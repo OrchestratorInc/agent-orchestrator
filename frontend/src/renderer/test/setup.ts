@@ -195,6 +195,9 @@ if (typeof window !== "undefined") {
 				if (targetId === "terminal") return { id: "terminal", name: "Terminal", kind: "terminal" };
 				return { id: targetId ?? "cursor", name: "Cursor", kind: "editor" };
 			},
+			openArtifacts: async ({ targetId }) => targetId === "terminal"
+				? { id: "terminal", name: "Terminal", kind: "terminal" }
+				: { id: "file-manager", name: "Finder", kind: "file_manager" },
 			copyWorkspacePath: async () => undefined,
 		},
 		telemetry: {
@@ -324,7 +327,7 @@ if (typeof window !== "undefined") {
 			onAnnotationState: () => () => undefined,
 		},
 		browserProfiles: {
-			list: async () => ({ profiles: [] }),
+			list: async () => ({ profiles: [], defaultProfileId: null }),
 			create: async (name: string) => {
 				const now = new Date().toISOString();
 				return { id: `test-${name}`, name, createdAt: now, updatedAt: now };
@@ -335,6 +338,7 @@ if (typeof window !== "undefined") {
 			},
 			clear: async () => undefined,
 			delete: async () => undefined,
+			setDefault: async () => undefined,
 			discoverImportSources: async () => ({ sources: [] }),
 			import: async () => ({ sourceName: "", entries: [] }),
 			onImportProgress: () => () => undefined,

@@ -894,17 +894,24 @@ func Run() error {
 			Binary: res.Path, PIDPath: tunnelPID, Log: log,
 		})
 	}
-	if res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir)); !res.NeedsInstall {
+	// A system cloudflared is version-checked by running it (30-120ms, up to a
+	// 5s timeout), so resolve off the boot path. Status reads and anything that
+	// needs a connector, such as restoring an enabled bridge, wait for this
+	// lookup rather than racing it.
+	bs.ResolveTunnelInBackground(func() controllers.TunnelController {
+		res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir))
+		if res.NeedsInstall {
+			// Not fatal: the LAN and Tailscale endpoints still work, and Connect
+			// Mobile behaves exactly as it did before remote access existed.
+			log.Info("mobile remote access unavailable; cloudflared not installed",
+				"rejectedSystemPath", res.SystemPath)
+			return nil
+		}
 		log.Info("mobile remote access available", "cloudflared", res.Path, "source", res.Source)
-		bs.Tunnel = mobilebridge.NewManagedTunnel(mobilebridge.ManagedTunnelDeps{
+		return mobilebridge.NewManagedTunnel(mobilebridge.ManagedTunnelDeps{
 			Binary: res.Path, PIDPath: tunnelPID, Log: log,
 		})
-	} else {
-		// Not fatal: the LAN and Tailscale endpoints still work, and Connect
-		// Mobile behaves exactly as it did before remote access existed.
-		log.Info("mobile remote access unavailable; cloudflared not installed",
-			"rejectedSystemPath", res.SystemPath)
-	}
+	})
 
 	// Stable, machine-bound host identity, served by the unauthenticated
 	// GET /api/v1/identity probe. A failure here is not fatal: the probe then

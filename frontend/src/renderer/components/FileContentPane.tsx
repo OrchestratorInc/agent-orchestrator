@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Eye, FileCode2, GitCompareArrows, LoaderCircle, MessageSquarePlus, Pencil, Save, X } from "lucide-react";
@@ -74,6 +75,7 @@ export function FileContentPane({
 	split,
 	scope = "combined",
 	source = DEFAULT_FILES_SOURCE,
+	toolbarHost,
 }: {
 	annotation: FileAnnotationModel;
 	initialEditing?: boolean;
@@ -93,6 +95,12 @@ export function FileContentPane({
 	split: boolean;
 	scope?: WorkspaceDiffScope;
 	source?: FilesSource;
+	/**
+	 * A header the host renders, with the file name, for the mode and action
+	 * buttons. When set, the pane renders those buttons into it and drops its own
+	 * path row; null renders none until the host mounts.
+	 */
+	toolbarHost?: HTMLElement | null;
 	/**
 	 * @deprecated Ignored: centre file tabs and the Files panel now share the
 	 * compact toolbar (breadcrumb + status/counts, icon mode switches).
@@ -333,7 +341,50 @@ export function FileContentPane({
 		</Tooltip>
 	);
 	const pathSegments = detail.path.split("/");
-	const compactTabs = (
+	// Mode switches and file actions share one row and one gap.
+	const toolbarActions = (
+		<div className="flex shrink-0 items-center gap-0.5">
+			{hasDisplayModeChoice ? (
+				<div aria-label={t("files.fileDisplayMode")} className="flex shrink-0 items-center gap-0.5" role="tablist">
+					{detail.status !== "unmodified" ? compactModeButton("diff", t("files.diff"), <GitCompareArrows aria-hidden="true" className="size-icon-sm" />) : null}
+					{compactModeButton("file", t("files.fileView"), <FileCode2 aria-hidden="true" className="size-icon-sm" />)}
+					{renderedAvailable ? compactModeButton("rendered", t("files.rendered"), <Eye aria-hidden="true" className="size-icon-sm" />) : null}
+				</div>
+			) : null}
+			{editing ? (
+				<div className="flex shrink-0 items-center gap-1">
+					<Button aria-label={t("files.cancelEditing")} className={EDIT_ACTION_CLASS} disabled={saving} onClick={cancelEditing} size="sm" type="button" variant="ghost"><X aria-hidden="true" className="size-icon-sm" />{t("files.cancelEditing")}</Button>
+					<Button aria-label={t("files.saveFile")} className={EDIT_ACTION_CLASS} disabled={saving || !hasUnsavedChanges} onClick={() => void saveEditing()} size="sm" type="button" variant="primary">{saving ? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" /> : <Save aria-hidden="true" className="size-icon-sm" />}{t("files.saveFile")}</Button>
+				</div>
+			) : (
+				<div className="flex shrink-0 items-center gap-0.5">
+					{editable ? (
+						<Tooltip>
+							<TooltipTrigger asChild><Button aria-label={t("files.editFile")} className="text-muted-foreground hover:text-foreground" onClick={beginEditing} size="icon-sm" type="button" variant="ghost"><Pencil aria-hidden="true" className="size-icon-sm" /></Button></TooltipTrigger>
+							<TooltipContent side="bottom">{t("files.editFile")}</TooltipContent>
+						</Tooltip>
+					) : null}
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								aria-label={t("files.addFeedback")}
+								disabled={Boolean(newerLiveText)}
+								className="text-muted-foreground hover:text-foreground"
+								onClick={() => annotation.begin({ path: detail.path, previousPath: detail.previousPath, side: "file", scope, surface: "focused", workspaceVersion: detail.workspaceVersion, fileFingerprint: detail.fileFingerprint })}
+								size="icon-sm"
+								type="button"
+								variant="ghost"
+							>
+								<MessageSquarePlus aria-hidden="true" className="size-icon-sm" />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent side="bottom">{t("files.addFeedback")}</TooltipContent>
+					</Tooltip>
+				</div>
+			)}
+		</div>
+	);
+	const compactTabs = toolbarHost !== undefined ? (toolbarHost ? createPortal(toolbarActions, toolbarHost) : null) : (
 		<div className="sticky top-0 z-20 flex min-h-9 items-center gap-2 border-b border-border bg-background px-3 py-1">
 			<nav aria-label={t("files.filePath")} className="flex min-w-0 flex-1 items-center gap-1.5" title={detail.path}>
 				<WorkspaceEntryIcon className="size-icon-base" kind="file" name={fileName} />
@@ -355,47 +406,7 @@ export function FileContentPane({
 					</span>
 				) : null}
 			</nav>
-			{/* Mode switches and file actions share one row and one gap. */}
-			<div className="flex shrink-0 items-center gap-0.5">
-				{hasDisplayModeChoice ? (
-					<div aria-label={t("files.fileDisplayMode")} className="flex shrink-0 items-center gap-0.5" role="tablist">
-						{detail.status !== "unmodified" ? compactModeButton("diff", t("files.diff"), <GitCompareArrows aria-hidden="true" className="size-icon-sm" />) : null}
-						{compactModeButton("file", t("files.fileView"), <FileCode2 aria-hidden="true" className="size-icon-sm" />)}
-						{renderedAvailable ? compactModeButton("rendered", t("files.rendered"), <Eye aria-hidden="true" className="size-icon-sm" />) : null}
-					</div>
-				) : null}
-				{editing ? (
-					<div className="flex shrink-0 items-center gap-1">
-						<Button aria-label={t("files.cancelEditing")} className={EDIT_ACTION_CLASS} disabled={saving} onClick={cancelEditing} size="sm" type="button" variant="ghost"><X aria-hidden="true" className="size-icon-sm" />{t("files.cancelEditing")}</Button>
-						<Button aria-label={t("files.saveFile")} className={EDIT_ACTION_CLASS} disabled={saving || !hasUnsavedChanges} onClick={() => void saveEditing()} size="sm" type="button" variant="primary">{saving ? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" /> : <Save aria-hidden="true" className="size-icon-sm" />}{t("files.saveFile")}</Button>
-					</div>
-				) : (
-					<div className="flex shrink-0 items-center gap-0.5">
-						{editable ? (
-							<Tooltip>
-								<TooltipTrigger asChild><Button aria-label={t("files.editFile")} className="text-muted-foreground hover:text-foreground" onClick={beginEditing} size="icon-sm" type="button" variant="ghost"><Pencil aria-hidden="true" className="size-icon-sm" /></Button></TooltipTrigger>
-								<TooltipContent side="bottom">{t("files.editFile")}</TooltipContent>
-							</Tooltip>
-						) : null}
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Button
-									aria-label={t("files.addFeedback")}
-									disabled={Boolean(newerLiveText)}
-									className="text-muted-foreground hover:text-foreground"
-									onClick={() => annotation.begin({ path: detail.path, previousPath: detail.previousPath, side: "file", scope, surface: "focused", workspaceVersion: detail.workspaceVersion, fileFingerprint: detail.fileFingerprint })}
-									size="icon-sm"
-									type="button"
-									variant="ghost"
-								>
-									<MessageSquarePlus aria-hidden="true" className="size-icon-sm" />
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent side="bottom">{t("files.addFeedback")}</TooltipContent>
-						</Tooltip>
-					</div>
-				)}
-			</div>
+			{toolbarActions}
 		</div>
 	);
 	// Both the Files panel and a centre file tab use the compact icon toolbar.

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
-import { isEditorId, type EditorHandoffState, type OpenTargetId } from "../../shared/editor-handoff";
+import { isEditorId, type EditorHandoffState, type OpenSessionArtifactsInput, type OpenTargetId } from "../../shared/editor-handoff";
 import { aoBridge } from "../lib/bridge";
 import { captureRendererEvent } from "../lib/telemetry";
 
@@ -135,6 +135,19 @@ export function useOpenSessionTarget() {
 			// disables itself instead of inviting the same failing click again.
 			void queryClient.invalidateQueries({ queryKey: editorHandoffQueryKey(input.sessionId) });
 			void captureRendererEvent("ao.renderer.open_in_editor_failed", { project_id: input.projectId });
+		},
+	});
+}
+
+/** Opens a session's artifact directory, or reveals one artifact, in the file manager or a terminal. */
+export function useOpenSessionArtifacts() {
+	return useMutation({
+		mutationFn: async (input: OpenSessionArtifactsInput) => {
+			try {
+				return await aoBridge.editorHandoff.openArtifacts(input);
+			} catch (error) {
+				throw new Error(editorHandoffErrorMessage(error) ?? String(error));
+			}
 		},
 	});
 }

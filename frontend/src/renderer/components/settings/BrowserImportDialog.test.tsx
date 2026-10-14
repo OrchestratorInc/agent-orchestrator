@@ -55,12 +55,13 @@ describe("BrowserImportDialog", () => {
 			updatedAt: "2026-01-01T00:00:00.000Z",
 		};
 		const bridge: AoBridge["browserProfiles"] = {
-			list: vi.fn(async () => ({ profiles: [] })),
+			list: vi.fn(async () => ({ profiles: [], defaultProfileId: null })),
 			create: vi.fn(),
 			rename: vi.fn(),
 			clear: vi.fn(),
 			delete: vi.fn(),
-			discoverImportSources: vi.fn(async () => ({ sources: [source, firefoxSource] })),
+			setDefault: vi.fn(),
+			discoverImportSources: vi.fn(async () => ({ sources: [source, firefoxSource], warnings: ["safari-access-denied" as const] })),
 			import: vi.fn(async () => ({
 				sourceName: source.name,
 				entries: [{
@@ -177,11 +178,12 @@ describe("BrowserImportDialog", () => {
 
 	it("clears a failed import when choosing another browser", async () => {
 		const bridge: AoBridge["browserProfiles"] = {
-			list: vi.fn(async () => ({ profiles: [] })),
+			list: vi.fn(async () => ({ profiles: [], defaultProfileId: null })),
 			create: vi.fn(),
 			rename: vi.fn(),
 			clear: vi.fn(),
 			delete: vi.fn(),
+			setDefault: vi.fn(),
 			discoverImportSources: vi.fn(async () => ({ sources: [source, firefoxSource] })),
 			import: vi.fn(async () => { throw new Error("Firefox cookie data is unavailable."); }),
 			onImportProgress: vi.fn(() => () => undefined),
@@ -380,11 +382,12 @@ describe("BrowserImportDialog", () => {
 	])("shows a quiet retry tip above the browser dropdown for %s", async (message) => {
 		const braveSource = { ...source, name: "Brave" };
 		const bridge: AoBridge["browserProfiles"] = {
-			list: vi.fn(async () => ({ profiles: [] })),
+			list: vi.fn(async () => ({ profiles: [], defaultProfileId: null })),
 			create: vi.fn(),
 			rename: vi.fn(),
 			clear: vi.fn(),
 			delete: vi.fn(),
+			setDefault: vi.fn(),
 			discoverImportSources: vi.fn(async () => ({ sources: [braveSource] })),
 			import: vi.fn(async () => {
 				throw new Error(`Error invoking remote method 'browserProfiles:import:start': Error: ${message}`);
@@ -449,11 +452,12 @@ describe("BrowserImportDialog", () => {
 		{ message: "SQLITE_BUSY", includeCookies: false, recoverable: true },
 	])("maps Safari $message with cookies=$includeCookies to recoverable=$recoverable", async ({ message, includeCookies, recoverable }) => {
 		const bridge: AoBridge["browserProfiles"] = {
-			list: vi.fn(async () => ({ profiles: [] })),
+			list: vi.fn(async () => ({ profiles: [], defaultProfileId: null })),
 			create: vi.fn(),
 			rename: vi.fn(),
 			clear: vi.fn(),
 			delete: vi.fn(),
+			setDefault: vi.fn(),
 			discoverImportSources: vi.fn(async () => ({ sources: [safariSource] })),
 			import: vi.fn(async () => { throw new Error(message); }),
 			onImportProgress: vi.fn(() => () => undefined),
@@ -486,11 +490,12 @@ describe("BrowserImportDialog", () => {
 
 	it("keeps discovery failures visible and disables import", async () => {
 		const bridge: AoBridge["browserProfiles"] = {
-			list: vi.fn(async () => ({ profiles: [] })),
+			list: vi.fn(async () => ({ profiles: [], defaultProfileId: null })),
 			create: vi.fn(),
 			rename: vi.fn(),
 			clear: vi.fn(),
 			delete: vi.fn(),
+			setDefault: vi.fn(),
 			discoverImportSources: vi.fn(async () => { throw new Error("Browser discovery failed."); }),
 			import: vi.fn(),
 			onImportProgress: vi.fn(() => () => undefined),

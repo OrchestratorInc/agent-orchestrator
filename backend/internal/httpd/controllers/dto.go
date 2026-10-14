@@ -240,6 +240,11 @@ type CleanupSessionsQuery struct {
 	Project string `query:"project,omitempty" description:"Project id filter. When omitted, clean terminated sessions across all projects."`
 }
 
+// ArtifactFileQuery is the query string accepted by DELETE /api/v1/sessions/{sessionId}/artifact-files.
+type ArtifactFileQuery struct {
+	Path string `query:"path" description:"Artifact-directory-relative file path, as listed in the session's artifactFiles."`
+}
+
 // WorkspaceFileQuery is the query string accepted by GET /api/v1/sessions/{sessionId}/workspace/file.
 type WorkspaceFileQuery struct {
 	Path string `query:"path" description:"Session-worktree-relative file path."`
@@ -765,6 +770,14 @@ type WorkspacePathResolutionResponse struct {
 type DesktopWorkspaceLocationResponse struct {
 	SessionID     domain.SessionID `json:"sessionId"`
 	WorkspacePath string           `json:"workspacePath"`
+}
+
+// DesktopArtifactLocationResponse is returned only by the LAN-blocked desktop
+// artifact route. Electron main consumes the absolute path and never exposes it
+// through the preload bridge.
+type DesktopArtifactLocationResponse struct {
+	SessionID   domain.SessionID `json:"sessionId"`
+	ArtifactDir string           `json:"artifactDir"`
 }
 
 // SessionPreviewResponse is the body of GET /api/v1/sessions/{sessionId}/preview.

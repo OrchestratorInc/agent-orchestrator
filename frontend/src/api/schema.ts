@@ -588,6 +588,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/desktop/sessions/{sessionId}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Resolve a session artifact directory for the loopback desktop supervisor */
+        get: operations["getDesktopSessionArtifacts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/desktop/sessions/{sessionId}/workspace": {
         parameters: {
             query?: never;
@@ -1667,6 +1684,23 @@ export interface paths {
         /** Retry safe source restoration for an agent switch */
         post: operations["recoverSessionAgentSwitch"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/artifact-files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete one file from a session's artifact directory and return the session with its refreshed artifact list */
+        delete: operations["deleteSessionArtifactFile"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4630,6 +4664,10 @@ export interface components {
             ok: boolean;
             orchestratorId?: string;
             workerId: string;
+        };
+        DesktopArtifactLocationResponse: {
+            artifactDir: string;
+            sessionId: string;
         };
         DesktopWorkspaceLocationResponse: {
             sessionId: string;
@@ -8727,6 +8765,56 @@ export interface operations {
             };
         };
     };
+    getDesktopSessionArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DesktopArtifactLocationResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     getDesktopSessionWorkspace: {
         parameters: {
             query?: never;
@@ -12500,6 +12588,59 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    deleteSessionArtifactFile: {
+        parameters: {
+            query?: {
+                /** @description Artifact-directory-relative file path, as listed in the session's artifactFiles. */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

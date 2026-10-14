@@ -12,7 +12,7 @@ import {
 	type BoardUsagePresentation,
 	type ProductUITranslator,
 } from "@aoagents/product-ui";
-import { Archive, Check, Copy, GitBranch, Globe, LoaderCircle, RotateCcw, Shapes } from "lucide-react";
+import { Archive, Check, Copy, FileText, GitBranch, Globe, LoaderCircle, RotateCcw } from "lucide-react";
 import type { MessageKey } from "../i18n";
 import { aoBridge } from "../lib/bridge";
 import { formatTimeCompact } from "../lib/format-time";
@@ -335,7 +335,7 @@ function BoardArtifactLinks({
 	return (
 		<div className="flex min-w-0 flex-col gap-0.5" data-testid="board-session-artifacts">
 			{latest.map((artifact) => {
-				const Icon = artifact.kind === "html" ? Globe : Shapes;
+				const Icon = artifact.kind === "html" ? Globe : FileText;
 				return (
 					<button
 						aria-label={t("shell.openArtifactNamed", { name: artifact.name })}

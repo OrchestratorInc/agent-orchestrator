@@ -1710,64 +1710,74 @@ export const ChatComposer = memo(function ChatComposer({
 						</button>
 					</div>
 				) : null}
-				{staged ? (
-					<ul className="flex flex-wrap gap-1.5" aria-label="Attached files">
-						{stripAttachments.map(({ file, path, preview }) => {
-							return (
-							<li
-								key={file.id}
-								className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1"
-							>
-								{preview ? (
-									<img src={preview} alt="" className="size-6 rounded-sm object-cover" />
-								) : (
-									<div className="flex size-6 items-center justify-center rounded-sm bg-surface">
-										<File aria-hidden="true" className="size-3.5 text-muted-foreground" />
-									</div>
-								)}
-								<span
-									className="max-w-[120px] truncate text-xs text-muted-foreground"
-									title={file.name}
-								>
-									{file.name}
-								</span>
-								<button
-									type="button"
-									onClick={() => {
-									if (submitInFlight.current) return;
-									if (path) editor.current?.removeImage(path);
-									if (visibleRetainedAttachments.some((attachment) => attachment.id === file.id)) {
-										const next = retainedAttachments.filter((attachment) => attachment.id !== file.id);
-										setRetainedAttachments(next);
-										onQueuedRetainedAttachmentsChange?.(next);
-									} else fileAttachments.remove(file.id);
-									}}
-									disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
-									aria-label={`Remove ${file.name}`}
-									className="text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-								>
-									<X aria-hidden="true" className="size-3" />
-								</button>
-							</li>
-							);
-						})}
-					</ul>
-				) : null}
-				{contextReferences.length > 0 ? (
-					<ChatAnnotationSummary
-						annotations={contextReferences}
-						onSelect={onSelectAnnotation}
-						disabled={controlsDisabled || draftMutationPending}
-						onRemove={(excerpt) => {
-							if (!draftScope || submitInFlight.current || !excerpt.id) return;
-							const result = writeChatExcerptReferences(
-								draftScope,
-								contextReferences.filter((item) => item.id !== excerpt.id),
-							);
-							composerRevision.current = result.draft.composer.revision;
-							setTextDraftPersistenceError(result.ok ? null : "chat.draft.saveFailed");
-						}}
-					/>
+				{staged || contextReferences.length > 0 ? (
+					<div className="flex flex-wrap items-center gap-1.5" data-testid="composer-attachments-and-annotations">
+						{staged ? (
+							<ul className="contents" aria-label="Attached files">
+								{stripAttachments.map(({ file, path, preview }) => {
+									return (
+									<li
+										key={file.id}
+										className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1"
+									>
+										{preview ? (
+											<img src={preview} alt="" className="size-6 rounded-sm object-cover" />
+										) : (
+											<div className="flex size-6 items-center justify-center rounded-sm bg-surface">
+												<File aria-hidden="true" className="size-3.5 text-muted-foreground" />
+											</div>
+										)}
+										<span
+											className="max-w-[120px] truncate text-xs text-muted-foreground"
+											title={file.name}
+										>
+											{file.name}
+										</span>
+										<button
+											type="button"
+											onClick={() => {
+											if (submitInFlight.current) return;
+											if (path) editor.current?.removeImage(path);
+											if (visibleRetainedAttachments.some((attachment) => attachment.id === file.id)) {
+												const next = retainedAttachments.filter((attachment) => attachment.id !== file.id);
+												setRetainedAttachments(next);
+												onQueuedRetainedAttachmentsChange?.(next);
+											} else fileAttachments.remove(file.id);
+											}}
+											disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
+											aria-label={`Remove ${file.name}`}
+											className="text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+										>
+											<X aria-hidden="true" className="size-3" />
+										</button>
+									</li>
+									);
+								})}
+							</ul>
+						) : null}
+						{contextReferences.length > 0 ? (
+							<ChatAnnotationSummary
+								annotations={contextReferences}
+								onSelect={onSelectAnnotation}
+								disabled={controlsDisabled || draftMutationPending}
+								onRemoveAll={() => {
+									if (!draftScope || submitInFlight.current) return;
+									const result = writeChatExcerptReferences(draftScope, []);
+									composerRevision.current = result.draft.composer.revision;
+									setTextDraftPersistenceError(result.ok ? null : "chat.draft.saveFailed");
+								}}
+								onRemove={(excerpt) => {
+									if (!draftScope || submitInFlight.current || !excerpt.id) return;
+									const result = writeChatExcerptReferences(
+										draftScope,
+										contextReferences.filter((item) => item.id !== excerpt.id),
+									);
+									composerRevision.current = result.draft.composer.revision;
+									setTextDraftPersistenceError(result.ok ? null : "chat.draft.saveFailed");
+								}}
+							/>
+						) : null}
+					</div>
 				) : null}
 
 				<ComposerEditor

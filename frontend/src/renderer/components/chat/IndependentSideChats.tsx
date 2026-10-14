@@ -46,6 +46,7 @@ export function SideComposer({
 	side,
 	onSettings,
 	onRemoveReference,
+	onRemoveAllReferences,
 	onFocusSide,
 	onCompact,
 	focusKey,
@@ -68,6 +69,7 @@ export function SideComposer({
 	side: Side;
 	onSettings: (model: string, effort: string) => void;
 	onRemoveReference: (id: string) => void;
+	onRemoveAllReferences: () => void;
 	onFocusSide?: () => void;
 	onCompact: () => void;
 	focusKey: number;
@@ -154,50 +156,56 @@ export function SideComposer({
 							onPick={choose}
 						/>
 					) : null}
-					<ChatAnnotationSummary
-						annotations={draft.references}
-						onSelect={onNavigate}
-						onRemove={(ref) => ref.id && onRemoveReference(ref.id)}
-					/>
-					{draft.attachments.length ? (
-						<ul className="flex flex-wrap gap-1.5" aria-label={t("sideChat.stagedFiles")}>
-							{draft.attachments.map((file, index) => (
-								<li
-									key={file.id}
-									className="flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[11px]"
-								>
-									{file.name}
-									<button
-										type="button"
-										aria-label={t("sideChat.remove", { value1: file.name })}
-										onClick={() => onRemoveFile(index)}
-									>
-										<X className="size-3" />
-									</button>
-								</li>
-							))}
-						</ul>
-					) : null}
-					{files.length ? (
-						<ul className="flex flex-wrap gap-1.5" aria-label={t("sideChat.attachedFiles")}>
-							{files.map((file, index) => (
-								<li
-									key={`${file.name}-${index}`}
-									className="flex items-center gap-1.5 rounded border border-border bg-background px-2 py-1 text-[11px]"
-								>
-									<span className="max-w-[120px] truncate" title={file.name}>
-										{file.name}
-									</span>
-									<button
-										type="button"
-										aria-label={t("sideChat.remove", { value1: file.name })}
-										onClick={() => onRemoveFile(index + draft.attachments.length)}
-									>
-										<X className="size-3" />
-									</button>
-								</li>
-							))}
-						</ul>
+					{draft.references.length || draft.attachments.length || files.length ? (
+						<div className="flex flex-wrap items-center gap-1.5" data-testid="side-chat-attachments-and-annotations">
+							<ChatAnnotationSummary
+								annotations={draft.references}
+								onSelect={onNavigate}
+								onRemove={(ref) => ref.id && onRemoveReference(ref.id)}
+								onRemoveAll={onRemoveAllReferences}
+								disabled={sending || deliveryPending}
+							/>
+							{draft.attachments.length ? (
+								<ul className="contents" aria-label={t("sideChat.stagedFiles")}>
+									{draft.attachments.map((file, index) => (
+										<li
+											key={file.id}
+											className="flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[11px]"
+										>
+											{file.name}
+											<button
+												type="button"
+												aria-label={t("sideChat.remove", { value1: file.name })}
+												onClick={() => onRemoveFile(index)}
+											>
+												<X className="size-3" />
+											</button>
+										</li>
+									))}
+								</ul>
+							) : null}
+							{files.length ? (
+								<ul className="contents" aria-label={t("sideChat.attachedFiles")}>
+									{files.map((file, index) => (
+										<li
+											key={`${file.name}-${index}`}
+											className="flex items-center gap-1.5 rounded border border-border bg-background px-2 py-1 text-[11px]"
+										>
+											<span className="max-w-[120px] truncate" title={file.name}>
+												{file.name}
+											</span>
+											<button
+												type="button"
+												aria-label={t("sideChat.remove", { value1: file.name })}
+												onClick={() => onRemoveFile(index + draft.attachments.length)}
+											>
+												<X className="size-3" />
+											</button>
+										</li>
+									))}
+								</ul>
+							) : null}
+						</div>
 					) : null}
 					<ComposerEditor
 						ref={editor}
@@ -1426,6 +1434,15 @@ export function useIndependentSideChats(
 									[activeId]: {
 										...(current[activeId] ?? emptySideChatDraft()),
 										references: (current[activeId]?.references ?? []).filter((ref) => ref.id !== id),
+									},
+								}))
+							}
+							onRemoveAllReferences={() =>
+								setDrafts((current) => ({
+									...current,
+									[activeId]: {
+										...(current[activeId] ?? emptySideChatDraft()),
+										references: [],
 									},
 								}))
 							}
