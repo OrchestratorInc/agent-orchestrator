@@ -104,7 +104,11 @@ export function useProjectOrchestratorAction({
 			// A completed request belongs to its original route, even if this
 			// component survived a project or session change while it was pending.
 			if (!earlyResume && activeRoute.current === routeKey) {
-				void navigate(sessionNavigateTarget(projectId, openedSessionId, hostId));
+				const opened = navigate(sessionNavigateTarget(projectId, openedSessionId, hostId));
+				// The board shows the cloud startup loader while this runs; settling
+				// before the session route opens would flash the board between that
+				// loader and the session's own.
+				if (project?.kind === CLOUD_PROJECT_KIND) await opened.catch(() => undefined);
 			}
 		},
 		onError: (cause) => {
