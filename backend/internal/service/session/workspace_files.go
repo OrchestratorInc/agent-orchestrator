@@ -2614,14 +2614,29 @@ type sandboxedWorkspaceGitKey struct{}
 // controls that worktree and its index, so it can commit a nested repository
 // as a gitlink with a core.fsmonitor or filter.*.clean command in the nested
 // config; host git that recurses into it runs the command. The decision comes
-// from the session record and project config, never from the worktree. A
-// project that cannot be read fails closed to the hardened form.
+// from Deps.SandboxedSession, never from anything inside the worktree.
 func (s *Service) workspaceGitContext(ctx context.Context, rec domain.SessionRecord) context.Context {
-	project, ok, err := s.sessionProject(ctx, rec)
-	if err == nil && (!ok || !domain.SessionSandbox(rec.Kind, project.Config).Enabled()) {
+	if !s.sessionSandboxed(ctx, rec) {
 		return ctx
 	}
 	return context.WithValue(ctx, sandboxedWorkspaceGitKey{}, true)
+}
+
+// sessionSandboxed is Deps.SandboxedSession, or without one the config-only
+// form of the daemon's rule: a session without a project runs on the host,
+// and a project that can't be read or found fails closed.
+func (s *Service) sessionSandboxed(ctx context.Context, rec domain.SessionRecord) bool {
+	if s.sandboxedSession != nil {
+		return s.sandboxedSession(ctx, rec)
+	}
+	if rec.ProjectID == "" {
+		return false
+	}
+	project, ok, err := s.sessionProject(ctx, rec)
+	if err != nil || !ok {
+		return true
+	}
+	return domain.SessionSandbox(rec.Kind, project.Config).Enabled()
 }
 
 // workspaceGitArgs builds the full argv for a read-only git call in root.

@@ -17,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/tmux"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/sandbox/dockersandbox"
 	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
@@ -960,9 +961,49 @@ func TestSessionSandboxProbe(t *testing.T) {
 			t.Errorf("sandboxed(%s) = %v, want %v", tc.id, got, tc.want)
 		}
 	}
+	if probe.sandboxedRecord(ctx, domain.SessionRecord{ID: "s-0", Kind: domain.KindWorker}) {
+		t.Error("a session without a project can never have run sandboxed")
+	}
 	lookup.sessionErr = errors.New("db down")
 	if !(sessionSandboxProbe{store: lookup}).sandboxed(ctx, ports.WorkspaceInfo{SessionID: "h-1"}) {
 		t.Error("a failed session read must fail closed")
+	}
+}
+
+// TestSessionSandboxProbeHonoursSandboxStateDir asserts a session whose agent
+// ever ran in a container stays hardened after the sandbox config is turned
+// off: Ensure creates its state dir, and only a real directory counts.
+func TestSessionSandboxProbeHonoursSandboxStateDir(t *testing.T) {
+	dataDir := t.TempDir()
+	lookup := fakeSandboxLookup{
+		sessions: map[domain.SessionID]domain.SessionRecord{
+			"h-1": {ID: "h-1", ProjectID: "host", Kind: domain.KindWorker},
+			"h-2": {ID: "h-2", ProjectID: "host", Kind: domain.KindWorker},
+		},
+		projects: map[string]domain.ProjectRecord{"host": {ID: "host"}},
+	}
+	probe := sessionSandboxProbe{store: lookup, dataDir: dataDir}
+	ctx := context.Background()
+
+	if err := os.MkdirAll(dockersandbox.SessionStateDir(dataDir, "host", "h-1"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if !probe.sandboxed(ctx, ports.WorkspaceInfo{ProjectID: "host", SessionID: "h-1"}) {
+		t.Error("state dir present, config off: want hardened")
+	}
+	if !probe.sandboxedRecord(ctx, lookup.sessions["h-1"]) {
+		t.Error("record with state dir, config off: want hardened")
+	}
+
+	h2 := dockersandbox.SessionStateDir(dataDir, "host", "h-2")
+	if err := os.MkdirAll(filepath.Dir(h2), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), h2); err != nil {
+		t.Fatal(err)
+	}
+	if probe.sandboxed(ctx, ports.WorkspaceInfo{ProjectID: "host", SessionID: "h-2"}) {
+		t.Error("a symlink in place of the state dir must not count; config off decides")
 	}
 }
 

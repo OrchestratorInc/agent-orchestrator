@@ -114,9 +114,25 @@ func (s *Sandbox) dockerPath() (string, error) {
 	return "", fmt.Errorf("%w: the docker CLI was not found; install Docker Desktop or Docker Engine", ports.ErrSandboxUnavailable)
 }
 
+// projectStateDir is a project's sandbox state root under the data dir.
+func projectStateDir(dataDir string, project domain.ProjectID) string {
+	return filepath.Join(dataDir, "sandbox", "projects", string(project))
+}
+
+// SessionStateDir is a session's sandbox state dir. Ensure creates it before
+// the container exists, so its presence proves the session's agent may have
+// run in a container. The daemon then keeps AO's host git hardened for that
+// worktree even after the sandbox config is turned off.
+//
+// Session state dirs must only ever be cleaned up after the session's
+// worktree is gone; removing one earlier would drop that hardening.
+func SessionStateDir(dataDir string, project domain.ProjectID, session domain.SessionID) string {
+	return filepath.Join(projectStateDir(dataDir, project), "sessions", string(session))
+}
+
 func (s *Sandbox) targetFor(container string, project domain.ProjectID, session domain.SessionID) ports.SandboxTarget {
-	projectDir := filepath.Join(s.cfg.DataDir, "sandbox", "projects", string(project))
-	sessionDir := filepath.Join(projectDir, "sessions", string(session))
+	projectDir := projectStateDir(s.cfg.DataDir, project)
+	sessionDir := SessionStateDir(s.cfg.DataDir, project, session)
 	return ports.SandboxTarget{
 		Container:  container,
 		Docker:     s.docker,
@@ -129,13 +145,13 @@ func (s *Sandbox) targetFor(container string, project domain.ProjectID, session 
 
 func (s *Sandbox) mounts(req ports.SandboxRequest, g gitLayout) ([]mount, error) {
 	m := []mount{{Path: req.WorkspacePath}}
-	projectDir := filepath.Join(s.cfg.DataDir, "sandbox", "projects", string(req.ProjectID))
+	projectDir := projectStateDir(s.cfg.DataDir, req.ProjectID)
 	// Per-agent containers see only their own session dir and prompts, not
 	// siblings'. A shared container serves every session of the project.
 	state := []mount{
 		{Path: filepath.Join(projectDir, "home")},
 		{Path: filepath.Join(projectDir, "claude")},
-		{Path: filepath.Join(projectDir, "sessions", string(req.SessionID))},
+		{Path: SessionStateDir(s.cfg.DataDir, req.ProjectID, req.SessionID)},
 	}
 	prompts := filepath.Join(s.cfg.DataDir, "prompts", string(req.SessionID))
 	if req.Config.Mode == domain.SandboxModeShared {

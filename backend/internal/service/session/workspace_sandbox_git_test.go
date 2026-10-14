@@ -88,6 +88,47 @@ func TestSandboxedChangesPanelDoesNotRunNestedRepoCommands(t *testing.T) {
 	}
 }
 
+// The daemon injects one predicate (sandbox state dir or config) so a
+// session that ran sandboxed stays hardened after the config is turned off.
+func TestChangesPanelUsesInjectedSandboxPredicate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("planted filter commands use a POSIX shell")
+	}
+	repo := newWorkspaceRepo(t)
+	marker := plantNestedWorkspaceRepo(t, repo)
+	st := newFakeStore()
+	st.projects["proj"] = domain.ProjectRecord{ID: "proj", Path: repo}
+	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", ProjectID: "proj", Kind: domain.KindWorker, Metadata: domain.SessionMetadata{WorkspacePath: repo}}
+	var asked []domain.SessionID
+	svc := NewWithDeps(Deps{Store: st, SandboxedSession: func(_ context.Context, rec domain.SessionRecord) bool {
+		asked = append(asked, rec.ID)
+		return true
+	}})
+	exerciseChangesPanel(t, svc)
+	if data, err := os.ReadFile(marker); err == nil {
+		t.Fatalf("host git ran a command planted in a nested repository: %q", data)
+	}
+	if len(asked) == 0 {
+		t.Fatal("the injected predicate was never consulted")
+	}
+}
+
+// A session whose project can't be found fails closed, the same as the
+// daemon's probe.
+func TestChangesPanelMissingProjectIsHardened(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("planted filter commands use a POSIX shell")
+	}
+	repo := newWorkspaceRepo(t)
+	marker := plantNestedWorkspaceRepo(t, repo)
+	st := newFakeStore()
+	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", ProjectID: "gone", Kind: domain.KindWorker, Metadata: domain.SessionMetadata{WorkspacePath: repo}}
+	exerciseChangesPanel(t, NewWithDeps(Deps{Store: st}))
+	if data, err := os.ReadFile(marker); err == nil {
+		t.Fatalf("host git ran a command planted in a nested repository: %q", data)
+	}
+}
+
 func TestUnsandboxedChangesPanelKeepsSubmoduleRecursion(t *testing.T) {
 	svc, marker := nestedRepoService(t, domain.SandboxModeOff)
 	exerciseChangesPanel(t, svc)

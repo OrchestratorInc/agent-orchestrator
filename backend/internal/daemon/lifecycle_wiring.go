@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -276,6 +277,9 @@ func startSession(ctx context.Context, cfg config.Config, boundPort func() int, 
 	// shares this root so the two cannot drift.
 	managedRoot := filepath.Join(cfg.DataDir, "worktrees")
 	sandbox := dockersandbox.New(dockersandbox.Config{DataDir: cfg.DataDir, ManagedRoot: managedRoot, DaemonPort: boundPort})
+	// One rule for which worktrees AO's host git treats as agent-controlled,
+	// shared by teardown and the changes panel.
+	sandboxProbe := sessionSandboxProbe{store: store, dataDir: cfg.DataDir}
 	gitWS, err := gitworktree.New(gitworktree.Options{
 		ManagedRoot: managedRoot,
 		// Resolve each project's source repo from the projects table, so a
@@ -283,7 +287,7 @@ func startSession(ctx context.Context, cfg config.Config, boundPort func() int, 
 		// that repo. Unregistered projects fail loudly.
 		RepoResolver:     projectRepoResolver{store: store},
 		Logger:           log,
-		SandboxedSession: sessionSandboxProbe{store: store}.sandboxed,
+		SandboxedSession: sandboxProbe.sandboxed,
 	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("session workspace: %w", err)
@@ -348,6 +352,7 @@ func startSession(ctx context.Context, cfg config.Config, boundPort func() int, 
 		SignalCapable:        activitydispatch.FullySupportsHarness,
 		OutputTypeReconciler: lcm,
 		ArtifactDeleter:      artifactVersions,
+		SandboxedSession:     sandboxProbe.sandboxedRecord,
 	})
 	// Triggering a review spawns a reviewer over the worker's worktree, resolved
 	// from the reviewer registry (distinct from the worker agent set). The
@@ -595,17 +600,39 @@ type sessionSandboxLookup interface {
 	GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error)
 }
 
-// sessionSandboxProbe tells the git workspace which worktrees belong to a
-// sandboxed session, so AO's own host git hardens its reads there (#6663).
-// It decides from the session record and project config only. Anything it
-// cannot establish counts as sandboxed: the hardened form never runs agent
-// code, and its Destroy dirty check keeps any worktree with a populated
-// nested repository, so failing closed cannot lose work.
-type sessionSandboxProbe struct{ store sessionSandboxLookup }
+// sessionSandboxProbe is the one rule for which worktrees AO's own host git
+// must treat as agent-controlled (#6663). Both the git workspace and the
+// session service's changes panel use it. A session counts as sandboxed when
+// its sandbox state dir is a real directory (Ensure creates it before the
+// container exists, so this survives the config being turned off later), or
+// when its project config sandboxes its role. Anything it cannot establish
+// counts as sandboxed: the hardened form never runs agent code, and its
+// Destroy dirty check keeps any worktree with a populated nested repository,
+// so failing closed cannot lose work.
+type sessionSandboxProbe struct {
+	store   sessionSandboxLookup
+	dataDir string
+}
 
 func (p sessionSandboxProbe) sandboxed(ctx context.Context, info ports.WorkspaceInfo) bool {
+	if p.hasStateDir(info.ProjectID, info.SessionID) {
+		return true
+	}
 	rec, ok, err := p.store.GetSession(ctx, info.SessionID)
 	if err != nil || !ok {
+		return true
+	}
+	return p.sandboxedRecord(ctx, rec)
+}
+
+// sandboxedRecord applies the rule to a session record the caller already
+// holds. A session without a project never had a sandbox config, so it runs
+// on the host.
+func (p sessionSandboxProbe) sandboxedRecord(ctx context.Context, rec domain.SessionRecord) bool {
+	if rec.ProjectID == "" {
+		return false
+	}
+	if p.hasStateDir(rec.ProjectID, rec.ID) {
 		return true
 	}
 	project, ok, err := p.store.GetProject(ctx, string(rec.ProjectID))
@@ -613,6 +640,16 @@ func (p sessionSandboxProbe) sandboxed(ctx context.Context, info ports.Workspace
 		return true
 	}
 	return domain.SessionSandbox(rec.Kind, project.Config).Enabled()
+}
+
+// hasStateDir reports whether the session's sandbox state dir is a real
+// directory. Lstat never follows a link planted in its place.
+func (p sessionSandboxProbe) hasStateDir(project domain.ProjectID, session domain.SessionID) bool {
+	if p.dataDir == "" || project == "" || session == "" {
+		return false
+	}
+	fi, err := os.Lstat(dockersandbox.SessionStateDir(p.dataDir, project, session))
+	return err == nil && fi.IsDir()
 }
 
 // chatLauncher adapts the chat service to session_manager.ChatLauncher.
