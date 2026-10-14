@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import mastraCodeLogo from "../assets/agents/mastra-code.svg";
 import { AgentAvatar } from "./AgentAvatar";
 import fxLogo from "../assets/agents/fx.svg";
 
@@ -9,7 +10,7 @@ describe("AgentAvatar", () => {
 
 		expect(screen.getByRole("img", { name: "mastra-code" })).toHaveAttribute(
 			"src",
-			expect.stringContaining("mastra-code.svg"),
+			mastraCodeLogo,
 		);
 	});
 
