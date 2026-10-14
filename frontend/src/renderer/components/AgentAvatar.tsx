@@ -25,6 +25,8 @@ import fxLogo from "../assets/agents/fx.svg";
 import geminiLogo from "../assets/agents/gemini.svg";
 import gooseLogo from "../assets/agents/goose.svg";
 import grokLogo from "../assets/agents/grok.png";
+// NousResearch/hermes-agent: apps/desktop/assets/icon.png.
+import hermesLogo from "../assets/agents/hermes.png";
 import kilocodeLogo from "../assets/agents/kilocode.svg";
 import kimiLogo from "../assets/agents/kimi.png";
 import kimchiLogo from "../assets/agents/kimchi.svg";
@@ -54,6 +56,7 @@ const LOGOS: AgentLogoSources = {
 	copilot: copilotLogo,
 	aider: aiderLogo,
 	grok: grokLogo,
+	hermes: hermesLogo,
 	gemini: geminiLogo,
 	droid: droidLogo,
 	fx: fxLogo,

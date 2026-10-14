@@ -699,6 +699,9 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 						// the installer plan so install controls stay usable.
 						const installationPending = !agents.error
 							&& (agents.isPending || readinessAgent?.installation.state === "unknown");
+						const unsupportedInstallation = readinessAgent?.installation.reasonCode === "install_check_unsupported"
+							? readinessAgent.installation.reason
+							: undefined;
 						const authPlan = agentAuthPlans.get(agentId);
 						const isSetupAction = authPlan?.action === "setup";
 						const isDocumentationAction = isSetupAction && authPlan?.launchMode === "documentation";
@@ -830,7 +833,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 									<p className="truncate text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</p>
 								</div>
 								<p className={cn("truncate text-xs text-settings-muted", rowHasError && "text-error")} title={authState?.error ?? actionError ?? job?.error ?? authPlan?.reason ?? plan?.reason}>
-									{isInstalled ? authSummary : installationPending ? t("settings.harness.installationUnknown") : actionError ?? (job?.status === "interrupted" ? t("settings.harness.interrupted") : failed ? (job?.error ?? t("settings.harness.installFailed")) : (plan?.available ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : (plan?.reason ?? t("settings.harness.manualRequired"))))}
+									{isInstalled ? authSummary : unsupportedInstallation ?? (installationPending ? t("settings.harness.installationUnknown") : actionError ?? (job?.status === "interrupted" ? t("settings.harness.interrupted") : failed ? (job?.error ?? t("settings.harness.installFailed")) : (plan?.available ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : (plan?.reason ?? t("settings.harness.manualRequired")))))}
 								</p>
 							</div>
 

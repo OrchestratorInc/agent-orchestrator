@@ -56,7 +56,7 @@ func (*Plugin) Manifest() adapters.Manifest {
 // ResolveBinary implements the scoped native adapter contract.
 func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	if runtime.GOOS != "linux" {
-		return "", fmt.Errorf("hermes: AO lease observation currently supports Linux only")
+		return "", fmt.Errorf("hermes: AO lease observation currently supports Linux only: %w", ports.ErrAgentBinaryLinuxOnly)
 	}
 	timedOut := false
 	// Probe only documented install locations. A PATH-first --version probe would

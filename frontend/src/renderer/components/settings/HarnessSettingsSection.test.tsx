@@ -858,6 +858,28 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Install" })).not.toBeInTheDocument();
 	});
 
+	it("shows why Hermes is unavailable on this operating system", async () => {
+		const unsupported = catalogWithInstalled();
+		unsupported.agents.push({
+			...unsupported.agents[1],
+			id: "hermes",
+			label: "Hermes Agent",
+			installation: { ...unsupported.agents[1].installation, state: "unknown", reasonCode: "install_check_unsupported", reason: "Hermes Agent is supported on Linux only." },
+			effectiveReadiness: "unknown",
+		});
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: unsupported } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [] } } as never;
+			return { data: undefined } as never;
+		});
+		renderSection();
+		const row = (await screen.findByText("Hermes Agent")).closest('[data-agent="hermes"]') as HTMLElement;
+		expect(await within(row).findByText("Hermes Agent is supported on Linux only.")).toBeInTheDocument();
+		expect(within(row).queryByText("Installation status unknown")).not.toBeInTheDocument();
+	});
+
 	it("falls back to installer plans when readiness cannot be loaded", async () => {
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { error: { message: "readiness unavailable" } } as never;

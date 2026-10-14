@@ -2,6 +2,7 @@ package hermes
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -10,6 +11,16 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+func TestResolveBinaryReportsLinuxOnlyPlatform(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("Linux runs the native resolver")
+	}
+	_, err := New().ResolveBinary(context.Background())
+	if !errors.Is(err, ports.ErrAgentBinaryLinuxOnly) {
+		t.Fatalf("ResolveBinary() error = %v, want Linux-only sentinel", err)
+	}
+}
 
 func TestStandingInstructionsPreserveNativeOverlay(t *testing.T) {
 	home := t.TempDir()

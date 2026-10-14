@@ -85,4 +85,8 @@ describe("AgentAvatar", () => {
 			expect.stringContaining("openhands.svg"),
 		);
 	});
+	it("renders the official Hermes Agent icon", () => {
+		render(<AgentAvatar provider="hermes" />);
+		expect(screen.getByRole("img", { name: "hermes" })).toHaveAttribute("src", expect.stringContaining("hermes.png"));
+	});
 });

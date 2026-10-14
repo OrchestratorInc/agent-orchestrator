@@ -101,6 +101,13 @@ describe("buildRankedAgentOptions", () => {
 		expect(options[1]).toMatchObject({ id: "codex", disabled: true, status: "Needs auth" });
 	});
 
+	it("marks unsupported Hermes platforms as unavailable", () => {
+		const hermes = agent("hermes", "unknown", "unknown");
+		hermes.installation.reasonCode = "install_check_unsupported";
+		const options = buildRankedAgentOptions({ agents: [hermes], priorityRank, fallbackAgents: [] });
+		expect(options[0]).toMatchObject({ disabled: true, status: "Unsupported OS" });
+	});
+
 	it("keeps stale known-good agents selectable while checking", () => {
 		const knownGood = agent("codex");
 		knownGood.installation.freshness = "checking";
