@@ -282,6 +282,40 @@ Qualify proprietary Chat protocols through actual daemon Chat APIs, including
 streaming, approvals, and reconnect; standalone native receipts and this TUI
 runner cannot replace those checks.
 
+## Current status and reproduction receipt
+
+Maintain one current-status section in the authorized PR report. Include the
+[completion matrix](integration-path.md#completion-matrix) and these fields:
+
+- **Current head:** SHA, CI result/links for that SHA, merge/conflict state and
+  unresolved work. Green CI does not establish merge readiness or runtime proof.
+- **Runtime-tested build:** exact AO/native/runner/UI revisions and executable
+  hashes, OS, permission scope and attempt ID. If this differs from current head,
+  name the intervening changes and what remains untested. Requalify affected
+  behavior before calling it current-head verified.
+- **Reproduce:** sanitized invocation and local-contract bytes plus hash, including
+  probe argv, interrupt/readiness/draft-cleanup settings. For manual or standalone
+  checks, provide equivalent pinned helper/commands and assertions. Explain
+  redactions and unavailable inputs without exposing credentials or profiles.
+- **Artifacts and cleanup:** report/receipt/image links and hashes, failed attempt
+  references, owned-process teardown, and an inventory of retained artifact/data
+  classes and their authorized locations. State which originals are unavailable;
+  exclude credential stores, raw databases and profile directories from sharing.
+
+Use fresh attempt paths for standalone, reconnect and capture helpers too. Preserve
+original receipts before later actions; helpers must not overwrite lifecycle
+proof. Label a reconstructed summary and its supporting observations explicitly;
+it does not replace missing original bytes. Later reproductions remain separate.
+
+Before publishing or handing off, reconcile the description with the final net
+diff and current GitHub state: category counts, binary count wherever repeated,
+capability claims, tested SHA, CI, merge conflicts and evidence links. Keep old
+attempts and receipts identifiable as historical; update stale prose that calls
+them current. Follow the repository PR-description skill for count calculation
+and preserve unrelated description content. Read back the published report and
+verify its links. These fields are contributor-authored; runner report schema
+and automated validation are unchanged.
+
 ## Evidence ownership by integration PR
 
 Keep each harness's detailed reports, JSON receipts, screenshots, and provenance

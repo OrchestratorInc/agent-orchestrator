@@ -153,6 +153,22 @@ model catalog only as far as upstream evidence supports:
   presence alone; that is `configured` unless a safe provider round trip proves
   it valid.
 
+Trace model selection through `modelcatalog/catalog.go` (discovery source and
+custom-entry policy), applicable `daemon.go` discovery callbacks, the model API,
+New Task/project defaults, and effective native selection. `GetConfigSpec` or
+in-session ACP options alone do not establish pre-launch picker support. Verify
+the chosen catalog/configured/text mode and its fallback; preserve an intentional
+default-only scope explicitly. A provider without discovery need not invent a
+catalog. Its strict runner catalog gates remain non-pass; record separately
+qualified product behavior without upgrading the runner verdict.
+
+Check readiness on each advertised OS before launch: binary, required config,
+supported permissions and safe auth state. Unsupported OS or missing/invalid
+required config must surface a useful blocker before the user starts a task.
+For setup, trace the actual Settings target/plan registration and linked user
+guide; an API enum alone does not add onboarding. If automatic installation is
+unsuitable, provide the official manual path and prerequisites.
+
 Add installation metadata under `backend/internal/service/systeminstall/` only
 for official, supportable installation methods. Never silently execute a remote
 shell script merely because the vendor documentation presents one.
@@ -173,6 +189,9 @@ After conformance and adapter tests pass:
 8. Add a licensed upstream brand asset and renderer avatar mapping when available.
 9. Verify inventory, settings, project defaults, task creation, CLI spawn, restore,
    kill, cleanup, and daemon restart behavior.
+
+For branding, record the upstream asset source/license and verify the avatar in
+the claimed UI, or document why the existing initials fallback is intentional.
 
 Do not infer that a TUI harness supports Chat. The Chat registry is the explicit
 capability gate.
@@ -294,3 +313,36 @@ attempt visible even after a successful fix.
 
 Publish the PR/report when requested or already authorized. Do not send reports
 to unrelated channels or merge/publish releases as part of integration testing.
+
+## Completion matrix
+
+Include one matrix in the integration PR's current-status section before handoff.
+Use columns **Area | Supported scope | Verification | Proof or reason**.
+Keep every row; scope an excluded interface explicitly rather than deleting it.
+
+| Area | Required disposition |
+| --- | --- |
+| Registration and UI | Trace adapter/driver, registry, API/generated contracts and claimed task/settings surfaces |
+| Models | Catalog/configured/text/default-only mode; pre-launch picker/defaults and effective native selection; in-session options separately |
+| Setup | Official installer or manual guide, actual Settings plan and prerequisites |
+| Readiness | Advertised OS, binary, required config, safe auth state and actionable pre-launch failures |
+| Identity and logo | Product label, licensed asset/source and avatar, or explicit fallback reason |
+| TUI and Chat | Each interface's supported scope and functional/UI evidence; reject excluded surfaces truthfully |
+| Permissions and instructions | Effective supported modes and private instruction delivery/consumption scope |
+| Lifecycle | Active-turn cancel, Kill, exact restore, reconnect/restart and cleanup as claimed |
+| Evidence | Tested source/binaries, real AO UI captures, distinct attempts and reproduction receipt |
+| CI and handoff | Current head checks, merge/conflict state, unresolved gaps and retained-data cleanup |
+
+Verification is `PASS`, `FAIL`, `BLOCKED`, `NOT_RUN`, or `N/A`, with linked proof
+or a concrete reason. `N/A` requires an upstream limitation or explicitly agreed
+scope and truthful capability rejection; unfinished supported wiring stays
+`FAIL`/`BLOCKED`/`NOT_RUN`. An intentional licensed-asset fallback is a recorded
+branding disposition, not permission to omit its row.
+
+Resolve failures within the authorized scope and reverify affected paths. If an
+external blocker remains, hand off the matrix as incomplete with the next action;
+do not call the integration fully verified. A limited-scope integration may be
+complete within that agreed scope but cannot claim a full strict runner PASS.
+Use the [current-status receipt](evidence-and-handoff.md#current-status-and-reproduction-receipt)
+to keep historical proof separate from the current head. This matrix requires
+contributor review; the audit scripts do not generate or enforce it.

@@ -19,6 +19,12 @@ automatic PR publisher, or Chat conformance suite.
 | Operate an audit and identify coverage | [Operating recipe and journey map](references/audit-journeys.md): Doctor, actions, readiness, proof, UI gaps, cleanup |
 | Interpret results, preserve failures, capture screens | [Evidence and handoff](references/evidence-and-handoff.md): gates, diagnostic mode, artifacts, authentication, screenshots |
 
+Before an integration handoff, complete the
+[completion matrix](references/integration-path.md#completion-matrix) and
+[current-status receipt](references/evidence-and-handoff.md#current-status-and-reproduction-receipt).
+These are contributor review gates, not checks enforced by the runner. A runner
+PASS does not establish complete product wiring or current-head runtime proof.
+
 ## Run
 
 Use Node 24 or newer, Git, SQLite CLI, installed native agents, and the Go version
