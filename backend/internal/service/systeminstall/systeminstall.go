@@ -1198,7 +1198,13 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 	}
 	installConfirmed := runErr != nil && devinOutput != nil && devinOutput.Confirmed()
 	if runErr != nil && !installConfirmed {
-		s.finishAgentJob(job, StatusFailed, out.String(), runErr.Error(), "")
+		message := runErr.Error()
+		if plan.Target == TargetAutohand && plan.Method == "official-installer" &&
+			strings.Contains(out.String(), "Downloaded Autohand CLI failed to start") &&
+			strings.Contains(out.String(), "The existing installation was not changed.") {
+			message = fmt.Sprintf("Autohand could not start the downloaded CLI; the existing installation was not changed. Its startup check can time out on a busy machine. Let other updates finish, then retry. (%v)", runErr)
+		}
+		s.finishAgentJob(job, StatusFailed, out.String(), message, "")
 		return
 	}
 

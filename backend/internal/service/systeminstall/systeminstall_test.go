@@ -701,6 +701,58 @@ func TestAgentVendorScriptInstallPersistsInstallVerifySuccessLifecycle(t *testin
 	}
 }
 
+func TestAutohandStartupFailureExplainsRecoveryWithoutClaimingSuccess(t *testing.T) {
+	const startupFailure = "Error: Downloaded Autohand CLI failed to start\nThe existing installation was not changed.\n"
+	for _, tc := range []struct {
+		name     string
+		method   string
+		output   string
+		script   bool
+		wantHint bool
+	}{
+		{name: "installer", method: "official-installer", output: startupFailure, script: true, wantHint: true},
+		{name: "self update", method: "official-installer", output: startupFailure, wantHint: true},
+		{name: "other failure", method: "official-installer", output: "Checksum verification failed\n"},
+		{name: "other method", method: "homebrew", output: startupFailure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestService("darwin", "sh")
+			t.Cleanup(s.stop)
+			s.commands = commandRunnerFunc(func(_ context.Context, _ []string, stdout, _ io.Writer) error {
+				_, _ = io.WriteString(stdout, tc.output)
+				return errors.New("exit status 1")
+			})
+			s.installScripts = installScriptRunnerFunc(func(_ context.Context, _ ports.InstallScriptCommand, stdout, _ io.Writer) (ports.InstallScriptResult, error) {
+				_, _ = io.WriteString(stdout, tc.output)
+				return ports.InstallScriptResult{}, errors.New("exit status 1")
+			})
+			s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+				t.Fatal("failed installer must not verify the old binary as a successful update")
+				return VerifyResult{}, nil
+			})
+			plan := Plan{Target: TargetAutohand, Method: tc.method, Command: []string{"autohand", "update"}}
+			if tc.script {
+				plan.Script = &ports.InstallScriptCommand{URL: "https://autohand.ai/install.sh", Interpreter: []string{"sh"}}
+			}
+			job := &Job{Target: TargetAutohand, Status: StatusInstalling}
+			s.jobs[TargetAutohand] = job
+			s.runAgentOperation(t.Context(), plan, AgentOperationUpdate, job, nil)
+			if job.Status != StatusFailed || job.Output != tc.output {
+				t.Fatalf("job = %+v, want failure with original diagnostics", job)
+			}
+			if tc.wantHint {
+				for _, want := range []string{"existing installation was not changed", "startup check", "retry", "exit status 1"} {
+					if !strings.Contains(job.Error, want) {
+						t.Fatalf("error = %q, want %q", job.Error, want)
+					}
+				}
+			} else if job.Error != "exit status 1" {
+				t.Fatalf("unrelated error was rewritten: %q", job.Error)
+			}
+		})
+	}
+}
+
 func TestAgentVendorScriptInstallPreservesPlanEnvironment(t *testing.T) {
 	s := newTestService("windows", "pwsh.exe")
 	captured := make(chan ports.InstallScriptCommand, 1)
