@@ -89,7 +89,8 @@ function fakeQueryClient() {
 }
 
 function cdcSources() {
-	return EventSourceStub.instances.filter((source) => source.url.endsWith("/api/v1/events"));
+	// The local stream has no path prefix; remote hosts are mounted under /<host>/.
+	return EventSourceStub.instances.filter((source) => /^http:\/\/127\.0\.0\.1:\d+\/api\/v1\/events\?after=latest$/.test(source.url));
 }
 
 function accountSources() {
@@ -280,13 +281,42 @@ describe("createEventTransport", () => {
 		} finally { vi.useRealTimers(); }
 	});
 
+	it("refreshes on a real daemon status change but not on repeated identical pushes", async () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+			const pushStatus = onStatusMock.mock.calls[0][0] as (status: { state: string; port?: number; pid?: number }) => void;
+			const conversationRefreshes = () =>
+				(queryClient.invalidateQueries as ReturnType<typeof vi.fn>).mock.calls.filter(
+					([filters]) => JSON.stringify(filters.queryKey) === JSON.stringify(["conversation"]),
+				).length;
+
+			pushStatus({ state: "ready", port: 3001, pid: 10 });
+			await vi.advanceTimersByTimeAsync(200);
+			const afterFirst = conversationRefreshes();
+			expect(afterFirst).toBeGreaterThan(0);
+
+			pushStatus({ state: "ready", port: 3001, pid: 10 });
+			pushStatus({ state: "ready", port: 3001, pid: 10 });
+			await vi.advanceTimersByTimeAsync(200);
+			expect(conversationRefreshes()).toBe(afterFirst);
+
+			pushStatus({ state: "ready", port: 3001, pid: 11 });
+			await vi.advanceTimersByTimeAsync(200);
+			expect(conversationRefreshes()).toBeGreaterThan(afterFirst);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("opens the CDC and Codex account SSE connections on connect", () => {
 		createEventTransport(fakeQueryClient()).connect();
 
 		expect(EventSourceStub.instances).toHaveLength(2);
 		expect(cdcSources()).toHaveLength(1);
 		expect(accountSources()).toHaveLength(1);
-		expect(cdcSources()[0].url).toBe("http://127.0.0.1:3001/api/v1/events");
+		expect(cdcSources()[0].url).toBe("http://127.0.0.1:3001/api/v1/events?after=latest");
 		expect(accountSources()[0].url).toBe("http://127.0.0.1:3001/api/v1/agents/codex/accounts/events");
 		// All CDC event types plus onmessage are wired up.
 		expect(cdcSources()[0].listeners).toContain("session_updated");
@@ -318,7 +348,7 @@ describe("createEventTransport", () => {
 		expect(firstAccount.closed).toBe(true);
 		expect(cdcSources()).toHaveLength(2);
 		expect(accountSources()).toHaveLength(2);
-		expect(cdcSources()[1].url).toBe("http://127.0.0.1:3099/api/v1/events");
+		expect(cdcSources()[1].url).toBe("http://127.0.0.1:3099/api/v1/events?after=latest");
 	});
 
 	it("does not make a new daemon port serve the dead port's backoff delay", () => {
@@ -407,6 +437,23 @@ describe("createEventTransport", () => {
 			vi.advanceTimersByTime(200);
 
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["conversation"] }, { cancelRefetch: false });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("refreshes event-scoped caches on reopen because the stream starts at the newest event", () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+			cdcSources()[0].onopen?.();
+
+			vi.advanceTimersByTime(200);
+
+			for (const queryKey of [["session-reviews"], ["session-interface-transition"], ["agent-models"]]) {
+				expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey }, { cancelRefetch: false });
+			}
 		} finally {
 			vi.useRealTimers();
 		}
@@ -715,6 +762,7 @@ describe("createEventTransport", () => {
 
 	it("rebuilds a source the browser abandoned after the retry delay", () => {
 		vi.useFakeTimers();
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
 		try {
 			createEventTransport(fakeQueryClient()).connect();
 			const source = cdcSources()[0];
@@ -725,9 +773,49 @@ describe("createEventTransport", () => {
 			expect(cdcSources()).toHaveLength(1);
 			vi.advanceTimersByTime(5_000);
 			expect(cdcSources()).toHaveLength(2);
-			expect(cdcSources()[1].url).toBe("http://127.0.0.1:3001/api/v1/events");
+			expect(cdcSources()[1].url).toBe("http://127.0.0.1:3001/api/v1/events?after=latest");
 		} finally {
 			vi.useRealTimers();
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("drops the cursor for a daemon that rejects ?after=latest", async () => {
+		vi.useFakeTimers();
+		const fetchMock = vi.fn().mockResolvedValue({ status: 400 });
+		vi.stubGlobal("fetch", fetchMock);
+		try {
+			createEventTransport(fakeQueryClient()).connect();
+			const source = cdcSources()[0];
+
+			// An older daemon answers 400, so the stream closes without ever opening.
+			source.readyState = 2;
+			source.onerror?.();
+			expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:3001/api/v1/events?after=latest", expect.anything());
+
+			await vi.advanceTimersByTimeAsync(5_000);
+			const latest = EventSourceStub.instances.filter((s) => s.url.includes("/api/v1/events")).at(-1);
+			expect(latest?.url).toBe("http://127.0.0.1:3001/api/v1/events");
+		} finally {
+			vi.useRealTimers();
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("does not probe once the stream has opened", () => {
+		vi.useFakeTimers();
+		const fetchMock = vi.fn().mockResolvedValue({ status: 200 });
+		vi.stubGlobal("fetch", fetchMock);
+		try {
+			createEventTransport(fakeQueryClient()).connect();
+			const source = cdcSources()[0];
+			source.onopen?.();
+			source.readyState = 2;
+			source.onerror?.();
+			expect(fetchMock).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+			vi.unstubAllGlobals();
 		}
 	});
 
@@ -745,7 +833,7 @@ describe("createEventTransport", () => {
 		expect(firstAccount.closed).toBe(true);
 		expect(cdcSources()).toHaveLength(2);
 		expect(accountSources()).toHaveLength(2);
-		expect(cdcSources()[1].url).toBe("http://127.0.0.1:4555/api/v1/events");
+		expect(cdcSources()[1].url).toBe("http://127.0.0.1:4555/api/v1/events?after=latest");
 	});
 
 	it("resets the connection state and unsubscribes on disconnect", () => {

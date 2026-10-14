@@ -134,7 +134,7 @@ import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { applyOrder } from "../lib/sidebar-order";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { SessionArchiveDialog } from "./SessionArchiveDialog";
+import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
 import { CreateProjectFlow, type CloneProjectInput, type CreateProjectInput } from "./CreateProjectFlow";
 import { ResizeHandle } from "./ResizeHandle";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
@@ -2588,9 +2588,9 @@ const SessionActions = memo(function SessionActions({
 		setConfirmOpen(true);
 	};
 
-	const confirmArchive = () => {
+	const confirmArchive = ({ deleteArtifacts }: SessionArchiveChoice) => {
 		setConfirmOpen(false);
-		terminateSession(session);
+		terminateSession({ ...session, deleteArtifacts });
 	};
 
 	return (

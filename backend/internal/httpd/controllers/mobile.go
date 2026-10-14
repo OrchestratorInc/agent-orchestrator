@@ -255,6 +255,9 @@ type BridgeService struct {
 
 	// Guards Tunnel, which ensureTunnel may replace while HTTP handlers read it.
 	tunnelMu sync.RWMutex
+	// tunnelResolving is closed once ResolveTunnelInBackground's lookup ends.
+	// Nil when no background lookup was started.
+	tunnelResolving chan struct{}
 
 	// stateMu protects only the short-lived in-memory status snapshot below. No
 	// listener, filesystem, or connector call may run while it is held.
@@ -354,6 +357,7 @@ func (b *BridgeService) tunnel() TunnelController {
 // Called where a connector is about to be needed, not on every read: probing
 // the filesystem to answer a status poll would be wasteful.
 func (b *BridgeService) ensureTunnel() TunnelController {
+	b.awaitBootTunnel()
 	if t := b.tunnel(); t != nil {
 		return t
 	}
@@ -375,6 +379,40 @@ func (b *BridgeService) ensureTunnel() TunnelController {
 	return b.Tunnel
 }
 
+// ResolveTunnelInBackground runs the boot-time connector lookup off the
+// daemon's startup path. Until it finishes, status reads and ensureTunnel wait
+// for its answer, so nothing reports remote access as unavailable, or looks up
+// a second connector, in the moment before it lands.
+func (b *BridgeService) ResolveTunnelInBackground(resolve func() TunnelController) {
+	done := make(chan struct{})
+	b.tunnelMu.Lock()
+	b.tunnelResolving = done
+	b.tunnelMu.Unlock()
+	go func() {
+		defer close(done)
+		t := resolve()
+		if t == nil {
+			return
+		}
+		b.tunnelMu.Lock()
+		defer b.tunnelMu.Unlock()
+		if b.Tunnel == nil {
+			b.Tunnel = t
+		}
+	}()
+}
+
+// awaitBootTunnel blocks until the boot-time lookup, if any, has finished. The
+// lookup is bounded by the cloudflared version probe's timeout.
+func (b *BridgeService) awaitBootTunnel() {
+	b.tunnelMu.RLock()
+	done := b.tunnelResolving
+	b.tunnelMu.RUnlock()
+	if done != nil {
+		<-done
+	}
+}
+
 func (b *BridgeService) tunnelEndpoint() *mobilebridge.TunnelEndpoint {
 	t := b.tunnel()
 	if t == nil {
@@ -384,6 +422,7 @@ func (b *BridgeService) tunnelEndpoint() *mobilebridge.TunnelEndpoint {
 }
 
 func (b *BridgeService) tunnelStatus() mobilebridge.TunnelStatus {
+	b.awaitBootTunnel()
 	t := b.tunnel()
 	if t == nil {
 		return mobilebridge.TunnelStatus{} // Supported stays false: nothing to run.
