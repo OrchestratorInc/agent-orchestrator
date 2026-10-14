@@ -4,6 +4,15 @@ import { AgentAvatar } from "./AgentAvatar";
 import fxLogo from "../assets/agents/fx.svg";
 
 describe("AgentAvatar", () => {
+	it("renders the mastra-code brand asset", () => {
+		render(<AgentAvatar provider="mastra-code" />);
+
+		expect(screen.getByRole("img", { name: "mastra-code" })).toHaveAttribute(
+			"src",
+			expect.stringContaining("mastra-code.svg"),
+		);
+	});
+
 	it("renders the official fx brand asset", () => {
 		render(<AgentAvatar provider="fx" />);
 		expect(screen.getByRole("img", { name: "fx" })).toHaveAttribute("src", fxLogo);
