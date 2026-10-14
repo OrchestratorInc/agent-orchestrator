@@ -21,6 +21,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 	_ "modernc.org/sqlite" // Register the driver for read-only native history queries.
+	sqlite3 "modernc.org/sqlite/lib"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
@@ -295,7 +296,11 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	var children int
 	err = db.QueryRowContext(ctx, "SELECT COALESCE(cwd,''), (SELECT count(*) FROM messages WHERE session_id=sessions.id), (SELECT count(*) FROM sessions child WHERE child.parent_session_id=sessions.id) FROM sessions WHERE id=?", id).Scan(&cwd, &messages, &children)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, false, fmt.Errorf("hermes: native state database unavailable (WAL recovery may be required): %w", err)
+		var coded interface{ Code() int }
+		if errors.As(err, &coded) && coded.Code() == sqlite3.SQLITE_READONLY_RECOVERY {
+			return nil, false, fmt.Errorf("hermes: native state database needs WAL recovery; resume Hermes natively once, then retry restore: %w", err)
+		}
+		return nil, false, fmt.Errorf("hermes: native state database unavailable: %w", err)
 	}
 	if err != nil || messages == 0 || children != 0 || filepath.Clean(cwd) != filepath.Clean(cfg.Session.WorkspacePath) {
 		return nil, false, fmt.Errorf("hermes: native history missing, compressed, or workspace mismatch")

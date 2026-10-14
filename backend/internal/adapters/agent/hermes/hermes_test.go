@@ -2,6 +2,7 @@ package hermes
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -101,6 +102,44 @@ func TestNativeStateDSNEscapesQueryCharacters(t *testing.T) {
 	dsn := nativeStateDSN("/tmp/hermes?override#fragment")
 	if !strings.Contains(dsn, "%3Foverride%23fragment") || !strings.Contains(dsn, "?mode=ro&_pragma=busy_timeout(1000)") {
 		t.Fatalf("unsafe native state DSN: %q", dsn)
+	}
+	if runtime.GOOS == "windows" {
+		return // Windows filenames cannot contain '?'.
+	}
+	fixtureDB := filepath.Join(t.TempDir(), "state.db")
+	writer, err := sql.Open("sqlite", fixtureDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Exec(`CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('correct database')`); err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(t.TempDir(), "hermes?override#fragment")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(fixtureDB, filepath.Join(home, "state.db")); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := sql.Open("sqlite", nativeStateDSN(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reader.Close() }()
+	var value string
+	if err := reader.QueryRow(`SELECT value FROM probe`).Scan(&value); err != nil || value != "correct database" {
+		t.Fatalf("escaped DSN read = %q, err = %v", value, err)
+	}
+	var timeout int
+	if err := reader.QueryRow(`PRAGMA busy_timeout`).Scan(&timeout); err != nil || timeout != 1000 {
+		t.Fatalf("busy_timeout = %d, err = %v; want 1000", timeout, err)
+	}
+	if _, err := reader.Exec(`INSERT INTO probe VALUES('must fail')`); err == nil {
+		t.Fatal("escaped DSN lost mode=ro")
 	}
 }
 
