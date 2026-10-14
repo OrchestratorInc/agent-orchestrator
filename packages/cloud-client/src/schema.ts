@@ -922,6 +922,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/coder-templates/{templateId}/parameters/evaluate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                templateId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The template's parameters with the given draft values applied. A template using Coder's dynamic parameters can declare a parameter only for certain values of another (for example a custom repository URL once "Other" is selected); evaluating with the draft values lists it, and each parameter carries Coder's diagnostics for its value. A template on Coder's classic parameter flow, or a Coder without dynamic parameters, answers with the same static parameters as the GET. 403 provider_forbidden for organizations without Coder; 404 coder_template_not_found for an unknown template; 422 validation_error for invalid values; 502 coder_unavailable when Coder cannot be read. */
+        post: operations["evaluateCoderTemplateParameters"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/worker/bootstrap": {
         parameters: {
             query?: never;
@@ -979,7 +999,9 @@ export interface paths {
         /** @description Publishes one allowlisted event. `agent.activity` carries an explicit
          *     coding-agent lifecycle hook signal. `worker.ready` must identify the
          *     authenticated worker and epoch. `chat.assistant_delta` is fenced by both
-         *     the token epoch and the claimed turn attempt.
+         *     the token epoch and the claimed turn attempt. `workspace.setup` reports
+         *     the outcome of the project's Setup commands and is appended to the
+         *     session's event stream.
          *      */
         post: operations["publishWorkerEvent"];
         delete?: never;
@@ -1591,9 +1613,13 @@ export interface components {
             /** @description Defaults to enabled when absent. Independent of session autoInjectReview feedback delivery. */
             autoReview?: boolean;
             coder?: components["schemas"]["ProjectCoderConfig"];
+            postCreate?: components["schemas"]["ProjectScriptCommands"];
+            preRemove?: components["schemas"]["ProjectScriptCommands"];
         } & {
             [key: string]: unknown;
         };
+        /** @description A project's Setup (postCreate) or Cleanup (preRemove) shell commands, the same settings a local project has. Setup commands run in order with sh -c in the session's working directory after its checkout and before the coding agent starts, once per session, each within 10 minutes; a failing step keeps the agent from starting until the session is reopened. Cleanup commands run in order before the session's workspace is deleted (Coder only), best effort and within 10 minutes in total. Both see AO_SESSION_ID, AO_SESSION_KIND, AO_SESSION_BRANCH, AO_WORKSPACE_DIR, AO_WORKTREE_PATH, AO_SOURCE_TREE_PATH, AO_REPOSITORY_URL, AO_PROJECT_ID and AO_PROJECT_NAME. An empty array clears them. */
+        ProjectScriptCommands: string[];
         /** @description Coder dev-kit settings inherited by every Coder session of the project. */
         ProjectCoderConfig: {
             /**
@@ -1630,6 +1656,13 @@ export interface components {
                 description: string;
             }[];
             order: number;
+            /** @description Coder's problems with the parameter's value; only set when evaluated against draft values. */
+            diagnostics?: {
+                /** @description "error" or "warning". */
+                severity: string;
+                summary: string;
+                detail?: string;
+            }[];
         };
         OrgCoderConfig: {
             baseUrl: string;
@@ -1651,6 +1684,10 @@ export interface components {
             readyProbeTimeoutSeconds?: number;
             /** @description Work in the checkout of the project repository the template already cloned (under $HOME/work/* or $HOME/*) instead of cloning into ~/repository. Always false for the ao-worker user; defaults to true for the workspace user. */
             reuseExistingCheckout: boolean;
+            /** @description Where sessions work: an absolute path or one starting with ~/ or $HOME/, optionally containing {repo} for the repository name (for example ~/work/{repo}). An existing checkout of the session repository there is adopted, a missing or empty directory gets a fresh clone, and anything else fails the checkout. Replaces the reuseExistingCheckout search. Requires the workspace worker user. */
+            workingDirectory?: string;
+            /** @description Keep Claude Code's file tools (and the file commands it recognizes in Bash) from reading or editing .env and .env.* files, except .env.example, .env.sample and .env.template. Defaults to true. Programs that load .env themselves are unaffected. */
+            protectSecretFiles: boolean;
         };
         /**
          * @description Who runs AO's worker and agent in the workspace: a dedicated ao-worker user (default; added to the docker group when one exists), or the workspace's own login user with its real HOME, groups and environment.
@@ -1689,6 +1726,10 @@ export interface components {
             readyProbeTimeoutSeconds?: number;
             /** @description Omit for the default (true with the workspace user). */
             reuseExistingCheckout?: boolean;
+            /** @description Where sessions work: an absolute path or one starting with ~/ or $HOME/, optionally containing {repo} for the repository name (for example ~/work/{repo}). An existing checkout of the session repository there is adopted, a missing or empty directory gets a fresh clone, and anything else fails the checkout. Replaces the reuseExistingCheckout search. Requires the workspace worker user. */
+            workingDirectory?: string;
+            /** @description Keep Claude Code's file tools (and the file commands it recognizes in Bash) from reading or editing .env and .env.* files, except .env.example, .env.sample and .env.template. Defaults to true. Programs that load .env themselves are unaffected. Omit to keep the stored value (true when never set). */
+            protectSecretFiles?: boolean;
         };
         ProjectCoderRepository: {
             /** Format: uri */
@@ -1711,6 +1752,8 @@ export interface components {
                 workspaceNamePrefix?: components["schemas"]["CoderWorkspaceNamePrefix"];
                 parameters?: components["schemas"]["CoderTemplateParameterValues"];
             };
+            postCreate?: components["schemas"]["ProjectScriptCommands"];
+            preRemove?: components["schemas"]["ProjectScriptCommands"];
         };
         ProjectSettingsInput: {
             displayName?: string;
@@ -1997,7 +2040,48 @@ export interface components {
             type: "agent.activity";
             payload: components["schemas"]["WorkerActivityPayload"];
         };
-        WorkerEventInput: components["schemas"]["WorkerActivityEventInput"] | components["schemas"]["WorkerReadyEventInput"] | components["schemas"]["WorkerOutputEventInput"];
+        WorkerSetupPayload: {
+            /** @enum {string} */
+            status: "succeeded" | "failed" | "timed_out";
+            /** @description The 1-based Setup command that failed or timed out; absent on success. */
+            step?: number;
+            /** @description The failed command's exit status; -1 when it timed out or could not run. */
+            exitCode: number;
+            durationMs: number;
+            /** @description Redacted tail of the failed (or last) command's combined output, at most 2 KiB. */
+            output?: string;
+        };
+        WorkerSetupEventInput: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "workspace.setup";
+            payload: components["schemas"]["WorkerSetupPayload"];
+        };
+        /** @description Whether the worker could prepare the session's workspace for its agent (repository checkout, the Coder connection's working directory and the project's Setup commands). A failure becomes the session's startup error and stays until a later ready report clears it. */
+        WorkerWorkspaceStartupPayload: {
+            /** @enum {string} */
+            status: "failed" | "ready";
+            /**
+             * @description Required when status is failed.
+             * @enum {string}
+             */
+            code?: "repository_checkout_failed" | "working_directory_unusable" | "project_setup_failed";
+            /** @description User-facing explanation; required when status is failed. */
+            message?: string;
+            /** @description Redacted excerpt, for Setup the failed command's output tail. */
+            detail?: string;
+        };
+        WorkerWorkspaceStartupEventInput: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "workspace.startup";
+            payload: components["schemas"]["WorkerWorkspaceStartupPayload"];
+        };
+        WorkerEventInput: components["schemas"]["WorkerActivityEventInput"] | components["schemas"]["WorkerReadyEventInput"] | components["schemas"]["WorkerOutputEventInput"] | components["schemas"]["WorkerSetupEventInput"] | components["schemas"]["WorkerWorkspaceStartupEventInput"];
         WorkerOKResponse: {
             /** @constant */
             ok: true;
@@ -2348,14 +2432,16 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
-        /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. */
+        /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. The worker-reported codes repository_checkout_failed, working_directory_unusable and project_setup_failed are the exception: the worker has checked in but could not prepare the workspace, so the agent does not start; they stay until the worker reports the workspace ready after the user reopens the session (a workspace checkout request). */
         SessionStartupError: {
-            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, or workspace_setup_not_ready (a Coder connection's workspace ready check never passed). Clients must tolerate codes added later. */
+            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, workspace_setup_not_ready (a Coder connection's workspace ready check never passed), repository_checkout_failed, working_directory_unusable or project_setup_failed (reported by the worker). Clients must tolerate codes added later. */
             code: string;
             /** @description Human-readable explanation suitable for display as-is. */
             message: string;
             /** Format: date-time */
             at: string;
+            /** @description Redacted detail behind the error: operator detail for an organization's own (bring-your-own) compute, and the failed command's output for project_setup_failed. */
+            detail?: string;
         };
         CreateSessionInput: {
             /** Format: uuid */
@@ -4531,6 +4617,41 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description The template's parameters in Coder's order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        parameters: components["schemas"]["CoderTemplateParameter"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    evaluateCoderTemplateParameters: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                templateId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Draft parameter values by name, encoded as in project config coder.parameters. */
+                    values: {
+                        [key: string]: string;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description The template's parameters for these values, in Coder's order. */
             200: {
                 headers: {
                     [name: string]: unknown;

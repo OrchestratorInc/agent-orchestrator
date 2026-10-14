@@ -82,11 +82,14 @@ type nestedMessageState struct {
 }
 
 type conversation struct {
-	conn            *acpsdk.ClientSideConnection
-	legacyWire      *legacyACPTransport
-	proc            *process
-	log             *slog.Logger
-	providerScopeID string
+	conn                 *acpsdk.ClientSideConnection
+	legacyWire           *legacyACPTransport
+	proc                 *process
+	log                  *slog.Logger
+	providerScopeID      string
+	decodeConversationID func(string) (string, error)
+	canDeleteFork        bool
+	unadoptedForkID      string
 
 	mu                 sync.Mutex
 	sessionID          string
@@ -130,6 +133,7 @@ type conversation struct {
 	onAuthRejected        func()
 	promptResponseFailure func(acpsdk.PromptResponse) error
 	hibernationCheck      func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
+	historyNotice         func(string) bool
 	// preamble is standing context attached to the first prompt that actually
 	// reaches the provider. It is the delivery channel for agents that accept no
 	// system-prompt launch flag and ignore session/new _meta but do execute
@@ -975,6 +979,15 @@ func (c *conversation) ResolveRequest(
 // discard rolls back setup without leaving a newly created host behind.
 // A failed adoption has no authority to terminate an existing provider.
 func (c *conversation) discard() {
+	if c.unadoptedForkID != "" && c.canDeleteFork {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err := c.conn.UnstableDeleteSession(ctx, acpsdk.UnstableDeleteSessionRequest{SessionId: acpsdk.SessionId(c.unadoptedForkID)})
+		if err != nil {
+			c.log.Warn("failed to delete unadopted ACP fork", "error", err)
+		}
+		cancel()
+		c.unadoptedForkID = ""
+	}
 	if c.proc.reconnected {
 		_ = c.Close()
 	} else {

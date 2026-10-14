@@ -1,10 +1,8 @@
-import { useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Copy, ExternalLink, File, FileText, Folder, Globe, Loader2, Plus, Search } from "lucide-react";
+import { ChevronDown, File, FileText, Folder, Globe, Loader2, Plus, Search } from "lucide-react";
 import { ScrollArea } from "radix-ui";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCreateArtifactSession } from "../hooks/useCreateArtifactSession";
-import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import {
 	artifactCount,
@@ -13,7 +11,6 @@ import {
 	type ArtifactGroup,
 	type ArtifactRow,
 } from "../lib/artifacts";
-import { aoBridge } from "../lib/bridge";
 import { formatTimeCompact } from "../lib/format-time";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { hidesShellTopbar } from "../lib/platform";
@@ -164,26 +161,13 @@ function ArtifactGroupSection({ group }: { group: ArtifactGroup }) {
 
 function ArtifactListRow({ row }: { row: ArtifactRow }) {
 	const { t } = useTranslation();
-	const queryClient = useQueryClient();
 	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
-	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const navigateToSession = useNavigateToSession();
 	const KindIcon = row.kind === "html" ? Globe : row.kind === "markdown" ? FileText : File;
-	const externalUrl = row.previewUrl ?? row.rawUrl;
 
 	const open = () => {
 		requestWorkspaceFileOpen(row.sessionId, row.path, undefined, "artifact");
 		navigateToSession(row.projectId, row.sessionId);
-	};
-	const copyContents = async () => {
-		try {
-			const file = await queryClient.fetchQuery(sessionArtifactFileQueryOptions(row.sessionId, row.path, row.rawUrl, t("files.error.loadArtifact")));
-			if (file.binary) throw new Error(t("artifacts.copyBinary"));
-			await aoBridge.clipboard.writeText(file.content);
-			showGlobalToast(t("artifacts.copied", { name: row.name }));
-		} catch (error) {
-			showGlobalToast(error instanceof Error ? error.message : t("files.error.loadArtifact"), undefined, "error");
-		}
 	};
 
 	return (
@@ -207,40 +191,11 @@ function ArtifactListRow({ row }: { row: ArtifactRow }) {
 				<span className="relative z-[1] shrink-0 truncate text-control font-medium text-foreground">{row.name}</span>
 				<span className="relative z-[1] min-w-0 truncate text-xs text-muted-foreground">{row.sessionTitle}</span>
 			</button>
-			<div className="relative z-[2] flex shrink-0 items-center gap-0.5 opacity-0 group-hover/artifact:opacity-100 group-has-focus-visible/artifact:opacity-100">
-				<RowAction label={t("artifacts.copy")} onClick={() => void copyContents()}>
-					<Copy className="size-icon-sm" />
-				</RowAction>
-				{externalUrl ? (
-					<RowAction label={t("artifacts.openExternal")} onClick={() => window.open(externalUrl, "_blank", "noopener,noreferrer")}>
-						<ExternalLink className="size-icon-sm" />
-					</RowAction>
-				) : null}
-			</div>
 			<time dateTime={row.updatedAt} className="relative z-[1] ms-auto w-20 shrink-0 text-right text-xs tabular-nums text-passive">
 				{formatTimeCompact(row.updatedAt)}
 			</time>
 			</div>
 		</li>
-	);
-}
-
-function RowAction({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
-	return (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<Button
-					variant="ghost"
-					size="icon-sm"
-					className="text-muted-foreground active:not-aria-[haspopup]:translate-y-0 active:not-aria-[haspopup]:scale-100"
-					aria-label={label}
-					onClick={onClick}
-				>
-					{children}
-				</Button>
-			</TooltipTrigger>
-			<TooltipContent>{label}</TooltipContent>
-		</Tooltip>
 	);
 }
 

@@ -74,6 +74,17 @@ describe("cloud control-plane Coder template parameters", () => {
 			expect.objectContaining({ method: "GET" }),
 		);
 	});
+
+	it("evaluates a template's parameters with draft values", async () => {
+		const parameters = [{ name: "other_github_repo", type: "string", mutable: false, required: false, defaultValue: "" }];
+		const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ parameters }), { status: 200, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		await expect(client.evaluateCoderTemplateParameters("org/a", "tpl 1", { github_repos: "[\"Other\"]" })).resolves.toEqual({ parameters });
+		const [url, init] = fetchImpl.mock.calls[0];
+		expect(url).toBe("https://cloud.example.test/api/cloud/v1/orgs/org%2Fa/coder-templates/tpl%201/parameters/evaluate");
+		expect(init).toMatchObject({ method: "POST" });
+		expect(JSON.parse(String(init.body))).toEqual({ values: { github_repos: "[\"Other\"]" } });
+	});
 });
 
 describe("cloud control-plane session lifecycle", () => {

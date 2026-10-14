@@ -190,8 +190,11 @@ const (
 	ChatCapabilityCompaction ChatCapability = "compaction"
 	// ChatCapabilityRollback means history can be discarded back to a turn.
 	ChatCapabilityRollback ChatCapability = "rollback"
-	// ChatCapabilityFork means a conversation can be branched.
+	// ChatCapabilityFork means a conversation can be branched at a completed turn.
 	ChatCapabilityFork ChatCapability = "fork"
+	// ChatCapabilityForkCurrent copies the current provider context only; it
+	// must not enable historical edits that require an exact turn cutoff.
+	ChatCapabilityForkCurrent ChatCapability = "fork_current"
 	// ChatCapabilityPromptReplay means AO can open a fresh provider session with
 	// a durable textual transcript supplied as context. This is an approximation
 	// of fork for providers whose protocol cannot fork from a historical turn.
@@ -294,6 +297,11 @@ type ChatStartConfig struct {
 	// until they know a new provider process is required; live adoption must keep
 	// the verifier for the bearer already held by the surviving process.
 	PrepareEnv func(context.Context) (map[string]string, error)
+	// AcquireForkSource locks a current-context source immediately before the
+	// provider copies it. Fork drivers release it before loading the child.
+	AcquireForkSource func(context.Context) (copyCtx context.Context, release func(), err error)
+	// RecordFork records an independent child before loading or activating it.
+	RecordFork func(context.Context, string) error
 	// Model is optional; empty defers to the provider's configured default.
 	Model string
 	// Effort is an optional provider-advertised model tuning value; empty
@@ -305,6 +313,9 @@ type ChatStartConfig struct {
 	// ReadOnly requires a provider-enforced sandbox that cannot modify the
 	// workspace. It is used for review-owned conversations.
 	ReadOnly bool
+	// DisableNetwork requests tool network isolation for read-only background
+	// conversations. Supporting drivers must not inherit reviewer network access.
+	DisableNetwork bool
 	// SystemPrompt carries AO's standing instructions for the session.
 	SystemPrompt string
 	// ProviderScopeID identifies the AO ownership boundary for opaque provider
@@ -734,7 +745,8 @@ type (
 		Fork(ctx context.Context, lastProviderTurnID *string) (providerConversationID string, err error)
 	}
 	// ChatIsolatedForker creates the fork in the destination provider host. The
-	// source host and its active writer remain untouched.
+	// source host and its active writer remain untouched. An empty turn id
+	// copies current context; the caller must keep the source quiescent.
 	ChatIsolatedForker interface {
 		ForkIntoHost(ctx context.Context, sourceProviderConversationID, lastProviderTurnID string, cfg ChatStartConfig) (ChatConversation, error)
 	}

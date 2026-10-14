@@ -163,6 +163,8 @@ vi.mock("../hooks/useCloudCp", () => ({
 			listGitHubRepositories: cloudMocks.listGitHubRepositories,
 			createGitHubProject: cloudMocks.createGitHubProject,
 			getCoderTemplateParameters: cloudMocks.getCoderTemplateParameters,
+			evaluateCoderTemplateParameters: (orgId: string, templateId: string, _values: unknown, options: unknown) =>
+				cloudMocks.getCoderTemplateParameters(orgId, templateId, options),
 			listProjects: cloudMocks.listProjects,
 		},
 		ready: cloudMocks.cloudEnabled && cloudMocks.sessionStatus === "authenticated",
@@ -2578,8 +2580,8 @@ describe("CreateProjectFlow project import validation", () => {
 		await screen.findByLabelText("Worker agent");
 
 		const prefix = screen.getByRole("textbox", { name: "Workspace name prefix" });
-		expect(prefix).toHaveAttribute("placeholder", "ao");
-		expect(screen.getByText("Coder workspaces are named <prefix>-<id>. Leave empty to use ao.")).toBeInTheDocument();
+		expect(prefix).toHaveAttribute("placeholder", "app");
+		expect(screen.getByText("Coder workspaces are named <prefix>-<id>. Leave empty to use the project name.")).toBeInTheDocument();
 		await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
 
 		for (const invalid of ["Team", "team-", "te--am", "1team"]) {

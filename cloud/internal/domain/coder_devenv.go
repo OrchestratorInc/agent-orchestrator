@@ -26,7 +26,16 @@ const (
 	DefaultCoderReadyProbeTimeoutSeconds = 900
 	MinCoderReadyProbeTimeoutSeconds     = 30
 	MaxCoderReadyProbeTimeoutSeconds     = 3600
+
+	MaxCoderWorkingDirectoryLength = 512
+	// CoderWorkingDirectoryRepo is the placeholder a working directory may use
+	// for the repository name (the last path segment of its URL, without .git).
+	CoderWorkingDirectoryRepo = "{repo}"
 )
+
+// ErrCoderSettingRequiresWorkspaceUser marks a dev-environment setting that
+// only works when the worker runs as the workspace's own login user.
+var ErrCoderSettingRequiresWorkspaceUser = errors.New("coder setting requires the workspace worker user")
 
 // Bounds for ProjectCoderConfig.Parameters.
 const (
@@ -51,6 +60,9 @@ func (c *OrgCoderConfig) normalizeDevEnvironment() {
 		reuse = c.ReuseExistingCheckout == nil || *c.ReuseExistingCheckout
 	}
 	c.ReuseExistingCheckout = &reuse
+	protect := c.ProtectSecretFiles == nil || *c.ProtectSecretFiles
+	c.ProtectSecretFiles = &protect
+	c.WorkingDirectory = strings.TrimSpace(c.WorkingDirectory)
 }
 
 // ReusesExistingCheckout reports whether sessions should adopt a checkout the
@@ -58,6 +70,12 @@ func (c *OrgCoderConfig) normalizeDevEnvironment() {
 func (c OrgCoderConfig) ReusesExistingCheckout() bool {
 	return c.WorkerUser == CoderWorkerUserWorkspace &&
 		(c.ReuseExistingCheckout == nil || *c.ReuseExistingCheckout)
+}
+
+// ProtectsSecretFiles reports whether sessions keep the coding agent out of
+// secret environment files. Unset means yes.
+func (c OrgCoderConfig) ProtectsSecretFiles() bool {
+	return c.ProtectSecretFiles == nil || *c.ProtectSecretFiles
 }
 
 // ValidateDevEnvironment checks the worker-user, ready-probe and timeout
@@ -80,6 +98,44 @@ func (c OrgCoderConfig) ValidateDevEnvironment() error {
 			c.ReadyProbeTimeoutSeconds > MaxCoderReadyProbeTimeoutSeconds) {
 		return fmt.Errorf("The workspace ready check timeout must be between %d and %d seconds.",
 			MinCoderReadyProbeTimeoutSeconds, MaxCoderReadyProbeTimeoutSeconds)
+	}
+	if c.WorkerUser != CoderWorkerUserWorkspace && c.WorkingDirectory != "" {
+		return fmt.Errorf("%w: the working directory needs AO to run as the workspace user", ErrCoderSettingRequiresWorkspaceUser)
+	}
+	return ValidateCoderWorkingDirectory(c.WorkingDirectory)
+}
+
+// ValidateCoderWorkingDirectory checks a working directory template: empty,
+// or an absolute path or one under home ("~/" or "$HOME/"), at most
+// MaxCoderWorkingDirectoryLength characters, without control characters,
+// ".." segments or placeholders other than CoderWorkingDirectoryRepo.
+func ValidateCoderWorkingDirectory(value string) error {
+	if value == "" {
+		return nil
+	}
+	if utf8.RuneCountInString(value) > MaxCoderWorkingDirectoryLength || !utf8.ValidString(value) {
+		return fmt.Errorf("The working directory must be at most %d characters.", MaxCoderWorkingDirectoryLength)
+	}
+	if strings.IndexFunc(value, func(character rune) bool { return character < ' ' || character == 0x7f }) >= 0 {
+		return errors.New("The working directory contains invalid characters.")
+	}
+	rest, ok := strings.CutPrefix(value, "~/")
+	if !ok {
+		rest, ok = strings.CutPrefix(value, "$HOME/")
+	}
+	if !ok {
+		rest, ok = strings.CutPrefix(value, "/")
+	}
+	if !ok || strings.Trim(rest, "/") == "" {
+		return errors.New("The working directory must be an absolute path or start with ~/ or $HOME/, and name a directory below it.")
+	}
+	for _, segment := range strings.Split(rest, "/") {
+		if segment == ".." || segment == "." {
+			return errors.New("The working directory must not contain . or .. segments.")
+		}
+	}
+	if strings.ContainsAny(strings.ReplaceAll(rest, CoderWorkingDirectoryRepo, ""), "{}$`\\") {
+		return fmt.Errorf("The working directory may only use %s as a placeholder.", CoderWorkingDirectoryRepo)
 	}
 	return nil
 }

@@ -209,6 +209,33 @@ beforeEach(() => {
 	useUiStore.setState({ isSidebarOpen: true, inspectorSessions: {} });
 });
 
+describe("ChatWorkspace prompt suggestions", () => {
+	it("inserts a contextual suggestion into the normal draft on Tab without sending it", async () => {
+		const onSend = vi.fn();
+		const promptSuggestion = { id: "context-1", text: "Explain the fix." };
+		const snapshot = { ...chatFixtureSettled, sessionId: "suggestion-workspace" };
+		render(<ChatWorkspace snapshot={snapshot} promptSuggestion={promptSuggestion} onSend={onSend} />);
+		expect(screen.getByTestId("prompt-suggestion")).toHaveTextContent(promptSuggestion.text);
+		const editor = screen.getByRole("combobox", { name: "Message the agent" });
+		await userEvent.click(editor);
+		fireEvent.keyDown(editor, { key: "Tab", code: "Tab" });
+		await waitFor(() => expect(editor).toHaveTextContent(promptSuggestion.text));
+		expect(readChatSessionDraft(snapshot.sessionId).composer.text).toBe(promptSuggestion.text);
+		expect(onSend).not.toHaveBeenCalled();
+	});
+
+	it("withholds suggestions while the normal entry is locked", () => {
+		const props = {
+			snapshot: { ...chatFixtureSettled, sessionId: "suggestion-workspace-locked" },
+			promptSuggestion: { id: "context-1", text: "Explain the fix." },
+		};
+		const view = render(<ChatWorkspace {...props} newWorkDisabled />);
+		expect(screen.queryByTestId("prompt-suggestion")).not.toBeInTheDocument();
+		view.rerender(<ChatWorkspace {...props} />);
+		expect(screen.getByTestId("prompt-suggestion")).toHaveTextContent(props.promptSuggestion.text);
+	});
+});
+
 afterEach(async () => {
 	restoreTimelineGeometry?.();
 	restoreTimelineGeometry = undefined;

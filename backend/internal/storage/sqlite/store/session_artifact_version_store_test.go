@@ -61,4 +61,11 @@ func TestSessionArtifactVersionStoreAppendsListsAndPrunes(t *testing.T) {
 	if n, err := s.CountSessionArtifactVersionsBySHA(ctx, "other", "ddd"); err != nil || n != 0 {
 		t.Fatalf("count for other session = %d err=%v, want 0", n, err)
 	}
+
+	if err := s.DeleteSessionArtifactVersions(ctx, sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	if latest, err := s.ListLatestSessionArtifactVersions(ctx, sess.ID); err != nil || len(latest) != 0 {
+		t.Fatalf("latest after delete = %+v err=%v, want none", latest, err)
+	}
 }

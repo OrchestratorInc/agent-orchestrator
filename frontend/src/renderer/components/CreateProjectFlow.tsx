@@ -43,7 +43,7 @@ import { cloudAgentInfos } from "../lib/cloud-agents";
 import { aoBridge } from "../lib/bridge";
 import { CloudCpError } from "../lib/cloud-cp";
 import { CODER_PROVIDER } from "../lib/cloud-offering";
-import { DEFAULT_CODER_WORKSPACE_NAME_PREFIX, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
+import { coderWorkspaceNamePrefixFor, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
 import { useOrgCoderConfig } from "../hooks/useOrgCoderConfig";
 import type { CloudCpGitHubAppRepository } from "../lib/cloud-cp/types";
 import { useCloudSession } from "../lib/cloud-session";
@@ -1880,7 +1880,7 @@ function CloudProjectCard({
 								id="coderWorkspaceNamePrefix"
 								value={coderWorkspaceNamePrefix}
 								onChange={(event) => setCoderWorkspaceNamePrefix(event.target.value)}
-								placeholder={DEFAULT_CODER_WORKSPACE_NAME_PREFIX}
+								placeholder={coderWorkspaceNamePrefixFor(selectedRepo?.name ?? "")}
 								maxLength={20}
 								spellCheck={false}
 								autoCapitalize="off"
