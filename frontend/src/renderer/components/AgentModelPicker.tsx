@@ -89,6 +89,14 @@ export function AgentModelPicker({
 		);
 	}
 
+	if (agentId === "memcode") {
+		return (
+			<span className="composer-chip composer-toolbar-option w-full justify-start" aria-label={t("newTask.model")}>
+				<span className="truncate text-control text-foreground">{t("newTask.nativeModel", { agent: agentLabel })}</span>
+			</span>
+		);
+	}
+
 	if (catalog?.selectionMode === "mode") {
 		const options = (catalog.models ?? []).filter((item) => isConcreteModelID(item.id)).map((item) => ({
 			value: item.id,
