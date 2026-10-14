@@ -162,7 +162,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	cfg.Env["HERMES_HOME"] = home
 	original, exists := cfg.Env["AO_HERMES_ORIGINAL_EPHEMERAL"]
 	if !exists {
-		original, exists = cfg.Env["HERMES_EPHEMERAL_SYSTEM_PROMPT"]
+		original = cfg.Env["HERMES_EPHEMERAL_SYSTEM_PROMPT"]
 	}
 	if original == "" {
 		b, readErr := os.ReadFile(filepath.Join(home, "config.yaml"))
@@ -294,7 +294,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	var messages int
 	var children int
 	err = db.QueryRowContext(ctx, "SELECT COALESCE(cwd,''), (SELECT count(*) FROM messages WHERE session_id=sessions.id), (SELECT count(*) FROM sessions child WHERE child.parent_session_id=sessions.id) FROM sessions WHERE id=?", id).Scan(&cwd, &messages, &children)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, false, fmt.Errorf("hermes: native state database unavailable (WAL recovery may be required): %w", err)
 	}
 	if err != nil || messages == 0 || children != 0 || filepath.Clean(cwd) != filepath.Clean(cfg.Session.WorkspacePath) {
@@ -395,7 +395,7 @@ func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launch
 		// Native /new creates the exact database row without cwd. The live
 		// owned process and its PTY breadcrumb still corroborate the AO
 		// workspace; a populated conflicting database cwd remains rejected.
-		if e != nil && e != sql.ErrNoRows {
+		if e != nil && !errors.Is(e, sql.ErrNoRows) {
 			return ports.SessionInfo{}, false, fmt.Errorf("hermes: read native state database: %w", e)
 		}
 		if e != nil || (storedCwd != "" && filepath.Clean(storedCwd) != filepath.Clean(cwd)) {
