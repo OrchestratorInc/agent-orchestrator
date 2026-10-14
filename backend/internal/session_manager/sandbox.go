@@ -133,7 +133,9 @@ func (m *Manager) discardSandbox(ctx context.Context, sb *sandboxLaunch) {
 // itself, so removal does not depend on the container reaper (which a
 // project can opt out of). It acts only once the session row is durably
 // terminated: an unreadable row or a kill that stopped earlier keeps the
-// container, because the agent may still be running in it.
+// container, because the agent may still be running in it. Whether the
+// session was sandboxed comes from its state, not the current config, so a
+// mode change after spawn does not leak the container.
 func (m *Manager) discardTerminatedSandbox(ctx context.Context, id domain.SessionID) {
 	if m.sandbox == nil {
 		return
@@ -141,11 +143,7 @@ func (m *Manager) discardTerminatedSandbox(ctx context.Context, id domain.Sessio
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sandboxDiscardBudget)
 	defer cancel()
 	rec, ok, err := m.store.GetSession(ctx, id)
-	if err != nil || !ok || !rec.IsTerminated {
-		return
-	}
-	project, err := m.loadProject(ctx, rec.ProjectID)
-	if err != nil || sandboxFor(rec.Kind, project.Config).Mode != domain.SandboxModePerAgent {
+	if err != nil || !ok || !rec.IsTerminated || !m.sandbox.HasSessionState(rec.ProjectID, rec.ID) {
 		return
 	}
 	if err := m.sandbox.DiscardSession(ctx, rec.ProjectID, rec.ID); err != nil {

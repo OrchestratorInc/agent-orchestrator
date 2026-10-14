@@ -367,6 +367,16 @@ func (s *Sandbox) Discard(ctx context.Context, target ports.SandboxTarget) error
 	return nil
 }
 
+// HasSessionState reports whether the session's state dir is a real
+// directory. Lstat never follows a link planted in its place.
+func (s *Sandbox) HasSessionState(project domain.ProjectID, session domain.SessionID) bool {
+	if s.cfg.DataDir == "" || project == "" || session == "" {
+		return false
+	}
+	fi, err := os.Lstat(SessionStateDir(s.cfg.DataDir, project, session))
+	return err == nil && fi.IsDir()
+}
+
 // DiscardSession removes a terminated session's per-agent container, found by
 // its labels so no container target is needed. Shared containers never match;
 // an unreachable Docker is not an error.

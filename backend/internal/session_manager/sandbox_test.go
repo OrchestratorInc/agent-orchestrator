@@ -35,6 +35,13 @@ type fakeSandbox struct {
 	discarded []ports.SandboxTarget
 	// sessionDiscards records DiscardSession calls as "project/session".
 	sessionDiscards []string
+	// noState lists sessions that never ran sandboxed; every other session
+	// has sandbox state.
+	noState map[domain.SessionID]bool
+}
+
+func (f *fakeSandbox) HasSessionState(_ domain.ProjectID, session domain.SessionID) bool {
+	return !f.noState[session]
 }
 
 func (f *fakeSandbox) Discard(_ context.Context, target ports.SandboxTarget) error {
@@ -584,21 +591,22 @@ func TestKillFailingBeforeTerminationKeepsPerAgentSandbox(t *testing.T) {
 	}
 }
 
-func TestKillSharedSandboxDoesNotDiscardSession(t *testing.T) {
+// A per-agent session killed after the project turned sandboxing off still
+// has its container removed: the decision follows the session's state.
+func TestKillDiscardsSandboxAfterModeChange(t *testing.T) {
 	m, st, _, _ := newManager()
 	sb := &fakeSandbox{}
 	m.sandbox = sb
-	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: sandboxedConfig(domain.SandboxModeShared)}
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
 	st.sessions["mer-1"] = mkLive("mer-1")
 	if _, err := m.Kill(ctx, "mer-1"); err != nil {
 		t.Fatal(err)
 	}
-	if len(sb.sessionDiscards) != 0 {
-		t.Fatalf("session discards = %v, want none in shared mode", sb.sessionDiscards)
+	if !reflect.DeepEqual(sb.sessionDiscards, []string{"mer/mer-1"}) {
+		t.Fatalf("session discards = %v, want the killed session's container", sb.sessionDiscards)
 	}
 }
 
-// I2: a restore that fails after Ensure removes the container it ensured.
 func TestRestoreDiscardsContainerWhenRuntimeCreateFails(t *testing.T) {
 	sb := &fakeSandbox{}
 	agent := &sandboxAgent{launchArgvAgent: launchArgvAgent{argv: []string{"claude"}}}

@@ -61,6 +61,9 @@ type Sandbox interface {
 	// without a target (kill has none). It never touches shared containers
 	// and returns nil when Docker is unavailable.
 	DiscardSession(ctx context.Context, project domain.ProjectID, session domain.SessionID) error
+	// HasSessionState reports whether the session has ever been sandboxed,
+	// whatever the project's sandbox config says now.
+	HasSessionState(project domain.ProjectID, session domain.SessionID) bool
 }
 
 // AgentSandboxSupport is implemented by harnesses that can run sandboxed.

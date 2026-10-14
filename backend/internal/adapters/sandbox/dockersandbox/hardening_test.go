@@ -239,6 +239,27 @@ func TestEnsureMountsArtifactDirWritable(t *testing.T) {
 	}
 }
 
+// Session state marks a session as sandboxed; a symlink planted in its place
+// does not count.
+func TestHasSessionState(t *testing.T) {
+	s, _, data := testSandbox(t, nil)
+	if s.HasSessionState("p", "s1") {
+		t.Fatal("state reported before Ensure created it")
+	}
+	if err := os.MkdirAll(SessionStateDir(data, "p", "s1"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if !s.HasSessionState("p", "s1") {
+		t.Fatal("state dir not reported")
+	}
+	if err := os.Symlink(t.TempDir(), SessionStateDir(data, "p", "s2")); err != nil {
+		t.Fatal(err)
+	}
+	if s.HasSessionState("p", "s2") {
+		t.Fatal("symlinked state dir counted as state")
+	}
+}
+
 func findMount(ms []mount, path string) *mount {
 	for i := range ms {
 		if ms[i].Path == path {
