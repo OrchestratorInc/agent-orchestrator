@@ -515,6 +515,44 @@ func TestCreateLaunchCommandExportsEnvVars(t *testing.T) {
 	}
 }
 
+func TestBuildLaunchCommandUnsetsRemovedEnv(t *testing.T) {
+	launchCmd := buildLaunchCommand(ports.RuntimeConfig{
+		WorkspacePath: "/tmp/ws",
+		Argv:          []string{"myagent"},
+		Env: map[string]string{
+			"PINNED": "survives",
+		},
+		EnvRemove: []string{"Z_STALE", "A_STALE", "PINNED"},
+	})
+	// Ambient-only names are unset (sorted); a removed name that is also a
+	// configured value is a pin — the export re-applies it, so it is not unset.
+	for _, want := range []string{
+		"unset 'A_STALE' 'Z_STALE'; ",
+		"export PINNED='survives'; ",
+	} {
+		if !strings.Contains(launchCmd, want) {
+			t.Fatalf("launch command missing %q in: %q", want, launchCmd)
+		}
+	}
+	if strings.Contains(launchCmd, "unset 'PINNED'") {
+		t.Fatalf("pinned name was unset despite being configured: %q", launchCmd)
+	}
+}
+
+func TestCreateRejectsInvalidRemovedEnvName(t *testing.T) {
+	r, fr := newTestRuntime(0)
+	fr.outputs = [][]byte{nil, []byte("/tmp/ws\n"), nil, nil, nil, nil, nil}
+	_, err := r.Create(context.Background(), ports.RuntimeConfig{
+		SessionID:     "sess-1",
+		WorkspacePath: "/tmp/ws",
+		Argv:          []string{"myagent"},
+		EnvRemove:     []string{"BAD KEY"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid env name") {
+		t.Fatalf("Create err = %v, want invalid removed env name", err)
+	}
+}
+
 func TestBuildLaunchCommandPreservesExplicitNoColor(t *testing.T) {
 	launchCmd := buildLaunchCommand(ports.RuntimeConfig{
 		WorkspacePath: "/tmp/ws",
