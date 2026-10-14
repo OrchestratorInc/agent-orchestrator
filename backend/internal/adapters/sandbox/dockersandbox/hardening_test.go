@@ -130,7 +130,6 @@ func TestEnsureReplacesSymlinkedStateDirs(t *testing.T) {
 	for _, rel := range []string{"home", "claude", "sessions", filepath.Join("sessions", "s1"), filepath.Join("sessions", "s1", "relay"), filepath.Join("sessions", "s1", "relay", "req")} {
 		t.Run(rel, func(t *testing.T) {
 			s, _, data := testSandbox(t, []fakeCall{
-				{match: "rev-parse", out: fakeGitDir + "\n"},
 				{match: "inspect", err: errors.New("No such object")},
 				{match: "run -d"},
 				{match: "command -v"},
@@ -160,41 +159,10 @@ func TestEnsureReplacesSymlinkedStateDirs(t *testing.T) {
 	}
 }
 
-// C2: hooks, config and modules in the shared git dir are read-only inside
-// the container, so the agent cannot plant code the host's git runs.
-func TestEnsureMountsGitControlFilesReadOnly(t *testing.T) {
-	s, fr, data := testSandbox(t, []fakeCall{
-		{match: "rev-parse", out: fakeGitDir + "\n"},
-		{match: "inspect", err: errors.New("No such object")},
-		{match: "run -d"},
-		{match: "command -v"},
-	})
-	if _, err := s.Ensure(context.Background(), perAgentReq(filepath.Join(data, "worktrees", "p", "s1"))); err != nil {
-		t.Fatal(err)
-	}
-	git := gitDirOf(data)
-	run := fr.calls[2]
-	for _, sub := range []string{"config", "hooks", "modules"} {
-		p := filepath.Join(git, sub)
-		if want := "-v " + p + ":" + p + ":ro"; !strings.Contains(run, want) {
-			t.Fatalf("docker run missing %q:\n%s", want, run)
-		}
-	}
-	if !strings.Contains(run, "-v "+git+":"+git+" ") {
-		t.Fatalf("git dir itself must stay read-write:\n%s", run)
-	}
-	for _, sub := range []string{"hooks", "modules"} {
-		if fi, err := os.Stat(filepath.Join(git, sub)); err != nil || !fi.IsDir() {
-			t.Fatalf("%s not created before docker run: %v", sub, err)
-		}
-	}
-}
-
 // C3: a shared container sees the project's worker worktrees but not the
 // orchestrator's.
 func TestEnsureSharedHidesOrchestratorWorktree(t *testing.T) {
 	s, fr, data := testSandbox(t, []fakeCall{
-		{match: "rev-parse", out: fakeGitDir + "\n"},
 		{match: "inspect", err: errors.New("No such object")},
 		{match: "run -d"},
 		{match: "command -v"},
@@ -205,15 +173,14 @@ func TestEnsureSharedHidesOrchestratorWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "--mount type=tmpfs,destination=" + filepath.Join(data, "worktrees", "p", "orchestrator") + ",readonly"
-	if !strings.Contains(fr.calls[2], want) {
-		t.Fatalf("shared run args missing %q:\n%s", want, fr.calls[2])
+	if !strings.Contains(runCall(t, fr), want) {
+		t.Fatalf("shared run args missing %q:\n%s", want, runCall(t, fr))
 	}
 }
 
 // I6: a per-agent container reads only its own session's prompts.
 func TestEnsurePerAgentMountsOnlyOwnPrompts(t *testing.T) {
 	s, fr, data := testSandbox(t, []fakeCall{
-		{match: "rev-parse", out: fakeGitDir + "\n"},
 		{match: "inspect", err: errors.New("No such object")},
 		{match: "run -d"},
 		{match: "command -v"},
@@ -222,8 +189,8 @@ func TestEnsurePerAgentMountsOnlyOwnPrompts(t *testing.T) {
 		t.Fatal(err)
 	}
 	all := filepath.Join(data, "prompts")
-	if strings.Contains(fr.calls[2], "-v "+all+":"+all+":ro") {
-		t.Fatalf("per-agent container mounts every session's prompts:\n%s", fr.calls[2])
+	if strings.Contains(runCall(t, fr), roBindArg(all)) {
+		t.Fatalf("per-agent container mounts every session's prompts:\n%s", runCall(t, fr))
 	}
 	if fi, err := os.Stat(filepath.Join(all, "s1")); err != nil || !fi.IsDir() {
 		t.Fatalf("own prompts dir not created: %v", err)
@@ -234,7 +201,7 @@ func TestEnsureSharedKeepsPromptsRoot(t *testing.T) {
 	s, _, data := testSandbox(t, nil)
 	req := perAgentReq(filepath.Join(data, "worktrees", "p", "s1"))
 	req.Config.Mode = domain.SandboxModeShared
-	m, err := s.mounts(req, gitDirOf(data))
+	m, err := s.mounts(req, gitLayout{dir: gitDirOf(data)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,8 +226,7 @@ func TestEnsureProbeFailureKeepsContainersItDidNotCreate(t *testing.T) {
 		s, _, data := testSandbox(t, nil)
 		ws := filepath.Join(data, "worktrees", "p", "s1")
 		s.run.(*fakeRunner).script = []fakeCall{
-			{match: "rev-parse", out: fakeGitDir + "\n"},
-			{match: "inspect", out: "exited\t" + s.hashFor(perAgentReq(ws), gitDirOf(data)) + "\n"},
+			{match: "inspect", out: "exited\t" + hashFor(t, s, perAgentReq(ws)) + "\n"},
 			{match: "start ao-sbx-s1"},
 			{match: "command -v", err: errors.New("exit status 1")},
 		}
@@ -270,7 +236,6 @@ func TestEnsureProbeFailureKeepsContainersItDidNotCreate(t *testing.T) {
 	})
 	t.Run("shared", func(t *testing.T) {
 		s, _, data := testSandbox(t, []fakeCall{
-			{match: "rev-parse", out: fakeGitDir + "\n"},
 			{match: "inspect", err: errors.New("No such object")},
 			{match: "run -d"},
 			{match: "command -v", err: errors.New("exit status 1")},
@@ -287,7 +252,6 @@ func TestEnsureProbeFailureKeepsContainersItDidNotCreate(t *testing.T) {
 // passes the shared-mode containment check.
 func TestEnsureSharedAcceptsPhysicalWorkspaceUnderSymlinkedRoot(t *testing.T) {
 	s, fr, data := testSandbox(t, []fakeCall{
-		{match: "rev-parse", out: fakeGitDir + "\n"},
 		{match: "inspect", err: errors.New("No such object")},
 		{match: "run -d"},
 		{match: "command -v"},
@@ -311,8 +275,8 @@ func TestEnsureSharedAcceptsPhysicalWorkspaceUnderSymlinkedRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	work := filepath.Join(physical, "worktrees", "p")
-	if !strings.Contains(fr.calls[2], "-v "+work+":"+work+" ") {
-		t.Fatalf("shared mount is not the workspace's own ancestor:\n%s", fr.calls[2])
+	if !strings.Contains(runCall(t, fr), bindArg(work)) {
+		t.Fatalf("shared mount is not the workspace's own ancestor:\n%s", runCall(t, fr))
 	}
 }
 

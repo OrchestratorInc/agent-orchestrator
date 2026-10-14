@@ -40,7 +40,7 @@ The project-level `sandbox` block applies to workers. A `sandbox` block under `w
 | Mode | Behavior |
 | --- | --- |
 | `off` | The agent runs on the host. |
-| `per-agent` | Each session gets its own container, with its own home, Claude config, and env. All sessions still share the repository's git data (objects and refs) read-write. |
+| `per-agent` | Each session gets its own container, with its own home, Claude config, and env. All sessions still share the repository's git objects and refs read-write. |
 | `shared` | All sessions in the project share one container. |
 
 In `shared` mode, sessions can see each other's sandbox state: the home directory, Claude config, env files, and system prompts. Use `per-agent` to keep each session's home, Claude config, and env separate. Shared mode also requires the workspace to be an Orchestrator-managed worktree.
@@ -56,6 +56,17 @@ Keep the orchestrator unsandboxed, which is the default. Inside the sandbox the 
 ### Applying changes
 
 A running per-agent container keeps its old settings until it stops. New settings apply on the next fresh start. Shared containers are created per config, and the old one is removed when the project's last session ends.
+
+## Git inside the sandbox
+
+The agent can commit, create branches, check out, rebase, and fetch inside the sandbox.
+
+The repository's git directory is read-only inside the container. Only its objects, refs, and reflogs are writable, plus the session's own worktree metadata.
+
+- **`per-agent`:** the container can't change the repository's git config, hooks, or other worktrees' git metadata. Deleting branches or tags, dropping the last stash, and `git gc` fail inside the sandbox, so do those on the host. Commands that change the git config, such as `git remote add` or `git push -u`, fail too.
+- **`shared`:** the same read-only top level, but sessions in a shared container can modify the git metadata of every worktree in the project (including worktrees you create yourself). Use `per-agent` mode for agents you don't trust.
+
+Each commit inside the sandbox also prints `Unable to create '.../packed-refs.lock': Read-only file system`. The commit still succeeds.
 
 ## Authentication
 
@@ -81,12 +92,12 @@ Everything else (spawn, send, session, render, review, browser, project, and so 
 ## Limits
 
 - The sandbox is not a security boundary against a hostile agent. On Docker Desktop the container can reach network services on your host through `host.docker.internal`, including Orchestrator's local API, which has no authentication.
-- A hostile agent can also make host-side git run commands by rewriting git metadata in its worktree or the repository's git dir. Treat the sandbox as protection against accidental damage only.
+- In `shared` mode a hostile agent can rewrite the git metadata of any worktree in the project, which can make git on the host run its commands when you use those worktrees. Use `per-agent` mode for agents you don't trust.
 - Terminal sessions only. Chat-mode sessions are refused for sandboxed roles, and so is restoring an existing chat session. Switch the session to terminal mode first.
 - Agent switching is not supported for sandboxed sessions.
 - Session-title generation still runs the harness briefly on the host, outside the sandbox.
 - Review agents (reviewers) run on the host, outside the sandbox.
-- The repository's git config, hooks, and submodule git directories are read-only inside the sandbox. Git commands that change the config, such as `git remote add` or `git push -u`, fail there.
+- Some git commands fail inside the sandbox. See [Git inside the sandbox](#git-inside-the-sandbox).
 - In `shared` mode the orchestrator's worktree is hidden from the container, but sessions in the same container can read each other's worktrees and system prompts.
 
 ## Troubleshooting
@@ -99,4 +110,5 @@ Everything else (spawn, send, session, render, review, browser, project, and so 
 - The image lacks `/bin/sh` or `claude`.
 - Credentials are missing.
 - The shared-mode workspace isn't an Orchestrator-managed worktree.
+- The worktree's git metadata doesn't point at the project's repository, for example because it was modified.
 - A chat session or an agent switch was requested for a sandboxed session.

@@ -99,16 +99,18 @@ func runArgs(name string, cfg domain.SandboxConfig, labels map[string]string, mo
 	if user != "" {
 		args = append(args, "--user", user)
 	}
+	// --mount, not -v: Docker mangled layered -v binds. Mounts are listed
+	// parents first, so a read-only child overmount lands on top.
 	for _, m := range mounts {
 		if m.Tmpfs {
-			args = append(args, "--mount", "type=tmpfs,destination="+m.Path+",readonly")
+			args = append(args, "--mount", "type=tmpfs,"+csvField("destination="+m.Path)+",readonly")
 			continue
 		}
-		spec := m.Path + ":" + m.Path
+		spec := "type=bind," + csvField("src="+m.Path) + "," + csvField("dst="+m.Path)
 		if m.ReadOnly {
-			spec += ":ro"
+			spec += ",readonly"
 		}
-		args = append(args, "-v", spec)
+		args = append(args, "--mount", spec)
 	}
 	if cfg.CPUs != "" {
 		args = append(args, "--cpus", cfg.CPUs)
@@ -120,6 +122,15 @@ func runArgs(name string, cfg domain.SandboxConfig, labels map[string]string, mo
 		args = append(args, "--pids-limit", fmt.Sprint(cfg.PidsLimit))
 	}
 	return append(args, "--entrypoint", "/bin/sh", cfg.Image, "-c", keepAliveScript)
+}
+
+// csvField quotes one field of a --mount value, which Docker parses as a CSV
+// record, so a comma or quote in a path cannot add mount options.
+func csvField(f string) string {
+	if !strings.ContainsAny(f, ",\"\r\n") {
+		return f
+	}
+	return `"` + strings.ReplaceAll(f, `"`, `""`) + `"`
 }
 
 // renderEnvFile renders env as POSIX sh assignments for `set -a; . file`.

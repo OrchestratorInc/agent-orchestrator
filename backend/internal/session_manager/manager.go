@@ -1350,7 +1350,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	}
 	m.augmentAgentRuntimeEnv(agent, env)
 	pinRuntimePermissionEnv(env, adapterConfig.Permissions)
-	sb, err := m.prepareSandboxLaunch(ctx, agent, rec, project.Config, ws.Path, env)
+	sb, err := m.prepareSandboxLaunch(ctx, agent, rec, project, ws.Path, env)
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w", id, err)
@@ -3352,7 +3352,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	// Before restoreArgv: it reads env (CLAUDE_CONFIG_DIR) to find the
 	// transcript, which PrepareSandbox points at the sandbox's config dir.
-	sb, err := m.prepareSandboxLaunch(ctx, agent, rec, project.Config, ws.Path, env)
+	sb, err := m.prepareSandboxLaunch(ctx, agent, rec, project, ws.Path, env)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
 	}

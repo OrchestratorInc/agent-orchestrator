@@ -113,7 +113,7 @@ func (s *Sandbox) targetFor(container string, project domain.ProjectID, session 
 	}
 }
 
-func (s *Sandbox) mounts(req ports.SandboxRequest, gitDir string) ([]mount, error) {
+func (s *Sandbox) mounts(req ports.SandboxRequest, g gitLayout) ([]mount, error) {
 	m := []mount{{Path: req.WorkspacePath}}
 	projectDir := filepath.Join(s.cfg.DataDir, "sandbox", "projects", string(req.ProjectID))
 	// Per-agent containers see only their own session dir and prompts, not
@@ -138,33 +138,10 @@ func (s *Sandbox) mounts(req ports.SandboxRequest, gitDir string) ([]mount, erro
 		state = []mount{{Path: projectDir}}
 		prompts = filepath.Join(s.cfg.DataDir, "prompts")
 	}
-	// The git dir stays writable for objects and refs, but the files the
-	// host's git executes or obeys (config, hooks, submodule git dirs) are
-	// read-only overmounts.
-	m = append(m,
-		mount{Path: gitDir},
-		mount{Path: filepath.Join(gitDir, "config"), ReadOnly: true},
-		mount{Path: filepath.Join(gitDir, "hooks"), ReadOnly: true},
-		mount{Path: filepath.Join(gitDir, "modules"), ReadOnly: true},
-		mount{Path: prompts, ReadOnly: true},
-	)
+	m = append(m, gitMounts(req, g)...)
+	m = append(m, mount{Path: prompts, ReadOnly: true})
 	m = append(m, state...)
 	return append(m, mount{Path: filepath.Join(s.cfg.DataDir, "sandbox", "bin"), ReadOnly: true}), nil
-}
-
-func (s *Sandbox) gitCommonDir(ctx context.Context, workspace string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-	out, err := s.run.Output(ctx, "git", "-C", workspace, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err != nil {
-		return "", fmt.Errorf("%w: resolve git dir for %s: %w", ports.ErrSandboxMisconfigured, workspace, err)
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-func (s *Sandbox) hashFor(req ports.SandboxRequest, gitDir string) string {
-	m, _ := s.mounts(req, gitDir)
-	return configHash(req.Config, m)
 }
 
 // Ensure returns a running container for req, creating or starting it when
@@ -177,11 +154,11 @@ func (s *Sandbox) Ensure(ctx context.Context, req ports.SandboxRequest) (ports.S
 	if err != nil {
 		return ports.SandboxTarget{}, err
 	}
-	gitDir, err := s.gitCommonDir(ctx, req.WorkspacePath)
+	git, err := s.resolveGit(ctx, req)
 	if err != nil {
 		return ports.SandboxTarget{}, err
 	}
-	mounts, err := s.mounts(req, gitDir)
+	mounts, err := s.mounts(req, git)
 	if err != nil {
 		return ports.SandboxTarget{}, err
 	}
@@ -201,10 +178,10 @@ func (s *Sandbox) Ensure(ctx context.Context, req ports.SandboxRequest) (ports.S
 	if err := os.MkdirAll(filepath.Join(s.cfg.DataDir, "prompts", string(req.SessionID)), 0o700); err != nil {
 		return ports.SandboxTarget{}, fmt.Errorf("sandbox prompts dir: %w", err)
 	}
-	if err := prepareGitOvermounts(gitDir); err != nil {
+	if err := InstallBin(target.BinDir); err != nil {
 		return ports.SandboxTarget{}, err
 	}
-	if err := InstallBin(target.BinDir); err != nil {
+	if err := requireMountSources(mounts); err != nil {
 		return ports.SandboxTarget{}, err
 	}
 
@@ -222,7 +199,7 @@ func (s *Sandbox) Ensure(ctx context.Context, req ports.SandboxRequest) (ports.S
 		}
 		fallthrough
 	case status == "":
-		labels := map[string]string{labelSandbox: string(req.Config.Mode), labelProject: string(req.ProjectID), labelHash: hash, labelGitDir: gitDir}
+		labels := map[string]string{labelSandbox: string(req.Config.Mode), labelProject: string(req.ProjectID), labelHash: hash, labelGitDir: git.dir}
 		if req.Config.Mode == domain.SandboxModePerAgent {
 			labels[dockerreap.SessionLabel] = string(req.SessionID)
 		}

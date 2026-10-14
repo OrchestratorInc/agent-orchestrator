@@ -89,8 +89,8 @@ func sandboxFor(kind domain.SessionKind, cfg domain.ProjectConfig) domain.Sandbo
 // prepareSandboxLaunch ensures the container and harness state for a
 // sandboxed role. It never falls back to the host on failure. A non-nil
 // result is registered in flight until its done is called.
-func (m *Manager) prepareSandboxLaunch(ctx context.Context, agent ports.Agent, rec domain.SessionRecord, cfg domain.ProjectConfig, workspacePath string, env map[string]string) (*sandboxLaunch, error) {
-	sb := sandboxFor(rec.Kind, cfg)
+func (m *Manager) prepareSandboxLaunch(ctx context.Context, agent ports.Agent, rec domain.SessionRecord, project domain.ProjectRecord, workspacePath string, env map[string]string) (*sandboxLaunch, error) {
+	sb := sandboxFor(rec.Kind, project.Config)
 	if !sb.Enabled() {
 		return nil, nil
 	}
@@ -103,7 +103,7 @@ func (m *Manager) prepareSandboxLaunch(ctx context.Context, agent ports.Agent, r
 	}
 	finish := m.sandboxInFlight.begin(rec.ProjectID)
 	target, err := m.sandbox.Ensure(ctx, ports.SandboxRequest{
-		SessionID: rec.ID, ProjectID: rec.ProjectID, Config: sb,
+		SessionID: rec.ID, ProjectID: rec.ProjectID, Config: sb, RepoPath: project.Path,
 		WorkspacePath: workspacePath, RequireBinaries: []string{support.SandboxBinary()},
 	})
 	if err != nil {

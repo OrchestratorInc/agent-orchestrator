@@ -96,7 +96,7 @@ func sandboxedConfig(mode domain.SandboxMode) domain.ProjectConfig {
 
 func newSandboxSpawnManager(sb *fakeSandbox, agent ports.Agent) (*Manager, *fakeStore, *fakeRuntime) {
 	st := newFakeStore()
-	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: sandboxedConfig(domain.SandboxModePerAgent)}
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repos/mer", Config: sandboxedConfig(domain.SandboxModePerAgent)}
 	rt := &fakeRuntime{}
 	m := New(Deps{
 		Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
@@ -149,7 +149,7 @@ func TestSpawnSandboxedLaunchesThroughDockerExec(t *testing.T) {
 		t.Fatalf("ensure calls = %d, want 1", len(sb.ensured))
 	}
 	req := sb.ensured[0]
-	if req.SessionID != "mer-1" || req.ProjectID != "mer" || req.Config.Mode != domain.SandboxModePerAgent ||
+	if req.SessionID != "mer-1" || req.ProjectID != "mer" || req.RepoPath != "/repos/mer" || req.Config.Mode != domain.SandboxModePerAgent ||
 		req.WorkspacePath != ws || !reflect.DeepEqual(req.RequireBinaries, []string{"claude"}) {
 		t.Fatalf("ensure request = %+v", req)
 	}

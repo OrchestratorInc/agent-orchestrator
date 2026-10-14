@@ -2,6 +2,7 @@ package dockersandbox
 
 import (
 	"crypto/sha256"
+	"encoding/csv"
 	"encoding/hex"
 	"os"
 	"os/exec"
@@ -74,7 +75,7 @@ func TestRunArgs(t *testing.T) {
 	want := []string{"run", "-d", "--init", "--name", "ao-sbx-s1",
 		"--label", "ao.sandbox=per-agent", "--label", "ao.session=s1",
 		"--user", "501:20",
-		"-v", "/w:/w", "-v", "/p:/p:ro",
+		"--mount", "type=bind,src=/w,dst=/w", "--mount", "type=bind,src=/p,dst=/p,readonly",
 		"--cpus", "2", "--memory", "4g", "--pids-limit", "256",
 		"--entrypoint", "/bin/sh", "node:22", "-c", keepAliveScript}
 	if !reflect.DeepEqual(got, want) {
@@ -133,12 +134,40 @@ func TestRunArgsTmpfsMount(t *testing.T) {
 	cfg := domain.SandboxConfig{Mode: domain.SandboxModeShared, Image: "node:22"}
 	got := runArgs("c", cfg, nil, []mount{{Path: "/w"}, {Path: "/w/orchestrator", Tmpfs: true}, {Path: "/g/config", ReadOnly: true}}, "")
 	want := []string{"run", "-d", "--init", "--name", "c",
-		"-v", "/w:/w", "--mount", "type=tmpfs,destination=/w/orchestrator,readonly", "-v", "/g/config:/g/config:ro",
+		"--mount", "type=bind,src=/w,dst=/w", "--mount", "type=tmpfs,destination=/w/orchestrator,readonly",
+		"--mount", "type=bind,src=/g/config,dst=/g/config,readonly",
 		"--entrypoint", "/bin/sh", "node:22", "-c", keepAliveScript}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("runArgs =\n%q\nwant\n%q", got, want)
 	}
 	if configHash(cfg, []mount{{Path: "/w/orchestrator", Tmpfs: true}}) == configHash(cfg, []mount{{Path: "/w/orchestrator"}}) {
 		t.Fatal("hash ignores the tmpfs flag")
+	}
+}
+
+// Docker parses --mount as one CSV record, so a path holding a comma or a
+// quote must be a quoted field or it would split into extra options.
+func TestRunArgsQuotesMountPathsAsCSV(t *testing.T) {
+	cfg := domain.SandboxConfig{Mode: domain.SandboxModeShared, Image: "node:22"}
+	odd := `/w/a,readonly=false,dst=/etc"x`
+	got := runArgs("c", cfg, nil, []mount{{Path: odd, ReadOnly: true}, {Path: odd + "/orch", Tmpfs: true}}, "")
+	var specs []string
+	for i, a := range got {
+		if a == "--mount" {
+			specs = append(specs, got[i+1])
+		}
+	}
+	want := [][]string{
+		{"type=bind", "src=" + odd, "dst=" + odd, "readonly"},
+		{"type=tmpfs", "destination=" + odd + "/orch", "readonly"},
+	}
+	if len(specs) != len(want) {
+		t.Fatalf("mount specs = %q", specs)
+	}
+	for i, spec := range specs {
+		fields, err := csv.NewReader(strings.NewReader(spec)).Read()
+		if err != nil || !reflect.DeepEqual(fields, want[i]) {
+			t.Fatalf("mount %q parses as %q (%v), want %q", spec, fields, err, want[i])
+		}
 	}
 }

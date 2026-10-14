@@ -23,6 +23,9 @@ type SandboxRequest struct {
 	Config          domain.SandboxConfig
 	WorkspacePath   string
 	RequireBinaries []string
+	// RepoPath is the project's repository root; the trusted source for the
+	// git dir.
+	RepoPath string
 }
 
 // SandboxTarget is a ready container plus the host directories mounted into

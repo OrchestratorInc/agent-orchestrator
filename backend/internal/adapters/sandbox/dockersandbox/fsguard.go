@@ -117,22 +117,6 @@ func writeSessionEnv(target ports.SandboxTarget, data []byte) (err error) {
 	return nil
 }
 
-// prepareGitOvermounts makes the read-only overmount sources exist before
-// `docker run`: a missing bind source would otherwise be created by Docker
-// as a directory, or left for the container to plant.
-func prepareGitOvermounts(gitDir string) error {
-	fi, err := os.Stat(filepath.Join(gitDir, "config"))
-	if err != nil || !fi.Mode().IsRegular() {
-		return fmt.Errorf("%w: git dir %s has no regular config file", ports.ErrSandboxMisconfigured, gitDir)
-	}
-	for _, dir := range []string{"hooks", "modules"} {
-		if err := os.MkdirAll(filepath.Join(gitDir, dir), 0o750); err != nil {
-			return fmt.Errorf("sandbox git %s dir: %w", dir, err)
-		}
-	}
-	return nil
-}
-
 // sharedWorkRoot returns the project's managed worktree root as an ancestor
 // of workspace, spelled as workspace spells it so in-container paths match.
 // Containment is checked on physical paths, so a data dir reached through a
