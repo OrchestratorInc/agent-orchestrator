@@ -56,9 +56,10 @@ func TestPrimeAgentCredentialsIgnorePiDirectoryAndExpandOwnOverride(t *testing.T
 				env[name] = ""
 			}
 			dir := filepath.Join(home, ".prime", "agent")
-			if override == "~/profile" {
+			switch override {
+			case "~/profile":
 				dir = filepath.Join(home, "profile")
-			} else if override == "~" {
+			case "~":
 				dir = home
 			}
 			writeProviderTestFile(t, filepath.Join(dir, "auth.json"), `{"openai":{"type":"api_key","key":"prime-key"}}`)

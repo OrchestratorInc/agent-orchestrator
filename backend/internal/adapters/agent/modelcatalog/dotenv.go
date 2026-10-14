@@ -30,7 +30,7 @@ func parseDotenv(raw []byte) map[string]string {
 		value = strings.TrimSpace(value)
 		if strings.HasPrefix(value, "#") {
 			value = ""
-		} else if len(value) > 0 && (value[0] == '"' || value[0] == '\'') {
+		} else if value != "" && (value[0] == '"' || value[0] == '\'') {
 			end := 1
 			for end < len(value) {
 				if value[end] == value[0] {
