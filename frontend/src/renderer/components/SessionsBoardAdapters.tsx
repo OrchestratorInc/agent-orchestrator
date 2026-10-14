@@ -139,6 +139,7 @@ export function ArchivedSessionCardAdapter({
 	restoreError?: string;
 	session: WorkspaceSession;
 }) {
+	const { t } = useTranslation();
 	const branch = session.branch ?? "";
 	return (
 		<DesktopSessionCard
@@ -147,11 +148,19 @@ export function ArchivedSessionCardAdapter({
 				<ArchiveRestoreButton
 					isDisabled={isRestoreDisabled}
 					isRestoring={isRestoring}
-					label={`Restore ${session.title}`}
+					label={t("shell.restoreNamed", { title: session.title })}
 					onClick={restoreAction}
 				/>
 			}
-			branchAction={branch ? <CopyActionButton label={`branch ${branch}`} value={branch} /> : undefined}
+			branchAction={
+				branch ? (
+					<CopyActionButton
+						copiedLabel={t("shell.copiedBranchNamed", { branch })}
+						copyLabel={t("shell.copyBranchNamed", { branch })}
+						value={branch}
+					/>
+				) : undefined
+			}
 			footer={<ArchiveRestoreError message={restoreError} />}
 			interactive={false}
 			session={session}
@@ -460,7 +469,15 @@ function ArchiveRestoreError({ message }: { message?: string }) {
 	) : null;
 }
 
-function CopyActionButton({ label, value }: { label: string; value: string }) {
+function CopyActionButton({
+	copiedLabel,
+	copyLabel,
+	value,
+}: {
+	copiedLabel: string;
+	copyLabel: string;
+	value: string;
+}) {
 	const [copied, setCopied] = useState(false);
 	const copiedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	useEffect(
@@ -469,7 +486,7 @@ function CopyActionButton({ label, value }: { label: string; value: string }) {
 		},
 		[],
 	);
-	const buttonLabel = copied ? `Copied ${label}` : `Copy ${label}`;
+	const buttonLabel = copied ? copiedLabel : copyLabel;
 	const copyValue = async (event: MouseEvent<HTMLButtonElement>) => {
 		event.stopPropagation();
 		try {
