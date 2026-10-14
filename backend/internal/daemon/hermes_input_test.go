@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +26,7 @@ type lineInputRuntime struct {
 	messages   []string
 	sendErr    error
 	nextScreen string
+	holdScreen bool
 }
 
 func (r *lineInputRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
@@ -39,6 +41,9 @@ func (r *lineInputRuntime) SendMessage(_ context.Context, _ ports.RuntimeHandle,
 		return r.sendErr
 	}
 	r.messages = append(r.messages, message)
+	if r.holdScreen {
+		return nil
+	}
 	if r.nextScreen != "" {
 		r.screen = r.nextScreen
 		return nil
@@ -150,5 +155,42 @@ func TestHermesAdmissionDropsPriorRuntimeGeneration(t *testing.T) {
 	}
 	if len(runtime.messages) != 1 || runtime.messages[0] != "new task" {
 		t.Fatalf("unexpected writes: %v", runtime.messages)
+	}
+}
+
+func TestHermesAdmissionRecoversAfterEchoTimeout(t *testing.T) {
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := t.Context()
+	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "p", Path: "/repo/p", RegisteredAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := store.CreateSession(ctx, domain.SessionRecord{ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessHermes, Activity: domain.Activity{State: domain.ActivityIdle}, Metadata: domain.SessionMetadata{RuntimeHandleID: "pane", RuntimeLaunchID: "generation"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	idle := "────────────────────────────────────────\n❯ \n────────────────────────────────────────"
+	runtime := &lineInputRuntime{screen: idle, holdScreen: true}
+	messenger := newSessionMessenger(store, runtime, nil, lineAgentResolver{})
+	if err := messenger.Send(ctx, rec.ID, "first"); err == nil || !strings.Contains(err.Error(), "native echo unconfirmed") {
+		t.Fatalf("submission with no observed echo did not time out: %v", err)
+	}
+	if len(runtime.messages) != 1 {
+		t.Fatalf("timed-out submission was not written exactly once: %v", runtime.messages)
+	}
+	if err := messenger.Send(ctx, rec.ID, "second"); err == nil || !strings.Contains(err.Error(), "prior terminal submission remains unconfirmed") {
+		t.Fatalf("unchanged screen allowed another submission: %v", err)
+	}
+	runtime.screen = "first turn complete\n" + idle
+	runtime.holdScreen = false
+	runtime.nextScreen = "second turn complete\n" + idle
+	if err := messenger.Send(ctx, rec.ID, "second"); err != nil {
+		t.Fatalf("changed idle screen did not release pending admission: %v", err)
+	}
+	if len(runtime.messages) != 2 || runtime.messages[1] != "second" {
+		t.Fatalf("unexpected writes after timeout recovery: %v", runtime.messages)
 	}
 }
