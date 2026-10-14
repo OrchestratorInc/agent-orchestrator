@@ -21,9 +21,10 @@ import (
 var component = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 type witness struct {
-	Generation string `json:"generation"`
-	NativeID   string `json:"native_id"`
-	Sequence   int    `json:"sequence"`
+	Generation      string `json:"generation"`
+	NativeID        string `json:"native_id"`
+	Sequence        int    `json:"sequence"`
+	RestoreSequence int    `json:"restore_sequence,omitempty"`
 }
 
 func witnessPath(data, session, generation string) (string, error) {
@@ -59,35 +60,39 @@ func (*Plugin) AugmentRuntimeLaunchEnv(env map[string]string, data string, id do
 // EmitStartWitness runs before any daemon callback. Interactive restore hooks
 // return locally so PrepareLaunch cannot deadlock and a fresh ID cannot overwrite
 // the durable target. Native session_end is never reported as process exit.
-func EmitStartWitness(out io.Writer) error {
+func EmitStartWitness(out io.Writer) (bool, error) {
 	data, session, generation := os.Getenv("AO_MEMCODE_DATA_DIR"), os.Getenv("AO_MEMCODE_SESSION"), os.Getenv("AO_MEMCODE_GENERATION")
 	path, err := witnessPath(data, session, generation)
 	if err != nil {
-		return err
+		return false, err
 	}
 	id := os.Getenv("MEMCODE_SESSION_ID")
 	if !nativeIDPattern.MatchString(id) {
-		return errors.New("invalid memcode native hook identity")
+		return false, errors.New("invalid memcode native hook identity")
 	}
 	old, err := readWitness(data, session, generation)
 	if err != nil {
-		return err
+		return false, err
 	}
 	sequence := 1
 	if old.Generation == generation {
 		sequence = old.Sequence + 1
 	}
-	b, _ := json.Marshal(witness{Generation: generation, NativeID: id, Sequence: sequence})
+	restoreSequence := old.RestoreSequence
+	if target := os.Getenv("AO_MEMCODE_RESTORE_TARGET"); target != "" && id == target && old.Sequence > 0 && restoreSequence == 0 {
+		restoreSequence = sequence
+	}
+	b, _ := json.Marshal(witness{Generation: generation, NativeID: id, Sequence: sequence, RestoreSequence: restoreSequence})
 	if err := EmitInstructionChunk(out, "context-chunk-0"); err != nil {
-		return err
+		return false, err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
+		return false, err
 	}
 	if err := hookutil.AtomicWriteFile(path, b, 0o600); err != nil {
-		return err
+		return false, err
 	}
-	return nil
+	return restoreSequence > 0 && sequence > restoreSequence, nil
 }
 
 // GetAgentHooks implements the native TUI adapter contract.
@@ -181,7 +186,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if err := hookutil.AtomicWriteFile(path, b, 0o600); err != nil {
 		return fmt.Errorf("memcode hooks: %w", err)
 	}
-	return hookutil.EnsureWorkspaceGitignore(dir, "hooks.json")
+	return hookutil.EnsureWorkspaceGitignore(dir, "hooks.json", "sessions/")
 }
 
 // CleanupWorkspace removes only the private launch artifacts owned by the

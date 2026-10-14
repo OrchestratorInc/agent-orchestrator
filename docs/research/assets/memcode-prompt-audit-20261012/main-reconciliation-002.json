@@ -1,0 +1,14 @@
+{
+  "at": "2026-10-12T20:57:03.416427+00:00",
+  "pr": 6515,
+  "harness": "memcode",
+  "previousHead": "4c5b82ad36d7b472961e02e01ddb413dff65b696",
+  "canonicalMain": "7b98727d3506d12ffeed367571dfcf4c66308673",
+  "resolvedPaths": [
+    "backend/internal/storage/sqlite/migrate_burned_versions_test.go"
+  ],
+  "preservedEvidence": "All existing report/JSON/PNG bytes unchanged; previous head and new canonical main are merge parents.",
+  "migration": "Preserve new canonical 0196_session_artifact_versions plus the candidate migration and burned-version ledger; no old migrations modified.",
+  "validation": "PR CI only; new exact-head checks required.",
+  "runtimeProof": "No new native/AO run is implied; old receipts retain exact original source and native revisions."
+}

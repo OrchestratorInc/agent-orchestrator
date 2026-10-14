@@ -45,12 +45,16 @@ func TestPrivateInstructionsAndWitnessPreserveUserHooks(t *testing.T) {
 	if bytes.Contains(b, []byte("PRIVATE")) {
 		t.Fatal("standing context leaked to workspace hook config")
 	}
+	ignored, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil || !strings.Contains(string(ignored), "/sessions/\n") {
+		t.Fatalf("Memcode history is not ignored: %q, %v", ignored, err)
+	}
 	t.Setenv("AO_MEMCODE_DATA_DIR", data)
 	t.Setenv("AO_MEMCODE_SESSION", "ao-1")
 	t.Setenv("AO_MEMCODE_GENERATION", "launch-1")
 	t.Setenv("MEMCODE_SESSION_ID", "sess_b1b1b1b1")
 	var out bytes.Buffer
-	if err := EmitStartWitness(&out); err != nil {
+	if _, err := EmitStartWitness(&out); err != nil {
 		t.Fatal(err)
 	}
 	w, err := readWitness(data, "ao-1", "launch-1")
@@ -61,7 +65,7 @@ func TestPrivateInstructionsAndWitnessPreserveUserHooks(t *testing.T) {
 		t.Fatal("private context not emitted")
 	}
 	t.Setenv("MEMCODE_SESSION_ID", testID)
-	if err := EmitStartWitness(&out); err != nil {
+	if _, err := EmitStartWitness(&out); err != nil {
 		t.Fatal(err)
 	}
 	w, _ = readWitness(data, "ao-1", "launch-1")
@@ -102,7 +106,7 @@ func TestEmitStartWitnessCommitsOnlyAfterContextEmission(t *testing.T) {
 			if test.failWrite {
 				out = failingWriter{}
 			}
-			if err := EmitStartWitness(out); err == nil {
+			if _, err := EmitStartWitness(out); err == nil {
 				t.Fatal("context emission failure accepted")
 			}
 			w, err := readWitness(data, "ao-1", "launch-1")
