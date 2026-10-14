@@ -171,6 +171,7 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao session exit-agent":     {},
 	"ao session kill":           {},
 	"ao session rename":         {},
+	"ao session restart-all":    {},
 	"ao session resume-agent":   {},
 	"ao session restore":        {},
 	"ao spawn":                  {},
