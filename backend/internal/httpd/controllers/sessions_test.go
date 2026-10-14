@@ -41,6 +41,8 @@ import (
 
 type fakeSessionService struct {
 	cleanupPending             bool
+	artifactsDeleted           []domain.SessionID
+	deleteArtifactsErr         error
 	sessions                   map[domain.SessionID]domain.Session
 	sent                       string
 	sentAttachment             *ports.SpawnAttachment
@@ -53,6 +55,7 @@ type fakeSessionService struct {
 	cleanupResult              []domain.SessionID
 	cleanupSkipped             []sessionsvc.CleanupSkipped
 	workspaceFiles             sessionsvc.WorkspaceFiles
+	workspaceListHook          func(context.Context) error
 	workspaceFile              sessionsvc.WorkspaceFileDetail
 	workspaceFileSection       sessionsvc.WorkspaceFileSection
 	workspaceFileCommitSHA     string
@@ -74,6 +77,8 @@ type fakeSessionService struct {
 	workspaceSearchQuery       string
 	workspaceSearchCursor      string
 	workspaceSearchLimit       int
+	workspaceResolvePath       string
+	workspaceResolution        sessionsvc.WorkspacePathResolution
 	workspaceTree              sessionsvc.WorkspaceTree
 	workspaceTreePath          string
 	workspacePaths             []string
@@ -484,6 +489,14 @@ func (f *fakeSessionService) Kill(_ context.Context, id domain.SessionID) (bool,
 	return true, nil
 }
 
+func (f *fakeSessionService) DeleteArtifacts(_ context.Context, id domain.SessionID) error {
+	if f.deleteArtifactsErr != nil {
+		return f.deleteArtifactsErr
+	}
+	f.artifactsDeleted = append(f.artifactsDeleted, id)
+	return nil
+}
+
 func (f *fakeSessionService) RollbackSpawn(_ context.Context, id domain.SessionID) (sessionsvc.RollbackOutcome, error) {
 	if _, ok := f.sessions[id]; ok {
 		delete(f.sessions, id)
@@ -632,7 +645,12 @@ func (f *fakeSessionService) StageAttachments(
 	return f.stagedPaths, nil
 }
 
-func (f *fakeSessionService) ListWorkspaceFiles(_ context.Context, id domain.SessionID) (sessionsvc.WorkspaceFiles, error) {
+func (f *fakeSessionService) ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceFiles, error) {
+	if f.workspaceListHook != nil {
+		if err := f.workspaceListHook(ctx); err != nil {
+			return sessionsvc.WorkspaceFiles{}, err
+		}
+	}
 	if f.workspaceErr != nil {
 		return sessionsvc.WorkspaceFiles{}, f.workspaceErr
 	}
@@ -814,6 +832,17 @@ func (f *fakeSessionService) GetPRFileRevisionAtCommit(ctx context.Context, id d
 func (f *fakeSessionService) GetWorkspaceFileRevisionAtCommit(ctx context.Context, id domain.SessionID, path string, side sessionsvc.WorkspaceFileBlobSide, workspaceVersion, expectedRevision, commitSHA string) (sessionsvc.WorkspaceFileRevision, error) {
 	f.workspaceRevisionCommitSHA = commitSHA
 	return f.GetWorkspaceFileRevision(ctx, id, path, sessionsvc.WorkspaceDiffCommitted, side, workspaceVersion, expectedRevision)
+}
+
+func (f *fakeSessionService) ResolveWorkspacePath(_ context.Context, id domain.SessionID, rawPath string) (sessionsvc.WorkspacePathResolution, error) {
+	f.workspaceResolvePath = rawPath
+	if f.workspaceErr != nil {
+		return sessionsvc.WorkspacePathResolution{}, f.workspaceErr
+	}
+	if _, ok := f.sessions[id]; !ok {
+		return sessionsvc.WorkspacePathResolution{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+	return f.workspaceResolution, nil
 }
 
 func (f *fakeSessionService) SearchWorkspaceFiles(_ context.Context, id domain.SessionID, query, cursor string, limit int) (sessionsvc.WorkspaceFileSearch, error) {
@@ -2160,6 +2189,53 @@ func TestSessionsAPI_OrchestratorRejectsUnknownApprovalMode(t *testing.T) {
 	body, status, _ := doRequest(t, srv, "POST", "/api/v1/orchestrators",
 		`{"projectId":"ao","approvalMode":"sometimes"}`)
 	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_APPROVAL_MODE")
+}
+
+func TestSessionsAPI_SpawnAcceptsArtifactRequestedOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "project", body: `{"projectId":"ao","kind":"worker","harness":"codex","requestedOutput":"artifact","displayName":"New artifact"}`},
+		{name: "standalone", body: `{"kind":"worker","harness":"codex","requestedOutput":"artifact","displayName":"New artifact"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newFakeSessionService()
+			srv := newSessionTestServer(t, svc)
+
+			body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions", tc.body)
+			if status != http.StatusCreated {
+				t.Fatalf("status = %d, want 201; body=%s", status, body)
+			}
+			if svc.lastSpawn.RequestedOutput != domain.RequestedOutputArtifact {
+				t.Fatalf("RequestedOutput = %q, want artifact", svc.lastSpawn.RequestedOutput)
+			}
+		})
+	}
+}
+
+func TestSessionsAPI_SpawnOmittedRequestedOutputStaysEmpty(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions", `{"projectId":"ao","kind":"worker","harness":"codex"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", status, body)
+	}
+	if svc.lastSpawn.RequestedOutput != "" {
+		t.Fatalf("RequestedOutput = %q, want empty", svc.lastSpawn.RequestedOutput)
+	}
+}
+
+func TestSessionsAPI_SpawnRejectsUnknownRequestedOutput(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions", `{"projectId":"ao","kind":"worker","harness":"codex","requestedOutput":"slides"}`)
+	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_REQUESTED_OUTPUT")
+	if svc.lastSpawn.RequestedOutput != "" || svc.lastSpawn.ProjectID != "" {
+		t.Fatalf("rejected request reached the service: %#v", svc.lastSpawn)
+	}
 }
 
 func TestSessionsAPI_PreviewDiscoversAndServesStaticIndex(t *testing.T) {
@@ -3687,6 +3763,26 @@ func TestSessionsAPI_SearchWorkspaceFiles(t *testing.T) {
 	}
 }
 
+func TestSessionsAPI_ResolveWorkspacePath(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.workspaceResolution = sessionsvc.WorkspacePathResolution{SessionID: "ao-1", Kind: sessionsvc.WorkspacePathKindWorkspace, Path: "src/app.ts"}
+	srv := newSessionTestServer(t, svc)
+
+	body, status, headers := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/resolve?path="+url.QueryEscape("/root/src/app.ts"), "")
+	assertJSON(t, headers)
+	if status != http.StatusOK {
+		t.Fatalf("GET workspace resolve = %d body=%s", status, body)
+	}
+	if svc.workspaceResolvePath != "/root/src/app.ts" {
+		t.Fatalf("service path = %q, want /root/src/app.ts", svc.workspaceResolvePath)
+	}
+	var got controllers.WorkspacePathResolutionResponse
+	mustJSON(t, body, &got)
+	if got.SessionID != "ao-1" || got.Kind != sessionsvc.WorkspacePathKindWorkspace || got.Path != "src/app.ts" {
+		t.Fatalf("response = %#v", got)
+	}
+}
+
 func TestSessionsAPI_GetWorkspaceFileBlob(t *testing.T) {
 	svc := newFakeSessionService()
 	svc.workspaceBlob = sessionsvc.WorkspaceFileBlob{
@@ -3725,6 +3821,18 @@ func TestSessionsAPI_GetWorkspaceFileBlobRequiresPath(t *testing.T) {
 func TestSessionsAPI_StreamWorkspaceChanges(t *testing.T) {
 	workspace := t.TempDir()
 	svc := newFakeSessionService()
+	// Permit the startup reconciliation, then block refresh work to verify
+	// that the invalidation edge is sent before scanning the changed workspace.
+	scans := 0
+	svc.workspaceListHook = func(ctx context.Context) error {
+		scans++
+		if scans == 1 {
+			return nil
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
 	session := svc.sessions["ao-1"]
 	session.Metadata.WorkspacePath = workspace
 	svc.sessions["ao-1"] = session
@@ -4483,6 +4591,55 @@ func TestSessionsAPI_InteractionRecencyKeepsHumanTimestampSeparate(t *testing.T)
 func (f *fakeSessionService) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
 	freed, err := f.Kill(ctx, id)
 	return sessionmanager.KillResult{Freed: freed && !f.cleanupPending, CleanupPending: f.cleanupPending}, err
+}
+
+func TestSessionsAPI_KillKeepsArtifactsByDefault(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/kill", "")
+	if status != http.StatusOK || strings.Contains(string(body), "artifactsDeleted") {
+		t.Fatalf("kill response = %d %s", status, body)
+	}
+	if len(svc.artifactsDeleted) != 0 {
+		t.Fatalf("artifacts deleted without the flag: %v", svc.artifactsDeleted)
+	}
+}
+
+func TestSessionsAPI_KillDeletesArtifactsWhenAsked(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/kill", `{"deleteArtifacts":true}`)
+	var result struct {
+		ArtifactsDeleted bool `json:"artifactsDeleted"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.Fatal(err)
+	}
+	if status != http.StatusOK || !result.ArtifactsDeleted || !svc.sessions["ao-1"].IsTerminated {
+		t.Fatalf("kill response = %d %s", status, body)
+	}
+	if len(svc.artifactsDeleted) != 1 || svc.artifactsDeleted[0] != "ao-1" {
+		t.Fatalf("artifactsDeleted = %v, want [ao-1]", svc.artifactsDeleted)
+	}
+}
+
+func TestSessionsAPI_KillSucceedsWhenArtifactDeleteFails(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.deleteArtifactsErr = errors.New("disk busy")
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/kill", `{"deleteArtifacts":true}`)
+	if status != http.StatusOK || strings.Contains(string(body), "artifactsDeleted") || !svc.sessions["ao-1"].IsTerminated {
+		t.Fatalf("kill response = %d %s", status, body)
+	}
+}
+
+func TestSessionsAPI_KillRejectsMalformedBody(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+	_, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/kill", `{"deleteArtifacts":`)
+	if status != http.StatusBadRequest || svc.sessions["ao-1"].IsTerminated {
+		t.Fatalf("status = %d terminated=%v, want 400 and a live session", status, svc.sessions["ao-1"].IsTerminated)
+	}
 }
 
 func TestSessionsAPI_KillReportsAcceptedCleanup(t *testing.T) {

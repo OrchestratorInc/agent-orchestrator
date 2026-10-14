@@ -464,15 +464,24 @@ func (r *acpRelay) captureResponse(request acpClientRequest, envelope map[string
 		_ = json.Unmarshal(request.params, &params)
 		r.state.InitialPermissions = params.Meta[ACPInitialPermissionsMetaKey]
 		r.state.InitializeResult = append(json.RawMessage(nil), result...)
-	case "session/new", "session/load", "session/resume":
-		r.state.SessionResult = append(json.RawMessage(nil), result...)
+	case "session/new", "session/load", "session/resume", "session/fork":
 		var response struct {
 			SessionID string `json:"sessionId"`
 		}
 		_ = json.Unmarshal(result, &response)
+		if request.method == "session/fork" {
+			var params struct {
+				SessionID string `json:"sessionId"`
+			}
+			_ = json.Unmarshal(request.params, &params)
+			if response.SessionID == "" || response.SessionID == params.SessionID {
+				return
+			}
+		}
+		r.state.SessionResult = append(json.RawMessage(nil), result...)
 		if response.SessionID != "" {
 			r.state.SessionID = response.SessionID
-		} else {
+		} else if request.method != "session/fork" {
 			var params struct {
 				SessionID string `json:"sessionId"`
 			}

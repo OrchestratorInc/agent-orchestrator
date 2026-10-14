@@ -206,7 +206,7 @@ beforeEach(async () => {
 		saving: false,
 		saveError: false,
 	});
-	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false });
+	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, sideChats: false });
 	useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true, saving: false, saveError: false });
 	document.documentElement.lang = "en";
 });
@@ -257,6 +257,21 @@ describe("GlobalSettingsForm", () => {
 		expect(setMacDifferentialUpdates).toHaveBeenCalledWith(true);
 		await user.click(await screen.findByLabelText("Updates channel", {}, { timeout: 5_000 }));
 		expect(await screen.findByRole("menuitem", { name: "Feature Releases" })).toBeInTheDocument();
+	});
+
+	it("reveals the Side chats toggle only in Developer mode and persists it", async () => {
+		const user = userEvent.setup();
+		renderForm("general");
+		await screen.findByRole("switch", { name: "Developer mode" });
+		expect(screen.queryByRole("switch", { name: "Side chats" })).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("switch", { name: "Developer mode" }));
+		const toggle = await screen.findByRole("switch", { name: "Side chats" });
+		expect(toggle).toHaveAttribute("aria-checked", "false");
+
+		await user.click(toggle);
+		expect(window.localStorage.getItem("ao.sideChats")).toBe("true");
+		expect(useUiStore.getState().sideChats).toBe(true);
 	});
 
 	it("reveals the Diagnostics toggle only in Developer mode and persists it", async () => {

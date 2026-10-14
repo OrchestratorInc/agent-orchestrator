@@ -88,6 +88,21 @@ leading and trailing whitespace:
 | `l` | 801 to 2,000 bytes |
 | `xl` | More than 2,000 bytes |
 
+## Artifact creation
+
+When desktop product telemetry is enabled, Orchestrator.inc records visits to the
+Artifacts page with `ao.v2.renderer.route_viewed` and `surface: artifacts`. It
+also records these events when you start an artifact session from that page:
+
+| Event | When it is sent | Artifact-specific properties |
+| --- | --- | --- |
+| `ao.renderer.artifact_create_requested` | You pick the Scratchpad or a project in the Create artifact menu | `scope` |
+| `ao.renderer.artifact_create_succeeded` | The session starts | `scope` |
+| `ao.renderer.artifact_create_failed` | Starting the session fails | `scope` |
+
+`scope` is `standalone` for the Scratchpad and `project` otherwise. No project
+identifier, file name, or artifact content is sent.
+
 The automation events do not include the prompt text, automation name, raw
 project identifier, exact schedule, timezone, selected agent, or error message.
 Editing an existing automation does not emit these creation events. Closing the

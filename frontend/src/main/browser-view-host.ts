@@ -240,12 +240,25 @@ export type BrowserShortcutAction =
   | "close-tab"
   | "focus-location"
   | "find"
-  | "reload";
+  | "reload"
+  | "back"
+  | "forward";
 
 export function browserShortcutAction(
   input: BrowserShortcutInput,
   isMac: boolean,
 ): BrowserShortcutAction | null {
+  // Page history, not AO's route history: ⌘[ / ⌘] on macOS, Alt+←/→ elsewhere.
+  if (!input.shift) {
+    if (isMac && input.meta && !input.control && !input.alt) {
+      if (input.key === "[") return "back";
+      if (input.key === "]") return "forward";
+    }
+    if (!isMac && input.alt && !input.control && !input.meta) {
+      if (input.key === "ArrowLeft") return "back";
+      if (input.key === "ArrowRight") return "forward";
+    }
+  }
   const primaryModifier = isMac
     ? input.meta && !input.control
     : input.control && !input.meta;
@@ -1666,8 +1679,11 @@ export function createBrowserViewHost(
     session: BrowserSessionEntry,
     tabId: string,
   ): Promise<BrowserTabsState> => {
-    if (session.tabs.size === 1) return listTabs(session);
     if (!session.tabs.has(tabId)) return listTabs(session);
+    // Keep a blank landing tab after closing the final page, just as when
+    // opening the browser for the first time. Create it before disposing the
+    // focused view so the shell retains focus and the native target stays valid.
+    if (session.tabs.size === 1) await openUserTab(session);
     if (!options.agentBrowserRuntime) return closeTab(session, tabId);
     return closeNativeTab(session, tabId);
   };
@@ -1724,6 +1740,17 @@ export function createBrowserViewHost(
         activeEntry(session).view.webContents.reload();
         return;
       }
+      if (action === "back" || action === "forward") {
+        invokeNav(
+          session.viewId,
+          (contents) => {
+            if (action === "back" && contents.canGoBack()) contents.goBack();
+            if (action === "forward" && contents.canGoForward()) contents.goForward();
+          },
+          true,
+        );
+        return;
+      }
       if (action === "new-tab") {
         void openUserTab(session)
           .then(() => {
@@ -1747,11 +1774,8 @@ export function createBrowserViewHost(
         // page and fall through to the menu's Close item.
         const shell = shellContents(options);
         shell.focus();
-        forgetNativeFocus(session.viewId);
-        forgetBrowserShortcutTarget(session.viewId);
-        shell.send("browser:closePanel", session.viewId);
-        void openUserTab(session)
-          .then(() => closeUserTab(session, closingTabId))
+        void closeUserTab(session, closingTabId)
+          .then(() => focusLocation(session))
           .catch(() => undefined);
         return;
       }
@@ -3106,20 +3130,13 @@ export function createBrowserViewHost(
     if (!session || !isRendererOwned(event, input.viewId))
       return emptyTabsState(input.viewId);
     assertProfileStable(session);
-    if (session.tabs.size === 1) {
-      throw browserError(
-        "CANNOT_CLOSE_LAST_TAB",
-        "The only browser tab cannot be closed",
-      );
-    }
     if (!session.tabs.has(input.tabId)) {
       throw browserError(
         "TAB_NOT_FOUND",
         `Browser tab ${input.tabId} does not exist`,
       );
     }
-    if (!options.agentBrowserRuntime) return closeTab(session, input.tabId);
-    return closeNativeTab(session, input.tabId);
+    return closeUserTab(session, input.tabId);
   });
   on("browser:panelUsed", (event, viewId: string) => {
     if (isRendererOwned(event, viewId) && entries.has(viewId))

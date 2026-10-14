@@ -921,6 +921,17 @@ describe("BrowserPanel", () => {
 		expect(frame.style.width).toBe("240px");
 	});
 
+	it("reaches the custom width input from the keyboard", async () => {
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		await openDevicePresets();
+		const item = screen.getByRole("menuitem", { name: /Custom width/ });
+		item.focus();
+		await userEvent.keyboard("{Enter}");
+		const input = screen.getByLabelText("Custom width");
+		expect(input).toHaveFocus();
+		expect(screen.getByRole("menu")).toBeInTheDocument();
+	});
+
 	// Regression: the reviewer flagged that the original 6-device list should
 	// match Chrome DevTools' own "Standard" device list rather than a
 	// hand-picked subset.
@@ -1127,7 +1138,6 @@ describe("BrowserPanel", () => {
 	it("renders the complete tab chrome in the drag overlay", () => {
 		render(
 			<BrowserTopTabDragOverlay
-				onlyTab={false}
 				tab={{ id: "t1", url: "http://localhost:3000/", title: "First app", active: true }}
 			/>,
 		);
@@ -1169,6 +1179,29 @@ describe("BrowserPanel", () => {
 		await userEvent.click(within(tabList).getByRole("button", { name: "Close tab Second app" }));
 
 		expect(hookState.closeTab).toHaveBeenCalledWith("t2");
+	});
+
+	it("allows closing the final browser tab", async () => {
+		hookState.tabs = [{ id: "t1", url: "https://example.test/", title: "Last page", active: true }];
+		hookState.activeTabId = "t1";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Close tab Last page" }));
+		expect(hookState.closeTab).toHaveBeenCalledWith("t1");
+	});
+
+	it.each(["", "about:blank"])("hides the close button on an empty tab (%s)", (url) => {
+		hookState.tabs = [{ id: "t1", url, title: "", active: true }];
+		hookState.activeTabId = "t1";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
+
+		expect(screen.getByRole("tab", { name: "New tab" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Close tab New tab" })).not.toBeInTheDocument();
+	});
+
+	it("hides the empty tab's close icon in its drag overlay", () => {
+		render(<BrowserTopTabDragOverlay tab={{ id: "t1", url: "about:blank", title: "", active: true }} />);
+		expect(screen.getByTestId("browser-tab-drag-overlay").querySelector(".browser-panel__tab-close")).toBeNull();
 	});
 
 	it("opens a new browser tab from the horizontal tab strip", async () => {
@@ -1441,6 +1474,22 @@ describe("BrowserPanel", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Discard all comments" }));
 		expect(hookState.annotationAction).toHaveBeenCalledWith("discard-all");
+	});
+
+	it("previews the original page while Enter or Space is held on the eye button", async () => {
+		hookState.navState = { ...hookState.navState, url: "https://example.test/docs" };
+		hookState.annotationMode = true;
+		hookState.annotationState = { count: 2, screenshotCount: 0, hasDraft: false };
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		const eye = screen.getAllByRole("button").find((b) => /original/i.test(b.getAttribute("aria-label") ?? ""))!;
+		eye.focus();
+		hookState.annotationAction.mockClear();
+
+		fireEvent.keyDown(eye, { key: "Enter" });
+		fireEvent.keyDown(eye, { key: "Enter", repeat: true });
+		expect(hookState.annotationAction.mock.calls).toEqual([["preview-original"]]);
+		fireEvent.keyUp(eye, { key: "Enter" });
+		expect(hookState.annotationAction).toHaveBeenLastCalledWith("restore-preview");
 	});
 
 	it("sends submitted annotation instructions to the session agent", async () => {

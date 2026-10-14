@@ -113,12 +113,17 @@ describe("patchClaudeRetryDetails", () => {
 });
 
 describe("patchClaudeHibernationCheck", () => {
+	const anchors = [
+		"// session.liveBackgroundTasks.set(message.task_id",
+		"// session.lastSessionState = message.state;",
+		"agent.endTask = (session, message) => { session.liveBackgroundTasks.delete(message.task_id); };",
+		"// session.liveBackgroundTasks.delete(message.task_id);",
+		"connection.onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params));",
+	];
+
 	it("keeps live native tasks awake and allows sleep after they settle", () => {
 		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
-		writeFileSync(adapterPath, `
-			// session.liveBackgroundTasks.set(message.task_id
-			connection.onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params));
-		`);
+		writeFileSync(adapterPath, anchors.join("\n"));
 		expect(patchClaudeHibernationCheck(adapterPath)).toBe(true);
 		expect(patchClaudeHibernationCheck(adapterPath)).toBe(false);
 		const handlers = new Map();
@@ -142,6 +147,19 @@ describe("patchClaudeHibernationCheck", () => {
 		expect(check(ctx)).toEqual({ canHibernate: true });
 		tasks.set("ended", { isSubagent: true, endedPerLevel: "ended" });
 		expect(check(ctx)).toEqual({ canHibernate: true });
+		// A finished task's notification starts a cycle AO has no turn for.
+		agent.sessions.native.lastSessionState = "running";
+		expect(check(ctx)).toEqual({ canHibernate: false });
+		agent.sessions.native.lastSessionState = "requires_action";
+		expect(check(ctx)).toEqual({ canHibernate: false });
+		agent.sessions.native.lastSessionState = "idle";
+		expect(check(ctx)).toEqual({ canHibernate: true });
+		// The notification cycle is reported as running a moment after the task leaves.
+		tasks.set("shell", { isSubagent: false });
+		agent.endTask(agent.sessions.native, { task_id: "shell" });
+		expect(check(ctx)).toEqual({ canHibernate: false });
+		agent.sessions.native.aoTaskEndedAt -= 10000;
+		expect(check(ctx)).toEqual({ canHibernate: true });
 		for (const sessionId of [undefined, "missing", "__proto__"]) {
 			expect(() => check({ params: { sessionId } })).toThrow("invalid session");
 		}
@@ -151,8 +169,10 @@ describe("patchClaudeHibernationCheck", () => {
 
 	it("fails packaging if the pinned native task registry changes", () => {
 		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
-		writeFileSync(adapterPath, "// incompatible adapter");
-		expect(() => patchClaudeHibernationCheck(adapterPath)).toThrow("native-task hibernation check");
+		for (const missing of anchors.keys()) {
+			writeFileSync(adapterPath, anchors.filter((_, i) => i !== missing).join("\n"));
+			expect(() => patchClaudeHibernationCheck(adapterPath)).toThrow("native-task hibernation check");
+		}
 	});
 });
 

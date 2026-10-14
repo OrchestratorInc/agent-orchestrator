@@ -13,7 +13,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -1007,10 +1010,33 @@ func isGitRepo(path string) bool {
 	return samePath(top, comparablePath(path))
 }
 
+// defaultProjectID derives a valid project id from the folder name, so any
+// folder can be added without typing an id: accents fold to plain letters
+// ("café" -> "cafe"), every other run of characters the id alphabet rejects
+// becomes one "-" ("app (v2)" -> "app-v2"), and a name with nothing usable
+// left falls back to "project".
 func defaultProjectID(path string) domain.ProjectID {
-	id := strings.ToLower(filepath.Base(path))
-	id = strings.TrimSpace(id)
-	id = strings.ReplaceAll(id, " ", "-")
+	name := norm.NFD.String(strings.ToLower(strings.TrimSpace(filepath.Base(path))))
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case unicode.Is(unicode.Mn, r):
+			// Combining accent split off by NFD.
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		case !strings.HasSuffix(b.String(), "-"):
+			b.WriteByte('-')
+		}
+	}
+	id := b.String()
+	for strings.Contains(id, "..") {
+		id = strings.ReplaceAll(id, "..", ".")
+	}
+	id = strings.TrimLeftFunc(id, func(r rune) bool { return (r < 'a' || r > 'z') && (r < '0' || r > '9') })
+	id = strings.TrimRight(id, "-")
+	if id == "" {
+		id = "project"
+	}
 	return domain.ProjectID(id)
 }
 

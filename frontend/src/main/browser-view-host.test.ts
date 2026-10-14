@@ -11,13 +11,14 @@ import {
 	sanitizeBrowserTitle,
 	sanitizeBrowserURL,
 	scaleBoundsForZoom,
+	shouldHandleAppShortcutInBrowserContext,
 } from "./browser-view-host";
 import { browserProfilePartition, type BrowserProfile } from "../shared/browser-profiles";
 import type { BrowserProfileStore } from "./browser-profile-store";
 import type { BrowserHistoryStore } from "./browser-history-store";
 import {
 	CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL,
-	FOCUS_TERMINAL_SHORTCUT_CHANNEL,
+	APP_SHORTCUT_CHANNEL,
 	NEW_SESSION_SHORTCUT_CHANNEL,
 	NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL,
 } from "../shared/shortcuts";
@@ -475,6 +476,27 @@ describe("browser shortcut matching", () => {
 		expect(browserShortcutAction({ ...input, key: "t", control: false, meta: true }, true)).toBe("new-tab");
 	});
 
+	it("maps page history to ⌘[ / ⌘] on macOS and Alt+←/→ elsewhere, without stealing the session chords", () => {
+		const input = { control: false, meta: false, shift: false, alt: false, type: "keyDown" };
+		expect(browserShortcutAction({ ...input, meta: true, key: "[" }, true)).toBe("back");
+		expect(browserShortcutAction({ ...input, meta: true, key: "]" }, true)).toBe("forward");
+		expect(browserShortcutAction({ ...input, alt: true, key: "ArrowLeft" }, false)).toBe("back");
+		expect(browserShortcutAction({ ...input, alt: true, key: "ArrowRight" }, false)).toBe("forward");
+		// ⌘⇧[ is "previous session" and ⌘⌥← is "previous tab": not the page's to take.
+		expect(browserShortcutAction({ ...input, meta: true, shift: true, key: "{" }, true)).toBeNull();
+		expect(browserShortcutAction({ ...input, meta: true, alt: true, key: "ArrowLeft" }, true)).toBeNull();
+		// Wrong platform modifier.
+		expect(browserShortcutAction({ ...input, control: true, key: "[" }, true)).toBeNull();
+		expect(browserShortcutAction({ ...input, alt: true, key: "ArrowLeft" }, true)).toBeNull();
+	});
+
+	it("keeps app route history out of the Browser panel so ⌘[ turns the page, not the route", () => {
+		const chord = { key: "[", code: "BracketLeft", ctrl: false, meta: true, shift: false, alt: false };
+		expect(shouldHandleAppShortcutInBrowserContext("history-back", chord, true)).toBe(false);
+		expect(shouldHandleAppShortcutInBrowserContext("history-forward", { ...chord, key: "]", code: "BracketRight" }, true)).toBe(false);
+		expect(shouldHandleAppShortcutInBrowserContext("next-session", { ...chord, key: "}", code: "BracketRight", shift: true }, true)).toBe(true);
+	});
+
 	it("leaves Space and Shift+Space to Chromium so browser form controls can accept spaces", () => {
 		const input = { key: " ", control: false, meta: false, shift: false, alt: false, type: "keyDown" };
 		expect(browserShortcutAction(input, false)).toBeNull();
@@ -586,7 +608,7 @@ describe("browser shortcut routing", () => {
 		expect(webContents.findInPage).toHaveBeenCalledOnce();
 	});
 
-	it("replaces the last tab with a blank tab and closes the browser panel on ⌘W", async () => {
+	it("replaces the last tab with a blank tab and keeps the browser panel open on ⌘W", async () => {
 		const { emitBeforeInput, host, invoke, shellSend } = setupHost();
 		const state = await invoke("browser:ensure", "sess-1");
 		await invoke("browser:navigate", { viewId: state.viewId, url: "https://example.test/" });
@@ -596,9 +618,9 @@ describe("browser shortcut routing", () => {
 
 		const closeEvent = emitBeforeInput({ key: "w", control: true });
 		expect(closeEvent.preventDefault).toHaveBeenCalled();
-		expect(shellSend).toHaveBeenCalledWith("browser:closePanel", state.viewId);
+		expect(shellSend).not.toHaveBeenCalledWith("browser:closePanel", state.viewId);
 		expect(shellSend).not.toHaveBeenCalledWith(CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL);
-		expect(host.isLastUsedBrowser()).toBe(false);
+		expect(host.isLastUsedBrowser()).toBe(true);
 		await vi.waitFor(() => {
 			expect(shellSend).toHaveBeenCalledWith(
 				"browser:tabsState",
@@ -624,7 +646,7 @@ describe("browser shortcut routing", () => {
 		await vi.waitFor(() => {
 			expect(shellSend).toHaveBeenCalledWith("browser:reopenClosedTab", state.viewId);
 		});
-		expect(shellSend).not.toHaveBeenCalledWith(FOCUS_TERMINAL_SHORTCUT_CHANNEL);
+		expect(shellSend).not.toHaveBeenCalledWith(APP_SHORTCUT_CHANNEL, { id: "reopen-closed-tab" });
 
 		const openEvent = emitBeforeInput({ key: "t", control: true });
 		// App-shortcut rejection + browser new-tab handler both consume the chord.
@@ -722,14 +744,14 @@ describe("browser shortcut routing", () => {
 		expect(shellSend).not.toHaveBeenCalledWith(CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL);
 		expect(host.isLastUsedBrowser()).toBe(true);
 
-		// Second ⌘W with one tab left swaps it for a blank tab and closes the
-		// panel; the hidden browser releases the shortcut target to the shell.
+		// Second ⌘W with one tab left swaps it for a blank tab and keeps
+		// browser shortcuts targeting the open panel.
 		shellSend.mockClear();
 		const secondClose = emitShellBeforeInput({ key: "w", control: true });
 		expect(secondClose.preventDefault).toHaveBeenCalled();
-		expect(shellSend).toHaveBeenCalledWith("browser:closePanel", state.viewId);
+		expect(shellSend).not.toHaveBeenCalledWith("browser:closePanel", state.viewId);
 		expect(shellSend).not.toHaveBeenCalledWith(CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL);
-		expect(host.isLastUsedBrowser()).toBe(false);
+		expect(host.isLastUsedBrowser()).toBe(true);
 		await vi.waitFor(() => {
 			expect(shellSend).toHaveBeenCalledWith(
 				"browser:tabsState",
@@ -1157,6 +1179,26 @@ function fakeBrowserProfileStore(profile: BrowserProfile, bindings: Record<strin
 }
 
 describe("browser:closeTab automation-runtime fallback", () => {
+	it("replaces the final page with a fresh blank tab through the renderer close action", async () => {
+		const { invoke, views } = setupTabHost();
+		const initial = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		await invoke("browser:navigate", { viewId: initial.viewId, url: "https://example.test/" });
+		const before = (await invoke("browser:getTabs", initial.viewId)) as BrowserTabsState;
+		const closed = (await invoke("browser:closeTab", { viewId: initial.viewId, tabId: before.activeTabId })) as BrowserTabsState;
+
+		expect(closed.tabs).toHaveLength(1);
+		expect(closed.activeTabId).not.toBe(before.activeTabId);
+		expect(closed.tabs[0].url).toBe("about:blank");
+		expect(views[0].webContents.close).toHaveBeenCalledOnce();
+		expect(views[1].webContents.close).not.toHaveBeenCalled();
+
+		// Closing the blank landing tab works too and leaves a usable landing tab.
+		const blankClosed = (await invoke("browser:closeTab", { viewId: initial.viewId, tabId: closed.activeTabId })) as BrowserTabsState;
+		expect(blankClosed.tabs).toHaveLength(1);
+		expect(blankClosed.activeTabId).not.toBe(closed.activeTabId);
+		expect(blankClosed.tabs[0].url).toBe("about:blank");
+	});
+
 	// Regression: observed in a real long-running session as
 	// "Tab t5 not found; run `agent-browser tab` to list open tabs" — the
 	// external automation runtime's own internal tab registry had drifted from

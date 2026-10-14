@@ -18,7 +18,7 @@ import { cn } from "../../lib/utils";
 import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface } from "../../hooks/useSettings";
 import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
-import { isWindowsPlatform } from "../../lib/platform";
+import { isMacPlatform, isWindowsPlatform } from "../../lib/platform";
 
 /**
  * Default interface for new sessions. Daemon-owned so `ao spawn` and mobile
@@ -260,6 +260,8 @@ export function GeneralSettingsSection({
 				</SettingsRow>
 				{developerMode && <CloudOfferingRow />}
 				{developerMode && <DiagnosticsRow />}
+				{developerMode && <SideChatsRow />}
+				{developerMode && isMacPlatform() && <WindowTranslucencyRow />}
 			</SettingsSection>
 		</>
 	);
@@ -306,6 +308,46 @@ function DiagnosticsRow() {
 				<Switch aria-label={t("settings.diagnostics")} checked={diagnostics} onCheckedChange={setDiagnostics} />
 			</SettingsRow>
 			<p className="px-3 pb-2 text-xs leading-relaxed text-muted-foreground">{t("settings.diagnosticsToggleHint")}</p>
+		</div>
+	);
+}
+
+/**
+ * Developer Mode-only toggle for side chats. Renderer state like Diagnostics:
+ * off hides the inspector tab, /btw and /side, and "Add to side chat".
+ */
+function SideChatsRow() {
+	const { t } = useTranslation();
+	const sideChats = useUiStore((state) => state.sideChats);
+	const setSideChats = useUiStore((state) => state.setSideChats);
+	return (
+		<div className="flex w-full flex-col">
+			<SettingsRow label={t("settings.sideChats")}>
+				<Switch aria-label={t("settings.sideChats")} checked={sideChats} onCheckedChange={setSideChats} />
+			</SettingsRow>
+			<p className="px-3 pb-2 text-xs leading-relaxed text-muted-foreground">{t("settings.sideChatsHint")}</p>
+		</div>
+	);
+}
+
+/**
+ * Developer Mode-only, macOS-only toggle for window translucency: native
+ * vibrancy blurs the desktop behind a translucent shell. Renderer state.
+ */
+function WindowTranslucencyRow() {
+	const { t } = useTranslation();
+	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
+	const setWindowTranslucency = useUiStore((state) => state.setWindowTranslucency);
+	return (
+		<div className="flex w-full flex-col">
+			<SettingsRow label={t("settings.windowTranslucency")}>
+				<Switch
+					aria-label={t("settings.windowTranslucency")}
+					checked={windowTranslucency}
+					onCheckedChange={setWindowTranslucency}
+				/>
+			</SettingsRow>
+			<p className="px-3 pb-2 text-xs leading-relaxed text-muted-foreground">{t("settings.windowTranslucencyHint")}</p>
 		</div>
 	);
 }

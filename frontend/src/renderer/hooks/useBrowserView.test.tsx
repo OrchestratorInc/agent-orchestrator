@@ -656,10 +656,9 @@ describe("useBrowserView", () => {
 		expect(result.current.tabNotice).toBe("Couldn't reopen that tab");
 	});
 
-	// Regression: closeTab/selectTab are invoked fire-and-forget (`void
-	// onCloseTab(...)`) from the tabs rail, so a rejection used to become a
-	// silent unhandled rejection with zero user feedback.
-	it("surfaces a notice instead of throwing when closing or selecting a tab fails", async () => {
+	// Closing from the tab strip is fire-and-forget, so a rejected close
+	// must be handled without becoming an unhandled rejection.
+	it("surfaces a notice instead of throwing when closing a tab fails", async () => {
 		const bridge = setupBridge();
 		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
 		await waitFor(() => expect(result.current.tabs.map((tab) => tab.id)).toEqual(["t1"]));
@@ -667,10 +666,27 @@ describe("useBrowserView", () => {
 		bridge.closeTab.mockRejectedValueOnce(new Error("boom"));
 		await expect(act(() => result.current.closeTab("t1"))).resolves.toBeUndefined();
 		expect(result.current.tabNotice).toBe("Couldn't close that tab");
+	});
 
-		bridge.selectTab.mockRejectedValueOnce(new Error("boom"));
+	it("resyncs a failed tab selection without showing a switch-failure notice", async () => {
+		const bridge = setupBridge();
+		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+		await waitFor(() => expect(result.current.activeTabId).toBe("t1"));
+
+		bridge.selectTab.mockRejectedValueOnce(new Error("automation sync failed"));
+		bridge.getTabs.mockResolvedValueOnce({
+			viewId: "42:sess-1",
+			activeTabId: "t2",
+			tabs: [{ id: "t2", url: "https://example.test/", title: "Selected", active: true }],
+		});
+		await expect(act(() => result.current.selectTab("t2"))).resolves.toBeUndefined();
+		expect(result.current.activeTabId).toBe("t2");
+		expect(result.current.tabNotice).toBe("");
+
+		bridge.selectTab.mockRejectedValueOnce(new Error("tab unavailable"));
+		bridge.getTabs.mockRejectedValueOnce(new Error("view unavailable"));
 		await expect(act(() => result.current.selectTab("t1"))).resolves.toBeUndefined();
-		expect(result.current.tabNotice).toBe("Couldn't switch to that tab");
+		expect(result.current.tabNotice).toBe("");
 	});
 
 	// Regression: the main process can mutate its own tab state (e.g. the

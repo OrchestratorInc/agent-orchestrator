@@ -9,6 +9,25 @@ import (
 	"testing"
 )
 
+func TestACPRelayCapturesIndependentForkForReconnect(t *testing.T) {
+	for _, childID := range []string{"child", "", "parent"} {
+		t.Run(childID, func(t *testing.T) {
+			relay := newTestACPRelay(t)
+			provider := relayClientFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":1,"method":"session/fork","params":{"sessionId":"parent","cwd":"/tmp"}}`+"\n"), 1)
+			result, _ := json.Marshal(map[string]any{"sessionId": childID, "configOptions": []any{}})
+			relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+frameID(t, provider)+`,"result":`+string(result)+`}`+"\n"), 1, true)
+			state := relay.snapshot()
+			if childID == "child" {
+				if state.SessionID != "child" || len(state.SessionResult) == 0 {
+					t.Fatalf("lost child reconnect state: %+v", state)
+				}
+			} else if state.SessionID != "" || len(state.SessionResult) != 0 {
+				t.Fatalf("malformed fork adopted parent ownership: %+v", state)
+			}
+		})
+	}
+}
+
 func TestACPRelayReclaimsPromptAcrossAttachment(t *testing.T) {
 	relay := newTestACPRelay(t)
 
