@@ -28,7 +28,13 @@ type fakeRunner struct {
 	gitCalls []string
 	gitDir   string            // replaces the placeholder fakeGitDir in output
 	git      map[string]string // argv substring -> output for git calls
+	// isolate answers every network-isolation helper run out of band (the
+	// call is still recorded in calls); the zero value succeeds.
+	isolate fakeCall
 }
+
+// isolationMarker identifies the network-isolation helper's docker run.
+const isolationMarker = " run --rm --network container:"
 
 // fakeGitDir in fake output stands for the test's real git dir.
 const fakeGitDir = "/repo/.git"
@@ -47,6 +53,9 @@ func (f *fakeRunner) Output(_ context.Context, name string, args ...string) ([]b
 		return f.gitOutput(line)
 	}
 	f.calls = append(f.calls, line)
+	if strings.Contains(line, isolationMarker) {
+		return []byte(f.isolate.out), f.isolate.err
+	}
 	if len(f.script) == 0 {
 		f.t.Fatalf("unexpected call: %s", line)
 	}
@@ -382,7 +391,7 @@ func TestEnsureRunningContainerWithStaleHashIsReused(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range fr.calls {
-		if strings.Contains(c, " rm ") || strings.Contains(c, " run ") {
+		if strings.Contains(c, " rm ") || (strings.Contains(c, " run ") && !strings.Contains(c, isolationMarker)) {
 			t.Fatalf("running container was touched: %s", c)
 		}
 	}

@@ -273,7 +273,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 	// override moves all durable per-user state together. The sandbox adapter
 	// shares this root so the two cannot drift.
 	managedRoot := filepath.Join(cfg.DataDir, "worktrees")
-	sandbox := dockersandbox.New(dockersandbox.Config{DataDir: cfg.DataDir, ManagedRoot: managedRoot})
+	sandbox := dockersandbox.New(dockersandbox.Config{DataDir: cfg.DataDir, ManagedRoot: managedRoot, DaemonPort: cfg.Port})
 	gitWS, err := gitworktree.New(gitworktree.Options{
 		ManagedRoot: managedRoot,
 		// Resolve each project's source repo from the projects table, so a

@@ -52,6 +52,9 @@ func (execRunner) Output(ctx context.Context, name string, args ...string) ([]by
 type Config struct {
 	DataDir     string
 	ManagedRoot string // workspace adapter's managed worktree root
+	// DaemonPort is the daemon's loopback port, probed to prove the sandbox
+	// can't reach it; 0 skips the probe.
+	DaemonPort int
 }
 
 // Sandbox implements ports.Sandbox with the docker CLI.
@@ -217,21 +220,30 @@ func (s *Sandbox) Ensure(ctx context.Context, req ports.SandboxRequest) (ports.S
 			return ports.SandboxTarget{}, err
 		}
 	}
+	// Remove only a per-agent container this call created; a reused or
+	// started one may belong to a live session, and shared containers belong
+	// to Release.
+	discardNew := func(err error) error {
+		if created && req.Config.Mode == domain.SandboxModePerAgent {
+			if _, rmErr := s.output(ctx, probeTimeout, docker, "rm", "-f", name); rmErr != nil {
+				err = fmt.Errorf("%w (removing the new container also failed: %w)", err, rmErr)
+			}
+		}
+		return err
+	}
+	if err := s.isolateHostNetwork(ctx, docker, name); err != nil {
+		if errors.Is(err, ports.ErrSandboxUnavailable) {
+			return ports.SandboxTarget{}, err
+		}
+		return ports.SandboxTarget{}, discardNew(err)
+	}
 	for _, bin := range req.RequireBinaries {
 		if _, err := s.output(ctx, probeTimeout, docker, "exec", name, "/bin/sh", "-c", `command -v "$1"`, "sh", bin); err != nil {
 			if errors.Is(err, ports.ErrSandboxUnavailable) {
 				return ports.SandboxTarget{}, err
 			}
-			// Remove only a per-agent container this call created; a reused
-			// or started one may belong to a live session, and shared
-			// containers belong to Release.
-			if created && req.Config.Mode == domain.SandboxModePerAgent {
-				if _, rmErr := s.output(ctx, probeTimeout, docker, "rm", "-f", name); rmErr != nil {
-					err = fmt.Errorf("%w (removing the new container also failed: %w)", err, rmErr)
-				}
-			}
 			return ports.SandboxTarget{}, fmt.Errorf("%w: image %s has no %q on PATH (and needs /bin/sh): %w",
-				ports.ErrSandboxMisconfigured, req.Config.Image, bin, err)
+				ports.ErrSandboxMisconfigured, req.Config.Image, bin, discardNew(err))
 		}
 	}
 	return target, nil

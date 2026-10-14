@@ -1,0 +1,38 @@
+# Runs in a helper container that shares the sandbox's network namespace.
+# Blackholes every address the host aliases resolve to, then proves the
+# daemon's loopback port ($1, 0 = unknown) is unreachable. Exit 3 = reachable.
+port=$1
+addrs=
+for h in host.docker.internal gateway.docker.internal host.internal host.lima.internal; do
+	for a in $(getent ahosts "$h" 2>/dev/null | awk '{print $1}'); do
+		case " $addrs " in *" $a "*) ;; *) addrs="$addrs $a" ;; esac
+	done
+done
+for a in $addrs; do
+	case $a in
+	*:*)
+		# With IPv6 off in the netns there is no v6 route to block.
+		if ! ip -6 route replace blackhole "$a/128"; then
+			[ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null)" = 1 ] && continue
+			echo "ip -6 route replace blackhole $a/128 failed" >&2
+			exit 1
+		fi
+		;;
+	*)
+		if ! ip route replace blackhole "$a/32"; then
+			echo "ip route replace blackhole $a/32 failed" >&2
+			exit 1
+		fi
+		;;
+	esac
+done
+[ "$port" = 0 ] && exit 0
+# The default gateway is probed but not blackholed: that would cut internet.
+gw=$(ip route show default | awk '$1 == "default" { print $3; exit }')
+for a in $addrs $gw; do
+	if nc -z -w 2 "$a" "$port" </dev/null >/dev/null 2>&1; then
+		echo "REACHABLE $a"
+		exit 3
+	fi
+done
+exit 0
