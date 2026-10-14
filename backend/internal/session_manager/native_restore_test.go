@@ -22,6 +22,9 @@ type interactiveTestAgent struct {
 }
 
 func (a *interactiveTestAgent) PrepareNativeRestore(context.Context, ports.RestoreConfig) (ports.NativeRestoreInitialization, error) {
+	if a.preflight != nil {
+		return nil, a.preflight
+	}
 	return a.plan, a.preflight
 }
 func (a *interactiveTestAgent) GetRestoreCommand(context.Context, ports.RestoreConfig) ([]string, bool, error) {
@@ -170,6 +173,37 @@ func TestInteractiveNativeRestoreAndResume(t *testing.T) {
 		})
 	}
 }
+
+func TestInteractiveRestoreFallsBackWhenNativeHistoryNeverStarted(t *testing.T) {
+	a := &interactiveTestAgent{preflight: ports.ErrNativeHistoryUnavailable}
+	m, st, rt, _ := interactiveManager(t, true, a)
+	rec := st.sessions["mer-1"]
+	rec.Metadata.AgentSessionID = ""
+	rec.Metadata.AgentSessionIDLaunchID = ""
+	st.sessions[rec.ID] = rec
+	result, err := m.RestoreWithMode(ctx, rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Mode == RestoreModeNative || rt.created != 1 || a.directCalls != 0 {
+		t.Fatalf("missing history did not launch fresh: mode=%q created=%d direct=%d", result.Mode, rt.created, a.directCalls)
+	}
+}
+
+func TestInteractiveRestoreDoesNotResumeUnverifiedGeneration(t *testing.T) {
+	a := &interactiveTestAgent{plan: &interactiveTestPlan{}}
+	m, st, rt, msg := interactiveManager(t, true, a)
+	rec := st.sessions["mer-1"]
+	rec.Metadata.AgentSessionIDLaunchID = "unverified-previous"
+	st.sessions[rec.ID] = rec
+	result, err := m.RestoreWithMode(ctx, rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Mode == RestoreModeNative || rt.created != 1 || len(msg.msgs) != 0 {
+		t.Fatalf("unverified generation resumed natively: mode=%q created=%d messages=%v", result.Mode, rt.created, msg.msgs)
+	}
+}
 func TestInteractiveNativeFailureCleanupAndRetryState(t *testing.T) {
 	for _, terminated := range []bool{true, false} {
 		for _, failure := range []string{"history", "timeout", "exit", "wrong-id", "discarded-publication", "cleanup"} {
@@ -255,14 +289,14 @@ func TestInteractiveCrashReconcileRefusesUnverifiedBootstrap(t *testing.T) {
 	rec := st.sessions["mer-1"]
 	rec.Metadata.AgentSessionIDLaunchID = "previous"
 	rec.Metadata.RuntimeLaunchID = "launch-old"
+	rec.Activity.State = domain.ActivityActive
 	st.sessions[rec.ID] = rec
 	rt.aliveByHandle = map[string]bool{"tmux-mer-1": true}
-	err := m.reconcileLive(ctx, rec)
-	if err == nil || !strings.Contains(err.Error(), "unverified") {
+	if err := m.reconcileLive(ctx, rec); err != nil {
 		t.Fatal(err)
 	}
-	if rt.destroyed != 1 {
-		t.Fatal("unverified runtime adopted")
+	if rt.destroyed != 0 || st.sessions[rec.ID].Activity.State == domain.ActivityExited {
+		t.Fatal("healthy runtime destroyed for a missing start-hook identity")
 	}
 }
 func TestInteractiveActualStartupHealthRefusesUnverifiedBootstrap(t *testing.T) {
@@ -270,13 +304,14 @@ func TestInteractiveActualStartupHealthRefusesUnverifiedBootstrap(t *testing.T) 
 	m, st, rt, _ := interactiveManager(t, false, a)
 	rec := st.sessions["mer-1"]
 	rec.Metadata.AgentSessionIDLaunchID = "previous"
+	rec.Activity.State = domain.ActivityActive
 	st.sessions[rec.ID] = rec
 	rt.aliveByHandle = map[string]bool{"tmux-mer-1": true}
-	if err := m.checkSessionHealth(ctx, rec); err == nil || !strings.Contains(err.Error(), "unverified") {
+	if err := m.checkSessionHealth(ctx, rec); err != nil {
 		t.Fatal(err)
 	}
-	if rt.destroyed != 1 || st.sessions[rec.ID].Activity.State != domain.ActivityExited {
-		t.Fatal("startup adopted fresh runtime")
+	if rt.destroyed != 0 || st.sessions[rec.ID].Activity.State == domain.ActivityExited {
+		t.Fatal("startup destroyed healthy runtime")
 	}
 }
 func TestNativeMemcodeDecisionRefusesOrdinarySend(t *testing.T) {

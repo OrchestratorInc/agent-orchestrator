@@ -117,7 +117,11 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	if !ok {
 		return
 	}
-	nativeDecisionCards := session.Harness == domain.HarnessMemcode
+	var options ports.TerminalActivityOptions
+	if provider, ok := agent.(ports.TerminalActivityOptionsProvider); ok {
+		options = provider.TerminalActivityOptions()
+	}
+	nativeDecisionCards := options.SupportsBlocked
 	continuous, ok := agent.(ports.ContinuousTerminalActivityDetector)
 	if !ok || !continuous.ContinuouslyDetectTerminalActivity() {
 		if session.Activity.State == domain.ActivityWaitingInput {
@@ -137,11 +141,7 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	var output string
 	var err error
 	handle := ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}
-	if nativeDecisionCards {
-		rendered, ok := o.runtime.(ports.StyledTerminalOutputReader)
-		if !ok {
-			return
-		}
+	if rendered, ok := o.runtime.(ports.StyledTerminalOutputReader); options.PreferStyledOutput && ok {
 		output, err = rendered.GetStyledOutput(ctx, handle, o.outputLines)
 	} else {
 		output, err = o.runtime.GetOutput(ctx, handle, o.outputLines)

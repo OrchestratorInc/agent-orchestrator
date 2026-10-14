@@ -121,10 +121,13 @@ func emptyComposer(output string) bool {
 		composer = composer || line == "→  Ask memcode…   ·   $ = shell"
 		footer = footer || strings.HasPrefix(line, "memcode · ")
 	}
-	return idle && composer && footer && !strings.Contains(output, "panic:")
+	return idle && composer && footer && !strings.Contains(strings.Join(lines, "\n"), "panic:")
 }
 func transcript(workspace, id string) ([32]byte, int, error) {
 	var zero [32]byte
+	if id == "" {
+		return zero, 0, fmt.Errorf("memcode native session identity missing: %w", ports.ErrNativeHistoryUnavailable)
+	}
 	if !nativeIDPattern.MatchString(id) {
 		return zero, 0, errors.New("memcode full native session identity required")
 	}
@@ -141,7 +144,10 @@ func transcript(workspace, id string) ([32]byte, int, error) {
 	defer func() { _ = confined.Close() }()
 	f, err := confined.Open(relative)
 	if err != nil {
-		return zero, 0, errors.New("memcode native history missing")
+		if errors.Is(err, os.ErrNotExist) {
+			return zero, 0, fmt.Errorf("memcode native history missing: %w", ports.ErrNativeHistoryUnavailable)
+		}
+		return zero, 0, err
 	}
 	defer func() { _ = f.Close() }()
 	st, err := f.Stat()
@@ -162,13 +168,20 @@ func transcript(workspace, id string) ([32]byte, int, error) {
 	if err := json.Unmarshal(data, &history); err != nil {
 		return zero, 0, errors.New("memcode malformed native history")
 	}
-	if history.ID != id || len(history.Messages) == 0 {
-		return zero, 0, errors.New("memcode native history identity mismatch or empty history")
+	if history.ID != id {
+		return zero, 0, errors.New("memcode native history identity mismatch")
+	}
+	if len(history.Messages) == 0 {
+		return zero, 0, fmt.Errorf("memcode native history empty: %w", ports.ErrNativeHistoryUnavailable)
 	}
 	for _, m := range history.Messages {
 		if m.Content == nil || m.Role != "user" && m.Role != "assistant" && m.Role != "system" && m.Role != "tool" {
 			return zero, 0, errors.New("memcode invalid native wire history")
 		}
 	}
-	return sha256.Sum256(data), len(history.Messages), nil
+	messages, err := json.Marshal(history.Messages)
+	if err != nil {
+		return zero, 0, err
+	}
+	return sha256.Sum256(messages), len(history.Messages), nil
 }

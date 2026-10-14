@@ -83,7 +83,11 @@ func TestRestoreRequiresCurrentWitnessAndEmptyComposer(t *testing.T) {
 	if _, err := p.Restored(context.Background(), "launch-1", banner); err == nil {
 		t.Fatal("wrong native identity accepted")
 	}
-	seedHistory(t, workspace, validHistory+" ")
+	seedHistory(t, workspace, validHistory[:len(validHistory)-1]+`,"saved_at":"2026-10-14T13:07:11Z"}`)
+	if _, err := p.Ready(context.Background(), "launch-1", readyTerminal); err != nil {
+		t.Fatal("metadata-only rewrite rejected", err)
+	}
+	seedHistory(t, workspace, strings.Replace(validHistory, `"role":"user"`, `"role":"assistant"`, 1))
 	if _, err := p.Ready(context.Background(), "launch-1", readyTerminal); err == nil {
 		t.Fatal("changed transcript accepted")
 	}
@@ -112,6 +116,9 @@ func TestModelDoesNotPretendFlagOverridesNativeSelection(t *testing.T) {
 func TestComposerRejectsHistoricalChrome(t *testing.T) {
 	if emptyComposer(readyTerminal + strings.Repeat("\nnew output", 20)) {
 		t.Fatal("historical idle composer accepted")
+	}
+	if !emptyComposer("panic: from old transcript\n" + strings.Repeat("old output\n", 20) + readyTerminal) {
+		t.Fatal("historical panic text blocked current idle composer")
 	}
 }
 func TestPermissionAndToolMappingsFailClosed(t *testing.T) {

@@ -2255,6 +2255,12 @@ func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, 
 	if override.Permissions != "" {
 		merged.Permissions = override.Permissions
 	}
+	// A project may carry a model from its previous worker harness. Memcode
+	// accepts only its native catalog; leave an incompatible inherited choice
+	// to the TUI instead of making every launch and restore fail.
+	if harness == domain.HarnessMemcode && validateSpawnModel(harness, merged.Model) != nil {
+		merged.Model = ""
+	}
 	return merged
 }
 
@@ -3436,13 +3442,24 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	var delivery ports.PromptDeliveryStrategy
 	var mode RestoreMode
 	if restorer, ok := agent.(ports.AgentInteractiveNativeRestorer); ok && !forceFresh {
-		initialization, err = restorer.PrepareNativeRestore(ctx, ports.RestoreConfig{Session: ports.SessionRef{ID: string(rec.ID), WorkspacePath: ws.Path, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID}}, DataDir: m.dataDir, Kind: rec.Kind, Config: agentConfig, Permissions: agentConfig.Permissions, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile})
-		if err == nil {
-			argv = initialization.Argv()
-			for key, value := range initialization.LaunchEnv() {
-				env[key] = value
+		identityUnverified := rec.Metadata.RuntimeLaunchID != "" && rec.Metadata.AgentSessionIDLaunchID != rec.Metadata.RuntimeLaunchID
+		if identityUnverified && requireNativeHistory {
+			err = ErrNotResumable
+		} else if identityUnverified {
+			argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
+				systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true)
+		} else {
+			initialization, err = restorer.PrepareNativeRestore(ctx, ports.RestoreConfig{Session: ports.SessionRef{ID: string(rec.ID), WorkspacePath: ws.Path, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID}}, DataDir: m.dataDir, Kind: rec.Kind, Config: agentConfig, Permissions: agentConfig.Permissions, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile})
+			if err == nil {
+				argv = initialization.Argv()
+				for key, value := range initialization.LaunchEnv() {
+					env[key] = value
+				}
+				delivery, mode = ports.PromptDeliveryInCommand, RestoreModeNative
+			} else if errors.Is(err, ports.ErrNativeHistoryUnavailable) && !requireNativeHistory {
+				argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
+					systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true)
 			}
-			delivery, mode = ports.PromptDeliveryInCommand, RestoreModeNative
 		}
 	} else if forceFresh {
 		argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
@@ -3784,12 +3801,6 @@ func (m *Manager) reconcileLive(ctx context.Context, rec domain.SessionRecord) e
 				return fmt.Errorf("reconcile %s: probe: %w", rec.ID, err)
 			}
 			if alive {
-				agent, agentFound := m.agents.Agent(rec.Harness)
-				if agentFound {
-					if _, interactive := agent.(ports.AgentInteractiveNativeRestorer); interactive && rec.Metadata.AgentSessionIDLaunchID != rec.Metadata.RuntimeLaunchID {
-						return errors.Join(errors.New("unverified interactive native startup cannot be adopted"), m.rollbackNativeInitialization(ctx, rec, handle, rec.Metadata.RuntimeLaunchID))
-					}
-				}
 				return nil // adopt: the session survived the crash.
 			}
 		}

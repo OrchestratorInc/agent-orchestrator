@@ -221,6 +221,10 @@ func instructionChunks(data []byte) ([][]byte, error) {
 	remaining := data
 	for len(remaining) > 8192 {
 		end := bytes.LastIndex(remaining[:8192], []byte("\n\n"))
+		for end > 0 && (!bytes.Equal(bytes.TrimSpace(remaining[:end]), remaining[:end]) ||
+			!bytes.Equal(bytes.TrimSpace(remaining[end+2:]), remaining[end+2:])) {
+			end = bytes.LastIndex(remaining[:end], []byte("\n\n"))
+		}
 		if end <= 0 {
 			return nil, errors.New("memcode private instruction paragraph exceeds native hook output limit")
 		}

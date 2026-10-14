@@ -394,7 +394,7 @@ func TestMemcodeObservationUsesCurrentRenderedScreen(t *testing.T) {
 	if err := observer.Poll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(rawSink.signals) != 0 {
-		t.Fatal("raw history substituted for current screen")
+	if len(rawSink.signals) != 1 || rawSink.signals[0].State != domain.ActivityIdle {
+		t.Fatal("raw output fallback did not detect current chrome", rawSink.signals)
 	}
 }
