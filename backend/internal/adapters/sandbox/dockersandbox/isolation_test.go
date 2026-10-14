@@ -275,7 +275,7 @@ func TestEnsureCreatesSandboxNetwork(t *testing.T) {
 			}
 			create, run := -1, -1
 			for i, c := range fr.calls {
-				if c == "/usr/bin/docker network create --label ao.sandbox.network=1 ao-sandbox" {
+				if c == "/usr/bin/docker network create --label ao.sandbox.network=1 -o com.docker.network.bridge.enable_icc=false ao-sandbox" {
 					create = i
 				}
 				if strings.Contains(c, " run -d ") {
@@ -340,6 +340,21 @@ func TestEnsureExistingSandboxNetworkIsNotRecreated(t *testing.T) {
 	}
 	if countCalls(fr, " network inspect ") != 1 || countCalls(fr, " network create ") != 0 {
 		t.Fatalf("calls:\n%s", strings.Join(fr.calls, "\n"))
+	}
+}
+
+// A network created before inter-container traffic was disabled must not be
+// reused: sandboxes on it could reach each other.
+func TestEnsureRejectsSandboxNetworkWithICC(t *testing.T) {
+	for _, out := range []string{"\n", "<no value>\n", "true\n"} {
+		s, fr, data := testSandbox(t, []fakeCall{{match: "inspect", err: errors.New("No such object")}})
+		fr.netInspect = fakeCall{out: out}
+		if _, err := s.Ensure(context.Background(), perAgentReq(wsOf(data))); !errors.Is(err, ports.ErrSandboxMisconfigured) {
+			t.Fatalf("option %q: err = %v, want ErrSandboxMisconfigured", out, err)
+		}
+		if countCalls(fr, " network create ") != 0 || countCalls(fr, " run -d ") != 0 {
+			t.Fatalf("calls:\n%s", strings.Join(fr.calls, "\n"))
+		}
 	}
 }
 

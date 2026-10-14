@@ -62,6 +62,9 @@ func (f *fakeRunner) Output(_ context.Context, name string, args ...string) ([]b
 	}
 	switch {
 	case strings.Contains(line, " network inspect "):
+		if f.netInspect == (fakeCall{}) {
+			return []byte("false\n"), nil // an existing, isolated network
+		}
 		return []byte(f.netInspect.out), f.netInspect.err
 	case strings.Contains(line, " network create "):
 		return []byte(f.netCreate.out), f.netCreate.err

@@ -22,6 +22,7 @@ const isolationImage = "alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b3
 const (
 	sandboxNetwork      = "ao-sandbox"
 	labelSandboxNetwork = "ao.sandbox.network"
+	iccOption           = "com.docker.network.bridge.enable_icc"
 )
 
 // isolationScript blackholes the host aliases and probes the daemon port;
@@ -31,10 +32,14 @@ const (
 var isolationScript string
 
 // ensureNetwork creates the sandbox network unless it exists. A concurrent
-// create that wins the race is success.
+// create that wins the race is success. Inter-container traffic is disabled
+// so sandboxes of different sessions and projects cannot reach each other.
 func (s *Sandbox) ensureNetwork(ctx context.Context, docker string) error {
-	_, err := s.output(ctx, probeTimeout, docker, "network", "inspect", "--format", "{{.Name}}", sandboxNetwork)
+	out, err := s.output(ctx, probeTimeout, docker, "network", "inspect", "--format", `{{index .Options "`+iccOption+`"}}`, sandboxNetwork)
 	if err == nil {
+		if strings.TrimSpace(string(out)) != "false" {
+			return fmt.Errorf("%w: sandbox network %s allows traffic between containers; remove it with `docker network rm %s` so it is recreated isolated", ports.ErrSandboxMisconfigured, sandboxNetwork, sandboxNetwork)
+		}
 		return nil
 	}
 	if errors.Is(err, ports.ErrSandboxUnavailable) {
@@ -43,7 +48,7 @@ func (s *Sandbox) ensureNetwork(ctx context.Context, docker string) error {
 	if msg := strings.ToLower(err.Error()); !strings.Contains(msg, "not found") && !strings.Contains(msg, "no such network") {
 		return fmt.Errorf("%w: inspect sandbox network %s: %w", ports.ErrSandboxMisconfigured, sandboxNetwork, err)
 	}
-	_, err = s.output(ctx, probeTimeout, docker, "network", "create", "--label", labelSandboxNetwork+"=1", sandboxNetwork)
+	_, err = s.output(ctx, probeTimeout, docker, "network", "create", "--label", labelSandboxNetwork+"=1", "-o", iccOption+"=false", sandboxNetwork)
 	if err == nil || strings.Contains(strings.ToLower(err.Error()), "already exists") {
 		return nil
 	}
