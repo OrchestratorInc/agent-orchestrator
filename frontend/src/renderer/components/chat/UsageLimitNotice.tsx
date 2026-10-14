@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import type { TFunction } from "i18next";
+import { Trans, useTranslation } from "react-i18next";
 import { Gauge, Loader2, Play } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { ConversationUsageLimit } from "../../types/conversation";
@@ -20,13 +22,13 @@ const resetTimeFormatter = new Intl.DateTimeFormat(undefined, {
 	timeStyle: "short",
 });
 
-function remainingTime(milliseconds: number): string {
+function remainingTime(milliseconds: number, t: TFunction): string {
 	const seconds = Math.max(0, Math.ceil(milliseconds / 1000));
 	const hours = Math.floor(seconds / 3600);
 	const minutes = Math.floor((seconds % 3600) / 60);
-	if (hours > 0) return `${hours}h ${minutes}m`;
-	if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
-	return `${seconds}s`;
+	if (hours > 0) return t("chat.usageLimit.remainingHours", { hours, minutes });
+	if (minutes > 0) return t("chat.usageLimit.remainingMinutes", { minutes, seconds: seconds % 60 });
+	return t("chat.usageLimit.remainingSeconds", { seconds });
 }
 
 /** The timer updates presentation only; the daemon owns automatic resumption. */
@@ -39,6 +41,7 @@ export function UsageLimitNotice({
 	error,
 	compact = false,
 }: UsageLimitNoticeProps) {
+	const { t } = useTranslation();
 	const [now, setNow] = useState(Date.now);
 	const parsedReset = usageLimit.resetsAt ? Date.parse(usageLimit.resetsAt) : NaN;
 	const resetAt = Number.isFinite(parsedReset) ? parsedReset : undefined;
@@ -74,21 +77,29 @@ export function UsageLimitNotice({
 		>
 			<Gauge aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-warning" />
 			<div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1.5">
-				<strong className="text-balance text-xs font-medium text-warning">Usage limit reached</strong>
+				<strong className="text-balance text-xs font-medium text-warning">{t("chat.usageLimit.title")}</strong>
 				{!compact ? (
 					<>
 						<span className="text-pretty text-xs text-muted-foreground">
-							{resetAt === undefined ? "The provider did not supply a reset time." : (
-								<>Resets <time dateTime={usageLimit.resetsAt}>{resetTimeFormatter.format(resetAt)}</time></>
+							{resetAt === undefined ? t("chat.usageLimit.unknownReset") : (
+								<Trans
+									t={t} i18nKey="chat.usageLimit.resetsAt"
+									values={{ time: resetTimeFormatter.format(resetAt) }}
+									components={{ time: <time dateTime={usageLimit.resetsAt} /> }}
+								/>
 							)}
 						</span>
 						<span className="text-pretty text-xs text-muted-foreground">
-							{resetAt === undefined ? "You can try resuming manually." : ready ? (
-								<span role="status">Reset time reached. You can resume now.</span>
+							{resetAt === undefined ? t("chat.usageLimit.manualResumeHint") : ready ? (
+								<span role="status">{t("chat.usageLimit.ready")}</span>
 							) : (
-								<>Available in <span className="tabular-nums">{remainingTime(resetAt - now)}</span>.</>
+								<Trans
+									t={t} i18nKey="chat.usageLimit.availableIn"
+									values={{ duration: remainingTime(resetAt - now, t) }}
+									components={{ duration: <span className="tabular-nums" /> }}
+								/>
 							)}
-							{resetAt !== undefined && usageLimit.autoResume ? " Auto-resume is scheduled." : null}
+							{resetAt !== undefined && usageLimit.autoResume ? ` ${t("chat.usageLimit.scheduled")}` : null}
 						</span>
 						{onResume || showAutoResume ? (
 							<div className="ml-auto flex flex-wrap items-center gap-2">
@@ -96,11 +107,11 @@ export function UsageLimitNotice({
 									<Button
 										type="button" size="sm" variant="outline" onClick={onResume}
 										disabled={pending || disabled || !ready}
-										title={!ready ? "Available when the usage limit resets" : undefined}
+										title={!ready ? t("chat.usageLimit.resumeHint") : undefined}
 										className="focus-visible:ring-2 focus-visible:ring-ring"
 									>
 										{pending ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" /> : <Play aria-hidden="true" className="size-3.5" />}
-										Resume
+										{t("chat.usageLimit.resume")}
 									</Button>
 								) : null}
 								{showAutoResume ? (
@@ -110,7 +121,7 @@ export function UsageLimitNotice({
 										disabled={pending || disabled}
 										className="focus-visible:ring-2 focus-visible:ring-ring"
 									>
-										{usageLimit.autoResume ? "Cancel auto-resume" : "Auto-resume at reset"}
+										{t(usageLimit.autoResume ? "chat.usageLimit.cancelAutoResume" : "chat.usageLimit.autoResume")}
 									</Button>
 								) : null}
 							</div>
