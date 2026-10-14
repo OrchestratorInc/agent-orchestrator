@@ -92,3 +92,27 @@ func TestMigration0203RejectsUnrecognizedConstraint(t *testing.T) {
 		t.Fatalf("unrecognized constraint silently migrated: %v", err)
 	}
 }
+
+func TestMigration0203AddsHermesBeforeLegacySchemaRepair(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 194)
+	mustExec(t, db, `PRAGMA writable_schema = ON`)
+	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''command-code'', ', '') WHERE type = 'table' AND name = 'sessions'`)
+	mustExec(t, db, `PRAGMA writable_schema = RESET`)
+	upTo(t, db, 203)
+	var schema string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`).Scan(&schema); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(schema, "'hermes'") || strings.Contains(schema, "'command-code'") {
+		t.Fatalf("external migration did not add Hermes to legacy schema: %s", schema)
+	}
+	if err := reconcileHarnessConstraint(db); err != nil {
+		t.Fatalf("AO legacy repair with Hermes present: %v", err)
+	}
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`).Scan(&schema); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(schema, "'hermes'") || !strings.Contains(schema, "'command-code'") {
+		t.Fatalf("legacy repair lost a harness: %s", schema)
+	}
+}

@@ -7,7 +7,7 @@ PRAGMA writable_schema = ON;
 -- +goose StatementEnd
 -- +goose StatementBegin
 UPDATE sqlite_master SET sql = replace(sql, '''fake''))', '''hermes'', ''fake''))')
-WHERE type = 'table' AND name = 'sessions' AND sql LIKE '%CHECK (harness IN (%' AND sql LIKE '%''muse''%' AND sql LIKE '%''kimchi''%' AND sql LIKE '%''prime-agent''%' AND sql LIKE '%''omp''%' AND sql LIKE '%''gemini''%' AND sql LIKE '%''unreal-agent''%' AND sql LIKE '%''mimo-code''%' AND sql LIKE '%''codewhale''%' AND sql LIKE '%''deepseek-harness''%' AND sql LIKE '%''openhands''%' AND sql LIKE '%''command-code''%' AND sql NOT LIKE '%''hermes''%';
+WHERE type = 'table' AND name = 'sessions' AND sql LIKE '%CHECK (harness IN (%' AND sql LIKE '%''fake''))%' AND sql NOT LIKE '%''hermes''%';
 -- +goose StatementEnd
 -- +goose StatementBegin
 PRAGMA writable_schema = RESET;
@@ -17,7 +17,7 @@ CREATE TEMP TABLE hermes_schema_guard (valid INTEGER NOT NULL CHECK (valid = 1))
 -- +goose StatementEnd
 -- +goose StatementBegin
 INSERT INTO hermes_schema_guard (valid)
-SELECT CASE WHEN sql IS NULL THEN 0 WHEN sql LIKE '%''muse''%' AND sql LIKE '%''kimchi''%' AND sql LIKE '%''prime-agent''%' AND sql LIKE '%''omp''%' AND sql LIKE '%''gemini''%' AND sql LIKE '%''unreal-agent''%' AND sql LIKE '%''mimo-code''%' AND sql LIKE '%''codewhale''%' AND sql LIKE '%''deepseek-harness''%' AND sql LIKE '%''openhands''%' AND sql LIKE '%''command-code''%' AND instr(sql, '''hermes''') = 0 THEN 0 ELSE 1 END
+SELECT CASE WHEN instr(COALESCE(sql, ''), '''hermes''') > 0 THEN 1 ELSE 0 END
 FROM (SELECT (SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions') AS sql);
 -- +goose StatementEnd
 -- +goose StatementBegin
