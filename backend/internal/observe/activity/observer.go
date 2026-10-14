@@ -181,10 +181,11 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	}
 	event := "terminal-" + string(state)
 	if rendered, ok := agent.(interface{ RequiresRenderedActivity() bool }); ok && rendered.RequiresRenderedActivity() && session.Activity.State == domain.ActivityBlocked && state != domain.ActivityBlocked {
-		// A current native composer/busy frame positively resolves the prior modal.
+		// A current native composer/busy frame resolves the prior modal. Keep
+		// its observed destination state: lifecycle accepts this boundary for
+		// active, idle, and waiting input, and clears the blocked tool flight.
 		event = "permission-resolved"
-	}
-	if state == domain.ActivityWaitingInput && event != "permission-resolved" {
+	} else if state == domain.ActivityWaitingInput {
 		event = "terminal-waiting-input"
 	}
 	err = o.sink.ApplyActivitySignal(ctx, session.ID, ports.ActivitySignal{

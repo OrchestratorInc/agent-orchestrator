@@ -287,9 +287,15 @@ func TestToolPrecedence_DefinitivePermissionResolutionClearsBlocked(t *testing.T
 			m, st, _ := newManager()
 			seedSignaled(st, "mer-1", domain.ActivityActive)
 			mustApply(t, m, "mer-1", sig(domain.ActivityBlocked, "permission-blocked", "", ""))
+			if _, tracked := m.flights["mer-1"]; !tracked {
+				t.Fatal("blocked modal did not create a tool flight")
+			}
 			mustApply(t, m, "mer-1", sig(want, "permission-resolved", "", ""))
 			if got := stateOf(st, "mer-1"); got != want {
 				t.Fatalf("state after definitive permission resolution = %q, want %q", got, want)
+			}
+			if _, tracked := m.flights["mer-1"]; tracked {
+				t.Fatalf("permission-resolved with state %q left blocked tool flight behind", want)
 			}
 		})
 	}
