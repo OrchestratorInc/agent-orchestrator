@@ -65,6 +65,7 @@ function setupBridge() {
 		setBounds: vi.fn(),
 		onBoundsApplied: vi.fn(() => () => undefined),
 		setOverlayOpen: vi.fn(),
+		setArtifactTheme: vi.fn(),
 		navigate: vi.fn(async ({ viewId }: { viewId: string }) => bridge.stateFor(viewId)),
 		clear: vi.fn(async (viewId: string) => bridge.stateFor(viewId)),
 		goBack: vi.fn(async (viewId: string) => bridge.stateFor(viewId)),
@@ -1520,6 +1521,22 @@ describe("useBrowserView", () => {
 			}),
 		);
 		expect(bridge.navigate).toHaveBeenCalledTimes(3);
+	});
+
+	it("opens an artifact preview with the app theme in its fragment", async () => {
+		document.documentElement.setAttribute("data-theme", "light");
+		const bridge = setupBridge();
+		const previewUrl = "http://ao-preview-artifact.abc.localhost:3001/q3/report.html";
+		renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false, previewUrl, previewRevision: 1 }));
+
+		await waitFor(() => expect(bridge.navigate).toHaveBeenCalledTimes(1));
+		const { url } = bridge.navigate.mock.calls[0]![0] as unknown as { url: string };
+		expect(url.startsWith(`${previewUrl}#ao-theme=`)).toBe(true);
+		expect(JSON.parse(decodeURIComponent(url.slice(`${previewUrl}#ao-theme=`.length)))).toMatchObject({
+			appearance: "light",
+			displayMode: "fullscreen",
+		});
+		document.documentElement.removeAttribute("data-theme");
 	});
 
 	it("never opens a disconnected remote localhost preview on this machine", async () => {

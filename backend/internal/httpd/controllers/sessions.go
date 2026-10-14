@@ -35,6 +35,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
+	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
@@ -682,7 +683,7 @@ func (c *SessionsController) PreviewOrigin(w http.ResponseWriter, r *http.Reques
 		// is served verbatim from ArtifactDir: there is no marker to strip
 		// and nothing a real workspace path could collide with.
 		asset := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
-		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, asset)
+		serveArtifactPreviewFile(w, r, sess.Metadata.ArtifactDir, asset)
 		return true
 	}
 	entry, ok := previewOriginEntry(sess, r.URL.Path)
@@ -782,6 +783,37 @@ func (c *SessionsController) serveRootedPreviewFile(w http.ResponseWriter, r *ht
 	}
 	defer func() { _ = file.Close() }()
 	serveOpenedPreviewFile(w, r, file, info, clean)
+}
+
+// serveArtifactPreviewFile serves the artifact preview origin the Browser
+// panel opens an artifact on. A page gets the theme bootstrap, as it does
+// framed in the chat thread, so it shows in the app's theme there too;
+// ?raw=true (the file viewer's fetch) and every other file are served as
+// serveRootedPreviewFile serves them.
+func serveArtifactPreviewFile(w http.ResponseWriter, r *http.Request, root, asset string) {
+	file, info, clean, err := previewutil.OpenWorkspaceFile(root, asset)
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_FILE_NOT_FOUND", "Preview file not found", nil)
+		return
+	}
+	defer func() { _ = file.Close() }()
+	ext := strings.ToLower(path.Ext(clean))
+	if (ext != ".html" && ext != ".htm") || previewRawRequested(r) || info.Size() > attachmentstore.MaxFileBytes {
+		serveOpenedPreviewFile(w, r, file, info, clean)
+		return
+	}
+	// The tag names the bootstrap too, since it is added as the page is
+	// served; http.ServeContent answers a matching If-None-Match with 304.
+	w.Header().Set("ETag", fmt.Sprintf(`"%s-%d-%d"`, renderpage.Version, info.Size(), info.ModTime().UnixNano()))
+	// Capped again in the read: the file can grow after the stat.
+	data, err := io.ReadAll(io.LimitReader(file, attachmentstore.MaxFileBytes+1))
+	if err != nil || len(data) > attachmentstore.MaxFileBytes {
+		w.Header().Del("ETag")
+		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_FILE_NOT_FOUND", "Preview file not found", nil)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(renderpage.Document(data)))
 }
 
 func serveOpenedPreviewFile(w http.ResponseWriter, r *http.Request, file *os.File, info fs.FileInfo, clean string) {

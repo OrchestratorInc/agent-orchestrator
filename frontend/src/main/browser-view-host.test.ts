@@ -930,6 +930,61 @@ describe("browser scrollbar styling", () => {
 	});
 });
 
+describe("artifact preview theme", () => {
+	const artifactURL = "http://ao-preview-artifact.abc.localhost:3001/q3/report.html";
+	const light = { appearance: "light", variables: { "--background": "#fff" } };
+	// What the script posts, run against a stand-in for the page's window.
+	const posted = (script: string) => {
+		const postMessage = vi.fn();
+		new Function("window", script)({ postMessage });
+		return postMessage.mock.calls[0];
+	};
+
+	it("posts the shell's theme to an open artifact page, and again whenever one loads", async () => {
+		const { invoke, send, setCurrentURL, webContents, webContentsListeners } = setupHost();
+		await invoke("browser:ensure", "sess-1");
+		setCurrentURL(artifactURL);
+
+		// No theme yet: nothing to post.
+		webContentsListeners.get("dom-ready")?.();
+		expect(webContents.executeJavaScript).not.toHaveBeenCalled();
+
+		send("browser:artifactTheme", 1, light);
+		expect(webContents.executeJavaScript).toHaveBeenCalledOnce();
+		expect(posted(webContents.executeJavaScript.mock.calls[0]![0])).toEqual([
+			{
+				jsonrpc: "2.0",
+				method: "ui/notifications/host-context-changed",
+				params: { theme: "light", styles: { variables: { "--background": "#fff" } }, displayMode: "fullscreen" },
+			},
+			"*",
+		]);
+
+		// A reload drops the fragment the page opened with; main posts the theme again.
+		webContentsListeners.get("dom-ready")?.();
+		expect(webContents.executeJavaScript).toHaveBeenCalledTimes(2);
+	});
+
+	it("leaves other pages alone and takes the theme only from the shell", async () => {
+		const { invoke, send, setCurrentURL, webContents, webContentsListeners } = setupHost();
+		await invoke("browser:ensure", "sess-1");
+
+		setCurrentURL("http://ao-preview.abc.localhost:3001/index.html");
+		send("browser:artifactTheme", 1, light);
+		webContentsListeners.get("dom-ready")?.();
+		expect(webContents.executeJavaScript).not.toHaveBeenCalled();
+
+		setCurrentURL(artifactURL);
+		send("browser:artifactTheme", 99, { ...light, appearance: "dark" });
+		send("browser:artifactTheme", 1, { appearance: "dark", variables: { "--background": 1 } });
+		send("browser:artifactTheme", 1, null);
+		expect(webContents.executeJavaScript).not.toHaveBeenCalled();
+		// The shell's earlier theme still stands.
+		webContentsListeners.get("dom-ready")?.();
+		expect(posted(webContents.executeJavaScript.mock.calls[0]![0])?.[0]).toMatchObject({ params: { theme: "light" } });
+	});
+});
+
 function setupTabHost(
 	browserProfileStore?: BrowserProfileStore,
 	failViewConstruction = false,

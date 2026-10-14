@@ -1,3 +1,5 @@
+import { readRenderTheme, renderThemeFragment, type RenderTheme } from "./render-frame";
+
 const ARTIFACT_PREVIEW_HOST_LABEL = "ao-preview-artifact";
 
 /**
@@ -12,4 +14,14 @@ export function isArtifactPreviewUrl(url: string | undefined): boolean {
 	} catch {
 		return false;
 	}
+}
+
+/**
+ * An artifact preview URL with the app theme in its fragment, which the page's
+ * theme bootstrap reads before first paint, as a framed render does. Any other
+ * URL is returned as it is.
+ */
+export function withArtifactPreviewTheme(url: string, theme?: RenderTheme): string {
+	if (!isArtifactPreviewUrl(url)) return url;
+	return `${url.split("#", 1)[0]}${renderThemeFragment(theme ?? readRenderTheme(), "fullscreen")}`;
 }

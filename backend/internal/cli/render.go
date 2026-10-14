@@ -83,9 +83,9 @@ func newRenderCommand(ctx *commandContext) *cobra.Command {
 			"--card-foreground --popover --border --border-strong --primary\n" +
 			"--primary-foreground --accent --accent-foreground --success --warning\n" +
 			"--destructive --code --link --chart-1..--chart-6 --radius --font-sans --font-mono.\n" +
-			"Use a fluid width with no outer padding, card, or border; give charts fixed\n" +
-			"pixel heights; never size html/body with 100vh. Chat sessions only: in a\n" +
-			"terminal session use `ao preview` instead.\n\n" +
+			"Use a fluid width with no outer padding, card, border, or page background;\n" +
+			"give charts fixed pixel heights; never size html/body with 100vh. Chat\n" +
+			"sessions only: in a terminal session use `ao preview` instead.\n\n" +
 			"Run `ao render --check <file>` first: the AO desktop app returns a\n" +
 			"screenshot, the page's content height, and its console messages.",
 		Example: `  ao render --check "$TMPDIR/turns-by-day.html" --width 390

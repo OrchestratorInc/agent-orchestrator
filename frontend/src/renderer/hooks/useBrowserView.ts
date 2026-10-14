@@ -17,6 +17,7 @@ import type {
 	BrowserAnnotationSubmitPayload,
 } from "../../shared/browser-annotations";
 import type { BrowserProfileViewState } from "../../shared/browser-profiles";
+import { withArtifactPreviewTheme } from "../lib/artifact-preview";
 import { BROWSER_OVERLAY_CANDIDATE_SELECTOR, OPEN_BROWSER_OVERLAY_SELECTOR } from "../lib/dom-selectors";
 import { aoBridge } from "../lib/bridge";
 
@@ -1078,9 +1079,12 @@ export function useBrowserView({
 		if (hasNativeBrowser) consumedPreviewTriggers.set(sessionId, consumed);
 		if (target) {
 			let cancelled = false;
+			// An artifact page paints in the app theme from the start; main posts
+			// later theme changes, and the theme again on every reload.
+			const themed = withArtifactPreviewTheme(target);
 			const resolved = origin
-				? aoBridge.remotes.previewUrl(origin.hostId, origin.sessionId, target)
-				: Promise.resolve(target);
+				? aoBridge.remotes.previewUrl(origin.hostId, origin.sessionId, themed)
+				: Promise.resolve(themed);
 			void resolved.then((url) => {
 				return cancelled ? undefined : navigate(url);
 			}).catch((error) => console.warn("Unable to open browser preview", error));

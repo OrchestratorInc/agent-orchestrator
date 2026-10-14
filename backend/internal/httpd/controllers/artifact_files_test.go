@@ -207,3 +207,76 @@ func TestInlineArtifactOriginServesItsFilesButNotTheAPI(t *testing.T) {
 		t.Fatalf("API from the inline origin: status=%d ACAO=%q, want 403 and no ACAO", resp.StatusCode, resp.Header.Get("Access-Control-Allow-Origin"))
 	}
 }
+
+// The Browser panel opens an HTML artifact on the artifact preview origin, so a
+// page there gets the theme bootstrap as it does framed in the chat. The file
+// viewer's ?raw=true fetch, the page's other files and workspace previews are
+// served as they are.
+func TestArtifactPreviewOriginServesAPageWithTheBootstrap(t *testing.T) {
+	artifactDir, workspace := t.TempDir(), t.TempDir()
+	for file, content := range map[string]string{
+		filepath.Join(artifactDir, "report", "index.html"): "<p>report</p>",
+		filepath.Join(artifactDir, "report", "app.css"):    "p{}",
+		filepath.Join(workspace, "index.html"):             "<p>workspace</p>",
+	} {
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := newFakeSessionService()
+	s := svc.sessions["ao-1"]
+	s.Metadata.ArtifactDir = artifactDir
+	s.Metadata.WorkspacePath = workspace
+	svc.sessions["ao-1"] = s
+	srv := newSessionTestServer(t, svc)
+	artifactURL, err := previewutil.ArtifactFileURL(srv.URL, "ao-1", "report/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body, status, header := doPreviewOriginRequest(t, srv, artifactURL, "/report/index.html")
+	if status != http.StatusOK || !strings.Contains(string(body), `<style id="ao-theme">`) || !strings.HasSuffix(string(body), "<p>report</p>") {
+		t.Fatalf("page: status=%d body=%.200q", status, body)
+	}
+	if got := header.Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Errorf("Content-Type = %q", got)
+	}
+	// The origin keeps the headers it had: the bootstrap's inline style and
+	// script run because no CSP is sent.
+	if got := header.Get("Content-Security-Policy"); got != "" {
+		t.Errorf("Content-Security-Policy = %q, want none", got)
+	}
+	etag := header.Get("ETag")
+	if want := `"` + renderpage.Version + "-" + strconv.Itoa(len("<p>report</p>")) + "-"; !strings.HasPrefix(etag, want) {
+		t.Fatalf("ETag = %q, want %s<mtime>\"", etag, want)
+	}
+	u, _ := url.Parse(artifactURL)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/report/index.html", nil)
+	req.Host = u.Host
+	req.Header.Set("If-None-Match", etag)
+	again, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = again.Body.Close()
+	if again.StatusCode != http.StatusNotModified {
+		t.Fatalf("If-None-Match: %s = %d, want 304", etag, again.StatusCode)
+	}
+
+	for path, want := range map[string]string{"/report/index.html?raw=true": "<p>report</p>", "/report/app.css": "p{}"} {
+		if body, status, _ := doPreviewOriginRequest(t, srv, artifactURL, path); status != http.StatusOK || string(body) != want {
+			t.Errorf("%s: status=%d body=%.200q, want %q", path, status, body, want)
+		}
+	}
+
+	workspaceURL, err := previewutil.FileURL(srv.URL, "ao-1", "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body, status, _ := doPreviewOriginRequest(t, srv, workspaceURL, "/index.html"); status != http.StatusOK || string(body) != "<p>workspace</p>" {
+		t.Fatalf("workspace preview: status=%d body=%.200q, want the file as it is", status, body)
+	}
+}

@@ -314,6 +314,13 @@ describe("preload browser profile bridge", () => {
 		expect(electronMocks.off).toHaveBeenCalledWith("browser:boundsApplied", wrapped);
 	});
 
+	it("sends the app theme for artifact preview pages", () => {
+		const bridge = exposedBridge();
+		const theme = { appearance: "light" as const, variables: { "--background": "#fff" } };
+		bridge.browser.setArtifactTheme(theme);
+		expect(electronMocks.send).toHaveBeenCalledWith("browser:artifactTheme", theme);
+	});
+
 	it("routes profile state, native menu, and CRUD calls over IPC", async () => {
 		const bridge = exposedBridge();
 		await bridge.browser.getProfile("1:worker-1");

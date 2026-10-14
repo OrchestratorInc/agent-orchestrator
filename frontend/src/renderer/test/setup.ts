@@ -210,6 +210,7 @@ if (typeof window !== "undefined") {
 		setBounds: () => undefined,
 		onBoundsApplied: () => () => undefined,
 		setOverlayOpen: () => undefined,
+		setArtifactTheme: () => undefined,
 		navigate: async ({ viewId }: { viewId: string }) => ({
 				viewId,
 				url: "",

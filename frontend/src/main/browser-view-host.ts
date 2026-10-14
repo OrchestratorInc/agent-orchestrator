@@ -50,6 +50,33 @@ import type { BrowserDownloadManager } from "./browser-download-manager";
 import type { BrowserDownloadActionInput } from "../shared/browser-downloads";
 import { matchInstruction } from "./browser-act-matcher";
 import type { ActCandidate } from "./browser-act-matcher";
+import { isArtifactPreviewUrl } from "../renderer/lib/artifact-preview";
+import {
+  renderThemeMessage,
+  type RenderTheme,
+} from "../renderer/lib/render-frame";
+
+// Checked before it is written into a script that runs in the page.
+function isRenderTheme(value: unknown): value is RenderTheme {
+  if (typeof value !== "object" || value === null) return false;
+  const { appearance, variables } = value as {
+    appearance?: unknown;
+    variables?: unknown;
+  };
+  return (
+    (appearance === "light" || appearance === "dark") &&
+    typeof variables === "object" &&
+    variables !== null &&
+    Object.values(variables).every((v) => typeof v === "string")
+  );
+}
+
+// The message RenderFrame posts a framed page, posted by an artifact page to
+// itself: its theme bootstrap takes messages from window.parent, which is the
+// page's own window when it is the top-level document.
+function artifactThemeScript(theme: RenderTheme): string {
+  return `window.postMessage(${JSON.stringify(renderThemeMessage(theme, "fullscreen"))}, "*")`;
+}
 
 function isValidAnnotationContext(
   value: unknown,
@@ -769,6 +796,14 @@ export function createBrowserViewHost(
   const viewIdsBySessionId = new Map<string, string>();
   const rendererOwnersByViewId = new Map<string, Set<number>>();
   const tabsByWebContentsId = new Map<number, BrowserEntry>();
+  // The shell's last theme, posted to each artifact preview page as it loads.
+  let artifactTheme: RenderTheme | null = null;
+  const postArtifactTheme = (contents: BrowserWebContents): void => {
+    if (!artifactTheme || !isArtifactPreviewUrl(contents.getURL())) return;
+    contents
+      .executeJavaScript(artifactThemeScript(artifactTheme))
+      .catch(() => undefined);
+  };
   const pendingTemporaryPartitionClears = new Set<Promise<void>>();
   // Workers whose human explicitly picked the temporary profile this run.
   const explicitTemporarySessionIds = new Set<string>();
@@ -998,6 +1033,9 @@ export function createBrowserViewHost(
     };
     view.webContents.on("dom-ready", applyScrollbarStyle);
     view.webContents.on("zoom-changed", applyScrollbarStyle);
+    // On every load, reloads included: the bootstrap drops the theme fragment
+    // the panel first opens an artifact with.
+    view.webContents.on("dom-ready", () => postArtifactTheme(view.webContents));
 
     const state: BrowserNavState = emptyNavState(session.viewId);
     const entry: BrowserEntry = {
@@ -1108,8 +1146,13 @@ export function createBrowserViewHost(
         const profileId = session.profileId;
         if (!isCurrentEntry() || !profileId || !options.browserHistoryStore)
           return;
+        // An artifact page opens with the theme in its fragment; history keeps
+        // the page, not that theme.
+        const historyUrl = isArtifactPreviewUrl(url)
+          ? url.split("#", 1)[0]!
+          : url;
         void options.browserHistoryStore
-          .record(profileId, url, title, incrementVisit)
+          .record(profileId, historyUrl, title, incrementVisit)
           .catch(() => undefined);
       },
       () => resetFindState(entry, session.activeTabId === entry.tabId),
@@ -3137,6 +3180,15 @@ export function createBrowserViewHost(
       );
     }
     return closeUserTab(session, input.tabId);
+  });
+  // The shell's theme changed: restyle the artifact pages open now; later ones
+  // get it as they load.
+  on("browser:artifactTheme", (event, theme: unknown) => {
+    if (event.sender.id !== shellWebContents.id || !isRenderTheme(theme))
+      return;
+    artifactTheme = theme;
+    for (const entry of tabsByWebContentsId.values())
+      postArtifactTheme(entry.view.webContents);
   });
   on("browser:panelUsed", (event, viewId: string) => {
     if (isRendererOwned(event, viewId) && entries.has(viewId))

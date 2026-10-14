@@ -17,6 +17,7 @@ import type {
 	BrowserRuntimeState,
 	BrowserTabsState,
 } from "./main/browser-view-host";
+import type { RenderTheme } from "./renderer/lib/render-frame";
 import {
 	TRAY_OPEN_SESSION_CHANNEL,
 	TRAY_RENDERER_READY_CHANNEL,
@@ -421,6 +422,8 @@ const api = {
 			};
 		},
 		setOverlayOpen: (open: boolean) => ipcRenderer.send("browser:overlay", open),
+		// Main posts it to every artifact preview page open in a browser panel.
+		setArtifactTheme: (theme: RenderTheme) => ipcRenderer.send("browser:artifactTheme", theme),
 		navigate: (input: BrowserNavigateInput) =>
 			ipcRenderer.invoke("browser:navigate", input) as Promise<BrowserNavState>,
 		historySuggestions: (input: { viewId: string; query: string }) =>

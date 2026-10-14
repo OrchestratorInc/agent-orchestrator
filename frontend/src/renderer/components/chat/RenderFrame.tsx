@@ -2,6 +2,7 @@ import { Code2, Download, ExternalLink, FilePlus, FileText, Globe2, Loader2, Max
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { useOpenArtifactPreview } from "../../hooks/useOpenArtifactPreview";
+import { useRenderTheme } from "../../hooks/useRenderTheme";
 import { apiClient, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import {
 	clampRenderHeight,
@@ -12,9 +13,7 @@ import {
 	renderFileName,
 	renderThemeFragment,
 	renderThemeMessage,
-	renderThemesEqual,
 	type RenderDisplayMode,
-	type RenderTheme,
 } from "../../lib/render-frame";
 import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
@@ -51,26 +50,6 @@ interface FramePage {
 // page up to ARTIFACT_FRAME_MAX_HEIGHT, past which it scrolls inside the frame.
 const ARTIFACT_FRAME_HEIGHT = 400;
 const ARTIFACT_FRAME_MAX_HEIGHT = 640;
-
-/** The app theme as handed to renders; follows data-theme and data-style-theme flips on <html>. */
-function useRenderTheme(): RenderTheme {
-	const [theme, setTheme] = useState(readRenderTheme);
-	useEffect(() => {
-		const observer = new MutationObserver(() =>
-			setTheme((current) => {
-				const next = readRenderTheme();
-				return renderThemesEqual(current, next) ? current : next;
-			}),
-		);
-		// Not `style`: only sidebar/zoom geometry writes it, on every animation tick.
-		observer.observe(document.documentElement, {
-			attributes: true,
-			attributeFilter: ["data-theme", "data-style-theme", "class"],
-		});
-		return () => observer.disconnect();
-	}, []);
-	return theme;
-}
 
 /**
  * An agent's HTML page inline in its turn. The page runs in an opaque-origin

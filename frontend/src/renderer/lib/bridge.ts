@@ -115,6 +115,7 @@ export const aoBridge: AoBridge =
 			setBounds: () => undefined,
 			onBoundsApplied: () => () => undefined,
 			setOverlayOpen: () => undefined,
+			setArtifactTheme: () => undefined,
 			navigate: async ({ viewId, url }) => ({
 				viewId,
 				url,

@@ -237,7 +237,7 @@ const (
 		`--background (identical to the thread), --foreground, --muted, --muted-foreground, --card, --card-foreground, --popover, ` +
 		`--border, --border-strong, --primary, --primary-foreground, --accent, --accent-foreground, --success, --warning, ` +
 		`--destructive, --code, --link, --chart-1 ... --chart-6 (categorical series), --radius, --font-sans, --font-mono. ` +
-		`The base stylesheet sets the page background, text color, and font from these, sets body margin to 0, and hides the page scrollbar. ` +
+		`The base stylesheet sets the text color and font from these, sets body margin to 0, and hides the page scrollbar. Inline, it leaves the page background clear so the thread shows through; do not paint html or body. ` +
 		`Use the variables, not hard-coded colors, so the page reads correctly in both themes.`
 )
 
