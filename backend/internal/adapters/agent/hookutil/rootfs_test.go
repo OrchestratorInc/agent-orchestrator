@@ -78,6 +78,57 @@ func TestEnsureGitignoreInRootReplacesSymlinkedDir(t *testing.T) {
 	}
 }
 
+// EnsureParentDirs keeps a link that resolves to a directory inside the root
+// and replaces links that escape, dangle or name a file.
+func TestEnsureParentDirsFollowsOnlyInRootDirLinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows")
+	}
+	ws, outside := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ws, "real"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "file"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	links := map[string]string{
+		"inroot":   "real",
+		"escapes":  outside,
+		"dangling": "missing",
+		"tofile":   "file",
+		"chained":  "escapes",
+	}
+	for name, dst := range links {
+		if err := os.Symlink(dst, filepath.Join(ws, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root, err := os.OpenRoot(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	for name := range links {
+		if err := EnsureParentDirs(root, filepath.Join(name, "x.json")); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		fi, err := os.Lstat(filepath.Join(ws, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		isLink := fi.Mode()&os.ModeSymlink != 0
+		if name == "inroot" && !isLink {
+			t.Fatalf("in-root dir link %s was replaced", name)
+		}
+		if name != "inroot" && (isLink || !fi.IsDir()) {
+			t.Fatalf("%s = %v, want a real directory", name, fi.Mode())
+		}
+	}
+	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
+		t.Fatalf("outside dir written to: %v", entries)
+	}
+}
+
 func TestEnsureWorkspaceGitignoreLeavesOversizedFileUntouched(t *testing.T) {
 	dir := t.TempDir()
 	big := strings.Repeat("x", gitignoreMaxBytes+10) + GitignoreSentinel

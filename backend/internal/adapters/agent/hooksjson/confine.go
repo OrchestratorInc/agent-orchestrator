@@ -16,8 +16,11 @@ const hooksFileMaxBytes = 16 << 20
 // os.Root opened on it (the trust boundary); the shared Lstat-per-component,
 // remove-the-squatter, temp+rename discipline lives in hookutil/rootfs.go.
 // A symlink or other non-regular entry in place of the file is treated as
-// absent and replaced on write; a symlink (or file) in place of an AO-owned
-// parent directory is removed, never followed, and recreated as a real dir.
+// absent and replaced on write. A parent directory that is a symlink to a
+// directory inside the workspace (a repo committing .claude -> config/claude)
+// is kept and written through; os.Root refuses to leave the workspace. A
+// parent symlink that escapes or dangles, or a file there, is removed, never
+// followed, and recreated as a real dir.
 
 // openWorkspaceRoot opens workspacePath as a root and returns the hooks file's
 // path relative to it. A hooks path outside the workspace is refused.

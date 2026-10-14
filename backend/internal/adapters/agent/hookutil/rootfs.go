@@ -25,8 +25,10 @@ const gitignoreMaxBytes = 1 << 20
 // The helpers below confine access to an agent-writable workspace through an
 // os.Root opened on it (the trust boundary): a symlink planted at the file or at
 // any parent directory can neither be read through nor make AO create or
-// replace files outside the root. A non-regular entry (symlink, FIFO) in place
-// of the file is treated as absent and replaced on write.
+// replace files outside the root. A parent directory may be a symlink to a
+// directory inside the root (os.Root resolves it there). A non-regular entry
+// (symlink, FIFO) in place of the file itself is treated as absent and
+// replaced on write.
 
 func parentDirs(rel string) []string {
 	var dirs []string
@@ -38,9 +40,19 @@ func parentDirs(rel string) []string {
 	return dirs
 }
 
-// ParentsAreRealDirs reports whether every parent directory of rel exists as a
-// real directory (not a symlink or file). It never modifies anything.
-func ParentsAreRealDirs(root *os.Root, rel string) (bool, error) {
+// isInRootDir reports whether dir is a directory once os.Root resolves it.
+// os.Root follows a symlink only while it stays inside the root, so a link to
+// an in-repo directory (a repository that commits .claude -> config/claude)
+// counts, and a link that escapes, dangles or names a file does not.
+func isInRootDir(root *os.Root, dir string) bool {
+	fi, err := root.Stat(dir)
+	return err == nil && fi.IsDir()
+}
+
+// ParentsAreDirs reports whether every parent directory of rel resolves to a
+// directory inside root: a real directory or a symlink to one in the root.
+// It never modifies anything.
+func ParentsAreDirs(root *os.Root, rel string) (bool, error) {
 	for _, dir := range parentDirs(rel) {
 		fi, err := root.Lstat(dir)
 		if errors.Is(err, fs.ErrNotExist) {
@@ -49,22 +61,26 @@ func ParentsAreRealDirs(root *os.Root, rel string) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		if !fi.IsDir() {
+		if !fi.IsDir() && !isInRootDir(root, dir) {
 			return false, nil
 		}
 	}
 	return true, nil
 }
 
-// EnsureParentDirs makes every parent directory of rel a real directory (0750).
-// A symlink or regular file squatting on a component is removed (the entry
-// itself, never its target, never recursively): the components are AO-owned
-// locations, so a squatter there is replaced rather than followed.
+// EnsureParentDirs makes every parent directory of rel resolve to a directory
+// inside root, creating missing ones (0750). A symlink to a directory inside
+// the root is kept: os.Root resolves it without leaving the root, and every
+// later access through root refuses a link swapped in that escapes. A symlink
+// that escapes or dangles, or a file, squatting on a component is removed (the
+// entry itself, never its target, never recursively) and replaced.
 func EnsureParentDirs(root *os.Root, rel string) error {
 	for _, dir := range parentDirs(rel) {
 		fi, err := root.Lstat(dir)
 		switch {
 		case err == nil && fi.IsDir():
+			continue
+		case err == nil && fi.Mode()&fs.ModeSymlink != 0 && isInRootDir(root, dir):
 			continue
 		case err == nil:
 			if err := root.Remove(dir); err != nil {
@@ -80,11 +96,12 @@ func EnsureParentDirs(root *os.Root, rel string) error {
 	return nil
 }
 
-// ReadRootFile returns the contents of rel when it is a regular file under real
-// parent directories, capped at maxBytes (ErrRootFileTooLarge beyond it).
-// present is false for anything else, which callers treat as absent.
+// ReadRootFile returns the contents of rel when it is a regular file under
+// parent directories that resolve inside root, capped at maxBytes
+// (ErrRootFileTooLarge beyond it). present is false for anything else, which
+// callers treat as absent.
 func ReadRootFile(root *os.Root, rel string, maxBytes int64) (data []byte, present bool, err error) {
-	ok, err := ParentsAreRealDirs(root, rel)
+	ok, err := ParentsAreDirs(root, rel)
 	if err != nil || !ok {
 		return nil, false, err
 	}

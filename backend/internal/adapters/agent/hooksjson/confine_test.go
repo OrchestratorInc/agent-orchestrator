@@ -82,6 +82,42 @@ func TestInstallDoesNotFollowSymlinkedSettingsDir(t *testing.T) {
 	}
 }
 
+// A repository may commit .claude as a symlink to a directory inside the
+// repo. That link stays, and the hook lands in its target next to the
+// repo's own settings.
+func TestInstallKeepsInRepoSymlinkedSettingsDir(t *testing.T) {
+	skipIfNoSymlinks(t)
+	ws := t.TempDir()
+	target := filepath.Join(ws, "config", "claude")
+	if err := os.MkdirAll(target, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "settings.local.json"), []byte(`{"permissions":{"allow":["Bash(make)"]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("config", "claude"), filepath.Join(ws, ".claude")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := confineManager().Install(t.Context(), ws); err != nil {
+		t.Fatal(err)
+	}
+
+	if fi, err := os.Lstat(filepath.Join(ws, ".claude")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf(".claude symlink was replaced: %v %v", fi, err)
+	}
+	got, err := os.ReadFile(filepath.Join(target, "settings.local.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "Bash(make)") || !strings.Contains(string(got), "ao hooks test notification") {
+		t.Fatalf("settings in link target = %s, want the repo's settings plus the hook", got)
+	}
+	if installed, err := confineManager().AreInstalled(t.Context(), ws); err != nil || !installed {
+		t.Fatalf("AreInstalled = %v, %v; want true", installed, err)
+	}
+}
+
 func TestInstallReplacesEmptyDirSettingsFileAndRejectsNonEmpty(t *testing.T) {
 	ws := t.TempDir()
 	target := filepath.Join(ws, ".claude", "settings.local.json")
