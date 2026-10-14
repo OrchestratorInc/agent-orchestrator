@@ -1,5 +1,5 @@
 -- Add Hermes Agent to the sessions harness constraint without changing usage bindings.
--- Versions 0197-0202 are reserved for sibling harness migrations in flight.
+-- Versions 0198-0202 remain reserved for sibling migrations in flight.
 -- +goose NO TRANSACTION
 -- +goose Up
 -- +goose StatementBegin
