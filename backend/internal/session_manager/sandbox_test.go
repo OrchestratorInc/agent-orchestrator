@@ -185,6 +185,27 @@ func TestSpawnSandboxUnavailableDoesNotLaunchOnHost(t *testing.T) {
 	}
 }
 
+// A multi-repo workspace project's child worktrees have agent-writable .git
+// files, so the agent could point AO's host git at its own config.
+func TestPrepareSandboxRefusesWorkspaceProject(t *testing.T) {
+	sb := &fakeSandbox{}
+	agent := &sandboxAgent{launchArgvAgent: launchArgvAgent{argv: []string{"claude"}}}
+	m, _, _ := newSandboxSpawnManager(sb, agent)
+	project := domain.ProjectRecord{ID: "ws", Path: "/repos/ws", Kind: domain.ProjectKindWorkspace, Config: sandboxedConfig(domain.SandboxModePerAgent)}
+	rec := domain.SessionRecord{ID: "ws-1", ProjectID: "ws", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode}
+
+	launch, err := m.prepareSandboxLaunch(ctx, agent, rec, project, "/d/worktrees/ws/ws-1", map[string]string{})
+	if !errors.Is(err, ports.ErrSandboxMisconfigured) || !strings.Contains(err.Error(), "single-repository projects only") {
+		t.Fatalf("err = %v, want ErrSandboxMisconfigured about single-repository projects", err)
+	}
+	if launch != nil || len(sb.ensured) != 0 {
+		t.Fatalf("launch=%v ensured=%d, want no container", launch, len(sb.ensured))
+	}
+	if m.sandboxInFlight.active("ws") {
+		t.Fatal("refused launch left an in-flight registration")
+	}
+}
+
 func TestSpawnSandboxRejectsHarnessWithoutSandboxSupport(t *testing.T) {
 	sb := &fakeSandbox{}
 	m, _, rt := newSandboxSpawnManager(sb, launchArgvAgent{argv: []string{"codex"}})

@@ -85,6 +85,12 @@ func (m *Manager) prepareSandboxLaunch(ctx context.Context, agent ports.Agent, r
 	if !sb.Enabled() {
 		return nil, nil
 	}
+	// A workspace project's child worktrees keep agent-writable .git files
+	// outside the sandbox's read-only binds, so the agent could repoint them
+	// at a git dir whose config AO's host git would then run.
+	if project.Kind.WithDefault() == domain.ProjectKindWorkspace {
+		return nil, fmt.Errorf("%w: sandbox supports single-repository projects only; set sandbox.mode to off for this multi-repo workspace project", ports.ErrSandboxMisconfigured)
+	}
 	if m.sandbox == nil {
 		return nil, fmt.Errorf("%w: this daemon has no sandbox support", ports.ErrSandboxUnavailable)
 	}
