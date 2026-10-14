@@ -92,7 +92,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	// in review -> ready. The middle two are one review-feedback loop, split by
 	// whose turn it is.
 	const columns: KanbanColumnView[] = boardKanbanColumnOrder.map((column) => getKanbanColumnView(column, t));
-	const localWorkspaceQuery = useWorkspaceQuery();
+	const localWorkspaceQuery = useWorkspaceQuery({ projectId });
 	const remoteProjectQuery = useRemoteProjectQuery(hostId ?? "", projectId ?? "");
 	// Evaluated at render so platform mocks in tests can flip the in-panel chrome.
 	const boardActionsInPanel = usesBoardActionsInPanel();
@@ -135,8 +135,8 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const boardLabels = sessionsBoardLabels(t);
 	const presentation = useBoardPresentation({
 		projectId,
-		isSuccess: localWorkspaceQuery.isSuccess,
-		isError: localWorkspaceQuery.isError,
+		isSuccess: localWorkspaceQuery.isSnapshotSuccess,
+		isError: localWorkspaceQuery.isSnapshotError,
 		hasProjects: workspaces.length > 0,
 		hasWorkerSessions: liveSessions.length > 0,
 	});

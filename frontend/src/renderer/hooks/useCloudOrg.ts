@@ -38,7 +38,7 @@ export interface UseCloudOrgResult {
 }
 
 export function useCloudOrg(): UseCloudOrgResult {
-	const { client, ready, baseUrl } = useCloudCp();
+	const { client, ready, baseUrl, isLoading } = useCloudCp();
 	const query = useQuery({
 		queryKey: [...cloudOrgQueryKey, baseUrl],
 		enabled: ready,
@@ -64,7 +64,7 @@ export function useCloudOrg(): UseCloudOrgResult {
 	});
 	return {
 		org: query.data,
-		isLoading: query.isLoading,
+		isLoading: isLoading || query.isLoading,
 		error: query.error ?? undefined,
 		refetch: query.refetch,
 		ready,

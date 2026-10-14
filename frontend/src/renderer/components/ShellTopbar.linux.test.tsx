@@ -24,7 +24,12 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: useWorkspaceQueryMock,
 	useWorkspaceScope: () => {
 		const result = useWorkspaceQueryMock();
-		return { ...result, data: result.data ?? {} };
+		return {
+			...result,
+			isSnapshotSuccess: result.isSnapshotSuccess ?? result.isSuccess,
+			isSnapshotError: result.isSnapshotError ?? result.isError,
+			data: result.data ?? {},
+		};
 	},
 	workspaceQueryKey: ["workspaces"],
 	workspaceQueryKeyForHost: (hostId?: string) => hostId ? ["remote-workspaces", hostId] : ["workspaces"],

@@ -501,7 +501,50 @@ type WorkspaceSubscriptionOptions = {
 	subscribed?: boolean;
 	enabled?: boolean;
 	includeCloud?: boolean;
+	projectId?: string;
 };
+
+type SnapshotQueryState = {
+	data: unknown;
+	isError: boolean;
+	isFetching: boolean;
+	isSuccess: boolean;
+};
+
+function workspaceSnapshotStatus(
+	projectId: string | undefined,
+	local: SnapshotQueryState,
+	hasLocalScope: boolean,
+	cloudProjects: SnapshotQueryState,
+	hasCloudScope: boolean,
+	cloudSessions: SnapshotQueryState,
+	cloudLookupEnabled: boolean,
+	cloudLookupLoading: boolean,
+	cloudLookupError: boolean,
+) {
+	const cloudPrerequisitePending = Boolean(
+		projectId && local.isSuccess && !hasLocalScope && cloudLookupLoading,
+	);
+	const cloudProjectLookupPending = Boolean(
+		projectId && local.isSuccess && !hasLocalScope && !hasCloudScope && cloudLookupEnabled &&
+			((cloudProjects.data === undefined && !cloudProjects.isError) || cloudProjects.isFetching),
+	);
+	const cloudSessionLookupPending = Boolean(
+		projectId && local.isSuccess && !hasLocalScope && hasCloudScope && cloudLookupEnabled &&
+			cloudSessions.data === undefined && !cloudSessions.isError,
+	);
+	const routedCloudLookupError = Boolean(
+		projectId && local.isSuccess && !hasLocalScope && (
+			cloudLookupError ||
+			(!hasCloudScope && cloudProjects.isError) ||
+			(hasCloudScope && cloudSessions.data === undefined && cloudSessions.isError)
+		),
+	);
+	return {
+		isSnapshotSuccess: local.isSuccess && !cloudPrerequisitePending && !cloudProjectLookupPending && !cloudSessionLookupPending && !routedCloudLookupError,
+		isSnapshotError: local.isError || routedCloudLookupError,
+	};
+}
 
 export function useCloudProjectsQuery(options: WorkspaceSubscriptionOptions = {}) {
 	const { client, ready, baseUrl } = useCloudCp();
@@ -613,7 +656,7 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 	const cloudOptions = { ...options, enabled: includeCloud && options.enabled !== false };
 	const cloud = useCloudProjectsQuery(cloudOptions);
 	const cloudSessions = useCloudSessionsQuery(cloudOptions);
-	const { org, ready } = useCloudOrg();
+	const { org, ready, isLoading: cloudLookupLoading, error: cloudLookupError } = useCloudOrg();
 	const orgId = org?.id;
 	const localData = local.data;
 	const cloudData = cloud.data;
@@ -634,7 +677,27 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 			...cloudData.map((project) => toCloudWorkspace(project, sessions, orgId)),
 		]);
 	}, [localData, cloudData, cloudSessionData, includeCloud, orgId, ready]);
-	return { ...local, data };
+	const selectedLocalWorkspace = options.projectId
+		? localData?.find((workspace) => workspace.id === options.projectId)
+		: undefined;
+	const selectedCloudProject = options.projectId
+		? cloudData?.find((project) => project.id === options.projectId)
+		: undefined;
+	return {
+		...local,
+		data,
+		...workspaceSnapshotStatus(
+			options.projectId,
+			local,
+			selectedLocalWorkspace !== undefined,
+			cloud,
+			selectedCloudProject !== undefined,
+			cloudSessions,
+			includeCloud && ready && orgId !== undefined && options.enabled !== false,
+			includeCloud && cloudLookupLoading,
+			includeCloud && cloudLookupError !== undefined,
+		),
+	};
 }
 
 /**
@@ -774,7 +837,7 @@ export function useWorkspaceScope(projectId?: string, sessionId?: string, hostId
 	const remote = useQuery({ queryKey: remoteWorkspaceQueryKey(hostId ?? ""), queryFn: () => fetchRemoteWorkspaces(hostId ?? ""), select: selectLocalScope, enabled: Boolean(hostId) });
 	const cloud = useCloudProjectsQuery({ enabled: !hostId });
 	const cloudSessions = useCloudSessionsQuery({ enabled: !hostId });
-	const { org, ready } = useCloudOrg();
+	const { org, ready, isLoading: cloudLookupLoading, error: cloudLookupError } = useCloudOrg();
 	const cloudScope = useMemo(() => {
 		if (!ready || !org?.id || !cloud.data) return undefined;
 		const workspaces = cloud.data.map((project) => toCloudWorkspace(project, cloudSessions.data ?? [], org.id));
@@ -785,7 +848,30 @@ export function useWorkspaceScope(projectId?: string, sessionId?: string, hostId
 	const data = local.data?.project || local.data?.session || !local.isSuccess
 		? local.data
 		: cloudScope ?? local.data;
-	return hostId ? remote : { ...local, data };
+	if (hostId) {
+		return {
+			...remote,
+			isSnapshotSuccess: remote.isSuccess,
+			isSnapshotError: remote.isError,
+		};
+	}
+	const hasLocalScope = Boolean(local.data?.project || local.data?.session);
+	const hasCloudScope = Boolean(cloudScope?.project || cloudScope?.session);
+	return {
+		...local,
+		data,
+		...workspaceSnapshotStatus(
+			projectId,
+			local,
+			hasLocalScope,
+			cloud,
+			hasCloudScope,
+			cloudSessions,
+			ready && org?.id !== undefined,
+			cloudLookupLoading,
+			cloudLookupError !== undefined,
+		),
+	};
 }
 
 function selectTraySessions(workspaces: WorkspaceSummary[]): TraySessionEntry[] {

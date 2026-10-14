@@ -161,8 +161,8 @@ export function ShellTopbar({
 	const { isSpawning, isProjectRestarting, isProvisioning, openNewTask, openOrchestrator } = projectActions;
 	const { showProjectEmpty } = useBoardPresentation({
 		projectId,
-		isSuccess: workspaceQuery.isSuccess,
-		isError: workspaceQuery.isError,
+		isSuccess: workspaceQuery.isSnapshotSuccess,
+		isError: workspaceQuery.isSnapshotError,
 		hasProjects: Boolean(project),
 		hasWorkerSessions: workspaceScope?.hasWorkerSessions ?? false,
 	});
