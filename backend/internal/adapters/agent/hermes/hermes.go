@@ -7,8 +7,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -33,6 +35,16 @@ import (
 // Plugin supervises the official native interactive terminal.
 type Plugin struct{ agentbase.Base }
 
+// Revalidate these v0.21.6 chrome markers whenever the supported native version changes.
+const (
+	nativeVersion       = "Hermes Agent v0.21.6"
+	nativePrompt        = "❯"
+	nativeNamedPrompt   = "☤ ❯"
+	nativeWarningPrompt = "⚠ ❯"
+)
+
+var nativeVersionLine = regexp.MustCompile("^" + regexp.QuoteMeta(nativeVersion) + "$")
+
 // New creates the native TUI adapter.
 func New() *Plugin { return &Plugin{} }
 
@@ -46,14 +58,30 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	if runtime.GOOS != "linux" {
 		return "", fmt.Errorf("hermes: AO lease observation currently supports Linux only")
 	}
-	return binaryutil.ResolveBinary(ctx, binaryutil.BinarySpec{Label: "hermes", Names: []string{"hermes"}, UnixHomePaths: [][]string{{".local", "bin", "hermes"}, {".hermes", "hermes-agent", ".venv", "bin", "hermes"}}, ValidateIdentity: func(ctx context.Context, path string) bool {
-		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	timedOut := false
+	// Probe only documented install locations. A PATH-first --version probe would
+	// execute an unrelated earlier binary during passive agent discovery.
+	path, err := binaryutil.ResolveBinary(ctx, binaryutil.BinarySpec{Label: "hermes", UnixPaths: []string{"/usr/local/bin/hermes", "/usr/bin/hermes"}, UnixHomePaths: [][]string{{".local", "bin", "hermes"}, {".hermes", "hermes-agent", ".venv", "bin", "hermes"}}, ValidateIdentity: func(ctx context.Context, path string) bool {
+		probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		cmd := aoprocess.CommandContext(ctx, path, "--version")
+		cmd := aoprocess.CommandContext(probeCtx, path, "--version")
+		aoprocess.ConfigureTreeCancellation(cmd)
 		cmd.WaitDelay = 100 * time.Millisecond
 		b, err := cmd.CombinedOutput()
-		return err == nil && strings.Contains(string(b), "Hermes Agent v0.21.6")
+		if errors.Is(probeCtx.Err(), context.DeadlineExceeded) {
+			timedOut = true
+			return false
+		}
+		if probeCtx.Err() != nil {
+			return false
+		}
+		firstLine, _, _ := strings.Cut(string(b), "\n")
+		return err == nil && nativeVersionLine.MatchString(strings.TrimSuffix(firstLine, "\r"))
 	}})
+	if err != nil && timedOut {
+		return "", fmt.Errorf("hermes: native identity check timed out: %w", err)
+	}
+	return path, err
 }
 
 // GetConfigSpec implements the scoped native adapter contract.
@@ -121,10 +149,8 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		return fmt.Errorf("hermes: named native profiles are not supported by this initial rendered-composer integration")
 	}
 	// Native sticky profiles can redirect a root even when HERMES_HOME is set.
-	if filepath.Base(filepath.Dir(home)) != "profiles" {
-		if b, e := os.ReadFile(filepath.Join(home, "active_profile")); e == nil && strings.TrimSpace(string(b)) != "" && strings.TrimSpace(string(b)) != "default" {
-			return fmt.Errorf("hermes: sticky native profile requires an explicit HERMES_HOME pointing to profiles/<name>")
-		}
+	if b, e := os.ReadFile(filepath.Join(home, "active_profile")); e == nil && strings.TrimSpace(string(b)) != "" && strings.TrimSpace(string(b)) != "default" {
+		return fmt.Errorf("hermes: sticky native profile requires an explicit HERMES_HOME pointing to profiles/<name>")
 	}
 	for _, managed := range []string{os.Getenv("HERMES_MANAGED_DIR"), cfg.Env["HERMES_MANAGED_DIR"], "/etc/hermes"} {
 		if managed != "" {
@@ -137,9 +163,6 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	original, exists := cfg.Env["AO_HERMES_ORIGINAL_EPHEMERAL"]
 	if !exists {
 		original, exists = cfg.Env["HERMES_EPHEMERAL_SYSTEM_PROMPT"]
-	}
-	if !exists {
-		original = os.Getenv("HERMES_EPHEMERAL_SYSTEM_PROMPT")
 	}
 	if original == "" {
 		b, readErr := os.ReadFile(filepath.Join(home, "config.yaml"))
@@ -166,7 +189,13 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		}
 		instructions = string(b)
 	}
-	if len(original)+len(instructions) > 128*1024 {
+	combined := original + instructions
+	if original != "" && instructions != "" {
+		combined = original + "\n\n" + instructions
+	}
+	const maxEnvString = 128 * 1024
+	if len("HERMES_EPHEMERAL_SYSTEM_PROMPT=")+len(combined)+1 > maxEnvString ||
+		len("AO_HERMES_ORIGINAL_EPHEMERAL=")+len(original)+1 > maxEnvString {
 		return fmt.Errorf("hermes: standing instructions exceed process environment limit")
 	}
 	if instructions != "" {
@@ -256,7 +285,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil || crumb.SessionID != id {
 		return nil, false, fmt.Errorf("hermes: native terminal rotated after observation; refusing stale restore")
 	}
-	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(home, "state.db"))+"?mode=ro")
+	db, err := sql.Open("sqlite", nativeStateDSN(home))
 	if err != nil {
 		return nil, false, err
 	}
@@ -265,6 +294,9 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	var messages int
 	var children int
 	err = db.QueryRowContext(ctx, "SELECT COALESCE(cwd,''), (SELECT count(*) FROM messages WHERE session_id=sessions.id), (SELECT count(*) FROM sessions child WHERE child.parent_session_id=sessions.id) FROM sessions WHERE id=?", id).Scan(&cwd, &messages, &children)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, false, fmt.Errorf("hermes: native state database unavailable (WAL recovery may be required): %w", err)
+	}
 	if err != nil || messages == 0 || children != 0 || filepath.Clean(cwd) != filepath.Clean(cfg.Session.WorkspacePath) {
 		return nil, false, fmt.Errorf("hermes: native history missing, compressed, or workspace mismatch")
 	}
@@ -353,9 +385,9 @@ func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launch
 		if e != nil || filepath.Clean(cwd) != filepath.Clean(crumb.Cwd) || filepath.Clean(cwd) != filepath.Clean(workspace) {
 			continue
 		}
-		db, e := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(home, "state.db"))+"?mode=ro")
+		db, e := sql.Open("sqlite", nativeStateDSN(home))
 		if e != nil {
-			continue
+			return ports.SessionInfo{}, false, fmt.Errorf("hermes: open native state database: %w", e)
 		}
 		var storedCwd string
 		e = db.QueryRowContext(ctx, "SELECT COALESCE(cwd,'') FROM sessions WHERE id=?", crumb.SessionID).Scan(&storedCwd)
@@ -363,13 +395,16 @@ func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launch
 		// Native /new creates the exact database row without cwd. The live
 		// owned process and its PTY breadcrumb still corroborate the AO
 		// workspace; a populated conflicting database cwd remains rejected.
+		if e != nil && e != sql.ErrNoRows {
+			return ports.SessionInfo{}, false, fmt.Errorf("hermes: read native state database: %w", e)
+		}
 		if e != nil || (storedCwd != "" && filepath.Clean(storedCwd) != filepath.Clean(cwd)) {
 			continue
 		}
 		if found != "" && found != crumb.SessionID {
 			return ports.SessionInfo{}, false, fmt.Errorf("hermes: ambiguous current native identity")
 		}
-		if e := os.WriteFile(filepath.Join(sessionDir(ref.DataDir, ref.ID), "observed-terminal"), []byte(crumbPath), 0o600); e != nil {
+		if e := recordObservedTerminal(sessionDir(ref.DataDir, ref.ID), crumbPath); e != nil {
 			return ports.SessionInfo{}, false, e
 		}
 		found = crumb.SessionID
@@ -378,6 +413,31 @@ func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launch
 		return ports.SessionInfo{}, false, nil
 	}
 	return ports.SessionInfo{AgentSessionID: found}, true, nil
+}
+
+func recordObservedTerminal(dir, crumbPath string) error {
+	path := filepath.Join(dir, "observed-terminal")
+	if current, err := os.ReadFile(path); err == nil && string(current) == crumbPath {
+		return nil
+	}
+	tmp, err := os.CreateTemp(dir, "observed-terminal-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.WriteString(crumbPath); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+func nativeStateDSN(home string) string {
+	path := filepath.ToSlash(filepath.Join(home, "state.db"))
+	return "file:" + (&url.URL{Path: path}).EscapedPath() + "?mode=ro&_pragma=busy_timeout(1000)"
 }
 
 // AuthStatus implements the scoped native adapter contract.
@@ -415,19 +475,34 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 		return sequence
 	})
 	lines := terminalui.PlainTerminalLines(output)
-	for i := len(lines) - 1; i >= 0 && i >= len(lines)-16; i-- {
+	last := len(lines) - 1
+	for last >= 0 && strings.TrimSpace(lines[last]) == "" {
+		last--
+	}
+	if last >= 0 {
+		bottom := strings.TrimSpace(lines[last])
+		if len([]rune(bottom)) >= 16 && strings.Trim(bottom, "─") == "" &&
+			(terminalui.LastBorderedPromptIsEmptyOrDimPlaceholder(composerOutput, nativePrompt) ||
+				terminalui.LastBorderedPromptIsEmptyOrDimPlaceholder(composerOutput, nativeNamedPrompt)) {
+			return domain.ActivityIdle, true
+		}
+	}
+	for i := last; i >= 0 && i >= last-4; i-- {
 		line := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(line, "⚠ ❯") || strings.HasPrefix(line, "? ❯") || strings.Contains(line, "Dangerous Command") || strings.Contains(line, "Allow once") || strings.Contains(line, "Help improve Hermes?") || strings.Contains(line, "Collect locally only") || strings.Contains(line, "Allow this command?") || strings.Contains(line, "[1] Allow once") || strings.Contains(line, "type secret (hidden)") || strings.Contains(line, "type password (hidden)") || strings.Contains(line, "type your answer here") {
+		if strings.HasPrefix(line, nativeWarningPrompt) || strings.HasPrefix(line, "? ❯") ||
+			strings.HasPrefix(line, "Dangerous Command") || strings.HasPrefix(line, "Allow this command?") ||
+			strings.HasPrefix(line, "Confirm: Allow this command?") ||
+			strings.HasPrefix(line, "Help improve Hermes?") || strings.HasPrefix(line, "Collect locally only") ||
+			strings.HasPrefix(line, "❯ 1. Allow once") || strings.HasPrefix(line, "❯ [1] Allow once") || strings.HasPrefix(line, "[1] Allow once") ||
+			strings.HasPrefix(line, "type secret (hidden)") || strings.HasPrefix(line, "type password (hidden)") ||
+			strings.HasPrefix(line, "type your answer here") {
 			return domain.ActivityBlocked, true
 		}
-		if strings.Contains(line, "❯") && strings.Contains(line, "msg=interrupt") {
+		if (strings.HasPrefix(line, nativePrompt) || strings.HasPrefix(line, nativeNamedPrompt)) && strings.Contains(line, "msg=interrupt") {
 			return domain.ActivityActive, true
 		}
-		if strings.HasPrefix(line, "❯") || strings.HasPrefix(line, "☤ ❯") {
-			if terminalui.LastPromptIsEmptyOrDimPlaceholder(composerOutput, "❯") || terminalui.LastPromptIsEmptyOrDimPlaceholder(composerOutput, "☤ ❯") {
-				return domain.ActivityIdle, true
-			}
-			return "", false
+		if strings.HasPrefix(line, nativePrompt) || strings.HasPrefix(line, nativeNamedPrompt) {
+			return domain.ActivityBlocked, true
 		}
 	}
 	return "", false

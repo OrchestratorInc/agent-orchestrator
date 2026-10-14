@@ -2,7 +2,7 @@
 title: Hermes Agent
 ---
 
-AO runs the official Nous Research Hermes Agent v0.21.6 classic interactive CLI on Linux. Install the pinned official release, configure a provider with native `hermes model`, and refresh Harness settings. AO never installs a global plugin or edits your native profile.
+AO runs the official Nous Research Hermes Agent v0.21.6 classic interactive CLI on Linux. Install the pinned official release at `~/.local/bin/hermes`, `~/.hermes/hermes-agent/.venv/bin/hermes`, `/usr/local/bin/hermes`, or `/usr/bin/hermes`; configure a provider with native `hermes model`, and refresh Harness settings. AO checks these locations directly rather than executing a `hermes` found earlier on `PATH`. AO never installs a global plugin or edits your native profile.
 
 Standing instructions append through the native ephemeral system prompt, preserving the supported native personality/instruction overlay. Tasks seed interactive chat once through a private query file. Default permissions preserve native approval decisions; explicit bypass uses native `--yolo`. Accept-edits, auto and AO tool allow/deny overrides are refused.
 

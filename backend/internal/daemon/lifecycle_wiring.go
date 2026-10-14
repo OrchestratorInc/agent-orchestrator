@@ -393,6 +393,8 @@ type terminalMessageAdmission struct {
 	sync.Mutex
 	pending  string
 	baseline string
+	handleID string
+	launchID string
 }
 
 type runtimeMessenger struct {
@@ -436,8 +438,14 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 			witness, hasWitness := agent.(interface {
 				TerminalMessageObserved(string, string, string) bool
 			})
+			if admission.pending != "" && (admission.handleID != rec.Metadata.RuntimeHandleID || admission.launchID != rec.Metadata.RuntimeLaunchID) {
+				admission.pending = ""
+			}
+			settled := func(frame string) bool {
+				return frame != admission.baseline && policy.ValidateTerminalMessage("", frame) == nil
+			}
 			if admission.pending != "" {
-				if !hasWitness || !witness.TerminalMessageObserved(admission.pending, admission.baseline, screen) {
+				if (!hasWitness || !witness.TerminalMessageObserved(admission.pending, admission.baseline, screen)) && !settled(screen) {
 					return fmt.Errorf("session %s: prior terminal submission remains unconfirmed", id)
 				}
 				admission.pending = ""
@@ -454,7 +462,10 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 			}
 			admission.pending = message
 			admission.baseline = screen
+			admission.handleID = rec.Metadata.RuntimeHandleID
+			admission.launchID = rec.Metadata.RuntimeLaunchID
 			if err := m.runtime.SendMessage(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, message); err != nil {
+				admission.pending = ""
 				return err
 			}
 			// A socket write acknowledgement precedes native echo. Hold admission until
@@ -466,7 +477,7 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 			defer ticker.Stop()
 			for {
 				frame, captureErr := reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, 40)
-				if captureErr == nil && hasWitness && witness.TerminalMessageObserved(message, admission.baseline, frame) {
+				if captureErr == nil && ((hasWitness && witness.TerminalMessageObserved(message, admission.baseline, frame)) || settled(frame)) {
 					admission.pending = ""
 					return nil
 				}

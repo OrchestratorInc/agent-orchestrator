@@ -155,15 +155,21 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 		return
 	}
 	state, ok := detector.DetectTerminalActivity(output)
+	if !ok || (state != domain.ActivityActive && state != domain.ActivityIdle && state != domain.ActivityWaitingInput && state != domain.ActivityBlocked) {
+		return
+	}
 	nativeID := ""
 	if resolver, supports := agent.(ports.AgentNativeSessionResolver); supports && o.dataDir != "" {
 		id, found, resolveErr := resolver.ResolveNativeSessionID(ctx, ports.NativeSessionResolveConfig{DataDir: o.dataDir, SessionID: session.ID, LaunchID: session.Metadata.RuntimeLaunchID})
-		if resolveErr == nil && found {
+		if resolveErr != nil {
+			o.logger.Debug("activity observer: native identity unavailable", "session", session.ID, "err", resolveErr)
+			return
+		}
+		if found {
 			nativeID = id
 		}
 	}
-	if !ok || (state == session.Activity.State && (nativeID == "" || nativeID == session.Metadata.AgentSessionID)) ||
-		(state != domain.ActivityActive && state != domain.ActivityIdle && state != domain.ActivityWaitingInput && state != domain.ActivityBlocked) {
+	if state == session.Activity.State && (nativeID == "" || nativeID == session.Metadata.AgentSessionID) {
 		return
 	}
 	event := "terminal-" + string(state)
@@ -171,7 +177,7 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 		// A current native composer/busy frame positively resolves the prior modal.
 		event = "permission-resolved"
 	}
-	if state == domain.ActivityWaitingInput {
+	if state == domain.ActivityWaitingInput && event != "permission-resolved" {
 		event = "terminal-waiting-input"
 	}
 	err = o.sink.ApplyActivitySignal(ctx, session.ID, ports.ActivitySignal{

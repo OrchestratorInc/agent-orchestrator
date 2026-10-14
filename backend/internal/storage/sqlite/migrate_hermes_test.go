@@ -3,6 +3,8 @@ package sqlite
 import (
 	"strings"
 	"testing"
+
+	"github.com/pressly/goose/v3"
 )
 
 // TestMigration0203AllowsHermesAndReversesBothHistoricalSchemas mirrors the
@@ -47,6 +49,13 @@ func TestMigration0203AllowsHermesAndReversesBothHistoricalSchemas(t *testing.T)
 			if _, err := db.Exec(insert, "unknown", 4, "unknown-agent"); err == nil {
 				t.Fatal("unknown harness bypassed the CHECK constraint")
 			}
+			gooseMu.Lock()
+			rollbackErr := goose.DownTo(db, "migrations", 196)
+			gooseMu.Unlock()
+			if rollbackErr == nil {
+				t.Fatal("rollback accepted existing hermes session")
+			}
+			mustExec(t, db, `DROP TABLE IF EXISTS temp.hermes_schema_guard`)
 			// Clear the new harness value before downgrading to the older contract.
 			mustExec(t, db, `UPDATE sessions SET harness = '' WHERE harness = 'hermes'`)
 			downTo(t, db, 194)
@@ -62,5 +71,24 @@ func TestMigration0203AllowsHermesAndReversesBothHistoricalSchemas(t *testing.T)
 				t.Fatalf("integrity after downgrade = %q, %v", integrity, err)
 			}
 		})
+	}
+}
+
+func TestMigration0203RejectsUnrecognizedConstraint(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 194)
+	mustExec(t, db, `PRAGMA writable_schema = ON`)
+	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''fake''))', '''fake'', ''other''))') WHERE type = 'table' AND name = 'sessions'`)
+	mustExec(t, db, `PRAGMA writable_schema = RESET`)
+	gooseMu.Lock()
+	goose.SetBaseFS(migrationsFS)
+	goose.SetLogger(goose.NopLogger())
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		gooseMu.Unlock()
+		t.Fatal(err)
+	}
+	err := goose.UpTo(db, "migrations", 203)
+	gooseMu.Unlock()
+	if err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+		t.Fatalf("unrecognized constraint silently migrated: %v", err)
 	}
 }

@@ -340,6 +340,28 @@ type renderedRuntime struct {
 	renderedErr error
 }
 
+type renderedWaitingAgent struct{ ports.Agent }
+
+func (renderedWaitingAgent) DetectTerminalActivity(string) (domain.ActivityState, bool) {
+	return domain.ActivityWaitingInput, true
+}
+func (renderedWaitingAgent) ContinuouslyDetectTerminalActivity() bool { return true }
+func (renderedWaitingAgent) RequiresRenderedActivity() bool           { return true }
+
+func TestRenderedModalResolutionKeepsBoundaryEvent(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	rec := activeSession(now, domain.HarnessHermes)
+	rec.Activity.State = domain.ActivityBlocked
+	sink := &fakeSink{}
+	observer := New(fakeSessions{rows: []domain.SessionRecord{rec}}, sink, &renderedRuntime{}, fakeAgents{domain.HarnessHermes: renderedWaitingAgent{}}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})
+	if err := observer.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.signals) != 1 || sink.signals[0].Event != "permission-resolved" || sink.signals[0].State != domain.ActivityWaitingInput {
+		t.Fatalf("blocked to waiting lost modal boundary: %+v", sink.signals)
+	}
+}
+
 func (r *renderedRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
 	return r.rendered, r.renderedErr
 }
@@ -365,7 +387,7 @@ func TestRenderedAdapterNeverUsesOldRingComposer(t *testing.T) {
 	}
 	rec.Activity.State = domain.ActivityBlocked
 	observer.sessions = fakeSessions{rows: []domain.SessionRecord{rec}}
-	runtime.rendered = "❯ \n"
+	runtime.rendered = "────────────────────────────────────────\n❯ \n────────────────────────────────────────"
 	sink.signals = nil
 	if err := observer.Poll(context.Background()); err != nil {
 		t.Fatal(err)

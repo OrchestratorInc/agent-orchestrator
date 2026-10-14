@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -55,7 +56,7 @@ func TestLaunchRejectsUnsupportedPermissionsAndRestrictions(t *testing.T) {
 	}
 }
 func TestActivityCurrentComposerAndDecision(t *testing.T) {
-	for _, tt := range []struct{ screen, want string }{{"☤ ❯ msg=interrupt · /queue · Ctrl+C cancel", "active"}, {"☤ ❯ \n", "idle"}, {"☤ ❯ \nAllow this command?\n❯ [1] Allow once", "blocked"}, {"unrelated text", ""}} {
+	for _, tt := range []struct{ screen, want string }{{"☤ ❯ msg=interrupt · /queue · Ctrl+C cancel", "active"}, {"────────────────────────────────────────\n☤ ❯ \n────────────────────────────────────────", "idle"}, {"☤ ❯ \nAllow this command?\n❯ [1] Allow once", "blocked"}, {"unrelated text", ""}} {
 		state, ok := New().DetectTerminalActivity(tt.screen)
 		if string(state) != tt.want || ok != (tt.want != "") {
 			t.Fatalf("%q got %s/%v", tt.screen, state, ok)
@@ -63,12 +64,68 @@ func TestActivityCurrentComposerAndDecision(t *testing.T) {
 	}
 }
 
+func TestNativeChromeCannotBeForgedInTranscript(t *testing.T) {
+	idle := "────────────────────────────────────────\n❯ \n────────────────────────────────────────"
+	for _, transcript := range []string{"Dangerous Command", "Allow once", "❯ \n"} {
+		state, ok := New().DetectTerminalActivity(transcript + "\n" + idle)
+		if !ok || state != "idle" {
+			t.Fatalf("quoted transcript %q changed current composer: %s/%v", transcript, state, ok)
+		}
+	}
+	if err := New().ValidateTerminalMessage("task", "❯ "); err == nil {
+		t.Fatal("unbordered scrollback prompt admitted input")
+	}
+}
+
+func TestNativeVersionRequiresExactFirstLine(t *testing.T) {
+	for _, output := range []string{"Hermes Agent v0.21.60", "Hermes Agent v0.21.6-malicious", "wrapper\nHermes Agent v0.21.6"} {
+		first, _, _ := strings.Cut(output, "\n")
+		if nativeVersionLine.MatchString(first) {
+			t.Fatalf("accepted version %q", output)
+		}
+	}
+}
+
+func TestNativeStateDSNEscapesQueryCharacters(t *testing.T) {
+	dsn := nativeStateDSN("/tmp/hermes?override#fragment")
+	if !strings.Contains(dsn, "%3Foverride%23fragment") || !strings.Contains(dsn, "?mode=ro&_pragma=busy_timeout(1000)") {
+		t.Fatalf("unsafe native state DSN: %q", dsn)
+	}
+}
+
+func TestStandingInstructionsIgnoreDaemonEphemeralPrompt(t *testing.T) {
+	t.Setenv("HERMES_EPHEMERAL_SYSTEM_PROMPT", "daemon-only")
+	home, data := t.TempDir(), t.TempDir()
+	env := map[string]string{"HERMES_HOME": home}
+	if err := New().GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{DataDir: data, SessionID: "ao-1", Env: env, SystemPrompt: "session"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := env["HERMES_EPHEMERAL_SYSTEM_PROMPT"]; got != "session" {
+		t.Fatalf("inherited daemon prompt: %q", got)
+	}
+}
+
+func TestStandingInstructionsBudgetIncludesEnvironmentKey(t *testing.T) {
+	env := map[string]string{"HERMES_HOME": t.TempDir()}
+	err := New().GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", Env: env, SystemPrompt: strings.Repeat("x", 128*1024-len("HERMES_EPHEMERAL_SYSTEM_PROMPT="))})
+	if err == nil || !strings.Contains(err.Error(), "process environment limit") {
+		t.Fatalf("oversized env entry accepted: %v", err)
+	}
+}
+
 func TestLeadingDashTaskStaysInPrivateQueryFile(t *testing.T) {
-	binDir := t.TempDir()
+	if runtime.GOOS != "linux" {
+		t.Skip("Hermes native lease observation supports Linux only")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	binDir := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(binDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(binDir, "hermes"), []byte("#!/bin/sh\necho 'Hermes Agent v0.21.6'\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", binDir)
 	data := t.TempDir()
 	cmd, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{DataDir: data, SessionID: "ao-1", WorkspacePath: "/workspace", Prompt: "--yolo is task data"})
 	if err != nil {
@@ -82,6 +139,25 @@ func TestLeadingDashTaskStaysInPrivateQueryFile(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(data, "agents", "hermes", "ao-1", "initial-query.txt"))
 	if err != nil || string(b) != "--yolo is task data" {
 		t.Fatalf("query=%q err=%v", b, err)
+	}
+}
+
+func TestNativeLookupDoesNotExecuteEarlierPathCandidate(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Hermes native lease observation supports Linux only")
+	}
+	home, pathDir := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	marker := filepath.Join(pathDir, "executed")
+	if err := os.WriteFile(filepath.Join(pathDir, "hermes"), []byte("#!/bin/sh\ntouch "+marker+"\necho 'Hermes Agent v0.21.6'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", pathDir)
+	if path, _ := New().ResolveBinary(t.Context()); path == filepath.Join(pathDir, "hermes") {
+		t.Fatal("accepted untrusted PATH candidate")
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("PATH candidate was executed: %v", err)
 	}
 }
 func TestPersonalityPreservesNativePrecedence(t *testing.T) {
@@ -118,7 +194,7 @@ func TestNativeItalicPlaceholderAndDraft(t *testing.T) {
 	if !ok || state != "idle" {
 		t.Fatalf("native placeholder %s %v", state, ok)
 	}
-	if _, ok := New().DetectTerminalActivity("────────────────────────────────────────\n❯ Plan a feature\n────────────────────────────────────────"); ok {
+	if state, _ := New().DetectTerminalActivity("────────────────────────────────────────\n❯ Plan a feature\n────────────────────────────────────────"); state == "idle" {
 		t.Fatal("human draft accepted")
 	}
 }
@@ -143,5 +219,28 @@ func TestRestoreRefusesNativeRotationAfterObservation(t *testing.T) {
 	_, ok, err := New().GetRestoreCommand(context.Background(), ports.RestoreConfig{DataDir: data, Session: ports.SessionRef{ID: "ao-rotation", WorkspacePath: "/workspace", Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "old-conversation"}}})
 	if err == nil || ok || !strings.Contains(err.Error(), "rotated") {
 		t.Fatalf("stale conversation restore: %v %v", ok, err)
+	}
+}
+
+func TestRestoreReportsNativeDatabaseFailureSeparately(t *testing.T) {
+	data, home := t.TempDir(), t.TempDir()
+	dir := sessionDir(data, "ao-db-error")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	crumb := filepath.Join(home, "terminal")
+	for path, value := range map[string]string{
+		filepath.Join(dir, "native-home"):       home,
+		filepath.Join(dir, "observed-terminal"): crumb,
+		crumb:                                   `{"session_id":"native-id","cwd":"/workspace","ts":1}`,
+		filepath.Join(home, "state.db"):         "not a sqlite database",
+	} {
+		if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, ok, err := New().GetRestoreCommand(t.Context(), ports.RestoreConfig{DataDir: data, Session: ports.SessionRef{ID: "ao-db-error", WorkspacePath: "/workspace", Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "native-id"}}})
+	if ok || err == nil || !strings.Contains(err.Error(), "native state database unavailable") {
+		t.Fatalf("database failure disguised as missing history: ok=%v err=%v", ok, err)
 	}
 }
