@@ -608,7 +608,7 @@ describe("browser shortcut routing", () => {
 		expect(webContents.findInPage).toHaveBeenCalledOnce();
 	});
 
-	it("replaces the last tab with a blank tab and closes the browser panel on ⌘W", async () => {
+	it("replaces the last tab with a blank tab and keeps the browser panel open on ⌘W", async () => {
 		const { emitBeforeInput, host, invoke, shellSend } = setupHost();
 		const state = await invoke("browser:ensure", "sess-1");
 		await invoke("browser:navigate", { viewId: state.viewId, url: "https://example.test/" });
@@ -618,9 +618,9 @@ describe("browser shortcut routing", () => {
 
 		const closeEvent = emitBeforeInput({ key: "w", control: true });
 		expect(closeEvent.preventDefault).toHaveBeenCalled();
-		expect(shellSend).toHaveBeenCalledWith("browser:closePanel", state.viewId);
+		expect(shellSend).not.toHaveBeenCalledWith("browser:closePanel", state.viewId);
 		expect(shellSend).not.toHaveBeenCalledWith(CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL);
-		expect(host.isLastUsedBrowser()).toBe(false);
+		expect(host.isLastUsedBrowser()).toBe(true);
 		await vi.waitFor(() => {
 			expect(shellSend).toHaveBeenCalledWith(
 				"browser:tabsState",
@@ -744,14 +744,14 @@ describe("browser shortcut routing", () => {
 		expect(shellSend).not.toHaveBeenCalledWith(CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL);
 		expect(host.isLastUsedBrowser()).toBe(true);
 
-		// Second ⌘W with one tab left swaps it for a blank tab and closes the
-		// panel; the hidden browser releases the shortcut target to the shell.
+		// Second ⌘W with one tab left swaps it for a blank tab and keeps
+		// browser shortcuts targeting the open panel.
 		shellSend.mockClear();
 		const secondClose = emitShellBeforeInput({ key: "w", control: true });
 		expect(secondClose.preventDefault).toHaveBeenCalled();
-		expect(shellSend).toHaveBeenCalledWith("browser:closePanel", state.viewId);
+		expect(shellSend).not.toHaveBeenCalledWith("browser:closePanel", state.viewId);
 		expect(shellSend).not.toHaveBeenCalledWith(CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL);
-		expect(host.isLastUsedBrowser()).toBe(false);
+		expect(host.isLastUsedBrowser()).toBe(true);
 		await vi.waitFor(() => {
 			expect(shellSend).toHaveBeenCalledWith(
 				"browser:tabsState",
@@ -1163,14 +1163,20 @@ function setupTabHost(
 	};
 }
 
-function fakeBrowserProfileStore(profile: BrowserProfile, bindings: Record<string, string>): BrowserProfileStore {
+function fakeBrowserProfileStore(
+	profile: BrowserProfile,
+	bindings: Record<string, string | null>,
+	defaultProfileId: string | null = null,
+): BrowserProfileStore {
 	return {
 		profiles: [profile],
 		getProfile: (profileId: string) => (profileId === profile.id ? { ...profile } : undefined),
 		getSessionProfileId: (sessionId: string) => bindings[sessionId],
+		getDefaultProfileId: () => defaultProfileId,
+		// A binding of `null` is an explicit, durable choice of Temporary and
+		// must be kept distinct from an absent key (no binding at all).
 		bindSession: vi.fn(async (sessionId: string, profileId: string | null) => {
-			if (profileId === null) delete bindings[sessionId];
-			else bindings[sessionId] = profileId;
+			bindings[sessionId] = profileId;
 		}),
 		isProfileOperationInProgress: () => false,
 		waitForProfileOperation: async () => undefined,
@@ -1179,6 +1185,26 @@ function fakeBrowserProfileStore(profile: BrowserProfile, bindings: Record<strin
 }
 
 describe("browser:closeTab automation-runtime fallback", () => {
+	it("replaces the final page with a fresh blank tab through the renderer close action", async () => {
+		const { invoke, views } = setupTabHost();
+		const initial = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		await invoke("browser:navigate", { viewId: initial.viewId, url: "https://example.test/" });
+		const before = (await invoke("browser:getTabs", initial.viewId)) as BrowserTabsState;
+		const closed = (await invoke("browser:closeTab", { viewId: initial.viewId, tabId: before.activeTabId })) as BrowserTabsState;
+
+		expect(closed.tabs).toHaveLength(1);
+		expect(closed.activeTabId).not.toBe(before.activeTabId);
+		expect(closed.tabs[0].url).toBe("about:blank");
+		expect(views[0].webContents.close).toHaveBeenCalledOnce();
+		expect(views[1].webContents.close).not.toHaveBeenCalled();
+
+		// Closing the blank landing tab works too and leaves a usable landing tab.
+		const blankClosed = (await invoke("browser:closeTab", { viewId: initial.viewId, tabId: closed.activeTabId })) as BrowserTabsState;
+		expect(blankClosed.tabs).toHaveLength(1);
+		expect(blankClosed.activeTabId).not.toBe(closed.activeTabId);
+		expect(blankClosed.tabs[0].url).toBe("about:blank");
+	});
+
 	// Regression: observed in a real long-running session as
 	// "Tab t5 not found; run `agent-browser tab` to list open tabs" — the
 	// external automation runtime's own internal tab registry had drifted from
@@ -2242,6 +2268,34 @@ describe("browser profile partitions and replacement", () => {
 		expect(clearBrowserProfileData).not.toHaveBeenCalled();
 	});
 
+	it("falls back to the global default profile for a session with no binding of its own", async () => {
+		const store = fakeBrowserProfileStore(profile, {}, profile.id);
+		const { host, invoke } = setupTabHost(store);
+		const ensured = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
+
+		expect(host.getProfileState(ensured.viewId)).toMatchObject({
+			profileId: profile.id,
+			profileName: "Work",
+			temporary: false,
+		});
+	});
+
+	it("keeps a session explicitly switched to Temporary out of the default profile, even across reconstruction", async () => {
+		const bindings: Record<string, string | null> = {};
+		const store = fakeBrowserProfileStore(profile, bindings, profile.id);
+		const firstHost = setupTabHost(store);
+		const ensured = (await firstHost.invoke("browser:ensure", "worker-1")) as BrowserNavState;
+		expect(firstHost.host.getProfileState(ensured.viewId)).toMatchObject({ profileId: profile.id, temporary: false });
+
+		await firstHost.host.switchProfile(ensured.viewId, null);
+		expect(bindings["worker-1"]).toBeNull();
+		firstHost.host.destroyAll();
+
+		const reconstructed = setupTabHost(store);
+		const reensured = (await reconstructed.invoke("browser:ensure", "worker-1")) as BrowserNavState;
+		expect(reconstructed.host.getProfileState(reensured.viewId)).toMatchObject({ profileId: null, temporary: true });
+	});
+
 	it("uses a stable named partition and restores the durable binding on host reconstruction", async () => {
 		const bindings = { "worker-1": profile.id, "worker-2": profile.id };
 		const store = fakeBrowserProfileStore(profile, bindings);
@@ -2445,7 +2499,8 @@ describe("browser profile partitions and replacement", () => {
 
 		const switched = await host.switchProfile(nav.viewId, null);
 		expect(switched).toMatchObject({ profileId: null, temporary: true });
-		expect(bindings["worker-1"]).toBeUndefined();
+		// An explicit switch to Temporary is a durable choice, not the absence of one.
+		expect(bindings["worker-1"]).toBeNull();
 		expect(runtime.closeSession).toHaveBeenCalledWith("worker-1");
 		expect(views.some((view) => view.webContents.closeDevTools.mock.calls.length > 0)).toBe(true);
 		expect(views[0]!.webContents.close).toHaveBeenCalled();
@@ -2566,18 +2621,12 @@ describe("browser profile partitions and replacement", () => {
 		expect(views[1]!.webContents.loadURL).toHaveBeenCalledWith("https://second.example/");
 	});
 
-	it("starts an unbound worker in a configured profile until the human picks temporary", async () => {
-		const bindings: Record<string, string> = {};
+	it("starts an unbound worker in Temporary when no default profile is set, even with saved profiles", async () => {
+		const bindings: Record<string, string | null> = {};
 		const store = fakeBrowserProfileStore(profile, bindings);
-		const { constructorOptions, host, invoke } = setupTabHost(store);
+		const { host, invoke } = setupTabHost(store);
 		const nav = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
-		expect(constructorOptions[0]!.webPreferences.partition).toBe(browserProfilePartition(profile.id));
-		expect(host.getProfileState(nav.viewId)).toMatchObject({ profileId: profile.id, temporary: false });
-
-		await host.switchProfile(nav.viewId, null);
-		host.destroy(nav.viewId);
-		const again = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
-		expect(host.getProfileState(again.viewId)).toMatchObject({ profileId: null, temporary: true });
+		expect(host.getProfileState(nav.viewId)).toMatchObject({ profileId: null, temporary: true });
 	});
 
 	it("releases profile usage when worker tab startup fails", async () => {
@@ -2634,7 +2683,7 @@ describe("browser profile partitions and replacement", () => {
 	});
 
 	it("does not clear a temporary partition when a failed profile switch rolls back to it", async () => {
-		const bindings: Record<string, string> = {};
+		const bindings: Record<string, string | null> = {};
 		const store = fakeBrowserProfileStore(profile, bindings);
 		const clearBrowserProfileData = vi.fn(async (_partition: string) => undefined);
 		let failReplacementStartup = false;
@@ -2658,7 +2707,8 @@ describe("browser profile partitions and replacement", () => {
 
 		await expect(host.switchProfile(nav.viewId, profile.id)).rejects.toThrow("replacement startup failed");
 
-		expect(bindings["worker-1"]).toBeUndefined();
+		// The explicit Temporary choice made before the failed switch is still recorded.
+		expect(bindings["worker-1"]).toBeNull();
 		expect(host.getProfileState(nav.viewId)).toMatchObject({ profileId: null, temporary: true });
 		expect(constructorOptions.at(-1)!.webPreferences.partition).toBe(temporaryPartition);
 		expect(clearBrowserProfileData).not.toHaveBeenCalled();

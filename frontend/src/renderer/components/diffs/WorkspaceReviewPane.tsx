@@ -55,6 +55,41 @@ const REVIEW_CODE_VIEW_THEME = { dark: "github-dark", light: "github-light" } as
 // row stays and still loads on click.
 const MAX_END_OF_FILE_PREFETCHES = 40;
 const END_OF_FILE_PREFETCH_MAX_BYTES = 128 * 1024;
+// Keep speculative reads serial within a host/session, without allowing one
+// stalled host to block other reviews. Every active pair has its own deadline.
+const FULL_CONTEXT_PREFETCH_TIMEOUT_MS = 30_000;
+const fullContextPrefetchTails = new Map<string, Promise<void>>();
+function prefetchFullContext<T>(key: string, load: (signal: AbortSignal) => Promise<T>, signal: AbortSignal): Promise<T> {
+	const previous = fullContextPrefetchTails.get(key) ?? Promise.resolve();
+	let release = () => {};
+	const tail = new Promise<void>((resolve) => { release = resolve; });
+	fullContextPrefetchTails.set(key, tail);
+	return previous.then(async () => {
+		signal.throwIfAborted();
+		const controller = new AbortController();
+		const onAbort = () => controller.abort(signal.reason);
+		signal.addEventListener("abort", onAbort, { once: true });
+		const timer = setTimeout(() => controller.abort(new DOMException("Diff context loading timed out", "TimeoutError")), FULL_CONTEXT_PREFETCH_TIMEOUT_MS);
+		let onCancelled = () => {};
+		const cancelled = new Promise<never>((_resolve, reject) => {
+			onCancelled = () => reject(controller.signal.reason);
+			controller.signal.addEventListener("abort", onCancelled, { once: true });
+		});
+		try {
+			return await Promise.race([load(controller.signal), cancelled]);
+		} finally {
+			clearTimeout(timer);
+			// Stop a sibling request if the other side failed first.
+			controller.abort();
+			signal.removeEventListener("abort", onAbort);
+			controller.signal.removeEventListener("abort", onCancelled);
+		}
+	}).finally(() => {
+		release();
+		if (fullContextPrefetchTails.get(key) === tail) fullContextPrefetchTails.delete(key);
+	});
+}
+
 export type ReviewSourceMenu = {
 	/** Short description of the current review source, shown on the trigger. */
 	label: string;
@@ -336,14 +371,14 @@ export function WorkspaceReviewPane({
 	}, askInChat !== undefined);
 
 	const loadDiffFiles = useCallback(
-		async (metadata: FileDiffMetadata) => {
+		async (metadata: FileDiffMetadata, signal?: AbortSignal) => {
 			// Pierre may hand this callback a normalized metadata object rather than
 			// the exact object stored in our parse cache, so resolve by stable path.
 			const file = files.find((candidate) => candidate.path === metadata.name);
 			if (!file) throw new Error(t("files.error.loadFile"));
 			const [before, after] = await Promise.all([
-				fetchWorkspaceFileRevision({ commitSha: selectedCommit?.sha, sessionId, path: file.path, scope, side: "before", workspaceVersion: data.workspaceVersion, hostId }),
-				fetchWorkspaceFileRevision({ commitSha: selectedCommit?.sha, sessionId, path: file.path, scope, side: "after", workspaceVersion: data.workspaceVersion, hostId }),
+				fetchWorkspaceFileRevision({ commitSha: selectedCommit?.sha, sessionId, path: file.path, scope, side: "before", workspaceVersion: data.workspaceVersion, hostId, signal }),
+				fetchWorkspaceFileRevision({ commitSha: selectedCommit?.sha, sessionId, path: file.path, scope, side: "after", workspaceVersion: data.workspaceVersion, hostId, signal }),
 			]);
 			if (before.binary || after.binary || before.truncated || after.truncated) throw new Error(t("files.error.loadFile"));
 			const newFile = { name: file.path, contents: after.content, cacheKey: after.revision };
@@ -365,9 +400,9 @@ export function WorkspaceReviewPane({
 			return {
 				queryKey: hostId ? ["files-review-end-of-file", hostId, sessionId, scope, selectedCommit?.sha ?? "", file.path, file.fileFingerprint ?? "", metadata ? patchIdentity(metadata) : ""] as const
 					: ["files-review-end-of-file", sessionId, scope, selectedCommit?.sha ?? "", file.path, file.fileFingerprint ?? "", metadata ? patchIdentity(metadata) : ""] as const,
-				queryFn: () => {
+				queryFn: ({ signal }) => {
 					if (!metadata) throw new Error(t("files.error.loadFile"));
-					return loadDiffFiles(metadata);
+					return prefetchFullContext(viewedSessionKey, (activeSignal) => loadDiffFiles(metadata, activeSignal), signal);
 				},
 				enabled: metadata != null,
 				retry: false,

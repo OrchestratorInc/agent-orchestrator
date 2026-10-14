@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Eye, FileCode2, GitCompareArrows, LoaderCircle, MessageSquarePlus, Pencil, Save, X } from "lucide-react";
@@ -14,10 +15,12 @@ import {
 	type FilesSource,
 } from "../hooks/useSessionWorkspaceFiles";
 import { usePierreFileHighlightReady } from "../hooks/usePierreFileHighlight";
+import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
 import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
 import { rememberedFileDisplayMode, useUiStore, type FileDisplayMode } from "../stores/ui-store";
+import { isAbsoluteFileReference } from "../lib/workspace-file-path";
 import { statusLabel, statusTone } from "../lib/workspace-file-status";
 import {
 	canSplitCompare,
@@ -72,6 +75,7 @@ export function FileContentPane({
 	split,
 	scope = "combined",
 	source = DEFAULT_FILES_SOURCE,
+	toolbarHost,
 }: {
 	annotation: FileAnnotationModel;
 	initialEditing?: boolean;
@@ -92,6 +96,12 @@ export function FileContentPane({
 	scope?: WorkspaceDiffScope;
 	source?: FilesSource;
 	/**
+	 * A header the host renders, with the file name, for the mode and action
+	 * buttons. When set, the pane renders those buttons into it and drops its own
+	 * path row; null renders none until the host mounts.
+	 */
+	toolbarHost?: HTMLElement | null;
+	/**
 	 * @deprecated Ignored: centre file tabs and the Files panel now share the
 	 * compact toolbar (breadcrumb + status/counts, icon mode switches).
 	 */
@@ -110,14 +120,32 @@ export function FileContentPane({
 	const [draft, setDraft] = useState("");
 	const [saving, setSaving] = useState(false);
 	const [saveError, setSaveError] = useState("");
+	// Warm syntax highlighting without withholding readable file contents.
 	const sourceHighlightReady = usePierreFileHighlightReady(path);
+	useEffect(() => {
+		if (!path || source.kind !== "workspace" || commitSha) return;
+		return subscribeWorkspaceFileChanges(sessionId, queryClient, hostId);
+	}, [path, source.kind, commitSha, sessionId, queryClient, hostId]);
 	// A background refetch mid-selection would re-render the pane out from under
 	// an active native text selection.
 	const [selectionOrMenuActive, setSelectionOrMenuActive] = useState(false);
+	// The daemon serves workspace files by relative path only. An absolute path
+	// that reaches here was not inside the session, so say that rather than
+	// sending a request that can only fail.
+	const outsideWorkspace = source.kind === "workspace" && isAbsoluteFileReference(path ?? "");
 	const query = useQuery({
 		...sessionSourceFileQueryOptions(sessionId, source, path ?? "", t(source.kind === "artifact" ? "files.error.loadArtifact" : "files.error.loadWorkspaceFile"), scope, commitSha, previousPath, hostId),
-		enabled: Boolean(path) && !selectionOrMenuActive,
+		refetchOnWindowFocus: true,
+		enabled: Boolean(path) && !outsideWorkspace && !selectionOrMenuActive,
 	});
+	const canReadLiveText = Boolean(path) && !outsideWorkspace && mode === "file" && !editing && !initialEditing && !selectionOrMenuActive && source.kind === "workspace" && !commitSha && (scope === "combined" || scope === "unstaged" || scope === "untracked");
+	const liveText = useQuery({
+		...sessionSourceFileRevisionQueryOptions({ path: path ?? "", scope, sessionId, hostId, side: "after", source }),
+		enabled: canReadLiveText,
+		staleTime: 5_000,
+		refetchOnWindowFocus: true,
+	});
+
 	const hasUnsavedChanges = Boolean(editing && query.data && draft !== query.data.content);
 	useEffect(() => {
 		if (path) markFileViewerPerformance("file-selected");
@@ -170,6 +198,7 @@ export function FileContentPane({
 					"session-workspace-search",
 					"session-workspace-file-revision",
 					"session-workspace-diffs",
+					"files-review-end-of-file",
 				].includes(String(queryKey[0])),
 			});
 			setEditing(false);
@@ -200,6 +229,28 @@ export function FileContentPane({
 	if (!path) {
 		return <PanelMessage>{t("files.explorer.selectFile")}</PanelMessage>;
 	}
+	if (outsideWorkspace) {
+		return <PanelMessage>{t("files.error.outsideWorkspace")}</PanelMessage>;
+	}
+	// File navigation can paint live text independently of repository status.
+	// Editing, annotations and comparison controls wait for their real metadata.
+	if (canReadLiveText && !query.data && liveText.data?.exists && !liveText.data.binary && !liveText.data.truncated && mode === "file") {
+		const revision = liveText.data;
+		const preview: WorkspaceFileDetail = {
+			sessionId, path, content: revision.content, size: revision.size, binary: false, deleted: false,
+			contentTruncated: false, diff: "", diffTruncated: false, status: "unmodified", additions: 0, deletions: 0,
+			fileFingerprint: revision.revision,
+		};
+		return <div className="flex min-h-0 flex-1 flex-col overflow-auto">
+			<div className="sticky top-0 z-20 flex min-h-9 items-center gap-2 border-b border-border bg-background px-3 py-1 text-xs" title={path}>
+				<WorkspaceEntryIcon className="size-icon-base" kind="file" name={path.split("/").pop() ?? path} />
+				<span className="truncate">{path}</span>
+			</div>
+			<ReadOnlyFileView annotation={{ ...annotation, begin: () => {} }} detail={preview} sessionId={sessionId} hostId={hostId} scope={scope} onContentReady={onContentReady} revealLine={initialLine ? { line: initialLine, requestKey: initialRequestKey } : undefined} onRevealLineConsumed={onInitialLineConsumed} />
+			{query.error ? <PanelMessage action={<RetryButton onClick={() => void refetch()} />}>{query.error.message}</PanelMessage> : null}
+		</div>;
+	}
+
 	if (query.isPending) {
 		return <PanelMessage>{t("files.loadingDiff")}</PanelMessage>;
 	}
@@ -222,18 +273,17 @@ export function FileContentPane({
 	const renderedAvailable = canRenderMarkdown(path, detail);
 	const hasDisplayModeChoice = detail.status !== "unmodified" || renderedAvailable;
 	const fileName = path.split("/").pop() || path;
-	const editable = detail.editable && Boolean(detail.fileFingerprint);
+	const newerLiveText = canReadLiveText && liveText.data?.exists && !liveText.data.binary && !liveText.data.truncated && liveText.dataUpdatedAt >= query.dataUpdatedAt && liveText.data.content !== detail.content;
+	const displayDetail = newerLiveText ? { ...detail, content: liveText.data!.content, size: liveText.data!.size, fileFingerprint: liveText.data!.revision } : detail;
+	const editable = !newerLiveText && detail.editable && Boolean(detail.fileFingerprint);
 	const effectiveMode =
 		(detail.status === "unmodified" && mode === "diff") || (mode === "rendered" && !renderedAvailable)
 			? "file"
 			: mode;
-	// Binary image previews do not use Pierre's syntax highlighter. Do not let a
-	// lazy grammar load (or an unsupported image extension) keep the image stuck
-	// behind the generic file-loading state.
-	const fileView = sourceHighlightReady || Boolean(detail.imageMediaType) ? (
+	const fileView = (
 		<CompleteFileView
-			annotation={annotation}
-			detail={detail}
+			annotation={newerLiveText ? { ...annotation, begin: () => {} } : annotation}
+			detail={displayDetail}
 			editing={editing && effectiveMode === "file"}
 			revealLine={initialLine ? { line: initialLine, requestKey: initialRequestKey } : undefined}
 			onEditChange={setDraft}
@@ -246,7 +296,7 @@ export function FileContentPane({
 			source={source}
 			markdownEditing={editing && renderedAvailable}
 		/>
-	) : <PanelMessage>{t("files.loading")}</PanelMessage>;
+	);
 	const beginEditing = () => {
 		setMode("file");
 		cancelFileAnnotations(annotation, (target) => target.surface !== "review" && target.path === detail.path);
@@ -291,7 +341,50 @@ export function FileContentPane({
 		</Tooltip>
 	);
 	const pathSegments = detail.path.split("/");
-	const compactTabs = (
+	// Mode switches and file actions share one row and one gap.
+	const toolbarActions = (
+		<div className="flex shrink-0 items-center gap-0.5">
+			{hasDisplayModeChoice ? (
+				<div aria-label={t("files.fileDisplayMode")} className="flex shrink-0 items-center gap-0.5" role="tablist">
+					{detail.status !== "unmodified" ? compactModeButton("diff", t("files.diff"), <GitCompareArrows aria-hidden="true" className="size-icon-sm" />) : null}
+					{compactModeButton("file", t("files.fileView"), <FileCode2 aria-hidden="true" className="size-icon-sm" />)}
+					{renderedAvailable ? compactModeButton("rendered", t("files.rendered"), <Eye aria-hidden="true" className="size-icon-sm" />) : null}
+				</div>
+			) : null}
+			{editing ? (
+				<div className="flex shrink-0 items-center gap-1">
+					<Button aria-label={t("files.cancelEditing")} className={EDIT_ACTION_CLASS} disabled={saving} onClick={cancelEditing} size="sm" type="button" variant="ghost"><X aria-hidden="true" className="size-icon-sm" />{t("files.cancelEditing")}</Button>
+					<Button aria-label={t("files.saveFile")} className={EDIT_ACTION_CLASS} disabled={saving || !hasUnsavedChanges} onClick={() => void saveEditing()} size="sm" type="button" variant="primary">{saving ? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" /> : <Save aria-hidden="true" className="size-icon-sm" />}{t("files.saveFile")}</Button>
+				</div>
+			) : (
+				<div className="flex shrink-0 items-center gap-0.5">
+					{editable ? (
+						<Tooltip>
+							<TooltipTrigger asChild><Button aria-label={t("files.editFile")} className="text-muted-foreground hover:text-foreground" onClick={beginEditing} size="icon-sm" type="button" variant="ghost"><Pencil aria-hidden="true" className="size-icon-sm" /></Button></TooltipTrigger>
+							<TooltipContent side="bottom">{t("files.editFile")}</TooltipContent>
+						</Tooltip>
+					) : null}
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								aria-label={t("files.addFeedback")}
+								disabled={Boolean(newerLiveText)}
+								className="text-muted-foreground hover:text-foreground"
+								onClick={() => annotation.begin({ path: detail.path, previousPath: detail.previousPath, side: "file", scope, surface: "focused", workspaceVersion: detail.workspaceVersion, fileFingerprint: detail.fileFingerprint })}
+								size="icon-sm"
+								type="button"
+								variant="ghost"
+							>
+								<MessageSquarePlus aria-hidden="true" className="size-icon-sm" />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent side="bottom">{t("files.addFeedback")}</TooltipContent>
+					</Tooltip>
+				</div>
+			)}
+		</div>
+	);
+	const compactTabs = toolbarHost !== undefined ? (toolbarHost ? createPortal(toolbarActions, toolbarHost) : null) : (
 		<div className="sticky top-0 z-20 flex min-h-9 items-center gap-2 border-b border-border bg-background px-3 py-1">
 			<nav aria-label={t("files.filePath")} className="flex min-w-0 flex-1 items-center gap-1.5" title={detail.path}>
 				<WorkspaceEntryIcon className="size-icon-base" kind="file" name={fileName} />
@@ -313,46 +406,7 @@ export function FileContentPane({
 					</span>
 				) : null}
 			</nav>
-			{/* Mode switches and file actions share one row and one gap. */}
-			<div className="flex shrink-0 items-center gap-0.5">
-				{hasDisplayModeChoice ? (
-					<div aria-label={t("files.fileDisplayMode")} className="flex shrink-0 items-center gap-0.5" role="tablist">
-						{detail.status !== "unmodified" ? compactModeButton("diff", t("files.diff"), <GitCompareArrows aria-hidden="true" className="size-icon-sm" />) : null}
-						{compactModeButton("file", t("files.fileView"), <FileCode2 aria-hidden="true" className="size-icon-sm" />)}
-						{renderedAvailable ? compactModeButton("rendered", t("files.rendered"), <Eye aria-hidden="true" className="size-icon-sm" />) : null}
-					</div>
-				) : null}
-				{editing ? (
-					<div className="flex shrink-0 items-center gap-1">
-						<Button aria-label={t("files.cancelEditing")} className={EDIT_ACTION_CLASS} disabled={saving} onClick={cancelEditing} size="sm" type="button" variant="ghost"><X aria-hidden="true" className="size-icon-sm" />{t("files.cancelEditing")}</Button>
-						<Button aria-label={t("files.saveFile")} className={EDIT_ACTION_CLASS} disabled={saving || !hasUnsavedChanges} onClick={() => void saveEditing()} size="sm" type="button" variant="primary">{saving ? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" /> : <Save aria-hidden="true" className="size-icon-sm" />}{t("files.saveFile")}</Button>
-					</div>
-				) : (
-					<div className="flex shrink-0 items-center gap-0.5">
-						{editable ? (
-							<Tooltip>
-								<TooltipTrigger asChild><Button aria-label={t("files.editFile")} className="text-muted-foreground hover:text-foreground" onClick={beginEditing} size="icon-sm" type="button" variant="ghost"><Pencil aria-hidden="true" className="size-icon-sm" /></Button></TooltipTrigger>
-								<TooltipContent side="bottom">{t("files.editFile")}</TooltipContent>
-							</Tooltip>
-						) : null}
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Button
-									aria-label={t("files.addFeedback")}
-									className="text-muted-foreground hover:text-foreground"
-									onClick={() => annotation.begin({ path: detail.path, previousPath: detail.previousPath, side: "file", scope, surface: "focused", workspaceVersion: detail.workspaceVersion, fileFingerprint: detail.fileFingerprint })}
-									size="icon-sm"
-									type="button"
-									variant="ghost"
-								>
-									<MessageSquarePlus aria-hidden="true" className="size-icon-sm" />
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent side="bottom">{t("files.addFeedback")}</TooltipContent>
-						</Tooltip>
-					</div>
-				)}
-			</div>
+			{toolbarActions}
 		</div>
 	);
 	// Both the Files panel and a centre file tab use the compact icon toolbar.
@@ -440,18 +494,14 @@ function artifactOriginOf(source: FilesSource): string | undefined {
 
 function CompleteFileView({ annotation, commitSha, detail, editing, markdownEditing = false, onContentReady, onEditChange, onRevealLineConsumed, revealLine, scope, sessionId, hostId, source }: { annotation: FileAnnotationModel; commitSha?: string; detail: WorkspaceFileDetail; editing: boolean; markdownEditing?: boolean; onContentReady?: () => void; onEditChange: (content: string) => void; onRevealLineConsumed?: (requestKey: number) => void; revealLine?: { line: number; requestKey: number }; scope: WorkspaceDiffScope; sessionId: string; hostId?: string; source: FilesSource }) {
 	const { t } = useTranslation();
+	const needsRevision = source.kind !== "artifact" && (detail.deleted || detail.contentTruncated) && !detail.imageMediaType;
 	const revision = useQuery({
 		...sessionSourceFileRevisionQueryOptions({ commitSha, path: detail.path, scope, sessionId, hostId, side: detail.deleted ? "before" : "after", source, workspaceVersion: detail.workspaceVersion }),
-		// Images are streamed from the blob endpoint by ReadOnlyFileView. A
-		// truncated binary image must not go through the text revision endpoint:
-		// that request carries an expected workspace snapshot and can lose a race
-		// with the file watcher, leaving the center tab stuck on a stale-snapshot
-		// error even though the current image is available.
-		enabled: source.kind !== "artifact" && (detail.deleted || detail.contentTruncated) && !detail.imageMediaType,
+		enabled: needsRevision,
 	});
-	if (revision.isPending && revision.isFetching) return <PanelMessage>{t("files.loading")}</PanelMessage>;
-	if (revision.error) return <PanelMessage>{revision.error.message}</PanelMessage>;
-	if (revision.data) {
+	if (needsRevision && revision.isPending && revision.isFetching) return <PanelMessage>{t("files.loading")}</PanelMessage>;
+	if (needsRevision && revision.error) return <PanelMessage>{revision.error.message}</PanelMessage>;
+	if (needsRevision && revision.data) {
 		if (!revision.data.exists) return <PanelMessage>{t("files.error.loadFile")}</PanelMessage>;
 		return (
 			<ReadOnlyFileView

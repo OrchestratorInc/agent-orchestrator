@@ -4,6 +4,7 @@ import {
 	isEditorId,
 	type EditorHandoffState,
 	type EditorId,
+	type OpenSessionArtifactsInput,
 	type OpenSessionTargetInput,
 	type OpenSessionTargetResult,
 	type OpenTarget,
@@ -75,10 +76,16 @@ export type EditorHandoffDeps = {
 	env: NodeJS.ProcessEnv;
 	homeDir: string;
 	resolveWorkspace: (sessionId: string) => Promise<string>;
+	/** The session's artifact directory, which lives outside its workspace. */
+	resolveArtifactDir: (sessionId: string) => Promise<string>;
 	readPreference: () => Promise<EditorId>;
 	writePreference: (editorId: EditorId) => Promise<void>;
 	launch: (command: string, args: readonly string[], cwd: string) => Promise<void>;
 	openDirectory: (workspacePath: string) => Promise<void>;
+	/** Shows one file selected in the system file manager. */
+	revealPath: (filePath: string) => Promise<void>;
+	/** Resolves symlinks in an existing path. */
+	realPath: (candidatePath: string) => Promise<string>;
 	/** Puts text on the system clipboard. The workspace path never reaches the renderer. */
 	copyText?: (text: string) => void;
 	isExecutable?: (candidatePath: string) => boolean;
@@ -89,6 +96,7 @@ export type EditorHandoffDeps = {
 export type EditorHandoff = {
 	getState(sessionId: string): Promise<EditorHandoffState>;
 	open(input: OpenSessionTargetInput): Promise<OpenSessionTargetResult>;
+	openArtifacts(input: OpenSessionArtifactsInput): Promise<OpenSessionTargetResult>;
 	copyWorkspacePath(sessionId: string): Promise<void>;
 };
 
@@ -111,6 +119,32 @@ function defaultIsDirectory(candidatePath: string): boolean {
 
 function pathAPI(platform: Platform) {
 	return platform === "win32" ? path.win32 : path.posix;
+}
+
+function isInside(api: typeof path.posix, dir: string, candidate: string): boolean {
+	const relative = api.relative(dir, candidate);
+	return Boolean(relative) && relative !== ".." && !relative.startsWith(`..${api.sep}`) && !api.isAbsolute(relative);
+}
+
+// An artifact's absolute path with symlinks resolved, which must stay inside
+// the artifact directory both as written and once resolved.
+async function artifactFilePath(
+	api: typeof path.posix,
+	realPath: (candidatePath: string) => Promise<string>,
+	artifactDir: string,
+	relativePath: string,
+): Promise<string> {
+	if (typeof relativePath !== "string" || !relativePath.trim() || api.isAbsolute(relativePath)) {
+		throw new Error("That artifact is not valid.");
+	}
+	const filePath = api.resolve(artifactDir, relativePath);
+	if (!isInside(api, artifactDir, filePath)) throw new Error("That artifact is not valid.");
+	const realDir = await realPath(artifactDir);
+	const realFile = await realPath(filePath).catch(() => {
+		throw new Error("That artifact no longer exists.");
+	});
+	if (!isInside(api, realDir, realFile)) throw new Error("That artifact is not valid.");
+	return realFile;
 }
 
 function executableNames(command: string, platform: Platform, env: NodeJS.ProcessEnv): string[] {
@@ -336,6 +370,20 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 		return { editors, terminal, targets };
 	};
 
+	const openTarget = async (target: OpenTarget, resolved: ResolvedCommand | undefined, directory: string, revealPath?: string) => {
+		try {
+			if (target.kind === "file_manager") {
+				await (revealPath ? deps.revealPath(revealPath) : deps.openDirectory(directory));
+			} else {
+				if (!resolved) throw new Error("target command was not resolved");
+				await deps.launch(resolved.command, resolved.argsForWorkspace(directory), directory);
+			}
+		} catch (error) {
+			deps.logError?.(`failed to open session target ${target.id}`, error);
+			throw new Error(`Could not open ${target.name}. Check that it is installed and try again.`);
+		}
+	};
+
 	const workspaceUnavailable = (error: unknown) =>
 		error instanceof Error && error.message.trim() ? error.message : "Session workspace is not available.";
 	const workspaceUnavailableCode = (error: unknown) => {
@@ -376,21 +424,26 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 				throw new Error("That open target is not available.");
 			}
 			const workspacePath = await deps.resolveWorkspace(sessionId);
-			try {
-				if (target.kind === "file_manager") {
-					await deps.openDirectory(workspacePath);
-				} else {
-					const resolved = target.kind === "terminal"
-						? terminal?.command
-						: editors.find(({ target: editor }) => editor.id === target.id)?.command;
-					if (!resolved) throw new Error("target command was not resolved");
-					await deps.launch(resolved.command, resolved.argsForWorkspace(workspacePath), workspacePath);
-				}
-			} catch (error) {
-				deps.logError?.(`failed to open session target ${target.id}`, error);
-				throw new Error(`Could not open ${target.name}. Check that it is installed and try again.`);
-			}
+			const resolved = target.kind === "terminal"
+				? terminal?.command
+				: editors.find(({ target: editor }) => editor.id === target.id)?.command;
+			await openTarget(target, resolved, workspacePath);
 			if (target.kind === "editor") await deps.writePreference(target.id as EditorId);
+			return target;
+		},
+
+		async openArtifacts(input) {
+			const sessionId = input.sessionId.trim();
+			if (!sessionId) throw new Error("Session is required.");
+			if (input.targetId !== "file-manager" && input.targetId !== "terminal") {
+				throw new Error("That open target is not supported.");
+			}
+			const terminal = input.targetId === "terminal" ? resolveTerminal(deps, isExecutable) : undefined;
+			const target = input.targetId === "file-manager" ? fileManager : terminal?.target;
+			if (!target) throw new Error("That open target is not available.");
+			const artifactDir = await deps.resolveArtifactDir(sessionId);
+			const filePath = input.path === undefined ? undefined : await artifactFilePath(pathAPI(deps.platform), deps.realPath, artifactDir, input.path);
+			await openTarget(target, terminal?.command, filePath ? pathAPI(deps.platform).dirname(filePath) : artifactDir, filePath);
 			return target;
 		},
 

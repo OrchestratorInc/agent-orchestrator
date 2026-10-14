@@ -86,9 +86,9 @@ func TestACPReplayProviderHelper(t *testing.T) {
 }
 
 func TestACPReplayProjectsExactlyOnceAcrossDaemonRestarts(t *testing.T) {
-	// Race-instrumented SQLite can need more than five minutes for the full
-	// burst on shared CI runners. Keep the burst and exact-once assertions intact.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	// Instrumented SQLite projection of 20k events takes nearly five minutes on
+	// CI. Leave bounded time for the full archive checks and final restart too.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Minute)
 	defer cancel()
 	st := openStore(t)
 	dataDir, workspace := t.TempDir(), t.TempDir()

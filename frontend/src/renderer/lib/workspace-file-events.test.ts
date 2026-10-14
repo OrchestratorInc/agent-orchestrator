@@ -96,6 +96,26 @@ afterEach(() => {
 });
 
 describe("subscribeWorkspaceFileChanges", () => {
+	it("refreshes during continuous writes instead of waiting for the final event", () => {
+		vi.useFakeTimers();
+		const queryClient = fakeQueryClient();
+		const stop = subscribeWorkspaceFileChanges("continuous", queryClient);
+		const source = EventSourceStub.instances[0]!;
+		source.dispatch("ready");
+		vi.advanceTimersByTime(150);
+		vi.mocked(queryClient.invalidateQueries).mockClear();
+		source.dispatch("workspace_changed");
+		vi.advanceTimersByTime(100);
+		source.dispatch("workspace_changed");
+		vi.advanceTimersByTime(50);
+		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-diffs", "continuous"] });
+		vi.mocked(queryClient.invalidateQueries).mockClear();
+		source.dispatch("workspace_changed");
+		vi.advanceTimersByTime(150);
+		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-diffs", "continuous"] });
+		stop();
+	});
+
 	it("polls while probing, then uses SSE after a delivered frame", () => {
 		vi.useFakeTimers();
 		baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/host-a");

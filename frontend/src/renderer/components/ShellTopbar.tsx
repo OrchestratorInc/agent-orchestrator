@@ -40,7 +40,7 @@ import { SHELL_PANEL_SPRING } from "../lib/motion-spring";
 import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
 import { StatusPill } from "./StatusPill";
 import { TopbarActionError, TopbarButton, topbarHeaderClass, topbarProjectLabelClass } from "./TopbarButton";
-import { SessionArchiveDialog } from "./SessionArchiveDialog";
+import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
 import { TopbarOpenEditorButton } from "./TopbarOpenEditorButton";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
 import {
@@ -445,9 +445,9 @@ export function TopbarArchiveButton({
 	const kill = useTerminateSession();
 	const { error, isPending } = useTerminateSessionState(session.id, session.hostId);
 
-	const confirmKill = () => {
+	const confirmKill = ({ deleteArtifacts }: SessionArchiveChoice) => {
 		setConfirmOpen(false);
-		kill.mutate(session);
+		kill.mutate({ ...session, deleteArtifacts });
 		onKilled(session.workspaceId, orchestratorId);
 	};
 	// ⌘⇧A opens the same confirmation the button does.
