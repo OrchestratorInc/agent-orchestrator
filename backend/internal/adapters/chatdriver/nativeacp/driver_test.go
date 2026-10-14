@@ -169,7 +169,7 @@ func TestBindingRetainsNativeInitializeAdmission(t *testing.T) {
 func TestBindingPreflightRejectsUnavailableProviderBeforeDiscovery(t *testing.T) {
 	sentinel := errors.New("provider requires Unix")
 	cfg := buildConfig(fakePlugin{binErr: ports.ErrAgentBinaryNotFound}, Config{
-		Harness:   domain.HarnessDockerAgent,
+		Harness:   domain.HarnessClaudeCode,
 		Preflight: func(context.Context) error { return sentinel },
 		Configure: func(context.Context, acpdriver.LaunchConfig) ([]string, map[string]string, error) {
 			return nil, nil, nil

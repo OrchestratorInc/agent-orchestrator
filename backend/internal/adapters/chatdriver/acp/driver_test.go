@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -103,6 +104,10 @@ func TestPersistentACPProviderHelper(t *testing.T) {
 				continue
 			}
 			time.Sleep(200 * time.Millisecond)
+			frames, _ := strconv.Atoi(os.Getenv("AO_TEST_PERSISTENT_ACP_REPLAY_FRAMES"))
+			for range frames {
+				_, _ = fmt.Fprintln(os.Stdout, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"persistent-provider-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"x"}}}}`)
+			}
 			_, _ = fmt.Fprintf(os.Stdout, `{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}`+"\n", request.ID)
 		default:
 			if len(request.ID) > 0 {
@@ -134,11 +139,15 @@ func TestPersistentACPDriverSurvivesRealProcessDetach(t *testing.T) {
 		domain.HarnessDroid, domain.HarnessKimi, domain.HarnessKimchi,
 		domain.HarnessPi, domain.HarnessOMP,
 	} {
-		t.Run(string(harness), func(t *testing.T) { testACPProcessDetach(t, harness) })
+		t.Run(string(harness), func(t *testing.T) { testACPProcessDetach(t, harness, 0) })
 	}
 }
 
-func testACPProcessDetach(t *testing.T, harness domain.AgentHarness) {
+func TestPersistentACPLargeReplaySurvivesRestarts(t *testing.T) {
+	testACPProcessDetach(t, domain.HarnessOpenCode, 6375)
+}
+
+func testACPProcessDetach(t *testing.T, harness domain.AgentHarness, replayFrames int) {
 	dataDir := t.TempDir()
 	workdir := t.TempDir()
 	callsPath := filepath.Join(t.TempDir(), "calls.log")
@@ -156,9 +165,10 @@ func testACPProcessDetach(t *testing.T, harness domain.AgentHarness) {
 			return Launch{
 				Command: os.Args[0], Args: []string{"-test.run=TestPersistentACPProviderHelper"},
 				Env: map[string]string{
-					"AO_TEST_PERSISTENT_ACP_PROVIDER":  "1",
-					"AO_TEST_PERSISTENT_ACP_NO_RESUME": "1",
-					"AO_TEST_PERSISTENT_ACP_CALLS":     callsPath,
+					"AO_TEST_PERSISTENT_ACP_PROVIDER":      "1",
+					"AO_TEST_PERSISTENT_ACP_NO_RESUME":     "1",
+					"AO_TEST_PERSISTENT_ACP_CALLS":         callsPath,
+					"AO_TEST_PERSISTENT_ACP_REPLAY_FRAMES": strconv.Itoa(replayFrames),
 				},
 			}, nil
 		},
@@ -219,13 +229,26 @@ func testACPProcessDetach(t *testing.T, harness domain.AgentHarness) {
 	}
 
 	_ = nextEvent(t, second.Events()) // controller.ready reconstructed from cached setup
+	if replayFrames > 0 {
+		// Hold projection during the burst, just as a restarting daemon can be
+		// behind the detached host. Neither connection nor history may be lost.
+		time.Sleep(300 * time.Millisecond)
+	}
 	var replayedDelta, completed ports.ChatEvent
-	deadline := time.After(5 * time.Second)
+	deltas := 0
+	replayTimeout := 5 * time.Second
+	if replayFrames > 0 {
+		replayTimeout = 30 * time.Second
+	}
+	deadline := time.After(replayTimeout)
 	for completed.Kind != ports.ChatEventTurnCompleted {
 		select {
 		case event := <-second.Events():
 			if event.Kind == ports.ChatEventMessageDelta {
-				replayedDelta = event
+				deltas++
+				if event.ProviderEventID == firstDelta.ProviderEventID {
+					replayedDelta = event
+				}
 			}
 			if event.Kind == ports.ChatEventTurnCompleted {
 				completed = event
@@ -233,6 +256,9 @@ func testACPProcessDetach(t *testing.T, harness domain.AgentHarness) {
 		case <-deadline:
 			t.Fatal("timed out waiting for detached prompt completion")
 		}
+	}
+	if deltas != replayFrames+1 {
+		t.Fatalf("replayed %d deltas, want %d", deltas, replayFrames+1)
 	}
 	if replayedDelta.Delta != firstDelta.Delta || completed.ProviderTurnID != ref.ProviderTurnID ||
 		completed.TurnState != domain.TurnStateCompleted || completed.ProviderEventID == "" {
@@ -755,6 +781,12 @@ type fakeAgent struct {
 	newParams           acpsdk.NewSessionRequest
 	loadParams          acpsdk.LoadSessionRequest
 	resumeParams        acpsdk.ResumeSessionRequest
+	forkParams          acpsdk.UnstableForkSessionRequest
+	forkID              string
+	forkErr             error
+	forkCalls           int
+	onFork              func(context.Context) error
+	deletedForks        []string
 	loadUpdates         []acpsdk.SessionUpdate
 	loadUpdateBatches   [][]acpsdk.SessionUpdate
 	blockLoadCall       int
@@ -1022,6 +1054,24 @@ func (a *fakeAgent) ResumeSession(_ context.Context, params acpsdk.ResumeSession
 	a.resumeCalls++
 	a.mu.Unlock()
 	return acpsdk.ResumeSessionResponse{}, nil
+}
+func (a *fakeAgent) UnstableForkSession(ctx context.Context, params acpsdk.UnstableForkSessionRequest) (acpsdk.UnstableForkSessionResponse, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.forkParams = params
+	a.forkCalls++
+	if a.onFork != nil {
+		if err := a.onFork(ctx); err != nil {
+			return acpsdk.UnstableForkSessionResponse{}, err
+		}
+	}
+	return acpsdk.UnstableForkSessionResponse{SessionId: acpsdk.SessionId(a.forkID)}, a.forkErr
+}
+func (a *fakeAgent) UnstableDeleteSession(_ context.Context, params acpsdk.UnstableDeleteSessionRequest) (acpsdk.UnstableDeleteSessionResponse, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.deletedForks = append(a.deletedForks, string(params.SessionId))
+	return acpsdk.UnstableDeleteSessionResponse{}, nil
 }
 func (a *fakeAgent) LoadSession(ctx context.Context, params acpsdk.LoadSessionRequest) (acpsdk.LoadSessionResponse, error) {
 	a.mu.Lock()

@@ -307,6 +307,13 @@ it("opens the frontend file from an absolute remote turn diff without a cwd", as
 		}));
 		if (url.pathname.endsWith("/workspace/manifest")) return Response.json({ sessionId: "session-1", workspaceVersion: "version-1", files, sections: { committed: [], staged: [], unstaged: [], untracked: files }, commits: [], summary: { additions: 2, deletions: 0, files: 2 }, truncated: false });
 		if (url.pathname.endsWith("/workspace/history")) return Response.json({ sessionId: "session-1", commits: [] });
+		// The daemon, which knows the worktree root, maps the absolute path; the
+		// file list alone cannot tell backend/src/index.ts from frontend/src/index.ts.
+		if (url.pathname.endsWith("/workspace/resolve")) {
+			return url.searchParams.get("path") === `/home/ao/.ao/data/worktrees/demo/session-1/${expectedPath}`
+				? Response.json({ sessionId: "session-1", kind: "workspace", path: expectedPath })
+				: Response.json({ sessionId: "session-1", kind: "outside", path: "" });
+		}
 		if (url.pathname.endsWith("/workspace/file")) {
 			fileRequests.push(url.searchParams.get("path") ?? "");
 			return url.searchParams.get("path") === expectedPath
@@ -323,7 +330,77 @@ it("opens the frontend file from an absolute remote turn diff without a cwd", as
 	expect(localGet).not.toHaveBeenCalled();
 });
 
-it("shows a preview tab after remote session data finishes loading", async () => {
+it.each([
+	["a daemon that places the path outside the session", () => Response.json({ sessionId: "session-1", kind: "outside", path: "" })],
+	["an older daemon without the resolve route", () => Response.json({ error: "Not found" }, { status: 404 })],
+])("does not open a same-named workspace file for an absolute Markdown link on %s", async (_name, resolveResponse) => {
+	HTMLElement.prototype.scrollTo = vi.fn();
+	localGet.mockReset();
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	const files = [{ path: "README.md", status: "modified", additions: 1, deletions: 0, size: 4, binary: false }];
+	const resolveRequests: string[] = [];
+	const fileRequests: string[] = [];
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const request = input instanceof Request ? input : new Request(input);
+		const url = new URL(request.url);
+		if (url.pathname.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
+		if (url.pathname.endsWith("/sessions")) return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", displayName: "Edit readme", harness: "codex", status: "working", mode: "chat", prs: [] }] });
+		if (url.pathname.endsWith("/conversation")) return Response.json(conversationBody({
+			turns: [{ id: "turn-1", state: "completed", requestedAt: "2026-09-28T00:00:00Z" }],
+			messages: [{ id: "message-1", turnId: "turn-1", role: "assistant", origin: "provider", text: "See [the other readme](/other-repo/README.md).", sequence: 1, revision: 0, streaming: false, createdAt: "2026-09-28T00:00:01Z" }],
+		}));
+		if (url.pathname.endsWith("/workspace/manifest")) return Response.json({ sessionId: "session-1", workspaceVersion: "version-1", files, sections: { committed: [], staged: [], unstaged: files, untracked: [] }, commits: [], summary: { additions: 1, deletions: 0, files: 1 }, truncated: false });
+		if (url.pathname.endsWith("/workspace/history")) return Response.json({ sessionId: "session-1", commits: [] });
+		if (url.pathname.endsWith("/workspace/resolve")) {
+			resolveRequests.push(url.searchParams.get("path") ?? "");
+			return resolveResponse();
+		}
+		if (url.pathname.endsWith("/workspace/file")) {
+			fileRequests.push(url.searchParams.get("path") ?? "");
+			return Response.json({ path: "README.md", diff: "", content: "session readme", binary: false, contentTruncated: false, diffTruncated: false });
+		}
+		throw new Error(`Unexpected request ${request.url}`);
+	}));
+	await connectHost("http://box-a:3001");
+	renderRemoteSession(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+	await userEvent.click(await screen.findByRole("link", { name: "the other readme" }));
+	expect(await screen.findByText("This file is outside the session's workspace, so it can't be opened here.")).toBeInTheDocument();
+	expect(resolveRequests).toEqual(["/other-repo/README.md"]);
+	expect(fileRequests).toEqual([]);
+	expect(localGet).not.toHaveBeenCalled();
+});
+
+it("baselines previews separately when the same session ID is viewed on another host", async () => {
+	remoteConnect.mockImplementation(async (url: string) => url.includes("box-b")
+		? { hostId: "box-b", label: "Box B", url, base: "http://127.0.0.1:4001" }
+		: { hostId: "box-a", label: "Box A", url, base: "http://127.0.0.1:4000" });
+	const revisions = { "4000": 1, "4001": 5 };
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const url = new URL(input instanceof Request ? input.url : String(input));
+		if (url.pathname.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
+		if (url.pathname.endsWith("/sessions")) return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", mode: "chat", previewUrl: "http://127.0.0.1:4600/", previewRevision: revisions[url.port as keyof typeof revisions], prs: [] }] });
+		if (url.pathname.endsWith("/conversation")) return Response.json(conversationBody());
+		return Response.json({});
+	}));
+	await connectHost("http://box-a:3001");
+	await connectHost("http://box-b:3001");
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const view = renderRemoteSession(client);
+	await screen.findByRole("combobox", { name: "Message the agent" });
+	expect(useUiStore.getState().inspectorSessions[sessionUiKey("session-1", "box-a")]?.view).toBe("summary");
+	view.rerender(<QueryClientProvider client={client}>
+		<TooltipProvider><SessionTopbarProvider><SessionView hostId="box-b" sessionId="session-1" /></SessionTopbarProvider></TooltipProvider>
+	</QueryClientProvider>);
+	await waitFor(() => expect(client.getQueryData(remoteWorkspaceQueryKey("box-b"))).toBeDefined());
+	expect(useUiStore.getState().inspectorSessions[sessionUiKey("session-1", "box-b")]?.view).toBe("summary");
+	revisions["4001"]++;
+	await act(async () => { await client.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-b") }); });
+	await waitFor(() => expect(useUiStore.getState().inspectorSessions[sessionUiKey("session-1", "box-b")]?.view).toBe("browser"));
+	expect(useUiStore.getState().inspectorSessions[sessionUiKey("session-1", "box-a")]?.view).toBe("summary");
+	expect(useUiStore.getState().inspectorSessions["session-1"]).toBeUndefined();
+});
+
+it("automatically reveals a remote preview after session data finishes loading", async () => {
 	HTMLElement.prototype.scrollTo = vi.fn();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
 	let previewStarted = false;
@@ -360,11 +437,12 @@ it("shows a preview tab after remote session data finishes loading", async () =>
 	releaseInitialSessions();
 	await screen.findByRole("combobox", { name: "Message the agent" });
 	expect(sessionReads).toBe(1);
+	expect(useUiStore.getState().inspectorSessions[sessionUiKey("session-1", "box-a")]?.view).toBe("summary");
 	previewStarted = true;
 	await act(async () => { await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
 	await waitFor(() => expect(navigate).toHaveBeenCalledWith({ viewId: "test:remote:box-a:session-1", url: "http://ao-preview.localhost/" }));
-	await userEvent.click(screen.getByRole("button", { name: "Open inspector panel" }));
-	await userEvent.click(screen.getByRole("tab", { name: "Browser" }));
+	expect(useUiStore.getState().inspectorSessions[sessionUiKey("session-1", "box-a")]).toMatchObject({ view: "browser", isOpen: true, browserUnseen: false });
+	expect(useUiStore.getState().inspectorSessions["session-1"]).toBeUndefined();
 	await waitFor(() => expect(resolvePreview).toHaveBeenCalledWith("box-a", "session-1", "http://127.0.0.1:4600/"));
 	await waitFor(() => expect(screen.getByRole("textbox", { name: "Browser URL" })).toHaveValue("ao-preview.localhost"));
 	await waitFor(() => expect(within(screen.getByRole("tablist", { name: "Browser tabs" })).getByRole("tab", { name: "QA preview" })).toBeVisible());

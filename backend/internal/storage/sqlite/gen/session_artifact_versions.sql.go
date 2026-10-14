@@ -29,6 +29,16 @@ func (q *Queries) CountSessionArtifactVersionsBySHA(ctx context.Context, arg Cou
 	return count, err
 }
 
+const deleteSessionArtifactVersions = `-- name: DeleteSessionArtifactVersions :exec
+DELETE FROM session_artifact_versions
+WHERE session_id = ?1
+`
+
+func (q *Queries) DeleteSessionArtifactVersions(ctx context.Context, sessionID domain.SessionID) error {
+	_, err := q.db.ExecContext(ctx, deleteSessionArtifactVersions, sessionID)
+	return err
+}
+
 const deleteSessionArtifactVersionsBelow = `-- name: DeleteSessionArtifactVersionsBelow :many
 DELETE FROM session_artifact_versions
 WHERE session_id = ?1 AND path = ?2
