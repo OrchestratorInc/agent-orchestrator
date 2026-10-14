@@ -1890,6 +1890,29 @@ func TestClaudeModelsRevalidationKeepsMatchingProviderCacheOnFailure(t *testing.
 	}
 }
 
+func TestMemcodeModelsReplacePreviouslyEmptyCatalogImmediately(t *testing.T) {
+	oldCatalog := ports.AgentModelCatalog{AgentID: "memcode", SelectionMode: ports.ModelSelectionCatalog, Models: []ports.AgentModelInfo{}, Source: "manual"}
+	data, err := json.Marshal(oldCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{
+		"memcode\x00": {AgentID: "memcode", BinaryVersion: "old", CatalogJSON: string(data)},
+	}}
+	discoverer := &fakeModelDiscoverer{version: "native-picker-v1", catalog: ports.AgentModelCatalog{
+		AgentID: "memcode", SelectionMode: ports.ModelSelectionCatalog,
+		Models: []ports.AgentModelInfo{{ID: "sonnet"}, {ID: "opus"}}, Source: "official-catalog",
+	}}
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("memcode", "Memcode", nil)}, cache, nil, discoverer)
+	got, err := svc.Models(context.Background(), "memcode", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Models) != 2 || got.Source != "official-catalog" {
+		t.Fatalf("catalog = %#v, want new native picker list on first read", got)
+	}
+}
+
 func TestClaudeModelsRejectProviderCacheWhenCredentialFingerprintChanges(t *testing.T) {
 	cached := ports.AgentModelCatalog{
 		AgentID: "claude-code", SelectionMode: ports.ModelSelectionCatalog,

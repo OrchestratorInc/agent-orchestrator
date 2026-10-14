@@ -355,11 +355,10 @@ func (s *Service) modelCatalog(ctx context.Context, agentID, projectID string, r
 			return ports.AgentModelCatalog{}, err
 		}
 		if ok {
-			// Claude provider model IDs are credential-scoped. Check its local
-			// discovery inputs before serving a cache hit so switching provider or
-			// credentials cannot briefly expose IDs from the previous provider.
-			// The check is local; provider discovery remains cache-first.
-			if agentID == "claude-code" && s.modelCatalogInputsChanged(ctx, agentID, projectID, cached.BinaryVersion) {
+			// Claude provider IDs are credential-scoped, and Memcode's older
+			// catalog was empty. Check local inputs before serving either cached
+			// catalog so a changed fingerprint reaches the picker immediately.
+			if (agentID == "claude-code" || agentID == "memcode") && s.modelCatalogInputsChanged(ctx, agentID, projectID, cached.BinaryVersion) {
 				return s.coalesceModelLoad(ctx, agentID, projectID, modelLoadCached)
 			}
 			cached.Catalog = applyCustomModelEntryPolicy(cached.Catalog, s.discoverer.Manual(agentID))

@@ -549,6 +549,28 @@ func TestMuseReturnsStaticCatalogWithoutStartingAgent(t *testing.T) {
 	}
 }
 
+func TestMemcodeReturnsNativePickerLabelsWithoutStartingAgent(t *testing.T) {
+	got, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{
+		AgentID: "memcode",
+		Binary:  "/missing/memcode",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Source != "official-catalog" || got.AllowCustom || len(got.Models) != 16 {
+		t.Fatalf("memcode catalog = %#v", got)
+	}
+	byID := map[string]string{}
+	for _, model := range got.Models {
+		byID[model.ID] = model.Label
+	}
+	for id, label := range map[string]string{"opus": "Opus 5.5", "sonnet": "Sonnet 5", "glm-5p3-flash": "GLM-5.3 Flash"} {
+		if byID[id] != label {
+			t.Fatalf("memcode catalog model %q = %q, want %q", id, byID[id], label)
+		}
+	}
+}
+
 func TestUnrealCatalogShowsEffectiveModelAndAllowsOverride(t *testing.T) {
 	t.Setenv("UNREAL_HARNESS_LLM_PROVIDER", "openai-codex")
 	t.Setenv("UNREAL_HARNESS_LLM_MODEL", "gpt-6-sol")
@@ -1311,5 +1333,12 @@ func TestCatalogFingerprintTracksTheDeepSeekProfile(t *testing.T) {
 	}
 	if second := CatalogFingerprint(context.Background(), "deepseek-harness", "", "", env); second == first {
 		t.Fatalf("fingerprint unchanged (%q) after the profile's model route changed", second)
+	}
+}
+
+func TestMemcodeCatalogFingerprintInvalidatesFormerEmptyCatalog(t *testing.T) {
+	got := CatalogFingerprint(context.Background(), "memcode", "", "", nil)
+	if got == BinaryVersion(context.Background(), "") {
+		t.Fatal("Memcode catalog fingerprint matches the old executable-only cache key")
 	}
 }

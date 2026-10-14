@@ -6157,6 +6157,47 @@ func (m *Manager) deliverAfterStartPrompt(ctx context.Context, agent ports.Agent
 	if err := m.waitForPromptReadiness(ctx, agent, cfg, handle); err != nil {
 		return err
 	}
+	if selector, ok := agent.(ports.AgentAfterStartCommand); ok {
+		command, err := selector.AfterStartCommand(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		if command != "" {
+			if err := m.deliverStartedInput(ctx, id, command); err != nil {
+				return err
+			}
+			if err := m.waitForAfterStartCommand(ctx, selector, cfg, handle); err != nil {
+				return err
+			}
+		}
+	}
+	return m.deliverStartedInput(ctx, id, prompt)
+}
+
+func (m *Manager) waitForAfterStartCommand(ctx context.Context, selector ports.AgentAfterStartCommand, cfg ports.LaunchConfig, handle ports.RuntimeHandle) error {
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		output, err := m.runtime.GetOutput(ctx, handle, 100)
+		if err != nil {
+			return fmt.Errorf("read native startup command output: %w", err)
+		}
+		if selector.AfterStartCommandApplied(cfg, output) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return errors.New("native startup command was not confirmed")
+		case <-ticker.C:
+		}
+	}
+}
+
+func (m *Manager) deliverStartedInput(ctx context.Context, id domain.SessionID, prompt string) error {
 	// Call Deliver directly (not the Guard.Send wrapper, which folds a suppressed
 	// outcome into nil): a freshly-spawned session can terminate or hit a
 	// permission dialog between readiness and prompt injection, and folding that

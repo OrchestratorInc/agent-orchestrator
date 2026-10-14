@@ -891,16 +891,6 @@ function TaskModelPicker({
 		);
 	}
 
-	// Memcode selects its model from its own account/endpoint configuration.
-	// Its catalog is intentionally empty and AO cannot pass a model override.
-	if (agentId === "memcode") {
-		return (
-			<span className="composer-chip composer-toolbar-option w-fit justify-start" aria-label={t("newTask.model")}>
-				<span className="truncate text-control text-foreground">{t("newTask.nativeModel", { agent: agentLabel })}</span>
-			</span>
-		);
-	}
-
 	if (catalog?.selectionMode === "mode") {
 		const options = (catalog.models ?? []).filter((item) => isConcreteModelID(item.id)).map((item) => ({
 			value: item.id,
