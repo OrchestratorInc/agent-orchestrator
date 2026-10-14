@@ -960,6 +960,19 @@ openai     gpt-5.5                     272K     128K     yes       yes
 	}
 }
 
+func TestParsePiModelsSkipsKimchiNotices(t *testing.T) {
+	got, err := parsePiModels([]byte(`[model-roles] Warning: explorer model "kimchi-dev/deepseek-v4-flash" is not available.
+provider    model                context  max-out  thinking  images
+kimchi-dev  deepseek-v4.1-flash  1.0M     512K     yes       yes
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "kimchi-dev/deepseek-v4.1-flash" {
+		t.Fatalf("models = %#v", got)
+	}
+}
+
 func TestParseJSONModelsFindsNestedModels(t *testing.T) {
 	got, err := parseJSONModels([]byte(`{"providers":[{"id":"anthropic","models":[{"modelId":"claude-sonnet","displayName":"Claude Sonnet","isDefault":true}]}]}`))
 	if err != nil {

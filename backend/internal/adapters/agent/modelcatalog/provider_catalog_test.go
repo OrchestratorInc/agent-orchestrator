@@ -108,8 +108,19 @@ func TestProviderCatalogMissingOrInvalidCacheKeepsDiscoveryUsable(t *testing.T) 
 func TestPiCustomProvidersVisibleWithoutCredentials(t *testing.T) {
 	env := providerTestEnv(t)
 	raw := `{"providers":{"local":{"models":[{"id":"org/model","name":"Local"}]},"empty":{"models":[]}}}`
-	if err := os.WriteFile(filepath.Join(env["PI_CODING_AGENT_DIR"], "models.json"), []byte(raw), 0o600); err != nil {
+	// Kimchi keeps its Pi runtime in its own harness directory, whatever
+	// PI_CODING_AGENT_DIR says.
+	kimchiDir := filepath.Join(env["HOME"], ".config", "kimchi", "harness")
+	if err := os.MkdirAll(kimchiDir, 0o755); err != nil {
 		t.Fatal(err)
+	}
+	for _, dir := range []string{env["PI_CODING_AGENT_DIR"], kimchiDir} {
+		if err := os.WriteFile(filepath.Join(dir, "models.json"), []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := localProviderCatalog(context.Background(), "kimchi", "", "", map[string]string{"HOME": t.TempDir(), "PI_CODING_AGENT_DIR": env["PI_CODING_AGENT_DIR"]}); len(got.Providers) != 0 {
+		t.Fatalf("kimchi read Pi's directory: %#v", got)
 	}
 	for _, agentID := range []string{"pi", "kimchi"} {
 		got := localProviderCatalog(context.Background(), agentID, "", "", env)
@@ -201,5 +212,51 @@ func TestOnlySettingsBrowsingListsProvidersWithoutCredentials(t *testing.T) {
 	}
 	if (Discoverer{}).CatalogFingerprint(context.Background(), request) == (Discoverer{}).CatalogFingerprint(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "opencode", Binary: binary, WorkingDir: request.WorkingDir, Env: env}) {
 		t.Fatal("task and browse catalogs share a fingerprint")
+	}
+}
+
+func TestPiInstalledCatalogReadsImportOnlyPiAIAndPrimeAgentFork(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node unavailable")
+	}
+	// Current pi-ai exports only an "import" condition, which require-style
+	// resolution rejects; Prime Agent ships its fork as "prime-agent-ai".
+	importOnly := `"type":"module","exports":{".":{"types":"./dist/index.d.ts","import":"./dist/index.js"}}`
+	for owner, aiName := range map[string]string{
+		"@earendil-works/pi-coding-agent": "@earendil-works/pi-ai",
+		"prime-agent":                     "prime-agent-ai",
+	} {
+		root := t.TempDir()
+		files := map[string]string{
+			"pkg/package.json":       `{"name":"` + owner + `","dependencies":{"@earendil-works/pi-ai":"1"}}`,
+			"pkg/dist/bundle/cli.js": "",
+			"pkg/node_modules/@earendil-works/pi-ai/package.json":             `{"name":"` + aiName + `",` + importOnly + `}`,
+			"pkg/node_modules/@earendil-works/pi-ai/dist/index.js":            "throw new Error('do not initialize the SDK');",
+			"pkg/node_modules/@earendil-works/pi-ai/dist/models.generated.js": `export const MODELS = {zai:{m:{id:"glm-5",name:"GLM-5",provider:"zai"}},radius:{}};`,
+		}
+		for name, contents := range files {
+			path := filepath.Join(root, name)
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		models := piInstalledModels(context.Background(), filepath.Join(root, "pkg/dist/bundle/cli.js"), root, nil)
+		if len(models) != 1 || models[0].ID != "zai/glm-5" {
+			t.Fatalf("%s models = %#v", owner, models)
+		}
+	}
+}
+
+func TestBrowsesAllProvidersCoversHarnessesThatReportProviders(t *testing.T) {
+	for _, agentID := range []string{"qwen", "cline", "continue", "aider", "crush", "vibe", "kimi", "autohand", "prime-agent", "opencode", "fx"} {
+		if !(Discoverer{}).BrowsesAllProviders(agentID) {
+			t.Fatalf("%s does not browse its providers", agentID)
+		}
+	}
+	if (Discoverer{}).BrowsesAllProviders("codex") {
+		t.Fatal("codex has no provider browsing")
 	}
 }

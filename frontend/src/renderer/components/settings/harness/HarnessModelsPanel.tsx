@@ -44,44 +44,43 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 	const allModels = catalog.data?.models;
 	const providers = useMemo(() => groupModelProviders(allModels ?? [], catalog.data?.configuredProviders, catalog.data?.providers), [allModels, catalog.data?.configuredProviders, catalog.data?.providers]);
 	const showProviders = providers.some((provider) => provider.id !== "");
-	// Enabled models narrow the project and New Task pickers; an empty list means all of them.
-	const { update: updateHarnessDefault, error: enabledModelsError } = useUpdateHarnessDefault(hostId);
+	// Switched-off models leave the project, New Task, and chat pickers; models the
+	// catalog adds later are offered.
+	const { update: updateHarnessDefault, error: disabledModelsError } = useUpdateHarnessDefault(hostId);
 	// The list being saved shows at once; the saved settings replace it once no save is left waiting.
-	const [enabledDraft, setEnabledDraft] = useState<{ scope: string; ids: string[] }>();
+	const [disabledDraft, setDisabledDraft] = useState<{ scope: string; ids: string[] }>();
 	const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
 	const queuedSaves = useRef(0);
-	const enabledIds = enabledDraft?.scope === scope ? enabledDraft.ids : settings?.harnessDefaults?.[agentId]?.enabledModels ?? [];
+	const savedDisabledIds = disabledDraft?.scope === scope ? disabledDraft.ids : settings?.harnessDefaults?.[agentId]?.disabledModels ?? [];
 	const allModelIds = useMemo(() => (allModels ?? []).map((model) => model.id).filter(isConcreteModelID), [allModels]);
-	const enabledSet = new Set(enabledIds);
-	// Saved ids the catalog no longer lists filter nothing, like the pickers:
-	// with none left, every model reads as shown.
-	const enabledInCatalog = allModelIds.filter((id) => enabledSet.has(id));
-	const filtered = enabledInCatalog.length > 0;
-	const isModelEnabled = (id: string) => !filtered || enabledSet.has(id);
-	const enabledCount = filtered ? enabledInCatalog.length : allModelIds.length;
-	const saveEnabledModels = (next: Set<string>) => {
-		// Disabling every model would read as "no filter", so keep at least one.
-		if (!allModelIds.some((id) => next.has(id))) return;
-		// All enabled is saved as no filter, so models the catalog adds later show up too.
-		const saved = allModelIds.every((id) => next.has(id)) ? [] : [...next];
-		setEnabledDraft({ scope, ids: saved });
+	// A list that switches off every catalog model filters nothing, like the pickers.
+	const savedDisabledSet = new Set(savedDisabledIds);
+	const allDisabled = allModelIds.length > 0 && allModelIds.every((id) => savedDisabledSet.has(id));
+	const disabledIds = allDisabled ? [] : savedDisabledIds;
+	const disabledSet = allDisabled ? new Set<string>() : savedDisabledSet;
+	const isModelEnabled = (id: string) => !disabledSet.has(id);
+	const enabledCount = allModelIds.filter(isModelEnabled).length;
+	// `keepOn` stays switched on, so Disable all leaves the pickers one model.
+	const setModelsEnabled = (ids: string[], on: boolean, keepOn?: string) => {
+		// Ids the catalog no longer lists stay saved in case it lists them again.
+		const next = new Set(disabledIds);
+		for (const id of ids) {
+			if (on) next.delete(id); else next.add(id);
+		}
+		if (keepOn) next.delete(keepOn);
+		// Pickers need a model, so keep at least one on.
+		if (allModelIds.every((id) => next.has(id))) return;
+		const saved = [...next];
+		setDisabledDraft({ scope, ids: saved });
 		queuedSaves.current += 1;
 		// One request at a time, in click order, so an older list never lands last.
 		saveQueue.current = saveQueue.current
-			.then(() => updateHarnessDefault({ agentId, enabledModels: saved }))
+			.then(() => updateHarnessDefault({ agentId, disabledModels: saved }))
 			.catch(() => undefined)
 			.finally(() => {
 				queuedSaves.current -= 1;
-				if (queuedSaves.current === 0) setEnabledDraft(undefined);
+				if (queuedSaves.current === 0) setDisabledDraft(undefined);
 			});
-	};
-	const setModelsEnabled = (ids: string[], on: boolean) => {
-		// Ids the catalog no longer lists stay saved in case it lists them again.
-		const next = new Set(filtered ? enabledIds : allModelIds);
-		for (const id of ids) {
-			if (on) next.add(id); else next.delete(id);
-		}
-		saveEnabledModels(next);
 	};
 	const initialModel = allModels?.find((model) => model.isDefault);
 	const initialProviderID = initialModel ? initialModel.provider?.trim() ?? "" : undefined;
@@ -106,12 +105,16 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 		? providerModels.filter((model) => `${model.label} ${model.id}`.toLocaleLowerCase().includes(normalizedModelSearch))
 		: providerModels;
 	const switchableModels = models.filter((model) => isConcreteModelID(model.id));
-	const visibleModelIds = new Set(switchableModels.map((model) => model.id));
-	// Pickers need at least one model, so Disable all keeps the default (or first) one on
-	// when nothing outside this list is enabled.
-	const keptOnDisable = allModelIds.some((id) => isModelEnabled(id) && !visibleModelIds.has(id))
+	// Enable all and Disable all cover every provider's models, or only the search results.
+	const bulkModelIds = normalizedModelSearch ? switchableModels.map((model) => model.id) : allModelIds;
+	const bulkModelIdSet = new Set(bulkModelIds);
+	// Pickers need at least one model, so Disable all keeps one on when nothing it leaves
+	// alone is: the one already on in view, else the default.
+	const keptOnDisable = allModelIds.some((id) => isModelEnabled(id) && !bulkModelIdSet.has(id))
 		? undefined
-		: (switchableModels.find((model) => model.isDefault) ?? switchableModels[0])?.id;
+		: (switchableModels.find((model) => model.isDefault && isModelEnabled(model.id))
+			?? switchableModels.find((model) => isModelEnabled(model.id))
+			?? switchableModels.find((model) => model.isDefault) ?? switchableModels[0])?.id;
 	const pageCount = Math.max(1, Math.ceil(models.length / MODELS_PAGE_SIZE));
 	const currentPage = Math.min(page, pageCount - 1);
 	const pageStart = currentPage * MODELS_PAGE_SIZE;
@@ -152,16 +155,16 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 		<div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
 			<h3 className="text-xs font-medium leading-4 text-settings-muted">{t("settings.harness.models.title")}</h3>
 			{allModelIds.length ? <span className="text-xs tabular-nums text-settings-muted">{t("settings.harness.models.enabledSummary", { enabled: enabledCount, total: allModelIds.length })}</span> : null}
-			{switchableModels.length > 1 ? <span className="ml-auto flex items-center gap-1">
+			{bulkModelIds.length > 1 ? <span className="ml-auto flex items-center gap-1">
 				<Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-caption"
-					disabled={switchableModels.every((model) => isModelEnabled(model.id))}
-					onClick={() => setModelsEnabled(switchableModels.map((model) => model.id), true)}>{t("settings.harness.models.enableAll")}</Button>
+					disabled={bulkModelIds.every(isModelEnabled)}
+					onClick={() => setModelsEnabled(bulkModelIds, true)}>{t("settings.harness.models.enableAll")}</Button>
 				<Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-caption"
-					disabled={!switchableModels.some((model) => model.id !== keptOnDisable && isModelEnabled(model.id))}
-					onClick={() => keptOnDisable ? saveEnabledModels(new Set([keptOnDisable])) : setModelsEnabled(switchableModels.map((model) => model.id), false)}>{t("settings.harness.models.disableAll")}</Button>
+					disabled={!bulkModelIds.some((id) => id !== keptOnDisable && isModelEnabled(id))}
+					onClick={() => setModelsEnabled(bulkModelIds, false, keptOnDisable)}>{t("settings.harness.models.disableAll")}</Button>
 			</span> : null}
 		</div>
-		{enabledModelsError ? <p role="alert" className="text-xs text-error">{enabledModelsError}</p> : null}
+		{disabledModelsError ? <p role="alert" className="text-xs text-error">{disabledModelsError}</p> : null}
 		{providerModels.length > MODELS_PAGE_SIZE ? <label className="flex h-8 shrink-0 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-2.5">
 			<Search aria-hidden="true" className="size-3.5 shrink-0 text-settings-muted" />
 			<input type="search" aria-label={t("settings.models.searchAria", { label: t("settings.harness.models.title").toLocaleLowerCase() })}

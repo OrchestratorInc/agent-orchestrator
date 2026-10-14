@@ -24,7 +24,7 @@ const providerCatalogReadLimit = 32 << 20
 // provider cache for agentID.
 func hasLocalProviderCatalog(agentID string) bool {
 	switch agentID {
-	case "opencode", "kilocode", "mimo-code", "omp", "pi", "kimchi":
+	case "opencode", "kilocode", "mimo-code", "omp", "pi", "kimchi", "prime-agent":
 		return true
 	}
 	return false
@@ -58,6 +58,10 @@ func localProviderCatalog(ctx context.Context, agentID, binary, workingDir strin
 		if agentID == "pi" {
 			result.Models = append(result.Models, piInstalledModels(ctx, binary, workingDir, env)...)
 		}
+	case "prime-agent":
+		// Prime Agent keeps no provider cache; its installed pi-ai fork lists
+		// every built-in provider's models.
+		result.Models = piInstalledModels(ctx, binary, workingDir, env)
 	}
 	return result
 }
@@ -83,12 +87,14 @@ func catalogHome(env map[string]string) string {
 }
 
 func piCatalogDir(agentID string, env map[string]string) string {
+	// Kimchi runs its embedded Pi runtime from its own harness directory and
+	// overrides PI_CODING_AGENT_DIR to point there, so Pi's directory and that
+	// variable say nothing about Kimchi's providers.
+	if agentID == "kimchi" {
+		return filepath.Join(catalogHome(env), ".config", "kimchi", "harness")
+	}
 	if dir := envValue(env, "PI_CODING_AGENT_DIR"); dir != "" {
 		return dir
-	}
-	// Kimchi's embedded Pi runtime uses the Pi agent directory too.
-	if agentID == "kimchi" {
-		agentID = "pi"
 	}
 	return filepath.Join(catalogHome(env), "."+agentID, "agent")
 }
@@ -214,13 +220,27 @@ const {readFileSync, existsSync} = await import('node:fs');
 let dir = dirname(process.argv[1]);
 while (!existsSync(join(dir, 'package.json')) && dirname(dir) !== dir) dir = dirname(dir);
 const owner = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
-const scope = owner.name === '@earendil-works/pi-coding-agent' ? '@earendil-works'
- : owner.name === '@mariozechner/pi-coding-agent' ? '@mariozechner' : undefined;
-if (!scope || !owner.dependencies?.[scope + '/pi-ai']) process.exit(1);
+const owners = new Set(['@earendil-works/pi-coding-agent', '@mariozechner/pi-coding-agent', 'prime-agent']);
+const scope = !owners.has(owner.name) ? undefined
+ : owner.dependencies?.['@earendil-works/pi-ai'] ? '@earendil-works'
+ : owner.dependencies?.['@mariozechner/pi-ai'] ? '@mariozechner' : undefined;
+if (!scope) process.exit(1);
 const req = createRequire(pathToFileURL(process.argv[1]));
-const entry = req.resolve(scope + '/pi-ai');
+let entry;
+try {
+ entry = req.resolve(scope + '/pi-ai');
+} catch {
+ // Newer pi-ai exports only an "import" condition, which require-style
+ // resolution rejects; look the package up the way Node would place it.
+ for (let at = dir; ; at = dirname(at)) {
+  const candidate = join(at, 'node_modules', scope, 'pi-ai', 'dist', 'index.js');
+  if (existsSync(candidate)) { entry = candidate; break; }
+  if (dirname(at) === at) process.exit(1);
+ }
+}
 const pkg = JSON.parse(readFileSync(join(dirname(entry), '..', 'package.json'), 'utf8'));
-if (pkg.name !== scope + '/pi-ai') process.exit(1);
+// Prime Agent ships its pi-ai fork as "prime-agent-ai" under the pi-ai name.
+if (pkg.name !== scope + '/pi-ai' && !(owner.name === 'prime-agent' && pkg.name === 'prime-agent-ai')) process.exit(1);
 const {MODELS} = await import(pathToFileURL(join(dirname(entry), 'models.generated.js')).href);
 const models = Object.values(MODELS).flatMap(group => Object.values(group)).map(m =>
  ({id: m.id, name: m.name, provider: m.provider, contextWindow: m.contextWindow, input: m.input}));

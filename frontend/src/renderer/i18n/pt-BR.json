@@ -4,6 +4,7 @@
 	"settings.harness.health.checkFailed": "Não foi possível concluir a verificação. Tente novamente ou copie os diagnósticos.",
 	"settings.harness.health.authContext": "As verificações usam o ambiente do processo do AO no host selecionado. Se o login funciona no terminal, compare o executável, a origem das credenciais e o horário da verificação abaixo. Um resultado inconclusivo não significa que você está desconectado.",
 	"settings.harness.health.authUnverified": "Credenciais não verificadas",
+	"settings.harness.health.authRenewsOnRun": "Conectado · o token é renovado na próxima execução",
 	"settings.harness.dismissAgentUpdate": "Dispensar atualização de {{agent}}",
 	"settings.harness.dismissAllUpdates": "Dispensar todas as atualizações",
 	"settings.harness.showUpdateStack": "Mostrar todas ({{count}})",

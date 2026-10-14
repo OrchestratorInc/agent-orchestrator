@@ -97,8 +97,7 @@ func NewAgentAuthDiagnostic(method, code string) AgentAuthDiagnostic {
 		d.Reason = "AO cannot directly verify the selected provider configuration."
 		d.NextStep = "Verify access using the harness on the selected host."
 	case "token_renewal_pending":
-		d.Reason = "The stored access token has expired, but a refresh token is available. AO leaves renewal to the harness."
-		d.NextStep = "Run the harness so it can renew its login, then check again."
+		d.Reason = "Signed in. The stored access token has expired; the harness renews it with its refresh token the next time it runs, so no action is needed."
 	case "provider_accepted":
 		d.Reason = "The provider accepted the selected credential."
 	case "provider_rejected":

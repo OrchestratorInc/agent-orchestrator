@@ -122,6 +122,16 @@ describe("startup harness update notice", () => {
 		expect(useUiStore.getState().settingsModal).toBe(before);
 	});
 
+	it("keeps Update all's text in the primary button colour, like Update", async () => {
+		mockUpdatableStack();
+		mountNotice();
+		const updateAll = await screen.findByRole("button", { name: "Update all" });
+		// tailwind-merge drops text-primary-foreground when given a bare custom size such as text-caption.
+		expect(updateAll.className).toContain("text-primary-foreground");
+		await userEvent.click(screen.getByRole("button", { name: "Show all (3)" }));
+		expect(screen.getByRole("button", { name: "Update all" }).className).toContain("text-primary-foreground");
+	});
+
 	it("excludes busy, login-required and unsupported harnesses from notification Update all", async () => {
 		mockUpdatableStack();
 		const { client } = mountNotice();

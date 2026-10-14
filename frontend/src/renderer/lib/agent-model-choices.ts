@@ -3,24 +3,26 @@ export function isConcreteModelID(id: string): boolean {
 }
 
 /**
- * Narrows a catalog to the models enabled in Settings → Harness → Models.
- * An empty or unset list means every model. Ids in `keep` (a model a project,
- * draft, or session already uses) stay listed so a saved choice never vanishes.
+ * Leaves out the models switched off in Settings → Harness → Models. An empty
+ * or unset list means every model, and models a catalog adds later are offered.
+ * Ids in `keep` (a model a project, draft, or session already uses) stay listed
+ * so a saved choice never vanishes. `modelID` maps an entry to its catalog id
+ * when the list names models another way (Claude's chat aliases).
  * `narrowed` is true only when some catalog model was hidden.
  */
-export function filterEnabledModels<T extends { id: string }>(
+export function filterDisabledModels<T extends { id: string }>(
 	models: T[],
-	enabled: readonly string[] | undefined,
+	disabled: readonly string[] | undefined,
 	keep: ReadonlyArray<string | undefined> = [],
+	modelID: (model: T) => string = (model) => model.id,
 ): { models: T[]; narrowed: boolean } {
-	if (!enabled?.length) return { models, narrowed: false };
-	// A list that matches nothing any more (renamed or removed models) offers the whole
-	// catalog; a kept model must not stand in for that list.
-	const enabledIDs = new Set(enabled);
-	if (!models.some((model) => enabledIDs.has(model.id))) return { models, narrowed: false };
-	const allowed = new Set([...enabled, ...keep.filter((id): id is string => !!id)]);
-	const filtered = models.filter((model) => allowed.has(model.id));
-	return filtered.length < models.length ? { models: filtered, narrowed: true } : { models, narrowed: false };
+	if (!disabled?.length) return { models, narrowed: false };
+	const kept = new Set(keep.filter((id): id is string => !!id));
+	const hidden = new Set(disabled);
+	const filtered = models.filter((model) => kept.has(model.id) || !hidden.has(modelID(model)));
+	// A picker needs a model, so a list that switches off every model offers the whole catalog.
+	if (filtered.length === 0 || filtered.length === models.length) return { models, narrowed: false };
+	return { models: filtered, narrowed: true };
 }
 
 export function isDefaultPlaceholderLabel(label: string): boolean {
@@ -79,6 +81,23 @@ export function splitClaudeModels<T extends { id: string; label: string }>(model
 	}
 	current.push(...models.filter((model) => !claudeFamilyVersion(model)));
 	return { current, other };
+}
+
+/**
+ * Claude's chat model option offers family aliases ("opus", "sonnet[1m]") and bare ids.
+ * Maps a choice to its catalog entry: an id to itself, an alias to the newest model of
+ * its family.
+ */
+export function claudeChoiceModel<T extends { id: string; label: string }>(catalog: T[]): ((value: string) => T | undefined) | undefined {
+	if (catalog.length === 0) return undefined;
+	const newest = splitClaudeModels(catalog).current;
+	return (value: string) => {
+		const id = value.replace(/\[.*?\]$/, "").toLowerCase();
+		const exact = catalog.find((model) => model.id.toLowerCase() === id);
+		if (exact) return exact;
+		return newest.find((model) => model.id.toLowerCase().includes(`-${id}-`)
+			|| agentModelDisplayLabel("claude-code", model.label).toLowerCase().startsWith(id));
+	};
 }
 
 /** A configured family alias ("sonnet") duplicates that family's newest model, so mark that model as the default instead. */

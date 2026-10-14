@@ -31,7 +31,7 @@ func (s *harnessDefaultSettingsService) SetHarnessDefault(_ context.Context, age
 	return settingssvc.Snapshot{HarnessDefaults: s.defaults}, nil
 }
 
-func TestSettingsHarnessDefaultPatchRequiresEnabledModels(t *testing.T) {
+func TestSettingsHarnessDefaultPatchRequiresDisabledModels(t *testing.T) {
 	svc := &harnessDefaultSettingsService{defaults: map[string]domain.HarnessDefault{}}
 	c := &SettingsController{Svc: svc}
 	patch := func(agent, body string) int {
@@ -46,14 +46,14 @@ func TestSettingsHarnessDefaultPatchRequiresEnabledModels(t *testing.T) {
 			t.Fatalf("body=%s status=%d", body, code)
 		}
 	}
-	if code := patch("not-an-agent", `{"enabledModels":[]}`); code != http.StatusNotFound {
+	if code := patch("not-an-agent", `{"disabledModels":[]}`); code != http.StatusNotFound {
 		t.Fatalf("unknown harness status=%d", code)
 	}
-	if code := patch("codex", `{"enabledModels":["gpt-5","gpt-5-mini"]}`); code != http.StatusOK {
-		t.Fatalf("enabled models status=%d", code)
+	if code := patch("codex", `{"disabledModels":["gpt-5","gpt-5-mini"]}`); code != http.StatusOK {
+		t.Fatalf("disabled models status=%d", code)
 	}
-	want := domain.HarnessDefault{EnabledModels: []string{"gpt-5", "gpt-5-mini"}}
+	want := domain.HarnessDefault{DisabledModels: []string{"gpt-5", "gpt-5-mini"}}
 	if got := svc.defaults["codex"]; !reflect.DeepEqual(got, want) {
-		t.Fatalf("after enabled models = %+v", got)
+		t.Fatalf("after disabled models = %+v", got)
 	}
 }

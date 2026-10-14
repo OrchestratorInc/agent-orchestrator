@@ -89,6 +89,91 @@ func TestQwenConfigDiscoveryUsesQwenHome(t *testing.T) {
 	}
 }
 
+func TestQwenBrowsingCatalogListsEveryProviderAndMarksConfiguredOnes(t *testing.T) {
+	home := t.TempDir()
+	qwenHome := filepath.Join(home, ".qwen")
+	t.Setenv("HOME", home)
+	t.Setenv("QWEN_HOME", "")
+	for _, name := range []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "ZAI_API_KEY"} {
+		t.Setenv(name, "")
+	}
+	if err := os.MkdirAll(qwenHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The key lives in settings.json's env map under the entry's envKey; Gemini
+	// has a model entry but no key, and nothing configures Anthropic.
+	if err := os.WriteFile(filepath.Join(qwenHome, "settings.json"), []byte(`{
+		"model":{"name":"GLM-5.2"},
+		"env":{"ZAI_API_KEY":"zai-test"},
+		"modelProviders":{
+			"openai":[{"id":"GLM-5.2","name":"[Z.AI] GLM-5.2","envKey":"ZAI_API_KEY"}],
+			"gemini":[{"id":"gemini-3-pro","name":"Gemini 3 Pro"}]
+		}
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	request := ports.AgentModelDiscoveryRequest{AgentID: "qwen", BrowseAll: true}
+
+	got, err := Discoverer{}.Discover(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"qwen-oauth", "openai", "openai-responses", "anthropic", "gemini", "vertex-ai"}; !reflect.DeepEqual(got.Providers, want) {
+		t.Fatalf("providers = %v, want %v", got.Providers, want)
+	}
+	if want := []string{"openai"}; !reflect.DeepEqual(got.ConfiguredProviders, want) {
+		t.Fatalf("configured providers = %v, want %v", got.ConfiguredProviders, want)
+	}
+	if len(got.Models) != 2 {
+		t.Fatalf("models = %#v", got.Models)
+	}
+
+	// A stored Qwen OAuth login and a key in Qwen's global .env count too.
+	if err := os.WriteFile(filepath.Join(qwenHome, "oauth_creds.json"), []byte(`{"access_token":"x"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(qwenHome, ".env"), []byte("export GEMINI_API_KEY='gem-test'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err = Discoverer{}.Discover(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"gemini", "openai", "qwen-oauth"}; !reflect.DeepEqual(got.ConfiguredProviders, want) {
+		t.Fatalf("configured providers = %v, want %v", got.ConfiguredProviders, want)
+	}
+
+	// Task pickers keep only the configured models, with no provider browsing.
+	task, err := Discover(context.Background(), "qwen", "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(task.Providers) != 0 || len(task.ConfiguredProviders) != 0 || len(task.Models) != 2 {
+		t.Fatalf("task catalog = %#v", task)
+	}
+}
+
+func TestAutoHandBrowsingCatalogListsItsSupportedProviders(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("AZURE_OPENAI_KEY", "")
+	dir := filepath.Join(home, ".autohand")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"provider":"zai","zai":{"model":"glm-5.1","apiKey":"zai-test"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Discoverer{}.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "autohand", BrowseAll: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Providers) != 14 || got.Providers[0] != "openrouter" || !reflect.DeepEqual(got.ConfiguredProviders, []string{"zai"}) {
+		t.Fatalf("providers = %v, configured = %v", got.Providers, got.ConfiguredProviders)
+	}
+}
+
 func TestParseContinueModels(t *testing.T) {
 	models, err := parseContinueModels([]byte(`
 models:

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterEnabledModels, foldClaudeAliasDefault, splitClaudeModels } from "./agent-model-choices";
+import { claudeChoiceModel, filterDisabledModels, foldClaudeAliasDefault, splitClaudeModels } from "./agent-model-choices";
 
 type TestModel = { id: string; label: string; isDefault?: boolean };
 const model = (label: string, id = label.toLowerCase().replace(/[ .]/g, "-"), extra: { isDefault?: boolean } = {}): TestModel => ({
@@ -60,25 +60,39 @@ describe("foldClaudeAliasDefault", () => {
 	});
 });
 
-describe("filterEnabledModels", () => {
+describe("filterDisabledModels", () => {
 	const catalog = [{ id: "a" }, { id: "b" }, { id: "c" }];
 
-	it("offers every model when nothing is enabled", () => {
-		expect(filterEnabledModels(catalog, undefined)).toEqual({ models: catalog, narrowed: false });
-		expect(filterEnabledModels(catalog, []).models).toBe(catalog);
+	it("offers every model when nothing is switched off", () => {
+		expect(filterDisabledModels(catalog, undefined)).toEqual({ models: catalog, narrowed: false });
+		expect(filterDisabledModels(catalog, []).models).toBe(catalog);
+		expect(filterDisabledModels(catalog, ["gone"])).toEqual({ models: catalog, narrowed: false });
 	});
 
-	it("keeps enabled models and the ones already in use, in catalog order", () => {
-		expect(filterEnabledModels(catalog, ["c", "a"])).toEqual({ models: [{ id: "a" }, { id: "c" }], narrowed: true });
-		expect(filterEnabledModels(catalog, ["a"], ["b", undefined]).models.map((item) => item.id)).toEqual(["a", "b"]);
+	it("leaves out switched-off models but keeps the ones already in use, in catalog order", () => {
+		expect(filterDisabledModels(catalog, ["b"])).toEqual({ models: [{ id: "a" }, { id: "c" }], narrowed: true });
+		expect(filterDisabledModels(catalog, ["b", "c"], ["b", undefined]).models.map((item) => item.id)).toEqual(["a", "b"]);
 	});
 
-	it("reports nothing narrowed when every model is enabled", () => {
-		expect(filterEnabledModels(catalog, ["a", "b", "c"])).toEqual({ models: catalog, narrowed: false });
+	it("falls back to the full catalog when every model is switched off", () => {
+		expect(filterDisabledModels(catalog, ["a", "b", "c"])).toEqual({ models: catalog, narrowed: false });
 	});
 
-	it("falls back to the full catalog when no enabled model is listed any more", () => {
-		expect(filterEnabledModels(catalog, ["gone"])).toEqual({ models: catalog, narrowed: false });
-		expect(filterEnabledModels(catalog, ["gone"], ["b"])).toEqual({ models: catalog, narrowed: false });
+	it("matches entries through modelID", () => {
+		const aliases = [{ id: "opus" }, { id: "sonnet" }];
+		expect(filterDisabledModels(aliases, ["claude-opus-5-5"], [], (item) => `claude-${item.id}-5-5`).models).toEqual([{ id: "sonnet" }]);
+	});
+});
+
+describe("claudeChoiceModel", () => {
+	const catalog = [model("Claude Opus 5.5", "claude-opus-5-5"), model("Claude Opus 4.9", "claude-opus-4-9"), model("Claude Sonnet 5.5", "claude-sonnet-5-5")];
+
+	it("maps a family alias to its newest model and an id to itself", () => {
+		const choiceModel = claudeChoiceModel(catalog)!;
+		expect(choiceModel("opus")?.id).toBe("claude-opus-5-5");
+		expect(choiceModel("sonnet[1m]")?.id).toBe("claude-sonnet-5-5");
+		expect(choiceModel("claude-opus-4-9")?.id).toBe("claude-opus-4-9");
+		expect(choiceModel("default")).toBeUndefined();
+		expect(claudeChoiceModel([])).toBeUndefined();
 	});
 });

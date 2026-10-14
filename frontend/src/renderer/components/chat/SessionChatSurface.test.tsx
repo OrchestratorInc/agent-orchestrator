@@ -358,7 +358,7 @@ describe("SessionChatSurface link routing", () => {
 		expect(screen.getByTestId("turn-settings-available")).toHaveTextContent("true");
 	});
 
-	it("offers only enabled models in a provider's model option, keeping its current value", async () => {
+	it("leaves switched-off models out of a provider's model option, keeping its current value", async () => {
 		conversationState.snapshot = { capabilities: ["config_options"], harness: "opencode" };
 		configState.loaded = true;
 		configState.options = [
@@ -372,7 +372,7 @@ describe("SessionChatSurface link routing", () => {
 			},
 		];
 		getMock.mockImplementation(async (path: string) => path === "/api/v1/settings"
-			? { data: { defaultSessionMode: "chat", chatHarnesses: [], harnessDefaults: { opencode: { enabledModels: ["model-a"] } } }, error: undefined, response: { status: 200 } }
+			? { data: { defaultSessionMode: "chat", chatHarnesses: [], harnessDefaults: { opencode: { disabledModels: ["model-b", "model-c"] } } }, error: undefined, response: { status: 200 } }
 			: { data: { switches: agentSwitchState.data }, error: undefined, response: { status: 200 } });
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 
@@ -380,6 +380,29 @@ describe("SessionChatSurface link routing", () => {
 
 		await waitFor(() => expect(screen.getByTestId("config-option-model")).toHaveTextContent("model-a,model-c"));
 		expect(screen.getByTestId("config-option-mode")).toHaveTextContent("build,plan");
+	});
+
+	it("matches Claude's family aliases to the catalog models switched off in Settings", async () => {
+		conversationState.snapshot = { capabilities: ["config_options"], harness: "claude-code" };
+		configState.loaded = true;
+		configState.options = [{
+			id: "model", name: "Model", category: "model", type: "select", currentValue: "default",
+			choices: [{ value: "default", name: "Default" }, { value: "opus", name: "Opus" }, { value: "sonnet", name: "Sonnet" }, { value: "haiku", name: "Haiku" }],
+		}];
+		getMock.mockImplementation(async (path: string) => path === "/api/v1/settings"
+			? { data: { defaultSessionMode: "chat", chatHarnesses: [], harnessDefaults: { "claude-code": { disabledModels: ["claude-opus-5-5"] } } }, error: undefined, response: { status: 200 } }
+			: path === "/api/v1/agents/{agent}/models"
+				? { data: { agentId: "claude-code", models: [
+					{ id: "claude-opus-5-5", label: "Claude Opus 5.5" },
+					{ id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
+					{ id: "claude-haiku-5-5", label: "Claude Haiku 5.5" },
+				] }, error: undefined, response: { status: 200 } }
+				: { data: { switches: agentSwitchState.data }, error: undefined, response: { status: 200 } });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+
+		render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, provider: "claude-code" }} /></Wrapper>);
+
+		await waitFor(() => expect(screen.getByTestId("config-option-model")).toHaveTextContent("default,sonnet,haiku"));
 	});
 
 	it("does not report idle work before the conversation snapshot loads", () => {

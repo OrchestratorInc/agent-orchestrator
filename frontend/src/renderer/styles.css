@@ -1622,8 +1622,9 @@ textarea,
 	background: transparent;
 }
 
-/* Open harness details own their scroll areas; the name and tabs stay in view.
-   Other settings pages retain the normal full-page scroll. */
+/* The harness list and the open harness own their scroll areas, so the page
+   itself does not scroll; the name and tabs stay in view. Other settings
+   pages, and a narrow harness list on its own, keep the normal page scroll. */
 .settings-thin-scrollbar:has([data-harness-detail]) {
 	display: flex;
 	flex-direction: column;

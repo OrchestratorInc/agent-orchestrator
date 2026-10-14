@@ -4,6 +4,7 @@
 	"settings.harness.health.checkFailed": "チェックを完了できませんでした。再試行するか、診断情報をコピーしてください。",
 	"settings.harness.health.authContext": "チェックには選択したホスト上の AO プロセスの環境を使用します。ターミナルではログインできる場合、以下の実行ファイル、認証情報の参照元、チェック時刻を比較してください。判定不能はログアウトを意味しません。",
 	"settings.harness.health.authUnverified": "認証情報は未検証",
+	"settings.harness.health.authRenewsOnRun": "接続済み · トークンは次回実行時に更新されます",
 	"settings.harness.dismissAgentUpdate": "{{agent}} の更新を閉じる",
 	"settings.harness.dismissAllUpdates": "すべての更新を閉じる",
 	"settings.harness.showUpdateStack": "すべて表示（{{count}}）",

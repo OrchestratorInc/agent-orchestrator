@@ -4,6 +4,7 @@
 	"settings.harness.health.checkFailed": "Could not complete the check. Try again or copy diagnostics.",
 	"settings.harness.health.authContext": "Checks use AO's process environment on the selected host. If login works in your terminal, compare the executable, credential source and check time below. An inconclusive check does not mean you are signed out.",
 	"settings.harness.health.authUnverified": "Credentials not verified",
+	"settings.harness.health.authRenewsOnRun": "Connected · token renews on next run",
 	"settings.harness.dismissAgentUpdate": "Dismiss {{agent}} update",
 	"settings.harness.dismissAllUpdates": "Dismiss all updates",
 	"settings.harness.showUpdateStack": "Show all ({{count}})",

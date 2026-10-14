@@ -173,7 +173,9 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		aria-label={label} onClick={onClick}><X className="size-3" aria-hidden="true" /></Button>;
 	// Several updates collapse into one summary card; Show all lists each one.
 	const summary = !isExpanded && updates.length > 1;
-	const updateAllButton = (className: string) => <Button type="button" size="sm" className={className}
+	// The caption size is written as a length: tailwind-merge reads a bare `text-caption`
+	// as a text colour and drops the button's own, leaving white text on the light fill.
+	const updateAllButton = (className: string) => <Button type="button" size="sm" className={cn(className, "text-[length:var(--font-size-caption)]")}
 		disabled={startingAll || updateAllTargets.length === 0} onClick={() => void startAllUpdates()}>
 		{startingAll ? <LoaderCircle className="size-3 animate-spin" aria-hidden="true" /> : null}
 		<span>{startingAll ? t("settings.harness.startingAllUpdates")
@@ -190,7 +192,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		{/* Above the stack, whose negative margin reaches up into this row. */}
 		{isExpanded ? <div className="relative z-20 mb-4 flex items-center justify-between gap-2">
 			<Button type="button" variant="ghost" size="sm" className="h-6 rounded-md border border-border bg-card px-2 text-caption text-settings-muted shadow-sm hover:bg-muted" aria-expanded aria-controls={stackId} onClick={() => setExpanded(false)}>{t("settings.harness.hideUpdateStack")}</Button>
-			{updateAllButton("h-6 px-2 text-caption shadow-sm")}
+			{updateAllButton("h-6 px-2 shadow-sm")}
 		</div> : null}
 		{/* flow-root keeps the stack's negative margin inside this box, so the cards behind peek out below only. */}
 		<div className="relative flow-root">
@@ -211,7 +213,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 				</div>
 				<div className="mt-1.5 flex items-center justify-between gap-2">
 					<Button type="button" size="sm" variant="outline" className="h-6 shrink-0 px-2 text-caption" aria-expanded={false} aria-controls={stackId} onClick={() => setExpanded(true)}>{t("settings.harness.showUpdateStack", { count: updates.length })}</Button>
-					{updateAllButton("h-6 shrink-0 px-2 text-caption")}
+					{updateAllButton("h-6 shrink-0 px-2")}
 				</div>
 			</article> : (isExpanded ? updates : updates.slice(0, 1)).map(({ agentId, advisory, key }) => {
 				const plan = installers.data?.find((candidate) => candidate.agentId === agentId);

@@ -4830,7 +4830,7 @@ export interface components {
             repoPath: string;
         };
         HarnessDefault: {
-            enabledModels?: string[];
+            disabledModels?: string[];
         };
         IdentityResponse: {
             apiVersion: number;
@@ -6344,7 +6344,7 @@ export interface components {
             enabled: null | boolean;
         };
         UpdateHarnessDefaultRequest: {
-            enabledModels: null | string[];
+            disabledModels: null | string[];
         };
         UpdateProjectSettingsInput: {
             config: components["schemas"]["ProjectConfig"];

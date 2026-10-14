@@ -4,6 +4,7 @@
 	"settings.harness.health.checkFailed": "La vérification n’a pas pu aboutir. Réessayez ou copiez les diagnostics.",
 	"settings.harness.health.authContext": "Les vérifications utilisent l’environnement du processus AO sur l’hôte sélectionné. Si la connexion fonctionne dans votre terminal, comparez l’exécutable, la source des identifiants et l’heure de vérification ci-dessous. Un résultat non concluant ne signifie pas que vous êtes déconnecté.",
 	"settings.harness.health.authUnverified": "Identifiants non vérifiés",
+	"settings.harness.health.authRenewsOnRun": "Connecté · le jeton se renouvelle au prochain lancement",
 	"settings.harness.dismissAgentUpdate": "Masquer la mise à jour de {{agent}}",
 	"settings.harness.dismissAllUpdates": "Masquer toutes les mises à jour",
 	"settings.harness.showUpdateStack": "Tout afficher ({{count}})",

@@ -14132,10 +14132,10 @@ components:
       type: object
     HarnessDefault:
       properties:
-        enabledModels:
+        disabledModels:
           items:
             type: string
-          maxItems: 5000
+          maxItems: 20000
           type: array
       type: object
     IdentityResponse:
@@ -18010,15 +18010,15 @@ components:
       type: object
     UpdateHarnessDefaultRequest:
       properties:
-        enabledModels:
+        disabledModels:
           items:
             type: string
-          maxItems: 5000
+          maxItems: 20000
           type:
           - "null"
           - array
       required:
-      - enabledModels
+      - disabledModels
       type: object
     UpdateProjectSettingsInput:
       properties:

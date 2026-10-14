@@ -22,7 +22,7 @@ func TestHarnessDefaultsPersistIndependentlyAndReset(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := s.SetHarnessDefault(ctx, agent, domain.HarnessDefault{EnabledModels: []string{string(agent) + "-model"}}, time.Now()); err != nil {
+			if err := s.SetHarnessDefault(ctx, agent, domain.HarnessDefault{DisabledModels: []string{string(agent) + "-model"}}, time.Now()); err != nil {
 				t.Error(err)
 			}
 		}()
@@ -32,7 +32,7 @@ func TestHarnessDefaultsPersistIndependentlyAndReset(t *testing.T) {
 	if err != nil || len(saved.HarnessDefaults) != 2 {
 		t.Fatalf("saved = %+v, %v", saved, err)
 	}
-	if !slices.Equal(saved.HarnessDefaults["codex"].EnabledModels, []string{"codex-model"}) || !slices.Equal(saved.HarnessDefaults["claude-code"].EnabledModels, []string{"claude-code-model"}) {
+	if !slices.Equal(saved.HarnessDefaults["codex"].DisabledModels, []string{"codex-model"}) || !slices.Equal(saved.HarnessDefaults["claude-code"].DisabledModels, []string{"claude-code-model"}) {
 		t.Fatalf("defaults lost values: %+v", saved.HarnessDefaults)
 	}
 	if err := s.SetHarnessDefault(ctx, domain.HarnessCodex, domain.HarnessDefault{}, time.Now()); err != nil {

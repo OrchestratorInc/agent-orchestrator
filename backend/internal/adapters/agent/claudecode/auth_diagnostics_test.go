@@ -17,7 +17,7 @@ func TestClaudeAuthDiagnosticsExplainRenewalWithoutSendingToken(t *testing.T) {
 	requests := 0
 	server := withStubValidator(t, func(w http.ResponseWriter, _ *http.Request) { requests++; w.WriteHeader(http.StatusUnauthorized) })
 	status, ok, step := (&Plugin{}).probeResolvedAuthDiagnostics(context.Background(), storedLoginContext(now.Add(-time.Minute), true, server.URL), true)
-	if !ok || status != ports.AgentAuthStatusConfigured || step.Code != "token_renewal_pending" || step.Source != "keychain" || step.NextStep == "" {
+	if !ok || status != ports.AgentAuthStatusConfigured || step.Code != "token_renewal_pending" || step.Source != "keychain" || step.NextStep != "" {
 		t.Fatalf("status=%s ok=%v step=%+v", status, ok, step)
 	}
 	if requests != 0 {

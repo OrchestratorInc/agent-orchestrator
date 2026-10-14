@@ -21,9 +21,13 @@ export function HarnessHealthTab({ details, checking, authCheckFailed, copied, o
 	const installState: { tone: HarnessTone; label: string } = installation?.state === "installed" ? { tone: "ok", label: t("settings.harness.installed") }
 		: installation?.state === "not_installed" ? { tone: "off", label: t("settings.harness.notInstalled") }
 		: { tone: "off", label: t("settings.harness.installationUnknown") };
-	const authTone: HarnessTone = authCheckFailed || readinessAgent?.authentication.freshness !== "fresh" || details.authStatus === "configured" ? "off"
-		: details.authStatus === "authorized" || details.authStatus === "not_applicable" ? "ok"
+	// An expired login token the harness renews by itself is signed in, not a problem to fix.
+	const renewsOnRun = details.authStatus === "configured" && Boolean(readinessAgent?.authentication.diagnostics?.some((step) => step.code === "token_renewal_pending"));
+	const authTone: HarnessTone = authCheckFailed || readinessAgent?.authentication.freshness !== "fresh" ? "off"
+		: renewsOnRun || details.authStatus === "authorized" || details.authStatus === "not_applicable" ? "ok"
 		: details.authStatus === "unauthorized" ? "error" : "off";
+	const authLabel = renewsOnRun ? t("settings.harness.health.authRenewsOnRun")
+		: details.authStatus === "configured" ? t("settings.harness.health.authUnverified") : details.authSummary;
 	// Only facts AO has observed: a row with nothing to report is left out rather than filled with a placeholder.
 	const credential = detectedCredential(details, t);
 	const executable = advisory?.binaryPath || details.job?.expectedDestination;
@@ -34,7 +38,7 @@ export function HarnessHealthTab({ details, checking, authCheckFailed, copied, o
 				<HarnessStateText tone={installState.tone}>{installState.label}</HarnessStateText>
 			</HarnessDetailRow>
 			{isInstalled ? <HarnessDetailRow label={t("settings.harness.health.authentication")}>
-				<HarnessStateText tone={authTone}>{details.authStatus === "configured" ? t("settings.harness.health.authUnverified") : details.authSummary}</HarnessStateText>
+				<HarnessStateText tone={authTone}>{authLabel}</HarnessStateText>
 			</HarnessDetailRow> : null}
 			{executable ? <HarnessDetailRow label={t("settings.harness.health.executable")}>
 				<span className="min-w-0 break-all font-mono text-xs text-settings-label">{executable}</span>

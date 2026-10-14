@@ -1818,10 +1818,10 @@ describe("TaskComposer", () => {
 		);
 	});
 
-	function mockEnabledModels(enabledModels: string[]) {
+	function mockDisabledModels(disabledModels: string[]) {
 		h.get.mockImplementation(async (path: string) => {
 			if (path === "/api/v1/settings") {
-				return { data: { defaultSessionMode: "tui", chatHarnesses: [], harnessDefaults: { codex: { enabledModels } } } };
+				return { data: { defaultSessionMode: "tui", chatHarnesses: [], harnessDefaults: { codex: { disabledModels } } } };
 			}
 			if (path.includes("/models")) {
 				return {
@@ -1842,7 +1842,7 @@ describe("TaskComposer", () => {
 	}
 
 	it("opens on an offered model when Settings hides the catalog default", async () => {
-		mockEnabledModels(["gpt-other"]);
+		mockDisabledModels(["gpt-default"]);
 		h.post.mockResolvedValue({ data: { workerId: "sess-offered" } });
 
 		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
@@ -1857,8 +1857,8 @@ describe("TaskComposer", () => {
 		expect(h.post.mock.calls[0][1].body).toMatchObject({ model: "gpt-other" });
 	});
 
-	it("keeps the catalog default when Settings enables every model", async () => {
-		mockEnabledModels(["gpt-default", "gpt-other"]);
+	it("keeps the catalog default when Settings switches off no model", async () => {
+		mockDisabledModels([]);
 		h.post.mockResolvedValue({ data: { workerId: "sess-all" } });
 
 		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);

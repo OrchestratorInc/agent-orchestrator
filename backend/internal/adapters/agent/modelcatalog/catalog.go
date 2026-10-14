@@ -251,6 +251,14 @@ type ClaudeFingerprintFunc func(context.Context, ports.AgentModelDiscoveryReques
 
 // Discover uses the agent-owned model surface configured for this adapter.
 func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
+	catalog, err := d.discover(ctx, request)
+	if err == nil && request.BrowseAll {
+		markBrowsedProviders(ctx, &catalog, request)
+	}
+	return catalog, err
+}
+
+func (d Discoverer) discover(ctx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
 	if request.AgentID == "fx" && request.BrowseAll {
 		return discoverFXBrowsingCatalog(ctx, request, func(ctx context.Context, binary string, args []string, dir string, env map[string]string) ([]byte, error) {
 			return modelCommand(ctx, binary, args, dir, env).CombinedOutput()
@@ -305,11 +313,13 @@ func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscov
 }
 
 // BrowsesAllProviders reports whether Settings browses a broader catalog than
-// task pickers: FX's every-provider listing, or a harness whose native
-// provider cache also lists providers without credentials. Task pickers only
-// offer what the harness can run now.
+// task pickers: FX's every-provider listing, a harness whose native provider
+// cache also lists providers without credentials, or a harness that reports
+// its supported or configured providers. Task pickers only offer what the
+// harness can run now.
 func (Discoverer) BrowsesAllProviders(agentID string) bool {
-	return agentID == "fx" || hasLocalProviderCatalog(agentID)
+	return agentID == "fx" || hasLocalProviderCatalog(agentID) ||
+		browseProviderCredentials[agentID] != nil || browseSupportedProviders[agentID] != nil
 }
 
 // opencodeCredentialEnv maps an opencode cloud credential type to the env var
@@ -484,11 +494,16 @@ func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentM
 	if request.AgentID == "fx" && request.BrowseAll {
 		return fingerprint + ":browse-v1:" + fingerprintConfigPaths([]string{fxSettingsPath(request.Env)})
 	}
+	if request.BrowseAll && (browseProviderCredentials[request.AgentID] != nil || browseSupportedProviders[request.AgentID] != nil) {
+		// Browsing catalogs cached before they marked this harness's configured
+		// providers must be rediscovered.
+		return fingerprint + ":browse-providers-v2"
+	}
 	if hasLocalProviderCatalog(request.AgentID) {
 		// Task catalogs cached before they dropped providers without
 		// credentials must be rediscovered.
 		if request.BrowseAll {
-			return fingerprint + ":browse-v1"
+			return fingerprint + ":browse-v2"
 		}
 		return fingerprint + ":configured-v1"
 	}
@@ -538,7 +553,7 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 		return base, errors.New("codex model discovery requires app-server")
 	}
 	if hasConfigDiscoverySource(agentID) {
-		return discoverConfigCatalog(agentID, workingDir, env)
+		return discoverConfigCatalog(agentID, workingDir, env, browseAll)
 	}
 	spec, ok := commandSpecs[agentID]
 	if !ok {
@@ -1296,7 +1311,9 @@ func parsePiModels(output []byte) ([]ports.AgentModelInfo, error) {
 		}
 		provider := strings.TrimSpace(fields[0])
 		modelID := strings.TrimSpace(fields[1])
-		if !looksLikeModelID(provider) || !looksLikeModelID(modelID) {
+		// Kimchi prefixes notices with a bracketed tag ("[model-roles]
+		// Warning: ..."); they are not table rows.
+		if strings.HasPrefix(provider, "[") || !looksLikeModelID(provider) || !looksLikeModelID(modelID) {
 			continue
 		}
 		id := provider + "/" + modelID

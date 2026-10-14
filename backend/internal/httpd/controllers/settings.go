@@ -158,12 +158,12 @@ func (c *SettingsController) setHarnessDefault(w http.ResponseWriter, r *http.Re
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
-	if req.EnabledModels == nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "HARNESS_DEFAULT_INVALID", "enabledModels is required; use an empty list to offer every model", nil)
+	if req.DisabledModels == nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "HARNESS_DEFAULT_INVALID", "disabledModels is required; use an empty list to offer every model", nil)
 		return
 	}
 	agent := domain.AgentHarness(chi.URLParam(r, "agent"))
-	snapshot, err := c.Svc.SetHarnessDefault(r.Context(), agent, domain.HarnessDefault{EnabledModels: *req.EnabledModels})
+	snapshot, err := c.Svc.SetHarnessDefault(r.Context(), agent, domain.HarnessDefault{DisabledModels: *req.DisabledModels})
 	if errors.Is(err, settingssvc.ErrUnknownHarness) {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "HARNESS_NOT_FOUND", err.Error(), nil)
 		return

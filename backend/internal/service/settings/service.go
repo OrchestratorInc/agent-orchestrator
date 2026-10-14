@@ -183,13 +183,13 @@ func (s *Service) ChatHarnesses(candidates []domain.AgentHarness) []domain.Agent
 	return out
 }
 
-// maxEnabledModels bounds the picker allowlist; the largest catalog (Aider via
-// LiteLLM) lists under 2,000 models.
-const maxEnabledModels = 5000
+// maxDisabledModels bounds the picker denylist; the largest catalog (OpenCode
+// via models.dev) lists under 9,000 models.
+const maxDisabledModels = 20000
 
-// normalizeEnabledModels trims and de-duplicates ids, keeping the given order.
-func normalizeEnabledModels(ids []string) ([]string, bool) {
-	if len(ids) > maxEnabledModels {
+// normalizeDisabledModels trims and de-duplicates ids, keeping the given order.
+func normalizeDisabledModels(ids []string) ([]string, bool) {
+	if len(ids) > maxDisabledModels {
 		return nil, false
 	}
 	out := make([]string, 0, len(ids))
@@ -224,11 +224,11 @@ func (s *Service) SetHarnessDefault(ctx context.Context, agent domain.AgentHarne
 	if !slices.Contains(domain.AllHarnesses, agent) {
 		return Snapshot{}, fmt.Errorf("%w %q", ErrUnknownHarness, agent)
 	}
-	enabled, ok := normalizeEnabledModels(value.EnabledModels)
+	disabled, ok := normalizeDisabledModels(value.DisabledModels)
 	if !ok {
-		return Snapshot{}, fmt.Errorf("%w: enabled models must be at most %d model ids of up to 256 characters", ErrInvalidHarnessDefault, maxEnabledModels)
+		return Snapshot{}, fmt.Errorf("%w: disabled models must be at most %d model ids of up to 256 characters", ErrInvalidHarnessDefault, maxDisabledModels)
 	}
-	value.EnabledModels = enabled
+	value.DisabledModels = disabled
 	if err := s.store.SetHarnessDefault(ctx, agent, value, s.now()); err != nil {
 		return Snapshot{}, err
 	}

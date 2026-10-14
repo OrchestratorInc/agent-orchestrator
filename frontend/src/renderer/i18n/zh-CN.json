@@ -4,6 +4,7 @@
 	"settings.harness.health.checkFailed": "无法完成检查。请重试或复制诊断信息。",
 	"settings.harness.health.authContext": "检查使用所选主机上 AO 进程的环境。如果在终端中可以登录，请比较下方的可执行文件、凭据来源和检查时间。无法确定结果并不代表你已退出登录。",
 	"settings.harness.health.authUnverified": "凭据尚未验证",
+	"settings.harness.health.authRenewsOnRun": "已连接 · 令牌将在下次运行时续期",
 	"settings.harness.dismissAgentUpdate": "关闭 {{agent}} 更新通知",
 	"settings.harness.dismissAllUpdates": "关闭所有更新通知",
 	"settings.harness.showUpdateStack": "显示全部（{{count}}）",

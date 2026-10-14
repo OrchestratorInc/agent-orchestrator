@@ -1,15 +1,15 @@
 package domain
 
 // HarnessDefault is a daemon-owned picker preference for one harness.
-// EnabledModels narrows the models clients offer in their pickers; empty means
-// every catalog model. It never changes what a session may be launched with.
-// Rows saved by earlier builds may carry model and effort keys; they are
-// ignored.
+// DisabledModels lists the models clients leave out of their pickers; empty
+// means every catalog model, and models a catalog adds later are offered. It
+// never changes what a session may be launched with. Rows saved by earlier
+// builds may carry model, effort, and enabledModels keys; they are ignored.
 type HarnessDefault struct {
-	EnabledModels []string `json:"enabledModels,omitempty" maxItems:"5000"`
+	DisabledModels []string `json:"disabledModels,omitempty" maxItems:"20000"`
 }
 
 // IsZero reports whether the preference holds nothing worth storing.
 func (d HarnessDefault) IsZero() bool {
-	return len(d.EnabledModels) == 0
+	return len(d.DisabledModels) == 0
 }

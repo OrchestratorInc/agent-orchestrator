@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, CircleArrowUp, LoaderCircle, TriangleAlert } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../../api/schema";
 import { agentAuthPlansQueryKeyForHost, probeAgentAuth, useAgentAuthPlans, useStartAgentAuth } from "../../../hooks/useAgentAuth";
@@ -270,7 +270,8 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		const detail = detailRef.current;
 		if (!detail) return;
 		focusPrimaryActionRef.current = false;
-		detail.scrollIntoView?.({ behavior: "smooth", block: "start" });
+		// No scrollIntoView: the open page always fills the dialog, whose body does not
+		// scroll, and scrolling it anyway shifts the page up with no way back.
 		const primaryAction = detail.querySelector<HTMLElement>("[data-harness-primary-action]:not(:disabled)");
 		(primaryAction ?? detail.querySelector<HTMLElement>("[role=tab][data-state=active]"))?.focus({ preventScroll: true });
 	}, [selectedAgentId]);
@@ -682,6 +683,18 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 
 	const selectedDetails = selectedAgentId ? describe(selectedAgentId) : null;
 	const detailsOpen = Boolean(selectedDetails);
+	// The list and the open page each scroll on their own, so the layout always
+	// fills the Settings body and the body itself never scrolls. Its scrolling is
+	// switched off in styles.css, but overflow: hidden keeps any earlier offset and
+	// still yields to focus or scrollIntoView, so hold the body at the top.
+	useLayoutEffect(() => {
+		const body = layoutRef.current?.closest<HTMLElement>(".settings-thin-scrollbar");
+		if (!body) return;
+		const toTop = () => { if (body.scrollTop !== 0) body.scrollTop = 0; };
+		toTop();
+		body.addEventListener("scroll", toTop);
+		return () => body.removeEventListener("scroll", toTop);
+	}, []);
 
 	return (
 		<>
@@ -692,11 +705,11 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 				</div>
 			) : null}
 
-			<div ref={layoutRef} data-harness-detail={detailsOpen ? "" : undefined} className={cn("w-full min-w-0 max-w-full", detailsOpen && "flex min-h-0 flex-1 flex-col overflow-hidden", split && detailsOpen && "grid-rows-[minmax(0,1fr)]", split && "grid grid-cols-[minmax(14rem,16rem)_minmax(0,1fr)] items-stretch overflow-clip rounded-xl border border-border bg-(--color-bg-primary)")}>
+			<div ref={layoutRef} data-harness-detail="" className={cn("relative flex w-full min-w-0 max-w-full min-h-0 flex-1 flex-col overflow-hidden", split && "grid-rows-[minmax(0,1fr)]", split && "grid grid-cols-[minmax(14rem,16rem)_minmax(0,1fr)] items-stretch overflow-clip rounded-xl border border-border bg-(--color-bg-primary)")}>
 				{split || !selectedDetails ? (
 					<div className={cn("flex w-full flex-col", split
-						? cn("sticky top-14 h-full self-start divide-y divide-border overflow-y-auto overscroll-contain bg-(--color-bg-secondary)", detailsOpen ? "static min-h-0 max-h-full" : "max-h-[calc(100dvh-10rem)]")
-						: "divide-y divide-border overflow-hidden rounded-lg border border-border")}>
+						? "relative h-full min-h-0 max-h-full divide-y divide-border overflow-y-auto overscroll-contain bg-(--color-bg-secondary)"
+						: "relative min-h-0 flex-1 divide-y divide-border overflow-y-auto overscroll-contain rounded-lg border border-border")}>
 						{rows.map((agentId) => {
 							const details = describe(agentId);
 							const selected = split && selectedAgentId === agentId;
@@ -709,7 +722,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 								aria-current={selected ? "true" : undefined}
 								className={cn(
 									"flex w-full items-center gap-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-									split ? "min-h-11 shrink-0 px-3" : "min-h-12 px-3",
+									split ? "min-h-11 shrink-0 px-3" : "min-h-12 shrink-0 px-3",
 									selected
 										? (split ? "bg-(--color-bg-tertiary) font-medium" : "bg-accent font-medium")
 										: "hover:bg-(--color-interactive-hover)",
@@ -717,6 +730,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 								data-agent={agentId}
 								onClick={() => openDetail(agentId)}
 							>
+								{/* sr-only is absolutely positioned: the list is `relative` so these stay inside its scroll box instead of stretching the app shell. */}
 								<span id={statusId} className="sr-only">{details.statusLabel}</span>
 								{/* Not-installed harnesses stay in place but recede. */}
 								<AgentAvatar className={cn("shrink-0", split ? "size-5" : "size-6", !details.isInstalled && "opacity-45 grayscale")} decorative provider={agentId} />

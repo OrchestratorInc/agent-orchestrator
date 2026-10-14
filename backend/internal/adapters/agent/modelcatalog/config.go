@@ -30,8 +30,11 @@ func hasConfigDiscoverySource(agentID string) bool {
 	}
 }
 
-func discoverConfigCatalog(agentID, workingDir string, env map[string]string) (ports.AgentModelCatalog, error) {
+func discoverConfigCatalog(agentID, workingDir string, env map[string]string, browseAll bool) (ports.AgentModelCatalog, error) {
 	base := Base(agentID)
+	if browseAll {
+		base.Providers = append([]string(nil), configProviderNames[agentID]...)
+	}
 	parser := configModelParser(agentID)
 	if parser == nil {
 		return base, fmt.Errorf("%s has no configuration model parser", agentID)
@@ -47,23 +50,36 @@ func discoverConfigCatalog(agentID, workingDir string, env map[string]string) (p
 			return base, fmt.Errorf("%s model discovery read %s: %w", agentID, path, err)
 		}
 		found = true
+		if browseAll && agentID == "qwen" {
+			base.Providers = append(base.Providers, qwenConfigProviders(raw)...)
+		}
 		parsed, err := parser(raw)
 		if err != nil {
 			return base, fmt.Errorf("%s model discovery parse %s: %w", agentID, path, err)
 		}
 		models = append(models, parsed...)
 	}
-	if !found {
+	// Browsing still lists a harness's own providers when none has a model yet.
+	if !found && len(base.Providers) == 0 {
 		return base, fmt.Errorf("%s model configuration was not found", agentID)
 	}
 	models = normalize(models)
-	if len(models) == 0 {
+	if len(models) == 0 && len(base.Providers) == 0 {
 		return base, fmt.Errorf("%s model configuration returned no models", agentID)
 	}
 	base.Models = models
+	base.Providers = uniqueProviders(base.Providers)
 	base.SelectionMode = ports.ModelSelectionCatalog
 	base.Source = "config"
 	return base, nil
+}
+
+// configProviderNames are the providers a harness itself supports, listed in
+// Harness Settings even before any of them has a model configured.
+var configProviderNames = map[string][]string{
+	"qwen": qwenAuthTypes,
+	// Autohand's CONFIG_PROVIDER_NAMES.
+	"autohand": {"openrouter", "ollama", "llamacpp", "openai", "mlx", "llmgateway", "azure", "zai", "vertexai", "xai", "cerebras", "nvidia", "deepseek", "bedrock"},
 }
 
 func configModelParser(agentID string) configParser {
@@ -97,8 +113,8 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 			paths = append(paths, filepath.Join(workingDir, ".qwen", "settings.json"))
 		}
 	case "continue":
-		if home != "" {
-			paths = append(paths, filepath.Join(home, ".continue", "config.yaml"))
+		if root := continueHomeDir(func(name string) string { return envValue(env, name) }); root != "" {
+			paths = append(paths, filepath.Join(root, "config.yaml"))
 		}
 	case "goose":
 		if root := strings.TrimSpace(env["GOOSE_PATH_ROOT"]); root != "" {

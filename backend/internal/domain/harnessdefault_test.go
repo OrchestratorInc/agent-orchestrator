@@ -6,12 +6,12 @@ import (
 	"testing"
 )
 
-func TestHarnessDefaultIgnoresRetiredModelAndEffortKeys(t *testing.T) {
+func TestHarnessDefaultIgnoresRetiredKeys(t *testing.T) {
 	var got HarnessDefault
-	if err := json.Unmarshal([]byte(`{"model":"opus","effort":"high","enabledModels":["opus"]}`), &got); err != nil {
+	if err := json.Unmarshal([]byte(`{"model":"opus","effort":"high","enabledModels":["sonnet"],"disabledModels":["opus"]}`), &got); err != nil {
 		t.Fatal(err)
 	}
-	if want := (HarnessDefault{EnabledModels: []string{"opus"}}); !reflect.DeepEqual(got, want) {
+	if want := (HarnessDefault{DisabledModels: []string{"opus"}}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
 	if !(HarnessDefault{}).IsZero() || got.IsZero() {

@@ -3271,9 +3271,9 @@ type UpdateSessionInterfaceRequest struct {
 
 // UpdateHarnessDefaultRequest replaces one harness's picker preference.
 type UpdateHarnessDefaultRequest struct {
-	// EnabledModels lists the model ids (each up to 256 characters) clients
-	// should offer in their pickers. An empty list offers every catalog model.
-	EnabledModels *[]string `json:"enabledModels" required:"true" maxItems:"5000"`
+	// DisabledModels lists the model ids (each up to 256 characters) clients
+	// should leave out of their pickers. An empty list offers every catalog model.
+	DisabledModels *[]string `json:"disabledModels" required:"true" maxItems:"20000"`
 }
 
 // UpdateCloudOfferingRequest flips the user's cloud toggle.

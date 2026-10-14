@@ -4,6 +4,7 @@
 	"settings.harness.health.checkFailed": "No se pudo completar la comprobación. Inténtalo de nuevo o copia los diagnósticos.",
 	"settings.harness.health.authContext": "Las comprobaciones usan el entorno del proceso de AO en el host seleccionado. Si el inicio de sesión funciona en tu terminal, compara el ejecutable, la fuente de credenciales y la hora de comprobación. Un resultado no concluyente no significa que hayas cerrado sesión.",
 	"settings.harness.health.authUnverified": "Credenciales sin verificar",
+	"settings.harness.health.authRenewsOnRun": "Conectado · el token se renueva en la próxima ejecución",
 	"settings.harness.dismissAgentUpdate": "Descartar actualización de {{agent}}",
 	"settings.harness.dismissAllUpdates": "Descartar todas las actualizaciones",
 	"settings.harness.showUpdateStack": "Mostrar todas ({{count}})",

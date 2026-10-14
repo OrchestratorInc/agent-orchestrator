@@ -39,6 +39,7 @@ import { useAgentSwitchProviderCatalogs } from "../../hooks/useAgentSwitchProvid
 import { useConversationPromptSuggestion } from "../../hooks/useConversationPromptSuggestion";
 import { useRememberProjectPermissions } from "../../hooks/useRememberProjectPermissions";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
+import { claudeChoiceModel } from "../../lib/agent-model-choices";
 import { isWebLink, isWorkspaceHtmlLink } from "../../lib/external-link-policy";
 import { sessionUiKey } from "../../lib/hosts";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
@@ -395,7 +396,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		() => providerModelOption?.choices.map((choice) => ({ id: choice.value })),
 		[providerModelOption],
 	);
-	const { models: offeredProviderModels } = useOfferedModels(snapshot?.harness, providerModelChoices, { hostId, keep: [providerModelOption?.currentValue] });
+	// Claude's choices are family aliases ("sonnet"); Settings names catalog ids.
+	const claudeChoiceID = useMemo(() => {
+		const choiceModel = isClaude && claudeCatalog ? claudeChoiceModel(claudeCatalog.models) : undefined;
+		return choiceModel && ((choice: { id: string }) => choiceModel(choice.id)?.id ?? choice.id);
+	}, [isClaude, claudeCatalog]);
+	const { models: offeredProviderModels } = useOfferedModels(snapshot?.harness, providerModelChoices, { hostId, keep: [providerModelOption?.currentValue], modelID: claudeChoiceID });
 	const offeredConfigOptions = useMemo(() => {
 		if (!providerModelOption) return configOptions.options;
 		const offered = new Set(offeredProviderModels.map((choice) => choice.id));

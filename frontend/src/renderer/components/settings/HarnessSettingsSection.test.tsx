@@ -434,24 +434,24 @@ describe("HarnessSettingsSection", () => {
 		expect(within(page).getByRole("button", { name: "Next models" })).toBeDisabled();
 	});
 
-	function mockModelSwitches(enabledModels: string[]) {
+	function mockModelSwitches(disabledModels: string[], catalog: { id: string; label: string; isDefault?: boolean; provider?: string }[] = [
+		{ id: "gpt-a", label: "GPT A", isDefault: true },
+		{ id: "gpt-b", label: "GPT B" },
+		{ id: "gpt-c", label: "GPT C" },
+	]) {
 		mockInstalledOperations("npm");
-		const models = { agentId: "codex", models: [
-			{ id: "gpt-a", label: "GPT A", isDefault: true, efforts: [] },
-			{ id: "gpt-b", label: "GPT B", efforts: [] },
-			{ id: "gpt-c", label: "GPT C", efforts: [] },
-		] };
-		let saved = enabledModels;
+		const models = { agentId: "codex", models: catalog.map((model) => ({ ...model, efforts: [] })) };
+		let saved = disabledModels;
 		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
 		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/models" ? { data: models } as never
-			: path === "/api/v1/settings" ? { data: { harnessDefaults: { codex: { enabledModels: saved } } } } as never
+			: path === "/api/v1/settings" ? { data: { harnessDefaults: { codex: { disabledModels: saved } } } } as never
 			: (get as (path: string, options: unknown) => Promise<never>)(path, options));
 		const post = vi.mocked(apiClient.POST).getMockImplementation()!;
 		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/models/refresh"
 			? { data: models } as never : (post as (path: string, options: unknown) => Promise<never>)(path, options));
 		const patch = vi.spyOn(apiClient, "PATCH").mockImplementation(async (_path, options) => {
-			saved = (options as { body: { enabledModels: string[] } }).body.enabledModels;
-			return { data: { harnessDefaults: { codex: { enabledModels: saved } } } } as never;
+			saved = (options as { body: { disabledModels: string[] } }).body.disabledModels;
+			return { data: { harnessDefaults: { codex: { disabledModels: saved } } } } as never;
 		});
 		return patch;
 	}
@@ -470,34 +470,51 @@ describe("HarnessSettingsSection", () => {
 		for (const label of ["GPT A", "GPT B", "GPT C"]) expect(within(page).getByRole("switch", { name: `Show ${label} in model pickers` })).toBeChecked();
 		expect(within(page).getByText("3 of 3 shown in model pickers")).toBeInTheDocument();
 		await userEvent.click(within(page).getByRole("switch", { name: "Show GPT B in model pickers" }));
-		await waitFor(() => expect(patch).toHaveBeenCalledWith("/api/v1/settings/harness-defaults/{agent}", { params: { path: { agent: "codex" } }, body: { enabledModels: ["gpt-a", "gpt-c"] } }));
+		await waitFor(() => expect(patch).toHaveBeenCalledWith("/api/v1/settings/harness-defaults/{agent}", { params: { path: { agent: "codex" } }, body: { disabledModels: ["gpt-b"] } }));
 		expect(within(page).getByRole("switch", { name: "Show GPT B in model pickers" })).not.toBeChecked();
 		expect(await within(page).findByText("2 of 3 shown in model pickers")).toBeInTheDocument();
 	});
 
-	it("reads saved models the catalog no longer lists as no filter", async () => {
-		mockModelSwitches(["retired-model"]);
-		const page = await openModels();
-		expect(await within(page).findByText("3 of 3 shown in model pickers")).toBeInTheDocument();
-		for (const label of ["GPT A", "GPT B", "GPT C"]) expect(within(page).getByRole("switch", { name: `Show ${label} in model pickers` })).toBeChecked();
+	it("ignores saved models the catalog no longer lists, and a list that switches off every model", async () => {
+		for (const disabled of [["retired-model"], ["gpt-a", "gpt-b", "gpt-c"]]) {
+			mockModelSwitches(disabled);
+			const page = await openModels();
+			expect(await within(page).findByText("3 of 3 shown in model pickers")).toBeInTheDocument();
+			for (const label of ["GPT A", "GPT B", "GPT C"]) expect(within(page).getByRole("switch", { name: `Show ${label} in model pickers` })).toBeChecked();
+			cleanup();
+		}
 	});
 
-	it("saves Enable all as no filter and keeps the default model on for Disable all", async () => {
-		const patch = mockModelSwitches(["gpt-b"]);
+	it("saves Enable all as an empty list and keeps the default model on for Disable all", async () => {
+		const patch = mockModelSwitches(["gpt-a", "gpt-c"]);
 		const page = await openModels();
 		expect(await within(page).findByText("1 of 3 shown in model pickers")).toBeInTheDocument();
 		// The last model left on cannot be switched off.
 		expect(within(page).getByRole("switch", { name: "Show GPT B in model pickers" })).toBeDisabled();
 		await userEvent.click(within(page).getByRole("button", { name: "Enable all" }));
-		await waitFor(() => expect(patch).toHaveBeenLastCalledWith("/api/v1/settings/harness-defaults/{agent}", { params: { path: { agent: "codex" } }, body: { enabledModels: [] } }));
+		await waitFor(() => expect(patch).toHaveBeenLastCalledWith("/api/v1/settings/harness-defaults/{agent}", { params: { path: { agent: "codex" } }, body: { disabledModels: [] } }));
 		expect(await within(page).findByText("3 of 3 shown in model pickers")).toBeInTheDocument();
 		expect(within(page).getByRole("button", { name: "Enable all" })).toBeDisabled();
 		await userEvent.click(within(page).getByRole("button", { name: "Disable all" }));
-		await waitFor(() => expect(patch).toHaveBeenLastCalledWith("/api/v1/settings/harness-defaults/{agent}", { params: { path: { agent: "codex" } }, body: { enabledModels: ["gpt-a"] } }));
+		await waitFor(() => expect(patch).toHaveBeenLastCalledWith("/api/v1/settings/harness-defaults/{agent}", { params: { path: { agent: "codex" } }, body: { disabledModels: ["gpt-b", "gpt-c"] } }));
 		expect(await within(page).findByText("1 of 3 shown in model pickers")).toBeInTheDocument();
 		expect(within(page).getByRole("switch", { name: "Show GPT A in model pickers" })).toBeChecked();
 		expect(within(page).getByRole("switch", { name: "Show GPT A in model pickers" })).toBeDisabled();
 		expect(within(page).getByRole("button", { name: "Disable all" })).toBeDisabled();
+	});
+
+	it("switches off every provider's models with Disable all, keeping the one on in view", async () => {
+		const patch = mockModelSwitches(["gpt-a"], [
+			{ id: "gpt-a", label: "GPT A", isDefault: true, provider: "openai" },
+			{ id: "gpt-b", label: "GPT B", provider: "openai" },
+			{ id: "claude-x", label: "Claude X", provider: "anthropic" },
+		]);
+		const page = await openModels();
+		expect(await within(page).findByText("2 of 3 shown in model pickers")).toBeInTheDocument();
+		await userEvent.click(within(page).getByRole("button", { name: "Disable all" }));
+		await waitFor(() => expect(patch).toHaveBeenLastCalledWith("/api/v1/settings/harness-defaults/{agent}", { params: { path: { agent: "codex" } }, body: { disabledModels: ["gpt-a", "claude-x"] } }));
+		expect(await within(page).findByText("1 of 3 shown in model pickers")).toBeInTheDocument();
+		expect(within(page).getByRole("switch", { name: "Show GPT B in model pickers" })).toBeChecked();
 	});
 
 	it("filters catalog by provider and resets pagination on provider change", async () => {
@@ -617,23 +634,22 @@ describe("HarnessSettingsSection", () => {
 		expect(report).toContain("Authentication attempted: 2026-10-10T11:00:00Z");
 	});
 
-	it("copies provider evidence and renewal guidance without claiming credentials are verified", async () => {
+	it("shows a login the harness renews by itself as connected and copies its provider evidence", async () => {
 		const readiness = readyCatalog();
 		Object.assign(readiness.agents[1].authentication, {
 			state: "configured", reason: "Credentials are configured but not verified.",
 			diagnostics: [{ method: "provider_validation", code: "token_renewal_pending", source: "keychain", provider: "firstParty",
-				reason: "The stored token needs renewal.", nextStep: "Run the harness, then check again.",
-				checkedAt: "2026-10-10T10:00:00Z", cached: false, durationMs: 0 }],
+				reason: "The stored token needs renewal.", checkedAt: "2026-10-10T10:00:00Z", cached: false, durationMs: 0 }],
 		});
 		mockInstalledOperations("npm", readiness);
 		renderSection();
 		const page = await findAgentRow("codex");
 		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
-		expect(within(page).getByText("Credentials not verified")).toBeInTheDocument();
+		expect(within(page).getByText("Connected · token renews on next run")).toBeInTheDocument();
+		expect(within(page).queryByText("Credentials not verified")).toBeNull();
 		expect(within(page).getByText("Detected credential")).toBeInTheDocument();
 		expect(within(page).getByText("keychain")).toBeInTheDocument();
 		expect(within(page).queryByText("The stored token needs renewal.")).toBeNull();
-		expect(within(page).queryByText("Run the harness, then check again.")).toBeNull();
 		await userEvent.click(within(page).getByRole("button", { name: "Copy diagnostics" }));
 		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
 		const report = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0];
@@ -641,7 +657,7 @@ describe("HarnessSettingsSection", () => {
 		expect(report).toContain("Checks use AO's process environment on the selected host.");
 		expect(within(page).queryByText(/An inconclusive check does not mean you are signed out/)).toBeNull();
 		expect(report).toContain("Auth check: provider_validation (token_renewal_pending)");
-		expect(report).toContain("Next step: Run the harness, then check again.");
+		expect(report).not.toContain("Next step:");
 	});
 
 	it("shows the credential the readiness check selected when the provider rejects it", async () => {
@@ -800,6 +816,39 @@ describe("HarnessSettingsSection", () => {
 			expect(await findListRow("codex")).toHaveAttribute("aria-current", "true");
 			expect(first).not.toHaveAttribute("aria-current");
 			expect(await findListRow("cursor")).toBeInTheDocument();
+		} finally {
+			window.ResizeObserver = original;
+		}
+	});
+
+	it("scrolls the side-by-side list on its own, never the Settings body, even with no harness open", async () => {
+		mockInstalledOperations("npm");
+		const original = window.ResizeObserver;
+		window.ResizeObserver = class {
+			constructor(private readonly callback: ResizeObserverCallback) {}
+			observe() { this.callback([{ contentRect: { width: 900 } } as ResizeObserverEntry], this as unknown as ResizeObserver); }
+			unobserve() {}
+			disconnect() {}
+		} as unknown as typeof ResizeObserver;
+		try {
+			const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			render(
+				<QueryClientProvider client={client}>
+					<TooltipProvider>
+						<div className="settings-thin-scrollbar" data-testid="settings-body"><HarnessSettingsSection /></div>
+					</TooltipProvider>
+				</QueryClientProvider>,
+			);
+			const body = screen.getByTestId("settings-body");
+			const row = await findListRow("codex");
+			// A search that matches nothing leaves no harness open beside the list.
+			await userEvent.type(screen.getByRole("textbox", { name: "Search harnesses" }), "no-such-harness");
+			await waitFor(() => expect(screen.queryByRole("button", { name: /codex/i })).toBeNull());
+			expect(document.querySelector("[data-harness-detail]")).not.toBeNull();
+			expect(row.isConnected).toBe(false);
+			body.scrollTop = 200;
+			fireEvent.scroll(body);
+			expect(body.scrollTop).toBe(0);
 		} finally {
 			window.ResizeObserver = original;
 		}
@@ -1336,7 +1385,32 @@ describe("HarnessSettingsSection", () => {
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "fx" } }, body: { method: "official-installer", operation: "install" } });
 	});
 
-	it("opens a targeted harness page, scrolls to it, focuses Install, and highlights it for two seconds once", async () => {
+	it("never lets the Settings body scroll on the harness page", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<QueryClientProvider client={client}>
+				<TooltipProvider>
+					<div className="settings-thin-scrollbar" data-testid="settings-body">
+						<HarnessSettingsSection />
+					</div>
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		const body = screen.getByTestId("settings-body");
+		// The list scrolls inside its own box, before and after a page opens.
+		await findListRow("codex");
+		expect(document.querySelector("[data-harness-detail]")).not.toBeNull();
+		body.scrollTop = 300;
+		fireEvent.scroll(body);
+		expect(body.scrollTop).toBe(0);
+		await findAgentRow("codex");
+		// Focus or scrollIntoView can still move an overflow: hidden body.
+		body.scrollTop = 120;
+		fireEvent.scroll(body);
+		expect(body.scrollTop).toBe(0);
+	});
+
+	it("opens a targeted harness page without scrolling the dialog, focuses Install, and highlights it for two seconds once", async () => {
 		const scrollIntoView = vi.fn();
 		const setTimeoutSpy = vi.spyOn(window, "setTimeout");
 		Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
@@ -1345,7 +1419,8 @@ describe("HarnessSettingsSection", () => {
 		const install = await within(row).findByRole("button", { name: "Install" });
 
 		await waitFor(() => expect(document.activeElement).toBe(install));
-		expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+		// The dialog body does not scroll while a page is open; scrolling it shifted the page out of view.
+		expect(scrollIntoView).not.toHaveBeenCalled();
 		expect(row).toHaveAttribute("data-focus-highlighted");
 		// The page replaces the list, so its search steps aside.
 		expect(screen.queryByRole("textbox", { name: "Search harnesses" })).toBeNull();
@@ -1362,7 +1437,7 @@ describe("HarnessSettingsSection", () => {
 				</TooltipProvider>
 			</QueryClientProvider>,
 		);
-		expect(scrollIntoView).toHaveBeenCalledTimes(1);
+		expect(scrollIntoView).not.toHaveBeenCalled();
 	});
 
 	it("focuses Login for an installed harness when authentication is required", async () => {
