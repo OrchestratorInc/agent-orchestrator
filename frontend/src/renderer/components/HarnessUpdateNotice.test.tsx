@@ -175,6 +175,24 @@ describe("startup harness update notice", () => {
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/readiness/ensure", { body: { agentIds: ["claude-code"], purpose: "display" } }));
 	});
 
+	it("reloads installer methods when the advisory confirms an owner they lacked", async () => {
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		let installerLoads = 0;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/installers") {
+				installerLoads += 1;
+				const methods = installerLoads === 1 ? [] : [{ id: "homebrew", available: true, updateAvailable: true }];
+				return { data: { agents: [{ agentId: "claude-code", methods }] } } as never;
+			}
+			if (path === "/api/v1/agents/{agent}/update-advisory") return { data: { agentId: "claude-code", status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.292", maintenanceMethod: "homebrew", source: "homebrew", checkedAt: "2026-10-07T00:00:00Z" } } as never;
+			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		mountNotice();
+		const notice = await screen.findByRole("region", { name: "Agent updates available" });
+		expect(await within(notice).findByRole("button", { name: "Update" })).toBeEnabled();
+		expect(installerLoads).toBeGreaterThan(1);
+	});
+
 	it("waits for the daemon before starting background requests", () => {
 		mountNotice(false);
 		expect(apiClient.GET).not.toHaveBeenCalled();

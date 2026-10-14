@@ -1,4 +1,4 @@
-import { queryOptions, useQueries, useQueryClient } from "@tanstack/react-query";
+import { queryOptions, useQueries, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
@@ -82,9 +82,10 @@ export function updateAdvisoryRefreshInterval(hasError = false): number {
 }
 
 export function useHarnessUpdates(installed: ReadonlySet<AgentId>, hostId?: string, enabled = true) {
+	const queryClient = useQueryClient();
 	const queries = useQueries({ queries: AGENT_OPTIONS.map((agentId) => queryOptions({
 		queryKey: updateAdvisoryQueryKey(agentId, hostId),
-		queryFn: () => fetchUpdateAdvisory(agentId, hostId),
+		queryFn: async () => syncInstallerMethods(queryClient, await fetchUpdateAdvisory(agentId, hostId), hostId),
 		enabled: enabled && installed.has(agentId),
 		staleTime: (query) => updateAdvisoryRefreshInterval(query.state.status === "error"),
 		refetchInterval: (query) => updateAdvisoryRefreshInterval(query.state.status === "error"),
@@ -93,6 +94,21 @@ export function useHarnessUpdates(installed: ReadonlySet<AgentId>, hostId?: stri
 		retry: false,
 	})) });
 	return new Map(AGENT_OPTIONS.map((agentId, index) => [agentId, queries[index]] as const));
+}
+
+/**
+ * An advisory can confirm a package owner the daemon derived after the
+ * installers list was loaded (e.g. a Homebrew formula outside the fixed
+ * methods). Reload the methods then, so Update doesn't depend on which
+ * request finished first.
+ */
+function syncInstallerMethods(queryClient: QueryClient, advisory: AgentUpdateAdvisory, hostId?: string): AgentUpdateAdvisory {
+	const methodId = maintenanceMethodId(advisory);
+	if (!methodId || !hasConfirmedHarnessUpdate(advisory)) return advisory;
+	const plans = queryClient.getQueryData<components["schemas"]["AgentInstallPlan"][]>(installerQueryKeyForHost(hostId));
+	const method = plans?.find((plan) => plan.agentId === advisory.agentId)?.methods.find((candidate) => candidate.id === methodId);
+	if (!method?.available || !method.updateAvailable) void queryClient.invalidateQueries({ queryKey: installerQueryKeyForHost(hostId), exact: true });
+	return advisory;
 }
 
 export async function fetchUpdateAdvisory(agentId: AgentId, hostId?: string, refresh = false): Promise<AgentUpdateAdvisory> {
@@ -122,7 +138,7 @@ export function useStartHarnessUpdate(hostId?: string) {
 		try {
 			const key = updateAdvisoryQueryKey(agentId, hostId);
 			await queryClient.cancelQueries({ queryKey: key });
-			const fresh = await fetchUpdateAdvisory(agentId, hostId, true);
+			const fresh = syncInstallerMethods(queryClient, await fetchUpdateAdvisory(agentId, hostId, true), hostId);
 			queryClient.setQueryData(key, fresh);
 			// No longer behind: the refreshed advisory already shows why.
 			if (!hasConfirmedHarnessUpdate(fresh) || canStart?.() === false) return {};
