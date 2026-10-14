@@ -25,7 +25,8 @@ import { useSettings } from "../hooks/useSettings";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useProviderConnections } from "../hooks/useProviderConnections";
-import { cloudAgentInfos, connectedCredentialType, credentialModelScope, isCloudHarnessConnected } from "../lib/cloud-agents";
+import type { CloudCpAgentProvider } from "../lib/cloud-cp";
+import { cloudAgentInfos } from "../lib/cloud-agents";
 import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../lib/agent-model-choices";
 import { fallbackEffort } from "../lib/effort";
 import {
@@ -381,20 +382,18 @@ export function TaskComposer({
 	);
 	const defaultWorkerAgent = rememberedAgentIsAvailable ? rememberedAgent : configuredDefaultAgent;
 	const selectedAgent = agent || defaultWorkerAgent;
-	// A cloud project is unknown to the local daemon, so its model catalog is
-	// queried agent-level (no project scope); otherwise the request 404s and the
-	// dropdown spins forever. opencode is the exception: its catalog depends on
-	// the connected provider, so scope the query by that credential type
-	// (credentialModelScope) to show the models the cloud VM will actually run.
-	// Local projects keep their real project scope.
-	const modelsProjectId = useMemo(() => {
-		if (!isCloudProject && !isStandalone) return projectId ?? "";
-		if (isCloudProject && selectedAgent === "opencode") {
-			const credentialType = connectedCredentialType(cloudConnectionsQuery.data, "opencode");
-			if (credentialType !== "") return credentialModelScope(credentialType);
-		}
-		return "";
-	}, [isCloudProject, isStandalone, projectId, selectedAgent, cloudConnectionsQuery.data]);
+	const selectedCloudConnection = cloudConnectionsQuery.data?.find(
+		(connection) => connection.provider === selectedAgent && connection.validationState === "valid",
+	);
+	useEffect(() => {
+		if (!isCloudProject) return;
+		setModel("");
+		setMode("");
+		setEffort("");
+		setModelTouched(false);
+		setEffortTouched(false);
+	}, [isCloudProject, projectId, selectedAgent, selectedCloudConnection?.id, selectedCloudConnection?.updatedAt]);
+	const modelsProjectId = !isStandalone ? projectId ?? "" : "";
 	const defaultWorkerModel =
 		projectConfig?.worker?.agentConfig?.model ?? projectConfig?.agentConfig?.model ?? "";
 	const defaultWorkerMode = projectConfig?.worker?.agentConfig?.mode ?? projectConfig?.agentConfig?.mode ?? "";
@@ -407,17 +406,47 @@ export function TaskComposer({
 		? defaultWorkerMode
 		: "";
 	// Shares the picker's query key, so this is the same fetch, not a second one.
-	const modelCatalogQuery = useQuery(agentModelsQueryOptions(selectedAgent, modelsProjectId, hostId));
+	const localModelCatalogQuery = useQuery({
+		...agentModelsQueryOptions(selectedAgent, modelsProjectId, hostId),
+		enabled: !isCloudProject && selectedAgent !== "",
+	});
+	const cloudModelCatalogQuery = useQuery({
+		queryKey: [
+			"cloud-agent-models",
+			selectedAgent,
+			selectedCloudConnection?.id ?? "",
+			selectedCloudConnection?.updatedAt ?? "",
+		],
+		queryFn: () => cloudClient.listUserAgentModels(selectedAgent as CloudCpAgentProvider),
+		enabled: isCloudProject && selectedAgent !== "" && selectedCloudConnection !== undefined,
+		staleTime: 60_000,
+		retry: false,
+	});
+	const cloudModelCatalog = useMemo<TaskComposerModelCatalog | undefined>(() => {
+		if (cloudModelCatalogQuery.isError || !cloudModelCatalogQuery.data) return undefined;
+		return {
+			allowCustom: false,
+			customModelEntry: "none",
+			selectionMode: "catalog",
+			models: cloudModelCatalogQuery.data.models.map((item) => ({
+				id: item.id,
+				label: item.displayName,
+				isDefault: item.default,
+				efforts: item.efforts,
+				defaultEffort: item.defaultEffort,
+			})),
+		};
+	}, [cloudModelCatalogQuery.data, cloudModelCatalogQuery.isError]);
 	const revalidationQuery = useQuery({
 		queryKey: [
 			"agent-model-revalidation",
 			hostId ?? "",
 			selectedAgent,
 			modelsProjectId,
-			modelCatalogQuery.data?.validatedAt ?? "",
+			localModelCatalogQuery.data?.validatedAt ?? "",
 		],
 		queryFn: () => revalidateAgentModels(selectedAgent, modelsProjectId, hostId),
-		enabled: selectedAgent !== "" && modelCatalogQuery.data?.refreshRecommended === true,
+		enabled: !isCloudProject && selectedAgent !== "" && localModelCatalogQuery.data?.refreshRecommended === true,
 		staleTime: Number.POSITIVE_INFINITY,
 		retry: false,
 	});
@@ -436,37 +465,37 @@ export function TaskComposer({
 		: undefined;
 	const modelWarningText =
 		revalidationWarning ??
-		modelCatalogQuery.data?.warning ??
-		(modelCatalogQuery.isError
-			? modelCatalogQuery.error instanceof Error
-				? modelCatalogQuery.error.message
+		(isCloudProject ? undefined : localModelCatalogQuery.data?.warning) ??
+		(isCloudProject && cloudModelCatalogQuery.isError
+			? t("settings.models.loadFailed")
+			: localModelCatalogQuery.isError
+			? localModelCatalogQuery.error instanceof Error
+				? localModelCatalogQuery.error.message
 				: t("settings.models.loadFailed")
 			: undefined);
-	// A login problem behind the catalog warning gets a plain-language notice
-	// with the fix in place. Discovery runs against this computer's login even
-	// for a cloud project, whose task runs with the cloud connection instead,
-	// so there the notice is informational and never reads as blocking.
-	const modelAuthIssue = revalidationWarning === undefined ? modelCatalogAuthIssue(modelCatalogQuery.data) : undefined;
+	const modelAuthIssue = !isCloudProject && revalidationWarning === undefined ? modelCatalogAuthIssue(localModelCatalogQuery.data) : undefined;
 	useModelCatalogAuthRecovery(selectedAgent, hostId, modelAuthIssue);
-	const modelCatalog: TaskComposerModelCatalog | undefined = modelCatalogQuery.data
+	const localModelCatalog: TaskComposerModelCatalog | undefined = localModelCatalogQuery.data
 		? {
-				allowCustom: modelCatalogQuery.data.allowCustom,
-				customModelEntry: modelCatalogQuery.data.customModelEntry,
-				models: modelCatalogQuery.data.models,
-				refreshError: modelCatalogQuery.data.refreshError,
-				refreshState: modelCatalogQuery.data.refreshState,
-				retryAt: modelCatalogQuery.data.retryAt,
-				selectionMode: modelCatalogQuery.data.selectionMode,
+				allowCustom: localModelCatalogQuery.data.allowCustom,
+				customModelEntry: localModelCatalogQuery.data.customModelEntry,
+				models: localModelCatalogQuery.data.models,
+				refreshError: localModelCatalogQuery.data.refreshError,
+				refreshState: localModelCatalogQuery.data.refreshState,
+				retryAt: localModelCatalogQuery.data.retryAt,
+				selectionMode: localModelCatalogQuery.data.selectionMode,
 			}
 		: undefined;
+	const modelCatalog = isCloudProject ? cloudModelCatalog : localModelCatalog;
 	// An unmarked first row is not evidence of what the provider will run.
-	const catalogModels = modelCatalogQuery.data?.models?.filter((item) => isConcreteModelID(item.id)) ?? [];
+	const catalogModels = modelCatalog?.models?.filter((item) => isConcreteModelID(item.id)) ?? [];
 	const catalogDefaultOption =
 		catalogModels.find((item) => item.isDefault)?.id ?? "";
-	const catalogUsesModes = modelCatalogQuery.data?.selectionMode === "mode";
+	const catalogUsesModes = modelCatalog?.selectionMode === "mode";
 	// The model this user ran most recently.
 	const lastUsedOption =
-		catalogModels
+		(localModelCatalogQuery.data?.models ?? [])
+			.filter((item) => isConcreteModelID(item.id))
 			.filter((item) => item.lastUsedAt)
 			.sort((a, b) => Date.parse(b.lastUsedAt ?? "") - Date.parse(a.lastUsedAt ?? ""))[0]?.id ?? "";
 	// With nothing remembered, run, or configured, Claude Code opens on the newest Opus.
@@ -480,14 +509,14 @@ export function TaskComposer({
 	const rememberedModelIsValid =
 		isConcreteModelID(rememberedModel) &&
 		Boolean(
-			modelCatalogQuery.data &&
-				(modelCatalogQuery.data.allowCustom || catalogModels.some((item) => item.id === rememberedModel)),
+			modelCatalog &&
+				((!isCloudProject && modelCatalog.allowCustom) || catalogModels.some((item) => item.id === rememberedModel)),
 		);
 	const rememberedModeIsValid =
 		isConcreteModelID(rememberedMode) && catalogModels.some((item) => item.id === rememberedMode);
 	const defaultModelForSelectedAgent =
 		(rememberedModelIsValid ? rememberedModel : "") ||
-		(isConcreteModelID(projectModelForSelectedAgent) ? projectModelForSelectedAgent : "") ||
+		(isConcreteModelID(projectModelForSelectedAgent) && (!isCloudProject || catalogModels.some((item) => item.id === projectModelForSelectedAgent)) ? projectModelForSelectedAgent : "") ||
 		(!catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(catalogUsesModes ? "" : catalogDefaultOption) ||
 		claudeFallbackOption;
@@ -496,11 +525,14 @@ export function TaskComposer({
 		(isConcreteModelID(projectModeForSelectedAgent) ? projectModeForSelectedAgent : "") ||
 		(catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(catalogUsesModes ? catalogDefaultOption : "");
-	const selectedModel = model || (modelTouched ? (catalogUsesModes ? "" : catalogDefaultOption) : defaultModelForSelectedAgent);
-	const selectedMode = mode || (modelTouched ? (catalogUsesModes ? catalogDefaultOption : "") : defaultModeForSelectedAgent);
+	const validExplicitModel = !isCloudProject || model === "" || catalogModels.some((item) => item.id === model) ? model : "";
+	const validExplicitMode = !isCloudProject || mode === "" || catalogModels.some((item) => item.id === mode) ? mode : "";
+	const selectedModel = validExplicitModel || (modelTouched ? (catalogUsesModes ? "" : catalogDefaultOption) : defaultModelForSelectedAgent);
+	const selectedMode = validExplicitMode || (modelTouched ? (catalogUsesModes ? catalogDefaultOption : "") : defaultModeForSelectedAgent);
 	const selectedModelOrMode = (selectedModel || selectedMode).trim();
 	const projectModelOrMode = projectModelForSelectedAgent || projectModeForSelectedAgent;
-	const requestedModel = selectedModelOrMode && selectedModelOrMode !== projectModelOrMode && (
+	const selectedCloudModelIsValid = !isCloudProject || selectedModelOrMode === "" || catalogModels.some((item) => item.id === selectedModelOrMode);
+	const requestedModel = selectedCloudModelIsValid && selectedModelOrMode && selectedModelOrMode !== projectModelOrMode && (
 		selectedModelOrMode !== catalogDefaultOption || isConcreteModelID(projectModelOrMode)
 	) ? selectedModelOrMode : undefined;
 	const rememberedEffortIsExplicit = Boolean(
@@ -531,9 +563,13 @@ export function TaskComposer({
 	// With no provider default for the reported levels AO picks one, shows it as
 	// selected, and sends it, so the picker matches what the task runs with.
 	const aoDefaultEffort = requiresTuiFallback ? undefined : fallbackEffort(effortOptions, implicitEffort);
-	const effectiveEffort = effort && effort !== "default" ? effort : aoDefaultEffort ?? "";
+	const effectiveEffort = isCloudProject
+		? effortOptions.includes(effort) ? effort : cloudDefaultEffort
+		: effort && effort !== "default" ? effort : aoDefaultEffort ?? "";
 	const requestedEffort = isCloudProject
-		? effort || cloudDefaultEffort || undefined
+		? selectedCloudModelIsValid && effectiveEffort && effortOptions.includes(effectiveEffort)
+			? effectiveEffort
+			: undefined
 		: effortTouched || rememberedEffortIsExplicit
 			? !effectiveEffort || effectiveEffort === implicitEffort ? undefined : effectiveEffort
 			: aoDefaultEffort;
@@ -555,9 +591,13 @@ export function TaskComposer({
 		[projectQuery.error, agentsQuery.error].find((cause): cause is Error => cause instanceof Error)?.message ?? settingsError ??
 			(agentsQuery.isSuccess && !agentCatalog?.agents.some(isLaunchableAgent) ? t("remote.noReadyAgent") : undefined);
 	const refreshSelectedModels = useCallback(async () => {
+		if (isCloudProject) {
+			await cloudModelCatalogQuery.refetch();
+			return;
+		}
 		const refreshed = await refreshAgentModels(selectedAgent, modelsProjectId, hostId);
 		queryClient.setQueryData(agentModelsQueryKey(selectedAgent, modelsProjectId, hostId), refreshed);
-	}, [hostId, modelsProjectId, queryClient, selectedAgent]);
+	}, [cloudModelCatalogQuery.refetch, hostId, isCloudProject, modelsProjectId, queryClient, selectedAgent]);
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	const startAgentLogin = useCallback(() => {
 		openGlobalSettings("harness", {
@@ -569,11 +609,7 @@ export function TaskComposer({
 			preserveProject: true,
 		});
 	}, [hostId, isCloudProject, openGlobalSettings, selectedAgent]);
-	// The catalog is read through this computer's login, but a cloud task runs on
-	// the cloud connection: once that is connected, this computer's login state is
-	// irrelevant to the task and the notice only confuses.
-	const cloudHarnessReady = isCloudProject && isCloudHarnessConnected(cloudConnectionsQuery.data, selectedAgent);
-	const modelWarning = modelAuthIssue && cloudHarnessReady ? undefined : modelAuthIssue ? (
+	const modelWarning = modelAuthIssue ? (
 		<ModelCatalogNotice
 			agentLabel={selectedAgentLabel}
 			issue={modelAuthIssue}
@@ -735,15 +771,16 @@ export function TaskComposer({
 				agentId: selectedAgent,
 				agentLabel: selectedAgentLabel,
 				projectId: isStandalone ? "" : (projectId ?? ""),
-				disabled: isSubmitting,
+				disabled: isSubmitting || (isCloudProject && cloudModelCatalog === undefined),
 				value: selectedModel,
 				mode: selectedMode,
 				catalog: modelCatalog,
-				fetching: modelCatalogQuery.isFetching,
+				fetching: isCloudProject ? cloudModelCatalogQuery.isFetching : localModelCatalogQuery.isFetching,
 				loading:
 					selectedAgent !== "" &&
-					modelCatalogQuery.isFetching &&
-					modelCatalogQuery.data === undefined,
+					(isCloudProject
+						? cloudConnectionsQuery.isFetching || (cloudModelCatalogQuery.isFetching && cloudModelCatalog === undefined)
+						: localModelCatalogQuery.isFetching && localModelCatalogQuery.data === undefined),
 				onModelChange: (value) => {
 					setModel(value);
 					setMode("");
@@ -764,7 +801,7 @@ export function TaskComposer({
 				},
 			}}
 			effort={{
-				disabled: isSubmitting,
+				disabled: isSubmitting || (isCloudProject && cloudModelCatalog === undefined),
 				options: effortOptions,
 				value: effectiveEffort,
 				onChange: (value) => {
@@ -793,7 +830,7 @@ export function TaskComposer({
 			renderEffortControl={(control) => <TaskEffortPicker {...control} value={control.value || cloudDefaultEffort} defaultEffort={inheritedEffort || effortModel?.defaultEffort} availability={effortAvailability} />}
 			renderModelControl={(control) => <TaskModelPicker {...control} onRefresh={refreshSelectedModels}
 				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />}
-			showEffort={!requiresTuiFallback && (effortOptions.length > 0 || Boolean(effort && effort !== "default"))}
+			showEffort={!requiresTuiFallback && (effortOptions.length > 0 || (!isCloudProject && Boolean(effort && effort !== "default")))}
 		/>
 	);
 }

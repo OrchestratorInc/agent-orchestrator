@@ -779,6 +779,16 @@ export class CloudClient {
     return response.providerConnections;
   }
 
+  listUserAgentModels(
+    provider: "claude-code" | "codex" | "cursor" | "opencode",
+    options: RequestOptions = {},
+  ): Promise<ChatModelsResponse> {
+    return this.request(
+      `/api/cloud/v1/me/providers/${encodeURIComponent(provider)}/models`,
+      options,
+    );
+  }
+
   putAgentProviderConnection(
     orgId: string,
     provider: "claude-code" | "codex" | "cursor",

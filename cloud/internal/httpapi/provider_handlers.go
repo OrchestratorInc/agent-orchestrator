@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/secrets"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -49,6 +51,10 @@ type workerCredentialAvailabilityStore interface {
 
 type userProviderCredentialStore interface {
 	UserAgentCredentialAvailable(context.Context, string, string) (bool, error)
+}
+
+type userModelCatalogSessionStore interface {
+	UserModelCatalogSession(context.Context, domain.Principal, string) (string, string, error)
 }
 
 type secretEncrypter interface {
@@ -455,6 +461,38 @@ func (s *Server) listUserProviderConnections(w http.ResponseWriter, r *http.Requ
 		items = append(items, toUserProviderConnectionResponse(connection))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"providerConnections": items})
+}
+
+func (s *Server) listUserAgentModels(w http.ResponseWriter, r *http.Request) {
+	agent := strings.TrimSpace(chi.URLParam(r, "agent"))
+	if !validAgentProvider(agent) {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "The coding agent is invalid.")
+		return
+	}
+	store, ok := s.store.(userModelCatalogSessionStore)
+	if !ok {
+		writeError(w, r, http.StatusNotImplemented, "not_implemented", "Cloud model catalogs are unavailable.")
+		return
+	}
+	orgID, sessionID, err := store.UserModelCatalogSession(r.Context(), principalFrom(r), agent)
+	if err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			writeError(w, r, http.StatusConflict, "MODEL_CATALOG_UNAVAILABLE", "Start one task with the agent default before choosing a model.")
+			return
+		}
+		s.writeStoreError(w, r, err)
+		return
+	}
+	result, ok := s.runWorkspaceRequest(w, r, orgID, sessionID, "chat.models", json.RawMessage(`{}`))
+	if !ok {
+		return
+	}
+	var response worker.ChatModelsResponse
+	if err := json.Unmarshal(result, &response); err != nil || response.Models == nil {
+		writeError(w, r, http.StatusBadGateway, "INVALID_WORKER_RESPONSE", "The worker returned an invalid model catalog.")
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) putUserAgentConnection(w http.ResponseWriter, r *http.Request) {
