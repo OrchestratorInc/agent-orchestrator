@@ -225,7 +225,7 @@ func requireDir(path string) error {
 func ensureRealDir(path string) error {
 	if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
 		if err := os.Mkdir(path, 0o755); err != nil && !errors.Is(err, fs.ErrExist) { //nolint:gosec // git's own mode for its metadata dirs
-			return fmt.Errorf("sandbox git dir %s: %w", path, err)
+			return fmt.Errorf("sandbox mountpoint %s: %w", path, err)
 		}
 	}
 	return requireDir(path)
@@ -254,10 +254,16 @@ func ensureEmptyFile(path string) error {
 }
 
 // requireMountSources fails before `docker run`, because --mount does not
-// create a missing bind source.
+// create a missing bind source. Tmpfs mountpoints are created as the host
+// user and must be real directories: Docker would otherwise create a missing
+// one as root on a native Linux engine, or follow one the agent replaced
+// with a symlink.
 func requireMountSources(mounts []mount) error {
 	for _, m := range mounts {
 		if m.Tmpfs {
+			if err := ensureRealDir(m.Path); err != nil {
+				return err
+			}
 			continue
 		}
 		if _, err := os.Stat(m.Path); err != nil {

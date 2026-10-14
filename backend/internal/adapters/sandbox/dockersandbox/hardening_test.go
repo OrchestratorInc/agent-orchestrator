@@ -172,9 +172,32 @@ func TestEnsureSharedHidesOrchestratorWorktree(t *testing.T) {
 	if _, err := s.Ensure(context.Background(), req); err != nil {
 		t.Fatal(err)
 	}
-	want := "--mount type=tmpfs,destination=" + filepath.Join(data, "worktrees", "p", "orchestrator") + ",readonly"
+	orch := filepath.Join(data, "worktrees", "p", "orchestrator")
+	want := "--mount type=tmpfs,destination=" + orch + ",readonly"
 	if !strings.Contains(runCall(t, fr), want) {
 		t.Fatalf("shared run args missing %q:\n%s", want, runCall(t, fr))
+	}
+	// AO creates the mountpoint as the host user, so a native Linux engine
+	// never creates it root-owned in the managed worktree root.
+	if fi, err := os.Lstat(orch); err != nil || !fi.IsDir() {
+		t.Fatalf("orchestrator mountpoint not created: %v", err)
+	}
+}
+
+// The agent can replace the orchestrator mountpoint, which sits in its
+// writable work root, with a symlink; Ensure must refuse to mount over it.
+func TestEnsureSharedRejectsSymlinkedOrchestratorMountpoint(t *testing.T) {
+	s, fr, data := testSandbox(t, nil)
+	req := perAgentReq(filepath.Join(data, "worktrees", "p", "s1"))
+	req.Config.Mode = domain.SandboxModeShared
+	if err := os.Symlink(t.TempDir(), filepath.Join(data, "worktrees", "p", "orchestrator")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Ensure(context.Background(), req); !errors.Is(err, ports.ErrSandboxMisconfigured) {
+		t.Fatalf("err = %v, want ErrSandboxMisconfigured", err)
+	}
+	if countCalls(fr, " run -d ") != 0 {
+		t.Fatalf("container started over a symlinked mountpoint:\n%s", strings.Join(fr.calls, "\n"))
 	}
 }
 
