@@ -5416,8 +5416,17 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
+        SessionBranchCommit: {
+            /** Format: date-time */
+            committedAt: string;
+            sha: string;
+            subject: string;
+        };
         SessionBranchState: {
+            behind: number;
             commits: number;
+            conflicts: boolean;
+            lastCommit?: components["schemas"]["SessionBranchCommit"];
             remoteBranch?: string;
             unpushed: number;
         };

@@ -462,6 +462,64 @@ describe("SessionInspector tabs", () => {
     expect(screen.getByText("workspace file review")).toBeInTheDocument();
   });
 
+  it("folds the pinned toggle and bell into the ⋮ menu when they would cover the field", async () => {
+    // jsdom has no layout: give the topbar a field that leaves the trailing
+    // column 50px, less than the 100px the ⋮ and pinned controls need.
+    const rect = (left: number, right: number) =>
+      ({ left, right, width: right - left, top: 0, bottom: 40, height: 40, x: left, y: 0, toJSON: () => ({}) }) as DOMRect;
+    const spy = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this.classList.contains("session-inspector__trailing")) return rect(300, 400);
+      if (this.classList.contains("files-panel__topbar-host")) return rect(100, 350);
+      if (this.querySelector(":scope > .session-inspector__trailing")) return rect(0, 400);
+      return rect(0, 0);
+    });
+    const onFold = vi.fn();
+    const onToggleInspector = vi.fn();
+    const onOpenNotifications = vi.fn();
+    try {
+      renderWithQuery(
+        <SessionInspector
+          filesView={<div>workspace file review</div>}
+          notificationsUnread={2}
+          onOpenNotifications={onOpenNotifications}
+          onPinnedActionsFoldChange={onFold}
+          onToggleInspector={onToggleInspector}
+          session={session([])}
+          view="files"
+        />,
+      );
+
+      await waitFor(() => expect(onFold).toHaveBeenLastCalledWith(true));
+      await userEvent.click(screen.getByRole("button", { name: "More" }));
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Close inspector panel" }));
+      expect(onToggleInspector).toHaveBeenCalledTimes(1);
+
+      await userEvent.click(screen.getByRole("button", { name: "More" }));
+      await userEvent.click(await screen.findByRole("menuitem", { name: /2 unread/ }));
+      await waitFor(() => expect(onOpenNotifications).toHaveBeenCalledTimes(1));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("keeps the pinned controls when the trailing column has room", async () => {
+    const onFold = vi.fn();
+    renderWithQuery(
+      <SessionInspector
+        filesView={<div>workspace file review</div>}
+        onPinnedActionsFoldChange={onFold}
+        onToggleInspector={vi.fn()}
+        session={session([])}
+        view="files"
+      />,
+    );
+
+    await waitFor(() => expect(onFold).toHaveBeenCalled());
+    expect(onFold).not.toHaveBeenCalledWith(true);
+    await userEvent.click(screen.getByRole("button", { name: "More" }));
+    expect(screen.queryByRole("menuitem", { name: "Close inspector panel" })).not.toBeInTheDocument();
+  });
+
   it("warms the workspace files cache before the Files tab opens", async () => {
     renderWithQuery(<SessionInspector session={session([])} />);
 
@@ -608,14 +666,14 @@ describe("SessionInspector PR section", () => {
       client.setQueryData(["project", "ws-1"], { repo: "https://gitlab.com/my-app/backend", config: {} });
     });
 
-    await screen.findByRole("link", { name: /gitlab.com\/release\/notes MR #9/ });
+    await screen.findByRole("link", { name: "Open PR #9" });
 
     const section = prSection("Pull request");
-    expect(section.getByRole("link", { name: /gitlab.com\/release\/notes MR #9/ })).toHaveAttribute("href", "https://gitlab.com/release/notes/-/merge_requests/9");
-    expect(section.getByText("Reported by worker")).toBeInTheDocument();
-    expect(section.getByText("External repository")).toBeInTheDocument();
+    expect(section.getByRole("link", { name: "Open PR #9" })).toHaveAttribute("href", "https://gitlab.com/release/notes/-/merge_requests/9");
+    expect(section.getByText("MR #9")).toBeInTheDocument();
+    expect(section.getByText(/release\/notes/)).toBeInTheDocument();
+    expect(section.getByText("Not tracked · External repository")).toBeInTheDocument();
     expect(section.getByRole("button", { name: /Linked for reference.*AO does not track checks/ })).toBeInTheDocument();
-    expect(section.getByRole("button", { name: "Copy link" })).toBeInTheDocument();
     expect(section.queryByRole("button", { name: /^Merge PR #/ })).not.toBeInTheDocument();
     expect(section.queryByText("No pull request opened yet.")).not.toBeInTheDocument();
     expect(getMock.mock.calls.filter(([path]) => path === "/api/v1/sessions/{sessionId}/pr")).toHaveLength(1);
@@ -638,8 +696,9 @@ describe("SessionInspector PR section", () => {
       client.setQueryData(["project", "ws-1"], { repo: "git@github.com:acme/repo.git", config: {} });
     });
 
-    await screen.findByRole("link", { name: /github.com\/acme\/repo PR #9/ });
-    expect(prSection("Pull request").queryByText("External repository")).not.toBeInTheDocument();
+    await screen.findByRole("link", { name: "Open PR #9" });
+    expect(prSection("Pull request").getByText("Not tracked")).toBeInTheDocument();
+    expect(prSection("Pull request").queryByText(/External repository/)).not.toBeInTheDocument();
   });
 
   it("renders one card per PR, ordered actionable-first, when a session owns a stack", () => {
@@ -685,15 +744,9 @@ describe("SessionInspector PR section", () => {
       prSection("Pull request").getByText("Checks passing"),
     ).toBeInTheDocument();
     expect(
-      prSection("Pull request").getByRole("link", { name: "PR 7" }),
-    ).toHaveClass("text-sm");
-    expect(
-      prSection("Pull request").getByRole("link", { name: "PR 7" }),
+      prSection("Pull request").getByRole("link", { name: "Open PR #7" }),
     ).toHaveAttribute("href", "https://github.com/acme/repo/pull/7");
-    expect(prSection("Pull request").getByText("open")).toHaveClass(
-      "text-[9px]",
-      "leading-none",
-    );
+    expect(prSection("Pull request").getByText("open")).toBeInTheDocument();
     expect(
       prSection("Pull request").getByRole("button", { name: "Merge PR #7" }),
     ).toBeInTheDocument();
@@ -879,11 +932,7 @@ describe("SessionInspector PR section", () => {
     const card = prSection("Pull request")
       .getByText("PR #7")
       .closest("article") as HTMLElement;
-    expect(within(card).getByText("merged", { exact: true })).toHaveClass(
-      "border-border-strong",
-      "bg-overlay",
-      "text-success",
-    );
+    expect(within(card).getByText("merged", { exact: true })).toBeInTheDocument();
     expect(
       within(card).queryByText("Pull request merged"),
     ).not.toBeInTheDocument();
@@ -1073,10 +1122,6 @@ describe("SessionInspector PR section", () => {
       prSection("Pull requests (2)").getByRole("link", { name: "Open PR #41" }),
       prSection("Pull requests (2)").getByRole("link", { name: "Open PR #42" }),
     ];
-    expect(links[0]).toHaveClass(
-      "text-settings-label",
-      "hover:text-settings-label",
-    );
     expect(links.map((a) => a.getAttribute("href"))).toEqual([
       "https://example.com/pr/41",
       "https://example.com/pr/42",
@@ -4695,7 +4740,7 @@ describe("SessionInspector branch summary", () => {
 
     expect(await screen.findByText("2 uncommitted files")).toBeInTheDocument();
     expect(branch().getByText("feat/ns")).toBeInTheDocument();
-    expect(branch().getByText("→ main")).toBeInTheDocument();
+    expect(branch().getByText("main ←")).toBeInTheDocument();
     expect(branch().getByText("+13")).toBeInTheDocument();
     expect(within(screen.getByRole("tab", { name: "Files" })).getByText("2")).toBeInTheDocument();
 
@@ -4734,6 +4779,36 @@ describe("SessionInspector branch summary", () => {
     await waitFor(() => expect(sendCalls()).toHaveLength(1));
     expect(sendCalls()[0][1].body.message).toContain("open a draft pull request");
     expect(await screen.findByRole("button", { name: "Creating PR…" })).toBeDisabled();
+  });
+
+  it("shows the last commit and how far the branch is behind its base", async () => {
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)] });
+    renderWithQuery(
+      <SessionInspector
+        session={session([], {
+          branchState: {
+            ...pushed(2),
+            behind: 3,
+            conflicts: true,
+            lastCommit: { sha: "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0", subject: "fix sidebar spacing", committedAt: new Date().toISOString() },
+          },
+        })}
+      />,
+    );
+
+    expect(await branch().findByText("fix sidebar spacing")).toBeInTheDocument();
+    expect(branch().getByText(/^a1b2c3d · /)).toBeInTheDocument();
+    expect(await branch().findByText("3 commits behind main")).toBeInTheDocument();
+    expect(branch().getByText("conflicts")).toHaveClass("text-status-in-review");
+  });
+
+  it("omits the behind row and conflict note while the branch is current", async () => {
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)] });
+    renderWithQuery(<SessionInspector session={session([], { branchState: { ...pushed(2), behind: 0, conflicts: false } })} />);
+
+    expect(await screen.findByText("pushed")).toBeInTheDocument();
+    expect(branch().queryByText(/behind/)).not.toBeInTheDocument();
+    expect(branch().queryByText("conflicts")).not.toBeInTheDocument();
   });
 
   it("offers a plain Create PR once every commit is pushed", async () => {

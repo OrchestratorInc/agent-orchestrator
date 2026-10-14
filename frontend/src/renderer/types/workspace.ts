@@ -106,7 +106,15 @@ export type SessionProvisionStep = {
 };
 
 /** The daemon's observed branch facts. `unpushed` equals `commits` until the branch reaches its remote. */
-export type SessionBranchState = { commits: number; remoteBranch?: string; unpushed: number };
+export type SessionBranchState = {
+	commits: number;
+	remoteBranch?: string;
+	unpushed: number;
+	/** Absent from daemons that predate these facts. */
+	behind?: number;
+	conflicts?: boolean;
+	lastCommit?: { sha: string; subject: string; committedAt: string };
+};
 
 export type WorkspaceSession = {
 	workspaceCleanup?: "pending" | "removed" | "preserved_dirty" | "failed" | "not_applicable";

@@ -1587,6 +1587,54 @@ textarea,
 	height: 0;
 }
 
+/* Overlay scrollbars, app-wide. A styled native scrollbar takes layout width in
+   Chromium, so every native bar is hidden and lib/overlay-scrollbars.ts draws a
+   thumb over the content instead. The standard property wins over the
+   ::-webkit-scrollbar rules below, which stay for any context that lacks it. */
+* {
+	scrollbar-width: none !important;
+}
+
+/* Above every popover and dialog: a thumb only shows for the element being
+   scrolled or hovered, which is never covered at that moment. */
+.overlay-scrollbar-layer {
+	position: fixed;
+	inset: 0;
+	z-index: 2147483000;
+	pointer-events: none;
+	overflow: hidden;
+}
+
+.overlay-scrollbar-thumb {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 4px;
+	height: 4px;
+	border-radius: 999px;
+	background-color: color-mix(in srgb, var(--color-scrollbar) 42%, transparent);
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 150ms ease-out, background-color var(--duration-fast) ease-out;
+	will-change: transform;
+}
+
+.overlay-scrollbar-thumb[data-visible] {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.overlay-scrollbar-thumb:hover,
+.overlay-scrollbar-thumb[data-dragging] {
+	background-color: color-mix(in srgb, var(--color-scrollbar) 56%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.overlay-scrollbar-thumb {
+		transition: none;
+	}
+}
+
 .board-scrollbar::-webkit-scrollbar {
 	width: 4px;
 	height: 4px;
@@ -1647,7 +1695,8 @@ textarea,
 /* Repository pickers keep a visible scroll track so a long grant list is
    discoverable even before the user starts scrolling. */
 .repository-picker-scrollbar {
-	scrollbar-width: auto;
+	/* Beats the app-wide overlay rule; lib/overlay-scrollbars.ts skips it too. */
+	scrollbar-width: auto !important;
 	scrollbar-color: var(--color-scrollbar) color-mix(in srgb, var(--color-scrollbar) 16%, transparent);
 	scrollbar-gutter: stable;
 }
@@ -3409,6 +3458,13 @@ html.sidebar-reordering * {
 	height: var(--size-inspector-tabs);
 	align-items: center;
 	gap: var(--space-1);
+}
+
+/* Folded into the inspector's ⋮ menu: hidden but mounted, so the bell's
+   popover still opens from the window edge. */
+.session-pinned-actions[data-folded] {
+	opacity: 0;
+	pointer-events: none;
 }
 
 .session-inspector-actions-spacer {
@@ -5408,13 +5464,6 @@ body:has(#root .platform-linux) > .files-popout-overlay {
 
 .browser-panel__toolbar--annotation .browser-panel__annotation-send:not(:disabled) {
 	color: var(--primary-foreground);
-}
-
-/* The shared primary hover is a translucent wash (bg-primary/80). Over the
-   dark annotation toolbar that reads as a half-disabled button, so the Send
-   control steps its tone instead and stays solid. */
-.browser-panel__toolbar--annotation .browser-panel__annotation-send:not(:disabled):hover {
-	background-color: color-mix(in oklch, var(--primary) 90%, var(--background));
 }
 
 .browser-panel__toolbar--annotation .browser-panel__annotation-send:disabled {

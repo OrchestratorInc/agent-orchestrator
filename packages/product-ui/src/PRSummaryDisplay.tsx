@@ -386,14 +386,15 @@ function SummaryLink({
 export function prBranchRange(
 	pr: Pick<PRSummaryMetadata, "sourceBranch" | "targetBranch">,
 ): string | undefined {
+	// GitHub order: base ← head.
 	if (pr.sourceBranch && pr.targetBranch) {
-		return `${pr.sourceBranch} → ${pr.targetBranch}`;
+		return `${pr.targetBranch} ← ${pr.sourceBranch}`;
 	}
 	if (pr.sourceBranch) {
 		return pr.sourceBranch;
 	}
 	if (pr.targetBranch) {
-		return `→ ${pr.targetBranch}`;
+		return `${pr.targetBranch} ←`;
 	}
 	return undefined;
 }

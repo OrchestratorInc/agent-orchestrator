@@ -19,7 +19,6 @@ import type {
 	PRSummaryMetadata,
 } from "./pull-request-models";
 import { scmUserAvatarUrl } from "./scm-avatar";
-import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { cn } from "./utils";
 import { UserAvatar } from "./UserAvatar";
 
@@ -72,11 +71,6 @@ export function SessionInspectorShellView({
 	summaryView?: ReactNode;
 	tabs: InspectorTab[];
 }) {
-	const prefersReducedMotion = useReducedMotion();
-	const tabIndicatorTransition = prefersReducedMotion
-		? { duration: 0 }
-		: { type: "spring" as const, duration: 0.3, bounce: 0 };
-
 	if (loadingText) {
 		return (
 			<aside className={inspectorShellClass} aria-label={ariaLabel}>
@@ -86,6 +80,8 @@ export function SessionInspectorShellView({
 			</aside>
 		);
 	}
+
+	const scrollableBody = activeView === "summary" || activeView === "reviews";
 
 	const selectAdjacentTab = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
 		let nextIndex: number;
@@ -140,22 +136,14 @@ export function SessionInspectorShellView({
 								aria-selected={activeView === tab.id}
 								tabIndex={activeView === tab.id ? 0 : -1}
 								className={cn(
-									"session-inspector__tab-button relative inline-flex size-control-md shrink-0 items-center justify-center rounded-md p-0 font-semibold text-passive transition-[color] duration-fast hover:bg-interactive-hover hover:text-foreground",
-									activeView === tab.id && "text-foreground",
+									// Same chrome as the trailing TopbarButton icon actions (⋮, panel toggle, bell).
+									"session-inspector__tab-button relative inline-flex size-control-md shrink-0 items-center justify-center rounded-md p-0 text-muted-foreground transition-[transform,background-color,color] duration-fast ease-out hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 active:scale-[0.96]",
+									activeView === tab.id && "bg-interactive-active text-foreground hover:bg-interactive-active",
 								)}
 								onClick={() => onViewChange(tab.id)}
 								onKeyDown={(event) => selectAdjacentTab(event, index)}
 								title={tab.label}
 							>
-								{activeView === tab.id ? (
-									<motion.span
-										aria-hidden="true"
-										className="absolute inset-0 rounded-md bg-interactive-active"
-										initial={false}
-										layoutId="session-inspector-tab-indicator"
-										transition={tabIndicatorTransition}
-									/>
-								) : null}
 								<span className="relative z-[1] inline-flex shrink-0 [&_svg]:size-icon-md">
 									{tab.icon}
 									{tab.badge ? (
@@ -193,7 +181,7 @@ export function SessionInspectorShellView({
 				className={cn(
 					inspectorBodyBaseClass,
 					!isVisible && "invisible pointer-events-none",
-					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "artifacts" && inspectorScrollableBodyClass,
+					scrollableBody && inspectorScrollableBodyClass,
 					(activeView === "sideChat" || activeView === "artifacts") && "p-0 overflow-hidden",
 					activeView === "browser" &&
 						!browserPoppedOut &&
@@ -228,21 +216,22 @@ export function InspectorSection({
 	// Header: 6px slot + 6px button inset puts the label 12px from the edge; collapsed headers sit 4px apart.
 	return (
 		<section className="group/inspector-section flex flex-col" data-testid="inspector-section">
-			<div className="px-1.5 py-0.5">
+			{/* A heading for screen-reader navigation; preflight leaves it unstyled. */}
+			<h3 className="px-1.5 py-0.5">
 				<button
 					aria-controls={contentId}
 					aria-expanded={open}
-					className={cn(NAV_ROW_HIGHLIGHT_HOST_CLASS, "relative flex w-full items-center rounded-lg p-1.5 text-left text-muted-foreground")}
+					// No hover fill: the title brightens instead; keyboard focus keeps a ring.
+					className="flex w-full items-center rounded-lg p-1.5 text-left text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 					onClick={() => setOpen((current) => !current)}
 					type="button"
 				>
-					<NavRowHighlight />
-					<span className="relative z-[1] flex w-full min-w-0 items-center justify-between gap-2 text-sm">
+					<span className="flex w-full min-w-0 items-center justify-between gap-2 text-xs">
 						<span className="min-w-0 flex-1">{title}</span>
 						<ChevronIcon aria-hidden="true" className="size-icon-2xs shrink-0 text-passive" direction={open ? "down" : "right"} />
 					</span>
 				</button>
-			</div>
+			</h3>
 			<AnimatePresence initial={false}>
 				{open ? (
 					// Clips only while animating, so open sections never cut off action menus.

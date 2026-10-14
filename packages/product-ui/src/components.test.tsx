@@ -96,14 +96,14 @@ describe("portable leaf components", () => {
 			/>,
 		);
 
-		expect(screen.getByText("feature → main")).toBeInTheDocument();
+		expect(screen.getByText("main ← feature")).toBeInTheDocument();
 		expect(screen.getByText("2 localized-file")).toBeInTheDocument();
 		expect(screen.getByRole("link", { name: "ada" })).toHaveAttribute("href", "https://github.com/ada");
 		expect(screen.getByRole("link", { name: "ada" }).querySelector("img")).toHaveAttribute(
 			"src",
 			"https://avatars.githubusercontent.com/u/123?v=4",
 		);
-		expect(screen.getByText("feature → main")).toHaveClass("break-words");
+		expect(screen.getByText("main ← feature")).toHaveClass("break-words");
 	});
 
 	it("renders precomputed PR presentation without controller dependencies", () => {

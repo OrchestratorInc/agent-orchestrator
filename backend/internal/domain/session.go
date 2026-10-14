@@ -340,6 +340,20 @@ type SessionBranchState struct {
 	// Unpushed is how many branch commits are not on RemoteBranch. It equals
 	// Commits while RemoteBranch is empty.
 	Unpushed int `json:"unpushed"`
+	// Behind is how many base commits the branch does not have yet.
+	Behind int `json:"behind"`
+	// Conflicts reports that merging the branch into its base would conflict.
+	Conflicts bool `json:"conflicts"`
+	// LastCommit is the branch's newest commit; zero while the branch has no
+	// commits of its own.
+	LastCommit SessionBranchCommit `json:"lastCommit,omitempty,omitzero"`
+}
+
+// SessionBranchCommit summarizes one commit for display.
+type SessionBranchCommit struct {
+	SHA         string    `json:"sha"`
+	Subject     string    `json:"subject"`
+	CommittedAt time.Time `json:"committedAt"`
 }
 
 // SessionProvisionStepID names one stage of an asynchronous Chat start.

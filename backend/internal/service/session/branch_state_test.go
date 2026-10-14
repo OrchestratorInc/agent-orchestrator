@@ -44,6 +44,21 @@ func commitFile(t *testing.T, repo, name string) {
 	runGit(t, repo, "commit", "-m", "add "+name)
 }
 
+// branchFacts drops LastCommit after checking it names the branch tip, so
+// tests can compare the counted facts by value.
+func branchFacts(t *testing.T, got *domain.SessionBranchState, wantSubject string) domain.SessionBranchState {
+	t.Helper()
+	if got == nil {
+		t.Fatal("branch state is nil")
+	}
+	facts := *got
+	if facts.LastCommit.Subject != wantSubject || len(facts.LastCommit.SHA) != 40 || facts.LastCommit.CommittedAt.IsZero() {
+		t.Fatalf("last commit = %+v, want subject %q", facts.LastCommit, wantSubject)
+	}
+	facts.LastCommit = domain.SessionBranchCommit{}
+	return facts
+}
+
 func TestReconcileSessionBranchStateTracksCommitsAndPushes(t *testing.T) {
 	repo := newPushableRepo(t)
 	runGit(t, repo, "checkout", "-b", "feat/x")
@@ -55,28 +70,28 @@ func TestReconcileSessionBranchStateTracksCommitsAndPushes(t *testing.T) {
 		WorkspacePath: repo, DiffBaseRef: "refs/remotes/origin/main",
 	}}
 	svc := &Service{store: st}
-	reconcile := func(want domain.SessionBranchState) {
+	reconcile := func(want domain.SessionBranchState, subject string) {
 		t.Helper()
 		if err := svc.ReconcileSessionBranchState(context.Background(), "ao-1"); err != nil {
 			t.Fatalf("reconcile: %v", err)
 		}
-		if got := st.sessions["ao-1"].BranchState; got == nil || *got != want {
+		if got := branchFacts(t, st.sessions["ao-1"].BranchState, subject); got != want {
 			t.Fatalf("branch state = %+v, want %+v", got, want)
 		}
 	}
 
 	// Tracking origin/main is not a push: the branch itself is not on the remote.
 	runGit(t, repo, "branch", "--set-upstream-to", "origin/main")
-	reconcile(domain.SessionBranchState{Commits: 2, Unpushed: 2})
+	reconcile(domain.SessionBranchState{Commits: 2, Unpushed: 2}, "add b.go")
 
 	runGit(t, repo, "push", "-u", "origin", "feat/x")
-	reconcile(domain.SessionBranchState{Commits: 2, RemoteBranch: "origin/feat/x", Unpushed: 0})
+	reconcile(domain.SessionBranchState{Commits: 2, RemoteBranch: "origin/feat/x", Unpushed: 0}, "add b.go")
 
 	commitFile(t, repo, "c.go")
-	reconcile(domain.SessionBranchState{Commits: 3, RemoteBranch: "origin/feat/x", Unpushed: 1})
+	reconcile(domain.SessionBranchState{Commits: 3, RemoteBranch: "origin/feat/x", Unpushed: 1}, "add c.go")
 
 	writes := st.writes
-	reconcile(domain.SessionBranchState{Commits: 3, RemoteBranch: "origin/feat/x", Unpushed: 1})
+	reconcile(domain.SessionBranchState{Commits: 3, RemoteBranch: "origin/feat/x", Unpushed: 1}, "add c.go")
 	if st.writes != writes {
 		t.Fatalf("unchanged facts were rewritten (%d writes, want %d)", st.writes, writes)
 	}
@@ -98,7 +113,7 @@ func TestReconcileBranchStatesFollowsTheWorktreeBranch(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 	want := domain.SessionBranchState{Commits: 1, Unpushed: 1}
-	if got := st.sessions["s1"].BranchState; got == nil || *got != want {
+	if got := branchFacts(t, st.sessions["s1"].BranchState, "add a.go"); got != want {
 		t.Fatalf("branch state = %+v, want %+v", got, want)
 	}
 }
@@ -130,21 +145,71 @@ func TestReconcileBranchStatesRunsGitOnlyWhenTipsMove(t *testing.T) {
 		return gitCalls() - before
 	}
 
-	// One for-each-ref for the shared repository, then one commit count per
-	// session; neither branch is on the remote, so no unpushed count.
-	if got := pass(); got != 3 {
-		t.Fatalf("first pass ran %d git processes, want 3", got)
+	// One for-each-ref for the shared repository, then per session one
+	// ahead/behind count and one last-commit read. Neither branch is on the
+	// remote or behind its base, so no unpushed count or conflict check.
+	if got := pass(); got != 5 {
+		t.Fatalf("first pass ran %d git processes, want 5", got)
 	}
 	if got := pass(); got != 1 {
 		t.Fatalf("idle pass ran %d git processes, want only the for-each-ref", got)
 	}
 	commitFile(t, worktrees["s1"], "more.go")
-	if got := pass(); got != 2 {
-		t.Fatalf("pass after one commit ran %d git processes, want 2", got)
+	if got := pass(); got != 3 {
+		t.Fatalf("pass after one commit ran %d git processes, want 3", got)
 	}
 	want := domain.SessionBranchState{Commits: 2, Unpushed: 2}
-	if got := st.sessions["s1"].BranchState; got == nil || *got != want {
+	if got := branchFacts(t, st.sessions["s1"].BranchState, "add more.go"); got != want {
 		t.Fatalf("s1 branch state = %+v, want %+v", got, want)
+	}
+}
+
+func TestReconcileSessionBranchStateTracksBehindAndConflicts(t *testing.T) {
+	repo := newPushableRepo(t)
+	writeWorkspaceFile(t, repo, "shared.txt", "base\n")
+	runGit(t, repo, "add", "shared.txt")
+	runGit(t, repo, "commit", "-m", "add shared")
+	runGit(t, repo, "push", "origin", "main")
+	runGit(t, repo, "checkout", "-b", "feat/x")
+	writeWorkspaceFile(t, repo, "shared.txt", "branch\n")
+	runGit(t, repo, "commit", "-am", "branch edit")
+
+	st := &branchStateStore{fakeStore: newFakeStore()}
+	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{
+		WorkspacePath: repo, DiffBaseRef: "refs/remotes/origin/main",
+	}}
+	svc := &Service{store: st}
+	reconcile := func(want domain.SessionBranchState) {
+		t.Helper()
+		if err := svc.ReconcileSessionBranchState(context.Background(), "ao-1"); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+		if got := branchFacts(t, st.sessions["ao-1"].BranchState, "branch edit"); got != want {
+			t.Fatalf("branch state = %+v, want %+v", got, want)
+		}
+	}
+	// advanceBase commits on main and pushes it, moving origin/main.
+	advanceBase := func(name, content string) {
+		t.Helper()
+		runGit(t, repo, "checkout", "main")
+		writeWorkspaceFile(t, repo, name, content)
+		runGit(t, repo, "add", name)
+		runGit(t, repo, "commit", "-m", "main edit "+name)
+		runGit(t, repo, "push", "origin", "main")
+		runGit(t, repo, "checkout", "feat/x")
+	}
+
+	reconcile(domain.SessionBranchState{Commits: 1, Unpushed: 1})
+
+	advanceBase("other.txt", "unrelated\n")
+	reconcile(domain.SessionBranchState{Commits: 1, Unpushed: 1, Behind: 1})
+
+	advanceBase("shared.txt", "main\n")
+	reconcile(domain.SessionBranchState{Commits: 1, Unpushed: 1, Behind: 2, Conflicts: true})
+
+	// The check merges in memory: the worktree and index stay as they were.
+	if out := runGit(t, repo, "status", "--porcelain"); strings.TrimSpace(out) != "" {
+		t.Fatalf("conflict check touched the worktree: %q", out)
 	}
 }
 

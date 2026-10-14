@@ -15627,10 +15627,30 @@ components:
       - size
       - updatedAt
       type: object
+    SessionBranchCommit:
+      properties:
+        committedAt:
+          format: date-time
+          type: string
+        sha:
+          type: string
+        subject:
+          type: string
+      required:
+      - sha
+      - subject
+      - committedAt
+      type: object
     SessionBranchState:
       properties:
+        behind:
+          type: integer
         commits:
           type: integer
+        conflicts:
+          type: boolean
+        lastCommit:
+          $ref: '#/components/schemas/SessionBranchCommit'
         remoteBranch:
           type: string
         unpushed:
@@ -15638,6 +15658,8 @@ components:
       required:
       - commits
       - unpushed
+      - behind
+      - conflicts
       type: object
     SessionInterfaceTransition:
       properties:

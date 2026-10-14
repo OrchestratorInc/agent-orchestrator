@@ -9,6 +9,7 @@ import { queryClient } from "./lib/query-client";
 import { mergeUnreadNotification, unreadNotificationsQueryKey } from "./lib/notifications";
 import { playNotificationSound } from "./lib/notification-sound-player";
 import { createAppRouter } from "./router";
+import { installOverlayScrollbars } from "./lib/overlay-scrollbars";
 import { TelemetryBoundary } from "./components/TelemetryBoundary";
 import { CloudOnboardingGate } from "./components/CloudOnboardingGate";
 import { CloudNotificationRuntime } from "./components/CloudNotificationRuntime";
@@ -106,6 +107,8 @@ async function renderApp(): Promise<void> {
 	// The sound-notifications toggle only needs to be right by the time
 	// Settings renders, so it loads in the background rather than blocking mount.
 	void useSoundNotificationsStore.getState().load();
+	// Native scrollbars are hidden app-wide; this draws them over the content.
+	installOverlayScrollbars();
 	// Do not wrap the desktop root in StrictMode. React 19 enables per-component
 	// performance tracking for that tree in development, which made common route
 	// switches and drag updates spend hundreds of milliseconds recording timings.
