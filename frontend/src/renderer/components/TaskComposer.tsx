@@ -9,6 +9,14 @@ import {
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
+import { AgentAvatar } from "./AgentAvatar";
+import { DropdownMenuSeparator } from "./ui/dropdown-menu";
+import { CHAT_MENU_CLASS } from "./chat/TurnSettingsBar";
+import { ModelMenuChoices } from "./chat/ModelMenuChoices";
+import { cn } from "../lib/utils";
+import { OptionMenuItem, OptionMenuSub, OptionMenuSubContent, OptionMenuSubTrigger } from "./ui/option-menu";
+import type { ApprovalMode, ChatModel, TurnSettings } from "../types/conversation";
+import { AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
@@ -38,6 +46,8 @@ import {
 	DEFAULT_AGENT_PRIORITY_RANK,
 	isLaunchableAgent,
 	isReadyAgent,
+	unknownAgentReadiness,
+	type AgentInfo,
 } from "../lib/agent-select-options";
 import { cloudSessionsQueryKey, useCloudProjectsQuery } from "../hooks/useWorkspaceQuery";
 import {
@@ -72,7 +82,7 @@ type CreateTaskInput = {
 	model?: string;
 	effort?: string;
 	mode?: "chat" | "tui";
-	approvalMode?: "bypass-permissions";
+	approvalMode?: ApprovalMode;
 	attachments?: FileAttachmentPayload[];
 	taskPreparation?: string;
 };
@@ -125,26 +135,23 @@ export type TaskComposerProps = {
 	createLabel?: string;
 };
 
-export function TaskComposer({
-	projectId,
-	hostId,
-	onCreated,
-	onDirtyChange,
-	onSubmittingChange,
-	autoFocusTitle,
-	createLabel,
-}: TaskComposerProps) {
+export type TaskLaunchOptions = {
+	interfaceMode?: "chat" | "tui";
+	approvalMode?: ApprovalMode;
+	/** Idempotency key; a retry with the same key cannot create a second session. */
+	clientRequestId?: string;
+};
+
+/**
+ * The New Task launch logic: which project, agent, model, and effort a task runs
+ * with, and the create call for local, remote, cloud, and standalone targets.
+ * The new chat page and TaskComposer render it.
+ */
+export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostId?: string }) {
 	const { t } = useTranslation();
-	const taskPlaceholder = useMemo(() => {
-		const placeholders = t("newTask.taskPlaceholders" as never, { returnObjects: true }) as string[];
-		return Array.isArray(placeholders)
-			? (placeholders[Math.floor(Math.random() * placeholders.length)] ?? "")
-			: "";
-	}, [t]);
 	const queryClient = useQueryClient();
 	const remoteConnections = useConnectedHosts();
 	const hostConnected = !hostId || remoteConnections.includes(hostId);
-	const [isPromptDirty, setIsPromptDirty] = useState(false);
 	const [model, setModel] = useState("");
 	const [mode, setMode] = useState("");
 	const [effort, setEffort] = useState("");
@@ -152,6 +159,8 @@ export function TaskComposer({
 	const [agentTouched, setAgentTouched] = useState(false);
 	const [modelTouched, setModelTouched] = useState(false);
 	const [effortTouched, setEffortTouched] = useState(false);
+	// Only a permission the user picks is sent; otherwise the project's own applies.
+	const [approvalMode, setApprovalMode] = useState<ApprovalMode>();
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const [error, setError] = useState<string | undefined>();
 	const [fallbackAction, setFallbackAction] = useState<FallbackAction>();
@@ -363,8 +372,8 @@ export function TaskComposer({
 	// config.worker.agent and fall back to claude-code.
 	const projectConfig = (isCloudProject ? cloudProject?.config : projectQuery.data?.config) as
 		| {
-				worker?: { agent?: string; agentConfig?: { model?: string; mode?: string; effort?: string } };
-				agentConfig?: { model?: string; mode?: string; effort?: string };
+				worker?: { agent?: string; agentConfig?: { model?: string; mode?: string; effort?: string; permissions?: string } };
+				agentConfig?: { model?: string; mode?: string; effort?: string; permissions?: string };
 		  }
 		| undefined;
 	const projectWorkerAgent = projectConfig?.worker?.agent ?? "";
@@ -480,9 +489,6 @@ export function TaskComposer({
 	const catalogModels = offeredModels.filter((item) => isConcreteModelID(item.id));
 	const catalogDefaultOption =
 		catalogModels.find((item) => item.isDefault)?.id ?? "";
-	const catalogDefaultHidden = Boolean(modelCatalogQuery.data?.models?.some(
-		(item) => item.isDefault && isConcreteModelID(item.id) && !catalogModels.some((offered) => offered.id === item.id),
-	));
 	const catalogUsesModes = modelCatalogQuery.data?.selectionMode === "mode";
 	// The model this user ran most recently.
 	const lastUsedOption =
@@ -505,22 +511,22 @@ export function TaskComposer({
 		);
 	const rememberedModeIsValid =
 		isConcreteModelID(rememberedMode) && catalogModels.some((item) => item.id === rememberedMode);
+	// A model is always selected: the provider's default, else the first one listed.
+	const catalogPick = catalogDefaultOption || catalogModels[0]?.id || "";
 	const defaultModelForSelectedAgent =
 		(rememberedModelIsValid ? rememberedModel : "") ||
 		(isConcreteModelID(projectModelForSelectedAgent) ? projectModelForSelectedAgent : "") ||
 		(!catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(catalogUsesModes ? "" : catalogDefaultOption) ||
 		claudeFallbackOption ||
-		// Only replace a default the catalog identified and Settings hid. An
-		// unreported default must keep the native model/provider selection.
-		(!catalogUsesModes && catalogDefaultHidden ? catalogModels[0]?.id ?? "" : "");
+		(catalogUsesModes ? "" : catalogPick);
 	const defaultModeForSelectedAgent =
 		(rememberedModeIsValid ? rememberedMode : "") ||
 		(isConcreteModelID(projectModeForSelectedAgent) ? projectModeForSelectedAgent : "") ||
 		(catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
-		(catalogUsesModes ? catalogDefaultOption : "");
-	const selectedModel = model || (modelTouched ? (catalogUsesModes ? "" : catalogDefaultOption) : defaultModelForSelectedAgent);
-	const selectedMode = mode || (modelTouched ? (catalogUsesModes ? catalogDefaultOption : "") : defaultModeForSelectedAgent);
+		(catalogUsesModes ? catalogPick : "");
+	const selectedModel = model || (modelTouched ? (catalogUsesModes ? "" : catalogPick) : defaultModelForSelectedAgent);
+	const selectedMode = mode || (modelTouched ? (catalogUsesModes ? catalogPick : "") : defaultModeForSelectedAgent);
 	const selectedModelOrMode = (selectedModel || selectedMode).trim();
 	const projectModelOrMode = projectModelForSelectedAgent || projectModeForSelectedAgent;
 	const requestedModel = isStandalone
@@ -645,28 +651,11 @@ export function TaskComposer({
 		if (!effortTouched) setEffort(defaultEffortForSelectedAgent || cloudDefaultEffort);
 	}, [cloudDefaultEffort, defaultEffortForSelectedAgent, effortTouched]);
 
-	const isDirty = isPromptDirty || modelTouched || effortTouched || attachments.length > 0;
-	const handlePromptChange = useCallback((value: string) => {
-		const nextDirty = value.trim() !== "";
-		setIsPromptDirty((wasDirty) => (wasDirty === nextDirty ? wasDirty : nextDirty));
-	}, []);
-	useEffect(() => {
-		onDirtyChange?.(isDirty);
-	}, [isDirty, onDirtyChange]);
-	useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
-
-	useEffect(() => {
-		onSubmittingChange?.(isSubmitting);
-	}, [isSubmitting, onSubmittingChange]);
-	useEffect(() => () => onSubmittingChange?.(false), [onSubmittingChange]);
 	useEffect(() => () => clearAttachments(), [clearAttachments]);
 
-	const submitTask = async (
-		brief: string,
-		interfaceMode?: "chat" | "tui",
-		approvalMode?: "bypass-permissions",
-	) => {
-		if (!projectId || !canSubmit || isSubmitting) return;
+	// Rejects with the create error after recording it (and any fallback) here.
+	const launch = async (brief: string, { interfaceMode, approvalMode: requestedApproval, clientRequestId }: TaskLaunchOptions = {}): Promise<string> => {
+		if (!projectId || !canSubmit || isSubmitting) throw new Error(remoteLoadError ?? t("newTask.unableToStart"));
 
 		setIsSubmitting(true);
 		setError(undefined);
@@ -694,7 +683,7 @@ export function TaskComposer({
 				// The local daemon applies the default session mode itself; the control
 				// plane has none, so a cloud task carries it.
 				mode: interfaceMode ?? (isCloudProject ? settings?.defaultSessionMode : undefined),
-				approvalMode,
+				approvalMode: requestedApproval ?? approvalMode,
 				attachments: attachmentPayloads.length > 0 ? attachmentPayloads : undefined,
 				taskPreparation: submittedPreparation || undefined,
 			};
@@ -703,7 +692,28 @@ export function TaskComposer({
 			if (requestRef.current?.payload !== payload) {
 				requestRef.current = { payload, id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}` };
 			}
-			const sessionId = await createTask({ ...request, clientRequestId: requestRef.current.id });
+			const createRequest = { ...request, clientRequestId: clientRequestId ?? requestRef.current.id };
+			let sessionId: string;
+			try {
+				sessionId = await createTask(createRequest);
+			} catch (err) {
+				// A model list that went stale cannot vouch for the effort. Refresh it and
+				// retry once; the same request id cannot create a second session.
+				if (!(err instanceof TaskCreateError) || err.code !== "MODEL_CAPABILITIES_UNAVAILABLE") throw err;
+				await refreshSelectedModels().catch(() => undefined);
+				try {
+					sessionId = await createTask(createRequest);
+				} catch (retryErr) {
+					if (!(retryErr instanceof TaskCreateError) || retryErr.code !== "MODEL_CAPABILITIES_UNAVAILABLE") throw retryErr;
+					throw new TaskCreateError(
+						t("newTask.modelCheckUnavailable", {
+							agent: selectedAgentLabel,
+							defaultValue: "Couldn't confirm {{agent}}'s models right now. Try again in a moment.",
+						}),
+						retryErr.code,
+					);
+				}
+			}
 			const preparationAfterSubmit = taskPreparationRef.current;
 			taskPreparationRef.current = "";
 			// DELETE is intentionally idempotent after a successful claim. It also
@@ -712,15 +722,18 @@ export function TaskComposer({
 			cancelTaskPreparation(submittedPreparation, hostId);
 			cancelTaskPreparation(preparationAfterSubmit, hostId);
 			if (selectedAgent) {
+				// Remember a model only when the user chose it (now or before). The one
+				// shown because the agent marks no default is not their preference.
+				const modelChosen = Boolean(model || mode) || rememberedModelIsValid || rememberedModeIsValid;
 				const preference: TaskComposerAgentPreference = {
-					model: selectedModel ? requestedModel ?? "" : "",
-					mode: selectedMode ? requestedModel ?? "" : "",
+					model: selectedModel && modelChosen ? requestedModel ?? "" : "",
+					mode: selectedMode && modelChosen ? requestedModel ?? "" : "",
 					...(requestedEffort !== undefined ? { effort: requestedEffort } : {}),
 				};
 				agentDrafts[selectedAgent] = preference;
 				rememberTaskComposerPreference(preferenceContext, selectedAgent, preference);
 			}
-			onCreated(sessionId);
+			return sessionId;
 		} catch (err) {
 			const canBypassApprovals =
 				err instanceof TaskCreateError &&
@@ -736,23 +749,220 @@ export function TaskComposer({
 						? "tui"
 						: undefined,
 			);
-			setError(err instanceof Error ? err.message : t("newTask.unableToStart"));
+			const message = err instanceof Error ? err.message : t("newTask.unableToStart");
+			setError(message);
+			throw err instanceof Error ? err : new Error(message);
 		} finally {
 			setIsSubmitting(false);
 		}
 	};
+	// The interface a plain submit asks for; a TUI-only agent cannot open Chat.
+	const submitMode: TaskLaunchOptions["interfaceMode"] = selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined;
+	const launchFallback = (brief: string, clientRequestId?: string) =>
+		fallbackAction === "bypass-permissions"
+			? launch(brief, { interfaceMode: selectedAgent === "unreal-agent" ? "chat" : undefined, approvalMode: "bypass-permissions", clientRequestId })
+			: launch(brief, { interfaceMode: "tui", clientRequestId });
+
+	const changeAgent = (value: string) => {
+		if (selectedAgent) {
+			agentDrafts[selectedAgent] = {
+				model: selectedModel ? requestedModel ?? "" : "",
+				mode: selectedMode ? requestedModel ?? "" : "",
+				...(requestedEffort !== undefined ? { effort: requestedEffort } : {}),
+			};
+		}
+		setAgent(value);
+		setAgentTouched(true);
+		setModel("");
+		setMode("");
+		setEffort("");
+		setModelTouched(false);
+		setEffortTouched(false);
+	};
+
+	const showEffort = cursorChoice ? cursorChoice.family.efforts.length > 1 : !requiresTuiFallback && (effortOptions.length > 0 || Boolean(effort && effort !== "default"));
+	// The same choices in the chat composer's shape, so the new chat page can use its settings bar.
+	const chatModels = useMemo<ChatModel[]>(() => catalogModels.map((item) => ({
+		id: item.id,
+		displayName: item.id === "auto" ? t("settings.models.autoRouteLabel") : catalogUsesModes ? modelChoiceLabel(item) : item.label,
+		default: Boolean(item.isDefault),
+		efforts: item.efforts,
+		defaultEffort: item.defaultEffort,
+	})), [catalogModels, catalogUsesModes, t]);
+	const projectPermissions = projectConfig?.worker?.agentConfig?.permissions ?? projectConfig?.agentConfig?.permissions;
+	const turnSettings: TurnSettings = {
+		model: (selectedModel || selectedMode) || undefined,
+		reasoningEffort: showEffort ? effectiveEffort || undefined : undefined,
+		// A session started without a permission choice runs in auto (applySpawnAgentConfig).
+		approvalMode: approvalMode ?? (APPROVAL_MODES.includes(projectPermissions as ApprovalMode) ? projectPermissions as ApprovalMode : "auto"),
+	};
+	const chooseTurnSettings = (next: TurnSettings) => {
+		if ((next.model ?? "") !== (turnSettings.model ?? "")) {
+			if (catalogUsesModes) {
+				setMode(next.model ?? "");
+				setModel("");
+				setEffort("");
+			} else {
+				setModel(next.model ?? "");
+				setMode("");
+			}
+			setModelTouched(true);
+		}
+		if ((next.reasoningEffort ?? "") !== (turnSettings.reasoningEffort ?? "")) {
+			setEffort(next.reasoningEffort ?? "");
+			setEffortTouched(true);
+		}
+		if (next.approvalMode && next.approvalMode !== turnSettings.approvalMode) setApprovalMode(next.approvalMode);
+	};
+
+	return {
+		launch,
+		launchFallback,
+		submitMode,
+		isCloudProject,
+		canSubmit,
+		isSubmitting,
+		isDirty: modelTouched || effortTouched || attachments.length > 0,
+		error,
+		remoteLoadError,
+		modelWarning,
+		fallbackAction,
+		fallbackLabel: fallbackAction === "bypass-permissions"
+			? t("newTask.startWithoutApprovals", { defaultValue: "Start without approvals" })
+			: t("newTask.createAsTui"),
+		agent: {
+			label: t("newTask.agent"),
+			placeholder: t("newTask.selectAgent"),
+			value: selectedAgent,
+			agents: isCloudProject ? cloudAgents : agentCatalog?.agents,
+			disabled:
+				isSubmitting || (!isCloudProject && agentsQuery.isFetching && agentCatalog === undefined),
+			onChange: changeAgent,
+		},
+		model: {
+			agentId: selectedAgent,
+			agentLabel: selectedAgentLabel,
+			projectId: isStandalone ? "" : (projectId ?? ""),
+			disabled: isSubmitting,
+			value: selectedModel,
+			mode: selectedMode,
+			catalog: modelCatalog,
+			fetching: modelCatalogQuery.isFetching,
+			loading:
+				selectedAgent !== "" &&
+				modelCatalogQuery.isFetching &&
+				modelCatalogQuery.data === undefined,
+			onModelChange: (value: string) => {
+				setModel(value);
+				setMode("");
+				setModelTouched(true);
+				// Effort levels are per-model, so a level the newly chosen model
+				// does not advertise has to be dropped rather than carried over.
+				const nextEfforts =
+					modelCatalog?.models?.find((item) => item.id === value)?.efforts ?? [];
+				setEffort((current) => (current !== "" && !nextEfforts.includes(current) ? "" : current));
+			},
+			onModeChange: (value: string) => {
+				setMode(value);
+				setModel("");
+				setModelTouched(true);
+				// A mode replaces the model entirely, so no model vouches for a
+				// previously chosen level any more.
+				setEffort("");
+			},
+		},
+		effort: cursorChoice ? {
+			disabled: isSubmitting,
+			options: cursorChoice.family.efforts,
+			value: cursorChoice.variant.effort ?? "",
+			onChange: (value: string) => pickCursorVariant({ effort: value }),
+		} : {
+			disabled: isSubmitting,
+			options: effortOptions,
+			value: effectiveEffort,
+			onChange: (value: string) => {
+				setEffort(value);
+				setEffortTouched(true);
+			},
+		},
+		attachments: {
+			items: attachments.map(({ id, name, dataUrl }) => ({ id, name, previewUrl: dataUrl })),
+			error: attachmentError,
+			onAddFiles: (files: File[]) => void addFiles(files),
+			onRemove: removeAttachment,
+		},
+		showEffort,
+		chatModels,
+		turnSettings,
+		chooseTurnSettings,
+		agentMenu: (
+			<AgentMenuSection
+				agents={isCloudProject ? cloudAgents : agentCatalog?.agents}
+				value={selectedAgent}
+				onChange={changeAgent}
+				// Load an agent's models before it is picked, so switching shows its model at once.
+				onPreview={(agentId) => void queryClient.prefetchQuery(
+					agentModelsQueryOptions(agentId, isCloudProject || isStandalone ? "" : projectId ?? "", hostId),
+				)}
+				hostId={hostId}
+				manageView={isCloudProject ? "cloud" : "local"}
+			/>
+		),
+		renderAgentControl: (control: TaskComposerAgentControl) => <DesktopAgentControl {...control} hostId={hostId} manageView={isCloudProject ? "cloud" : "local"} />,
+		renderEffortControl: (control: TaskComposerEffortControl) => <TaskEffortPicker {...control} value={control.value || cloudDefaultEffort} defaultEffort={cursorChoice ? undefined : inheritedEffort || effortModel?.defaultEffort} availability={cursorChoice ? "supported" : effortAvailability}
+			footer={cursorChoice?.family.hasThinkingChoice ? <ToggleRow label={t("agentSwitch.thinking")} checked={cursorChoice.variant.thinking} onChange={(thinking) => pickCursorVariant({ thinking })} /> : undefined} />,
+		renderModelControl: (control: TaskComposerModelControl) => <TaskModelPicker {...control} onRefresh={refreshSelectedModels}
+			showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />,
+	};
+}
+
+export type TaskLaunch = ReturnType<typeof useTaskLaunch>;
+
+// The launch form as a standalone composer. The app starts tasks from the new
+// chat page; this view keeps the launch logic exercised in isolation.
+export function TaskComposer({
+	projectId,
+	hostId,
+	onCreated,
+	onDirtyChange,
+	onSubmittingChange,
+	autoFocusTitle,
+	createLabel,
+}: TaskComposerProps) {
+	const { t } = useTranslation();
+	const taskPlaceholder = useMemo(() => {
+		const placeholders = t("newTask.taskPlaceholders" as never, { returnObjects: true }) as string[];
+		return Array.isArray(placeholders)
+			? (placeholders[Math.floor(Math.random() * placeholders.length)] ?? "")
+			: "";
+	}, [t]);
+	const task = useTaskLaunch({ projectId, hostId });
+	const [isPromptDirty, setIsPromptDirty] = useState(false);
+	const isDirty = isPromptDirty || task.isDirty;
+	const handlePromptChange = useCallback((value: string) => {
+		const nextDirty = value.trim() !== "";
+		setIsPromptDirty((wasDirty) => (wasDirty === nextDirty ? wasDirty : nextDirty));
+	}, []);
+	useEffect(() => {
+		onDirtyChange?.(isDirty);
+	}, [isDirty, onDirtyChange]);
+	useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+	useEffect(() => {
+		onSubmittingChange?.(task.isSubmitting);
+	}, [task.isSubmitting, onSubmittingChange]);
+	useEffect(() => () => onSubmittingChange?.(false), [onSubmittingChange]);
+	// The hook records a failure for display, so a rejected create just stays put.
+	const settle = (created: Promise<string>) => void created.then(onCreated, () => undefined);
 
 	return (
 		<TaskComposerView
 			autoFocusPrompt={autoFocusTitle}
-			canSubmit={canSubmit}
+			canSubmit={task.canSubmit}
 			onPromptChange={handlePromptChange}
 			labels={{
 				addFile: t("newTask.addFile"),
 				effort: t("settings.models.effort"),
-				fallbackAction: fallbackAction === "bypass-permissions"
-					? t("newTask.startWithoutApprovals", { defaultValue: "Start without approvals" })
-					: t("newTask.createAsTui"),
+				fallbackAction: task.fallbackLabel,
 				removeFile: (name) => t("newTask.removeFile", { name }),
 				runsWith: t("newTask.runsWith"),
 				start: createLabel ?? t("newTask.start"),
@@ -760,100 +970,29 @@ export function TaskComposer({
 				task: t("newTask.task"),
 				taskPlaceholder,
 			}}
-			agent={{
-				label: t("newTask.agent"),
-				placeholder: t("newTask.selectAgent"),
-				value: selectedAgent,
-				agents: isCloudProject ? cloudAgents : agentCatalog?.agents,
-				disabled:
-				isSubmitting || (!isCloudProject && agentsQuery.isFetching && agentCatalog === undefined),
-				onChange: (value) => {
-					if (selectedAgent) {
-						agentDrafts[selectedAgent] = {
-							model: selectedModel ? requestedModel ?? "" : "",
-							mode: selectedMode ? requestedModel ?? "" : "",
-					...(requestedEffort !== undefined ? { effort: requestedEffort } : {}),
-						};
-					}
-					setAgent(value);
-					setAgentTouched(true);
-					setModel("");
-					setMode("");
-					setEffort("");
-					setModelTouched(false);
-					setEffortTouched(false);
-				},
-			}}
-			model={{
-				agentId: selectedAgent,
-				agentLabel: selectedAgentLabel,
-				projectId: isStandalone ? "" : (projectId ?? ""),
-				disabled: isSubmitting,
-				value: selectedModel,
-				mode: selectedMode,
-				catalog: modelCatalog,
-				fetching: modelCatalogQuery.isFetching,
-				onModelChange: (value) => {
-					setModel(value);
-					setMode("");
-					setModelTouched(true);
-					// Effort levels are per-model, so a level the newly chosen model
-					// does not advertise has to be dropped rather than carried over.
-					const nextEfforts =
-						modelCatalog?.models?.find((item) => item.id === value)?.efforts ?? [];
-					setEffort((current) => (current !== "" && !nextEfforts.includes(current) ? "" : current));
-				},
-				onModeChange: (value) => {
-					setMode(value);
-					setModel("");
-					setModelTouched(true);
-					// A mode replaces the model entirely, so no model vouches for a
-					// previously chosen level any more.
-					setEffort("");
-				},
-			}}
-			effort={cursorChoice ? {
-				disabled: isSubmitting,
-				options: cursorChoice.family.efforts,
-				value: cursorChoice.variant.effort ?? "",
-				onChange: (value) => pickCursorVariant({ effort: value }),
-			} : {
-				disabled: isSubmitting,
-				options: effortOptions,
-				value: effectiveEffort,
-				onChange: (value) => {
-					setEffort(value);
-					setEffortTouched(true);
-				},
-			}}
-			attachments={{
-				items: attachments.map(({ id, name, dataUrl }) => ({ id, name, previewUrl: dataUrl })),
-				error: attachmentError,
-				onAddFiles: (files) => void addFiles(files),
-				onRemove: removeAttachment,
-			}}
+			agent={task.agent}
+			model={task.model}
+			effort={task.effort}
+			attachments={task.attachments}
 			submission={{
-				showFallbackAction: fallbackAction !== undefined,
-				error: error ?? remoteLoadError ?? undefined,
-				isSubmitting,
-				modelWarning,
-				onFallbackAction: (brief) =>
-					void (fallbackAction === "bypass-permissions"
-						? submitTask(brief, selectedAgent === "unreal-agent" ? "chat" : undefined, "bypass-permissions")
-						: submitTask(brief, "tui")),
-				onSubmit: (brief) => void submitTask(brief, selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined),
+				showFallbackAction: task.fallbackAction !== undefined,
+				error: task.error ?? task.remoteLoadError ?? undefined,
+				isSubmitting: task.isSubmitting,
+				modelWarning: task.modelWarning,
+				onFallbackAction: (brief) => settle(task.launchFallback(brief)),
+				onSubmit: (brief) => settle(task.launch(brief, { interfaceMode: task.submitMode })),
 			}}
-			renderAgentControl={(control) => <DesktopAgentControl {...control} hostId={hostId} manageView={isCloudProject ? "cloud" : "local"} />}
-			renderEffortControl={(control) => <TaskEffortPicker {...control} value={control.value || cloudDefaultEffort} defaultEffort={cursorChoice ? undefined : inheritedEffort || effortModel?.defaultEffort} availability={cursorChoice ? "supported" : effortAvailability}
-				footer={cursorChoice?.family.hasThinkingChoice ? <ToggleRow label={t("agentSwitch.thinking")} checked={cursorChoice.variant.thinking} onChange={(thinking) => pickCursorVariant({ thinking })} /> : undefined} />}
-			renderModelControl={(control) => <TaskModelPicker {...control} onRefresh={refreshSelectedModels}
-				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />}
-			showEffort={cursorChoice ? cursorChoice.family.efforts.length > 1 : !requiresTuiFallback && (effortOptions.length > 0 || Boolean(effort && effort !== "default"))}
+			renderAgentControl={task.renderAgentControl}
+			renderEffortControl={task.renderEffortControl}
+			renderModelControl={task.renderModelControl}
+			showEffort={task.showEffort}
 		/>
 	);
 }
 
 // The agent, model and effort menus share one compact width.
+const APPROVAL_MODES: ApprovalMode[] = ["default", "accept-edits", "auto", "bypass-permissions"];
+
 const COMPOSER_MENU_WIDTH = "w-[min(14rem,calc(100vw-2rem))]! min-w-0! max-w-[calc(100vw-2rem)]!";
 
 function TaskEffortPicker({
@@ -971,5 +1110,79 @@ function TaskModelPicker({
 			menuClassName={COMPOSER_MENU_WIDTH}
 			renderTrigger={(label) => <span className="min-w-0 truncate text-control text-foreground" title={label}>{label}</span>}
 		/>
+	);
+}
+
+// The agent choice as the first row of the chat model menu. Its submenu lists
+// the launchable agents, then a way to set up more, like the standalone chip.
+function AgentMenuSection({
+	agents,
+	value,
+	onChange,
+	onPreview,
+	hostId,
+	manageView,
+}: {
+	agents?: AgentInfo[];
+	value: string;
+	onChange: (agentId: string) => void;
+	onPreview: (agentId: string) => void;
+	hostId?: string;
+	manageView: "local" | "cloud";
+}) {
+	const { t } = useTranslation();
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	const options = buildRankedAgentOptions({
+		agents,
+		priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
+		fallbackAgents: AGENT_OPTIONS.map((agent) => unknownAgentReadiness(agent, agentLabel(agent))),
+	});
+	const visibleOptions = agents ? options.filter(isLaunchableAgent) : options;
+	const selectedLabel = options.find((agent) => agent.id === value)?.label ?? (value ? agentLabel(value) : t("newTask.selectAgent"));
+	// Drawn as the Model row and its submenu are, so the menu reads as one list.
+	return (
+		<OptionMenuSub>
+			<OptionMenuSubTrigger aria-label={t("newTask.agent")} label={t("newTask.agent")} value={selectedLabel} />
+			<OptionMenuSubContent scrollable className={CHAT_MENU_CLASS}>
+				{visibleOptions.length > 0 ? (
+					<ModelMenuChoices models={visibleOptions} searchable={false}>
+						{() => visibleOptions.map((agent) => (
+							<OptionMenuItem
+								key={agent.id}
+								disabled={agent.disabled}
+								radio
+								active={agent.id === value}
+								onPointerEnter={() => onPreview(agent.id)}
+								onFocus={() => onPreview(agent.id)}
+								// The menu stays open: the next choice is usually a model for this agent,
+								// and closing mid-switch flickers the trigger.
+								onSelect={(event) => {
+									event.preventDefault();
+									if (agent.id !== value) onChange(agent.id);
+								}}
+								className={cn("text-xs", agent.id === value ? "text-foreground" : "text-muted-foreground")}
+							>
+								<span className="flex min-w-0 flex-1 items-center gap-2">
+									<AgentAvatar provider={agent.id} className="size-icon-sm" decorative />
+									<span className="min-w-0 truncate">{agent.label}</span>
+								</span>
+							</OptionMenuItem>
+						))}
+					</ModelMenuChoices>
+				) : <p className="px-2 py-1.5 text-xs text-settings-muted">{t("agentSelector.noneReady")}</p>}
+				<DropdownMenuSeparator />
+				<OptionMenuItem
+					className="text-xs"
+					onSelect={() => openGlobalSettings("harness", {
+						focusAgentId: value,
+						...(hostId ? { hostId } : {}),
+						harnessView: manageView,
+						preserveProject: true,
+					})}
+				>
+					{(manageView === "cloud" ? t("agentSelector.manageCloud") : t("agentSelector.manage")).replace(/[.…]+$/u, "")}
+				</OptionMenuItem>
+			</OptionMenuSubContent>
+		</OptionMenuSub>
 	);
 }

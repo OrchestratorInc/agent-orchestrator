@@ -1487,6 +1487,34 @@ describe("TaskComposer", () => {
 		);
 	});
 
+	it("refreshes a stale model list and retries once when the effort cannot be checked", async () => {
+		const catalog = { agent: "codex", selectionMode: "catalog", models: [{ id: "gpt-5", label: "GPT-5", isDefault: true, efforts: ["low", "high"] }], allowCustom: false };
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: catalog }
+			: { data: { status: "ok", project: { agent: "codex", config: {} } } });
+		const unavailable = { error: { code: "MODEL_CAPABILITIES_UNAVAILABLE", message: "spawn: model capabilities unavailable for model \"gpt-5\"" } };
+		const delegate = vi.fn()
+			.mockResolvedValueOnce(unavailable)
+			.mockResolvedValueOnce({ data: { workerId: "sess-after-refresh" } });
+		h.post.mockImplementation(async (path: string, request: unknown) => {
+			if (path === "/api/v1/agents/{agent}/models/refresh") return { data: catalog };
+			if (path === "/api/v1/orchestrators/delegate") return delegate(path, request);
+			return { data: {} };
+		});
+		const onCreated = vi.fn();
+
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={onCreated} /></Wrap>);
+		await waitForTaskReady();
+		fireEvent.change(task(), { target: { value: "Retry past a stale catalog" } });
+		fireEvent.click(startTask());
+
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("sess-after-refresh"));
+		expect(h.post).toHaveBeenCalledWith("/api/v1/agents/{agent}/models/refresh", expect.anything());
+		expect(delegate).toHaveBeenCalledTimes(2);
+		// One request id for both tries, so a lost first response cannot create a second session.
+		expect(delegate.mock.calls[1][1].body.clientRequestId).toBe(delegate.mock.calls[0][1].body.clientRequestId);
+	});
+
 	it("offers an explicit approval-less retry from structured capability details", async () => {
 		h.get.mockImplementation(async (path: string) => {
 			if (path.includes("/models")) {
@@ -1746,7 +1774,7 @@ describe("TaskComposer", () => {
 		{ name: "the newest Opus when nothing was run", agent: "claude-code", lastUsed: {}, expected: "Opus 5.5" },
 		{ name: "the most recently run model, ahead of Opus", agent: "claude-code", lastUsed: { "claude-fable-5-1": "2026-10-01T12:00:00Z", "claude-sonnet-5-5": "2026-10-05T12:00:00Z" }, expected: "Sonnet 5.5" },
 		{ name: "the project model, ahead of the last run", agent: "claude-code", lastUsed: { "claude-sonnet-5-5": "2026-10-05T12:00:00Z" }, projectModel: "claude-opus-4-8", expected: "Opus 4.8" },
-		{ name: "no model for another agent", agent: "codex", lastUsed: {}, expected: "Select model" },
+		{ name: "the first listed model for another agent", agent: "codex", lastUsed: {}, expected: "Claude Fable 5.1" },
 	])("opens $agent on $name", async ({ agent, lastUsed, projectModel, expected }) => {
 		const models = ["fable-5-1", "opus-4-8", "opus-5-5", "sonnet-5-5"].map((slug) => ({
 			id: `claude-${slug}`,
@@ -1852,7 +1880,7 @@ describe("TaskComposer", () => {
 		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("opus[1m]");
 	});
 
-	it("does not invent a catalog default when none is reported", async () => {
+	it("selects the first listed model when the provider reports no default", async () => {
 		h.get.mockImplementation(async (path: string) => {
 			if (path.includes("/models")) {
 				return {
@@ -1874,16 +1902,13 @@ describe("TaskComposer", () => {
 		);
 
 		const picker = await screen.findByRole("button", { name: "Model" });
-		expect(picker).toHaveTextContent("Select model");
+		expect(picker).toHaveTextContent("GPT-5");
 
-		await userEvent.click(picker);
-		expect(await screen.findByRole("menuitem", { name: "GPT-5" })).toBeInTheDocument();
-		await userEvent.keyboard("{Escape}");
 		h.post.mockResolvedValueOnce({ data: { workerId: "sess-unreported-model" } });
-		fireEvent.change(task(), { target: { value: "Use the provider's model" } });
+		fireEvent.change(task(), { target: { value: "Use the first model" } });
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.post).toHaveBeenCalled());
-		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("model");
+		expect(h.post.mock.calls[0][1].body).toHaveProperty("model", "gpt-5");
 	});
 
 	it("shows Memcode's native model list and sends an explicit choice", async () => {
@@ -2318,24 +2343,19 @@ describe("TaskComposer", () => {
 		expect(h.post.mock.calls[0][1].body.model).toBe("gpt-new");
 	});
 
-	it("clears a mode override when the agent reports no preferred mode", async () => {
+	it("selects the first mode when the agent reports no preferred mode", async () => {
 		h.get.mockImplementation(async (path: string) => path.includes("/models")
-			? { data: { agent: "codex", selectionMode: "mode", models: [{ id: "fast", label: "Fast" }], allowCustom: false } }
+			? { data: { agent: "codex", selectionMode: "mode", models: [{ id: "fast", label: "Fast" }, { id: "deep", label: "Deep" }], allowCustom: false } }
 			: { data: { status: "ok", project: { agent: "codex", config: {} } } });
 		h.post.mockResolvedValue({ data: { workerId: "sess-1" } });
 
 		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
-		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Mode not reported"));
-		const picker = screen.getByRole("button", { name: "Model" });
-		await userEvent.click(picker);
-		await userEvent.click(await screen.findByRole("menuitem", { name: "Fast" }));
+		const picker = await screen.findByRole("button", { name: "Model" });
 		expect(picker).toHaveTextContent("Fast");
-		await userEvent.click(picker);
-		await userEvent.click(await screen.findByRole("menuitem", { name: "Use agent mode" }));
-		expect(picker).toHaveTextContent("Mode not reported");
+		fireEvent.change(task(), { target: { value: "Use the first mode" } });
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.post).toHaveBeenCalledOnce());
-		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("model");
+		expect(h.post.mock.calls[0][1].body).toHaveProperty("model", "fast");
 	});
 
 	describe("model login errors", () => {

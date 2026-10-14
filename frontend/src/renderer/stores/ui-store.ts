@@ -188,10 +188,10 @@ export type UiState = {
 	globalToasts: GlobalToast[];
 	globalToast: GlobalToast | null;
 	globalToastSequence: number;
-	// Transient "open the New Task dialog for this project" signal. The nonce
-	// bumps on every request so a repeat press (even for the same project) still
-	// re-fires; the always-mounted GlobalNewTaskDialog consumes it. Selection
-	// still lives in the URL — this is a one-shot action, not persisted state.
+	// Transient "start a new task for this project" signal. The nonce bumps on
+	// every request so a repeat press (even for the same project) still re-fires;
+	// the always-mounted NewTaskNavigator consumes it by opening the new chat
+	// page. Selection still lives in the URL — this is a one-shot action.
 	newTaskRequest: { projectId: string; hostId?: string; nonce: number } | null;
 	/** Transient one-shot request to reveal a path in a session's existing Files UI. */
 	workspaceFileOpenRequest: WorkspaceFileOpenRequest | null;

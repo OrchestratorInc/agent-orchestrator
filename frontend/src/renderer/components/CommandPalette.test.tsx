@@ -1,6 +1,4 @@
-import { useState } from "react";
-import * as Popover from "@radix-ui/react-popover";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
@@ -163,42 +161,6 @@ vi.mock("../lib/bridge", () => ({
 }));
 
 vi.mock("../hooks/useRestoreSession", () => ({ useRestoreSession: () => restoreMock }));
-
-function StubNestedLayer() {
-	const [open, setOpen] = useState(false);
-	return (
-		<Popover.Root open={open} onOpenChange={setOpen}>
-			<Popover.Trigger>stub-open-layer</Popover.Trigger>
-			<Popover.Portal>
-				<Popover.Content>nested layer</Popover.Content>
-			</Popover.Portal>
-		</Popover.Root>
-	);
-}
-
-vi.mock("./TaskComposer", () => ({
-	TaskComposer: (props: {
-		projectId?: string;
-		onCreated: (id: string) => void;
-		onDirtyChange?: (dirty: boolean) => void;
-		onSubmittingChange?: (submitting: boolean) => void;
-	}) => (
-		<div data-testid="task-composer">
-			<span>composer {props.projectId}</span>
-			<StubNestedLayer />
-			<input aria-label="stub-composer-input" />
-			<button type="button" onClick={() => props.onDirtyChange?.(true)}>
-				stub-dirty
-			</button>
-			<button type="button" onClick={() => props.onSubmittingChange?.(true)}>
-				stub-submit-start
-			</button>
-			<button type="button" onClick={() => props.onCreated("new-session")}>
-				stub-create
-			</button>
-		</div>
-	),
-}));
 
 vi.mock("./CreateProjectFlow", () => ({
 	CreateProjectFlow: (props: {
@@ -1188,103 +1150,15 @@ describe("CommandPalette back navigation", () => {
 	});
 });
 
-describe("CommandPalette inline task composer", () => {
-	async function openComposer() {
+describe("CommandPalette new task", () => {
+	it("closes the palette and opens the new chat page for the current project", async () => {
 		ctx.params = { projectId: "proj-1" };
+		useUiStore.setState({ newTaskRequest: null });
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 		await screen.findByPlaceholderText(/search projects/i);
 		fireEvent.click(screen.getByText("New task"));
-		return screen.findByTestId("task-composer");
-	}
-
-	it("opens the composer inline instead of a dialog", async () => {
-		await openComposer();
-		expect(screen.getByTestId("task-composer")).toHaveTextContent("proj-1");
-		expect(screen.queryByTestId("new-task-dialog")).toBeNull();
-	});
-
-	it("navigates to the created session and closes on success", async () => {
-		await openComposer();
-		fireEvent.click(screen.getByText("stub-create"));
-		await waitFor(() =>
-			expect(navigateMock).toHaveBeenCalledWith({
-				to: "/projects/$projectId/sessions/$sessionId",
-				params: { projectId: "proj-1", sessionId: "new-session" },
-			}),
-		);
-		await waitFor(() => expect(paletteInput()).toBeNull());
-	});
-
-	it("lets a layer opened inside the composer take Escape first", async () => {
-		await openComposer();
-		fireEvent.click(screen.getByText("stub-dirty"));
-		fireEvent.click(screen.getByText("stub-open-layer"));
-		expect(await screen.findByText("nested layer")).toBeInTheDocument();
-
-		pressEscape();
-		await waitFor(() => expect(screen.queryByText("nested layer")).toBeNull());
-		expect(screen.queryByText(/discard this draft/i)).toBeNull();
-		expect(screen.getByTestId("task-composer")).toBeInTheDocument();
-
-		pressEscape();
-		expect(await screen.findByText(/discard this draft/i)).toBeInTheDocument();
-	});
-
-	it("confirms before discarding a dirty draft", async () => {
-		await openComposer();
-		fireEvent.click(screen.getByText("stub-dirty"));
-		pressEscape();
-		expect(await screen.findByText(/discard this draft/i)).toBeInTheDocument();
-		expect(screen.getByTestId("task-composer")).toBeInTheDocument();
-	});
-
-	it("announces the discard prompt as an alert and focuses Keep editing", async () => {
-		await openComposer();
-		fireEvent.click(screen.getByText("stub-dirty"));
-		pressEscape();
-		const alert = await screen.findByRole("alert");
-		expect(alert).toHaveTextContent(/discard this draft/i);
-		const keepEditing = within(alert).getByRole("button", { name: /keep editing/i });
-		await waitFor(() => expect(keepEditing).toHaveFocus());
-
-		fireEvent.click(keepEditing);
-		await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
-		await waitFor(() => expect(screen.getByLabelText("stub-composer-input")).toHaveFocus());
-		expect(screen.getByTestId("task-composer")).toBeInTheDocument();
-	});
-
-	it("lets Tab and Shift+Tab out of the composer to the dialog's focus trap but keeps other keys from cmdk", async () => {
-		const composer = await openComposer();
-		const seen: string[] = [];
-		const onKeyDown = (event: KeyboardEvent) => seen.push(event.key);
-		document.addEventListener("keydown", onKeyDown);
-		try {
-			const input = within(composer).getByLabelText("stub-composer-input");
-			fireEvent.keyDown(input, { key: "Tab" });
-			fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
-			fireEvent.keyDown(input, { key: "a" });
-			fireEvent.keyDown(input, { key: "ArrowDown" });
-			expect(seen).toEqual(["Tab", "Tab"]);
-		} finally {
-			document.removeEventListener("keydown", onKeyDown);
-		}
-	});
-
-	it("blocks dismissal while a create is in flight, then navigates on completion", async () => {
-		await openComposer();
-		fireEvent.click(screen.getByText("stub-dirty"));
-		fireEvent.click(screen.getByText("stub-submit-start"));
-		pressEscape();
-		expect(screen.queryByText(/discard this draft/i)).toBeNull();
-		expect(screen.getByTestId("task-composer")).toBeInTheDocument();
-		expect(navigateMock).not.toHaveBeenCalled();
-		fireEvent.click(screen.getByText("stub-create"));
-		await waitFor(() =>
-			expect(navigateMock).toHaveBeenCalledWith({
-				to: "/projects/$projectId/sessions/$sessionId",
-				params: { projectId: "proj-1", sessionId: "new-session" },
-			}),
-		);
+		await waitFor(() => expect(useUiStore.getState().isCommandPaletteOpen).toBe(false));
+		expect(useUiStore.getState().newTaskRequest).toMatchObject({ projectId: "proj-1" });
 	});
 });

@@ -19,6 +19,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useChatPermissionModes } from "../../hooks/useChatPermissionModes";
 import { useChatMessageFocus } from "../../hooks/useChatMessageFocus";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
+import { forgetLaunchSettings, LaunchSettingsBar, launchSettingsFor, openingStartFor } from "./LaunchSettingsBar";
+import { rememberChatSettingsTemplate } from "../../lib/chat-settings-template";
 import {
 	clearConversationProviderCatalogs,
 	conversationQueryKey,
@@ -214,6 +216,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
 	const commands = useConversationCommands(session.id, hostId);
+	// Set only when this task was started from the new chat page.
+	const queryClient = useQueryClient();
+	const launchSettings = launchSettingsFor(queryClient, session.id, hostId);
+	const openingStartedAt = openingStartFor(queryClient, session.id, hostId);
 	const projectPermissions = useRememberProjectPermissions(session.workspaceId, snapshot?.harness, hostId, session.kind);
 	const {
 		acknowledgeAcceptedTurn,
@@ -241,7 +247,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	useEffect(() => {
 		if (!chatInFront) setChosenSwitch(undefined);
 	}, [chatInFront]);
-	const queryClient = useQueryClient();
 	// After a daemon restart the daemon reattaches surviving Chats on its own, and
 	// that reattach emits no change event. The session's recovery check settling
 	// on "ready" is the signal to refresh the controller state this view shows.
@@ -343,7 +348,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		);
 		const queuedTurnIds = new Set(snapshot.turns.filter((turn) => turn.state === "queued").map((turn) => turn.id));
 		for (const echo of localEchos) {
-			if (
+			if (echo.opening && durableHumanTurnIds.size > 0) acknowledgeLocalEcho?.(undefined, echo.clientMessageId);
+			else if (
 				echo.turnId && durableHumanTurnIds.has(echo.turnId) &&
 				!(echo.backgroundWake && queuedTurnIds.has(echo.turnId))
 			) acknowledgeLocalEcho?.(echo.turnId);
@@ -373,6 +379,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// Suppress native controls only for dimensions the provider catalog replaces;
 	// a model-only catalog must not hide the Approvals control.
 	const providerOptions = configOptions.options ?? [];
+	// Keep this agent's settings so the new chat page can draw the very bar a
+	// session of it will show, before that session exists.
+	useEffect(() => {
+		if (session.kind !== "worker" || !configOptions.loaded || providerOptions.length === 0) return;
+		rememberChatSettingsTemplate(session.provider, hostId, { options: providerOptions });
+	}, [configOptions.loaded, hostId, providerOptions, session.kind, session.provider]);
 	const hasProviderMode = hasProviderPermissionMode(providerOptions);
 	const hasProviderModel = providerOptions.some(
 		(option) => option.category === "model" || option.id === "model",
@@ -497,7 +509,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// arrival, even over a cached transcript, so history appears once and fades
 	// in instead of flashing, hiding, and reappearing as the controller restarts.
 	const optimisticArrival = Boolean(arriving) && !renderShellFallback;
-	const optimisticChat = (session.kind === "orchestrator" && isLoading && !renderShellFallback) || optimisticArrival;
+	// A task started from the new chat page already shows its brief, so its first
+	// read keeps that frame instead of flashing a loading state.
+	const openingSend = localEchos.some((echo) => echo.opening);
+	const optimisticChat = ((session.kind === "orchestrator" || openingSend) && isLoading && !renderShellFallback) || optimisticArrival;
 	const continueIntent = useRef<{ turnId: string; clientMessageId: string; sequence: number } | null>(null);
 	const renderSnapshot =
 		(optimisticArrival
@@ -535,6 +550,15 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		if (session.provisionState !== "failed" && !targetChatControllerReady && !renderShellFallback && !error && !unavailable) return;
 		useUiStore.getState().setProjectProvisioning(session.workspaceId, false, hostId);
 	}, [error, hostId, isLoading, renderShellFallback, session.kind, session.provisionState, session.workspaceId, targetChatControllerReady, unavailable]);
+
+	// Until the agent's own settings arrive the bar shows the saved ones, disabled. With
+	// none saved yet it waits, so defaults never pass for the chat's own.
+	const settingsReady = Boolean(renderSnapshot) && !optimisticChat && (targetChatControllerReady || agentResuming || waking) &&
+		(!settingsLoading || Boolean(renderSnapshot?.settings?.model || renderSnapshot?.settings?.approvalMode));
+	// The session's own settings have taken over; a later restart must not bring the launch chips back.
+	useEffect(() => {
+		if (settingsReady && !settingsLoading && launchSettings) forgetLaunchSettings(queryClient, session.id, hostId);
+	}, [hostId, launchSettings, queryClient, session.id, settingsLoading, settingsReady]);
 
 	if (isLoading && !renderShellFallback && !optimisticChat) {
 		return (
@@ -734,12 +758,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onOpenShell={onOpenShell}
 				openingShell={openingShell}
 				shellError={shellError}
-				// Until the agent's own settings arrive the bar shows the saved ones, disabled. With
-				// none saved yet it waits, so defaults never pass for the chat's own.
-				settingsReady={!optimisticChat && (targetChatControllerReady || agentResuming || waking) &&
-					(!settingsLoading || Boolean(renderSnapshot.settings?.model || renderSnapshot.settings?.approvalMode))}
+				settingsReady={settingsReady}
 				settingsLoading={settingsLoading}
 				lastModel={lastModel}
+				openingStartedAt={openingStartedAt}
+				// A task started from the new chat page keeps its chips until the agent's own settings load.
+				draftSettings={launchSettings && (!settingsReady || settingsLoading) ? <LaunchSettingsBar {...launchSettings} /> : undefined}
 				models={models}
 				onChooseSettings={hasProviderMode ? undefined : commands.chooseSettings}
 				onRememberPermissions={can(renderSnapshot, "config_options") && !configOptions.loaded

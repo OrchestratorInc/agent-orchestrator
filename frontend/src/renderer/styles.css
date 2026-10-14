@@ -2523,7 +2523,7 @@ html.sidebar-reordering * {
 	transform: none;
 }
 
-/* Welcome sample prompts are list rows like the sidebar's: no press scale. */
+/* Welcome sample prompt chips hold still when pressed. */
 .cursor-chat-surface .welcome-prompt-suggestion:not(:disabled):active {
 	transform: none;
 }
@@ -2710,6 +2710,27 @@ html.sidebar-reordering * {
 	border-radius: var(--radius-chat-composer);
 	background: var(--composer-bg);
 	box-shadow: none;
+	transition: box-shadow 300ms ease-out;
+}
+
+/* With a tray tucked under it, a hairline edge keeps the composer the layer on top. */
+[data-composer-tray] .cursor-chat-composer {
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-text-primary) 7%, transparent);
+}
+
+/* Narrower than the composer and hung from its bottom edge, cancelling the dock's
+   gap-2. It starts at the edge rather than under it: in transparency mode the
+   composer is see-through, and anything behind it would show. 1rem in, the
+   composer's corner has already curved back to the edge. The inset inside is
+   the same on every side. */
+.chat-composer-tray {
+	--tray-inset: 0.375rem;
+
+	margin: -0.5rem 1rem 0;
+	padding: var(--tray-inset);
+	/* Concentric with the rounded-lg control inside it. */
+	border-radius: 0 0 calc(var(--radius-lg) + var(--tray-inset)) calc(var(--radius-lg) + var(--tray-inset));
+	background: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
 }
 
 .chat-composer-startup-shimmer {
@@ -2747,6 +2768,26 @@ html.sidebar-reordering * {
 /* Dragging remains visible without changing the composer's structural edge. */
 .cursor-chat-composer[data-dragging] {
 	background: color-mix(in oklch, var(--composer-bg) 94%, var(--color-logo-accent));
+}
+
+/* The session header arriving in the new chat page's empty strip. */
+@keyframes chat-header-slide-in {
+	from {
+		opacity: 0;
+		transform: translateY(-10px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+.chat-header-slide-in {
+	animation: chat-header-slide-in 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.chat-header-slide-in { animation: none; }
 }
 
 @keyframes queue-dock-in {
@@ -6156,6 +6197,12 @@ html[data-window-translucent="true"] :is(
 	--secondary: var(--solid-secondary);
 	--accent: var(--solid-accent);
 	--sidebar-accent: var(--solid-sidebar-accent);
+}
+
+/* Text drawn in the canvas colour sits on a solid foreground fill (the send
+ * button's arrow), so it must keep the solid colour or it vanishes. */
+html[data-window-translucent="true"] :is(.text-background, .hover\:text-background:hover) {
+	color: var(--solid-bg-primary);
 }
 
 /* tokens.css resolves the legacy aliases on :root, before the swaps above.

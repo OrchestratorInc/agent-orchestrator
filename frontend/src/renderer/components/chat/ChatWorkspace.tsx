@@ -35,12 +35,11 @@ import {
 	type ReactNode,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
-import { ArrowDown, Lightbulb, Loader2, MessageSquarePlus, TriangleAlert, Undo2 } from "lucide-react";
+import { ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, MessageSquarePlus, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "lucide-react";
 import { AnimatePresence, motion, Reorder, useDragControls, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
 import { actionMenuContentClass, actionMenuItemClass } from "../ui/menu-styles";
-import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "../NavRowHighlight";
 import { useScrollFollow } from "../../hooks/useScrollFollow";
 import {
 	defaultRangeExtractor,
@@ -576,6 +575,21 @@ export interface ChatWorkspaceProps {
 	promoteQueuedTurnPendingTurnId?: string;
 	cancelQueuedTurnPendingTurnId?: string;
 	editQueuedTurnPendingTurnId?: string;
+	/** Replaces the turn settings bar, for a chat whose session does not exist yet. */
+	draftSettings?: ReactNode;
+	/** Shown under the composer, for a chat whose session does not exist yet. */
+	draftNotice?: ReactNode;
+	/**
+	 * When the user sent the brief that started this chat. Until the first turn
+	 * settles the chat reads as working from that moment, with no connecting banner.
+	 */
+	openingStartedAt?: string;
+	/** A tray tucked under the composer while the chat is empty, e.g. the new chat page's project picker. */
+	composerTray?: ReactNode;
+	/** An empty header strip sits above: center the empty chat in the window, not below the strip. */
+	centerInWindow?: boolean;
+	/** Show the attach control, disabled, before there is a workspace to attach into. */
+	attachLater?: boolean;
 }
 
 type ChatWorkspaceActivation =
@@ -771,6 +785,12 @@ function ChatWorkspaceContent({
 	promoteQueuedTurnPendingTurnId,
 	cancelQueuedTurnPendingTurnId,
 	editQueuedTurnPendingTurnId,
+	draftSettings,
+	draftNotice,
+	openingStartedAt,
+	composerTray,
+	centerInWindow = false,
+	attachLater,
 	draftScope,
 	draftPersistenceAvailable,
 	onRetryDraftPersistence,
@@ -1140,6 +1160,10 @@ function ChatWorkspaceContent({
 					if (!updateQueueDraft(undefined, prepared.draft.queuedEdit.revision).ok) throw new Error("chat.draft.queueClearFailed");
 				}
 				return;
+			}
+			// Where the composer stands now is where the docking slide starts from.
+			if (wasConversationEmpty.current && composerBoxRef.current) {
+				composerCenteredTopRef.current = composerBoxRef.current.getBoundingClientRect().top;
 			}
 			return onSend?.(text, attachments, clientMessageId, excerpts);
 		},
@@ -1568,6 +1592,17 @@ function ChatWorkspaceContent({
 	// Arriving in a chat that already has messages docks the composer at the
 	// bottom while they load; a chat with none opens centered like any new chat.
 	const arrivingWithHistory = arrivingInChat && Boolean(session?.lastUserMessageAt);
+	// A chat started from the new chat page holds the start-up shimmer from the
+	// send until the agent picks the brief up, on that page and on the session's.
+	// Arriving from the new chat page, whose header strip is empty, the session's
+	// header slides into that strip. Only on that arrival, not on a later visit.
+	const [headerSlideIn] = useState(() => {
+		if (!openingStartedAt || Date.now() - Date.parse(openingStartedAt) > 15_000 || headerSlidSessions.has(snapshot.sessionId)) return false;
+		headerSlidSessions.add(snapshot.sessionId);
+		return true;
+	});
+	const openingStarting = Boolean(openingStartedAt) && startupState !== "failed" && !firstTurnSettled(snapshot) &&
+		!(turn?.state === "running" && snapshot.controller.state !== "connecting");
 	const conversationEmpty = !arrivingWithHistory && snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || sessionRole === "orchestrator");
 	const { t } = useTranslation();
 	const [emptyChatPlaceholder] = useState(
@@ -1602,7 +1637,7 @@ function ChatWorkspaceContent({
 
 		const composerTop = () => (composerBoxRef.current ?? dock).getBoundingClientRect().top;
 		if (conversationEmpty) {
-			composerCenteredTopRef.current = composerTop();
+			composerCenteredTopRef.current ??= composerTop();
 			composerFlipDyRef.current = null;
 			return;
 		}
@@ -1694,6 +1729,7 @@ function ChatWorkspaceContent({
 				orderedAuxiliaryTabs={orderedAuxiliaryTabs}
 				onReorderAuxiliaryTabs={reorderAuxiliaryTabs}
 				inline={isFullscreen || inlineHeader}
+				slideIn={headerSlideIn}
 			/>}
 			<div className="relative flex min-h-0 flex-1 flex-col">
 				{reviewerTarget && session ? (
@@ -1770,6 +1806,7 @@ function ChatWorkspaceContent({
 					) : null}
 					<ControllerBanner
 						controller={snapshot.controller}
+						quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
 						provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
 						transitioning={controllerTransitioning || agentResuming}
 						automaticWakePending={suppressStopped}
@@ -1789,7 +1826,7 @@ function ChatWorkspaceContent({
 						agentStopped={snapshot.controller.state === "stopped" && !(controllerTransitioning || agentResuming || suppressStopped || resumingAgent || startupReconnecting)}
 					/>
 					<div
-						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", arrivingWithHistory && snapshot.items.length === 0 && "justify-end")}
+						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", conversationEmpty && centerInWindow && "pb-inspector-tabs", arrivingWithHistory && snapshot.items.length === 0 && "justify-end")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
 					>
 						<ChatLinkProvider
@@ -1836,6 +1873,7 @@ function ChatWorkspaceContent({
 									rollbackDisabled={Boolean(turn || rollbackPending || newWorkDisabled)}
 									localEchos={localEchos}
 									startup={sessionRole === "orchestrator" ? undefined : startup}
+									openingStartedAt={openingStartedAt}
 									arriving={arrivingInChat}
 								/>
 							</ChatHostId.Provider>
@@ -1873,7 +1911,7 @@ function ChatWorkspaceContent({
 									artifact={artifactSession}
 									onPick={(text) => composerFocusRef.current?.setDraft(text)}
 								/>
-								<div ref={composerBoxRef} className="relative">
+								<div ref={composerBoxRef} className="relative z-10" data-composer-tray={conversationEmpty && composerTray ? "" : undefined}>
 									{welcomeLeaving ? (
 										<h1
 											aria-hidden="true"
@@ -1920,10 +1958,10 @@ function ChatWorkspaceContent({
 										queuedDraftScope={queueEdit ? draftScope : undefined}
 										onQueuedAttachmentsChange={changeQueuedStagedAttachments}
 										onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
-										onInterrupt={turn && !newWorkDisabled ? stableInterrupt : undefined}
-										onContinue={canContinue && !queueEdit ? onContinueTurn : undefined}
+										onInterrupt={turn && !newWorkDisabled && !openingStarting ? stableInterrupt : undefined}
+										onContinue={canContinue && !queueEdit && !openingStarting ? onContinueTurn : undefined}
 										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
-										settings={<>
+										settings={draftSettings ?? <>
 											{agentSwitch ? null : <ContextMeter usage={snapshot.usage} compactsAt={compactsAt} />}
 											{composerSettings}
 										</>}
@@ -1945,11 +1983,13 @@ function ChatWorkspaceContent({
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: undefined
 										}
-										starting={orchestratorStarting || arrivingInChat}
-										disabled={(orchestratorStarting || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
+										starting={orchestratorStarting || arrivingInChat || openingStarting}
+										disabled={(orchestratorStarting || openingStarting || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
 										disabledPlaceholder={
 											arrivingInChat
 												? arrivingPlaceholder
+												: openingStarting
+												? `Starting ${agentLabel(snapshot.harness)}`
 												: orchestratorStarting
 												? setupPlaceholder
 												: controllerTransitioning || newWorkDisabled
@@ -1969,6 +2009,7 @@ function ChatWorkspaceContent({
 										filePaths={filePaths}
 										filePathsTruncated={filePathsTruncated}
 										onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
+										attachLater={attachLater}
 										nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
 										autoFocus={!reviewerActive}
 										autoFocusKey={draftScope.sessionId}
@@ -1992,7 +2033,9 @@ function ChatWorkspaceContent({
 										acceptedClientMessageIds={acceptedClientMessageIds}
 									/>
 								</div>
+								{conversationEmpty && composerTray ? <div className="chat-composer-tray flex items-center">{composerTray}</div> : null}
 								{compactStartup ? <OrchestratorStartupStatus {...compactStartup} /> : null}
+								{draftNotice}
 							</div>
 						</div>
 					</div>
@@ -2177,6 +2220,7 @@ function ChatHeader({
 	orderedAuxiliaryTabs,
 	onReorderAuxiliaryTabs,
 	inline,
+	slideIn = false,
 	session,
 	onSessionRenamed,
 }: {
@@ -2207,6 +2251,7 @@ function ChatHeader({
 	onSessionRenamed?: () => void | Promise<void>;
 	/** Fullscreen content cannot see the normal topbar portal outside its subtree. */
 	inline?: boolean;
+	slideIn?: boolean;
 }) {
 	const { t } = useTranslation();
 	const providerLabel = agentLabel(snapshot.harness);
@@ -2240,7 +2285,7 @@ function ChatHeader({
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(isMac);
 	const tabListRef = useTabListTabStop<HTMLDivElement>();
 	const header = (
-		<header className="flex h-inspector-tabs w-full shrink-0 items-stretch bg-sidebar">
+		<header className={cn("flex h-inspector-tabs w-full shrink-0 items-stretch bg-sidebar", slideIn && "chat-header-slide-in")}>
 			<div
 				className="session-topbar-surface flex min-w-0 flex-1"
 				data-testid="session-workspace-topbar"
@@ -2379,8 +2424,11 @@ function ControllerBanner({
 	onOpenShell,
 	openingShell,
 	shellError,
+	quietConnect = false,
 }: {
 	controller: { state: ControllerState; error?: string };
+	/** The chat already shows the opening brief as working; connecting needs no banner. */
+	quietConnect?: boolean;
 	provisionState?: WorkspaceSession["provisionState"];
 	transitioning?: boolean;
 	automaticWakePending?: boolean;
@@ -2408,6 +2456,7 @@ function ControllerBanner({
 	// presenting its intermediate snapshot as a crash produces a red false alarm.
 	if (controller.state === "ready" || controller.state === "busy" || controller.state === "hibernated") return null;
 	if (controller.state === "stopped" && (transitioning || automaticWakePending)) return null;
+	if (controller.state === "connecting" && quietConnect) return null;
 
 	const copy: Partial<Record<ControllerState, { title: string; tone: string }>> = {
 		connecting: {
@@ -2560,6 +2609,7 @@ export function Timeline({
 	startup,
 	arriving = false,
 	workerUpdates = false,
+	openingStartedAt,
 }: {
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
 	/** Replaces the default "Add to chat" (write to this draft scope's composer). */
@@ -2600,6 +2650,8 @@ export function Timeline({
 	arriving?: boolean;
 	/** Orchestrator chat: draw worker messages and reports as rows, and the orchestrator's handling under them. */
 	workerUpdates?: boolean;
+	/** When the brief that started this chat was sent; see ChatWorkspaceProps. */
+	openingStartedAt?: string;
 }) {
 	const hasTranscript = snapshot.items.length > 0;
 	const arrivedEmpty = useRef(false);
@@ -2897,8 +2949,10 @@ export function Timeline({
 	const queued = useMemo(() => {
 		const ids = queuedTurnIds(snapshot);
 		if (openingTurnId) ids.delete(openingTurnId);
+		const firstTurn = snapshot.turns[0];
+		if (openingStartedAt && firstTurn && !firstTurnSettled(snapshot)) ids.delete(firstTurn.id);
 		return ids;
-	}, [openingTurnId, snapshot]);
+	}, [openingStartedAt, openingTurnId, snapshot]);
 	const decide = useStableCallback(onDecide);
 	const rollback = useStableCallback(onRollback);
 	const openFiles = useStableCallback(onOpenFiles);
@@ -3402,19 +3456,22 @@ export function Timeline({
 			lastSeenLatestSequence.current = snapshot.latestSequence;
 			return;
 		}
+		const openingTurnId = openingStartedAt ? snapshot.turns[0]?.id : undefined;
 		const added = new Set(
 			humanMessages
 				.filter(
 					(item) =>
 						!seenHumanMessageIds.current?.has(itemKey(item)) &&
-						item.sequence > (lastSeenLatestSequence.current ?? -Infinity),
+						item.sequence > (lastSeenLatestSequence.current ?? -Infinity) &&
+						// The brief that started the chat made its entrance on the new chat page.
+						!(openingTurnId && item.turnId === openingTurnId),
 				)
 				.map(itemKey),
 		);
 		seenHumanMessageIds.current = humanMessageKeys;
 		lastSeenLatestSequence.current = snapshot.latestSequence;
 		if (added.size > 0) setNewHumanMessageIds(added);
-	}, [timelineItems, snapshot.latestSequence]);
+	}, [timelineItems, snapshot.latestSequence, openingStartedAt, snapshot.turns]);
 	const previousEchoIds = useRef<ReadonlySet<string>>(new Set(localEchos.map((echo) => echo.clientMessageId)));
 	useLayoutEffect(() => {
 		const ids = new Set(localEchos.map((echo) => echo.clientMessageId));
@@ -3424,15 +3481,32 @@ export function Timeline({
 		// The reader just sent: bring them to their prompt even if they had scrolled away.
 		requestGlideToEnd();
 	}, [localEchos, requestGlideToEnd]);
+	// The brief that started this chat reads as working from the moment it was
+	// sent, through the agent connecting, until its turn settles.
+	const openingPending = Boolean(openingStartedAt) && !firstTurnSettled(snapshot);
 	const grouped = useMemo(() => {
 		const hiddenTurns = hiddenTimelineTurnIds(snapshot);
 		if (openingTurnId) hiddenTurns.delete(openingTurnId);
-		return groupByTurn({ ...snapshot, items: timelineItems }).filter(
-			(group) => !group.turnId || !hiddenTurns.has(group.turnId),
-		);
-	}, [openingTurnId, snapshot, timelineItems]);
+		const firstTurn = snapshot.turns[0];
+		if (openingPending && firstTurn) hiddenTurns.delete(firstTurn.id);
+		return groupByTurn({ ...snapshot, items: timelineItems })
+			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
+			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
+				? { ...group, live: true, liveStartedAt: openingStartedAt }
+				: group);
+	}, [openingPending, openingStartedAt, openingTurnId, snapshot, timelineItems]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
+	// One slot carries the start-up row from the first frame: the opening turn's
+	// group, or before that turn exists, the brief's own live group. Drawing it
+	// anywhere else first would make it jump lines when the turn arrives.
+	const startupGroupKey = startup && showStartup
+		? groups.find((group) => (openingTurnId ? group.turnId === openingTurnId : group.live))?.key
+		: undefined;
+	// A chat started from the new chat page shows its setup as the composer's
+	// shimmer under a plain Working row. Other starts keep the checklist, which
+	// is what explains a long setup; a failure always names its steps.
+	const rowStartup = startup ? { ...startup, quiet: Boolean(openingStartedAt) && !startup.failed } : undefined;
 	// Read by syncScrollLayout (a stable callback) so the initial snap only latches
 	// once real conversation content exists (history can load after the chat opens).
 	const groupCountRef = useRef(groups.length);
@@ -4054,7 +4128,7 @@ export function Timeline({
 									workerUpdates={workerUpdates}
 									// Consecutive quiet worker turns read as one list of rows, not separate turns.
 									tight={workerUpdates && isQuietWorkerGroup(group) && isQuietWorkerGroup(groups[index - 1])}
-									startup={showStartup && group.turnId === openingTurnId ? startup : undefined}
+									startup={group.key === startupGroupKey ? rowStartup : undefined}
 									onSelectAnnotation={selectAnnotation}
 									activityDisclosureOverrides={activityDisclosureOverrides}
 									onActivityDisclosureChange={onActivityDisclosureChange}
@@ -4103,12 +4177,15 @@ export function Timeline({
 					</div>
 					{/* Normally drawn inside the opening turn's group; this covers a start
 					    whose brief is not in the timeline. */}
-					{startup && showStartup && !groups.some((group) => group.turnId === openingTurnId) ? (
-						<LiveResponseStatus startupLabel={t(startup.failed ? "chat.startup.failed" : "chat.startup.running")} failed={startup.failed}>
-							<SessionStartup {...startup} />
+					{rowStartup && showStartup && !startupGroupKey ? (
+						<LiveResponseStatus startupLabel={rowStartup.quiet ? undefined : t(rowStartup.failed ? "chat.startup.failed" : "chat.startup.running")} failed={rowStartup.failed}>
+							{rowStartup.quiet ? null : <SessionStartup {...rowStartup} />}
 						</LiveResponseStatus>
 					) : turn?.state === "running" && !groups.some((group) => group.turnId === turn.id) ? (
 						<LiveResponseStatus startedAt={turn.startedAt ?? turn.requestedAt} />
+					) : openingPending && !groups.some((group) => group.live) ? (
+						// Before the brief has a turn of its own (still being created).
+						<LiveResponseStatus startedAt={openingStartedAt} />
 					) : null}
 					{messageEdit && !editedMessageVisible ? (
 						<div className="flex justify-end" data-chat-scroll-anchor="">
@@ -4337,7 +4414,7 @@ const TurnGroup = memo(function TurnGroup({
 	queued: boolean;
 	newHumanMessageIds: ReadonlySet<string>;
 	/** The opening turn of a starting session: its setup checklist. */
-	startup?: ComponentProps<typeof SessionStartup>;
+	startup?: ComponentProps<typeof SessionStartup> & { quiet?: boolean };
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 	workerUpdates?: boolean;
 	tight?: boolean;
@@ -4489,10 +4566,11 @@ const TurnGroup = memo(function TurnGroup({
 				key="turn-working"
 				startedAt={group.liveStartedAt}
 				settling={!startup && !group.live}
-				startupLabel={startup ? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : undefined}
+				// A quiet start reads as working from the send, with no label swap.
+				startupLabel={startup && !startup.quiet ? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : undefined}
 				failed={startup?.failed}
 			>
-				{startup ? <SessionStartup {...startup} /> : null}
+				{startup && !startup.quiet ? <SessionStartup {...startup} /> : null}
 			</LiveResponseStatus>,
 		);
 	}
@@ -4861,6 +4939,7 @@ function echoMatchesItem(
 	backgroundQueuedTurnIds: ReadonlySet<string>,
 ): boolean {
 	if (item.kind !== "message" || item.role !== "user" || item.origin !== "human") return false;
+	if (echo.opening) return true;
 	// A background wake keeps its echo in the timeline while the durable turn sits queued.
 	if (echo.turnId && backgroundQueuedTurnIds.has(echo.turnId) && item.turnId === echo.turnId) return false;
 	if (item.clientMessageId) return item.clientMessageId === echo.clientMessageId;
@@ -5084,6 +5163,15 @@ function previewText(value: string, limit: number): string {
 	return plain.length > limit ? `${plain.slice(0, limit - 1).trimEnd()}…` : plain;
 }
 
+/** Sessions whose header already slid in on arrival from the new chat page. */
+const headerSlidSessions = new Set<string>();
+
+/** The first turn has an outcome, so the opening brief no longer reads as pending. */
+function firstTurnSettled(snapshot: ConversationSnapshot): boolean {
+	const first = snapshot.turns[0];
+	return Boolean(first && first.state !== "queued" && first.state !== "running");
+}
+
 /**
  * Group items by the turn that produced them, so a completed turn can be closed
  * off with its outcome.
@@ -5299,16 +5387,19 @@ function rendersNothing(run: TimelineRun): boolean {
 	return (item.activityKind === "user_input" || item.activityKind === "approval") && item.status === "pending";
 }
 
-const ARTIFACT_PROMPT_KEYS = [
-	"chat.welcome.artifactPrompt.plan",
-	"chat.welcome.artifactPrompt.compare",
-	"chat.welcome.artifactPrompt.notes",
+// Each chip names its request in a few words; picking it fills in the whole request.
+const ARTIFACT_PROMPTS = [
+	{ prompt: "chat.welcome.artifactPrompt.plan", chip: "chat.welcome.chip.plan", icon: ListTodo },
+	{ prompt: "chat.welcome.artifactPrompt.compare", chip: "chat.welcome.chip.compare", icon: Columns2 },
+	{ prompt: "chat.welcome.artifactPrompt.notes", chip: "chat.welcome.chip.notes", icon: NotebookPen },
+	{ prompt: "chat.welcome.artifactPrompt.slides", chip: "chat.welcome.chip.slides", icon: Presentation },
 ] as const;
 
-const CHAT_PROMPT_KEYS = [
-	"chat.welcome.prompt.review",
-	"chat.welcome.prompt.tests",
-	"chat.welcome.prompt.trace",
+const CHAT_PROMPTS = [
+	{ prompt: "chat.welcome.prompt.review", chip: "chat.welcome.chip.review", icon: ScanSearch },
+	{ prompt: "chat.welcome.prompt.tests", chip: "chat.welcome.chip.tests", icon: FlaskConical },
+	{ prompt: "chat.welcome.prompt.trace", chip: "chat.welcome.chip.trace", icon: Route },
+	{ prompt: "chat.welcome.prompt.simplify", chip: "chat.welcome.chip.simplify", icon: WandSparkles },
 ] as const;
 
 /**
@@ -5319,7 +5410,7 @@ const CHAT_PROMPT_KEYS = [
 function WelcomePromptSuggestions({ open, artifact, onPick }: { open: boolean; artifact: boolean; onPick: (text: string) => void }) {
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
-	const keys = artifact ? ARTIFACT_PROMPT_KEYS : CHAT_PROMPT_KEYS;
+	const prompts = artifact ? ARTIFACT_PROMPTS : CHAT_PROMPTS;
 	return (
 		<AnimatePresence initial={false}>
 			{open ? (
@@ -5327,26 +5418,31 @@ function WelcomePromptSuggestions({ open, artifact, onPick }: { open: boolean; a
 					key="welcome-prompts"
 					initial={{ height: 0, opacity: 0 }}
 					animate={{ height: "auto", opacity: 1, transition: { duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] } }}
-					exit={{ height: 0, opacity: 0, transition: { duration: reducedMotion ? 0 : 0.16, ease: [0.4, 0, 1, 1] } }}
+					// The chips fade first, then the row folds away with a soft ease in and out,
+					// so the composer below settles instead of being yanked up.
+					exit={{
+						height: 0,
+						opacity: 0,
+						transition: reducedMotion ? { duration: 0 } : {
+							height: { duration: 0.32, ease: [0.65, 0, 0.35, 1] },
+							opacity: { duration: 0.14, ease: "easeOut" },
+						},
+					}}
 					// The dock's gap-2 sits outside this box. Cancel it and put the space back as
 					// padding inside, so it collapses with the height instead of snapping.
 					className="-mb-2 overflow-hidden"
 				>
-					<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-col divide-y divide-border pb-3">
-						{keys.map((key) => (
-							<li key={key} className="py-0.5">
+					<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-wrap justify-center gap-2 pb-4">
+						{prompts.map(({ prompt, chip, icon: Icon }) => (
+							<li key={prompt}>
 								<button
 									type="button"
-									// Same growing pill as the sidebar rows; the host stays transparent.
-									className={cn(
-										"welcome-prompt-suggestion flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-control text-muted-foreground focus-visible:outline-none",
-										NAV_ROW_HIGHLIGHT_HOST_CLASS,
-									)}
-									onClick={() => onPick(t(key))}
+									title={t(prompt)}
+									className="welcome-prompt-suggestion inline-flex h-8 items-center gap-1.5 rounded-full border border-border px-3 text-control text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:border-ring focus-visible:bg-interactive-hover focus-visible:text-foreground"
+									onClick={() => onPick(t(prompt))}
 								>
-									<NavRowHighlight />
-									<Lightbulb aria-hidden="true" className="relative z-[1] size-icon-sm shrink-0" />
-									<span className="relative z-[1] truncate">{t(key)}</span>
+									<Icon aria-hidden="true" className="size-icon-sm shrink-0" />
+									<span className="whitespace-nowrap">{t(chip)}</span>
 								</button>
 							</li>
 						))}
