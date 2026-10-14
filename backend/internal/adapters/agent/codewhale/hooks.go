@@ -43,7 +43,7 @@ func runCodewhaleCommand(ctx context.Context, binary, workingDir string, env map
 	if strings.TrimSpace(workingDir) != "" {
 		cmd.Dir = workingDir
 	}
-	cmd.Env = processenv.Merge(env)
+	cmd.Env = processenv.Merge(env, nil)
 	return cmd.CombinedOutput()
 }
 

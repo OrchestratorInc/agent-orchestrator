@@ -50,7 +50,7 @@ type spawnFunc func(Launch, string) (*process, error)
 func spawnAgent(launch Launch, workdir string) (*process, error) {
 	cmd := aoprocess.Command(launch.Command, launch.Args...)
 	cmd.Dir = workdir
-	cmd.Env = processenv.Merge(launch.Env)
+	cmd.Env = processenv.Merge(launch.Env, nil)
 	configureProcessGroup(cmd)
 
 	stdin, err := cmd.StdinPipe()

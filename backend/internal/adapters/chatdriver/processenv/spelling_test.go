@@ -14,7 +14,7 @@ func TestMergePreservesVariableSpellingForBash(t *testing.T) {
 	t.Setenv("buildMode", "parent")
 	t.Setenv("inheritedMode", "unchanged")
 	cmd := exec.CommandContext(context.Background(), bash, "--noprofile", "--norc", "-c", `printf '%s:%s' "$buildMode" "$inheritedMode"`)
-	cmd.Env = Merge(map[string]string{"buildMode": "production"})
+	cmd.Env = Merge(map[string]string{"buildMode": "production"}, nil)
 	output, err := cmd.CombinedOutput()
 	if err != nil || string(output) != "production:unchanged" {
 		t.Fatalf("Bash project variable: %v: %q", err, output)
