@@ -65,7 +65,7 @@ import {
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useBrowserView, type BrowserViewModel } from "../hooks/useBrowserView";
-import { reconnectBrowserRuntime, useBrowserRuntimeState } from "../hooks/useBrowserRuntimeState";
+import { useBrowserRuntimeState } from "../hooks/useBrowserRuntimeState";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
 import { formatBrowserAnnotationMessage, type BrowserAnnotationSubmitPayload } from "../../shared/browser-annotations";
 import type { BrowserProfile } from "../../shared/browser-profiles";
@@ -933,11 +933,14 @@ export function BrowserPanelView({
 							: "";
 	const agentStatusLabel = agentActivityLabel(agentBrowserActivity, agentBrowserActive);
 	const runtimeState = useBrowserRuntimeState();
-	const runtimeDisconnected = hasNativeBrowser && runtimeState?.connected === false;
+	// A handshake in flight (launch, Reconnect, a daemon restart's first redial) is
+	// not a disconnect yet; alarming then would flash the alert on every relink.
+	const runtimeDisconnected =
+		hasNativeBrowser && runtimeState !== null && !runtimeState.connected && !runtimeState.connecting;
 	const reconnectRuntime = useCallback(async () => {
 		setRuntimeReconnectPending(true);
 		try {
-			await reconnectBrowserRuntime();
+			await window.ao?.browser.reconnectRuntime();
 		} finally {
 			setRuntimeReconnectPending(false);
 		}
@@ -1286,19 +1289,22 @@ export function BrowserPanelView({
 				<div className="browser-panel__toolbar" data-testid="browser-toolbar">
 							{runtimeDisconnected ? (
 								<div className="flex min-w-0 items-center gap-1.5 text-2xs text-destructive" data-testid="browser-runtime-alert" role="alert">
-									<span className="truncate">
-										{runtimeState?.rejected ? t("browser.runtimeRejected") : t("browser.runtimeDisconnected")}
+									<span className="truncate" title={runtimeState.rejected ? t("browser.runtimeRejected") : undefined}>
+										{runtimeState.rejected ? t("browser.runtimeRejected") : t("browser.runtimeDisconnected")}
 									</span>
-									<Button
-										className="shrink-0"
-										disabled={runtimeReconnectPending}
-										onClick={() => void reconnectRuntime()}
-										size="sm"
-										type="button"
-										variant="outline"
-									>
-										{t("browser.reconnectRuntime")}
-									</Button>
+									{/* Reconnecting sends the same token, which the daemon would refuse again. */}
+									{runtimeState.rejected ? null : (
+										<Button
+											className="shrink-0"
+											disabled={runtimeReconnectPending}
+											onClick={() => void reconnectRuntime()}
+											size="sm"
+											type="button"
+											variant="outline"
+										>
+											{t("browser.reconnectRuntime")}
+										</Button>
+									)}
 								</div>
 							) : null}
 							<BrowserControlTooltip label={t("browser.back")}>

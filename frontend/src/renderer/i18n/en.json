@@ -207,7 +207,7 @@
 	"browser.reopenClosedTab": "Reopen closed tab",
 	"browser.retryAnnotation": "Retry annotation",
 	"browser.runtimeDisconnected": "Browser runtime disconnected.",
-	"browser.runtimeRejected": "Browser runtime refused by the AO daemon. Restart AO to relink it.",
+	"browser.runtimeRejected": "The AO daemon refused the browser runtime because another AO launch started it. Run `ao stop`, then reopen AO.",
 	"browser.reconnectRuntime": "Reconnect",
 	"browser.returnToPanel": "Return to panel",
 	"browser.sending": "Sending",

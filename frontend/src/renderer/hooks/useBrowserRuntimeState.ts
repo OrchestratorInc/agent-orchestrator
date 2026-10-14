@@ -1,36 +1,55 @@
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import type { BrowserRuntimeState } from "../../main/browser-view-host";
 
 // null until the main process answers, so a panel never flashes "disconnected"
 // before the first read.
 let current: BrowserRuntimeState | null = null;
-const listeners = new Set<(state: BrowserRuntimeState | null) => void>();
-let revision = 0;
-let stop: (() => void) | undefined;
+const listeners = new Set<() => void>();
+let stopIpc: (() => void) | undefined;
 
 function receive(state: BrowserRuntimeState) {
-	if (current?.connected === state.connected && current.rejected === state.rejected) return;
+	if (
+		current?.connected === state.connected &&
+		current.connecting === state.connecting &&
+		current.rejected === state.rejected
+	) {
+		return;
+	}
 	current = state;
-	revision += 1;
-	for (const listener of listeners) listener(state);
+	listeners.forEach((listener) => listener());
 }
 
-function connect() {
-	let live = true;
-	// Subscribe before reading. A late snapshot must never replace a push.
-	const off = window.ao?.browser.onRuntimeState(receive);
-	const requestedRevision = revision;
-	void window.ao?.browser
-		.getRuntimeState()
-		.then((state) => {
-			if (live && requestedRevision === revision) receive(state);
-		})
-		.catch(() => undefined);
+// One IPC subscription for every mounted panel, opened by the first and closed by
+// the last. It subscribes before reading, so a late snapshot never replaces a push.
+function subscribe(listener: () => void): () => void {
+	listeners.add(listener);
+	if (!stopIpc) {
+		const session = { live: true, pushed: false };
+		const off = window.ao?.browser.onRuntimeState((state) => {
+			session.pushed = true;
+			receive(state);
+		});
+		void window.ao?.browser
+			.getRuntimeState()
+			.then((state) => {
+				if (session.live && !session.pushed) receive(state);
+			})
+			.catch(() => undefined);
+		stopIpc = () => {
+			session.live = false;
+			off?.();
+		};
+	}
 	return () => {
-		live = false;
-		off?.();
+		listeners.delete(listener);
+		if (listeners.size > 0) return;
+		stopIpc?.();
+		stopIpc = undefined;
+		current = null;
 	};
 }
+
+const getSnapshot = () => current;
 
 /**
  * The desktop browser runtime link, read only by the surfaces that show it. It
@@ -38,23 +57,5 @@ function connect() {
  * the whole SessionView that owns the view model (#6466).
  */
 export function useBrowserRuntimeState(): BrowserRuntimeState | null {
-	const [state, setState] = useState(current);
-	useEffect(() => {
-		listeners.add(setState);
-		setState(current);
-		if (!stop) stop = connect();
-		return () => {
-			listeners.delete(setState);
-			if (listeners.size === 0) {
-				stop?.();
-				stop = undefined;
-				current = null;
-			}
-		};
-	}, []);
-	return state;
-}
-
-export async function reconnectBrowserRuntime(): Promise<void> {
-	await window.ao?.browser.reconnectRuntime();
+	return useSyncExternalStore(subscribe, getSnapshot);
 }

@@ -1,9 +1,12 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserRuntimeState } from "../../main/browser-view-host";
-import { reconnectBrowserRuntime, useBrowserRuntimeState } from "./useBrowserRuntimeState";
+import { useBrowserRuntimeState } from "./useBrowserRuntimeState";
 
 const original = window.ao;
+const DISCONNECTED: BrowserRuntimeState = { connected: false, connecting: false, rejected: false };
+const CONNECTED: BrowserRuntimeState = { connected: true, connecting: false, rejected: false };
+const REJECTED: BrowserRuntimeState = { connected: false, connecting: false, rejected: true };
 
 function installBridge(read: () => Promise<BrowserRuntimeState>) {
 	const listeners = new Set<(state: BrowserRuntimeState) => void>();
@@ -30,12 +33,13 @@ afterEach(() => {
 
 describe("useBrowserRuntimeState", () => {
 	it("hydrates a late-mounted panel and follows pushes", async () => {
-		const bridge = installBridge(async () => ({ connected: false, rejected: false }));
+		const bridge = installBridge(async () => DISCONNECTED);
 		const { result, unmount } = renderHook(() => useBrowserRuntimeState());
 
-		await waitFor(() => expect(result.current).toEqual({ connected: false, rejected: false }));
-		act(() => bridge.push({ connected: false, rejected: true }));
-		expect(result.current).toEqual({ connected: false, rejected: true });
+		expect(result.current).toBeNull();
+		await waitFor(() => expect(result.current).toEqual(DISCONNECTED));
+		act(() => bridge.push(REJECTED));
+		expect(result.current).toEqual(REJECTED);
 
 		unmount();
 		expect(bridge.listeners.size).toBe(0);
@@ -51,26 +55,22 @@ describe("useBrowserRuntimeState", () => {
 		);
 		const { result, unmount } = renderHook(() => useBrowserRuntimeState());
 
-		act(() => bridge.push({ connected: true, rejected: false }));
-		await act(async () => resolveRead({ connected: false, rejected: true }));
+		act(() => bridge.push(CONNECTED));
+		await act(async () => resolveRead(REJECTED));
 
-		expect(result.current).toEqual({ connected: true, rejected: false });
+		expect(result.current).toEqual(CONNECTED);
 		unmount();
 	});
 
 	it("shares one subscription between panels", () => {
-		const bridge = installBridge(async () => ({ connected: true, rejected: false }));
+		const bridge = installBridge(async () => CONNECTED);
 		const first = renderHook(() => useBrowserRuntimeState());
 		const second = renderHook(() => useBrowserRuntimeState());
 
 		expect(bridge.browser.onRuntimeState).toHaveBeenCalledOnce();
 		first.unmount();
+		expect(bridge.listeners.size).toBe(1);
 		second.unmount();
-	});
-
-	it("asks the main process to relink", async () => {
-		const bridge = installBridge(async () => ({ connected: false, rejected: true }));
-		await reconnectBrowserRuntime();
-		expect(bridge.browser.reconnectRuntime).toHaveBeenCalledOnce();
+		expect(bridge.listeners.size).toBe(0);
 	});
 });

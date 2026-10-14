@@ -170,8 +170,12 @@ export type BrowserAgentActivityState = {
 };
 
 export type BrowserRuntimeState = {
+	/** The daemon answered this app's hello with hello-ok. */
 	connected: boolean;
-	/** The daemon keeps refusing this app's handshake; reconnecting alone won't fix it. */
+	/** A handshake that should settle soon is in flight: the link just started, or an
+	 *  accepted link dropped and is redialing. Not yet a disconnect worth showing. */
+	connecting: boolean;
+	/** The daemon refused this app's hello. Reconnecting with the same token can't help. */
 	rejected: boolean;
 };
 
