@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -126,6 +127,35 @@ func TestChangesPanelMissingProjectIsHardened(t *testing.T) {
 	exerciseChangesPanel(t, NewWithDeps(Deps{Store: st}))
 	if data, err := os.ReadFile(marker); err == nil {
 		t.Fatalf("host git ran a command planted in a nested repository: %q", data)
+	}
+}
+
+// The PR files reads run git in the agent-controlled worktree, so the source
+// they share must hand them the sandbox-marked context, not only use it for
+// its own fetch.
+func TestPRFileSourceCarriesSandboxMarking(t *testing.T) {
+	for _, mode := range []domain.SandboxMode{domain.SandboxModeOff, domain.SandboxModePerAgent} {
+		t.Run(string(mode), func(t *testing.T) {
+			repo := newWorkspaceRepo(t)
+			runGit(t, repo, "remote", "add", "origin", "https://example.test/acme/repo.git")
+			base := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+			writeWorkspaceFile(t, repo, "README.md", "pull request\n")
+			runGit(t, repo, "commit", "-am", "pr change")
+			head := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+			st := newFakeStore()
+			st.projects["proj"] = domain.ProjectRecord{ID: "proj", Path: repo, Config: domain.ProjectConfig{Sandbox: domain.SandboxConfig{Mode: mode, Image: "node:22"}}}
+			st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", ProjectID: "proj", Kind: domain.KindWorker, Metadata: domain.SessionMetadata{WorkspacePath: repo}}
+			st.prs["ao-1"] = []domain.PullRequest{{Number: 42, URL: "https://example.test/acme/repo/-/merge_requests/42", Provider: "gitlab", Host: "example.test", Repo: "acme/repo", BaseSHA: base, HeadSHA: head}}
+
+			ctx, _, _, err := NewWithDeps(Deps{Store: st}).prFileSource(context.Background(), "ao-1", 42, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			marked, _ := ctx.Value(sandboxedWorkspaceGitKey{}).(bool)
+			if want := mode != domain.SandboxModeOff; marked != want {
+				t.Fatalf("sandbox marking = %v, want %v", marked, want)
+			}
+		})
 	}
 }
 
