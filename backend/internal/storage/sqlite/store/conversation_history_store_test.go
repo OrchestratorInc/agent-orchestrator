@@ -364,6 +364,7 @@ func TestFirstOrchestratorControllerMovesProvisioningQueue(t *testing.T) {
 		{"opening brief", "client-0", string(excerpt)},
 		{"follow-up", "client-1", ""},
 		{"already delivered", "client-delivered", ""},
+		{"interrupted drain", "client-3", ""},
 	} {
 		if _, err := s.AppendUserMessage(ctx, provisioning.ID, orchestrator.ID, "", domain.ConversationMessage{
 			ID: fmt.Sprintf("queued-message-%d", i), Text: queued.text, Origin: domain.MessageOriginHuman,
@@ -376,6 +377,11 @@ func TestFirstOrchestratorControllerMovesProvisioningQueue(t *testing.T) {
 	if err := s.UpdateQueuedTurnMessage(ctx, provisioning.ID, "queued-turn-1", "edited follow-up", "", 0,
 		histClock.Add(10*time.Second), editReceipt); err != nil {
 		t.Fatalf("edit queued follow-up: %v", err)
+	}
+	// A drain that reserved a turn and then died leaves promotion_started_at set.
+	// That turn moves too, rather than staying where no lookup can find it.
+	if _, err := s.ReserveQueuedTurnForPromotion(ctx, provisioning.ID, "queued-turn-3", histClock.Add(20*time.Second)); err != nil {
+		t.Fatalf("reserve queued turn for an interrupted drain: %v", err)
 	}
 
 	reset := domain.ConversationActivity{
@@ -405,10 +411,10 @@ func TestFirstOrchestratorControllerMovesProvisioningQueue(t *testing.T) {
 			t.Fatalf("message %s at sequence %d, past the returned latest %d", message.ID, message.Sequence, opened.LatestSequence)
 		}
 	}
-	if !reflect.DeepEqual(texts, []string{"opening brief", "edited follow-up"}) {
-		t.Fatalf("visible project messages = %q, want both prompts after the boundary, in order", texts)
+	if !reflect.DeepEqual(texts, []string{"opening brief", "edited follow-up", "interrupted drain"}) {
+		t.Fatalf("visible project messages = %q, want the queued prompts after the boundary, in order", texts)
 	}
-	for _, id := range []string{"queued-turn-0", "queued-turn-1"} {
+	for _, id := range []string{"queued-turn-0", "queued-turn-1", "queued-turn-3"} {
 		turn, err := s.TurnByID(ctx, id)
 		if err != nil || turn.ConversationID != project.ID || turn.State != domain.TurnStateQueued {
 			t.Fatalf("turn %s after adoption = %+v, %v; want queued in the project row under the same id", id, turn, err)
