@@ -815,7 +815,14 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 		fallback.Warning = discoverErr.Error()
 		fallback.WarningCode = warningCode
 		fallback.RefreshRecommended = true
-		if err := s.saveFailedCatalog(persistCtx, decodedCatalog{Catalog: fallback, ProjectID: projectID}, fallback, generation); err == nil {
+		// An empty catalog still carries retry history. Preserve it for the same
+		// inputs so cold discovery failures eventually exhaust their retry budget.
+		previous := cached
+		if !cacheMatchesInputs {
+			previous = decodedCatalog{Catalog: fallback, ProjectID: projectID}
+			previous.Catalog.Metadata = catalogMetadata(request)
+		}
+		if err := s.saveFailedCatalog(persistCtx, previous, fallback, generation); err == nil {
 			if updated, found, _ := s.cachedCatalog(persistCtx, agentID, projectID); found {
 				return updated.Catalog, nil
 			}

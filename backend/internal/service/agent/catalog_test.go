@@ -392,6 +392,74 @@ func TestChangedInputsStartANewRetrySequence(t *testing.T) {
 	}
 }
 
+func TestEmptyModelDiscoveryPreservesRetrySequence(t *testing.T) {
+	for _, reset := range []string{"manual refresh", "changed inputs"} {
+		t.Run(reset, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			now := time.Now().UTC()
+			cache := &fakeModelCache{}
+			discoverer := &fakeModelDiscoverer{version: "v1", err: errors.New("offline")}
+			svc := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, cache, nil, discoverer)
+			svc.ctx = ctx
+			svc.now = func() time.Time { return now }
+
+			for attempt, delay := range []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, 0} {
+				got, err := svc.RevalidateModels(ctx, "claude-code", "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(got.Models) != 0 || got.RefreshState != "error" || got.Warning != "offline" {
+					t.Fatalf("failed empty discovery = %#v", got)
+				}
+				record, ok, err := cache.GetAgentModelCatalog(ctx, "claude-code", "")
+				if err != nil || !ok {
+					t.Fatalf("cached failure = (%#v, %v, %v)", record, ok, err)
+				}
+				if record.RetryCount != int64(attempt+1) || discoverer.discoverCalls.Load() != int32(attempt+1) {
+					t.Fatalf("attempt %d: retry count = %d, discoveries = %d", attempt+1, record.RetryCount, discoverer.discoverCalls.Load())
+				}
+				if delay == 0 {
+					if !record.RetryAt.IsZero() || got.RetryAt != nil || got.RefreshRecommended {
+						t.Fatalf("exhausted discovery still recommends retry: %#v", got)
+					}
+				} else {
+					wantRetryAt := now.Add(delay)
+					if !record.RetryAt.Equal(wantRetryAt) || got.RetryAt == nil || !got.RetryAt.Equal(wantRetryAt) || !got.RefreshRecommended {
+						t.Fatalf("attempt %d: retryAt = %v, want %s", attempt+1, got.RetryAt, wantRetryAt)
+					}
+				}
+				// Automatic reads must respect both the backoff and the stop limit.
+				if _, err := svc.RevalidateModels(ctx, "claude-code", ""); err != nil {
+					t.Fatal(err)
+				}
+				if discoverer.discoverCalls.Load() != int32(attempt+1) {
+					t.Fatal("automatic revalidation ignored retry backoff or exhaustion")
+				}
+				now = now.Add(delay)
+			}
+
+			var err error
+			if reset == "manual refresh" {
+				_, err = svc.Models(ctx, "claude-code", "", true)
+			} else {
+				discoverer.version = "v2"
+				_, err = svc.RevalidateModels(ctx, "claude-code", "")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			record, ok, err := cache.GetAgentModelCatalog(ctx, "claude-code", "")
+			if err != nil || !ok {
+				t.Fatalf("reset cache = (%#v, %v, %v)", record, ok, err)
+			}
+			if record.RetryCount != 1 || !record.RetryAt.Equal(now.Add(time.Minute)) || record.InputFingerprint != discoverer.version || discoverer.discoverCalls.Load() != 5 {
+				t.Fatalf("%s did not restart the retry sequence: %#v", reset, record)
+			}
+		})
+	}
+}
+
 func TestOnlyManualModelRefreshPersistsLoadingState(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
