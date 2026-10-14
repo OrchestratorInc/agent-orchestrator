@@ -210,6 +210,35 @@ func TestEnsureSharedKeepsPromptsRoot(t *testing.T) {
 	}
 }
 
+// The system prompt sends deliverables to the host artifact dir, so it must be
+// mounted writable: per-agent gets its own dir, shared the artifacts root.
+func TestEnsureMountsArtifactDirWritable(t *testing.T) {
+	s, fr, data := testSandbox(t, []fakeCall{
+		{match: "inspect", err: errors.New("No such object")},
+		{match: "run -d"},
+		{match: "command -v"},
+	})
+	req := perAgentReq(filepath.Join(data, "worktrees", "p", "s1"))
+	if _, err := s.Ensure(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	own := filepath.Join(data, "artifacts", "s1")
+	if !strings.Contains(runCall(t, fr), bindArg(own)) || strings.Contains(runCall(t, fr), bindArg(filepath.Join(data, "artifacts"))) {
+		t.Fatalf("per-agent run should bind only %s read-write:\n%s", own, runCall(t, fr))
+	}
+	if fi, err := os.Stat(own); err != nil || !fi.IsDir() {
+		t.Fatalf("own artifact dir not created: %v", err)
+	}
+	req.Config.Mode = domain.SandboxModeShared
+	m, err := s.mounts(req, gitLayout{dir: gitDirOf(data)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root := filepath.Join(data, "artifacts"); !reflect.DeepEqual(findMount(m, root), &mount{Path: root}) {
+		t.Fatalf("shared mounts = %+v, want the artifacts root read-write", m)
+	}
+}
+
 func findMount(ms []mount, path string) *mount {
 	for i := range ms {
 		if ms[i].Path == path {

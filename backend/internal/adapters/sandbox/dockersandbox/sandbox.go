@@ -17,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 )
 
 const (
@@ -154,6 +155,9 @@ func (s *Sandbox) mounts(req ports.SandboxRequest, g gitLayout) ([]mount, error)
 		{Path: SessionStateDir(s.cfg.DataDir, req.ProjectID, req.SessionID)},
 	}
 	prompts := filepath.Join(s.cfg.DataDir, "prompts", string(req.SessionID))
+	// The system prompt tells the agent to write deliverables to its host
+	// artifact dir, so that path must be writable inside the container.
+	artifacts := sessionartifacts.Dir(s.cfg.DataDir, req.SessionID)
 	if req.Config.Mode == domain.SandboxModeShared {
 		work, err := sharedWorkRoot(filepath.Join(s.cfg.ManagedRoot, string(req.ProjectID)), req.WorkspacePath)
 		if err != nil {
@@ -167,9 +171,10 @@ func (s *Sandbox) mounts(req ports.SandboxRequest, g gitLayout) ([]mount, error)
 		}
 		state = []mount{{Path: projectDir}}
 		prompts = filepath.Join(s.cfg.DataDir, "prompts")
+		artifacts = filepath.Join(s.cfg.DataDir, "artifacts")
 	}
 	m = append(m, gitMounts(req, g)...)
-	m = append(m, mount{Path: prompts, ReadOnly: true})
+	m = append(m, mount{Path: prompts, ReadOnly: true}, mount{Path: artifacts})
 	m = append(m, state...)
 	return append(m, mount{Path: filepath.Join(s.cfg.DataDir, "sandbox", "bin"), ReadOnly: true}), nil
 }
@@ -208,6 +213,9 @@ func (s *Sandbox) Ensure(ctx context.Context, req ports.SandboxRequest) (ports.S
 	}
 	if err := os.MkdirAll(filepath.Join(s.cfg.DataDir, "prompts", string(req.SessionID)), 0o700); err != nil {
 		return ports.SandboxTarget{}, fmt.Errorf("sandbox prompts dir: %w", err)
+	}
+	if err := os.MkdirAll(sessionartifacts.Dir(s.cfg.DataDir, req.SessionID), 0o700); err != nil {
+		return ports.SandboxTarget{}, fmt.Errorf("sandbox artifact dir: %w", err)
 	}
 	if err := InstallBin(target.BinDir); err != nil {
 		return ports.SandboxTarget{}, err
