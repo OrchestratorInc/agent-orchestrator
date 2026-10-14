@@ -38,10 +38,17 @@ type fakeSandbox struct {
 	// noState lists sessions that never ran sandboxed; every other session
 	// has sandbox state.
 	noState map[domain.SessionID]bool
+	// envRemovals records RemoveSessionEnv calls as "project/session".
+	envRemovals []string
 }
 
 func (f *fakeSandbox) HasSessionState(_ domain.ProjectID, session domain.SessionID) bool {
 	return !f.noState[session]
+}
+
+func (f *fakeSandbox) RemoveSessionEnv(project domain.ProjectID, session domain.SessionID) error {
+	f.envRemovals = append(f.envRemovals, string(project)+"/"+string(session))
+	return nil
 }
 
 func (f *fakeSandbox) Discard(_ context.Context, target ports.SandboxTarget) error {
@@ -633,7 +640,7 @@ func TestReleaseSharedSandboxIgnoresLiveHostSessions(t *testing.T) {
 	st.sessions["mer-orch"] = mkLive("mer-orch")
 	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1"})
 
-	m.ReleaseTerminatedSandbox(ctx, "mer-1")
+	m.CleanupTerminatedSandbox(ctx, "mer-1")
 	if !sameReleases(sb.released, []releaseCall{{inUse: false}}) {
 		t.Fatalf("released = %+v, want the container released despite the live host session", sb.released)
 	}
@@ -641,20 +648,41 @@ func TestReleaseSharedSandboxIgnoresLiveHostSessions(t *testing.T) {
 
 // Every terminal path, not only kill, releases the shared container; a
 // session without sandbox state does not reach Docker at all.
-func TestReleaseTerminatedSandboxOnlyForSandboxedSessions(t *testing.T) {
+func TestCleanupTerminatedSandboxOnlyForSandboxedSessions(t *testing.T) {
 	m, st, _, _ := newManager()
 	sb := &fakeSandbox{noState: map[domain.SessionID]bool{"mer-2": true}}
 	m.sandbox = sb
 	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1"})
 	seedTerminal(st, "mer-2", domain.SessionMetadata{WorkspacePath: "/ws/mer-2"})
 
-	m.ReleaseTerminatedSandbox(ctx, "mer-2")
-	if len(sb.released) != 0 {
-		t.Fatalf("released = %+v, want none for a host session", sb.released)
+	m.CleanupTerminatedSandbox(ctx, "mer-2")
+	if len(sb.released) != 0 || len(sb.envRemovals) != 0 {
+		t.Fatalf("released = %+v, env removals = %v, want none for a host session", sb.released, sb.envRemovals)
 	}
-	m.ReleaseTerminatedSandbox(ctx, "mer-1")
+	m.CleanupTerminatedSandbox(ctx, "mer-1")
 	if !sameReleases(sb.released, []releaseCall{{inUse: false}}) {
 		t.Fatalf("released = %+v, want one release", sb.released)
+	}
+	if !reflect.DeepEqual(sb.envRemovals, []string{"mer/mer-1"}) {
+		t.Fatalf("env removals = %v, want the terminated session's credentials deleted", sb.envRemovals)
+	}
+}
+
+// A live session's env file is never deleted, and neither is one written by
+// a launch still in flight in the project.
+func TestCleanupTerminatedSandboxKeepsEnvOfLiveOrLaunchingSessions(t *testing.T) {
+	m, st, _, _ := newManager()
+	sb := &fakeSandbox{}
+	m.sandbox = sb
+	st.sessions["mer-1"] = mkLive("mer-1")
+	seedTerminal(st, "mer-2", domain.SessionMetadata{WorkspacePath: "/ws/mer-2"})
+
+	m.CleanupTerminatedSandbox(ctx, "mer-1")
+	done := m.sandboxInFlight.begin("mer")
+	m.CleanupTerminatedSandbox(ctx, "mer-2")
+	done()
+	if len(sb.envRemovals) != 0 {
+		t.Fatalf("env removals = %v, want none", sb.envRemovals)
 	}
 }
 

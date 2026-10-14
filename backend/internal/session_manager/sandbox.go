@@ -181,16 +181,24 @@ func sandboxArgv(argv []string, binary string) []string {
 	return out
 }
 
-// ReleaseTerminatedSandbox releases the shared container after any terminal
-// path, not just kill. Lifecycle calls it once a session is terminated; a
-// session that never ran sandboxed touches neither Docker nor the store.
-func (m *Manager) ReleaseTerminatedSandbox(ctx context.Context, id domain.SessionID) {
+// CleanupTerminatedSandbox runs after any terminal path, not just kill.
+// Lifecycle calls it once a session is terminated; a session that never ran
+// sandboxed touches neither Docker nor the store. It deletes the session's
+// env file, so credentials do not outlive the session, and releases the
+// shared container. While a launch is in flight in the project, the env file
+// is kept: a concurrent restore may just have written it.
+func (m *Manager) CleanupTerminatedSandbox(ctx context.Context, id domain.SessionID) {
 	if m.sandbox == nil {
 		return
 	}
 	rec, ok, err := m.store.GetSession(ctx, id)
-	if err != nil || !ok || !m.sandbox.HasSessionState(rec.ProjectID, rec.ID) {
+	if err != nil || !ok || !rec.IsTerminated || !m.sandbox.HasSessionState(rec.ProjectID, rec.ID) {
 		return
+	}
+	if !m.sandboxInFlight.active(rec.ProjectID) {
+		if err := m.sandbox.RemoveSessionEnv(rec.ProjectID, rec.ID); err != nil {
+			m.logger.Warn("sandbox: remove terminated session's env file", "sessionID", id, "error", err)
+		}
 	}
 	m.releaseSharedSandbox(ctx, rec.ProjectID)
 }

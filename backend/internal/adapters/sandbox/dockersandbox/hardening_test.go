@@ -260,6 +260,48 @@ func TestHasSessionState(t *testing.T) {
 	}
 }
 
+// The env file is deleted while the state dir stays as the sandbox marker. A
+// symlink planted as env is removed itself; its target survives.
+func TestRemoveSessionEnv(t *testing.T) {
+	s, _, data := testSandbox(t, nil)
+	if err := s.RemoveSessionEnv("p", "s1"); err != nil {
+		t.Fatalf("missing project dir: %v", err)
+	}
+	dir := SessionStateDir(data, "p", "s1")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "env"), []byte("export ANTHROPIC_API_KEY=x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RemoveSessionEnv("p", "s1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "env")); !os.IsNotExist(err) {
+		t.Fatalf("env still present: %v", err)
+	}
+	if !s.HasSessionState("p", "s1") {
+		t.Fatal("state dir removed with the env file")
+	}
+	if err := s.RemoveSessionEnv("p", "s1"); err != nil {
+		t.Fatalf("second removal: %v", err)
+	}
+
+	victim := filepath.Join(t.TempDir(), "keep")
+	if err := os.WriteFile(victim, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(dir, "env")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RemoveSessionEnv("p", "s1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Fatalf("symlink target removed: %v", err)
+	}
+}
+
 func findMount(ms []mount, path string) *mount {
 	for i := range ms {
 		if ms[i].Path == path {

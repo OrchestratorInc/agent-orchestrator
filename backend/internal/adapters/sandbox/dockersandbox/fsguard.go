@@ -117,6 +117,28 @@ func writeSessionEnv(target ports.SandboxTarget, data []byte) (err error) {
 	return nil
 }
 
+// RemoveSessionEnv deletes a session's env file, which holds its credentials.
+// The state dir itself stays as the sandbox marker. The removal goes through
+// a root opened from the project dir, so a planted symlink is removed rather
+// than followed.
+func (s *Sandbox) RemoveSessionEnv(project domain.ProjectID, session domain.SessionID) error {
+	if s.cfg.DataDir == "" || project == "" || session == "" {
+		return nil
+	}
+	root, err := os.OpenRoot(projectStateDir(s.cfg.DataDir, project))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("remove sandbox env: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	if err := root.Remove(filepath.Join("sessions", string(session), "env")); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("remove sandbox env: %w", err)
+	}
+	return nil
+}
+
 // sharedWorkRoot returns the project's managed worktree root as an ancestor
 // of workspace, spelled as workspace spells it so in-container paths match.
 // Containment is checked on physical paths, so a data dir reached through a

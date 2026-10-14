@@ -1127,7 +1127,7 @@ func (f *fakeSessionLifecycle) PersistChatModel(_ context.Context, _ domain.Sess
 	return nil
 }
 
-func (f *fakeSessionLifecycle) ReleaseTerminatedSandbox(context.Context, domain.SessionID) {}
+func (f *fakeSessionLifecycle) CleanupTerminatedSandbox(context.Context, domain.SessionID) {}
 
 // TestWiring_SessionLifecycleInterfaceInvokedByDaemon asserts the
 // sessionLifecycle interface is satisfied by *sessionmanager.Manager (compile

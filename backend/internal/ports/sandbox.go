@@ -64,6 +64,9 @@ type Sandbox interface {
 	// HasSessionState reports whether the session has ever been sandboxed,
 	// whatever the project's sandbox config says now.
 	HasSessionState(project domain.ProjectID, session domain.SessionID) bool
+	// RemoveSessionEnv deletes a terminated session's env file, which holds
+	// its credentials. The next launch writes a fresh one.
+	RemoveSessionEnv(project domain.ProjectID, session domain.SessionID) error
 }
 
 // AgentSandboxSupport is implemented by harnesses that can run sandboxed.
