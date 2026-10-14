@@ -179,10 +179,41 @@ func TestStandingInstructionsIgnoreDaemonEphemeralPrompt(t *testing.T) {
 }
 
 func TestStandingInstructionsBudgetIncludesEnvironmentKey(t *testing.T) {
-	env := map[string]string{"HERMES_HOME": t.TempDir()}
-	err := New().GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", Env: env, SystemPrompt: strings.Repeat("x", 128*1024-len("HERMES_EPHEMERAL_SYSTEM_PROMPT="))})
-	if err == nil || !strings.Contains(err.Error(), "process environment limit") {
-		t.Fatalf("oversized env entry accepted: %v", err)
+	const maxEnvString = 128 * 1024
+	const promptKey = "HERMES_EPHEMERAL_SYSTEM_PROMPT="
+	const originalKey = "AO_HERMES_ORIGINAL_EPHEMERAL="
+	original := "native instructions"
+	instructionBytesAtLimit := maxEnvString - len(promptKey) - 1 - len(original) - len("\n\n")
+	for _, tt := range []struct {
+		name             string
+		instructionBytes int
+		wantError        bool
+	}{
+		{name: "exact limit", instructionBytes: instructionBytesAtLimit},
+		{name: "one byte over", instructionBytes: instructionBytesAtLimit + 1, wantError: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			env := map[string]string{"HERMES_HOME": t.TempDir(), "HERMES_EPHEMERAL_SYSTEM_PROMPT": original}
+			err := New().GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", Env: env, SystemPrompt: strings.Repeat("x", tt.instructionBytes)})
+			if tt.wantError {
+				if err == nil || !strings.Contains(err.Error(), "process environment limit") {
+					t.Fatalf("oversized env entry accepted: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := len(promptKey) + len(env["HERMES_EPHEMERAL_SYSTEM_PROMPT"]) + 1; got != maxEnvString {
+				t.Fatalf("prompt env entry size = %d, want %d", got, maxEnvString)
+			}
+			if got := env["AO_HERMES_ORIGINAL_EPHEMERAL"]; got != original {
+				t.Fatalf("native prompt copy changed: %q", got)
+			}
+			if got := len(originalKey) + len(env["AO_HERMES_ORIGINAL_EPHEMERAL"]) + 1; got > maxEnvString {
+				t.Fatalf("original env entry size = %d exceeds %d", got, maxEnvString)
+			}
+		})
 	}
 }
 

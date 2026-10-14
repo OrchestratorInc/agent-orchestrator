@@ -195,6 +195,8 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if original != "" && instructions != "" {
 		combined = original + "\n\n" + instructions
 	}
+	// Linux MAX_ARG_STRLEN counts NAME= and the trailing NUL for each entry.
+	// The AO original-prompt entry carries a second copy of the native text.
 	const maxEnvString = 128 * 1024
 	if len("HERMES_EPHEMERAL_SYSTEM_PROMPT=")+len(combined)+1 > maxEnvString ||
 		len("AO_HERMES_ORIGINAL_EPHEMERAL=")+len(original)+1 > maxEnvString {
