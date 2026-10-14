@@ -53,18 +53,22 @@ func TestInstallBinConcurrent(t *testing.T) {
 	}
 }
 
-func TestRelayClientScriptRoundTrip(t *testing.T) {
-	bin := t.TempDir()
+// newRelayFixture installs the client scripts and a relay spool, and answers
+// the first request like the host: stdout echoes the request's stdin after
+// "out:", stderr is "err" and the exit code is 3. The channel yields the argv.
+func newRelayFixture(t *testing.T) (bin, relay string, done <-chan []string) {
+	t.Helper()
+	bin = t.TempDir()
 	if err := InstallBin(bin); err != nil {
 		t.Fatal(err)
 	}
-	relay := t.TempDir()
+	relay = t.TempDir()
 	for _, d := range []string{"req", "resp"} {
 		if err := os.MkdirAll(filepath.Join(relay, d), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	done := make(chan []string, 1)
+	ch := make(chan []string, 1)
 	go func() { // fake host: answer the first request
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
@@ -83,13 +87,18 @@ func TestRelayClientScriptRoundTrip(t *testing.T) {
 				_ = os.WriteFile(filepath.Join(tmp, "stderr"), []byte("err"), 0o600)
 				_ = os.WriteFile(filepath.Join(tmp, "exit"), []byte("3"), 0o600)
 				_ = os.Rename(tmp, filepath.Join(relay, "resp", e.Name()))
-				done <- args
+				ch <- args
 				return
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
-		done <- nil
+		ch <- nil
 	}()
+	return bin, relay, ch
+}
+
+func TestRelayClientScriptRoundTrip(t *testing.T) {
+	bin, relay, done := newRelayFixture(t)
 	cmd := exec.Command("/bin/sh", filepath.Join(bin, "ao"), "hooks", "claude-code", "arg with space")
 	cmd.Env = append(os.Environ(), "AO_SANDBOX_RELAY="+relay)
 	cmd.Stdin = strings.NewReader(`{"hook":"x"}`)
@@ -108,6 +117,43 @@ func TestRelayClientScriptRoundTrip(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(filepath.Join(relay, "resp")); len(entries) != 0 {
 		t.Fatalf("client left response behind: %v", entries)
+	}
+}
+
+// TestRelayClientIgnoresOpenStdinForNonHookCommands pins that only hooks read
+// stdin: an agent's tool runner may hand `ao status` a pipe it never closes,
+// and reading it would hang the client before the request is even sent.
+func TestRelayClientIgnoresOpenStdinForNonHookCommands(t *testing.T) {
+	bin, relay, done := newRelayFixture(t)
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pr.Close(); _ = pw.Close() }()
+	if _, err := pw.WriteString("not for the host"); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/bin/sh", filepath.Join(bin, "ao"), "status")
+	cmd.Env = append(os.Environ(), "AO_SANDBOX_RELAY="+relay)
+	cmd.Stdin = pr // the write end stays open: EOF never arrives
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	select {
+	case <-exited:
+	case <-time.After(10 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("relay client hung reading an open stdin for a non-hook command")
+	}
+	if got := <-done; strings.Join(got, "|") != "status" {
+		t.Fatalf("argv = %q", got)
+	}
+	if stdout.String() != "out:" {
+		t.Fatalf("stdout = %q, want the host to see empty stdin", stdout.String())
 	}
 }
 

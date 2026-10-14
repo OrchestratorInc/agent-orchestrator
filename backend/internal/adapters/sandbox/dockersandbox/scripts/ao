@@ -11,7 +11,9 @@ id="$(date +%s)-$$-$rnd"
 tmp="$relay/req/$id.tmp"
 mkdir -p "$tmp"
 for arg in "$@"; do printf '%s\0' "$arg"; done > "$tmp/argv"
-if [ -t 0 ]; then : > "$tmp/stdin"; else cat > "$tmp/stdin"; fi
+# Only hooks read stdin (the harness pipes their payload and closes it). Other
+# commands may get a pipe that never closes from an agent's tool runner.
+if [ "${1:-}" = hooks ] && [ ! -t 0 ]; then cat > "$tmp/stdin"; else : > "$tmp/stdin"; fi
 mv "$tmp" "$relay/req/$id"
 resp="$relay/resp/$id"
 deadline=$(( $(date +%s) + 65 ))
