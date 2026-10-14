@@ -5,7 +5,6 @@ package memcode
 import (
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"time"
 
@@ -95,13 +94,6 @@ func (*Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	return agentbase.ModelConfigSpec(ctx, "AO model overrides are unsupported; configure the native endpoint/account model before launch.")
 }
 
-// AuthStatus implements the native TUI adapter contract.
-func (*Plugin) AuthStatus(context.Context) (ports.AgentAuthStatus, error) {
-	if os.Getenv("MEMCODE_ENDPOINT_URL") != "" {
-		return ports.AgentAuthStatusConfigured, nil
-	}
-	return ports.AgentAuthStatusUnknown, nil
-}
 func validateModel(_, model string) error {
 	if strings.TrimSpace(model) != "" {
 		return errors.New("memcode AO model overrides are unsupported; select the model in native endpoint/account configuration before launch")
