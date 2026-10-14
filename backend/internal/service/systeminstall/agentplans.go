@@ -352,6 +352,7 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 	if operation == AgentOperationInstall || plan.Unsupported {
 		return plan
 	}
+	installScript := plan.Script
 	plan.Script = nil
 	if operation == AgentOperationReinstall {
 		switch plan.Method {
@@ -401,6 +402,15 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 		case "bun":
 			plan.Command = []string{"bun", "install", "-g", packageWithoutLatest(plan.Package) + "@latest"}
 		case "official-installer":
+			// These Windows self-updaters do not reliably replace the installed
+			// binary headlessly. Re-run the vendor's Windows installer instead;
+			// ownership and post-update version checks still guard the operation.
+			if s.goos == "windows" && installScript != nil &&
+				(plan.Target == TargetAutohand || plan.Target == TargetGrok) {
+				plan.Command = nil
+				plan.Script = installScript
+				break
+			}
 			command, ok := vendorUpdateCommands[plan.Target]
 			if !ok {
 				plan.Unsupported = true
@@ -436,7 +446,7 @@ var vendorUpdateCommands = map[Target][]string{
 	TargetCursor:     {"cursor-agent", "update"},
 	TargetAmp:        {"amp", "update", "--porcelain"},
 	TargetGrok:       {"grok", "update"},
-	TargetKimi:       {"kimi", "upgrade"},
+	TargetKimi:       {"kimi", "upgrade", "-y"},
 	TargetDroid:      {"droid", "update"},
 	TargetQwen:       {"qwen", "update"},
 	TargetFX:         {"fx", "upgrade"},
@@ -482,7 +492,9 @@ func (s *Service) planShellInstaller(target Target, url, shell string) Plan {
 }
 
 func (s *Service) planPowerShellInstaller(target Target, url string) Plan {
-	for _, shell := range []string{"pwsh.exe", "powershell.exe", "pwsh", "powershell"} {
+	// WindowsApps can expose a pwsh.exe execution alias that LookPath finds but
+	// the daemon cannot launch. Prefer the Windows PowerShell binary instead.
+	for _, shell := range []string{"powershell.exe", "powershell", "pwsh.exe", "pwsh"} {
 		resolved, err := s.executables.LookPath(shell)
 		if err != nil {
 			continue

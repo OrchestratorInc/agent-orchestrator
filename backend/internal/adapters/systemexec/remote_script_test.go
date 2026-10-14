@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -44,6 +46,30 @@ func TestRunInstallScriptDownloadsExecutesAndCleansUp(t *testing.T) {
 	entries, err := os.ReadDir(filepath.Join(dataDir, "installers", "tmp"))
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("temporary scripts remain: %v, %v", entries, err)
+	}
+}
+
+func TestRunInstallScriptPowerShellLoadsHashModule(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows PowerShell installer")
+	}
+	shell, err := exec.LookPath("powershell.exe")
+	if err != nil {
+		t.Skip("Windows PowerShell unavailable")
+	}
+	const body = "(Get-FileHash -Path $PSCommandPath -Algorithm SHA256).Hash"
+	server := httptest.NewTLSServer(httpHandler(body))
+	defer server.Close()
+	var output bytes.Buffer
+	_, err = newAdapter(t.TempDir(), server.Client()).RunInstallScript(context.Background(), ports.InstallScriptCommand{
+		URL: server.URL, Interpreter: []string{shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"},
+	}, &output, &output)
+	if err != nil {
+		t.Fatalf("PowerShell installer failed: %v; output: %s", err, output.String())
+	}
+	sum := sha256.Sum256([]byte(body))
+	if !strings.Contains(strings.ToLower(output.String()), hex.EncodeToString(sum[:])) {
+		t.Fatalf("installer hash output = %q, want %x", output.String(), sum)
 	}
 }
 

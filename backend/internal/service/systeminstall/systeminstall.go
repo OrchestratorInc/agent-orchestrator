@@ -1197,7 +1197,17 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		return
 	}
 	installConfirmed := runErr != nil && devinOutput != nil && devinOutput.Confirmed()
-	if runErr != nil && !installConfirmed {
+	// Autohand's Windows installer can finish replacing the CLI, then fail
+	// while installing its separate Computer control component. Verify the
+	// actual CLI version before deciding whether the requested update worked.
+	autohandCLIInstalled := runErr != nil && s.goos == "windows" && plan.Target == TargetAutohand &&
+		plan.Method == "official-installer" && plan.Script != nil &&
+		strings.Contains(out.String(), "Installed to ") &&
+		strings.Contains(out.String(), "Computer control could not be installed.")
+	if autohandCLIInstalled {
+		_, _ = io.WriteString(out, "\nAutohand CLI install will be verified. Computer control needs a separate repair: autohand computer install\n")
+	}
+	if runErr != nil && !installConfirmed && !autohandCLIInstalled {
 		message := runErr.Error()
 		if plan.Target == TargetAutohand && plan.Method == "official-installer" &&
 			strings.Contains(out.String(), "Downloaded Autohand CLI failed to start") &&

@@ -1508,7 +1508,7 @@ func TestVendorInstallerUpdateUsesHarnessSelfUpdateCommand(t *testing.T) {
 		TargetCursor:     {"cursor-agent", "update"},
 		TargetAmp:        {"amp", "update", "--porcelain"},
 		TargetGrok:       {"grok", "update"},
-		TargetKimi:       {"kimi", "upgrade"},
+		TargetKimi:       {"kimi", "upgrade", "-y"},
 		TargetDroid:      {"droid", "update"},
 		TargetQwen:       {"qwen", "update"},
 		TargetFX:         {"fx", "upgrade"},
@@ -1523,6 +1523,74 @@ func TestVendorInstallerUpdateUsesHarnessSelfUpdateCommand(t *testing.T) {
 	}
 	if _, err := planner.resolveAgentMethod(TargetMuse, "official-installer", AgentOperationUpdate); !errors.Is(err, ErrInstallMethod) {
 		t.Fatalf("Muse update error = %v, want ErrInstallMethod for a vendor without a self-update command", err)
+	}
+}
+
+func TestWindowsVendorUpdatesUsePowerShellInstallers(t *testing.T) {
+	// A pwsh.exe alias may exist in WindowsApps but refuse execution. The system
+	// powershell.exe must win when both names resolve.
+	s := newTestService("windows", "pwsh.exe", "powershell.exe")
+	planner, err := s.newRequestPlanner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for target, url := range map[Target]string{
+		TargetAutohand: "https://autohand.ai/install.ps1",
+		TargetGrok:     "https://x.ai/cli/install.ps1",
+	} {
+		t.Run(string(target), func(t *testing.T) {
+			plan, err := planner.resolveAgentMethod(target, "official-installer", AgentOperationUpdate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.Unsupported || plan.Script == nil || plan.Script.URL != url || len(plan.Command) != 0 {
+				t.Fatalf("Windows update plan = %+v, want PowerShell installer %s", plan, url)
+			}
+			if want := []string{"/usr/bin/powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"}; !slices.Equal(plan.Script.Interpreter, want) {
+				t.Fatalf("interpreter = %v, want %v", plan.Script.Interpreter, want)
+			}
+		})
+	}
+	kimi, err := planner.resolveAgentMethod(TargetKimi, "official-installer", AgentOperationUpdate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"kimi", "upgrade", "-y"}; kimi.Script != nil || !slices.Equal(kimi.Command, want) {
+		t.Fatalf("Kimi update = %+v, want native noninteractive command %v", kimi, want)
+	}
+}
+
+func TestAutohandWindowsInstallerVerifiesCLIAfterComputerControlFailure(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		version    string
+		output     string
+		wantStatus Status
+	}{
+		{name: "CLI updated", version: "0.9.8", output: "OK Installed to C:\\autohand\\autohand.exe\nInstallation is incomplete: Computer control could not be installed.\n", wantStatus: StatusSucceeded},
+		{name: "CLI unchanged", version: "0.9.7", output: "OK Installed to C:\\autohand\\autohand.exe\nInstallation is incomplete: Computer control could not be installed.\n", wantStatus: StatusFailed},
+		{name: "other failure", version: "0.9.8", output: "OK Installed to C:\\autohand\\autohand.exe\nChecksum verification failed\n", wantStatus: StatusFailed},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s := newTestService("windows", "powershell.exe")
+			s.installScripts = installScriptRunnerFunc(func(_ context.Context, _ ports.InstallScriptCommand, stdout, _ io.Writer) (ports.InstallScriptResult, error) {
+				_, _ = io.WriteString(stdout, test.output)
+				return ports.InstallScriptResult{}, errors.New("exit status 1")
+			})
+			s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+				return VerifyResult{ResolvedPath: `C:\autohand\autohand.exe`, Output: test.version}, nil
+			})
+			job := &Job{Target: TargetAutohand, Method: "official-installer", Status: StatusInstalling}
+			plan := Plan{Target: TargetAutohand, Method: "official-installer", Script: &ports.InstallScriptCommand{URL: "https://autohand.ai/install.ps1"}}
+			baseline := &installedBaseline{version: "0.9.7", latest: "0.9.8", scheme: versionSchemeFor(TargetAutohand)}
+			s.runAgentOperation(context.Background(), plan, AgentOperationUpdate, job, baseline)
+			if job.Status != test.wantStatus {
+				t.Fatalf("status = %s, error = %q, output = %q; want %s", job.Status, job.Error, job.Output, test.wantStatus)
+			}
+			if test.wantStatus == StatusSucceeded && !strings.Contains(job.Output, "Computer control needs a separate repair") {
+				t.Fatalf("missing Computer control warning: %q", job.Output)
+			}
+		})
 	}
 }
 
