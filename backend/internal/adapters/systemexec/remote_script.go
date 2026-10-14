@@ -110,7 +110,7 @@ func (a Adapter) RunInstallScript(ctx context.Context, command ports.InstallScri
 		// vendor installers and their checksum checks need Get-FileHash, so load
 		// its bundled module explicitly before invoking the untouched script.
 		launcherPath := filepath.Join(jobDir, "launch.ps1")
-		const launcher = "Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop\n& (Join-Path $PSScriptRoot 'installer.ps1')\nif (-not $?) { exit 1 }\n"
+		const launcher = "Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop\n& (Join-Path $PSScriptRoot 'installer.ps1')\nif (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }\n"
 		if err := os.WriteFile(launcherPath, []byte(launcher), 0o600); err != nil {
 			return result, fmt.Errorf("write PowerShell installer launcher: %w", err)
 		}

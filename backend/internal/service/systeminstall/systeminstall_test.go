@@ -3,12 +3,14 @@ package systeminstall
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os/exec"
 	"reflect"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1557,6 +1559,56 @@ func TestWindowsVendorUpdatesUsePowerShellInstallers(t *testing.T) {
 	}
 	if want := []string{"kimi", "upgrade", "-y"}; kimi.Script != nil || !slices.Equal(kimi.Command, want) {
 		t.Fatalf("Kimi update = %+v, want native noninteractive command %v", kimi, want)
+	}
+}
+
+func TestWindowsGrokUpdateRefusesUnknownDestination(t *testing.T) {
+	for _, binary := range []string{"", "grok.exe", `D:grok.exe`, `tools\grok.exe`} {
+		plan := targetInstalledCopy("windows", Plan{Method: "official-installer", Script: &ports.InstallScriptCommand{}}, TargetGrok, binary)
+		if !plan.Unsupported || plan.Reason == "" {
+			t.Fatalf("path %q: update was not refused: %+v", binary, plan)
+		}
+	}
+}
+
+func TestWindowsGrokUpdateReplacesPlanDestinationWithoutMutation(t *testing.T) {
+	script := &ports.InstallScriptCommand{Env: []string{`grok_bin_dir=C:\other`, "KEEP=yes"}}
+	plan := targetInstalledCopy("windows", Plan{Method: "official-installer", Script: script}, TargetGrok, `D:\grok.exe`)
+	if !slices.Equal(plan.Script.Env, []string{"KEEP=yes", `GROK_BIN_DIR=D:\`}) {
+		t.Fatalf("environment = %v", plan.Script.Env)
+	}
+	if !slices.Equal(script.Env, []string{`grok_bin_dir=C:\other`, "KEEP=yes"}) {
+		t.Fatalf("original script was mutated: %v", script.Env)
+	}
+}
+
+func TestWindowsGrokUpdateTargetsConfirmedDirectory(t *testing.T) {
+	for _, binary := range []string{`D:\tools\grok\grok.exe`, `D:\tools with spaces\grok.exe`, `\\server\tools\grok\grok.exe`} {
+		t.Run(binary, func(t *testing.T) {
+			s := newTestService("windows", "powershell.exe")
+			t.Cleanup(s.stop)
+			t.Setenv("GROK_BIN_DIR", `C:\other\grok`)
+			var version atomic.Int32
+			version.Store(13)
+			s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+				return VerifyResult{ResolvedPath: binary, Output: fmt.Sprintf("1.0.%d", version.Load())}, nil
+			})
+			captured := make(chan ports.InstallScriptCommand, 1)
+			s.installScripts = installScriptRunnerFunc(func(_ context.Context, command ports.InstallScriptCommand, _, _ io.Writer) (ports.InstallScriptResult, error) {
+				captured <- command
+				version.Store(14)
+				return ports.InstallScriptResult{}, nil
+			})
+			if _, err := s.StartAgentOperation(t.Context(), TargetGrok, "official-installer", AgentOperationUpdate, ""); err != nil {
+				t.Fatal(err)
+			}
+			waitForStatus(t, s, TargetGrok, StatusSucceeded)
+			command := <-captured
+			want := "GROK_BIN_DIR=" + binary[:strings.LastIndex(binary, `\`)]
+			if !slices.Contains(command.Env, want) {
+				t.Fatalf("installer environment = %v, want %q", command.Env, want)
+			}
+		})
 	}
 }
 

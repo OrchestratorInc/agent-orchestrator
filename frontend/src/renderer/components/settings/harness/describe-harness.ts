@@ -108,7 +108,11 @@ export function describeHarness(input: HarnessDescribeInput) {
 	const authBusy = Boolean(rowAuthWorkflow || authState?.pending);
 	const needsLogin = needsHarnessLogin(authPlan, authStatus);
 	const showUpdate = updateAvailable && !input.authPlansPending && !input.authPlansFailed;
-	const hasDiagnostics = Boolean(job && jobFailed && (job.error || job.output || job.method || job.expectedDestination));
+	// The daemon retains this component-repair instruction in persisted output,
+	// including after CLI verification succeeds or AO restarts.
+	const autohandRepair = "Computer control needs a separate repair: autohand computer install";
+	const installWarning = agentId === "autohand" && job?.status === "succeeded" && job.output?.includes(autohandRepair) ? autohandRepair : undefined;
+	const hasDiagnostics = Boolean(job && (jobFailed || installWarning) && (job.error || job.output || job.method || job.expectedDestination));
 	const authSummary = authStatus === "configured" || authStatus === "authorized" ? t(isSetupAction ? "settings.harness.configured" : "settings.harness.loggedIn")
 		: authStatus === "not_applicable" || (!input.authPlansPending && (!authPlan || authPlan.action === "instructions")) ? t("settings.harness.installed")
 		: authPlan && !authPlan.available ? (authPlan.reason ?? t("settings.harness.authFailed"))
@@ -139,7 +143,7 @@ export function describeHarness(input: HarnessDescribeInput) {
 		agentId, plan, job, isInstalled, availableMethods, installMethod, methodId, maintenanceMethod, canUpdate, manualOnly, updateReason,
 		advisoryQuery, advisory, updateUnknown, updateAvailable, currentVersion, busy, failed, jobFailed, currentOperation, readinessAgent,
 		authPlan, authState, authStatus, authSummary, accountDescription, rowAuthWorkflow, authBusy, needsLogin, isSetupAction, isDocumentationAction, canRelogin,
-		showUpdate, hasDiagnostics, rowError, versionText, versionUnverified, updatedAt: input.updatedAt, progressLabel, installationPending, installNote, listTone, statusLabel,
+		showUpdate, hasDiagnostics, installWarning, rowError, versionText, versionUnverified, updatedAt: input.updatedAt, progressLabel, installationPending, installNote, listTone, statusLabel,
 	};
 }
 

@@ -2363,6 +2363,24 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(row).toHaveTextContent("Verifying…"));
 	});
 
+	it("shows Autohand component repair after verified CLI success", async () => {
+		const warning = "Computer control needs a separate repair: autohand computer install";
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: { agents: [agentReadiness("autohand", "Autohand")] } } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [{ target: "autohand", status: "succeeded", method: "official-installer", output: `Installed to C:\\autohand\\autohand.exe\nAutohand CLI install will be verified. ${warning}\n0.9.8` }] } } as never;
+			return { data: undefined } as never;
+		});
+		const user = userEvent.setup();
+		renderSection();
+		const row = await findAgentRow("autohand");
+		expect(await within(row).findByRole("status")).toHaveTextContent(warning);
+		expect(within(row).queryByRole("button", { name: "Verify again" })).not.toBeInTheDocument();
+		await user.click(within(row).getByRole("button", { name: "Show diagnostics" }));
+		expect(within(row).getByRole("button", { name: "Copy diagnostics" })).toBeInTheDocument();
+		expect(row).toHaveTextContent("0.9.8");
+	});
+
 	it("shows and copies daemon diagnostics", async () => {
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;

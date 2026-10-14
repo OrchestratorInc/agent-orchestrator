@@ -551,6 +551,34 @@ func pinVendorUpdate(plan Plan, latest string) Plan {
 // finds first, and npm acts on the global prefix that holds the package with
 // that prefix's own Node, which need not be the daemon's npm.
 func targetInstalledCopy(goos string, plan Plan, target Target, binaryPath string) Plan {
+	if goos == "windows" && target == TargetGrok && plan.Method == "official-installer" && plan.Script != nil {
+		// PowerShell's installer defaults to the user's profile. Bind its
+		// destination even when the confirmed copy lives on another drive/share.
+		slashed := strings.ReplaceAll(binaryPath, `\`, "/")
+		driveAbsolute := len(slashed) >= 3 && ((slashed[0] >= 'A' && slashed[0] <= 'Z') || (slashed[0] >= 'a' && slashed[0] <= 'z')) && slashed[1:3] == ":/"
+		uncAbsolute := strings.HasPrefix(slashed, "//") && len(strings.Split(strings.TrimPrefix(slashed, "//"), "/")) >= 3
+		if !driveAbsolute && !uncAbsolute {
+			plan.Unsupported = true
+			plan.Reason = "AO could not preserve the confirmed Grok installation directory; update it manually."
+			return plan
+		}
+		end := strings.LastIndex(slashed, "/")
+		if driveAbsolute && end == 2 {
+			end++ // Keep the separator in a drive root such as D:\.
+		}
+		script := *plan.Script
+		script.Env = nil
+		for _, entry := range plan.Script.Env {
+			key, _, _ := strings.Cut(entry, "=")
+			if !strings.EqualFold(key, "GROK_BIN_DIR") {
+				script.Env = append(script.Env, entry)
+			}
+		}
+		script.Env = append(script.Env, "GROK_BIN_DIR="+binaryPath[:end])
+		plan.Script = &script
+		plan.ExpectedDestination = binaryPath
+		return plan
+	}
 	if len(plan.Command) == 0 {
 		return plan
 	}

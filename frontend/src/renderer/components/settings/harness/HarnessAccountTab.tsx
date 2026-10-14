@@ -114,6 +114,7 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 		/> : null}
 
 		{details.rowError ? <p role="alert" className="text-xs text-error">{details.rowError}</p> : null}
+		{details.installWarning ? <p role="status" className="text-xs text-settings-label">{details.installWarning}</p> : null}
 		{details.jobFailed && !authBusy ? <div><Button type="button" size="sm" variant="outline" disabled={details.busy} onClick={onVerify}>{t("settings.harness.verifyAgain")}</Button></div> : null}
 		{details.hasDiagnostics ? <div className="space-y-2">
 			<Button type="button" aria-expanded={diagnosticsExpanded} size="sm" variant="ghost" onClick={onToggleDiagnostics}>

@@ -55,21 +55,45 @@ func TestRunInstallScriptPowerShellLoadsHashModule(t *testing.T) {
 	}
 	shell, err := exec.LookPath("powershell.exe")
 	if err != nil {
-		t.Skip("Windows PowerShell unavailable")
+		t.Fatal("Windows PowerShell unavailable: ", err)
 	}
-	const body = "(Get-FileHash -Path $PSCommandPath -Algorithm SHA256).Hash"
-	server := httptest.NewTLSServer(httpHandler(body))
-	defer server.Close()
-	var output bytes.Buffer
-	_, err = newAdapter(t.TempDir(), server.Client()).RunInstallScript(context.Background(), ports.InstallScriptCommand{
-		URL: server.URL, Interpreter: []string{shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"},
-	}, &output, &output)
-	if err != nil {
-		t.Fatalf("PowerShell installer failed: %v; output: %s", err, output.String())
-	}
-	sum := sha256.Sum256([]byte(body))
-	if !strings.Contains(strings.ToLower(output.String()), hex.EncodeToString(sum[:])) {
-		t.Fatalf("installer hash output = %q, want %x", output.String(), sum)
+	for _, tc := range []struct {
+		name     string
+		tail     string
+		wantExit int
+	}{
+		{name: "success"},
+		{name: "explicit unsuccessful exit", tail: "\nexit 7", wantExit: 7},
+		{name: "terminating error", tail: "\nthrow 'synthetic installer failure'", wantExit: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := "(Get-FileHash -Path $PSCommandPath -Algorithm SHA256).Hash" + tc.tail
+			server := httptest.NewTLSServer(httpHandler(body))
+			t.Cleanup(server.Close)
+			dataDir := t.TempDir()
+			var output bytes.Buffer
+			result, err := newAdapter(dataDir, server.Client()).RunInstallScript(t.Context(), ports.InstallScriptCommand{
+				URL: server.URL, Interpreter: []string{shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"},
+			}, &output, &output)
+			if tc.wantExit == 0 {
+				if err != nil {
+					t.Fatalf("PowerShell installer failed: %v; output: %s", err, output.String())
+				}
+			} else {
+				var exitErr *exec.ExitError
+				if !errors.As(err, &exitErr) || exitErr.ExitCode() != tc.wantExit {
+					t.Fatalf("PowerShell error = %v, want exit %d; output: %s", err, tc.wantExit, output.String())
+				}
+			}
+			sum := sha256.Sum256([]byte(body))
+			if result.SHA256 != hex.EncodeToString(sum[:]) || !strings.Contains(strings.ToLower(output.String()), result.SHA256) {
+				t.Fatalf("installer hash = %q, output = %q, want %x", result.SHA256, output.String(), sum)
+			}
+			entries, readErr := os.ReadDir(filepath.Join(dataDir, "installers", "tmp"))
+			if readErr != nil || len(entries) != 0 {
+				t.Fatalf("temporary scripts remain: %v, %v", entries, readErr)
+			}
+		})
 	}
 }
 
