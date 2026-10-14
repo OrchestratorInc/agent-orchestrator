@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, useState, type ComponentProps, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useState, type ComponentProps, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "../lib/utils";
 
@@ -18,16 +18,17 @@ export function SessionTopbarProvider({ children }: { children: ReactNode }) {
 
 export function SessionTopbarHost({ className, ref, ...props }: ComponentProps<"div">) {
 	const context = useContext(SessionTopbarContext);
+	const setHostRef = useCallback((element: HTMLDivElement | null) => {
+		context?.setHost(element);
+		if (typeof ref === "function") ref(element);
+		else if (ref) ref.current = element;
+	}, [context?.setHost, ref]);
 	if (!context) throw new Error("SessionTopbarHost must be used within SessionTopbarProvider");
 
 	return (
 		<div
 			className={cn("workspace-topbar-container", className)}
-			ref={(element) => {
-				context.setHost(element);
-				if (typeof ref === "function") ref(element);
-				else if (ref) ref.current = element;
-			}}
+			ref={setHostRef}
 			{...props}
 		/>
 	);

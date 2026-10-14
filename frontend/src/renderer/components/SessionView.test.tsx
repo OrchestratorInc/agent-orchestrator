@@ -751,13 +751,21 @@ vi.mock("./SessionInspector", () => ({
 				<button type="button" onClick={() => onOpenReviewFile?.({ path: "notes.txt" })}>
 					view review basename
 				</button>
+				<button type="button" onClick={() => onOpenReviewFile?.({ path: "/Users/me/worktrees/s/src/panel.tsx", line: 42 })}>
+					view absolute review file
+				</button>
 				<button type="button" onClick={() => onOpenReviewerChat?.("review-1")}>
 					open reviewer chat
 				</button>
 				<button type="button" onClick={onWorkerMessageSent}>
 					send review feedback
 				</button>
-				{view === "files" ? filesView : null}
+				{view === "files" ? (
+					<>
+						<button type="button" onClick={onOpenFiles}>retry files</button>
+						{filesView}
+					</>
+				) : null}
 				{view === "artifacts" ? (
 					<ArtifactsViewMock onRequestConsumed={onArtifactRequestConsumed} request={artifactRequest} />
 				) : null}
@@ -5206,16 +5214,62 @@ describe("SessionView", () => {
 		expect(screen.getByText("terminal center")).toBeInTheDocument();
 	});
 
-	it("opens a selected cloud diff file in the shared center file tab", () => {
+	it("opens a selected Cloud file without querying the local daemon from Files or retry", async () => {
 		workerSession("sess-1").cloud = { orgId: "cloud-org", sandboxProvider: "docker" };
-		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
-		render(<SessionView sessionId="sess-1" />);
+		reviewGetMock.mockImplementation(async (requestPath: string) => {
+			if (requestPath.includes("/workspace/")) {
+				return { data: undefined, error: { code: "SESSION_NOT_FOUND", message: "Unknown session" } };
+			}
+			return { data: { reviewerHandleId: "", reviews: [], runs: [] }, error: undefined };
+		});
+		const unhandled = vi.fn();
+		window.addEventListener("unhandledrejection", unhandled);
 
-		fireEvent.click(screen.getByRole("button", { name: "open files" }));
-		fireEvent.click(screen.getByRole("button", { name: "open cloud file" }));
+		try {
+			act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
+			render(<SessionView sessionId="sess-1" />);
 
-		expect(screen.getByRole("tab", { name: "cloud.ts" })).toHaveAttribute("aria-selected", "true");
-		expect(screen.getByTestId("cloud-file-workspace")).toHaveTextContent("src/cloud.ts");
+			fireEvent.click(screen.getByRole("button", { name: "open files" }));
+			fireEvent.click(screen.getByRole("button", { name: "retry files" }));
+			await act(async () => {});
+
+			expect(reviewGetMock.mock.calls.some(([requestPath]) => String(requestPath).includes("/workspace/"))).toBe(false);
+			expect(unhandled).not.toHaveBeenCalled();
+
+			fireEvent.click(screen.getByRole("button", { name: "open cloud file" }));
+			expect(screen.getByRole("tab", { name: "cloud.ts" })).toHaveAttribute("aria-selected", "true");
+			expect(screen.getByTestId("cloud-file-workspace")).toHaveTextContent("src/cloud.ts");
+		} finally {
+			window.removeEventListener("unhandledrejection", unhandled);
+		}
+	});
+
+	it.each([
+		["relative", "view review file", "src/panel.tsx"],
+		["absolute", "view absolute review file", "/Users/me/worktrees/s/src/panel.tsx"],
+	])("opens a Cloud %s review path without querying the local daemon", async (_kind, buttonName, path) => {
+		const session = workerSession("sess-1");
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "docker" };
+		reviewGetMock.mockImplementation(async (requestPath: string) => {
+			if (requestPath.includes("/workspace/")) {
+				return { data: undefined, error: { code: "SESSION_NOT_FOUND", message: "Unknown session" } };
+			}
+			return { data: { reviewerHandleId: "", reviews: [], runs: [] }, error: undefined };
+		});
+		const unhandled = vi.fn();
+		window.addEventListener("unhandledrejection", unhandled);
+
+		try {
+			render(<SessionView sessionId="sess-1" />);
+			fireEvent.click(screen.getByRole("button", { name: buttonName }));
+
+			expect(await screen.findByTestId("cloud-file-workspace")).toHaveTextContent(path);
+			expect(reviewGetMock.mock.calls.some(([requestPath]) => String(requestPath).includes("/workspace/"))).toBe(false);
+			await act(async () => {});
+			expect(unhandled).not.toHaveBeenCalled();
+		} finally {
+			window.removeEventListener("unhandledrejection", unhandled);
+		}
 	});
 
 	it("opens a selected tree file in a center tab while retaining the right-side tree", () => {

@@ -1535,6 +1535,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const revealResolvedWorkspaceFile = useCallback(
 		async (rawPath: string, options?: FileOpenOptions) => {
 			const reference = normalizeWorkspaceFileReference(rawPath);
+			if (session?.cloud) {
+				if (reference) openCenterFile(reference, options);
+				return;
+			}
 			if (!isAbsoluteFileReference(reference)) {
 				const data = await fetchWorkspaceFiles();
 				openCenterFile(matchWorkspaceFilePath(rawPath, data.files ?? []), options);
@@ -1553,15 +1557,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			// so, rather than a workspace file that happens to share its name.
 			openCenterFile(reference, options);
 		},
-		[fetchWorkspaceFiles, hostId, openCenterFile, revealResolvedArtifact, sessionId],
+		[fetchWorkspaceFiles, hostId, openCenterFile, revealResolvedArtifact, session?.cloud, sessionId],
 	);
 
 	const handleOpenFiles = useCallback(() => {
 		markFileViewerPerformance("files-click");
 		setFilesSource(uiSessionId, { kind: "workspace" });
 		prepareFilesInspector();
-		void fetchWorkspaceFiles();
-	}, [fetchWorkspaceFiles, prepareFilesInspector, setFilesSource, uiSessionId]);
+		if (!session?.cloud) void fetchWorkspaceFiles();
+	}, [fetchWorkspaceFiles, prepareFilesInspector, session?.cloud, setFilesSource, uiSessionId]);
 
 	const handleOpenReviewFile = useCallback(
 		(target: { line?: number; path: string }) => {
