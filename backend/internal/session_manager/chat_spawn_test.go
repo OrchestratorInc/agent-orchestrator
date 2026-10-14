@@ -1149,12 +1149,12 @@ func TestChatSpawnValidatesProjectEnvironmentBeforeDurableState(t *testing.T) {
 				return nil
 			}}
 			mgr, store, runtime := newChatManager(launcher)
-			project := store.projects[chatTestProject]
+			project := store.projects[string(chatTestProject)]
 			project.Config.Env = map[string]string{"AO_DOCKER_AGENT_CONFIG": "/project/redirect.yaml"}
 			if configured {
 				project.Config.Env["NATIVE_CONFIG"] = "/project/native.yaml"
 			}
-			store.projects[chatTestProject] = project
+			store.projects[string(chatTestProject)] = project
 			_, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{
 				ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessCodex,
 				RequestedMode: domain.SessionModeChat,
