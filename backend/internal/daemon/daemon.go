@@ -1245,6 +1245,7 @@ func installedAgentHarness(target systeminstall.Target) (string, bool) {
 func usagePipelineWatchRoots(roots usagesvc.SourceRoots) []string {
 	return []string{
 		roots.ClaudeProjects,
+		roots.ClaudeSandboxProjects,
 		roots.CodexSessions,
 		roots.CodexArchived,
 		roots.KimiHome,
