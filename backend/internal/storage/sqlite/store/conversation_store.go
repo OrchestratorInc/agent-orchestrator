@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
@@ -48,6 +49,7 @@ type conversationCreateOptions struct {
 	session       domain.SessionID
 	contextReset  *domain.ConversationActivity
 	preserveOwner bool
+	adoptQueue    bool
 	now           time.Time
 }
 
@@ -153,6 +155,31 @@ func (s *Store) CreateProjectConversationWithContextReset(
 	})
 }
 
+// CreateProjectConversationAdoptingQueue opens the project conversation for an
+// orchestrator's first controller like CreateProjectConversationWithContextReset,
+// and in the same transaction moves everything the session queued in its
+// provisioning-time session row into it (#6523). Doing both in one write means a
+// prompt sent meanwhile lands either in the session row, and moves with the rest,
+// or in the project row after them.
+func (s *Store) CreateProjectConversationAdoptingQueue(
+	ctx context.Context,
+	id string,
+	project domain.ProjectID,
+	session domain.SessionID,
+	reset domain.ConversationActivity,
+	now time.Time,
+) (domain.ConversationRecord, error) {
+	return s.createConversation(ctx, conversationCreateOptions{
+		id:           id,
+		scope:        domain.ConversationScopeProject,
+		project:      project,
+		session:      session,
+		contextReset: &reset,
+		adoptQueue:   true,
+		now:          now,
+	})
+}
+
 func (s *Store) createConversation(
 	ctx context.Context,
 	options conversationCreateOptions,
@@ -173,7 +200,7 @@ func (s *Store) createConversation(
 			if options.contextReset != nil {
 				transactionName += " with reset"
 			}
-			err = s.inTx(ctx, transactionName, func(q *gen.Queries) error {
+			rebind := func(q *gen.Queries) error {
 				if err := q.BindProjectConversationSession(ctx, gen.BindProjectConversationSessionParams{
 					CurrentSessionID: &options.session,
 					UpdatedAt:        options.now,
@@ -239,6 +266,20 @@ func (s *Store) createConversation(
 					CreatedAt:      options.now,
 					UpdatedAt:      options.now,
 				})
+			}
+			err = s.inTx(ctx, transactionName, func(q *gen.Queries) error {
+				if err := rebind(q); err != nil {
+					return err
+				}
+				if !options.adoptQueue {
+					return nil
+				}
+				latest, err := adoptProvisioningQueue(ctx, q, options.session, existing.ID, options.now)
+				if err != nil {
+					return err
+				}
+				existing.LatestSequence = latest
+				return nil
 			})
 			if err != nil {
 				return domain.ConversationRecord{}, err
@@ -263,6 +304,7 @@ func (s *Store) createConversation(
 		ownerSession = &options.session
 	}
 	rootBranchID := options.id + ":root"
+	var latestSequence int64
 	err := s.inTx(ctx, "insert conversation", func(q *gen.Queries) error {
 		owner, getErr := q.GetSession(ctx, options.session)
 		if getErr != nil {
@@ -280,7 +322,7 @@ func (s *Store) createConversation(
 		}); insertErr != nil {
 			return insertErr
 		}
-		return q.InsertConversationBranch(ctx, gen.InsertConversationBranchParams{
+		if err := q.InsertConversationBranch(ctx, gen.InsertConversationBranchParams{
 			ID:                     rootBranchID,
 			ConversationID:         options.id,
 			SessionID:              nullableString(string(options.session)),
@@ -289,7 +331,15 @@ func (s *Store) createConversation(
 			ProviderScopeID:        rootBranchID,
 			ProviderIdsScoped:      1,
 			CreatedAt:              options.now,
-		})
+		}); err != nil {
+			return err
+		}
+		if !options.adoptQueue || scope != domain.ConversationScopeProject {
+			return nil
+		}
+		var adoptErr error
+		latestSequence, adoptErr = adoptProvisioningQueue(ctx, q, options.session, options.id, options.now)
+		return adoptErr
 	})
 	if err != nil {
 		return domain.ConversationRecord{}, fmt.Errorf("insert conversation %s: %w", options.id, err)
@@ -301,9 +351,116 @@ func (s *Store) createConversation(
 		ProjectID:      options.project,
 		SessionID:      options.session,
 		ActiveBranchID: rootBranchID,
+		LatestSequence: latestSequence,
 		CreatedAt:      options.now,
 		UpdatedAt:      options.now,
 	}, nil
+}
+
+// adoptProvisioningQueue moves the rows of every other session-scoped
+// conversation the session is bound to into targetID, then detaches those rows.
+// Turns, messages, and activities keep their IDs, so a turn id a client already
+// holds still resolves for edit and cancel. Messages and activities go after the
+// target's latest sequence, which is after any context boundary the caller just
+// recorded. It returns the target's new latest sequence.
+func adoptProvisioningQueue(
+	ctx context.Context,
+	q *gen.Queries,
+	session domain.SessionID,
+	targetID string,
+	now time.Time,
+) (int64, error) {
+	target, err := q.SelectConversationByID(ctx, targetID)
+	if err != nil {
+		return 0, fmt.Errorf("select adopting conversation %s: %w", targetID, err)
+	}
+	sources, err := q.SelectProvisioningConversationsForSession(ctx,
+		gen.SelectProvisioningConversationsForSessionParams{CurrentSessionID: &session, ID: targetID})
+	if err != nil {
+		return 0, fmt.Errorf("select provisioning conversations for %s: %w", session, err)
+	}
+	latest := target.LatestSequence
+	for _, source := range sources {
+		if err := retargetExcerptReferences(ctx, q, source.ID, targetID); err != nil {
+			return 0, err
+		}
+		if err := q.MoveConversationTurns(ctx, gen.MoveConversationTurnsParams{
+			TargetID: targetID, BranchID: target.ActiveBranchID, SourceID: source.ID,
+		}); err != nil {
+			return 0, fmt.Errorf("move turns from %s: %w", source.ID, err)
+		}
+		if err := q.MoveConversationMessages(ctx, gen.MoveConversationMessagesParams{
+			TargetID: targetID, BranchID: target.ActiveBranchID, SequenceOffset: latest, SourceID: source.ID,
+		}); err != nil {
+			return 0, fmt.Errorf("move messages from %s: %w", source.ID, err)
+		}
+		if err := q.MoveConversationActivities(ctx, gen.MoveConversationActivitiesParams{
+			TargetID: targetID, BranchID: target.ActiveBranchID, SequenceOffset: latest, SourceID: source.ID,
+		}); err != nil {
+			return 0, fmt.Errorf("move activities from %s: %w", source.ID, err)
+		}
+		if err := q.MoveConversationQueuedEditDeliveries(ctx, gen.MoveConversationQueuedEditDeliveriesParams{
+			TargetID: targetID, SourceID: source.ID,
+		}); err != nil {
+			return 0, fmt.Errorf("move queued edit receipts from %s: %w", source.ID, err)
+		}
+		if err := q.AdvanceConversationSequence(ctx, gen.AdvanceConversationSequenceParams{
+			LatestSequence: source.LatestSequence, UpdatedAt: now, ID: targetID,
+		}); err != nil {
+			return 0, fmt.Errorf("advance sequence of %s: %w", targetID, err)
+		}
+		latest += source.LatestSequence
+		// Only a turn whose prompt already reached the target stays behind. Settle
+		// it so nothing queued is left where no lookup can find it.
+		if err := q.CancelAllQueuedConversationTurns(ctx, gen.CancelAllQueuedConversationTurnsParams{
+			CompletedAt: timeToNullTime(now), ConversationID: source.ID,
+		}); err != nil {
+			return 0, fmt.Errorf("settle duplicate turns in %s: %w", source.ID, err)
+		}
+		if err := q.DetachSessionConversation(ctx, gen.DetachSessionConversationParams{
+			UpdatedAt: now, ID: source.ID, CurrentSessionID: &session,
+		}); err != nil {
+			return 0, fmt.Errorf("detach provisioning conversation %s: %w", source.ID, err)
+		}
+	}
+	return latest, nil
+}
+
+// retargetExcerptReferences points the excerpt references queued in sourceID at
+// targetID before the rows move, because drain checks each reference against the
+// conversation it runs in.
+func retargetExcerptReferences(ctx context.Context, q *gen.Queries, sourceID, targetID string) error {
+	rows, err := q.SelectConversationDeliveryContent(ctx, sourceID)
+	if err != nil {
+		return fmt.Errorf("select delivery content in %s: %w", sourceID, err)
+	}
+	for _, row := range rows {
+		var content []ports.ChatContent
+		if err := json.Unmarshal([]byte(row.DeliveryContentJson), &content); err != nil {
+			// Drain fails a turn with corrupt content; moving it unchanged keeps that.
+			continue
+		}
+		changed := false
+		for i := range content {
+			if excerpt := content[i].Excerpt; excerpt != nil && excerpt.Reference.ConversationID == sourceID {
+				excerpt.Reference.ConversationID = targetID
+				changed = true
+			}
+		}
+		if !changed {
+			continue
+		}
+		encoded, err := json.Marshal(content)
+		if err != nil {
+			return fmt.Errorf("encode delivery content of %s: %w", row.ID, err)
+		}
+		if err := q.SetConversationMessageDeliveryContent(ctx, gen.SetConversationMessageDeliveryContentParams{
+			DeliveryContentJson: string(encoded), ID: row.ID,
+		}); err != nil {
+			return fmt.Errorf("retarget excerpts of %s: %w", row.ID, err)
+		}
+	}
+	return nil
 }
 
 // CreateConversationBranch records a provider-thread child without changing the
@@ -936,6 +1093,19 @@ func (s *Store) HasConversationTurns(ctx context.Context, conversationID string)
 	return hasTurns, nil
 }
 
+// LatestConversationTurn reads the latest non-rolled-back turn on the active
+// branch lineage without loading messages or activities.
+func (s *Store) LatestConversationTurn(ctx context.Context, conversationID string) (domain.ConversationTurn, error) {
+	row, err := s.qr.SelectLatestConversationTurn(ctx, conversationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ConversationTurn{}, domain.ErrNoConversationTurn
+	}
+	if err != nil {
+		return domain.ConversationTurn{}, fmt.Errorf("select latest conversation turn: %w", err)
+	}
+	return turnToDomain(row), nil
+}
+
 // LatestVisibleUserTurnSettled checks the current branch's latest user prompt
 // without loading the full conversation history.
 func (s *Store) LatestVisibleUserTurnSettled(ctx context.Context, conversationID string, sessionID domain.SessionID) (bool, error) {
@@ -1015,6 +1185,16 @@ func (s *Store) appendUserMessage(
 		}
 		if record.IsTerminated || (!record.ProvisionState.IsProvisioning() && !record.HibernatedAt.Valid) {
 			return false, domain.ErrSessionNotProvisioning
+		}
+		// The caller read the conversation before taking writeMu. An orchestrator's
+		// first controller may have moved the queue out of it since then; a turn
+		// appended here would never drain or show.
+		conversation, readErr := s.qw.SelectConversationByID(ctx, conversationID)
+		if readErr != nil {
+			return false, fmt.Errorf("check queued conversation %s: %w", conversationID, readErr)
+		}
+		if conversation.CurrentSessionID == nil || *conversation.CurrentSessionID != session {
+			return false, domain.ErrConversationRebound
 		}
 	}
 

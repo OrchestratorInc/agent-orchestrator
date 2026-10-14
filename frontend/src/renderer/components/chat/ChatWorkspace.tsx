@@ -125,6 +125,7 @@ import {
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
+import type { ComposerPromptSuggestion } from "./ComposerEditor";
 import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
@@ -318,6 +319,7 @@ export interface ChatWorkspaceProps {
 	onAddToSideChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
 	annotationNavigationRequest?: { id: string; text: string; messageId?: string; revision?: number };
 	snapshot: ConversationSnapshot;
+	promptSuggestion?: ComposerPromptSuggestion;
 	/** Renderer-owned state identity; the snapshot's sessionId remains the daemon wire ID. */
 	uiSessionId?: string;
 	/** Durable draft owner for a conversation that is not a worker session. */
@@ -598,6 +600,7 @@ function ChatWorkspaceContent({
 	onAddToSideChat,
 	annotationNavigationRequest,
 	snapshot,
+	promptSuggestion,
 	sessionTitle,
 	sessionRole = "worker",
 	assetBaseUrl,
@@ -1753,6 +1756,11 @@ function ChatWorkspaceContent({
 										elicitation={composerElicitation}
 										onSend={handleComposerSend}
 										draftSeed={composerDraftSeed}
+										promptSuggestion={!queueEdit && !composerApproval && !composerElicitation && !turn &&
+											!busy && !sendPending && !steerPending && !agentInputDisabled && !newWorkDisabled &&
+											!controllerTransitioning && !loadingQuietly && !agentResuming &&
+											!workspaceActiveTabKey && !reviewerActive && !shellActive && snapshot.controller.state === "ready"
+											? promptSuggestion : undefined}
 										editingQueuedTurnId={queueEdit?.turnId}
 										queuedEditRecovery={Boolean(queueEdit?.clientMessageId)}
 										savingQueuedEditPending={Boolean(

@@ -4209,18 +4209,18 @@ html.sidebar-reordering * {
 	}
 }
 
-/* Files tab: the filter field sits in the inspector top bar exactly where the
-   browser's address field does, with the same centered track and focus
-   widening, and drops to its own row at the same narrow width (below). */
+/* Files tab: center the filter in the space between the tabs and the pinned
+   actions. Intrinsic side tracks let it adjust when the review tab appears.
+   It still widens on focus and takes its own row in narrow panels (below). */
 .session-inspector__topbar:has(> .files-panel__topbar-host) {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, clamp(120px, calc(100cqw - 2 * var(--inspector-tabs-reserve)), 240px)) minmax(0, 1fr);
+	grid-template-columns: max-content minmax(0, 1fr) max-content;
+	column-gap: var(--space-1);
 	padding-left: 0;
-	transition: grid-template-columns var(--duration-fast) ease;
 }
 
-.session-inspector__topbar:has(> .files-panel__topbar-host :focus) {
-	grid-template-columns: minmax(0, 1fr) clamp(120px, min(52cqw, calc(100cqw - 2 * var(--inspector-tabs-reserve))), 560px) minmax(0, 1fr);
+.session-inspector__topbar > .files-panel__topbar-host:focus-within {
+	width: min(100%, 52cqw, 560px);
 }
 
 .session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector__tablist {
@@ -4230,7 +4230,9 @@ html.sidebar-reordering * {
 
 .session-inspector__topbar > .files-panel__topbar-host {
 	grid-column: 2;
-	width: 100%;
+	width: min(100%, 240px);
+	justify-self: center;
+	transition: width var(--duration-fast) ease;
 }
 
 .session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector__trailing {
@@ -4239,9 +4241,7 @@ html.sidebar-reordering * {
 }
 
 /* Like the browser's URL field: once zoom or a narrow window leaves too little
-   room, the filter takes its own row so it cannot slide under the tabs. The
-   focused selector repeats the plain one so its wider focus track above never
-   overrides the two-column layout here. */
+   room, the filter takes its own row so it cannot slide under the tabs. */
 @container inspector (max-width: 440px) {
 	.session-inspector__topbar:has(> .files-panel__topbar-host),
 	.session-inspector__topbar:has(> .files-panel__topbar-host :focus) {

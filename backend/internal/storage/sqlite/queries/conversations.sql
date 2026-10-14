@@ -19,8 +19,86 @@ VALUES (?, 'review', ?, ?, ?, 0, ?, ?, ?);
 -- name: SelectConversationByReview :one
 SELECT * FROM conversations WHERE current_review_id = ? LIMIT 1;
 
+-- An orchestrator's first controller moves the prompts queued during provisioning
+-- into the project row and detaches the session-scoped row in one transaction
+-- (#6523). Migration 0197 detached the rows older builds left bound to both. If a
+-- session is still bound to two rows, the project row is the live one.
 -- name: SelectConversationBySession :one
-SELECT * FROM conversations WHERE current_session_id = ? LIMIT 1;
+SELECT * FROM conversations WHERE current_session_id = ?
+ORDER BY scope = 'project' DESC, created_at DESC, id DESC
+LIMIT 1;
+
+-- The session-scoped rows a session is bound to besides the given conversation:
+-- where an orchestrator's provisioning-time prompts wait for its project row.
+-- name: SelectProvisioningConversationsForSession :many
+SELECT id, latest_sequence FROM conversations
+WHERE current_session_id = ? AND scope = 'session' AND id <> ?
+ORDER BY created_at, id;
+
+-- Delivery content that may hold excerpt references to the conversation it is
+-- moving out of.
+-- name: SelectConversationDeliveryContent :many
+SELECT id, delivery_content_json FROM conversation_messages
+WHERE conversation_id = ? AND delivery_content_json <> '';
+
+-- name: SetConversationMessageDeliveryContent :exec
+UPDATE conversation_messages SET delivery_content_json = ? WHERE id = ?;
+
+-- Move a provisioning row's turns into the conversation that adopts them. IDs and
+-- requested_at stay, so queue order and every turn id a client holds still work.
+-- A turn whose prompt already reached the target under the same client message id
+-- stays behind: it would break the target's unique client id.
+-- name: MoveConversationTurns :exec
+UPDATE conversation_turns
+SET conversation_id = sqlc.arg(target_id), branch_id = sqlc.arg(branch_id)
+WHERE conversation_turns.conversation_id = sqlc.arg(source_id)
+  AND conversation_turns.id NOT IN (
+      SELECT moved.turn_id FROM conversation_messages AS moved
+      JOIN conversation_messages AS delivered
+        ON delivered.conversation_id = sqlc.arg(target_id)
+       AND delivered.client_message_id = moved.client_message_id
+      WHERE moved.conversation_id = sqlc.arg(source_id)
+        AND moved.client_message_id <> ''
+        AND moved.turn_id IS NOT NULL
+  );
+
+-- Messages and activities follow their turns. Offsetting every sequence by the
+-- target's latest keeps their order and places them after the target's history.
+-- name: MoveConversationMessages :exec
+UPDATE conversation_messages
+SET conversation_id = sqlc.arg(target_id), branch_id = sqlc.arg(branch_id),
+    sequence = sequence + sqlc.arg(sequence_offset)
+WHERE conversation_messages.conversation_id = sqlc.arg(source_id)
+  AND (conversation_messages.turn_id IS NULL OR conversation_messages.turn_id IN (
+      SELECT id FROM conversation_turns WHERE conversation_turns.conversation_id = sqlc.arg(target_id)
+  ));
+
+-- name: MoveConversationActivities :exec
+UPDATE conversation_activities
+SET conversation_id = sqlc.arg(target_id), branch_id = sqlc.arg(branch_id),
+    sequence = sequence + sqlc.arg(sequence_offset)
+WHERE conversation_activities.conversation_id = sqlc.arg(source_id)
+  AND (conversation_activities.turn_id IS NULL OR conversation_activities.turn_id IN (
+      SELECT id FROM conversation_turns WHERE conversation_turns.conversation_id = sqlc.arg(target_id)
+  ));
+
+-- Queued-edit receipts keep a retried edit idempotent after the move.
+-- name: MoveConversationQueuedEditDeliveries :exec
+UPDATE conversation_queued_edit_deliveries
+SET conversation_id = sqlc.arg(target_id)
+WHERE conversation_queued_edit_deliveries.conversation_id = sqlc.arg(source_id)
+  AND conversation_queued_edit_deliveries.client_message_id NOT IN (
+      SELECT existing.client_message_id FROM conversation_queued_edit_deliveries AS existing
+      WHERE existing.conversation_id = sqlc.arg(target_id)
+  );
+
+-- name: AdvanceConversationSequence :exec
+UPDATE conversations SET latest_sequence = latest_sequence + ?, updated_at = ?
+WHERE id = ?;
+
+-- name: DetachSessionConversation :exec
+UPDATE conversations SET current_session_id = NULL, updated_at = ?
+WHERE id = ? AND scope = 'session' AND current_session_id = ?;
 
 -- name: SelectProjectConversation :one
 SELECT * FROM conversations WHERE project_id = ? AND scope = 'project' LIMIT 1;
@@ -758,6 +836,41 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
         AND lineage_activity.sequence <= path.max_sequence
   ))
 ORDER BY conversation_turns.requested_at, conversation_turns.rowid;
+
+-- The latest non-discarded turn uses the same active lineage and ordering as
+-- SelectConversationTurns, independently of where late timeline items occur.
+-- name: SelectLatestConversationTurn :one
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = sqlc.arg(conversation_id)
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT conversation_turns.* FROM conversation_turns
+JOIN active_path AS path ON path.branch_id = conversation_turns.branch_id
+WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
+  AND conversation_turns.promoted_to_turn_id IS NULL
+  AND conversation_turns.rolled_back_at IS NULL
+  AND (path.max_sequence IS NULL OR EXISTS (
+      SELECT 1 FROM conversation_messages AS lineage_message
+      WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.sequence <= path.max_sequence
+      UNION ALL
+      SELECT 1 FROM conversation_activities AS lineage_activity
+      WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.sequence <= path.max_sequence
+  ))
+ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
+LIMIT 1;
 
 -- Turns represented by one bounded timeline page. Active turns are included
 -- even before their first item arrives, so the live-turn controls never vanish.

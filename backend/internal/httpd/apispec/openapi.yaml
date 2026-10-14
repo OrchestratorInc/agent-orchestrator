@@ -5510,6 +5510,69 @@ paths:
       summary: List the models the provider offers for a chat session
       tags:
       - conversations
+  /api/v1/sessions/{sessionId}/conversation/prompt-suggestion:
+    post:
+      operationId: suggestSessionConversationPrompt
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationPromptSuggestionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationPromptSuggestionResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "429":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Too Many Requests
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Suggest the next human message after a completed chat turn
+      tags:
+      - conversations
   /api/v1/sessions/{sessionId}/conversation/queue/reorder:
     post:
       operationId: reorderQueuedSessionConversationTurns
@@ -7124,6 +7187,11 @@ paths:
         schema:
           description: Session identifier, e.g. project-1.
           type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersKillSessionRequest'
       responses:
         "200":
           content:
@@ -9624,6 +9692,58 @@ paths:
           description: Not Implemented
       summary: Get the compact changed-file manifest for the initial workspace review
         paint
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/workspace/resolve:
+    get:
+      operationId: resolveSessionWorkspacePath
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Absolute or workspace-relative file path to classify.
+        in: query
+        name: path
+        required: true
+        schema:
+          description: Absolute or workspace-relative file path to classify.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspacePathResolutionResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Classify a path as a workspace file, a session artifact, or neither
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/workspace/search:
@@ -12171,6 +12291,11 @@ components:
       - active
       - hasBattery
       type: object
+    ControllersKillSessionRequest:
+      properties:
+        deleteArtifacts:
+          type: boolean
+      type: object
     ControllersRemoteHostAccountTokenResponse:
       properties:
         hostId:
@@ -12932,6 +13057,23 @@ components:
       required:
       - text
       - status
+      type: object
+    ConversationPromptSuggestionRequest:
+      properties:
+        turnId:
+          type: string
+      required:
+      - turnId
+      type: object
+    ConversationPromptSuggestionResponse:
+      properties:
+        prompt:
+          type: string
+        turnId:
+          type: string
+      required:
+      - turnId
+      - prompt
       type: object
     ConversationRateLimitsPayload:
       properties:
@@ -14157,6 +14299,8 @@ components:
       type: object
     KillSessionResponse:
       properties:
+        artifactsDeleted:
+          type: boolean
         cleanupPending:
           type: boolean
         freed:
@@ -18330,6 +18474,23 @@ components:
       - stale
       - refreshing
       - degraded
+      type: object
+    WorkspacePathResolutionResponse:
+      properties:
+        kind:
+          enum:
+          - workspace
+          - artifact
+          - outside
+          type: string
+        path:
+          type: string
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - kind
+      - path
       type: object
     WorkspaceRepo:
       properties:

@@ -20,6 +20,7 @@ const side = {
 function renderSideComposer(
 	draft = emptySideChatDraft(),
 	flags: { sending?: boolean; ready?: boolean; deliveryPending?: boolean } = {},
+	canCreate = true,
 ) {
 	const onSend = vi.fn();
 	const onFocusSide = vi.fn();
@@ -43,7 +44,7 @@ function renderSideComposer(
 			side={side}
 			onSettings={vi.fn()}
 			onRemoveReference={vi.fn()}
-			onFocusSide={onFocusSide}
+			onFocusSide={canCreate ? onFocusSide : undefined}
 			onCompact={onCompact}
 			onNavigate={onNavigate}
 			focusKey={0}
@@ -59,6 +60,14 @@ function renderSideComposer(
 }
 
 describe("side composer slash menu", () => {
+	it("preserves provider commands when a new side cannot open", async () => {
+		const { onSend, onFocusSide, field } = renderSideComposer(emptySideChatDraft(), {}, false);
+		await typeInLexicalEditor(field, "/btw");
+		expect(screen.queryByRole("option", { name: /\/btw/ })).not.toBeInTheDocument();
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith("/btw"));
+		expect(onFocusSide).not.toHaveBeenCalled();
+	});
 	it("shows provider skills and opens /btw without sending", async () => {
 		const { onSend, onFocusSide, field } = renderSideComposer();
 		await typeInLexicalEditor(field, "/");
