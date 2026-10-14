@@ -1553,6 +1553,10 @@ func (c *Controller) sendLocked(
 func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.ConversationTurn, error) {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
+	return c.retryTurnLocked(ctx, turnID)
+}
+
+func (c *Controller) retryTurnLocked(ctx context.Context, turnID string) (domain.ConversationTurn, error) {
 	if c.handoffActive() {
 		return domain.ConversationTurn{}, ErrControllerHandoff
 	}

@@ -1608,6 +1608,18 @@ WHERE conversation_id = sqlc.arg(conversation_id)
   AND retry_of_turn_id = sqlc.arg(retry_of_turn_id)
 LIMIT 1;
 
+-- name: SetConversationTurnAutoResume :execrows
+UPDATE conversation_turns
+SET usage_limit_resets_at = COALESCE(sqlc.narg(resets_at), usage_limit_resets_at),
+    usage_limit_auto_resume = sqlc.arg(enabled),
+    usage_limit_resume_error = sqlc.arg(resume_error)
+WHERE id = sqlc.arg(id) AND conversation_id = sqlc.arg(conversation_id);
+
+-- name: SelectAutoResumeConversationTurns :many
+SELECT * FROM conversation_turns
+WHERE usage_limit_auto_resume = 1
+ORDER BY usage_limit_resets_at, id;
+
 -- Retry attempts outside the active branch still consume their source action.
 -- name: SelectConversationRetriedSourceTurnIDs :many
 SELECT CAST(retry_of_turn_id AS TEXT) AS retry_of_turn_id
@@ -1754,3 +1766,38 @@ WHERE t.conversation_id = sqlc.arg(conversation_id)
   AND t.completed_at > sqlc.arg(after_at)
 ORDER BY t.completed_at DESC LIMIT 1;
 
+
+-- Queued work stays held behind a failed source until its retry succeeds.
+-- name: SelectLatestAutoResumeConversationTurn :one
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = sqlc.arg(conversation_id)
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT conversation_turns.* FROM conversation_turns
+JOIN active_path AS path ON path.branch_id = conversation_turns.branch_id
+WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
+  AND conversation_turns.state NOT IN ('queued', 'cancelled')
+  AND conversation_turns.promoted_to_turn_id IS NULL
+  AND conversation_turns.rolled_back_at IS NULL
+  AND (path.max_sequence IS NULL OR EXISTS (
+      SELECT 1 FROM conversation_messages AS lineage_message
+      WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.sequence <= path.max_sequence
+      UNION ALL
+      SELECT 1 FROM conversation_activities AS lineage_activity
+      WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.sequence <= path.max_sequence
+  ))
+ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
+LIMIT 1;

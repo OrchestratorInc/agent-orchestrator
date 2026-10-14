@@ -78,6 +78,22 @@ describe("TurnOutcome", () => {
 		expect(screen.getByText("Provider error")).toBeInTheDocument();
 	});
 
+	it("presents a usage limit as an amber historical notice without retry controls", () => {
+		render(
+			<TurnOutcome
+				state="failed"
+				error="Manage your limit at https://example.com/billing."
+				usageLimit={{ resetsAt: "2026-10-14T16:50:00Z", autoResume: false }}
+				retry={{ onRetry: vi.fn() }}
+			/>,
+		);
+
+		expect(screen.getByText("Usage limit reached")).toHaveClass("text-warning");
+		expect(screen.queryByText("The agent ran into a problem")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button")).not.toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "https://example.com/billing" })).toHaveAttribute("href", "https://example.com/billing");
+	});
+
 	it("preserves multiline provider text and links without interpreting its structure", () => {
 		render(
 			<TurnOutcome

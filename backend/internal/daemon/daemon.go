@@ -1108,6 +1108,27 @@ func Run() error {
 				}
 			}
 		}()
+		go func() {
+			// Recovery must attach existing provider work before scheduled retries
+			// inspect controller readiness. The durable opt-in survives shutdown.
+			select {
+			case <-done:
+			case <-ctx.Done():
+				return
+			}
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for {
+				if err := chatSvc.ResumeUsageLimitedTurns(ctx); err != nil && ctx.Err() == nil {
+					log.Warn("usage-limit auto-resume failed", "err", err)
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
 	})
 
 	// Both graceful shutdown paths (SIGTERM and POST /shutdown) funnel through

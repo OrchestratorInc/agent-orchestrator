@@ -1250,6 +1250,13 @@ func (s *Store) appendUserMessage(
 		} else if err := q.InsertReviewConversationTurn(ctx, gen.InsertReviewConversationTurnParams{ID: turnID, ConversationID: conversationID, HandledBySessionID: session, HandledByReviewID: nullableString(reviewID), ControllerGeneration: generation, RetryOfTurnID: nullableString(retryOfTurnID), State: domain.TurnStateQueued, RequestedAt: now}); err != nil {
 			return fmt.Errorf("insert reviewer turn: %w", err)
 		}
+		if retryOfTurnID != "" {
+			if _, err := q.SetConversationTurnAutoResume(ctx, gen.SetConversationTurnAutoResumeParams{
+				ID: retryOfTurnID, ConversationID: conversationID,
+			}); err != nil {
+				return fmt.Errorf("consume source auto-resume: %w", err)
+			}
+		}
 
 		if err := q.InsertConversationMessage(ctx, gen.InsertConversationMessageParams{
 			ID:                  msg.ID,
@@ -3038,6 +3045,57 @@ func (s *Store) TurnByID(ctx context.Context, turnID string) (domain.Conversatio
 	return turnToDomain(row), nil
 }
 
+// SetTurnAutoResume keeps user consent on the failed source, separate from the
+// new attempt. The retry transaction consumes it before provider dispatch.
+func (s *Store) SetTurnAutoResume(ctx context.Context, conversationID, turnID string, resetsAt *time.Time, enabled bool, resumeError string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	var armed int64
+	if enabled {
+		armed = 1
+	}
+	var reset sql.NullTime
+	if resetsAt != nil {
+		reset = timeToNullTime(*resetsAt)
+	}
+	n, err := s.qw.SetConversationTurnAutoResume(ctx, gen.SetConversationTurnAutoResumeParams{
+		ID: turnID, ConversationID: conversationID, ResetsAt: reset, Enabled: armed, ResumeError: resumeError,
+	})
+	if err != nil {
+		return fmt.Errorf("set turn auto-resume: %w", err)
+	}
+	if n == 0 {
+		return domain.ErrNoConversationTurn
+	}
+	return nil
+}
+
+// AutoResumeTurns reads durable intent, including future deadlines so a sweep
+// can cancel sources that were superseded or whose session ended.
+func (s *Store) AutoResumeTurns(ctx context.Context) ([]domain.ConversationTurn, error) {
+	rows, err := s.qr.SelectAutoResumeConversationTurns(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read auto-resume turns: %w", err)
+	}
+	turns := make([]domain.ConversationTurn, 0, len(rows))
+	for _, row := range rows {
+		turns = append(turns, turnToDomain(row))
+	}
+	return turns, nil
+}
+
+// LatestAutoResumeTurn finds the latest visible turn that has left the queue.
+func (s *Store) LatestAutoResumeTurn(ctx context.Context, conversationID string) (domain.ConversationTurn, error) {
+	row, err := s.qr.SelectLatestAutoResumeConversationTurn(ctx, conversationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ConversationTurn{}, domain.ErrNoConversationTurn
+	}
+	if err != nil {
+		return domain.ConversationTurn{}, fmt.Errorf("read latest auto-resume source: %w", err)
+	}
+	return turnToDomain(row), nil
+}
+
 // RollbackTurns records that a rollback discarded the named turn and everything
 // after it, and returns how many turns that was.
 //
@@ -3831,6 +3889,17 @@ func turnToDomain(row gen.ConversationTurn) domain.ConversationTurn {
 	if row.CompletedAt.Valid {
 		completed := row.CompletedAt.Time
 		turn.CompletedAt = &completed
+	}
+	if turn.State == domain.TurnStateFailed {
+		turn.UsageLimit = domain.ParseConversationUsageLimit(turn.ErrorMessage, turn.CompletedAt)
+		if turn.UsageLimit != nil {
+			if row.UsageLimitResetsAt.Valid {
+				reset := row.UsageLimitResetsAt.Time
+				turn.UsageLimit.ResetsAt = &reset
+			}
+			turn.UsageLimit.AutoResume = row.UsageLimitAutoResume != 0
+			turn.UsageLimit.ResumeError = row.UsageLimitResumeError
+		}
 	}
 	if row.DiffJson != "" {
 		var diff domain.ConversationTurnDiff
