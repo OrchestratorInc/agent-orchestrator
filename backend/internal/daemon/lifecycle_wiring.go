@@ -279,8 +279,9 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		// Resolve each project's source repo from the projects table, so a
 		// session spawned for a registered project materialises its worktree off
 		// that repo. Unregistered projects fail loudly.
-		RepoResolver: projectRepoResolver{store: store},
-		Logger:       log,
+		RepoResolver:     projectRepoResolver{store: store},
+		Logger:           log,
+		SandboxedSession: sessionSandboxProbe{store: store}.sandboxed,
 	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("session workspace: %w", err)
@@ -564,6 +565,32 @@ func (r projectRepoResolver) RepoPath(projectID domain.ProjectID) (string, error
 		return "", fmt.Errorf("project %q has no repo path on record: %w", projectID, sessionmanager.ErrProjectNotResolvable)
 	}
 	return rec.Path, nil
+}
+
+// sessionSandboxLookup is the store surface sessionSandboxProbe reads.
+type sessionSandboxLookup interface {
+	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
+	GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error)
+}
+
+// sessionSandboxProbe tells the git workspace which worktrees belong to a
+// sandboxed session, so AO's own host git hardens its reads there (#6663).
+// It decides from the session record and project config only. Anything it
+// cannot establish counts as sandboxed: the hardened form never runs agent
+// code, and its Destroy dirty check keeps any worktree with a populated
+// nested repository, so failing closed cannot lose work.
+type sessionSandboxProbe struct{ store sessionSandboxLookup }
+
+func (p sessionSandboxProbe) sandboxed(ctx context.Context, info ports.WorkspaceInfo) bool {
+	rec, ok, err := p.store.GetSession(ctx, info.SessionID)
+	if err != nil || !ok {
+		return true
+	}
+	project, ok, err := p.store.GetProject(ctx, string(rec.ProjectID))
+	if err != nil || !ok {
+		return true
+	}
+	return domain.SessionSandbox(rec.Kind, project.Config).Enabled()
 }
 
 // chatLauncher adapts the chat service to session_manager.ChatLauncher.

@@ -232,7 +232,7 @@ type UpdateWorkspaceFileInput struct {
 // session workspace read model. Workspace projects include child repositories
 // that are deliberately ignored by the parent Git repository.
 func (s *Service) WorkspaceWatchPaths(ctx context.Context, id domain.SessionID) ([]string, error) {
-	rec, err := s.sessionWorkspaceRecord(ctx, id)
+	ctx, rec, err := s.sessionWorkspaceRecord(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -276,7 +276,7 @@ func (s *Service) InvalidateWorkspaceCache(id domain.SessionID) {
 // session worktree, annotated with their current git status against the
 // session's recorded base when available.
 func (s *Service) ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (WorkspaceFiles, error) {
-	rec, err := s.sessionWorkspaceRecord(ctx, id)
+	ctx, rec, err := s.sessionWorkspaceRecord(ctx, id)
 	if err != nil {
 		return WorkspaceFiles{}, err
 	}
@@ -353,7 +353,7 @@ func (s *Service) ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (
 // GetWorkspaceHistory loads commit and upstream metadata without paying for
 // the legacy all-files inventory used by the full workspace browser.
 func (s *Service) GetWorkspaceHistory(ctx context.Context, id domain.SessionID) (WorkspaceHistory, error) {
-	rec, err := s.sessionWorkspaceRecord(ctx, id)
+	ctx, rec, err := s.sessionWorkspaceRecord(ctx, id)
 	if err != nil {
 		return WorkspaceHistory{}, err
 	}
@@ -414,7 +414,7 @@ func workspaceDegradedCode(err error) string {
 // (see WorkspaceFileSection) since a partially staged file's staged and
 // unstaged changes are different diffs.
 func (s *Service) GetWorkspaceFile(ctx context.Context, id domain.SessionID, rawPath string, section WorkspaceFileSection) (WorkspaceFileDetail, error) {
-	target, err := s.resolveWorkspaceFileTarget(ctx, id, rawPath)
+	ctx, target, err := s.resolveWorkspaceFileTarget(ctx, id, rawPath)
 	if err != nil {
 		return WorkspaceFileDetail{}, err
 	}
@@ -437,7 +437,7 @@ func (s *Service) GetWorkspaceFileAtCommit(ctx context.Context, id domain.Sessio
 	if err != nil {
 		return WorkspaceFileDetail{}, err
 	}
-	target, err := s.resolveWorkspaceFileTarget(ctx, id, rawPath)
+	ctx, target, err := s.resolveWorkspaceFileTarget(ctx, id, rawPath)
 	if err != nil {
 		return WorkspaceFileDetail{}, err
 	}
@@ -499,7 +499,7 @@ func (s *Service) UpdateWorkspaceFile(ctx context.Context, id domain.SessionID, 
 		return WorkspaceFileDetail{}, apierr.Conflict("WORKSPACE_FILE_STALE", "File changed while it was being edited", map[string]any{"fileFingerprint": current.FileFingerprint})
 	}
 
-	target, err := s.resolveWorkspaceFileTarget(ctx, id, input.Path)
+	ctx, target, err := s.resolveWorkspaceFileTarget(ctx, id, input.Path)
 	if err != nil {
 		return WorkspaceFileDetail{}, err
 	}
@@ -539,17 +539,23 @@ type workspaceFileTarget struct {
 
 // resolveWorkspaceFileTarget maps a request path onto the worktree that owns it
 // and that worktree's compare state. Shared by the file detail read model and
-// the raw blob route so both resolve a path the same way.
-func (s *Service) resolveWorkspaceFileTarget(ctx context.Context, id domain.SessionID, rawPath string) (workspaceFileTarget, error) {
+// the raw blob route so both resolve a path the same way. The returned context
+// carries the session's sandbox marking; git reads of the target must use it.
+func (s *Service) resolveWorkspaceFileTarget(ctx context.Context, id domain.SessionID, rawPath string) (context.Context, workspaceFileTarget, error) {
 	return s.resolveWorkspaceFileTargetWithCompare(ctx, id, rawPath, true)
 }
 
 // Plain working-tree reads need path confinement, not a repository-wide Git scan.
-func (s *Service) resolveWorkspaceFileTargetWithCompare(ctx context.Context, id domain.SessionID, rawPath string, withCompare bool) (workspaceFileTarget, error) {
-	rec, err := s.sessionWorkspaceRecord(ctx, id)
+func (s *Service) resolveWorkspaceFileTargetWithCompare(ctx context.Context, id domain.SessionID, rawPath string, withCompare bool) (context.Context, workspaceFileTarget, error) {
+	ctx, rec, err := s.sessionWorkspaceRecord(ctx, id)
 	if err != nil {
-		return workspaceFileTarget{}, err
+		return ctx, workspaceFileTarget{}, err
 	}
+	target, err := s.resolveSessionFileTarget(ctx, id, rec, rawPath, withCompare)
+	return ctx, target, err
+}
+
+func (s *Service) resolveSessionFileTarget(ctx context.Context, id domain.SessionID, rec domain.SessionRecord, rawPath string, withCompare bool) (workspaceFileTarget, error) {
 	rel, err := cleanWorkspaceRelativePath(rawPath)
 	if err != nil {
 		return workspaceFileTarget{}, err
@@ -614,7 +620,7 @@ func (s *Service) GetWorkspaceFileBlob(ctx context.Context, id domain.SessionID,
 	if side != WorkspaceBlobBefore && side != WorkspaceBlobAfter {
 		return WorkspaceFileBlob{}, apierr.Invalid("INVALID_WORKSPACE_BLOB_SIDE", "side must be before or after", nil)
 	}
-	target, err := s.resolveWorkspaceFileTarget(ctx, id, rawPath)
+	ctx, target, err := s.resolveWorkspaceFileTarget(ctx, id, rawPath)
 	if err != nil {
 		return WorkspaceFileBlob{}, err
 	}
@@ -734,22 +740,25 @@ func gitWorkspaceBlob(ctx context.Context, root, rev, rel string, limit int64) (
 	return []byte(out), nil
 }
 
-func (s *Service) sessionWorkspaceRecord(ctx context.Context, id domain.SessionID) (domain.SessionRecord, error) {
+// sessionWorkspaceRecord loads a session whose workspace exists. The returned
+// context carries the session's sandbox marking (see workspaceGitContext);
+// git reads of the workspace must use it.
+func (s *Service) sessionWorkspaceRecord(ctx context.Context, id domain.SessionID) (context.Context, domain.SessionRecord, error) {
 	rec, ok, err := s.store.GetSession(ctx, id)
 	if err != nil {
-		return domain.SessionRecord{}, fmt.Errorf("get %s: %w", id, err)
+		return ctx, domain.SessionRecord{}, fmt.Errorf("get %s: %w", id, err)
 	}
 	if !ok {
-		return domain.SessionRecord{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+		return ctx, domain.SessionRecord{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	}
 	if strings.TrimSpace(rec.Metadata.WorkspacePath) == "" {
-		return domain.SessionRecord{}, apierr.NotFound("SESSION_WORKSPACE_NOT_FOUND", "Session workspace not found")
+		return ctx, domain.SessionRecord{}, apierr.NotFound("SESSION_WORKSPACE_NOT_FOUND", "Session workspace not found")
 	}
 	info, err := os.Stat(rec.Metadata.WorkspacePath)
 	if err != nil || !info.IsDir() {
-		return domain.SessionRecord{}, apierr.NotFound("SESSION_WORKSPACE_NOT_FOUND", "Session workspace not found")
+		return ctx, domain.SessionRecord{}, apierr.NotFound("SESSION_WORKSPACE_NOT_FOUND", "Session workspace not found")
 	}
-	return rec, nil
+	return s.workspaceGitContext(ctx, rec), rec, nil
 }
 
 func (s *Service) sessionProject(ctx context.Context, rec domain.SessionRecord) (domain.ProjectRecord, bool, error) {
@@ -2597,10 +2606,48 @@ func truncateUTF8(in string, limit int) (string, bool) {
 	return in[:end], true
 }
 
+// sandboxedWorkspaceGitKey marks a context whose git reads target a sandboxed
+// session's worktree (#6663).
+type sandboxedWorkspaceGitKey struct{}
+
+// workspaceGitContext marks ctx when rec's agent runs in a sandbox. The agent
+// controls that worktree and its index, so it can commit a nested repository
+// as a gitlink with a core.fsmonitor or filter.*.clean command in the nested
+// config; host git that recurses into it runs the command. The decision comes
+// from the session record and project config, never from the worktree. A
+// project that cannot be read fails closed to the hardened form.
+func (s *Service) workspaceGitContext(ctx context.Context, rec domain.SessionRecord) context.Context {
+	project, ok, err := s.sessionProject(ctx, rec)
+	if err == nil && (!ok || !domain.SessionSandbox(rec.Kind, project.Config).Enabled()) {
+		return ctx
+	}
+	return context.WithValue(ctx, sandboxedWorkspaceGitKey{}, true)
+}
+
+// workspaceGitArgs builds the full argv for a read-only git call in root.
+// For a sandboxed session it also stops git from recursing into nested
+// repositories: status and diff need --ignore-submodules=all because a
+// .gitmodules `ignore = none` overrides any config-level setting, and fetch
+// needs --no-recurse-submodules. Host sessions keep their submodule view.
+func workspaceGitArgs(ctx context.Context, root string, args []string) []string {
+	out := make([]string, 0, 14+len(args))
+	out = append(out, "--no-pager", "--no-optional-locks", "-c", "core.hooksPath="+os.DevNull, "-c", "diff.external=", "-c", "core.fsmonitor=false")
+	sandboxed, _ := ctx.Value(sandboxedWorkspaceGitKey{}).(bool)
+	if !sandboxed || len(args) == 0 {
+		return append(append(out, "-C", root), args...)
+	}
+	out = append(out, "-c", "submodule.recurse=false", "-C", root, args[0])
+	switch args[0] {
+	case "status", "diff":
+		out = append(out, "--ignore-submodules=all")
+	case "fetch":
+		out = append(out, "--no-recurse-submodules")
+	}
+	return append(out, args[1:]...)
+}
+
 func gitWorkspaceOutput(ctx context.Context, root string, args ...string) (string, error) {
-	globalArgs := make([]string, 0, 10+len(args))
-	globalArgs = append(globalArgs, "--no-pager", "--no-optional-locks", "-c", "core.hooksPath="+os.DevNull, "-c", "diff.external=", "-c", "core.fsmonitor=false", "-C", root)
-	cmd := aoprocess.CommandContext(ctx, "git", append(globalArgs, args...)...)
+	cmd := aoprocess.CommandContext(ctx, "git", workspaceGitArgs(ctx, root, args)...)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -2649,9 +2696,7 @@ func (w *cappedWorkspaceOutput) Write(p []byte) (int, error) {
 // gitWorkspaceOutputCapped drains all output while retaining only a bounded
 // prefix, preventing large diffs from becoming an unbounded in-memory buffer.
 func gitWorkspaceOutputCapped(ctx context.Context, root string, limit int, args ...string) (string, bool, error) {
-	globalArgs := make([]string, 0, 10+len(args))
-	globalArgs = append(globalArgs, "--no-pager", "--no-optional-locks", "-c", "core.hooksPath="+os.DevNull, "-c", "diff.external=", "-c", "core.fsmonitor=false", "-C", root)
-	cmd := aoprocess.CommandContext(ctx, "git", append(globalArgs, args...)...)
+	cmd := aoprocess.CommandContext(ctx, "git", workspaceGitArgs(ctx, root, args)...)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
 	stdout := &cappedWorkspaceOutput{limit: limit}
 	stderr := &cappedWorkspaceOutput{limit: 64 * 1024}

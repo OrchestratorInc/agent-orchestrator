@@ -891,6 +891,62 @@ func TestProjectRepoResolver_ResolvesRegisteredProject(t *testing.T) {
 	}
 }
 
+type fakeSandboxLookup struct {
+	sessions   map[domain.SessionID]domain.SessionRecord
+	projects   map[string]domain.ProjectRecord
+	sessionErr error
+}
+
+func (f fakeSandboxLookup) GetSession(_ context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
+	rec, ok := f.sessions[id]
+	return rec, ok, f.sessionErr
+}
+
+func (f fakeSandboxLookup) GetProject(_ context.Context, id string) (domain.ProjectRecord, bool, error) {
+	rec, ok := f.projects[id]
+	return rec, ok, nil
+}
+
+// TestSessionSandboxProbe asserts AO's host git treats a worktree as
+// sandboxed from the session record and project config, and fails closed to
+// the hardened form whenever that cannot be established.
+func TestSessionSandboxProbe(t *testing.T) {
+	perAgent := domain.ProjectConfig{Sandbox: domain.SandboxConfig{Mode: domain.SandboxModePerAgent, Image: "node:22"}}
+	lookup := fakeSandboxLookup{
+		sessions: map[domain.SessionID]domain.SessionRecord{
+			"w-1": {ID: "w-1", ProjectID: "sb", Kind: domain.KindWorker},
+			"o-1": {ID: "o-1", ProjectID: "sb", Kind: domain.KindOrchestrator},
+			"h-1": {ID: "h-1", ProjectID: "host", Kind: domain.KindWorker},
+			"x-1": {ID: "x-1", ProjectID: "gone", Kind: domain.KindWorker},
+		},
+		projects: map[string]domain.ProjectRecord{
+			"sb":   {ID: "sb", Config: perAgent},
+			"host": {ID: "host"},
+		},
+	}
+	probe := sessionSandboxProbe{store: lookup}
+	ctx := context.Background()
+	cases := []struct {
+		id   domain.SessionID
+		want bool
+	}{
+		{"w-1", true},
+		{"o-1", false}, // the orchestrator never inherits the project sandbox
+		{"h-1", false},
+		{"x-1", true},     // unknown project: fail closed
+		{"missing", true}, // unknown session: fail closed
+	}
+	for _, tc := range cases {
+		if got := probe.sandboxed(ctx, ports.WorkspaceInfo{SessionID: tc.id}); got != tc.want {
+			t.Errorf("sandboxed(%s) = %v, want %v", tc.id, got, tc.want)
+		}
+	}
+	lookup.sessionErr = errors.New("db down")
+	if !(sessionSandboxProbe{store: lookup}).sandboxed(ctx, ports.WorkspaceInfo{SessionID: "h-1"}) {
+		t.Error("a failed session read must fail closed")
+	}
+}
+
 // fakeSessionLifecycle records calls to Reconcile and RestoreAll so tests can
 // assert the daemon wiring invokes the correct methods without needing a real
 // runtime or worktree.

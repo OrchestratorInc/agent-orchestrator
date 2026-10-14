@@ -72,18 +72,9 @@ func (f *sandboxInFlight) active(project domain.ProjectID) bool {
 	return f.count[project] > 0
 }
 
-// sandboxFor returns the sandbox for a role. Workers inherit the project
-// block. The orchestrator runs on the host unless orchestrator.sandbox is set
-// explicitly: the relay cannot spawn or send, so a sandboxed orchestrator is
-// opt-in only (#6663).
+// sandboxFor returns the sandbox for a role. See domain.SessionSandbox.
 func sandboxFor(kind domain.SessionKind, cfg domain.ProjectConfig) domain.SandboxConfig {
-	if kind == domain.KindOrchestrator {
-		if cfg.Orchestrator.Sandbox != nil {
-			return *cfg.Orchestrator.Sandbox
-		}
-		return domain.SandboxConfig{}
-	}
-	return domain.EffectiveSandbox(cfg.Sandbox, roleOverride(kind, cfg))
+	return domain.SessionSandbox(kind, cfg)
 }
 
 // prepareSandboxLaunch ensures the container and harness state for a

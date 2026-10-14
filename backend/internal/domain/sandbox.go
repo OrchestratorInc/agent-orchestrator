@@ -72,3 +72,18 @@ func EffectiveSandbox(base SandboxConfig, role RoleOverride) SandboxConfig {
 	}
 	return base
 }
+
+// SessionSandbox returns the sandbox for a session of kind in a project.
+// Workers inherit the project block unless the worker role overrides it. The
+// orchestrator runs on the host unless orchestrator.sandbox is set
+// explicitly: the relay cannot spawn or send, so a sandboxed orchestrator is
+// opt-in only (#6663).
+func SessionSandbox(kind SessionKind, cfg ProjectConfig) SandboxConfig {
+	if kind == KindOrchestrator {
+		if cfg.Orchestrator.Sandbox != nil {
+			return *cfg.Orchestrator.Sandbox
+		}
+		return SandboxConfig{}
+	}
+	return EffectiveSandbox(cfg.Sandbox, cfg.Worker)
+}

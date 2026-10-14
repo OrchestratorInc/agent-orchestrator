@@ -316,7 +316,7 @@ func prContainsCommit(ctx context.Context, root string, pr domain.PullRequest, s
 }
 
 func (s *Service) prFileSource(ctx context.Context, id domain.SessionID, number int, sourceURL string) (domain.SessionRecord, domain.PullRequest, error) {
-	rec, err := s.sessionWorkspaceRecord(ctx, id)
+	ctx, rec, err := s.sessionWorkspaceRecord(ctx, id)
 	if err != nil {
 		return domain.SessionRecord{}, domain.PullRequest{}, err
 	}

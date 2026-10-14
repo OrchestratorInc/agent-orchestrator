@@ -17,7 +17,7 @@ import (
 // initial Changes paint. Callers should normally use GetWorkspaceManifest so
 // this work is shared and retained across UI mounts.
 func (s *Service) computeWorkspaceManifest(ctx context.Context, id domain.SessionID) (WorkspaceManifest, error) {
-	rec, err := s.sessionWorkspaceRecord(ctx, id)
+	ctx, rec, err := s.sessionWorkspaceRecord(ctx, id)
 	if err != nil {
 		return WorkspaceManifest{}, err
 	}

@@ -56,7 +56,7 @@ type WorkspaceTree struct {
 // with a dedicated error, since the caller only needs to know that browsing
 // deeper found nothing.
 func (s *Service) ListWorkspaceTree(ctx context.Context, id domain.SessionID, rawDir string) (WorkspaceTree, error) {
-	rec, err := s.sessionWorkspaceRecord(ctx, id)
+	ctx, rec, err := s.sessionWorkspaceRecord(ctx, id)
 	if err != nil {
 		return WorkspaceTree{}, err
 	}

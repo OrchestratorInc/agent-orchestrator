@@ -46,6 +46,26 @@ func TestEffectiveSandboxRoleOverrideReplacesWholeBlock(t *testing.T) {
 	}
 }
 
+func TestSessionSandboxAppliesRoleRules(t *testing.T) {
+	cfg := ProjectConfig{Sandbox: SandboxConfig{Mode: SandboxModePerAgent, Image: "node:22"}}
+	if SessionSandbox(KindOrchestrator, cfg).Enabled() {
+		t.Fatal("orchestrator inherited the project sandbox")
+	}
+	if got := SessionSandbox(KindWorker, cfg); got != cfg.Sandbox {
+		t.Fatalf("worker = %#v, want project block", got)
+	}
+	shared := SandboxConfig{Mode: SandboxModeShared, Image: "node:22"}
+	cfg.Orchestrator.Sandbox = &shared
+	off := SandboxConfig{Mode: SandboxModeOff}
+	cfg.Worker.Sandbox = &off
+	if got := SessionSandbox(KindOrchestrator, cfg); got != shared {
+		t.Fatalf("orchestrator = %#v, want explicit block", got)
+	}
+	if SessionSandbox(KindWorker, cfg).Enabled() {
+		t.Fatal("worker override to off was ignored")
+	}
+}
+
 func TestProjectConfigValidateChecksSandbox(t *testing.T) {
 	cfg := DefaultProjectConfig()
 	cfg.Sandbox = SandboxConfig{Mode: SandboxModePerAgent}
