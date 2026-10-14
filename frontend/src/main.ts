@@ -52,6 +52,7 @@ import { createEditorHandoff } from "./main/editor-handoff";
 import { discoverMacTerminalApps } from "./main/mac-terminal-apps";
 import { registerCliLinkIpc } from "./main/cli-link-ipc";
 import { launchCommand } from "./main/launch-command";
+import { closeDaemonLog, openDaemonLog, writeDaemonLog } from "./main/daemon-log";
 import { blocksRenderFrameNavigation } from "./main/render-frame-guard";
 import { agentPageRequestAllowed } from "./main/render-frame-network";
 import { isAgentPageUrl } from "./shared/agent-page-url";
@@ -69,7 +70,15 @@ import {
 } from "./main/ui-settings";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+	closeSync,
+	existsSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	renameSync,
+	writeFileSync,
+} from "node:fs";
 import { chmod, copyFile, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -653,19 +662,37 @@ function appendDaemonOutput(text: string): void {
 	if (nextStatus !== daemonStatus) setDaemonStatus(nextStatus);
 }
 
+// Durable daemon log writer lives in ./main/daemon-log; this file only decides
+// where the log goes (dev keeps its own under ~/.ao/dev/) and which child owns
+// the current generation.
+let daemonLogChild: ChildProcess | undefined;
+
+function daemonLogPath(): string {
+	return path.join(os.homedir(), ".ao", ...(isDev ? [DEV_STATE_SUBDIR] : []), "daemon.log");
+}
+
 // Menu installed on Windows where the native menu bar is hidden. The bar stays
 // out of sight, but the roles keep their accelerators alive (Reload, zoom, full
 // screen, edit commands). DevTools uses the AO browser toggle so the focused
 // Browser panel opens the same native Chromium surface as the toolbar.
+// Open DevTools for whatever is actually focused. Electron's built-in
+// toggleDevTools role assumes focus is on the BrowserWindow; in AO it is usually
+// on a WebContentsView, where that role crashes the main process. Everything
+// that toggles DevTools goes through here instead.
+function toggleDevToolsForFocusedSurface(): void {
+	const fallback = () => getShellWebContents()?.toggleDevTools();
+	const host = browserViewHost;
+	if (!host) {
+		fallback();
+		return;
+	}
+	void host.toggleDevToolsForLastFocused().then((state) => {
+		if (!state) fallback();
+	}).catch(fallback);
+}
+
 function buildWindowsAppMenu(): Menu {
-	return Menu.buildFromTemplate(
-		buildWindowsAppMenuTemplate(() => {
-			const fallback = () => getShellWebContents()?.toggleDevTools();
-			void browserViewHost?.toggleDevToolsForLastFocused().then((state) => {
-				if (!state) fallback();
-			}).catch(fallback);
-		}),
-	);
+	return Menu.buildFromTemplate(buildWindowsAppMenuTemplate(toggleDevToolsForFocusedSurface));
 }
 
 // Menu installed on Linux where the native menu bar is hidden by default.
@@ -1045,6 +1072,20 @@ async function createWindowInternal(): Promise<void> {
 	});
 	mainWindow.on("maximize", pushMaximized);
 	mainWindow.on("unmaximize", pushMaximized);
+	// The native browser preview's bounds are entirely renderer-driven (measured
+	// from a placeholder DOM node via ResizeObserver/window "resize"). An
+	// OS-level window move, resize, or maximize toggle does not reliably fire
+	// those DOM signals on every platform/window manager, which leaves the
+	// WebContentsView painted at stale bounds. Forward these window events so
+	// the renderer can re-measure and re-send bounds regardless of whether its
+	// own listeners fired.
+	const pushRemeasure = () => {
+		getShellWebContents()?.send("window:remeasure");
+	};
+	mainWindow.on("resize", pushRemeasure);
+	mainWindow.on("move", pushRemeasure);
+	mainWindow.on("maximize", pushRemeasure);
+	mainWindow.on("unmaximize", pushRemeasure);
 	mainWindow.on("blur", () => {
 		keybindingRecordingActive = false;
 	});
@@ -2084,10 +2125,15 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	if (!keep) {
 		const scanStdout = createListenPortScanner(reportBoundPort);
 		const scanStderr = createListenPortScanner(reportBoundPort);
+		// Mirror the pipes to disk: the scanners still need them, so the log is a
+		// tee rather than the stdio redirect keep-daemon mode uses.
+		openDaemonLog(daemonLogPath());
+		daemonLogChild = child;
 
 		child.stdout?.on("data", (chunk: Buffer) => {
 			const text = chunk.toString("utf8");
 			appendDaemonOutput(text);
+			writeDaemonLog(text);
 			console.log(text.trimEnd());
 			scanStdout(text);
 		});
@@ -2095,6 +2141,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 		child.stderr?.on("data", (chunk: Buffer) => {
 			const text = chunk.toString("utf8");
 			appendDaemonOutput(text);
+			writeDaemonLog(text);
 			console.error(text.trimEnd());
 			scanStderr(text);
 		});
@@ -2149,7 +2196,21 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 
 	child.once("exit", (code, signal) => {
 		stopDiscovery();
+		// Stale-exit guard before any log work: after a spawn failure Node emits
+		// both 'error' and 'exit' for the same child, and 'error' may already have
+		// cleared daemonProcess before a restart opened a fresh log. The exit
+		// stamp below acts on the module-level shared stream, so it must run only
+		// while this child is still the current one — otherwise a stale 'exit'
+		// stamps the new child's active log.
 		if (daemonProcess !== child) return;
+		// Stamp the exit now: a bare stack with no terminator reads as a
+		// truncated log, while "exited with SIGSEGV" names the failure outright.
+		// The close itself waits for 'close' (below): 'exit' can fire while
+		// stdout/stderr still hold buffered output, and closing here drops the
+		// final crash lines this log exists to capture (PR #3892 review).
+		writeDaemonLog(
+			`\n[ao] daemon exited ${signal ? `with ${signal}` : `with code ${code ?? "unknown"}`} at ${new Date().toISOString()}\n`,
+		);
 		daemonProcess = null;
 		// An explicit stopDaemon() already set a clean `{ state: "stopped" }`.
 		// daemon-telemetry reports any status carrying a `code` as
@@ -2174,6 +2235,16 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 			exitCode: code,
 			signal,
 		});
+	});
+
+	child.once("close", () => {
+		// 'close' fires once the stdio pipes have flushed, so whatever the daemon
+		// printed last is already teed into the log before it ends. Ownership
+		// guard: a respawned daemon owns the log by then, and the old child's
+		// late 'close' must not end the new child's active stream.
+		if (daemonLogChild !== child) return;
+		daemonLogChild = undefined;
+		void closeDaemonLog();
 	});
 
 	return daemonStatus;
