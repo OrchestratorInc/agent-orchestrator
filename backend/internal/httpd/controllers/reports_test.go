@@ -69,16 +69,19 @@ func TestReportsAPI_InvalidJSON(t *testing.T) {
 
 func TestReportsAPI_ListIsReadOnlyProjection(t *testing.T) {
 	created := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
+	available := created.Add(time.Hour)
 	svc := &fakeReportService{reports: []domain.ReportRecord{{
 		ID: "rpt_1", SessionID: "worker", ProjectID: "ao", State: domain.ReportDone,
 		Note: "finished", CreatedAt: created, RepeatCount: 2,
-		Outputs: []domain.ReportOutput{{Kind: domain.ReportOutputArtifact, Reference: "opaque"}},
+		Outputs:       []domain.ReportOutput{{Kind: domain.ReportOutputArtifact, Reference: "opaque"}},
+		DeliveryState: domain.ReportPending, DeliveryAttempts: 3, AvailableAt: available, LastError: "no active orchestrator",
 	}}}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Reports: svc}, httpd.ControlDeps{}))
 	defer srv.Close()
 	body, status, _ := doRequest(t, srv, "GET", "/api/v1/reports?projectId=ao", "")
-	if status != http.StatusOK || !reportContainsAll(string(body), `"id":"rpt_1"`, `"sessionId":"worker"`, `"reference":"opaque"`, `"repeatCount":2`) {
+	if status != http.StatusOK || !reportContainsAll(string(body), `"id":"rpt_1"`, `"sessionId":"worker"`, `"reference":"opaque"`, `"repeatCount":2`,
+		`"deliveryState":"pending"`, `"deliveryAttempts":3`, `"lastError":"no active orchestrator"`) {
 		t.Fatalf("status=%d body=%s", status, body)
 	}
 	_, status, _ = doRequest(t, srv, "GET", "/api/v1/reports", "")

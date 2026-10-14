@@ -26,6 +26,7 @@ import {
 	getKanbanColumnView,
 	type KanbanColumnView,
 } from "../lib/session-presentation";
+import { useProjectReports } from "../hooks/useProjectReports";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { useRemoteProjectQuery, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -94,6 +95,12 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const columns: KanbanColumnView[] = boardKanbanColumnOrder.map((column) => getKanbanColumnView(column, t));
 	const localWorkspaceQuery = useWorkspaceQuery();
 	const remoteProjectQuery = useRemoteProjectQuery(hostId ?? "", projectId ?? "");
+	const developerMode = useUiStore((state) => state.developerMode);
+	const reportDelivery = useProjectReports(
+		projectId ?? "",
+		hostId,
+		developerMode && projectId !== undefined,
+	).data;
 	// Evaluated at render so platform mocks in tests can flip the in-panel chrome.
 	const boardActionsInPanel = usesBoardActionsInPanel();
 	/** Bell lives in the board action row when the shell topbar does not host it. */
@@ -247,6 +254,22 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 							<LayoutDashboard aria-hidden="true" className="size-icon-md" />
 							{boardLabel}
 							{hostId ? <span className="truncate text-muted-foreground">· {labelForHost(hostId) ?? hostId}</span> : null}
+						</span>
+					) : null}
+					{reportDelivery && reportDelivery.undelivered > 0 ? (
+						<span
+							className={cn(
+								"inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-2xs",
+								reportDelivery.errored > 0
+									? "border-destructive/40 bg-destructive/10 text-destructive"
+									: "border-border bg-surface text-muted-foreground",
+							)}
+							data-testid="board-reports-indicator"
+						>
+							{t("board.reportsUndelivered", { count: reportDelivery.undelivered })}
+							{reportDelivery.errored > 0
+								? ` · ${t("board.reportsDeliveryErrors", { count: reportDelivery.errored })}`
+								: null}
 						</span>
 					) : null}
 					<div className="min-w-0 flex-1" />

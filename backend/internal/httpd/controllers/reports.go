@@ -57,10 +57,13 @@ func (c *ReportsController) list(w http.ResponseWriter, r *http.Request) {
 		for j, output := range record.Outputs {
 			outputs[j] = ReportOutputResponse{Kind: string(output.Kind), Reference: output.Reference, Label: output.Label}
 		}
+		availableAt := record.AvailableAt
 		response.Reports[i] = ReportResponse{
 			ID: record.ID, SessionID: string(record.SessionID), ProjectID: string(record.ProjectID),
 			State: string(record.State), Note: record.Note, Message: record.Message,
 			Outputs: outputs, CreatedAt: record.CreatedAt, RepeatCount: record.RepeatCount,
+			DeliveryState: string(record.DeliveryState), DeliveryAttempts: record.DeliveryAttempts,
+			AvailableAt: &availableAt, LastError: record.LastError,
 		}
 	}
 	envelope.WriteJSON(w, http.StatusOK, response)
