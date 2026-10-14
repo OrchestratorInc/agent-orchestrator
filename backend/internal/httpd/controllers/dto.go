@@ -1009,12 +1009,20 @@ type InterfaceTransitionNoticeAckResponse struct {
 	Transition SessionInterfaceTransitionView `json:"transition"`
 }
 
+// KillSessionRequest is the optional body of POST /api/v1/sessions/{sessionId}/kill.
+// DeleteArtifacts empties the session's artifact directory once it is
+// terminated. Only the archive dialog sets it; the CLI and the reaper never do.
+type KillSessionRequest struct {
+	DeleteArtifacts bool `json:"deleteArtifacts,omitempty"`
+}
+
 // KillSessionResponse is the body of POST /api/v1/sessions/{sessionId}/kill.
 type KillSessionResponse struct {
-	OK             bool             `json:"ok"`
-	SessionID      domain.SessionID `json:"sessionId"`
-	Freed          bool             `json:"freed,omitempty"`
-	CleanupPending bool             `json:"cleanupPending,omitempty"`
+	OK               bool             `json:"ok"`
+	SessionID        domain.SessionID `json:"sessionId"`
+	Freed            bool             `json:"freed,omitempty"`
+	CleanupPending   bool             `json:"cleanupPending,omitempty"`
+	ArtifactsDeleted bool             `json:"artifactsDeleted,omitempty"`
 }
 
 // RollbackSessionResponse is the body of POST /api/v1/sessions/{sessionId}/rollback.
@@ -2443,6 +2451,18 @@ type UnregisterPushDeviceResponse struct {
 }
 
 /* ---- chat conversations ------------------------------------------------ */
+
+// ConversationPromptSuggestionRequest identifies the latest completed turn.
+type ConversationPromptSuggestionRequest struct {
+	TurnID string `json:"turnId"`
+}
+
+// ConversationPromptSuggestionResponse offers one optional next human message.
+type ConversationPromptSuggestionResponse struct {
+	TurnID string `json:"turnId"`
+	// Empty when there is no useful suggestion.
+	Prompt string `json:"prompt"`
+}
 
 // SetChatViewRequest renews or releases one renderer's Chat view lease.
 type SetChatViewRequest struct {

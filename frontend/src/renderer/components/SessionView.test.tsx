@@ -10,6 +10,7 @@ import { useFilesTopbarHost } from "./files-topbar-host";
 import { SessionTopbarProvider } from "./SessionTopbarPortal";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
+import type { BrowserAgentActivityState } from "../../main/browser-view-host";
 import { inspectorIsOpen, rememberedFileDisplayMode, useUiStore, type InspectorView } from "../stores/ui-store";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
@@ -639,7 +640,7 @@ vi.mock("./CloudWorkspaceDiff", () => ({
 const { browserDestroy, browserViewOptions, browserViewState } = vi.hoisted(() => ({
 	browserDestroy: vi.fn(),
 	browserViewOptions: { current: undefined as { active: boolean; sessionId: string; terminated: boolean } | undefined },
-	browserViewState: { url: "", agentBrowserActive: false },
+	browserViewState: { url: "", agentBrowserActive: false, agentBrowserActivity: null as BrowserAgentActivityState | null },
 }));
 vi.mock("../hooks/useBrowserView", () => ({
 	useBrowserView: (options: { active: boolean; sessionId: string; terminated: boolean }) => {
@@ -664,6 +665,7 @@ vi.mock("../hooks/useBrowserView", () => ({
 			activeTabId: "t1",
 			tabNotice: "",
 			agentBrowserActive: browserViewState.agentBrowserActive,
+			agentBrowserActivity: browserViewState.agentBrowserActivity,
 			selectTab: vi.fn(),
 			closeTab: vi.fn(),
 			annotationMode: false,
@@ -960,6 +962,7 @@ describe("SessionView", () => {
 		browserViewOptions.current = undefined;
 		browserViewState.url = "";
 		browserViewState.agentBrowserActive = false;
+		browserViewState.agentBrowserActivity = null;
 		shellTerminalsState.data = [];
 		shellTerminalsState.loaded = true;
 		navigateMock.mockReset();
@@ -5098,7 +5101,7 @@ describe("SessionView", () => {
 		expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("browser");
 	});
 
-	it("reveals the orchestrator Browser on new preview work and respects closing it", () => {
+	it("reveals each explicit orchestrator preview and respects closing it during passive activity", () => {
 		const orchestrator = workerSession("sess-orch");
 		const { rerender } = render(<SessionView sessionId="sess-orch" />);
 		orchestrator.previewUrl = "https://example.com";
@@ -5107,6 +5110,9 @@ describe("SessionView", () => {
 		expect(inspectorOpen("sess-orch")).toBe(true);
 		fireEvent.click(screen.getByRole("button", { name: "Close Browser" }));
 		orchestrator.previewRevision = 2;
+		rerender(<SessionView sessionId="sess-orch" />);
+		expect(inspectorOpen("sess-orch")).toBe(true);
+		fireEvent.click(screen.getByRole("button", { name: "Close Browser" }));
 		browserViewState.agentBrowserActive = true;
 		rerender(<SessionView sessionId="sess-orch" />);
 		expect(inspectorOpen("sess-orch")).toBe(false);
@@ -5463,23 +5469,22 @@ describe("SessionView", () => {
 		expect(screen.getByTestId("files-popout-topbar")).not.toHaveClass("files-popout-titlebar--mac-windowed");
 	});
 
-	it("badges Browser as unseen for a new live `ao preview` target instead of auto-opening it", () => {
+	it("reveals Browser for a new live preview target in the viewed session", () => {
 		const worker = workerSession("sess-1");
 		const { rerender } = render(<SessionView sessionId="sess-1" />);
-		const viewBefore = inspectorButton().getAttribute("data-view");
-		const openBefore = inspectorOpen("sess-1");
 
 		worker.previewUrl = "http://localhost:5173/";
 		worker.previewRevision = 1;
 		rerender(<SessionView sessionId="sess-1" />);
 
 		expect(screen.getByText("terminal center")).toBeInTheDocument();
-		expect(inspectorOpen("sess-1")).toBe(openBefore);
-		expect(inspectorButton()).toHaveAttribute("data-view", viewBefore);
-		expect(browserUnseen("sess-1")).toBe(true);
+		expect(inspectorOpen("sess-1")).toBe(true);
+		expect(inspectorButton()).toHaveAttribute("data-view", "browser");
+		expect(browserUnseen("sess-1")).toBe(false);
+		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
-	it("badges Browser as unseen without opening a collapsed inspector when a new live preview arrives", () => {
+	it("opens a collapsed inspector on Browser when a new live preview arrives", () => {
 		const worker = workerSession("sess-1");
 		act(() => useUiStore.getState().setInspectorOpen("sess-1", false));
 		const { rerender } = render(<SessionView sessionId="sess-1" />);
@@ -5488,12 +5493,12 @@ describe("SessionView", () => {
 		worker.previewRevision = 1;
 		rerender(<SessionView sessionId="sess-1" />);
 
-		expect(inspectorOpen("sess-1")).toBe(false);
-		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
-		expect(browserUnseen("sess-1")).toBe(true);
+		expect(inspectorOpen("sess-1")).toBe(true);
+		expect(inspectorButton()).toHaveAttribute("data-view", "browser");
+		expect(browserUnseen("sess-1")).toBe(false);
 	});
 
-	it("keeps Summary on session entry and badges Browser as unseen for later preview work", () => {
+	it("keeps Summary on session entry and reveals Browser only for later preview work", () => {
 		const secondWorker = workerSession("sess-2");
 		secondWorker.previewUrl = "http://localhost:5173/";
 		secondWorker.previewRevision = 1;
@@ -5510,8 +5515,84 @@ describe("SessionView", () => {
 
 		secondWorker.previewRevision = 2;
 		rerender(<SessionView sessionId="sess-2" />);
+		expect(inspectorButton()).toHaveAttribute("data-view", "browser");
+		expect(browserUnseen("sess-2")).toBe(false);
+	});
+
+	it.each(["open", "tab-new"])("reveals Browser once for explicit %s commands", (action) => {
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", false));
+		const { rerender } = render(<SessionView sessionId="sess-1" />);
+		browserViewState.agentBrowserActive = true;
+		browserViewState.agentBrowserActivity = { viewId: "browser:sess-1", active: true, action, phase: "started", commandId: "command-1" };
+		rerender(<SessionView sessionId="sess-1" />);
+		expect(inspectorOpen("sess-1")).toBe(true);
+		expect(inspectorButton()).toHaveAttribute("data-view", "browser");
+		expect(browserUnseen("sess-1")).toBe(false);
+
+		// The same start event remains in the hook when the user closes Browser.
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", false));
+		expect(inspectorOpen("sess-1")).toBe(false);
+		browserViewState.agentBrowserActivity = { ...browserViewState.agentBrowserActivity, active: false, phase: "finished" };
+		// Another command can keep the aggregate active flag true at completion.
+		rerender(<SessionView sessionId="sess-1" />);
+		expect(inspectorOpen("sess-1")).toBe(false);
+
+		browserViewState.agentBrowserActivity = { viewId: "browser:sess-1", active: true, action, phase: "started", commandId: "command-2" };
+		rerender(<SessionView sessionId="sess-1" />);
+		expect(inspectorOpen("sess-1")).toBe(true);
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it.each(["snapshot", "click", "fill", "act", "errors"])("only badges Browser for passive %s commands", (action) => {
+		const { rerender } = render(<SessionView sessionId="sess-1" />);
+		browserViewState.agentBrowserActive = true;
+		browserViewState.agentBrowserActivity = { viewId: "browser:sess-1", active: true, action, phase: "started", commandId: "passive-1" };
+		rerender(<SessionView sessionId="sess-1" />);
 		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
-		expect(browserUnseen("sess-2")).toBe(true);
+		expect(browserUnseen("sess-1")).toBe(true);
+	});
+
+	it("reveals a fast open command even when React only renders its finished event", () => {
+		const { rerender } = render(<SessionView sessionId="sess-1" />);
+		browserViewState.agentBrowserActivity = { viewId: "browser:sess-1", active: false, action: "open", phase: "finished", commandId: "fast-1" };
+		rerender(<SessionView sessionId="sess-1" />);
+		expect(inspectorButton()).toHaveAttribute("data-view", "browser");
+		act(() => useUiStore.getState().setInspectorView("sess-1", "summary"));
+		rerender(<SessionView sessionId="sess-1" />);
+		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
+	});
+
+	it("does not reveal for an explicit browser command from another view", () => {
+		const { rerender } = render(<SessionView sessionId="sess-1" />);
+		browserViewState.agentBrowserActive = true;
+		browserViewState.agentBrowserActivity = { viewId: "browser:sess-2", active: true, action: "open", phase: "started", commandId: "background-1" };
+		rerender(<SessionView sessionId="sess-1" />);
+		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("keeps the foreground view when a background session previews, and baselines that target on entry", () => {
+		const { rerender } = render(<SessionView sessionId="sess-1" />);
+		workerSession("sess-2").previewUrl = "http://localhost:5173/";
+		workerSession("sess-2").previewRevision = 1;
+		rerender(<SessionView sessionId="sess-1" />);
+		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
+		rerender(<SessionView sessionId="sess-2" />);
+		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("dismisses maximized Files when an explicit preview reveals Browser", () => {
+		const worker = workerSession("sess-1");
+		const { rerender } = render(<SessionView sessionId="sess-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+		fireEvent.click(within(screen.getByTestId("panel-inspector")).getByRole("button", { name: "files rail" }));
+		expect(document.querySelector(".files-popout-overlay")).toBeInTheDocument();
+		worker.previewUrl = "http://localhost:5173/";
+		worker.previewRevision = 1;
+		rerender(<SessionView sessionId="sess-1" />);
+		expect(document.querySelector(".files-popout-overlay")).not.toBeInTheDocument();
+		expect(inspectorButton()).toHaveAttribute("data-view", "browser");
 	});
 
 	// Regression: the session-entry effect that defaults a brand-new session to
@@ -5643,8 +5724,8 @@ describe("SessionView", () => {
 		worker.previewUrl = "http://localhost:5173/";
 		worker.previewRevision = 1;
 		rerender(<SessionView sessionId="sess-1" />);
-		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
-		expect(browserUnseen("sess-1")).toBe(true);
+		expect(inspectorButton()).toHaveAttribute("data-view", "browser");
+		expect(browserUnseen("sess-1")).toBe(false);
 
 		act(() => {
 			useUiStore.getState().setInspectorView("sess-1", "summary");
@@ -5663,9 +5744,9 @@ describe("SessionView", () => {
 		worker.previewRevision = 3;
 		rerender(<SessionView sessionId="sess-1" />);
 
-		expect(inspectorOpen("sess-1")).toBe(false);
-		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
-		expect(browserUnseen("sess-1")).toBe(true);
+		expect(inspectorOpen("sess-1")).toBe(true);
+		expect(inspectorButton()).toHaveAttribute("data-view", "browser");
+		expect(browserUnseen("sess-1")).toBe(false);
 	});
 
 	// Regression: a terminated session's `previewUrl` is a stale DB fact —
@@ -5682,6 +5763,19 @@ describe("SessionView", () => {
 
 		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
 		expect(useUiStore.getState().inspectorSessions["sess-1"]?.browserContentRevealed).toBeFalsy();
+	});
+
+	it("does not reveal or badge new previews and open commands on a terminated session", () => {
+		const worker = workerSession("sess-1");
+		worker.isTerminated = true;
+		const { rerender } = render(<SessionView sessionId="sess-1" />);
+		worker.previewUrl = "http://localhost:5173/";
+		worker.previewRevision = 1;
+		browserViewState.agentBrowserActive = true;
+		browserViewState.agentBrowserActivity = { viewId: "browser:sess-1", active: true, action: "open", phase: "started", commandId: "terminated-1" };
+		rerender(<SessionView sessionId="sess-1" />);
+		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
+		expect(browserUnseen("sess-1")).toBe(false);
 	});
 
 	// Regression: agent-browser commands (fill, click, snapshot, …) are real

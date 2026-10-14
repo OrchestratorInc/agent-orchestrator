@@ -87,6 +87,9 @@ type Service struct {
 	wakeRuns           map[domain.SessionID]*wakeRun
 	backgroundWakes    map[domain.SessionID]bool
 
+	runPromptSuggestion   func(context.Context, domain.SessionID, string, string, string) (string, error)
+	promptSuggestionSlots chan struct{}
+
 	mu               sync.RWMutex
 	controllers      map[domain.SessionID]*Controller
 	ownerControllers map[domain.ConversationOwner]*Controller
@@ -203,6 +206,7 @@ func New(opts Options) *Service {
 		waking:                 make(map[domain.SessionID]int),
 		wakeRuns:               make(map[domain.SessionID]*wakeRun),
 		backgroundWakes:        make(map[domain.SessionID]bool),
+		promptSuggestionSlots:  make(chan struct{}, 2),
 	}
 	svc.sides = newSideManager(svc, newMemorySideStore(), opts.AppRunID)
 	return svc

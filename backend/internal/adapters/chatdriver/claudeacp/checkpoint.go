@@ -15,6 +15,7 @@ import (
 )
 
 var _ ports.ChatDriverReconnector = (*checkpointDriver)(nil)
+var _ ports.ChatIsolatedForker = (*checkpointDriver)(nil)
 
 type checkpointDriver struct {
 	ports.ChatDriver
@@ -30,6 +31,15 @@ func (d *checkpointDriver) Reconnect(ctx context.Context, cfg ports.ChatResumeCo
 		return nil, ports.ErrChatHostNotRunning
 	}
 	return reconnector.Reconnect(ctx, cfg)
+}
+
+// Embedding ChatDriver otherwise hides the shared ACP driver's optional fork.
+func (d *checkpointDriver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+	forker, ok := d.ChatDriver.(ports.ChatIsolatedForker)
+	if !ok {
+		return nil, ports.ErrChatCapabilityUnavailable
+	}
+	return forker.ForkIntoHost(ctx, sourceID, lastTurnID, cfg)
 }
 
 func (d *checkpointDriver) VerifyNativeCheckpoint(ctx context.Context, request ports.NativeCheckpointRequest) (ports.NativeCheckpointBoundary, error) {

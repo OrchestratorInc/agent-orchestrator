@@ -64,6 +64,7 @@ func capabilities() ports.ChatCapabilities {
 		ports.ChatCapabilityInterrupt: true,
 		ports.ChatCapabilityResume:    true,
 		ports.ChatCapabilityUsage:     true,
+		ports.ChatCapabilityFork:      true,
 	}
 }
 

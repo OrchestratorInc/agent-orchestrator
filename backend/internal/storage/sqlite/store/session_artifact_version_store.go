@@ -66,6 +66,17 @@ func (s *Store) AppendSessionArtifactVersion(ctx context.Context, v domain.Sessi
 	return sessionArtifactVersionFromGen(row), pruned, nil
 }
 
+// DeleteSessionArtifactVersions removes every version row of a session, for
+// when the user deletes the session's artifacts.
+func (s *Store) DeleteSessionArtifactVersions(ctx context.Context, id domain.SessionID) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.DeleteSessionArtifactVersions(ctx, id); err != nil {
+		return fmt.Errorf("delete artifact versions for %s: %w", id, err)
+	}
+	return nil
+}
+
 // CountSessionArtifactVersionsBySHA counts a session's version rows, across
 // all paths, whose content is the blob named by sha.
 func (s *Store) CountSessionArtifactVersionsBySHA(ctx context.Context, id domain.SessionID, sha string) (int64, error) {

@@ -5,6 +5,7 @@ import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
 import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import {
+	$addUpdateTag,
 	$getNodeByKey,
 	$getRoot,
 	$getSelection,
@@ -16,7 +17,9 @@ import {
 	CLEAR_HISTORY_COMMAND,
 	COMMAND_PRIORITY_HIGH,
 	DecoratorNode,
+	HISTORY_PUSH_TAG,
 	KEY_ENTER_COMMAND,
+	KEY_ESCAPE_COMMAND,
 	KEY_TAB_COMMAND,
 	type EditorConfig,
 	type LexicalEditor,
@@ -33,6 +36,8 @@ import {
 	useContext,
 	useEffect,
 	useImperativeHandle,
+	useId,
+	useLayoutEffect,
 	useRef,
 	useState,
 	type ClipboardEvent,
@@ -60,6 +65,8 @@ export type ComposerEditorSnapshot = {
 	hasText: boolean;
 	trigger?: ComposerTrigger;
 };
+
+export type ComposerPromptSuggestion = { id: string; text: string; onDismiss?: () => void };
 
 export type ComposerEditorHandle = {
 	focus(): void;
@@ -408,13 +415,15 @@ const EditorBridge = forwardRef<
 	ComposerEditorHandle,
 	{
 		disabled?: boolean;
+		promptSuggestion?: ComposerPromptSuggestion;
+		onDismissSuggestion: () => void;
 		/** Staged paths of the images attached right now. */
 		attachedImages: () => string[];
 		onChange: (snapshot: ComposerEditorSnapshot) => void;
 		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
 	}
->(function EditorBridge({ disabled, attachedImages, onChange, onComplete, onEnter }, ref) {
+>(function EditorBridge({ disabled, promptSuggestion, onDismissSuggestion, attachedImages, onChange, onComplete, onEnter }, ref) {
 	const [editor] = useLexicalComposerContext();
 
 	useEffect(() => editor.setEditable(!disabled), [disabled, editor]);
@@ -472,14 +481,17 @@ const EditorBridge = forwardRef<
 		[attachedImages, editor],
 	);
 
-	useEffect(
-		() =>
-			editor.registerUpdateListener(({ editorState, tags }) => {
-				if (tags.has(PROGRAMMATIC_TEXT_UPDATE_TAG)) return;
-				editorState.read(() => onChange(editorSnapshot()));
-			}),
-		[editor, onChange],
-	);
+	useLayoutEffect(() => {
+		const dismissIfNotEmpty = () => {
+			if (promptSuggestion && $serializeComposer().length > 0) onDismissSuggestion();
+		};
+		editor.getEditorState().read(dismissIfNotEmpty);
+		return editor.registerUpdateListener(({ editorState, tags }) => {
+			editorState.read(dismissIfNotEmpty);
+			if (tags.has(PROGRAMMATIC_TEXT_UPDATE_TAG)) return;
+			editorState.read(() => onChange(editorSnapshot()));
+		});
+	}, [editor, onChange, onDismissSuggestion, promptSuggestion]);
 
 	useEffect(() => {
 		const complete = (event: globalThis.KeyboardEvent | null, key: "Enter" | "Tab") => {
@@ -489,6 +501,24 @@ const EditorBridge = forwardRef<
 			if (event?.defaultPrevented) return true;
 			if (event?.isComposing || event?.shiftKey || editor.isComposing()) return false;
 			const snapshot = editorSnapshot();
+			if (
+				key === "Tab" && promptSuggestion && !snapshot.text &&
+				!event?.altKey && !event?.ctrlKey && !event?.metaKey
+			) {
+				const selection = $getSelection();
+				if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
+				$addUpdateTag(HISTORY_PUSH_TAG);
+				// End a generated @path or /skill with a boundary, including after draft
+				// restore. Outgoing text is trimmed; ordinary prose stays unchanged.
+				const trailingTrigger = findActiveTrigger(promptSuggestion.text, promptSuggestion.text.length);
+				selection.insertText(promptSuggestion.text + (trailingTrigger ? " " : ""));
+				onDismissSuggestion();
+				if (event) {
+					completionHandledEvents.add(event);
+					event.preventDefault();
+				}
+				return true;
+			}
 			const value = onComplete(snapshot, key);
 			if (snapshot.trigger && value) {
 				if (!$insertComposerToken(snapshot.trigger, value)) return false;
@@ -519,11 +549,20 @@ const EditorBridge = forwardRef<
 			(event) => complete(event, "Tab"),
 			COMMAND_PRIORITY_HIGH,
 		);
+		const removeEscape = editor.registerCommand(KEY_ESCAPE_COMMAND, (event) => {
+			if (!promptSuggestion || $serializeComposer() || event.isComposing || editor.isComposing()) return false;
+			onDismissSuggestion();
+			completionHandledEvents.add(event);
+			event.preventDefault();
+			event.stopPropagation();
+			return true;
+		}, COMMAND_PRIORITY_HIGH);
 		return () => {
 			removeEnter();
 			removeTab();
+			removeEscape();
 		};
-	}, [editor, onComplete, onEnter]);
+	}, [editor, onComplete, onDismissSuggestion, onEnter, promptSuggestion]);
 
 	return null;
 });
@@ -560,6 +599,7 @@ export const ComposerEditor = forwardRef<
 		concealed?: boolean;
 		label: string;
 		placeholder: string;
+		promptSuggestion?: ComposerPromptSuggestion;
 		menuOpen: boolean;
 		menuId: string;
 		activeIndex: number;
@@ -577,6 +617,7 @@ export const ComposerEditor = forwardRef<
 		concealed,
 		label,
 		placeholder,
+		promptSuggestion,
 		menuOpen,
 		menuId,
 		activeIndex,
@@ -590,6 +631,18 @@ export const ComposerEditor = forwardRef<
 	},
 	ref,
 ) {
+	const { t } = useTranslation();
+	const suggestionDescriptionId = useId();
+	const [dismissedSuggestionId, setDismissedSuggestionId] = useState<string>();
+	const suggestion = !disabled && !concealed && promptSuggestion?.id !== dismissedSuggestionId
+		? promptSuggestion
+		: undefined;
+	const dismissSuggestion = useCallback(() => {
+		if (promptSuggestion) {
+			setDismissedSuggestionId(promptSuggestion.id);
+			promptSuggestion.onDismiss?.();
+		}
+	}, [promptSuggestion]);
 	const initialConfig = {
 		namespace: "AOChatComposer",
 		nodes: [ComposerTokenNode],
@@ -608,22 +661,28 @@ export const ComposerEditor = forwardRef<
 
 	const placeholderNode = useCallback(
 		() => (
-			<div className="pointer-events-none absolute inset-x-0 top-0 py-1 pl-[7px] text-base! leading-relaxed text-muted-foreground">
-				<FadingPlaceholder text={placeholder} />
+			<div className={cn(
+				"py-1 pl-[7px] text-base! leading-relaxed text-muted-foreground",
+				suggestion
+					? "min-h-[4.5rem] whitespace-pre-wrap break-words"
+					: "pointer-events-none absolute inset-x-0 top-0",
+			)}>
+				{suggestion ? <span data-testid="prompt-suggestion">{suggestion.text}</span> : <FadingPlaceholder text={placeholder} />}
 			</div>
 		),
-		[placeholder],
+		[placeholder, suggestion],
 	);
 
 	return (
 		<LexicalComposer initialConfig={initialConfig}>
 			<ComposerImages.Provider value={images}>
-			<div className="relative">
+			<div className={cn("relative", suggestion && "chat-composer-scrollbar max-h-40 overflow-y-auto overscroll-contain")}>
 				<PlainTextPlugin
 					contentEditable={
 						<ContentEditable
 							aria-label={label}
 							aria-placeholder={placeholder}
+							aria-describedby={suggestion ? suggestionDescriptionId : undefined}
 							placeholder={placeholderNode}
 							aria-disabled={disabled || undefined}
 							role="combobox"
@@ -632,7 +691,7 @@ export const ComposerEditor = forwardRef<
 							aria-activedescendant={
 								menuOpen ? `${menuId}-option-${activeIndex}` : undefined
 							}
-							aria-autocomplete="list"
+							aria-autocomplete={suggestion ? "both" : "list"}
 							onCompositionStart={() => onCompositionChange(true)}
 							onCompositionEnd={() => onCompositionChange(false)}
 							onKeyDown={(event) => {
@@ -644,6 +703,7 @@ export const ComposerEditor = forwardRef<
 							}}
 							className={cn(
 								"chat-composer-scrollbar max-h-40 min-h-[4.5rem] w-full overflow-y-auto overscroll-contain bg-transparent py-1 pl-[7px] pr-0 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-background",
+								suggestion && "absolute inset-0 overflow-visible overscroll-auto",
 								concealed ? "invisible" : disabled && "opacity-50",
 							)}
 						/>
@@ -651,10 +711,17 @@ export const ComposerEditor = forwardRef<
 					ErrorBoundary={LexicalErrorBoundary}
 				/>
 				{concealed ? <div aria-hidden="true">{placeholderNode()}</div> : null}
+				{suggestion ? (
+					<span id={suggestionDescriptionId} className="sr-only">
+						{t("chat.promptSuggestion.description", { prompt: suggestion.text })}
+					</span>
+				) : null}
 				<HistoryPlugin />
 				<EditorBridge
 					ref={ref}
 					disabled={disabled}
+					promptSuggestion={suggestion}
+					onDismissSuggestion={dismissSuggestion}
 					attachedImages={attachedImages}
 					onChange={onChange}
 					onComplete={onComplete}

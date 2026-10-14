@@ -60,6 +60,7 @@ import {
 	type ComposerEditorHandle,
 	type ComposerImage,
 	type ComposerEditorSnapshot,
+	type ComposerPromptSuggestion,
 	type ComposerTrigger,
 } from "./ComposerEditor";
 import { moveHighlight, rankFiles, rankSkills, type Suggestion } from "./composerSuggest";
@@ -224,6 +225,7 @@ export const ChatComposer = memo(function ChatComposer({
 	assetSessionId,
 	acceptedClientMessageIds,
 	emptyPlaceholder,
+	promptSuggestion,
 	onSelectAnnotation,
 }: {
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
@@ -252,6 +254,8 @@ export const ChatComposer = memo(function ChatComposer({
 	starting?: boolean;
 	/** A contextual prompt shown before an otherwise empty conversation begins. */
 	emptyPlaceholder?: string;
+	/** A proposed next message, kept out of the draft until accepted with Tab. */
+	promptSuggestion?: ComposerPromptSuggestion;
 	/** The provider's skills. Empty leaves `/` an ordinary character. */
 	skills?: ChatSkill[];
 	/** Worktree-relative paths offered for `@`. Empty leaves `@` ordinary. */
@@ -1769,6 +1773,7 @@ export const ChatComposer = memo(function ChatComposer({
 				<ComposerEditor
 					ref={editor}
 					images={composerImages}
+					promptSuggestion={willQueue || starting || editingQueuedTurnId || staged ? undefined : promptSuggestion}
 					disabled={Boolean(disabled || queuedEditRecovery || (!optimisticSend && (submitting || draftMutationPending)))}
 					concealed={sendConcealed && !optimisticSend}
 					label="Message the agent"

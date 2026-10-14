@@ -147,4 +147,5 @@ type SideInput struct {
 type SideProviderCleanup struct {
 	ForkID    string
 	SessionID SessionID
+	Harness   AgentHarness
 }

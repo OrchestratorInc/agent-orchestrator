@@ -65,7 +65,7 @@ func publishingScopePrompt() string {
 
 - Do not request fresh approval for each push or PR/MR update within a workflow the user already authorized.
 - For freeform work, publish only when the user requests it or explicitly configured project rules require it. Available credentials, a configured remote, or permissive tool settings alone do not authorize publishing.
-- Explicit restrictions such as local-only, review-only, or do-not-publish take precedence over workflow defaults.
+- Explicit restrictions such as local-only, review-only, or do-not-publish take precedence over workflow defaults. Review-only permits the requested provider review and comments, but forbids implementation, other PR mutations, and AO ownership changes such as claiming the target PR.
 - Preserve the user's publishing scope and restrictions when spawning or redirecting workers.`
 }
 

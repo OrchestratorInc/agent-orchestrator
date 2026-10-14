@@ -52,6 +52,7 @@ type conversation struct {
 	historyParentID string
 	providerScopeID string
 	readOnly        bool
+	disableNetwork  bool
 	// launchMode is the permission mode the thread started or resumed with;
 	// a turn without its own approval setting runs under it.
 	launchMode ports.PermissionMode
@@ -322,7 +323,7 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 		// must not produce a second turn.
 		params["clientUserMessageId"] = msg.ClientMessageID
 	}
-	applyTurnSettings(params, msg.Settings, c.readOnly)
+	applyTurnSettings(params, msg.Settings, c.readOnly, c.disableNetwork)
 
 	var resp struct {
 		Turn struct {
@@ -345,7 +346,7 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 // Only fields the caller actually chose are sent. An omitted field lets the
 // provider fall back to what the thread was started with, which is why a caller
 // that chooses nothing behaves exactly as it did before per-turn settings existed.
-func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings, readOnly bool) {
+func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings, readOnly, disableNetwork bool) {
 	if settings.Model != "" {
 		params["model"] = settings.Model
 	}
@@ -365,13 +366,11 @@ func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings, r
 		params["sandboxPolicy"] = turnSandboxPolicy(sandbox)
 	}
 	if readOnly {
-		// A reviewer must not write the workspace, but it does need the network:
-		// it reads the PR through gh and reports its verdict to the local daemon
-		// with `ao review submit`. With approvals off it cannot ask for that access
-		// mid-turn, so the read-only policy grants it up front.
+		// Reviewers need gh and ao review submit; text-only background calls
+		// explicitly disable that tool network access.
 		params["approvalPolicy"] = "never"
 		params["approvalsReviewer"] = "user"
-		params["sandboxPolicy"] = map[string]any{"type": "readOnly", "networkAccess": true}
+		params["sandboxPolicy"] = map[string]any{"type": "readOnly", "networkAccess": !disableNetwork}
 	}
 }
 
@@ -739,6 +738,9 @@ func (c *conversation) handleServerRequest(ctx context.Context, req serverReques
 	if !known {
 		c.log.Warn("refusing unmodelled app-server request", "method", req.Method)
 		return nil, fmt.Errorf("unsupported request %s", req.Method)
+	}
+	if c.disableNetwork {
+		return nil, errors.New("background task does not permit approval or input requests")
 	}
 
 	requestID := rawID(req.ID)

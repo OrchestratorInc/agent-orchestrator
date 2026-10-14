@@ -213,6 +213,10 @@ type Controller struct {
 	// sendMu serializes command dispatch so only one operation mutates the
 	// provider conversation at a time.
 	sendMu sync.Mutex
+	// A current-context copy fences dispatch, but Stop cancels it before waiting.
+	forkCancel context.CancelFunc
+	forkDone   chan struct{}
+	interrupts int
 	// configMu serializes live provider setting changes. Each response replaces
 	// the complete option catalog and updates durable next-turn settings, so
 	// concurrent writes could otherwise persist an older catalog last.
@@ -2353,6 +2357,13 @@ func (c *Controller) interruptForHandoff(ctx context.Context) error {
 //     "no active turn" would leave the user staring at a Working bar they cannot
 //     dismiss. Reconcile the durable row instead.
 func (c *Controller) Interrupt(ctx context.Context) error {
+	c.mu.Lock()
+	c.interrupts++
+	if c.forkCancel != nil {
+		c.forkCancel()
+	}
+	c.mu.Unlock()
+	defer func() { c.mu.Lock(); c.interrupts--; c.mu.Unlock() }()
 	// Stop's linearization point is the dispatch lock. A Send that acquired the
 	// lock first is existing work Stop should cancel; a Send that arrives after
 	// this point waits and is therefore post-Stop work that must survive.
@@ -2626,6 +2637,11 @@ func (c *Controller) Close(ctx context.Context) error {
 // host. Daemon shutdown uses Close so the host survives; user/session teardown
 // and controller replacement use Terminate.
 func (c *Controller) Terminate(ctx context.Context) error {
+	c.mu.Lock()
+	if c.forkCancel != nil {
+		c.forkCancel()
+	}
+	c.mu.Unlock()
 	c.once.Do(func() {
 		if terminator, ok := c.conv.(ports.ChatProviderTerminator); ok {
 			c.closeErr = terminator.Terminate()
