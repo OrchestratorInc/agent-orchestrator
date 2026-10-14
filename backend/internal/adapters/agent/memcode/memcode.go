@@ -4,13 +4,19 @@ package memcode
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/terminalui"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
@@ -91,12 +97,64 @@ func (*Plugin) SessionInfo(ctx context.Context, s ports.SessionRef) (ports.Sessi
 
 // GetConfigSpec implements the native TUI adapter contract.
 func (*Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
-	return agentbase.ModelConfigSpec(ctx, "AO model overrides are unsupported; configure the native endpoint/account model before launch.")
+	return agentbase.ModelConfigSpec(ctx, "Memcode selects the chosen model in its native TUI and remembers it for this project. Custom endpoints keep their own model selection.")
 }
 
-func validateModel(_, model string) error {
-	if strings.TrimSpace(model) != "" {
-		return errors.New("memcode AO model overrides are unsupported; select the model in native endpoint/account configuration before launch")
+func validateModel(workspace, model string) error {
+	if model == "" {
+		return nil
 	}
-	return nil
+	if os.Getenv("MEMCODE_ENDPOINT_URL") != "" {
+		return errors.New("memcode custom endpoint models must be selected in the native TUI")
+	}
+	settings, err := readMemcodeAuthEnv(memcodeAuthEnvPath())
+	if err != nil {
+		return err
+	}
+	if settings["MEMCODE_ENDPOINT_URL"] != "" {
+		return errors.New("memcode custom endpoint models must be selected in the native TUI")
+	}
+	if workspace != "" {
+		data, err := os.ReadFile(filepath.Join(workspace, ".memcode", "config.json"))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if len(data) > 0 {
+			var native struct {
+				Endpoints []json.RawMessage `json:"endpoints"`
+			}
+			if err := json.Unmarshal(data, &native); err != nil {
+				return fmt.Errorf("read memcode model configuration: %w", err)
+			}
+			if len(native.Endpoints) > 0 {
+				return errors.New("memcode custom endpoint models must be selected in the native TUI")
+			}
+		}
+	}
+	for _, choice := range modelcatalog.Base("memcode").Models {
+		if model == choice.ID {
+			return nil
+		}
+	}
+	return errors.New("memcode model is not in the supported native catalog")
+}
+
+// AfterStartCommand applies an AO model choice through Memcode's real TUI
+// command. The task is held until the terminal confirms the selected model.
+func (*Plugin) AfterStartCommand(ctx context.Context, cfg ports.LaunchConfig) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if err := validateModel(cfg.WorkspacePath, cfg.Config.Model); err != nil {
+		return "", err
+	}
+	if cfg.Config.Model == "" {
+		return "", nil
+	}
+	return "/model " + cfg.Config.Model, nil
+}
+
+func (*Plugin) AfterStartCommandApplied(cfg ports.LaunchConfig, output string) bool {
+	model := cfg.Config.Model
+	return model != "" && emptyComposer(output) && strings.Contains(terminalui.PlainTerminalText(output), "model → "+model)
 }

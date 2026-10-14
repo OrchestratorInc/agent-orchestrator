@@ -500,6 +500,14 @@ type AgentAfterStartPromptBuilder interface {
 	BuildAfterStartPrompt(ctx context.Context, cfg LaunchConfig) (string, error)
 }
 
+// AgentAfterStartCommand selects native TUI state before AO delivers the first
+// task. Confirmation must come from the current terminal output, so an ignored
+// command cannot silently launch a task with the wrong model.
+type AgentAfterStartCommand interface {
+	AfterStartCommand(ctx context.Context, cfg LaunchConfig) (string, error)
+	AfterStartCommandApplied(cfg LaunchConfig, output string) bool
+}
+
 // TerminalActivityDetector derives activity only from authoritative terminal UI markers.
 type TerminalActivityDetector interface {
 	DetectTerminalActivity(output string) (domain.ActivityState, bool)

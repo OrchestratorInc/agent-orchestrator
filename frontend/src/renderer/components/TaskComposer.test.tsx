@@ -1774,22 +1774,25 @@ describe("TaskComposer", () => {
 		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("model");
 	});
 
-	it("shows Memcode's native model choice instead of an empty model menu", async () => {
+	it("shows Memcode's native model list and sends an explicit choice", async () => {
 		h.agentCatalog = { agents: [agentReadiness("memcode", "memcode", { authentication: "configured" })] };
 		h.get.mockImplementation(async (path: string) => {
-			if (path.includes("/models")) return { data: { agentId: "memcode", selectionMode: "catalog", models: [], customModelEntry: "none", allowCustom: false } };
+			if (path.includes("/models")) return { data: { agentId: "memcode", selectionMode: "catalog", models: [{ id: "sonnet", label: "Sonnet 5" }, { id: "opus", label: "Opus 5.5" }], customModelEntry: "none", allowCustom: false } };
 			return { data: { status: "ok", project: { agent: "memcode", config: { worker: { agent: "memcode" } } } } };
 		});
 
 		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
 
-		expect(await screen.findByText("Model set in memcode")).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Model" })).not.toBeInTheDocument();
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await userEvent.click(picker);
+		expect(await screen.findByRole("menuitem", { name: "Sonnet 5" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitem", { name: "Opus 5.5" }));
+		expect(picker).toHaveTextContent("Opus 5.5");
 		h.post.mockResolvedValueOnce({ data: { workerId: "memcode-task" } });
 		fireEvent.change(task(), { target: { value: "Use the native model" } });
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.post).toHaveBeenCalled());
-		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("model");
+		expect(h.post.mock.calls[0][1].body).toHaveProperty("model", "opus");
 	});
 
 	it("inherits the project worker model without saving it as a task override", async () => {
