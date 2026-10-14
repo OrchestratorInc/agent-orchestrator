@@ -1335,7 +1335,7 @@ function CloudAgentSetupStep({
 				<div className="flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-[var(--color-bg-import-card)] px-4 py-3">
 					<p className={onboardingFieldHintClass}>
 						{t("createProject.cloudHarnessLoginNeeded", {
-							defaultValue: "No harness is logged in for cloud yet. Log in to Claude Code, Codex, Cursor, or OpenCode to run this project's sessions.",
+							defaultValue: "No agent is logged in for cloud yet. Log in to Claude Code, Codex, Cursor, or OpenCode to run this project's sessions.",
 						})}
 					</p>
 					<Button
@@ -1345,7 +1345,7 @@ function CloudAgentSetupStep({
 						className="shrink-0"
 						onClick={() => openGlobalSettings("harness", { harnessView: "cloud", preserveProject: true })}
 					>
-						{t("createProject.openHarnessSettings", { defaultValue: "Go to Harness settings" })}
+						{t("createProject.openHarnessSettings", { defaultValue: "Go to Agents settings" })}
 					</Button>
 				</div>
 			) : null}
