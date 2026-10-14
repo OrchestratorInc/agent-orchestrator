@@ -1501,6 +1501,8 @@ func mapSessionError(err error) error {
 			"The agent could not resume its saved conversation. Your AO history is still available.", nil)
 	case errors.Is(err, ports.ErrAgentAuthRequired):
 		return apierr.Conflict("AGENT_AUTH_REQUIRED", "The agent is installed but the project credential was rejected", nil)
+	case errors.Is(err, ports.ErrUnsupportedSpeed):
+		return apierr.Invalid("UNSUPPORTED_SPEED_MODE", err.Error(), nil)
 	case errors.Is(err, ports.ErrUnsupportedEffort):
 		return apierr.Invalid("UNSUPPORTED_EFFORT", err.Error(), nil)
 	case errors.Is(err, ports.ErrModelCapabilitiesUnavailable):

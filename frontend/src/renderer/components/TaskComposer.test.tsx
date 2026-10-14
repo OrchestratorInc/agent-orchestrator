@@ -2128,3 +2128,25 @@ describe("TaskComposer", () => {
 		});
 	});
 });
+
+
+describe.each(["__standalone__", "proj-1"])("Codex task speed on %s", (projectId) => {
+ it.each(["normal", "fast", "ultrafast"] as const)("sends %s before the first turn", async (speed) => {
+  h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+  h.get.mockImplementation(async (path: string) => {
+   if (path.includes("/models")) return { data: { agent: "codex", selectionMode: "catalog", models: [{ id: "gpt-test", label: "GPT Test", isDefault: true, serviceTiers: [{ id: "priority", name: "Fast" }, { id: "ultrafast", name: "Ultrafast" }] }], allowCustom: false, refreshRecommended: false } };
+   if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: ["codex"] } };
+   return { data: { status: "ok", project: { config: { worker: { agent: "codex" } } } } };
+  });
+  h.post.mockImplementation(async (path: string) => path === "/api/v1/sessions" ? { data: { session: { id: "speed-task" } } } : path === "/api/v1/orchestrators/delegate" ? { data: { workerId: "speed-task" } } : { data: { taskPreparation: "" } });
+  render(<Wrap><TaskComposer projectId={projectId} onCreated={vi.fn()} /></Wrap>);
+  await waitForTaskReady();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Model" }));
+  await user.click(screen.getByRole("menuitem", { name: /^Speed/ }));
+  fireEvent.click(screen.getByRole("menuitemradio", { name: speed === "normal" ? "Normal" : speed === "fast" ? /^Fast/ : /^Ultra-fast/ }));
+  fireEvent.click(startTask());
+  const route = projectId === "__standalone__" ? "/api/v1/sessions" : "/api/v1/orchestrators/delegate";
+  await waitFor(() => expect(h.post).toHaveBeenCalledWith(route, expect.objectContaining({ body: expect.objectContaining({ speedMode: speed }) })));
+ });
+});

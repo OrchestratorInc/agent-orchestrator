@@ -1326,6 +1326,7 @@ function ChatWorkspaceContent({
 					rememberedPermissionMode={rememberedPermissionMode}
 					harness={snapshot.harness}
 					showApprovalMode={showApprovalMode ?? !session?.cloud}
+					showSpeed={!session?.cloud}
 					approvalModes={approvalModes}
 					reroute={stableModelReroute}
 					onChange={newWorkDisabled ? undefined : onChooseSettings}

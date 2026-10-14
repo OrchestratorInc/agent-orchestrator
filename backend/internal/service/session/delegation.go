@@ -32,6 +32,7 @@ type DelegateTaskInput struct {
 	RequestedAgent    domain.AgentHarness
 	Model             string
 	Effort            *string
+	SpeedMode         domain.SpeedMode
 	ApprovalMode      domain.PermissionMode
 	RequestedMode     domain.SessionMode
 	Attachments       []ports.SpawnAttachment
@@ -98,6 +99,7 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 		AgentConfig: ports.AgentConfig{
 			Model:       strings.TrimSpace(in.Model),
 			Effort:      effort,
+			SpeedMode:   in.SpeedMode,
 			Permissions: in.ApprovalMode,
 		},
 		EffortOverride: effortOverride,

@@ -2906,5 +2906,15 @@
 	"settings.billing.usageNote": "Every running session counts, so two sessions running for an hour use 2 session hours. Paused sessions don't count.",
 	"settings.billing.cancelNotice": "Your {{plan}} plan ends on {{date}}. You'll move to Free then.",
 	"settings.billing.keepPlan": "Keep {{plan}}",
-	"settings.billing.freeStarts": "Starts {{date}}"
+	"settings.billing.freeStarts": "Starts {{date}}",
+	"settings.models.speed": "Speed",
+	"settings.models.speedNormal": "Normal",
+	"settings.models.speedFast": "Fast",
+	"settings.models.speedUltrafast": "Ultra-fast",
+	"settings.models.speedFastUsage": "Higher provider usage",
+	"settings.models.speedUltrafastPlan": "Pro 25x required for personal subscriptions",
+	"settings.models.speedUnavailable": "Unavailable",
+	"settings.models.speedNotAdvertised": "Not advertised for this model and account",
+	"settings.models.speedCloudUnavailable": "Speed selection is unavailable for cloud tasks",
+	"settings.models.speedSelectionUnavailable": "The selected speed is not available for this model and account. Choose Normal or refresh models."
 }

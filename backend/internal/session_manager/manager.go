@@ -1069,6 +1069,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		rec = prep.record
 	} else {
 		seed := seedRecord(cfg, project.Config, m.clock())
+		seed.Metadata.SpeedMode = cfg.AgentConfig.SpeedMode
 		if mode == domain.SessionModeChat {
 			seed.Metadata.Model = cfg.AgentConfig.Model
 			seed.Metadata.Effort = cfg.AgentConfig.Effort
@@ -1154,6 +1155,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			}
 		}
 		seed := seedRecord(cfg, project.Config, m.clock())
+		seed.Metadata.SpeedMode = cfg.AgentConfig.SpeedMode
 		seed.ID = id
 		seed.Metadata.ArtifactDir = artifactDir
 		if mode == domain.SessionModeChat {
@@ -1433,8 +1435,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		// The user-visible resolved selection is Model for regular harnesses and
 		// Mode for adapters whose catalog is a mode list (e.g. Amp). If an explicit
 		// Model override exists it wins; otherwise fall back to the resolved Mode.
-		Model:  resolvedModelForMetadata(cfg.Harness, agentConfig, adapterConfig),
-		Effort: agentConfig.Effort,
+		Model:     resolvedModelForMetadata(cfg.Harness, agentConfig, adapterConfig),
+		Effort:    agentConfig.Effort,
+		SpeedMode: agentConfig.SpeedMode,
 	}
 	if prompt != "" {
 		metadata.LatestUserPromptAt = m.clock()
@@ -1518,6 +1521,9 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	if cfg.EffortOverride {
 		resolved.Effort = requested.Effort
 	}
+	if !resolved.SpeedMode.Valid() || resolved.SpeedMode.Accelerated() && cfg.Harness != domain.HarnessCodex {
+		return ports.AgentConfig{}, fmt.Errorf("%w: %q for %s", ports.ErrUnsupportedSpeed, resolved.SpeedMode, cfg.Harness)
+	}
 	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode {
 		resolved.Effort = ""
 		return resolved, nil
@@ -1531,11 +1537,11 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	}
 	modelID := strings.TrimSpace(resolved.Model)
 	validateClaudeModel := cfg.Harness == domain.HarnessClaudeCode && modelID != ""
-	if resolved.Effort == "" && !validateClaudeModel {
+	if resolved.Effort == "" && !validateClaudeModel && !resolved.SpeedMode.Accelerated() {
 		return resolved, nil
 	}
 	if m.modelCatalog == nil {
-		if validateClaudeModel {
+		if validateClaudeModel || resolved.SpeedMode.Accelerated() {
 			return ports.AgentConfig{}, fmt.Errorf("%w: model catalog is unavailable", ports.ErrModelCapabilitiesUnavailable)
 		}
 		return resolved, nil
@@ -1545,7 +1551,7 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		if modelChangedWithoutExplicitEffort {
 			resolved.Effort = ""
 		}
-		if validateClaudeModel || resolved.Effort != "" {
+		if validateClaudeModel || resolved.Effort != "" || resolved.SpeedMode.Accelerated() {
 			return ports.AgentConfig{}, fmt.Errorf("%w: %w", ports.ErrModelCapabilitiesUnavailable, err)
 		}
 		return resolved, nil
@@ -1581,6 +1587,14 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	if modelChangedWithoutExplicitEffort {
 		if selected == nil || !containsString(selected.Efforts, base.Effort) {
 			resolved.Effort = ""
+		}
+	}
+	if resolved.SpeedMode.Accelerated() {
+		if catalog.Stale || selected == nil {
+			return ports.AgentConfig{}, fmt.Errorf("%w: speed capabilities unavailable", ports.ErrUnsupportedSpeed)
+		}
+		if _, supported := ports.ServiceTierForSpeed(selected.ServiceTiers, resolved.SpeedMode); !supported {
+			return ports.AgentConfig{}, fmt.Errorf("%w: %s for model %q", ports.ErrUnsupportedSpeed, resolved.SpeedMode, modelID)
 		}
 	}
 	if resolved.Effort == "" {
@@ -2161,6 +2175,9 @@ func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, 
 	if harnessMatches && override.Effort != "" {
 		merged.Effort = override.Effort
 	}
+	if harnessMatches && override.SpeedMode != "" {
+		merged.SpeedMode = override.SpeedMode
+	}
 	if harnessMatches && override.Mode != "" {
 		merged.Mode = override.Mode
 	}
@@ -2176,6 +2193,15 @@ func restoredAgentConfig(rec domain.SessionRecord, cfg domain.ProjectConfig) por
 		merged.Model = rec.Metadata.Model
 		merged.Effort = rec.Metadata.Effort
 	}
+	if rec.Harness == domain.HarnessCodex {
+		merged.SpeedMode = rec.Metadata.SpeedMode
+		if merged.SpeedMode.Accelerated() && rec.Metadata.Model != "" {
+			// Validate and restore the speed/model pair the user selected in
+			// Chat, rather than a different model from the project defaults.
+			merged.Model = rec.Metadata.Model
+			merged.Effort = rec.Metadata.Effort
+		}
+	}
 	return merged
 }
 
@@ -2185,6 +2211,9 @@ func applySpawnAgentConfig(base, override ports.AgentConfig) ports.AgentConfig {
 	}
 	if override.Effort != "" {
 		base.Effort = override.Effort
+	}
+	if override.SpeedMode != "" {
+		base.SpeedMode = override.SpeedMode
 	}
 	if override.Mode != "" {
 		base.Mode = override.Mode
@@ -3270,6 +3299,12 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	// must win over the project default for every harness on a TUI rebuild.
 	if model := strings.TrimSpace(rec.Metadata.Model); model != "" {
 		agentConfig.Model = model
+	}
+	if agentConfig.SpeedMode.Accelerated() {
+		agentConfig, err = m.resolveAgentConfig(ctx, ports.SpawnConfig{ProjectID: rec.ProjectID, Kind: rec.Kind, Harness: rec.Harness, AgentConfig: agentConfig, EffortOverride: true}, project.Config)
+		if err != nil {
+			return RestoreResult{}, err
+		}
 	}
 	if rec.Metadata.Permissions != "" {
 		agentConfig.Permissions = rec.Metadata.Permissions

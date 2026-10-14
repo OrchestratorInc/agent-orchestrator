@@ -19,6 +19,29 @@ Codex supports the same capability-gated Chat/Terminal UI handoff as Claude Code
 
 Orchestrator performs bounded installation and authentication probes before spawn. Use `--skip-agent-check` only to bypass that advisory CLI preflight; daemon validation remains authoritative.
 
+## Speed
+
+Open the model picker in a Codex chat or New Task and choose **Speed**:
+**Normal** (the default), **Fast**, or **Ultra-fast**. Speed is independent of
+reasoning effort. The selected model and account must advertise an accelerated
+tier; unavailable choices are disabled and the daemon validates the choice again
+before inference. Speed choices are saved with the session and apply to the next
+turn, including after restart. Selecting Normal explicitly returns to standard
+speed.
+
+Older API callers that omit speed retain their native provider defaults until
+they make an explicit choice.
+
+Accelerated tiers use more provider usage. Ultra-fast requires Pro 25x for
+personal subscriptions; eligible managed plans depend on provider availability.
+See [OpenAI's speed documentation](https://learn.chatgpt.com/docs/agent-configuration/speed).
+The integration follows the [app-server configuration and model discovery
+contracts](https://learn.chatgpt.com/docs/app-server) and the installed Codex
+protocol's serving-tier fields. Availability comes from the live catalog and
+managed requirements, rather than a list of plans or models maintained by AO.
+Cloud task creation has no speed contract, so its accelerated choices remain
+unavailable.
+
 ## Accounts
 
 Open **Settings → Subscriptions** to view the current Codex account, add another account through Codex's login terminal, or switch to a verified account. Orchestrator uses the verified account name as the card label. Supported Codex builds also show plan and usage details.

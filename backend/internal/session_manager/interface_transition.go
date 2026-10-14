@@ -823,6 +823,12 @@ func (m *Manager) preflightInterfaceTarget(
 		return err
 	}
 	config := restoredAgentConfig(rec, project.Config)
+	if config.SpeedMode.Accelerated() {
+		config, err = m.resolveAgentConfig(ctx, ports.SpawnConfig{ProjectID: rec.ProjectID, Kind: rec.Kind, Harness: rec.Harness, AgentConfig: config, EffortOverride: true}, project.Config)
+		if err != nil {
+			return err
+		}
+	}
 	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
 	pinRuntimePermissionEnv(env, config.Permissions)
 	m.augmentAgentRuntimeEnv(agent, env)

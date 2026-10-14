@@ -306,7 +306,8 @@ type ChatStartConfig struct {
 	Model string
 	// Effort is an optional provider-advertised model tuning value; empty
 	// defers to the provider's configured default.
-	Effort string
+	Effort    string
+	SpeedMode domain.SpeedMode
 	// Permissions is AO's existing per-session approval policy. Drivers map it
 	// onto their provider's native approval and sandbox settings.
 	Permissions PermissionMode
@@ -357,6 +358,7 @@ type ChatResumeConfig struct {
 	Model string
 	// Effort is optional; empty keeps the provider conversation's current effort.
 	Effort      string
+	SpeedMode   domain.SpeedMode
 	Permissions PermissionMode
 	ReadOnly    bool
 	// SystemPrompt is recomputed by the session manager on restore and reapplied
@@ -491,7 +493,8 @@ type ChatTurnSettings struct {
 	// Model is the provider's model id, from ChatModel.ID.
 	Model string
 	// Effort is how much reasoning to spend, from ChatModel.Efforts.
-	Effort string
+	Effort    string
+	SpeedMode domain.SpeedMode
 	// Approval is AO's permission mode for this turn. The driver maps it onto
 	// whatever approval policy and sandbox its provider understands.
 	Approval PermissionMode
@@ -500,7 +503,7 @@ type ChatTurnSettings struct {
 // IsZero reports whether nothing was chosen, so a dispatch can omit the fields
 // entirely rather than sending empty strings the provider would have to interpret.
 func (s ChatTurnSettings) IsZero() bool {
-	return s.Model == "" && s.Effort == "" && s.Approval == ""
+	return s.Model == "" && s.Effort == "" && s.Approval == "" && s.SpeedMode == ""
 }
 
 // ChatModel is one model the provider offers for a conversation.
@@ -519,6 +522,7 @@ type ChatModel struct {
 	Efforts []string
 	// DefaultEffort is the level the provider uses when none is chosen.
 	DefaultEffort string
+	ServiceTiers  []ModelServiceTier
 }
 
 // ChatModelLister is implemented by drivers whose provider can enumerate models.

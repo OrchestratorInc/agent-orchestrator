@@ -1492,6 +1492,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 		settings: {
 			model: wire.settings?.model || undefined,
 			reasoningEffort: wire.settings?.reasoningEffort || undefined,
+			speedMode: wire.settings?.speedMode || undefined,
 			approvalMode: (wire.settings?.approvalMode as ApprovalMode | undefined) || undefined,
 		},
 		// Absent means the provider has not reported, which the meter renders as

@@ -658,6 +658,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	}
 	if cfg.ProviderConversationID != "" {
 		cfg.Effort = conversation.Settings.ReasoningEffort
+		cfg.SpeedMode = conversation.Settings.SpeedMode
 	}
 	if cfg.ProviderConversationID != "" && conversation.Settings.ApprovalMode != "" {
 		cfg.Permissions = conversation.Settings.ApprovalMode
@@ -668,6 +669,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		}
 		conversation.Settings.Model = cfg.Model
 		conversation.Settings.ReasoningEffort = cfg.Effort
+		conversation.Settings.SpeedMode = cfg.SpeedMode
 		conversation.Settings.ApprovalMode = cfg.Permissions
 		if err := s.store.SetConversationSettings(ctx, conversation.ID, conversation.Settings, s.now()); err != nil {
 			return nil, fmt.Errorf("record initial conversation settings: %w", err)
@@ -698,6 +700,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			PrepareEnv:             prepareEnv,
 			Model:                  cfg.Model,
 			Effort:                 cfg.Effort,
+			SpeedMode:              cfg.SpeedMode,
 			Permissions:            cfg.Permissions,
 			ReadOnly:               cfg.ReadOnly,
 			SystemPrompt:           cfg.SystemPrompt,
@@ -716,6 +719,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			PrepareEnv:            prepareEnv,
 			Model:                 cfg.Model,
 			Effort:                cfg.Effort,
+			SpeedMode:             cfg.SpeedMode,
 			Permissions:           cfg.Permissions,
 			ReadOnly:              cfg.ReadOnly,
 			SystemPrompt:          cfg.SystemPrompt,
@@ -2398,10 +2402,37 @@ func (s *Service) setTurnSettings(ctx context.Context, controller *Controller, o
 	defer controller.configMu.Unlock()
 	// The turn-settings endpoint does not own provider session mode choices.
 	previous := controller.Settings()
+	// An older client may omit speed while changing another setting.
+	if settings.SpeedMode == "" {
+		settings.SpeedMode = previous.SpeedMode
+	}
 	if owner.Kind == domain.ConversationOwnerReview && settings.ApprovalMode != previous.ApprovalMode {
 		return domain.ConversationSettings{}, ErrReviewerPermissionsFixed
 	}
 	settings.OpenCodeMode = previous.OpenCodeMode
+	if !settings.SpeedMode.Valid() || settings.SpeedMode.Accelerated() && controller.harness != domain.HarnessCodex {
+		return domain.ConversationSettings{}, fmt.Errorf("%w: %q for %s", ports.ErrUnsupportedSpeed, settings.SpeedMode, controller.harness)
+	}
+	if settings.SpeedMode.Accelerated() {
+		lister, ok := controller.conv.(ports.ChatModelLister)
+		if !ok {
+			return domain.ConversationSettings{}, fmt.Errorf("%w: provider has no tier catalog", ports.ErrUnsupportedSpeed)
+		}
+		models, err := lister.ListModels(ctx)
+		if err != nil {
+			return domain.ConversationSettings{}, fmt.Errorf("%w: %w", ports.ErrUnsupportedSpeed, err)
+		}
+		supported := false
+		for _, model := range models {
+			if model.ID == settings.Model || settings.Model == "" && model.Default {
+				_, supported = ports.ServiceTierForSpeed(model.ServiceTiers, settings.SpeedMode)
+				break
+			}
+		}
+		if !supported {
+			return domain.ConversationSettings{}, fmt.Errorf("%w: %s is not advertised for this model", ports.ErrUnsupportedSpeed, settings.SpeedMode)
+		}
+	}
 	if err := controller.SetSettings(ctx, settings); err != nil {
 		return domain.ConversationSettings{}, err
 	}

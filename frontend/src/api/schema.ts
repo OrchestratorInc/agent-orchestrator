@@ -3583,6 +3583,8 @@ export interface components {
             mode?: string;
             model?: string;
             permissions?: string;
+            /** @enum {string} */
+            speedMode?: "normal" | "fast" | "ultrafast";
         };
         AgentInfo: {
             /**
@@ -3652,6 +3654,7 @@ export interface components {
             /** Format: date-time */
             lastUsedAt?: null | string;
             provider?: string;
+            serviceTiers?: components["schemas"]["ModelServiceTier"][];
         };
         AgentModelsResponse: {
             agentId: string;
@@ -4346,6 +4349,7 @@ export interface components {
             displayName: string;
             efforts?: string[];
             id: string;
+            serviceTiers?: components["schemas"]["ModelServiceTier"][];
         };
         ConversationModelsResponse: {
             models: components["schemas"]["ConversationModelResponse"][];
@@ -4460,6 +4464,8 @@ export interface components {
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             model?: string;
             reasoningEffort?: string;
+            /** @enum {string} */
+            speedMode?: "normal" | "fast" | "ultrafast";
         };
         ConversationUsagePayload: {
             /** Format: int64 */
@@ -4555,6 +4561,8 @@ export interface components {
             mode?: "tui" | "chat";
             model?: string;
             projectId: string;
+            /** @enum {string} */
+            speedMode?: "normal" | "fast" | "ultrafast";
             taskPreparation?: string;
         };
         DelegateTaskResponse: {
@@ -5027,6 +5035,11 @@ export interface components {
             ready: boolean;
             running: boolean;
             supported: boolean;
+        };
+        ModelServiceTier: {
+            description?: string;
+            id: string;
+            name: string;
         };
         MuteDeviceRequest: {
             /** @description True to stop sending push notifications to this device. */
@@ -6023,6 +6036,8 @@ export interface components {
             prompt?: string;
             /** @enum {string} */
             requestedOutput?: "artifact";
+            /** @enum {string} */
+            speedMode?: "normal" | "fast" | "ultrafast";
             /** @enum {string} */
             trackerProvider?: "github" | "gitlab";
         };

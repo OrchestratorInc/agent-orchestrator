@@ -2908,5 +2908,15 @@
 	"settings.billing.usageNote": "每个运行中的会话都会计时：两个会话运行一小时计 2 会话小时。已暂停的会话不计时。",
 	"settings.billing.cancelNotice": "你的 {{plan}} 套餐将于 {{date}} 结束，之后将转为免费套餐。",
 	"settings.billing.keepPlan": "保留 {{plan}}",
-	"settings.billing.freeStarts": "{{date}} 开始"
+	"settings.billing.freeStarts": "{{date}} 开始",
+	"settings.models.speed": "速度",
+	"settings.models.speedNormal": "正常",
+	"settings.models.speedFast": "快速",
+	"settings.models.speedUltrafast": "超快",
+	"settings.models.speedFastUsage": "消耗更多提供商用量",
+	"settings.models.speedUltrafastPlan": "个人订阅需 Pro 25x",
+	"settings.models.speedUnavailable": "不可用",
+	"settings.models.speedNotAdvertised": "此模型和账户未提供此速度",
+	"settings.models.speedCloudUnavailable": "云任务不支持速度选择",
+	"settings.models.speedSelectionUnavailable": "此模型和账户不支持所选速度。请选择正常速度或刷新模型。"
 }

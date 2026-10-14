@@ -1693,3 +1693,19 @@ describe("effort default when the provider reports none", () => {
 		expect(onChange).not.toHaveBeenCalled();
 	});
 });
+
+
+describe("Codex speed in the model menu", () => {
+ it("places Speed below Model and preserves reasoning when speed changes", async () => {
+  const onChange = vi.fn(); const user = userEvent.setup();
+  render(<TurnSettingsBar harness="codex" models={[{ id: "gpt-test", displayName: "GPT Test", default: true, efforts: ["high"], serviceTiers: [{ id: "priority", name: "Fast" }] }]} settings={{ model: "gpt-test", reasoningEffort: "high" }} onChange={onChange} />);
+  await user.click(screen.getByRole("button", { name: "Model and reasoning effort for the next turn" }));
+  const model = screen.getByRole("menuitem", { name: /^Model/ });
+  const speed = screen.getByRole("menuitem", { name: /^Speed/ });
+  expect(model.compareDocumentPosition(speed) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  await user.click(speed);
+  expect(screen.getByRole("menuitemradio", { name: "Normal" })).toHaveAttribute("aria-checked", "true");
+  fireEvent.click(screen.getByRole("menuitemradio", { name: /^Fast/ }));
+  expect(onChange).toHaveBeenCalledWith({ model: "gpt-test", reasoningEffort: "high", speedMode: "fast" });
+ });
+});

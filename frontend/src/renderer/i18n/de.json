@@ -2926,5 +2926,15 @@
 	"settings.billing.usageNote": "Jede laufende Sitzung zählt: Zwei Sitzungen für eine Stunde verbrauchen 2 Sitzungsstunden. Pausierte Sitzungen zählen nicht.",
 	"settings.billing.cancelNotice": "Dein {{plan}}-Tarif endet am {{date}}. Danach wechselst du zu Kostenlos.",
 	"settings.billing.keepPlan": "{{plan}} behalten",
-	"settings.billing.freeStarts": "Ab {{date}}"
+	"settings.billing.freeStarts": "Ab {{date}}",
+	"settings.models.speed": "Geschwindigkeit",
+	"settings.models.speedNormal": "Normal",
+	"settings.models.speedFast": "Schnell",
+	"settings.models.speedUltrafast": "Ultraschnell",
+	"settings.models.speedFastUsage": "Höherer Verbrauch beim Anbieter",
+	"settings.models.speedUltrafastPlan": "Pro 25x für persönliche Abonnements erforderlich",
+	"settings.models.speedUnavailable": "Nicht verfügbar",
+	"settings.models.speedNotAdvertised": "Für dieses Modell und Konto nicht angeboten",
+	"settings.models.speedCloudUnavailable": "Die Geschwindigkeitsauswahl ist für Cloud-Aufgaben nicht verfügbar",
+	"settings.models.speedSelectionUnavailable": "Die gewählte Geschwindigkeit ist für dieses Modell und Konto nicht verfügbar. Wählen Sie Normal oder aktualisieren Sie die Modelle."
 }

@@ -392,6 +392,7 @@ func (m *Manager) executeChatAgentSwitch(
 		Env:                     targetLaunchEnv,
 		Model:                   agentConfig.Model,
 		Effort:                  agentConfig.Effort,
+		SpeedMode:               agentConfig.SpeedMode,
 		Permissions:             agentConfig.Permissions,
 		SystemPrompt:            finalSystemPrompt,
 		AdditionalDirectories:   additionalDirectories,
@@ -577,6 +578,7 @@ func committedChatSwitchConversation(
 	conversation.ActiveBranchID = chatSwitchProviderBoundaryID(switchID)
 	conversation.Settings.Model = ""
 	conversation.Settings.ReasoningEffort = ""
+	conversation.Settings.SpeedMode = ""
 	conversation.UpdatedAt = activatedAt
 	return conversation
 }

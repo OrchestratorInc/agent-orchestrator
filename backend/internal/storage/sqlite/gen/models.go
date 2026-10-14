@@ -248,6 +248,7 @@ type Conversation struct {
 	UsageCurrency              sql.NullString
 	ActiveBranchID             string
 	OpencodeMode               string
+	SpeedMode                  sql.NullString
 }
 
 type ConversationActivity struct {
@@ -690,6 +691,7 @@ type Session struct {
 	HibernatedAt                     sql.NullTime
 	BranchState                      string
 	RequestedOutput                  string
+	SpeedMode                        string
 }
 
 type SessionArtifactVersion struct {

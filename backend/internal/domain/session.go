@@ -226,7 +226,8 @@ type SessionMetadata struct {
 	// Effort is the reasoning level resolved with Model at spawn time. Empty
 	// means the provider default, including an explicit task-level reset. The
 	// resolved value is pinned so project-default changes cannot alter resume.
-	Effort string `json:"effort,omitempty"`
+	Effort    string    `json:"effort,omitempty"`
+	SpeedMode SpeedMode `json:"speedMode,omitempty"`
 	// ArtifactDir is the session-owned artifact directory under AO's data dir.
 	// It is outside the git workspace and is never exposed directly on the API.
 	ArtifactDir string `json:"-"`

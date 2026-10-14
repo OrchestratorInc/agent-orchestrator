@@ -2926,5 +2926,15 @@
 	"settings.billing.usageNote": "実行中のセッションごとに計上されます。2 つのセッションを 1 時間実行すると 2 セッション時間です。一時停止中は計上されません。",
 	"settings.billing.cancelNotice": "{{plan}} プランは {{date}} に終了し、その後は無料プランになります。",
 	"settings.billing.keepPlan": "{{plan}} を継続",
-	"settings.billing.freeStarts": "{{date}} から開始"
+	"settings.billing.freeStarts": "{{date}} から開始",
+	"settings.models.speed": "速度",
+	"settings.models.speedNormal": "通常",
+	"settings.models.speedFast": "高速",
+	"settings.models.speedUltrafast": "超高速",
+	"settings.models.speedFastUsage": "プロバイダーの使用量が増加",
+	"settings.models.speedUltrafastPlan": "個人向けサブスクリプションには Pro 25x が必要",
+	"settings.models.speedUnavailable": "利用不可",
+	"settings.models.speedNotAdvertised": "このモデルとアカウントでは提供されていません",
+	"settings.models.speedCloudUnavailable": "クラウドタスクでは速度を選択できません",
+	"settings.models.speedSelectionUnavailable": "このモデルとアカウントでは選択した速度を利用できません。通常を選択するか、モデルを更新してください。"
 }

@@ -10739,6 +10739,12 @@ components:
           type: string
         permissions:
           type: string
+        speedMode:
+          enum:
+          - normal
+          - fast
+          - ultrafast
+          type: string
       type: object
     AgentInfo:
       properties:
@@ -10909,6 +10915,10 @@ components:
           - string
         provider:
           type: string
+        serviceTiers:
+          items:
+            $ref: '#/components/schemas/ModelServiceTier'
+          type: array
       required:
       - id
       - label
@@ -12816,6 +12826,10 @@ components:
           type: array
         id:
           type: string
+        serviceTiers:
+          items:
+            $ref: '#/components/schemas/ModelServiceTier'
+          type: array
       required:
       - id
       - displayName
@@ -13125,6 +13139,12 @@ components:
           type: string
         reasoningEffort:
           type: string
+        speedMode:
+          enum:
+          - normal
+          - fast
+          - ultrafast
+          type: string
       type: object
     ConversationUsagePayload:
       properties:
@@ -13400,6 +13420,12 @@ components:
           maxLength: 256
           type: string
         projectId:
+          type: string
+        speedMode:
+          enum:
+          - normal
+          - fast
+          - ultrafast
           type: string
         taskPreparation:
           type: string
@@ -14660,6 +14686,18 @@ components:
       - hostname
       - location
       - lastError
+      type: object
+    ModelServiceTier:
+      properties:
+        description:
+          type: string
+        id:
+          type: string
+        name:
+          type: string
+      required:
+      - id
+      - name
       type: object
     MuteDeviceRequest:
       properties:
@@ -17185,6 +17223,12 @@ components:
         requestedOutput:
           enum:
           - artifact
+          type: string
+        speedMode:
+          enum:
+          - normal
+          - fast
+          - ultrafast
           type: string
         trackerProvider:
           enum:

@@ -1,3 +1,5 @@
+import { SpeedMenu } from "../chat/SpeedMenu";
+import type { SpeedMode } from "../../types/conversation";
 import { Check, ChevronDown, Loader2, RefreshCw, Search } from "lucide-react";
 import { type ReactNode, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -77,6 +79,7 @@ export function AgentModelCombobox({
 	showEffortInTrigger = true,
 	agentId,
 	tuning,
+	speed,
 	disabled = false,
 	"aria-label": ariaLabel,
 }: {
@@ -112,6 +115,8 @@ export function AgentModelCombobox({
 	showEffortInTrigger?: boolean;
 	/** Callers opt into a combined model and reasoning-effort menu. */
 	tuning?: ModelEffortSelection;
+	/** Only the new-task picker opts into serving speed. */
+	speed?: { value: SpeedMode; onChange(value: SpeedMode): void; unavailableReason?: string };
 	disabled?: boolean;
 	"aria-label": string;
 }) {
@@ -500,7 +505,9 @@ export function AgentModelCombobox({
 						aria-hidden="true"
 					/>
 				</div>
-				{showEffort && tuning && (
+				{speed ? <><DropdownMenuSeparator /><SpeedMenu value={speed.value} tiers={selected?.model.serviceTiers}
+						disabled={disabled} unavailableReason={speed.unavailableReason} onChange={speed.onChange} /></> : null}
+					{showEffort && tuning && (
 					<div className="shrink-0">
 						<DropdownMenuSeparator />
 						<OptionMenuSub open={effortMenuOpen} onOpenChange={(open) => {

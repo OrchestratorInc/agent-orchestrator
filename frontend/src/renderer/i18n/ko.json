@@ -2926,5 +2926,15 @@
 	"settings.billing.usageNote": "실행 중인 세션마다 계산됩니다. 세션 두 개를 한 시간 실행하면 2 세션 시간입니다. 일시 중지된 세션은 계산되지 않습니다.",
 	"settings.billing.cancelNotice": "{{plan}} 플랜이 {{date}}에 종료되며, 이후 무료 플랜으로 전환됩니다.",
 	"settings.billing.keepPlan": "{{plan}} 유지",
-	"settings.billing.freeStarts": "{{date}}부터 시작"
+	"settings.billing.freeStarts": "{{date}}부터 시작",
+	"settings.models.speed": "속도",
+	"settings.models.speedNormal": "일반",
+	"settings.models.speedFast": "빠름",
+	"settings.models.speedUltrafast": "초고속",
+	"settings.models.speedFastUsage": "공급자 사용량 증가",
+	"settings.models.speedUltrafastPlan": "개인 구독에는 Pro 25x 필요",
+	"settings.models.speedUnavailable": "사용 불가",
+	"settings.models.speedNotAdvertised": "이 모델과 계정에서는 제공되지 않음",
+	"settings.models.speedCloudUnavailable": "클라우드 작업에서는 속도를 선택할 수 없습니다",
+	"settings.models.speedSelectionUnavailable": "이 모델과 계정에서는 선택한 속도를 사용할 수 없습니다. 일반을 선택하거나 모델을 새로 고치세요."
 }

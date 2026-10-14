@@ -1,3 +1,4 @@
+import { SpeedMenu } from "./SpeedMenu";
 /**
  * What the next turn will be sent with: model, reasoning effort, approval mode.
  *
@@ -85,6 +86,7 @@ export function TurnSettingsBar({
 	models,
 	settings,
 	harness,
+	showSpeed = true,
 	showApprovalMode = true,
 	approvalModes,
 	reroute,
@@ -105,6 +107,8 @@ export function TurnSettingsBar({
 	settings: TurnSettings;
 	/** The active provider selects its own supported permission vocabulary. */
 	harness?: string;
+	/** The cloud control plane has no serving-speed contract. */
+	showSpeed?: boolean;
 	/** Cloud permissions are fixed for the session, not a per-turn setting. */
 	showApprovalMode?: boolean;
 	approvalModes?: ApprovalMode[];
@@ -251,6 +255,7 @@ export function TurnSettingsBar({
 				<div className="flex h-7 min-w-0 flex-wrap items-center gap-0.5">
 					{nativeModelMenu && onChange ? (
 						<ModelEffortPicker
+							showSpeed={showSpeed && harness === "codex"}
 							models={harness === "claude-code" ? displayModels.filter((model) => model.id !== "default") : displayModels}
 							settings={settings}
 							onChange={onChange}
@@ -372,6 +377,7 @@ function claudeChoiceLabels(catalog: { id: string; displayName: string }[]) {
 }
 
 function ModelEffortPicker({
+	showSpeed,
 	models,
 	settings,
 	onChange,
@@ -391,6 +397,7 @@ function ModelEffortPicker({
 	onChangeConfigOption,
 }: {
 	models: ChatModel[];
+	showSpeed?: boolean;
 	settings: TurnSettings;
 	onChange: (next: TurnSettings) => void;
 	disabled?: boolean;
@@ -463,6 +470,9 @@ function ModelEffortPicker({
 						</ModelMenuChoices>
 					</OptionMenuSubContent>
 				</OptionMenuSub>
+
+				{showSpeed ? <SpeedMenu value={settings.speedMode} tiers={models.find((model) => model.id === settings.model || !settings.model && model.default)?.serviceTiers}
+					disabled={disabled} onChange={(speedMode) => onChange({ ...settings, speedMode })} /> : null}
 
 				{efforts.length > 0 || savedEffort ? (
 					<OptionMenuSub>

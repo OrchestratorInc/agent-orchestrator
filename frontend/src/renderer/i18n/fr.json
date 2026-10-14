@@ -2970,5 +2970,15 @@
 	"settings.billing.usageNote": "Chaque session en cours compte : deux sessions pendant une heure utilisent 2 heures de session. Les sessions en pause ne comptent pas.",
 	"settings.billing.cancelNotice": "Votre forfait {{plan}} se termine le {{date}}. Vous passerez alors au forfait Gratuit.",
 	"settings.billing.keepPlan": "Garder {{plan}}",
-	"settings.billing.freeStarts": "Commence le {{date}}"
+	"settings.billing.freeStarts": "Commence le {{date}}",
+	"settings.models.speed": "Vitesse",
+	"settings.models.speedNormal": "Normale",
+	"settings.models.speedFast": "Rapide",
+	"settings.models.speedUltrafast": "Ultra-rapide",
+	"settings.models.speedFastUsage": "Utilisation accrue du fournisseur",
+	"settings.models.speedUltrafastPlan": "Pro 25x requis pour les abonnements personnels",
+	"settings.models.speedUnavailable": "Indisponible",
+	"settings.models.speedNotAdvertised": "Non proposé pour ce modèle et ce compte",
+	"settings.models.speedCloudUnavailable": "Le choix de vitesse est indisponible pour les tâches cloud",
+	"settings.models.speedSelectionUnavailable": "La vitesse sélectionnée est indisponible pour ce modèle et ce compte. Choisissez Normale ou actualisez les modèles."
 }

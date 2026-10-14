@@ -2970,5 +2970,15 @@
 	"settings.billing.usageNote": "Cuenta cada sesión en ejecución: dos sesiones durante una hora usan 2 horas de sesión. Las sesiones en pausa no cuentan.",
 	"settings.billing.cancelNotice": "Tu plan {{plan}} termina el {{date}}. Entonces pasarás a Gratis.",
 	"settings.billing.keepPlan": "Mantener {{plan}}",
-	"settings.billing.freeStarts": "Empieza el {{date}}"
+	"settings.billing.freeStarts": "Empieza el {{date}}",
+	"settings.models.speed": "Velocidad",
+	"settings.models.speedNormal": "Normal",
+	"settings.models.speedFast": "Rápida",
+	"settings.models.speedUltrafast": "Ultrarrápida",
+	"settings.models.speedFastUsage": "Mayor consumo del proveedor",
+	"settings.models.speedUltrafastPlan": "Las suscripciones personales requieren Pro 25x",
+	"settings.models.speedUnavailable": "No disponible",
+	"settings.models.speedNotAdvertised": "No se ofrece para este modelo y cuenta",
+	"settings.models.speedCloudUnavailable": "La selección de velocidad no está disponible para tareas en la nube",
+	"settings.models.speedSelectionUnavailable": "La velocidad seleccionada no está disponible para este modelo y cuenta. Elige Normal o actualiza los modelos."
 }
