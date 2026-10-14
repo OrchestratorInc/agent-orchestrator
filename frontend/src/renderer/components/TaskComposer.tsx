@@ -470,7 +470,7 @@ export function TaskComposer({
 	const catalogModels = offeredModels.filter((item) => isConcreteModelID(item.id));
 	const catalogDefaultOption =
 		catalogModels.find((item) => item.isDefault)?.id ?? "";
-	const catalogDefaultHidden = Boolean(modelCatalogQuery.data?.models.some(
+	const catalogDefaultHidden = Boolean(modelCatalogQuery.data?.models?.some(
 		(item) => item.isDefault && isConcreteModelID(item.id) && !catalogModels.some((offered) => offered.id === item.id),
 	));
 	const catalogUsesModes = modelCatalogQuery.data?.selectionMode === "mode";
