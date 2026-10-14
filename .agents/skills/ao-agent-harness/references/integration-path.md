@@ -225,7 +225,8 @@ For kill/restore validation, do not accept the restore response's immediate
 continuation, and verify that the provider appends that token to the pre-kill
 proof file before declaring continuity.
 
-Register the driver only after all required cases pass. Do not implement
+Use temporary registration in an isolated candidate build to exercise the
+registered AO cases. Enable production registration only after those cases pass. Do not implement
 `ports.AgentInterfaceHandoff` until TUI and Chat are proven to share identity,
 history, permission state, and cancellation semantics. Chat qualification uses
 actual registered daemon Chat sessions and controller states, not the TUI runner.
@@ -274,9 +275,12 @@ authenticated provider's message role.
 For every harness claimed as running inside AO, capture the actual AO session
 UI on the tested build, even when the integration changes only backend code.
 Follow the [required AO UI evidence](evidence-and-handoff.md#required-ao-ui-evidence)
-contract: attach real screenshots for each claimed interface, correlate them
-with session/native identity and functional logs, and retain clearly labelled
-failures. Native CLI and terminal-mirror captures do not fulfill this gate.
+contract and [step-by-step checklist](audit-journeys.md#mandatory-step-by-step-screenshots):
+plan capture before onboarding and retain each action/result from Agent Harness
+listing/install/auth and both model surfaces through New Task, running, Kill,
+archive, exact restore and Kanban return, plus supported Chat. Correlate images
+with identities and functional logs and retain clearly labelled failures. Native
+CLI and terminal-mirror captures do not fulfill this gate.
 
 For UI changes, use `ao preview` from the session or the isolated real-Electron
 desktop lab described in `AGENTS.md`. Never use the invoking checkout with real AO
@@ -303,10 +307,11 @@ A useful report separates:
 - stored/configured credentials from verified provider authorization;
 - actual AO UI screenshots from native-only terminals, mirrors, and later reproductions.
 
-For each claimed running harness, embed its real AO UI screenshot in the PR
-report/comment with the required capture record and durable GitHub-renderable
-URL. A passing fixture suite or runner result cannot fill this slot. Missing
-AO UI capture or attachment means `AO UI evidence: BLOCKED` and an incomplete
+For each harness, publish the complete checkpoint index and embed its real AO
+UI screenshots in journey order, with required capture records and durable
+GitHub-renderable URLs. A passing fixture suite, runner result or final running
+image cannot fill missing earlier steps. Missing AO UI capture or attachment
+means `AO UI evidence: BLOCKED` and an incomplete
 integration handoff. List every non-pass gate separately with its actual failure
 screenshot, or `screenshot: unavailable` and the reason; keep the first failed
 attempt visible even after a successful fix.
@@ -323,14 +328,14 @@ Keep every row; scope an excluded interface explicitly rather than deleting it.
 | Area | Required disposition |
 | --- | --- |
 | Registration and UI | Trace adapter/driver, registry, API/generated contracts and claimed task/settings surfaces |
-| Models | Catalog/configured/text/default-only mode; pre-launch picker/defaults and effective native selection; in-session options separately |
-| Setup | Official installer or manual guide, actual Settings plan and prerequisites |
+| Models | Catalog/configured/text/default-only mode; separate Agent Harness and New Task captures plus effective native selection; planned/absent panel explicitly incomplete; in-session options separately |
+| Setup | Official installer or manual guide, actual Settings plan/prerequisites; screenshots of install and login/configuration actions/results or explicit unexercised branches |
 | Readiness | Advertised OS, binary, required config, safe auth state and actionable pre-launch failures |
 | Identity and logo | Product label, licensed asset/source and avatar, or explicit fallback reason |
 | TUI and Chat | Each interface's supported scope and functional/UI evidence; reject excluded surfaces truthfully |
 | Permissions and instructions | Effective supported modes and private instruction delivery/consumption scope |
-| Lifecycle | Active-turn cancel, Kill, exact restore, reconnect/restart and cleanup as claimed |
-| Evidence | Tested source/binaries, real AO UI captures, distinct attempts and reproduction receipt |
+| Lifecycle | Active-turn cancel, Kill, archived entry, exact restore and same card back in Kanban with continuation; action/result captures and functional proof; reconnect/restart and cleanup as claimed |
+| Evidence | Tested source/binaries, complete screenshot checkpoint index with action/result and failure logs, distinct attempts and reproduction receipt |
 | CI and handoff | Current head checks, merge/conflict state, unresolved gaps and retained-data cleanup |
 
 Verification is `PASS`, `FAIL`, `BLOCKED`, `NOT_RUN`, or `N/A`, with linked proof
@@ -342,7 +347,9 @@ branding disposition, not permission to omit its row.
 Resolve failures within the authorized scope and reverify affected paths. If an
 external blocker remains, hand off the matrix as incomplete with the next action;
 do not call the integration fully verified. A limited-scope integration may be
-complete within that agreed scope but cannot claim a full strict runner PASS.
+complete within that agreed scope but cannot claim verification outside it.
+Report the runner's actual verdict separately: a strict TUI runner PASS does not
+qualify Chat, onboarding or the complete UI journey.
 Use the [current-status receipt](evidence-and-handoff.md#current-status-and-reproduction-receipt)
 to keep historical proof separate from the current head. This matrix requires
 contributor review; the audit scripts do not generate or enforce it.

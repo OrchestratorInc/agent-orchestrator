@@ -93,9 +93,13 @@ and optional owned-draft cleanup.
 
 Runner token prompts establish assisted instruction consumption. Claims about
 ordinary-task delivery require the reference's independent instruction controls.
-For every inside-AO claim, attach a real screenshot of the claimed TUI/Chat
-interface in the actual AO UI with functional evidence and capture provenance.
-A runner PASS cannot fill missing `AO UI evidence: BLOCKED`.
+For every harness, complete the [step-by-step screenshot checklist](references/audit-journeys.md#mandatory-step-by-step-screenshots):
+Agent Harness discovery, install, login/configuration, both model surfaces, New
+Task selection, running task, Kill/archive, exact restore and return to Kanban;
+include Chat when supported. Capture each action and result in the actual AO UI
+with functional evidence and provenance. A single running screenshot does not
+cover the journey. Missing steps or planned UI remain explicit non-pass rows;
+a runner PASS cannot fill missing `AO UI evidence: BLOCKED`.
 
 Keep each attempt and failure distinct. Detailed harness reports, JSON receipts,
 screenshots, and provenance belong with that harness's integration PR. The skill

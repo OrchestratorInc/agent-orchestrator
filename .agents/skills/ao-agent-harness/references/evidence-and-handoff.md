@@ -177,13 +177,15 @@ require a separately authorized live audit in the eventual host environment.
 
 ## Required AO UI evidence
 
-Before claiming any harness runs inside AO, attach at least one real screenshot
-for that harness and each AO interface claimed as running (TUI or Chat). Capture
-the actual AO desktop or web UI connected to the tested isolated daemon, with
-the target session selected. Show enough AO navigation/session context to
-identify the application and harness, plus the native TUI or Chat turn/output
-inside it. A provider CLI in an external terminal, a terminal mirror, a log
-rendered into a PNG, a mockup, or a synthetic UI cannot establish this claim.
+Before claiming a harness's AO user journey is verified, complete every row of
+the [mandatory step-by-step screenshot checklist](audit-journeys.md#mandatory-step-by-step-screenshots).
+Capture the actual AO desktop or web UI connected to the tested isolated daemon,
+with the relevant Agent Harness page, New Task dialog, board/archive or selected
+session visible. Include each action and resulting state, both model surfaces,
+and each claimed running interface (TUI/Chat). Show enough AO navigation and
+harness/session context to identify the subject. A single running image, provider
+CLI in an external terminal, terminal mirror, log rendered into a PNG, mockup or
+synthetic UI cannot establish the complete journey.
 
 Plan capture before the live run. The runner is API-first: it does not launch an
 AO UI, capture successful gates, upload images, or enforce this publication gate.
@@ -195,12 +197,31 @@ capture there too. If the UI cannot run or capture fails, keep the functional
 results and report `AO UI evidence: BLOCKED`; do not claim the integration is
 fully verified or convert missing screenshots into a pass.
 
-Include this capture record beside each image in the report/PR comment:
+Maintain a per-harness, per-attempt checkpoint index in the report/PR comment:
+
+| Checkpoint/substep | Action and expected → observed state | Functional status | Screenshot/attachment status | Image and functional proof or reason |
+| --- | --- | --- | --- | --- |
+| `install-run/result` | AO-page install → actual observed outcome | `PASS` / `FAIL` / `BLOCKED` / `NOT_RUN` / justified `N/A` | Captured and attached, or `unavailable` with reason | Linked real image(s), install-job/log receipt, or blocker and next action |
+
+Include all checklist rows, failed attempts, skipped branches and planned features.
+If a required UI feature does not exist, use functional `NOT_RUN` and reason
+`NOT_IMPLEMENTED`, with a real capture of the available surface when possible;
+it is not `N/A` or proof of the missing feature. Only explicit upstream limits or
+agreed scope with truthful rejection justify `N/A`. Keep functional and screenshot
+status separate: a screenshot cannot upgrade a failed function, and a passing
+API probe cannot fill missing UI proof. The AO UI evidence gate passes only when
+all applicable checkpoints have their required real captures and accessible
+attachments. Complete journey verification also requires functional PASS on all
+applicable steps; missing requested UI leaves the handoff incomplete.
+
+Include this capture record beside each image (shared build fields may be linked
+from the attempt header; every image still needs its own checkpoint/state/time):
 
 | Required field | Contents |
 | --- | --- |
-| Harness and interface | Registered harness ID, TUI/Chat, provider/model, native CLI version |
-| Session identity | AO session ID and native session ID, or its SHA-256 digest when redacted; correlate with the functional audit |
+| Checkpoint and attempt | Checklist ID/substep, unique attempt ID, action and expected/observed result; original attempt or labelled later reproduction |
+| Harness and interface | Registered harness ID, selected host, page/interface, provider/model and native CLI version when known |
+| Session identity | AO/native session ID or SHA-256 digest when redacted; correlate with functional proof. Pre-session install/auth/model checkpoints use agent/host/job identity and explicitly say no session yet |
 | Tested build | Exact AO source SHA, executable hash, and UI source SHA if different |
 | Capture | UTC timestamp, actual screenshot tool/command, AO desktop/web surface, local artifact path, and image SHA-256 |
 | Observed state | Running/output, original failure, or later reproduction; name the gate and state exactly what is visible |
@@ -214,9 +235,14 @@ continuity, refreshed instructions, and restore still need their independent
 functional assertions and logs.
 
 Label failures explicitly as `FAIL`, `BLOCKED`, or `NOT_RUN`, with the gate,
-reason, timestamp, and AO session when one exists. Capture the actual relevant
-AO error/failure state before cleanup when possible. A preflight/startup failure
-may have no AO session or screen; use `screenshot: unavailable` and explain why.
+reason, timestamp, checkpoint/substep, attempt and AO session when one exists.
+Capture the actual relevant AO error/failure state before cleanup when possible.
+Retain the failing request/command, sanitized stdout/stderr or install/auth/daemon
+logs, exit/error code, expected versus observed outcome and relevant identity/file/
+process witness. Correlate these with the screenshot; collect only relevant logs
+and redact secrets before sharing. Dependent steps stay `NOT_RUN` with the blocker;
+continue safe independent checks without manufacturing success. A preflight/startup
+failure may have no AO session or screen; use `screenshot: unavailable` and explain why.
 A later reproduction gets its own timestamp and label and does not erase the
 original missing capture or failure. Screenshot availability never upgrades a
 failed functional gate.
@@ -242,8 +268,9 @@ terminal output, or a whole profile directory with a report.
 For a PR report, record the tested commit and binary hash, native version,
 provider/model (without credentials), fixture/live/CI scope, gate summary,
 failed attempts and fixes, unresolved limitations, screenshot provenance, and
-cleanup result. Every claimed running harness must have its real AO UI image
-embedded in the PR report/comment using `![descriptive caption](image-url)`.
+cleanup result. Embed the required checkpoint images in journey order in the
+PR report/comment using `![checkpoint: observed state](image-url)` and link them
+from the index. Every claimed running interface needs its own real AO UI proof.
 Use a durable GitHub attachment or a committed, revision-pinned image URL that
 renders on GitHub. A local/VPS path, expiring CI artifact, or plain text link to
 an unavailable image is not an attachment. Verify the published image URL is
@@ -297,6 +324,10 @@ Maintain one current-status section in the authorized PR report. Include the
   probe argv, interrupt/readiness/draft-cleanup settings. For manual or standalone
   checks, provide equivalent pinned helper/commands and assertions. Explain
   redactions and unavailable inputs without exposing credentials or profiles.
+- **Step-by-step UI evidence:** complete checkpoint index with action/result
+  images and functional receipts, including both model surfaces, authentication
+  branches, original failures and all unavailable/unimplemented steps. State the
+  aggregate AO UI evidence and functional journey results separately.
 - **Artifacts and cleanup:** report/receipt/image links and hashes, failed attempt
   references, owned-process teardown, and an inventory of retained artifact/data
   classes and their authorized locations. State which originals are unavailable;

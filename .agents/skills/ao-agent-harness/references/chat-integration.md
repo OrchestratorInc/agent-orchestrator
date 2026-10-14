@@ -2,8 +2,9 @@
 
 Use this reference when the released native agent exposes ACP. Start with the
 [upstream contract](integration-path.md#1-map-the-upstream-contract); an advertised
-ACP flag or successful initialize response is not qualification. Keep the binding
-unregistered until the required native and registered AO Chat cases pass.
+ACP flag or successful initialize response is not qualification. Use temporary
+registration in an isolated candidate build for registered AO Chat verification;
+enable production registration only after the required native and AO cases pass.
 
 ## Implementation path and source entry points
 
