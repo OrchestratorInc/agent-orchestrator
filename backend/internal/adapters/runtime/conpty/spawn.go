@@ -121,7 +121,7 @@ func stripEnvAssignments(argv []string) (assignments, rest []string) {
 // or an `env NO_COLOR=...` argv prefix. The native PTY and its xterm clients
 // support 24-bit SGR color, so advertise that capability consistently with the
 // legacy tmux runtime.
-func interactiveTerminalEnv(base []string, configured map[string]string, assignments []string, remove []string) []string {
+func interactiveTerminalEnv(base []string, configured map[string]string, assignments, remove []string) []string {
 	removed := make(map[string]bool, len(remove))
 	for _, key := range remove {
 		removed[key] = true

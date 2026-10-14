@@ -28,7 +28,7 @@ func TestMergeWindowsPATHExecutesBundledAO(t *testing.T) {
 			"PATH":  bundle + ";" + os.Getenv("Path"),
 			"Path":  os.Getenv("AO_TEST_FOREIGN_DIR") + ";" + os.Getenv("Path"),
 			modeKey: "identity",
-		})
+		}, nil)
 		output, err := cmd.CombinedOutput()
 		if err != nil || !strings.Contains(strings.ToLower(string(output)), strings.ToLower("AO_IDENTITY="+filepath.Join(bundle, "ao.exe"))) {
 			t.Fatalf("bundled AO identity: %v\n%s", err, output)
