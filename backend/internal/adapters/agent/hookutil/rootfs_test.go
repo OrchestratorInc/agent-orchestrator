@@ -91,12 +91,17 @@ func TestEnsureParentDirsFollowsOnlyInRootDirLinks(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ws, "file"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// "hop" escapes but is never repaired, so "chained" escapes through it
+	// whatever order the components are checked in.
+	if err := os.Symlink(outside, filepath.Join(ws, "hop")); err != nil {
+		t.Fatal(err)
+	}
 	links := map[string]string{
 		"inroot":   "real",
 		"escapes":  outside,
 		"dangling": "missing",
 		"tofile":   "file",
-		"chained":  "escapes",
+		"chained":  "hop",
 	}
 	for name, dst := range links {
 		if err := os.Symlink(dst, filepath.Join(ws, name)); err != nil {
