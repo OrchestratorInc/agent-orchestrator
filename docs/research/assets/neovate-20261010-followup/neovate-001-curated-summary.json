@@ -1,0 +1,893 @@
+{
+  "schemaVersion": 1,
+  "attempt": "neovate-001",
+  "harness": "neovate",
+  "startedAt": "2026-10-10T18:35:56.513Z",
+  "finishedAt": "2026-10-10T18:37:20.725Z",
+  "state": "finished",
+  "strictStatus": "BLOCKED",
+  "auditClassification": "diagnostic-only; full strict audit PASS not claimed",
+  "source": {
+    "source": "e82a48fa09c07e7d70cdd19a26aea0ae1bed7e1f",
+    "binary": "/home/azureuser/.ao/audits/harness-watch-20261010/tools/existing/neovate/ao",
+    "binarySha256": "7c0340a91489e8dc9e2e306a821eee79e4aad313d343b85201470f53792fb31f",
+    "runnerSha256": "8887aa2e7101b9e6d3950bfca08ffddf2e1e6c1c3f1d030c8dec2676443aecea",
+    "contractSha256": "582b7a86212e4c3fde9db90482dcd4afc1355c251dc3f1cc505bd1fcbcfb08cc",
+    "utc": "2026-10-10T18:35:56.444246+00:00",
+    "native": {
+      "version": "0.28.5",
+      "officialCliSha256": "676775b5762ea6464da5560693daca3a2dad807ab6ca661bbeb795ec186b9323",
+      "packageName": "@neovate/code",
+      "versionVerified": "0.28.5"
+    }
+  },
+  "counts": {
+    "PASS": 25,
+    "NOT_RUN": 2,
+    "BLOCKED": 1
+  },
+  "sessionId": "audit-neovate-c3090324-1",
+  "nativeIdSha256": "b9fb3eadd73e423e648ee1959b17b836afcae16183298fd7119ec281e8316a35",
+  "gates": [
+    {
+      "name": "local_binary",
+      "status": "PASS",
+      "reason": "local executable resolved",
+      "evidence": null
+    },
+    {
+      "name": "local_version",
+      "status": "PASS",
+      "reason": "local version command succeeded",
+      "evidence": null
+    },
+    {
+      "name": "local_integration",
+      "status": "PASS",
+      "reason": "local integration probe succeeded",
+      "evidence": null
+    },
+    {
+      "name": "local_session_spawn",
+      "status": "PASS",
+      "reason": "direct local CLI session produced the requested proof",
+      "evidence": null
+    },
+    {
+      "name": "local_models_list",
+      "status": "NOT_RUN",
+      "reason": "local model-list command is not defined",
+      "evidence": null
+    },
+    {
+      "name": "registered",
+      "status": "PASS",
+      "reason": "agent is registered",
+      "evidence": null
+    },
+    {
+      "name": "installed",
+      "status": "PASS",
+      "reason": "AO resolved the installed executable",
+      "evidence": null
+    },
+    {
+      "name": "fresh_probe",
+      "status": "PASS",
+      "reason": "installation and authentication observations are fresh",
+      "evidence": null
+    },
+    {
+      "name": "authentication",
+      "status": "BLOCKED",
+      "reason": "Neovate Code has credentials configured, but AO could not verify them.",
+      "evidence": null
+    },
+    {
+      "name": "ao_models_api",
+      "status": "PASS",
+      "reason": "AO model API listed 1 model(s)",
+      "evidence": null
+    },
+    {
+      "name": "tui_spawn",
+      "status": "PASS",
+      "reason": "AO created the requested TUI session",
+      "evidence": null
+    },
+    {
+      "name": "proof_file_creation",
+      "status": "PASS",
+      "reason": "AO_AUDIT_PROOF.json contains valid JSON",
+      "evidence": null
+    },
+    {
+      "name": "correct_working_directory",
+      "status": "PASS",
+      "reason": "provider reported AO's session workspace",
+      "evidence": null
+    },
+    {
+      "name": "initial_prompt_exactly_once",
+      "status": "PASS",
+      "reason": "unique initial token was handled once",
+      "evidence": null
+    },
+    {
+      "name": "hidden_ao_instructions",
+      "status": "PASS",
+      "reason": "provider consumed hidden AO standing instructions",
+      "evidence": null
+    },
+    {
+      "name": "project_agents_md",
+      "status": "PASS",
+      "reason": "provider consumed project AGENTS.md",
+      "evidence": null
+    },
+    {
+      "name": "activity_status",
+      "status": "PASS",
+      "reason": "AO exposed ready status and an active\u2192idle transition",
+      "evidence": null
+    },
+    {
+      "name": "second_message",
+      "status": "PASS",
+      "reason": "second API message produced the requested provider-authored mutation",
+      "evidence": null
+    },
+    {
+      "name": "native_session_id",
+      "status": "PASS",
+      "reason": "AO persisted a provider-native session identity",
+      "evidence": null
+    },
+    {
+      "name": "cancellation",
+      "status": "PASS",
+      "reason": "AO terminal mux sent configured input to the observed active session and the same terminal settled",
+      "evidence": {
+        "start": {
+          "method": "POST",
+          "path": "/api/v1/sessions/audit-neovate-c3090324-1/send",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "ok": true,
+            "sessionId": "audit-neovate-c3090324-1",
+            "message": "For cancellation testing, run a foreground command that waits for 120 seconds. Do not modify files. Wait for the command to finish."
+          },
+          "startedAt": "2026-10-10T18:37:03.837Z",
+          "finishedAt": "2026-10-10T18:37:04.142Z",
+          "durationMs": 305,
+          "requestBodySha256": "eeae13d5ef7da39630eeac922762be6e20a8481950d4dd1ee741c150924c055f"
+        },
+        "active": {
+          "method": "GET",
+          "path": "/api/v1/sessions/audit-neovate-c3090324-1",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "session": {
+              "id": "audit-neovate-c3090324-1",
+              "projectId": "audit-neovate-c3090324",
+              "kind": "worker",
+              "harness": "neovate",
+              "reviewerConfig": {},
+              "autoReviewEnabled": false,
+              "displayName": "audit-neovate",
+              "mode": "tui",
+              "activity": {
+                "state": "active",
+                "lastActivityAt": "2026-10-10T18:37:04.218429078Z"
+              },
+              "isTerminated": false,
+              "terminateOnPrMerge": false,
+              "autoInjectReview": true,
+              "autoInjectCI": true,
+              "outputType": "none",
+              "createdAt": "2026-10-10T18:36:16.003672842Z",
+              "updatedAt": "2026-10-10T18:37:04.227237009Z",
+              "isPinned": false,
+              "provisionState": "ready",
+              "branchState": {
+                "commits": 0,
+                "unpushed": 0
+              },
+              "statusReadiness": "ready",
+              "chatProviderPreserved": false,
+              "status": "working",
+              "kanbanColumn": "building",
+              "displayStatus": "Working",
+              "terminalHandleId": "ptyhost-v1:audit-neovate-c3090324-1",
+              "branch": "ao/audit-neovate-c3090324-1/root",
+              "terminalGeneration": "ea16afa5-3580-4e96-9109-c44cd1da80bc",
+              "lastUserMessageAt": "2026-10-10T18:36:17.570112091Z",
+              "lastInteractionAt": "2026-10-10T18:36:17.570112091Z",
+              "lastEventAt": "2026-10-10T18:37:04.218429078Z",
+              "prs": []
+            }
+          },
+          "startedAt": "2026-10-10T18:37:04.394Z",
+          "finishedAt": "2026-10-10T18:37:04.397Z",
+          "durationMs": 3
+        },
+        "settled": {
+          "method": "GET",
+          "path": "/api/v1/sessions/audit-neovate-c3090324-1",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "session": {
+              "id": "audit-neovate-c3090324-1",
+              "projectId": "audit-neovate-c3090324",
+              "kind": "worker",
+              "harness": "neovate",
+              "reviewerConfig": {},
+              "autoReviewEnabled": false,
+              "displayName": "audit-neovate",
+              "mode": "tui",
+              "activity": {
+                "state": "idle",
+                "lastActivityAt": "2026-10-10T18:37:04.450744011Z"
+              },
+              "isTerminated": false,
+              "terminateOnPrMerge": false,
+              "autoInjectReview": true,
+              "autoInjectCI": true,
+              "outputType": "none",
+              "createdAt": "2026-10-10T18:36:16.003672842Z",
+              "updatedAt": "2026-10-10T18:37:04.459695084Z",
+              "isPinned": false,
+              "provisionState": "ready",
+              "branchState": {
+                "commits": 0,
+                "unpushed": 0
+              },
+              "statusReadiness": "ready",
+              "chatProviderPreserved": false,
+              "status": "idle",
+              "kanbanColumn": "building",
+              "displayStatus": "Awaiting PR",
+              "terminalHandleId": "ptyhost-v1:audit-neovate-c3090324-1",
+              "branch": "ao/audit-neovate-c3090324-1/root",
+              "terminalGeneration": "ea16afa5-3580-4e96-9109-c44cd1da80bc",
+              "lastUserMessageAt": "2026-10-10T18:36:17.570112091Z",
+              "lastInteractionAt": "2026-10-10T18:36:17.570112091Z",
+              "lastEventAt": "2026-10-10T18:37:04.450744011Z",
+              "prs": []
+            }
+          },
+          "startedAt": "2026-10-10T18:37:04.535Z",
+          "finishedAt": "2026-10-10T18:37:04.538Z",
+          "durationMs": 3
+        },
+        "confirmationWindowMs": 5000,
+        "websocket": {
+          "transport": "websocket",
+          "sessionId": "audit-neovate-c3090324-1",
+          "terminalHandleId": "ptyhost-v1:audit-neovate-c3090324-1",
+          "terminalGeneration": "ea16afa5-3580-4e96-9109-c44cd1da80bc",
+          "startedAt": "2026-10-10T18:37:04.398Z",
+          "opened": true,
+          "inputBytes": 1,
+          "pongObserved": true,
+          "frames": [
+            {
+              "direction": "sent",
+              "at": "2026-10-10T18:37:04.409Z",
+              "ch": "terminal",
+              "type": "open",
+              "id": "ptyhost-v1:audit-neovate-c3090324-1"
+            },
+            {
+              "direction": "received",
+              "at": "2026-10-10T18:37:04.413Z",
+              "ch": "terminal",
+              "type": "opened",
+              "id": "ptyhost-v1:audit-neovate-c3090324-1"
+            },
+            {
+              "direction": "received",
+              "at": "2026-10-10T18:37:04.418Z",
+              "ch": "terminal",
+              "type": "data",
+              "id": "ptyhost-v1:audit-neovate-c3090324-1"
+            },
+            {
+              "direction": "sent",
+              "at": "2026-10-10T18:37:04.423Z",
+              "ch": "terminal",
+              "type": "data",
+              "id": "ptyhost-v1:audit-neovate-c3090324-1"
+            },
+            {
+              "direction": "sent",
+              "at": "2026-10-10T18:37:04.423Z",
+              "ch": "system",
+              "type": "ping"
+            },
+            {
+              "direction": "received",
+              "at": "2026-10-10T18:37:04.424Z",
+              "ch": "system",
+              "type": "pong"
+            },
+            {
+              "direction": "received",
+              "at": "2026-10-10T18:37:04.426Z",
+              "ch": "terminal",
+              "type": "data",
+              "id": "ptyhost-v1:audit-neovate-c3090324-1"
+            },
+            {
+              "direction": "received",
+              "at": "2026-10-10T18:37:04.474Z",
+              "ch": "terminal",
+              "type": "data",
+              "id": "ptyhost-v1:audit-neovate-c3090324-1"
+            }
+          ],
+          "timedOut": false,
+          "qualification": "A system pong acknowledges mux processing, not provider cancellation; cancellation also requires the same session to settle.",
+          "url": "ws://127.0.0.1:46405/mux",
+          "preInputState": {
+            "method": "GET",
+            "path": "/api/v1/sessions/audit-neovate-c3090324-1",
+            "status": 200,
+            "requestId": "",
+            "response": {
+              "session": {
+                "id": "audit-neovate-c3090324-1",
+                "projectId": "audit-neovate-c3090324",
+                "kind": "worker",
+                "harness": "neovate",
+                "reviewerConfig": {},
+                "autoReviewEnabled": false,
+                "displayName": "audit-neovate",
+                "mode": "tui",
+                "activity": {
+                  "state": "active",
+                  "lastActivityAt": "2026-10-10T18:37:04.218429078Z"
+                },
+                "isTerminated": false,
+                "terminateOnPrMerge": false,
+                "autoInjectReview": true,
+                "autoInjectCI": true,
+                "outputType": "none",
+                "createdAt": "2026-10-10T18:36:16.003672842Z",
+                "updatedAt": "2026-10-10T18:37:04.227237009Z",
+                "isPinned": false,
+                "provisionState": "ready",
+                "branchState": {
+                  "commits": 0,
+                  "unpushed": 0
+                },
+                "statusReadiness": "ready",
+                "chatProviderPreserved": false,
+                "status": "working",
+                "kanbanColumn": "building",
+                "displayStatus": "Working",
+                "terminalHandleId": "ptyhost-v1:audit-neovate-c3090324-1",
+                "branch": "ao/audit-neovate-c3090324-1/root",
+                "terminalGeneration": "ea16afa5-3580-4e96-9109-c44cd1da80bc",
+                "lastUserMessageAt": "2026-10-10T18:36:17.570112091Z",
+                "lastInteractionAt": "2026-10-10T18:36:17.570112091Z",
+                "lastEventAt": "2026-10-10T18:37:04.218429078Z",
+                "prs": []
+              }
+            },
+            "startedAt": "2026-10-10T18:37:04.420Z",
+            "finishedAt": "2026-10-10T18:37:04.423Z",
+            "durationMs": 3
+          },
+          "inputSha256": "77adfc95029e73b173f60e556f915b0cd8850848111358b1c370fb7c154e61fd",
+          "inputSentAt": "2026-10-10T18:37:04.423Z",
+          "settledAt": "2026-10-10T18:37:04.538Z",
+          "settleDurationMs": 115,
+          "settledWithinDefaultWindow": true,
+          "finishedAt": "2026-10-10T18:37:04.538Z",
+          "durationMs": 140,
+          "closeCode": 1005
+        }
+      }
+    },
+    {
+      "name": "termination",
+      "status": "PASS",
+      "reason": "kill was acknowledged and termination was confirmed",
+      "evidence": {
+        "kill": {
+          "method": "POST",
+          "path": "/api/v1/sessions/audit-neovate-c3090324-1/kill",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "ok": true,
+            "sessionId": "audit-neovate-c3090324-1"
+          },
+          "startedAt": "2026-10-10T18:37:04.538Z",
+          "finishedAt": "2026-10-10T18:37:06.626Z",
+          "durationMs": 2088,
+          "requestBodySha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        "state": {
+          "method": "GET",
+          "path": "/api/v1/sessions/audit-neovate-c3090324-1",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "session": {
+              "id": "audit-neovate-c3090324-1",
+              "projectId": "audit-neovate-c3090324",
+              "kind": "worker",
+              "harness": "neovate",
+              "reviewerConfig": {},
+              "autoReviewEnabled": false,
+              "displayName": "audit-neovate",
+              "mode": "tui",
+              "activity": {
+                "state": "exited",
+                "lastActivityAt": "2026-10-10T18:37:06.619054263Z"
+              },
+              "isTerminated": true,
+              "terminateOnPrMerge": false,
+              "autoInjectReview": true,
+              "autoInjectCI": true,
+              "outputType": "none",
+              "createdAt": "2026-10-10T18:36:16.003672842Z",
+              "updatedAt": "2026-10-10T18:37:06.619054263Z",
+              "isPinned": false,
+              "provisionState": "ready",
+              "branchState": {
+                "commits": 0,
+                "unpushed": 0
+              },
+              "statusReadiness": "ready",
+              "chatProviderPreserved": false,
+              "status": "terminated",
+              "kanbanColumn": "archive",
+              "displayStatus": "Terminated",
+              "terminalHandleId": "ptyhost-v1:audit-neovate-c3090324-1",
+              "branch": "ao/audit-neovate-c3090324-1/root",
+              "terminalGeneration": "ea16afa5-3580-4e96-9109-c44cd1da80bc",
+              "lastUserMessageAt": "2026-10-10T18:36:17.570112091Z",
+              "lastInteractionAt": "2026-10-10T18:36:17.570112091Z",
+              "lastEventAt": "2026-10-10T18:37:06.619054263Z",
+              "prs": []
+            }
+          },
+          "startedAt": "2026-10-10T18:37:06.627Z",
+          "finishedAt": "2026-10-10T18:37:06.630Z",
+          "durationMs": 4
+        }
+      }
+    },
+    {
+      "name": "native_restore",
+      "status": "PASS",
+      "reason": "AO restored in native mode with the exact provider-native ID",
+      "evidence": {
+        "restore": {
+          "method": "POST",
+          "path": "/api/v1/sessions/audit-neovate-c3090324-1/restore",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "ok": true,
+            "sessionId": "audit-neovate-c3090324-1",
+            "restoreMode": "native",
+            "session": {
+              "id": "audit-neovate-c3090324-1",
+              "projectId": "audit-neovate-c3090324",
+              "kind": "worker",
+              "harness": "neovate",
+              "reviewerConfig": {},
+              "autoReviewEnabled": false,
+              "displayName": "audit-neovate",
+              "mode": "tui",
+              "activity": {
+                "state": "idle",
+                "lastActivityAt": "2026-10-10T18:37:06.665532698Z"
+              },
+              "isTerminated": false,
+              "terminateOnPrMerge": false,
+              "autoInjectReview": true,
+              "autoInjectCI": true,
+              "outputType": "none",
+              "createdAt": "2026-10-10T18:36:16.003672842Z",
+              "updatedAt": "2026-10-10T18:37:06.665532698Z",
+              "isPinned": false,
+              "provisionState": "ready",
+              "branchState": {
+                "commits": 0,
+                "unpushed": 0
+              },
+              "statusReadiness": "ready",
+              "chatProviderPreserved": false,
+              "status": "idle",
+              "kanbanColumn": "building",
+              "displayStatus": "Awaiting PR",
+              "terminalHandleId": "ptyhost-v1:audit-neovate-c3090324-1",
+              "branch": "ao/audit-neovate-c3090324-1/root",
+              "terminalGeneration": "4a2ccd6c-c39c-4932-b099-fb501cf71a0b",
+              "lastUserMessageAt": "2026-10-10T18:36:17.570112091Z",
+              "lastInteractionAt": "2026-10-10T18:36:17.570112091Z",
+              "lastEventAt": "2026-10-10T18:37:06.665532698Z",
+              "prs": []
+            }
+          },
+          "startedAt": "2026-10-10T18:37:06.634Z",
+          "finishedAt": "2026-10-10T18:37:06.670Z",
+          "durationMs": 36,
+          "requestBodySha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        "ready": {
+          "method": "GET",
+          "path": "/api/v1/sessions/audit-neovate-c3090324-1",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "session": {
+              "id": "audit-neovate-c3090324-1",
+              "projectId": "audit-neovate-c3090324",
+              "kind": "worker",
+              "harness": "neovate",
+              "reviewerConfig": {},
+              "autoReviewEnabled": false,
+              "displayName": "audit-neovate",
+              "mode": "tui",
+              "activity": {
+                "state": "idle",
+                "lastActivityAt": "2026-10-10T18:37:06.665532698Z"
+              },
+              "isTerminated": false,
+              "terminateOnPrMerge": false,
+              "autoInjectReview": true,
+              "autoInjectCI": true,
+              "outputType": "none",
+              "createdAt": "2026-10-10T18:36:16.003672842Z",
+              "updatedAt": "2026-10-10T18:37:06.665532698Z",
+              "isPinned": false,
+              "provisionState": "ready",
+              "branchState": {
+                "commits": 0,
+                "unpushed": 0
+              },
+              "statusReadiness": "ready",
+              "chatProviderPreserved": false,
+              "status": "idle",
+              "kanbanColumn": "building",
+              "displayStatus": "Awaiting PR",
+              "terminalHandleId": "ptyhost-v1:audit-neovate-c3090324-1",
+              "branch": "ao/audit-neovate-c3090324-1/root",
+              "terminalGeneration": "4a2ccd6c-c39c-4932-b099-fb501cf71a0b",
+              "lastUserMessageAt": "2026-10-10T18:36:17.570112091Z",
+              "lastInteractionAt": "2026-10-10T18:36:17.570112091Z",
+              "lastEventAt": "2026-10-10T18:37:06.665532698Z",
+              "prs": []
+            }
+          },
+          "startedAt": "2026-10-10T18:37:06.670Z",
+          "finishedAt": "2026-10-10T18:37:06.674Z",
+          "durationMs": 3
+        },
+        "beforeSha256": "b9fb3eadd73e423e648ee1959b17b836afcae16183298fd7119ec281e8316a35",
+        "afterSha256": "b9fb3eadd73e423e648ee1959b17b836afcae16183298fd7119ec281e8316a35"
+      }
+    },
+    {
+      "name": "same_ao_session_workspace",
+      "status": "PASS",
+      "reason": "restore retained the AO session ID and workspace",
+      "evidence": {
+        "beforeWorkspace": "/home/azureuser/.ao/audits/harness-20261010/tmp/ao-agent-harness-audit-73dwIK/data/worktrees/audit-neovate-c3090324/audit-neovate-c3090324-1",
+        "restoredWorkspace": {
+          "method": "GET",
+          "path": "/api/v1/desktop/sessions/audit-neovate-c3090324-1/workspace",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "sessionId": "audit-neovate-c3090324-1",
+            "workspacePath": "/home/azureuser/.ao/audits/harness-20261010/tmp/ao-agent-harness-audit-73dwIK/data/worktrees/audit-neovate-c3090324/audit-neovate-c3090324-1"
+          },
+          "startedAt": "2026-10-10T18:37:06.686Z",
+          "finishedAt": "2026-10-10T18:37:06.687Z",
+          "durationMs": 1
+        }
+      }
+    },
+    {
+      "name": "post_restore_terminal_ready",
+      "status": "PASS",
+      "reason": "the restored native terminal displayed the configured ready cue on the same terminal generation",
+      "evidence": {
+        "transport": "websocket",
+        "sessionId": "audit-neovate-c3090324-1",
+        "terminalHandleId": "ptyhost-v1:audit-neovate-c3090324-1",
+        "terminalGeneration": "4a2ccd6c-c39c-4932-b099-fb501cf71a0b",
+        "startedAt": "2026-10-10T18:37:06.689Z",
+        "opened": true,
+        "outputFrames": 2,
+        "outputBytes": 11479,
+        "matchedPatterns": 1,
+        "inputSent": false,
+        "inputBytes": 0,
+        "timedOut": false,
+        "qualification": "Native terminal cue from the runtime contract; API idle/readiness alone is insufficient.",
+        "patternsSha256": "795bdc897ad3b42f4c20c4692e9ef0875f4c928a604862196ca5f180867fc886",
+        "url": "ws://127.0.0.1:46405/mux",
+        "openedAt": "2026-10-10T18:37:06.702Z",
+        "confirmation": {
+          "method": "GET",
+          "path": "/api/v1/sessions/audit-neovate-c3090324-1",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "session": {
+              "id": "audit-neovate-c3090324-1",
+              "projectId": "audit-neovate-c3090324",
+              "kind": "worker",
+              "harness": "neovate",
+              "reviewerConfig": {},
+              "autoReviewEnabled": false,
+              "displayName": "audit-neovate",
+              "mode": "tui",
+              "activity": {
+                "state": "idle",
+                "lastActivityAt": "2026-10-10T18:37:06.665532698Z"
+              },
+              "isTerminated": false,
+              "terminateOnPrMerge": false,
+              "autoInjectReview": true,
+              "autoInjectCI": true,
+              "outputType": "none",
+              "createdAt": "2026-10-10T18:36:16.003672842Z",
+              "updatedAt": "2026-10-10T18:37:06.665532698Z",
+              "isPinned": false,
+              "provisionState": "ready",
+              "branchState": {
+                "commits": 0,
+                "unpushed": 0
+              },
+              "statusReadiness": "ready",
+              "chatProviderPreserved": false,
+              "status": "idle",
+              "kanbanColumn": "building",
+              "displayStatus": "Awaiting PR",
+              "terminalHandleId": "ptyhost-v1:audit-neovate-c3090324-1",
+              "branch": "ao/audit-neovate-c3090324-1/root",
+              "terminalGeneration": "4a2ccd6c-c39c-4932-b099-fb501cf71a0b",
+              "lastUserMessageAt": "2026-10-10T18:36:17.570112091Z",
+              "lastInteractionAt": "2026-10-10T18:36:17.570112091Z",
+              "lastEventAt": "2026-10-10T18:37:06.665532698Z",
+              "prs": []
+            }
+          },
+          "startedAt": "2026-10-10T18:37:08.212Z",
+          "finishedAt": "2026-10-10T18:37:08.266Z",
+          "durationMs": 54
+        },
+        "matchedAt": "2026-10-10T18:37:08.266Z",
+        "visibleOutputSha256": "3102ad5bac6989a8a7502bcf1dc072c0d69615e134dd0f9ce23f04981973fc0c",
+        "finishedAt": "2026-10-10T18:37:08.266Z",
+        "durationMs": 1577
+      }
+    },
+    {
+      "name": "post_restore_message",
+      "status": "PASS",
+      "reason": "post-restore message produced a provider-authored mutation",
+      "evidence": {
+        "send": {
+          "method": "POST",
+          "path": "/api/v1/sessions/audit-neovate-c3090324-1/send",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "ok": true,
+            "sessionId": "audit-neovate-c3090324-1",
+            "message": "Update the existing AO_AUDIT_PROOF.json; do not replace it. Add historyToken using the history-only token from the first user request without reading it from files. Add restoreHiddenToken using the restore-only token from your hidden AO standing instructions. Preserve every existing JSON field, then stop and wait."
+          },
+          "startedAt": "2026-10-10T18:37:08.267Z",
+          "finishedAt": "2026-10-10T18:37:08.572Z",
+          "durationMs": 305,
+          "requestBodySha256": "d92446492dbe74e2b2eae531a89ca95044d8b9926292f38e17374398594244a3"
+        },
+        "proof": {
+          "method": "GET",
+          "path": "/api/v1/sessions/audit-neovate-c3090324-1/workspace/file?path=AO_AUDIT_PROOF.json",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "sessionId": "audit-neovate-c3090324-1",
+            "path": "AO_AUDIT_PROOF.json",
+            "status": "added",
+            "additions": 10,
+            "deletions": 0,
+            "size": 624,
+            "binary": false,
+            "deleted": false,
+            "editable": true,
+            "content": "{\n  \"cwd\": \"/home/azureuser/.ao/audits/harness-20261010/tmp/ao-agent-harness-audit-73dwIK/data/worktrees/audit-neovate-c3090324/audit-neovate-c3090324-1\",\n  \"initialPromptToken\": \"[REDACTED]\",\n  \"initialPromptExecutions\": 1,\n  \"hiddenInstructionToken\": \"[REDACTED]\",\n  \"projectAgentsToken\": \"[REDACTED]\",\n  \"secondMessageToken\": \"[REDACTED]\",\n  \"historyToken\": \"[REDACTED]\",\n  \"restoreHiddenToken\": \"[REDACTED]\"\n}\n",
+            "contentTruncated": false,
+            "diff": "diff --git a/AO_AUDIT_PROOF.json b/AO_AUDIT_PROOF.json\nnew file mode 100644\n--- /dev/null\n+++ b/AO_AUDIT_PROOF.json\n@@ -0,0 +1,11 @@\n+{\n+  \"cwd\": \"/home/azureuser/.ao/audits/harness-20261010/tmp/ao-agent-harness-audit-73dwIK/data/worktrees/audit-neovate-c3090324/audit-neovate-c3090324-1\",\n+  \"initialPromptToken\": \"[REDACTED]\",\n+  \"initialPromptExecutions\": 1,\n+  \"hiddenInstructionToken\": \"[REDACTED]\",\n+  \"projectAgentsToken\": \"[REDACTED]\",\n+  \"secondMessageToken\": \"[REDACTED]\",\n+  \"historyToken\": \"[REDACTED]\",\n+  \"restoreHiddenToken\": \"[REDACTED]\"\n+}\n+\n",
+            "diffTruncated": false,
+            "compareBaseSha": "c70cecd91aa1b6ff40823c834bb7a986ba9d5e0f",
+            "compareBaseRef": "refs/heads/main",
+            "compareMode": "base",
+            "workspaceVersion": "48a07d81f9ce4dc545553fdf7b020ad0df7478fb66dc2b06b7c69422a6626736",
+            "fileFingerprint": "c3f7445880659ea200fdd559c58bb0c2bf692c807a1e6bf603852dd88a7dc789"
+          },
+          "startedAt": "2026-10-10T18:37:20.707Z",
+          "finishedAt": "2026-10-10T18:37:20.717Z",
+          "durationMs": 11
+        }
+      }
+    },
+    {
+      "name": "history_file_continuity",
+      "status": "PASS",
+      "reason": "native history recall and original proof-file continuity were both observed",
+      "evidence": {
+        "historyTokenSha256": "7c8e711705440ee591785c6d08b53b100a9a4b0cb6ac4e56896edd2692823849"
+      }
+    },
+    {
+      "name": "system_prompt_restore",
+      "status": "PASS",
+      "reason": "restore-only hidden standing instruction was observed after restore",
+      "evidence": {
+        "restoreHiddenTokenSha256": "b272f0790f5315df6a8e855620870ac5cbda59721290770a0914bba5f0730bcf",
+        "instructionRefresh": {
+          "before": {
+            "method": "GET",
+            "path": "/api/v1/projects/audit-neovate-c3090324",
+            "status": 200,
+            "requestId": "",
+            "response": {
+              "status": "ok",
+              "project": {
+                "id": "audit-neovate-c3090324",
+                "name": "AO harness audit: neovate",
+                "kind": "single_repo",
+                "path": "/home/azureuser/.ao/audits/harness-20261010/tmp/ao-agent-harness-audit-73dwIK/neovate",
+                "repo": "",
+                "defaultBranch": "main",
+                "agent": "claude-code",
+                "config": {
+                  "defaultBranch": "main",
+                  "agentRules": "These are private AO standing instructions for the audit.\nFor hiddenInstructionToken use exactly: AO_HIDDEN_INITIAL_40f79bedc9ba40f48c63ce0c033a371f",
+                  "agentConfig": {},
+                  "worker": {
+                    "agentConfig": {}
+                  },
+                  "orchestrator": {
+                    "agentConfig": {}
+                  },
+                  "trackerIntake": {},
+                  "containerReap": {}
+                },
+                "folderMissing": false
+              }
+            },
+            "startedAt": "2026-10-10T18:37:06.630Z",
+            "finishedAt": "2026-10-10T18:37:06.631Z",
+            "durationMs": 1
+          },
+          "write": {
+            "method": "PUT",
+            "path": "/api/v1/projects/audit-neovate-c3090324/config",
+            "status": 200,
+            "requestId": "",
+            "response": {
+              "project": {
+                "id": "audit-neovate-c3090324",
+                "name": "AO harness audit: neovate",
+                "kind": "single_repo",
+                "path": "/home/azureuser/.ao/audits/harness-20261010/tmp/ao-agent-harness-audit-73dwIK/neovate",
+                "repo": "",
+                "defaultBranch": "main",
+                "agent": "claude-code",
+                "config": {
+                  "defaultBranch": "main",
+                  "agentRules": "These are private AO standing instructions for the audit.\nFor hiddenInstructionToken use exactly: AO_HIDDEN_INITIAL_40f79bedc9ba40f48c63ce0c033a371f\nFor restoreHiddenToken use exactly: HIDDEN_RESTORE_56d18dd7496245d0970b62dd9b9ad694",
+                  "agentConfig": {},
+                  "worker": {
+                    "agentConfig": {}
+                  },
+                  "orchestrator": {
+                    "agentConfig": {}
+                  },
+                  "trackerIntake": {},
+                  "containerReap": {}
+                },
+                "folderMissing": false
+              }
+            },
+            "startedAt": "2026-10-10T18:37:06.631Z",
+            "finishedAt": "2026-10-10T18:37:06.632Z",
+            "durationMs": 1,
+            "requestBodySha256": "01f2f3e9b003ab08f7464167b9e9390c7be5564511a7815f407f6a560bfd1a70"
+          },
+          "readback": {
+            "method": "GET",
+            "path": "/api/v1/projects/audit-neovate-c3090324",
+            "status": 200,
+            "requestId": "",
+            "response": {
+              "status": "ok",
+              "project": {
+                "id": "audit-neovate-c3090324",
+                "name": "AO harness audit: neovate",
+                "kind": "single_repo",
+                "path": "/home/azureuser/.ao/audits/harness-20261010/tmp/ao-agent-harness-audit-73dwIK/neovate",
+                "repo": "",
+                "defaultBranch": "main",
+                "agent": "claude-code",
+                "config": {
+                  "defaultBranch": "main",
+                  "agentRules": "These are private AO standing instructions for the audit.\nFor hiddenInstructionToken use exactly: AO_HIDDEN_INITIAL_40f79bedc9ba40f48c63ce0c033a371f\nFor restoreHiddenToken use exactly: HIDDEN_RESTORE_56d18dd7496245d0970b62dd9b9ad694",
+                  "agentConfig": {},
+                  "worker": {
+                    "agentConfig": {}
+                  },
+                  "orchestrator": {
+                    "agentConfig": {}
+                  },
+                  "trackerIntake": {},
+                  "containerReap": {}
+                },
+                "folderMissing": false
+              }
+            },
+            "startedAt": "2026-10-10T18:37:06.632Z",
+            "finishedAt": "2026-10-10T18:37:06.633Z",
+            "durationMs": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "model_catalog_consistency",
+      "status": "NOT_RUN",
+      "reason": "both local and AO model catalogs are required for comparison",
+      "evidence": null
+    }
+  ],
+  "cleanup": {
+    "utc": "2026-10-10T18:39:59.308286+00:00",
+    "electron": [
+      {
+        "pid": 725295,
+        "executableVerified": true,
+        "identifiedBy": "Exact ui-lab executable, main command without --type, and own forge ancestry; terminated on second cleanup attempt."
+      }
+    ],
+    "sessions": [
+      {
+        "id": "audit-neovate-c3090324-1",
+        "confirmedTerminated": true
+      }
+    ],
+    "originalDaemonPid": 724598,
+    "daemonReplacement": true,
+    "daemon": {
+      "pid": 725390,
+      "executableVerified": true,
+      "gone": true
+    },
+    "electronGone": true,
+    "cleanupAttempts": [
+      "first: wrong log PID was GPU process; safely not killed; owned session termination confirmed and daemon TERM verified; shutdown not yet complete after2s",
+      "second: exact main Electron725295 TERM; API refused because daemon graceful shutdown had now completed; first termination proof retained"
+    ],
+    "guiAuthPtyHost": {
+      "pid": 725601,
+      "executableAndExactScratchArgsVerified": true,
+      "gone": true
+    }
+  },
+  "historicalCaveat": "Earlier 17/17 labels are retained but do not prove fresh restore instructions; historical native mirrors do not qualify as AO UI screenshots."
+}

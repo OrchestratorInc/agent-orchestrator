@@ -1,0 +1,50 @@
+{
+  "at": "2026-10-12T22:25:28.075242+00:00",
+  "http": 200,
+  "reply": {
+    "ok": true,
+    "sessionId": "prompt-neovate-c0476fe5-1",
+    "restoreMode": "native",
+    "session": {
+      "id": "prompt-neovate-c0476fe5-1",
+      "projectId": "prompt-neovate-c0476fe5",
+      "kind": "worker",
+      "harness": "neovate",
+      "reviewerConfig": {},
+      "autoReviewEnabled": false,
+      "displayName": "Neovate private prompt control",
+      "mode": "tui",
+      "activity": {
+        "state": "idle",
+        "lastActivityAt": "2026-10-12T22:25:28.063926961Z"
+      },
+      "isTerminated": false,
+      "terminateOnPrMerge": false,
+      "autoInjectReview": true,
+      "autoInjectCI": true,
+      "outputType": "none",
+      "createdAt": "2026-10-12T22:04:59.825367436Z",
+      "updatedAt": "2026-10-12T22:25:28.063926961Z",
+      "isPinned": false,
+      "provisionState": "ready",
+      "branchState": {
+        "commits": 0,
+        "unpushed": 0
+      },
+      "statusReadiness": "ready",
+      "chatProviderPreserved": false,
+      "status": "idle",
+      "kanbanColumn": "building",
+      "displayStatus": "Awaiting PR",
+      "terminalHandleId": "ptyhost-v1:prompt-neovate-c0476fe5-1",
+      "branch": "ao/prompt-neovate-c0476fe5-1/root",
+      "terminalGeneration": "2ad9bd56-6a6d-4e1f-8a94-6c3d53647256",
+      "model": "zai-audit/glm-4.7",
+      "lastUserMessageAt": "2026-10-12T22:23:30.554213593Z",
+      "lastInteractionAt": "2026-10-12T22:23:30.554213593Z",
+      "lastEventAt": "2026-10-12T22:25:28.063926961Z",
+      "prs": []
+    }
+  },
+  "purpose": "Separate serial executing controls; no new private consumption claim after invalid overlapping attempt."
+}

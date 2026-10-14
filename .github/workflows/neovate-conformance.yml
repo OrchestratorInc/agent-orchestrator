@@ -1,0 +1,42 @@
+name: Neovate released TUI
+
+on:
+  pull_request:
+    paths:
+      - 'backend/internal/adapters/agent/neovate/**'
+      - '.github/workflows/neovate-conformance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  released-tui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Download pinned official npm release
+        shell: bash
+        run: |
+          curl --fail --location --retry 3 https://registry.npmjs.org/@neovate/code/-/code-0.28.5.tgz -o "$RUNNER_TEMP/neovate.tgz"
+          NEOVATE_ARCHIVE="$RUNNER_TEMP/neovate.tgz" node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const actual = 'sha512-' + crypto.createHash('sha512').update(fs.readFileSync(process.env.NEOVATE_ARCHIVE)).digest('base64');
+          const expected = 'sha512-oimeQUCP+lbYuV0wkCkLchqhNMTl4Orh/f1CF0l8sczxXAzL6YlZU4kCaxZOFSy+hAXm8Az8KoBnABvNYYzczw==';
+          if (actual !== expected) throw new Error('Neovate release integrity mismatch');
+          JS
+          npm install --ignore-scripts --prefix "$RUNNER_TEMP/neovate" "$RUNNER_TEMP/neovate.tgz"
+      - name: Verify hidden prompts, native restore, hooks and cancellation
+        working-directory: backend
+        env:
+          AO_NEOVATE_BINARY: ${{ runner.temp }}/neovate/node_modules/.bin/neovate
+        run: go test -race -count=1 -timeout=5m -run '^TestReleasedNeovate' -v ./internal/adapters/agent/neovate

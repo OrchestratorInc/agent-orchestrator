@@ -1,0 +1,1202 @@
+{
+  "at": "2026-10-12T22:23:43.127Z",
+  "source": "6be36883b73840e7a9950fc933643f1698d74c68",
+  "runnerSHA256": "23dc1a2f39bd6c88fd95b47d041040a039d16c52ab71996a278f49e68f8bdcc5",
+  "witnessSpec": {
+    "startPath": ".cancel-start-3c9162ea6bf94049aab443c9407193e8.json",
+    "latePath": ".cancel-late-3c9162ea6bf94049aab443c9407193e8.json",
+    "lateSideEffectDelayMs": 12000,
+    "tokenSHA256": "3a25d84d708959ac7ed9ccbd5aad21f05c8d2f7c21dae3c269be193fb26e726a"
+  },
+  "result": {
+    "passed": false,
+    "observedActive": true,
+    "reason": "terminal exited before cancellation confirmation",
+    "activeState": {
+      "ok": true,
+      "status": 200,
+      "requestId": "",
+      "method": "GET",
+      "path": "/api/v1/sessions/prompt-neovate-c0476fe5-1",
+      "response": {
+        "session": {
+          "id": "prompt-neovate-c0476fe5-1",
+          "projectId": "prompt-neovate-c0476fe5",
+          "kind": "worker",
+          "harness": "neovate",
+          "reviewerConfig": {},
+          "autoReviewEnabled": false,
+          "displayName": "Neovate private prompt control",
+          "mode": "tui",
+          "activity": {
+            "state": "active",
+            "lastActivityAt": "2026-10-12T22:22:42.244307884Z"
+          },
+          "isTerminated": false,
+          "terminateOnPrMerge": false,
+          "autoInjectReview": true,
+          "autoInjectCI": true,
+          "outputType": "none",
+          "createdAt": "2026-10-12T22:04:59.825367436Z",
+          "updatedAt": "2026-10-12T22:23:00.527277287Z",
+          "isPinned": false,
+          "provisionState": "ready",
+          "branchState": {
+            "commits": 0,
+            "unpushed": 0
+          },
+          "statusReadiness": "ready",
+          "chatProviderPreserved": false,
+          "status": "working",
+          "kanbanColumn": "building",
+          "displayStatus": "Working",
+          "terminalHandleId": "ptyhost-v1:prompt-neovate-c0476fe5-1",
+          "branch": "ao/prompt-neovate-c0476fe5-1/root",
+          "terminalGeneration": "b5644106-b77d-49c4-b579-d9225d9be9f4",
+          "model": "zai-audit/glm-4.7",
+          "lastUserMessageAt": "2026-10-12T22:22:42.244307884Z",
+          "lastInteractionAt": "2026-10-12T22:22:42.244307884Z",
+          "lastEventAt": "2026-10-12T22:22:42.244307884Z",
+          "prs": []
+        }
+      },
+      "startedAt": "2026-10-12T22:23:06.086Z",
+      "finishedAt": "2026-10-12T22:23:09.931Z",
+      "durationMs": 3845
+    },
+    "settledState": {
+      "ok": true,
+      "status": 200,
+      "requestId": "",
+      "method": "GET",
+      "path": "/api/v1/sessions/prompt-neovate-c0476fe5-1",
+      "response": {
+        "session": {
+          "id": "prompt-neovate-c0476fe5-1",
+          "projectId": "prompt-neovate-c0476fe5",
+          "kind": "worker",
+          "harness": "neovate",
+          "reviewerConfig": {},
+          "autoReviewEnabled": false,
+          "displayName": "Neovate private prompt control",
+          "mode": "tui",
+          "activity": {
+            "state": "active",
+            "lastActivityAt": "2026-10-12T22:22:42.244307884Z"
+          },
+          "isTerminated": false,
+          "terminateOnPrMerge": false,
+          "autoInjectReview": true,
+          "autoInjectCI": true,
+          "outputType": "none",
+          "createdAt": "2026-10-12T22:04:59.825367436Z",
+          "updatedAt": "2026-10-12T22:23:41.860563813Z",
+          "isPinned": false,
+          "provisionState": "ready",
+          "branchState": {
+            "commits": 0,
+            "unpushed": 0
+          },
+          "statusReadiness": "ready",
+          "chatProviderPreserved": false,
+          "status": "working",
+          "kanbanColumn": "building",
+          "displayStatus": "Working",
+          "terminalHandleId": "ptyhost-v1:prompt-neovate-c0476fe5-1",
+          "branch": "ao/prompt-neovate-c0476fe5-1/root",
+          "terminalGeneration": "b5644106-b77d-49c4-b579-d9225d9be9f4",
+          "model": "zai-audit/glm-4.7",
+          "lastUserMessageAt": "2026-10-12T22:23:30.554213593Z",
+          "lastInteractionAt": "2026-10-12T22:23:30.554213593Z",
+          "lastEventAt": "2026-10-12T22:22:42.244307884Z",
+          "prs": []
+        }
+      },
+      "startedAt": "2026-10-12T22:23:43.019Z",
+      "finishedAt": "2026-10-12T22:23:43.025Z",
+      "durationMs": 6
+    },
+    "confirmationWindowMs": 60000,
+    "websocket": {
+      "transport": "websocket",
+      "sessionId": "prompt-neovate-c0476fe5-1",
+      "terminalHandleId": "ptyhost-v1:prompt-neovate-c0476fe5-1",
+      "terminalGeneration": "b5644106-b77d-49c4-b579-d9225d9be9f4",
+      "startedAt": "2026-10-12T22:23:10.037Z",
+      "opened": true,
+      "inputBytes": 1,
+      "pongObserved": true,
+      "frames": [
+        {
+          "direction": "sent",
+          "at": "2026-10-12T22:23:10.049Z",
+          "ch": "terminal",
+          "type": "open",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:10.050Z",
+          "ch": "terminal",
+          "type": "resize",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:10.054Z",
+          "ch": "terminal",
+          "type": "opened",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:10.054Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "sent",
+          "at": "2026-10-12T22:23:10.067Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "sent",
+          "at": "2026-10-12T22:23:10.067Z",
+          "ch": "system",
+          "type": "ping"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:10.067Z",
+          "ch": "system",
+          "type": "pong"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:10.891Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:10.908Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:11.016Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:11.035Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:11.137Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:11.159Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:28.149Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:28.153Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:28.237Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:28.422Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:28.526Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:28.541Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:30.016Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:30.328Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:30.333Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:30.341Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:30.522Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:31.016Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:31.050Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:31.161Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:31.261Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:31.314Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:31.329Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:31.435Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:31.440Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:31.635Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:31.749Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:31.936Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:32.048Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:32.128Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:32.213Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:32.218Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:32.359Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:32.421Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:32.530Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:32.659Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:32.846Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:32.913Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:32.928Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:33.127Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:33.214Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:33.313Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:33.440Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:33.456Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:33.523Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:33.647Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:33.857Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:33.914Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:34.013Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:34.025Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:34.057Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:34.223Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:34.254Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:34.444Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:34.513Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:34.633Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:34.743Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:34.847Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:35.053Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:35.057Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:35.144Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:35.162Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:35.413Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:35.531Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:35.644Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:35.726Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:35.747Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:35.853Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:36.030Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:36.033Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:36.044Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:36.157Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:36.360Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:36.413Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:36.435Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:36.634Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:36.646Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:36.911Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:37.113Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:37.222Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:37.236Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:37.241Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:37.256Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:37.311Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:37.351Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:37.449Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:37.460Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:37.541Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:37.615Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:37.658Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:37.822Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:37.828Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:37.943Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:38.046Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:38.056Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:38.237Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:38.330Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:38.335Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:38.446Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:38.451Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:38.611Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:38.627Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:38.725Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:38.729Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:38.850Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:39.733Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:39.746Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:39.838Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:39.846Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:39.936Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:39.949Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:40.046Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:40.058Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:40.428Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:40.453Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:40.551Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:40.644Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:40.736Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:40.752Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:40.817Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:23:40.941Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-c0476fe5-1"
+        }
+      ],
+      "timedOut": false,
+      "qualification": "A system pong acknowledges mux processing, not provider cancellation; cancellation also requires a live command-start witness with matching kernel process-start identity, the same session settling, that exact process stopping, and no delayed side effect.",
+      "commandWitness": {
+        "tokenSha256": "3a25d84d708959ac7ed9ccbd5aad21f05c8d2f7c21dae3c269be193fb26e726a",
+        "pid": 1087500,
+        "processIdentityKind": "linux-proc-startticks",
+        "processIdentitySha256": "bcd146c477828fe93101b751991d68010ee7c2d4a2b81c3e6c066a12cb0ed3c6",
+        "startPath": ".cancel-start-3c9162ea6bf94049aab443c9407193e8.json",
+        "latePath": ".cancel-late-3c9162ea6bf94049aab443c9407193e8.json",
+        "lateSideEffectDelayMs": 12000
+      },
+      "url": "ws://127.0.0.1:45436/mux",
+      "preInputState": {
+        "method": "GET",
+        "path": "/api/v1/sessions/prompt-neovate-c0476fe5-1",
+        "status": 200,
+        "requestId": "",
+        "response": {
+          "session": {
+            "id": "prompt-neovate-c0476fe5-1",
+            "projectId": "prompt-neovate-c0476fe5",
+            "kind": "worker",
+            "harness": "neovate",
+            "reviewerConfig": {},
+            "autoReviewEnabled": false,
+            "displayName": "Neovate private prompt control",
+            "mode": "tui",
+            "activity": {
+              "state": "active",
+              "lastActivityAt": "2026-10-12T22:22:42.244307884Z"
+            },
+            "isTerminated": false,
+            "terminateOnPrMerge": false,
+            "autoInjectReview": true,
+            "autoInjectCI": true,
+            "outputType": "none",
+            "createdAt": "2026-10-12T22:04:59.825367436Z",
+            "updatedAt": "2026-10-12T22:23:00.527277287Z",
+            "isPinned": false,
+            "provisionState": "ready",
+            "branchState": {
+              "commits": 0,
+              "unpushed": 0
+            },
+            "statusReadiness": "ready",
+            "chatProviderPreserved": false,
+            "status": "working",
+            "kanbanColumn": "building",
+            "displayStatus": "Working",
+            "terminalHandleId": "ptyhost-v1:prompt-neovate-c0476fe5-1",
+            "branch": "ao/prompt-neovate-c0476fe5-1/root",
+            "terminalGeneration": "b5644106-b77d-49c4-b579-d9225d9be9f4",
+            "model": "zai-audit/glm-4.7",
+            "lastUserMessageAt": "2026-10-12T22:22:42.244307884Z",
+            "lastInteractionAt": "2026-10-12T22:22:42.244307884Z",
+            "lastEventAt": "2026-10-12T22:22:42.244307884Z",
+            "prs": []
+          }
+        },
+        "startedAt": "2026-10-12T22:23:10.059Z",
+        "finishedAt": "2026-10-12T22:23:10.062Z",
+        "durationMs": 3
+      },
+      "preInputWitness": {
+        "start": {
+          "method": "GET",
+          "path": "/api/v1/sessions/prompt-neovate-c0476fe5-1/workspace/file?path=.cancel-start-3c9162ea6bf94049aab443c9407193e8.json",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "sessionId": "prompt-neovate-c0476fe5-1",
+            "path": ".cancel-start-3c9162ea6bf94049aab443c9407193e8.json",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0,
+            "size": 109,
+            "binary": false,
+            "deleted": false,
+            "editable": true,
+            "content": "{\"token\":\"3c9162ea6bf94049aab443c9407193e8\",\"pid\":1087500,\"processIdentity\":\"linux-proc-startticks:88953705\"}",
+            "contentTruncated": false,
+            "diff": "diff --git a/.cancel-start-3c9162ea6bf94049aab443c9407193e8.json b/.cancel-start-3c9162ea6bf94049aab443c9407193e8.json\nnew file mode 100644\n--- /dev/null\n+++ b/.cancel-start-3c9162ea6bf94049aab443c9407193e8.json\n@@ -0,0 +1,1 @@\n+{\"token\":\"3c9162ea6bf94049aab443c9407193e8\",\"pid\":1087500,\"processIdentity\":\"linux-proc-startticks:88953705\"}\n",
+            "diffTruncated": false,
+            "compareBaseSha": "e0eeb3cfd99070b97e6dd12ceeca28c4ed66fb7e",
+            "compareBaseRef": "refs/heads/main",
+            "compareMode": "base",
+            "workspaceVersion": "50fd19c298d640fbf0c9b6a3824ff449fa58a52ebe38bc4738a6bcd39d918863",
+            "fileFingerprint": "045898356e5d25305af1dd07276e1f09c7864bd68a481e601ccd42cf8f3c0660"
+          },
+          "startedAt": "2026-10-12T22:23:10.062Z",
+          "finishedAt": "2026-10-12T22:23:10.066Z",
+          "durationMs": 4
+        },
+        "late": {
+          "method": "GET",
+          "path": "/api/v1/sessions/prompt-neovate-c0476fe5-1/workspace/file?path=.cancel-late-3c9162ea6bf94049aab443c9407193e8.json",
+          "status": 404,
+          "requestId": "",
+          "response": {
+            "error": "not_found",
+            "code": "WORKSPACE_FILE_NOT_FOUND",
+            "message": "Workspace file not found",
+            "requestId": "vps-linux/ao33ckoSwx-003355"
+          },
+          "startedAt": "2026-10-12T22:23:10.062Z",
+          "finishedAt": "2026-10-12T22:23:10.064Z",
+          "durationMs": 2
+        },
+        "process": {
+          "running": true,
+          "sameIdentity": true,
+          "identityKind": "linux-proc-startticks",
+          "identitySha256": "bcd146c477828fe93101b751991d68010ee7c2d4a2b81c3e6c066a12cb0ed3c6"
+        }
+      },
+      "inputSha256": "77adfc95029e73b173f60e556f915b0cd8850848111358b1c370fb7c154e61fd",
+      "inputSentAt": "2026-10-12T22:23:10.067Z",
+      "unsettledAfterDefaultWindow": {
+        "observedAfterInputMs": 5012,
+        "state": {
+          "method": "GET",
+          "path": "/api/v1/sessions/prompt-neovate-c0476fe5-1",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "session": {
+              "id": "prompt-neovate-c0476fe5-1",
+              "projectId": "prompt-neovate-c0476fe5",
+              "kind": "worker",
+              "harness": "neovate",
+              "reviewerConfig": {},
+              "autoReviewEnabled": false,
+              "displayName": "Neovate private prompt control",
+              "mode": "tui",
+              "activity": {
+                "state": "active",
+                "lastActivityAt": "2026-10-12T22:22:42.244307884Z"
+              },
+              "isTerminated": false,
+              "terminateOnPrMerge": false,
+              "autoInjectReview": true,
+              "autoInjectCI": true,
+              "outputType": "none",
+              "createdAt": "2026-10-12T22:04:59.825367436Z",
+              "updatedAt": "2026-10-12T22:23:00.527277287Z",
+              "isPinned": false,
+              "provisionState": "ready",
+              "branchState": {
+                "commits": 0,
+                "unpushed": 0
+              },
+              "statusReadiness": "ready",
+              "chatProviderPreserved": false,
+              "status": "working",
+              "kanbanColumn": "building",
+              "displayStatus": "Working",
+              "terminalHandleId": "ptyhost-v1:prompt-neovate-c0476fe5-1",
+              "branch": "ao/prompt-neovate-c0476fe5-1/root",
+              "terminalGeneration": "b5644106-b77d-49c4-b579-d9225d9be9f4",
+              "model": "zai-audit/glm-4.7",
+              "lastUserMessageAt": "2026-10-12T22:22:42.244307884Z",
+              "lastInteractionAt": "2026-10-12T22:22:42.244307884Z",
+              "lastEventAt": "2026-10-12T22:22:42.244307884Z",
+              "prs": []
+            }
+          },
+          "startedAt": "2026-10-12T22:23:15.077Z",
+          "finishedAt": "2026-10-12T22:23:15.079Z",
+          "durationMs": 2
+        }
+      },
+      "error": "terminal exited before cancellation confirmation",
+      "finishedAt": "2026-10-12T22:23:43.126Z",
+      "durationMs": 33089,
+      "closeCode": 1005
+    }
+  }
+}

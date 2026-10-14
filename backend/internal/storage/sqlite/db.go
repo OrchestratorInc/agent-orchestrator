@@ -2015,6 +2015,11 @@ BEGIN
 	// this column, so repair field databases that recorded 0132 without adding it.
 	{version: 132, table: "conversations", column: "opencode_mode",
 		addDDL: `ALTER TABLE conversations ADD COLUMN opencode_mode TEXT NOT NULL DEFAULT ''`},
+	// Pre-merge Neovate builds used 0195 for their harness constraint. Main
+	// owns 0195 for requested_output; recover its column when that number was
+	// recorded by those builds without changing existing output values.
+	{version: 195, table: "sessions", column: "requested_output",
+		addDDL: `ALTER TABLE sessions ADD COLUMN requested_output TEXT NOT NULL DEFAULT ''`},
 }
 
 // reconcileSchema verifies that the columns in schemaRepairs physically exist
@@ -2108,7 +2113,8 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsDeepSeek := !strings.Contains(schema, "'deepseek-harness'")
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
-	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
+	needsNeovate := !strings.Contains(schema, "'neovate'")
+	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsNeovate {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2215,6 +2221,9 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsCodewhale {
 		repairs = append(repairs, replacement{"'fake'))", "'codewhale', 'fake'))"})
 	}
+	if needsNeovate {
+		repairs = append(repairs, replacement{"'fake'))", "'neovate', 'fake'))"})
+	}
 	if needsCommandCode {
 		// Migration 0194 rewrites the constraint by anchoring on the retained
 		// 'fake' fixture harness, for the same reason as DeepSeek above. A
@@ -2270,6 +2279,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'openhands'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing OpenHands and did not match known pre-OpenHands schema")
+	}
+	if !strings.Contains(schema, "'neovate'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Neovate Code")
 	}
 	if !strings.Contains(schema, "'command-code'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Command Code and did not match known pre-Command-Code schema")

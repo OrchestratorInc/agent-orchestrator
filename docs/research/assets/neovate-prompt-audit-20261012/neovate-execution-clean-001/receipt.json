@@ -1,0 +1,26 @@
+{
+  "scope": "REGISTERED_AO_FOCUSED_ORDINARY_TASK",
+  "at": "2026-10-12T22:35:39.521303+00:00",
+  "source": "6be36883b73840e7a9950fc933643f1698d74c68",
+  "projectId": "prompt-neovate-8ca2d039",
+  "sessionId": "prompt-neovate-8ca2d039-1",
+  "workspace": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/neovate-prompt-data/worktrees/prompt-neovate-8ca2d039/prompt-neovate-8ca2d039-1",
+  "nativeIDDigest": "f4558fb08271eb948338598090d892a529066b04b39a3739d4127e6789ec1267",
+  "generation": "83d2cfdf-0690-4a6d-ba08-cc79b9eca4b4",
+  "visibleTask": "-Please create visible.json containing count 1 and cwd equal to the actual current working directory. If it already exists, increment its count once. Finish and wait.",
+  "visibleTaskHasPrivatePathOrToken": false,
+  "privateTokenSHA256": "c690064c968447362626e4bce91f7e1332750c89fa3545780fd082e1e49c3d8c",
+  "projectTokenSHA256": "e7bac7543e1f7a92872870421d4573309171f4203cb85baf74f4c05e01ebba67",
+  "fresh": {
+    "timeout": true
+  },
+  "observedStates": [
+    "idle",
+    "active"
+  ],
+  "controlSession": null,
+  "controlBefore": null,
+  "controlAfterFresh": null,
+  "actualAuthenticatedWireRole": "NOT_CAPTURED",
+  "nativeSyntheticRole": "systemPrompt native plugin appends defaults; authenticated wire role not captured"
+}

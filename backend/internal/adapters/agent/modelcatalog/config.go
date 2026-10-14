@@ -23,7 +23,7 @@ type configParser func([]byte) ([]ports.AgentModelInfo, error)
 
 func hasConfigDiscoverySource(agentID string) bool {
 	switch agentID {
-	case "qwen", "continue", "goose", "vibe", "cline", "autohand":
+	case "qwen", "continue", "goose", "vibe", "cline", "autohand", "neovate":
 		return true
 	default:
 		return false
@@ -78,6 +78,8 @@ func configModelParser(agentID string) configParser {
 		return parseVibeModels
 	case "cline":
 		return parseClineModels
+	case "neovate":
+		return parseNeovateModels
 	case "autohand":
 		return parseAutoHandModels
 	default:
@@ -130,6 +132,13 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 	case "cline":
 		if home != "" {
 			paths = append(paths, filepath.Join(home, ".cline", "data", "settings", "providers.json"))
+		}
+	case "neovate":
+		if home != "" {
+			paths = append(paths, filepath.Join(home, ".neovate", "config.json"))
+		}
+		if workingDir != "" {
+			paths = append(paths, filepath.Join(workingDir, ".neovate", "config.local.json"), filepath.Join(workingDir, ".neovate", "config.json"))
 		}
 	case "autohand":
 		if home != "" {

@@ -19,6 +19,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		action                                               Action
 		argv                                                 []string
 	}{
+		{"neovate", "Set up Neovate Code", "neovate", "Open setup after Neovate starts to select and configure a provider", "https://github.com/neovateai/neovate-code", "/login\r", ActionSetup, []string{"neovate"}},
 		{"claude-code", "Log in to Claude Code", "claude", "Choose Claude subscription, Anthropic Console, or SSO", "https://code.claude.com/docs/en/installation", "", ActionLogin, []string{"claude", "auth", "login"}},
 		{"codex", "Log in to Codex", "codex", "Choose ChatGPT, device code, API key, or access token", "https://github.com/openai/codex", "", ActionLogin, []string{"codex", "login"}},
 		{"cursor", "Log in to Cursor", "cursor-agent", "Native browser flow", "https://docs.cursor.com/en/cli/installation", "", ActionLogin, []string{"cursor-agent", "login"}},

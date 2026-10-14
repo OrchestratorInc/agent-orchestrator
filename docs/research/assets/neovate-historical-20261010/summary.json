@@ -1,0 +1,333 @@
+{
+  "schemaVersion": 1,
+  "kind": "curated-historical-session-evidence",
+  "sessionDate": "2026-10-10",
+  "scope": "Results at the exact integration PR revisions only; not validation of main, the new skill PR, other versions, or a combined integration branch.",
+  "historicalSummaryAt": "2026-10-10T07:26:28.608581+00:00",
+  "ciVerifiedAt": "2026-10-10 07:22:03 UTC",
+  "outcome": "Historical reports recorded 17/17 lifecycle PASS labels per agent and 24/24 CI successes per exact integration PR head. Packaging review found instruction-refresh evidence unproven for every agent; no full strict audit PASS is claimed.",
+  "environment": {
+    "os": "Ubuntu 24.04 x86_64",
+    "node": "24.21.0",
+    "provider": "Existing Z.ai coding-plan credential",
+    "model": "glm-5.3-flash",
+    "localMacChecksRun": false,
+    "unusedCredentials": [
+      "Existing Codex login",
+      "Supplied DeepSeek key"
+    ],
+    "newLoginOrAccountSwitch": false,
+    "isolatedStateUnder": "~/.ao",
+    "permissionScope": "Disposable native bypass where required; other permission modes not established"
+  },
+  "lifecycleGates": [
+    "tui_spawn",
+    "proof_file_creation",
+    "correct_working_directory",
+    "initial_prompt_exactly_once",
+    "hidden_ao_instructions",
+    "project_agents_md",
+    "activity_status",
+    "second_message",
+    "native_session_id",
+    "cancellation",
+    "termination",
+    "native_restore",
+    "same_ao_session_workspace",
+    "post_restore_terminal_ready",
+    "post_restore_message",
+    "history_file_continuity",
+    "system_prompt_restore"
+  ],
+  "attemptPolicy": "Original failed and partial attempts are preserved, not overwritten or promoted. Final summaries use corrected evidence and exact source attribution.",
+  "cleanup": {
+    "checkedAt": "2026-10-10T07:25:25.016594+00:00",
+    "selection": "Processes owned by the dedicated isolated audit: audit data directory, scratch projects, or audit executable/helper; scanner excluded",
+    "remainingOwnedProcesses": [],
+    "clean": true,
+    "scope": "No unrelated user processes were terminated"
+  },
+  "artifactPolicy": "Curated research evidence only. Raw run logs/state, credentials, native profiles/IDs, connection details and binaries excluded. Original external evidence remains unchanged.",
+  "historicalRunnerFixtures": {
+    "passed": 91,
+    "total": 91,
+    "finalRunnerSha256": "37e6d6f8901ba080ec1a41cc36d6a253a56abad8003f753a4357fedc7f0170d7",
+    "originalStrictRunnerSha256": "66271ceb4a9fdd5b9db23edec4ee8505730f6723b8802306862b09b1fed4c297"
+  },
+  "agents": [
+    {
+      "agent": "neovate",
+      "label": "Neovate Code",
+      "nativeVersion": "0.28.5",
+      "pr": 6494,
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/pull/6494",
+      "initialHead": "e82a48fa09c07e7d70cdd19a26aea0ae1bed7e1f",
+      "head": "e82a48fa09c07e7d70cdd19a26aea0ae1bed7e1f",
+      "binarySha256": "e32b841daefa160e2ac4c4129035af2fdded197ddf6e42abb782aba97561c3f2",
+      "finalAttempt": "neovate-diagnostic-attempt3",
+      "originalReportSha256": "f38efeda3f3fa5ad1c82bf1e3644fbaac553ac71f2adc3bf67205779415d3c7e",
+      "runnerSha256": "09070c3086b73d8a5d54b28ab07697dda06b67b23bc3c1ddea4555f7144ec741",
+      "lifecyclePassed": 17,
+      "lifecycleTotal": 17,
+      "gateCounts": {
+        "PASS": 25,
+        "NOT_RUN": 2,
+        "BLOCKED": 1
+      },
+      "overallAuditStatus": "BLOCKED",
+      "nonPassGates": [
+        {
+          "name": "local_models_list",
+          "status": "NOT_RUN",
+          "reason": "local model-list command is not defined"
+        },
+        {
+          "name": "authentication",
+          "status": "BLOCKED",
+          "reason": "Neovate Code has credentials configured, but AO could not verify them."
+        },
+        {
+          "name": "model_catalog_consistency",
+          "status": "NOT_RUN",
+          "reason": "both local and AO model catalogs are required for comparison"
+        }
+      ],
+      "ciPassed": 24,
+      "ciTotal": 24,
+      "sessionTerminationConfirmed": true,
+      "daemonStopped": true,
+      "ciChecks": [
+        {
+          "name": "native (ubuntu-latest)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941165/job/114080980047"
+        },
+        {
+          "name": "mac-update-helper",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941175/job/114080979722"
+        },
+        {
+          "name": "backend-core (0)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980098"
+        },
+        {
+          "name": "released-tui",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941142/job/114080979529"
+        },
+        {
+          "name": "scan",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941145/job/114080979632"
+        },
+        {
+          "name": "native (macos-latest)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941165/job/114080980280"
+        },
+        {
+          "name": "backend-core (1)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980104"
+        },
+        {
+          "name": "native (windows-latest)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941165/job/114080980159"
+        },
+        {
+          "name": "container",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941165/job/114080979775"
+        },
+        {
+          "name": "test",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941175/job/114080979721"
+        },
+        {
+          "name": "chat-race (0)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980217"
+        },
+        {
+          "name": "chat-race (1)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980115"
+        },
+        {
+          "name": "renderer-smoke",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941175/job/114080979573"
+        },
+        {
+          "name": "session-store-race",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080979811"
+        },
+        {
+          "name": "sqlite-race (0)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980080"
+        },
+        {
+          "name": "sqlite-race (1)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980090"
+        },
+        {
+          "name": "sqlite-race (2)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980167"
+        },
+        {
+          "name": "sqlite-race (3)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980016"
+        },
+        {
+          "name": "windows-workspace",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980057"
+        },
+        {
+          "name": "cloud-build-test",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980103"
+        },
+        {
+          "name": "lint",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980185"
+        },
+        {
+          "name": "sqlc-drift",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980058"
+        },
+        {
+          "name": "api-drift",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980079"
+        },
+        {
+          "name": "build-test",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114082900315"
+        }
+      ],
+      "reportComments": [
+        "https://github.com/OrchestratorInc/agent-orchestrator/pull/6494#issuecomment-6095293549",
+        "https://github.com/OrchestratorInc/agent-orchestrator/pull/6494#issuecomment-6095922325"
+      ],
+      "recordedLifecycleCountsAreHistorical": true,
+      "systemPromptRestoreInterpretation": "UNPROVEN for refreshed delivery; initial token availability only"
+    }
+  ],
+  "attempts": [
+    {
+      "attempt": "neovate-diagnostic-attempt1",
+      "startedAt": "2026-10-10T05:53:51.176Z",
+      "finishedAt": "2026-10-10T05:58:09.678Z",
+      "reportedState": "finished",
+      "note": "Runner used nonexistent interrupt HTTP endpoint. Initial work and exact restore passed; continuation unproven."
+    },
+    {
+      "attempt": "neovate-diagnostic-attempt2",
+      "startedAt": "2026-10-10T06:13:49.845Z",
+      "finishedAt": "2026-10-10T06:18:49.070Z",
+      "reportedState": "finished",
+      "note": "Actual mux Escape canceled the native turn. Continuation was sent before native composer mounted and remained draft."
+    },
+    {
+      "attempt": "neovate-diagnostic-attempt3",
+      "startedAt": "2026-10-10T06:38:48.041Z",
+      "finishedAt": "2026-10-10T06:40:13.253Z",
+      "reportedState": "finished",
+      "note": "Final Neovate lifecycle gates pass with readiness-aware diagnostic runner."
+    },
+    {
+      "attempt": "neovate-postrestore-control",
+      "startedAt": "2026-10-10T06:26:24.316312+00:00",
+      "finishedAt": "2026-10-10T06:26:26.812971+00:00",
+      "reportedState": null,
+      "note": "Control stopped before sending: initially searched old PTY registry location. Cleanup confirmed.",
+      "controlledResult": false
+    },
+    {
+      "attempt": "neovate-postrestore-control-attempt2",
+      "startedAt": "2026-10-10T06:27:55.920332+00:00",
+      "finishedAt": "2026-10-10T06:28:31.929014+00:00",
+      "reportedState": null,
+      "note": "Same-session control waited for actual composer then sent identical API message; history and refreshed instructions verified.",
+      "controlledResult": true
+    },
+    {
+      "attempt": "neovate-strict-attempt1",
+      "startedAt": "2026-10-10T05:47:08.740Z",
+      "finishedAt": "2026-10-10T05:47:58.551Z",
+      "reportedState": "finished",
+      "note": "Original strict gates retained; configured metadata is not an expired-login claim."
+    }
+  ],
+  "strictAuditLimits": [
+    "All AO credential probes remain configured-only, despite independent successful real-provider calls.",
+    "Neovate has no supported native model-list command; exact local catalog comparison is NOT_RUN."
+  ],
+  "reviewFindings": {
+    "reviewedAt": "2026-10-10T06:59:14.227950+00:00",
+    "mode": "Independent read-only source review; no development-Mac tests or edits",
+    "scopeExcluded": [
+      "Broader original integration implementation",
+      "Native macOS/Windows harness conformance",
+      "Provider credential validity (separate live evidence)",
+      "Production polling interval changes"
+    ]
+  },
+  "preservedCIFailures": [],
+  "historicalEvidenceCorrection": {
+    "discoveredDuring": "Skill packaging review after the historical VPS runs",
+    "affectedGate": "system_prompt_restore",
+    "affectedAgents": [
+      "neovate"
+    ],
+    "recordedStatus": "PASS",
+    "correctedInterpretation": "UNPROVEN for refreshed or reinjected instruction delivery; only initial instruction-token availability after restore was shown.",
+    "cause": "setupProject included hiddenRestoreToken in initial agentRules before the first turn and did not change those rules before restore; native history could retain it.",
+    "rawCountsPreserved": true,
+    "newPackagedRunner": "Introduces a fresh instruction token in configuration only after kill and before restore.",
+    "correctedLiveProviderGateRerun": false,
+    "validationBoundary": "New fixture checks do not establish corrected real-provider restore instruction behavior."
+  },
+  "relocation": {
+    "sourceCommit": "eaeed697f2e92fda214b9847443ef941f80ab2ae",
+    "sourcePath": "docs/research/ao-agent-harness-session-2026-10-10/summary.json",
+    "scope": "Filtered historical evidence for this harness only; no new test execution"
+  }
+}

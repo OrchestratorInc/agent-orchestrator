@@ -1,0 +1,14 @@
+{
+  "at": "2026-10-12T22:39:47.486166+00:00",
+  "HTTP": 200,
+  "reply": {
+    "ok": true,
+    "sessionId": "prompt-neovate-8ca2d039-1"
+  },
+  "beforeActivity": {
+    "state": "idle",
+    "lastActivityAt": "2026-10-12T22:38:23.009487099Z"
+  },
+  "terminated": true,
+  "qualification": "Cleanup after failed Escape, not an independent AO Kill proof. Original failure retained."
+}

@@ -324,3 +324,17 @@ func hasLine(content, line string) bool {
 	}
 	return false
 }
+
+func TestNeovateAdapterIsSelectable(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("neovate")
+	if !ok {
+		t.Fatal("Neovate Code is not registered")
+	}
+	if adapter.Manifest().Name != "Neovate Code" || !domain.HarnessNeovate.IsKnown() {
+		t.Fatal("Neovate Code is not selectable")
+	}
+}
