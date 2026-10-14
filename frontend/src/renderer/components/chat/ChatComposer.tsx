@@ -113,6 +113,8 @@ import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
 export const AGENT_SWITCH_FAILED = "AGENT_SWITCH_FAILED";
 const DEFINITIVE_SEND_REJECTIONS = new Set([
 	AGENT_SWITCH_FAILED,
+	// The new chat page could not create the session this brief would start.
+	"TASK_CREATE_FAILED",
 	// Cloud validation failures reject the request before durable acceptance.
 	"validation_error",
 	"INVALID_BODY",
@@ -189,6 +191,7 @@ export const ChatComposer = memo(function ChatComposer({
 	disabled,
 	disabledPlaceholder,
 	starting,
+	attachLater,
 	settings,
 	addMenuItems,
 	approval,
@@ -267,6 +270,8 @@ export const ChatComposer = memo(function ChatComposer({
 	/** Explains why message entry is temporarily blocked. */
 	disabledPlaceholder?: string;
 	starting?: boolean;
+	/** Draw the attach control disabled, for a chat whose workspace does not exist yet. */
+	attachLater?: boolean;
 	/** A contextual prompt shown before an otherwise empty conversation begins. */
 	emptyPlaceholder?: string;
 	/** A proposed next message, kept out of the draft until accepted with Tab. */
@@ -2041,6 +2046,24 @@ export const ChatComposer = memo(function ChatComposer({
 								</Tooltip>
 								)}
 							</>
+						) : attachLater ? (
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<span className="inline-flex">
+										<Button
+											type="button"
+											variant="ghost"
+											size="icon-sm"
+											disabled
+											aria-label="Attach a file"
+											className="size-7 shrink-0 rounded-full p-0 text-muted-foreground"
+										>
+											<Plus aria-hidden="true" className="size-3.5 text-muted-foreground" />
+										</Button>
+									</span>
+								</TooltipTrigger>
+								<TooltipContent side="bottom">Files can be attached once the task has started</TooltipContent>
+							</Tooltip>
 						) : null}
 						{settings}
 					</div>
@@ -2072,7 +2095,7 @@ export const ChatComposer = memo(function ChatComposer({
 											<Square aria-hidden="true" className="size-2.5 fill-current" />
 										) : canContinueTurn && !continuing ? (
 											<Play aria-hidden="true" className="size-3 translate-x-px fill-current" />
-										) : continuing || submitting || steerPending || savingQueuedEditPending || sendPending ? (
+										) : continuing || (!starting && (submitting || steerPending || savingQueuedEditPending || sendPending)) ? (
 											<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
 										) : showsSteer ? (
 											<CornerUpRight aria-hidden="true" className="size-3.5" />

@@ -39,6 +39,7 @@ import { agentLabel } from "../../lib/agent-options";
 import { AgentModelPicker, AutoCompactRow, compactsEarly, ToggleRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import { providerQualifiedChoice } from "../../lib/model-variants";
+import { AgentAvatar } from "../AgentAvatar";
 import type {
 	ApprovalMode,
 	ChatConfigOption,
@@ -86,9 +87,9 @@ const CODEX_APPROVAL_ORDER: ApprovalMode[] = [
 	"bypass-permissions",
 ];
 
-const TRIGGER_CLASS =
+export const TRIGGER_CLASS =
 	"h-7 gap-1 bg-transparent rounded-lg px-3 text-xs! leading-none text-muted-foreground hover:bg-interactive-active hover:text-foreground data-[state=open]:bg-interactive-active data-[state=open]:text-foreground";
-const CHAT_MENU_CLASS = "chat-settings-menu text-xs!";
+export const CHAT_MENU_CLASS = "chat-settings-menu text-xs!";
 
 export function TurnSettingsBar({
 	models,
@@ -112,6 +113,8 @@ export function TurnSettingsBar({
 	beforePicker,
 	modelsLoading,
 	lastModel,
+	agentMenu,
+	agentIcon = false,
 	children,
 }: {
 	models: ChatModel[];
@@ -162,6 +165,10 @@ export function TurnSettingsBar({
 	lastModel?: string;
 	/** Inline controls on the right model row, before the mode/approval picker — queue vs steer. */
 	children?: ReactNode;
+	/** First row of the model menu, for choosing the agent before a session exists. */
+	agentMenu?: ReactNode;
+	/** Lead the model trigger with the agent's icon, for a chat that can still change agent. */
+	agentIcon?: boolean;
 }) {
 	const { t } = useTranslation();
 	const displayModels = useMemo(
@@ -218,7 +225,7 @@ export function TurnSettingsBar({
 			: optionId;
 		void Promise.resolve(onChangeConfigOption(providerId, value)).catch(() => {});
 	};
-	const nativeModelMenu = Boolean(onChange && displayModels.length > 0 && grouped.model.length === 0);
+	const nativeModelMenu = Boolean(onChange && (displayModels.length > 0 || agentMenu) && grouped.model.length === 0);
 	// A model with effort levels but no provider default would otherwise show no
 	// selected effort. AO picks a level and sets it, so what the picker shows is
 	// what the next turn uses.
@@ -443,6 +450,8 @@ export function TurnSettingsBar({
 					) : null}
 					{!unified && nativeModelMenu && onChange ? (
 						<ModelEffortPicker
+							agentMenu={agentMenu}
+							agentIcon={agentIcon && harness ? <AgentAvatar provider={harness} className="mr-2 size-icon-sm" decorative /> : null}
 							models={harness === "claude-code" ? displayModels.filter((model) => model.id !== "default") : displayModels}
 							settings={settings}
 							onChange={onChange}
@@ -465,6 +474,8 @@ export function TurnSettingsBar({
 
 					{!unified && onChangeConfigOption && clubbedLeft && !nativeModelMenu ? (
 						<ClubbedConfigPicker
+							agentMenu={agentMenu}
+							agentIcon={agentIcon && harness ? <AgentAvatar provider={harness} className="mr-2 size-icon-sm" decorative /> : null}
 							groupClaude={harness === "claude-code"}
 							modelOptions={grouped.model}
 							effortOptions={grouped.effort}
@@ -688,10 +699,14 @@ function ModelEffortPicker({
 	toggles = [],
 	extraOptions = [],
 	onChangeConfigOption,
+	agentMenu,
+	agentIcon,
 }: {
 	models: ChatModel[];
 	settings: TurnSettings;
 	onChange: (next: TurnSettings) => void;
+	agentMenu?: ReactNode;
+	agentIcon?: ReactNode;
 	disabled?: boolean;
 	modelLabel: string;
 	groupLabel: string;
@@ -728,6 +743,7 @@ function ModelEffortPicker({
 					}
 					className={TRIGGER_CLASS}
 				>
+					{agentIcon}
 					<span className="min-w-0 max-w-[38ch] truncate">{groupLabel}</span>
 					{reroute ? (
 						// A mark, not a second name. Two truncated model names side by side is
@@ -740,18 +756,17 @@ function ModelEffortPicker({
 					) : null}
 				</OptionMenuTrigger>
 			<OptionMenuContent align="start" className={CHAT_MENU_CLASS} onCloseAutoFocus={restoreComposerFocus}>
+				{agentMenu}
 				<OptionMenuSub>
 					<OptionMenuSubTrigger label="Model" value={modelLabel} />
 					{/* Scroll on an inner strip: the surface utility caps height but wheel
 					    events do not reliably reach an outer overflow on nested submenus. */}
-					<OptionMenuSubContent scrollable className={CHAT_MENU_CLASS} onFocus={focusModelSearch}>
-						<ModelMenuChoices models={catalog}>
-							{(matches, searchActiveID, optionID) => matches.map((model) => (
+					<OptionMenuSubContent scrollable className={CHAT_MENU_CLASS}>
+						<ModelMenuChoices models={catalog} searchable={false}>
+							{() => catalog.map((model) => (
 								<OptionMenuItem
 									key={model.id}
-									id={optionID?.(model.id)}
 									active={model.id === settings.model}
-									searchActive={model.id === searchActiveID}
 									radio
 									onSelect={() => onChange({ ...settings, model: model.id, reasoningEffort: undefined })}
 									className={cn("text-xs", model.id === settings.model ? "text-foreground" : "text-muted-foreground")}
@@ -805,7 +820,11 @@ function ClubbedConfigPicker({
 	disabled,
 	onChange,
 	groupClaude,
+	agentMenu,
+	agentIcon,
 }: {
+	agentMenu?: ReactNode;
+	agentIcon?: ReactNode;
 	groupClaude?: boolean;
 	modelOptions: ChatConfigOption[];
 	effortOptions: ChatConfigOption[];
@@ -867,9 +886,11 @@ function ClubbedConfigPicker({
 					title="Model and reasoning effort for the next turn"
 					className={TRIGGER_CLASS}
 				>
+					{agentIcon}
 					<span className="min-w-0 max-w-[38ch] truncate">{groupLabel}</span>
 				</OptionMenuTrigger>
 			<OptionMenuContent align="start" className={CHAT_MENU_CLASS} onCloseAutoFocus={restoreComposerFocus}>
+				{agentMenu}
 				{modelOptions.map((option) => (
 					<OptionSubmenu key={option.id} option={option} onChange={onChange} scrollable groupClaude={groupClaude} />
 				))}
@@ -1101,11 +1122,7 @@ function OptionSubmenu({
 	return (
 		<OptionMenuSub>
 			<OptionMenuSubTrigger label={label ?? option.name} value={current} />
-			<OptionMenuSubContent
-				scrollable={scrollable}
-				className={CHAT_MENU_CLASS}
-				onFocus={isModelOption(option) ? focusModelSearch : undefined}
-			>
+			<OptionMenuSubContent scrollable={scrollable} className={CHAT_MENU_CLASS}>
 				{isModelOption(option) ? (
 					<ConfigModelChoices option={option} onChange={(value) => onChange(option.id, value)} groupClaude={groupClaude} />
 				) : (
@@ -1144,7 +1161,6 @@ function ConfigOptionPicker({
 			title={title || option.description || option.name}
 			disabled={disabled}
 			leadIcon={leadIcon}
-			onFocus={isModelOption(option) ? focusModelSearch : undefined}
 		>
 			{isModelOption(option) ? (
 				<ConfigModelChoices option={option} onChange={onChange} groupClaude={groupClaude} />
@@ -1189,15 +1205,9 @@ function ConfigModelChoices({
 	const showOther = otherOpen || selectedIsOther;
 	const menuModels = claude ? (showOther ? [...claude.current, ...claude.other] : claude.current) : models;
 	return (
-		<ModelMenuChoices models={menuModels}>
-			{(matches, searchActiveID, optionID) => (
-				<>
-					<ConfigOptionChoices
-						option={{ ...option, choices: matches }}
-						onChange={onChange}
-						searchActiveID={searchActiveID}
-						optionID={optionID}
-					/>
+		<ModelMenuChoices models={menuModels} searchable={false}>
+			{() => (<>
+					<ConfigOptionChoices option={{ ...option, choices: menuModels }} onChange={onChange} />
 					{claude?.other.length && !selectedIsOther ? (
 						<OptionMenuItem
 							// The composer focuses its editor on any click that bubbles out of the portal,
@@ -1214,8 +1224,7 @@ function ConfigModelChoices({
 							<ChevronDown className={cn("ml-auto size-3 opacity-70 transition-transform", otherOpen && "rotate-180")} aria-hidden="true" />
 						</OptionMenuItem>
 					) : null}
-				</>
-			)}
+			</>)}
 		</ModelMenuChoices>
 	);
 }
@@ -1223,13 +1232,9 @@ function ConfigModelChoices({
 function ConfigOptionChoices({
 	option,
 	onChange,
-	searchActiveID,
-	optionID,
 }: {
 	option: ChatConfigOption;
 	onChange: (value: ChatConfigOptionValue) => void;
-	searchActiveID?: string;
-	optionID?: (id: string) => string;
 }) {
 	if (option.type === "boolean") {
 		return (
@@ -1269,9 +1274,7 @@ function ConfigOptionChoices({
 							</OptionMenuLabel>
 						) : null}
 						<OptionMenuItem
-							id={optionID?.(choice.value)}
 							active={choice.value === option.currentValue}
-							searchActive={choice.value === searchActiveID}
 							radio
 							onSelect={() => onChange({ value: choice.value })}
 							className={cn("text-xs")}
@@ -1525,16 +1528,6 @@ function Picker({
 	);
 }
 
-function focusModelSearch(event: FocusEvent<HTMLDivElement>) {
-	if (event.target !== event.currentTarget) return;
-	const search = event.currentTarget.querySelector<HTMLInputElement>('input[type="search"]');
-	if (search) {
-		// Focus search before the menu's roving focus chooses a model.
-		event.preventDefault();
-		search.focus();
-	}
-}
-
 function isModelOption(option: ChatConfigOption): boolean {
 	return option.category === "model" || option.id === "model";
 }
@@ -1584,7 +1577,7 @@ export function hasProviderPermissionMode(options: ChatConfigOption[]): boolean 
 	return Boolean(partitionConfigOptions(options).mode);
 }
 
-function partitionConfigOptions(options: ChatConfigOption[], includeExecutionModes = true): {
+export function partitionConfigOptions(options: ChatConfigOption[], includeExecutionModes = true): {
 	model: ChatConfigOption[];
 	effort: ChatConfigOption[];
 	/** Provider plan/agent modes, placed with model selection rather than permissions. */
@@ -1730,8 +1723,9 @@ function addAgentModeChoice(
 	permissionChoices: ChatConfigOption["choices"],
 ): ChatConfigOption["choices"] {
 	// OpenCode names its ordinary agent mode "build", so its catalog already has
-	// one and must not gain a synthetic duplicate.
-	if (executionChoices.some((choice) => executionChoiceMatches(choice, "agent|build"))) {
+	// one and must not gain a synthetic duplicate. With no execution mode to leave
+	// for, an Agent choice alone would be a picker with nothing to pick.
+	if (executionChoices.length === 0 || executionChoices.some((choice) => executionChoiceMatches(choice, "agent|build"))) {
 		return executionChoices;
 	}
 	const standard = permissionChoices.find((choice) => choiceMatches(choice, "manual"))

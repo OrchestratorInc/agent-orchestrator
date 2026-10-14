@@ -2141,9 +2141,10 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText("Describe the page or document you want")).toBeInTheDocument();
 		const prompts = within(screen.getByRole("list", { name: "Sample artifact requests" })).getAllByRole("button");
 		expect(prompts.map((prompt) => prompt.textContent)).toEqual([
-			"Write a one-page plan for a new feature",
-			"Build an HTML page comparing three options side by side",
-			"Turn my rough notes into a polished Markdown document",
+			"Write a plan",
+			"Compare options",
+			"Polish my notes",
+			"Make slides",
 		]);
 
 		await user.click(prompts[1]);
@@ -2160,9 +2161,10 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByRole("list", { name: "Sample artifact requests" })).not.toBeInTheDocument();
 		const prompts = within(screen.getByRole("list", { name: "Sample requests" })).getAllByRole("button");
 		expect(prompts.map((prompt) => prompt.textContent)).toEqual([
-			"Review my recent changes for bugs",
-			"Add tests for the code I am working on",
-			"Walk me through how a request flows through this code",
+			"Review my changes",
+			"Add tests",
+			"Trace a request",
+			"Simplify my code",
 		]);
 
 		await user.click(prompts[0]);
