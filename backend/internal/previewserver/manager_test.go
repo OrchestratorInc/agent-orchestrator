@@ -93,7 +93,7 @@ func TestManagerStartsIsolatedConfiguredServerAndStopsIt(t *testing.T) {
 	manager := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	t.Cleanup(manager.Close)
 
-	status, err := manager.Start(context.Background(), "ao-1", workspace, "", nil)
+	status, err := manager.Start(context.Background(), "ao-1", workspace, "", nil, nil)
 	if err != nil {
 		t.Fatalf("Start: %v\nstatus=%+v", err, status)
 	}
@@ -126,11 +126,11 @@ func TestManagerKeepsConcurrentSessionServersIsolated(t *testing.T) {
 	manager := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	t.Cleanup(manager.Close)
 
-	first, err := manager.Start(context.Background(), domain.SessionID("ao-1"), workspace, "", nil)
+	first, err := manager.Start(context.Background(), domain.SessionID("ao-1"), workspace, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := manager.Start(context.Background(), domain.SessionID("ao-2"), workspace, "", nil)
+	second, err := manager.Start(context.Background(), domain.SessionID("ao-2"), workspace, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestManagerFiresOnExitWhenServerCrashesAfterLaunch(t *testing.T) {
 		gotStatus <- s
 	})
 
-	status, err := manager.Start(context.Background(), domain.SessionID("ao-1"), workspace, "", nil)
+	status, err := manager.Start(context.Background(), domain.SessionID("ao-1"), workspace, "", nil, nil)
 	if err != nil {
 		t.Fatalf("Start: %v\nstatus=%+v", err, status)
 	}
@@ -197,7 +197,7 @@ func TestManagerDoesNotFireOnExitWhenStoppedByUser(t *testing.T) {
 	manager := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	t.Cleanup(manager.Close)
 
-	status, err := manager.Start(context.Background(), domain.SessionID("ao-1"), workspace, "", nil)
+	status, err := manager.Start(context.Background(), domain.SessionID("ao-1"), workspace, "", nil, nil)
 	if err != nil {
 		t.Fatalf("Start: %v\nstatus=%+v", err, status)
 	}
@@ -226,13 +226,13 @@ func TestManagerRequiresNameWhenConfigurationsAreAmbiguous(t *testing.T) {
 	manager := New(nil)
 	t.Cleanup(manager.Close)
 
-	_, err := manager.Start(context.Background(), "ao-1", workspace, "", nil)
+	_, err := manager.Start(context.Background(), "ao-1", workspace, "", nil, nil)
 	var serviceErr Error
 	if !errors.As(err, &serviceErr) || serviceErr.Code != "PREVIEW_CONFIGURATION_REQUIRED" {
 		t.Fatalf("error = %#v, want PREVIEW_CONFIGURATION_REQUIRED", err)
 	}
 
-	status, err := manager.Start(context.Background(), "ao-1", workspace, "api", nil)
+	status, err := manager.Start(context.Background(), "ao-1", workspace, "api", nil, nil)
 	if err != nil {
 		t.Fatalf("named Start: %v", err)
 	}
@@ -245,13 +245,13 @@ func TestManagerRequiresNameWhenConfigurationsAreAmbiguous(t *testing.T) {
 func TestManagerRejectsMissingConfigAndNonLoopbackURL(t *testing.T) {
 	manager := New(nil)
 	t.Cleanup(manager.Close)
-	_, err := manager.Start(context.Background(), "ao-1", t.TempDir(), "", nil)
+	_, err := manager.Start(context.Background(), "ao-1", t.TempDir(), "", nil, nil)
 	assertPreviewErrorCode(t, err, "PREVIEW_CONFIG_NOT_FOUND")
 
 	cfg := helperConfiguration("web", TargetApp)
 	cfg.URL = "https://example.com:${PORT}/"
 	workspace := writeLaunchFile(t, []Configuration{cfg})
-	_, err = manager.Start(context.Background(), "ao-1", workspace, "", nil)
+	_, err = manager.Start(context.Background(), "ao-1", workspace, "", nil, nil)
 	assertPreviewErrorCode(t, err, "PREVIEW_CONFIG_INVALID")
 }
 
@@ -299,6 +299,7 @@ func TestPreviewEnvironmentDoesNotInheritDaemonCredentials(t *testing.T) {
 			"AO_BROWSER_RUNTIME_TOKEN=runtime-secret",
 		},
 		map[string]string{"PROJECT_TOKEN": "shared", "PUBLIC_FLAG": "project", "LITERAL": "${PORT}"},
+		nil,
 		map[string]string{"PUBLIC_FLAG": "enabled", "EXPANDED": "${PORT}"},
 		"session-1",
 		4173,
