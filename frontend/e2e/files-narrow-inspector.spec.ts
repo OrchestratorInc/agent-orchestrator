@@ -22,7 +22,7 @@ const patch = [
 // The preview session has no workspace behind it, so serve one changed file
 // with every header action (edit included) to fill the review row. The fake
 // bridge gives the renderer a ready daemon on :8080 for these routes to answer.
-async function stubWorkspaceFiles(page: Page) {
+async function stubWorkspaceFiles(page: Page, sessionId = "demo-working") {
 	await installFakeBridge(page);
 	const file = { path: filePath, status: "modified", additions: 3, deletions: 0, size: 512, binary: false, editable: true, fileFingerprint: "fp-1" };
 	await page.route(`http://127.0.0.1:8080/api/v1/sessions/${sessionId}/workspace/manifest*`, (route) =>
@@ -115,4 +115,30 @@ test("@P0 files filter and review rows stay clear of each other in a narrow insp
 	await inspector.getByRole("button", { name: "More actions" }).click();
 	await expect(page.getByRole("menuitem", { name: "Edit file" })).toBeVisible();
 	await expect(page.getByRole("menuitem", { name: "Add feedback" })).toBeVisible();
+});
+
+test("@P0 files filter centers between the tabs and actions when the review tab is available", async ({ page }) => {
+	const sessionId = "demo-needs-input";
+	await page.setViewportSize({ width: 1800, height: 900 });
+	await stubWorkspaceFiles(page, sessionId);
+	await page.goto(`/#/projects/ao-demo/sessions/${sessionId}`);
+	const inspector = await openInspector(page);
+	await expect(inspector.getByRole("tab", { name: "Reviews" })).toBeVisible();
+	await inspector.getByRole("tab", { name: /Files?$/ }).click();
+	await expect(inspector.locator(".session-inspector__tablist").getByRole("tab")).toHaveCount(4);
+	const filter = inspector.getByRole("textbox", { name: "Filter files" });
+
+	const expectCentered = async () => {
+		await expect.poll(async () => {
+			const tabs = await inspector.locator(".session-inspector__tablist").boundingBox();
+			const actions = await inspector.locator(".session-inspector__trailing").boundingBox();
+			const field = await filter.boundingBox();
+			if (!tabs || !actions || !field) return Infinity;
+			return Math.abs(field.x + field.width / 2 - (tabs.x + tabs.width + actions.x) / 2);
+		}).toBeLessThan(1);
+		expect(await filterOverlapsATab(page)).toBe(false);
+	};
+	await expectCentered();
+	await filter.focus();
+	await expectCentered();
 });

@@ -1,10 +1,9 @@
-import { OrchestratorStartingChat } from "../components/chat/OrchestratorStartingChat";
 import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
 import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { createFileRoute, Outlet, useMatchRoute, useNavigate, useParams, useRouter } from "@tanstack/react-router";
 import { isCancelledError, useQueryClient } from "@tanstack/react-query";
-import { memo, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderPlus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { CommandPalette } from "../components/CommandPalette";
@@ -29,12 +28,14 @@ import { useRemoteHosts } from "../hooks/useRemoteHosts";
 import { SidebarProvider } from "../components/ui/sidebar";
 import { TitlebarNav } from "../components/TitlebarNav";
 import { WindowTitlebar } from "../components/WindowTitlebar";
-import { TerminalCacheProvider } from "../components/TerminalPane";
+import { preloadXtermTerminal, TerminalCacheProvider } from "../components/TerminalPane";
+import { scheduleIdle } from "../lib/idle";
+import { LazyChunkBoundary } from "../components/LazyChunkBoundary";
 import { agentModelsQueryOptions } from "../hooks/useAgentModelsQuery";
 import { useDaemonStatus } from "../hooks/useDaemonStatus";
 import { useOpenShellTerminal } from "../hooks/useShellTerminals";
 import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
-import { cloudProjectsQueryKey, cloudSessionsQueryKey, useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKey, toWorkspaceSession, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
+import { cloudProjectsQueryKey, cloudSessionsQueryKey, useRemoteWorkspaces, useWorkspacePolling, useWorkspaceQuery, workspaceQueryKey, toWorkspaceSession, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { apiClient, apiErrorCode, apiErrorDetails, apiErrorMessage, apiErrorRequestId, hasTrustedApiBaseUrl } from "../lib/api-client";
@@ -65,6 +66,7 @@ import { useAgentInventoryTelemetry } from "../hooks/useAgentInventoryTelemetry"
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { clientForHost } from "../lib/host-clients";
 import { useCloudSession } from "../lib/cloud-session";
+import { useCloudAccountSwitchReset } from "../hooks/useCloudAccountSwitchReset";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { sessionUiKey } from "../lib/hosts";
@@ -73,6 +75,18 @@ import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useAppShortcut } from "../hooks/useAppShortcut";
 import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
 
+const SHELL_LOADER_STALE_MS = 2_000;
+
+// Only shown while an orchestrator is starting, but it pulls in the whole chat
+// stack (ChatWorkspace, lexical, markdown). Lazy keeps that off every route.
+const loadOrchestratorStartingChat = () => import("../components/chat/OrchestratorStartingChat");
+const OrchestratorStartingChat = lazy(() =>
+	loadOrchestratorStartingChat().then((module) => ({ default: module.OrchestratorStartingChat })),
+);
+function preloadOrchestratorStartingChat(): void {
+	void loadOrchestratorStartingChat().catch(() => undefined);
+}
+
 export const Route = createFileRoute("/_shell")({
 	// Prefetch the workspace list for the whole shell (parent loaders run before
 	// children); pairs with the router's defaultPreload: "intent" so a hovered
@@ -80,7 +94,10 @@ export const Route = createFileRoute("/_shell")({
 	loader: async ({ context }) => {
 		await refreshDaemonStatus().catch(() => undefined);
 		if (!usesPreviewWorkspaceData && !hasTrustedApiBaseUrl()) return;
-		return context.queryClient.fetchQuery({ ...workspaceQueryOptions, staleTime: 0 });
+		// Fresh on navigation, but deduped: a hover preload followed by its click,
+		// or a quick run of navigations, shares one /projects + /sessions fetch
+		// instead of one each. Mutations and CDC events invalidate regardless.
+		return context.queryClient.fetchQuery({ ...workspaceQueryOptions, staleTime: SHELL_LOADER_STALE_MS });
 	},
 	component: ShellLayoutWithSettings,
 });
@@ -181,7 +198,7 @@ const ShellCenter = memo(function ShellCenter({
 	// Windows already owns a separate WindowTitlebar.
 	const draggableSessionFrame = (isSessionRoute || startingOrchestrator) && isLinux;
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
-	const startingChat = startingOrchestrator ? <OrchestratorStartingChat steps={startingSteps} cloud={startingCloudOrchestrator} coderWorkspaceUrl={startingCoderWorkspaceUrl} /> : null;
+	const startingChat = startingOrchestrator ? <LazyChunkBoundary><Suspense fallback={null}><OrchestratorStartingChat steps={startingSteps} cloud={startingCloudOrchestrator} coderWorkspaceUrl={startingCoderWorkspaceUrl} /></Suspense></LazyChunkBoundary> : null;
 	// Settings is a self-framed route, so its starting chat gets its own panel.
 	const selfFramedOutlet = <>
 		<div className={startingOrchestrator ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingOrchestrator || undefined}><Outlet /></div>
@@ -223,6 +240,7 @@ function ShellLayout() {
 	const queryClient = useQueryClient();
 	const { client: cloudClient } = useCloudCp();
 	const { org: cloudOrg } = useCloudOrg();
+	useWorkspacePolling();
 	const workspaceQuery = useWorkspaceQuery();
 	const workspaces = workspaceQuery.data ?? [];
 	const { hosts: remoteHosts, refresh: refreshRemoteHosts } = useRemoteHosts();
@@ -238,12 +256,23 @@ function ShellLayout() {
 	const remoteWorkspacesRef = useRef(remoteWorkspaces);
 	remoteWorkspacesRef.current = remoteWorkspaces;
 	const daemonStatus = useDaemonStatus(queryClient);
+	const daemonIsReady = daemonStatus.state === "ready";
+	// Warm the lazy chunks the first session open needs once the app is idle, so
+	// moving them off the startup path does not add a wait on first use.
+	useEffect(() => {
+		if (!daemonIsReady) return;
+		return scheduleIdle(() => {
+			preloadXtermTerminal();
+			preloadOrchestratorStartingChat();
+		});
+	}, [daemonIsReady]);
 	const [workspaceStartupState, setWorkspaceStartupState] = useState<"loading" | "ready" | "error">("loading");
 	const workspaceStartupBaselineRef = useRef(0);
 	const sidebarDragStripRef = useRef<HTMLDivElement>(null);
 	const themePreference = useUiStore((state) => state.themePreference);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const themeStyle = useUiStore((state) => state.themeStyle);
+	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
 	const developerMode = useUiStore((state) => state.developerMode);
 	const chatHibernationSyncRef = useRef<Promise<void>>(Promise.resolve());
 	const isSidebarOpen = useUiStore(sidebarIsVisible);
@@ -311,10 +340,18 @@ function ShellLayout() {
 	const routeParamsRef = useRef(routeParams);
 	routeParamsRef.current = routeParams;
 	const remoteHostsEnabled = useUiStore((state) => state.developerMode && state.remoteHosts);
-	const { status: accountStatus } = useCloudSession();
+	const { status: accountStatus, session: cloudAccount } = useCloudSession();
 	useEffect(() => {
 		if ((!remoteHostsEnabled || accountStatus === "unauthenticated") && routeParams.hostId) void navigate({ to: "/", replace: true });
 	}, [accountStatus, navigate, remoteHostsEnabled, routeParams.hostId]);
+	useCloudAccountSwitchReset({
+		userId: cloudAccount?.user.id ?? null,
+		ready: accountStatus !== "loading",
+		queryClient,
+		onLocalPage: !routeParams.projectId ||
+			workspaces.some((workspace) => workspace.id === routeParams.projectId && workspace.kind !== CLOUD_PROJECT_KIND),
+		leavePage: () => void navigate({ to: "/", replace: true }),
+	});
 	const linkSession = routeParams.hostId ? undefined : workspaces.flatMap((workspace) => workspace.sessions).find((session) => session.id === routeParams.sessionId);
 	const openBrowserLink = useSessionBrowserLink(linkSession);
 	const canOpenBrowserLink = linkSession?.kind === "worker" && sessionIsActive(linkSession);
@@ -1053,6 +1090,17 @@ function ShellLayout() {
 		});
 		return () => cancelAnimationFrame(frame);
 	}, [resolvedTheme]);
+
+	// macOS window transparency (Developer Mode flag): the shell becomes one
+	// translucent plate over the native vibrancy blur (styles.css, "macOS window
+	// transparency").
+	const windowTranslucent = isMac && developerMode && windowTranslucency;
+	useEffect(() => {
+		if (!isMac) return;
+		if (windowTranslucent) document.documentElement.dataset.windowTranslucent = "true";
+		else delete document.documentElement.dataset.windowTranslucent;
+		void aoBridge.theme?.setWindowTranslucent(windowTranslucent);
+	}, [windowTranslucent]);
 
 	// Follow OS appearance while the user keeps Theme on System — updates
 	// resolvedTheme (and thus React consumers) without writing light/dark to storage.

@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/commandcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
@@ -259,7 +261,7 @@ func TestRunBackgroundTaskUsesResolvedWorkerHarnessAndConfig(t *testing.T) {
 		Metadata: domain.SessionMetadata{
 			WorkspacePath: "/ws/mer-1",
 			Model:         "selected-model",
-			Effort:        "low",
+			Effort:        "xhigh",
 			Permissions:   ports.PermissionModeAcceptEdits,
 		},
 	}
@@ -274,7 +276,7 @@ func TestRunBackgroundTaskUsesResolvedWorkerHarnessAndConfig(t *testing.T) {
 	}
 	task := launcher.background[0]
 	if launcher.backgroundHarnesses[0] != rec.Harness || task.WorkspacePath == rec.Metadata.WorkspacePath ||
-		task.Model != rec.Metadata.Model || task.Effort != rec.Metadata.Effort || task.Permissions != ports.PermissionModeAcceptEdits {
+		task.Model != rec.Metadata.Model || task.Effort != "" || task.Permissions != ports.PermissionModeAcceptEdits {
 		t.Fatalf("background task = %#v", task)
 	}
 	if _, err := os.Stat(task.WorkspacePath); !errors.Is(err, os.ErrNotExist) {
@@ -289,6 +291,9 @@ func TestRunBackgroundTaskUsesResolvedWorkerHarnessAndConfig(t *testing.T) {
 	if _, ok := task.Env[EnvSessionID]; ok {
 		t.Fatalf("background task inherited %s: %#v", EnvSessionID, task.Env)
 	}
+	if worker := st.sessions[rec.ID]; worker.Metadata.Model != rec.Metadata.Model || worker.Metadata.Effort != rec.Metadata.Effort {
+		t.Fatalf("background task changed worker model/effort: %#v", worker.Metadata)
+	}
 }
 
 func TestBackgroundTaskPermissionsKeepKimiCompatible(t *testing.T) {
@@ -300,7 +305,7 @@ func TestBackgroundTaskPermissionsKeepKimiCompatible(t *testing.T) {
 	}
 }
 
-func TestChatSpawnPersistsResolvedEffortForBackgroundTasks(t *testing.T) {
+func TestChatSpawnPersistsResolvedEffort(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
 		override bool
@@ -1824,4 +1829,189 @@ func (l *deadlineConsumingChatLauncher) QueueChatPrompt(_ context.Context, _ dom
 
 func (l *deadlineConsumingChatLauncher) DrainChatQueue(_ context.Context, _ domain.SessionID) error {
 	return nil
+}
+
+type hookRecordingAgent struct {
+	fakeAgent
+	hookErr   error
+	hookCalls []ports.WorkspaceHookConfig
+}
+
+func (a *hookRecordingAgent) GetAgentHooks(_ context.Context, cfg ports.WorkspaceHookConfig) error {
+	a.hookCalls = append(a.hookCalls, cfg)
+	return a.hookErr
+}
+
+// TestChatSpawnInstallsAgentHooksBeforeControllerStart is the regression test
+// for the standing-instruction delivery gap: fresh Chat sessions used to start
+// the controller without ever installing the adapter'"'"'s workspace hooks, so
+// Command Code'"'"'s SessionStart hook (which injects the prompt file) was absent
+// and the session ran with no AO role or coordination instructions.
+func TestChatSpawnInstallsAgentHooksBeforeControllerStart(t *testing.T) {
+	for _, kind := range []domain.SessionKind{domain.KindWorker, domain.KindOrchestrator} {
+		t.Run(string(kind), func(t *testing.T) {
+			dataDir := t.TempDir()
+			wsDir := t.TempDir()
+			launcher := &recordingLauncher{}
+			hooks := &hookRecordingAgent{}
+			st := newFakeStore()
+			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+			mgr := New(Deps{
+				Runtime:   &fakeRuntime{},
+				Agents:    switchTestAgents{domain.HarnessCommandCode: hooks},
+				Workspace: &fakeWorkspace{path: wsDir},
+				Store:     st,
+				Messenger: &fakeMessenger{},
+				Chat:      launcher,
+				Lifecycle: &fakeLCM{store: st},
+				DataDir:   dataDir,
+				LookPath:  func(string) (string, error) { return "/bin/true", nil },
+			})
+
+			hooksAtStart := -1
+			launcher.beforeStart = func(ChatStart) {
+				hooksAtStart = len(hooks.hookCalls)
+			}
+			rec, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{
+				ProjectID:     chatTestProject,
+				Kind:          kind,
+				Harness:       domain.HarnessCommandCode,
+				Prompt:        "say hi",
+				RequestedMode: domain.SessionModeChat,
+			})
+			if err != nil {
+				t.Fatalf("Spawn: %v", err)
+			}
+			if len(hooks.hookCalls) != 1 {
+				t.Fatalf("hook installs = %d, want 1", len(hooks.hookCalls))
+			}
+			if hooksAtStart != 1 {
+				t.Fatalf("hooks installed at controller start = %d, want 1: hooks must land before the provider starts", hooksAtStart)
+			}
+			got := hooks.hookCalls[0]
+			if got.WorkspacePath != wsDir {
+				t.Errorf("hook workspace = %q, want %q", got.WorkspacePath, wsDir)
+			}
+			if got.SystemPrompt == "" {
+				t.Error("hook install carried no system prompt; SessionStart would inject nothing")
+			}
+			if got.SystemPromptFile == "" {
+				t.Error("hook install carried no system prompt file")
+			} else if data, err := os.ReadFile(got.SystemPromptFile); err != nil || !strings.Contains(string(data), got.SystemPrompt) {
+				t.Errorf("system prompt file %q missing the installed prompt (err=%v)", got.SystemPromptFile, err)
+			}
+			if len(launcher.started) != 1 {
+				t.Fatalf("started %d controllers, want 1", len(launcher.started))
+			}
+			_ = rec
+		})
+	}
+}
+
+func TestChatSpawnFailsWhenHookInstallFails(t *testing.T) {
+	launcher := &recordingLauncher{}
+	hooks := &hookRecordingAgent{hookErr: errors.New("disk read-only")}
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	mgr := New(Deps{
+		Runtime:   &fakeRuntime{},
+		Agents:    switchTestAgents{domain.HarnessCommandCode: hooks},
+		Workspace: &fakeWorkspace{path: t.TempDir()},
+		Store:     st,
+		Messenger: &fakeMessenger{},
+		Chat:      launcher,
+		Lifecycle: &fakeLCM{store: st},
+		DataDir:   t.TempDir(),
+		LookPath:  func(string) (string, error) { return "/bin/true", nil },
+	})
+
+	_, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{
+		ProjectID:     chatTestProject,
+		Kind:          domain.KindWorker,
+		Harness:       domain.HarnessCommandCode,
+		Prompt:        "say hi",
+		RequestedMode: domain.SessionModeChat,
+	})
+	if !errors.Is(err, ErrSpawnPrepare) {
+		t.Fatalf("Spawn err = %v, want %v", err, ErrSpawnPrepare)
+	}
+	if len(launcher.started) != 0 {
+		t.Fatalf("started %d controllers after hook failure, want 0", len(launcher.started))
+	}
+}
+
+// TestChatSpawnWritesCommandCodeSessionStartHook drives a fresh Chat spawn
+// through the real Command Code adapter and asserts the workspace actually
+// receives the SessionStart hook that injects the standing instructions. A
+// prompt file without this hook is the exact gap reported against fresh Chat
+// workers and orchestrators.
+func TestChatSpawnWritesCommandCodeSessionStartHook(t *testing.T) {
+	dataDir := t.TempDir()
+	wsDir := t.TempDir()
+	launcher := &recordingLauncher{}
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	mgr := New(Deps{
+		Runtime:   &fakeRuntime{},
+		Agents:    switchTestAgents{domain.HarnessCommandCode: commandcode.New()},
+		Workspace: &fakeWorkspace{path: wsDir},
+		Store:     st,
+		Messenger: &fakeMessenger{},
+		Chat:      launcher,
+		Lifecycle: &fakeLCM{store: st},
+		DataDir:   dataDir,
+		LookPath:  func(string) (string, error) { return "/bin/true", nil },
+	})
+
+	if _, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{
+		ProjectID:     chatTestProject,
+		Kind:          domain.KindWorker,
+		Harness:       domain.HarnessCommandCode,
+		Prompt:        "say hi",
+		RequestedMode: domain.SessionModeChat,
+	}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	settingsPath := filepath.Join(wsDir, ".commandcode", "settings.json")
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read %s: %v (hook was never installed)", settingsPath, err)
+	}
+	for _, want := range []string{"SessionStart", "ao hooks command-code session-start"} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("settings.json missing %q; standing instructions have no delivery hook:\n%s", want, raw)
+		}
+	}
+}
+
+type suggestionRecordingLauncher struct {
+	*recordingLauncher
+	source domain.SessionID
+	turn   string
+}
+
+func (l *suggestionRecordingLauncher) RunPromptSuggestionTask(ctx context.Context, id domain.SessionID, turn string, harness domain.AgentHarness, cfg ports.ChatStartConfig, prompt string) (string, error) {
+	l.source, l.turn = id, turn
+	return l.RunBackgroundTask(ctx, harness, cfg, prompt)
+}
+func TestRunPromptSuggestionTaskPassesForkSourceWithScratchPolicy(t *testing.T) {
+	launcher := &suggestionRecordingLauncher{recordingLauncher: &recordingLauncher{}}
+	m, st, _ := newChatManager(launcher)
+	m.dataDir = t.TempDir()
+	rec := domain.SessionRecord{ID: "mer-1", ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Metadata: domain.SessionMetadata{WorkspacePath: "/foreground", Model: "selected-model", Permissions: ports.PermissionModeAuto}}
+	st.sessions[rec.ID] = rec
+	got, err := m.RunPromptSuggestionTask(t.Context(), rec.ID, "completed-turn", "suggestion only", "Suggest next message")
+	if err != nil || got != "Generated title" || launcher.source != rec.ID || launcher.turn != "completed-turn" || len(launcher.background) != 1 {
+		t.Fatalf("source=%q turn=%q result=%q err=%v", launcher.source, launcher.turn, got, err)
+	}
+	cfg := launcher.background[0]
+	if launcher.backgroundHarnesses[0] != rec.Harness || cfg.WorkspacePath == rec.Metadata.WorkspacePath || cfg.Model != rec.Metadata.Model || cfg.Permissions != ports.PermissionModeAcceptEdits || cfg.SystemPrompt != "suggestion only" {
+		t.Fatalf("suggestion config=%+v", cfg)
+	}
+	if _, ok := cfg.Env[EnvSessionID]; ok {
+		t.Fatal("suggestion inherited foreground hook identity")
+	}
+	if _, err := os.Stat(cfg.WorkspacePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("scratch workspace survived suggestion")
+	}
 }

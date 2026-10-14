@@ -185,9 +185,10 @@ type Server struct {
 	defaultOrgBilling string
 	// coderTemplates lists the Coder templates a client may pick from. Nil when
 	// the deployment does not offer the coder provider.
-	coderTemplates CoderTemplateLister
-	provisioning   sandbox.ProvisioningDefaults
-	workerTokens   WorkerTokens
+	coderTemplates   CoderTemplateLister
+	coderTemplateIDs []string
+	provisioning     sandbox.ProvisioningDefaults
+	workerTokens     WorkerTokens
 	// workerTokenLifetime is zero when the deployment does not override the
 	// protocol default; workerTokenTTL() resolves that.
 	workerTokenLifetime     time.Duration
@@ -245,7 +246,10 @@ type Options struct {
 	// or domain.OrgBillingContract.
 	DefaultOrgBilling string
 	// CoderTemplates lists templates available from the configured Coder provider.
-	CoderTemplates     CoderTemplateLister
+	CoderTemplates CoderTemplateLister
+	// CoderTemplateIDs limits the configured Coder's templates the picker
+	// offers; empty offers all. Bring-your-own connections are not limited.
+	CoderTemplateIDs   []string
 	Provisioning       sandbox.ProvisioningDefaults
 	WorkerTokens       WorkerTokens
 	WorkerTokenTTL     time.Duration
@@ -364,6 +368,7 @@ func New(options Options) *Server {
 		defaultOrgCapabilities:    defaultOrgCapabilities,
 		defaultOrgBilling:         defaultOrgBilling,
 		coderTemplates:            options.CoderTemplates,
+		coderTemplateIDs:          options.CoderTemplateIDs,
 		provisioning:              options.Provisioning,
 		workerTokens:              options.WorkerTokens,
 		workerTokenLifetime:       options.WorkerTokenTTL,

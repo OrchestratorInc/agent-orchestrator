@@ -5,7 +5,6 @@ import type { TFunction } from "i18next";
 import {
 	scmUserAvatarUrl,
 	SessionCardView,
-	SessionUsageMetricView,
 	type BoardPullRequestLabels,
 	type BoardPullRequestProgress,
 	type BoardSessionPresentation,
@@ -13,24 +12,21 @@ import {
 	type BoardUsagePresentation,
 	type ProductUITranslator,
 } from "@aoagents/product-ui";
-import { Archive, Check, Copy, GitBranch, LoaderCircle, RotateCcw } from "lucide-react";
+import { Archive, Check, Copy, GitBranch, Globe, LoaderCircle, RotateCcw, Shapes } from "lucide-react";
 import type { MessageKey } from "../i18n";
 import { aoBridge } from "../lib/bridge";
 import { formatTimeCompact } from "../lib/format-time";
-import { formatEstimatedCost } from "../lib/format-cost";
-import { formatTokenCount } from "../lib/format-token-count";
 import { prBrowserUrl, sessionPRDisplaySummaries } from "../lib/pr-display";
 import {
 	agentSwitchStatusVisual,
 	deriveSessionAgentSwitchPresentation,
 } from "../lib/agent-switch-presentation";
 import { agentLabel } from "../lib/agent-options";
-import type { WorkspaceSession } from "../types/workspace";
-import { canonicalTrackerIssueId } from "../types/workspace";
+import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
+import { canonicalTrackerIssueId, sessionArtifacts } from "../types/workspace";
 import { formatCPU, formatMemory, type SessionMemoryReading } from "../hooks/useSessionMemory";
 import type { ChipTone } from "@aoagents/product-ui";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
-import type { SessionUsageSummary } from "../hooks/useSessionUsageSummaries";
 import {
 	clearTerminateSessionState,
 	useTerminateSessionState,
@@ -38,7 +34,7 @@ import {
 import { cn } from "../lib/utils";
 import { AgentAvatar } from "./AgentAvatar";
 import { ProductExternalLink } from "./ProductExternalLink";
-import { SessionArchiveDialog } from "./SessionArchiveDialog";
+import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 export function toBoardSessionPresentation(
@@ -102,27 +98,28 @@ export function BoardSessionCardAdapter({
 	memory,
 	memoryTone,
 	onOpen,
+	onOpenArtifact,
 	onTerminate,
 	session,
-	usage,
 }: {
 	/** Live reading of the session's process tree, for the card's resource chip. */
 	memory?: SessionMemoryReading;
 	/** Colour for the chip; neutral unless this card is part of the fix. */
 	memoryTone?: ChipTone;
 	onOpen: () => void;
-	onTerminate?: () => void;
+	/** Opens the session with this artifact (by path) shown in the inspector. */
+	onOpenArtifact?: (path: string) => void;
+	onTerminate?: (choice: SessionArchiveChoice) => void;
 	session: WorkspaceSession;
-	usage?: SessionUsageSummary;
 }) {
 	return (
 		<DesktopSessionCard
 			memory={memory}
 			memoryTone={memoryTone}
 			onOpen={onOpen}
+			onOpenArtifact={onOpenArtifact}
 			onTerminate={onTerminate}
 			session={session}
-			usage={usage}
 		/>
 	);
 }
@@ -134,7 +131,6 @@ export function ArchivedSessionCardAdapter({
 	restoreAction,
 	restoreError,
 	session,
-	usage,
 }: {
 	hideTerminatedStatus?: boolean;
 	isRestoreDisabled: boolean;
@@ -142,8 +138,8 @@ export function ArchivedSessionCardAdapter({
 	restoreAction: (event: MouseEvent<HTMLButtonElement>) => void;
 	restoreError?: string;
 	session: WorkspaceSession;
-	usage?: SessionUsageSummary;
 }) {
+	const { t } = useTranslation();
 	const branch = session.branch ?? "";
 	return (
 		<DesktopSessionCard
@@ -152,15 +148,22 @@ export function ArchivedSessionCardAdapter({
 				<ArchiveRestoreButton
 					isDisabled={isRestoreDisabled}
 					isRestoring={isRestoring}
-					label={`Restore ${session.title}`}
+					label={t("shell.restoreNamed", { title: session.title })}
 					onClick={restoreAction}
 				/>
 			}
-			branchAction={branch ? <CopyActionButton label={`branch ${branch}`} value={branch} /> : undefined}
+			branchAction={
+				branch ? (
+					<CopyActionButton
+						copiedLabel={t("shell.copiedBranchNamed", { branch })}
+						copyLabel={t("shell.copyBranchNamed", { branch })}
+						value={branch}
+					/>
+				) : undefined
+			}
 			footer={<ArchiveRestoreError message={restoreError} />}
 			interactive={false}
 			session={session}
-			usage={usage}
 		/>
 	);
 }
@@ -174,9 +177,9 @@ function DesktopSessionCard({
 	memory,
 	memoryTone,
 	onOpen,
+	onOpenArtifact,
 	onTerminate,
 	session,
-	usage,
 }: {
 	action?: ReactNode;
 	branchAction?: ReactNode;
@@ -186,9 +189,9 @@ function DesktopSessionCard({
 	memory?: SessionMemoryReading;
 	memoryTone?: ChipTone;
 	onOpen?: () => void;
-	onTerminate?: () => void;
+	onOpenArtifact?: (path: string) => void;
+	onTerminate?: (choice: SessionArchiveChoice) => void;
 	session: WorkspaceSession;
-	usage?: SessionUsageSummary;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -200,7 +203,6 @@ function DesktopSessionCard({
 	const termination = useTerminateSessionState(session.id, session.hostId);
 	const showTerminate = interactive && session.isTerminated !== true && onTerminate;
 	const keepTerminateVisible = session.status === "merged";
-	const usagePresentation = toUsagePresentation(usage, t);
 	const resourcePresentation = toResourcePresentation(memory, session.activity?.state === "active", memoryTone, t);
 	const translate: ProductUITranslator = (key, values) => t(key as MessageKey, values);
 
@@ -209,9 +211,9 @@ function DesktopSessionCard({
 			<TooltipTrigger asChild>
 				<span className="inline-flex">
 					<SessionArchiveDialog
-						onConfirm={() => {
+						onConfirm={(choice) => {
 							setConfirmOpen(false);
-							onTerminate();
+							onTerminate(choice);
 						}}
 						onOpenChange={setConfirmOpen}
 						open={confirmOpen}
@@ -257,6 +259,11 @@ function DesktopSessionCard({
 	return (
 		<SessionCardView
 			action={action}
+			artifacts={
+				interactive && onOpenArtifact ? (
+					<BoardArtifactLinks artifacts={sessionArtifacts(session)} onOpen={onOpenArtifact} />
+				) : undefined
+			}
 			branchAction={branchAction}
 			branchIcon={<GitBranch aria-hidden="true" className="size-icon-2xs shrink-0" />}
 			error={termination.error ?? undefined}
@@ -298,16 +305,60 @@ function DesktopSessionCard({
 					: toBoardSessionPresentation(session, t)
 			}
 			translate={translate}
-			renderUsage={(usage) => (
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<SessionUsageMetricView usage={usage} />
-					</TooltipTrigger>
-					<TooltipContent side="top">{usage.accessibleLabel}</TooltipContent>
-				</Tooltip>
-			)}
-			usage={usagePresentation}
 		/>
+	);
+}
+
+const BOARD_ARTIFACT_LIMIT = 2;
+
+/** The session's most recently updated artifacts, newest first. */
+export function latestSessionArtifacts(artifacts: SessionArtifact[], limit = BOARD_ARTIFACT_LIMIT): SessionArtifact[] {
+	return [...artifacts]
+		.sort(
+			(a, b) =>
+				(Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0) || a.path.localeCompare(b.path),
+		)
+		.slice(0, limit);
+}
+
+function BoardArtifactLinks({
+	artifacts,
+	onOpen,
+}: {
+	artifacts: SessionArtifact[];
+	onOpen: (path: string) => void;
+}) {
+	const { t } = useTranslation();
+	if (artifacts.length === 0) return null;
+	const latest = latestSessionArtifacts(artifacts);
+	const hidden = artifacts.length - latest.length;
+	return (
+		<div className="flex min-w-0 flex-col gap-0.5" data-testid="board-session-artifacts">
+			{latest.map((artifact) => {
+				const Icon = artifact.kind === "html" ? Globe : Shapes;
+				return (
+					<button
+						aria-label={t("shell.openArtifactNamed", { name: artifact.name })}
+						className="flex min-w-0 max-w-full items-center gap-1.5 self-start rounded-sm py-0.5 text-left text-xs text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						key={artifact.path}
+						onClick={(event) => {
+							event.stopPropagation();
+							onOpen(artifact.path);
+						}}
+						title={artifact.path}
+						type="button"
+					>
+						<Icon aria-hidden="true" className="size-icon-2xs shrink-0 text-muted-foreground" />
+						<span className="truncate">{artifact.name}</span>
+					</button>
+				);
+			})}
+			{hidden > 0 ? (
+				<span className="pl-[18px] text-2xs text-muted-foreground">
+					{t("shell.moreArtifacts", { count: hidden })}
+				</span>
+			) : null}
+		</div>
 	);
 }
 
@@ -355,8 +406,6 @@ function pullRequestProgressLabel(
 		.join(" · ");
 }
 
-// Keep the board metric scannable by showing cost only. The full cost/token
-// summary remains available from the hover tooltip and to screen readers.
 /** "1.4 GB · 82%" while working, just "240 MB" while idle: an idle agent is
  * always at 0% and printing it is noise. */
 function toResourcePresentation(
@@ -375,40 +424,6 @@ function toResourcePresentation(
 		accessibleLabel: t("shell.sessionResourceAria", { size, cpu }),
 		compactLabel: `${size} · ${cpu}`,
 		tone,
-	};
-}
-
-function toUsagePresentation(
-	usage: SessionUsageSummary | undefined,
-	t: TFunction,
-): BoardUsagePresentation | undefined {
-	const processedTokens = usage?.processedTokens ?? null;
-	if (!usage) {
-		return undefined;
-	}
-	const cost = formatEstimatedCost(usage.estimatedCost);
-	if (!cost) {
-		if (processedTokens === null || processedTokens <= 0) {
-			return undefined;
-		}
-		const compactTokens = formatTokenCount(processedTokens).replace(/ tok$/, "");
-		const accessibleTokens = t("shell.usageTokens", {
-			count: processedTokens.toLocaleString("en-US"),
-		});
-		return {
-			accessibleLabel: accessibleTokens,
-			compactLabel: compactTokens,
-		};
-	}
-	if (processedTokens === null) {
-		return { accessibleLabel: cost, compactLabel: cost };
-	}
-	const accessibleTokens = t("shell.usageTokens", {
-		count: processedTokens.toLocaleString("en-US"),
-	});
-	return {
-		accessibleLabel: `${cost} · ${accessibleTokens}`,
-		compactLabel: cost,
 	};
 }
 
@@ -454,7 +469,15 @@ function ArchiveRestoreError({ message }: { message?: string }) {
 	) : null;
 }
 
-function CopyActionButton({ label, value }: { label: string; value: string }) {
+function CopyActionButton({
+	copiedLabel,
+	copyLabel,
+	value,
+}: {
+	copiedLabel: string;
+	copyLabel: string;
+	value: string;
+}) {
 	const [copied, setCopied] = useState(false);
 	const copiedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	useEffect(
@@ -463,7 +486,7 @@ function CopyActionButton({ label, value }: { label: string; value: string }) {
 		},
 		[],
 	);
-	const buttonLabel = copied ? `Copied ${label}` : `Copy ${label}`;
+	const buttonLabel = copied ? copiedLabel : copyLabel;
 	const copyValue = async (event: MouseEvent<HTMLButtonElement>) => {
 		event.stopPropagation();
 		try {

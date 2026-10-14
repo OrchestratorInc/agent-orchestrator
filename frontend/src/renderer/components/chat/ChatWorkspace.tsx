@@ -35,11 +35,12 @@ import {
 	type ReactNode,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
-import { ArrowDown, Loader2, MessageSquarePlus, TriangleAlert, Undo2 } from "lucide-react";
-import { Reorder, useDragControls } from "motion/react";
+import { ArrowDown, Lightbulb, Loader2, MessageSquarePlus, TriangleAlert, Undo2 } from "lucide-react";
+import { AnimatePresence, motion, Reorder, useDragControls, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
 import { actionMenuContentClass, actionMenuItemClass } from "../ui/menu-styles";
+import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "../NavRowHighlight";
 import { useScrollFollow } from "../../hooks/useScrollFollow";
 import {
 	defaultRangeExtractor,
@@ -124,6 +125,7 @@ import {
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
+import type { ComposerPromptSuggestion } from "./ComposerEditor";
 import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
@@ -317,6 +319,7 @@ export interface ChatWorkspaceProps {
 	onAddToSideChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
 	annotationNavigationRequest?: { id: string; text: string; messageId?: string; revision?: number };
 	snapshot: ConversationSnapshot;
+	promptSuggestion?: ComposerPromptSuggestion;
 	/** Renderer-owned state identity; the snapshot's sessionId remains the daemon wire ID. */
 	uiSessionId?: string;
 	/** Durable draft owner for a conversation that is not a worker session. */
@@ -597,6 +600,7 @@ function ChatWorkspaceContent({
 	onAddToSideChat,
 	annotationNavigationRequest,
 	snapshot,
+	promptSuggestion,
 	sessionTitle,
 	sessionRole = "worker",
 	assetBaseUrl,
@@ -1110,6 +1114,10 @@ function ChatWorkspaceContent({
 	const [confirming, setConfirming] = useState<string | undefined>(undefined);
 	const surfaceRef = useRef<HTMLElement | null>(null);
 	const composerFocusRef = useRef<ChatComposerHandle>(null);
+	const artifactSession = session?.requestedOutput === "artifact";
+	// The sample prompts show only while the composer is empty: picking one hides
+	// them, and clearing the draft brings them back.
+	const [composerEmpty, setComposerEmpty] = useState(true);
 	const annotationNavigationRef = useRef<((annotation: { text: string; messageId?: string; revision?: number }) => void) | null>(null);
 	const navigateToAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number }) => {
 		annotationNavigationRef.current?.(annotation);
@@ -1719,7 +1727,7 @@ function ChatWorkspaceContent({
 								{discarded > 0 ? <RolledBackNotice count={discarded} /> : null}
 								{conversationEmpty ? (
 									<h1 className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl">
-										{t("chat.welcome.heading")}
+										{t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
 									</h1>
 								) : null}
 								<div ref={composerBoxRef} className="relative">
@@ -1728,7 +1736,7 @@ function ChatWorkspaceContent({
 											aria-hidden="true"
 											className="chat-welcome-leaving pointer-events-none absolute inset-x-0 bottom-full mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl"
 										>
-											{t("chat.welcome.heading")}
+											{t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
 										</h1>
 									) : null}
 									<McpServerBanner
@@ -1748,6 +1756,11 @@ function ChatWorkspaceContent({
 										elicitation={composerElicitation}
 										onSend={handleComposerSend}
 										draftSeed={composerDraftSeed}
+										promptSuggestion={!queueEdit && !composerApproval && !composerElicitation && !turn &&
+											!busy && !sendPending && !steerPending && !agentInputDisabled && !newWorkDisabled &&
+											!controllerTransitioning && !loadingQuietly && !agentResuming &&
+											!workspaceActiveTabKey && !reviewerActive && !shellActive && snapshot.controller.state === "ready"
+											? promptSuggestion : undefined}
 										editingQueuedTurnId={queueEdit?.turnId}
 										queuedEditRecovery={Boolean(queueEdit?.clientMessageId)}
 										savingQueuedEditPending={Boolean(
@@ -1756,6 +1769,7 @@ function ChatWorkspaceContent({
 										)}
 										onCancelQueuedEdit={cancelQueuedEdit}
 										onQueuedDraftChange={queueEdit ? changeQueuedDraft : undefined}
+										onDraftEmptyChange={setComposerEmpty}
 										queuedDraftScope={queueEdit ? draftScope : undefined}
 										onQueuedAttachmentsChange={changeQueuedStagedAttachments}
 										onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
@@ -1786,7 +1800,7 @@ function ChatWorkspaceContent({
 										// task can have non-message activity before its first visible chat
 										// message, and the generic placeholder makes a still-empty composer
 										// look like a regression.
-										emptyPlaceholder={conversationEmpty ? emptyChatPlaceholder : undefined}
+										emptyPlaceholder={conversationEmpty ? (artifactSession ? t("chat.welcome.artifactPlaceholder") : emptyChatPlaceholder) : undefined}
 										skills={skills}
 										filePaths={filePaths}
 										filePathsTruncated={filePathsTruncated}
@@ -1814,6 +1828,11 @@ function ChatWorkspaceContent({
 										acceptedClientMessageIds={acceptedClientMessageIds}
 									/>
 								</div>
+								<WelcomePromptSuggestions
+									open={conversationEmpty && !newWorkDisabled && composerEmpty}
+									artifact={artifactSession}
+									onPick={(text) => composerFocusRef.current?.setDraft(text)}
+								/>
 								{compactStartup ? <OrchestratorStartupStatus {...compactStartup} /> : null}
 							</div>
 						</div>
@@ -4797,4 +4816,62 @@ function rendersNothing(run: TimelineRun): boolean {
 	if (run.kind !== "single" || !item) return false;
 	if (item.kind === "message") return item.role === "assistant" && item.text.trim() === "";
 	return item.activityKind === "user_input" || (item.activityKind === "approval" && item.status === "pending");
+}
+
+const ARTIFACT_PROMPT_KEYS = [
+	"chat.welcome.artifactPrompt.plan",
+	"chat.welcome.artifactPrompt.compare",
+	"chat.welcome.artifactPrompt.notes",
+] as const;
+
+const CHAT_PROMPT_KEYS = [
+	"chat.welcome.prompt.review",
+	"chat.welcome.prompt.tests",
+	"chat.welcome.prompt.trace",
+] as const;
+
+/**
+ * Sample requests under an empty chat's composer; picking one fills the composer.
+ * The list collapses its height, and the gap above it, on the way in and out so the
+ * centered composer glides instead of jumping.
+ */
+function WelcomePromptSuggestions({ open, artifact, onPick }: { open: boolean; artifact: boolean; onPick: (text: string) => void }) {
+	const { t } = useTranslation();
+	const reducedMotion = useReducedMotion();
+	const keys = artifact ? ARTIFACT_PROMPT_KEYS : CHAT_PROMPT_KEYS;
+	return (
+		<AnimatePresence initial={false}>
+			{open ? (
+				<motion.div
+					key="welcome-prompts"
+					initial={{ height: 0, opacity: 0 }}
+					animate={{ height: "auto", opacity: 1, transition: { duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] } }}
+					exit={{ height: 0, opacity: 0, transition: { duration: reducedMotion ? 0 : 0.16, ease: [0.4, 0, 1, 1] } }}
+					// The dock's gap-2 sits outside this box. Cancel it and put the space back as
+					// padding inside, so it collapses with the height instead of snapping.
+					className="-mt-2 overflow-hidden"
+				>
+					<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-col divide-y divide-border pt-3">
+						{keys.map((key) => (
+							<li key={key} className="py-0.5">
+								<button
+									type="button"
+									// Same growing pill as the sidebar rows; the host stays transparent.
+									className={cn(
+										"welcome-prompt-suggestion flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-control text-muted-foreground focus-visible:outline-none",
+										NAV_ROW_HIGHLIGHT_HOST_CLASS,
+									)}
+									onClick={() => onPick(t(key))}
+								>
+									<NavRowHighlight />
+									<Lightbulb aria-hidden="true" className="relative z-[1] size-icon-sm shrink-0" />
+									<span className="relative z-[1] truncate">{t(key)}</span>
+								</button>
+							</li>
+						))}
+					</ul>
+				</motion.div>
+			) : null}
+		</AnimatePresence>
+	);
 }

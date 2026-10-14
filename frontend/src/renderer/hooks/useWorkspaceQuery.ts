@@ -150,6 +150,7 @@ export function toWorkspaceSession(
 		pinnedAt: session.pinnedAt ?? undefined,
 		prs: (session.prs ?? []).map(toPullRequestFacts),
 		outputType: session.outputType,
+		...(session.requestedOutput ? { requestedOutput: session.requestedOutput } : {}),
 		artifactFiles: session.artifactFiles?.map(toSessionArtifact),
 	};
 }
@@ -252,6 +253,7 @@ function toLocalWorkspaceSession(
 		pinnedAt: session.pinnedAt ?? undefined,
 		prs: (session.prs ?? []).map(toPullRequestFacts),
 		outputType: session.outputType,
+		...(session.requestedOutput ? { requestedOutput: session.requestedOutput } : {}),
 		artifactFiles: session.artifactFiles?.map(toSessionArtifact),
 	};
 }
@@ -385,13 +387,27 @@ async function fetchRemoteWorkspaces(hostId: string): Promise<WorkspaceSummary[]
 
 // Shared so route loaders can prefetch via queryClient.ensureQueryData (paired
 // with the router's defaultPreload: "intent") and the hook reads the same cache.
+// No refetchInterval here: every observer that carries one runs its own timer,
+// and timers started at different mount times do not dedupe. With ~18
+// subscribers that meant several /projects + /sessions fetches per tick.
+// useWorkspacePolling() is the single owner of the interval.
 export const workspaceQueryOptions = {
 	queryKey: workspaceQueryKey,
 	queryFn: fetchWorkspaces,
 	retry: 1,
 	staleTime: 10_000,
-	refetchInterval: (query: Query<WorkspaceSummary[]>) => (workspaceStatusesChecking(query.state.data) ? 300 : 15_000),
 };
+
+export const workspaceRefetchInterval = (query: Query<WorkspaceSummary[]>) =>
+	workspaceStatusesChecking(query.state.data) ? 300 : 15_000;
+
+/**
+ * Drives the workspace poll from one place. Mounted once by the shell; it never
+ * re-renders its host (notifyOnChangeProps: []), it only keeps the timer.
+ */
+export function useWorkspacePolling(enabled = true) {
+	useQuery({ ...workspaceQueryOptions, refetchInterval: workspaceRefetchInterval, notifyOnChangeProps: [], enabled });
+}
 
 // Cloud projects are a separate query so a control-plane failure can never
 // break the local list: on error TanStack keeps this query's last known data,

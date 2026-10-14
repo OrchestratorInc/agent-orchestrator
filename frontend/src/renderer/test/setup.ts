@@ -1,8 +1,16 @@
 import "@testing-library/jest-dom/vitest";
 import * as jestDomMatchers from "@testing-library/jest-dom/matchers";
 import { expect } from "vitest";
-import "../i18n";
+import { appI18n } from "../i18n";
+import { appCatalogs } from "../i18n/all-messages";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
+
+// The app loads non-English catalogs on demand. Component tests read other
+// locales synchronously (getFixedT, t after changeLanguage), so give the shared
+// instance every catalog up front. instance.test.ts covers the lazy path.
+for (const [locale, catalog] of Object.entries(appCatalogs)) {
+	appI18n.addResourceBundle(locale, "translation", catalog, true, true);
+}
 import { appShortcutBus } from "./app-shortcut-bus";
 
 // Vitest 4 can load the convenience entry against a different matcher
@@ -143,6 +151,7 @@ if (typeof window !== "undefined") {
 			set: async () => undefined,
 			persistTerminal: async () => undefined,
 			setWindowBackground: async () => undefined,
+			setWindowTranslucent: async () => undefined,
 		},
 		menu: {
 			action: async () => undefined,
@@ -334,6 +343,12 @@ if (typeof window !== "undefined") {
 		appState: {
 			getMigration: async () => ({ status: "pending" }),
 			setMigration: async () => undefined,
+		},
+		cliLink: {
+			setEnabled: async () => undefined,
+			inspect: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
+			link: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
+			unlink: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
 		},
 		updateSettings: {
 			get: async () => ({ enabled: false, channel: "latest", nightlyAck: false, feature: null, macDifferentialUpdates: false }),

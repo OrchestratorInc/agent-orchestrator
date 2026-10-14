@@ -1,5 +1,5 @@
 import { Host, Picker, Switch } from "@expo/ui";
-import { Feather } from "../lib/icons";
+import { Feather } from "../../lib/icons";
 import * as Application from "expo-application";
 import * as Clipboard from "expo-clipboard";
 import * as Device from "expo-device";
@@ -8,27 +8,29 @@ import { useFocusEffect, useRouter } from "expo-router";
 import * as Updates from "expo-updates";
 import { Children, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Alert, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { ApiError, pingServer } from "../lib/api";
-import { loadAccount, signInToAccount, signOutOfAccount, type Account } from "../lib/account";
-import { clearAccountHosts, ignoreAccountHost, syncAccountHosts } from "../lib/accountHosts";
-import { formatVersionLine, type BuildInfo } from "../lib/appInfo";
-import { bugReportClipboard, bugReportOpenUrl, bugReportUrl } from "../lib/bugReport";
-import { isConfigured, type ServerConfig } from "../lib/config";
-import { classifyConnectionFailure, describeConnectionFailure } from "../lib/connectionError";
-import { describeDesktopStatus } from "../lib/desktopStatus";
-import { discordFeatureRequestURL } from "../lib/discord";
-import { forgetServer } from "../lib/disconnect";
-import { haptics } from "../lib/haptics";
-import { activeHost, loadHosts, type Host as PairedHost } from "../lib/hosts";
-import { toggleLayoutGrid, useLayoutGrid } from "../lib/layoutGrid";
-import { checkStore, openOrStartUpdate } from "../lib/inAppUpdates";
-import { describePrompt } from "../lib/storeUpdate";
-import { NativeHeaderButton } from "../lib/native-header-button";
-import { openGitHub } from "../lib/openGitHub";
-import { tunnelMayHaveRotated } from "../lib/staleTunnel";
-import { getPushStatus, openNotificationSettings, registerForPush, unregisterFromPush } from "../lib/push";
-import { describePushToggle, describeRegisterFailure, type PushStatus } from "../lib/pushStatus";
-import { useApp } from "../lib/store";
+import { ApiError, pingServer } from "../../lib/api";
+import { loadAccount, signInToAccount, signOutOfAccount, type Account } from "../../lib/account";
+import { clearAccountHosts, syncAccountHosts } from "../../lib/accountHosts";
+import { formatVersionLine, type BuildInfo } from "../../lib/appInfo";
+import { bugReportClipboard, bugReportOpenUrl, bugReportUrl } from "../../lib/bugReport";
+import { isConfigured, type ServerConfig } from "../../lib/config";
+import { environmentSummary } from "../../lib/environmentView";
+import { classifyConnectionFailure, describeConnectionFailure } from "../../lib/connectionError";
+import { describeDesktopStatus } from "../../lib/desktopStatus";
+import { discordFeatureRequestURL } from "../../lib/discord";
+import { haptics } from "../../lib/haptics";
+import { activeHost, loadHosts, type Host as PairedHost } from "../../lib/hosts";
+import { toggleLayoutGrid, useLayoutGrid } from "../../lib/layoutGrid";
+import { checkStore, openOrStartUpdate } from "../../lib/inAppUpdates";
+import { MachineSelector } from "../../lib/MachineSelector";
+import { canRepairWithQr } from "../../lib/machineRecovery";
+import { describePrompt } from "../../lib/storeUpdate";
+import { NativeHeaderButton } from "../../lib/native-header-button";
+import { openGitHub } from "../../lib/openGitHub";
+import { tunnelMayHaveRotated } from "../../lib/staleTunnel";
+import { getPushStatus, openNotificationSettings, registerForPush, unregisterFromPush } from "../../lib/push";
+import { describePushToggle, describeRegisterFailure, type PushStatus } from "../../lib/pushStatus";
+import { useApp } from "../../lib/store";
 import {
 	describeSoftwareUpdateRow,
 	describeStoreRow,
@@ -38,9 +40,9 @@ import {
 	tierOf,
 	type StoreCheck,
 	type StoreRowResult,
-} from "../lib/storeUpdate";
-import type { Theme } from "../lib/theme";
-import { preferenceLabel, type ThemePreference } from "../lib/themePreference";
+} from "../../lib/storeUpdate";
+import type { Theme } from "../../lib/theme";
+import { preferenceLabel, type ThemePreference } from "../../lib/themePreference";
 
 // Light / Dark / System, in the desktop app's order and wording.
 const THEME_OPTIONS: { value: ThemePreference; icon: keyof typeof Feather.glyphMap }[] = [
@@ -48,20 +50,20 @@ const THEME_OPTIONS: { value: ThemePreference; icon: keyof typeof Feather.glyphM
 	{ value: "dark", icon: "moon" },
 	{ value: "system", icon: "smartphone" },
 ];
-import { useTheme, useThemedStyles, useThemeState } from "../lib/ThemeProvider";
-import { checkAndDownload, describeUpdateRow, type UpdateOutcome } from "../lib/updates";
-import { VERSION_FLOOR } from "../lib/versionFloor";
-import { type, space } from "../lib/tokens";
-import { backOr } from "../lib/backNavigation";
+import { useTheme, useThemedStyles, useThemeState } from "../../lib/ThemeProvider";
+import { checkAndDownload, describeUpdateRow, type UpdateOutcome } from "../../lib/updates";
+import { VERSION_FLOOR } from "../../lib/versionFloor";
+import { type, space } from "../../lib/tokens";
+import { backOr } from "../../lib/backNavigation";
 
 
-export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
+export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
 export default function SettingsScreen() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
-	const { config, configured, selectedHostName, switchHost, reloadConfig } = useApp();
+	const { config, configured, selectedHostName, switchHost, connection, error, errorStatus, activeEndpoints, loading: appLoading, reloadConfig } = useApp();
 	const scrollRef = useRef<ScrollView>(null);
 	const [pairedHosts, setPairedHosts] = useState<PairedHost[]>([]);
 	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
@@ -108,6 +110,15 @@ export default function SettingsScreen() {
 	const paired = pairedHosts.length > 0 || configured || selectedHostName !== null;
 	const selectedHost = pairedHosts.find((host) => host.id === selectedHostId);
 	const selectedConfigReady = !!config && isConfigured(config) && (!selectedHost || config.hostId === selectedHost.id);
+	// Only a poll that actually failed is a failure. Before the first tick lands
+	// errorStatus is null too, which on its own would read as unreachable.
+	const classified = error ? classifyConnectionFailure(errorStatus ?? undefined) : null;
+	const failure =
+		classified === "unreachable" && tunnelMayHaveRotated(activeEndpoints, config?.endpointKind, connection === "open")
+			? "tunnel-rotated"
+			: classified ?? (paired && !config && !appLoading ? "unreachable" : null);
+	const machineStatus = describeDesktopStatus({ configured: paired, connection, failure });
+	const machineStatusColor = machineStatus.tone === "ok" ? t.green : machineStatus.tone === "error" ? t.red : undefined;
 	return (
 		<View style={styles.screen} collapsable={false}>
 			<View style={styles.header}>
@@ -122,30 +133,46 @@ export default function SettingsScreen() {
 				contentContainerStyle={styles.content}
 				keyboardShouldPersistTaps="handled"
 			>
-				<SettingsSection title="Machines" footer={selectedHost?.name ?? selectedHostName ?? (paired && config ? `${config.host}:${config.httpPort}` : "Pair this phone with an AO machine.")}>
+				<SettingsSection title="Machines">
 					<SettingsCard>
-						<DesktopStatusRow />
-						<ConnectionTestRow paired={paired} selectedHostId={selectedHostId} />
-						<CardRow icon="plus" label={paired ? "Pair another machine" : "Pair a machine"} onPress={() => router.navigate("/pair")} />
-						{pairedHosts.map((host) => (
-							<MachineRow
-								key={host.id}
-								host={host}
-								selected={host.id === selectedHostId}
-								loading={switchingHostId === host.id}
-								onSelect={() => { void selectHost(host.id); }}
-								onEdit={() => router.push({ pathname: "/sheets/connect", params: { hostId: host.id } })}
+						<MachineSelector
+							hosts={pairedHosts}
+							selectedHostId={selectedHostId}
+							selectedHostName={selectedHostName}
+							statusLabel={machineStatus.label}
+							statusColor={machineStatusColor}
+							switchingHostId={switchingHostId}
+							onSelect={(id) => { void selectHost(id); }}
+						/>
+						{selectedHost && canRepairWithQr(failure) ? (
+							<CardRow
+								icon="maximize"
+								label="Scan new code"
+								onPress={() => router.push({ pathname: "/pair", params: { repairHostId: selectedHost.id } })}
 							/>
-						))}
+						) : null}
+						<ConnectionTestRow paired={paired} selectedHostId={selectedHostId} />
+						<CardRow icon="plus" label="Add a machine" showChevron={false} onPress={() => router.navigate("/pair")} />
 						{selectedHost && !selectedConfigReady ? (
 							<CardRow icon="refresh-cw" label="Retry selected machine" onPress={() => { void reloadConfig(); }} />
 						) : null}
 					</SettingsCard>
 				</SettingsSection>
 
+				<SettingsSection title="Environments">
+					<SettingsCard>
+						<CardRow
+							icon="globe"
+							label="Environments"
+							value={environmentSummary(pairedHosts.length, selectedHost?.name ?? selectedHostName)}
+							onPress={() => router.push("/settings/environments")}
+						/>
+					</SettingsCard>
+				</SettingsSection>
+
 				<SettingsSection title="Account" footer="Paired machines sync across signed-in devices.">
 					<SettingsCard>
-						<CardRow icon="user" label={account ? "AO Cloud" : "Sign in to AO Cloud"} value={account?.email} loading={accountLoading || accountBusy} onPress={account ? undefined : () => {
+						<CardRow icon="user" label={account ? "Orchestrator Cloud" : "Sign in to Orchestrator Cloud"} value={account?.email} loading={accountLoading || accountBusy} onPress={account ? undefined : () => {
 							setAccountBusy(true);
 							void signInToAccount().then(async (value) => {
 								if (!value) return;
@@ -184,7 +211,7 @@ export default function SettingsScreen() {
 					</SettingsCard>
 				</SettingsSection>
 
-				<SettingsSection title="Updates" footer="AO installs compatible updates automatically. Native releases open in your app store.">
+				<SettingsSection title="Updates">
 					<SettingsCard><SoftwareUpdateRow /></SettingsCard>
 				</SettingsSection>
 
@@ -195,45 +222,6 @@ export default function SettingsScreen() {
 					</SettingsCard>
 				</SettingsSection>
 
-				{paired ? (
-				<DisconnectRow
-					machineName={selectedHost?.name}
-					onForget={async () => {
-						let failed = false;
-						if (account && selectedHostId) {
-							try { await ignoreAccountHost(account.id, selectedHostId); }
-							catch { failed = true; }
-						}
-						if (failed) {
-							Alert.alert("Couldn't disconnect", "This machine could not be hidden from account sync. Try again.");
-							return;
-						}
-						try { await forgetServer(); } catch { failed = true; }
-						try { await reloadConfig(); } catch {}
-						let remaining: PairedHost[];
-						try { remaining = await loadHosts(); }
-						catch {
-							haptics.error();
-							Alert.alert("Couldn't disconnect", "The saved machines couldn't be read. Try again.");
-							return;
-						}
-						const stillPaired = selectedHostId !== null
-							? remaining.some((host) => host.id === selectedHostId)
-							: remaining.length > 0;
-						if (failed && stillPaired) {
-							haptics.error();
-							Alert.alert("Couldn't disconnect", "This machine's saved connection couldn't be removed. Try again.");
-							return;
-						}
-						if (remaining.length === 0) {
-							router.replace("/onboarding");
-						} else {
-							setPairedHosts(remaining);
-							setSelectedHostId((await activeHost())?.id ?? null);
-						}
-					}}
-				/>
-				) : null}
 				<VersionFooter />
 			</ScrollView>
 		</View>
@@ -300,6 +288,7 @@ function CardRow({
 	onPress,
 	disabled = false,
 	loading = false,
+	showChevron = true,
 	right,
 }: {
 	icon: keyof typeof Feather.glyphMap;
@@ -309,6 +298,7 @@ function CardRow({
 	onPress?: () => void;
 	disabled?: boolean;
 	loading?: boolean;
+	showChevron?: boolean;
 	right?: ReactNode;
 }) {
 	const t = useTheme();
@@ -320,63 +310,13 @@ function CardRow({
 			{right ?? (loading ? <ActivityIndicator size="small" color={t.textTertiary} /> : (
 				<>
 					{value ? <Text style={[styles.rowValue, valueColor ? { color: valueColor } : null]} numberOfLines={1}>{value}</Text> : null}
-					{onPress ? <Feather name="chevron-right" size={17} color={t.textFaint} /> : null}
+					{onPress && showChevron ? <Feather name="chevron-right" size={17} color={t.textFaint} /> : null}
 				</>
 			))}
 		</>
 	);
 	if (!onPress) return <View style={styles.row}>{content}</View>;
 	return <Pressable disabled={disabled || loading} onPress={() => { haptics.tap(); onPress(); }} style={({ pressed }) => [styles.row, pressed && styles.rowPressed, disabled && styles.disabled]}>{content}</Pressable>;
-}
-
-function MachineRow({ host, selected, loading, onSelect, onEdit }: {
-	host: PairedHost;
-	selected: boolean;
-	loading: boolean;
-	onSelect(): void;
-	onEdit(): void;
-}) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-
-	return <View style={styles.row}>
-		<Feather name="server" size={17} color={t.textSecondary} style={styles.rowIcon} />
-		<Pressable accessibilityRole="button" accessibilityLabel={selected ? `${host.name}, default machine` : `Make ${host.name} default`} disabled={selected || loading} onPress={() => { haptics.tap(); onSelect(); }} style={styles.machineSelect}>
-			<Text style={styles.rowLabel} numberOfLines={1}>{host.name}</Text>
-			{loading ? <ActivityIndicator size="small" color={t.textTertiary} /> : <Text style={styles.rowValue}>{selected ? "Default" : "Make default"}</Text>}
-		</Pressable>
-		<Pressable accessibilityRole="button" accessibilityLabel={`Edit connection for ${host.name}`} onPress={() => { haptics.tap(); onEdit(); }} style={styles.machineAction}>
-			<Feather name="edit-2" size={17} color={t.textSecondary} />
-		</Pressable>
-	</View>;
-}
-
-function DesktopStatusRow() {
-	const t = useTheme();
-	const router = useRouter();
-	const { config, configured, selectedHostName, connection, error, errorStatus, activeEndpoints, loading } = useApp();
-	const paired = configured || selectedHostName !== null;
-	// Only a poll that actually failed is a failure. Before the first tick lands
-	// errorStatus is null too, which on its own would read as unreachable. Same
-	// gate as the board, which only shows its failure copy behind `error`.
-	const classified = error ? classifyConnectionFailure(errorStatus ?? undefined) : null;
-	// Same rule as the board's failure copy: a dead tunnel with nothing else to
-	// reach the machine by is a rotated address, not an unreachable machine.
-	const failure =
-		classified === "unreachable" && tunnelMayHaveRotated(activeEndpoints, config?.endpointKind, connection === "open")
-			? "tunnel-rotated"
-			: classified ?? (paired && !config && !loading ? "unreachable" : null);
-	const status = describeDesktopStatus({ configured: paired, connection, failure });
-	const color = status.tone === "ok" ? t.green : status.tone === "error" ? t.red : undefined;
-	return (
-		<CardRow
-			icon="monitor"
-			label="Selected machine"
-			value={status.label}
-			valueColor={color}
-			onPress={() => router.navigate("/pair")}
-		/>
-	);
 }
 
 function ConnectionTestRow({ paired, selectedHostId }: { paired: boolean; selectedHostId: string | null }) {
@@ -524,7 +464,7 @@ function NotificationsRow() {
 
 	async function onToggle(next: boolean) {
 		if (toggle.blocked) {
-			Alert.alert("Notifications are blocked", "Allow notifications for AO in your system settings, then come back.", [
+			Alert.alert("Notifications are blocked", "Allow notifications for Orchestrator in your system settings, then come back.", [
 				{ text: "Not now", style: "cancel" },
 				{ text: "Open settings", onPress: openNotificationSettings },
 			]);
@@ -642,6 +582,7 @@ function SoftwareUpdateRow() {
 			<CardRow
 				icon="download-cloud"
 				label="Software update"
+				showChevron={false}
 				value={row.value}
 				valueColor={row.tone === "good" ? t.green : row.tone === "bad" ? t.red : undefined}
 				loading={row.busy}
@@ -649,7 +590,7 @@ function SoftwareUpdateRow() {
 			/>
 			{storePrompt ? (
 				<InlinePanel
-					title="A newer AO is ready"
+					title="A newer version of Orchestrator is ready"
 					copy={describePrompt({ version: storePrompt.version, storeConfirmed: storePrompt.storeConfirmed, storeName: Platform.OS === "ios" ? "App Store" : "Play Store" })}
 					primary={`Open ${Platform.OS === "ios" ? "App Store" : "Play Store"}`}
 					secondary="Not now"
@@ -711,7 +652,7 @@ function ReportProblemRow() {
 		setCopied(true);
 		void openGitHub(bugReportOpenUrl(bugReportUrl(environment), Platform.OS));
 	}
-	return <CardRow icon="help-circle" label="Report a problem" value={copied ? "Details copied" : undefined} onPress={report} />;
+	return <CardRow icon="help-circle" label="Report a problem" showChevron={false} value={copied ? "Details copied" : undefined} onPress={report} />;
 }
 
 function FeatureRequestRow() {
@@ -719,44 +660,16 @@ function FeatureRequestRow() {
 		<CardRow
 			icon="message-circle"
 			label="Request a feature"
+			showChevron={false}
 			value="Discord"
 			onPress={() => { void Linking.openURL(discordFeatureRequestURL()).catch(() => {}); }}
 		/>
 	);
 }
 
-function DisconnectRow({ machineName, onForget }: { machineName?: string; onForget: () => Promise<void> }) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	const [forgetting, setForgetting] = useState(false);
-	function confirmForget() {
-		Alert.alert(machineName ? `Forget ${machineName}?` : "Disconnect from machine?", "This phone will stop receiving notifications from this machine and remove its saved connection.", [
-			{ text: "Cancel", style: "cancel" },
-			{
-				text: machineName ? "Forget" : "Disconnect",
-				style: "destructive",
-				onPress: async () => {
-					setForgetting(true);
-					try { await onForget(); } finally { setForgetting(false); }
-				},
-			},
-		]);
-	}
-	return (
-		<Pressable
-			disabled={forgetting}
-			onPress={() => { haptics.warning(); confirmForget(); }}
-			style={({ pressed }) => [styles.disconnect, pressed && styles.rowPressed]}
-		>
-			{forgetting ? <ActivityIndicator color={t.red} /> : <Feather name="log-out" size={17} color={t.red} />}
-			<Text style={styles.disconnectText}>{forgetting ? "Disconnecting…" : machineName ? `Forget ${machineName}` : "Disconnect from machine"}</Text>
-		</Pressable>
-	);
-}
-
 function VersionFooter() {
 	const styles = useThemedStyles(makeStyles);
-	return <Text style={styles.versionFooter}>AO {formatVersionLine(buildInfo())}</Text>;
+	return <Text style={styles.versionFooter}>Orchestrator {formatVersionLine(buildInfo())}</Text>;
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
@@ -789,11 +702,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	rowIcon: { fontFamily: "Geist_400Regular", width: 26, textAlign: "center" },
 	rowLabel: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600", flex: 1 },
 	rowValue: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, maxWidth: "42%" },
-	machineSelect: { flex: 1, minWidth: 0, minHeight: 52, flexDirection: "row", alignItems: "center", gap: space.sm },
-	machineAction: { width: 44, minHeight: 44, alignItems: "center", justifyContent: "center" },
 	appearancePicker: { width: 124, height: 38, alignItems: "flex-end", justifyContent: "center" },
 	disabled: { opacity: 0.45 },
-	disconnect: { minHeight: 52, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md, borderRadius: 16, borderCurve: "continuous" },
-	disconnectText: { fontFamily: "Geist_600SemiBold", color: t.red, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
 	versionFooter: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, textAlign: "center", marginTop: -6 },
 });

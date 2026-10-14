@@ -309,6 +309,11 @@ type WorkspaceSearchQuery struct {
 	Limit  int    `query:"limit,omitempty" minimum:"1" maximum:"100" description:"Maximum results. Defaults to 50."`
 }
 
+// WorkspaceResolveQuery is the query string accepted by GET /api/v1/sessions/{sessionId}/workspace/resolve.
+type WorkspaceResolveQuery struct {
+	Path string `query:"path" required:"true" description:"Absolute or workspace-relative file path to classify."`
+}
+
 // WorkspaceTreeQuery is the query string accepted by GET /api/v1/sessions/{sessionId}/workspace/tree.
 type WorkspaceTreeQuery struct {
 	Path string `query:"path,omitempty" description:"Directory path relative to the session workspace root. Empty or omitted lists the root."`
@@ -432,6 +437,11 @@ type SpawnSessionRequest struct {
 	Model string `json:"model,omitempty" maxLength:"256"`
 	// Effort is the optional reasoning level for the selected model.
 	Effort string `json:"effort,omitempty" maxLength:"32"`
+
+	// RequestedOutput asks for a specific deliverable. artifact tells the worker to
+	// write a file in its artifact directory instead of opening a PR. Omitted is
+	// the ordinary task flow.
+	RequestedOutput domain.RequestedOutput `json:"requestedOutput,omitempty" enum:"artifact"`
 
 	// DisplayName is the sidebar label for the session, capped at 100 characters.
 	// `ao spawn --name` always sets it; other clients (e.g. the desktop new-task
@@ -740,6 +750,15 @@ type WorkspaceFileSearchResponse struct {
 	Truncated  bool                                `json:"truncated"`
 }
 
+// WorkspacePathResolutionResponse is the body of GET /api/v1/sessions/{sessionId}/workspace/resolve.
+// Path is relative to the root named by Kind and empty when Kind is outside;
+// the response never carries a local absolute path.
+type WorkspacePathResolutionResponse struct {
+	SessionID domain.SessionID             `json:"sessionId"`
+	Kind      sessionsvc.WorkspacePathKind `json:"kind" enum:"workspace,artifact,outside"`
+	Path      string                       `json:"path"`
+}
+
 // DesktopWorkspaceLocationResponse is returned only by the LAN-blocked desktop
 // handoff route. Electron main consumes the absolute path and never exposes it
 // through the preload bridge.
@@ -990,12 +1009,20 @@ type InterfaceTransitionNoticeAckResponse struct {
 	Transition SessionInterfaceTransitionView `json:"transition"`
 }
 
+// KillSessionRequest is the optional body of POST /api/v1/sessions/{sessionId}/kill.
+// DeleteArtifacts empties the session's artifact directory once it is
+// terminated. Only the archive dialog sets it; the CLI and the reaper never do.
+type KillSessionRequest struct {
+	DeleteArtifacts bool `json:"deleteArtifacts,omitempty"`
+}
+
 // KillSessionResponse is the body of POST /api/v1/sessions/{sessionId}/kill.
 type KillSessionResponse struct {
-	OK             bool             `json:"ok"`
-	SessionID      domain.SessionID `json:"sessionId"`
-	Freed          bool             `json:"freed,omitempty"`
-	CleanupPending bool             `json:"cleanupPending,omitempty"`
+	OK               bool             `json:"ok"`
+	SessionID        domain.SessionID `json:"sessionId"`
+	Freed            bool             `json:"freed,omitempty"`
+	CleanupPending   bool             `json:"cleanupPending,omitempty"`
+	ArtifactsDeleted bool             `json:"artifactsDeleted,omitempty"`
 }
 
 // RollbackSessionResponse is the body of POST /api/v1/sessions/{sessionId}/rollback.
@@ -2425,6 +2452,18 @@ type UnregisterPushDeviceResponse struct {
 
 /* ---- chat conversations ------------------------------------------------ */
 
+// ConversationPromptSuggestionRequest identifies the latest completed turn.
+type ConversationPromptSuggestionRequest struct {
+	TurnID string `json:"turnId"`
+}
+
+// ConversationPromptSuggestionResponse offers one optional next human message.
+type ConversationPromptSuggestionResponse struct {
+	TurnID string `json:"turnId"`
+	// Empty when there is no useful suggestion.
+	Prompt string `json:"prompt"`
+}
+
 // SetChatViewRequest renews or releases one renderer's Chat view lease.
 type SetChatViewRequest struct {
 	ViewID        string `json:"viewId"`
@@ -2868,6 +2907,9 @@ type ConversationActivityResponse struct {
 
 // ConversationSnapshotResponse is the durable read model a client bootstraps from.
 type ConversationSnapshotResponse struct {
+	// SupportsExcerpts advertises daemon-owned source verification separately from
+	// provider capabilities. Older daemons silently ignore the excerpts input.
+	SupportsExcerpts           bool   `json:"supportsExcerpts,omitempty"`
 	ConversationID             string `json:"conversationId"`
 	ActiveBranchID             string `json:"activeBranchId,omitempty"`
 	BranchedFromEarlierMessage bool   `json:"branchedFromEarlierMessage"`

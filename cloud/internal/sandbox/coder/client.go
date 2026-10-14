@@ -776,14 +776,34 @@ func normalizeState(status string) string {
 }
 
 func (c *Client) selectAgent(view workspace) (workspaceAgent, bool) {
+	var other workspaceAgent
+	others := 0
 	for _, resource := range view.LatestBuild.Resources {
 		for _, agent := range resource.Agents {
 			if c.agentName == "" || agent.Name == c.agentName {
 				return agent, true
 			}
+			other = agent
+			others++
 		}
 	}
+	// The configured name belongs to the deployment's default template; a
+	// template with a single agent under another name still has one to use.
+	if others == 1 {
+		return other, true
+	}
 	return workspaceAgent{}, false
+}
+
+// agentNames lists the agents a workspace build reported, for diagnostics.
+func agentNames(view workspace) []string {
+	var names []string
+	for _, resource := range view.LatestBuild.Resources {
+		for _, agent := range resource.Agents {
+			names = append(names, agent.Name)
+		}
+	}
+	return names
 }
 
 // BootstrapWorker installs and starts AO through the Coder agent PTY. The

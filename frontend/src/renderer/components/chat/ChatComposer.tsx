@@ -60,6 +60,7 @@ import {
 	type ComposerEditorHandle,
 	type ComposerImage,
 	type ComposerEditorSnapshot,
+	type ComposerPromptSuggestion,
 	type ComposerTrigger,
 } from "./ComposerEditor";
 import { moveHighlight, rankFiles, rankSkills, type Suggestion } from "./composerSuggest";
@@ -167,7 +168,12 @@ function restoredDeliveryNotice(delivery: ChatComposerDelivery | undefined): str
 }
 /** A retained server-owned attachment; image bytes stay in durable storage. */
 export type StoredComposerAttachment = ChatDraftRetainedAttachment & { dataUrl?: string };
-export type ChatComposerHandle = { focus(): void; isEmpty(): boolean };
+export type ChatComposerHandle = {
+	focus(): void;
+	isEmpty(): boolean;
+	/** Replaces the draft with text, saved like typed input, and focuses the editor. */
+	setDraft(text: string): void;
+};
 
 export const ChatComposer = memo(function ChatComposer({
 	focusRef,
@@ -197,6 +203,7 @@ export const ChatComposer = memo(function ChatComposer({
 	editingQueuedTurnId,
 	onCancelQueuedEdit,
 	onQueuedDraftChange,
+	onDraftEmptyChange,
 	queuedDraftScope,
 	onQueuedAttachmentsChange,
 	onQueuedRetainedAttachmentsChange,
@@ -218,6 +225,7 @@ export const ChatComposer = memo(function ChatComposer({
 	assetSessionId,
 	acceptedClientMessageIds,
 	emptyPlaceholder,
+	promptSuggestion,
 	onSelectAnnotation,
 }: {
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
@@ -246,6 +254,8 @@ export const ChatComposer = memo(function ChatComposer({
 	starting?: boolean;
 	/** A contextual prompt shown before an otherwise empty conversation begins. */
 	emptyPlaceholder?: string;
+	/** A proposed next message, kept out of the draft until accepted with Tab. */
+	promptSuggestion?: ComposerPromptSuggestion;
 	/** The provider's skills. Empty leaves `/` an ordinary character. */
 	skills?: ChatSkill[];
 	/** Worktree-relative paths offered for `@`. Empty leaves `@` ordinary. */
@@ -282,6 +292,8 @@ export const ChatComposer = memo(function ChatComposer({
 	editingQueuedTurnId?: string;
 	onCancelQueuedEdit?: () => void;
 	onQueuedDraftChange?: (text: string) => void;
+	/** Called when the draft turns empty or non-empty, including after a restore. */
+	onDraftEmptyChange?: (empty: boolean) => void;
 	queuedDraftScope?: ChatDraftScope;
 	onQueuedAttachmentsChange?: (attachments: ChatDraftAttachment[]) => void;
 	onQueuedRetainedAttachmentsChange?: (attachments: ChatDraftRetainedAttachment[]) => void;
@@ -553,6 +565,9 @@ export const ChatComposer = memo(function ChatComposer({
 		path && IMAGE_ATTACHMENT_PATH.test(path) ? [{ path, name: file.name, src: preview }] : []);
 	const controlsDisabled = Boolean(disabled || submitting);
 	const hasDraft = hasText || staged || contextReferences.length > 0;
+	useEffect(() => {
+		onDraftEmptyChange?.(!hasDraft);
+	}, [hasDraft, onDraftEmptyChange]);
 	const savingQueuedEdit = Boolean(editingQueuedTurnId);
 	const acceptedMutationWaiting = Boolean(
 		composerMutation.accepted &&
@@ -692,7 +707,6 @@ export const ChatComposer = memo(function ChatComposer({
 		if (!autoFocus || disabled) return;
 		editor.current?.focus();
 	}, [autoFocus, disabled]);
-	useImperativeHandle(focusRef, () => ({ focus: focusEditor, isEmpty: () => !hasDraft }), [focusEditor, hasDraft]);
 
 	useEffect(() => {
 		focusEditor();
@@ -1038,6 +1052,20 @@ export const ChatComposer = memo(function ChatComposer({
 			setDismissedKey(null);
 		}
 	}, [draftScope, onQueuedDraftChange, optimisticSend]);
+	useImperativeHandle(
+		focusRef,
+		() => ({
+			focus: focusEditor,
+			isEmpty: () => !hasDraft,
+			setDraft: (text: string) => {
+				editor.current?.setText(text);
+				const snapshot = editor.current?.getSnapshot();
+				if (snapshot) onEditorChange(snapshot);
+				editor.current?.focus();
+			},
+		}),
+		[focusEditor, hasDraft, onEditorChange],
+	);
 
 	const pick = useCallback((value: string) => {
 		const currentTrigger = triggerRef.current;
@@ -1745,6 +1773,7 @@ export const ChatComposer = memo(function ChatComposer({
 				<ComposerEditor
 					ref={editor}
 					images={composerImages}
+					promptSuggestion={willQueue || starting || editingQueuedTurnId || staged ? undefined : promptSuggestion}
 					disabled={Boolean(disabled || queuedEditRecovery || (!optimisticSend && (submitting || draftMutationPending)))}
 					concealed={sendConcealed && !optimisticSend}
 					label="Message the agent"

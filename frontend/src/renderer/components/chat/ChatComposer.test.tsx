@@ -307,6 +307,16 @@ describe("send keys", () => {
 		expect(field.textContent).toBe("");
 	});
 
+	it("reports when the draft turns non-empty and empty again", async () => {
+		const onDraftEmptyChange = vi.fn();
+		const { field } = renderComposer({ onDraftEmptyChange });
+		expect(onDraftEmptyChange).toHaveBeenLastCalledWith(true);
+		await typeInComposer(field, "hello");
+		expect(onDraftEmptyChange).toHaveBeenLastCalledWith(false);
+		await userEvent.keyboard("{Enter}");
+		expect(onDraftEmptyChange).toHaveBeenLastCalledWith(true);
+	});
+
 	it("does not restore a sent draft through undo", async () => {
 		const { field } = renderComposer();
 		await typeInComposer(field, "already sent");

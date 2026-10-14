@@ -175,10 +175,13 @@ type Config struct {
 	DockerNamespace      string
 	DockerWorkerTokenTTL time.Duration
 
-	CoderURL            string
-	CoderAPIToken       string
-	CoderOwner          string
-	CoderTemplateID     string
+	CoderURL        string
+	CoderAPIToken   string
+	CoderOwner      string
+	CoderTemplateID string
+	// CoderTemplateIDs limits the templates sessions on the deployment's Coder
+	// may pick (AO_CLOUD_CODER_TEMPLATE_IDS, comma-separated); empty allows any.
+	CoderTemplateIDs    []string
 	CoderAgentName      string
 	CoderParameters     map[string]string
 	CoderDurableRoot    string
@@ -366,12 +369,13 @@ func Load() (Config, error) {
 			"AO_CLOUD_DOCKER_WORKER_TOKEN_TTL", sandbox.DefaultWorkerTokenTTL,
 		),
 
-		CoderURL:        strings.TrimRight(strings.TrimSpace(os.Getenv("AO_CLOUD_CODER_URL")), "/"),
-		CoderAPIToken:   strings.TrimSpace(os.Getenv("AO_CLOUD_CODER_TOKEN")),
-		CoderOwner:      strings.TrimSpace(os.Getenv("AO_CLOUD_CODER_OWNER")),
-		CoderTemplateID: strings.TrimSpace(os.Getenv("AO_CLOUD_CODER_TEMPLATE_ID")),
-		CoderAgentName:  strings.TrimSpace(os.Getenv("AO_CLOUD_CODER_AGENT_NAME")),
-		CoderParameters: coderParametersEnv,
+		CoderURL:         strings.TrimRight(strings.TrimSpace(os.Getenv("AO_CLOUD_CODER_URL")), "/"),
+		CoderAPIToken:    strings.TrimSpace(os.Getenv("AO_CLOUD_CODER_TOKEN")),
+		CoderOwner:       strings.TrimSpace(os.Getenv("AO_CLOUD_CODER_OWNER")),
+		CoderTemplateID:  strings.TrimSpace(os.Getenv("AO_CLOUD_CODER_TEMPLATE_ID")),
+		CoderAgentName:   strings.TrimSpace(os.Getenv("AO_CLOUD_CODER_AGENT_NAME")),
+		CoderTemplateIDs: commaList(os.Getenv("AO_CLOUD_CODER_TEMPLATE_IDS")),
+		CoderParameters:  coderParametersEnv,
 		CoderDurableRoot: strings.TrimSpace(
 			os.Getenv("AO_CLOUD_CODER_DURABLE_ROOT"),
 		),
@@ -850,6 +854,17 @@ func defaultSandboxProvider(hosted bool) string {
 		return sandbox.ProviderNodeOps
 	}
 	return sandbox.DefaultProvider
+}
+
+// commaList splits a comma-separated setting, dropping blanks.
+func commaList(value string) []string {
+	var list []string
+	for _, part := range strings.Split(value, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			list = append(list, part)
+		}
+	}
+	return list
 }
 
 // resolveAvailableProviders returns the set of providers a control plane offers.

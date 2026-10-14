@@ -52,6 +52,7 @@ export const aoBridge: AoBridge =
 			set: async () => undefined,
 			persistTerminal: async () => undefined,
 			setWindowBackground: async () => undefined,
+			setWindowTranslucent: async () => undefined,
 		},
 		menu: {
 			action: async () => undefined,
@@ -264,6 +265,12 @@ export const aoBridge: AoBridge =
 		appState: {
 			getMigration: async () => ({ status: "pending" }),
 			setMigration: async () => undefined,
+		},
+		cliLink: {
+			setEnabled: async () => undefined,
+			inspect: async () => ({ ok: false as const, code: "unsupported" as const, message: "The desktop app is required to link the global ao command." }),
+			link: async () => ({ ok: false as const, code: "unsupported" as const, message: "The desktop app is required to link the global ao command." }),
+			unlink: async () => ({ ok: false as const, code: "unsupported" as const, message: "The desktop app is required to link the global ao command." }),
 		},
 		updateSettings: {
 			get: async () => ({ enabled: false, channel: "latest", nightlyAck: false, feature: null, macDifferentialUpdates: false }),

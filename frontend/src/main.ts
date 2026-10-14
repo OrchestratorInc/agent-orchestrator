@@ -49,6 +49,7 @@ import { readUpdateSettings, type UpdateSettings, type UpdateStatus } from "./ma
 import { readKeybindingOverrides, writeKeybindingOverrides } from "./main/keybinding-settings";
 import { readEditorSettings, writeEditorPreference } from "./main/editor-settings";
 import { createEditorHandoff } from "./main/editor-handoff";
+import { registerCliLinkIpc } from "./main/cli-link-ipc";
 import { launchCommand } from "./main/launch-command";
 import { blocksRenderFrameNavigation } from "./main/render-frame-guard";
 import { agentPageRequestAllowed } from "./main/render-frame-network";
@@ -205,10 +206,14 @@ const ignoreStdStreamError = (err: NodeJS.ErrnoException): void => {
 process.stdout.on("error", ignoreStdStreamError);
 process.stderr.on("error", ignoreStdStreamError);
 
+// The name shown in window titles, the menu bar, the dock, and the About panel.
+// Packaged bundle and installer filenames are unchanged.
+const APP_DISPLAY_NAME = "Orchestrator.inc";
+
 // Must run before app ready so the About panel and default-menu role labels use it.
 // Unpackaged runs get a distinct name so the dev window, dock menu, and About
 // panel never impersonate the installed app (#3642).
-app.setName(app.isPackaged ? "Agent Orchestrator" : "Agent Orchestrator (dev)");
+app.setName(app.isPackaged ? APP_DISPLAY_NAME : `${APP_DISPLAY_NAME} (dev)`);
 
 // Windows shows native toasts only when the app declares an AppUserModelID that
 // matches its installer shortcut (the NSIS maker's appId). Without it,
@@ -409,9 +414,16 @@ function getShellWebContents(): WebContents | null {
 // browser page shows, so the native window background must match it or the
 // gutters around the panels render in the fallback colour.
 let rendererWindowBackground: string | null = null;
+// macOS window transparency: the shell paints translucent surfaces and the
+// native vibrancy material underneath blurs the desktop.
+let windowTranslucent = false;
 
 function syncNativeWindowBackground(): void {
 	if (!windowComposition || !mainWindow || mainWindow.isDestroyed()) return;
+	if (windowTranslucent) {
+		mainWindow.setBackgroundColor("#00000000");
+		return;
+	}
 	mainWindow.setBackgroundColor(
 		rendererWindowBackground ??
 			(nativeTheme.shouldUseDarkColors ? NATIVE_WINDOW_BACKGROUND_DARK : NATIVE_WINDOW_BACKGROUND_LIGHT),
@@ -450,11 +462,13 @@ nativeTheme.on("updated", syncNativeWindowBackground);
 // app://renderer is an origin only this app can present, so the daemon's CORS
 // allowlist can name it. A standard scheme also makes the build's absolute
 // asset URLs (/assets/…) and history-API routing resolve, which file:// breaks.
-// Must run before app ready.
+// codeCache lets V8 keep compiled bytecode for app:// scripts across launches;
+// Chromium only does that for http(s) by default, so without it every launch
+// recompiles the whole renderer bundle. Must run before app ready.
 protocol.registerSchemesAsPrivileged([
 	{
 		scheme: RENDERER_SCHEME,
-		privileges: { standard: true, secure: true, supportFetchAPI: true },
+		privileges: { standard: true, secure: true, supportFetchAPI: true, codeCache: true },
 	},
 ]);
 
@@ -530,6 +544,26 @@ function applyRuntimeAppIcon(): void {
 	}
 }
 
+// BaseWindow has no ready-to-show event, so show the hidden window when the
+// shell's document has loaded (or failed to), with a fallback so a renderer that
+// never finishes cannot leave the app invisible. Anything that needs the window
+// sooner (focusMainWindow, deep links, the dock) can still show it directly.
+const WINDOW_SHOW_FALLBACK_MS = 2_500;
+
+function showWhenRendererLoaded(window: BaseWindow, contents: WebContents): void {
+	let shown = false;
+	const show = () => {
+		if (shown) return;
+		shown = true;
+		clearTimeout(fallback);
+		if (window.isDestroyed() || window.isVisible()) return;
+		window.show();
+	};
+	const fallback = setTimeout(show, WINDOW_SHOW_FALLBACK_MS);
+	contents.once("did-finish-load", show);
+	contents.once("did-fail-load", show);
+}
+
 function focusMainWindow(): void {
 	if (!mainWindow) {
 		createWindow();
@@ -542,6 +576,7 @@ function focusMainWindow(): void {
 
 let sideClaimedDaemonPID: number | undefined;
 let sideLaunchState: { appRunId: string; sides: unknown[]; numbers?: Record<string, number> } | undefined;
+const SIDE_STATE_BACKSTOP_MS = 5_000;
 let sideStateTimer: ReturnType<typeof setInterval> | undefined;
 let sideStatePolling = false;
 let sideStateRequest = 0;
@@ -601,7 +636,10 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 				finally { sideStatePolling = false; }
 			};
 			await readState();
-			if (sideClaimedDaemonPID === daemonIdentity) sideStateTimer = setInterval(() => void readState(), 500);
+			// Backstop only: the renderer captures this state after every side chat
+			// change (sideChats:capture). Polling at 500ms cost ~7,200 daemon
+			// requests an hour for the whole app lifetime.
+			if (sideClaimedDaemonPID === daemonIdentity) sideStateTimer = setInterval(() => void readState(), SIDE_STATE_BACKSTOP_MS);
 		}).catch((error) => { if (sideClaimedDaemonPID === daemonIdentity) sideClaimedDaemonPID = undefined; console.warn("AO: side chat launch claim failed", error); });
 	}
 }
@@ -713,9 +751,12 @@ async function createWindowInternal(): Promise<void> {
 		height: 860,
 		minWidth: 960,
 		minHeight: 640,
-		title: app.isPackaged ? "Agent Orchestrator" : "Agent Orchestrator (dev)",
+		title: app.isPackaged ? APP_DISPLAY_NAME : `${APP_DISPLAY_NAME} (dev)`,
 		icon: windowIconPath(),
 		backgroundColor: NATIVE_WINDOW_BACKGROUND_DARK,
+		// Shown once the renderer has loaded (showWhenRendererLoaded below), so the
+		// first thing on screen is the app instead of an empty native frame.
+		show: false,
 		// Windows goes frameless and the renderer paints the whole titlebar,
 		// including custom min/max/close controls. macOS keeps the inset
 		// traffic-light chrome, and Linux uses standard frame decorations.
@@ -734,6 +775,13 @@ async function createWindowInternal(): Promise<void> {
 					}
 				: {
 						titleBarStyle: "hiddenInset" as const,
+						// Window transparency: an opaque window keeps Chromium's compositor
+						// opaque, hiding the vibrancy view. Transparent windows still paint
+						// the theme colour via setBackgroundColor unless the Developer Mode
+						// window transparency flag is on.
+						transparent: true,
+						// Keep the window-transparency blur vivid when the window loses focus.
+						visualEffectState: "active" as const,
 						// Center on the shared header; zoom/resize synchronization follows below.
 						trafficLightPosition: { x: MAC_WINDOW_BUTTON_X, y: MAC_TITLEBAR_HEIGHT / 2 - MAC_WINDOW_BUTTON_RADIUS },
 					}),
@@ -960,6 +1008,7 @@ async function createWindowInternal(): Promise<void> {
 	});
 	if (daemonStatus.state === "ready") establishBrowserRuntimeLink();
 
+	showWhenRendererLoaded(mainWindow, shellWebContents);
 	void shellWebContents.loadURL(rendererUrl());
 
 	if (isDev && process.env.AO_OPEN_DEVTOOLS === "1") {
@@ -1640,8 +1689,13 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 
 	// Single chokepoint: make sure the login-shell env is resolved before the
 	// daemon is spawned, so a Finder/Dock launch hands the daemon a real PATH and
-	// shell-exported credentials rather than launchd's minimal env.
-	await ensureShellEnv();
+	// shell-exported credentials rather than launchd's minimal env. The probe
+	// spawns the user's login shell (0.2-2s with a heavy profile) and only feeds
+	// the spawn env, so start it now but only wait for it when we actually spawn:
+	// attaching to a running daemon (the common relaunch) no longer waits on it.
+	const shellEnvReady = ensureShellEnv();
+	// Attach paths return without awaiting it; keep a rejection observed there.
+	shellEnvReady.catch(() => undefined);
 
 	const launch = resolveDaemonLaunch(
 		daemonLaunchEnv(),
@@ -1748,6 +1802,12 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 			if (shouldLinkOnAttach(portAttachOwner)) establishSupervisorLink();
 			return daemonStatus;
 		}
+	}
+
+	// Every path from here spawns a daemon, which needs the login-shell env.
+	await shellEnvReady;
+	if (startEpoch !== daemonStartEpoch) {
+		return daemonStatus;
 	}
 
 	// Wedged-orphan kill+replace: both attach paths returned null, but a process
@@ -2161,6 +2221,15 @@ async function restartDaemon(): Promise<DaemonStatus> {
 	return startDaemonForRestart();
 }
 
+registerCliLinkIpc({
+	isPackaged: () => app.isPackaged,
+	resourcesPath: process.resourcesPath,
+	appImage: process.env.APPIMAGE,
+	dataDir: desktopDataDir,
+	appVersion: app.getVersion(),
+	shellPath: () => cachedShellEnv?.PATH ?? process.env.PATH,
+});
+
 ipcMain.handle("daemon:getStatus", () => refreshDaemonStatus());
 ipcMain.handle("daemon:start", () => startDaemon());
 ipcMain.handle("daemon:stop", () => stopDaemon());
@@ -2243,7 +2312,15 @@ ipcMain.handle("theme:set-window-background", (_event, color: unknown) => {
 	}
 });
 
-ipcMain.handle("theme:persist-terminal", (_event, scheme: unknown) => {
+ipcMain.handle("theme:set-window-translucent", (_event, enabled: unknown) => {
+	if (process.platform !== "darwin" || typeof enabled !== "boolean" || enabled === windowTranslucent) return;
+	if (!mainWindow || mainWindow.isDestroyed()) return;
+	windowTranslucent = enabled;
+	mainWindow.setVibrancy(enabled ? "under-window" : null);
+	syncNativeWindowBackground();
+});
+
+ipcMain.handle("theme:persist-terminal",(_event, scheme: unknown) => {
 	if (scheme === "light" || scheme === "dark") {
 		persistTerminalThemeHint(scheme);
 	}
@@ -2365,8 +2442,8 @@ ipcMain.handle("menu:action", (_event, action: string) => {
 		case "help.about":
 			void dialog.showMessageBox(win, {
 				type: "info",
-				title: "About Agent Orchestrator",
-				message: "Agent Orchestrator",
+				title: `About ${APP_DISPLAY_NAME}`,
+				message: APP_DISPLAY_NAME,
 				detail: `Version ${app.getVersion()}`,
 				buttons: ["OK"],
 			});
@@ -3116,7 +3193,7 @@ app.whenReady().then(async () => {
 					defaultId: 0,
 					cancelId: 1,
 					title: "Remove old AO copies",
-					message: "Old copies of Agent Orchestrator can replace your updated app.",
+					message: `Old copies of ${APP_DISPLAY_NAME} can replace your updated app.`,
 					detail: `${formatStaleAppCopies(copies)}\n\nMove these copies to Trash to prevent another downgrade. Your AO projects and sessions will not be removed.`,
 					noLink: true,
 				});

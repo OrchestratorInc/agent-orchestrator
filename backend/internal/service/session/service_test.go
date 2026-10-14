@@ -3622,6 +3622,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"cleanup script failed", fmt.Errorf("kill mer-1: %w: secret output", sessionmanager.ErrCleanupScript), apierr.KindConflict, "WORKSPACE_CLEANUP_FAILED"},
 		{"unknown harness", fmt.Errorf("spawn: %w: %q", sessionmanager.ErrUnknownHarness, "bogus"), apierr.KindInvalid, "UNKNOWN_HARNESS"},
 		{"missing harness", fmt.Errorf("spawn: %w: configure project worker.agent or pass --harness", sessionmanager.ErrMissingHarness), apierr.KindInvalid, "AGENT_REQUIRED"},
+		{"artifact output unavailable", fmt.Errorf("spawn: %w", sessionmanager.ErrArtifactOutputUnavailable), apierr.KindInvalid, "ARTIFACT_OUTPUT_UNAVAILABLE"},
 		{"harness install active", fmt.Errorf("spawn: %w", sessionmanager.ErrHarnessInstallActive), apierr.KindConflict, "HARNESS_INSTALL_ACTIVE"},
 		{"awaiting decision", fmt.Errorf("send mer-1: %w", sessionmanager.ErrAwaitingDecision), apierr.KindConflict, "SESSION_AWAITING_DECISION"},
 		{"startup pending", fmt.Errorf("send mer-1: %w", sessionmanager.ErrStartupPending), apierr.KindConflict, "SESSION_STARTUP_PENDING"},
@@ -3725,6 +3726,12 @@ func TestToSpawnAPIErrorMapsSpawnStageSentinels(t *testing.T) {
 			fmt.Errorf("spawn mer-1: %w: %w", sessionmanager.ErrWorkspaceCreate, ports.ErrWorkspaceBranchNotFetched),
 			apierr.KindInvalid,
 			"BRANCH_NOT_FETCHED",
+		},
+		{
+			"artifact output without a data dir",
+			fmt.Errorf("spawn: %w", sessionmanager.ErrArtifactOutputUnavailable),
+			apierr.KindInvalid,
+			"ARTIFACT_OUTPUT_UNAVAILABLE",
 		},
 		{
 			"unclassified fallback",
@@ -5818,5 +5825,102 @@ func TestSessionReadsExposeOnlyCurrentTerminatedCleanupFacts(t *testing.T) {
 		if err != nil || len(list) != 1 || list[0].WorkspaceCleanup != tc.want {
 			t.Fatalf("list=%+v err=%v", list, err)
 		}
+	}
+}
+
+type fakeArtifactDeleter struct {
+	deleted []domain.SessionID
+	err     error
+}
+
+func (f *fakeArtifactDeleter) DeleteSession(_ context.Context, id domain.SessionID) error {
+	f.deleted = append(f.deleted, id)
+	return f.err
+}
+
+func TestDeleteArtifactsDeletesThroughTheDeleterAndReconciles(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
+		OutputType: domain.SessionOutputArtifact,
+	}
+	deleter := &fakeArtifactDeleter{}
+	reconciler := &fakeOutputTypeReconciler{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: t.TempDir(), OutputTypeReconciler: reconciler, ArtifactDeleter: deleter})
+
+	if err := svc.DeleteArtifacts(context.Background(), "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(deleter.deleted) != 1 || deleter.deleted[0] != "mer-1" {
+		t.Fatalf("deleted = %v, want [mer-1]", deleter.deleted)
+	}
+	if len(reconciler.reconciled) != 1 || reconciler.reconciled[0] != "mer-1" {
+		t.Fatalf("reconciled = %v, want [mer-1]", reconciler.reconciled)
+	}
+}
+
+func TestDeleteArtifactsReconcilesAndReportsAFailedDelete(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true}
+	deleter := &fakeArtifactDeleter{err: errors.New("file in use")}
+	reconciler := &fakeOutputTypeReconciler{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: t.TempDir(), OutputTypeReconciler: reconciler, ArtifactDeleter: deleter})
+
+	if err := svc.DeleteArtifacts(context.Background(), "mer-1"); err == nil {
+		t.Fatal("DeleteArtifacts succeeded, want the deleter's error")
+	}
+	if len(reconciler.reconciled) != 1 {
+		t.Fatalf("reconciled = %v, want a reconcile after the failure too", reconciler.reconciled)
+	}
+}
+
+func TestDeleteArtifactsRefusesLiveSession(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
+	deleter := &fakeArtifactDeleter{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: t.TempDir(), ArtifactDeleter: deleter})
+
+	err := svc.DeleteArtifacts(context.Background(), "mer-1")
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "SESSION_NOT_TERMINATED" {
+		t.Fatalf("err = %v, want SESSION_NOT_TERMINATED", err)
+	}
+	if len(deleter.deleted) != 0 {
+		t.Fatalf("deleted = %v for a live session, want none", deleter.deleted)
+	}
+}
+
+func TestDeleteArtifactsRefusesAnArtifactDirOutsideTheDataDir(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
+		Metadata: domain.SessionMetadata{ArtifactDir: filepath.Join(t.TempDir(), "old-data", "artifacts", "mer-1")},
+	}
+	deleter := &fakeArtifactDeleter{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: t.TempDir(), ArtifactDeleter: deleter})
+
+	if err := svc.DeleteArtifacts(context.Background(), "mer-1"); err == nil {
+		t.Fatal("DeleteArtifacts succeeded, want a refusal")
+	}
+	if len(deleter.deleted) != 0 {
+		t.Fatalf("deleted = %v, want none", deleter.deleted)
+	}
+}
+
+func TestDeleteArtifactsAcceptsTheCanonicalArtifactDir(t *testing.T) {
+	dataDir := t.TempDir()
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
+		Metadata: domain.SessionMetadata{ArtifactDir: filepath.Join(dataDir, "artifacts", "mer-1")},
+	}
+	deleter := &fakeArtifactDeleter{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: dataDir, ArtifactDeleter: deleter})
+
+	if err := svc.DeleteArtifacts(context.Background(), "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(deleter.deleted) != 1 {
+		t.Fatalf("deleted = %v, want [mer-1]", deleter.deleted)
 	}
 }

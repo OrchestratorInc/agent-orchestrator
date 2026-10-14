@@ -345,6 +345,10 @@ const api = {
 		// The shell goes transparent over a live native browser page, so whatever
 		// shows through its unpainted gutters is the native window background.
 		setWindowBackground: (color: string) => ipcRenderer.invoke("theme:set-window-background", color) as Promise<void>,
+		// macOS only: swap the painted window background for native vibrancy so
+		// the translucent shell blurs the desktop behind it.
+		setWindowTranslucent: (enabled: boolean) =>
+			ipcRenderer.invoke("theme:set-window-translucent", enabled) as Promise<void>,
 	},
 	menu: {
 		action: (action: string) => ipcRenderer.invoke("menu:action", action) as Promise<void>,
@@ -646,6 +650,14 @@ const api = {
 		getMigration: () => ipcRenderer.invoke("appState:getMigration") as Promise<MigrationState>,
 		setMigration: (migration: MigrationState) =>
 			ipcRenderer.invoke("appState:setMigration", migration) as Promise<void>,
+	},
+	cliLink: {
+		setEnabled: (enabled: boolean) => ipcRenderer.invoke("cliLink:setEnabled", enabled) as Promise<void>,
+		inspect: () => ipcRenderer.invoke("cliLink:inspect") as Promise<import("./shared/cli-link").CliLinkView>,
+		link: (confirmReplacement: boolean, expectedTarget?: string | null) =>
+			ipcRenderer.invoke("cliLink:link", confirmReplacement, expectedTarget) as Promise<import("./shared/cli-link").CliLinkResult>,
+		unlink: (confirmReplacement: boolean, expectedTarget?: string | null) =>
+			ipcRenderer.invoke("cliLink:unlink", confirmReplacement, expectedTarget) as Promise<import("./shared/cli-link").CliLinkResult>,
 	},
 	updateSettings: {
 		get: () => ipcRenderer.invoke("updateSettings:get") as Promise<UpdateSettings>,

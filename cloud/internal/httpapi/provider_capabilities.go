@@ -340,6 +340,23 @@ func (s *Server) writeSessionPlanError(w http.ResponseWriter, r *http.Request, o
 		)
 		return
 	}
+	if errors.Is(err, sandbox.ErrCoderTemplateUnavailable) {
+		s.logger.Warn(
+			"session create rejected: coder template unavailable",
+			"org_id", orgID,
+			"user_id", principalFrom(r).UserID,
+			"project_id", projectID,
+		)
+		s.recordActivity(r, domain.ActivityEvent{OrgID: orgID, Kind: domain.ActivitySessionCreateRefused,
+			Provider: sandbox.ProviderCoder, Attrs: map[string]any{
+				"code": "coder_template_unavailable", "project_id": projectID,
+			}})
+		writeError(
+			w, r, http.StatusUnprocessableEntity, "coder_template_unavailable",
+			"This project's Coder template is not available. Choose another template in the project's settings.",
+		)
+		return
+	}
 	s.logger.Error("resolve sandbox provisioning plan", "error", err, "request_id", requestID(r))
 	writeError(
 		w, r, http.StatusInternalServerError, "internal_error",

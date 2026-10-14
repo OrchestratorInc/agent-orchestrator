@@ -21,6 +21,11 @@ function snapshot(): ConversationSnapshot {
 }
 
 describe("mobile Chat timeline model", () => {
+	it("does not offer rollback on a hibernated provider", () => {
+		const value = snapshot();
+		value.controller.state = "hibernated";
+		expect(canRollbackTurn(value, value.turns[0])).toBe(false);
+	});
 	it("keeps the empty state outside the inverted conversation surface", () => {
 		const value = snapshot();
 		value.items = [];
@@ -43,6 +48,12 @@ describe("mobile Chat timeline model", () => {
 			["u2", "a2"],
 			["u1", "a1"],
 		]);
+	});
+
+	it("renders Android exchanges in natural order without an inverted list transform", () => {
+		const plan = timelineModel.conversationTimelineRenderPlan(snapshot(), undefined, "android");
+		expect(plan).toMatchObject({ kind: "list", inverted: false });
+		expect(plan.groups.map((group) => group.key)).toEqual(["turn-t1", "turn-t2"]);
 	});
 
 	it("keeps queued questions with their own answers instead of strict-sequence interleaving", () => {

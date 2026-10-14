@@ -90,6 +90,12 @@ func (c *Client) Diagnose(ctx context.Context, id sandbox.ID) (sandbox.Diagnosti
 		summary["agent_architecture"] = agent.Architecture
 	} else {
 		summary["agent_status"] = "missing"
+		if names := agentNames(view); len(names) > 0 {
+			summary["agents_found"] = strings.Join(names, ",")
+		}
+		if c.agentName != "" {
+			summary["agent_expected"] = c.agentName
+		}
 	}
 	// The connection's dev-environment options shape how the worker started,
 	// so an operator reading a startup failure sees them alongside the logs.

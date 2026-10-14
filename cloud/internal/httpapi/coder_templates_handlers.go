@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
@@ -136,7 +137,47 @@ func (s *Server) coderTemplateListerForOrg(ctx context.Context, orgID string) (C
 	if s.coderTemplates == nil {
 		return nil, nil
 	}
+	if len(s.coderTemplateIDs) > 0 {
+		return allowedTemplateLister{inner: s.coderTemplates, allowed: s.coderTemplateIDs}, nil
+	}
 	return s.coderTemplates, nil
+}
+
+// allowedTemplateLister offers only the deployment Coder's templates its
+// sessions can boot; the shared Coder also holds test and bring-your-own
+// templates.
+type allowedTemplateLister struct {
+	inner   CoderTemplateLister
+	allowed []string
+}
+
+func (l allowedTemplateLister) has(templateID string) bool {
+	return slices.Contains(l.allowed, strings.TrimSpace(templateID))
+}
+
+func (l allowedTemplateLister) ListTemplates(ctx context.Context) ([]coder.Template, error) {
+	templates, err := l.inner.ListTemplates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	allowed := templates[:0]
+	for _, template := range templates {
+		if l.has(template.ID) {
+			allowed = append(allowed, template)
+		}
+	}
+	return allowed, nil
+}
+
+func (l allowedTemplateLister) TemplateParameters(ctx context.Context, templateID string) ([]coder.TemplateParameter, error) {
+	reader, ok := l.inner.(CoderTemplateParameterReader)
+	if !ok {
+		return nil, coder.ErrTemplateNotFound
+	}
+	if !l.has(templateID) {
+		return nil, coder.ErrTemplateNotFound
+	}
+	return reader.TemplateParameters(ctx, templateID)
 }
 
 // CoderTemplateParameterReader reads the rich parameters a Coder template's

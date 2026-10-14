@@ -269,7 +269,7 @@ func (b HarnessBuilder) systemPrompt(launch worker.LaunchContext, workspace stri
 	skillDir := skillassets.Dir(b.DataDir)
 	systemPrompt := workerSystemPrompt(skillDir, launch.ParentSessionID != "")
 	if launch.Kind == "reviewer" {
-		systemPrompt = "You are an independent pull request reviewer. Inspect the diff and report concrete correctness issues. Submit your verdict using AO_REVIEW_HELP."
+		systemPrompt = "You are AO's native reviewer for an implementation PR owned by an AO worker. Inspect the diff and report concrete correctness issues. Submit your verdict using AO_REVIEW_HELP."
 	}
 	if launch.Kind == "orchestrator" {
 		systemPrompt = orchestratorSystemPrompt(skillDir)

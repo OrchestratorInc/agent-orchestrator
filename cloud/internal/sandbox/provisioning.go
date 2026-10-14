@@ -31,6 +31,12 @@ const (
 // rather than a deployment misconfiguration.
 var ErrCoderTemplateRequired = errors.New("a Coder template must be selected for this session")
 
+// ErrCoderTemplateUnavailable is returned when a session on the deployment's
+// own Coder picks a template outside CoderConfig.AllowedTemplateIDs: test or
+// bring-your-own templates on the shared Coder that the deployment's sessions
+// cannot boot (different agent, no durable volume).
+var ErrCoderTemplateUnavailable = errors.New("this Coder template is not available for sessions on AO's Coder")
+
 type NodeOpsConfig struct {
 	BaseURL       string
 	APIKey        string
@@ -113,6 +119,25 @@ type CoderConfig struct {
 	Parameters     map[string]string
 	DurableRoot    string
 	WorkerTokenTTL time.Duration
+	// AllowedTemplateIDs limits the templates a session on this deployment's
+	// Coder may pick; empty allows any. The default TemplateID is always
+	// allowed. Bring-your-own connections are not limited.
+	AllowedTemplateIDs []string
+}
+
+// TemplateAllowed reports whether a session on this deployment's Coder may use
+// the template.
+func (c CoderConfig) TemplateAllowed(templateID string) bool {
+	templateID = strings.TrimSpace(templateID)
+	if len(c.AllowedTemplateIDs) == 0 || templateID == strings.TrimSpace(c.TemplateID) {
+		return true
+	}
+	for _, allowed := range c.AllowedTemplateIDs {
+		if strings.TrimSpace(allowed) == templateID {
+			return true
+		}
+	}
+	return false
 }
 
 // CoderSessionProfile is the non-secret provider contract stamped onto one
@@ -619,6 +644,9 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 		}
 		if templateID == "" {
 			return Plan{}, ErrCoderTemplateRequired
+		}
+		if override == nil && !d.Coder.TemplateAllowed(templateID) {
+			return Plan{}, ErrCoderTemplateUnavailable
 		}
 		coderCfg.TemplateID = templateID
 		if err := coderCfg.Validate(); err != nil {

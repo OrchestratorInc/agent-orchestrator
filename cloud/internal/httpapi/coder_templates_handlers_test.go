@@ -289,3 +289,59 @@ func TestProjectCoderParameterValidationRefusesNonMembers(t *testing.T) {
 		t.Fatal("read the organization's Coder connection for a non-member")
 	}
 }
+
+// fakeDeploymentTemplateReader is the deployment lister with template options.
+type fakeDeploymentTemplateReader struct {
+	fakeDeploymentTemplateLister
+}
+
+func (f *fakeDeploymentTemplateReader) TemplateParameters(context.Context, string) ([]coder.TemplateParameter, error) {
+	return []coder.TemplateParameter{{Name: "size"}}, nil
+}
+
+// The deployment's Coder offers only its allowed templates: the shared Coder's
+// test and bring-your-own templates are neither listed nor readable.
+func TestDeploymentCoderOffersOnlyAllowedTemplates(t *testing.T) {
+	t.Parallel()
+	deployment := &fakeDeploymentTemplateReader{fakeDeploymentTemplateLister{templates: []coder.Template{
+		{ID: "00000000-0000-4000-8000-0000000000d1", Name: "ao-azure-vm"}, {ID: "00000000-0000-4000-8000-0000000000e1", Name: "ao-11x-replica"}, {ID: "00000000-0000-4000-8000-0000000000f1", Name: "ao-devkit"},
+	}}}
+	srv := New(Options{
+		Store:                     &fakeCoderConnStore{err: postgres.ErrNotFound},
+		SecretCipher:              newTestCipher(t),
+		SandboxProvider:           sandbox.ProviderCoder,
+		AvailableSandboxProviders: []string{sandbox.ProviderCoder},
+		CoderTemplates:            deployment,
+		CoderTemplateIDs:          []string{"00000000-0000-4000-8000-0000000000d1", "00000000-0000-4000-8000-0000000000f1"},
+		Logger:                    slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+
+	rec := httptest.NewRecorder()
+	srv.listCoderTemplates(rec, coderConfigRequest(t, http.MethodGet, "", []string{sandbox.ProviderCoder}))
+	templates := decodeTemplatesResponse(t, rec)
+	if len(templates) != 2 || templates[0].ID != "00000000-0000-4000-8000-0000000000d1" || templates[1].ID != "00000000-0000-4000-8000-0000000000f1" {
+		t.Fatalf("templates = %+v, want only the allowed ones", templates)
+	}
+
+	for templateID, want := range map[string]int{"00000000-0000-4000-8000-0000000000f1": http.StatusOK, "00000000-0000-4000-8000-0000000000e1": http.StatusNotFound} {
+		rec := httptest.NewRecorder()
+		req := coderConfigRequest(t, http.MethodGet, "", []string{sandbox.ProviderCoder})
+		chi.RouteContext(req.Context()).URLParams.Add("templateId", templateID)
+		srv.getCoderTemplateParameters(rec, req)
+		if rec.Code != want {
+			t.Fatalf("%s parameters: status = %d, want %d", templateID, rec.Code, want)
+		}
+	}
+}
+
+// A session refused for a template the deployment's Coder does not offer gets
+// a clear, user-fixable 422 rather than a 500.
+func TestSessionPlanErrorForUnavailableCoderTemplate(t *testing.T) {
+	t.Parallel()
+	srv := newCoderTemplatesServer(t, newTestCipher(t), &fakeCoderConnStore{}, nil)
+	rec := httptest.NewRecorder()
+	srv.writeSessionPlanError(rec, coderConfigRequest(t, http.MethodPost, "", nil), coderCfgOrgID, "project-1", sandbox.ErrCoderTemplateUnavailable)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "coder_template_unavailable") {
+		t.Fatalf("status = %d, body = %s; want 422 coder_template_unavailable", rec.Code, rec.Body.String())
+	}
+}
