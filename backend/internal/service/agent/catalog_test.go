@@ -1829,7 +1829,7 @@ func TestClaudeModelsUsesMatchingProviderCache(t *testing.T) {
 		version: "same-fingerprint",
 		catalog: ports.AgentModelCatalog{
 			AgentID: "claude-code", SelectionMode: ports.ModelSelectionCatalog,
-			Models: []ports.AgentModelInfo{{ID: "sonnet"}, {ID: "opus"}}, Source: "catalog",
+			Models: []ports.AgentModelInfo{}, Source: "manual",
 		},
 		err: errors.New("provider unavailable"),
 	}
@@ -1872,7 +1872,7 @@ func TestClaudeModelsRevalidationKeepsMatchingProviderCacheOnFailure(t *testing.
 		version: "same-fingerprint",
 		catalog: ports.AgentModelCatalog{
 			AgentID: "claude-code", SelectionMode: ports.ModelSelectionCatalog,
-			Models: []ports.AgentModelInfo{{ID: "sonnet"}, {ID: "opus"}}, Source: "catalog",
+			Models: []ports.AgentModelInfo{}, Source: "manual",
 		},
 		err: errors.New("provider unavailable"),
 	}
@@ -1908,7 +1908,7 @@ func TestClaudeModelsRejectProviderCacheWhenCredentialFingerprintChanges(t *test
 		version: "credential-b",
 		catalog: ports.AgentModelCatalog{
 			AgentID: "claude-code", SelectionMode: ports.ModelSelectionCatalog,
-			Models: []ports.AgentModelInfo{{ID: "sonnet"}, {ID: "opus"}}, Source: "catalog",
+			Models: []ports.AgentModelInfo{}, Source: "manual",
 		},
 		err: errors.New("provider unavailable"),
 	}
@@ -1930,7 +1930,7 @@ func TestClaudeModelsRejectProviderCacheWhenCredentialFingerprintChanges(t *test
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(got.Models) == 2 && got.Models[0].ID == "sonnet" && got.Models[1].ID == "opus" && got.Source == "catalog" && got.Stale {
+		if len(got.Models) == 0 && got.Source == "manual" && got.Stale {
 			return
 		}
 		if time.Now().After(deadline) {

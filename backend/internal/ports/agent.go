@@ -454,15 +454,6 @@ type AgentModelDiscoverer interface {
 	Manual(agentID string) AgentModelCatalog
 }
 
-// AgentModelAliasLabeler is an optional AgentModelDiscoverer capability. When a
-// discovery fails and AO falls back to an agent's static alias list, it labels
-// those aliases with the versions a previous successful discovery reported
-// (reference), so "opus" can read "Opus 5.5" instead of a bare family name.
-// Implementations return models unchanged when reference cannot resolve them.
-type AgentModelAliasLabeler interface {
-	LabelAliases(agentID string, models, reference []AgentModelInfo) []AgentModelInfo
-}
-
 // AgentExitDetectionMode describes how AO learns that an agent CLI process
 // ended while its terminal runtime remains alive.
 type AgentExitDetectionMode string

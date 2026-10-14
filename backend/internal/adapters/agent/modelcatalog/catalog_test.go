@@ -575,33 +575,16 @@ func TestUnrealCatalogShowsEffectiveModelAndAllowsOverride(t *testing.T) {
 	}
 }
 
-func TestClaudeReturnsStaticCatalogWithConfiguredFallback(t *testing.T) {
-	claudeRequest(t)
-	t.Setenv("ANTHROPIC_MODEL", "")
-	t.Setenv("HOME", t.TempDir())
-	got, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{
-		AgentID: "claude-code",
-		Binary:  "/missing/claude",
-		Env:     map[string]string{"ANTHROPIC_MODEL": "claude-opus-4-5-20251101"},
-	})
-	if err != nil {
-		t.Fatal(err)
+func TestClaudeWithoutDiscoveryDoesNotInventModels(t *testing.T) {
+	request := claudeRequest(t)
+	request.Binary = "/missing/claude"
+	request.Env["ANTHROPIC_MODEL"] = "claude-opus-4-5-20251101"
+	got, err := (Discoverer{}).Discover(context.Background(), request)
+	if err == nil {
+		t.Fatal("missing provider discovery was reported as success")
 	}
-	wantLabels := map[string]string{
-		"sonnet": "Sonnet", "fable": "Fable 5.1", "opus": "Opus",
-		"haiku": "Haiku", "opus[1m]": "Opus (1M context)",
-		"claude-opus-4-5-20251101": "claude-opus-4-5-20251101",
-	}
-	if got.Source != "catalog" || len(got.Models) != len(wantLabels) {
-		t.Fatalf("catalog = %#v", got)
-	}
-	for _, item := range got.Models {
-		if wantLabels[item.ID] != item.Label {
-			t.Fatalf("unexpected model %#v", item)
-		}
-		if item.IsDefault != (item.ID == "claude-opus-4-5-20251101") {
-			t.Fatalf("default marker = %#v", item)
-		}
+	if len(got.Models) != 0 || !got.AllowCustom {
+		t.Fatalf("catalog = %#v, want no invented choices with manual entry allowed", got)
 	}
 }
 
@@ -1218,7 +1201,9 @@ func TestClaudeCatalogDefaultUsesResolvedSettingsEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("ANTHROPIC_MODEL", "daemon-model")
-	catalog, err := discoverClaudeCatalog(context.Background(), request, nil)
+	catalog, err := discoverClaudeCatalog(context.Background(), request, func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
+		return []ports.AgentModelInfo{{ID: "kimi-k2", Label: "Kimi K2"}}, nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -241,8 +241,8 @@ type ACPOptionListFunc func(context.Context, ports.AgentModelDiscoveryRequest) (
 
 // ClaudeModelListFunc obtains the Claude model IDs the configured provider
 // actually serves, in that provider's own ID format. It returns an error
-// whenever the provider could not be asked; discovery then falls back to the
-// static alias list rather than emptying the picker.
+// whenever the provider could not be asked; the service then retains its
+// matching cached catalog instead of replacing it with guessed models.
 type ClaudeModelListFunc func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error)
 
 // ClaudeFingerprintFunc supplies account/provider identity that is not present
@@ -346,101 +346,33 @@ func withOpenCodeCredentialPresence(env map[string]string, credentialType string
 	return next
 }
 
-// claudeCodeModels is the static Claude Code model catalog. It mirrors the
-// model choices a Claude Code ACP session advertises through session/new, so AO
-// can render the picker without spawning the Agent SDK. Claude Code owns the
-// real list; refresh this snapshot when the advertised models change.
-func claudeCodeModels() []ports.AgentModelInfo {
-	return []ports.AgentModelInfo{
-		{ID: "sonnet", Label: "Sonnet"},
-		{ID: "fable", Label: "Fable 5.1"},
-		{ID: "opus", Label: "Opus"},
-		{ID: "haiku", Label: "Haiku"},
-		{ID: "opus[1m]", Label: "Opus (1M context)"},
-	}
-}
-
-// discoverClaudeCatalog builds the Claude Code catalog, preferring the model
-// list the provider itself reports and falling back to the static aliases.
-//
-// The fallback is not a formality. The static list is the set of aliases the
-// first-party API accepts — sonnet, opus, haiku — and those are wrong on every
-// other provider: Bedrock spells the same model anthropic.claude-…-v1:0 with a
-// region prefix, Vertex claude-opus-4-5@20251101. No string rule maps between
-// the three, so the only way to offer correct IDs is to ask the provider that
-// will serve them, which is exactly what the credential probe already does.
-//
-// The static aliases travel with a discovery error so the service can prefer a
-// last-known-good provider catalog. With no cache, the aliases still keep the
-// picker usable while accurately remaining stale/unverified.
+// discoverClaudeCatalog reports only provider-discovered models. Errors leave
+// the shared service to retain the matching cached catalog or allow manual
+// entry when no successful catalog has been saved yet.
 func discoverClaudeCatalog(
 	ctx context.Context,
 	request ports.AgentModelDiscoveryRequest,
 	list ClaudeModelListFunc,
 ) (ports.AgentModelCatalog, error) {
-	base := Base(request.AgentID)
-	base.Source = "catalog"
-	base.FetchedAt = time.Now().UTC()
-	settings := agentcreds.ResolveClaudeSettings(ctx, request.WorkingDir, request.Env, agentcreds.ResolveOptions{})
-
-	if list != nil {
-		models, err := list(ctx, request)
-		if err != nil {
-			base.Models = claudeFallbackModels(settings)
-			return base, fmt.Errorf("claude-code model discovery: %w", err)
-		}
-		normalized := normalize(models)
-		if len(normalized) > 0 {
-			// A configured alias ("sonnet") rides along with the provider's
-			// concrete models; label it with the version they resolve it to.
-			base.Models = LabelClaudeAliasVersions(applyClaudeConfiguredDefault(normalized, settings.Model), normalized)
-			base.Source = "provider"
-			return base, nil
-		}
-		base.Models = claudeFallbackModels(settings)
+	base := Manual(request.AgentID)
+	if list == nil {
+		return base, errors.New("claude-code model discovery is unavailable")
+	}
+	models, err := list(ctx, request)
+	if err != nil {
+		return base, fmt.Errorf("claude-code model discovery: %w", err)
+	}
+	normalized := normalize(models)
+	if len(normalized) == 0 {
 		return base, errors.New("claude-code model discovery returned no models")
 	}
-
-	base.Models = claudeFallbackModels(settings)
+	settings := agentcreds.ResolveClaudeSettings(ctx, request.WorkingDir, request.Env, agentcreds.ResolveOptions{})
+	// An explicitly configured alias may accompany the provider's concrete
+	// models; use the discovered catalog to resolve its display version.
+	base.Models = LabelClaudeAliasVersions(applyClaudeConfiguredDefault(normalized, settings.Model), normalized)
+	base.SelectionMode = ports.ModelSelectionCatalog
+	base.Source = "provider"
 	return base, nil
-}
-
-func claudeFallbackModels(settings agentcreds.ClaudeSettings) []ports.AgentModelInfo {
-	static := normalize(claudeCodeModels())
-	if strings.TrimSpace(settings.Env["ANTHROPIC_BASE_URL"]) == "" {
-		return applyClaudeConfiguredDefault(static, settings.Model)
-	}
-
-	configured := []string{
-		settings.Model,
-		settings.Env["ANTHROPIC_DEFAULT_OPUS_MODEL"],
-		settings.Env["ANTHROPIC_DEFAULT_SONNET_MODEL"],
-		settings.Env["ANTHROPIC_DEFAULT_HAIKU_MODEL"],
-		settings.Env["ANTHROPIC_SMALL_FAST_MODEL"],
-	}
-	models := make([]ports.AgentModelInfo, 0, len(configured)+len(static))
-	seen := make(map[string]struct{}, len(configured)+len(static))
-	appendModel := func(item ports.AgentModelInfo) {
-		item.ID = strings.TrimSpace(item.ID)
-		if item.ID == "" {
-			return
-		}
-		if _, exists := seen[item.ID]; exists {
-			return
-		}
-		seen[item.ID] = struct{}{}
-		if strings.TrimSpace(item.Label) == "" {
-			item.Label = item.ID
-		}
-		models = append(models, item)
-	}
-	for _, id := range configured {
-		appendModel(ports.AgentModelInfo{ID: id})
-	}
-	for _, item := range static {
-		appendModel(item)
-	}
-	return applyClaudeConfiguredDefault(models, settings.Model)
 }
 
 func applyClaudeConfiguredDefault(models []ports.AgentModelInfo, configured string) []ports.AgentModelInfo {
@@ -453,26 +385,11 @@ func applyClaudeConfiguredDefault(models []ports.AgentModelInfo, configured stri
 		matched = matched || models[i].IsDefault
 	}
 	if !matched {
-		// Claude accepts custom aliases and pinned snapshots beyond the static
-		// picker snapshot. Keep the effective configured model visible. When it
-		// is one of Claude Code's known aliases (the common case: settings.json
-		// pins "sonnet" while provider discovery returns concrete snapshot IDs),
-		// carry the human label so the picker reads "Sonnet" rather than a raw
-		// id — this is the local CLI's configured default, shown verbatim.
-		models = append(models, ports.AgentModelInfo{ID: configured, Label: claudeConfiguredLabel(configured), IsDefault: true})
+		// Preserve the user's explicit default, including custom aliases and
+		// pinned snapshots. Its display version comes from the provider list.
+		models = append(models, ports.AgentModelInfo{ID: configured, Label: configured, IsDefault: true})
 	}
 	return models
-}
-
-// claudeConfiguredLabel returns the human label Claude Code uses for a known
-// alias, falling back to the raw id for custom aliases and pinned snapshots.
-func claudeConfiguredLabel(id string) string {
-	for _, model := range claudeCodeModels() {
-		if strings.EqualFold(model.ID, id) {
-			return model.Label
-		}
-	}
-	return id
 }
 
 // CatalogFingerprint returns a stable fingerprint of the discovery inputs: the
@@ -498,15 +415,6 @@ func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentM
 
 // Manual returns the manual-entry fallback catalog for an agent.
 func (Discoverer) Manual(agentID string) ports.AgentModelCatalog { return Manual(agentID) }
-
-// LabelAliases implements ports.AgentModelAliasLabeler. Only Claude Code
-// publishes family aliases whose version a provider catalog can resolve.
-func (Discoverer) LabelAliases(agentID string, models, reference []ports.AgentModelInfo) []ports.AgentModelInfo {
-	if agentID != "claude-code" {
-		return models
-	}
-	return LabelClaudeAliasVersions(models, reference)
-}
 
 // discoverCommandCatalog combines native output and local provider metadata.
 // Credential-scoped cloud discovery excludes the device-local catalogs.

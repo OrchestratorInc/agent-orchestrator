@@ -15,6 +15,11 @@ and the broader provider sources already supported by each harness:
 - OMP: its read-only native model database.
 - FX: Gateway, Codex, Grok and declared custom connection models.
 
+Claude models come from the configured provider. Failed discovery retains the
+last cached catalog for matching discovery inputs; no hardcoded Claude list is
+substituted. Without a matching cache, manual model entry remains available.
+A successfully discovered catalog also preserves an explicitly configured model.
+
 Native model caches may include providers without configured credentials.
 A **Configured** marker means AO observed credential configuration; it does
 not prove that the provider accepts it. Providers with no models are omitted

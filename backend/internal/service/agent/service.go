@@ -797,7 +797,6 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 			discovered.Warning = discoverErr.Error()
 			discovered.WarningCode = warningCode
 			discovered.RefreshRecommended = true
-			discovered.Models = s.labelAliasVersions(persistCtx, agentID, discovered.Models, cached, hasCached)
 			previous := cached
 			if !cacheMatchesInputs {
 				previous.Catalog.LastSuccessAt = nil
@@ -880,37 +879,6 @@ func (s *Service) keepCatalogUntilSignIn(ctx context.Context, agentName string, 
 		catalog.Warning = appendCacheWarning(catalog.Warning)
 	}
 	return catalog
-}
-
-// labelAliasVersions lets a fallback alias list ("opus") carry the version a
-// previous discovery resolved ("Opus 5.5"). The reference is every catalog
-// cached for the agent in any scope: alias versions are not project-specific,
-// a fallback is exactly when this scope has nothing better, and the labeler
-// takes the newest version it finds per family, so an older or alias-only
-// catalog cannot pull a label backwards.
-func (s *Service) labelAliasVersions(ctx context.Context, agentID string, models []ports.AgentModelInfo, cached decodedCatalog, hasCached bool) []ports.AgentModelInfo {
-	labeler, ok := s.discoverer.(ports.AgentModelAliasLabeler)
-	if !ok || len(models) == 0 {
-		return models
-	}
-	var reference []ports.AgentModelInfo
-	if hasCached {
-		reference = append(reference, cached.Catalog.Models...)
-	}
-	if s.cache != nil {
-		if records, err := s.cache.ListAgentModelCatalogsByAgent(ctx, agentID); err == nil {
-			for _, record := range records {
-				var catalog ports.AgentModelCatalog
-				if json.Unmarshal([]byte(record.CatalogJSON), &catalog) == nil {
-					reference = append(reference, catalog.Models...)
-				}
-			}
-		}
-	}
-	if len(reference) == 0 {
-		return models
-	}
-	return labeler.LabelAliases(agentID, models, reference)
 }
 
 // modelCatalogWarningCode classifies a discovery failure that clients can
