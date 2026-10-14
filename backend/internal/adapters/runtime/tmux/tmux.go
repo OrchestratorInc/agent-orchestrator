@@ -20,6 +20,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/ptyexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/envfilter"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
@@ -226,7 +227,14 @@ type execRunner struct{}
 
 func (execRunner) Run(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
 	cmd := aoprocess.CommandContext(ctx, name, args...)
-	cmd.Env = append(append([]string(nil), os.Environ()...), env...)
+	// A daemon started from inside a Claude Code session (rebuild-ao.sh run
+	// from an agent terminal, or the desktop app opened from one) inherits
+	// that session's own CLAUDECODE/CLAUDE_CODE_CHILD_SESSION/etc markers.
+	// The first call here auto-starts tmux's persistent server, which keeps
+	// whatever env it's given for its entire lifetime — so without this,
+	// every worker's claude-code process misidentifies itself as a child of
+	// that unrelated parent session. See envfilter for what's dropped and why.
+	cmd.Env = envfilter.DropParentSessionMarkers(append(append([]string(nil), os.Environ()...), env...))
 	// Run from a stable directory, not whatever the daemon process's cwd happens
 	// to be. The first tmux CLI call auto-starts tmux's persistent server, which
 	// inherits ITS launching process's cwd and keeps it for the server's entire
@@ -969,7 +977,7 @@ func (r *Runtime) Attach(ctx context.Context, handle ports.RuntimeHandle, rows, 
 		return nil, fmt.Errorf("tmux runtime: attach session %s: %w", id, err)
 	}
 	argv := r.attachCommandForSocket(id, socketName)
-	return ptyexec.Spawn(ctx, argv, attachEnv(os.Environ()), rows, cols)
+	return ptyexec.Spawn(ctx, argv, attachEnv(envfilter.DropParentSessionMarkers(os.Environ())), rows, cols)
 }
 
 // attachCommand returns the argv to attach a terminal to the session.
