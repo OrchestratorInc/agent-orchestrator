@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EditorHandoffState, OpenSessionTargetInput } from "../../shared/editor-handoff";
+import { useUiStore } from "../stores/ui-store";
 import { appShortcutBus } from "../test/app-shortcut-bus";
 import { TopbarOpenEditorButton } from "./TopbarOpenEditorButton";
 import { TooltipProvider } from "./ui/tooltip";
@@ -107,6 +108,72 @@ describe("TopbarOpenEditorButton", () => {
 		setState(availableState);
 	});
 
+	it("copies the workspace through the native bridge without opening a target", async () => {
+		const copy = vi.spyOn(window.ao!.editorHandoff, "copyWorkspacePath").mockResolvedValue(undefined);
+		renderButton();
+		await userEvent.click(await screen.findByRole("button", { name: "Open workspace options" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Copy path" }));
+		await waitFor(() => expect(copy).toHaveBeenCalledWith("sess-1"));
+		expect(openMock).not.toHaveBeenCalled();
+		expect(useUiStore.getState().globalToast?.title).toBe("Session path copied");
+	});
+
+	it("reports copy failures and refreshes workspace availability", async () => {
+		vi.spyOn(window.ao!.editorHandoff, "copyWorkspacePath").mockRejectedValue(
+			new Error("Error invoking remote method 'editorHandoff:copyWorkspacePath': Error: Workspace removed"),
+		);
+		const getState = vi.fn().mockResolvedValueOnce(availableState).mockResolvedValue({ ...availableState, workspaceAvailable: false });
+		window.ao!.editorHandoff.getState = getState;
+		renderButton();
+		await userEvent.click(await screen.findByRole("button", { name: "Open workspace options" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Copy path" }));
+		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({ title: "Could not copy session path", body: "Workspace removed", tone: "error" }));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Open workspace options" })).toBeDisabled());
+		expect(openMock).not.toHaveBeenCalled();
+	});
+
+	it("uses the bundled Ghostty symbol even when a native placeholder exists and launches Ghostty", async () => {
+		const iconDataUrl = "data:image/png;base64,dGVzdA==";
+		setState({ ...availableState, targets: [...availableState.targets, { id: "ghostty", name: "Ghostty", kind: "terminal", iconDataUrl }] });
+		renderButton();
+		await userEvent.click(await screen.findByRole("button", { name: "Open workspace options" }));
+		const ghostty = await screen.findByRole("menuitem", { name: "Ghostty" });
+		expect(ghostty.querySelector("image")).not.toBeInTheDocument();
+		expect(ghostty.querySelector("svg path")).toBeInTheDocument();
+		const menu = screen.getByRole("menu");
+		expect(menu.textContent!.indexOf("Open in")).toBeLessThan(menu.textContent!.indexOf("Ghostty"));
+		expect(menu.textContent!.indexOf("Ghostty")).toBeLessThan(menu.textContent!.indexOf("Open with"));
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy path", "Finder", "Terminal", "Ghostty", "Cursor", "VS Code"]);
+		for (const item of screen.getAllByRole("menuitem")) expect(item.querySelector("svg")).toBeInTheDocument();
+		expect(menu.textContent!.indexOf("Copy path")).toBeLessThan(menu.textContent!.indexOf("Open with"));
+		expect(screen.queryByRole("menuitem", { name: "Open in Ghostty" })).not.toBeInTheDocument();
+		await userEvent.click(ghostty);
+		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1", targetId: "ghostty" }));
+	});
+
+	it("always shows Finder and the original Terminal SVG symbols, even when native images are supplied", async () => {
+		const iconDataUrl = "data:image/png;base64,dGVzdA==";
+		setState({ ...availableState, targets: availableState.targets.map((target) => ({ ...target, iconDataUrl })) });
+		renderButton();
+		await userEvent.click(await screen.findByRole("button", { name: "Open workspace options" }));
+		const finder = await screen.findByRole("menuitem", { name: "Finder" });
+		const terminal = screen.getByRole("menuitem", { name: "Terminal" });
+		expect(finder.querySelector("svg")).toBeInTheDocument();
+		expect(finder.querySelector("image")).not.toBeInTheDocument();
+		expect(terminal.querySelector("svg.lucide-square-terminal")).toBeInTheDocument();
+		expect(terminal.querySelector("image")).not.toBeInTheDocument();
+	});
+
+	it.each(["wezterm", "kitty"] as const)("keeps a visible SVG fallback when the %s app icon fails to load", async (id) => {
+		setState({ ...availableState, targets: [...availableState.targets, { id, name: id, kind: "terminal", iconDataUrl: "data:image/png;base64,dGVzdA==" }] });
+		renderButton();
+		await userEvent.click(await screen.findByRole("button", { name: "Open workspace options" }));
+		const item = await screen.findByRole("menuitem", { name: id });
+		fireEvent.error(item.querySelector("image")!);
+		expect(item.querySelector("image")).not.toBeInTheDocument();
+		expect(item.querySelector("svg path")).toBeInTheDocument();
+	});
+
 	it("uses persisted Cursor as the primary target and sends no filesystem path", async () => {
 		renderButton();
 		const button = await screen.findByRole("button", { name: "Open in Cursor" });
@@ -156,8 +223,9 @@ describe("TopbarOpenEditorButton", () => {
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Open workspace options" }));
 		expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual([
-			"Open in Finder",
-			"Open in Terminal",
+			"Copy path",
+			"Finder",
+			"Terminal",
 		]);
 		expect(screen.queryByRole("note")).not.toBeInTheDocument();
 		expect(document.body.textContent).not.toContain("No supported editor found");
@@ -327,7 +395,7 @@ describe("TopbarOpenEditorButton", () => {
 	it("opens safe native fallbacks from the menu", async () => {
 		renderButton();
 		await userEvent.click(await screen.findByRole("button", { name: "Open workspace options" }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: "Open in Finder" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Finder" }));
 		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1", targetId: "file-manager" }));
 	});
 

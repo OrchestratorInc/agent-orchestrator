@@ -611,6 +611,8 @@
 	"editor.openInAria": "{{name}} で開く",
 	"editor.openInTarget": "{{name}} で開く",
 	"editor.openOptionsAria": "ワークスペースを開くオプション",
+	"editor.copyPath": "パスをコピー",
+	"editor.openIn": "次で開く",
 	"editor.openWith": "別のアプリで開く",
 	"editor.openWorkspaceInTitle": "このセッションのワークスペースを {{name}} で開く",
 	"editor.workspaceUnavailable": "セッションのワークスペースを利用できません。",

@@ -1215,6 +1215,7 @@ const editorHandoff = createEditorHandoff({
 	},
 	realPath: (candidatePath) => realpath(candidatePath),
 	copyText: (text) => clipboard.writeText(text),
+	readIcon: async (appPath) => (await app.getFileIcon(appPath, { size: "normal" })).toDataURL(),
 	logError: (message, error) => console.error(message, error),
 });
 

@@ -611,6 +611,8 @@
 	"editor.openInAria": "在 {{name}} 中打开",
 	"editor.openInTarget": "在 {{name}} 中打开",
 	"editor.openOptionsAria": "打开工作区选项",
+	"editor.copyPath": "复制路径",
+	"editor.openIn": "打开位置",
 	"editor.openWith": "打开方式",
 	"editor.openWorkspaceInTitle": "在 {{name}} 中打开此会话的工作区",
 	"editor.workspaceUnavailable": "会话工作区不可用。",

@@ -614,6 +614,8 @@
 	"editor.openInAria": "Abrir en {{name}}",
 	"editor.openInTarget": "Abrir en {{name}}",
 	"editor.openOptionsAria": "Opciones para abrir el espacio de trabajo",
+	"editor.copyPath": "Copiar ruta",
+	"editor.openIn": "Abrir en",
 	"editor.openWith": "Abrir con",
 	"editor.openWorkspaceInTitle": "Abrir el espacio de trabajo de esta sesión en {{name}}",
 	"editor.workspaceUnavailable": "El espacio de trabajo de la sesión no está disponible.",

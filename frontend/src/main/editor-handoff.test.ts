@@ -52,6 +52,110 @@ describe("editor handoff", () => {
 		expect(state.targets.map(({ id }) => id)).toEqual(["cursor", "vscode", "file-manager", "terminal"]);
 	});
 
+	it.each(["/Applications", "/Users/tester/Applications"])("discovers Ghostty in %s without a CLI on PATH and sends the exact workspace as a folder-open event", async (root) => {
+		const workspace = "/work trees/it's $safe; $(touch nope)";
+		const input = deps({
+			isExecutable: () => false,
+			isDirectory: (value) => value === `${root}/Ghostty.app`,
+			resolveWorkspace: vi.fn().mockResolvedValue(workspace),
+		});
+		const handoff = createEditorHandoff(input);
+		expect((await handoff.getState("ao-1")).targets).toContainEqual({ id: "ghostty", name: "Ghostty", kind: "terminal" });
+		await handoff.open({ sessionId: "ao-1", targetId: "ghostty" });
+		expect(input.launch).toHaveBeenCalledWith("/usr/bin/open", ["-a", `${root}/Ghostty.app`, workspace], workspace);
+		expect(input.writePreference).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["iterm2", "iTerm", (dir: string) => ["-a", "/Applications/iTerm.app", dir]],
+		["wezterm", "WezTerm", (dir: string) => ["-n", "-a", "/Applications/WezTerm.app", "--args", "start", "--cwd", dir]],
+		["kitty", "kitty", (dir: string) => ["-n", "-a", "/Applications/kitty.app", "--args", "--directory", dir]],
+		["alacritty", "Alacritty", (dir: string) => ["-n", "-a", "/Applications/Alacritty.app", "--args", "--working-directory", dir]],
+	] as const)("opens a detected macOS %s app in the workspace", async (id, app, args) => {
+		const input = deps({ isExecutable: () => false, isDirectory: (value) => value === `/Applications/${app}.app` });
+		await createEditorHandoff(input).open({ sessionId: "ao-1", targetId: id });
+		expect(input.launch).toHaveBeenCalledWith("/usr/bin/open", args("/worktrees/ao-1"), "/worktrees/ao-1");
+	});
+
+	it.each([
+		["ghostty", ["--working-directory=/worktrees/ao-1"]],
+		["wezterm", ["start", "--cwd", "/worktrees/ao-1"]],
+		["kitty", ["--directory", "/worktrees/ao-1"]],
+		["alacritty", ["--working-directory", "/worktrees/ao-1"]],
+		["gnome-terminal", ["--working-directory=/worktrees/ao-1"]],
+		["konsole", ["--workdir", "/worktrees/ao-1"]],
+		["xfce4-terminal", ["--working-directory=/worktrees/ao-1"]],
+	] as const)("discovers and launches Linux %s with its directory argument", async (id, args) => {
+		const input = deps({ platform: "linux", isExecutable: installedExecutables(`/bin/${id}`), isDirectory: () => false });
+		const handoff = createEditorHandoff(input);
+		expect((await handoff.getState("ao-1")).targets.some((target) => target.id === id)).toBe(true);
+		await handoff.open({ sessionId: "ao-1", targetId: id });
+		expect(input.launch).toHaveBeenCalledWith(`/bin/${id}`, args, "/worktrees/ao-1");
+	});
+
+	it("discovers Windows Terminal from PATH", async () => {
+		const input = winDeps({ isExecutable: installedExecutables("C\\bin\\wt.exe") });
+		await createEditorHandoff(input).open({ sessionId: "ao-1", targetId: "windows-terminal" });
+		expect(input.launch).toHaveBeenCalledWith("C\\bin\\wt.exe", ["-d", "/worktrees/ao-1"], "/worktrees/ao-1");
+	});
+
+	it("rechecks terminal installation before launch and never launches a removed target", async () => {
+		let installed = true;
+		const input = deps({ isDirectory: (value) => installed && value === "/Applications/Ghostty.app" });
+		const handoff = createEditorHandoff(input);
+		expect((await handoff.getState("ao-1")).targets.some((target) => target.id === "ghostty")).toBe(true);
+		installed = false;
+		await expect(handoff.open({ sessionId: "ao-1", targetId: "ghostty" })).rejects.toThrow("not available");
+		expect(input.launch).not.toHaveBeenCalled();
+	});
+
+	it("copies the resolved workspace verbatim without launching an app or changing preferences", async () => {
+		const copyText = vi.fn();
+		const input = deps({ copyText });
+		await createEditorHandoff(input).copyWorkspacePath("ao-1");
+		expect(copyText).toHaveBeenCalledWith("/worktrees/ao-1");
+		expect(input.launch).not.toHaveBeenCalled();
+		expect(input.writePreference).not.toHaveBeenCalled();
+	});
+
+	it("does not copy a stale workspace when resolution fails", async () => {
+		const copyText = vi.fn();
+		const input = deps({ copyText, resolveWorkspace: vi.fn().mockRejectedValue(new Error("Workspace removed")) });
+		await expect(createEditorHandoff(input).copyWorkspacePath("ao-1")).rejects.toThrow("Workspace removed");
+		expect(copyText).not.toHaveBeenCalled();
+	});
+
+	it("returns native Finder and terminal icons without exposing installation paths and caches icon reads", async () => {
+		const iconDataUrl = "data:image/png;base64,dGVzdA==";
+		const readIcon = vi.fn().mockResolvedValue(iconDataUrl);
+		const handoff = createEditorHandoff(deps({ readIcon, isDirectory: (value) => value === "/Applications/Ghostty.app" }));
+		const state = await handoff.getState("ao-1");
+		expect(readIcon).toHaveBeenCalledWith("/System/Library/CoreServices/Finder.app");
+		expect(readIcon).toHaveBeenCalledWith("/System/Applications/Utilities/Terminal.app");
+		expect(readIcon).toHaveBeenCalledWith("/Applications/Ghostty.app");
+		for (const id of ["file-manager", "terminal", "ghostty"]) {
+			expect(state.targets.find((target) => target.id === id)).toMatchObject({ iconDataUrl });
+		}
+		expect(JSON.stringify(state)).not.toContain(".app");
+		await handoff.getState("ao-2");
+		expect(readIcon).toHaveBeenCalledTimes(3);
+	});
+
+	it("keeps targets usable when native icon lookup fails and retries the lookup", async () => {
+		const readIcon = vi.fn().mockRejectedValue(new Error("No icon"));
+		const handoff = createEditorHandoff(deps({ readIcon }));
+		const state = await handoff.getState("ao-1");
+		expect(state.workspaceAvailable).toBe(true);
+		expect(state.targets.every((target) => !target.iconDataUrl)).toBe(true);
+		readIcon.mockResolvedValue("data:image/png;base64,dGVzdA==");
+		expect((await handoff.getState("ao-1")).targets.find((target) => target.id === "terminal")).toHaveProperty("iconDataUrl");
+	});
+
+	it.each(["data:image/png;base64,", "https://example.test/icon.png"])("omits an empty or non-native icon: %s", async (icon) => {
+		const handoff = createEditorHandoff(deps({ readIcon: vi.fn().mockResolvedValue(icon) }));
+		expect((await handoff.getState("ao-1")).targets.every((target) => !target.iconDataUrl)).toBe(true);
+	});
+
 	it("opens Neovim in macOS Terminal with shell-safe workspace quoting", async () => {
 		const workspacePath = "/work trees/it's & safe";
 		const input = deps({
