@@ -5,7 +5,7 @@ description: Run Claude Code agents inside Docker containers while Orchestrator,
 
 The sandbox runs an agent inside a Docker container. Orchestrator, your worktrees, and the desktop app stay on the host. The container gets the agent's worktree, the repository's git data, and its own sandbox state. It does not see the rest of your home directory.
 
-The sandbox protects your files and credentials from accidental damage by the agent, and it blocks Docker's routes to services bound to your computer's loopback (localhost), including Orchestrator's local API. Services listening on all interfaces stay reachable (see [Network](#network)). Don't treat it as a complete security boundary against a deliberately hostile agent: `shared` mode lets sessions tamper with each other's git metadata, internet access is unrestricted, and the isolation is only as strong as Docker itself. See [Limits](#limits).
+The sandbox protects your files and credentials from accidental damage by the agent, and it keeps the agent away from Orchestrator's local API (see [Network](#network)). Don't treat it as a complete security boundary against a deliberately hostile agent: `shared` mode lets sessions tamper with each other's git metadata, git you run yourself in an agent's worktree can run code the agent planted there, internet access is unrestricted, and the isolation is only as strong as Docker itself. See [Limits](#limits).
 
 The sandbox is off by default and is configured per project.
 
@@ -63,10 +63,10 @@ A running per-agent container keeps its old settings until it stops. New setting
 
 The agent can commit, create branches, check out, rebase, and fetch inside the sandbox. Commits use the `user.name` and `user.email` that git on the host has for the repository.
 
-The repository's git directory is read-only inside the container. Only its objects and refs are writable, plus the session's own worktree metadata. Commits and branches reach the host normally. Reflogs written inside the sandbox stay in the container and are lost when it stops, so `git reflog` on the host doesn't show the agent's moves.
+The repository's git directory is read-only inside the container. Only its objects and refs are writable, plus worktree metadata: the session's own in `per-agent` mode, every worktree's in `shared` mode. Commits and branches reach the host normally. Reflogs written inside the sandbox stay in the container and are lost when it stops, so `git reflog` on the host doesn't show the agent's moves. The stash list is a reflog too, so a stash made inside the sandbox may be missing from `git stash list` on the host. The stash itself stays reachable as `refs/stash`, but a `git stash pop` or `git stash drop` on the host can discard it.
 
-- **`per-agent`:** the container can't change the repository's git config, hooks, or other worktrees' git metadata. Deleting branches or tags, dropping the last stash, and `git gc` fail inside the sandbox, so do those on the host. Commands that change the git config, such as `git remote add` or `git push -u`, fail too.
-- **`shared`:** the same read-only top level, but sessions in a shared container can modify the git metadata of every worktree in the project, including its reflogs and worktrees you create yourself. Use `per-agent` mode for agents you don't trust.
+- **`per-agent`:** the container can't change the repository's git config or hooks, or other worktrees' git metadata. That holds only while no role in the project uses `shared` mode (see below). Deleting branches or tags, dropping the last stash, and `git gc` fail inside the sandbox, so do those on the host. Commands that change the git config, such as `git remote add` or `git push -u`, fail too.
+- **`shared`:** the same read-only top level, but sessions in a shared container can modify the git metadata of every worktree in the project, including its reflogs and worktrees you create yourself. If you mix modes in one project, for example with a `shared` override under `worker`, that includes the metadata of `per-agent` sessions. Use `per-agent` mode for every role when you don't trust the agents.
 
 Each commit inside the sandbox also prints `Unable to create '.../packed-refs.lock': Read-only file system`. The commit still succeeds.
 
@@ -109,11 +109,12 @@ Everything else (spawn, send, session, render, review, browser, project, and so 
 
 ## Limits
 
-- The sandbox blocks Docker's routes to services bound to your computer's loopback, including Orchestrator's local API, and refuses to start if its probes reach that API. Only Docker Desktop on macOS is tested; other engines are best effort.
-- Services listening on all interfaces stay reachable from the sandbox through your computer's network address: dev servers bound to `0.0.0.0`, ports published by other containers, and Connect Mobile when enabled (it requires its password). Bind local services to `127.0.0.1` if the sandbox must not reach them.
+- Only services bound to your computer's loopback are blocked. Services listening on all interfaces stay reachable, and only Docker Desktop on macOS is tested. See [Network](#network).
 - Internet access is unrestricted, so the agent can send anything it can read to the internet.
 - The isolation relies on Docker. A flaw in Docker or a misconfigured Docker host weakens it.
-- In `shared` mode a hostile agent can rewrite the git metadata of any worktree in the project, which can make git on the host run its commands when you use those worktrees. Use `per-agent` mode for agents you don't trust.
+- Running git yourself in a sandboxed session's worktree can run code the agent planted there, for example through a nested repository whose config runs a command. Review the worktree before you run git in it, or use Orchestrator's changes panel. Orchestrator's own git calls in sandboxed worktrees skip nested repositories, so the changes panel doesn't show changes inside them, and a worktree that contains one is kept rather than removed when the session ends.
+- `per-agent` mode keeps the repository's git config and hooks, and other worktrees' git metadata, away from the agent. A role in `shared` mode can rewrite the git metadata of every worktree in the project, including that of `per-agent` sessions, which can make git on the host run its commands when you use those worktrees. Use `per-agent` mode for every role when you don't trust the agents.
+- An agent can lock its own worktree, which stops Orchestrator from removing it when the session ends. Run `git worktree unlock <path>`, then remove it.
 - Terminal sessions only. Chat-mode sessions are refused for sandboxed roles, and so is restoring an existing chat session. Switch the session to terminal mode first.
 - Agent switching is not supported for sandboxed sessions.
 - Session-title generation still runs the harness briefly on the host, outside the sandbox.
@@ -133,5 +134,8 @@ Everything else (spawn, send, session, render, review, browser, project, and so 
 - The image lacks `/bin/sh` or `claude`.
 - Credentials are missing.
 - The shared-mode workspace isn't an Orchestrator-managed worktree.
+- A `per-agent` session runs in the repository's main checkout. Start it in an Orchestrator-managed worktree instead.
+- The project has no repository path.
 - The worktree's git metadata doesn't point at the project's repository, for example because it was modified.
+- A stopped sandbox container can't be started again. Remove it with `docker rm -f <name>` and Orchestrator creates a new one.
 - A chat session or an agent switch was requested for a sandboxed session.
