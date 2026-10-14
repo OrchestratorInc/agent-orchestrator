@@ -129,6 +129,8 @@ type WorkspaceFetchLog = {
 	fetches: Record<FetchTrigger, number>;
 	/** The trigger of the first workspace fetch whose snapshot held each new session. */
 	firstFetchedBy: Record<string, FetchTrigger>;
+	/** `Date.now()` of that fetch: the session enters the cache when it resolves. */
+	firstFetchedAt: Record<string, number>;
 	workspaceInvalidations: number;
 	/** `Date.now()` of the latest workspace invalidation, or 0. */
 	lastWorkspaceInvalidationAt: number;
@@ -150,6 +152,7 @@ const instrumentWorkspaceFetches = (page: Page) =>
 		const log: WorkspaceFetchLog = {
 			fetches: { invalidate: 0, refetch: 0, fetchQuery: 0, focus: 0, interval: 0, retry: 0, other: 0 },
 			firstFetchedBy: {},
+			firstFetchedAt: {},
 			workspaceInvalidations: 0,
 			lastWorkspaceInvalidationAt: 0,
 		};
@@ -192,6 +195,7 @@ const instrumentWorkspaceFetches = (page: Page) =>
 				if (seen.has(session.id)) continue;
 				seen.add(session.id);
 				log.firstFetchedBy[session.id] = source;
+				log.firstFetchedAt[session.id] = Date.now();
 			}
 			return result;
 		};
@@ -201,7 +205,7 @@ const instrumentWorkspaceFetches = (page: Page) =>
 const workspaceFetchLog = (page: Page) =>
 	page.evaluate(() => {
 		const log = window.__workspaceFetchLog!;
-		return { ...log, fetches: { ...log.fetches }, firstFetchedBy: { ...log.firstFetchedBy } };
+		return { ...log, fetches: { ...log.fetches }, firstFetchedBy: { ...log.firstFetchedBy }, firstFetchedAt: { ...log.firstFetchedAt } };
 	});
 
 // The fake fires `open` from a timer, and the app's catch-up refresh can trail
@@ -317,8 +321,10 @@ test("diagnostic: large workspace snapshot, refetch race, and SSE replay keep th
 	// only the 15-second poll can recover the worker. Create it only after the
 	// replacement stream's open catch-up has run, or that fetch would find it.
 	await waitForStreamCatchUp(page);
-	await page.evaluate(() => window.__aoFakeAgent!.createWorkerWithoutEvent({ id: "poll-worker", title: "Poll worker" }));
-	const pollStartedAt = await page.evaluate(() => Date.now());
+	const pollStartedAt = await page.evaluate(() => {
+		window.__aoFakeAgent!.createWorkerWithoutEvent({ id: "poll-worker", title: "Poll worker" });
+		return Date.now();
+	});
 	const pollCacheBefore = await cacheState(page);
 	const beforePoll = {
 		cacheSessionCount: pollCacheBefore.sessionCount,
@@ -331,12 +337,13 @@ test("diagnostic: large workspace snapshot, refetch race, and SSE replay keep th
 	await expect.poll(async () => (await cacheState(page)).sessionIds.includes("poll-worker"), { timeout: 30_000 }).toBe(true);
 	await expect(sessionList(page).getByText("Poll worker", { exact: true })).toBeVisible();
 	const pollCacheAfter = await cacheState(page);
+	const logAfterPoll = await workspaceFetchLog(page);
 	const afterPoll = {
 		cacheSessionCount: pollCacheAfter.sessionCount,
 		workerIndex: pollCacheAfter.sessionIds.indexOf("poll-worker"),
-		firstFetchedBy: (await workspaceFetchLog(page)).firstFetchedBy["poll-worker"],
+		firstFetchedBy: logAfterPoll.firstFetchedBy["poll-worker"],
 		row: await sidebarRowState(page, "Poll worker"),
-		pollElapsedMs: await page.evaluate((startedAt) => Date.now() - startedAt, pollStartedAt),
+		missingMs: logAfterPoll.firstFetchedAt["poll-worker"] - pollStartedAt,
 	};
 	console.log("SIDEBAR_DIAGNOSTIC after-poll", JSON.stringify(afterPoll));
 	expect(afterPoll.firstFetchedBy).toBe("interval");
@@ -357,7 +364,13 @@ test("diagnostic: continuous SSE pressure does not starve workspace invalidation
 	// over a tick's worth per task, so the renderer can fetch and paint between.
 	await page.evaluate(() => window.__aoFakeAgent!.startContinuousWorkspaceEvents(50, 100));
 	await page.waitForTimeout(1_000);
-	await page.evaluate(() => window.__aoFakeAgent!.createWorker({ id: "continuous-worker", title: "Continuous worker" }));
+	// The worker's own session_created would queue behind the undelivered backlog,
+	// so create it without one: only a later pressure frame's invalidation can
+	// bring it into the cache.
+	const workerCreatedAt = await page.evaluate(() => {
+		window.__aoFakeAgent!.createWorkerWithoutEvent({ id: "continuous-worker", title: "Continuous worker" });
+		return Date.now();
+	});
 	await page.waitForTimeout(120_000);
 	await page.evaluate(() => window.__aoFakeAgent!.stopContinuousWorkspaceEvents());
 	const elapsedMs = await page.evaluate((startedAt) => Date.now() - startedAt, startTime);
@@ -371,6 +384,7 @@ test("diagnostic: continuous SSE pressure does not starve workspace invalidation
 		workspaceInvalidations: after.workspaceInvalidations - before.workspaceInvalidations,
 		fetches: fetchesSince(before, after),
 		firstFetchedBy: after.firstFetchedBy["continuous-worker"],
+		cachedAfterCreateMs: after.firstFetchedAt["continuous-worker"] - workerCreatedAt,
 		cacheSessionCount: capturedCache.sessionCount,
 		workerIndex: capturedCache.sessionIds.indexOf("continuous-worker"),
 		row: await sidebarRowState(page, "Continuous worker"),
@@ -502,7 +516,7 @@ test("diagnostic: a missed hidden SSE event waits for the next 15-second poll af
 	const recoveredCache = await cacheState(page);
 	const logAfterRecovery = await workspaceFetchLog(page);
 	const recoveryCapture = {
-		missingAfterRestoreMs: await page.evaluate((startedAt) => Date.now() - startedAt, restoreStartedAt),
+		missingAfterRestoreMs: logAfterRecovery.firstFetchedAt["hidden-missed-worker"] - restoreStartedAt,
 		fetchesSinceRestore: fetchesSince(logBeforeRestore, logAfterRecovery),
 		firstFetchedBy: logAfterRecovery.firstFetchedBy["hidden-missed-worker"],
 		cacheSessionCount: recoveredCache.sessionCount,
@@ -515,7 +529,7 @@ test("diagnostic: a missed hidden SSE event waits for the next 15-second poll af
 	expect(recoveryCapture.fetchesSinceRestore).toEqual({ invalidate: 0, refetch: 0, fetchQuery: 0, focus: 0, interval: 1, retry: 0, other: 0 });
 	expect(recoveryCapture.firstFetchedBy).toBe("interval");
 	// The poll keeps its phase while hidden, so the wait is up to one interval.
-	expect(recoveryCapture.missingAfterRestoreMs).toBeLessThanOrEqual(15_000 + 2_000);
+	expect(recoveryCapture.missingAfterRestoreMs).toBeLessThanOrEqual(15_000 + 1_000);
 });
 
 test("diagnostic: the app's replacement EventSource catches up a missed event on open @SIDEBAR_DIAG", async ({ page }) => {
