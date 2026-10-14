@@ -1,13 +1,10 @@
 import { useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { LoaderCircle, LogIn, RotateCw } from "lucide-react";
-import type { ModelCatalogAuthIssue } from "../hooks/useAgentModelsQuery";
-import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 
 export type ModelCatalogNoticeProps = {
 	agentLabel: string;
-	issue: ModelCatalogAuthIssue;
 	/** The daemon's own wording, kept out of the headline but one click away. */
 	detail?: string;
 	onLogin: () => void;
@@ -19,14 +16,12 @@ export type ModelCatalogNoticeProps = {
  * Says so in plain words and offers the fix (log in) and a retry in place,
  * instead of a raw provider error and a retry buried in the model menu.
  */
-export function ModelCatalogNotice({ agentLabel, issue, detail, onLogin, onRetry }: ModelCatalogNoticeProps) {
+export function ModelCatalogNotice({ agentLabel, detail, onLogin, onRetry }: ModelCatalogNoticeProps) {
 	const { t } = useTranslation();
 	const detailId = useId();
 	const [showDetail, setShowDetail] = useState(false);
 	const [retrying, setRetrying] = useState(false);
-	const headline = issue === "expired"
-		? t("newTask.modelNotice.expired", { agent: agentLabel })
-		: t("newTask.modelNotice.signedOut", { agent: agentLabel });
+	const headline = t("newTask.modelNotice.signedOut", { agent: agentLabel });
 	const retry = async () => {
 		if (retrying) return;
 		setRetrying(true);
@@ -40,9 +35,9 @@ export function ModelCatalogNotice({ agentLabel, issue, detail, onLogin, onRetry
 	};
 	return (
 		<div
-			// Only a signed-out agent is a problem to fix here. An expired token
-			// renews on its own.
-			className={cn("flex flex-col gap-1 text-caption", issue === "expired" ? "text-muted-foreground" : "text-warning")}
+			// Only a signed-out agent reaches this notice: an expired login renews
+			// itself when the agent starts.
+			className="flex flex-col gap-1 text-caption text-warning"
 			data-testid="model-catalog-notice"
 			role="status"
 		>
@@ -51,7 +46,7 @@ export function ModelCatalogNotice({ agentLabel, issue, detail, onLogin, onRetry
 				<span className="inline-flex shrink-0 items-center gap-1">
 					<Button type="button" size="sm" variant="outline" className="h-6 px-2" onClick={onLogin}>
 						<LogIn aria-hidden="true" className="size-3.5" />
-						{issue === "expired" ? t("newTask.modelNotice.loginAgain") : t("newTask.modelNotice.login")}
+						{t("newTask.modelNotice.login")}
 					</Button>
 					<Button type="button" size="sm" variant="ghost" className="h-6 px-2" disabled={retrying} onClick={() => void retry()}>
 						{retrying

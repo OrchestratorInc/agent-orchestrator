@@ -2604,12 +2604,17 @@ describe("TaskComposer", () => {
 			await waitFor(() => expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument());
 		});
 
-		it("explains an expired login that Claude Code renews on its own", async () => {
+		it("stays quiet about an expired login that Claude Code renews on its own", async () => {
 			h.agentCatalog = { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "configured" })] };
 			serveClaude(() => claudeCatalog({ warning: "the saved Claude Code login token expired", warningCode: "auth_expired" }));
 			render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
-			expect(await screen.findByTestId("model-catalog-notice")).toHaveTextContent("Claude Code's saved login has expired.");
-			expect(screen.getByRole("button", { name: "Log in again" })).toBeInTheDocument();
+			await waitFor(() => expect(h.get).toHaveBeenCalledWith(expect.stringContaining("/models"), expect.anything()));
+			// Let the catalog response render before asserting nothing was shown.
+			await act(async () => {
+				await new Promise((resolve) => setTimeout(resolve, 50));
+			});
+			expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument();
+			expect(screen.queryByText("the saved Claude Code login token expired")).not.toBeInTheDocument();
 		});
 
 		it("recognizes a login error from a daemon that predates warning codes", async () => {

@@ -1700,7 +1700,13 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 			}
 		}
 	}
-	if catalog.Stale && validateClaudeModel {
+	// A catalog left stale only because the stored login's access token expired
+	// (its refresh token still in date) must not block the launch: Claude Code
+	// renews the token when it starts. The stale list still validates what it
+	// knows; anything it lacks is left to the CLI.
+	renewableLogin := catalog.Stale && catalog.WarningCode == ports.ModelCatalogWarningAuthExpired &&
+		cfg.Harness == domain.HarnessClaudeCode
+	if catalog.Stale && validateClaudeModel && !renewableLogin {
 		return ports.AgentConfig{}, fmt.Errorf("%w for model %q: catalog is stale", ports.ErrModelCapabilitiesUnavailable, modelID)
 	}
 	var selected *ports.AgentModelInfo
@@ -1710,7 +1716,7 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 			break
 		}
 	}
-	if validateClaudeModel && selected == nil {
+	if validateClaudeModel && selected == nil && !renewableLogin {
 		return ports.AgentConfig{}, fmt.Errorf("%w: model %q is not in the active provider catalog", ErrUnsupportedModel, modelID)
 	}
 	if selected != nil && selected.RequiresVersion != "" {
@@ -1732,10 +1738,10 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 			resolved.Effort = ""
 		}
 	}
-	if resolved.Effort == "" {
+	if resolved.Effort == "" || (renewableLogin && selected == nil) {
 		return resolved, nil
 	}
-	if catalog.Stale || selected == nil {
+	if (catalog.Stale && !renewableLogin) || selected == nil {
 		return ports.AgentConfig{}, fmt.Errorf("%w for model %q", ports.ErrModelCapabilitiesUnavailable, modelID)
 	}
 	if resolved.Effort != "" && !containsString(selected.Efforts, resolved.Effort) {
