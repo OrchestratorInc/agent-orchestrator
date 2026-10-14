@@ -334,7 +334,7 @@ const defaultAliases = "host.docker.internal=192.168.65.254 host.docker.internal
 
 // runIsolationScript runs the script with getent, ip and nc stand-ins that
 // log their argv, and returns its output, the logged calls and exit code.
-// Env knobs: ALIASES (name=addr list), GW, ONLINK=all, FAIL_IP, REACH, PROXY.
+// Env knobs: ALIASES (name=addr list), GW, LINK (link-scope prefix), PRE_BLACKHOLE, FAIL_IP, REACH, PROXY.
 func runIsolationScript(t *testing.T, args []string, env ...string) (string, string, int) {
 	t.Helper()
 	bin := t.TempDir()
@@ -351,10 +351,15 @@ done
 		"ip": `echo "ip $*" >> "$LOG"
 case "$*" in
 "route show default") printf 'default via %s dev eth0\n172.17.0.0/16 dev eth0 scope link\n' "${GW:-172.17.0.1}"; exit 0 ;;
-"route get "*) if [ "$ONLINK" = all ]; then echo "$3 dev eth0  src 172.17.0.3"; else echo "$3 via ${GW:-172.17.0.1} dev eth0  src 172.17.0.3"; fi; exit 0 ;;
+"-4 route show scope link")
+	printf '%s dev eth0  src 172.17.0.3\n' "${LINK:-172.17.0.0/16}"
+	[ -n "$PRE_BLACKHOLE" ] && printf 'blackhole %s\n' "$PRE_BLACKHOLE"
+	exit 0 ;;
+"route get "*) echo "RTNETLINK answers: Invalid argument" >&2; exit 2 ;;
 esac
 [ -n "$FAIL_IP" ] && case "$*" in *"$FAIL_IP"*) echo "RTNETLINK answers: Operation not permitted" >&2; exit 2 ;; esac
 exit 0`,
+		"sleep": `echo "sleep $*" >> "$LOG"`,
 		"nc": `echo "nc $*" >> "$LOG"
 if [ "$1" = -z ]; then
 	[ "$4" = "$REACH" ] && exit 0
@@ -395,8 +400,8 @@ func TestIsolationScriptBlackholesAndProbes(t *testing.T) {
 	}
 	want := strings.Join([]string{
 		"ip route show default",
-		"ip route get 192.168.65.254",
-		"ip route get 192.168.65.1",
+		"ip -4 route show scope link",
+		"ip -4 route show scope link",
 		"ip -4 route replace blackhole 192.168.65.254/32",
 		"ip -4 route replace blackhole 192.168.65.0/24",
 		"ip -6 route replace blackhole fdc4::254/128",
@@ -423,7 +428,7 @@ func TestIsolationScriptKeepsOwnNetworkReachable(t *testing.T) {
 		env  []string
 	}{
 		{"gateway in the /24", []string{"GW=192.168.65.9"}},
-		{"on-link", []string{"ONLINK=all"}},
+		{"on-link", []string{"LINK=192.168.0.0/16"}},
 		{"loopback", []string{"ALIASES=host.internal=127.0.0.2"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -461,12 +466,37 @@ func TestIsolationScriptPortZeroSkipsProbe(t *testing.T) {
 
 func TestIsolationScriptNoAlias(t *testing.T) {
 	out, calls, code := runIsolationScript(t, []string{"3001", "1"}, "ALIASES=")
-	if code != 4 || strings.Contains(calls, "blackhole") || strings.Contains(calls, "nc ") {
+	// Three attempts, so two sleeps.
+	if code != 4 || strings.Count(calls, "sleep 1\n") != 2 || strings.Contains(calls, "blackhole") || strings.Contains(calls, "nc ") {
 		t.Fatalf("required: exit %d out %q calls:\n%s", code, out, calls)
 	}
+	// One attempt, no sleep.
 	out, calls, code = runIsolationScript(t, []string{"3001", "0"}, "ALIASES=")
-	if code != 0 || strings.Contains(calls, "blackhole") || !strings.Contains(calls, "nc -z -w 2 172.17.0.1 3001") {
+	if code != 0 || strings.Contains(calls, "sleep") || strings.Contains(calls, "blackhole") || !strings.Contains(calls, "nc -z -w 2 172.17.0.1 3001") {
 		t.Fatalf("optional: exit %d out %q calls:\n%s", code, out, calls)
+	}
+}
+
+// A /32 blackhole left from an earlier run (the container was not
+// restarted) must not make the alias look on-link and drop the /24.
+func TestIsolationScriptAddsSubnetOverExistingBlackhole(t *testing.T) {
+	out, calls, code := runIsolationScript(t, []string{"0", "1"}, "PRE_BLACKHOLE=192.168.65.254", "ALIASES=host.docker.internal=192.168.65.254")
+	if code != 0 || !strings.Contains(calls, "ip -4 route replace blackhole 192.168.65.0/24\n") || strings.Contains(calls, "route get") {
+		t.Fatalf("exit %d out %q calls:\n%s", code, out, calls)
+	}
+}
+
+func TestIsolationScriptOnLinkMatchesPrefix(t *testing.T) {
+	for _, tc := range []struct {
+		link string
+		want bool // /24 added
+	}{
+		{"192.168.0.0/16", false}, {"192.168.65.254", false}, {"192.168.64.0/24", true}, {"10.0.0.0/8", true},
+	} {
+		_, calls, _ := runIsolationScript(t, []string{"0", "1"}, "LINK="+tc.link, "ALIASES=host.docker.internal=192.168.65.254")
+		if got := strings.Contains(calls, "192.168.65.0/24"); got != tc.want {
+			t.Fatalf("LINK=%s: /24 added = %v, want %v\n%s", tc.link, got, tc.want, calls)
+		}
 	}
 }
 

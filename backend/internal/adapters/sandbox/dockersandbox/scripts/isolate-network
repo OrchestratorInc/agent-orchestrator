@@ -9,7 +9,9 @@ gw=$(ip route show default | awk '$1 == "default" { print $3; exit }')
 
 addrs=
 tries=0
-while [ -z "$addrs" ] && [ "$tries" -lt 3 ]; do
+max_tries=1
+[ "$require_alias" = 1 ] && max_tries=3 # retry only where an alias must exist
+while [ -z "$addrs" ] && [ "$tries" -lt "$max_tries" ]; do
 	[ "$tries" -gt 0 ] && sleep 1
 	tries=$((tries + 1))
 	for h in host.docker.internal gateway.docker.internal host.internal host.lima.internal; do
@@ -29,6 +31,17 @@ fi
 # Desktop's other host services (its HTTP proxy at .7). A /24 is skipped when
 # it is loopback, holds the default gateway, or is on-link, since that would
 # cut the container's own network. Decided before any route is added.
+# on_link reports whether IPv4 $1 lies in one of the container's link-scope
+# prefixes (its own subnets); blackhole and other typed routes are ignored.
+on_link() {
+	ip -4 route show scope link 2>/dev/null | awk -v a="$1" '
+		function num(s, p) { split(s, p, "."); return ((p[1] * 256 + p[2]) * 256 + p[3]) * 256 + p[4] }
+		$1 ~ /^[0-9]/ {
+			split($1, c, "/"); bits = (c[2] == "") ? 32 : c[2]; m = 2 ^ (32 - bits)
+			if (int(num(a) / m) == int(num(c[1]) / m)) found = 1
+		}
+		END { exit !found }'
+}
 routes=
 for a in $addrs; do
 	case $a in
@@ -38,7 +51,7 @@ for a in $addrs; do
 		net=${a%.*}
 		case $a in 127.*) continue ;; esac
 		[ -n "$gw" ] && [ "${gw%.*}" = "$net" ] && continue
-		ip route get "$a" 2>/dev/null | grep -q ' via ' || continue
+		on_link "$a" && continue
 		case " $routes " in *" -4:$net.0/24 "*) ;; *) routes="$routes -4:$net.0/24" ;; esac
 		;;
 	esac

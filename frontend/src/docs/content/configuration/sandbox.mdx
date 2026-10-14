@@ -5,7 +5,7 @@ description: Run Claude Code agents inside Docker containers while Orchestrator,
 
 The sandbox runs an agent inside a Docker container. Orchestrator, your worktrees, and the desktop app stay on the host. The container gets the agent's worktree, the repository's git data, and its own sandbox state. It does not see the rest of your home directory.
 
-The sandbox protects your files and credentials from accidental damage by the agent, and it blocks the container's known routes to your computer (see [Network](#network)). Don't treat it as a complete security boundary against a deliberately hostile agent: `shared` mode lets sessions tamper with each other's git metadata, internet access is unrestricted, and the isolation is only as strong as Docker itself. See [Limits](#limits).
+The sandbox protects your files and credentials from accidental damage by the agent, and it blocks Docker's routes to services bound to your computer's loopback (localhost), including Orchestrator's local API. Services listening on all interfaces stay reachable (see [Network](#network)). Don't treat it as a complete security boundary against a deliberately hostile agent: `shared` mode lets sessions tamper with each other's git metadata, internet access is unrestricted, and the isolation is only as strong as Docker itself. See [Limits](#limits).
 
 The sandbox is off by default and is configured per project.
 
@@ -25,7 +25,7 @@ RUN npm install -g @anthropic-ai/claude-code
 
 There is no Docker access inside the sandbox.
 
-The first start pulls a small helper image (`alpine:3.22`), which Orchestrator uses to block the container's access to your computer. See [Network](#network).
+The first start pulls a small helper image (`alpine:3.22`), which Orchestrator uses to block the container's routes to services on your computer's loopback. See [Network](#network).
 
 ## Configuration
 
@@ -80,7 +80,9 @@ Sandboxes run on a dedicated Docker network, `ao-sandbox`, which Orchestrator cr
 
 This is tested on Docker Desktop for macOS. On other engines the blocking is best effort, but the probe still refuses to start a sandbox that can reach Orchestrator's API.
 
-Internet access is unrestricted. Tools inside the sandbox can't reach dev servers or MCP servers running on your computer.
+This blocks services bound to your computer's loopback (localhost), including Orchestrator's local API. Services listening on all interfaces stay reachable through your computer's network address. That includes dev servers bound to `0.0.0.0`, ports published by other containers, and Connect Mobile when it is enabled (it requires its password). Bind local services to `127.0.0.1` if the sandbox must not reach them.
+
+Internet access is unrestricted.
 
 If you restart a sandbox container yourself with `docker restart`, the block is gone until Orchestrator next starts a session in it. Agents don't survive that restart, and Orchestrator reapplies the block before it runs anything there again.
 
@@ -107,8 +109,9 @@ Everything else (spawn, send, session, render, review, browser, project, and so 
 
 ## Limits
 
-- The sandbox blocks the direct host addresses and Docker Desktop's built-in proxy, and refuses to start if its probes reach Orchestrator's local API. Only Docker Desktop on macOS is tested; other engines are best effort. Internet access is unrestricted, so the agent can send anything it can read to the internet.
-- Tools inside the sandbox can't reach dev servers or MCP servers running on your computer.
+- The sandbox blocks Docker's routes to services bound to your computer's loopback, including Orchestrator's local API, and refuses to start if its probes reach that API. Only Docker Desktop on macOS is tested; other engines are best effort.
+- Services listening on all interfaces stay reachable from the sandbox through your computer's network address: dev servers bound to `0.0.0.0`, ports published by other containers, and Connect Mobile when enabled (it requires its password). Bind local services to `127.0.0.1` if the sandbox must not reach them.
+- Internet access is unrestricted, so the agent can send anything it can read to the internet.
 - The isolation relies on Docker. A flaw in Docker or a misconfigured Docker host weakens it.
 - In `shared` mode a hostile agent can rewrite the git metadata of any worktree in the project, which can make git on the host run its commands when you use those worktrees. Use `per-agent` mode for agents you don't trust.
 - Terminal sessions only. Chat-mode sessions are refused for sandboxed roles, and so is restoring an existing chat session. Switch the session to terminal mode first.
