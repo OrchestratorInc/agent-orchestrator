@@ -129,7 +129,7 @@ func (m *Manager) runBackgroundTask(ctx context.Context, id domain.SessionID, sy
 	config := ports.AgentConfig{
 		Model: rec.Metadata.Model, Permissions: backgroundTaskPermissions(rec.Harness),
 	}
-	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, nil)
+	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, nil, nil)
 	if m.agents != nil {
 		if agent, found := m.agents.Agent(rec.Harness); found {
 			m.augmentAgentRuntimeEnv(agent, env)
@@ -220,7 +220,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 	}
 	// Chat Service retains this unprivileged base environment. The bearer is
 	// minted inside its per-session launch gate and is never cached for reuse.
-	env := m.runtimeEnv(id, in.record.ProjectID, in.record.IssueID, in.project.Config.Env)
+	env := m.runtimeEnv(id, in.record.ProjectID, in.record.IssueID, in.project.Config.Env, in.project.Config.EnvRemove)
 	if agent, ok := m.agents.Agent(in.cfg.Harness); ok {
 		m.augmentAgentRuntimeEnv(agent, env)
 		// Chat launches go through the same workspace preparation as terminal
@@ -246,6 +246,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		DataDir:                 m.dataDir,
 		WorkspacePath:           in.workspace.Path,
 		Env:                     env,
+		EnvRemove:               in.project.Config.EnvRemove,
 		Model:                   agentConfig.Model,
 		Effort:                  agentConfig.Effort,
 		Permissions:             agentConfig.Permissions,
@@ -255,7 +256,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		ExpectedControllerOwner: in.record.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
-				launchCtx, in.record, in.project.Config.Env, expected,
+				launchCtx, in.record, in.project.Config.Env, expected, in.project.Config.EnvRemove,
 			)
 			if prepareErr != nil {
 				return nil, fmt.Errorf("%w: %w", ErrSpawnBrowser, prepareErr)
@@ -487,7 +488,7 @@ func (m *Manager) resumeChatController(
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: workspace roots: %w", operation, rec.ID, err)
 	}
-	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
+	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, project.Config.EnvRemove)
 	if agent, ok := m.agents.Agent(rec.Harness); ok {
 		m.augmentAgentRuntimeEnv(agent, env)
 	}
@@ -513,6 +514,7 @@ func (m *Manager) resumeChatController(
 		DataDir:                 m.dataDir,
 		WorkspacePath:           ws.Path,
 		Env:                     env,
+		EnvRemove:               project.Config.EnvRemove,
 		Model:                   agentConfig.Model,
 		Effort:                  agentConfig.Effort,
 		Permissions:             agentConfig.Permissions,
@@ -522,7 +524,7 @@ func (m *Manager) resumeChatController(
 		ExpectedControllerOwner: rec.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
-				launchCtx, rec, project.Config.Env, expected,
+				launchCtx, rec, project.Config.Env, expected, project.Config.EnvRemove,
 			)
 			if prepareErr != nil {
 				return nil, prepareErr

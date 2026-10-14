@@ -39,7 +39,7 @@ func (m *Manager) executeChatAgentSwitch(
 	targetOwnershipAmbiguous := false
 	skipTerminalization := false
 	var panicCause *agentSwitchPanicCause
-	targetSetupEnv := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
+	targetSetupEnv := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, project.Config.EnvRemove)
 	m.augmentAgentRuntimeEnv(targetAgent, targetSetupEnv)
 
 	defer func() {
@@ -365,7 +365,7 @@ func (m *Manager) executeChatAgentSwitch(
 		credentialRecord.Activity.State != domain.ActivityExited {
 		return result, fmt.Errorf("switch Chat agent %s: source ownership changed before browser capability rotation", id)
 	}
-	targetLaunchEnv := m.runtimeEnv(id, credentialRecord.ProjectID, credentialRecord.IssueID, project.Config.Env)
+	targetLaunchEnv := m.runtimeEnv(id, credentialRecord.ProjectID, credentialRecord.IssueID, project.Config.Env, project.Config.EnvRemove)
 	m.augmentAgentRuntimeEnv(targetAgent, targetLaunchEnv)
 	releaseCodexAdmission, admissionErr := m.acquireCodexControllerAdmission(ctx, cfg.TargetHarness)
 	if admissionErr != nil {
@@ -390,6 +390,7 @@ func (m *Manager) executeChatAgentSwitch(
 		DataDir:                 m.dataDir,
 		WorkspacePath:           rec.Metadata.WorkspacePath,
 		Env:                     targetLaunchEnv,
+		EnvRemove:               project.Config.EnvRemove,
 		Model:                   agentConfig.Model,
 		Effort:                  agentConfig.Effort,
 		Permissions:             agentConfig.Permissions,
@@ -399,7 +400,7 @@ func (m *Manager) executeChatAgentSwitch(
 		ExpectedControllerOwner: credentialRecord.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
-				launchCtx, credentialRecord, project.Config.Env, expected,
+				launchCtx, credentialRecord, project.Config.Env, expected, project.Config.EnvRemove,
 			)
 			if prepareErr != nil {
 				return nil, prepareErr
@@ -627,7 +628,7 @@ func (m *Manager) rollbackStoppedChatAgentSwitchSource(
 		return err
 	}
 	agentConfig := effectiveAgentConfig(rec.Harness, rec.Kind, project.Config)
-	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
+	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, project.Config.EnvRemove)
 	m.augmentAgentRuntimeEnv(sourceAgent, env)
 	if err := m.prepareWorkspace(
 		ctx, sourceAgent, rec.ID, rec.Metadata.WorkspacePath,
