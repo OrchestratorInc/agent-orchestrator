@@ -4321,6 +4321,9 @@ components:
         mode:
           $ref: "#/components/schemas/SessionMode"
           default: trusted
+        interfaceMode:
+          $ref: "#/components/schemas/SessionInterfaceMode"
+          description: The initial interface. Omitted defaults to tui.
         model:
           type: string
           maxLength: 200

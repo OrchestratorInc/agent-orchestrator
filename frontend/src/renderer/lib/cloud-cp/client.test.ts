@@ -77,6 +77,27 @@ describe("cloud control-plane Coder template parameters", () => {
 });
 
 describe("cloud control-plane session lifecycle", () => {
+	it("sends the initial interface and stable idempotency key in the create envelope", async () => {
+		const fetchMock = vi.fn(async () => new Response(JSON.stringify({ session: { id: "session-1" } }), {
+			status: 201,
+			headers: { "Content-Type": "application/json" },
+		}));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl: fetchMock });
+		await client.createSession("org/1", {
+			projectId: "project-1",
+			kind: "worker",
+			harness: "codex",
+			displayName: "Chat task",
+			prompt: "Do the work",
+			interfaceMode: "chat",
+		}, { idempotencyKey: "stable-create-id" });
+
+		const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+		const request = calls[0]?.[1];
+		expect(JSON.parse(request.body as string)).toMatchObject({ interfaceMode: "chat" });
+		expect(new Headers(request.headers).get("Idempotency-Key")).toBe("stable-create-id");
+	});
+
 	it("uses the cloud review endpoints for an encoded session", async () => {
 		const fetchMock = vi.fn(
 			async () =>

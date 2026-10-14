@@ -114,6 +114,15 @@ async function waitForTaskReady() {
 	await waitFor(() => expect(startTask()).toBeEnabled());
 }
 
+function serveCloudTask(defaultSessionMode: "chat" | "tui", harness = "claude-code") {
+	h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: harness } } });
+	h.get.mockImplementation(async (path: string) => {
+		if (path === "/api/v1/settings") return { data: { defaultSessionMode, chatHarnesses: [harness] } };
+		if (path.includes("/models")) return { data: { agent: harness, selectionMode: "text", models: [], allowCustom: true } };
+		return { data: {} };
+	});
+}
+
 beforeEach(() => {
 	useUiStore.setState({ developerMode: true, remoteHosts: true });
 	h.get.mockImplementation(async (path: string) => {
@@ -1063,6 +1072,79 @@ describe("TaskComposer", () => {
 		expect(h.post).not.toHaveBeenCalled();
 	});
 
+	it.each(["chat", "tui"] as const)("applies the saved %s default to a new cloud session", async (defaultSessionMode) => {
+		serveCloudTask(defaultSessionMode);
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
+		render(<Wrap><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		fireEvent.change(task(), { target: { value: "Do the work" } });
+		await waitForTaskReady();
+		fireEvent.click(startTask());
+
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledTimes(1));
+		expect(h.cloudCreateSession.mock.calls[0]?.[0]).toBe("org-1");
+		expect(h.cloudCreateSession.mock.calls[0]?.[1]).toMatchObject({ interfaceMode: defaultSessionMode });
+		expect(h.cloudCreateSession.mock.calls[0]?.[2]).toEqual({ idempotencyKey: expect.any(String) });
+	});
+
+	it("uses terminal when the saved Chat default selects a Cloud harness without Chat support", async () => {
+		serveCloudTask("chat", "opencode");
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
+		render(<Wrap><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		fireEvent.change(task(), { target: { value: "Do the work" } });
+		await waitForTaskReady();
+		fireEvent.click(startTask());
+
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledTimes(1));
+		expect(h.cloudCreateSession.mock.calls[0]?.[1]).toMatchObject({ harness: "opencode", interfaceMode: "tui" });
+	});
+
+	it("waits for the saved interface default before creating a cloud session", async () => {
+		serveCloudTask("chat");
+		let resolveSettings!: (value: { data: { defaultSessionMode: "chat"; chatHarnesses: string[] } }) => void;
+		const settings = new Promise<{ data: { defaultSessionMode: "chat"; chatHarnesses: string[] } }>((resolve) => {
+			resolveSettings = resolve;
+		});
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/settings") return settings;
+			if (path.includes("/models")) return { data: { agent: "claude-code", selectionMode: "text", models: [], allowCustom: true } };
+			return { data: {} };
+		});
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
+		render(<Wrap><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		fireEvent.change(task(), { target: { value: "Do the work" } });
+		expect(startTask()).toBeDisabled();
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+
+		resolveSettings({ data: { defaultSessionMode: "chat", chatHarnesses: ["claude-code"] } });
+		await waitForTaskReady();
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledTimes(1));
+		expect(h.cloudCreateSession.mock.calls[0]?.[1]).toMatchObject({ interfaceMode: "chat" });
+	});
+
+	it("reuses the cloud create key after failure and prevents duplicate in-flight creation", async () => {
+		serveCloudTask("chat");
+		let resolveCreate!: (value: { session: { id: string } }) => void;
+		const pending = new Promise<{ session: { id: string } }>((resolve) => {
+			resolveCreate = resolve;
+		});
+		h.cloudCreateSession.mockRejectedValueOnce(new Error("response lost")).mockReturnValueOnce(pending);
+		const onCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="cloud-1" onCreated={onCreated} /></Wrap>);
+		fireEvent.change(task(), { target: { value: "Do the work" } });
+		await waitForTaskReady();
+		fireEvent.click(startTask());
+		await screen.findByText("response lost");
+		const retry = startTask();
+		fireEvent.click(retry);
+		fireEvent.click(retry);
+
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledTimes(2));
+		expect(h.cloudCreateSession.mock.calls[1]?.[2]).toEqual(h.cloudCreateSession.mock.calls[0]?.[2]);
+		resolveCreate({ session: { id: "session-1" } });
+		await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+	});
+
 	it("defaults cloud effort to medium and sends explicit effort choices", async () => {
 		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "claude-code" } } });
 		h.get.mockImplementation(async () => ({ data: { agent: "claude-code", selectionMode: "catalog", models: [
@@ -1077,12 +1159,14 @@ describe("TaskComposer", () => {
 		await userEvent.keyboard("{Escape}");
 		fireEvent.change(task(), { target: { value: "Do the work" } });
 		fireEvent.click(startTask());
-		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ reasoningEffort: "medium" })));
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalled());
+		expect(h.cloudCreateSession.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ reasoningEffort: "medium" }));
 		await userEvent.click(picker);
 		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
 		fireEvent.change(task(), { target: { value: "Another task" } });
 		fireEvent.click(startTask());
-		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenLastCalledWith("org-1", expect.objectContaining({ reasoningEffort: "high" })));
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledTimes(2));
+		expect(h.cloudCreateSession.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ reasoningEffort: "high" }));
 	});
 
 	it("leaves the sandbox provider to the project and org default on the control plane", async () => {

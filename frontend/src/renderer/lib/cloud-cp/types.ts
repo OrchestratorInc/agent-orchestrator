@@ -304,6 +304,7 @@ export interface CloudCpCreateSessionRequest {
 	prompt: string;
 	/** Defaults to "trusted" on the control plane when omitted. */
 	mode?: CloudCpSessionMode;
+	interfaceMode?: CloudCpInterfaceMode;
 	/**
 	 * Coding-agent model the session launches with (harness-native id). Optional:
 	 * omitted uses the harness default.

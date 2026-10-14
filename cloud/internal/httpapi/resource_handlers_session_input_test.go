@@ -1,8 +1,14 @@
 package httpapi
 
 import (
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
 
 // The renderer derives a cloud session's display name from the task brief with a
@@ -45,5 +51,63 @@ func TestValidSessionInputDisplayNameLength(t *testing.T) {
 			t.Errorf("%s: validSessionInput(displayName runes=%d) = %v, want %v",
 				tc.name, len([]rune(tc.displayName)), got, tc.want)
 		}
+	}
+}
+
+func TestCreateSessionInitialInterface(t *testing.T) {
+	tests := []struct {
+		name          string
+		harness       string
+		interfaceMode string
+		wantStatus    int
+		wantInterface domain.SessionInterface
+		wantCode      string
+	}{
+		{name: "default terminal", harness: "claude-code", wantStatus: http.StatusCreated, wantInterface: domain.SessionInterfaceTUI},
+		{name: "explicit terminal", harness: "claude-code", interfaceMode: "tui", wantStatus: http.StatusCreated, wantInterface: domain.SessionInterfaceTUI},
+		{name: "supported chat", harness: "codex", interfaceMode: "chat", wantStatus: http.StatusCreated, wantInterface: domain.SessionInterfaceChat},
+		{name: "unsupported chat", harness: "opencode", interfaceMode: "chat", wantStatus: http.StatusUnprocessableEntity, wantCode: "INTERFACE_MODE_UNSUPPORTED"},
+		{name: "invalid interface", harness: "claude-code", interfaceMode: "both", wantStatus: http.StatusUnprocessableEntity, wantCode: "validation_error"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &stubAutolinkStore{}
+			srv := newChildServer(store, bothProviderProvisioning("nodeops"), "nodeops")
+			req := createSessionRequestHTTP(t, "worker", "")
+			body, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var input map[string]any
+			if err := json.Unmarshal(body, &input); err != nil {
+				t.Fatal(err)
+			}
+			input["harness"] = tc.harness
+			if tc.interfaceMode != "" {
+				input["interfaceMode"] = tc.interfaceMode
+			}
+			body, err = json.Marshal(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Body = io.NopCloser(strings.NewReader(string(body)))
+			recorder := httptest.NewRecorder()
+			srv.createSession(recorder, req)
+			if recorder.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body = %s", recorder.Code, tc.wantStatus, recorder.Body.String())
+			}
+			if tc.wantStatus == http.StatusCreated {
+				if !store.created || store.captured.Interface != tc.wantInterface {
+					t.Fatalf("created = %v, interface = %q, want %q", store.created, store.captured.Interface, tc.wantInterface)
+				}
+			} else {
+				if store.created {
+					t.Fatal("invalid request created a session")
+				}
+				if !strings.Contains(recorder.Body.String(), tc.wantCode) {
+					t.Fatalf("body = %s, want error code %q", recorder.Body.String(), tc.wantCode)
+				}
+			}
+		})
 	}
 }
