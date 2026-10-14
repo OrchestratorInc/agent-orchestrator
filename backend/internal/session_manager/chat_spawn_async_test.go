@@ -137,7 +137,7 @@ func testAsyncChatAnswersBeforeWorkspaceAndController(t *testing.T, kind domain.
 	}
 }
 
-func TestSpawnAsyncChatSeedsEffortBeforeBackgroundTitle(t *testing.T) {
+func TestSpawnAsyncChatPreservesForegroundEffortDuringBackgroundTitle(t *testing.T) {
 	for _, prepared := range []bool{false, true} {
 		name := "fresh"
 		if prepared {
@@ -172,8 +172,11 @@ func TestSpawnAsyncChatSeedsEffortBeforeBackgroundTitle(t *testing.T) {
 			if _, err := m.RunBackgroundTask(context.Background(), rec.ID, "title only", "do the thing"); err != nil {
 				t.Fatal(err)
 			}
-			if len(launcher.background) != 1 || launcher.background[0].Effort != "high" {
-				t.Fatalf("background title task = %#v, want high effort", launcher.background)
+			if len(launcher.background) != 1 || launcher.background[0].Effort != "" {
+				t.Fatalf("background title task = %#v, want provider-advertised effort", launcher.background)
+			}
+			if st.sessions[rec.ID].Metadata.Effort != "high" {
+				t.Fatal("background task changed the foreground effort")
 			}
 		})
 	}

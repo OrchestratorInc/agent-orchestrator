@@ -1,4 +1,4 @@
-import { type KeyboardEvent, type ReactNode, type RefObject, useEffect, useId, useRef, useState } from "react";
+import { type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject, useEffect, useId, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ExternalLinkComponent } from "./external-link";
 import {
@@ -23,7 +23,7 @@ import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight
 import { cn } from "./utils";
 import { UserAvatar } from "./UserAvatar";
 
-export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files";
+export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files" | "artifacts";
 
 export type InspectorTab = {
 	badge?: boolean;
@@ -43,6 +43,7 @@ export const inspectorEmptyClass = "text-xs text-settings-muted leading-normal";
 export function SessionInspectorShellView({
 	activeView,
 	ariaLabel,
+	artifactsView,
 	browserPoppedOut,
 	browserView,
 	sideChatView,
@@ -57,6 +58,7 @@ export function SessionInspectorShellView({
 }: {
 	activeView: InspectorView;
 	ariaLabel: string;
+	artifactsView?: ReactNode;
 	browserPoppedOut: boolean;
 	browserView?: ReactNode;
 	sideChatView?: ReactNode;
@@ -117,6 +119,7 @@ export function SessionInspectorShellView({
 					"session-inspector__topbar flex h-inspector-tabs shrink-0 items-center border-b border-border-strong pl-1",
 					activeView === "browser" && "session-inspector__topbar--browser",
 				)}
+				style={{ "--inspector-tab-count": tabs.length } as CSSProperties}
 			>
 				{isVisible && tabs.length === 1 ? (
 					<span className="min-w-0 flex-1 px-2 text-sm text-passive">{tabs[0].label}</span>
@@ -190,8 +193,8 @@ export function SessionInspectorShellView({
 				className={cn(
 					inspectorBodyBaseClass,
 					!isVisible && "invisible pointer-events-none",
-					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && inspectorScrollableBodyClass,
-					activeView === "sideChat" && "p-0 overflow-hidden",
+					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "artifacts" && inspectorScrollableBodyClass,
+					(activeView === "sideChat" || activeView === "artifacts") && "p-0 overflow-hidden",
 					activeView === "browser" &&
 						!browserPoppedOut &&
 						"session-inspector__body--browser p-0 overflow-hidden [&>[role=tabpanel]]:border-0 [&>[role=tabpanel]]:rounded-none",
@@ -204,6 +207,7 @@ export function SessionInspectorShellView({
 				{activeView === "browser" ? browserView : null}
 				{activeView === "sideChat" ? sideChatView : null}
 				{activeView === "files" ? filesView : null}
+				{activeView === "artifacts" ? artifactsView : null}
 			</div>
 		</aside>
 	);

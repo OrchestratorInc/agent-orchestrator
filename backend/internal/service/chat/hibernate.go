@@ -398,7 +398,17 @@ func (s *Service) workingController(ctx context.Context, id domain.SessionID) (*
 				controller.mu.Lock()
 				hibernating := controller.handoff == controllerHandoffHibernate
 				stopped := controller.state == ports.ChatControllerStopped
+				forkDone := controller.forkDone
 				controller.mu.Unlock()
+				if forkDone != nil {
+					gate.unlock()
+					select {
+					case <-forkDone:
+						continue
+					case <-ctx.Done():
+						return nil, nil, ctx.Err()
+					}
+				}
 				if hibernating {
 					gate.unlock()
 					select {

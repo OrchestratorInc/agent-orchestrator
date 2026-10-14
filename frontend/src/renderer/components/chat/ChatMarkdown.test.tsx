@@ -65,6 +65,11 @@ describe("ChatMarkdown", () => {
 		expect(screen.getAllByRole("listitem")).toHaveLength(4);
 	});
 
+	it("keeps the first number of an ordered list that starts after 1", () => {
+		render(<ChatMarkdown text={"6."} />);
+		expect(screen.getByRole("list")).toHaveAttribute("start", "6");
+	});
+
 	it("renders a task list with read-only checkboxes reflecting the agent's state", () => {
 		render(<ChatMarkdown text={"- [x] done thing\n- [ ] pending thing"} />);
 		const boxes = screen.getAllByRole("checkbox") as HTMLInputElement[];
@@ -161,7 +166,9 @@ describe("ChatMarkdown", () => {
 
 		await userEvent.click(screen.getByRole("link", { name: "the component" }));
 
-		expect(onFileOpen).toHaveBeenCalledWith("frontend/src/App.tsx", 42);
+		// The absolute reference is passed through as written: its tail matching
+		// a workspace file does not make it that file, so the opener asks the daemon.
+		expect(onFileOpen).toHaveBeenCalledWith("/Users/me/project/frontend/src/App.tsx", 42);
 		expect(openExternal).not.toHaveBeenCalled();
 		openExternal.mockRestore();
 	});
@@ -176,6 +183,22 @@ describe("ChatMarkdown", () => {
 
 		const link = screen.getByRole("link", { name: "frontend/src/App.tsx" });
 		expect(link.querySelector("button")).toBeNull();
+	});
+
+	it("does not swap an absolute link or inline path for a same-named workspace file", async () => {
+		const onFileOpen = vi.fn();
+		renderWithLinkHandler(
+			"See [the readme](/other-repo/README.md) and `/other-repo/README.md:3`.",
+			vi.fn(),
+			["README.md"],
+			onFileOpen,
+		);
+
+		await userEvent.click(screen.getByRole("link", { name: "the readme" }));
+		await userEvent.click(screen.getByRole("button", { name: "Open README.md in Files" }));
+
+		expect(onFileOpen).toHaveBeenNthCalledWith(1, "/other-repo/README.md");
+		expect(onFileOpen).toHaveBeenNthCalledWith(2, "/other-repo/README.md", 3);
 	});
 
 	it("opens an explicit relative file link before the workspace catalog catches up", async () => {
