@@ -154,6 +154,7 @@ func (*Plugin) AfterStartCommand(ctx context.Context, cfg ports.LaunchConfig) (s
 	return "/model " + cfg.Config.Model, nil
 }
 
+// AfterStartCommandApplied confirms that Memcode accepted the requested native model.
 func (*Plugin) AfterStartCommandApplied(cfg ports.LaunchConfig, output string) bool {
 	model := cfg.Config.Model
 	return model != "" && emptyComposer(output) && strings.Contains(terminalui.PlainTerminalText(output), "model → "+model)
