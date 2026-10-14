@@ -15,7 +15,7 @@ trigger: "Using the ao CLI in an AO workspace: creating Cues, spawning workers, 
 | `agent` | Inspect installed harnesses and launch readiness | Choosing or diagnosing an agent harness | `ao agent ls --refresh` |
 | `pr` | Merge a PR or resolve its review threads | Completing a reviewed change | `ao pr merge` / `ao pr resolve-comments` |
 | `project` | Register, inspect, configure, or remove projects | Setting up or managing repos AO knows about | [commands/project.md](commands/project.md) |
-| `automation` | Manage durable recurring session automations | Creating, editing, disabling, deleting, and inspecting scheduled runs | [commands/automation.md](commands/automation.md) |
+| `automation` | Manage durable session automations | Creating, editing, disabling, deleting, and inspecting scheduled or session-ended runs | [commands/automation.md](commands/automation.md) |
 | `cue` | Create or list reusable project Cues | Saving a repetitive command or agent task at the user's request | [commands/cue.md](commands/cue.md) |
 | `orchestrator` | List orchestrator sessions | Viewing which sessions are orchestrators | [commands/orchestrator.md](commands/orchestrator.md) |
 | `review` | Start, list, cancel, or submit AO's native reviewer for a worker's PR (default: this session) | Reviewing implementation PRs owned by AO workers. Use a normal review-only worker for someone else's PR | [commands/review.md](commands/review.md) |

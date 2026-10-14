@@ -25,6 +25,7 @@ func TestAutomationCreateAndGetRoundTripsDefinition(t *testing.T) {
 		Prompt:      "Review new issues",
 		Kind:        domain.KindWorker,
 		Harness:     domain.HarnessCodex,
+		Trigger:     domain.AutomationTriggerSchedule,
 		RRuleText:   "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
 		Timezone:    "Asia/Calcutta",
 		Enabled:     true,
@@ -226,13 +227,14 @@ func TestAutomationUpdatePersistsAllMutableFields(t *testing.T) {
 	now := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
 	rec := domain.Automation{
 		ID: "automation-1", ProjectID: "scheduled", DisplayName: "Triage",
-		Prompt: "Review issues", Kind: domain.KindWorker, RRuleText: "FREQ=DAILY",
-		Timezone: "UTC", Enabled: true, NextRunAt: now, CreatedAt: now, UpdatedAt: now,
+		Prompt: "Review issues", Kind: domain.KindWorker, Trigger: domain.AutomationTriggerSchedule,
+		RRuleText: "FREQ=DAILY", Timezone: "UTC", Enabled: true, NextRunAt: now, CreatedAt: now, UpdatedAt: now,
 	}
 	if _, err := store.CreateAutomation(ctx, rec); err != nil {
 		t.Fatalf("CreateAutomation: %v", err)
 	}
 	lastRun := now.Add(time.Hour)
+	rec.Trigger = domain.AutomationTriggerSessionEnded
 	rec.DisplayName = "Weekly triage"
 	rec.Prompt = "Review the weekly queue"
 	rec.Kind = domain.KindOrchestrator
@@ -389,5 +391,71 @@ func TestAutomationDeleteCascadesRunsButPreservesSession(t *testing.T) {
 	got, ok, err := store.GetSession(ctx, session.ID)
 	if err != nil || !ok || got.AutomationRunID != nil {
 		t.Fatalf("surviving session = %#v ok=%v err=%v", got, ok, err)
+	}
+}
+
+// Dropping the per-session dedupe, the same-instant bump, or the overlap
+// exemption for session-ended runs must make this test fail: each ended
+// session gets exactly one review, and reviews of different sessions run side
+// by side.
+func TestTriggeredAutomationRunsDedupePerSessionAndMayOverlap(t *testing.T) {
+	store := newTestStore(t)
+	seedProject(t, store, "scheduled")
+	seedProject(t, store, "other")
+	ctx := context.Background()
+	base := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
+	for _, rec := range []domain.Automation{
+		{ID: "review", ProjectID: "scheduled", Trigger: domain.AutomationTriggerSessionEnded, Enabled: true},
+		{ID: "paused-review", ProjectID: "scheduled", Trigger: domain.AutomationTriggerSessionEnded, Enabled: false},
+		{ID: "nightly", ProjectID: "scheduled", Trigger: domain.AutomationTriggerSchedule, RRuleText: "FREQ=DAILY", Enabled: true},
+		{ID: "other-review", ProjectID: "other", Trigger: domain.AutomationTriggerSessionEnded, Enabled: true},
+	} {
+		rec.DisplayName, rec.Prompt, rec.Kind, rec.Timezone = "Review", "Review the session", domain.KindWorker, "UTC"
+		rec.NextRunAt, rec.CreatedAt, rec.UpdatedAt = base, base, base
+		if _, err := store.CreateAutomation(ctx, rec); err != nil {
+			t.Fatalf("CreateAutomation %s: %v", rec.ID, err)
+		}
+	}
+	listed, err := store.ListSessionEndedAutomations(ctx, "scheduled")
+	if err != nil || len(listed) != 1 || listed[0].ID != "review" {
+		t.Fatalf("session-ended automations = %#v err=%v, want only review", listed, err)
+	}
+	due, err := store.ListDueAutomations(ctx, base.Add(time.Hour), 10)
+	if err != nil || len(due) != 1 || due[0].ID != "nightly" {
+		t.Fatalf("due automations = %#v err=%v, want only the scheduled one", due, err)
+	}
+
+	var sessions []domain.SessionID
+	for range 2 {
+		created, err := store.CreateSession(ctx, sampleRecord("scheduled"))
+		if err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+		sessions = append(sessions, created.ID)
+	}
+	queue := func(runID domain.AutomationRunID, session domain.SessionID) bool {
+		t.Helper()
+		created, err := store.CreateTriggeredAutomationRun(ctx, domain.AutomationRun{
+			ID: runID, AutomationID: "review", ScheduledFor: base, TriggerSessionID: &session,
+			Status: domain.AutomationRunPending, CreatedAt: base, UpdatedAt: base,
+		})
+		if err != nil {
+			t.Fatalf("CreateTriggeredAutomationRun %s: %v", runID, err)
+		}
+		return created
+	}
+	if !queue("run-a", sessions[0]) || queue("run-a-again", sessions[0]) {
+		t.Fatal("first run for a session must queue and a repeat must not")
+	}
+	if !queue("run-b", sessions[1]) {
+		t.Fatal("a second session ending at the same instant must still queue")
+	}
+
+	lease := base.Add(time.Minute)
+	for _, want := range []domain.AutomationRunID{"run-a", "run-b"} {
+		claimed, ok, err := store.ClaimNextAutomationRun(ctx, base, lease)
+		if err != nil || !ok || claimed.ID != want || claimed.TriggerSessionID == nil {
+			t.Fatalf("claim = %#v ok=%v err=%v, want %s with its trigger session", claimed, ok, err, want)
+		}
 	}
 }

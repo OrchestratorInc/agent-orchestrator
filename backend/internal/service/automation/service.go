@@ -17,6 +17,11 @@ const (
 	maxPromptBytes      = 4096
 )
 
+var (
+	errInvalidTrigger       = apierr.Invalid("INVALID_AUTOMATION_TRIGGER", "Automation trigger must be schedule or session_ended", nil)
+	errSessionEndedSchedule = apierr.Invalid("INVALID_AUTOMATION_SCHEDULE", "Session-ended automations have no schedule", nil)
+)
+
 // Store is the persistence surface needed for definition management.
 type Store interface {
 	GetProject(context.Context, string) (domain.ProjectRecord, bool, error)
@@ -65,10 +70,13 @@ type CreateInput struct {
 	Prompt      string
 	Kind        domain.SessionKind
 	Harness     domain.AgentHarness
-	RRule       string
-	Cron        string
-	Timezone    string
-	Enabled     *bool
+	// Trigger defaults to schedule. Session-ended definitions take no
+	// schedule.
+	Trigger  domain.AutomationTrigger
+	RRule    string
+	Cron     string
+	Timezone string
+	Enabled  *bool
 }
 
 // UpdateInput distinguishes omitted fields from explicit false/empty values.
@@ -78,6 +86,7 @@ type UpdateInput struct {
 	Prompt      *string
 	Kind        *domain.SessionKind
 	Harness     *domain.AgentHarness
+	Trigger     *domain.AutomationTrigger
 	RRule       *string
 	Cron        *string
 	Timezone    *string
@@ -111,11 +120,27 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automat
 		return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_HARNESS", "Unknown automation harness", nil)
 	}
 	now := s.clock().UTC()
-	schedule, err := CanonicalizeSchedule(ScheduleInput{
-		RRule: input.RRule, Cron: input.Cron, Timezone: input.Timezone,
-	}, now)
-	if err != nil {
-		return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_SCHEDULE", err.Error(), nil)
+	trigger := input.Trigger
+	if trigger == "" {
+		trigger = domain.AutomationTriggerSchedule
+	}
+	var schedule Schedule
+	switch trigger {
+	case domain.AutomationTriggerSchedule:
+		schedule, err = CanonicalizeSchedule(ScheduleInput{
+			RRule: input.RRule, Cron: input.Cron, Timezone: input.Timezone,
+		}, now)
+		if err != nil {
+			return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_SCHEDULE", err.Error(), nil)
+		}
+	case domain.AutomationTriggerSessionEnded:
+		if strings.TrimSpace(input.RRule) != "" || strings.TrimSpace(input.Cron) != "" {
+			return domain.Automation{}, errSessionEndedSchedule
+		}
+		// NextRunAt is unused: ListDueAutomations only reads schedule rows.
+		schedule = Schedule{Timezone: strings.TrimSpace(input.Timezone), NextRunAt: now}
+	default:
+		return domain.Automation{}, errInvalidTrigger
 	}
 	enabled := true
 	if input.Enabled != nil {
@@ -128,6 +153,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automat
 		Prompt:      prompt,
 		Kind:        input.Kind,
 		Harness:     input.Harness,
+		Trigger:     trigger,
 		RRuleText:   schedule.RRuleText,
 		Timezone:    schedule.Timezone,
 		Enabled:     enabled,
@@ -222,7 +248,28 @@ func (s *Service) Update(ctx context.Context, id domain.AutomationID, input Upda
 		rec.Harness = *input.Harness
 	}
 	now := s.clock().UTC()
-	scheduleChanged := input.RRule != nil || input.Cron != nil || input.Timezone != nil
+	if input.Trigger != nil {
+		switch *input.Trigger {
+		case domain.AutomationTriggerSchedule:
+			if rec.Trigger == domain.AutomationTriggerSessionEnded && input.RRule == nil && input.Cron == nil {
+				return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_SCHEDULE", "A schedule is required", nil)
+			}
+		case domain.AutomationTriggerSessionEnded:
+			rec.RRuleText = ""
+		default:
+			return domain.Automation{}, errInvalidTrigger
+		}
+		rec.Trigger = *input.Trigger
+	}
+	if rec.Trigger == domain.AutomationTriggerSessionEnded {
+		if (input.RRule != nil && strings.TrimSpace(*input.RRule) != "") || (input.Cron != nil && strings.TrimSpace(*input.Cron) != "") {
+			return domain.Automation{}, errSessionEndedSchedule
+		}
+		if input.Timezone != nil {
+			rec.Timezone = strings.TrimSpace(*input.Timezone)
+		}
+	}
+	scheduleChanged := rec.Trigger != domain.AutomationTriggerSessionEnded && (input.RRule != nil || input.Cron != nil || input.Timezone != nil)
 	if scheduleChanged {
 		rruleText, cronText, timezone := "", "", rec.Timezone
 		if input.RRule != nil {
@@ -247,7 +294,7 @@ func (s *Service) Update(ctx context.Context, id domain.AutomationID, input Upda
 	if input.Enabled != nil {
 		wasEnabled := rec.Enabled
 		rec.Enabled = *input.Enabled
-		if !wasEnabled && rec.Enabled && !scheduleChanged {
+		if !wasEnabled && rec.Enabled && !scheduleChanged && rec.Trigger != domain.AutomationTriggerSessionEnded {
 			next, nextErr := NextOccurrence(rec.RRuleText, rec.Timezone, now)
 			if nextErr != nil {
 				return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_SCHEDULE", nextErr.Error(), nil)

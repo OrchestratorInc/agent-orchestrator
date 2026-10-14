@@ -76,7 +76,7 @@ It also records these events when you create an automation:
 
 These events also include the standard installation and environment information
 described above. The project identifier is hashed before transmission.
-`schedule_preset` is limited to `daily`, `weekly`, or `custom`. The
+`schedule_preset` is limited to `daily`, `weekly`, `custom`, or `session_ended`. The
 `prompt_length_bucket` describes the UTF-8 byte size of the prompt after trimming
 leading and trailing whitespace:
 

@@ -98,7 +98,7 @@ Agent adapters are compiled into Orchestrator. There is no plugin marketplace or
 
 `set-config` replaces the entire project config, even when you use a focused flag. Its JSON decoder ignores unknown keys, and it drops existing `effort` values; `ao project get --json` cannot show effort. See [Projects: update from the CLI](/configuration/projects#update-from-the-cli) for safe alternatives and details. This command does not edit the old `agent-orchestrator.yaml` file.
 
-Use `ao automation create`, `list`, `get`, `update`, `delete`, and `runs` to manage recurring work. To create one, provide a project, name, prompt, and exactly one schedule: `--cron` or `--rrule`. Set `--timezone` to an IANA time-zone name such as `America/New_York`. Pause a definition with `ao automation update <id> --enabled=false`. See [schedule behavior](/configuration/lifecycle-automation#what-ao-handles).
+Use `ao automation create`, `list`, `get`, `update`, `delete`, and `runs` to manage scheduled and session-ended work. To create one, provide a project, name, prompt, and exactly one schedule: `--cron` or `--rrule`. To run after each worker in the project ends instead, pass `--trigger session_ended` and no schedule. Set `--timezone` to an IANA time-zone name such as `America/New_York`. Pause a definition with `ao automation update <id> --enabled=false`. See [schedule behavior](/configuration/lifecycle-automation#what-ao-handles).
 
 `ao cue create --project <id> --name <name>` requires exactly one `--command` or `--prompt`. `ao cue list --project <id>` lists definitions. Editing, deleting, and invoking Cues is available in the desktop; the CLI does not have a `cue run` command.
 

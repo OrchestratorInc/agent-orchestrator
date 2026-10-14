@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
 	create: vi.fn(),
 	update: vi.fn(),
 	runsError: null as Error | null,
+	runs: [] as Array<Record<string, unknown>>,
+	sessions: [] as Array<{ id: string; title: string }>,
+	navigate: vi.fn(),
 	hideShellTopbar: false,
 	capture: vi.fn(),
 }));
@@ -24,12 +27,12 @@ vi.mock("../lib/platform", async (importOriginal) => ({
 	hidesShellTopbar: () => mocks.hideShellTopbar,
 }));
 
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
+vi.mock("@tanstack/react-router", () => ({ useNavigate: () => mocks.navigate }));
 const codexSnapshot = { id: "codex", label: "Codex", installation: { state: "installed", freshness: "fresh" }, authentication: { state: "authorized", freshness: "fresh" }, effectiveReadiness: "ready", usageCount: 3, lastUsedAt: null };
 const cursorSnapshot = { id: "cursor", label: "Cursor", installation: { state: "not_installed", freshness: "fresh" }, authentication: { state: "unknown", freshness: "stale" }, effectiveReadiness: "not_ready", usageCount: 0, lastUsedAt: null };
 vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: [codexSnapshot, cursorSnapshot] } }) }));
 vi.mock("../hooks/useProjectDefaultWorker", () => ({ useProjectDefaultWorker: () => "codex" }));
-vi.mock("../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data: [{ id: "demo", name: "Demo" }] }) }));
+vi.mock("../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data: [{ id: "demo", name: "Demo", sessions: mocks.sessions }] }) }));
 vi.mock("../hooks/useAgentModelsQuery", () => ({
 	agentModelsQueryKey: (agentId: string, projectId: string) => ["agent-models", agentId, projectId],
 	agentModelsQueryOptions: (agentId: string, projectId: string) => ({
@@ -50,7 +53,7 @@ vi.mock("../hooks/useAutomations", () => ({
 	useCreateAutomation: () => ({ mutateAsync: mocks.create, isPending: false, error: null }),
 	useUpdateAutomation: () => ({ mutateAsync: mocks.update, isPending: false, error: null }),
 	useDeleteAutomation: () => ({ mutate: vi.fn(), isPending: false, error: null }),
-	useAutomationRuns: () => ({ data: [], isLoading: false, error: mocks.runsError }),
+	useAutomationRuns: () => ({ data: mocks.runs, isLoading: false, error: mocks.runsError }),
 }));
 
 function renderView(ui: ReactNode = <AutomationsView />) {
@@ -59,7 +62,7 @@ function renderView(ui: ReactNode = <AutomationsView />) {
 }
 
 describe("AutomationsView", () => {
-	beforeEach(() => { mocks.automations = []; mocks.runsError = null; mocks.hideShellTopbar = false; mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
+	beforeEach(() => { mocks.automations = []; mocks.runs = []; mocks.sessions = []; mocks.navigate.mockReset(); mocks.runsError = null; mocks.hideShellTopbar = false; mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
 
 	it("shows a discoverable empty state and create action", () => {
 		renderView();
@@ -128,7 +131,7 @@ describe("AutomationsView", () => {
 		await user.click(screen.getByRole("option", { name: "Demo" }));
 		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Friday review");
 		await user.type(within(dialog).getByRole("textbox", { name: "Prompt" }), "Review the board");
-		await user.click(within(dialog).getByRole("combobox", { name: "Schedule" }));
+		await user.click(within(dialog).getByRole("combobox", { name: "Runs" }));
 		await user.click(screen.getByRole("option", { name: "Weekly" }));
 		await user.click(within(dialog).getByRole("combobox", { name: "Day" }));
 		await user.click(screen.getByRole("option", { name: "Friday" }));
@@ -204,7 +207,7 @@ describe("AutomationsView", () => {
 		await user.click(screen.getByRole("option", { name: "Demo" }));
 		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Wednesday review");
 		await user.type(within(dialog).getByRole("textbox", { name: "Prompt" }), "Review the board");
-		await user.click(within(dialog).getByRole("combobox", { name: "Schedule" }));
+		await user.click(within(dialog).getByRole("combobox", { name: "Runs" }));
 		await user.click(screen.getByRole("option", { name: "Custom" }));
 		await user.click(within(dialog).getByRole("combobox", { name: "Frequency" }));
 		await user.click(screen.getByRole("option", { name: "Weekly" }));
@@ -253,7 +256,7 @@ describe("AutomationsView", () => {
 		await user.click(screen.getByRole("button", { name: "Edit Every other day" }));
 
 		const dialog = screen.getByRole("dialog", { name: "Edit automation" });
-		expect(within(dialog).getByRole("combobox", { name: "Schedule" })).toHaveTextContent("Custom");
+		expect(within(dialog).getByRole("combobox", { name: "Runs" })).toHaveTextContent("Custom");
 		expect(within(dialog).getByRole("combobox", { name: "Frequency" })).toBeInTheDocument();
 		const name = within(dialog).getByRole("textbox", { name: "Name" });
 		await user.clear(name);
@@ -298,7 +301,7 @@ describe("AutomationsView", () => {
 		const dialog = screen.getByRole("dialog", { name: "Create automation" });
 		expect(dialog.querySelector('select:not([aria-hidden="true"])')).toBeNull();
 		expect(within(dialog).getByRole("combobox", { name: "Project" })).toBeInTheDocument();
-		expect(within(dialog).getByRole("combobox", { name: "Schedule" })).toBeInTheDocument();
+		expect(within(dialog).getByRole("combobox", { name: "Runs" })).toBeInTheDocument();
 		expect(within(dialog).getByRole("combobox", { name: "Agent" })).toBeInTheDocument();
 		expect(within(dialog).queryByRole("button", { name: "Model" })).not.toBeInTheDocument();
 		expect(view.container.querySelector('[data-slot="select-content"]')).toBeNull();
@@ -465,5 +468,64 @@ describe("AutomationsView", () => {
 		renderView();
 		await userEvent.click(screen.getByRole("button", { name: /show run history/i }));
 		expect(screen.getByRole("alert")).toHaveTextContent("daemon unavailable");
+	});
+	it("creates a session-ended automation without schedule fields", async () => {
+		const user = userEvent.setup();
+		renderView();
+		await user.click(screen.getAllByRole("button", { name: /create automation/i })[0]);
+
+		const dialog = screen.getByRole("dialog", { name: "Create automation" });
+		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
+		await user.click(screen.getByRole("option", { name: "Demo" }));
+		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Session review");
+		await user.click(within(dialog).getByRole("combobox", { name: "Runs" }));
+		await user.click(screen.getByRole("option", { name: "After a session ends" }));
+
+		expect(within(dialog).queryByLabelText("Time")).not.toBeInTheDocument();
+		expect(within(dialog).getByText("Starts a new session after a worker in this project is archived or its PR merges.")).toBeInTheDocument();
+		expect(within(dialog).getByRole("textbox", { name: "Prompt" })).toHaveAttribute("placeholder", expect.stringContaining("suggest improvements"));
+		await user.type(within(dialog).getByRole("textbox", { name: "Prompt" }), "Review the session");
+		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
+
+		expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ projectId: "demo", displayName: "Session review", trigger: "session_ended" }));
+		expect(mocks.create.mock.calls[0][0]).not.toHaveProperty("rrule");
+	});
+
+	it("shows a session-ended automation as waiting and links each run to the session that ended", async () => {
+		mocks.automations = [{ id: "review", projectId: "demo", displayName: "Session review", prompt: "Review the session", kind: "worker", harness: "codex", trigger: "session_ended", rrule: "", timezone: "UTC", enabled: true, nextRunAt: "2026-08-27T09:00:00Z" }];
+		mocks.sessions = [{ id: "ao-7", title: "Fix login redirect" }];
+		mocks.runs = [{ id: "run-1", automationId: "review", status: "running", scheduledFor: "2026-08-27T09:00:00Z", sessionId: "ao-8", triggerSessionId: "ao-7" }];
+		renderView();
+
+		expect(screen.getByText("After a session ends")).toBeInTheDocument();
+		expect(screen.getByText("Waiting")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: /show run history/i }));
+		expect(screen.queryByText("Timezone: UTC")).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Fix login redirect" }));
+		expect(mocks.navigate).toHaveBeenCalledWith({ to: "/sessions/$sessionId", params: { sessionId: "ao-7" } });
+	});
+
+	it("switches an edited automation between a schedule and session ends", async () => {
+		const user = userEvent.setup();
+		mocks.automations = [{ id: "automation-1", projectId: "demo", displayName: "Session review", prompt: "Review", kind: "worker", harness: "codex", trigger: "session_ended", rrule: "", timezone: "Asia/Calcutta", enabled: true, nextRunAt: "2026-08-27T09:00:00Z" }];
+		renderView();
+		await user.click(screen.getByRole("button", { name: "Edit Session review" }));
+		let dialog = screen.getByRole("dialog", { name: "Edit automation" });
+		expect(within(dialog).getByRole("combobox", { name: "Runs" })).toHaveTextContent("After a session ends");
+		await user.click(within(dialog).getByRole("combobox", { name: "Runs" }));
+		await user.click(screen.getByRole("option", { name: "Daily" }));
+		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+		expect(mocks.update.mock.calls[0][0].body).toEqual(expect.objectContaining({ trigger: "schedule", timezone: "Asia/Calcutta", rrule: expect.stringContaining("FREQ=DAILY") }));
+
+		mocks.automations = [{ ...mocks.automations[0], trigger: "schedule", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0" }];
+		mocks.update.mockReset();
+		renderView();
+		await user.click(screen.getAllByRole("button", { name: "Edit Session review" }).at(-1)!);
+		dialog = screen.getAllByRole("dialog", { name: "Edit automation" }).at(-1)!;
+		await user.click(within(dialog).getByRole("combobox", { name: "Runs" }));
+		await user.click(screen.getByRole("option", { name: "After a session ends" }));
+		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+		expect(mocks.update.mock.calls[0][0].body).toEqual(expect.objectContaining({ trigger: "session_ended" }));
+		expect(mocks.update.mock.calls[0][0].body).not.toHaveProperty("rrule");
 	});
 });

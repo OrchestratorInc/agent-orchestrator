@@ -220,3 +220,30 @@ func TestAutomationGetRequiresIDAsUsageError(t *testing.T) {
 		t.Fatalf("err=%v exit=%d", err, ExitCode(err))
 	}
 }
+
+func TestAutomationCreateSessionEndedTrigger(t *testing.T) {
+	cfg := setConfigEnv(t)
+	server, capture := automationServer(t, http.StatusCreated, `{"automation":{"id":"automation-1","displayName":"Session review","trigger":"session_ended"}}`)
+	writeRunFileFor(t, cfg, server)
+	deps := Deps{ProcessAlive: func(int) bool { return true }, Now: func() time.Time { return time.Now() }}
+	out, stderr, err := executeCLI(t, deps, "automation", "create", "--project", "demo", "--name", "Session review", "--prompt", "Review it", "--trigger", "session_ended")
+	if err != nil {
+		t.Fatalf("create: %v stderr=%s", err, stderr)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(capture.body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["trigger"] != "session_ended" || body["rrule"] != nil || body["cron"] != nil || !strings.Contains(out, "when a session ends") {
+		t.Fatalf("body=%s out=%s", capture.body, out)
+	}
+	for _, args := range [][]string{
+		{"--trigger", "session_ended", "--cron", "0 9 * * *"},
+		{"--trigger", "webhook"},
+	} {
+		args = append([]string{"automation", "create", "--project", "demo", "--name", "Review", "--prompt", "Review it"}, args...)
+		if _, _, err := executeCLI(t, deps, args...); err == nil || ExitCode(err) != 2 {
+			t.Fatalf("%v: err=%v exit=%d, want usage error", args, err, ExitCode(err))
+		}
+	}
+}

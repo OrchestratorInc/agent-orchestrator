@@ -31,11 +31,12 @@ type Observer struct {
 	tick   time.Duration
 	clock  func() time.Time
 	logger *slog.Logger
+	wake   chan struct{}
 }
 
 // New constructs an automation observer with defaults for omitted configuration.
 func New(poller Poller, cfg Config) *Observer {
-	o := &Observer{poller: poller, tick: cfg.Tick, clock: cfg.Clock, logger: cfg.Logger}
+	o := &Observer{poller: poller, tick: cfg.Tick, clock: cfg.Clock, logger: cfg.Logger, wake: make(chan struct{}, 1)}
 	if o.tick <= 0 {
 		o.tick = DefaultTickInterval
 	}
@@ -50,7 +51,16 @@ func New(poller Poller, cfg Config) *Observer {
 
 // Start runs the polling loop until ctx is canceled and returns its completion channel.
 func (o *Observer) Start(ctx context.Context) <-chan struct{} {
-	return observe.StartPollLoop(ctx, o.tick, o.Poll, o.logger, "automations")
+	return observe.StartWakeablePollLoop(ctx, o.tick, o.wake, o.Poll, o.logger, "automations")
+}
+
+// Wake asks for a poll now instead of at the next tick. It never blocks, and
+// wakes that arrive while a poll is pending collapse into one.
+func (o *Observer) Wake() {
+	select {
+	case o.wake <- struct{}{}:
+	default:
+	}
 }
 
 // Poll processes automation work due at the observer's current time.

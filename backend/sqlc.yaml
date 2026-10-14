@@ -146,6 +146,10 @@ sql:
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
               type: "AgentHarness"
+          - column: "automations.trigger_type"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "AutomationTrigger"
           - column: "automation_runs.id"
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -163,6 +167,11 @@ sql:
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
               type: "AutomationRunStatus"
+          - column: "automation_runs.trigger_session_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "SessionID"
+              pointer: true
           - column: "usage_bindings.session_id"
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"

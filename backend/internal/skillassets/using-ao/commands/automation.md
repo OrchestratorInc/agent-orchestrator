@@ -1,6 +1,6 @@
 # ao automation
 
-Manage durable recurring session automations through the daemon API.
+Manage durable session automations through the daemon API. An automation starts a new session on a schedule, or after each worker in its project ends.
 
 ## Syntax
 
@@ -15,11 +15,12 @@ ao automations <subcommand> [args] [flags]
 
 ### ao automation create
 
-Create a recurring automation for a project.
+Create a scheduled or session-ended automation for a project.
 
 **Syntax:**
 ```text
 ao automation create --project <id> --name <name> --prompt <text> (--rrule <rule> | --cron <expr>) [flags]
+ao automation create --project <id> --name <name> --prompt <text> --trigger session_ended [flags]
 ```
 
 **Flags:**
@@ -29,8 +30,9 @@ ao automation create --project <id> --name <name> --prompt <text> (--rrule <rule
 | `--project string` | Project id that owns the automation | Required |
 | `--name string` | Display name | Required |
 | `--prompt string` | Session task prompt | Required |
-| `--rrule string` | RFC 5545 recurrence rule | Required unless `--cron` is set |
-| `--cron string` | Supported five-field cron expression | Required unless `--rrule` is set |
+| `--trigger string` | `schedule`, or `session_ended` to run after each worker in the project is archived or its PR merges | `schedule` |
+| `--rrule string` | RFC 5545 recurrence rule | Required for a schedule unless `--cron` is set |
+| `--cron string` | Supported five-field cron expression | Required for a schedule unless `--rrule` is set |
 | `--timezone string` | IANA timezone | Local zone when resolvable |
 | `--kind string` | Session kind | `worker` |
 | `--harness string` | Agent harness; empty uses project default | - |
@@ -41,7 +43,10 @@ ao automation create --project <id> --name <name> --prompt <text> (--rrule <rule
 
 ```bash
 ao automation create --project my-app --name "Morning triage" --prompt "Review overnight issues" --cron "0 9 * * *" --timezone America/Los_Angeles
+ao automation create --project my-app --name "Session review" --prompt "Review how the session went and suggest improvements to our skills" --trigger session_ended
 ```
+
+A session-ended run starts one new worker per ended worker. Its prompt ends with the ended session's ID, branch, PRs, task, and transcript path. Sessions started by a session-ended run never start another one.
 
 ---
 
@@ -90,6 +95,7 @@ ao automation update <id> [flags]
 |---|---|
 | `--name string` | New display name |
 | `--prompt string` | New task prompt |
+| `--trigger string` | `schedule` (with `--rrule` or `--cron`) or `session_ended` |
 | `--rrule string` | Replace schedule with an RRule |
 | `--cron string` | Replace schedule with a cron expression |
 | `--timezone string` | IANA timezone |

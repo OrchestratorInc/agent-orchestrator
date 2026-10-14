@@ -1,6 +1,6 @@
 ---
 title: Automation reference
-description: Built-in event rules, recurring Automations, Cues, and notifications.
+description: Built-in event rules, scheduled and session-ended Automations, Cues, and notifications.
 ---
 
 Orchestrator routes CI failures, review feedback, and merge conflicts with built-in rules. Project settings do not accept the retired `reactions:` configuration. See [Migration](/migration) before reusing an old YAML example.
@@ -36,7 +36,9 @@ Choose one schedule format: a five-field cron expression or an RRULE, a calendar
 
 Cron accepts numeric minute and hour fields, `*` for day and month, and supported weekday choices. It does not accept arbitrary ranges or steps. RRULE does not accept `COUNT` or `UNTIL`, or intervals faster than one minute.
 
-Automations run in the local daemon, so the computer must be awake and Orchestrator must be running. After a restart, Orchestrator runs at most three missed occurrences. The same automation will not start another run while its current run is active. Deleting an automation also deletes its run history.
+Automations run in the local daemon, so the computer must be awake and Orchestrator must be running. After a restart, Orchestrator runs at most three missed occurrences. A scheduled automation will not start another run while its current run is active. Deleting an automation also deletes its run history.
+
+An automation can also run **after a session ends** instead of on a schedule. Under **Runs**, choose **After a session ends**, or pass `--trigger session_ended` to `ao automation create`. It starts one new worker each time a worker in the project is archived, or ends because its PR merged. Archiving from the app, `ao session kill`, and an orchestrator all count. Daemon shutdowns, crashes, agent switches, and project removal do not start it. The new session's prompt ends with the ended session's ID, title, branch, PRs, task, and transcript path, so the agent can review what happened, for example to improve your skills or `AGENTS.md`. Reviews of different sessions can run at the same time. A session that such a run started never starts another one.
 
 To try an automation, create one in **Automations** with a short prompt and a schedule a few minutes ahead. Then open its run history and linked session. If it does not run, check the time zone, confirm the automation is enabled, and make sure Orchestrator stayed open and the computer stayed awake. Pause the automation before changing a schedule you are testing.
 

@@ -172,22 +172,24 @@ type Automation struct {
 	LastRunAt   sql.NullTime
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	TriggerType domain.AutomationTrigger
 }
 
 type AutomationRun struct {
-	ID             domain.AutomationRunID
-	AutomationID   domain.AutomationID
-	ScheduledFor   time.Time
-	SessionID      *domain.SessionID
-	Status         domain.AutomationRunStatus
-	AttemptCount   int64
-	ClaimedAt      sql.NullTime
-	LeaseExpiresAt sql.NullTime
-	StartedAt      sql.NullTime
-	FinishedAt     sql.NullTime
-	ErrorMessage   sql.NullString
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID               domain.AutomationRunID
+	AutomationID     domain.AutomationID
+	ScheduledFor     time.Time
+	SessionID        *domain.SessionID
+	Status           domain.AutomationRunStatus
+	AttemptCount     int64
+	ClaimedAt        sql.NullTime
+	LeaseExpiresAt   sql.NullTime
+	StartedAt        sql.NullTime
+	FinishedAt       sql.NullTime
+	ErrorMessage     sql.NullString
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	TriggerSessionID *domain.SessionID
 }
 
 type ChangeLog struct {

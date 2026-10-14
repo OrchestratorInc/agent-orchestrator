@@ -388,7 +388,7 @@ function routeSurface(pathname: string): string {
 	return "other";
 }
 
-const AUTOMATION_SCHEDULE_PRESET_SET = new Set(["daily", "weekly", "custom"]);
+const AUTOMATION_SCHEDULE_PRESET_SET = new Set(["daily", "weekly", "custom", "session_ended"]);
 const AUTOMATION_PROMPT_LENGTH_BUCKET_SET = new Set(["xs", "s", "m", "l", "xl"]);
 
 /**

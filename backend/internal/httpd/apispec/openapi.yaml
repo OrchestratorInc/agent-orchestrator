@@ -1118,7 +1118,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: List recurring automations
+      summary: List automations
       tags:
       - automations
     post:
@@ -1160,7 +1160,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Create a recurring automation
+      summary: Create a scheduled or session-ended automation
       tags:
       - automations
   /api/v1/automations/{automationId}:
@@ -1245,7 +1245,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Get one recurring automation
+      summary: Get one automation
       tags:
       - automations
     patch:
@@ -1295,7 +1295,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Update a recurring automation
+      summary: Update an automation
       tags:
       - automations
   /api/v1/automations/{automationId}/runs:
@@ -11945,6 +11945,11 @@ components:
           type: string
         timezone:
           type: string
+        trigger:
+          enum:
+          - schedule
+          - session_ended
+          type: string
         updatedAt:
           format: date-time
           type: string
@@ -11954,6 +11959,7 @@ components:
       - displayName
       - prompt
       - kind
+      - trigger
       - rrule
       - timezone
       - enabled
@@ -12008,6 +12014,8 @@ components:
           - completed
           - failed
           type: string
+        triggerSessionId:
+          type: string
         updatedAt:
           format: date-time
           type: string
@@ -12048,6 +12056,8 @@ components:
           - running
           - completed
           - failed
+          type: string
+        triggerSessionId:
           type: string
       required:
       - id
@@ -13946,6 +13956,11 @@ components:
         rrule:
           type: string
         timezone:
+          type: string
+        trigger:
+          enum:
+          - schedule
+          - session_ended
           type: string
       required:
       - projectId
@@ -18539,6 +18554,13 @@ components:
           - "null"
           - string
         timezone:
+          type:
+          - "null"
+          - string
+        trigger:
+          enum:
+          - schedule
+          - session_ended
           type:
           - "null"
           - string

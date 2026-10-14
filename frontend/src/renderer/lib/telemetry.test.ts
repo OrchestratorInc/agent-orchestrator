@@ -305,6 +305,8 @@ describe("telemetry sanitizers", () => {
 		expect(props.schedule_preset).toBe("weekly");
 		expect(props.prompt_length_bucket).toBe("m");
 		expect(props.project_id_hash).toMatch(/^[0-9a-f]{64}$/);
+		const sessionEnded = await sanitizeRendererProperties("ao.renderer.automation_create_requested", { schedule_preset: "session_ended" });
+		expect(sessionEnded.schedule_preset).toBe("session_ended");
 	});
 
 	it("drops automation funnel values outside the closed vocabularies", async () => {

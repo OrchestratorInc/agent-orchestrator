@@ -101,6 +101,7 @@ func (s *Store) UpdateAutomation(ctx context.Context, rec domain.Automation) (bo
 		NextRunAt:   rec.NextRunAt,
 		LastRunAt:   timePtrToNullTime(rec.LastRunAt),
 		UpdatedAt:   rec.UpdatedAt,
+		TriggerType: automationTrigger(rec.Trigger),
 		ID:          rec.ID,
 	})
 	if err != nil {
@@ -210,6 +211,57 @@ func (s *Store) ClaimNextAutomationRun(ctx context.Context, now, leaseExpiresAt 
 	return claimed, found, nil
 }
 
+// ListSessionEndedAutomations returns a project's enabled definitions that run
+// when one of its sessions ends.
+func (s *Store) ListSessionEndedAutomations(ctx context.Context, projectID domain.ProjectID) ([]domain.Automation, error) {
+	rows, err := s.qr.ListSessionEndedAutomations(ctx, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("list session-ended automations: %w", err)
+	}
+	items := make([]domain.Automation, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, automationFromGen(row))
+	}
+	return items, nil
+}
+
+// CreateTriggeredAutomationRun queues a pending run for one ended session. It
+// returns false when the automation already has a run for that session. When
+// another run of the automation holds the same instant, the occurrence moves
+// forward a millisecond to keep (automation, scheduled_for) unique.
+func (s *Store) CreateTriggeredAutomationRun(ctx context.Context, run domain.AutomationRun) (bool, error) {
+	if run.TriggerSessionID == nil {
+		return false, fmt.Errorf("create triggered automation run %s: trigger session is required", run.ID)
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	created := false
+	err := s.inTx(ctx, "create triggered automation run", func(q *gen.Queries) error {
+		existing, err := q.CountAutomationRunsForTriggerSession(ctx, gen.CountAutomationRunsForTriggerSessionParams{
+			AutomationID: run.AutomationID, TriggerSessionID: run.TriggerSessionID,
+		})
+		if err != nil || existing > 0 {
+			return err
+		}
+		for attempt := range 5 {
+			rows, err := q.InsertTriggeredAutomationRun(ctx, gen.InsertTriggeredAutomationRunParams{
+				ID: run.ID, AutomationID: run.AutomationID,
+				ScheduledFor:     run.ScheduledFor.Add(time.Duration(attempt) * time.Millisecond),
+				TriggerSessionID: run.TriggerSessionID, CreatedAt: run.CreatedAt, UpdatedAt: run.UpdatedAt,
+			})
+			if err != nil || rows > 0 {
+				created = rows > 0
+				return err
+			}
+		}
+		return fmt.Errorf("no free occurrence time")
+	})
+	if err != nil {
+		return false, fmt.Errorf("create triggered automation run %s: %w", run.ID, err)
+	}
+	return created, nil
+}
+
 func automationToInsert(rec domain.Automation) gen.InsertAutomationParams {
 	return gen.InsertAutomationParams{
 		ID:          rec.ID,
@@ -225,7 +277,16 @@ func automationToInsert(rec domain.Automation) gen.InsertAutomationParams {
 		LastRunAt:   timePtrToNullTime(rec.LastRunAt),
 		CreatedAt:   rec.CreatedAt,
 		UpdatedAt:   rec.UpdatedAt,
+		TriggerType: automationTrigger(rec.Trigger),
 	}
+}
+
+// automationTrigger defaults definitions written before triggers existed.
+func automationTrigger(trigger domain.AutomationTrigger) domain.AutomationTrigger {
+	if trigger == "" {
+		return domain.AutomationTriggerSchedule
+	}
+	return trigger
 }
 
 func automationFromGen(row gen.Automation) domain.Automation {
@@ -236,6 +297,7 @@ func automationFromGen(row gen.Automation) domain.Automation {
 		Prompt:      row.Prompt,
 		Kind:        row.Kind,
 		Harness:     row.Harness,
+		Trigger:     row.TriggerType,
 		RRuleText:   row.RruleText,
 		Timezone:    row.Timezone,
 		Enabled:     row.Enabled,
@@ -366,19 +428,20 @@ func automationRunToInsert(rec domain.AutomationRun) gen.InsertAutomationRunPara
 
 func automationRunFromGen(row gen.AutomationRun) domain.AutomationRun {
 	return domain.AutomationRun{
-		ID:             row.ID,
-		AutomationID:   row.AutomationID,
-		ScheduledFor:   row.ScheduledFor,
-		SessionID:      row.SessionID,
-		Status:         row.Status,
-		AttemptCount:   row.AttemptCount,
-		ClaimedAt:      nullTimeToTimePtr(row.ClaimedAt),
-		LeaseExpiresAt: nullTimeToTimePtr(row.LeaseExpiresAt),
-		StartedAt:      nullTimeToTimePtr(row.StartedAt),
-		FinishedAt:     nullTimeToTimePtr(row.FinishedAt),
-		ErrorMessage:   row.ErrorMessage.String,
-		CreatedAt:      row.CreatedAt,
-		UpdatedAt:      row.UpdatedAt,
+		ID:               row.ID,
+		AutomationID:     row.AutomationID,
+		ScheduledFor:     row.ScheduledFor,
+		SessionID:        row.SessionID,
+		TriggerSessionID: row.TriggerSessionID,
+		Status:           row.Status,
+		AttemptCount:     row.AttemptCount,
+		ClaimedAt:        nullTimeToTimePtr(row.ClaimedAt),
+		LeaseExpiresAt:   nullTimeToTimePtr(row.LeaseExpiresAt),
+		StartedAt:        nullTimeToTimePtr(row.StartedAt),
+		FinishedAt:       nullTimeToTimePtr(row.FinishedAt),
+		ErrorMessage:     row.ErrorMessage.String,
+		CreatedAt:        row.CreatedAt,
+		UpdatedAt:        row.UpdatedAt,
 	}
 }
 

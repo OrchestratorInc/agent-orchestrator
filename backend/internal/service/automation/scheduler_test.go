@@ -16,16 +16,47 @@ type schedulerMemoryStore struct {
 	*fakeStore
 	runs     map[domain.AutomationRunID]domain.AutomationRun
 	sessions map[domain.SessionID]domain.SessionRecord
+	prs      map[domain.SessionID][]domain.PullRequest
 }
 
 func newSchedulerStore() *schedulerMemoryStore {
-	return &schedulerMemoryStore{fakeStore: newFakeStore(), runs: map[domain.AutomationRunID]domain.AutomationRun{}, sessions: map[domain.SessionID]domain.SessionRecord{}}
+	return &schedulerMemoryStore{fakeStore: newFakeStore(), runs: map[domain.AutomationRunID]domain.AutomationRun{}, sessions: map[domain.SessionID]domain.SessionRecord{}, prs: map[domain.SessionID][]domain.PullRequest{}}
+}
+
+func (f *schedulerMemoryStore) ListPRsBySession(_ context.Context, id domain.SessionID) ([]domain.PullRequest, error) {
+	return f.prs[id], nil
+}
+
+func (f *schedulerMemoryStore) GetAutomationRun(_ context.Context, id domain.AutomationRunID) (domain.AutomationRun, bool, error) {
+	run, ok := f.runs[id]
+	return run, ok, nil
+}
+
+func (f *schedulerMemoryStore) ListSessionEndedAutomations(_ context.Context, projectID domain.ProjectID) ([]domain.Automation, error) {
+	var out []domain.Automation
+	for _, rec := range f.automations {
+		if rec.ProjectID == projectID && rec.Enabled && rec.Trigger == domain.AutomationTriggerSessionEnded {
+			out = append(out, rec)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+func (f *schedulerMemoryStore) CreateTriggeredAutomationRun(_ context.Context, run domain.AutomationRun) (bool, error) {
+	for _, existing := range f.runs {
+		if existing.AutomationID == run.AutomationID && existing.TriggerSessionID != nil && *existing.TriggerSessionID == *run.TriggerSessionID {
+			return false, nil
+		}
+	}
+	f.runs[run.ID] = run
+	return true, nil
 }
 
 func (f *schedulerMemoryStore) ListDueAutomations(_ context.Context, now time.Time, _ int64) ([]domain.Automation, error) {
 	var out []domain.Automation
 	for _, rec := range f.automations {
-		if rec.Enabled && !rec.NextRunAt.After(now) {
+		if rec.Enabled && rec.Trigger != domain.AutomationTriggerSessionEnded && !rec.NextRunAt.After(now) {
 			out = append(out, rec)
 		}
 	}
@@ -55,7 +86,7 @@ func (f *schedulerMemoryStore) ClaimNextAutomationRun(_ context.Context, now, le
 	}
 	var candidates []domain.AutomationRun
 	for _, run := range f.runs {
-		if run.Status == domain.AutomationRunPending && f.automations[run.AutomationID].Enabled && !active[run.AutomationID] {
+		if run.Status == domain.AutomationRunPending && f.automations[run.AutomationID].Enabled && (!active[run.AutomationID] || run.TriggerSessionID != nil) {
 			candidates = append(candidates, run)
 		}
 	}

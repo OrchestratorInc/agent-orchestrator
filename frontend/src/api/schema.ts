@@ -471,10 +471,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List recurring automations */
+        /** List automations */
         get: operations["listAutomations"];
         put?: never;
-        /** Create a recurring automation */
+        /** Create a scheduled or session-ended automation */
         post: operations["createAutomation"];
         delete?: never;
         options?: never;
@@ -489,7 +489,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get one recurring automation */
+        /** Get one automation */
         get: operations["getAutomation"];
         put?: never;
         post?: never;
@@ -497,7 +497,7 @@ export interface paths {
         delete: operations["deleteAutomation"];
         options?: never;
         head?: never;
-        /** Update a recurring automation */
+        /** Update an automation */
         patch: operations["updateAutomation"];
         trace?: never;
     };
@@ -4004,6 +4004,8 @@ export interface components {
             prompt: string;
             rrule: string;
             timezone: string;
+            /** @enum {string} */
+            trigger: "schedule" | "session_ended";
             /** Format: date-time */
             updatedAt: string;
         };
@@ -4028,6 +4030,7 @@ export interface components {
             startedAt?: null | string;
             /** @enum {string} */
             status: "pending" | "spawning" | "running" | "completed" | "failed";
+            triggerSessionId?: string;
             /** Format: date-time */
             updatedAt: string;
         };
@@ -4043,6 +4046,7 @@ export interface components {
             startedAt?: null | string;
             /** @enum {string} */
             status: "pending" | "spawning" | "running" | "completed" | "failed";
+            triggerSessionId?: string;
         };
         BrowserCommandRequest: {
             action: string;
@@ -4742,6 +4746,8 @@ export interface components {
             prompt: string;
             rrule?: string;
             timezone: string;
+            /** @enum {string} */
+            trigger?: "schedule" | "session_ended";
         };
         CreateConversationSideChatRequest: {
             forceNew?: boolean;
@@ -6523,6 +6529,8 @@ export interface components {
             prompt?: null | string;
             rrule?: null | string;
             timezone?: null | string;
+            /** @enum {null|string} */
+            trigger?: "schedule" | "session_ended" | null;
         };
         UpdateChatHibernationRequest: {
             enabled: null | boolean;

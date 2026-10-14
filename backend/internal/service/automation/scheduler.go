@@ -35,6 +35,7 @@ type schedulerStore interface {
 	ListActiveAutomationRuns(context.Context) ([]domain.AutomationRun, error)
 	GetSessionByAutomationRunID(context.Context, domain.AutomationRunID) (domain.SessionRecord, bool, error)
 	GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error)
+	ListPRsBySession(context.Context, domain.SessionID) ([]domain.PullRequest, error)
 	MarkAutomationRunRunning(context.Context, domain.AutomationRunID, domain.SessionID, time.Time) (bool, error)
 	CompleteAutomationRun(context.Context, domain.AutomationRunID, time.Time) (bool, error)
 	FailAutomationRun(context.Context, domain.AutomationRunID, string, time.Time) (bool, error)
@@ -144,9 +145,14 @@ func (s *Service) dispatch(ctx context.Context, store schedulerStore, run domain
 		_, releaseErr := store.ReleaseAutomationRun(context.WithoutCancel(ctx), run.ID, runError(err), now)
 		return errors.Join(err, releaseErr)
 	}
+	prompt, displayName := definition.Prompt, definition.DisplayName
+	if run.TriggerSessionID != nil {
+		transcripts, _ := s.spawner.(transcriptLocator)
+		prompt, displayName = sessionEndedLaunch(ctx, store, transcripts, definition, *run.TriggerSessionID)
+	}
 	session, _, _, spawnErr := s.spawner.Spawn(ctx, ports.SpawnConfig{
 		ProjectID: definition.ProjectID, Kind: definition.Kind, Harness: definition.Harness,
-		Prompt: definition.Prompt, DisplayName: definition.DisplayName, AutomationRunID: &run.ID,
+		Prompt: prompt, DisplayName: displayName, AutomationRunID: &run.ID,
 	})
 	if spawnErr != nil {
 		var apiError *apierr.Error

@@ -1979,10 +1979,13 @@ type CreateAutomationRequest struct {
 	Prompt      string `json:"prompt"`
 	Kind        string `json:"kind" enum:"worker,orchestrator"`
 	Harness     string `json:"harness,omitempty"`
-	RRule       string `json:"rrule,omitempty"`
-	Cron        string `json:"cron,omitempty"`
-	Timezone    string `json:"timezone"`
-	Enabled     *bool  `json:"enabled,omitempty"`
+	// Trigger defaults to schedule. A session_ended automation takes no
+	// rrule or cron.
+	Trigger  string `json:"trigger,omitempty" enum:"schedule,session_ended"`
+	RRule    string `json:"rrule,omitempty"`
+	Cron     string `json:"cron,omitempty"`
+	Timezone string `json:"timezone"`
+	Enabled  *bool  `json:"enabled,omitempty"`
 }
 
 // UpdateAutomationRequest is the partial body accepted when updating an automation.
@@ -1991,6 +1994,7 @@ type UpdateAutomationRequest struct {
 	Prompt      *string `json:"prompt,omitempty"`
 	Kind        *string `json:"kind,omitempty" enum:"worker,orchestrator"`
 	Harness     *string `json:"harness,omitempty"`
+	Trigger     *string `json:"trigger,omitempty" enum:"schedule,session_ended"`
 	RRule       *string `json:"rrule,omitempty"`
 	Cron        *string `json:"cron,omitempty"`
 	Timezone    *string `json:"timezone,omitempty"`
@@ -1999,13 +2003,15 @@ type UpdateAutomationRequest struct {
 
 // AutomationRunSummaryResponse is the latest-run projection attached to a definition.
 type AutomationRunSummaryResponse struct {
-	ID           string     `json:"id"`
-	Status       string     `json:"status" enum:"pending,spawning,running,completed,failed"`
-	ScheduledFor time.Time  `json:"scheduledFor"`
-	SessionID    string     `json:"sessionId,omitempty"`
-	ErrorMessage string     `json:"errorMessage,omitempty"`
-	StartedAt    *time.Time `json:"startedAt,omitempty"`
-	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
+	ID           string    `json:"id"`
+	Status       string    `json:"status" enum:"pending,spawning,running,completed,failed"`
+	ScheduledFor time.Time `json:"scheduledFor"`
+	SessionID    string    `json:"sessionId,omitempty"`
+	// TriggerSessionID is the ended session a session_ended run reviews.
+	TriggerSessionID string     `json:"triggerSessionId,omitempty"`
+	ErrorMessage     string     `json:"errorMessage,omitempty"`
+	StartedAt        *time.Time `json:"startedAt,omitempty"`
+	FinishedAt       *time.Time `json:"finishedAt,omitempty"`
 }
 
 // AutomationResponse is the API representation of an automation definition.
@@ -2016,6 +2022,7 @@ type AutomationResponse struct {
 	Prompt      string                        `json:"prompt"`
 	Kind        string                        `json:"kind" enum:"worker,orchestrator"`
 	Harness     string                        `json:"harness,omitempty"`
+	Trigger     string                        `json:"trigger" enum:"schedule,session_ended"`
 	RRule       string                        `json:"rrule"`
 	Timezone    string                        `json:"timezone"`
 	Enabled     bool                          `json:"enabled"`
@@ -2039,19 +2046,21 @@ type ListAutomationsResponse struct {
 
 // AutomationRunResponse is the API representation of one scheduled occurrence.
 type AutomationRunResponse struct {
-	ID             string     `json:"id"`
-	AutomationID   string     `json:"automationId"`
-	ScheduledFor   time.Time  `json:"scheduledFor"`
-	SessionID      string     `json:"sessionId,omitempty"`
-	Status         string     `json:"status" enum:"pending,spawning,running,completed,failed"`
-	AttemptCount   int64      `json:"attemptCount"`
-	ClaimedAt      *time.Time `json:"claimedAt,omitempty"`
-	LeaseExpiresAt *time.Time `json:"leaseExpiresAt,omitempty"`
-	StartedAt      *time.Time `json:"startedAt,omitempty"`
-	FinishedAt     *time.Time `json:"finishedAt,omitempty"`
-	ErrorMessage   string     `json:"errorMessage,omitempty"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	UpdatedAt      time.Time  `json:"updatedAt"`
+	ID           string    `json:"id"`
+	AutomationID string    `json:"automationId"`
+	ScheduledFor time.Time `json:"scheduledFor"`
+	SessionID    string    `json:"sessionId,omitempty"`
+	// TriggerSessionID is the ended session a session_ended run reviews.
+	TriggerSessionID string     `json:"triggerSessionId,omitempty"`
+	Status           string     `json:"status" enum:"pending,spawning,running,completed,failed"`
+	AttemptCount     int64      `json:"attemptCount"`
+	ClaimedAt        *time.Time `json:"claimedAt,omitempty"`
+	LeaseExpiresAt   *time.Time `json:"leaseExpiresAt,omitempty"`
+	StartedAt        *time.Time `json:"startedAt,omitempty"`
+	FinishedAt       *time.Time `json:"finishedAt,omitempty"`
+	ErrorMessage     string     `json:"errorMessage,omitempty"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	UpdatedAt        time.Time  `json:"updatedAt"`
 }
 
 // ListAutomationRunsResponse is one page of automation run history.

@@ -24,6 +24,13 @@ import (
 // poll errors other than context.Canceled are logged via logger with name as a
 // prefix, e.g. name="scm observer" -> "scm observer: initial poll failed".
 func StartPollLoop(ctx context.Context, tick time.Duration, poll func(context.Context) error, logger *slog.Logger, name string) <-chan struct{} {
+	return StartWakeablePollLoop(ctx, tick, nil, poll, logger, name)
+}
+
+// StartWakeablePollLoop is StartPollLoop that also polls whenever wake
+// receives, so event-driven work does not wait for the next tick. A nil wake
+// never fires.
+func StartWakeablePollLoop(ctx context.Context, tick time.Duration, wake <-chan struct{}, poll func(context.Context) error, logger *slog.Logger, name string) <-chan struct{} {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -40,9 +47,10 @@ func StartPollLoop(ctx context.Context, tick time.Duration, poll func(context.Co
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				if err := poll(ctx); err != nil && !errors.Is(err, context.Canceled) {
-					logger.Error(name+": poll failed", "err", err)
-				}
+			case <-wake:
+			}
+			if err := poll(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				logger.Error(name+": poll failed", "err", err)
 			}
 		}
 	}()

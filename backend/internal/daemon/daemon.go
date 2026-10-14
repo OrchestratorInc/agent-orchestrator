@@ -643,7 +643,7 @@ func Run() error {
 	wireManagedPreviewExit(managedPreview, sessionSvc, log)
 	sessMgr.SetTerminalInputGate(termMgr)
 	lifecycleMessenger.Bind(sessionLifecycleMessenger{sessMgr})
-	lcStack.LCM.SetCompletionTerminator(sessMgr)
+	lcStack.LCM.SetCompletionTerminator(sessionSvc.MergedTerminator())
 	lcStack.LCM.SetSessionInputLease(sessMgr)
 	lcStack.LCM.SetSessionOperationGate(sessMgr)
 	termMgr.SetSessionInputLease(sessMgr)

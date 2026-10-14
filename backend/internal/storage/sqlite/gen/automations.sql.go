@@ -47,12 +47,12 @@ UPDATE automation_runs
 SET status = 'spawning', attempt_count = attempt_count + 1,
     claimed_at = ?, lease_expires_at = ?, error_message = NULL, updated_at = ?
 WHERE automation_runs.id = ? AND automation_runs.status = 'pending'
-  AND NOT EXISTS (
+  AND (automation_runs.trigger_session_id IS NOT NULL OR NOT EXISTS (
       SELECT 1 FROM automation_runs active
       WHERE active.automation_id = automation_runs.automation_id
         AND active.id <> automation_runs.id
         AND active.status IN ('spawning', 'running')
-  )
+  ))
 `
 
 type ClaimAutomationRunParams struct {
@@ -110,6 +110,24 @@ type CountAutomationRunsParams struct {
 
 func (q *Queries) CountAutomationRuns(ctx context.Context, arg CountAutomationRunsParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countAutomationRuns, arg.AutomationID, arg.StatusFilter)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countAutomationRunsForTriggerSession = `-- name: CountAutomationRunsForTriggerSession :one
+SELECT COUNT(*)
+FROM automation_runs
+WHERE automation_id = ? AND trigger_session_id = ?
+`
+
+type CountAutomationRunsForTriggerSessionParams struct {
+	AutomationID     domain.AutomationID
+	TriggerSessionID *domain.SessionID
+}
+
+func (q *Queries) CountAutomationRunsForTriggerSession(ctx context.Context, arg CountAutomationRunsForTriggerSessionParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countAutomationRunsForTriggerSession, arg.AutomationID, arg.TriggerSessionID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -175,7 +193,8 @@ func (q *Queries) FailAutomationRun(ctx context.Context, arg FailAutomationRunPa
 
 const getAutomation = `-- name: GetAutomation :one
 SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
-    timezone, enabled, next_run_at, last_run_at, created_at, updated_at
+    timezone, enabled, next_run_at, last_run_at, created_at, updated_at,
+    trigger_type
 FROM automations
 WHERE id = ?
 `
@@ -197,6 +216,7 @@ func (q *Queries) GetAutomation(ctx context.Context, id domain.AutomationID) (Au
 		&i.LastRunAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TriggerType,
 	)
 	return i, err
 }
@@ -204,7 +224,7 @@ func (q *Queries) GetAutomation(ctx context.Context, id domain.AutomationID) (Au
 const getAutomationRun = `-- name: GetAutomationRun :one
 SELECT id, automation_id, scheduled_for, session_id, status, attempt_count,
     claimed_at, lease_expires_at, started_at, finished_at, error_message,
-    created_at, updated_at
+    created_at, updated_at, trigger_session_id
 FROM automation_runs
 WHERE id = ?
 `
@@ -226,6 +246,7 @@ func (q *Queries) GetAutomationRun(ctx context.Context, id domain.AutomationRunI
 		&i.ErrorMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TriggerSessionID,
 	)
 	return i, err
 }
@@ -233,7 +254,7 @@ func (q *Queries) GetAutomationRun(ctx context.Context, id domain.AutomationRunI
 const getAutomationRunByOccurrence = `-- name: GetAutomationRunByOccurrence :one
 SELECT id, automation_id, scheduled_for, session_id, status, attempt_count,
     claimed_at, lease_expires_at, started_at, finished_at, error_message,
-    created_at, updated_at
+    created_at, updated_at, trigger_session_id
 FROM automation_runs
 WHERE automation_id = ? AND scheduled_for = ?
 `
@@ -260,6 +281,7 @@ func (q *Queries) GetAutomationRunByOccurrence(ctx context.Context, arg GetAutom
 		&i.ErrorMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TriggerSessionID,
 	)
 	return i, err
 }
@@ -267,16 +289,17 @@ func (q *Queries) GetAutomationRunByOccurrence(ctx context.Context, arg GetAutom
 const getNextClaimableAutomationRun = `-- name: GetNextClaimableAutomationRun :one
 SELECT r.id, r.automation_id, r.scheduled_for, r.session_id, r.status,
     r.attempt_count, r.claimed_at, r.lease_expires_at, r.started_at,
-    r.finished_at, r.error_message, r.created_at, r.updated_at
+    r.finished_at, r.error_message, r.created_at, r.updated_at,
+    r.trigger_session_id
 FROM automation_runs r
 JOIN automations a ON a.id = r.automation_id
 WHERE r.status = 'pending'
   AND a.enabled = 1
-  AND NOT EXISTS (
+  AND (r.trigger_session_id IS NOT NULL OR NOT EXISTS (
       SELECT 1 FROM automation_runs active
       WHERE active.automation_id = r.automation_id
         AND active.status IN ('spawning', 'running')
-  )
+  ))
 ORDER BY r.scheduled_for, r.id
 LIMIT 1
 `
@@ -298,6 +321,7 @@ func (q *Queries) GetNextClaimableAutomationRun(ctx context.Context) (Automation
 		&i.ErrorMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TriggerSessionID,
 	)
 	return i, err
 }
@@ -305,8 +329,9 @@ func (q *Queries) GetNextClaimableAutomationRun(ctx context.Context) (Automation
 const insertAutomation = `-- name: InsertAutomation :exec
 INSERT INTO automations (
     id, project_id, display_name, prompt, kind, harness, rrule_text,
-    timezone, enabled, next_run_at, last_run_at, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    timezone, enabled, next_run_at, last_run_at, created_at, updated_at,
+    trigger_type
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertAutomationParams struct {
@@ -323,6 +348,7 @@ type InsertAutomationParams struct {
 	LastRunAt   sql.NullTime
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	TriggerType domain.AutomationTrigger
 }
 
 func (q *Queries) InsertAutomation(ctx context.Context, arg InsertAutomationParams) error {
@@ -340,6 +366,7 @@ func (q *Queries) InsertAutomation(ctx context.Context, arg InsertAutomationPara
 		arg.LastRunAt,
 		arg.CreatedAt,
 		arg.UpdatedAt,
+		arg.TriggerType,
 	)
 	return err
 }
@@ -391,10 +418,42 @@ func (q *Queries) InsertAutomationRun(ctx context.Context, arg InsertAutomationR
 	return result.RowsAffected()
 }
 
+const insertTriggeredAutomationRun = `-- name: InsertTriggeredAutomationRun :execrows
+INSERT INTO automation_runs (
+    id, automation_id, scheduled_for, trigger_session_id, status,
+    attempt_count, created_at, updated_at
+) VALUES (?, ?, ?, ?, 'pending', 0, ?, ?)
+ON CONFLICT DO NOTHING
+`
+
+type InsertTriggeredAutomationRunParams struct {
+	ID               domain.AutomationRunID
+	AutomationID     domain.AutomationID
+	ScheduledFor     time.Time
+	TriggerSessionID *domain.SessionID
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+func (q *Queries) InsertTriggeredAutomationRun(ctx context.Context, arg InsertTriggeredAutomationRunParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertTriggeredAutomationRun,
+		arg.ID,
+		arg.AutomationID,
+		arg.ScheduledFor,
+		arg.TriggerSessionID,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const listActiveAutomationRuns = `-- name: ListActiveAutomationRuns :many
 SELECT id, automation_id, scheduled_for, session_id, status, attempt_count,
     claimed_at, lease_expires_at, started_at, finished_at, error_message,
-    created_at, updated_at
+    created_at, updated_at, trigger_session_id
 FROM automation_runs
 WHERE status IN ('spawning', 'running')
 ORDER BY scheduled_for, id
@@ -423,6 +482,7 @@ func (q *Queries) ListActiveAutomationRuns(ctx context.Context) ([]AutomationRun
 			&i.ErrorMessage,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.TriggerSessionID,
 		); err != nil {
 			return nil, err
 		}
@@ -440,7 +500,7 @@ func (q *Queries) ListActiveAutomationRuns(ctx context.Context) ([]AutomationRun
 const listAutomationRuns = `-- name: ListAutomationRuns :many
 SELECT id, automation_id, scheduled_for, session_id, status, attempt_count,
     claimed_at, lease_expires_at, started_at, finished_at, error_message,
-    created_at, updated_at
+    created_at, updated_at, trigger_session_id
 FROM automation_runs
 WHERE automation_id = ?1
   AND (?2 = '' OR status = ?2)
@@ -483,6 +543,7 @@ func (q *Queries) ListAutomationRuns(ctx context.Context, arg ListAutomationRuns
 			&i.ErrorMessage,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.TriggerSessionID,
 		); err != nil {
 			return nil, err
 		}
@@ -499,7 +560,8 @@ func (q *Queries) ListAutomationRuns(ctx context.Context, arg ListAutomationRuns
 
 const listAutomations = `-- name: ListAutomations :many
 SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
-    timezone, enabled, next_run_at, last_run_at, created_at, updated_at
+    timezone, enabled, next_run_at, last_run_at, created_at, updated_at,
+    trigger_type
 FROM automations
 WHERE (?1 = '' OR project_id = ?1)
   AND (?2 < 0 OR enabled = ?2)
@@ -542,6 +604,7 @@ func (q *Queries) ListAutomations(ctx context.Context, arg ListAutomationsParams
 			&i.LastRunAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.TriggerType,
 		); err != nil {
 			return nil, err
 		}
@@ -558,9 +621,10 @@ func (q *Queries) ListAutomations(ctx context.Context, arg ListAutomationsParams
 
 const listDueAutomations = `-- name: ListDueAutomations :many
 SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
-    timezone, enabled, next_run_at, last_run_at, created_at, updated_at
+    timezone, enabled, next_run_at, last_run_at, created_at, updated_at,
+    trigger_type
 FROM automations
-WHERE enabled = 1 AND next_run_at <= ?
+WHERE enabled = 1 AND trigger_type = 'schedule' AND next_run_at <= ?
 ORDER BY next_run_at, id
 LIMIT ?
 `
@@ -593,6 +657,7 @@ func (q *Queries) ListDueAutomations(ctx context.Context, arg ListDueAutomations
 			&i.LastRunAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.TriggerType,
 		); err != nil {
 			return nil, err
 		}
@@ -610,7 +675,8 @@ func (q *Queries) ListDueAutomations(ctx context.Context, arg ListDueAutomations
 const listLatestAutomationRuns = `-- name: ListLatestAutomationRuns :many
 SELECT r.id, r.automation_id, r.scheduled_for, r.session_id, r.status,
     r.attempt_count, r.claimed_at, r.lease_expires_at, r.started_at,
-    r.finished_at, r.error_message, r.created_at, r.updated_at
+    r.finished_at, r.error_message, r.created_at, r.updated_at,
+    r.trigger_session_id
 FROM automation_runs r
 WHERE r.automation_id IN (/*SLICE:automation_ids*/?)
   AND r.id = (
@@ -656,6 +722,54 @@ func (q *Queries) ListLatestAutomationRuns(ctx context.Context, automationIds []
 			&i.ErrorMessage,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.TriggerSessionID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSessionEndedAutomations = `-- name: ListSessionEndedAutomations :many
+SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
+    timezone, enabled, next_run_at, last_run_at, created_at, updated_at,
+    trigger_type
+FROM automations
+WHERE project_id = ? AND enabled = 1 AND trigger_type = 'session_ended'
+ORDER BY created_at, id
+`
+
+func (q *Queries) ListSessionEndedAutomations(ctx context.Context, projectID domain.ProjectID) ([]Automation, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionEndedAutomations, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Automation{}
+	for rows.Next() {
+		var i Automation
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.DisplayName,
+			&i.Prompt,
+			&i.Kind,
+			&i.Harness,
+			&i.RruleText,
+			&i.Timezone,
+			&i.Enabled,
+			&i.NextRunAt,
+			&i.LastRunAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.TriggerType,
 		); err != nil {
 			return nil, err
 		}
@@ -721,7 +835,8 @@ func (q *Queries) ReleaseAutomationRun(ctx context.Context, arg ReleaseAutomatio
 const updateAutomation = `-- name: UpdateAutomation :execrows
 UPDATE automations
 SET display_name = ?, prompt = ?, kind = ?, harness = ?, rrule_text = ?,
-    timezone = ?, enabled = ?, next_run_at = ?, last_run_at = ?, updated_at = ?
+    timezone = ?, enabled = ?, next_run_at = ?, last_run_at = ?, updated_at = ?,
+    trigger_type = ?
 WHERE id = ?
 `
 
@@ -736,6 +851,7 @@ type UpdateAutomationParams struct {
 	NextRunAt   time.Time
 	LastRunAt   sql.NullTime
 	UpdatedAt   time.Time
+	TriggerType domain.AutomationTrigger
 	ID          domain.AutomationID
 }
 
@@ -751,6 +867,7 @@ func (q *Queries) UpdateAutomation(ctx context.Context, arg UpdateAutomationPara
 		arg.NextRunAt,
 		arg.LastRunAt,
 		arg.UpdatedAt,
+		arg.TriggerType,
 		arg.ID,
 	)
 	if err != nil {

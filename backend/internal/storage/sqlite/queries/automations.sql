@@ -1,18 +1,21 @@
 -- name: InsertAutomation :exec
 INSERT INTO automations (
     id, project_id, display_name, prompt, kind, harness, rrule_text,
-    timezone, enabled, next_run_at, last_run_at, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    timezone, enabled, next_run_at, last_run_at, created_at, updated_at,
+    trigger_type
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetAutomation :one
 SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
-    timezone, enabled, next_run_at, last_run_at, created_at, updated_at
+    timezone, enabled, next_run_at, last_run_at, created_at, updated_at,
+    trigger_type
 FROM automations
 WHERE id = ?;
 
 -- name: ListAutomations :many
 SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
-    timezone, enabled, next_run_at, last_run_at, created_at, updated_at
+    timezone, enabled, next_run_at, last_run_at, created_at, updated_at,
+    trigger_type
 FROM automations
 WHERE (sqlc.arg(project_id) = '' OR project_id = sqlc.arg(project_id))
   AND (sqlc.arg(enabled_filter) < 0 OR enabled = sqlc.arg(enabled_filter))
@@ -28,7 +31,8 @@ WHERE (sqlc.arg(project_id) = '' OR project_id = sqlc.arg(project_id))
 -- name: UpdateAutomation :execrows
 UPDATE automations
 SET display_name = ?, prompt = ?, kind = ?, harness = ?, rrule_text = ?,
-    timezone = ?, enabled = ?, next_run_at = ?, last_run_at = ?, updated_at = ?
+    timezone = ?, enabled = ?, next_run_at = ?, last_run_at = ?, updated_at = ?,
+    trigger_type = ?
 WHERE id = ?;
 
 -- name: DeleteAutomation :execrows
@@ -41,9 +45,10 @@ WHERE id = ? AND enabled = 1 AND next_run_at = ?;
 
 -- name: ListDueAutomations :many
 SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
-    timezone, enabled, next_run_at, last_run_at, created_at, updated_at
+    timezone, enabled, next_run_at, last_run_at, created_at, updated_at,
+    trigger_type
 FROM automations
-WHERE enabled = 1 AND next_run_at <= ?
+WHERE enabled = 1 AND trigger_type = 'schedule' AND next_run_at <= ?
 ORDER BY next_run_at, id
 LIMIT ?;
 
@@ -58,14 +63,14 @@ ON CONFLICT (automation_id, scheduled_for) DO NOTHING;
 -- name: GetAutomationRun :one
 SELECT id, automation_id, scheduled_for, session_id, status, attempt_count,
     claimed_at, lease_expires_at, started_at, finished_at, error_message,
-    created_at, updated_at
+    created_at, updated_at, trigger_session_id
 FROM automation_runs
 WHERE id = ?;
 
 -- name: ListActiveAutomationRuns :many
 SELECT id, automation_id, scheduled_for, session_id, status, attempt_count,
     claimed_at, lease_expires_at, started_at, finished_at, error_message,
-    created_at, updated_at
+    created_at, updated_at, trigger_session_id
 FROM automation_runs
 WHERE status IN ('spawning', 'running')
 ORDER BY scheduled_for, id;
@@ -73,14 +78,14 @@ ORDER BY scheduled_for, id;
 -- name: GetAutomationRunByOccurrence :one
 SELECT id, automation_id, scheduled_for, session_id, status, attempt_count,
     claimed_at, lease_expires_at, started_at, finished_at, error_message,
-    created_at, updated_at
+    created_at, updated_at, trigger_session_id
 FROM automation_runs
 WHERE automation_id = ? AND scheduled_for = ?;
 
 -- name: ListAutomationRuns :many
 SELECT id, automation_id, scheduled_for, session_id, status, attempt_count,
     claimed_at, lease_expires_at, started_at, finished_at, error_message,
-    created_at, updated_at
+    created_at, updated_at, trigger_session_id
 FROM automation_runs
 WHERE automation_id = sqlc.arg(automation_id)
   AND (sqlc.arg(status_filter) = '' OR status = sqlc.arg(status_filter))
@@ -96,7 +101,8 @@ WHERE automation_id = sqlc.arg(automation_id)
 -- name: ListLatestAutomationRuns :many
 SELECT r.id, r.automation_id, r.scheduled_for, r.session_id, r.status,
     r.attempt_count, r.claimed_at, r.lease_expires_at, r.started_at,
-    r.finished_at, r.error_message, r.created_at, r.updated_at
+    r.finished_at, r.error_message, r.created_at, r.updated_at,
+    r.trigger_session_id
 FROM automation_runs r
 WHERE r.automation_id IN (sqlc.slice('automation_ids'))
   AND r.id = (
@@ -111,16 +117,17 @@ ORDER BY r.automation_id;
 -- name: GetNextClaimableAutomationRun :one
 SELECT r.id, r.automation_id, r.scheduled_for, r.session_id, r.status,
     r.attempt_count, r.claimed_at, r.lease_expires_at, r.started_at,
-    r.finished_at, r.error_message, r.created_at, r.updated_at
+    r.finished_at, r.error_message, r.created_at, r.updated_at,
+    r.trigger_session_id
 FROM automation_runs r
 JOIN automations a ON a.id = r.automation_id
 WHERE r.status = 'pending'
   AND a.enabled = 1
-  AND NOT EXISTS (
+  AND (r.trigger_session_id IS NOT NULL OR NOT EXISTS (
       SELECT 1 FROM automation_runs active
       WHERE active.automation_id = r.automation_id
         AND active.status IN ('spawning', 'running')
-  )
+  ))
 ORDER BY r.scheduled_for, r.id
 LIMIT 1;
 
@@ -129,12 +136,12 @@ UPDATE automation_runs
 SET status = 'spawning', attempt_count = attempt_count + 1,
     claimed_at = ?, lease_expires_at = ?, error_message = NULL, updated_at = ?
 WHERE automation_runs.id = ? AND automation_runs.status = 'pending'
-  AND NOT EXISTS (
+  AND (automation_runs.trigger_session_id IS NOT NULL OR NOT EXISTS (
       SELECT 1 FROM automation_runs active
       WHERE active.automation_id = automation_runs.automation_id
         AND active.id <> automation_runs.id
         AND active.status IN ('spawning', 'running')
-  );
+  ));
 
 -- name: MarkAutomationRunRunning :execrows
 UPDATE automation_runs
@@ -159,3 +166,23 @@ UPDATE automation_runs
 SET status = 'pending', claimed_at = NULL, lease_expires_at = NULL,
     error_message = ?, updated_at = ?
 WHERE id = ? AND status = 'spawning';
+
+-- name: ListSessionEndedAutomations :many
+SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
+    timezone, enabled, next_run_at, last_run_at, created_at, updated_at,
+    trigger_type
+FROM automations
+WHERE project_id = ? AND enabled = 1 AND trigger_type = 'session_ended'
+ORDER BY created_at, id;
+
+-- name: CountAutomationRunsForTriggerSession :one
+SELECT COUNT(*)
+FROM automation_runs
+WHERE automation_id = ? AND trigger_session_id = ?;
+
+-- name: InsertTriggeredAutomationRun :execrows
+INSERT INTO automation_runs (
+    id, automation_id, scheduled_for, trigger_session_id, status,
+    attempt_count, created_at, updated_at
+) VALUES (?, ?, ?, ?, 'pending', 0, ?, ?)
+ON CONFLICT DO NOTHING;
