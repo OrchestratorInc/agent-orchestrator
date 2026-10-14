@@ -34,6 +34,7 @@ import mimoCodeLogo from "../assets/agents/mimo-code.svg";
 import ompLogo from "../assets/agents/omp.png";
 import openhandsLogo from "../assets/agents/openhands.svg";
 import opencodeLogo from "../assets/agents/opencode.svg";
+import openjarvisLogo from "../assets/agents/openjarvis.png";
 import piLogo from "../assets/agents/pi.png";
 import primeAgentLogo from "../assets/agents/prime-agent.png";
 import qwenLogo from "../assets/agents/qwen.svg";
@@ -69,6 +70,7 @@ const LOGOS: AgentLogoSources = {
 	kiro: kiroLogo,
 	kilocode: kilocodeLogo,
 	vibe: vibeLogo,
+	"openjarvis": openjarvisLogo,
 	pi: piLogo,
 	kimchi: kimchiLogo,
 	"prime-agent": primeAgentLogo,

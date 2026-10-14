@@ -4,6 +4,15 @@ import { AgentAvatar } from "./AgentAvatar";
 import fxLogo from "../assets/agents/fx.svg";
 
 describe("AgentAvatar", () => {
+	it("renders the openjarvis brand asset", () => {
+		render(<AgentAvatar provider="openjarvis" />);
+
+		expect(screen.getByRole("img", { name: "openjarvis" })).toHaveAttribute(
+			"src",
+			expect.stringContaining("openjarvis.png"),
+		);
+	});
+
 	it("renders the official fx brand asset", () => {
 		render(<AgentAvatar provider="fx" />);
 		expect(screen.getByRole("img", { name: "fx" })).toHaveAttribute("src", fxLogo);
