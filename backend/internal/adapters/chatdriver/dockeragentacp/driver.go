@@ -26,6 +26,8 @@ import (
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
 		Harness:              domain.HarnessDockerAgent,
+		Preflight:            preflight,
+		ValidateEnvironment:  validateEnvironment,
 		Configure:            configure,
 		ValidateInitialize:   validateInitialize,
 		SessionMode:          sessionMode,
@@ -46,27 +48,53 @@ func validateInitialize(init acpsdk.InitializeResponse) error {
 	return nil
 }
 
-func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+func preflight(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
-		return nil, nil, err
+		return err
 	}
 	if runtime.GOOS == "windows" {
-		return nil, nil, fmt.Errorf("docker agent private hook binding currently supports Unix only")
+		return fmt.Errorf("docker agent private hook binding currently supports Unix only")
+	}
+	return nil
+}
+
+func validateEnvironment(ctx context.Context, env map[string]string) error {
+	_, err := nativeConfig(ctx, env)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
+	}
+	return nil
+}
+
+func nativeConfig(ctx context.Context, env map[string]string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 	config := os.Getenv(dockeragent.ConfigEnv)
-	if value, ok := cfg.Env[dockeragent.ConfigEnv]; ok {
+	if value, ok := env[dockeragent.ConfigEnv]; ok {
 		config = value
 	}
 	config = strings.TrimSpace(config)
 	if !filepath.IsAbs(config) {
-		return nil, nil, fmt.Errorf("%s must name an absolute existing Docker Agent YAML config", dockeragent.ConfigEnv)
+		return "", fmt.Errorf("%s must name an absolute existing Docker Agent YAML config", dockeragent.ConfigEnv)
 	}
 	info, err := os.Stat(config)
 	if err != nil {
-		return nil, nil, fmt.Errorf("docker agent configuration: %w", err)
+		return "", fmt.Errorf("docker agent configuration: %w", err)
 	}
 	if !info.Mode().IsRegular() {
-		return nil, nil, fmt.Errorf("docker agent configuration must be a regular file")
+		return "", fmt.Errorf("docker agent configuration must be a regular file")
+	}
+	return config, nil
+}
+
+func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+	if err := preflight(ctx); err != nil {
+		return nil, nil, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
+	}
+	config, err := nativeConfig(ctx, cfg.Env)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 	}
 	if !filepath.IsAbs(cfg.DataDir) || cfg.SessionID == "" {
 		return nil, nil, fmt.Errorf("docker agent requires an absolute AO data directory and session ID")

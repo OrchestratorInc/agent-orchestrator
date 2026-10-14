@@ -59,6 +59,17 @@ type ChatLauncher interface {
 	DrainChatQueue(ctx context.Context, id domain.SessionID) error
 }
 
+type chatEnvironmentPreflighter interface {
+	PreflightChatWithEnv(context.Context, domain.AgentHarness, ports.PermissionMode, map[string]string) error
+}
+
+func (m *Manager) preflightChat(ctx context.Context, harness domain.AgentHarness, permissions ports.PermissionMode, env map[string]string) error {
+	if preflighter, ok := m.chat.(chatEnvironmentPreflighter); ok {
+		return preflighter.PreflightChatWithEnv(ctx, harness, permissions, env)
+	}
+	return m.chat.PreflightChat(ctx, harness, permissions)
+}
+
 type chatBackgroundTaskRunner interface {
 	RunBackgroundTask(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)
 }

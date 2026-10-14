@@ -1120,6 +1120,56 @@ func TestChatSpawnRejectedBeforeDurableStateWhenUnsupported(t *testing.T) {
 	}
 }
 
+type environmentPreflightLauncher struct {
+	recordingLauncher
+	validate func(map[string]string) error
+}
+
+func (l *environmentPreflightLauncher) PreflightChatWithEnv(ctx context.Context, harness domain.AgentHarness, permissions ports.PermissionMode, env map[string]string) error {
+	if err := l.validate(env); err != nil {
+		return err
+	}
+	return l.PreflightChat(ctx, harness, permissions)
+}
+
+func TestChatSpawnValidatesProjectEnvironmentBeforeDurableState(t *testing.T) {
+	sentinel := fmt.Errorf("%w: native config missing", ports.ErrChatDriverUnavailable)
+	for _, configured := range []bool{false, true} {
+		t.Run(fmt.Sprintf("configured=%v", configured), func(t *testing.T) {
+			launcher := &environmentPreflightLauncher{validate: func(env map[string]string) error {
+				if _, ok := env["AO_DOCKER_AGENT_CONFIG"]; ok {
+					t.Fatal("reserved project key reached Chat admission")
+				}
+				if env["NATIVE_CONFIG"] != "/project/native.yaml" {
+					return sentinel
+				}
+				return nil
+			}}
+			mgr, store, runtime := newChatManager(launcher)
+			project := store.projects[chatTestProject]
+			project.Config.Env = map[string]string{"AO_DOCKER_AGENT_CONFIG": "/project/redirect.yaml"}
+			if configured {
+				project.Config.Env["NATIVE_CONFIG"] = "/project/native.yaml"
+			}
+			store.projects[chatTestProject] = project
+			_, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{
+				ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessCodex,
+				RequestedMode: domain.SessionModeChat,
+			})
+			if configured {
+				if err != nil || len(launcher.started) != 1 {
+					t.Fatalf("valid project config: started=%d err=%v", len(launcher.started), err)
+				}
+				return
+			}
+			workspace := mgr.workspace.(*fakeWorkspace)
+			if !errors.Is(err, sentinel) || len(store.sessions) != 0 || workspace.createCount != 0 || runtime.created != 0 || len(launcher.started) != 0 {
+				t.Fatalf("config failure left state: sessions=%d workspaces=%d runtimes=%d controllers=%d err=%v", len(store.sessions), workspace.createCount, runtime.created, len(launcher.started), err)
+			}
+		})
+	}
+}
+
 // Chat mode with no launcher wired must fail, never silently become a TUI session
 // in a terminal the user did not ask for.
 func TestChatSpawnWithoutLauncherIsRefusedNotDowngraded(t *testing.T) {

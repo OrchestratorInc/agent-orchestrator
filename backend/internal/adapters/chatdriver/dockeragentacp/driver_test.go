@@ -3,6 +3,7 @@ package dockeragentacp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -16,6 +17,100 @@ import (
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+type installedPlugin struct{ status ports.AgentAuthStatus }
+
+func (installedPlugin) ResolveBinary(context.Context) (string, error) {
+	return "/installed/docker-agent", nil
+}
+func (p installedPlugin) AuthStatus(context.Context) (ports.AgentAuthStatus, error) {
+	return p.status, nil
+}
+
+func TestProbeChecksPlatformWithoutRequiringDaemonConfig(t *testing.T) {
+	t.Setenv(dockeragent.ConfigEnv, "")
+	for _, status := range []ports.AgentAuthStatus{ports.AgentAuthStatusUnknown, ports.AgentAuthStatusConfigured} {
+		driver := New(installedPlugin{status: status}, nil)
+		caps, err := driver.Probe(context.Background())
+		if runtime.GOOS == "windows" {
+			if !errors.Is(err, ports.ErrChatDriverUnavailable) || !strings.Contains(err.Error(), "Unix only") || caps != nil {
+				t.Fatalf("unsupported platform caps=%v err=%v", caps, err)
+			}
+		} else if err != nil || !caps[ports.ChatCapabilityResume] {
+			t.Fatalf("global probe rejected a possible project config: caps=%v err=%v", caps, err)
+		}
+	}
+}
+
+func TestContextualConfigValidation(t *testing.T) {
+	dir := t.TempDir()
+	config := filepath.Join(dir, "native.yaml")
+	if err := os.WriteFile(config, []byte("agents: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	driver := New(installedPlugin{}, nil)
+	validator, ok := driver.(ports.ChatEnvironmentValidator)
+	if !ok {
+		t.Fatal("Docker Agent binding has no contextual config validation")
+	}
+	for _, tc := range []struct {
+		name         string
+		daemonConfig string
+		env          map[string]string
+		wantError    bool
+	}{
+		{name: "missing", wantError: true},
+		{name: "relative", env: map[string]string{dockeragent.ConfigEnv: "native.yaml"}, wantError: true},
+		{name: "nonexistent", env: map[string]string{dockeragent.ConfigEnv: filepath.Join(dir, "missing.yaml")}, wantError: true},
+		{name: "directory", env: map[string]string{dockeragent.ConfigEnv: dir}, wantError: true},
+		{name: "daemon config", daemonConfig: config},
+		{name: "trimmed daemon config", daemonConfig: "  " + config + " \n"},
+		{name: "session config", env: map[string]string{dockeragent.ConfigEnv: config}},
+		{name: "session overrides invalid daemon config", daemonConfig: "relative.yaml", env: map[string]string{dockeragent.ConfigEnv: config}},
+		{name: "explicit empty override", daemonConfig: config, env: map[string]string{dockeragent.ConfigEnv: ""}, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(dockeragent.ConfigEnv, tc.daemonConfig)
+			err := validator.ValidateEnvironment(context.Background(), tc.env)
+			if (err != nil) != tc.wantError {
+				t.Fatalf("ValidateEnvironment error=%v, wantError=%v", err, tc.wantError)
+			}
+			if tc.wantError && !errors.Is(err, ports.ErrChatDriverUnavailable) {
+				t.Fatalf("config failure lost typed admission error: %v", err)
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := validator.ValidateEnvironment(ctx, map[string]string{dockeragent.ConfigEnv: config}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation lost: %v", err)
+	}
+}
+
+func TestConfigureRechecksConfigBeforeWritingRuntimeFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("qualified native hook binding is Unix only")
+	}
+	dir := t.TempDir()
+	config := filepath.Join(dir, "native.yaml")
+	if err := os.WriteFile(config, []byte("agents: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{dockeragent.ConfigEnv: config}
+	if err := validateEnvironment(context.Background(), env); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(config); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := configure(context.Background(), acpdriver.LaunchConfig{DataDir: dir, SessionID: "s", Env: env})
+	if !errors.Is(err, ports.ErrChatDriverUnavailable) {
+		t.Fatalf("removed config admitted at launch: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "agent-runtime")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid config created runtime files: %v", err)
+	}
+}
 
 func TestPrivateHookPreservesNativeConfigAndRefreshesRestoreContext(t *testing.T) {
 	if runtime.GOOS == "windows" {

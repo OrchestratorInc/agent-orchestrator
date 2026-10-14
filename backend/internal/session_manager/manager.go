@@ -1017,17 +1017,17 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			m.logger.Warn("spawn: default Chat unavailable; falling back to TUI",
 				"harness", cfg.Harness, "error", ports.ErrChatUnsupported)
 			mode = domain.SessionModeTUI
-		} else if err := m.chat.PreflightChat(ctx, cfg.Harness, agentConfig.Permissions); err != nil {
+		} else if err := m.preflightChat(ctx, cfg.Harness, agentConfig.Permissions, agentlaunch.MergeEnv(project.Config.Env, nil)); err != nil {
 			fallbackAllowed := errors.Is(err, ports.ErrChatUnsupported) ||
 				errors.Is(err, ports.ErrChatDriverUnavailable) ||
 				errors.Is(err, ports.ErrChatDriverIncompatible) ||
 				errors.Is(err, ports.ErrChatAuthRequired)
 			if modeExplicitlyRequested || !fallbackAllowed ||
 				errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
+				return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", agentlaunch.RedactError(err, project.Config.Env))
 			}
 			m.logger.Warn("spawn: default Chat unavailable; falling back to TUI",
-				"harness", cfg.Harness, "error", err)
+				"harness", cfg.Harness, "error", agentlaunch.RedactError(err, project.Config.Env))
 			mode = domain.SessionModeTUI
 		}
 		if mode == domain.SessionModeChat {

@@ -59,6 +59,10 @@ type Config struct {
 	DecodeProviderConversationID func(string) (string, error)
 	// VersionProbe optionally gates admission on a minimum binary version.
 	VersionProbe VersionProbe
+	// Preflight checks provider prerequisites that do not depend on session environment.
+	Preflight func(context.Context) error
+	// ValidateEnvironment checks required native configuration using launch overrides.
+	ValidateEnvironment func(context.Context, map[string]string) error
 	// ValidateInitialize admits the qualified native ACP identity after handshake.
 	ValidateInitialize func(acpsdk.InitializeResponse) error
 }
@@ -83,13 +87,19 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 	}
 
 	return acpdriver.Config{
-		Harness:            cfg.Harness,
-		ValidateInitialize: cfg.ValidateInitialize,
-		Capabilities:       capabilities,
+		Harness:             cfg.Harness,
+		ValidateInitialize:  cfg.ValidateInitialize,
+		ValidateEnvironment: cfg.ValidateEnvironment,
+		Capabilities:        capabilities,
 		Probe: func(ctx context.Context) error {
 			if cfg.Configure == nil {
 				return fmt.Errorf("%w: incomplete native ACP binding for %s",
 					ports.ErrChatDriverUnavailable, cfg.Harness)
+			}
+			if cfg.Preflight != nil {
+				if err := cfg.Preflight(ctx); err != nil {
+					return fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
+				}
 			}
 			bin, err := plugin.ResolveBinary(ctx)
 			if err != nil {

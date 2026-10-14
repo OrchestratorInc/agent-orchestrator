@@ -2026,6 +2026,29 @@ func (s *Service) PreflightChat(
 	return capabilityAdmissionError(harness, caps, permissions)
 }
 
+// PreflightChatWithEnv checks the task's native prerequisites separately from
+// cached global capabilities, before the session manager allocates durable state.
+func (s *Service) PreflightChatWithEnv(
+	ctx context.Context,
+	harness domain.AgentHarness,
+	permissions ports.PermissionMode,
+	env map[string]string,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	driver, err := s.drivers.Driver(harness)
+	if err != nil {
+		return fmt.Errorf("%w: %s has no chat driver", ports.ErrChatUnsupported, harness)
+	}
+	if validator, ok := driver.(ports.ChatEnvironmentValidator); ok {
+		if err := validator.ValidateEnvironment(ctx, env); err != nil {
+			return err
+		}
+	}
+	return s.PreflightChat(ctx, harness, permissions)
+}
+
 func capabilityAdmissionError(
 	harness domain.AgentHarness,
 	caps ports.ChatCapabilities,
