@@ -86,8 +86,9 @@ func (c *commandContext) runSupervisedProcess(ctx context.Context, sessionID, re
 	child.Stdout = c.deps.Out
 	child.Stderr = c.deps.Err
 
-	// Open the relay before the child starts so a failure is reported once,
-	// up front, instead of in-container ao calls hanging until they time out.
+	// Open the relay before the child starts. Without it every in-container ao
+	// call, including each hook, would hang until it times out, so the agent
+	// is not started at all.
 	var relayRoot *os.Root
 	var relayExe string
 	if relayDir != "" {
@@ -96,7 +97,9 @@ func (c *commandContext) runSupervisedProcess(ctx context.Context, sessionID, re
 			relayRoot, err = openSandboxRelay(relayDir)
 		}
 		if err != nil {
-			_, _ = fmt.Fprintf(c.deps.Err, "ao: sandbox relay disabled: %v\n", err)
+			_, _ = fmt.Fprintf(c.deps.Err, "ao: sandbox relay unavailable, not starting the agent: %v\n", err)
+			c.reportSupervisedExit(sessionID, reviewID, launchID)
+			return
 		}
 		relayExe = exe
 	}

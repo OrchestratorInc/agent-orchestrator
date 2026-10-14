@@ -102,22 +102,28 @@ func TestAgentProcessSuperviseReportsReviewExitWithSessionIdentity(t *testing.T)
 	}
 }
 
-// A relay that cannot start must say so; otherwise in-container ao calls
-// silently hang until their client timeout.
-func TestAgentProcessSuperviseReportsUnusableSandboxRelay(t *testing.T) {
+// A relay that cannot start must stop the launch; otherwise every
+// in-container ao call, each hook included, hangs until its timeout.
+func TestAgentProcessSuperviseRefusesUnusableSandboxRelay(t *testing.T) {
 	cfg := setConfigEnv(t)
-	srv, _ := activityServer(t, http.StatusOK, `{"ok":true}`)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
 	writeRunFileFor(t, cfg, srv)
 	missing := filepath.Join(t.TempDir(), "sessions", "s1", "relay")
 
-	_, errOut, err := executeCLI(t, Deps{
+	out, errOut, err := executeCLI(t, Deps{
 		In:           strings.NewReader(""),
 		ProcessAlive: func(int) bool { return true },
-	}, "agent-process", "supervise", "--session", "ao-7", "--launch", "launch-3", "--sandbox-relay", missing, "--", "sh", "-c", "exit 0")
+	}, "agent-process", "supervise", "--session", "ao-7", "--launch", "launch-3", "--sandbox-relay", missing, "--", "sh", "-c", "printf started")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(errOut, "sandbox relay") {
+	if out != "" {
+		t.Fatalf("stdout = %q, want the agent not started", out)
+	}
+	if !strings.Contains(errOut, "sandbox relay unavailable") {
 		t.Fatalf("stderr = %q, want a sandbox relay error line", errOut)
+	}
+	if capture.path != "/api/v1/sessions/ao-7/activity" || !strings.Contains(capture.body, `"process-exited"`) {
+		t.Fatalf("exit report = %s %s, want the launch reported as exited", capture.path, capture.body)
 	}
 }
