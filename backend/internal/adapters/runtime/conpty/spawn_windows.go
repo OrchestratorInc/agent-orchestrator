@@ -70,7 +70,7 @@ func defaultSpawnHost(ctx context.Context, sessionID, cwd string, argv []string,
 	}
 
 	// Merge and normalize the environment for an interactive true-color PTY.
-	merged := interactiveTerminalEnv(os.Environ(), env, envAssignments)
+	merged := interactiveTerminalEnv(os.Environ(), env, envAssignments, opts.EnvRemove)
 
 	cmd := exec.CommandContext(ctx, exe, args...) //nolint:forbidigo // detached ConPTY host requires specialized creation flags
 	cmd.Dir = cwd
