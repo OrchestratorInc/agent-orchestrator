@@ -1643,7 +1643,7 @@ describe("SessionView", () => {
 		expect(loader).toHaveTextContent("Creating the workspace");
 		expect(loader).toHaveTextContent("Preparing your repository and agent");
 		expect(loader).toHaveTextContent("Connecting your terminal");
-		expect(within(loader).getByTestId("multi-step-loader-step").querySelector(".multi-step-loader__step")).toBeInTheDocument();
+		expect(within(loader).getByTestId("multi-step-loader-step").querySelector(".multi-step-loader__shimmer")).toBeInTheDocument();
 		expect(within(loader).queryByRole("progressbar")).not.toBeInTheDocument();
 		expect(loader).not.toHaveTextContent("Coder");
 		expect(loader).not.toHaveClass("right-4", "top-4");
