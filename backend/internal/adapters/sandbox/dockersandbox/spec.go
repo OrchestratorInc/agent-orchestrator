@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -131,6 +132,34 @@ func csvField(f string) string {
 		return f
 	}
 	return `"` + strings.ReplaceAll(f, `"`, `""`) + `"`
+}
+
+// addGitConfigEnv makes git usable inside the container through
+// command-scope config, appended after any entries env already sets: bind
+// mount roots look foreign-owned there, so safe.directory must be *, and the
+// host's identity lets the agent commit.
+func addGitConfigEnv(env map[string]string, t ports.SandboxTarget) error {
+	n := 0
+	if c, ok := env["GIT_CONFIG_COUNT"]; ok {
+		var err error
+		if n, err = strconv.Atoi(c); err != nil || n < 0 {
+			return fmt.Errorf("sandbox env: GIT_CONFIG_COUNT %q is not a count", c)
+		}
+	}
+	add := func(k, v string) {
+		env["GIT_CONFIG_KEY_"+strconv.Itoa(n)] = k
+		env["GIT_CONFIG_VALUE_"+strconv.Itoa(n)] = v
+		n++
+	}
+	add("safe.directory", "*")
+	if t.GitUserName != "" {
+		add("user.name", t.GitUserName)
+	}
+	if t.GitUserEmail != "" {
+		add("user.email", t.GitUserEmail)
+	}
+	env["GIT_CONFIG_COUNT"] = strconv.Itoa(n)
+	return nil
 }
 
 // renderEnvFile renders env as POSIX sh assignments for `set -a; . file`.

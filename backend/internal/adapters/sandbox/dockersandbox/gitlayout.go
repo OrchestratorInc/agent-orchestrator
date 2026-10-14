@@ -27,6 +27,8 @@ type gitLayout struct {
 	dir            string // the repository's common git dir
 	admin          string // per-agent: <dir>/worktrees/<name> of this workspace
 	worktreeConfig bool   // extensions.worktreeConfig is on: mount config.worktree read-only
+	userName       string // host git identity, empty when unset
+	userEmail      string
 }
 
 // hostGit runs git on the host with fsmonitor and hooks disabled, so even a
@@ -103,6 +105,9 @@ func (s *Sandbox) resolveGit(ctx context.Context, req ports.SandboxRequest) (git
 			}
 		}
 	}
+	// Unset identity keys are simply omitted.
+	g.userName, _ = s.hostGit(ctx, req.RepoPath, "config", "--get", "user.name")
+	g.userEmail, _ = s.hostGit(ctx, req.RepoPath, "config", "--get", "user.email")
 	return g, nil
 }
 

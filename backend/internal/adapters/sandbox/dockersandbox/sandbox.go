@@ -172,6 +172,7 @@ func (s *Sandbox) Ensure(ctx context.Context, req ports.SandboxRequest) (ports.S
 	target := s.targetFor(name, req.ProjectID, req.SessionID)
 	target.Docker = docker
 	target.Mode = req.Config.Mode
+	target.GitUserName, target.GitUserEmail = git.userName, git.userEmail
 	if err := ensureStateDirs(target.ProjectDir, req.SessionID); err != nil {
 		return ports.SandboxTarget{}, fmt.Errorf("sandbox state dir: %w", err)
 	}
@@ -262,9 +263,12 @@ func (s *Sandbox) output(ctx context.Context, timeout time.Duration, docker stri
 
 // Exec writes the session env file (0600) and returns the docker exec argv.
 func (s *Sandbox) Exec(target ports.SandboxTarget, workspacePath string, env map[string]string, argv []string) ([]string, error) {
-	merged := make(map[string]string, len(env)+2)
+	merged := make(map[string]string, len(env)+7)
 	for k, v := range env {
 		merged[k] = v
+	}
+	if err := addGitConfigEnv(merged, target); err != nil {
+		return nil, fmt.Errorf("%w: %w", ports.ErrSandboxMisconfigured, err)
 	}
 	data, err := renderEnvFile(merged)
 	if err != nil {

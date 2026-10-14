@@ -59,7 +59,7 @@ A running per-agent container keeps its old settings until it stops. New setting
 
 ## Git inside the sandbox
 
-The agent can commit, create branches, check out, rebase, and fetch inside the sandbox.
+The agent can commit, create branches, check out, rebase, and fetch inside the sandbox. Commits use the `user.name` and `user.email` that git on the host has for the repository.
 
 The repository's git directory is read-only inside the container. Only its objects, refs, and reflogs are writable, plus the session's own worktree metadata.
 

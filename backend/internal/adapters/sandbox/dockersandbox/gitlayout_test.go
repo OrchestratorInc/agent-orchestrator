@@ -206,6 +206,22 @@ func TestResolveGitRejects(t *testing.T) {
 	}
 }
 
+func TestEnsureReadsHostGitIdentity(t *testing.T) {
+	s, fr, data := testSandbox(t, []fakeCall{
+		{match: "inspect", err: errors.New("No such object")},
+		{match: "run -d"},
+		{match: "command -v"},
+	})
+	fr.git = map[string]string{"-C /repo config --get user.name": "Ada Lovelace\n"}
+	target, err := s.Ensure(context.Background(), perAgentReq(wsOf(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.GitUserName != "Ada Lovelace" || target.GitUserEmail != "" {
+		t.Fatalf("identity = %q <%q>, want the host name and no email", target.GitUserName, target.GitUserEmail)
+	}
+}
+
 // --mount does not create a missing source, so Ensure must refuse rather
 // than hand docker a dangling bind.
 func TestEnsureMissingBindSourceIsMisconfigured(t *testing.T) {
@@ -216,6 +232,74 @@ func TestEnsureMissingBindSourceIsMisconfigured(t *testing.T) {
 	_, err := s.Ensure(context.Background(), req)
 	if !errors.Is(err, ports.ErrSandboxMisconfigured) || !strings.Contains(err.Error(), filepath.Join(data, "worktrees", "q")) {
 		t.Fatalf("err = %v, want ErrSandboxMisconfigured naming the missing source", err)
+	}
+}
+
+func readEnvFile(t *testing.T, target ports.SandboxTarget) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(target.SessionDir, "env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func TestExecSetsGitConfigEnv(t *testing.T) {
+	cases := map[string]struct {
+		name, email string
+		env         map[string]string
+		want        []string
+		absent      []string
+	}{
+		"safe.directory only": {
+			want:   []string{"GIT_CONFIG_COUNT='1'", "GIT_CONFIG_KEY_0='safe.directory'", "GIT_CONFIG_VALUE_0='*'"},
+			absent: []string{"GIT_CONFIG_KEY_1"},
+		},
+		"identity": {
+			name: "Ada", email: "ada@example.com",
+			want: []string{"GIT_CONFIG_COUNT='3'", "GIT_CONFIG_KEY_0='safe.directory'", "GIT_CONFIG_KEY_1='user.name'",
+				"GIT_CONFIG_VALUE_1='Ada'", "GIT_CONFIG_KEY_2='user.email'", "GIT_CONFIG_VALUE_2='ada@example.com'"},
+		},
+		"email only": {
+			email: "ada@example.com",
+			want:  []string{"GIT_CONFIG_COUNT='2'", "GIT_CONFIG_KEY_1='user.email'"},
+		},
+		"appends to caller entries": {
+			name: "Ada",
+			env:  map[string]string{"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.editor", "GIT_CONFIG_VALUE_0": "vi"},
+			want: []string{"GIT_CONFIG_COUNT='3'", "GIT_CONFIG_KEY_0='core.editor'", "GIT_CONFIG_VALUE_0='vi'",
+				"GIT_CONFIG_KEY_1='safe.directory'", "GIT_CONFIG_KEY_2='user.name'"},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			s, _, data := testSandbox(t, nil)
+			target := execTarget(t, s)
+			target.GitUserName, target.GitUserEmail = tc.name, tc.email
+			if _, err := s.Exec(target, filepath.Join(data, "w"), tc.env, []string{"claude"}); err != nil {
+				t.Fatal(err)
+			}
+			body := readEnvFile(t, target)
+			for _, w := range tc.want {
+				if !strings.Contains(body, w+"\n") {
+					t.Fatalf("env file missing %q:\n%s", w, body)
+				}
+			}
+			for _, a := range tc.absent {
+				if strings.Contains(body, a) {
+					t.Fatalf("env file has %q:\n%s", a, body)
+				}
+			}
+		})
+	}
+}
+
+func TestExecRejectsInvalidGitConfigCount(t *testing.T) {
+	s, _, data := testSandbox(t, nil)
+	target := execTarget(t, s)
+	_, err := s.Exec(target, filepath.Join(data, "w"), map[string]string{"GIT_CONFIG_COUNT": "x"}, []string{"claude"})
+	if !errors.Is(err, ports.ErrSandboxMisconfigured) {
+		t.Fatalf("err = %v, want ErrSandboxMisconfigured", err)
 	}
 }
 
@@ -260,6 +344,7 @@ func TestResolveGitRealWorktree(t *testing.T) {
 	repo, wt := newRepoWithWorktree(t)
 	gitDir := gitRun(t, repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	own := filepath.Join(gitDir, "worktrees", "wt")
+	gitRun(t, repo, "config", "user.name", "Ada")
 
 	// A decoy admin dir pointing elsewhere, a non-regular gitdir that would
 	// match, and a worktree .git rewritten to name the decoy.
@@ -285,6 +370,9 @@ func TestResolveGitRealWorktree(t *testing.T) {
 	}
 	if physicalPath(g.admin) != physicalPath(own) {
 		t.Fatalf("admin = %s, want %s", g.admin, own)
+	}
+	if g.userName != "Ada" || g.userEmail != "" {
+		t.Fatalf("identity = %q <%q>, want Ada and no email", g.userName, g.userEmail)
 	}
 }
 

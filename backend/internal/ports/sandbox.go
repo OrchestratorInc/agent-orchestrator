@@ -38,6 +38,10 @@ type SandboxTarget struct {
 	SessionDir string // per-session env file and relay spool
 	RelayDir   string
 	Mode       domain.SandboxMode // per-agent or shared
+	// GitUserName and GitUserEmail are the host's git identity for the
+	// repository, passed to git inside the container. Empty when unset.
+	GitUserName  string
+	GitUserEmail string
 }
 
 // Sandbox runs agent processes inside local containers (#6663).
