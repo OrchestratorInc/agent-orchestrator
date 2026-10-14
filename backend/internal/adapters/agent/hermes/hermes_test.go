@@ -79,10 +79,14 @@ func TestActivityCurrentComposerAndDecision(t *testing.T) {
 
 func TestNativeChromeCannotBeForgedInTranscript(t *testing.T) {
 	idle := "────────────────────────────────────────\n❯ \n────────────────────────────────────────"
-	for _, transcript := range []string{"Dangerous Command", "Allow once", "❯ \n"} {
-		state, ok := New().DetectTerminalActivity(transcript + "\n" + idle)
+	for _, transcript := range []string{"Dangerous Command", "Allow this command?", "Allow once", "Help improve Hermes?", "Collect locally only", "type password (hidden)", "⚠ ❯", "? ❯", "❯ \n"} {
+		frame := transcript + "\n" + idle
+		state, ok := New().DetectTerminalActivity(frame)
 		if !ok || state != "idle" {
 			t.Fatalf("quoted transcript %q changed current composer: %s/%v", transcript, state, ok)
+		}
+		if err := New().ValidateTerminalMessage("task", frame); err != nil {
+			t.Fatalf("quoted transcript %q blocked the current composer: %v", transcript, err)
 		}
 	}
 	if err := New().ValidateTerminalMessage("task", "❯ "); err == nil {
@@ -246,6 +250,21 @@ func TestNativeModalChromeBlocks(t *testing.T) {
 		if !ok || state != "blocked" {
 			t.Fatalf("modal admitted: %q %s", screen, state)
 		}
+	}
+}
+
+func TestNativeModalLabelsInScrollbackDoNotBlock(t *testing.T) {
+	active := "☤ ❯ msg=interrupt · /queue · Ctrl+C cancel"
+	for _, label := range []string{"Dangerous Command", "Allow this command?", "Confirm: Allow this command?", "Help improve Hermes?", "Collect locally only", "[1] Allow once", "type secret (hidden)", "type password (hidden)", "type your answer here"} {
+		if state, ok := New().DetectTerminalActivity(label); ok {
+			t.Fatalf("quoted modal label %q classified as %s", label, state)
+		}
+		if state, ok := New().DetectTerminalActivity(label + "\n" + active); !ok || state != domain.ActivityActive {
+			t.Fatalf("quoted modal label %q overrode active footer: %s/%v", label, state, ok)
+		}
+	}
+	if state, ok := New().DetectTerminalActivity("Dangerous Command\n❯ 1. Allow once\n⚠ ❯\n" + active); !ok || state != domain.ActivityActive {
+		t.Fatalf("scrolled modal chrome overrode current active footer: %s/%v", state, ok)
 	}
 }
 func TestStickyProfileFailsClosed(t *testing.T) {

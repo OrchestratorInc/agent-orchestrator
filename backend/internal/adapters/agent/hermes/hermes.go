@@ -38,10 +38,11 @@ type Plugin struct{ agentbase.Base }
 
 // Revalidate these v0.21.6 chrome markers whenever the supported native version changes.
 const (
-	nativeVersion       = "Hermes Agent v0.21.6"
-	nativePrompt        = "❯"
-	nativeNamedPrompt   = "☤ ❯"
-	nativeWarningPrompt = "⚠ ❯"
+	nativeVersion        = "Hermes Agent v0.21.6"
+	nativePrompt         = "❯"
+	nativeNamedPrompt    = "☤ ❯"
+	nativeWarningPrompt  = "⚠ ❯"
+	nativeQuestionPrompt = "? ❯"
 )
 
 var nativeVersionLine = regexp.MustCompile("^" + regexp.QuoteMeta(nativeVersion) + "$")
@@ -498,18 +499,14 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 				terminalui.LastBorderedPromptIsEmptyOrDimPlaceholder(composerOutput, nativeNamedPrompt)) {
 			return domain.ActivityIdle, true
 		}
+		// Approval and question prompts are native chrome at the bottom of the
+		// pane. Plain modal labels may also occur in task or model scrollback.
+		if strings.HasPrefix(bottom, nativeWarningPrompt) || strings.HasPrefix(bottom, nativeQuestionPrompt) {
+			return domain.ActivityBlocked, true
+		}
 	}
 	for i := last; i >= 0 && i >= last-4; i-- {
 		line := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(line, nativeWarningPrompt) || strings.HasPrefix(line, "? ❯") ||
-			strings.HasPrefix(line, "Dangerous Command") || strings.HasPrefix(line, "Allow this command?") ||
-			strings.HasPrefix(line, "Confirm: Allow this command?") ||
-			strings.HasPrefix(line, "Help improve Hermes?") || strings.HasPrefix(line, "Collect locally only") ||
-			strings.HasPrefix(line, "❯ 1. Allow once") || strings.HasPrefix(line, "❯ [1] Allow once") || strings.HasPrefix(line, "[1] Allow once") ||
-			strings.HasPrefix(line, "type secret (hidden)") || strings.HasPrefix(line, "type password (hidden)") ||
-			strings.HasPrefix(line, "type your answer here") {
-			return domain.ActivityBlocked, true
-		}
 		if (strings.HasPrefix(line, nativePrompt) || strings.HasPrefix(line, nativeNamedPrompt)) && strings.Contains(line, "msg=interrupt") {
 			return domain.ActivityActive, true
 		}
