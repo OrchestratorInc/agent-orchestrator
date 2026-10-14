@@ -221,6 +221,21 @@ describe("SessionsBoard", () => {
 		expect(screen.queryByTestId("daemon-startup-loader")).not.toBeInTheDocument();
 	});
 
+	it("shows the load error without worker columns when the initial Cloud snapshot fails", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [],
+			isSuccess: true,
+			isError: false,
+			isSnapshotSuccess: false,
+			isSnapshotError: true,
+		});
+		renderBoardWithShell(new QueryClient({ defaultOptions: { queries: { retry: false } } }), "p1");
+
+		expect(screen.getByText("Could not load sessions.")).toBeInTheDocument();
+		expect(screen.queryByTestId("board-column")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("daemon-startup-loader")).not.toBeInTheDocument();
+	});
+
 	it("shows the Cloud loader instead of Chat while a cloud orchestrator is starting", () => {
 		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }], isSuccess: true });
 		useUiStore.getState().setProjectProvisioning("p1", true);

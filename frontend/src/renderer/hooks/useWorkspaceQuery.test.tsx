@@ -44,7 +44,7 @@ vi.mock("./useCloudOrg", () => ({
 	useCloudOrg: () => ({ org: cloudState.org, isLoading: cloudState.loading, error: cloudState.error, ready: cloudState.ready }),
 }));
 
-import { cloudProjectsQueryKey, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { cloudProjectsQueryKey, cloudSessionsQueryKey, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 
 it("preserves the existing local and remote workspace cache keys", () => {
 	expect(workspaceQueryKeyForHost()).toBe(workspaceQueryKey);
@@ -768,6 +768,78 @@ describe("useWorkspaceScope board presentation", () => {
 		expect(result.current.isSnapshotError).toBe(false);
 		expect(listProjectsMock).not.toHaveBeenCalled();
 		expect(listSessionsMock).not.toHaveBeenCalled();
+	});
+
+	it("surfaces an initial Cloud project failure instead of resolving the routed board", async () => {
+		cloudState.ready = true;
+		cloudState.org = { id: "org-1" };
+		respondWith({});
+		listProjectsMock.mockRejectedValue(new Error("project snapshot unavailable"));
+		const { result } = renderHook(() => useWorkspaceQuery({ projectId: "cloud-1" }), { wrapper });
+
+		await waitFor(() => expect(result.current.isSnapshotError).toBe(true), { timeout: 3_000 });
+		expect(result.current.isSnapshotSuccess).toBe(false);
+		expect(result.current.data?.find((workspace) => workspace.id === "cloud-1")).toBeUndefined();
+	});
+
+	it("retains a valid cached Cloud board through org, project, and session refetch errors", async () => {
+		cloudState.ready = true;
+		cloudState.org = { id: "org-1" };
+		cloudState.error = new Error("org refresh unavailable");
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } });
+		queryClient.setQueryData(workspaceQueryKey, []);
+		queryClient.setQueryData(
+			[...cloudProjectsQueryKey, "https://cp.example.com", "org-1"],
+			[{ id: "cloud-1", displayName: "Cloud project" }],
+		);
+		queryClient.setQueryData(
+			[...cloudSessionsQueryKey, "https://cp.example.com", "org-1"],
+			[{ id: "cloud-worker", projectId: "cloud-1", kind: "worker", status: "working" }],
+		);
+		listProjectsMock.mockRejectedValue(new Error("project refresh unavailable"));
+		listSessionsMock.mockRejectedValue(new Error("session refresh unavailable"));
+		const scopedWrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const states: Array<{ error: boolean; success: boolean }> = [];
+		const { result } = renderHook(() => {
+			const query = useWorkspaceQuery({ projectId: "cloud-1" });
+			states.push({ error: query.isSnapshotError, success: query.isSnapshotSuccess });
+			return query;
+		}, { wrapper: scopedWrapper });
+
+		await waitFor(() => expect(listProjectsMock).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(listSessionsMock).toHaveBeenCalledTimes(2));
+		expect(result.current.data?.find((workspace) => workspace.id === "cloud-1")?.sessions).toHaveLength(1);
+		expect(states.every((state) => state.success && !state.error)).toBe(true);
+	});
+
+	it("does not reload an absent route during a background Cloud project refresh", async () => {
+		cloudState.ready = true;
+		cloudState.org = { id: "org-1" };
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } });
+		queryClient.setQueryData(workspaceQueryKey, []);
+		queryClient.setQueryData(
+			[...cloudProjectsQueryKey, "https://cp.example.com", "org-1"],
+			[{ id: "cloud-other", displayName: "Other Cloud project" }],
+		);
+		queryClient.setQueryData([...cloudSessionsQueryKey, "https://cp.example.com", "org-1"], []);
+		let resolveProjects!: (value: { items: Array<{ id: string; displayName: string }> }) => void;
+		listProjectsMock.mockReturnValue(new Promise((resolve) => {
+			resolveProjects = resolve;
+		}));
+		const scopedWrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result } = renderHook(() => useWorkspaceQuery({ projectId: "missing" }), { wrapper: scopedWrapper });
+
+		await waitFor(() => expect(listProjectsMock).toHaveBeenCalledTimes(1));
+		expect(result.current.isSnapshotSuccess).toBe(true);
+		expect(result.current.isSnapshotError).toBe(false);
+
+		resolveProjects({ items: [{ id: "cloud-other", displayName: "Other Cloud project" }] });
+		await waitFor(() => expect(queryClient.isFetching({ queryKey: cloudProjectsQueryKey })).toBe(0));
+		expect(result.current.isSnapshotSuccess).toBe(true);
 	});
 
 	it("keeps a cached Cloud project pending while its unfetched session snapshot is paused", async () => {

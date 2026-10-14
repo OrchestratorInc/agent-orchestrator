@@ -302,7 +302,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 					</span>
 				</div>
 			) : null}
-				{!hostId && (presentation.workspaceStartupState === "error" || localWorkspaceQuery.isError) ? (
+				{!hostId && (presentation.workspaceStartupState === "error" || localWorkspaceQuery.isSnapshotError) ? (
 					<p className="py-10 text-center text-xs text-passive">{t("shell.couldNotLoadSessions")}</p>
 				) : hostId && !workspace ? null : showWelcome ? (
 				<BoardWelcome />

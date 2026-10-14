@@ -1,9 +1,9 @@
-import { renderHook } from "@testing-library/react";
+import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 
-const { cloudGateState, cloudSessionState, settingsState } = vi.hoisted(() => ({
+const { cloudGateState, getSessionMock, settingsState } = vi.hoisted(() => ({
 	cloudGateState: { cloudEnabled: false },
-	cloudSessionState: { status: "loading" as "loading" | "authenticated" | "unauthenticated" },
+	getSessionMock: vi.fn(),
 	settingsState: {
 		isLoading: true,
 		settings: undefined as undefined | { cloudControlPlaneUrl: string },
@@ -12,9 +12,17 @@ const { cloudGateState, cloudSessionState, settingsState } = vi.hoisted(() => ({
 
 vi.mock("./useSettings", () => ({ useSettings: () => settingsState }));
 vi.mock("./useCloudGate", () => ({ useCloudGate: () => cloudGateState }));
-vi.mock("../lib/cloud-session", () => ({
-	useCloudSession: () => ({ session: null, status: cloudSessionState.status }),
+vi.mock("../lib/bridge", () => ({
+	aoBridge: {
+		cloud: {
+			getSession: getSessionMock,
+			onSessionChanged: () => () => undefined,
+			signIn: vi.fn(),
+			signOut: vi.fn(),
+		},
+	},
 }));
+vi.mock("../lib/cloud-telemetry", () => ({ noteCloudSession: vi.fn() }));
 vi.mock("../lib/cloud-cp/renderer-client", () => ({
 	createRendererCloudCpClient: () => ({}),
 }));
@@ -23,7 +31,7 @@ import { useCloudCp } from "./useCloudCp";
 
 beforeEach(() => {
 	cloudGateState.cloudEnabled = false;
-	cloudSessionState.status = "loading";
+	getSessionMock.mockReset().mockReturnValue(new Promise(() => undefined));
 	settingsState.isLoading = true;
 	settingsState.settings = undefined;
 });
@@ -53,13 +61,27 @@ it("does not leave disabled Cloud in a loading state", () => {
 	expect(result.current).toMatchObject({ isLoading: false, ready: false });
 });
 
-it("finishes loading once enabled Cloud is authenticated and configured", () => {
+it("finishes loading once the real fresh-mount account read authenticates configured Cloud", async () => {
 	settingsState.isLoading = false;
 	settingsState.settings = { cloudControlPlaneUrl: "https://cloud.example" };
 	cloudGateState.cloudEnabled = true;
-	cloudSessionState.status = "authenticated";
+	getSessionMock.mockResolvedValue({ user: { id: "user-1" } });
 
 	const { result } = renderHook(() => useCloudCp());
 
-	expect(result.current).toMatchObject({ isLoading: false, ready: true });
+	expect(result.current).toMatchObject({ isLoading: true, ready: false });
+	await waitFor(() => expect(result.current).toMatchObject({ isLoading: false, ready: true }));
+	expect(getSessionMock).toHaveBeenCalledTimes(1);
+});
+
+it("finishes loading without enabling Cloud when the fresh-mount account read is signed out", async () => {
+	settingsState.isLoading = false;
+	settingsState.settings = { cloudControlPlaneUrl: "https://cloud.example" };
+	cloudGateState.cloudEnabled = true;
+	getSessionMock.mockResolvedValue(null);
+
+	const { result } = renderHook(() => useCloudCp());
+
+	expect(result.current).toMatchObject({ isLoading: true, ready: false });
+	await waitFor(() => expect(result.current).toMatchObject({ isLoading: false, ready: false }));
 });

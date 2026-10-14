@@ -527,7 +527,7 @@ function workspaceSnapshotStatus(
 	);
 	const cloudProjectLookupPending = Boolean(
 		projectId && local.isSuccess && !hasLocalScope && !hasCloudScope && cloudLookupEnabled &&
-			((cloudProjects.data === undefined && !cloudProjects.isError) || cloudProjects.isFetching),
+			cloudProjects.data === undefined && !cloudProjects.isError,
 	);
 	const cloudSessionLookupPending = Boolean(
 		projectId && local.isSuccess && !hasLocalScope && hasCloudScope && cloudLookupEnabled &&
@@ -536,7 +536,7 @@ function workspaceSnapshotStatus(
 	const routedCloudLookupError = Boolean(
 		projectId && local.isSuccess && !hasLocalScope && (
 			cloudLookupError ||
-			(!hasCloudScope && cloudProjects.isError) ||
+			(!hasCloudScope && cloudProjects.data === undefined && cloudProjects.isError) ||
 			(hasCloudScope && cloudSessions.data === undefined && cloudSessions.isError)
 		),
 	);
@@ -695,7 +695,7 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 			cloudSessions,
 			includeCloud && ready && orgId !== undefined && options.enabled !== false,
 			includeCloud && cloudLookupLoading,
-			includeCloud && cloudLookupError !== undefined,
+			includeCloud && orgId === undefined && cloudLookupError !== undefined,
 		),
 	};
 }
@@ -869,7 +869,7 @@ export function useWorkspaceScope(projectId?: string, sessionId?: string, hostId
 			cloudSessions,
 			ready && org?.id !== undefined,
 			cloudLookupLoading,
-			cloudLookupError !== undefined,
+			org === undefined && cloudLookupError !== undefined,
 		),
 	};
 }
