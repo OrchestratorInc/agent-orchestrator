@@ -49,3 +49,10 @@ or survive a human taking over native settings/tools inside the TUI.
 
 Chat/ACP, TUI–Chat handoff, reviewer integration and native background scheduling
 are excluded. `--acp` declarations alone do not establish conformance.
+
+## Branding
+
+AO intentionally uses the existing initials avatar for CodeBuddy. No upstream
+brand asset is bundled because redistribution terms for a suitable official
+asset have not been verified. The product name remains CodeBuddy Code; this
+fallback does not claim an unofficial logo or Tencent endorsement.
