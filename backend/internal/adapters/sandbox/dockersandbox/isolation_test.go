@@ -81,7 +81,7 @@ func TestEnsureIsolatesNetworkOnEveryPath(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, fr, data := testSandbox(t, nil)
-			s.cfg.DaemonPort = 3001
+			s.cfg.DaemonPort = func() int { return 3001 }
 			fr.engine = "Docker Desktop"
 			req := perAgentReq(wsOf(data))
 			hash := hashFor(t, s, req)
@@ -96,6 +96,24 @@ func TestEnsureIsolatesNetworkOnEveryPath(t *testing.T) {
 			requireIsolatedBeforeProbe(t, fr, isolationCall("ao-sbx-s1", "3001", "1"))
 		})
 	}
+}
+
+// The daemon may fall back to an ephemeral port after the sandbox is built,
+// so the port is read on every Ensure, not captured at construction.
+func TestEnsureIsolationReadsBoundPortEachTime(t *testing.T) {
+	s, fr, data := testSandbox(t, []fakeCall{
+		{match: "inspect", err: errors.New("No such object")},
+		{match: "run -d"},
+		{match: "command -v"},
+	})
+	fr.engine = "Docker Desktop"
+	port := 0
+	s.cfg.DaemonPort = func() int { return port }
+	port = 49152
+	if _, err := s.Ensure(context.Background(), perAgentReq(wsOf(data))); err != nil {
+		t.Fatal(err)
+	}
+	requireIsolatedBeforeProbe(t, fr, isolationCall("ao-sbx-s1", "49152", "1"))
 }
 
 func TestEnsureIsolationUnknownPortPassesZero(t *testing.T) {
@@ -163,7 +181,7 @@ func TestEnsureHostReachableIsMisconfigured(t *testing.T) {
 			{match: "run -d"},
 			{match: "rm -f ao-sbx-s1"},
 		})
-		s.cfg.DaemonPort = 3001
+		s.cfg.DaemonPort = func() int { return 3001 }
 		fr.isolate = reachable
 		_, err := s.Ensure(context.Background(), perAgentReq(wsOf(data)))
 		requireReachable(t, err)
@@ -268,6 +286,46 @@ func TestEnsureCreatesSandboxNetwork(t *testing.T) {
 				t.Fatalf("calls:\n%s", strings.Join(fr.calls, "\n"))
 			}
 		})
+	}
+}
+
+// `docker network prune` removes ao-sandbox while a stopped container still
+// references it, and `docker start` then fails. Starting must recreate it.
+func TestEnsureStartRecreatesPrunedSandboxNetwork(t *testing.T) {
+	s, fr, data := testSandbox(t, nil)
+	req := perAgentReq(wsOf(data))
+	fr.script = []fakeCall{
+		{match: "inspect", out: "exited\t" + hashFor(t, s, req) + "\n"},
+		{match: "start ao-sbx-s1"},
+		{match: "command -v"},
+	}
+	fr.netInspect = fakeCall{err: errors.New("Error response from daemon: network ao-sandbox not found")}
+	if _, err := s.Ensure(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	create, start := -1, -1
+	for i, c := range fr.calls {
+		if strings.Contains(c, " network create ") {
+			create = i
+		}
+		if strings.Contains(c, " start ao-sbx-s1") {
+			start = i
+		}
+	}
+	if create < 0 || create > start {
+		t.Fatalf("network not recreated before start; calls:\n%s", strings.Join(fr.calls, "\n"))
+	}
+}
+
+func TestEnsureStartFailureIsMisconfigured(t *testing.T) {
+	s, fr, data := testSandbox(t, nil)
+	req := perAgentReq(wsOf(data))
+	fr.script = []fakeCall{
+		{match: "inspect", out: "exited\t" + hashFor(t, s, req) + "\n"},
+		{match: "start ao-sbx-s1", err: errors.New("Error response from daemon: failed to set up container networking")},
+	}
+	if _, err := s.Ensure(context.Background(), req); !errors.Is(err, ports.ErrSandboxMisconfigured) {
+		t.Fatalf("err = %v, want ErrSandboxMisconfigured", err)
 	}
 }
 

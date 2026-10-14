@@ -94,7 +94,7 @@ func (s *Sandbox) isolateHostNetwork(ctx context.Context, docker, name string) e
 		requireArg = "1"
 	}
 	out, err := s.output(ctx, createTimeout, docker, "run", "--rm", "--network", "container:"+name, "--cap-add", "NET_ADMIN",
-		isolationImage, "/bin/sh", "-c", isolationScript, "sh", strconv.Itoa(s.cfg.DaemonPort), requireArg)
+		isolationImage, "/bin/sh", "-c", isolationScript, "sh", strconv.Itoa(s.cfg.daemonPort()), requireArg)
 	if err == nil {
 		return nil
 	}

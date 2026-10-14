@@ -52,9 +52,18 @@ func (execRunner) Output(ctx context.Context, name string, args ...string) ([]by
 type Config struct {
 	DataDir     string
 	ManagedRoot string // workspace adapter's managed worktree root
-	// DaemonPort is the daemon's loopback port, probed to prove the sandbox
-	// can't reach it; 0 skips the probe.
-	DaemonPort int
+	// DaemonPort returns the daemon's bound loopback port, probed to prove
+	// the sandbox can't reach it. It is read on every Ensure because the
+	// listener binds after the sandbox is built and may fall back to an
+	// ephemeral port. nil, or a result of 0, skips the probe.
+	DaemonPort func() int
+}
+
+func (c Config) daemonPort() int {
+	if c.DaemonPort == nil {
+		return 0
+	}
+	return c.DaemonPort()
 }
 
 // Sandbox implements ports.Sandbox with the docker CLI.
@@ -221,8 +230,17 @@ func (s *Sandbox) Ensure(ctx context.Context, req ports.SandboxRequest) (ports.S
 		}
 		created = true
 	case status != "running":
-		if _, err := s.output(ctx, probeTimeout, docker, "start", name); err != nil {
+		// `docker network prune` removes the network while this stopped
+		// container still names it, and start would then fail.
+		if err := s.ensureNetwork(ctx, docker); err != nil {
 			return ports.SandboxTarget{}, err
+		}
+		if _, err := s.output(ctx, probeTimeout, docker, "start", name); err != nil {
+			if errors.Is(err, ports.ErrSandboxUnavailable) {
+				return ports.SandboxTarget{}, err
+			}
+			return ports.SandboxTarget{}, fmt.Errorf("%w: start stopped sandbox container %s (remove it with `docker rm -f %s` to recreate it): %w",
+				ports.ErrSandboxMisconfigured, name, name, err)
 		}
 	}
 	// Remove only a per-agent container this call created; a reused or

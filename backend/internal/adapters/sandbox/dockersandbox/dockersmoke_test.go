@@ -159,7 +159,7 @@ func TestDockerSmokeHostIsolation(t *testing.T) {
 		t.Fatal("the helper's CONNECT probe misses a proxy that tunnels to host loopback")
 	}
 
-	s := New(Config{DataDir: data, ManagedRoot: filepath.Join(data, "worktrees"), DaemonPort: port})
+	s := New(Config{DataDir: data, ManagedRoot: filepath.Join(data, "worktrees"), DaemonPort: func() int { return port }})
 	ctx := context.Background()
 	req := ports.SandboxRequest{SessionID: "smokenet1", ProjectID: "smoke", RepoPath: repo, WorkspacePath: ws,
 		Config: domain.SandboxConfig{Mode: domain.SandboxModePerAgent, Image: "alpine:3.22"}}

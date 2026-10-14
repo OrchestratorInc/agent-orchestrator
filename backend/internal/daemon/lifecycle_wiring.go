@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/activitydispatch"
@@ -268,12 +270,12 @@ func telemetryEmitsSpawned(cfg config.Config) bool {
 // (issue #2685). The returned service is mounted at httpd APIDeps.Sessions.
 // It also returns the manager so the caller can wire Reconcile into the boot
 // sequence.
-func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.Runtime, store *sqlite.Store, lcm *lifecycle.Manager, artifactVersions *artifactversions.Capturer, messenger ports.AgentMessenger, telemetry ports.EventSink, notifications notificationSink, agents ports.AgentResolver, agentReadiness ports.AgentReadinessProvider, previewLifecycle sessionmanager.PreviewLifecycle, browserLifecycle sessionmanager.BrowserLifecycle, browserCapabilities sessionmanager.BrowserCapabilityIssuer, chat sessionmanager.ChatLauncher, reviewerRecoveryDone <-chan struct{}, defaults sessionmanager.SessionModeDefaults, reportingPolicy ports.AgentSwitchReportingPolicy, tracker ports.Tracker, codexOperationGate ports.CodexOperationGate, log *slog.Logger) (*sessionsvc.Service, reviewsvc.Manager, sessionLifecycle, error) {
+func startSession(ctx context.Context, cfg config.Config, boundPort func() int, runtime runtimeselect.Runtime, store *sqlite.Store, lcm *lifecycle.Manager, artifactVersions *artifactversions.Capturer, messenger ports.AgentMessenger, telemetry ports.EventSink, notifications notificationSink, agents ports.AgentResolver, agentReadiness ports.AgentReadinessProvider, previewLifecycle sessionmanager.PreviewLifecycle, browserLifecycle sessionmanager.BrowserLifecycle, browserCapabilities sessionmanager.BrowserCapabilityIssuer, chat sessionmanager.ChatLauncher, reviewerRecoveryDone <-chan struct{}, defaults sessionmanager.SessionModeDefaults, reportingPolicy ports.AgentSwitchReportingPolicy, tracker ports.Tracker, codexOperationGate ports.CodexOperationGate, log *slog.Logger) (*sessionsvc.Service, reviewsvc.Manager, sessionLifecycle, error) {
 	// Per-session worktrees live under the data dir, so a single AO_DATA_DIR
 	// override moves all durable per-user state together. The sandbox adapter
 	// shares this root so the two cannot drift.
 	managedRoot := filepath.Join(cfg.DataDir, "worktrees")
-	sandbox := dockersandbox.New(dockersandbox.Config{DataDir: cfg.DataDir, ManagedRoot: managedRoot, DaemonPort: cfg.Port})
+	sandbox := dockersandbox.New(dockersandbox.Config{DataDir: cfg.DataDir, ManagedRoot: managedRoot, DaemonPort: boundPort})
 	gitWS, err := gitworktree.New(gitworktree.Options{
 		ManagedRoot: managedRoot,
 		// Resolve each project's source repo from the projects table, so a
@@ -566,6 +568,26 @@ func (r projectRepoResolver) RepoPath(projectID domain.ProjectID) (string, error
 	}
 	return rec.Path, nil
 }
+
+// daemonPort holds the loopback listener's port for the sandbox's
+// reachability probe. The session stack is built before the listener binds,
+// and the listener may fall back to an ephemeral port, so it starts at the
+// configured port and the bound address replaces it.
+type daemonPort struct{ port atomic.Int32 }
+
+func newDaemonPort(configured int) *daemonPort {
+	p := &daemonPort{}
+	p.port.Store(int32(configured)) //nolint:gosec // a TCP port fits
+	return p
+}
+
+func (p *daemonPort) bound(addr net.Addr) {
+	if tcp, ok := addr.(*net.TCPAddr); ok {
+		p.port.Store(int32(tcp.Port)) //nolint:gosec // a TCP port fits
+	}
+}
+
+func (p *daemonPort) get() int { return int(p.port.Load()) }
 
 // sessionSandboxLookup is the store surface sessionSandboxProbe reads.
 type sessionSandboxLookup interface {
