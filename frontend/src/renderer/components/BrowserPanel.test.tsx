@@ -43,6 +43,10 @@ const hookState = vi.hoisted(() => ({
 	goForward: vi.fn(),
 	reload: vi.fn(),
 	stop: vi.fn(),
+	findInPage: vi.fn(),
+	stopFindInPage: vi.fn(),
+	findOpenRequest: 0,
+	findState: { viewId: "42:sess-1", tabId: "t1", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true },
 	selectTab: vi.fn(),
 	closeTab: vi.fn(),
 	openTab: vi.fn(),
@@ -51,11 +55,13 @@ const hookState = vi.hoisted(() => ({
 	reopenClosedTab: vi.fn(),
 	openDevTools: vi.fn(),
 	closeDevTools: vi.fn(),
+	reconnectBrowserRuntime: vi.fn(),
 	devtoolsState: { viewId: "42:sess-1", open: false, activeTabId: "t1" },
 	setAnnotationMode: vi.fn(),
 	annotationAction: vi.fn(),
 	annotationMode: false,
 	annotationState: { count: 0, screenshotCount: 0, hasDraft: false },
+	browserRuntimeConnected: true as boolean | null,
 	tabs: [{ id: "t1", url: "", title: "", active: true }],
 	activeTabId: "t1",
 	tabNotice: "",
@@ -85,6 +91,10 @@ vi.mock("../hooks/useBrowserView", () => ({
 			goForward: hookState.goForward,
 			reload: hookState.reload,
 			stop: hookState.stop,
+			findInPage: hookState.findInPage,
+			stopFindInPage: hookState.stopFindInPage,
+			findOpenRequest: hookState.findOpenRequest,
+			findState: hookState.findState,
 			tabs: hookState.tabs,
 			activeTabId: hookState.activeTabId,
 			tabNotice: hookState.tabNotice,
@@ -100,6 +110,8 @@ vi.mock("../hooks/useBrowserView", () => ({
 			devtoolsState: hookState.devtoolsState,
 			openDevTools: hookState.openDevTools,
 			closeDevTools: hookState.closeDevTools,
+			browserRuntimeConnected: hookState.browserRuntimeConnected,
+			reconnectBrowserRuntime: hookState.reconnectBrowserRuntime,
 			annotationMode: hookState.annotationMode,
 			annotationState: hookState.annotationState,
 			setAnnotationMode: hookState.setAnnotationMode,
@@ -242,12 +254,20 @@ describe("BrowserPanel", () => {
 		hookState.goForward.mockReset();
 		hookState.reload.mockReset();
 		hookState.stop.mockReset();
+		hookState.findInPage.mockReset();
+		hookState.stopFindInPage.mockReset();
+		hookState.findOpenRequest = 0;
+		hookState.findState = {
+			viewId: "42:sess-1", tabId: "t1", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true,
+		};
 		hookState.selectTab.mockReset();
 		hookState.closeTab.mockReset();
 		hookState.reopenClosedTab.mockReset();
 		hookState.closedTabs = [];
 		hookState.openDevTools.mockReset();
 		hookState.closeDevTools.mockReset();
+		hookState.reconnectBrowserRuntime.mockReset();
+		hookState.reconnectBrowserRuntime.mockResolvedValue(undefined);
 		hookState.devtoolsState = { viewId: "42:sess-1", open: false, activeTabId: "t1" };
 		hookState.navState = {
 			viewId: "42:sess-1",
@@ -263,6 +283,7 @@ describe("BrowserPanel", () => {
 		hookState.annotationAction.mockResolvedValue(undefined);
 		hookState.annotationMode = false;
 		hookState.annotationState = { count: 0, screenshotCount: 0, hasDraft: false };
+		hookState.browserRuntimeConnected = true;
 		postMock.mockReset();
 		postMock.mockResolvedValue({ data: {} });
 		annotationSubmitListeners.clear();
@@ -294,7 +315,7 @@ describe("BrowserPanel", () => {
 			return () => downloadListeners.delete(listener);
 		});
 		window.ao!.browser.selectProfile = vi.fn(async () => undefined);
-		window.ao!.browserProfiles.list = vi.fn(async () => ({ profiles: [] }));
+		window.ao!.browserProfiles.list = vi.fn(async () => ({ profiles: [], defaultProfileId: null }));
 		window.ao!.browser.notifyPanelUsed = vi.fn();
 		window.ao!.browser.notifyPanelBlur = vi.fn();
 		window.ao!.browser.onFocusLocation = vi.fn((listener: (viewId: string) => void) => {
@@ -333,6 +354,55 @@ describe("BrowserPanel", () => {
 
 		expect(hookState.navigate).toHaveBeenCalledWith("localhost:5173");
 		expect(input).not.toHaveFocus();
+	});
+
+	it("toggles find-in-page, searches as text changes, and supports keyboard navigation", async () => {
+		let focusFrame: FrameRequestCallback | undefined;
+		vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+			focusFrame = callback;
+			return 1;
+		});
+		const view = render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		expect(screen.queryByRole("search")).not.toBeInTheDocument();
+
+		hookState.findOpenRequest = 1;
+		view.rerender(
+			<TooltipProvider>
+				<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />
+			</TooltipProvider>,
+		);
+		const input = await screen.findByRole("textbox", { name: "Find in page" });
+		act(() => focusFrame?.(0));
+		expect(input).toHaveFocus();
+
+		await userEvent.type(input, "alpha");
+		expect(hookState.findInPage).toHaveBeenLastCalledWith("alpha", true, true);
+
+		await userEvent.keyboard("{Enter}");
+		expect(hookState.findInPage).toHaveBeenLastCalledWith("alpha", true, false);
+		await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+		expect(hookState.findInPage).toHaveBeenLastCalledWith("alpha", false, false);
+
+		hookState.findOpenRequest = 2;
+		view.rerender(
+			<TooltipProvider>
+				<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />
+			</TooltipProvider>,
+		);
+		expect(screen.queryByRole("search")).not.toBeInTheDocument();
+		expect(hookState.stopFindInPage).toHaveBeenCalledWith(true);
+
+		hookState.findOpenRequest = 3;
+		view.rerender(
+			<TooltipProvider>
+				<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />
+			</TooltipProvider>,
+		);
+		expect(await screen.findByRole("textbox", { name: "Find in page" })).toBeInTheDocument();
+		act(() => focusFrame?.(0));
+		await userEvent.keyboard("{Escape}");
+		expect(screen.queryByRole("search")).not.toBeInTheDocument();
+		expect(hookState.stopFindInPage).toHaveBeenCalledTimes(2);
 	});
 
 	it("supports consecutive address-bar navigations after refocusing", async () => {
@@ -799,6 +869,7 @@ describe("BrowserPanel", () => {
 					updatedAt: "2026-01-01T00:00:00.000Z",
 				},
 			],
+			defaultProfileId: null,
 		}));
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 
@@ -849,6 +920,17 @@ describe("BrowserPanel", () => {
 		await userEvent.clear(customWidthInput);
 		await userEvent.type(customWidthInput, "10");
 		expect(frame.style.width).toBe("240px");
+	});
+
+	it("reaches the custom width input from the keyboard", async () => {
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		await openDevicePresets();
+		const item = screen.getByRole("menuitem", { name: /Custom width/ });
+		item.focus();
+		await userEvent.keyboard("{Enter}");
+		const input = screen.getByLabelText("Custom width");
+		expect(input).toHaveFocus();
+		expect(screen.getByRole("menu")).toBeInTheDocument();
 	});
 
 	// Regression: the reviewer flagged that the original 6-device list should
@@ -1057,7 +1139,6 @@ describe("BrowserPanel", () => {
 	it("renders the complete tab chrome in the drag overlay", () => {
 		render(
 			<BrowserTopTabDragOverlay
-				onlyTab={false}
 				tab={{ id: "t1", url: "http://localhost:3000/", title: "First app", active: true }}
 			/>,
 		);
@@ -1099,6 +1180,29 @@ describe("BrowserPanel", () => {
 		await userEvent.click(within(tabList).getByRole("button", { name: "Close tab Second app" }));
 
 		expect(hookState.closeTab).toHaveBeenCalledWith("t2");
+	});
+
+	it("allows closing the final browser tab", async () => {
+		hookState.tabs = [{ id: "t1", url: "https://example.test/", title: "Last page", active: true }];
+		hookState.activeTabId = "t1";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Close tab Last page" }));
+		expect(hookState.closeTab).toHaveBeenCalledWith("t1");
+	});
+
+	it.each(["", "about:blank"])("hides the close button on an empty tab (%s)", (url) => {
+		hookState.tabs = [{ id: "t1", url, title: "", active: true }];
+		hookState.activeTabId = "t1";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
+
+		expect(screen.getByRole("tab", { name: "New tab" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Close tab New tab" })).not.toBeInTheDocument();
+	});
+
+	it("hides the empty tab's close icon in its drag overlay", () => {
+		render(<BrowserTopTabDragOverlay tab={{ id: "t1", url: "about:blank", title: "", active: true }} />);
+		expect(screen.getByTestId("browser-tab-drag-overlay").querySelector(".browser-panel__tab-close")).toBeNull();
 	});
 
 	it("opens a new browser tab from the horizontal tab strip", async () => {
@@ -1325,6 +1429,16 @@ describe("BrowserPanel", () => {
 		expect(screen.getByTestId("browser-viewport")).toHaveClass("browser-panel__viewport");
 	});
 
+	it("offers to reconnect when the browser runtime is disconnected", async () => {
+		hookState.browserRuntimeConnected = false;
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		expect(screen.getByTestId("browser-runtime-alert")).toHaveTextContent("Browser runtime disconnected.");
+		await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+
+		expect(hookState.reconnectBrowserRuntime).toHaveBeenCalledOnce();
+	});
+
 	it("does not render a globe icon in the URL input", () => {
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 
@@ -1361,6 +1475,22 @@ describe("BrowserPanel", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Discard all comments" }));
 		expect(hookState.annotationAction).toHaveBeenCalledWith("discard-all");
+	});
+
+	it("previews the original page while Enter or Space is held on the eye button", async () => {
+		hookState.navState = { ...hookState.navState, url: "https://example.test/docs" };
+		hookState.annotationMode = true;
+		hookState.annotationState = { count: 2, screenshotCount: 0, hasDraft: false };
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		const eye = screen.getAllByRole("button").find((b) => /original/i.test(b.getAttribute("aria-label") ?? ""))!;
+		eye.focus();
+		hookState.annotationAction.mockClear();
+
+		fireEvent.keyDown(eye, { key: "Enter" });
+		fireEvent.keyDown(eye, { key: "Enter", repeat: true });
+		expect(hookState.annotationAction.mock.calls).toEqual([["preview-original"]]);
+		fireEvent.keyUp(eye, { key: "Enter" });
+		expect(hookState.annotationAction).toHaveBeenLastCalledWith("restore-preview");
 	});
 
 	it("sends submitted annotation instructions to the session agent", async () => {

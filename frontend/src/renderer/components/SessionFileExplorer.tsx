@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import {
 	sessionSourceFilesQueryOptions,
+	sessionSourceFileQueryOptions,
 	sessionWorkspaceHistoryQueryOptions,
 	type FilesSource,
 	useWorkspaceFileConnectionState,
@@ -22,7 +23,7 @@ import {
 } from "../hooks/useSessionWorkspaceFiles";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
-import { buildChangedOnlyTree, type TreeNode } from "../hooks/useSessionWorkspaceTree";
+import { buildChangedOnlyTree, sessionWorkspaceTreeQueryOptions, type TreeNode } from "../hooks/useSessionWorkspaceTree";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import { useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
@@ -62,9 +63,6 @@ type SessionFileExplorerProps = {
 	onOpenFile?: (path: string, options?: FileOpenOptions) => void;
 	onSplitChange?: (split: boolean) => void;
 	onToggleMaximized?: (next: boolean) => void;
-	revealRequest?: { path: string; key: number } | null;
-	/** Called once a reveal request has opened its file, so the owner can drop it. */
-	onRevealHandled?: (key: number) => void;
 	split?: boolean;
 };
 
@@ -75,8 +73,6 @@ export function SessionFileExplorer({
 	onOpenFile,
 	onSplitChange,
 	onToggleMaximized,
-	revealRequest,
-	onRevealHandled,
 	split: controlledSplit,
 }: SessionFileExplorerProps) {
 	const { t } = useTranslation();
@@ -101,10 +97,15 @@ export function SessionFileExplorer({
 	useLayoutEffect(() => markFileViewerPerformance("files-shell-painted"), []);
 
 	const changedOnly = useUiStore((state) => state.inspectorSessions[uiKey]?.filesChangedOnly ?? true);
-	const source = useUiStore((state) => state.inspectorSessions[uiKey]?.filesSource ?? WORKSPACE_SOURCE);
+	const storedSource = useUiStore((state) => state.inspectorSessions[uiKey]?.filesSource);
+	// Artifacts have their own inspector view; a stale artifact source reads as the workspace.
+	const source = !storedSource || storedSource.kind === "artifact" ? WORKSPACE_SOURCE : storedSource;
 	const setFilesChangedOnly = useUiStore((state) => state.setFilesChangedOnly);
 	const setFilesSource = useUiStore((state) => state.setFilesSource);
-	const annotation = useFileAnnotation(sessionId, { hostId, source: source.kind === "workspace" ? "Workspace" : `${source.label} (${source.url})` });
+	const annotation = useFileAnnotation(sessionId, {
+		hostId,
+		source: source.kind === "pull_request" ? `${source.label} (${source.url})` : "Workspace",
+	});
 	const snapshot = source.kind === "pull_request" ? prSummaries.find((pr) => pr.url === source.url)?.headSha ?? "" : "";
 	const querySource = useMemo<FilesSource>(
 		() => source.kind === "pull_request" ? { ...source, snapshot } : source,
@@ -174,16 +175,27 @@ export function SessionFileExplorer({
 	useEffect(() => {
 		window.localStorage.setItem("ao.files.diffStyle", split ? "split" : "unified");
 	}, [split]);
-	useEffect(() => {
-		if (!revealRequest) return;
-		setFilesChangedOnly(uiKey, false);
-		setSelectedPath(revealRequest.path);
-		// Maximized, the file is shown in this view's own preview; the request
-		// stays pending so un-maximizing still opens it in the centre.
-		if (isMaximized) return;
-		onOpenFile?.(revealRequest.path, { mode: "file" });
-		onRevealHandled?.(revealRequest.key);
-	}, [isMaximized, onOpenFile, onRevealHandled, revealRequest, uiKey, setFilesChangedOnly]);
+
+	// Give the hovered/focused row a short head start, without issuing a
+	// request for every row the pointer crosses or competing with a busy read.
+	const prefetchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	const prefetchBusy = useRef(false);
+	useEffect(() => () => {
+		if (prefetchTimer.current) clearTimeout(prefetchTimer.current);
+	}, [uiKey, querySource, prCommit?.sha]);
+	const prefetchPath = useCallback((node: TreeNode) => {
+		if (prefetchTimer.current) clearTimeout(prefetchTimer.current);
+		prefetchTimer.current = setTimeout(() => {
+			prefetchTimer.current = undefined;
+			if (prefetchBusy.current) return;
+			if (node.type === "dir" && querySource.kind !== "workspace") return;
+			prefetchBusy.current = true;
+			const request = node.type === "dir"
+				? queryClient.prefetchQuery({ ...sessionWorkspaceTreeQueryOptions(sessionId, node.path, undefined, hostId), staleTime: 5_000 })
+				: queryClient.prefetchQuery({ ...sessionSourceFileQueryOptions(sessionId, querySource, node.path, undefined, "combined", prCommit?.sha, sourceFiles?.find((file) => file.path === node.path)?.previousPath, hostId), staleTime: 5_000 });
+			void request.finally(() => { prefetchBusy.current = false; });
+		}, 100);
+	}, [queryClient, sessionId, hostId, querySource, prCommit?.sha, sourceFiles]);
 
 	const handleSelectPath = (node: TreeNode) => {
 		setPreviewRequest(null);
@@ -202,7 +214,7 @@ export function SessionFileExplorer({
 	};
 	const treeSelectedPath = selectedPath;
 	const selectedPreviousPath = sourceFiles?.find((file) => file.path === selectedPath)?.previousPath;
-	const sourceValue = source.kind === "workspace" ? "workspace" : source.url;
+	const sourceValue = source.kind === "pull_request" ? source.url : "workspace";
 	const sourceOptions: { value: string; label: string }[] = [
 		{ value: "workspace", label: t("files.explorer.workspaceSource") },
 		...prSummaries.map((pr) => ({ value: pr.url, label: `PR #${pr.number} · ${pr.sourceBranch || pr.title}` })),
@@ -249,7 +261,7 @@ export function SessionFileExplorer({
 	// Docked with nothing to pick or review, the header would hold only the
 	// maximize button (the filter lives in the top bar), so it floats over the
 	// tree's top-right corner instead of reserving an empty row above it.
-	const floatingHeader = !showSourcePicker && Boolean(filesTopbarHost) && !showChanges && !splitView && !hasViewTabs;
+	const floatingHeader = source.kind === "workspace" && !showSourcePicker && Boolean(filesTopbarHost) && !showChanges && !splitView && !hasViewTabs;
 	// In the preview + tree split the (already active) All-files tab doubles as
 	// the tree toggle, so the header doesn't carry two file-tree buttons.
 	const allFilesTabLabel = !showChanges && splitView ? (treeOpen ? t("files.hideFileTree") : t("files.showFileTree")) : t("files.allFiles");
@@ -274,16 +286,16 @@ export function SessionFileExplorer({
 			    the split draws its divider on the content below instead.
 			    The trailing actions sit 4px from the right edge with 4px gaps, the same
 			    as the pinned top-bar buttons above them and the review rows below. */}
-			<header className={floatingHeader ? "absolute right-0 top-0 z-10 flex items-center gap-1 pr-1 pt-1" : "flex shrink-0 items-center gap-1 pb-3 pl-3 pr-1 pt-1"}>
+			<header className={floatingHeader ? "absolute right-0 top-0 z-10 flex items-center gap-1 pr-1 pt-1" : "flex shrink-0 items-center gap-1 pb-3 pl-3 pr-1 pt-2"}>
 				{/* One dropdown for "what am I reviewing", laid out like a VCS review
 				    picker: working scopes at the top, then Commits › and Branch ›
 				    flyouts (Branch = Workspace or a PR). */}
 				{/* -ml-2 cancels the trigger's own 8px inline padding so its label
 				    starts on the same 12px gutter as the context row's text below. */}
-				{/* While a PR is shown, Workspace sits before the picker as the way back;
-				    on the workspace itself the trigger already names it. It keys off the
-				    source alone, so it stays reachable while the PR list loads or fails. */}
-				{source.kind === "pull_request" ? (
+				{/* While a PR is shown, Workspace sits before the picker as
+				    the way back; on the workspace itself the trigger already names it. It
+				    keys off the source alone, so it stays reachable while the PR list loads or fails. */}
+				{source.kind !== "workspace" ? (
 					<Button className="-ml-2 h-control-md shrink-0 text-xs" onClick={() => selectSource("workspace")} size="sm" type="button" variant="ghost">
 						{t("files.explorer.workspaceSource")}
 					</Button>
@@ -293,7 +305,7 @@ export function SessionFileExplorer({
 					<DropdownMenuTrigger asChild>
 						<SettingsMenuTrigger
 							aria-label={t("files.explorer.source")}
-							className={cn(source.kind !== "pull_request" && "-ml-2", "h-control-md min-w-0 max-w-72 shrink text-xs")}
+							className={cn(source.kind === "workspace" && "-ml-2", "h-control-md min-w-0 max-w-72 shrink text-xs")}
 							title={currentSourceLabel}
 						>
 							<span className="min-w-0 truncate">{currentSourceLabel}</span>
@@ -500,6 +512,7 @@ export function SessionFileExplorer({
 									changedOnlyData={changedOnlyData}
 									filterText={filter}
 									onSelectPath={handleSelectPath}
+									onPrefetchPath={prefetchPath}
 									selectedPath={treeSelectedPath}
 									sessionId={sessionId}
 								/>
@@ -516,6 +529,7 @@ export function SessionFileExplorer({
 					changedOnlyData={changedOnlyData}
 					filterText={filter}
 					onSelectPath={handleSelectPath}
+					onPrefetchPath={prefetchPath}
 					selectedPath={treeSelectedPath}
 					sessionId={sessionId}
 				/>

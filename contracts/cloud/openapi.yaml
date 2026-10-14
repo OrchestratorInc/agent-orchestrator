@@ -227,6 +227,18 @@ paths:
     parameters:
       - $ref: "#/components/parameters/OrgId"
       - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: getProject
+      tags: [Projects]
+      responses:
+        "200":
+          description: Project and normalized settings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectResponse"
+        default:
+          $ref: "#/components/responses/Error"
     patch:
       operationId: updateProject
       tags: [Projects]
@@ -260,6 +272,29 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DeleteProjectResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/projects/{projectId}/settings:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/ProjectId"
+    patch:
+      operationId: updateProjectSettings
+      tags: [Projects]
+      description: Merge supplied settings only. Omitted fields are preserved, nested role objects merge, and reviewers replace the array. Null is rejected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectSettingsInput"
+      responses:
+        "200":
+          description: Validated settings persisted atomically.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectResponse"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/github/installations:
@@ -582,6 +617,33 @@ paths:
                 $ref: "#/components/schemas/WorkerOKResponse"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/startup-retry:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: retrySessionStartup
+      tags: [Sessions]
+      description: >-
+        Retries a session whose worker never started (its startupError explains
+        why). The startup window, repair count and startup error are reset and
+        the worker bootstrap runs again against the existing sandbox; a
+        bring-your-own workspace is never recreated. Returns 409
+        startup_retry_unavailable when the worker has already checked in or the
+        session is not meant to be running.
+      responses:
+        "202":
+          description: The retry was accepted for asynchronous processing.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session]
+                properties:
+                  session:
+                    $ref: "#/components/schemas/Session"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/children:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -635,6 +697,131 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SessionReviewState"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/trigger:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: triggerSessionReviews
+      tags: [Reviews]
+      responses:
+        "200":
+          description: The current commit was already reviewed or is ineligible.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionReviewState"
+        "201":
+          description: A reviewer terminal was started.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionReviewState"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/cancel:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: cancelSessionReviews
+      tags: [Reviews]
+      responses:
+        "200":
+          description: Review state after cancellation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionReviewState"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/{reviewRunId}/send:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - name: reviewRunId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: sendSessionReviewToWorker
+      tags: [Reviews]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "202":
+          description: The stored review was accepted and durably queued for the worker agent.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [event]
+                properties:
+                  event:
+                    $ref: "#/components/schemas/UserMessageEvent"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/preferences:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    patch:
+      operationId: updateSessionPreferences
+      tags: [Sessions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSessionPreferencesInput"
+      responses:
+        "200":
+          description: The updated cloud session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviewer-harnesses:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: inspectSessionReviewerHarnesses
+      tags: [Reviews]
+      responses:
+        "200":
+          description: Supported reviewer CLI availability inside the live sandbox.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HarnessInspectResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviewer-harnesses/{harness}/install:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - name: harness
+        in: path
+        required: true
+        schema:
+          $ref: "#/components/schemas/CloudReviewerHarness"
+    post:
+      operationId: installSessionReviewerHarness
+      tags: [Reviews]
+      responses:
+        "200":
+          description: The installed and verified reviewer CLI.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HarnessStatus"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/messages:
@@ -1023,6 +1210,140 @@ paths:
           description: The coding-agent credential was disconnected.
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/coder-config:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+    get:
+      operationId: getOrgCoderConfig
+      tags: [Providers]
+      description: The organization's bring-your-own Coder connection, without its token. 403 provider_forbidden when the organization is not entitled to Coder.
+      responses:
+        "200":
+          description: The connection, or configured=false when there is none.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrgCoderConfigResponse"
+        default:
+          $ref: "#/components/responses/Error"
+    put:
+      operationId: putOrgCoderConfig
+      tags: [Providers]
+      description: >-
+        Create or replace the organization's bring-your-own Coder connection
+        (org admins). The token is required on first save and when baseUrl
+        changes; otherwise an omitted token keeps the stored one. An omitted
+        owner is derived from the token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutOrgCoderConfigInput"
+      responses:
+        "200":
+          description: The validated connection was stored; the token is never returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrgCoderConfigResponse"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteOrgCoderConfig
+      tags: [Providers]
+      responses:
+        "204":
+          description: The connection was removed.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/coder-templates/{templateId}/parameters:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - name: templateId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      operationId: getCoderTemplateParameters
+      tags: [Providers]
+      description: >-
+        The coder_parameter inputs the template's active version declares, read
+        from the organization's own Coder connection (or the deployment's Coder
+        when it has none). 403 provider_forbidden for organizations without
+        Coder; 404 coder_template_not_found for an unknown template; 502
+        coder_unavailable when Coder cannot be read.
+      responses:
+        "200":
+          description: The template's parameters in Coder's order.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [parameters]
+                properties:
+                  parameters:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CoderTemplateParameter"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/coder-templates/{templateId}/parameters/evaluate:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - name: templateId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: evaluateCoderTemplateParameters
+      tags: [Providers]
+      description: >-
+        The template's parameters with the given draft values applied. A
+        template using Coder's dynamic parameters can declare a parameter only
+        for certain values of another (for example a custom repository URL once
+        "Other" is selected); evaluating with the draft values lists it, and
+        each parameter carries Coder's diagnostics for its value. A template on
+        Coder's classic parameter flow, or a Coder without dynamic parameters,
+        answers with the same static parameters as the GET. 403
+        provider_forbidden for organizations without Coder; 404
+        coder_template_not_found for an unknown template; 422 validation_error
+        for invalid values; 502 coder_unavailable when Coder cannot be read.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [values]
+              properties:
+                values:
+                  type: object
+                  description: Draft parameter values by name, encoded as in project config coder.parameters.
+                  additionalProperties:
+                    type: string
+      responses:
+        "200":
+          description: The template's parameters for these values, in Coder's order.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [parameters]
+                properties:
+                  parameters:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CoderTemplateParameter"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/worker/bootstrap:
     post:
       operationId: bootstrapWorker
@@ -1101,7 +1422,9 @@ paths:
         Publishes one allowlisted event. `agent.activity` carries an explicit
         coding-agent lifecycle hook signal. `worker.ready` must identify the
         authenticated worker and epoch. `chat.assistant_delta` is fenced by both
-        the token epoch and the claimed turn attempt.
+        the token epoch and the claimed turn attempt. `workspace.setup` reports
+        the outcome of the project's Setup commands and is appended to the
+        session's event stream.
       requestBody:
         required: true
         content:
@@ -1267,12 +1590,21 @@ paths:
   /api/cloud/v1/worker/credential:
     get:
       operationId: getWorkerCredential
+      parameters:
+        - name: reviewRunId
+          in: query
+          required: false
+          description: Select the snapshotted reviewer credential for a running review owned by this session.
+          schema:
+            type: string
+            format: uuid
       tags: [Worker Execution]
       security:
         - workerAuth: []
       description: |
         Returns the valid default coding-agent credential selected by the
-        session harness. The secret must never be logged or persisted.
+        session harness, or the durable reviewer harness when reviewRunId is supplied.
+        The secret must never be logged or persisted.
       responses:
         "200":
           description: The decrypted session-scoped coding-agent credential.
@@ -2154,6 +2486,63 @@ components:
           type: string
         role:
           $ref: "#/components/schemas/OrganizationRole"
+        offering:
+          $ref: "#/components/schemas/Offering"
+    Offering:
+      type: object
+      additionalProperties: false
+      description: >-
+        What an organization may use and how it is billed. The control plane is
+        the source of truth; clients shape their UI from it and the server
+        enforces the same rules on create.
+      required: [providers, defaultProvider, billingMode, kind, features]
+      properties:
+        providers:
+          type: array
+          description: >-
+            Sandbox providers the organization may use: the deployment's
+            providers filtered by the capability gate against the
+            organization's effective capabilities.
+          items:
+            type: string
+        defaultProvider:
+          type: string
+          description: >-
+            Provider a session gets when none is chosen: the deployment default
+            when allowed, otherwise the first allowed provider, otherwise empty
+            (no cloud sessions).
+        billingMode:
+          type: string
+          enum: [self_serve, contract, "off"]
+          description: >-
+            off when the deployment has no Stripe configured; contract when the
+            organization is billed under an agreement, runs on the internal
+            plan, or is grandfathered; self_serve otherwise. Only self_serve
+            organizations are subject to plan limits.
+        kind:
+          type: string
+          enum: [b2b, b2c, both, none]
+          description: >-
+            b2b when coder is the only allowed provider, b2c when only other
+            providers are allowed, both for a mix, none when no provider is
+            allowed.
+        features:
+          type: array
+          description: Plan feature flags; empty when none apply.
+          items:
+            type: string
+    SandboxProviders:
+      type: object
+      additionalProperties: false
+      description: Legacy provider selector data; the same values as offering.providers and offering.defaultProvider.
+      required: [available, default]
+      properties:
+        available:
+          type: array
+          items:
+            type: string
+        default:
+          type: string
     CurrentAccount:
       type: object
       additionalProperties: false
@@ -2165,6 +2554,11 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/OrganizationMembership"
+        offering:
+          # The offering of the first organization, the one the desktop app works in.
+          $ref: "#/components/schemas/Offering"
+        sandboxProviders:
+          $ref: "#/components/schemas/SandboxProviders"
     AgentCapability:
       type: string
       enum:
@@ -2242,6 +2636,418 @@ components:
           type: boolean
         nextCursor:
           type: string
+    CloudAgentHarness:
+      type: string
+      enum: [claude-code, codex, cursor, opencode]
+    ProjectAgentConfig:
+      type: object
+      additionalProperties: false
+      properties:
+        model:
+          type: string
+          maxLength: 500
+        mode:
+          type: string
+          enum: ["", plan, ask]
+          description: Cursor CLI mode. Omit or use an empty string for the agent default.
+        effort:
+          type: string
+          enum: ["", low, medium, high, xhigh, max]
+          description: Reasoning effort for Codex or Claude Code. Claude Code does not accept xhigh.
+        permissions:
+          type: string
+          enum: ["", default, auto, accept-edits, bypass-permissions]
+          description: Native approval policy. OpenCode does not accept accept-edits. Empty uses the session execution policy.
+    ProjectRoleConfig:
+      type: object
+      additionalProperties: false
+      required: [agent]
+      properties:
+        agent:
+          $ref: "#/components/schemas/CloudAgentHarness"
+        agentConfig:
+          $ref: "#/components/schemas/ProjectAgentConfig"
+    ProjectRoleConfigPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        agent:
+          $ref: "#/components/schemas/CloudAgentHarness"
+        agentConfig:
+          $ref: "#/components/schemas/ProjectAgentConfig"
+    ProjectReviewer:
+      type: object
+      additionalProperties: false
+      required: [harness]
+      properties:
+        harness:
+          $ref: "#/components/schemas/CloudAgentHarness"
+        agentConfig:
+          $ref: "#/components/schemas/ProjectAgentConfig"
+    ProjectConfig:
+      type: object
+      additionalProperties: true
+      description: Canonical nested role settings. Legacy workerAgent and orchestratorAgent are normalized on reads and removed on the next settings write. Nested agents take precedence.
+      properties:
+        sessionPrefix:
+          type: string
+          maxLength: 40
+          pattern: '^([A-Za-z0-9_][A-Za-z0-9_-]*)?$'
+          description: Prefix for new session branches. Empty uses ao; existing sessions are unchanged.
+        worker:
+          $ref: "#/components/schemas/ProjectRoleConfig"
+        orchestrator:
+          $ref: "#/components/schemas/ProjectRoleConfig"
+        reviewers:
+          type: array
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/ProjectReviewer"
+          description: Empty or absent uses the session agent for reviews.
+        autoReview:
+          type: boolean
+          description: Defaults to enabled when absent. Independent of session autoInjectReview feedback delivery.
+        coder:
+          $ref: "#/components/schemas/ProjectCoderConfig"
+        postCreate:
+          $ref: "#/components/schemas/ProjectScriptCommands"
+        preRemove:
+          $ref: "#/components/schemas/ProjectScriptCommands"
+    ProjectScriptCommands:
+      type: array
+      maxItems: 20
+      items:
+        type: string
+        minLength: 1
+        maxLength: 4096
+      description: >-
+        A project's Setup (postCreate) or Cleanup (preRemove) shell commands,
+        the same settings a local project has. Setup commands run in order
+        with sh -c in the session's working directory after its checkout and
+        before the coding agent starts, once per session, each within 10
+        minutes; a failing step keeps the agent from starting until the
+        session is reopened. Cleanup commands run in order before the
+        session's workspace is deleted (Coder only), best effort and within
+        10 minutes in total. Both see AO_SESSION_ID, AO_SESSION_KIND,
+        AO_SESSION_BRANCH, AO_WORKSPACE_DIR, AO_WORKTREE_PATH,
+        AO_SOURCE_TREE_PATH, AO_REPOSITORY_URL, AO_PROJECT_ID and
+        AO_PROJECT_NAME. An empty array clears them.
+    ProjectCoderConfig:
+      type: object
+      additionalProperties: false
+      description: Coder dev-kit settings inherited by every Coder session of the project.
+      properties:
+        templateId:
+          type: string
+          format: uuid
+          description: Coder template; absent uses the organization or deployment default.
+        size:
+          type: string
+          enum: [small, medium, large]
+        startupScript:
+          type: string
+          maxLength: 65536
+        extraRepos:
+          type: array
+          maxItems: 10
+          items:
+            $ref: "#/components/schemas/ProjectCoderRepository"
+        workspaceNamePrefix:
+          $ref: "#/components/schemas/CoderWorkspaceNamePrefix"
+        parameters:
+          $ref: "#/components/schemas/CoderTemplateParameterValues"
+    CoderTemplateParameterValues:
+      type: object
+      maxProperties: 50
+      additionalProperties:
+        type: string
+        maxLength: 4096
+      description: >-
+        Values for the chosen template's coder_parameter inputs, by parameter
+        name. A list(string) value is a JSON array string and a bool is "true"
+        or "false". Requires a chosen template; names must be parameters the
+        template declares. At workspace create they override the
+        organization connection's parameters and are overridden by size and
+        startupScript.
+    CoderTemplateParameter:
+      type: object
+      additionalProperties: false
+      required: [name, displayName, description, type, formType, mutable, required, defaultValue, options, order]
+      properties:
+        name:
+          type: string
+        displayName:
+          type: string
+        description:
+          type: string
+        type:
+          type: string
+          description: 'Coder parameter type: "string", "number", "bool" or "list(string)".'
+        formType:
+          type: string
+          description: Coder's form hint (for example dropdown, multi-select, switch); may be empty.
+        mutable:
+          type: boolean
+          description: False when the value can only be set when a workspace is created.
+        required:
+          type: boolean
+        defaultValue:
+          type: string
+        options:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, value, description]
+            properties:
+              name:
+                type: string
+              value:
+                type: string
+              description:
+                type: string
+        order:
+          type: integer
+        diagnostics:
+          type: array
+          description: Coder's problems with the parameter's value; only set when evaluated against draft values.
+          items:
+            type: object
+            additionalProperties: false
+            required: [severity, summary]
+            properties:
+              severity:
+                type: string
+                description: '"error" or "warning".'
+              summary:
+                type: string
+              detail:
+                type: string
+    OrgCoderConfig:
+      type: object
+      additionalProperties: false
+      required: [baseUrl, owner, templateId, workerUser, reuseExistingCheckout, protectSecretFiles]
+      properties:
+        baseUrl:
+          type: string
+        owner:
+          type: string
+        templateId:
+          type: string
+        agentName:
+          type: string
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+        durableRoot:
+          type: string
+        endpointServiceName:
+          type: string
+        region:
+          type: string
+        requireMountedDurableRoot:
+          type: boolean
+        startupTimeoutSeconds:
+          type: integer
+        workerUser:
+          $ref: "#/components/schemas/CoderWorkerUser"
+        readyProbe:
+          type: string
+          maxLength: 1000
+          description: Shell command run as the workspace user after the Coder agent is ready and before AO starts its worker; polled every 5 seconds until it exits 0.
+        readyProbeTimeoutSeconds:
+          type: integer
+          minimum: 30
+          maximum: 3600
+          description: Ready check budget, measured from the agent becoming ready. 900 when a ready check is set without one. On timeout the session fails with startup error workspace_setup_not_ready.
+        reuseExistingCheckout:
+          type: boolean
+          description: Work in the checkout of the project repository the template already cloned (under $HOME/work/* or $HOME/*) instead of cloning into ~/repository. Always false for the ao-worker user; defaults to true for the workspace user.
+        workingDirectory:
+          type: string
+          maxLength: 512
+          description: >-
+            Where sessions work: an absolute path or one starting with ~/ or
+            $HOME/, optionally containing {repo} for the repository name (for
+            example ~/work/{repo}). An existing checkout of the session
+            repository there is adopted, a missing or empty directory gets a
+            fresh clone, and anything else fails the checkout. Replaces the
+            reuseExistingCheckout search. Requires the workspace worker user.
+        protectSecretFiles:
+          type: boolean
+          description: >-
+            Keep Claude Code's file tools (and the file commands it recognizes in
+            Bash) from reading or editing .env and .env.* files, except
+            .env.example, .env.sample and .env.template. Defaults to true.
+            Programs that load .env themselves are unaffected.
+    CoderWorkerUser:
+      type: string
+      enum: [ao-worker, workspace]
+      description: >-
+        Who runs AO's worker and agent in the workspace: a dedicated ao-worker
+        user (default; added to the docker group when one exists), or the
+        workspace's own login user with its real HOME, groups and environment.
+    OrgCoderConfigResponse:
+      type: object
+      additionalProperties: false
+      required: [configured]
+      properties:
+        configured:
+          type: boolean
+        coderConfig:
+          $ref: "#/components/schemas/OrgCoderConfig"
+        validationState:
+          type: string
+        validatedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    PutOrgCoderConfigInput:
+      type: object
+      additionalProperties: false
+      required: [baseUrl]
+      properties:
+        token:
+          type: string
+          description: Coder API token. Required on first save and when baseUrl changes; omit to keep the stored token.
+        baseUrl:
+          type: string
+        owner:
+          type: string
+          description: Omit to derive from the token.
+        templateId:
+          type: string
+        agentName:
+          type: string
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+        durableRoot:
+          type: string
+        endpointServiceName:
+          type: string
+        region:
+          type: string
+        requireMountedDurableRoot:
+          type: boolean
+        startupTimeoutSeconds:
+          type: integer
+          description: 0 (default 20 minutes) or 60..7200.
+        workerUser:
+          $ref: "#/components/schemas/CoderWorkerUser"
+        readyProbe:
+          type: string
+          maxLength: 1000
+        readyProbeTimeoutSeconds:
+          type: integer
+          description: 0 (default 900 when readyProbe is set) or 30..3600.
+        reuseExistingCheckout:
+          type: boolean
+          description: Omit for the default (true with the workspace user).
+        workingDirectory:
+          type: string
+          maxLength: 512
+          description: >-
+            Where sessions work: an absolute path or one starting with ~/ or
+            $HOME/, optionally containing {repo} for the repository name (for
+            example ~/work/{repo}). An existing checkout of the session
+            repository there is adopted, a missing or empty directory gets a
+            fresh clone, and anything else fails the checkout. Replaces the
+            reuseExistingCheckout search. Requires the workspace worker user.
+        protectSecretFiles:
+          type: boolean
+          description: >-
+            Keep Claude Code's file tools (and the file commands it recognizes in
+            Bash) from reading or editing .env and .env.* files, except
+            .env.example, .env.sample and .env.template. Defaults to true.
+            Programs that load .env themselves are unaffected. Omit to keep the stored value (true when never set).
+    ProjectCoderRepository:
+      type: object
+      additionalProperties: false
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          pattern: "^https://"
+        branch:
+          type: string
+    CoderWorkspaceNamePrefix:
+      type: string
+      maxLength: 20
+      pattern: '^([a-z]([a-z0-9]|-[a-z0-9])*)?$'
+      description: >-
+        Names new Coder workspaces <prefix>-<short session id> (at most 32
+        characters). Lowercase letters, digits and single hyphens, starting with
+        a letter and not ending with a hyphen. Empty keeps the default ao-<id>;
+        existing sessions keep their workspace.
+    ProjectSettingsConfigPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        sessionPrefix:
+          type: string
+          maxLength: 40
+          pattern: '^([A-Za-z0-9_][A-Za-z0-9_-]*)?$'
+          description: Prefix for new session branches. Empty uses ao; existing sessions are unchanged.
+        worker:
+          description: Null removes the worker override and uses the session agent selection.
+          oneOf:
+            - $ref: "#/components/schemas/ProjectRoleConfigPatch"
+            - type: "null"
+        orchestrator:
+          description: Null removes the orchestrator override and uses the session agent selection.
+          oneOf:
+            - $ref: "#/components/schemas/ProjectRoleConfigPatch"
+            - type: "null"
+        reviewers:
+          type: array
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/ProjectReviewer"
+        autoReview:
+          type: boolean
+        coder:
+          type: object
+          additionalProperties: false
+          description: >-
+            Only the workspace name prefix and the template parameters are
+            editable after the project is created. parameters replaces the
+            stored values as a whole and needs a project with a chosen template.
+          properties:
+            workspaceNamePrefix:
+              $ref: "#/components/schemas/CoderWorkspaceNamePrefix"
+            parameters:
+              $ref: "#/components/schemas/CoderTemplateParameterValues"
+        postCreate:
+          $ref: "#/components/schemas/ProjectScriptCommands"
+        preRemove:
+          $ref: "#/components/schemas/ProjectScriptCommands"
+    ProjectSettingsInput:
+      type: object
+      additionalProperties: false
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 120
+        defaultBranch:
+          type: string
+          minLength: 1
+          maxLength: 255
+        config:
+          $ref: "#/components/schemas/ProjectSettingsConfigPatch"
+    ProjectResponse:
+      type: object
+      additionalProperties: false
+      required: [project]
+      properties:
+        project:
+          $ref: "#/components/schemas/Project"
     Project:
       type: object
       additionalProperties: false
@@ -2265,8 +3071,7 @@ components:
           pattern: "^[1-9][0-9]*$"
           description: GitHub's integer repository ID encoded as a decimal string to preserve precision.
         config:
-          type: object
-          additionalProperties: true
+          $ref: "#/components/schemas/ProjectConfig"
         createdAt:
           type: string
           format: date-time
@@ -2293,6 +3098,8 @@ components:
         config:
           type: object
           additionalProperties: true
+        coder:
+          $ref: "#/components/schemas/ProjectCoderConfig"
     UpdateProjectInput:
       type: object
       additionalProperties: false
@@ -2675,6 +3482,8 @@ components:
           type: string
           maxLength: 200
           description: Coding-agent model to launch with; empty uses the harness default.
+        agentConfig:
+          $ref: "#/components/schemas/ProjectAgentConfig"
         deniedCommands:
           type: array
           items:
@@ -2837,17 +3646,84 @@ components:
           const: agent.activity
         payload:
           $ref: "#/components/schemas/WorkerActivityPayload"
+    WorkerSetupPayload:
+      type: object
+      additionalProperties: false
+      required: [status, exitCode, durationMs]
+      properties:
+        status:
+          type: string
+          enum: [succeeded, failed, timed_out]
+        step:
+          type: integer
+          minimum: 0
+          description: The 1-based Setup command that failed or timed out; absent on success.
+        exitCode:
+          type: integer
+          description: The failed command's exit status; -1 when it timed out or could not run.
+        durationMs:
+          type: integer
+        output:
+          type: string
+          description: Redacted tail of the failed (or last) command's combined output, at most 2 KiB.
+    WorkerSetupEventInput:
+      type: object
+      additionalProperties: false
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          const: workspace.setup
+        payload:
+          $ref: "#/components/schemas/WorkerSetupPayload"
+    WorkerWorkspaceStartupPayload:
+      type: object
+      additionalProperties: false
+      required: [status]
+      description: >-
+        Whether the worker could prepare the session's workspace for its agent
+        (repository checkout, the Coder connection's working directory and the
+        project's Setup commands). A failure becomes the session's startup
+        error and stays until a later ready report clears it.
+      properties:
+        status:
+          type: string
+          enum: [failed, ready]
+        code:
+          type: string
+          enum: [repository_checkout_failed, working_directory_unusable, project_setup_failed]
+          description: Required when status is failed.
+        message:
+          type: string
+          description: User-facing explanation; required when status is failed.
+        detail:
+          type: string
+          description: Redacted excerpt, for Setup the failed command's output tail.
+    WorkerWorkspaceStartupEventInput:
+      type: object
+      additionalProperties: false
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          const: workspace.startup
+        payload:
+          $ref: "#/components/schemas/WorkerWorkspaceStartupPayload"
     WorkerEventInput:
       oneOf:
         - $ref: "#/components/schemas/WorkerActivityEventInput"
         - $ref: "#/components/schemas/WorkerReadyEventInput"
         - $ref: "#/components/schemas/WorkerOutputEventInput"
+        - $ref: "#/components/schemas/WorkerSetupEventInput"
+        - $ref: "#/components/schemas/WorkerWorkspaceStartupEventInput"
       discriminator:
         propertyName: type
         mapping:
           agent.activity: "#/components/schemas/WorkerActivityEventInput"
           worker.ready: "#/components/schemas/WorkerReadyEventInput"
           chat.assistant_delta: "#/components/schemas/WorkerOutputEventInput"
+          workspace.setup: "#/components/schemas/WorkerSetupEventInput"
+          workspace.startup: "#/components/schemas/WorkerWorkspaceStartupEventInput"
     WorkerOKResponse:
       type: object
       additionalProperties: false
@@ -3416,6 +4292,13 @@ components:
             desiredState:
               type: string
               const: deleted
+    SessionResponse:
+      type: object
+      additionalProperties: false
+      required: [session]
+      properties:
+        session:
+          $ref: "#/components/schemas/Session"
     SessionInterfaceMode:
       type: string
       enum: [tui, chat]
@@ -3495,6 +4378,10 @@ components:
         - projectId
         - kind
         - harness
+        - autoReviewEnabled
+        - autoInjectCI
+        - autoInjectReview
+        - terminateOnPrMerge
         - displayName
         - branch
         - mode
@@ -3520,6 +4407,16 @@ components:
           $ref: "#/components/schemas/SessionKind"
         harness:
           type: string
+        reviewerHarness:
+          type: string
+        autoReviewEnabled:
+          type: boolean
+        autoInjectCI:
+          type: boolean
+        autoInjectReview:
+          type: boolean
+        terminateOnPrMerge:
+          type: boolean
         displayName:
           type: string
         branch:
@@ -3551,6 +4448,18 @@ components:
           type: string
         runtimeError:
           type: string
+        startupError:
+          $ref: "#/components/schemas/SessionStartupError"
+        coderWorkspaceUrl:
+          type: string
+          format: uri
+          description: >-
+            The session's workspace page on the organization's own
+            (bring-your-own) Coder deployment, as
+            <baseUrl>/@<owner>/<workspace name>. Present only for sessions on
+            a bring-your-own Coder connection, from the session's creation
+            (the workspace may not exist yet); never set for AO's managed
+            Coder or other providers.
         activeTurn:
           $ref: "#/components/schemas/Turn"
         isTerminated:
@@ -3561,6 +4470,43 @@ components:
         updatedAt:
           type: string
           format: date-time
+    SessionStartupError:
+      type: object
+      additionalProperties: false
+      required: [code, message, at]
+      description: >-
+        The latest user-facing reason the session's sandbox has not started.
+        Present until the worker first checks in or the user retries. While
+        runtimeState is "terminated" AO has stopped retrying; otherwise it is
+        still trying in the background. The worker-reported codes
+        repository_checkout_failed, working_directory_unusable and
+        project_setup_failed are the exception: the worker has checked in but
+        could not prepare the workspace, so the agent does not start; they stay
+        until the worker reports the workspace ready after the user reopens
+        the session (a workspace checkout request).
+      properties:
+        code:
+          type: string
+          description: >-
+            Stable reason code: workspace_not_ready, terminal_unavailable,
+            unsupported_architecture, durable_root_unavailable,
+            worker_never_started, bootstrap_failed,
+            workspace_setup_not_ready (a Coder connection's workspace ready
+            check never passed), repository_checkout_failed,
+            working_directory_unusable or project_setup_failed (reported by
+            the worker). Clients must tolerate codes added later.
+        message:
+          type: string
+          description: Human-readable explanation suitable for display as-is.
+        at:
+          type: string
+          format: date-time
+        detail:
+          type: string
+          description: >-
+            Redacted detail behind the error: operator detail for an
+            organization's own (bring-your-own) compute, and the failed
+            command's output for project_setup_failed.
     CreateSessionInput:
       type: object
       additionalProperties: false
@@ -3599,6 +4545,50 @@ components:
         sandboxProviderConnectionId:
           type: string
           format: uuid
+    UpdateSessionPreferencesInput:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        reviewerHarness:
+          oneOf:
+            - $ref: "#/components/schemas/CloudReviewerHarness"
+            - type: string
+              maxLength: 0
+        autoReviewEnabled:
+          type: boolean
+        autoInjectCI:
+          type: boolean
+        autoInjectReview:
+          type: boolean
+        terminateOnPrMerge:
+          type: boolean
+    CloudReviewerHarness:
+      type: string
+      enum: [claude-code, codex, cursor]
+    HarnessStatus:
+      type: object
+      additionalProperties: false
+      required: [harness, status]
+      properties:
+        harness:
+          $ref: "#/components/schemas/CloudReviewerHarness"
+        status:
+          type: string
+          enum: [missing, ready, failed]
+        version:
+          type: string
+        error:
+          type: string
+    HarnessInspectResponse:
+      type: object
+      additionalProperties: false
+      required: [harnesses]
+      properties:
+        harnesses:
+          type: array
+          items:
+            $ref: "#/components/schemas/HarnessStatus"
     SessionPage:
       type: object
       additionalProperties: false
@@ -3903,6 +4893,7 @@ components:
         - sessionId
         - batchId
         - harness
+        - triggerSource
         - pullRequestUrl
         - targetSha
         - status
@@ -3922,6 +4913,9 @@ components:
           type: string
         harness:
           type: string
+        triggerSource:
+          type: string
+          enum: [manual, auto]
         pullRequestUrl:
           type: string
         targetSha:
@@ -3968,7 +4962,7 @@ components:
     SessionReviewState:
       type: object
       additionalProperties: false
-      required: [sessionId, reviews, runs]
+      required: [sessionId, availableReviewerHarnesses, reviews, runs]
       properties:
         sessionId:
           type: string
@@ -3976,6 +4970,10 @@ components:
           type: string
         reviewerHarness:
           type: string
+        availableReviewerHarnesses:
+          type: array
+          items:
+            $ref: "#/components/schemas/CloudReviewerHarness"
         reviews:
           type: array
           items:

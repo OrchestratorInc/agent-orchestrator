@@ -40,6 +40,9 @@ const renameSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 vi.mock("../lib/rename-session", () => ({ renameSession: renameSessionMock }));
 
 vi.mock("motion/react", () => ({
+	motion: {
+		div: ({ layoutScroll: _layoutScroll, ...props }: ComponentProps<"div"> & { layoutScroll?: boolean }) => <div {...props} />,
+	},
 	Reorder: {
 		Group: ({ children, onReorder }: { children: ReactNode; onReorder: (values: string[]) => void }) => {
 			reorderMocks.onReorder = onReorder;
@@ -252,6 +255,22 @@ describe("CenterPane toolbar session label", () => {
 
 		expect(renameSessionMock).not.toHaveBeenCalled();
 		expect(screen.getByRole("tab", { name: /^do the thing/ })).toBeInTheDocument();
+	});
+
+	it("does not offer rename on the project orchestrator's tab", async () => {
+		const user = userEvent.setup();
+		renderCenterPane({ session: { ...worker, id: "sess-orch", kind: "orchestrator" } });
+
+		const tab = screen.getByRole("tab", { name: /^Orchestrator/ });
+		expect(tab).not.toHaveAttribute("aria-keyshortcuts");
+		await user.dblClick(tab);
+		tab.focus();
+		await user.keyboard("{F2}");
+		fireEvent.contextMenu(tab);
+
+		expect(screen.queryByRole("textbox", { name: /^Rename/ })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /^Rename/ })).not.toBeInTheDocument();
+		expect(renameSessionMock).not.toHaveBeenCalled();
 	});
 
 	it.each(["", "do the thing"])("does not persist the no-op terminal-tab rename %j", async (nextName) => {
@@ -1181,11 +1200,11 @@ describe("CenterPane toolbar session label", () => {
 		fireEvent.wheel(scrollRegion, { deltaY: 80 });
 		expect(scrollBy).toHaveBeenCalledWith({ left: 80 });
 
-		// Horizontal trackpad input is already native to overflow-x-auto and must
-		// not be re-applied by the vertical-wheel adapter.
+		// Horizontal trackpad input is driven by the strip too, so a gesture can
+		// never latch onto an outer scroller and leave the tabs stuck.
 		scrollBy.mockClear();
-		fireEvent.wheel(scrollRegion, { deltaX: 60 });
-		expect(scrollBy).not.toHaveBeenCalled();
+		expect(fireEvent.wheel(scrollRegion, { deltaX: 60, deltaY: 5 })).toBe(false);
+		expect(scrollBy).toHaveBeenCalledWith({ left: 60 });
 
 		// Ctrl+wheel is terminal font zoom, not tab scrolling.
 		scrollBy.mockClear();

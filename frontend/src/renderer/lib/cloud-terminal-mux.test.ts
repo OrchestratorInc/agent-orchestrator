@@ -175,6 +175,23 @@ describe("createCloudTerminalMux cursor resume", () => {
 		expect(chunks.join("")).toContain("\x1b[2J");
 		mux.dispose();
 	});
+
+	it("routes a reviewer ticket to its exact terminal", async () => {
+		FakeWebSocket.instances = [];
+		const mux = createCloudTerminalMux({
+			wsBaseUrl: "wss://cp.example.com/api/cloud/v1",
+			kind: "agent",
+			terminalId: "reviewer-terminal-id",
+			mintTicket: async () => "ticket-1",
+			WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+		});
+		await Promise.resolve();
+		await Promise.resolve();
+		const url = new URL(FakeWebSocket.instances[0].url.replace(/^ws/, "http"));
+		expect(url.searchParams.get("terminalId")).toBe("reviewer-terminal-id");
+		mux.dispose();
+	});
+
 });
 
 describe("createCloudTerminalMux cloud notification hints", () => {
@@ -188,6 +205,43 @@ describe("createCloudTerminalMux cloud notification hints", () => {
 		ws.deliver({ type: "notification_hint", eventId: "evt-1", eventType: "needs_input", occurredAt: "2026-09-21T00:00:00Z", payload: { message: "Need a choice" } });
 		expect(hints).toEqual(["evt-1"]);
 		unsubscribe();
+		mux.dispose();
+	});
+});
+
+describe("createCloudTerminalMux ticket refusals", () => {
+	function refusingMux(error: object) {
+		const mux = createCloudTerminalMux({
+			wsBaseUrl: "wss://cp.example.com/api/cloud/v1",
+			kind: "agent",
+			mintTicket: async () => {
+				throw error;
+			},
+			WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+		});
+		const errors: string[] = [];
+		const states: string[] = [];
+		mux.onError("pane", (message) => errors.push(message));
+		mux.onConnectionChange((state) => states.push(state));
+		return { mux, errors, states };
+	}
+
+	it("reports a plan refusal once as a pane error instead of polling", async () => {
+		FakeWebSocket.instances = [];
+		const { mux, errors, states } = refusingMux({ code: "WEEKLY_LIMIT_REACHED", message: "Weekly usage limit reached." });
+		await settle();
+		expect(errors).toEqual(["Weekly usage limit reached."]);
+		expect(states).toEqual([]);
+		expect(FakeWebSocket.instances).toHaveLength(0);
+		mux.dispose();
+	});
+
+	it("keeps waiting while the worker is still starting", async () => {
+		FakeWebSocket.instances = [];
+		const { mux, errors, states } = refusingMux({ code: "WORKER_UNAVAILABLE", message: "Worker is starting." });
+		await settle();
+		expect(errors).toEqual([]);
+		expect(states).toEqual(["waiting"]);
 		mux.dispose();
 	});
 });

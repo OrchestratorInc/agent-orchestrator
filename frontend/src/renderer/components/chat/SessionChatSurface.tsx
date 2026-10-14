@@ -1,3 +1,7 @@
+import { createPortal } from "react-dom";
+import { useIndependentSideChats } from "./IndependentSideChats";
+import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
+import { useSideChatsAvailable } from "../../lib/side-chats";
 /**
  * The central surface for a chat-mode session.
  *
@@ -8,7 +12,7 @@
  */
 
 import { AlertTriangle, CheckCircle2, Loader2, X } from "lucide-react";
-import { memo, useEffect, useRef, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
 	findActiveAgentSwitch,
@@ -18,6 +22,8 @@ import {
 } from "../../hooks/useAgentSwitches";
 import { useObservedAgentSwitchLifecycle } from "../../hooks/useObservedAgentSwitchLifecycle";
 import { useAgentSwitchPresentationVisibility, useAgentSwitchRouteVisibility } from "../../hooks/useAgentSwitchVisibility";
+import { useQuery } from "@tanstack/react-query";
+import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
 import { useSwitchAgentState } from "../../hooks/useSwitchAgent";
 import {
 	useConversation,
@@ -29,6 +35,7 @@ import {
 	useWorkspaceFilePaths,
 } from "../../hooks/useConversation";
 import { useAgentSwitchProviderCatalogs } from "../../hooks/useAgentSwitchProviderCatalogs";
+import { useConversationPromptSuggestion } from "../../hooks/useConversationPromptSuggestion";
 import { useRememberProjectPermissions } from "../../hooks/useRememberProjectPermissions";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
 import { isWebLink, isWorkspaceHtmlLink } from "../../lib/external-link-policy";
@@ -47,7 +54,9 @@ import type { ConversationSnapshot } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
 import type { AgentSwitchSummary, WorkspaceSession } from "../../types/workspace";
 import { AgentSwitchProgressTrack } from "../AgentSwitchProgressTrack";
+import { useUiStore } from "../../stores/ui-store";
 import { ChatWorkspace } from "./ChatWorkspace";
+import { startingConversationSnapshot } from "./OrchestratorStartingChat";
 import { hasProviderPermissionMode } from "./TurnSettingsBar";
 
 export interface ConversationWorkState {
@@ -88,6 +97,7 @@ function firstBrowserLink(text: string, workspacePaths: string[]): string | unde
 }
 
 export const SessionChatSurface = memo(function SessionChatSurface({
+	sideChatContainer,
 	session,
 	hostId,
 	assetBaseUrl,
@@ -124,10 +134,13 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	auxiliaryTabOrder,
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
+	agentResuming,
 	controllerResumeError,
 	newWorkDisabled,
+	arriving,
 	onConversationWorkChange,
 }: {
+	sideChatContainer?: HTMLDivElement | null;
 	session: WorkspaceSession;
 	/** Owning daemon for a remote session; omitted for the local daemon. */
 	hostId?: string;
@@ -173,9 +186,13 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	/** The target controller is being installed by an interface handoff. */
 	controllerTransitioning?: boolean;
+	/** A stopped agent is being resumed in the background after the chat opened. */
+	agentResuming?: boolean;
 	controllerResumeError?: string;
 	/** An interface handoff fences new agent work while current-turn decisions remain available. */
 	newWorkDisabled?: boolean;
+	/** A switch from the terminal is under way and the conversation is not readable yet. */
+	arriving?: boolean;
 	/** Reports accepted Chat work that must inform an interface-switch policy choice. */
 	onConversationWorkChange?: (state: ConversationWorkState) => void;
 }) {
@@ -203,6 +220,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		pendingAcceptedTurnId,
 	} = commands;
 	const conversationWorkKnown = Boolean(snapshot);
+	const [sideWork, setSideWork] = useState(false);
 	const acceptedLocalTurnObserved = Boolean(
 		pendingAcceptedTurnId && snapshot?.turns.some((turn) => turn.id === pendingAcceptedTurnId),
 	);
@@ -225,20 +243,26 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					: [],
 			),
 		);
+		const queuedTurnIds = new Set(snapshot.turns.filter((turn) => turn.state === "queued").map((turn) => turn.id));
 		for (const echo of localEchos) {
-			if (echo.turnId && durableHumanTurnIds.has(echo.turnId)) acknowledgeLocalEcho?.(echo.turnId);
+			if (
+				echo.turnId && durableHumanTurnIds.has(echo.turnId) &&
+				!(echo.backgroundWake && queuedTurnIds.has(echo.turnId))
+			) acknowledgeLocalEcho?.(echo.turnId);
 		}
 	}, [acknowledgeLocalEcho, localEchos, snapshot]);
 	useEffect(() => {
 		if (!conversationWorkKnown) return;
-		onConversationWorkChange?.({ controllerBusy, hasRunningTurn, queuedTurnCount });
-	}, [controllerBusy, conversationWorkKnown, hasRunningTurn, onConversationWorkChange, queuedTurnCount]);
+		onConversationWorkChange?.({ controllerBusy: controllerBusy || sideWork, hasRunningTurn: hasRunningTurn || sideWork, queuedTurnCount });
+	}, [controllerBusy, conversationWorkKnown, hasRunningTurn, onConversationWorkChange, queuedTurnCount, sideWork]);
 	const targetChatControllerReady =
 		snapshot?.harness === session.provider &&
 		(snapshot.controller?.state === "ready" || snapshot.controller?.state === "busy");
 	// Mode commits before the target controller starts. A cached ready snapshot
 	// can also outlive the source, so wait for the handoff's final snapshot refresh.
-	const controllerCatalogsEnabled = targetChatControllerReady && !controllerTransitioning && !newWorkDisabled;
+	// A background resume keeps the last-known catalogs visible so the model
+	// picker doesn't blank out while the agent spins up.
+	const controllerCatalogsEnabled = (targetChatControllerReady || agentResuming) && !controllerTransitioning && !newWorkDisabled;
 	// Agent-switch presentation for the chat surface progress track and input locks.
 	const switchMutation = useSwitchAgentState(uiSessionId);
 	const agentSwitches = useAgentSwitches(session.id, hostId).data ?? [];
@@ -341,11 +365,24 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	// Only asked for once the conversation is actually readable: the catalog comes
 	// from the live controller, so there is nothing to fetch before then.
-	const { models } = useConversationModels(
+	const { models: controllerModels } = useConversationModels(
 		session.id,
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot) && !hasProviderModel,
 		hostId,
 	);
+	// Claude's live list is family aliases; the new-task picker's catalog carries the versions.
+	const isClaude = snapshot?.harness === "claude-code";
+	const claudeCatalog = useQuery({ ...agentModelsQueryOptions("claude-code", "", hostId), enabled: isClaude }).data;
+	const models = useMemo(() => {
+		if (!isClaude || !claudeCatalog?.models.length) return controllerModels;
+		return claudeCatalog.models
+			.filter((model) => model.id.toLowerCase() !== "default")
+			.map((model) => ({
+				id: model.id,
+				displayName: model.label || model.id,
+				default: Boolean(model.isDefault),
+			}));
+	}, [isClaude, claudeCatalog, controllerModels]);
 	const { skills } = useConversationSkills(
 		session.id,
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot),
@@ -353,7 +390,39 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot), hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
-	const openLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser, paths);
+	const [annotationNavigationRequest, setAnnotationNavigationRequest] = useState<{ id: string; text: string; messageId?: string; revision?: number }>();
+	const sideEnabled = useSideChatsAvailable(session, hostId) && !unavailable;
+	const sideCreationEnabled = sideEnabled && Boolean(snapshot && can(snapshot, "resume"));
+	const openSideInspector = () => {
+		const ui = useUiStore.getState();
+		ui.setInspectorView(uiSessionId, "sideChat");
+		ui.setInspectorOpen(uiSessionId, true);
+	};
+	const sideChats = useIndependentSideChats(
+		session.id, models, skills, stageAttachments, Boolean(snapshot && can(snapshot, "images")), sideEnabled,
+		(annotation) => {
+			onSelectChat?.();
+			setAnnotationNavigationRequest({ ...annotation, id: crypto.randomUUID() });
+		},
+		() => useUiStore.getState().setInspectorOpen(uiSessionId, false),
+		sideCreationEnabled,
+	);
+	useEffect(() => { if (sideChatContainer) sideChats.show(); }, [sideChatContainer]);
+	useEffect(() => setSideWork(sideChats.sides.some((side) => side.hasWork)), [sideChats.sides]);
+	const attachToSide = async (excerpt: ChatDraftExcerptReference) => {
+		openSideInspector();
+		if (sideChats.activeId) {
+			sideChats.addReference(sideChats.activeId, excerpt);
+			sideChats.show(sideChats.activeId);
+		} else {
+			await sideChats.create(excerpt);
+		}
+	};
+
+	const openLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser, paths, onOpenFile);
+	// Links opened on the user's behalf stay quiet about a file the session does
+	// not own; only a click earns the explanation in the file pane.
+	const autoOpenLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser, paths);
 	const openSessionLink = useSessionLinkNavigation(hostId);
 	const conversationLinkBaselines = useRef(new Map<string, ConversationLinkBaseline>());
 	useEffect(() => {
@@ -406,11 +475,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			if (url) {
 				autoOpenedLinkSessions.add(uiSessionId);
 				pendingCompleted.delete(item.id);
-				openLinkInBrowser(url);
+				autoOpenLinkInBrowser(url);
 				break;
 			}
 		}
-	}, [isLoading, openLinkInBrowser, paths, snapshot, uiSessionId]);
+	}, [autoOpenLinkInBrowser, isLoading, paths, snapshot, uiSessionId]);
 	const observedSuccessfulSwitch = Boolean(
 		agentSwitch &&
 			observedSettledSwitchId === agentSwitch.id &&
@@ -431,12 +500,38 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const switchLocksChat = Boolean(
 		switchPresentation?.lockAgentTerminal && !switchPresentation.allowSourceInput,
 	);
+	const promptSuggestion = useConversationPromptSuggestion(snapshot, Boolean(
+		targetChatControllerReady && !controllerBusy && !localEchos.length &&
+		!commands.rollbackPending && !commands.editMessagePending && !commands.activateBranchPending && !commands.compacting &&
+		!session.isTerminated && session.provisionState !== "failed" && session.provisionState !== "provisioning" &&
+		!isLoading && !error && !refreshError && !unavailable &&
+		!agentSwitching && !switchLocksChat && !handoffDialogOpen &&
+		!controllerTransitioning && !agentResuming && !newWorkDisabled && !arriving &&
+		!workspaceFileActive && !workspaceActiveTabKey && !reviewerTarget && !reviewerChatSelected && !shellTarget,
+	), hostId);
 	const renderShellFallback = Boolean(shellTarget && session);
+	// A switch from the terminal shows the chat before the daemon has a
+	// conversation to read. The starting snapshot stands in for the whole
+	// arrival, even over a cached transcript, so history appears once and fades
+	// in instead of flashing, hiding, and reappearing as the controller restarts.
+	const optimisticArrival = Boolean(arriving) && !renderShellFallback;
+	const optimisticChat = (session.kind === "orchestrator" && isLoading && !renderShellFallback) || optimisticArrival;
 	const renderSnapshot =
-		snapshot ??
+		(optimisticArrival
+			? { ...startingConversationSnapshot(session.id, session.provider), controller: { state: "stopped" as const } }
+			: snapshot) ??
+		(optimisticChat ? startingConversationSnapshot(session.id, session.provider) : undefined) ??
 		(renderShellFallback
 			? unavailableConversationSnapshot(session)
 			: undefined);
+	// Keep the project marked as starting until its controller is ready, so
+	// sidebar actions cannot launch a duplicate orchestrator.
+	useEffect(() => {
+		if (session.kind !== "orchestrator" || session.provisionState === "provisioning") return;
+		if (isLoading && !renderShellFallback) return;
+		if (session.provisionState !== "failed" && !targetChatControllerReady && !renderShellFallback && !error && !unavailable) return;
+		useUiStore.getState().setProjectProvisioning(session.workspaceId, false, hostId);
+	}, [error, hostId, isLoading, renderShellFallback, session.kind, session.provisionState, session.workspaceId, targetChatControllerReady, unavailable]);
 	const visibilityPresentationKind = agentSwitchVisibilityPresentationKind(shownSwitchPresentation);
 	useAgentSwitchPresentationVisibility({
 		localRouteKey: `session/${uiSessionId}`,
@@ -452,7 +547,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		),
 	});
 
-	if (isLoading && !renderShellFallback) {
+	if (isLoading && !renderShellFallback && !optimisticChat) {
 		return (
 			<Centered>
 				<Loader2 aria-hidden="true" className="size-4 animate-spin text-muted-foreground" />
@@ -465,11 +560,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// run Chat is a state to explain rather than an error to spin on. A compatible
 	// session may switch interfaces, but retrying this failed controller by itself
 	// cannot change the answer.
-	if (unavailable && !renderShellFallback) {
+	if (unavailable && !renderShellFallback && !optimisticArrival) {
 		return (
 			<Centered>
 				<AlertTriangle aria-hidden="true" className="size-4 text-warning" />
-				<strong className="text-sm text-foreground">Conversation unavailable</strong>
+				<strong className="text-xs text-foreground">Conversation unavailable</strong>
 				<p className="max-w-sm text-center text-xs leading-relaxed text-muted-foreground">
 					{unavailable.message}
 				</p>
@@ -480,7 +575,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		);
 	}
 
-	if (error || !renderSnapshot) {
+	if ((error && !optimisticArrival) || !renderSnapshot) {
 		return (
 			<Centered>
 				<AlertTriangle aria-hidden="true" className="size-4 text-destructive" />
@@ -493,13 +588,17 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 
 	return (
 		<div className="relative h-full min-h-0">
-			{refreshError ? <p role="alert" className="px-4 py-2 text-sm text-destructive">{refreshError}</p> : null}
+			{refreshError ? <p role="alert" className="px-4 py-2 text-xs text-destructive">{refreshError}</p> : null}
+			{sideChatContainer ? createPortal(sideChats.panel, sideChatContainer) : null}
 			<ChatWorkspace
+				onAddToSideChat={sideEnabled && (sideChats.activeId || sideCreationEnabled) ? attachToSide : undefined}
+				annotationNavigationRequest={annotationNavigationRequest}
 				key={uiSessionId}
 				uiSessionId={uiSessionId}
 				assetBaseUrl={assetBaseUrl}
 				remoteHostId={hostId}
 				snapshot={renderSnapshot}
+				promptSuggestion={promptSuggestion}
 				agentInputDisabled={switchLocksChat || handoffDialogOpen}
 				newWorkDisabled={newWorkDisabled}
 				onLinkOpen={openLinkInBrowser}
@@ -532,12 +631,39 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				auxiliaryTabOrder={auxiliaryTabOrder}
 				onAuxiliaryTabOrderChange={onAuxiliaryTabOrderChange}
 				controllerTransitioning={controllerTransitioning}
+				loadingQuietly={optimisticChat && !optimisticArrival && session.provisionState !== "provisioning"}
+				agentResuming={agentResuming}
 				hasOlder={hasOlder}
 				loadingOlder={isLoadingOlder}
 				onLoadOlder={loadOlder}
 				busy={commands.busy}
-				onSend={(text, attachments, clientMessageId) =>
-					commands.send({ text, attachments, clientMessageId })}
+				excerptsEnabled
+				onSend={async (text, attachments, clientMessageId, excerpts) => {
+					// Only claim /btw and /side where side chats can open. Elsewhere the
+					// text goes to the agent as typed (it may be the harness's own skill),
+					// so a failed side launch can never strand the main draft.
+					const btw = sideCreationEnabled ? /^\/(?:btw|side)(?:\s+|$)/i.exec(text) : null;
+					if (btw) {
+						openSideInspector();
+						const side = await sideChats.create(undefined, true, clientMessageId);
+						const question = text.slice(btw[0].length).trim();
+						if (question || excerpts?.length || attachments?.length) {
+							// Retain the main draft if handing the request to the side fails.
+							await sideChats.send(side.id, question, attachments, excerpts, true, clientMessageId);
+						}
+						return;
+					}
+					return commands.send({
+						text,
+						attachments,
+						clientMessageId,
+						excerpts: excerpts?.map((excerpt) => ({
+							conversationId: excerpt.conversationId,
+							messageId: excerpt.messageId,
+							revision: excerpt.revision,
+							text: excerpt.text,
+						})),
+					}); }}
 				commandError={commands.error}
 				onDecide={commands.resolve}
 				onResolveInput={commands.resolveInput}
@@ -545,11 +671,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onResumeAgent={() => {
 					void commands.resumeAgent().catch(() => {});
 				}}
-				resumingAgent={commands.resumingAgent}
+				resumingAgent={commands.resumingAgent || (renderSnapshot.controller.state === "hibernated" && controllerBusy)}
 				resumeError={commands.resumeError ?? controllerResumeError}
 				onOpenShell={onOpenShell}
 				openingShell={openingShell}
 				shellError={shellError}
+				settingsReady={!optimisticChat && (targetChatControllerReady || agentResuming) && (!can(renderSnapshot, "config_options") || configOptions.loaded)}
 				models={models}
 				onChooseSettings={hasProviderMode ? undefined : commands.chooseSettings}
 				onRememberPermissions={can(renderSnapshot, "config_options") && !configOptions.loaded
@@ -560,7 +687,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				configOptions={configOptions.options}
 				onChooseConfigOption={configOptions.setOption}
 				configOptionPending={configOptions.pending || commands.choosingSettings}
-				configOptionError={configOptions.error}
+				configOptionError={controllerCatalogsEnabled ? configOptions.error : undefined}
 				onCompact={commands.compact}
 				compacting={commands.compacting}
 				compactUnavailable={commands.compactUnavailable}
@@ -576,7 +703,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onActivateBranch={commands.activateBranch}
 				activateBranchPending={commands.activateBranchPending}
 				activateBranchError={commands.activateBranchError}
-				skills={skills}
+				skills={sideCreationEnabled ? [...(["btw", "side"].map((name) => ({ name, displayName: name, description: "Open a new side chat", source: "AO" }))), ...skills.filter((skill) => skill.name !== "btw" && skill.name !== "side")] : skills}
 				filePaths={paths}
 				filePathsTruncated={truncated}
 				localEchos={localEchos}
@@ -601,17 +728,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				promoteQueuedTurnPendingTurnId={commands.promoteQueuedTurnPendingTurnId}
 				cancelQueuedTurnPendingTurnId={commands.cancelQueuedTurnPendingTurnId}
 				editQueuedTurnPendingTurnId={commands.editQueuedTurnPendingTurnId}
-				onReloadMcpServers={
-					!can(renderSnapshot, "mcp_reload") || commands.mcpReloadUnsupported
-						? undefined
-						: () => {
-								// The rejection is already held by the mutation and rendered from
-								// `mcpReloadError`; rethrowing it would only add a console error.
-								void commands.reloadMcpServers().catch(() => {});
-							}
-				}
-				reloadingMcpServers={commands.reloadingMcpServers}
-				mcpReloadError={commands.mcpReloadError}
 			/>
 			{shownSwitchPresentation ? (
 				<ChatAgentSwitchStatus
@@ -708,21 +824,8 @@ function ChatAgentSwitchStatus({
 
 function unavailableConversationSnapshot(session: WorkspaceSession): ConversationSnapshot {
 	return {
-		conversationId: session.id,
-		sessionId: session.id,
-		harness: session.provider,
-		mode: "chat",
+		...startingConversationSnapshot(session.id, session.provider),
 		controller: { state: "stopped", error: "Conversation unavailable" },
-		latestSequence: 0,
-		oldestSequence: 0,
-		hasMoreBefore: false,
-		activeBranchId: "branch-root",
-		branchPoints: [],
-		settings: {},
-		mcpServers: [],
-		capabilities: [],
-		turns: [],
-		items: [],
 	};
 }
 

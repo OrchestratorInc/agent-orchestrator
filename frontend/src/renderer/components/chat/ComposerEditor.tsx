@@ -5,9 +5,11 @@ import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
 import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import {
+	$addUpdateTag,
 	$getNodeByKey,
 	$getRoot,
 	$getSelection,
+	$isElementNode,
 	$isRangeSelection,
 	$isTextNode,
 	$createParagraphNode,
@@ -15,28 +17,39 @@ import {
 	CLEAR_HISTORY_COMMAND,
 	COMMAND_PRIORITY_HIGH,
 	DecoratorNode,
+	HISTORY_PUSH_TAG,
 	KEY_ENTER_COMMAND,
+	KEY_ESCAPE_COMMAND,
 	KEY_TAB_COMMAND,
 	type EditorConfig,
 	type LexicalEditor,
 	type LexicalNode,
 	type NodeKey,
+	type RangeSelection,
 	type SerializedLexicalNode,
 	type Spread,
 } from "lexical";
 import {
+	createContext,
 	forwardRef,
 	useCallback,
+	useContext,
 	useEffect,
 	useImperativeHandle,
+	useId,
+	useLayoutEffect,
+	useRef,
+	useState,
 	type ClipboardEvent,
 	type JSX,
 	type KeyboardEvent,
 } from "react";
-import { Box } from "lucide-react";
+import { Box, Image as ImageIcon } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { composerFileIcon } from "./composerFileIcon";
 import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
+import { splitInlineImagePaths } from "./messageAttachments";
 
 export type ComposerTrigger = {
 	kind: TriggerKind;
@@ -53,15 +66,78 @@ export type ComposerEditorSnapshot = {
 	trigger?: ComposerTrigger;
 };
 
+export type ComposerPromptSuggestion = { id: string; text: string; onDismiss?: () => void };
+
 export type ComposerEditorHandle = {
 	focus(): void;
 	clear(): void;
 	setText(text: string): void;
 	insertToken(trigger: ComposerTrigger, value: string): void;
+	/** Inserts a file reference chip at the caret (or the end) that sends `wire`. */
+	insertReference(path: string, display: string, wire: string): void;
+	/**
+	 * Hold the caret's place for images still being staged. Returns a reservation
+	 * for fillImages, so the chips land where the user pasted, not wherever the
+	 * caret has moved by the time staging finishes.
+	 */
+	reserveImages(): string | undefined;
+	/** Replace a reservation with one chip per staged image path (none removes it). */
+	fillImages(reservation: string, paths: string[]): void;
+	/** Drop every inline chip for an image that left the attachment list. */
+	removeImage(path: string): void;
+	/**
+	 * Drop chips whose image is not in `attached` (an undo can restore a chip
+	 * after its image was removed). Typed text is never touched.
+	 */
+	pruneImages(attached: string[]): void;
 	getSnapshot(): ComposerEditorSnapshot;
 };
 
-type TokenKind = "skill" | "file";
+/** What an inline image chip shows for a staged path; the path itself is the wire text. */
+export type ComposerImage = { path: string; name: string; src?: string };
+
+const ComposerImages = createContext<ComposerImage[]>([]);
+
+/** An empty path is a reservation whose image is still being staged. */
+function ComposerImageChip({ path }: { path: string }) {
+	const { t } = useTranslation();
+	const images = useContext(ComposerImages);
+	const index = images.findIndex((candidate) => candidate.path === path);
+	const image = images[index];
+	if (!path) {
+		return (
+			<span
+				data-composer-token="image-pending"
+				contentEditable={false}
+				className="mx-0.5 inline-flex items-center gap-1 rounded-md border border-dashed border-border-strong px-1.5 py-0.5 align-middle text-[0.9em] leading-none text-muted-foreground select-none"
+			>
+				<ImageIcon aria-hidden="true" className="size-3 shrink-0" />
+				…
+			</span>
+		);
+	}
+	return (
+		<span
+			data-composer-token="image"
+			data-value={path}
+			contentEditable={false}
+			title={image?.name}
+			className="mx-0.5 inline-flex max-w-48 items-center gap-1 rounded-md border border-border-strong bg-interactive-hover py-0.5 pl-0.5 pr-1.5 align-middle text-[0.9em] leading-none text-foreground select-none"
+		>
+			{image?.src ? (
+				<img src={image.src} alt="" className="size-4 shrink-0 rounded-sm object-cover" />
+			) : (
+				<ImageIcon aria-hidden="true" className="size-3 shrink-0" />
+			)}
+			{/* Numbered like the sent message will be; the file name stays in the tooltip. */}
+			<span className="truncate">
+				{image ? t("chat.image.numbered", { index: index + 1 }) : t("chat.image.untitled")}
+			</span>
+		</span>
+	);
+}
+
+type TokenKind = "skill" | "file" | "image";
 
 const completionHandledEvents = new WeakSet<Event>();
 const PROGRAMMATIC_TEXT_UPDATE_TAG = "ao:composer-programmatic-text";
@@ -146,6 +222,7 @@ class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 	}
 
 	decorate(): JSX.Element {
+		if (this.__kind === "image") return <ComposerImageChip path={this.__value} />;
 		const Icon = this.__kind === "skill" ? Box : composerFileIcon(this.__value);
 		return (
 			<span
@@ -167,10 +244,21 @@ class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 }
 
 function $createComposerTokenNode(kind: TokenKind, value: string): ComposerTokenNode {
+	if (kind === "image") return new ComposerTokenNode(kind, value, value, value);
 	const wire = kind === "skill" ? `/${value}` : /\s/.test(value) ? `"${value}"` : value;
 	const slash = value.lastIndexOf("/");
 	const display = kind === "skill" ? wire : slash >= 0 ? value.slice(slash + 1) : value;
 	return new ComposerTokenNode(kind, value, display, wire);
+}
+
+function $insertComposerReference(path: string, display: string, wire: string): void {
+	let selection = $getSelection();
+	if (!$isRangeSelection(selection)) {
+		$getRoot().selectEnd();
+		selection = $getSelection();
+	}
+	if (!$isRangeSelection(selection)) return;
+	selection.insertNodes([new ComposerTokenNode("file", path, display, wire), $createTextNode(" ")]);
 }
 
 function $serializeComposer(): string {
@@ -203,15 +291,91 @@ function $insertComposerToken(trigger: ComposerTrigger, value: string): boolean 
 	return true;
 }
 
-function $replaceEditorText(text: string): void {
+function $replaceEditorText(text: string, attached: string[] = []): void {
 	const root = $getRoot();
 	root.clear();
 	for (const line of text.split("\n")) {
 		const paragraph = $createParagraphNode();
-		if (line !== "") paragraph.append($createTextNode(line));
+		// A restored draft is plain text; paths of still-attached images become chips
+		// again. Any other path stays the text the user typed.
+		for (const segment of splitInlineImagePaths(line, (path) => attached.includes(path))) {
+			paragraph.append(
+				segment.path === undefined
+					? $createTextNode(segment.text)
+					: $createComposerTokenNode("image", segment.path),
+			);
+		}
 		root.append(paragraph);
 	}
 	root.selectEnd();
+}
+
+/** True when the character before the caret would run into an inserted chip's text. */
+function $joinsPreviousWord(selection: RangeSelection): boolean {
+	const { anchor } = selection;
+	const node = anchor.getNode();
+	const before = $isTextNode(node)
+		? node.getTextContent().slice(0, anchor.offset) || (node.getPreviousSibling()?.getTextContent() ?? "")
+		: $isElementNode(node) && anchor.offset > 0
+			? (node.getChildAtIndex(anchor.offset - 1)?.getTextContent() ?? "")
+			: "";
+	return /\S$/.test(before);
+}
+
+function $reserveImages(): string | undefined {
+	const reservation = $createComposerTokenNode("image", "");
+	const nodes: LexicalNode[] = [reservation, $createTextNode(" ")];
+	let selection = $getSelection();
+	if (!$isRangeSelection(selection)) {
+		// A drop or the file picker can leave no selection; the end is the natural place.
+		$getRoot().selectEnd();
+		selection = $getSelection();
+	}
+	if (!$isRangeSelection(selection)) return undefined;
+	if ($joinsPreviousWord(selection)) nodes.unshift($createTextNode(" "));
+	selection.insertNodes(nodes);
+	return reservation.getKey();
+}
+
+function $fillImages(reservation: string, paths: string[]): void {
+	const node = $getNodeByKey(reservation);
+	// Deleted while staging: the user removed it on purpose, so add nothing back.
+	if (!(node instanceof ComposerTokenNode)) return;
+	if (paths.length === 0) {
+		$removeChip(node);
+		return;
+	}
+	let last: LexicalNode = node;
+	paths.forEach((path, index) => {
+		const chip = $createComposerTokenNode("image", path);
+		if (index === 0) {
+			node.replace(chip);
+		} else {
+			const space = $createTextNode(" ");
+			last.insertAfter(space);
+			space.insertAfter(chip);
+		}
+		last = chip;
+	});
+}
+
+/** Remove a chip and one following space so the words around it don't double-space. */
+function $removeChip(chip: LexicalNode): void {
+	const next = chip.getNextSibling();
+	if ($isTextNode(next) && next.getTextContent().startsWith(" ")) {
+		if (next.getTextContent() === " ") next.remove();
+		else next.setTextContent(next.getTextContent().slice(1));
+	}
+	chip.remove();
+}
+
+function $removeImageTokens(remove: (path: string) => boolean): void {
+	for (const paragraph of $getRoot().getChildren()) {
+		if (!$isElementNode(paragraph)) continue;
+		for (const child of paragraph.getChildren()) {
+			if (child instanceof ComposerTokenNode && child.__kind === "image" && remove(child.__value)) $removeChip(child);
+		}
+	}
 }
 
 function editorSnapshot(): ComposerEditorSnapshot {
@@ -251,11 +415,15 @@ const EditorBridge = forwardRef<
 	ComposerEditorHandle,
 	{
 		disabled?: boolean;
+		promptSuggestion?: ComposerPromptSuggestion;
+		onDismissSuggestion: () => void;
+		/** Staged paths of the images attached right now. */
+		attachedImages: () => string[];
 		onChange: (snapshot: ComposerEditorSnapshot) => void;
 		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
 	}
->(function EditorBridge({ disabled, onChange, onComplete, onEnter }, ref) {
+>(function EditorBridge({ disabled, promptSuggestion, onDismissSuggestion, attachedImages, onChange, onComplete, onEnter }, ref) {
 	const [editor] = useLexicalComposerContext();
 
 	useEffect(() => editor.setEditable(!disabled), [disabled, editor]);
@@ -275,7 +443,7 @@ const EditorBridge = forwardRef<
 			},
 			setText: (text) => {
 				editor.update(() => {
-					$replaceEditorText(text);
+					$replaceEditorText(text, attachedImages());
 					editor.dispatchCommand(CLEAR_HISTORY_COMMAND, undefined);
 				}, {
 					discrete: true,
@@ -287,19 +455,43 @@ const EditorBridge = forwardRef<
 					$insertComposerToken(trigger, value);
 				}, { discrete: true });
 			},
+			insertReference: (path, display, wire) => {
+				editor.update(() => {
+					$insertComposerReference(path, display, wire);
+				}, { discrete: true });
+			},
+			reserveImages: () => {
+				let reservation: string | undefined;
+				editor.update(() => {
+					reservation = $reserveImages();
+				}, { discrete: true });
+				return reservation;
+			},
+			fillImages: (reservation, paths) => {
+				editor.update(() => $fillImages(reservation, paths), { discrete: true });
+			},
+			removeImage: (path) => {
+				editor.update(() => $removeImageTokens((candidate) => candidate === path), { discrete: true });
+			},
+			pruneImages: (attached) => {
+				editor.update(() => $removeImageTokens((candidate) => !attached.includes(candidate)), { discrete: true });
+			},
 			getSnapshot: () => editor.getEditorState().read(editorSnapshot),
 		}),
-		[editor],
+		[attachedImages, editor],
 	);
 
-	useEffect(
-		() =>
-			editor.registerUpdateListener(({ editorState, tags }) => {
-				if (tags.has(PROGRAMMATIC_TEXT_UPDATE_TAG)) return;
-				editorState.read(() => onChange(editorSnapshot()));
-			}),
-		[editor, onChange],
-	);
+	useLayoutEffect(() => {
+		const dismissIfNotEmpty = () => {
+			if (promptSuggestion && $serializeComposer().length > 0) onDismissSuggestion();
+		};
+		editor.getEditorState().read(dismissIfNotEmpty);
+		return editor.registerUpdateListener(({ editorState, tags }) => {
+			editorState.read(dismissIfNotEmpty);
+			if (tags.has(PROGRAMMATIC_TEXT_UPDATE_TAG)) return;
+			editorState.read(() => onChange(editorSnapshot()));
+		});
+	}, [editor, onChange, onDismissSuggestion, promptSuggestion]);
 
 	useEffect(() => {
 		const complete = (event: globalThis.KeyboardEvent | null, key: "Enter" | "Tab") => {
@@ -309,6 +501,24 @@ const EditorBridge = forwardRef<
 			if (event?.defaultPrevented) return true;
 			if (event?.isComposing || event?.shiftKey || editor.isComposing()) return false;
 			const snapshot = editorSnapshot();
+			if (
+				key === "Tab" && promptSuggestion && !snapshot.text &&
+				!event?.altKey && !event?.ctrlKey && !event?.metaKey
+			) {
+				const selection = $getSelection();
+				if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
+				$addUpdateTag(HISTORY_PUSH_TAG);
+				// End a generated @path or /skill with a boundary, including after draft
+				// restore. Outgoing text is trimmed; ordinary prose stays unchanged.
+				const trailingTrigger = findActiveTrigger(promptSuggestion.text, promptSuggestion.text.length);
+				selection.insertText(promptSuggestion.text + (trailingTrigger ? " " : ""));
+				onDismissSuggestion();
+				if (event) {
+					completionHandledEvents.add(event);
+					event.preventDefault();
+				}
+				return true;
+			}
 			const value = onComplete(snapshot, key);
 			if (snapshot.trigger && value) {
 				if (!$insertComposerToken(snapshot.trigger, value)) return false;
@@ -339,24 +549,61 @@ const EditorBridge = forwardRef<
 			(event) => complete(event, "Tab"),
 			COMMAND_PRIORITY_HIGH,
 		);
+		const removeEscape = editor.registerCommand(KEY_ESCAPE_COMMAND, (event) => {
+			if (!promptSuggestion || $serializeComposer() || event.isComposing || editor.isComposing()) return false;
+			onDismissSuggestion();
+			completionHandledEvents.add(event);
+			event.preventDefault();
+			event.stopPropagation();
+			return true;
+		}, COMMAND_PRIORITY_HIGH);
 		return () => {
 			removeEnter();
 			removeTab();
+			removeEscape();
 		};
-	}, [editor, onComplete, onEnter]);
+	}, [editor, onComplete, onDismissSuggestion, onEnter, promptSuggestion]);
 
 	return null;
 });
+
+/**
+ * Fades a changing placeholder (the orchestrator's start-up steps) out, swaps
+ * the text, and fades it back in. Fast on purpose. The first text mounts
+ * directly.
+ */
+const PLACEHOLDER_FADE_MS = 80;
+
+function FadingPlaceholder({ text }: { text: string }) {
+	const [shown, setShown] = useState(text);
+	useEffect(() => {
+		if (text === shown) return;
+		const timer = setTimeout(() => setShown(text), PLACEHOLDER_FADE_MS);
+		return () => clearTimeout(timer);
+	}, [text, shown]);
+	return (
+		<span
+			className="transition-opacity ease-out motion-reduce:transition-none"
+			style={{ opacity: text === shown ? 1 : 0, transitionDuration: `${PLACEHOLDER_FADE_MS}ms` }}
+		>
+			{shown}
+		</span>
+	);
+}
 
 export const ComposerEditor = forwardRef<
 	ComposerEditorHandle,
 	{
 		disabled?: boolean;
+		/** Hides the text while a send is in flight; the draft is still held for recovery. */
+		concealed?: boolean;
 		label: string;
 		placeholder: string;
+		promptSuggestion?: ComposerPromptSuggestion;
 		menuOpen: boolean;
 		menuId: string;
 		activeIndex: number;
+		images?: ComposerImage[];
 		onChange: (snapshot: ComposerEditorSnapshot) => void;
 		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
@@ -367,11 +614,14 @@ export const ComposerEditor = forwardRef<
 >(function ComposerEditor(
 	{
 		disabled,
+		concealed,
 		label,
 		placeholder,
+		promptSuggestion,
 		menuOpen,
 		menuId,
 		activeIndex,
+		images = [],
 		onChange,
 		onComplete,
 		onEnter,
@@ -381,6 +631,18 @@ export const ComposerEditor = forwardRef<
 	},
 	ref,
 ) {
+	const { t } = useTranslation();
+	const suggestionDescriptionId = useId();
+	const [dismissedSuggestionId, setDismissedSuggestionId] = useState<string>();
+	const suggestion = !disabled && !concealed && promptSuggestion?.id !== dismissedSuggestionId
+		? promptSuggestion
+		: undefined;
+	const dismissSuggestion = useCallback(() => {
+		if (promptSuggestion) {
+			setDismissedSuggestionId(promptSuggestion.id);
+			promptSuggestion.onDismiss?.();
+		}
+	}, [promptSuggestion]);
 	const initialConfig = {
 		namespace: "AOChatComposer",
 		nodes: [ComposerTokenNode],
@@ -391,23 +653,36 @@ export const ComposerEditor = forwardRef<
 		},
 	};
 
+	// Read at setText time, not render time, so a draft restore sees the
+	// attachments it was restored with.
+	const imagesRef = useRef(images);
+	imagesRef.current = images;
+	const attachedImages = useCallback(() => imagesRef.current.map((image) => image.path), []);
+
 	const placeholderNode = useCallback(
 		() => (
-			<div className="pointer-events-none absolute inset-x-0 top-0 py-1 pl-[7px] text-base! leading-relaxed text-muted-foreground">
-				{placeholder}
+			<div className={cn(
+				"py-1 pl-[7px] text-base! leading-relaxed text-muted-foreground",
+				suggestion
+					? "min-h-[4.5rem] whitespace-pre-wrap break-words"
+					: "pointer-events-none absolute inset-x-0 top-0",
+			)}>
+				{suggestion ? <span data-testid="prompt-suggestion">{suggestion.text}</span> : <FadingPlaceholder text={placeholder} />}
 			</div>
 		),
-		[placeholder],
+		[placeholder, suggestion],
 	);
 
 	return (
 		<LexicalComposer initialConfig={initialConfig}>
-			<div className="relative">
+			<ComposerImages.Provider value={images}>
+			<div className={cn("relative", suggestion && "chat-composer-scrollbar max-h-40 overflow-y-auto overscroll-contain")}>
 				<PlainTextPlugin
 					contentEditable={
 						<ContentEditable
 							aria-label={label}
 							aria-placeholder={placeholder}
+							aria-describedby={suggestion ? suggestionDescriptionId : undefined}
 							placeholder={placeholderNode}
 							aria-disabled={disabled || undefined}
 							role="combobox"
@@ -416,7 +691,7 @@ export const ComposerEditor = forwardRef<
 							aria-activedescendant={
 								menuOpen ? `${menuId}-option-${activeIndex}` : undefined
 							}
-							aria-autocomplete="list"
+							aria-autocomplete={suggestion ? "both" : "list"}
 							onCompositionStart={() => onCompositionChange(true)}
 							onCompositionEnd={() => onCompositionChange(false)}
 							onKeyDown={(event) => {
@@ -428,21 +703,32 @@ export const ComposerEditor = forwardRef<
 							}}
 							className={cn(
 								"chat-composer-scrollbar max-h-40 min-h-[4.5rem] w-full overflow-y-auto overscroll-contain bg-transparent py-1 pl-[7px] pr-0 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-background",
-								disabled && "opacity-50",
+								suggestion && "absolute inset-0 overflow-visible overscroll-auto",
+								concealed ? "invisible" : disabled && "opacity-50",
 							)}
 						/>
 					}
 					ErrorBoundary={LexicalErrorBoundary}
 				/>
+				{concealed ? <div aria-hidden="true">{placeholderNode()}</div> : null}
+				{suggestion ? (
+					<span id={suggestionDescriptionId} className="sr-only">
+						{t("chat.promptSuggestion.description", { prompt: suggestion.text })}
+					</span>
+				) : null}
 				<HistoryPlugin />
 				<EditorBridge
 					ref={ref}
 					disabled={disabled}
+					promptSuggestion={suggestion}
+					onDismissSuggestion={dismissSuggestion}
+					attachedImages={attachedImages}
 					onChange={onChange}
 					onComplete={onComplete}
 					onEnter={onEnter}
 				/>
 			</div>
+			</ComposerImages.Provider>
 		</LexicalComposer>
 	);
 });

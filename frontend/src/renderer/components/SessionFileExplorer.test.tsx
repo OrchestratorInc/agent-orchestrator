@@ -7,6 +7,7 @@ import { SessionFileExplorer } from "./SessionFileExplorer";
 import { FilesTopbarHostContext } from "./files-topbar-host";
 import { TooltipProvider } from "./ui/tooltip";
 import { useUiStore } from "../stores/ui-store";
+import { sessionSourceFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
 import { sessionUiKey } from "../lib/hosts";
 import type { TreeNode } from "../hooks/useSessionWorkspaceTree";
@@ -49,23 +50,26 @@ vi.mock("./FileTree", () => ({
 		forceChangedOnly = false,
 		filterText,
 		onSelectPath,
+		onPrefetchPath,
 	}: {
 		changedOnly: boolean;
 		changedOnlyData: TreeNode[];
 		forceChangedOnly?: boolean;
 		filterText: string;
 		onSelectPath: (node: { path: string; type: "file" }) => void;
+		onPrefetchPath?: (node: TreeNode) => void;
 	}) => {
 		const [expanded, setExpanded] = useState(false);
 		const filePaths = (nodes: TreeNode[]): string[] => nodes.flatMap((node) => node.children ? filePaths(node.children) : [node.path]);
+		const selectablePath = filePaths(changedOnlyData)[0] ?? "src/App.tsx";
 		return <div>
 			<span data-testid="tree-changed-only">{String(changedOnly || forceChangedOnly)}</span>
 			<span data-testid="tree-files">{filePaths(changedOnlyData).join(" ")}</span>
 			<span data-testid="tree-filter">{filterText}</span>
 			<button onClick={() => setExpanded((current) => !current)} type="button">expand src</button>
 			{expanded ? <span>src directory expanded</span> : null}
-			<button onClick={() => onSelectPath({ path: "src/App.tsx", type: "file" })} type="button">
-				select src/App.tsx
+			<button onPointerEnter={() => onPrefetchPath?.({ name: selectablePath.split("/").pop()!, path: selectablePath, type: "file" })} onClick={() => onSelectPath({ path: selectablePath, type: "file" })} type="button">
+				select {selectablePath}
 			</button>
 		</div>;
 	},
@@ -118,6 +122,20 @@ describe("SessionFileExplorer", () => {
 		postMock.mockReset();
 		hostAGetMock.mockReset();
 		hostBGetMock.mockReset();
+	});
+
+	it("warms the exact file query on hover so opening it needs no second request", async () => {
+		useUiStore.getState().setFilesChangedOnly("hover-session", false);
+		const detail = { sessionId: "hover-session", path: "src/App.tsx", content: "ready before click" };
+		const previous = getMock.getMockImplementation()!;
+		getMock.mockImplementation((path: string, options: unknown) => path.endsWith("/workspace/file") ? Promise.resolve({ data: detail }) : previous(path, options));
+		const { client } = renderWithQuery(<SessionFileExplorer sessionId="hover-session" />);
+		fireEvent.pointerEnter(screen.getByRole("button", { name: "select src/App.tsx" }));
+		await waitFor(() => expect(client.getQueryData(["session-workspace-file", "hover-session", "combined", "", "src/App.tsx"])).toEqual(detail));
+		const fileCalls = () => getMock.mock.calls.filter(([path]) => path.endsWith("/workspace/file"));
+		expect(fileCalls()).toHaveLength(1);
+		await client.fetchQuery(sessionSourceFileQueryOptions("hover-session", { kind: "workspace" }, "src/App.tsx"));
+		expect(fileCalls()).toHaveLength(1);
 	});
 
 	it("keeps same-id remote file state on A and B separate while opening center tabs", async () => {
@@ -183,54 +201,6 @@ describe("SessionFileExplorer", () => {
 		expect(onOpenFile).toHaveBeenCalledOnce();
 	});
 
-	it("keeps the tree visible and opens an externally requested file in the center", () => {
-		const onOpenFile = vi.fn();
-		const { client, rerender } = renderWithQuery(
-			<SessionFileExplorer onOpenFile={onOpenFile} sessionId="sess-explorer-reveal" revealRequest={null} />,
-		);
-
-		expect(screen.queryByTestId("content-pane")).not.toBeInTheDocument();
-		rerender(
-			<QueryClientProvider client={client}>
-				<TooltipProvider>
-					<SessionFileExplorer
-						onOpenFile={onOpenFile}
-						revealRequest={{ path: "docs/notes.txt", key: 1 }}
-						sessionId="sess-explorer-reveal"
-					/>
-				</TooltipProvider>
-			</QueryClientProvider>,
-		);
-
-		expect(screen.queryByTestId("content-pane")).not.toBeInTheDocument();
-		expect(screen.getByTestId("tree-changed-only")).toBeInTheDocument();
-		expect(onOpenFile).toHaveBeenCalledWith("docs/notes.txt", { mode: "file" });
-	});
-
-	it("reports a reveal handled once it opens the file, and keeps it pending while maximized", () => {
-		const onOpenFile = vi.fn();
-		const onRevealHandled = vi.fn();
-		const reveal = { path: "docs/notes.txt", key: 3 };
-		const { client, rerender } = renderWithQuery(
-			<SessionFileExplorer isMaximized onOpenFile={onOpenFile} onRevealHandled={onRevealHandled} revealRequest={reveal} sessionId="sess-explorer-reveal-once" />,
-		);
-		// Maximized, the file shows in this view's own preview; the request stays pending.
-		expect(onOpenFile).not.toHaveBeenCalled();
-		expect(onRevealHandled).not.toHaveBeenCalled();
-
-		rerender(
-			<QueryClientProvider client={client}>
-				<TooltipProvider>
-					<SessionFileExplorer onOpenFile={onOpenFile} onRevealHandled={onRevealHandled} revealRequest={reveal} sessionId="sess-explorer-reveal-once" />
-				</TooltipProvider>
-			</QueryClientProvider>,
-		);
-		expect(onOpenFile).toHaveBeenCalledOnce();
-		expect(onOpenFile).toHaveBeenCalledWith("docs/notes.txt", { mode: "file" });
-		expect(onRevealHandled).toHaveBeenCalledOnce();
-		expect(onRevealHandled).toHaveBeenCalledWith(3);
-	});
-
 	it("keeps the tree and content side by side when maximized", async () => {
 		const widthSpy = vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(500);
 		useUiStore.getState().setFilesChangedOnly("sess-explorer-maximized", false);
@@ -287,6 +257,39 @@ describe("SessionFileExplorer", () => {
 		expect(titlebar).toContainElement(filter);
 		expect(screen.getByRole("button", { name: "Minimize files" }).closest("header")).not.toContainElement(filter);
 		titlebar.remove();
+	});
+
+	it("does not offer artifacts as a Files source in the workspace dropdown", async () => {
+		// A PR keeps the source picker itself visible, so the Branch submenu can
+		// actually be opened and inspected.
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/sessions/{sessionId}/pr") {
+				return { data: { sessionId: "sess-artifacts", prs: [{ number: 42, url: "https://example.test/pr/42", sourceBranch: "feature/files", title: "Files" }] } };
+			}
+			return {
+				data: {
+					sessionId: "sess-artifacts",
+					files: [{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 10, binary: false }],
+					truncated: false,
+				},
+			};
+		});
+		renderWithQuery(<SessionFileExplorer sessionId="sess-artifacts" />);
+
+		expect(await screen.findByRole("tablist", { name: "File view" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "File source" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Branch" }));
+
+		expect(await screen.findByRole("menuitem", { name: "PR #42 · feature/files" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Artifacts (2)" })).not.toBeInTheDocument();
+	});
+
+	it("shows the workspace when a stale artifact source is stored", async () => {
+		const sessionId = "sess-stale-artifact-source";
+		useUiStore.getState().setFilesSource(sessionId, { kind: "artifact" });
+		renderWithQuery(<SessionFileExplorer sessionId={sessionId} />);
+
+		expect(await screen.findByTestId("review-pane")).toBeInTheDocument();
 	});
 
 	it("defaults to the continuous changes review and can switch to the full file tree", async () => {

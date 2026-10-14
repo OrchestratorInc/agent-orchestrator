@@ -6,6 +6,11 @@ const spawn = readFileSync(fileURLToPath(new URL("../app/spawn.tsx", import.meta
 const voiceInput = readFileSync(fileURLToPath(new URL("./voice/useVoiceInput.ts", import.meta.url)), "utf8");
 
 describe("spawn composer", () => {
+	it("puts Standalone agent after projects with a section break", () => {
+		expect(spawn).toContain('...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }');
+		expect(spawn).not.toContain('label: "Standalone worker"');
+	});
+
 	it("reflows attachments and messages above keyboard-lifted controls on iOS", () => {
 		expect(spawn).toContain('height={Platform.OS === "ios" ? promptRoom : undefined}');
 		expect(spawn).toContain('Platform.OS === "ios" && keyboardHeight > 0 ? (');
@@ -32,6 +37,10 @@ describe("spawn composer", () => {
 		expect(finish).toContain('if (current !== "recording") return;');
 		expect(finish).toContain("device.stop();");
 		expect(finish.slice(finish.indexOf('if (current !== "recording") return;'))).not.toContain('setPhase("idle")');
-		expect(spawn).toContain('disabled={!hostMatches || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing"}');
+		expect(spawn).toContain('disabled={!selectedHostId || !config || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing"}');
+	});
+
+	it("clears model loading when changing to a machine without a ready model request", () => {
+		expect(spawn).toContain('if (!config || !requestedHostId || !projectId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }');
 	});
 });

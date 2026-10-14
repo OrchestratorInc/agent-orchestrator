@@ -7,11 +7,11 @@ import (
 	"time"
 )
 
-// TestMigration0178AddsPiAndPreservesKimiUsage verifies the declared Kimi → Pi
+// TestMigration0198AddsPiAndPreservesKimiUsage verifies the declared Kimi → Pi
 // merge order in both directions. Rebuilding the constrained collection tables
 // must preserve Kimi row IDs and events while adding and removing only Pi.
-func TestMigration0178AddsPiAndPreservesKimiUsage(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 177)
+func TestMigration0198AddsPiAndPreservesKimiUsage(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 197)
 	now := time.Date(2026, 8, 29, 10, 0, 0, 0, time.UTC)
 	if _, err := db.Exec(`INSERT INTO projects (id, path, display_name, registered_at)
 		VALUES ('usage-migration', '/tmp/usage-migration', 'usage', ?)`, now); err != nil {
@@ -56,7 +56,7 @@ func TestMigration0178AddsPiAndPreservesKimiUsage(t *testing.T) {
 	}
 	kimiEventID, _ := kimiEventResult.LastInsertId()
 
-	upTo(t, db, 178)
+	upTo(t, db, 198)
 	for table, wantColumns := range expectedUsageTableColumns {
 		if got := tableColumns(t, db, table); !reflect.DeepEqual(got, wantColumns) {
 			t.Fatalf("%s columns after Pi migration = %v, want %v", table, got, wantColumns)
@@ -87,7 +87,7 @@ func TestMigration0178AddsPiAndPreservesKimiUsage(t *testing.T) {
 		t.Fatalf("seed Pi event: %v", err)
 	}
 
-	downTo(t, db, 177)
+	downTo(t, db, 197)
 	assertKimiMigrationRows(t, db, kimiBindingID, kimiSourceID, kimiEventID)
 	var piEvents int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM model_usage_events WHERE source_event_key = 'event-pi'`).Scan(&piEvents); err != nil {
@@ -99,7 +99,7 @@ func TestMigration0178AddsPiAndPreservesKimiUsage(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO usage_bindings (
 		session_id, harness, native_root_id, state, updated_at
 	) VALUES ('session-pi', 'pi', 'pi-after-down', 'active', ?)`, now); err == nil {
-		t.Fatal("Pi binding remained allowed after rolling migration 0178 back")
+		t.Fatal("Pi binding remained allowed after rolling migration 0198 back")
 	}
 }
 

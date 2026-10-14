@@ -31,8 +31,6 @@ func (t CueType) Valid() bool {
 const (
 	// MaxCueNameLength bounds the user-visible cue name.
 	MaxCueNameLength = 64
-	// MaxCueDescriptionLength bounds the optional cue description.
-	MaxCueDescriptionLength = 240
 	// MaxCueCommandLength bounds a command cue's shell command.
 	MaxCueCommandLength = 4 << 10
 	// MaxCuePromptLength bounds an agent cue's prompt. It matches the spawn
@@ -45,8 +43,6 @@ var (
 	ErrInvalidCueType = errors.New("invalid cue type")
 	// ErrInvalidCueName reports a missing or oversized cue name.
 	ErrInvalidCueName = errors.New("invalid cue name")
-	// ErrInvalidCueDescription reports an oversized cue description.
-	ErrInvalidCueDescription = errors.New("invalid cue description")
 	// ErrInvalidCueCommand reports a command cue without a command or with an
 	// oversized command.
 	ErrInvalidCueCommand = errors.New("invalid cue command")
@@ -64,11 +60,10 @@ var (
 // user. Definitions live in AO-managed application data keyed by project; the
 // project repository is never modified by cue operations.
 type Cue struct {
-	ID          CueID
-	ProjectID   ProjectID
-	Name        string
-	Description string
-	Type        CueType
+	ID        CueID
+	ProjectID ProjectID
+	Name      string
+	Type      CueType
 	// Command is the shell command for a command cue. It is unused for agent cues.
 	Command string
 	// Prompt is the agent instruction for an agent cue. It is unused for
@@ -84,9 +79,6 @@ type Cue struct {
 func (c Cue) Validate() error {
 	if strings.TrimSpace(c.Name) == "" || len(c.Name) > MaxCueNameLength {
 		return ErrInvalidCueName
-	}
-	if len(c.Description) > MaxCueDescriptionLength {
-		return ErrInvalidCueDescription
 	}
 	if !c.Type.Valid() {
 		return ErrInvalidCueType

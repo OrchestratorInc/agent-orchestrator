@@ -27,14 +27,13 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { WebglAddon } from "@xterm/addon-webgl";
 import { terminalFontSizeDelta as shortcutFontSizeDelta } from "../../shared/shortcuts";
 import type {
 	AttachableTerminal,
 	TerminalUserInputSource,
 } from "../hooks/useTerminalSession";
 import { aoBridge } from "../lib/bridge";
-import { isDialogOrMenuOpen } from "../lib/dom-selectors";
+import { isDialogOrMenuOpenOutside } from "../lib/dom-selectors";
 import { TERMINAL_FONT_SIZE_DEFAULT } from "../lib/design-tokens";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { findSessionLinks } from "../lib/session-links";
@@ -51,6 +50,7 @@ import {
 	type OscTerminalColors,
 } from "../lib/osc-color-report";
 import { buildTerminalThemes } from "../lib/terminal-themes";
+import { leaseWebglRenderer, type WebglLease } from "../lib/terminal-webgl-pool";
 import { useUiStore, type Theme, type ThemeStyle } from "../stores/ui-store";
 import { TerminalSearch } from "./TerminalSearch";
 import { useLinkPreview } from "../hooks/useLinkPreview";
@@ -103,21 +103,6 @@ export type XtermTerminalProps = {
 	 */
 	onReady?: (terminal: AttachableTerminal) => void;
 };
-
-// WebGL keeps box-drawing glyphs on the cell grid. The canvas addon has no
-// xterm 6 build, so unavailable WebGL falls back to the DOM renderer.
-function loadRenderer(term: Terminal): void {
-	try {
-		const webgl = new WebglAddon();
-		webgl.onContextLoss(() => {
-			webgl.dispose();
-			console.warn("xterm: WebGL context lost; box-drawing may drift");
-		});
-		term.loadAddon(webgl);
-	} catch (error) {
-		console.warn("xterm: WebGL renderer unavailable; box-drawing may drift", error);
-	}
-}
 
 // xterm palette tracks the app theme (see lib/terminal-themes.ts + tokens.css).
 const SUPPRESS_NATIVE_PASTE_MS = 100;
@@ -286,7 +271,7 @@ function terminalHasFocus(host: HTMLElement): boolean {
 }
 
 function canAutoFocusTerminal(host: HTMLElement): boolean {
-	if (isDialogOrMenuOpen()) return false;
+	if (isDialogOrMenuOpenOutside(host)) return false;
 	const activeElement = document.activeElement;
 	if (!(activeElement instanceof HTMLElement) || activeElement === document.body || !activeElement.isConnected) return true;
 	if (host.contains(activeElement)) return true;
@@ -345,12 +330,12 @@ type TerminalContextMenuActions = Record<TerminalContextMenuAction, () => void>;
 // and scrolls its scrollback via copy-mode. Left to itself xterm would convert
 // the wheel into cursor-arrow keys (its alt-buffer fallback), which move the
 // agent's cursor rather than scrolling. SGR button 64 = wheel up, 65 = down;
-// reports are 1-based and a single cell is enough for a borderless single pane.
+// reports are 1-based; coordinates must identify the actual transcript cell.
 const SGR_WHEEL_UP = 64;
 const SGR_WHEEL_DOWN = 65;
 
-function sgrWheelReport(button: number, count: number): string {
-	return `\x1b[<${button};1;1M`.repeat(count);
+function sgrWheelReport(button: number, count: number, column: number, row: number): string {
+	return `\x1b[<${button};${column};${row}M`.repeat(count);
 }
 
 // PageUp (CSI 5~) / PageDown (CSI 6~) for pane apps that scroll their transcript
@@ -478,6 +463,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 	const scrollbarTrackRef = useRef<HTMLDivElement | null>(null);
 	const scrollbarThumbRef = useRef<HTMLDivElement | null>(null);
 	const termRef = useRef<Terminal | null>(null);
+	const webglLeaseRef = useRef<WebglLease | null>(null);
 	// Whether the live terminal's grid has been measured from its laid-out slot.
 	const gridMeasuredRef = useRef(false);
 	const notifyCursorSchemeRef = useRef<(scheme: Theme, force?: boolean, retry?: boolean) => void>(() => {});
@@ -650,11 +636,15 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		const host = hostRef.current;
 		if (!shell || !host) return undefined;
 		let reportedFocused = false;
+		let reportedFontSize = false;
+		// Every terminal reports focus so Ctrl+K/W/B/T reach the shell; only ones
+		// that resize their own font also claim the zoom chords.
 		const reportFocused = (focused: boolean) => {
-			const next = focused && Boolean(callbacksRef.current.onChangeFontSize);
-			if (next === reportedFocused) return;
-			reportedFocused = next;
-			aoBridge.terminal.setFocused(next);
+			const handlesFontSize = focused && Boolean(callbacksRef.current.onChangeFontSize);
+			if (focused === reportedFocused && handlesFontSize === reportedFontSize) return;
+			reportedFocused = focused;
+			reportedFontSize = handlesFontSize;
+			aoBridge.terminal.setFocused(focused, handlesFontSize);
 		};
 		const handleFocusIn = () => reportFocused(true);
 		const handleFocusOut = (event: FocusEvent) => {
@@ -789,7 +779,9 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		if (import.meta.env.DEV) {
 			(host as DevXtermHost).__aoXtermForTest = term;
 		}
-		loadRenderer(term);
+		const webglLease = leaseWebglRenderer(term, () => callbacksRef.current.isVisible !== false);
+		webglLeaseRef.current = webglLease;
+		webglLease.activate();
 		term.options.macOptionClickForcesSelection = true;
 		forceSelectionMode(term);
 		confineDragSelectionToTerminalWidth(term);
@@ -815,9 +807,9 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			}
 			scrollbarTrack.dataset.active = "false";
 		};
-		// Called on every scroll, which streaming output fires continuously: keep
-		// it to a timestamp. The single hide timer re-arms itself while activity
-		// continues instead of being cleared and re-created per scroll.
+		// Called once per frame while scrolling (streaming output fires a scroll
+		// per line feed): keep it to a timestamp. The single hide timer re-arms
+		// itself while activity continues instead of being cleared and re-created.
 		const revealScrollbar = () => {
 			if (!scrollbarTrack || scrollbarTrack.dataset.scrollable !== "true") return;
 			scrollbarLastActive = Date.now();
@@ -825,8 +817,11 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			if (scrollbarDrag || scrollbarHideTimer !== null) return;
 			scrollbarHideTimer = window.setTimeout(hideScrollbarWhenIdle, MAC_TERMINAL_SCROLLBAR_IDLE_MS);
 		};
+		let revealAfterUpdate = false;
 		const updateScrollbar = () => {
 			scrollbarFrame = null;
+			const reveal = revealAfterUpdate;
+			revealAfterUpdate = false;
 			if (!scrollbarTrack || !scrollbarThumb) return;
 			const buffer = term.buffer.active;
 			const maxScrollLine = buffer.type === "normal" ? buffer.baseY : 0;
@@ -843,6 +838,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			scrollbarThumb.style.height = `${thumbHeight}px`;
 			scrollbarThumb.style.transform = `translateY(${thumbTop}px)`;
 			scrollbarTrack.dataset.scrollable = "true";
+			if (reveal) revealScrollbar();
 		};
 		const scheduleScrollbarUpdate = () => {
 			if (!scrollbarTrack || scrollbarFrame !== null) return;
@@ -850,8 +846,8 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		};
 		const scrollPositionChange = scrollbarTrack
 			? term.onScroll(() => {
+				revealAfterUpdate = true;
 				scheduleScrollbarUpdate();
-				revealScrollbar();
 			})
 			: null;
 		const scrollbarResize = scrollbarTrack ? term.onResize(scheduleScrollbarUpdate) : null;
@@ -1529,7 +1525,16 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			// reaches the app directly; under a mux it drives copy-mode.
 			if (term.modes.mouseTrackingMode !== "none") {
 				const button = lines < 0 ? SGR_WHEEL_UP : SGR_WHEEL_DOWN;
-				emitUserInput(sgrWheelReport(button, Math.abs(lines)), "wheel");
+				const screen = term.screenElement?.getBoundingClientRect();
+				if (!screen || screen.width <= 0 || screen.height <= 0
+					|| !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return false;
+				// Measure the grid itself, excluding host padding and the scrollbar.
+				// Dividing its rendered size also accounts for CSS scaling and zoom.
+				const column = Math.max(1, Math.min(term.cols,
+					Math.floor((event.clientX - screen.left) * term.cols / screen.width) + 1));
+				const row = Math.max(1, Math.min(term.rows,
+					Math.floor((event.clientY - screen.top) * term.rows / screen.height) + 1));
+				emitUserInput(sgrWheelReport(button, Math.abs(lines), column, row), "wheel");
 				return false;
 			}
 			// Alt-buffer pane with mouse tracking off and no keyboard-scroll hint:
@@ -1611,6 +1616,8 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		let cancelActivationPreparation: (() => void) | null = null;
 		const prepareForActivation = (): Promise<void> => {
 			cancelActivationPreparation?.();
+			// Before the hidden paint frames, so the revealed frame is drawn by WebGL.
+			webglLease.activate();
 			return new Promise((resolve) => {
 				let firstFrame: number | null = null;
 				let paintFrame: number | null = null;
@@ -1740,6 +1747,8 @@ export function XtermTerminal(props: XtermTerminalProps) {
 
 		return () => {
 			disposed = true;
+			webglLease.release();
+			webglLeaseRef.current = null;
 			if (reportedFocused) aoBridge.terminal.setFocused(false);
 			disposeFontSizeShortcut();
 			host.removeEventListener("focusin", handleFocusIn);
@@ -1884,6 +1893,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		const becameVisible = visible && !wasVisibleRef.current;
 		wasVisibleRef.current = visible;
 		if (!becameVisible) return;
+		webglLeaseRef.current?.activate();
 		// Activation preparation already fitted the terminal after the slot became
 		// stable. Publish that grid without fitting a second time after reveal.
 		// A terminal that has never measured its slot has no grid to publish; its
@@ -2068,7 +2078,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 						onPointerLeave={() => linkPreviewControlsRef.current.hide()}
 					>
 						{linkPreviewQuery.data ? (
-							<LinkPreviewCard url={linkPreview.url} preview={linkPreviewQuery.data} />
+							<LinkPreviewCard url={linkPreview.url} preview={linkPreviewQuery.data} onBrowserOpen={props.onLinkOpen} />
 						) : (
 							<LinkPreviewCardLoading />
 						)}

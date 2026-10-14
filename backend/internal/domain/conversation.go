@@ -624,10 +624,12 @@ type RetryPrompt struct {
 
 // ConversationMessage is one readable block of text.
 type ConversationMessage struct {
-	ID             string `json:"id"`
-	ConversationID string `json:"conversationId"`
-	TurnID         string `json:"turnId,omitempty"`
-	Sequence       int64  `json:"sequence"`
+	// InteractionAt is an internal write fact, independent of history CreatedAt.
+	InteractionAt  time.Time `json:"-"`
+	ID             string    `json:"id"`
+	ConversationID string    `json:"conversationId"`
+	TurnID         string    `json:"turnId,omitempty"`
+	Sequence       int64     `json:"sequence"`
 	// Revision increases each time streaming rewrites this message's text, so a
 	// client can detect a gap and resync instead of rendering stale text.
 	Revision int64         `json:"revision"`
@@ -644,11 +646,16 @@ type ConversationMessage struct {
 	ProviderItemID string `json:"providerItemId,omitempty"`
 	// ClientMessageID is the caller-supplied idempotency key for user messages.
 	// A retry carrying the same key must not create a second provider turn.
-	ClientMessageID     string    `json:"clientMessageId,omitempty"`
-	ClientPayloadHash   string    `json:"-"`
-	DeliveryContentJSON string    `json:"-"`
-	CreatedAt           time.Time `json:"createdAt"`
-	UpdatedAt           time.Time `json:"updatedAt"`
+	ClientMessageID     string `json:"clientMessageId,omitempty"`
+	ClientPayloadHash   string `json:"-"`
+	DeliveryContentJSON string `json:"-"`
+	// Sender metadata is presentation data for automation-origin messages. The
+	// display name is intentionally a send-time snapshot; the session id is stable.
+	SenderSessionID   string    `json:"senderSessionId,omitempty"`
+	SenderProjectID   string    `json:"senderProjectId,omitempty"`
+	SenderDisplayName string    `json:"senderDisplayName,omitempty"`
+	CreatedAt         time.Time `json:"createdAt"`
+	UpdatedAt         time.Time `json:"updatedAt"`
 }
 
 // ConversationActivity is one non-message timeline entry: a command, a diff, a
@@ -712,6 +719,12 @@ var ErrNoQueuedTurn = errors.New("no queued turn")
 
 // ErrSessionNotProvisioning rejects a pre-controller turn after startup ended.
 var ErrSessionNotProvisioning = errors.New("session is not provisioning")
+
+// ErrConversationRebound rejects a pre-controller turn aimed at a conversation the
+// session no longer holds, such as an orchestrator's provisioning row after its
+// first controller moved the queue to the project conversation. The caller should
+// look the session's conversation up again.
+var ErrConversationRebound = errors.New("conversation is no longer bound to the session")
 
 // ErrNoConversationTurn reports a turn id that is not in the conversation it was
 // named against. It lives here rather than in the storage layer so a controller and

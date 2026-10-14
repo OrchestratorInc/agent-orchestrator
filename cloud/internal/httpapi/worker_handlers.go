@@ -14,8 +14,10 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
+	activitylog "github.com/aoagents/agent-orchestrator/cloud/internal/activity"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/logctx"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/roleprompt"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
@@ -83,6 +85,12 @@ var workerEventTypes = map[string]struct{}{
 	"worker.ready":         {},
 	"chat.assistant_delta": {},
 	"chat.activity":        {},
+	// workspace.setup reports the project's Setup commands' outcome so the
+	// session shows why its setup is missing.
+	worker.SetupEventType: {},
+	// workspace.startup reports whether the worker could prepare the
+	// session's workspace; a failure becomes the session's startup error.
+	worker.WorkspaceStartupEventType: {},
 }
 
 const (
@@ -131,7 +139,7 @@ func (s *Server) workerBootstrap(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	launchContext, err := launchContextFrom(launch)
+	launchContext, err := launchContextFrom(launch, slices.Contains(input.Capabilities, worker.CapabilityWorkspacePathPlaceholder))
 	if err != nil {
 		s.logger.Error("build worker launch context", "error", err, "project_id", launch.ProjectID, "request_id", requestID(r))
 		writeError(w, r, http.StatusInternalServerError, "BOOTSTRAP_FAILED", "The project's role instructions are invalid.")
@@ -139,6 +147,9 @@ func (s *Server) workerBootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	workerID := worker.NextWorkerID(ticket.SessionID, ticket.WorkerEpoch)
+	// Read the startup timing before the registration and first heartbeat
+	// clear it, so the support trail can measure time-to-ready.
+	readiness, readinessErr := s.sandboxReadiness(r.Context(), ticket.OrgID, ticket.SessionID)
 	if err := s.store.RegisterWorkerBootstrap(
 		r.Context(),
 		ticket.OrgID,
@@ -172,6 +183,7 @@ func (s *Server) workerBootstrap(w http.ResponseWriter, r *http.Request) {
 	); err != nil {
 		s.logger.Warn("append worker.connected event", "error", err, "request_id", requestID(r))
 	}
+	s.recordWorkerReady(r, ticket.OrgID, ticket.SessionID, workerID, input.Version, ticket.WorkerEpoch, readiness, readinessErr)
 
 	writeJSON(w, http.StatusOK, worker.BootstrapResponse{
 		WorkerToken: token,
@@ -219,7 +231,7 @@ func (s *Server) workerReconnect(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	launchContext, err := launchContextFrom(launch)
+	launchContext, err := launchContextFrom(launch, headerReportsCapability(r, worker.CapabilityWorkspacePathPlaceholder))
 	if err != nil {
 		s.logger.Error("build worker reconnect context", "error", err, "project_id", launch.ProjectID, "request_id", requestID(r))
 		writeError(w, r, http.StatusInternalServerError, "RECONNECT_FAILED", "The project's role instructions are invalid.")
@@ -234,13 +246,32 @@ func (s *Server) workerReconnect(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// headerReportsCapability reports whether a worker request's
+// worker.CapabilitiesHeader lists capability.
+func headerReportsCapability(r *http.Request, capability string) bool {
+	for _, reported := range strings.Split(r.Header.Get(worker.CapabilitiesHeader), ",") {
+		if strings.TrimSpace(reported) == capability {
+			return true
+		}
+	}
+	return false
+}
+
 // launchContextFrom projects a stored launch spec onto the wire type shared by
-// bootstrap and reconnect.
-func launchContextFrom(launch domain.WorkerLaunch) (worker.LaunchContext, error) {
+// bootstrap and reconnect. resolvesWorkspacePath is whether the worker
+// substitutes worker.WorkspacePathPlaceholder.
+func launchContextFrom(launch domain.WorkerLaunch, resolvesWorkspacePath bool) (worker.LaunchContext, error) {
+	var agentConfig domain.ProjectAgentConfig
+	if len(launch.AgentConfig) > 0 {
+		if err := json.Unmarshal(launch.AgentConfig, &agentConfig); err != nil {
+			return worker.LaunchContext{}, err
+		}
+	}
 	agentRules, orchestratorRules, err := projectRoleRules(launch.ProjectConfig)
 	if err != nil {
 		return worker.LaunchContext{}, err
 	}
+	postCreate, preRemove := domain.ProjectScripts(launch.ProjectConfig)
 	// Extra repos are project-level (chosen at project setup, stored on the
 	// project config), so every session of the project clones the same set.
 	// Decoded before the prompt is built so both the project context (which
@@ -257,12 +288,16 @@ func launchContextFrom(launch domain.WorkerLaunch) (worker.LaunchContext, error)
 		}
 	}
 	systemPrompt := roleprompt.Build(roleprompt.Config{
-		Role:              launch.Kind,
-		ProjectID:         launch.ProjectID,
-		ProjectName:       launch.ProjectName,
-		RepositoryURL:     launch.RepositoryURL,
-		DefaultBranch:     launch.DefaultBranch,
-		WorkspacePath:     "/workspace/repository",
+		Role:          launch.Kind,
+		ProjectID:     launch.ProjectID,
+		ProjectName:   launch.ProjectName,
+		RepositoryURL: launch.RepositoryURL,
+		DefaultBranch: launch.DefaultBranch,
+		// The worker knows where the session actually works (it depends on the
+		// provider, the workspace user's home and a Coder connection's working
+		// directory) and substitutes it before launching the agent. An older
+		// worker shows the prompt as is, so it gets the path it always showed.
+		WorkspacePath:     workspacePathFor(resolvesWorkspacePath),
 		AgentRules:        agentRules,
 		OrchestratorRules: orchestratorRules,
 		ExtraRepos:        promptExtras,
@@ -270,6 +305,7 @@ func launchContextFrom(launch domain.WorkerLaunch) (worker.LaunchContext, error)
 	return worker.LaunchContext{
 		SessionID:       launch.SessionID,
 		ProjectID:       launch.ProjectID,
+		ProjectName:     launch.ProjectName,
 		Kind:            launch.Kind,
 		Harness:         launch.Harness,
 		DisplayName:     launch.DisplayName,
@@ -280,6 +316,7 @@ func launchContextFrom(launch domain.WorkerLaunch) (worker.LaunchContext, error)
 		ParentSessionID: launch.ParentSessionID,
 		Mode:            launch.Mode,
 		Model:           launch.Model,
+		AgentConfig:     agentConfig,
 		ReasoningEffort: launch.ReasoningEffort,
 		SelectionAt:     launch.SelectionAt,
 		DeniedCommands:  launch.DeniedCommands,
@@ -287,6 +324,8 @@ func launchContextFrom(launch domain.WorkerLaunch) (worker.LaunchContext, error)
 		DefaultBranch:   launch.DefaultBranch,
 		ExtraRepos:      extraRepos,
 		SystemPrompt:    systemPrompt,
+		PostCreate:      postCreate,
+		PreRemove:       preRemove,
 	}, nil
 }
 
@@ -377,6 +416,11 @@ func (s *Server) workerAuth(next http.Handler) http.Handler {
 			writeError(w, r, http.StatusUnauthorized, "STALE_WORKER_TOKEN", "The worker credential has been replaced.")
 			return
 		}
+		logctx.Annotate(r.Context(), logctx.Fields{
+			OrgID:     claims.OrgID,
+			SessionID: claims.SessionID,
+			WorkerID:  claims.WorkerID,
+		})
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), workerContextKey{}, claims)))
 	})
 }
@@ -396,7 +440,10 @@ func (s *Server) workerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input worker.HeartbeatRequest
-	if err := decodeJSON(w, r, &input); err != nil {
+	// Unknown fields are ignored here, unlike other requests: a worker newer
+	// than this control plane (a rollback) may report more, and rejecting
+	// its heartbeat would take every such session offline.
+	if err := decodeJSONTolerant(w, r, &input); err != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -416,6 +463,17 @@ func (s *Server) workerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	if input.Busy {
+		if store, ok := s.store.(interface {
+			MarkSandboxBusy(ctx context.Context, orgID, sessionID string) error
+		}); ok {
+			// Best effort: a missed mark only makes idle pause slightly eager,
+			// and the next busy heartbeat records it again.
+			if err := store.MarkSandboxBusy(r.Context(), claims.OrgID, claims.SessionID); err != nil {
+				s.logger.Warn("record sandbox activity", "session_id", claims.SessionID, "error", err)
+			}
+		}
+	}
 	renewed, err := s.workerTokens.Issue(claims, s.workerTokenTTL())
 	if err != nil {
 		s.logger.Error("renew worker token", "error", err, "request_id", requestID(r))
@@ -426,6 +484,7 @@ func (s *Server) workerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		OK:          true,
 		WorkerToken: renewed,
 		ExpiresIn:   int(s.workerTokenTTL().Seconds()),
+		Features:    []string{worker.HeartbeatFeatureBusy},
 	})
 }
 
@@ -458,11 +517,13 @@ func (s *Server) workerCheckoutGrant(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, postgres.ErrForbidden) || errors.Is(err, postgres.ErrNotFound) {
+			s.recordGitGrantFailure(r, claims, "checkout", "CHECKOUT_NOT_AUTHORIZED", err)
 			writeError(w, r, http.StatusForbidden, "CHECKOUT_NOT_AUTHORIZED", "This session does not have an active repository grant.")
 			return
 		}
 		if err != nil {
 			s.logger.Error("issue worker checkout grant", "error", err, "request_id", requestID(r))
+			s.recordGitGrantFailure(r, claims, "checkout", "SCM_BROKER_FAILED", err)
 			writeError(w, r, http.StatusBadGateway, "SCM_BROKER_FAILED", "A repository checkout grant could not be issued.")
 			return
 		}
@@ -617,7 +678,7 @@ func (s *Server) workerRaisePullRequest(w http.ResponseWriter, r *http.Request) 
 		writeError(w, r, http.StatusForbidden, "SCOPE_REQUIRED", "The worker:git scope is required.")
 		return
 	}
-	if s.checkoutBroker == nil {
+	if s.checkoutBroker == nil && s.patWrites == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "Raising a pull request is not available.")
 		return
 	}
@@ -654,12 +715,17 @@ func (s *Server) workerRaisePullRequest(w http.ResponseWriter, r *http.Request) 
 		pr  domain.PullRequest
 		err error
 	)
-	pr, err = s.checkoutBroker.RaisePullRequest(r.Context(), claims.OrgID, claims.SessionID, raiseInput)
-	if err != nil {
+	if s.checkoutBroker != nil {
+		pr, err = s.checkoutBroker.RaisePullRequest(r.Context(), claims.OrgID, claims.SessionID, raiseInput)
+	}
+	if err != nil || s.checkoutBroker == nil {
 		if grant, ok := s.patWriteGrant(r.Context(), claims); ok {
 			pr, err = s.patWrites.RaisePullRequest(
 				r.Context(), claims.OrgID, claims.SessionID, grant.CloneURL, grant.Token, raiseInput,
 			)
+		} else if s.checkoutBroker == nil {
+			writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "Raising a pull request is not available.")
+			return
 		}
 	}
 	if errors.Is(err, postgres.ErrForbidden) || errors.Is(err, postgres.ErrNotFound) {
@@ -697,7 +763,7 @@ func (s *Server) workerClaimPullRequest(w http.ResponseWriter, r *http.Request) 
 		writeError(w, r, http.StatusForbidden, "SCOPE_REQUIRED", "The worker:git scope is required.")
 		return
 	}
-	if s.checkoutBroker == nil {
+	if s.checkoutBroker == nil && s.patWrites == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "Pull request tracking is not available.")
 		return
 	}
@@ -723,12 +789,17 @@ func (s *Server) workerClaimPullRequest(w http.ResponseWriter, r *http.Request) 
 		pr  domain.PullRequest
 		err error
 	)
-	pr, err = s.checkoutBroker.ClaimPullRequest(r.Context(), claims.OrgID, claims.SessionID, input.Reference)
-	if err != nil {
+	if s.checkoutBroker != nil {
+		pr, err = s.checkoutBroker.ClaimPullRequest(r.Context(), claims.OrgID, claims.SessionID, input.Reference)
+	}
+	if err != nil || s.checkoutBroker == nil {
 		if grant, ok := s.patWriteGrant(r.Context(), claims); ok {
 			pr, err = s.patWrites.ClaimPullRequest(
 				r.Context(), claims.OrgID, claims.SessionID, grant.CloneURL, grant.Token, input.Reference,
 			)
+		} else if s.checkoutBroker == nil {
+			writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "Pull request tracking is not available.")
+			return
 		}
 	}
 	if errors.Is(err, postgres.ErrForbidden) || errors.Is(err, postgres.ErrNotFound) {
@@ -829,7 +900,7 @@ func (s *Server) workerSubmitReview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusForbidden, "SCOPE_REQUIRED", "The worker:git scope is required.")
 		return
 	}
-	if s.checkoutBroker == nil {
+	if s.checkoutBroker == nil && s.patWrites == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "Submitting a review is not available.")
 		return
 	}
@@ -843,10 +914,19 @@ func (s *Server) workerSubmitReview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	run, err := s.checkoutBroker.SubmitReview(r.Context(), claims.OrgID, claims.SessionID, reviewRunID, domain.SubmitReviewResult{
-		Verdict: contract.AOReviewVerdict(strings.TrimSpace(input.Verdict)),
-		Body:    input.Body,
-	})
+	result := domain.SubmitReviewResult{Verdict: contract.AOReviewVerdict(strings.TrimSpace(input.Verdict)), Body: input.Body}
+	var (
+		run domain.ReviewRun
+		err error
+	)
+	if grant, ok := s.patWriteGrant(r.Context(), claims); ok {
+		run, err = s.patWrites.SubmitReview(r.Context(), claims.OrgID, claims.SessionID, reviewRunID, grant.Token, result)
+	} else if s.checkoutBroker != nil {
+		run, err = s.checkoutBroker.SubmitReview(r.Context(), claims.OrgID, claims.SessionID, reviewRunID, result)
+	} else {
+		writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "Submitting a review is not available.")
+		return
+	}
 	if errors.Is(err, postgres.ErrForbidden) || errors.Is(err, postgres.ErrNotFound) {
 		writeError(w, r, http.StatusForbidden, "REVIEW_NOT_AUTHORIZED", "This session may not submit a verdict for this review.")
 		return
@@ -969,6 +1049,59 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 		if _, err := s.store.AppendSessionEvent(
 			r.Context(), claims.OrgID, claims.SessionID, input.Type, input.Payload,
 		); err != nil {
+			s.writeWorkerStoreError(w, r, err)
+			return
+		}
+	case worker.SetupEventType:
+		var outcome worker.SetupEvent
+		if err := json.Unmarshal(input.Payload, &outcome); err != nil ||
+			(outcome.Status != worker.SetupSucceeded && outcome.Status != worker.SetupFailed &&
+				outcome.Status != worker.SetupTimedOut) || outcome.Step < 0 ||
+			len(input.Payload) > maxWorkerControlBody {
+			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The setup payload is invalid.")
+			return
+		}
+		outcome.Output = activitylog.Excerpt(outcome.Output, 2048)
+		logArgs := []any{
+			"org_id", claims.OrgID, "session_id", claims.SessionID, "status", outcome.Status,
+			"step", outcome.Step, "exit_code", outcome.ExitCode, "duration_ms", outcome.DurationMS,
+		}
+		if outcome.Status == worker.SetupSucceeded {
+			s.logger.Info("project setup finished", logArgs...)
+		} else {
+			s.logger.Warn("project setup did not succeed", append(logArgs, "output", outcome.Output)...)
+		}
+		payload, err := json.Marshal(outcome)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The setup payload is invalid.")
+			return
+		}
+		if _, err := s.store.AppendSessionEvent(r.Context(), claims.OrgID, claims.SessionID, input.Type, payload); err != nil {
+			s.writeWorkerStoreError(w, r, err)
+			return
+		}
+	case worker.WorkspaceStartupEventType:
+		var startup worker.WorkspaceStartupEvent
+		if err := json.Unmarshal(input.Payload, &startup); err != nil ||
+			len(input.Payload) > maxWorkerOutput+maxWorkerControlBody ||
+			(startup.Status == worker.WorkspaceStartupFailed &&
+				(!domain.IsWorkspaceStartupErrorCode(startup.Code) || strings.TrimSpace(startup.Message) == "")) ||
+			(startup.Status != worker.WorkspaceStartupFailed && startup.Status != worker.WorkspaceStartupReady) {
+			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The workspace startup payload is invalid.")
+			return
+		}
+		var err error
+		if startup.Status == worker.WorkspaceStartupReady {
+			err = s.store.ClearWorkspaceStartupError(r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch)
+		} else {
+			message := activitylog.Truncate(activitylog.Redact(strings.TrimSpace(startup.Message)), 1024)
+			detail := activitylog.Excerpt(startup.Detail, 4096)
+			s.logger.Warn("workspace startup failed in the worker",
+				"org_id", claims.OrgID, "session_id", claims.SessionID, "code", startup.Code, "message", message)
+			err = s.store.RecordWorkspaceStartupError(r.Context(), claims.OrgID, claims.SessionID,
+				claims.WorkerID, claims.Epoch, startup.Code, message, detail)
+		}
+		if err != nil {
 			s.writeWorkerStoreError(w, r, err)
 			return
 		}
@@ -1158,6 +1291,10 @@ func (s *Server) workerFinishTurn(w http.ResponseWriter, r *http.Request, outcom
 	})
 }
 
+type workerReviewCredentialStore interface {
+	WorkerReviewCredential(context.Context, string, string, string, int64, string) (domain.WorkerCredential, error)
+}
+
 func (s *Server) workerCredential(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	claims := workerFrom(r)
@@ -1169,9 +1306,31 @@ func (s *Server) workerCredential(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusServiceUnavailable, "CREDENTIALS_UNAVAILABLE", "Coding-agent credentials are unavailable.")
 		return
 	}
-	credential, err := s.store.WorkerAgentCredential(
-		r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch,
-	)
+	// A worker redeems only its own session's harness credential, or the
+	// snapshotted harness of a running review it owns. There is deliberately no
+	// arbitrary-provider selector: the worker token is readable by the agent, so
+	// one would let a compromised session pull every connected credential.
+	if r.URL.Query().Has("provider") {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "provider is not supported.")
+		return
+	}
+	reviewRunID := r.URL.Query().Get("reviewRunId")
+	var credential domain.WorkerCredential
+	var err error
+	if reviewRunID != "" {
+		if requireUUID(reviewRunID, "reviewRunId") != nil {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "reviewRunId must be a UUID.")
+			return
+		}
+		store, ok := s.store.(workerReviewCredentialStore)
+		if !ok {
+			writeError(w, r, http.StatusNotImplemented, "not_implemented", "Reviewer credentials are unavailable.")
+			return
+		}
+		credential, err = store.WorkerReviewCredential(r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch, reviewRunID)
+	} else {
+		credential, err = s.store.WorkerAgentCredential(r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch)
+	}
 	if err != nil {
 		s.writeWorkerStoreError(w, r, err)
 		return
@@ -1220,4 +1379,11 @@ func (s *Server) workerTokenTTL() time.Duration {
 		return s.workerTokenLifetime
 	}
 	return worker.DefaultTokenTTL
+}
+
+func workspacePathFor(resolvesWorkspacePath bool) string {
+	if resolvesWorkspacePath {
+		return worker.WorkspacePathPlaceholder
+	}
+	return worker.LegacyWorkspacePath
 }

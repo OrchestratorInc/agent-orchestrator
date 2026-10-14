@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { aoBridge } from "../lib/bridge";
 import { connectHost, connectedHosts, disconnectHost } from "../lib/host-clients";
+import { useCloudSession } from "../lib/cloud-session";
+import { listAccountRemoteHosts } from "../lib/account-remote-hosts";
+import { useSettings } from "./useSettings";
 import { useUiStore } from "../stores/ui-store";
 
 const HOSTS_CHANGED_EVENT = "ao:remote-hosts-changed";
 const OFFLINE_RETRY_MS = 15_000;
+const ACCOUNT_SYNC_MS = 30_000;
 const NO_HOSTS: RemoteHost[] = [];
 
 function isOfflineError(error: unknown): boolean {
@@ -24,9 +28,17 @@ export type RemoteHost = {
 };
 
 export function useRemoteHosts(): { hosts: RemoteHost[]; refresh: () => Promise<void> } {
-	const enabled = useUiStore((state) => state.developerMode && state.remoteHosts);
+	const remoteHostsEnabled = useUiStore((state) => state.developerMode && state.remoteHosts);
+	const { status, session } = useCloudSession();
+	const accountId = session?.user.id ?? "";
+	const { settings } = useSettings();
+	const cloudBaseUrl = settings?.cloudControlPlaneUrl ?? "";
+	const enabled = remoteHostsEnabled && status === "authenticated" && Boolean(accountId);
 	const enabledRef = useRef(enabled);
 	enabledRef.current = enabled;
+	const accountRef = useRef(accountId);
+	accountRef.current = accountId;
+	const previousAccount = useRef(accountId);
 	const [hosts, setHosts] = useState<RemoteHost[]>([]);
 	const hostsRef = useRef(hosts);
 	hostsRef.current = hosts;
@@ -37,8 +49,19 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; refresh: () => Promise<
 	const refresh = useCallback(async () => {
 		if (!enabledRef.current) return;
 		const generation = ++refreshGeneration.current;
-		const current = () => enabledRef.current && refreshGeneration.current === generation;
-		const saved = await aoBridge.remotes.list();
+		const current = () => enabledRef.current && accountRef.current === accountId && refreshGeneration.current === generation;
+		let saved = await aoBridge.remotes.list();
+		if (cloudBaseUrl) {
+			try {
+				const accountHosts = await listAccountRemoteHosts(cloudBaseUrl);
+				if (!current()) return;
+				for (const host of accountHosts) await aoBridge.remotes.importAccountHost(accountId, { ...host, password: host.token });
+				await aoBridge.remotes.pruneAccountHosts(accountId, accountHosts.map((host) => host.hostId));
+				saved = await aoBridge.remotes.list();
+			} catch { /* Cloud outage must not hide locally paired machines. */ }
+		}
+		if (!current()) return;
+		await Promise.all(connectedHosts().filter((hostId) => !saved.some((host) => host.hostId === hostId)).map(disconnectHost));
 		if (!current()) return;
 		savedHostUrls.current = new Map(saved.map((host) => [host.hostId, host.url]));
 		setHosts((previous) => saved.map((host) => ({
@@ -70,13 +93,20 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; refresh: () => Promise<
 			if (!current()) return;
 			setHosts((current) => current.map((host) => host.url === savedHost.url && host.hostId === savedHost.hostId ? { ...host, hostId: connectedHostId, status, ...(failureReason ? { failureReason } : {}) } : host));
 		}));
-	}, []);
+	}, [cloudBaseUrl, accountId]);
 
 	useEffect(() => {
+		if (previousAccount.current !== accountId) {
+			previousAccount.current = accountId;
+			refreshGeneration.current++;
+			setHosts([]);
+			for (const hostId of connectedHosts()) void disconnectHost(hostId);
+		}
 		if (enabled) {
 			void refresh();
 			return;
 		}
+		refreshGeneration.current++;
 		setHosts([]);
 		retryableHosts.current.clear();
 		savedHostUrls.current.clear();
@@ -114,6 +144,11 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; refresh: () => Promise<
 		window.addEventListener(HOSTS_CHANGED_EVENT, onChanged);
 		return () => window.removeEventListener(HOSTS_CHANGED_EVENT, onChanged);
 	}, [enabled, refresh]);
+	useEffect(() => {
+		if (!enabled || !cloudBaseUrl) return;
+		const timer = setInterval(() => { if (!document.hidden) void refresh(); }, ACCOUNT_SYNC_MS);
+		return () => clearInterval(timer);
+	}, [enabled, cloudBaseUrl, refresh]);
 
 	return { hosts: enabled ? hosts : NO_HOSTS, refresh };
 }

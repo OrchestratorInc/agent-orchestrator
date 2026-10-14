@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,10 +8,12 @@ import { FileContentPane } from "./FileContentPane";
 import type { FileAnnotationModel } from "./WorkspaceDiffView";
 import { TooltipProvider } from "./ui/tooltip";
 
-const { getMock, putMock } = vi.hoisted(() => ({ getMock: vi.fn(), putMock: vi.fn() }));
+const { getMock, putMock, subscribeMock, highlightReadyMock } = vi.hoisted(() => ({ getMock: vi.fn(), putMock: vi.fn(), subscribeMock: vi.fn((_sessionId: string, _client: QueryClient, _hostId?: string) => vi.fn()), highlightReadyMock: vi.fn(() => true) }));
+
+vi.mock("../lib/workspace-file-events", () => ({ subscribeWorkspaceFileChanges: subscribeMock }));
 
 vi.mock("../hooks/usePierreFileHighlight", () => ({
-	usePierreFileHighlightReady: () => true,
+	usePierreFileHighlightReady: highlightReadyMock,
 }));
 
 vi.mock("../lib/api-client", () => ({
@@ -24,7 +26,9 @@ vi.mock("../lib/api-client", () => ({
 }));
 
 vi.mock("./ReadOnlyFileView", () => ({
-	ReadOnlyFileView: ({ detail, editing, onEditChange }: { detail: { content: string; path: string }; editing?: boolean; onEditChange?: (content: string) => void }) => editing ? (
+	ReadOnlyFileView: ({ detail, editing, onEditChange }: { detail: { content: string; path: string; imageMediaType?: string }; editing?: boolean; onEditChange?: (content: string) => void }) => detail.imageMediaType ? (
+		<img alt={detail.path} src="/api/v1/sessions/sess-1/workspace/file/blob" />
+	) : editing ? (
 		<textarea
 			aria-label={`Edit ${detail.path}`}
 			defaultValue={detail.content}
@@ -39,19 +43,83 @@ function renderWithQuery(children: ReactNode) {
 }
 
 function noopAnnotation(): FileAnnotationModel {
-	return { target: null, draft: "", status: "idle", error: "", begin: vi.fn(), setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn() };
+	return { targets: [], status: "idle", error: "", begin: vi.fn(), draftFor: () => "", statusFor: () => "idle", setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn() };
 }
 
 describe("FileContentPane", () => {
 	beforeEach(() => {
 		getMock.mockReset();
 		putMock.mockReset();
+		subscribeMock.mockClear();
+		highlightReadyMock.mockReturnValue(true);
 		useUiStore.setState({ inspectorSessions: {} });
+	});
+
+	it("shows readable contents while the syntax grammar is still loading and watches a standalone file", async () => {
+		highlightReadyMock.mockReturnValue(false);
+		getMock.mockResolvedValue({ data: { sessionId: "sess-1", path: "README.md", status: "unmodified", additions: 0, deletions: 0, size: 8, binary: false, deleted: false, content: "read now", contentTruncated: false, diff: "", diffTruncated: false } });
+		const view = renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path="README.md" sessionId="sess-1" split={false} />);
+		expect(await screen.findByText("read now")).toBeInTheDocument();
+		expect(subscribeMock).toHaveBeenCalledWith("sess-1", expect.any(QueryClient), undefined);
+		const client = subscribeMock.mock.calls[0]![1] as QueryClient;
+		getMock.mockResolvedValue({ data: { sessionId: "sess-1", path: "README.md", status: "unmodified", additions: 0, deletions: 0, size: 8, binary: false, deleted: false, content: "live edit", contentTruncated: false, diff: "", diffTruncated: false } });
+		await client.invalidateQueries({ queryKey: ["session-workspace-file", "sess-1"] });
+		expect(await screen.findByText("live edit")).toBeInTheDocument();
+		view.unmount();
+		expect(subscribeMock.mock.results[0]!.value).toHaveBeenCalled();
+	});
+
+	it("does not watch immutable commit files", async () => {
+		getMock.mockResolvedValue({ data: { sessionId: "sess-1", path: "README.md", status: "unmodified", additions: 0, deletions: 0, size: 8, binary: false, deleted: false, content: "snapshot", contentTruncated: false, diff: "", diffTruncated: false } });
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" commitSha="abc" path="README.md" sessionId="sess-1" split={false} />);
+		expect(await screen.findByText("snapshot")).toBeInTheDocument();
+		expect(subscribeMock).not.toHaveBeenCalled();
+	});
+
+	it("does not reuse a cached working-tree preview for an immutable commit", async () => {
+		let complete: (value: unknown) => void = () => {};
+		getMock.mockImplementation((route: string) => route.endsWith("/revision")
+			? Promise.resolve({ data: { path: "README.md", exists: true, binary: false, truncated: false, size: 4, content: "working tree", revision: "live" } })
+			: new Promise((resolve) => { complete = resolve; }));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const pane = (commitSha?: string) => <QueryClientProvider client={client}><TooltipProvider><FileContentPane annotation={noopAnnotation()} initialMode="file" commitSha={commitSha} path="README.md" sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>;
+		const view = render(pane());
+		expect(await screen.findByText("working tree")).toBeInTheDocument();
+		view.rerender(pane("abc"));
+		expect(screen.queryByText("working tree")).not.toBeInTheDocument();
+		await act(async () => complete({ data: { sessionId: "sess-1", path: "README.md", status: "unmodified", content: "commit text", binary: false, deleted: false, contentTruncated: false } }));
+		expect(await screen.findByText("commit text")).toBeInTheDocument();
+		expect(screen.queryByText("working tree")).not.toBeInTheDocument();
+	});
+
+	it("paints and refreshes live text while repository metadata is blocked", async () => {
+		let content = "first live text";
+		let finish: (value: unknown) => void = () => {};
+		const metadata = new Promise((resolve) => { finish = resolve; });
+		getMock.mockImplementation((path: string) => path.endsWith("/revision") ? Promise.resolve({ data: { sessionId: "sess-1", path: "README.md", side: "after", exists: true, content, size: content.length, binary: false, truncated: false, revision: content, encoding: "utf-8", workspaceVersion: "" } }) : metadata);
+		const view = renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path="README.md" sessionId="sess-1" split={false} />);
+		expect(await screen.findByText("first live text")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Edit file" })).not.toBeInTheDocument();
+		const client = subscribeMock.mock.calls[0]![1] as QueryClient;
+		content = "new live text";
+		await act(() => client.invalidateQueries({ queryKey: ["session-workspace-file-revision", "sess-1"] }));
+		expect(await screen.findByText("new live text")).toBeInTheDocument();
+		await act(async () => finish({ data: { sessionId: "sess-1", path: "README.md", status: "unmodified", additions: 0, deletions: 0, size: content.length, binary: false, deleted: false, content, contentTruncated: false, diff: "", diffTruncated: false, editable: true, fileFingerprint: "validated" } }));
+		expect(await screen.findByRole("button", { name: "Edit file" })).toBeInTheDocument();
+		expect(screen.getByText("new live text")).toBeInTheDocument();
+		view.unmount();
 	});
 
 	it("prompts for a selection when no path is chosen", () => {
 		renderWithQuery(<FileContentPane annotation={noopAnnotation()} path={null} sessionId="sess-1" split={false} />);
 		expect(screen.getByText("Select a file to preview.")).toBeInTheDocument();
+		expect(getMock).not.toHaveBeenCalled();
+	});
+
+	it("explains an outside-workspace path without fetching or offering Retry", () => {
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} path="/Users/me/notes/plan.md" sessionId="sess-1" split={false} />);
+		expect(screen.getByText("This file is outside the session's workspace, so it can't be opened here.")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /retry/i })).toBeNull();
 		expect(getMock).not.toHaveBeenCalled();
 	});
 
@@ -103,6 +171,33 @@ describe("FileContentPane", () => {
 		renderWithQuery(<FileContentPane annotation={noopAnnotation()} path="README.md" sessionId="sess-1" split={false} />);
 
 		expect(await screen.findByText("hello")).toBeInTheDocument();
+	});
+
+	it("renders an image without waiting for syntax highlighting", async () => {
+		highlightReadyMock.mockReturnValue(false);
+		getMock.mockResolvedValue({
+			data: {
+				sessionId: "sess-1",
+				path: "assets/logo.png",
+				status: "unmodified",
+				additions: 0,
+				deletions: 0,
+				size: 128,
+				binary: true,
+				imageMediaType: "image/png",
+				deleted: false,
+				content: "",
+				contentTruncated: true,
+				diff: "",
+				diffTruncated: false,
+			},
+		});
+
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} path="assets/logo.png" sessionId="sess-1" split={false} />);
+
+		expect(await screen.findByRole("img", { name: "assets/logo.png" })).toBeInTheDocument();
+		expect(screen.queryByText("Loading files...")).not.toBeInTheDocument();
+		expect(getMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("shows the filename instead of a redundant File tab for an untouched non-Markdown file", async () => {
@@ -361,7 +456,7 @@ describe("FileContentPane", () => {
 
 	it("anchors whole-file feedback below the focused header", async () => {
 		const model = noopAnnotation();
-		model.target = { path: "src/App.tsx", side: "file", scope: "combined", surface: "focused" };
+		model.targets = [{ path: "src/App.tsx", side: "file", scope: "combined", surface: "focused" }];
 		getMock.mockResolvedValue({
 			data: {
 				sessionId: "sess-1",

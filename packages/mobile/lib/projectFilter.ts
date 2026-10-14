@@ -1,8 +1,12 @@
 import type { DashboardSession, ProjectInfo } from "./api";
 import { isArchived } from "./agentsView";
+import { reconcileRows } from "./rowSharing";
 
 /** The board filter that means "every project". */
 export const ALL_PROJECTS = "all";
+
+/** Picker-only value; the daemon represents standalone sessions with no project id. */
+export const STANDALONE_PROJECT = "__standalone__";
 
 /**
  * What the app knows about one machine's projects.
@@ -55,7 +59,11 @@ export function retainProjects(
 	if (answer.machine !== activeMachine) return prev;
 	// Explicitly against null, not truthiness: a successful [] takes this branch
 	// and becomes known, which is the distinction the whole type exists for.
-	if (answer.projects !== null) return { machine: answer.machine, projects: answer.projects, known: true };
+	if (answer.projects !== null) {
+		const projects = prev.machine === answer.machine ? reconcileRows(prev.projects, answer.projects) : answer.projects;
+		return prev.known && prev.machine === answer.machine && projects === prev.projects
+			? prev : { machine: answer.machine, projects, known: true };
+	}
 	if (prev.machine === answer.machine && prev.known) return prev;
 	return { machine: answer.machine, projects: [], known: false };
 }
@@ -128,6 +136,7 @@ export function resolveSpawnProject(
 	projects: readonly { id: string }[],
 	projectsKnown: boolean,
 ): string | null {
+	if (currentProjectId === STANDALONE_PROJECT) return STANDALONE_PROJECT;
 	if (
 		currentProjectId
 		&& resolveActiveProject(currentProjectId, projects, projectsKnown) === currentProjectId

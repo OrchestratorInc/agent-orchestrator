@@ -96,6 +96,12 @@ vi.mock("../lib/bridge", () => ({
 		clipboard: { writeText },
 		daemon: { getStatus: getDaemonStatus },
 		remotes: { list: vi.fn(async () => []) },
+		cliLink: {
+			setEnabled: vi.fn(async () => undefined),
+			inspect: vi.fn(async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" })),
+			link: vi.fn(async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" })),
+			unlink: vi.fn(async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" })),
+		},
 		updateSettings: {
 			get: getUpdate,
 			set: setUpdate,
@@ -118,6 +124,10 @@ vi.mock("../lib/bridge", () => ({
 		featureBuilds: { list: featListBuilds, getActive: featGetActive },
 		telemetry: { getPolicy: getTelemetryPolicy, setEventsEnabled: setTelemetryEvents, onPolicy: onTelemetryPolicy, getBootstrap: vi.fn(), capture: vi.fn() },
 	},
+}));
+
+vi.mock("../lib/cloud-session", () => ({
+	useCloudSession: () => ({ status: "authenticated", session: { user: { id: "test-user" } } }),
 }));
 
 function renderForm(section: GlobalSettingsSection = "all", focusAgentId?: string, hostId?: string) {
@@ -202,7 +212,7 @@ beforeEach(async () => {
 		saving: false,
 		saveError: false,
 	});
-	useUiStore.setState({ developerMode: false, remoteHosts: false });
+	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, sideChats: false });
 	useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true, saving: false, saveError: false });
 	document.documentElement.lang = "en";
 });
@@ -253,6 +263,36 @@ describe("GlobalSettingsForm", () => {
 		expect(setMacDifferentialUpdates).toHaveBeenCalledWith(true);
 		await user.click(await screen.findByLabelText("Updates channel", {}, { timeout: 5_000 }));
 		expect(await screen.findByRole("menuitem", { name: "Feature Releases" })).toBeInTheDocument();
+	});
+
+	it("reveals the Side chats toggle only in Developer mode and persists it", async () => {
+		const user = userEvent.setup();
+		renderForm("general");
+		await screen.findByRole("switch", { name: "Developer mode" });
+		expect(screen.queryByRole("switch", { name: "Side chats" })).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("switch", { name: "Developer mode" }));
+		const toggle = await screen.findByRole("switch", { name: "Side chats" });
+		expect(toggle).toHaveAttribute("aria-checked", "false");
+
+		await user.click(toggle);
+		expect(window.localStorage.getItem("ao.sideChats")).toBe("true");
+		expect(useUiStore.getState().sideChats).toBe(true);
+	});
+
+	it("reveals the Diagnostics toggle only in Developer mode and persists it", async () => {
+		const user = userEvent.setup();
+		renderForm("general");
+		await screen.findByRole("switch", { name: "Developer mode" });
+		expect(screen.queryByRole("switch", { name: "Diagnostics" })).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("switch", { name: "Developer mode" }));
+		const toggle = await screen.findByRole("switch", { name: "Diagnostics" });
+		expect(toggle).toHaveAttribute("aria-checked", "false");
+
+		await user.click(toggle);
+		expect(window.localStorage.getItem("ao.diagnostics")).toBe("true");
+		expect(useUiStore.getState().diagnostics).toBe(true);
 	});
 
 	it("keeps Remote hosts in its own page and persists the enable switch", async () => {

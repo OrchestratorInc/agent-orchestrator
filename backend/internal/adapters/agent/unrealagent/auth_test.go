@@ -15,9 +15,9 @@ func TestAuthStatusUsesSelectedProvider(t *testing.T) {
 		want                ports.AgentAuthStatus
 	}{
 		{name: "default openai missing", want: ports.AgentAuthStatusUnauthorized},
-		{name: "openai", provider: "openai", key: "OPENAI_API_KEY", want: ports.AgentAuthStatusAuthorized},
-		{name: "openrouter", provider: "openrouter", key: "OPENROUTER_API_KEY", want: ports.AgentAuthStatusAuthorized},
-		{name: "fireworks", provider: "fireworks", key: "FIREWORKS_API_KEY", want: ports.AgentAuthStatusAuthorized},
+		{name: "openai", provider: "openai", key: "OPENAI_API_KEY", want: ports.AgentAuthStatusConfigured},
+		{name: "openrouter", provider: "openrouter", key: "OPENROUTER_API_KEY", want: ports.AgentAuthStatusConfigured},
+		{name: "fireworks", provider: "fireworks", key: "FIREWORKS_API_KEY", want: ports.AgentAuthStatusConfigured},
 		{name: "ollama", provider: "ollama", want: ports.AgentAuthStatusAuthorized},
 		{name: "unknown", provider: "custom", want: ports.AgentAuthStatusUnknown},
 	}
@@ -46,7 +46,7 @@ func TestAuthStatusFindsCodexAuthFile(t *testing.T) {
 	t.Setenv("UNREAL_HARNESS_LLM_PROVIDER", "openai-codex")
 	t.Setenv("OPENAI_CODEX_AUTH_FILE", authFile)
 	got, err := (&Plugin{resolvedBinary: "unreal-agent-runner"}).AuthStatus(context.Background())
-	if err != nil || got != ports.AgentAuthStatusAuthorized {
+	if err != nil || got != ports.AgentAuthStatusConfigured {
 		t.Fatalf("AuthStatus() = (%q, %v)", got, err)
 	}
 }
@@ -65,7 +65,7 @@ func TestAuthStatusWithEnvUsesProjectProviderCredentials(t *testing.T) {
 			"OPENROUTER_API_KEY":          "project-key",
 		},
 	)
-	if err != nil || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("AuthStatusWithEnv() = (%q, %v), want (%q, nil)", status, err, ports.AgentAuthStatusAuthorized)
+	if err != nil || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("AuthStatusWithEnv() = (%q, %v), want (%q, nil)", status, err, ports.AgentAuthStatusConfigured)
 	}
 }

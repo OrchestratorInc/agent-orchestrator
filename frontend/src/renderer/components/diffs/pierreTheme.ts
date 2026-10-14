@@ -32,6 +32,20 @@ export const AO_PIERRE_SURFACE_CSS = `
 [data-gutter-buffer="annotation"][data-gutter-buffer] {
 	--diffs-annotation-bg: var(--diffs-bg);
 }
+
+/* The gutter + (AO's line feedback button) sits in the line-number column's
+   leading space, clear of both the code and the digits, so a drag that starts
+   at the beginning of a line selects its text instead of pressing the +. */
+[data-column-number][data-column-number][data-column-number],
+[data-gutter-buffer][data-gutter-buffer][data-gutter-buffer] {
+	padding-left: calc(1lh + 6px);
+}
+[data-gutter-utility-slot][data-gutter-utility-slot] {
+	left: 2px;
+	right: auto;
+	justify-content: flex-start;
+	align-items: center;
+}
 `;
 
 // Local Files diffs (the review list, the Files preview and centre file tabs):

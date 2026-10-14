@@ -83,6 +83,12 @@ export type DashboardSession = {
 	summary: string | null;
 	createdAt: string;
 	lastActivityAt: string;
+	/**
+	 * When something a person would notice last happened (activity-state change,
+	 * PR lifecycle or CI change, review). Absent from daemons that predate it;
+	 * read it through `eventAtOf`, which falls back.
+	 */
+	lastEventAt?: string;
 	pr?: DashboardPR | null;
 	prs?: DashboardPR[];
 	metadata?: Record<string, string>;
@@ -201,6 +207,7 @@ type WireSession = {
 	branch?: string;
 	createdAt?: string;
 	updatedAt?: string;
+	lastEventAt?: string;
 	previewUrl?: string;
 	isPinned?: boolean;
 	pinnedAt?: string | null;
@@ -290,6 +297,7 @@ function mapSession(s: WireSession): DashboardSession {
 		summary: null,
 		createdAt: s.createdAt ?? "",
 		lastActivityAt: activityLastAt(s.activity) ?? s.updatedAt ?? s.createdAt ?? "",
+		lastEventAt: s.lastEventAt || undefined,
 		pr: prs[0] ?? null,
 		prs,
 		previewUrl: s.previewUrl ?? null,
@@ -326,6 +334,9 @@ function mapOrchestrator(s: WireSession, projectName: string): OrchestratorLink 
 const REQUEST_TIMEOUT_MS = 12000;
 const DISCONNECT_REQUEST_TIMEOUT_MS = 2000;
 // The daemon gives attachment uploads 10 minutes; allow time for its response.
+// A cold agent resume spawns the chat host and reloads the transcript; the
+// daemon allows the driver 60s for that and cancels it if the client gives up.
+export const RESUME_REQUEST_TIMEOUT_MS = 70_000;
 export const ATTACHMENT_REQUEST_TIMEOUT_MS = 11 * 60_000;
 
 // The server answered, but with an error status. Distinct from the errors fetch
@@ -358,39 +369,64 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 	// Without a timeout a sleeping/unreachable host (common over Tailscale) hangs
 	// the call for the OS TCP timeout (~75-120s), freezing Kill/send and the poll.
 	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), timeoutMs);
-	let res: Response;
+	const abortError = () => Object.assign(new Error("Request cancelled"), { name: "AbortError" });
+	if (init?.signal?.aborted) throw abortError();
+	const cancel = () => controller.abort();
+	init?.signal?.addEventListener("abort", cancel);
+	let rejectAbort!: () => void;
+	const aborted = new Promise<never>((_resolve, reject) => {
+		rejectAbort = () => reject(abortError());
+		controller.signal.addEventListener("abort", rejectAbort);
+	});
+	const timer = setTimeout(cancel, timeoutMs);
+	let received: Response | undefined;
+	let bodyText = "";
 	try {
 		const installId = cachedInstallId();
-		res = await fetch(url, {
-			...init,
-			signal: controller.signal,
-			headers: {
-				...authHeaders(cfg),
-				"Content-Type": "application/json",
-				...(installId ? { "X-AO-Install-Id": installId } : {}),
-				...(init?.headers ?? {}),
-			},
-		});
+		await Promise.race([aborted, (async () => {
+			received = await fetch(url, {
+				...init,
+				signal: controller.signal,
+				headers: {
+					...authHeaders(cfg),
+					"Content-Type": "application/json",
+					...(installId ? { "X-AO-Install-Id": installId } : {}),
+					...(init?.headers ?? {}),
+				},
+			});
+			// This boundary serves finite JSON responses, not SSE or downloads.
+			// Finish loading here so writes with no body consumer also release their
+			// timer, and /sessions cannot fan out while its body is still stalled.
+			bodyText = await received.text();
+		})()]);
 	} catch (e) {
-		if ((e as { name?: string })?.name === "AbortError") {
+		// Leaving a screen/host is not a connectivity failure. The poll owner
+		// invalidates its result before cancelling the shared request lifecycle.
+		if (init?.signal?.aborted) throw abortError();
+		if (received && !received.ok) {
+			// Headers already prove an auth/contract failure even if its optional
+			// error envelope stalls. Never turn a 401 into a retryable timeout.
+		} else if ((e as { name?: string })?.name === "AbortError") {
 			// Timed out reaching the host (commonly a sleeping Tailscale peer).
 			captureMobileApiError(path, "timeout");
 			throw new UnreachableError("timeout", { cause: e });
+		} else {
+			captureMobileApiError(path, "offline");
+			throw new UnreachableError("offline", { cause: e });
 		}
-		// fetch threw without reaching the server: DNS/refused/offline.
-		captureMobileApiError(path, "offline");
-		throw new UnreachableError("offline", { cause: e });
 	} finally {
 		clearTimeout(timer);
+		init?.signal?.removeEventListener("abort", cancel);
+		controller.signal.removeEventListener("abort", rejectAbort);
 	}
+	const res = received!;
 	if (!res.ok) {
 		// The daemon returns a locked JSON envelope: { error, code, message, requestId }.
 		let detail = "";
 		let code: string | undefined;
 		let requestId: string | undefined;
 		try {
-			const body = await res.json();
+			const body = JSON.parse(bodyText);
 			detail = body?.message ?? body?.error ?? "";
 			code = typeof body?.code === "string" ? body.code : undefined;
 			requestId = typeof body?.requestId === "string" ? body.requestId : undefined;
@@ -408,7 +444,11 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 			detail || undefined,
 		);
 	}
-	return res;
+	// Keep the existing Response interface for callers; the network body is
+	// already complete. Empty-response statuses cannot carry a Response body.
+	return new Response([204, 205, 304].includes(res.status) ? null : bodyText, {
+		status: res.status, statusText: res.statusText, headers: res.headers,
+	});
 }
 
 /** Shared authenticated JSON request boundary for focused mobile feature modules. */
@@ -418,8 +458,8 @@ export function apiRequest(cfg: ServerConfig, path: string, init?: RequestInit, 
 
 // ---- Reads ------------------------------------------------------------------
 
-export async function getProjects(cfg: ServerConfig): Promise<ProjectInfo[]> {
-	const res = await req(cfg, `${API}/projects`);
+export async function getProjects(cfg: ServerConfig, init?: Pick<RequestInit, "signal">): Promise<ProjectInfo[]> {
+	const res = await req(cfg, `${API}/projects`, init);
 	const data = await res.json();
 	const projects = Array.isArray(data?.projects) ? data.projects : [];
 	return projects.map((p: WireProject) => ({
@@ -436,7 +476,7 @@ export async function getProject(cfg: ServerConfig, id: string): Promise<Project
 	return (data?.project ?? data) as ProjectDetail;
 }
 
-export async function getSessions(cfg: ServerConfig, _projectId?: string): Promise<SessionsResponse> {
+export async function getSessions(cfg: ServerConfig, _projectId?: string, init?: Pick<RequestInit, "signal">): Promise<SessionsResponse> {
 	// The daemon exposes sessions and orchestrators as two lists. Fetch both,
 	// keep worker sessions for the board, and map orchestrators for their screen.
 	//
@@ -447,14 +487,14 @@ export async function getSessions(cfg: ServerConfig, _projectId?: string): Promi
 	// ticks and make the user's next action, typically scanning a fresh pairing
 	// code, fail with 429 before the new password was ever checked. Probing first
 	// caps a bad-credential tick at a single failed attempt.
-	const sessRes = await req(cfg, `${API}/sessions`);
+	const sessRes = await req(cfg, `${API}/sessions`, init);
 	// A failed /projects is reported as null rather than [] so a caller can tell
 	// "this daemon has no projects" from "we could not ask". It stays caught: an
 	// older daemon, or one blip on that one route, must not knock the board
 	// offline when /sessions answered fine.
 	const [orchRes, projects] = await Promise.all([
-		req(cfg, `${API}/orchestrators`),
-		getProjects(cfg).catch(() => null),
+		req(cfg, `${API}/orchestrators`, init),
+		getProjects(cfg, init).catch(() => null),
 	]);
 	const sessData = await sessRes.json();
 	const orchData = await orchRes.json();
@@ -708,13 +748,14 @@ export type NotificationPage = {
 export async function getNotifications(
 	cfg: ServerConfig,
 	opts: { status?: "unread" | "all"; limit?: number; cursor?: string } = {},
+	init?: Pick<RequestInit, "signal">,
 ): Promise<NotificationPage> {
 	const qs = new URLSearchParams();
 	if (opts.status) qs.set("status", opts.status);
 	if (opts.limit) qs.set("limit", String(opts.limit));
 	if (opts.cursor) qs.set("cursor", opts.cursor);
 	const suffix = qs.toString() ? `?${qs}` : "";
-	const res = await req(cfg, `${API}/notifications${suffix}`);
+	const res = await req(cfg, `${API}/notifications${suffix}`, init);
 	const data = await res.json();
 	return {
 		notifications: Array.isArray(data?.notifications) ? data.notifications : [],
@@ -1008,7 +1049,7 @@ export async function restoreSession(cfg: ServerConfig, id: string): Promise<voi
 
 /** Restart a stopped agent/controller without restoring a terminated AO session. */
 export async function resumeSessionAgent(cfg: ServerConfig, id: string): Promise<void> {
-	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/resume-agent`, { method: "POST" });
+	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/resume-agent`, { method: "POST" }, RESUME_REQUEST_TIMEOUT_MS);
 }
 
 export async function sendMessage(cfg: ServerConfig, id: string, message: string): Promise<void> {
@@ -1020,7 +1061,7 @@ export async function sendMessage(cfg: ServerConfig, id: string, message: string
 
 export async function spawnSession(
 	cfg: ServerConfig,
-	opts: { projectId: string; prompt?: string; issueId?: string; harness?: string; mode?: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string },
+	opts: { projectId?: string; prompt?: string; issueId?: string; harness?: string; model?: string; mode?: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string },
 ): Promise<DashboardSession> {
 	const res = await req(cfg, `${API}/sessions`, {
 		method: "POST",
@@ -1032,6 +1073,7 @@ export async function spawnSession(
 			// The daemon needs an agent harness unless the project configures a
 			// default worker.agent; the spawn screen lets the user pick one.
 			harness: opts.harness || undefined,
+			model: opts.model || undefined,
 			// Mobile is Chat-first. Callers may deliberately request TUI for a harness
 			// that cannot expose a structured controller, but omission must never make
 			// the phone depend on a desktop preference it cannot see.

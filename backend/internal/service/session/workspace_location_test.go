@@ -3,6 +3,8 @@ package session
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -46,6 +48,44 @@ func TestWorkspaceLocationRejectsMissingDirectory(t *testing.T) {
 	assertAPIErrorCode(t, err, "SESSION_WORKSPACE_NOT_FOUND")
 }
 
+func TestWorkspaceLocationRejectsFileInPlaceOfDirectory(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "workspace")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := newFakeStore()
+	store.sessions["ao-1"] = domain.SessionRecord{
+		ID:       "ao-1",
+		Metadata: domain.SessionMetadata{WorkspacePath: file},
+	}
+
+	_, err := (&Service{store: store}).WorkspaceLocation(context.Background(), "ao-1")
+	assertAPIErrorCode(t, err, "SESSION_WORKSPACE_NOT_FOUND")
+}
+
+func TestWorkspaceLocationReportsUnreadableWorkspace(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	parent := t.TempDir()
+	workspace := filepath.Join(parent, "workspace")
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
+	store := newFakeStore()
+	store.sessions["ao-1"] = domain.SessionRecord{
+		ID:       "ao-1",
+		Metadata: domain.SessionMetadata{WorkspacePath: workspace},
+	}
+
+	_, err := (&Service{store: store}).WorkspaceLocation(context.Background(), "ao-1")
+	assertAPIErrorCode(t, err, "SESSION_WORKSPACE_UNREADABLE")
+}
+
 func TestWorkspaceLocationPreservesStoreFailure(t *testing.T) {
 	store := newFakeStore()
 	store.getSessionErr = errors.New("storage unavailable")
@@ -62,4 +102,44 @@ func assertAPIErrorCode(t *testing.T, err error, code string) {
 	if !errors.As(err, &apiError) || apiError.Code != code {
 		t.Fatalf("error = %v, want API code %s", err, code)
 	}
+}
+
+func TestArtifactLocationReturnsTheStoredArtifactDirectory(t *testing.T) {
+	artifactDir := t.TempDir()
+	store := newFakeStore()
+	store.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{ArtifactDir: artifactDir}}
+
+	got, err := (&Service{store: store, dataDir: t.TempDir()}).ArtifactLocation(context.Background(), "ao-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != artifactDir {
+		t.Fatalf("ArtifactLocation() = %q, want %q", got, artifactDir)
+	}
+}
+
+func TestArtifactLocationFallsBackToTheDataDirLayout(t *testing.T) {
+	dataDir := t.TempDir()
+	artifactDir := filepath.Join(dataDir, "artifacts", "ao-1")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store := newFakeStore()
+	store.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1"}
+
+	got, err := (&Service{store: store, dataDir: dataDir}).ArtifactLocation(context.Background(), "ao-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != artifactDir {
+		t.Fatalf("ArtifactLocation() = %q, want %q", got, artifactDir)
+	}
+}
+
+func TestArtifactLocationRejectsAMissingDirectory(t *testing.T) {
+	store := newFakeStore()
+	store.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{ArtifactDir: filepath.Join(t.TempDir(), "gone")}}
+
+	_, err := (&Service{store: store}).ArtifactLocation(context.Background(), "ao-1")
+	assertAPIErrorCode(t, err, "SESSION_ARTIFACTS_NOT_FOUND")
 }

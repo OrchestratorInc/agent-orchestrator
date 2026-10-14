@@ -8,39 +8,42 @@ import (
 )
 
 var agentDocumentationURLs = map[Target]string{
-	TargetClaudeCode: "https://code.claude.com/docs/en/installation",
-	TargetCodex:      "https://github.com/openai/codex",
-	TargetCursor:     "https://docs.cursor.com/en/cli/installation",
-	TargetOpencode:   "https://github.com/anomalyco/opencode",
-	TargetOpencodeV2: "https://opencode.ai/v2/docs",
-	TargetAider:      "https://aider.chat/docs/install.html",
-	TargetCopilot:    "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli",
-	TargetGrok:       "https://docs.x.ai/build/overview",
-	TargetKimi:       "https://moonshotai.github.io/kimi-code/en/",
-	TargetPi:         "https://github.com/earendil-works/pi",
-	TargetAmp:        "https://ampcode.com/manual",
-	TargetAuggie:     "https://docs.augmentcode.com/cli/overview",
-	TargetDroid:      "https://docs.factory.ai/droid-cli/cli-reference",
-	TargetCrush:      "https://github.com/charmbracelet/crush",
-	TargetCline:      "https://github.com/cline/cline",
-	TargetGoose:      "https://goose-docs.ai/docs/getting-started/installation/",
-	TargetQwen:       "https://qwenlm.github.io/qwen-code-docs/en/users/quickstart/",
-	TargetGemini:     "https://geminicli.com/docs/get-started/installation/",
-	TargetContinue:   "https://docs.continue.dev/cli/quickstart",
-	TargetDevin:      "https://docs.devin.ai/get-started/devin-intro",
-	TargetKiro:       "https://kiro.dev/docs/getting-started/installation/",
-	TargetKilocode:   "https://kilo.ai/docs/code-with-ai/platforms/cli",
-	TargetVibe:       "https://github.com/mistralai/mistral-vibe",
-	TargetMuse:       "https://ai.meta.com/llama/",
-	TargetAgy:        "https://github.com/google-antigravity/antigravity-cli",
-	TargetAutohand:   "https://docs.autohand.ai/working-with-autohand-code/cli",
-	TargetKimchi:     "https://docs.kimchi.dev/docs/coding-getting-started",
-	TargetPrimeAgent: "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md",
-	TargetOMP:        "https://github.com/can1357/oh-my-pi",
-	TargetFX:         "https://fx.sh/docs",
-	TargetUnreal:     "https://github.com/unreallabsai/unreal-agent",
-	TargetMiMoCode:   "https://github.com/XiaomiMiMo/MiMo-Code",
-	TargetDeepSeek:   "https://github.com/deepseek-ai/deepseek-harness",
+	TargetClaudeCode:  "https://code.claude.com/docs/en/installation",
+	TargetCodex:       "https://github.com/openai/codex",
+	TargetCursor:      "https://docs.cursor.com/en/cli/installation",
+	TargetOpencode:    "https://github.com/anomalyco/opencode",
+	TargetOpencodeV2:  "https://opencode.ai/v2/docs",
+	TargetAider:       "https://aider.chat/docs/install.html",
+	TargetCopilot:     "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli",
+	TargetGrok:        "https://docs.x.ai/build/overview",
+	TargetKimi:        "https://moonshotai.github.io/kimi-code/en/",
+	TargetPi:          "https://github.com/earendil-works/pi",
+	TargetAmp:         "https://ampcode.com/manual",
+	TargetAuggie:      "https://docs.augmentcode.com/cli/overview",
+	TargetDroid:       "https://docs.factory.ai/droid-cli/cli-reference",
+	TargetCrush:       "https://github.com/charmbracelet/crush",
+	TargetCline:       "https://github.com/cline/cline",
+	TargetGoose:       "https://goose-docs.ai/docs/getting-started/installation/",
+	TargetQwen:        "https://qwenlm.github.io/qwen-code-docs/en/users/quickstart/",
+	TargetGemini:      "https://geminicli.com/docs/get-started/installation/",
+	TargetContinue:    "https://docs.continue.dev/cli/quickstart",
+	TargetDevin:       "https://docs.devin.ai/get-started/devin-intro",
+	TargetKiro:        "https://kiro.dev/docs/getting-started/installation/",
+	TargetKilocode:    "https://kilo.ai/docs/code-with-ai/platforms/cli",
+	TargetVibe:        "https://github.com/mistralai/mistral-vibe",
+	TargetMuse:        "https://ai.meta.com/llama/",
+	TargetAgy:         "https://github.com/google-antigravity/antigravity-cli",
+	TargetAutohand:    "https://docs.autohand.ai/working-with-autohand-code/cli",
+	TargetKimchi:      "https://docs.kimchi.dev/docs/coding-getting-started",
+	TargetPrimeAgent:  "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md",
+	TargetOMP:         "https://github.com/can1357/oh-my-pi",
+	TargetCodewhale:   "https://github.com/Hmbown/Codewhale",
+	TargetFX:          "https://fx.sh/docs",
+	TargetUnreal:      "https://github.com/unreallabsai/unreal-agent",
+	TargetMiMoCode:    "https://github.com/XiaomiMiMo/MiMo-Code",
+	TargetDeepSeek:    "https://github.com/deepseek-ai/deepseek-harness",
+	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
+	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -225,6 +228,12 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		} else {
 			plans = []Plan{s.planBun(target), official}
 		}
+	case TargetCodewhale:
+		plans = []Plan{manualPlan(
+			target,
+			"AO does not automatically install Codewhale. Follow the upstream installation instructions, then refresh harness status.",
+			agentDocumentationURLs[target],
+		)}
 	case TargetUnreal:
 		plans = []Plan{{
 			Target: target, Unsupported: true, Method: "manual",
@@ -236,12 +245,24 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		// DeepSeek Harness ships as one Node CLI that boots every profile
 		// (headless, ACP, web) from the same install, so npm is the only method.
 		plans = []Plan{s.planNPM(target, "@deepseek-ai/dsh")}
+	case TargetOpenHands:
+		// The package pins Requires-Python ==3.12.*, which uv resolves (and
+		// downloads if needed) on its own; pipx would need a 3.12 interpreter
+		// already on PATH, so it is not offered.
+		plans = []Plan{s.planUV(target, "openhands")}
+		if s.goos == "darwin" || s.goos == "linux" {
+			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
+		}
+	case TargetCommandCode:
+		plans = []Plan{s.planNPM(target, "command-code")}
 	default:
 		plans = []Plan{{Target: target, Unsupported: true, Method: "manual", Reason: "unknown install target"}}
 	}
 	for index := range plans {
 		plans[index].DocsURL = agentDocumentationURLs[target]
-		plans[index].Notice = installNotice(target)
+		if target != TargetOpencodeV2 || plans[index].Method != "npm" {
+			plans[index].Notice = installNotice(target)
+		}
 		plans[index] = s.planForOperation(plans[index], operation)
 	}
 	return plans

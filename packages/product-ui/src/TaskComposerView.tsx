@@ -115,7 +115,9 @@ export type TaskComposerSubmission = {
 	showFallbackAction: boolean;
 	error?: string;
 	isSubmitting: boolean;
-	modelWarning?: string;
+	// A string renders as plain warning text; a node lets the host render its
+	// own notice (for example one with a login action).
+	modelWarning?: ReactNode;
 	onFallbackAction: (prompt: string) => void;
 	onSubmit: (prompt: string) => void;
 };
@@ -190,7 +192,7 @@ const TaskPrompt = memo(function TaskPrompt({
 			<textarea
 				ref={textareaRef}
 				id={id}
-				className="min-h-[calc(3lh+1.75rem)] max-h-[calc(8lh+1.75rem)] w-full resize-none overflow-y-auto bg-transparent px-4 pb-3 pt-4 text-md leading-relaxed text-foreground outline-none placeholder:text-passive disabled:cursor-not-allowed disabled:opacity-50"
+				className="min-h-[calc(3lh+1.125rem)] max-h-[calc(8lh+1.125rem)] w-full resize-none overflow-y-auto bg-transparent px-4 pb-3 pt-1.5 text-md leading-relaxed text-foreground outline-none placeholder:text-passive disabled:cursor-not-allowed disabled:opacity-50"
 				disabled={disabled}
 				placeholder={placeholder}
 				value={value}
@@ -400,9 +402,11 @@ export function TaskComposerView({
 							) : null}
 						</div>
 					)}
-					{!submission.error && submission.modelWarning && (
-						<p className="text-caption text-warning" role="status">{submission.modelWarning}</p>
-					)}
+					{!submission.error && submission.modelWarning ? (
+						typeof submission.modelWarning === "string"
+							? <p className="text-caption text-warning" role="status">{submission.modelWarning}</p>
+							: submission.modelWarning
+					) : null}
 				</div>
 			)}
 
@@ -428,7 +432,7 @@ export function TaskComposerView({
 				<button
 					type="button"
 					disabled={submission.isSubmitting}
-					className="inline-flex size-(--size-settings-action-height) shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+					className="inline-flex size-(--size-composer-toolbar-height) shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
 					aria-label={labels.addFile}
 					onClick={() => {
 						if (!submission.isSubmitting) fileInputRef.current?.click();
@@ -440,7 +444,7 @@ export function TaskComposerView({
 				<button
 					type="submit"
 					disabled={submission.isSubmitting || !canSubmit}
-					className="inline-flex h-(--size-settings-action-height) shrink-0 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/80 disabled:pointer-events-none disabled:opacity-50"
+					className="inline-flex h-(--size-composer-toolbar-height) shrink-0 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/80 disabled:pointer-events-none disabled:opacity-50"
 				>
 					{submission.isSubmitting ? <Loader2 className="size-icon-base animate-spin" aria-hidden="true" /> : null}
 					{submission.isSubmitting ? labels.starting : labels.start}

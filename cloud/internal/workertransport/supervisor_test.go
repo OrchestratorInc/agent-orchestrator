@@ -29,6 +29,59 @@ type outputSequenceControl struct {
 	output chan int64
 }
 
+type terminalFrameControl struct {
+	supervisorControlStub
+	output chan []byte
+}
+
+func (s *terminalFrameControl) PublishTerminalOutput(_ context.Context, _ string, _ int64, data []byte) error {
+	s.output <- append([]byte(nil), data...)
+	return nil
+}
+
+func TestReopenedAgentTerminalClearsPreviousDisplay(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		kind  string
+		next  int64
+		clear bool
+	}{
+		{"first agent startup", "agent", 1, false},
+		{"agent after interface switch", "agent", 41, true},
+		{"workspace shell", "workspace", 41, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			control := &terminalFrameControl{output: make(chan []byte, 32)}
+			supervisor := &Supervisor{
+				Control: control, Workspace: t.TempDir(), Shell: "/bin/sh",
+				terminals: make(map[string]*terminalProcess),
+			}
+			supervisor.AgentCommand = workerexec.Command{Path: "/bin/sh", Args: []string{"-c", "printf ready; cat"}, Dir: supervisor.Workspace}
+			defer supervisor.closeAllTerminals()
+			id := "00000000-0000-0000-0000-000000000040"
+			if err := supervisor.openTerminal(ctx, worker.TerminalCommand{TerminalID: id, Kind: test.kind, NextOutputSequence: test.next}); err != nil {
+				t.Fatal(err)
+			}
+			if test.kind == "workspace" {
+				if err := supervisor.writeTerminal(worker.TerminalCommand{TerminalID: id, Data: []byte("printf ready\n")}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			select {
+			case data := <-control.output:
+				cleared := strings.HasPrefix(string(data), "\x1b[3J\x1b[H\x1b[2J")
+				if cleared != test.clear {
+					t.Fatalf("first output = %q; clear previous display = %v, want %v", data, cleared, test.clear)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("terminal produced no output")
+			}
+		})
+	}
+}
+
 func (s *outputSequenceControl) PublishTerminalOutput(_ context.Context, _ string, sequence int64, _ []byte) error {
 	s.output <- sequence
 	return nil
@@ -908,12 +961,19 @@ func TestReservedAgentTerminalBuffersEarlyInputAndResize(t *testing.T) {
 
 type turnClaimSpy struct {
 	Control
-	claims int
+	claims    int
+	turn      *worker.Turn
+	completed int
 }
 
 func (s *turnClaimSpy) ClaimTurn(context.Context) (*worker.Turn, error) {
 	s.claims++
-	return nil, nil
+	return s.turn, nil
+}
+
+func (s *turnClaimSpy) CompleteTurn(context.Context, string, int, bool) error {
+	s.completed++
+	return nil
 }
 
 func TestForwardTurnWaitsForReservedAgentPTY(t *testing.T) {
@@ -943,6 +1003,47 @@ func TestForwardTurnWaitsForReservedAgentPTY(t *testing.T) {
 	}
 	if control.claims != 1 {
 		t.Fatalf("claimed %d turns after the agent PTY started, want 1", control.claims)
+	}
+}
+
+func TestForwardTurnEncodesMultilinePromptForAgentPTY(t *testing.T) {
+	t.Parallel()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create pipe: %v", err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+
+	prompt := "Review summary:\n- fix the race\n- add a test"
+	control := &turnClaimSpy{turn: &worker.Turn{ID: "turn-1", Prompt: prompt, Attempt: 1}}
+	supervisor := &Supervisor{
+		Control:         control,
+		AgentTerminalID: "agent-1",
+		agentStarted:    true,
+		workspaceReady:  true,
+		terminals: map[string]*terminalProcess{
+			"agent-1": {pty: writer, cancel: func() {}, cleanup: func() {}},
+		},
+	}
+
+	handled, err := supervisor.forwardTurn(context.Background())
+	if err != nil || !handled {
+		t.Fatalf("forward multiline turn = (%v, %v), want (true, nil)", handled, err)
+	}
+	want := worker.EncodeTerminalInput(prompt)
+	got := make([]byte, len(want))
+	if err := reader.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	if _, err := io.ReadFull(reader, got); err != nil {
+		t.Fatalf("read forwarded prompt: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("forwarded prompt = %q, want %q", got, want)
+	}
+	if control.completed != 1 {
+		t.Fatalf("completed turns = %d, want 1", control.completed)
 	}
 }
 

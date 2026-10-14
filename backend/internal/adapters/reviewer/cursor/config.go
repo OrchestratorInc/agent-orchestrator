@@ -16,6 +16,7 @@ import (
 	workeragent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 const (
@@ -266,7 +267,7 @@ func validateMCPServerIDs(ids []string) error {
 // validateMCPServerIDs because this CLI does not honor end-of-options for
 // them, and everything reaching this point is a safe positional argument.
 func mcpDisableCommand(ctx context.Context, binary, id, workspacePath, profileDir string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, binary, "mcp", "disable", id) //nolint:gosec // binary is adapter-resolved, args are static.
+	cmd := aoprocess.CommandContext(ctx, binary, "mcp", "disable", id) //nolint:gosec // binary is adapter-resolved, args are static.
 	cmd.Dir = workspacePath
 	prefix := cursorDataDirEnv + "="
 	env := make([]string, 0, len(os.Environ())+1)

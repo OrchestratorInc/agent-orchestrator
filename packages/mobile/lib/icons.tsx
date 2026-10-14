@@ -55,6 +55,7 @@ import Inbox from "lucide-react-native/icons/inbox";
 import Info from "lucide-react-native/icons/info";
 import Italic from "lucide-react-native/icons/italic";
 import KeyRound from "lucide-react-native/icons/key-round";
+import Laptop from "lucide-react-native/icons/laptop";
 import Layers from "lucide-react-native/icons/layers";
 import Link from "lucide-react-native/icons/link";
 import List from "lucide-react-native/icons/list";
@@ -65,6 +66,7 @@ import Maximize from "lucide-react-native/icons/maximize";
 import Menu from "lucide-react-native/icons/menu";
 import MessageCircle from "lucide-react-native/icons/message-circle";
 import MessageSquare from "lucide-react-native/icons/message-square";
+import MessageSquarePlus from "lucide-react-native/icons/message-square-plus";
 import Mic from "lucide-react-native/icons/mic";
 import MicOff from "lucide-react-native/icons/mic-off";
 import Minus from "lucide-react-native/icons/minus";
@@ -177,6 +179,7 @@ export const glyphs = {
 	"info": Info,
 	"italic": Italic,
 	"key": KeyRound,
+	"laptop": Laptop,
 	"layers": Layers,
 	"link": Link,
 	"list": List,
@@ -187,6 +190,7 @@ export const glyphs = {
 	"menu": Menu,
 	"message-circle": MessageCircle,
 	"message-square": MessageSquare,
+	"message-square-plus": MessageSquarePlus,
 	"mic": Mic,
 	"mic-off": MicOff,
 	"minus": Minus,

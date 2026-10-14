@@ -1,7 +1,7 @@
 import type { ConnectResult } from "./connect";
-import { loadConfig, saveConfig, type ServerConfig } from "./config";
+import { loadConfig, type ServerConfig } from "./config";
 import type { Host } from "./hosts";
-import { activeHost, migrateLegacyConfig } from "./hosts";
+import { activeHost, migrateLegacyConfig, persistResolvedConfig } from "./hosts";
 import { connectToHost, type ConnectOptions } from "./connectRuntime";
 import { IncompatibleHostVersionError } from "./race";
 
@@ -12,7 +12,7 @@ export type ResolveDeps = {
 	connect: (hostId: string) => Promise<ConnectResult>;
 	loadLegacyConfig: () => Promise<ServerConfig>;
 	/** Writes the winning endpoint back to storage. */
-	persist: (config: ServerConfig) => Promise<void>;
+	persist: (config: ServerConfig) => Promise<boolean | void>;
 };
 
 /**
@@ -48,7 +48,7 @@ export async function resolveActiveConfig(deps: ResolveDeps): Promise<ServerConf
 				// copy, so without this a phone that raced onto Tailscale after
 				// losing Wi-Fi would leave them pointed at the dead LAN address:
 				// REST recovers, the terminal does not.
-				await deps.persist(result.config);
+				if (await deps.persist(result.config) === false) return null;
 				return result.config;
 			}
 			if (result.reason === "incompatible") throw new IncompatibleHostVersionError(host.id);
@@ -67,6 +67,6 @@ export function runtimeResolveDeps(options?: ConnectOptions): ResolveDeps {
 		activeHost,
 		connect: (hostId) => connectToHost(hostId, options),
 		loadLegacyConfig: loadConfig,
-		persist: saveConfig,
+		persist: persistResolvedConfig,
 	};
 }

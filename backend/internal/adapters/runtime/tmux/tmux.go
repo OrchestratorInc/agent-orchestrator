@@ -21,6 +21,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/ptyexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
 )
 
@@ -181,7 +182,7 @@ func reapPaneSessions(
 func signalSessions(ctx context.Context, pids []int, sig string) bool {
 	supported := false
 	for _, pid := range pids {
-		err := exec.CommandContext(ctx, "pkill", sig, "-s", strconv.Itoa(pid)).Run()
+		err := aoprocess.CommandContext(ctx, "pkill", sig, "-s", strconv.Itoa(pid)).Run()
 		if !isUnsupportedMatcher(err) {
 			supported = true
 		}
@@ -209,7 +210,7 @@ func isUnsupportedMatcher(err error) bool {
 // survivors so Destroy stays conservative and still attempts SIGKILL.
 func sessionsHaveProcesses(ctx context.Context, pids []int) bool {
 	for _, pid := range pids {
-		err := exec.CommandContext(ctx, "pgrep", "-s", strconv.Itoa(pid)).Run()
+		err := aoprocess.CommandContext(ctx, "pgrep", "-s", strconv.Itoa(pid)).Run()
 		if err == nil || ctx.Err() != nil {
 			return true
 		}
@@ -224,7 +225,7 @@ func sessionsHaveProcesses(ctx context.Context, pids []int) bool {
 type execRunner struct{}
 
 func (execRunner) Run(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := aoprocess.CommandContext(ctx, name, args...)
 	cmd.Env = append(append([]string(nil), os.Environ()...), env...)
 	// Run from a stable directory, not whatever the daemon process's cwd happens
 	// to be. The first tmux CLI call auto-starts tmux's persistent server, which

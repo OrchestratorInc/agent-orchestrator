@@ -35,21 +35,12 @@ function eventFrom(sender: unknown) {
 }
 
 describe("isTrayEnabled", () => {
-	it("is enabled on darwin for dev builds regardless of version", () => {
-		expect(isTrayEnabled("darwin", false, "0.10.3")).toBe(true);
+	it("is enabled on macOS for every release channel", () => {
+		expect(isTrayEnabled("darwin")).toBe(true);
 	});
 
-	it("is enabled on darwin for packaged nightly builds", () => {
-		expect(isTrayEnabled("darwin", true, "0.10.3-nightly.20260804")).toBe(true);
-	});
-
-	it("is disabled on darwin for packaged stable builds", () => {
-		expect(isTrayEnabled("darwin", true, "0.10.3")).toBe(false);
-	});
-
-	it("is disabled on every non-darwin platform even for dev/nightly builds", () => {
-		expect(isTrayEnabled("win32", false, "0.10.3")).toBe(false);
-		expect(isTrayEnabled("linux", true, "0.10.3-nightly.20260804")).toBe(false);
+	it.each(["win32", "linux"] as const)("is disabled on %s", (platform) => {
+		expect(isTrayEnabled(platform)).toBe(false);
 	});
 });
 

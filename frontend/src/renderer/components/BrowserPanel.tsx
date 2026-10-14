@@ -38,7 +38,9 @@ import {
 	Bug,
 	Camera,
 	Check,
+	ChevronDown,
 	ChevronRight,
+	ChevronUp,
 	Copy,
 	Download,
 	Eye,
@@ -47,6 +49,7 @@ import {
 	Maximize2,
 	Minimize2,
 	RotateCcw,
+	Search,
 	Monitor,
 	MoreVertical,
 	MousePointer2,
@@ -418,6 +421,10 @@ export function BrowserPanelView({
 		goForward,
 		reload,
 		stop,
+		findState = { viewId: "", tabId: "", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true },
+		findOpenRequest = 0,
+		findInPage = async () => undefined,
+		stopFindInPage = async () => undefined,
 		tabs,
 		activeTabId,
 		tabNotice,
@@ -429,6 +436,8 @@ export function BrowserPanelView({
 		reopenClosedTab,
 		agentBrowserActive,
 		agentBrowserActivity,
+		browserRuntimeConnected,
+		reconnectBrowserRuntime = async () => undefined,
 		devtoolsState = { viewId: "", open: false, activeTabId: "" },
 		profileState = { viewId: "", profileId: null, temporary: true },
 		openDevTools = async () => undefined,
@@ -452,8 +461,10 @@ export function BrowserPanelView({
 	const canRetryAnnotation = status === "error" && queuedCount > 0;
 	const [devicePreset, setDevicePreset] = useState<string | null>(null);
 	const [customDeviceWidth, setCustomDeviceWidth] = useState("390");
+	const customWidthInputRef = useRef<HTMLInputElement>(null);
 	const [controlsView, setControlsView] = useState<"root" | "devices" | "profiles">("root");
 	const [controlsOpen, setControlsOpen] = useState(false);
+	const [runtimeReconnectPending, setRuntimeReconnectPending] = useState(false);
 	const [browserProfiles, setBrowserProfiles] = useState<BrowserProfile[]>([]);
 	const [profilesLoading, setProfilesLoading] = useState(false);
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
@@ -462,6 +473,14 @@ export function BrowserPanelView({
 			? clampDeviceFrameWidth(Number(customDeviceWidth))
 			: DEVICE_PRESETS.find((preset) => preset.id === devicePreset)?.width;
 	const urlInputRef = useRef<HTMLInputElement>(null);
+	const findInputRef = useRef<HTMLInputElement>(null);
+	const findComposingRef = useRef(false);
+	const findStateRef = useRef(findState);
+	findStateRef.current = findState;
+	const [findOpen, setFindOpen] = useState(false);
+	const findOpenRef = useRef(findOpen);
+	findOpenRef.current = findOpen;
+	const [findQuery, setFindQuery] = useState("");
 	const historyMenuRef = useRef<HTMLDivElement>(null);
 	const historyRequestGenerationRef = useRef(0);
 	const copyFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -474,20 +493,6 @@ export function BrowserPanelView({
 		showRightFade: showTabsRightFade,
 	} = useTabScrollEdges([tabs.length]);
 	const previousTabCountRef = useRef(tabs.length);
-	// Vertical wheel scrolls the horizontal tab strip when it overflows — same
-	// affordance as the session terminal tabs (CenterPane.tsx).
-	useEffect(() => {
-		const element = tabScrollRef.current;
-		if (!element) return;
-		const handleWheel = (event: WheelEvent) => {
-			if (event.ctrlKey || event.metaKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
-			if (event.deltaY === 0 || element.scrollWidth <= element.clientWidth) return;
-			event.preventDefault();
-			element.scrollBy({ left: event.deltaY });
-		};
-		element.addEventListener("wheel", handleWheel, { passive: false });
-		return () => element.removeEventListener("wheel", handleWheel);
-	}, [tabScrollRef]);
 
 	// Opening a tab (or a popup adding one) appends it, so reveal the newest.
 	useEffect(() => {
@@ -579,6 +584,49 @@ export function BrowserPanelView({
 			}),
 		[viewId],
 	);
+	useEffect(() => {
+		if (findOpenRequest <= 0) return;
+		if (findOpenRef.current) {
+			setFindOpen(false);
+			setFindQuery("");
+			void stopFindInPage(true);
+			return;
+		}
+		setFindOpen(true);
+		setFindQuery(findStateRef.current.query);
+		requestAnimationFrame(() => {
+			findInputRef.current?.focus();
+			findInputRef.current?.select();
+		});
+	}, [findOpenRequest, stopFindInPage]);
+	useEffect(() => {
+		if (!findOpen || findState.tabId !== activeTabId) return;
+		setFindQuery(findState.query);
+	}, [activeTabId, findOpen, findState.query, findState.tabId]);
+	const closeFind = useCallback(() => {
+		setFindOpen(false);
+		setFindQuery("");
+		void stopFindInPage(true);
+	}, [stopFindInPage]);
+	const runFind = useCallback(
+		(query: string, forward = true, newSession = true) => {
+			void findInPage(query, forward, newSession);
+		},
+		[findInPage],
+	);
+	const handleFindKeyDown = useCallback(
+		(event: KeyboardEvent<HTMLInputElement>) => {
+			if (event.key === "Escape") {
+				event.preventDefault();
+				closeFind();
+				return;
+			}
+			if (event.key !== "Enter" || findComposingRef.current || !findQuery) return;
+			event.preventDefault();
+			runFind(findQuery, !event.shiftKey, false);
+		},
+		[closeFind, findQuery, runFind],
+	);
 	useEffect(
 		() =>
 			window.ao?.browser.onReopenClosedTab((targetViewId) => {
@@ -617,7 +665,7 @@ export function BrowserPanelView({
 	const knownDownloadIds = useRef<Set<string> | null>(null);
 	const observedInitialDownloads = useRef(false);
 	const hasActiveDownload = browserDownloads.downloads.some(
-		(download) => download.status === "progressing" || download.status === "paused",
+		(download) => download.status === "progressing" || download.status === "paused" || download.status === "blocked",
 	);
 	useEffect(() => {
 		if (!browserDownloads.initialized) return;
@@ -871,6 +919,15 @@ export function BrowserPanelView({
 							? error
 							: "";
 	const agentStatusLabel = agentActivityLabel(agentBrowserActivity, agentBrowserActive);
+	const runtimeDisconnected = hasNativeBrowser && browserRuntimeConnected === false;
+	const reconnectRuntime = useCallback(async () => {
+		setRuntimeReconnectPending(true);
+		try {
+			await reconnectBrowserRuntime();
+		} finally {
+			setRuntimeReconnectPending(false);
+		}
+	}, [reconnectBrowserRuntime]);
 	const suggestionsOpen = urlEditing && historySuggestions.length > 0;
 	const currentURLIsWeb = isWebLink(navState.url);
 	const copyURLLabel = t(urlCopied ? "browser.urlCopied" : "browser.copyUrl");
@@ -1036,7 +1093,6 @@ export function BrowserPanelView({
 									key={tab.id}
 									onClose={handleCloseTab}
 									onSelect={handleSelectTab}
-									onlyTab={tabs.length === 1}
 									selected={tab.id === activeTabId}
 									tab={tab}
 								/>
@@ -1049,7 +1105,7 @@ export function BrowserPanelView({
 					</div>
 				</SortableContext>
 				<DragOverlay adjustScale={false} dropAnimation={null} modifiers={browserTopTabDragModifiers}>
-					{draggedTopTab ? <BrowserTopTabDragOverlay onlyTab={tabs.length === 1} tab={draggedTopTab} /> : null}
+					{draggedTopTab ? <BrowserTopTabDragOverlay tab={draggedTopTab} /> : null}
 				</DragOverlay>
 			</DndContext>
 				<BrowserControlTooltip label={t("browser.openNewTab")}>
@@ -1127,6 +1183,15 @@ export function BrowserPanelView({
 							aria-label={t("browser.annotationOriginalPage")}
 							disabled={annotationIdle}
 							onBlur={() => void annotationAction("restore-preview")}
+							onKeyDown={(event) => {
+								if ((event.key !== "Enter" && event.key !== " ") || event.repeat) return;
+								event.preventDefault();
+								void annotationAction("preview-original");
+							}}
+							onKeyUp={(event) => {
+								if (event.key !== "Enter" && event.key !== " ") return;
+								void annotationAction("restore-preview");
+							}}
 							onPointerCancel={() => void annotationAction("restore-preview")}
 							onPointerDown={() => void annotationAction("preview-original")}
 							onPointerLeave={() => void annotationAction("restore-preview")}
@@ -1205,6 +1270,21 @@ export function BrowserPanelView({
 			>
 				{browserTabBar}
 				<div className="browser-panel__toolbar" data-testid="browser-toolbar">
+							{runtimeDisconnected ? (
+								<div className="flex min-w-0 items-center gap-1.5 text-2xs text-destructive" data-testid="browser-runtime-alert" role="alert">
+									<span className="truncate">{t("browser.runtimeDisconnected")}</span>
+									<Button
+										className="shrink-0"
+										disabled={runtimeReconnectPending}
+										onClick={() => void reconnectRuntime()}
+										size="sm"
+										type="button"
+										variant="outline"
+									>
+										{t("browser.reconnectRuntime")}
+									</Button>
+								</div>
+							) : null}
 							<BrowserControlTooltip label={t("browser.back")}>
 								<span className="browser-panel__navigation-control inline-flex">
 							<Button
@@ -1419,12 +1499,24 @@ export function BrowserPanelView({
 							})}
 						</div>
 						<div className="my-1 h-px bg-border" role="separator" />
-						<label className="flex items-center gap-1.5 px-2 py-1.5 text-body">
+						<DropdownMenuItem
+							className="gap-1.5"
+							// Radix re-focuses an item on pointer move/leave, which would pull focus
+							// out of the width field while the mouse drifts over the row.
+							onPointerMove={(event) => event.preventDefault()}
+							onPointerLeave={(event) => event.preventDefault()}
+							onSelect={(event) => {
+								event.preventDefault();
+								customWidthInputRef.current?.focus();
+							}}
+						>
 							<span className="flex size-4 shrink-0 items-center justify-center">
 								{devicePreset === CUSTOM_DEVICE_PRESET_ID ? <Check aria-hidden="true" className="text-accent" /> : null}
 							</span>
 							<span className="flex-1">{t("browser.deviceCustomWidth")}</span>
 							<Input
+								aria-label={t("browser.deviceCustomWidth")}
+								ref={customWidthInputRef}
 								className="h-6 w-16 shrink-0 px-1.5 text-right font-mono text-caption"
 								inputMode="numeric"
 								max={MAX_DEVICE_FRAME_WIDTH}
@@ -1434,10 +1526,14 @@ export function BrowserPanelView({
 									setDevicePreset(CUSTOM_DEVICE_PRESET_ID);
 								}}
 								onClick={(event) => event.stopPropagation()}
+								onKeyDown={(event) => {
+									// Escape still closes the menu; everything else is typing.
+									if (event.key !== "Escape") event.stopPropagation();
+								}}
 								type="number"
 								value={customDeviceWidth}
 							/>
-						</label>
+						</DropdownMenuItem>
 							</>
 						) : controlsView === "profiles" ? (
 							<>
@@ -1569,6 +1665,71 @@ export function BrowserPanelView({
 					</motion.div>
 				) : null}
 			</AnimatePresence>
+			{findOpen ? (
+				<div className="browser-panel__find-row" role="search" data-testid="browser-find-row">
+					<Search aria-hidden="true" className="size-3.5 shrink-0 text-passive" />
+					<input
+						ref={findInputRef}
+						className="browser-panel__find-input"
+						value={findQuery}
+						placeholder={t("browser.find.placeholder")}
+						aria-label={t("browser.find.placeholder")}
+						onChange={(event) => {
+							const query = event.currentTarget.value;
+							setFindQuery(query);
+							if (!findComposingRef.current) runFind(query);
+						}}
+						onCompositionStart={() => {
+							findComposingRef.current = true;
+						}}
+						onCompositionEnd={(event) => {
+							findComposingRef.current = false;
+							const query = event.currentTarget.value;
+							setFindQuery(query);
+							runFind(query);
+						}}
+						onKeyDown={handleFindKeyDown}
+					/>
+					<span className="browser-panel__find-status" aria-live="polite" aria-atomic="true">
+						{findQuery
+							? findState.matches > 0
+								? t("browser.find.matchCount", {
+									active: findState.activeMatchOrdinal,
+									total: findState.matches,
+								})
+								: findState.finalUpdate
+									? t("browser.find.noResults")
+									: ""
+							: ""}
+					</span>
+					<button
+						type="button"
+						className="browser-panel__find-button"
+						disabled={!findQuery}
+						aria-label={t("browser.find.previous")}
+						onClick={() => runFind(findQuery, false, false)}
+					>
+						<ChevronUp aria-hidden="true" />
+					</button>
+					<button
+						type="button"
+						className="browser-panel__find-button"
+						disabled={!findQuery}
+						aria-label={t("browser.find.next")}
+						onClick={() => runFind(findQuery, true, false)}
+					>
+						<ChevronDown aria-hidden="true" />
+					</button>
+					<button
+						type="button"
+						className="browser-panel__find-button"
+						aria-label={t("browser.find.close")}
+						onClick={closeFind}
+					>
+						<X aria-hidden="true" />
+					</button>
+				</div>
+			) : null}
 			<div className="browser-panel__body flex min-h-0 flex-1 overflow-hidden">
 				<div
 					className="browser-panel__viewport relative min-h-0 flex-1 overflow-hidden"
@@ -1602,7 +1763,7 @@ export function BrowserPanelView({
 					</div>
 					{showStaticPreview ? <StaticPreview url={navState.url} /> : null}
 					{navState.url === "" ? (
-						<div className="pointer-events-none absolute inset-0 grid place-items-center p-5 text-center font-mono text-xs text-passive">
+						<div className="pointer-events-none absolute inset-0 grid place-items-center p-5 text-center text-xs text-muted-foreground">
 							<p>{t("browser.emptyUrl")}</p>
 						</div>
 					) : null}
@@ -1649,13 +1810,11 @@ function BrowserControlTooltip({
 const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 	tab,
 	selected,
-	onlyTab,
 	onSelect,
 	onClose,
 }: {
 	tab: BrowserViewModel["tabs"][number];
 	selected: boolean;
-	onlyTab: boolean;
 	onSelect: (tabId: string) => void;
 	onClose: (tabId: string) => void;
 }) {
@@ -1693,27 +1852,26 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 					<span className="browser-panel__tab-title">{label.title}</span>
 				</button>
 			</BrowserControlTooltip>
-			<BrowserControlTooltip label={onlyTab ? t("browser.onlyTab") : closeLabel}>
-				<button
-					aria-label={closeLabel}
-					className="browser-panel__tab-close"
-					disabled={onlyTab}
-					onClick={() => onClose(tab.id)}
-					type="button"
-				>
-					<X aria-hidden="true" className="size-icon-base" />
-				</button>
-			</BrowserControlTooltip>
+			{tab.url && tab.url !== "about:blank" ? (
+				<BrowserControlTooltip label={closeLabel}>
+					<button
+						aria-label={closeLabel}
+						className="browser-panel__tab-close"
+						onClick={() => onClose(tab.id)}
+						type="button"
+					>
+						<X aria-hidden="true" className="size-icon-base" />
+					</button>
+				</BrowserControlTooltip>
+			) : null}
 		</div>
 	);
 });
 
 export const BrowserTopTabDragOverlay = memo(function BrowserTopTabDragOverlay({
 	tab,
-	onlyTab,
 }: {
 	tab: BrowserViewModel["tabs"][number];
-	onlyTab: boolean;
 }) {
 	const label = browserTabLabel(tab.title, tab.url);
 	return (
@@ -1730,11 +1888,11 @@ export const BrowserTopTabDragOverlay = memo(function BrowserTopTabDragOverlay({
 				)}
 				<span className="browser-panel__tab-title">{label.title}</span>
 			</div>
-			{onlyTab ? null : (
+			{tab.url && tab.url !== "about:blank" ? (
 				<span className="browser-panel__tab-close">
 					<X aria-hidden="true" className="size-icon-base" />
 				</span>
-			)}
+			) : null}
 		</div>
 	);
 });

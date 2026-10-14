@@ -116,7 +116,18 @@ function setupBridge() {
 		notifyPanelUsed: vi.fn(),
 		notifyPanelBlur: vi.fn(),
 		onFocusLocation: vi.fn(() => () => undefined),
+		getFindState: vi.fn(async (viewId: string) => ({
+			viewId, tabId: "t1", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true,
+		})),
+		findInPage: vi.fn(async ({ viewId, query }: { viewId: string; query: string }) => ({
+			viewId, tabId: "t1", query, activeMatchOrdinal: 1, matches: 1, finalUpdate: true,
+		})),
+		stopFindInPage: vi.fn(async ({ viewId }: { viewId: string }) => ({
+			viewId, tabId: "t1", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true,
+		})),
+		onFindOpen: vi.fn(() => () => undefined),
 		onReopenClosedTab: vi.fn(() => () => undefined),
+		onClosePanel: vi.fn(() => () => undefined),
 		devtools: vi.fn(
 			async ({ viewId, operation, placement }: {
 				viewId: string;
@@ -136,6 +147,8 @@ function setupBridge() {
 		})),
 		showProfileMenu: vi.fn(),
 		selectProfile: vi.fn(),
+		reconnectRuntime: vi.fn(async () => undefined),
+		getRuntimeState: vi.fn(async () => ({ connected: false })),
 		historySuggestions: vi.fn(async () => []),
 		historyFavicon: vi.fn(async () => undefined),
 		captureScreenshot: vi.fn(async () => undefined),
@@ -154,6 +167,7 @@ function setupBridge() {
 			listeners.add(listener);
 			return () => listeners.delete(listener);
 		}),
+		onFindState: vi.fn(() => () => undefined),
 		onPageFocus: vi.fn(() => () => undefined),
 		onTabsState: vi.fn((listener: TabsListener) => {
 			tabsListeners.add(listener);
@@ -167,6 +181,7 @@ function setupBridge() {
 			activityListeners.add(listener);
 			return () => activityListeners.delete(listener);
 		}),
+		onRuntimeState: vi.fn(() => () => undefined),
 		onProfileState: vi.fn((listener: ProfileListener) => {
 			profileListeners.add(listener);
 			return () => profileListeners.delete(listener);
@@ -254,6 +269,17 @@ describe("useBrowserView", () => {
 			),
 		).toBe(true);
 		expect(result.current.viewId).toBe("42:sess-1");
+	});
+
+	it("hydrates the runtime connection state for a late-mounted panel", async () => {
+		const bridge = setupBridge();
+		bridge.getRuntimeState.mockResolvedValueOnce({ connected: false });
+		const slot = createSlot();
+		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+
+		await waitFor(() => expect(bridge.getRuntimeState).toHaveBeenCalled());
+		await waitFor(() => expect(result.current.browserRuntimeConnected).toBe(false));
+		expect(slot).toBeInTheDocument();
 	});
 
 	it("keeps bounds revisions increasing when the same native view remounts", async () => {
@@ -630,10 +656,9 @@ describe("useBrowserView", () => {
 		expect(result.current.tabNotice).toBe("Couldn't reopen that tab");
 	});
 
-	// Regression: closeTab/selectTab are invoked fire-and-forget (`void
-	// onCloseTab(...)`) from the tabs rail, so a rejection used to become a
-	// silent unhandled rejection with zero user feedback.
-	it("surfaces a notice instead of throwing when closing or selecting a tab fails", async () => {
+	// Closing from the tab strip is fire-and-forget, so a rejected close
+	// must be handled without becoming an unhandled rejection.
+	it("surfaces a notice instead of throwing when closing a tab fails", async () => {
 		const bridge = setupBridge();
 		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
 		await waitFor(() => expect(result.current.tabs.map((tab) => tab.id)).toEqual(["t1"]));
@@ -641,10 +666,27 @@ describe("useBrowserView", () => {
 		bridge.closeTab.mockRejectedValueOnce(new Error("boom"));
 		await expect(act(() => result.current.closeTab("t1"))).resolves.toBeUndefined();
 		expect(result.current.tabNotice).toBe("Couldn't close that tab");
+	});
 
-		bridge.selectTab.mockRejectedValueOnce(new Error("boom"));
+	it("resyncs a failed tab selection without showing a switch-failure notice", async () => {
+		const bridge = setupBridge();
+		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+		await waitFor(() => expect(result.current.activeTabId).toBe("t1"));
+
+		bridge.selectTab.mockRejectedValueOnce(new Error("automation sync failed"));
+		bridge.getTabs.mockResolvedValueOnce({
+			viewId: "42:sess-1",
+			activeTabId: "t2",
+			tabs: [{ id: "t2", url: "https://example.test/", title: "Selected", active: true }],
+		});
+		await expect(act(() => result.current.selectTab("t2"))).resolves.toBeUndefined();
+		expect(result.current.activeTabId).toBe("t2");
+		expect(result.current.tabNotice).toBe("");
+
+		bridge.selectTab.mockRejectedValueOnce(new Error("tab unavailable"));
+		bridge.getTabs.mockRejectedValueOnce(new Error("view unavailable"));
 		await expect(act(() => result.current.selectTab("t1"))).resolves.toBeUndefined();
-		expect(result.current.tabNotice).toBe("Couldn't switch to that tab");
+		expect(result.current.tabNotice).toBe("");
 	});
 
 	// Regression: the main process can mutate its own tab state (e.g. the

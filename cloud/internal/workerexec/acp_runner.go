@@ -83,7 +83,7 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 	if !ok {
 		return errors.New("Cloud approval control is unavailable")
 	}
-	path, args, env, err := acpLaunch(turn, command)
+	path, args, env, err := acpLaunch(ctx, turn, command)
 	if err != nil {
 		return err
 	}
@@ -124,13 +124,20 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 	var modes *acp.SessionModeState
 	if turn.AgentSessionID != "" {
 		loaded, loadErr := conn.LoadSession(handshakeCtx, acp.LoadSessionRequest{Meta: meta, Cwd: command.Dir, McpServers: []acp.McpServer{}, SessionId: acp.SessionId(turn.AgentSessionID)})
-		err = loadErr
-		if err != nil {
-			return fmt.Errorf("restore ACP session: %w", err)
+		if loadErr != nil {
+			var requestErr *acp.RequestError
+			// The CLI builder's missing-transcript check only changes CLI args;
+			// ACP must resolve the original durable identity with the provider.
+			// Only an explicit missing Claude session permits a replacement.
+			if turn.Harness != "claude-code" || !errors.As(loadErr, &requestErr) || requestErr.Code != -32002 {
+				return fmt.Errorf("restore ACP session: %w", loadErr)
+			}
+		} else {
+			sessionID = acp.SessionId(turn.AgentSessionID)
+			configOptions, modes = loaded.ConfigOptions, loaded.Modes
 		}
-		sessionID = acp.SessionId(turn.AgentSessionID)
-		configOptions, modes = loaded.ConfigOptions, loaded.Modes
-	} else {
+	}
+	if sessionID == "" {
 		created, createErr := conn.NewSession(handshakeCtx, acp.NewSessionRequest{Meta: meta, Cwd: command.Dir, McpServers: []acp.McpServer{}})
 		if createErr != nil {
 			return fmt.Errorf("create ACP session: %w: %s", createErr, boundedError(stderr.String()))
@@ -170,15 +177,19 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 	return nil
 }
 
-func acpLaunch(turn worker.Turn, command Command) (string, []string, map[string]string, error) {
+func acpLaunch(ctx context.Context, turn worker.Turn, command Command) (string, []string, map[string]string, error) {
 	env := make(map[string]string, len(command.Env)+1)
 	for key, value := range command.Env {
 		env[key] = value
 	}
 	switch turn.Harness {
 	case "claude-code":
-		env["CLAUDE_CODE_EXECUTABLE"] = command.Path
-		return "claude-agent-acp", nil, env, nil
+		env = claudeModelEnvironment(command, turn.Model, nil)
+		adapter, err := EnsureClaudeACPAdapter(ctx)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		return adapter, nil, env, nil
 	case "cursor":
 		args := []string{"--trust"}
 		switch turn.ApprovalMode {

@@ -25,6 +25,7 @@
 //             {type:"output",data:<base64>,sequence}
 
 import { base64ToBytes, type MuxConnectionState, type TerminalMux } from "./terminal-mux";
+import { PLAN_REFUSAL_CODES } from "./cloud-cp/client";
 import { publishCloudNotificationHint } from "./cloud-notification-hints";
 
 export interface CloudTerminalMuxOptions {
@@ -32,6 +33,8 @@ export interface CloudTerminalMuxOptions {
 	wsBaseUrl: string;
 	/** "agent" attaches the running coding agent; "workspace" opens a shell. */
 	kind: "agent" | "workspace";
+	/** Dedicated agent terminal to attach, rather than the session's primary agent terminal. */
+	terminalId?: string;
 	/** Mints a fresh single-use terminal ticket (goes through the CP proxy). */
 	mintTicket: (kind: "agent" | "workspace") => Promise<string>;
 	/**
@@ -98,6 +101,17 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 		);
 	};
 
+	// The org's plan does not allow waking this session (a usage limit, no
+	// plan). That holds for hours or days, so it is reported once as a pane
+	// error rather than polled like a worker that is still starting; the client
+	// already raised the plan prompt for this refusal.
+	const planRefusal = (error: unknown): string | undefined => {
+		if (typeof error !== "object" || error === null) return undefined;
+		const { code, message } = error as { code?: unknown; message?: unknown };
+		if (typeof code !== "string" || !PLAN_REFUSAL_CODES.has(code)) return undefined;
+		return typeof message === "string" && message !== "" ? message : "Your plan does not allow this session to run right now.";
+	};
+
 	const sendJSON = (message: unknown): boolean => {
 		if (socket && socket.readyState === WS.OPEN) {
 			socket.send(JSON.stringify(message));
@@ -153,12 +167,13 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 
 	const openSocket = (kind: "agent" | "workspace", ticket: string) => {
 		if (disposed) return;
-		const query = new URLSearchParams({
+	const query = new URLSearchParams({
 			ticket,
 			kind,
 			after: String(after),
 			protocol: "2",
-		});
+	});
+	if (options.terminalId) query.set("terminalId", options.terminalId);
 		const url = `${options.wsBaseUrl.replace(/\/+$/, "")}/terminal?${query.toString()}`;
 		const ws = new WS(url);
 		socket = ws;
@@ -196,6 +211,11 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 			// (the "Connected, but stuck Connecting…" symptom).
 			if (terminalExited(error)) {
 				reportTerminalExited();
+				return;
+			}
+			const refusal = planRefusal(error);
+			if (refusal) {
+				errorListeners.forEach((listener) => listener(refusal));
 				return;
 			}
 			// A freshly created session's worker may not be connected yet while its

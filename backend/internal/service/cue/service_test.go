@@ -95,7 +95,7 @@ func newTestService(store *fakeStore) *cue.Service {
 }
 
 func commandInput(name string) cue.Input {
-	return cue.Input{Name: name, Description: "d", Type: domain.CueTypeCommand, Command: "pnpm test"}
+	return cue.Input{Name: name, Type: domain.CueTypeCommand, Command: "pnpm test"}
 }
 
 func TestGetCue(t *testing.T) {
@@ -156,8 +156,7 @@ func TestCreateValidation(t *testing.T) {
 	}{
 		{"missing project", "", commandInput("Test"), "INVALID_PROJECT_ID"},
 		{"blank name", "mer", commandInput("   "), "INVALID_CUE_NAME"},
-		{"oversized name", "mer", cue.Input{Name: string(make([]byte, 65)), Description: "", Type: domain.CueTypeCommand, Command: "x"}, "INVALID_CUE_NAME"},
-		{"oversized description", "mer", cue.Input{Name: "Test", Description: string(make([]byte, 241)), Type: domain.CueTypeCommand, Command: "x"}, "INVALID_CUE_DESCRIPTION"},
+		{"oversized name", "mer", cue.Input{Name: string(make([]byte, 65)), Type: domain.CueTypeCommand, Command: "x"}, "INVALID_CUE_NAME"},
 		{"invalid type", "mer", cue.Input{Name: "Test", Type: "prompt", Prompt: "run"}, "INVALID_CUE_TYPE"},
 		{"command without command", "mer", cue.Input{Name: "Test", Type: domain.CueTypeCommand}, "INVALID_CUE_COMMAND"},
 		{"oversized command", "mer", cue.Input{Name: "Test", Type: domain.CueTypeCommand, Command: string(make([]byte, (4<<10)+1))}, "INVALID_CUE_COMMAND"},
@@ -229,7 +228,7 @@ func TestUpdateHappyPath(t *testing.T) {
 	svc := newTestService(store)
 
 	got, err := svc.Update(context.Background(), "cue-a", cue.Input{
-		Name: "Run Tests", Description: "longer desc", Type: domain.CueTypeAgent, Prompt: "Run tests in watch mode.",
+		Name: "Run Tests", Type: domain.CueTypeAgent, Prompt: "Run tests in watch mode.",
 	})
 	if err != nil {
 		t.Fatalf("update: %v", err)
@@ -259,7 +258,7 @@ func TestUpdateErrors(t *testing.T) {
 	_, err = svc.Update(context.Background(), "cue-b", commandInput("Test"))
 	wantCode(t, err, apierr.KindConflict, "CUE_NAME_EXISTS")
 
-	_, err = svc.Update(context.Background(), "cue-a", cue.Input{Name: "Test", Description: "", Type: "prompt", Prompt: "run"})
+	_, err = svc.Update(context.Background(), "cue-a", cue.Input{Name: "Test", Type: "prompt", Prompt: "run"})
 	wantCode(t, err, apierr.KindInvalid, "INVALID_CUE_TYPE")
 
 	_, err = svc.Update(context.Background(), "", commandInput("Test"))

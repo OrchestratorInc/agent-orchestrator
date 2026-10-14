@@ -16,7 +16,11 @@ import {
 	createWorkDirectory,
 	npmInvocation,
 	patchClaudeContextUsage,
+	patchClaudeFoldedPromptSettlement,
+	patchClaudeHibernationCheck,
 	patchClaudeRetryDetails,
+	patchClaudeStaleIdleDebt,
+	patchClaudeSteerSettlement,
 	pruneNodeDistribution,
 	runtimeSourceFiles,
 } from "./build-acp-runtime-helpers.mjs";
@@ -84,6 +88,10 @@ const npm = npmInvocation(["ci", "--omit=dev", "--omit=optional", "--ignore-scri
 run(npm.command, npm.args, { cwd: outDir });
 patchClaudeRetryDetails(claudeAdapter);
 patchClaudeContextUsage(claudeAdapter);
+patchClaudeHibernationCheck(claudeAdapter);
+patchClaudeFoldedPromptSettlement(claudeAdapter);
+patchClaudeStaleIdleDebt(claudeAdapter);
+patchClaudeSteerSettlement(claudeAdapter);
 
 // The Claude Agent SDK declares platform-native Claude executables as optional
 // dependencies. --omit=optional excludes them; this removal is defense-in-depth.

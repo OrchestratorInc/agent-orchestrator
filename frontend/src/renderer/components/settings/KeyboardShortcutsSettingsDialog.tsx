@@ -2,7 +2,7 @@ import { Check, Keyboard, Pencil, Plus, RotateCcw, Search, X } from "lucide-reac
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { shortcutCategoryLabelKeys, shortcutLabelKeys } from "../../i18n/key-maps";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
 	APP_SHORTCUTS,
 	effectiveShortcutBindings,
@@ -34,6 +34,7 @@ import {
 } from "../ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { eventBinding } from "./KeyboardShortcutsContent";
 
 function shortcutLabel(id: AppShortcutId, t: TFunction): string {
 	return t(shortcutLabelKeys[id]);
@@ -56,37 +57,11 @@ type ToastState = {
 	undo?: () => Promise<void>;
 };
 
-const ignoredRecordingKeys = new Set([
-	"Alt",
-	"AltGraph",
-	"CapsLock",
-	"Control",
-	"Dead",
-	"Meta",
-	"NumLock",
-	"Process",
-	"ScrollLock",
-	"Shift",
-	"Unidentified",
-]);
-
-function eventBinding(event: KeyboardEvent): ShortcutBinding | null {
-	if (ignoredRecordingKeys.has(event.key) || event.getModifierState?.("AltGraph")) return null;
-	return {
-		key: event.key.length === 1 ? event.key.toLowerCase() : event.key,
-		...(event.code === "Backquote" ? { code: event.code } : {}),
-		ctrl: event.ctrlKey,
-		meta: event.metaKey,
-		shift: event.shiftKey,
-		alt: event.altKey,
-	};
-}
-
 function definition(id: AppShortcutId) {
 	return APP_SHORTCUTS.find((shortcut) => shortcut.id === id);
 }
 
-export function KeyboardShortcutsSettingsDialog({
+export const KeyboardShortcutsSettingsDialog = memo(function KeyboardShortcutsSettingsDialog({
 	open,
 	onOpenChange,
 	isMac = isMacPlatform(),
@@ -574,4 +549,4 @@ export function KeyboardShortcutsSettingsDialog({
 			/>
 		</>
 	);
-}
+});

@@ -11,6 +11,12 @@ const mocks = vi.hoisted(() => ({
 	update: vi.fn(),
 	runsError: null as Error | null,
 	hideShellTopbar: false,
+	capture: vi.fn(),
+}));
+
+vi.mock("../lib/telemetry", async (importOriginal) => ({
+	...await importOriginal<typeof import("../lib/telemetry")>(),
+	captureRendererEvent: mocks.capture,
 }));
 
 vi.mock("../lib/platform", async (importOriginal) => ({
@@ -53,7 +59,7 @@ function renderView(ui: ReactNode = <AutomationsView />) {
 }
 
 describe("AutomationsView", () => {
-	beforeEach(() => { mocks.automations = []; mocks.runsError = null; mocks.hideShellTopbar = false; mocks.create.mockReset(); mocks.update.mockReset(); });
+	beforeEach(() => { mocks.automations = []; mocks.runsError = null; mocks.hideShellTopbar = false; mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
 
 	it("shows a discoverable empty state and create action", () => {
 		renderView();
@@ -139,6 +145,53 @@ describe("AutomationsView", () => {
 				rrule: "FREQ=WEEKLY;BYDAY=FR;BYHOUR=9;BYMINUTE=30;BYSECOND=0",
 			}),
 		);
+	});
+
+	it("reports the create funnel from dialog open through success", async () => {
+		const user = userEvent.setup();
+		renderView();
+		await user.click(screen.getAllByRole("button", { name: /create automation/i })[0]);
+		expect(mocks.capture).toHaveBeenCalledWith("ao.renderer.automation_create_opened");
+
+		const dialog = screen.getByRole("dialog", { name: "Create automation" });
+		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
+		await user.click(screen.getByRole("option", { name: "Demo" }));
+		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Friday review");
+		await user.type(within(dialog).getByRole("textbox", { name: "Prompt" }), "Review the board");
+		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
+
+		const funnel = { project_id: "demo", schedule_preset: "daily", prompt_length_bucket: "xs" };
+		expect(mocks.capture).toHaveBeenCalledWith("ao.renderer.automation_create_requested", funnel);
+		expect(mocks.capture).toHaveBeenCalledWith("ao.renderer.automation_create_succeeded", funnel);
+		expect(mocks.capture).not.toHaveBeenCalledWith("ao.renderer.automation_create_failed", expect.anything());
+	});
+
+	it("reports a failed create and keeps the dialog open with its error", async () => {
+		const user = userEvent.setup();
+		mocks.create.mockRejectedValueOnce(new Error("daemon unreachable"));
+		renderView();
+		await user.click(screen.getAllByRole("button", { name: /create automation/i })[0]);
+
+		const dialog = screen.getByRole("dialog", { name: "Create automation" });
+		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
+		await user.click(screen.getByRole("option", { name: "Demo" }));
+		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Friday review");
+		await user.type(within(dialog).getByRole("textbox", { name: "Prompt" }), "Review the board");
+		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
+
+		expect(mocks.capture).toHaveBeenCalledWith("ao.renderer.automation_create_failed", expect.objectContaining({ project_id: "demo" }));
+		expect(mocks.capture).not.toHaveBeenCalledWith("ao.renderer.automation_create_succeeded", expect.anything());
+		expect(screen.getByRole("dialog", { name: "Create automation" })).toBeInTheDocument();
+	});
+
+	it("reports no create funnel while editing an existing automation", async () => {
+		mocks.automations = [{ id: "a1", projectId: "demo", displayName: "Nightly", prompt: "Check CI", kind: "worker", harness: "codex", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0", timezone: "UTC", enabled: true, nextRunAt: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }];
+		const user = userEvent.setup();
+		renderView();
+		await user.click(screen.getByRole("button", { name: "Edit Nightly" }));
+
+		expect(screen.getByRole("dialog", { name: "Edit automation" })).toBeInTheDocument();
+		expect(mocks.capture).not.toHaveBeenCalled();
 	});
 
 	it("creates a custom weekly automation on the chosen weekday", async () => {

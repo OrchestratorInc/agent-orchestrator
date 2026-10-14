@@ -69,6 +69,13 @@ export function prChecksUrl(pr: SessionPRSummary): string | undefined {
 	}
 }
 
+// Older daemons and cloud responses can omit the provider's explanation list.
+// Keep the display layer tolerant of that wire-format drift because the PR
+// card is rendered as soon as the inspector tab opens.
+function mergeReasons(pr: SessionPRSummary): string[] {
+	return pr.mergeability.reasons ?? [];
+}
+
 /**
  * Canonical identity key for deduplication. Reuses the URL normalization
  * from `prURL` (which normalizes GitHub issues→pull, strips query/fragment,
@@ -222,14 +229,14 @@ export function prCardPresentation(pr: SessionPRSummary): PRCardPresentation {
 			statusRows.push(cardStatus("ci", "pr.card.checksPassing", "success", undefined, [], prChecksUrl(pr)));
 		} else if (pr.ci.state === "failing") {
 			statusRows.push(cardStatus("ci", "pr.card.checksFailing", "error", undefined, [], prChecksUrl(pr)));
-		} else if (pr.mergeability.reasons.includes("github_checks_unavailable")) {
+		} else if (mergeReasons(pr).includes("github_checks_unavailable")) {
 			statusRows.push(cardStatus("ci", "pr.card.checksUnavailable", "warning", undefined, [], prChecksUrl(pr)));
 		} else if (pr.ci.state === "pending" || pr.ci.state === "unknown") {
 			statusRows.push(cardStatus("ci", pr.ci.state === "pending" ? "pr.card.checksPending" : "pr.card.checksLoading", "neutral", undefined, [], prChecksUrl(pr), true));
 		}
 		statusRows.push(cardStatus("review", "pr.card.reviewStatus", reviewTone(pr.review.decision, pr.review.hasUnresolvedHumanComments), reviewStatusDetail(pr)));
 		const mergeable = prCanMerge(pr);
-		if (pr.mergeability.reasons.includes("github_checks_unavailable")) {
+		if (mergeReasons(pr).includes("github_checks_unavailable")) {
 			return { primary, supporting, statusRows, readiness: {
 				label: appI18n.t("pr.merge.accessLost"),
 				detail: appI18n.t("pr.merge.checksUnavailableDetail"),
@@ -323,8 +330,8 @@ export function prSummaryParts(pr: SessionPRSummary): PRSummaryPart[] {
 		{
 			key: "ci",
 			label: appI18n.t("pr.section.ci"),
-			status: pr.mergeability.reasons.includes("github_checks_unavailable") ? appI18n.t("pr.card.checksUnavailable") : ciLabel(pr.ci.state),
-			summary: pr.mergeability.reasons.includes("github_checks_unavailable") ? appI18n.t("pr.merge.checksUnavailableDetail") : ciSummary(pr),
+			status: mergeReasons(pr).includes("github_checks_unavailable") ? appI18n.t("pr.card.checksUnavailable") : ciLabel(pr.ci.state),
+			summary: mergeReasons(pr).includes("github_checks_unavailable") ? appI18n.t("pr.merge.checksUnavailableDetail") : ciSummary(pr),
 			links: ciLinks(pr),
 			linkTotal: pr.ci.state === "failing" ? pr.ci.failingChecks.length : 0,
 			overflowLabel: pr.ci.state === "failing" ? overflowLabel(pr.ci.failingChecks.length, 3, "check") : undefined,
@@ -580,7 +587,7 @@ function mergeabilityLabel(state: SessionPRSummary["mergeability"]["state"]): st
 }
 
 function hasLostGitHubAccess(pr: SessionPRSummary): boolean {
-	return pr.mergeability.reasons.includes("github_access_lost");
+	return mergeReasons(pr).includes("github_access_lost");
 }
 
 function mergeabilityTone(state: SessionPRSummary["mergeability"]["state"]): PRDisplayTone {
@@ -646,7 +653,7 @@ function mergeAttentionLinks(pr: SessionPRSummary, kind: "merge_conflict" | "mer
 // explain more precisely. It is not an actionable reason, so cards summarize
 // it as merge availability instead of exposing implementation terminology.
 function visibleMergeReasons(pr: SessionPRSummary): string[] {
-	return pr.mergeability.reasons.filter((reason) => reason !== "blocked_by_provider");
+	return mergeReasons(pr).filter((reason) => reason !== "blocked_by_provider");
 }
 
 // GitHub's and GitLab's `/conflicts` subpages only exist when the host judges the

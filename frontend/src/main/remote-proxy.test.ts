@@ -68,6 +68,47 @@ async function startUpstream(
 }
 
 describe("startRemoteProxy", () => {
+	it("serves authenticated artifact files and sibling assets without replacing an app preview", async () => {
+		const { port, seen } = await startUpstream(() => ({ status: 200, body: "artifact", headers: { "set-cookie": "secret=1" } }));
+		proxy = await startRemoteProxy({ label: "box", url: `http://127.0.0.1:${port}/ao`, password: "pw" });
+		const app = proxy.previewUrl("ao-1", "http://localhost:5173/");
+		const source = `http://ao-preview-artifact.mfxs2mi.localhost:${port}/docs/report.md?raw=true`;
+		const raw = proxy.previewUrl("ao-1", source);
+		const html = proxy.previewUrl("ao-1", source.replace("report.md?raw=true", "index.html"));
+		expect(new URL(html).host).toBe(new URL(raw).host);
+		expect(proxy.previewUrl("ao-1", source)).toBe(raw);
+		expect(proxy.resolvePreviewUrl("ao-1", raw)).toBe(source);
+		expect(proxy.resolvePreviewUrl("ao-2", raw)).toBe("");
+		const request = async (url: string, method = "GET") => {
+			const target = new URL(url);
+			return new Promise<number>((resolve, reject) => {
+				const req = httpRequest({ hostname: "127.0.0.1", port: Number(new URL(proxy!.base).port), path: target.pathname + target.search, method, headers: { Host: target.host } }, (res) => {
+					expect(res.headers["set-cookie"]).toBeUndefined();
+					res.resume();
+					res.on("end", () => resolve(res.statusCode ?? 0));
+				});
+				req.on("error", reject);
+				req.end();
+			});
+		};
+		expect(await request(raw)).toBe(200);
+		expect(await request(html)).toBe(200);
+		expect(await request(new URL("chart.png", raw).href)).toBe(200);
+		expect(await request(new URL("/assets/chart.png", raw).href)).toBe(200);
+		expect(await request(raw, "POST")).toBe(404);
+		expect(seen.map((entry) => entry.url)).toEqual([
+			"/ao/api/v1/sessions/ao-1/preview/files/docs/report.md?raw=true&source=artifact",
+			"/ao/api/v1/sessions/ao-1/preview/files/docs/index.html?source=artifact",
+			"/ao/api/v1/sessions/ao-1/preview/files/docs/chart.png?source=artifact",
+			"/ao/api/v1/sessions/ao-1/preview/files/assets/chart.png?source=artifact",
+		]);
+		expect(seen.every((entry) => entry.auth === "Bearer pw" && !entry.appAuth)).toBe(true);
+		// Clearing Browser's app preview does not invalidate raw artifact reads.
+		expect(proxy.previewUrl("ao-1", "http://localhost:5173/")).toBe(app);
+		proxy.previewUrl("ao-1", "");
+		expect(await request(raw)).toBe(200);
+	});
+
 	it("scopes a stable static preview origin to one session and serves root assets", async () => {
 		const { port, seen } = await startUpstream((request) => ({
 			status: request.url === "/api/v1/projects" ? 200 : 200,

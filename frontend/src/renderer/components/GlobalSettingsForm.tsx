@@ -7,23 +7,30 @@ export type GlobalSettingsSection = GlobalSettingsPage | "all";
 
 export function GlobalSettingsForm({
 	cloudEnabled = true,
-	is11x = false,
+	hasCoder = false,
+	selfServeBilling = false,
 	focusAgentId,
 	hostId,
 	harnessView,
+	startLogin,
 	section = "all",
 }: {
 	cloudEnabled?: boolean;
-	is11x?: boolean;
+	/** The org's offering includes coder (SettingsDialog reads useCloudOffering). */
+	hasCoder?: boolean;
+	/** The org is on self-serve billing. */
+	selfServeBilling?: boolean;
 	focusAgentId?: string;
 	hostId?: string;
 	harnessView?: "local" | "cloud";
+	startLogin?: boolean;
 	section?: GlobalSettingsSection;
 }) {
 	const { t } = useTranslation();
 	const developerMode = useUiStore((state) => state.developerMode);
+	const diagnostics = useUiStore((state) => state.developerMode && state.diagnostics);
 	const all = section === "all";
-	const context = { cloudEnabled, developerMode, is11x, focusAgentId, hostId, harnessView };
+	const context = { cloudEnabled, developerMode, diagnostics, hasCoder, selfServeBilling, focusAgentId, hostId, harnessView, startLogin };
 	// One section per page means the dialog header already names it, so a
 	// leading in-page heading would just repeat that title.
 	const titleHidden = !all;
@@ -32,7 +39,6 @@ export function GlobalSettingsForm({
 		<div
 			aria-label={t("settings.title")}
 			className="flex w-full flex-col gap-(--size-settings-section-gap)"
-			data-testid="settings-page"
 		>
 			{globalSettingsItemsFor(section, context).map((item) => (
 				<Fragment key={item.id}>

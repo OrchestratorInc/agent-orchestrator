@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 	"time"
 
@@ -23,6 +24,16 @@ type Principal struct {
 	// optional features such as the coder sandbox provider. Empty for personal or
 	// local organizations.
 	OrgCapabilities []string
+	// OrgBilling is the active organization's billing arrangement from WorkOS
+	// organization metadata (metadata.billing), normalized by
+	// NormalizeOrgBilling. Empty when the metadata does not set it.
+	OrgBilling string
+	// TeamOrgID is the AO organization ID the token's WorkOS organization maps
+	// to, set when the principal is resolved. OrgCapabilities and OrgBilling
+	// describe only that organization: a request that targets any other
+	// organization (such as the user's personal one) uses the deployment
+	// defaults instead. Empty without a WorkOS organization.
+	TeamOrgID string
 }
 
 type Membership struct {
@@ -65,11 +76,18 @@ type UpdateProject struct {
 }
 
 type Session struct {
-	ID                 string
-	OrgID              string
-	ProjectID          string
-	Kind               string
-	Harness            string
+	ID        string
+	OrgID     string
+	ProjectID string
+	Kind      string
+	Harness   string
+	// ReviewerHarness overrides Harness only for manually-triggered PR review
+	// terminals. An empty value deliberately follows the worker harness.
+	ReviewerHarness    string
+	AutoReviewEnabled  bool
+	AutoInjectCI       bool
+	AutoInjectReview   bool
+	TerminateOnPRMerge bool
 	DisplayName        string
 	Branch             string
 	Mode               string
@@ -86,9 +104,24 @@ type Session struct {
 	ObservedState      string
 	RuntimeState       string
 	RuntimeError       string
-	AutoInjectCI       bool
-	AutoInjectReview   bool
-	TerminateOnPRMerge bool
+	// StartupErrorCode, StartupErrorMessage and StartupErrorAt are the latest
+	// user-facing reason the session's sandbox has not started. Empty once the
+	// worker checks in.
+	StartupErrorCode    string
+	StartupErrorMessage string
+	StartupErrorAt      *time.Time
+	// StartupErrorDetail is the redacted operator detail behind the startup
+	// error (failed stage, provider error, Coder build and agent log tails). It
+	// is filled only for bring-your-own compute, whose operators are the
+	// organization's own.
+	StartupErrorDetail string
+	// BYOCoderWorkspace locates the session's workspace on the organization's
+	// own (bring-your-own) Coder deployment, as AO recorded it in the sandbox
+	// resource profile when it planned the workspace, so it is known from the
+	// session's creation (the workspace may not exist yet). Nil for AO's managed
+	// Coder (an internal deployment customers have no login on) and for every
+	// other provider.
+	BYOCoderWorkspace *CoderWorkspaceRef
 	// WorkerEpoch is the highest worker epoch the session has minted for its
 	// agent terminal. It advances every time a fresh worker connects (a resume
 	// from idle-pause, a restore, or any re-provision), so a client can key its
@@ -97,6 +130,15 @@ type Session struct {
 	WorkerEpoch int64
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+}
+
+// CoderWorkspaceRef is the non-secret identity of one session's Coder
+// workspace: the deployment origin, the owning Coder user and the project's
+// workspace name prefix (empty for the default ao-<id> name).
+type CoderWorkspaceRef struct {
+	BaseURL    string
+	Owner      string
+	NamePrefix string
 }
 
 // Status derives the session's display status from runtime and pull request facts.
@@ -119,16 +161,17 @@ func (s Session) Status(now time.Time, prs []contract.PRFacts) contract.SessionS
 }
 
 type CreateSession struct {
-	ProjectID      string
-	Kind           string
-	Harness        string
-	DisplayName    string
-	Prompt         string
-	Mode           string
-	Model          string
-	DeniedCommands []string
-	Interface      SessionInterface
-	Provider       string
+	ProjectID       string
+	Kind            string
+	Harness         string
+	DisplayName     string
+	Prompt          string
+	Mode            string
+	Model           string
+	ReasoningEffort string
+	DeniedCommands  []string
+	Interface       SessionInterface
+	Provider        string
 	// SandboxConnectionID names a bring-your-own provider credential. It is
 	// empty for sandboxes that run on the platform's own account.
 	SandboxConnectionID string
@@ -164,6 +207,69 @@ type ProjectCoderConfig struct {
 	Size          string    `json:"size,omitempty"`
 	StartupScript string    `json:"startupScript,omitempty"`
 	ExtraRepos    []RepoRef `json:"extraRepos,omitempty"`
+	// WorkspaceNamePrefix names new Coder workspaces <prefix>-<short session
+	// id>. Empty keeps the default ao-<id>.
+	WorkspaceNamePrefix string `json:"workspaceNamePrefix,omitempty"`
+	// Parameters are the project's values for the chosen template's
+	// coder_parameter inputs, keyed by parameter name. Values are strings as
+	// Coder takes them: a list(string) value is a JSON array string and a bool
+	// is "true" or "false". At workspace create they override the
+	// organization connection's parameters and are overridden by AO's own
+	// size/startup mapping. See ValidateCoderTemplateParameterValues.
+	Parameters map[string]string `json:"parameters,omitempty"`
+}
+
+// MaxCoderWorkspaceNamePrefix bounds the prefix so <prefix>-<id> stays inside
+// Coder's 32-character workspace name limit with a collision-safe id.
+const MaxCoderWorkspaceNamePrefix = 20
+
+var coderWorkspaceNamePrefixPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,19}$`)
+
+// ValidateCoderWorkspaceNamePrefix accepts an empty prefix (the default) or a
+// lowercase name Coder will accept once "-<id>" is appended: it must start
+// with a letter, and may not end with or repeat a hyphen.
+func ValidateCoderWorkspaceNamePrefix(prefix string) error {
+	if prefix == "" {
+		return nil
+	}
+	if !coderWorkspaceNamePrefixPattern.MatchString(prefix) ||
+		strings.HasSuffix(prefix, "-") || strings.Contains(prefix, "--") {
+		return errors.New("Coder workspace name prefix must be 1-20 lowercase letters, digits, or single hyphens, starting with a letter")
+	}
+	return nil
+}
+
+// CoderWorkspaceNamePrefixFor derives a workspace name prefix from a project
+// name: lower-cased, every run of other characters a single hyphen, starting
+// with a letter, at most MaxCoderWorkspaceNamePrefix characters, so it
+// always passes ValidateCoderWorkspaceNamePrefix. A name with no letters gives
+// "ao", the default prefix.
+func CoderWorkspaceNamePrefixFor(projectName string) string {
+	var slug strings.Builder
+	hyphen := false
+	for _, character := range strings.ToLower(projectName) {
+		switch {
+		case character >= 'a' && character <= 'z', character >= '0' && character <= '9' && slug.Len() > 0:
+			if hyphen && slug.Len() > 0 {
+				slug.WriteByte('-')
+			}
+			hyphen = false
+			slug.WriteRune(character)
+		default:
+			hyphen = true
+		}
+		if slug.Len() >= MaxCoderWorkspaceNamePrefix {
+			break
+		}
+	}
+	prefix := strings.TrimRight(slug.String(), "-")
+	if len(prefix) > MaxCoderWorkspaceNamePrefix {
+		prefix = strings.TrimRight(prefix[:MaxCoderWorkspaceNamePrefix], "-")
+	}
+	if prefix == "" || ValidateCoderWorkspaceNamePrefix(prefix) != nil {
+		return "ao"
+	}
+	return prefix
 }
 
 // DecodeProjectCoderConfig extracts the coder dev-kit config from a project's
@@ -179,6 +285,38 @@ func DecodeProjectCoderConfig(config json.RawMessage) (cfg ProjectCoderConfig, o
 		return ProjectCoderConfig{}, false
 	}
 	return *envelope.Coder, true
+}
+
+// RepositorySandboxSnapshot is a prepared VM snapshot for one repository and
+// harness: the harness snapshot (BaseSnapshotID) with the repository cloned.
+// It is shared by every project in the organization on that repository and
+// outlives them. RepositoryIdentity is the GitHub owner/name it was cloned
+// from, which a session's repository must still match to use it.
+type RepositorySandboxSnapshot struct {
+	OrgID              string
+	RepositoryKey      string
+	RepositoryIdentity string
+	Provider           string
+	Harness            string
+	SnapshotID         string
+	BaseSnapshotID     string
+	CreatedAt          time.Time
+}
+
+// DecodeProjectSandboxProvider returns the sandbox provider a project was set up
+// to run its sessions on, stored in its Config as {"sandboxProvider": "..."}.
+// It is empty when the project leaves the choice to the session.
+func DecodeProjectSandboxProvider(config json.RawMessage) string {
+	if len(config) == 0 {
+		return ""
+	}
+	var envelope struct {
+		SandboxProvider string `json:"sandboxProvider"`
+	}
+	if err := json.Unmarshal(config, &envelope); err != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(envelope.SandboxProvider))
 }
 
 // MergeProjectCoderConfig stores the coder dev-kit config under the "coder" key
@@ -198,11 +336,12 @@ func MergeProjectCoderConfig(config json.RawMessage, coder ProjectCoderConfig) (
 	return json.Marshal(merged)
 }
 
-// DefaultOrgCoderDurableRoot is the Coder workspace persistent-volume mount
-// point assumed when an organization's Coder config omits one. It mirrors the
-// mount the AO-maintained Coder templates use, so a bring-your-own org that does
-// not override it still provisions against a valid durable root.
-const DefaultOrgCoderDurableRoot = "/home/coder"
+// DefaultOrgCoderDurableRoot is the durable root assumed when an
+// organization's Coder config omits one: the workspace user's home directory,
+// resolved inside the workspace at bootstrap. A bring-your-own template may run
+// as any user, so a fixed /home/coder would point at a directory that does not
+// exist there. (Mirrors sandbox.CoderHomeDurableRoot; domain cannot import it.)
+const DefaultOrgCoderDurableRoot = "$HOME"
 
 // OrgCoderConfig is one organization's non-secret bring-your-own Coder
 // connection contract. It is stored as the config JSONB of the org's
@@ -224,7 +363,53 @@ type OrgCoderConfig struct {
 	// time. Both stay blank for a directly reachable Coder.
 	EndpointServiceName string `json:"endpointServiceName,omitempty"`
 	Region              string `json:"region,omitempty"`
+	// RequireMountedDurableRoot keeps the deployment Coder's strict check that
+	// the durable root is a mounted volume. Off by default: bring-your-own
+	// templates commonly keep home on the root filesystem.
+	RequireMountedDurableRoot bool `json:"requireMountedDurableRoot,omitempty"`
+	// StartupTimeoutSeconds is how long AO waits for a workspace from this
+	// connection to become ready and its worker to check in before giving up.
+	// Zero uses the bring-your-own default (20 minutes).
+	StartupTimeoutSeconds int `json:"startupTimeoutSeconds,omitempty"`
+	// WorkerUser selects which account runs AO's worker and coding agent in
+	// the workspace: CoderWorkerUserAOWorker (a dedicated ao-worker user, the
+	// historical behavior) or CoderWorkerUserWorkspace (the workspace's own
+	// login user, with its real HOME, groups and environment). Normalized to
+	// CoderWorkerUserAOWorker when unset.
+	WorkerUser string `json:"workerUser,omitempty"`
+	// ReadyProbe is an optional shell command AO runs as the workspace user
+	// after the Coder agent reports ready and before it launches the worker.
+	// AO polls it until it exits 0 or ReadyProbeTimeoutSeconds elapses, for
+	// templates whose own setup outlives the Coder agent's startup script.
+	ReadyProbe string `json:"readyProbe,omitempty"`
+	// ReadyProbeTimeoutSeconds bounds the ReadyProbe wait. Normalized to
+	// DefaultCoderReadyProbeTimeoutSeconds when a probe is set without one.
+	ReadyProbeTimeoutSeconds int `json:"readyProbeTimeoutSeconds,omitempty"`
+	// ReuseExistingCheckout makes the worker use a checkout of the project's
+	// repository the template already cloned (under $HOME/work/* or $HOME/*)
+	// as the session worktree instead of cloning into ~/repository. It only
+	// applies with the workspace worker user, where it defaults to true;
+	// normalization pins it to false for the ao-worker user.
+	ReuseExistingCheckout *bool `json:"reuseExistingCheckout,omitempty"`
+	// WorkingDirectory names the directory a session works in: an absolute
+	// path, or one under the workspace user's home ("~/" or "$HOME/"), which
+	// may contain {repo} for the repository name, for example ~/work/{repo}.
+	// An existing checkout of the session repository there is adopted, a
+	// missing directory gets a fresh clone, and anything else fails the
+	// checkout. It replaces the ReuseExistingCheckout search and requires the
+	// workspace worker user.
+	WorkingDirectory string `json:"workingDirectory,omitempty"`
+	// ProtectSecretFiles stops the coding agent's own file tools from reading
+	// or editing secret environment files (.env, .env.*). It defaults to true;
+	// normalization makes the effective value explicit.
+	ProtectSecretFiles *bool `json:"protectSecretFiles,omitempty"`
 }
+
+// Bounds for OrgCoderConfig.StartupTimeoutSeconds.
+const (
+	MinOrgCoderStartupTimeoutSeconds = 60
+	MaxOrgCoderStartupTimeoutSeconds = 2 * 60 * 60
+)
 
 // normalize trims the config's string fields and fills the durable-root default
 // so every encode and decode yields the same canonical, provisioning-ready
@@ -235,6 +420,9 @@ func (c *OrgCoderConfig) normalize() {
 	c.TemplateID = strings.TrimSpace(c.TemplateID)
 	c.AgentName = strings.TrimSpace(c.AgentName)
 	c.DurableRoot = strings.TrimSpace(c.DurableRoot)
+	if c.DurableRoot == "~" || c.DurableRoot == "${HOME}" {
+		c.DurableRoot = DefaultOrgCoderDurableRoot
+	}
 	c.EndpointServiceName = strings.TrimSpace(c.EndpointServiceName)
 	c.Region = strings.TrimSpace(c.Region)
 	if c.DurableRoot == "" {
@@ -243,6 +431,7 @@ func (c *OrgCoderConfig) normalize() {
 	if len(c.Parameters) == 0 {
 		c.Parameters = nil
 	}
+	c.normalizeDevEnvironment()
 }
 
 // DecodeOrgCoderConfig reads an organization's Coder config from the config

@@ -3,23 +3,30 @@
  * (GET /orgs/{orgId}/sandbox/coder/templates). Empty when the deployment does
  * not offer coder or the org is not entitled — the picker then shows only
  * "Default". Enabled only when the caller has already resolved that coder is the
- * active provider, to avoid a needless call on nodeops/docker deployments.
+ * active provider, and never for an org whose offering lacks coder (the control
+ * plane answers 403 provider_forbidden there).
  */
 
 import { useQuery } from "@tanstack/react-query";
 import type { CloudCpCoderTemplate } from "../lib/cloud-cp/types";
 import { useCloudCp } from "./useCloudCp";
+import { useCloudOffering } from "./useCloudOffering";
 
 export interface UseCoderTemplatesResult {
 	templates: CloudCpCoderTemplate[];
 	isLoading: boolean;
+	// True when the list could not be loaded — most often an unreachable Coder or a
+	// bad API token. Callers that only drive a dropdown can ignore it; the settings
+	// page uses it to show a "couldn't load" state.
+	isError: boolean;
 }
 
 export function useCoderTemplates(orgId: string | undefined, enabled: boolean): UseCoderTemplatesResult {
 	const { client, ready, baseUrl } = useCloudCp();
+	const { hasCoder } = useCloudOffering();
 	const query = useQuery({
 		queryKey: ["cloud-coder-templates", baseUrl, orgId],
-		enabled: ready && enabled && Boolean(orgId),
+		enabled: ready && enabled && hasCoder && Boolean(orgId),
 		staleTime: 5 * 60_000,
 		retry: 1,
 		queryFn: async (): Promise<CloudCpCoderTemplate[]> => {
@@ -30,5 +37,6 @@ export function useCoderTemplates(orgId: string | undefined, enabled: boolean): 
 	return {
 		templates: query.data ?? [],
 		isLoading: query.isLoading,
+		isError: query.isError,
 	};
 }

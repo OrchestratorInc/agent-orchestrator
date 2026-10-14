@@ -11,6 +11,7 @@ import {
 	reviewerConversationQueryRoot,
 } from "../hooks/useReviewerConversation";
 import { agentSwitchesQueryRoot } from "../hooks/useAgentSwitches";
+import { sessionReviewsQueryKey } from "./session-reviews";
 import { sessionUsageQueryRoot } from "../hooks/useSessionUsageSummaries";
 import { agentSwitchVisibility } from "./agent-switch-visibility";
 import { codexAccountsQueryKey, writeCodexAccounts } from "../hooks/codex-accounts-state";
@@ -62,15 +63,33 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 			const pendingConversationSessions = new Set<string>();
 			const pendingReviewerConversations = new Set<string>();
+			const pendingReviewSessions = new Set<string>();
 			const pendingInterfaceTransitionSessions = new Set<string>();
 			const pendingEditorHandoffSessions = new Set<string>();
 			const pendingModelCatalogScopes = new Map<string, { agentId: string; projectId: string }>();
 			let workspaceInvalidationPending = false;
 			let allConversationsInvalidationPending = false;
 			let allEditorHandoffsInvalidationPending = false;
+			// Reviews, interface transitions and model catalogs are otherwise only
+			// refreshed by their own events. A fresh stream starts at the newest event,
+			// so a lifecycle refresh must cover whatever changed in the gap.
+			let allEventScopedCachesInvalidationPending = false;
 			let retryTimer: ReturnType<typeof setTimeout> | undefined;
 			let source: EventSource | undefined;
 			let sourceBaseUrl: string | undefined;
+			// Base URL of a daemon that rejected ?after=latest (built before the cursor
+			// existed). Its stream connects without one, replaying history as before.
+			let cursorUnsupportedBaseUrl: string | undefined;
+			const probeCursorSupport = (baseUrl: string, url: string) => {
+				const controller = new AbortController();
+				void fetch(url, { signal: controller.signal })
+					.then((response) => {
+						if (response.status === 400) cursorUnsupportedBaseUrl = baseUrl;
+					})
+					.catch(() => undefined)
+					// A supporting daemon answers with an open stream; do not keep it.
+					.finally(() => controller.abort());
+			};
 			let accountSource: EventSource | undefined;
 			let accountSourceBaseUrl: string | undefined;
 			let disposed = false;
@@ -218,6 +237,12 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					invalidate(sessionUsageQueryRoot);
 					workspaceInvalidationPending = false;
 				}
+				if (allEventScopedCachesInvalidationPending) {
+					invalidate(["session-reviews"]);
+					invalidate(["session-interface-transition"]);
+					invalidate(["agent-models"]);
+					allEventScopedCachesInvalidationPending = false;
+				}
 				if (allEditorHandoffsInvalidationPending) {
 					invalidate(editorHandoffQueryRoot);
 					allEditorHandoffsInvalidationPending = false;
@@ -232,6 +257,10 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					invalidate(conversationQueryKey(sessionId));
 				}
 				pendingConversationSessions.clear();
+				for (const sessionId of pendingReviewSessions) {
+					invalidate(sessionReviewsQueryKey(sessionId));
+				}
+				pendingReviewSessions.clear();
 				for (const reviewId of pendingReviewerConversations) {
 					invalidate(reviewerConversationQueryKey(reviewId));
 				}
@@ -258,6 +287,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					// leaving an open chat frozen on its pre-gap snapshot.
 					allConversationsInvalidationPending = true;
 					allEditorHandoffsInvalidationPending = true;
+					allEventScopedCachesInvalidationPending = true;
 				}
 				if (event && "data" in event) {
 					try {
@@ -282,6 +312,17 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 										projectId?: unknown;
 								  })
 								: undefined;
+						// A review run can start or finish without this window asking for
+						// it: an agent ran `ao review trigger`, auto-review fired, or a
+						// reviewer submitted. Refresh that session's reviews so the
+						// inspector shows it instead of a stale verdict.
+						if (
+							(decoded.type === "review_run_created" || decoded.type === "review_run_updated") &&
+							typeof decoded.sessionId === "string" &&
+							decoded.sessionId
+						) {
+							pendingReviewSessions.add(decoded.sessionId);
+						}
 						if (payload?.kind === "model_catalog" && typeof payload.agentId === "string" && typeof payload.projectId === "string") {
 							pendingModelCatalogScopes.set(`${payload.agentId}\0${payload.projectId}`, {
 								agentId: payload.agentId,
@@ -411,10 +452,20 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				source = undefined;
 				sourceBaseUrl = baseUrl;
 				try {
-					source = new EventSource(`${baseUrl.replace(/\/+$/, "")}/api/v1/events`);
+					// Start at the newest event. Without a cursor the daemon replays the
+					// whole change_log (up to 100k rows under retention) on every connect,
+					// although onopen already refreshes everything below. The daemon then
+					// sends a cursor id, so the browser's own reconnect replays only the gap.
+					// A daemon from before the cursor existed answers 400; that base URL
+					// falls back to the cursorless stream (see probeCursorSupport).
+					const streamUrl = `${baseUrl.replace(/\/+$/, "")}/api/v1/events`;
+					const useCursor = cursorUnsupportedBaseUrl !== baseUrl;
+					source = new EventSource(useCursor ? `${streamUrl}?after=latest` : streamUrl);
 					const connectedSource = source;
+					let opened = false;
 					source.onopen = () => {
 						if (disposed || source !== connectedSource) return;
+						opened = true;
 						healthAttempt += 1;
 						retries = 0;
 						setEventsConnectionState("connected");
@@ -429,7 +480,11 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						// either way the stream is not delivering, so surface it instead
 						// of looping silently against a dead daemon.
 						setEventsConnectionState("disconnected");
-						if (source?.readyState === EVENTSOURCE_CLOSED) scheduleRetry();
+						if (source?.readyState === EVENTSOURCE_CLOSED) {
+							// Closed before it ever opened: maybe this daemon rejects the cursor.
+							if (!opened && useCursor) probeCursorSupport(baseUrl, `${streamUrl}?after=latest`);
+							scheduleRetry();
+						}
 						const attempt = ++healthAttempt;
 						void queryClient.refetchQueries(
 							{ queryKey: workspaceQueryKey, type: "active" },
@@ -458,7 +513,15 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				}
 			};
 
-			const removeDaemonListener = aoBridge.daemon.onStatus(() => {
+			// Main re-pushes the same status on every getStatus poll (~10s) when it is
+			// attached to a daemon it did not spawn. Only a real change (state, port or
+			// pid) can mean missed events; refreshing on each echo refetched every open
+			// conversation and the workspace list every 10 seconds.
+			let lastDaemonStatusKey: string | undefined;
+			const removeDaemonListener = aoBridge.daemon.onStatus((status) => {
+				const key = `${status?.state}:${status?.port ?? ""}:${status?.pid ?? ""}`;
+				if (key === lastDaemonStatusKey) return;
+				lastDaemonStatusKey = key;
 				connectSource();
 				refreshWorkspaces();
 			});
@@ -474,6 +537,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				disposed = true;
 				if (refreshTimer !== undefined) clearTimeout(refreshTimer);
 				pendingConversationSessions.clear();
+				pendingReviewSessions.clear();
 				pendingInterfaceTransitionSessions.clear();
 				pendingModelCatalogScopes.clear();
 				refreshes.clear();
