@@ -139,10 +139,19 @@ additional exercised UI action and outcome, including errors and retries.
 
 Already installed or already connected is a valid observed starting state, not
 proof of fresh installation or login. Capture that state and mark unexercised
-branches `NOT_RUN`; qualify missing paths with a separate disposable installation
-or authorized isolated account when available. Never uninstall the user's real
-agent, delete saved credentials or force logout to create a screenshot. No safe
-fixture/account leaves the affected journey `BLOCKED`, with its next action.
+branches `NOT_RUN`. When the agreed journey accepts existing credentials,
+`auth-before` and `auth-ready` plus fresh verified authorization and a successful
+provider turn qualify that auth route. Keep `auth-action: NOT_RUN` with reason
+`EXISTING_VERIFIED_CREDENTIALS`: this unexercised alternative does not block the
+accepted route or establish fresh-login proof. Missing authentication/configuration
+or an explicit fresh-login claim requires `auth-action`; a cached Connected label
+or configured-only state cannot qualify the existing-credential route.
+
+Qualify required missing install/login paths with a separate disposable
+installation or authorized isolated account when available. Never uninstall the
+user's real agent, delete saved credentials or force logout to create a screenshot.
+If a required branch has no safe fixture/account, leave it `BLOCKED` with its
+next action.
 Auth-not-applicable or unsupported Chat may be `N/A` only with concrete capability
 proof and truthful UI behavior. Missing product wiring, an unavailable requested
 model panel, or a manual guide cannot become a successful in-page install/login.
