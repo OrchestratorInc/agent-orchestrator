@@ -1,4 +1,6 @@
 // Native v0.21.6 personality definitions, from NousResearch/hermes-agent (MIT).
+// AO preserves the exact text only for a native personality selected in the
+// user's configuration; this adapter does not select a personality itself.
 package hermes
 
 var builtinPersonalities = map[string]string{
