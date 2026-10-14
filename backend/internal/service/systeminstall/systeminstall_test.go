@@ -1572,12 +1572,12 @@ func TestWindowsGrokUpdateRefusesUnknownDestination(t *testing.T) {
 }
 
 func TestWindowsGrokUpdateReplacesPlanDestinationWithoutMutation(t *testing.T) {
-	script := &ports.InstallScriptCommand{Env: []string{`grok_bin_dir=C:\other`, "KEEP=yes"}}
+	script := &ports.InstallScriptCommand{Env: []string{`grok_bin_dir=C:/alternate`, "KEEP=yes"}}
 	plan := targetInstalledCopy("windows", Plan{Method: "official-installer", Script: script}, TargetGrok, `D:\grok.exe`)
 	if !slices.Equal(plan.Script.Env, []string{"KEEP=yes", `GROK_BIN_DIR=D:\`}) {
 		t.Fatalf("environment = %v", plan.Script.Env)
 	}
-	if !slices.Equal(script.Env, []string{`grok_bin_dir=C:\other`, "KEEP=yes"}) {
+	if !slices.Equal(script.Env, []string{`grok_bin_dir=C:/alternate`, "KEEP=yes"}) {
 		t.Fatalf("original script was mutated: %v", script.Env)
 	}
 }
@@ -1587,7 +1587,7 @@ func TestWindowsGrokUpdateTargetsConfirmedDirectory(t *testing.T) {
 		t.Run(binary, func(t *testing.T) {
 			s := newTestService("windows", "powershell.exe")
 			t.Cleanup(s.stop)
-			t.Setenv("GROK_BIN_DIR", `C:\other\grok`)
+			t.Setenv("GROK_BIN_DIR", `C:/alternate/grok`)
 			var version atomic.Int32
 			version.Store(13)
 			s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {

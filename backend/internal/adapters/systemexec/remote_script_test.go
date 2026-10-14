@@ -67,7 +67,7 @@ func TestRunInstallScriptPowerShellLoadsHashModule(t *testing.T) {
 		{name: "terminating error", tail: "\nthrow 'synthetic installer failure'", wantExit: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			body := "(Get-FileHash -Path $PSCommandPath -Algorithm SHA256).Hash" + tc.tail
+			body := "$PSModuleAutoLoadingPreference = 'None'\n(Get-FileHash -Path $PSCommandPath -Algorithm SHA256).Hash" + tc.tail
 			server := httptest.NewTLSServer(httpHandler(body))
 			t.Cleanup(server.Close)
 			dataDir := t.TempDir()
