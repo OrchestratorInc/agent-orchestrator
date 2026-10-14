@@ -42,10 +42,10 @@ The project-level `sandbox` block applies to workers. A `sandbox` block under `w
 | Mode | Behavior |
 | --- | --- |
 | `off` | The agent runs on the host. |
-| `per-agent` | Each session gets its own container, with its own home, Claude config, and env. All sessions still share the repository's git objects and refs read-write. |
+| `per-agent` | Each session gets its own container, with its own env files and system prompts. The home directory and Claude config are shared read-write by every session in the project, as are the repository's git objects and refs. |
 | `shared` | All sessions in the project share one container. |
 
-In `shared` mode, sessions can see each other's sandbox state: the home directory, Claude config, env files, and system prompts. Use `per-agent` to keep each session's home, Claude config, and env separate. Shared mode also requires the workspace to be an Orchestrator-managed worktree.
+In `shared` mode, sessions can see each other's sandbox state: the home directory, Claude config, env files, and system prompts. Use `per-agent` to keep each session's env and system prompts separate. Per-agent mode does not isolate sessions from each other: a session can change the shared home or Claude config, for example by adding hooks to `settings.json`, and those changes run in every other session of the project. Shared mode also requires the workspace to be an Orchestrator-managed worktree.
 
 Set the config with `ao project set-config`. It replaces the whole project config, so read the [full-config warning](/configuration/projects#update-from-the-cli) first.
 
