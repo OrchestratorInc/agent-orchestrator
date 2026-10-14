@@ -23,7 +23,7 @@ func preflight(ctx context.Context) error {
 
 func validatePlatform(goos string) error {
 	if goos != "darwin" && goos != "linux" {
-		return fmt.Errorf("Pool Chat requires macOS or Linux for its private instruction hooks; this AO integration does not support %s", goos)
+		return fmt.Errorf("pool Chat requires macOS or Linux for its private instruction hooks; this AO integration does not support %s", goos)
 	}
 	return nil
 }
@@ -40,13 +40,13 @@ func validateConfiguration(env map[string]string) error {
 	if endpoint := value("POOLSIDE_STANDALONE_BASE_URL"); endpoint != "" {
 		parsed, err := url.Parse(endpoint)
 		if err != nil || parsed.Hostname() == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
-			return fmt.Errorf("Pool POOLSIDE_STANDALONE_BASE_URL must be an absolute HTTP or HTTPS provider base URL; check Pool's installation guide")
+			return fmt.Errorf("pool POOLSIDE_STANDALONE_BASE_URL must be an absolute HTTP or HTTPS provider base URL; check Pool's installation guide")
 		}
 	}
 	if raw := value("POOLSIDE_STANDALONE_CONTEXT_LENGTH"); raw != "" {
 		length, err := strconv.ParseUint(raw, 10, 64)
 		if err != nil || length == 0 {
-			return fmt.Errorf("Pool POOLSIDE_STANDALONE_CONTEXT_LENGTH must be a positive integer within the model server's context window")
+			return fmt.Errorf("pool POOLSIDE_STANDALONE_CONTEXT_LENGTH must be a positive integer within the model server's context window")
 		}
 	}
 	return nil

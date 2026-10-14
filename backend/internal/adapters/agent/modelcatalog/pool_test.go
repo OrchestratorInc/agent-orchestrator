@@ -46,7 +46,9 @@ func TestPoolCatalogUsesConfiguredNativeChoices(t *testing.T) {
 func TestPoolCatalogPreservesDiscoveryFailure(t *testing.T) {
 	failure := errors.New("provider model catalog unavailable")
 	discoverer := Discoverer{ACPOptions: map[string]ACPOptionListFunc{
-		"pool": func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) { return nil, failure },
+		"pool": func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+			return nil, failure
+		},
 	}}
 	_, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "pool"})
 	if !errors.Is(err, failure) {
@@ -66,9 +68,9 @@ func TestPoolCatalogFingerprintTracksProviderModelAndSavedSettings(t *testing.T)
 	}
 	base := fingerprint(nil)
 	for key, value := range map[string]string{
-		"POOLSIDE_API_KEY": "private-test-key",
+		"POOLSIDE_API_KEY":             "private-test-key",
 		"POOLSIDE_STANDALONE_BASE_URL": "https://private-test-provider.example/v1",
-		"POOLSIDE_STANDALONE_MODEL": "private-test-model",
+		"POOLSIDE_STANDALONE_MODEL":    "private-test-model",
 	} {
 		got := fingerprint(map[string]string{key: value})
 		if got == base || strings.Contains(got, "private-test") {

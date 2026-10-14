@@ -887,7 +887,8 @@ func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env 
 		// Native ACP reads saved provider settings and environment overrides.
 		// Hash credentials as well as the provider/model so account changes do
 		// not leave another account's model choices cached. Never return secrets.
-		inputs := []string{fingerprintConfigPaths(modelConfigPaths(agentID, workingDir, env))}
+		inputs := make([]string, 0, 5)
+		inputs = append(inputs, fingerprintConfigPaths(modelConfigPaths(agentID, workingDir, env)))
 		for _, key := range []string{"POOLSIDE_API_KEY", "POOLSIDE_STANDALONE_BASE_URL", "POOLSIDE_STANDALONE_MODEL", "POOLSIDE_STANDALONE_CONTEXT_LENGTH"} {
 			inputs = append(inputs, key+"="+envValue(env, key))
 		}
