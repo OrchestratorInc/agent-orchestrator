@@ -770,9 +770,11 @@ func TestClineDiscoveryUsesACPModelOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// ACP groups name the model vendors; the shared catalog identifies Cline
+	// as the serving connection while preserving native IDs and the default.
 	want := []ports.AgentModelInfo{
-		{ID: "anthropic/claude-sonnet-4-6", Label: "Claude Sonnet 4.6", Provider: "anthropic", IsDefault: true},
-		{ID: "openai/gpt-5.4", Label: "GPT-5.4", Provider: "openai"},
+		{ID: "anthropic/claude-sonnet-4-6", Label: "Claude Sonnet 4.6", Provider: "cline", IsDefault: true},
+		{ID: "openai/gpt-5.4", Label: "GPT-5.4", Provider: "cline"},
 	}
 	if !reflect.DeepEqual(got.Models, want) || got.Source != "acp" {
 		t.Fatalf("catalog = %#v, want models %#v from ACP", got, want)
