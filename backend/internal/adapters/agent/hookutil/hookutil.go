@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 )
 
 // GitignoreSentinel marks a workspace .gitignore as AO-managed so
@@ -33,30 +32,31 @@ const CopilotAgentProfileSentinel = "<!-- managed by agent-orchestrator: copilot
 // A .gitignore at the same path that lacks the sentinel is left untouched and
 // the install proceeds: the worktree then simply stays dirty and teardown
 // preserves it, which is the safe degradation.
+//
+// The .gitignore itself is read and written through an os.Root opened on dir
+// (see EnsureGitignoreInRoot), so a planted symlink or FIFO there is never
+// followed. A dir that is itself a symlink or not a directory is skipped (nil):
+// the worktree then stays dirty, the same safe degradation. The Lstat-then-open
+// of dir is not atomic; callers that hold a workspace root should call
+// EnsureGitignoreInRoot directly.
 func EnsureWorkspaceGitignore(dir string, names ...string) error {
-	path := filepath.Join(dir, ".gitignore")
-	existing, err := os.ReadFile(path) //nolint:gosec // path built from caller-owned workspace dir
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("read %s: %w", path, err)
-	}
-	if err == nil && !strings.Contains(string(existing), GitignoreSentinel) {
+	fi, err := os.Lstat(dir)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return fmt.Errorf("create %s: %w", dir, err)
+		}
+	case err != nil:
+		return fmt.Errorf("stat %s: %w", dir, err)
+	case !fi.IsDir():
 		return nil
 	}
-	var b strings.Builder
-	b.WriteString(GitignoreSentinel)
-	b.WriteString("\n/.gitignore\n")
-	for _, name := range names {
-		b.WriteString("/")
-		b.WriteString(filepath.ToSlash(name))
-		b.WriteString("\n")
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", dir, err)
 	}
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("create %s: %w", dir, err)
-	}
-	if err := AtomicWriteFile(path, []byte(b.String()), 0o600); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	return nil
+	defer func() { _ = root.Close() }()
+	return EnsureGitignoreInRoot(root, ".", names...)
 }
 
 // statRegularFile returns the FileInfo for path if it names an existing regular

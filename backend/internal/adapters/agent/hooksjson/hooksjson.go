@@ -225,7 +225,7 @@ func (m Manager) Install(ctx context.Context, workspacePath string) error {
 	if err := writeHooksFile(root, rel, hooksPath, topLevel, rawHooks); err != nil {
 		return fmt.Errorf("%s.GetAgentHooks: %w", m.Label, err)
 	}
-	if err := hookutil.EnsureWorkspaceGitignore(filepath.Dir(hooksPath), filepath.Base(hooksPath)); err != nil {
+	if err := hookutil.EnsureGitignoreInRoot(root, filepath.Dir(rel), filepath.Base(rel)); err != nil {
 		return fmt.Errorf("%s.GetAgentHooks: gitignore: %w", m.Label, err)
 	}
 	return nil
