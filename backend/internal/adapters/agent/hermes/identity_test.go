@@ -104,4 +104,10 @@ func TestCurrentIdentityUsesOwnedPTYAfterNativeNewWithoutDatabaseCwd(t *testing.
 	if _, ok, err := New().ResolveNativeSessionID(context.Background(), cfg); err != nil || ok {
 		t.Fatalf("accepted conflicting native cwd: %v %v", ok, err)
 	}
+	if _, err := db.ExecContext(t.Context(), "DROP TABLE sessions"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := New().ResolveNativeSessionID(context.Background(), cfg); ok || err == nil || !strings.Contains(err.Error(), "read native state database") {
+		t.Fatalf("native database query failure should be reported, got match=%v err=%v", ok, err)
+	}
 }
