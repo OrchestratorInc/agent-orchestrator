@@ -10,6 +10,7 @@ export type AgentInfo = {
 	installation: {
 		state: "installed" | "not_installed" | "unknown";
 		freshness: "fresh" | "stale" | "checking";
+		reasonCode?: string;
 	};
 	label: string;
 	lastUsedAt?: string | null;
