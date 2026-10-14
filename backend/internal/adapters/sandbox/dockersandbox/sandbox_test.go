@@ -187,6 +187,10 @@ func TestEnsureCreatesPerAgentContainer(t *testing.T) {
 	if strings.Contains(run, "src="+filepath.Join(data, "sandbox", "projects", "p")+",") {
 		t.Fatalf("whole project dir mounted in per-agent mode:\n%s", run)
 	}
+	// Nothing reads a git-dir label, so the container does not carry one.
+	if strings.Contains(run, "ao.sandbox.gitdir") {
+		t.Fatalf("unused git-dir label set:\n%s", run)
+	}
 	if target.Container != "ao-sbx-s1" || target.Mode != domain.SandboxModePerAgent || target.SessionDir != filepath.Join(data, "sandbox", "projects", "p", "sessions", "s1") {
 		t.Fatalf("target = %#v", target)
 	}

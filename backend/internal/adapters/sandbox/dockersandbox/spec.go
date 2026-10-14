@@ -24,7 +24,6 @@ const (
 	labelSandbox = "ao.sandbox"
 	labelProject = "ao.project"
 	labelHash    = "ao.sandbox.hash"
-	labelGitDir  = "ao.sandbox.gitdir"
 )
 
 // keepAliveScript keeps the container alive without depending on the image's

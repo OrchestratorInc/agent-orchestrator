@@ -217,7 +217,7 @@ func (s *Sandbox) Ensure(ctx context.Context, req ports.SandboxRequest) (ports.S
 		if err := s.ensureNetwork(ctx, docker); err != nil {
 			return ports.SandboxTarget{}, err
 		}
-		labels := map[string]string{labelSandbox: string(req.Config.Mode), labelProject: string(req.ProjectID), labelHash: hash, labelGitDir: git.dir}
+		labels := map[string]string{labelSandbox: string(req.Config.Mode), labelProject: string(req.ProjectID), labelHash: hash}
 		if req.Config.Mode == domain.SandboxModePerAgent {
 			labels[dockerreap.SessionLabel] = string(req.SessionID)
 		}
