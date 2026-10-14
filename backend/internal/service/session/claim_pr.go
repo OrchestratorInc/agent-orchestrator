@@ -95,9 +95,11 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 		return ClaimPRResult{}, err
 	}
 	if err := s.requireProjectPRRepository(ctx, project, prURL); err != nil {
+		s.recordClaimed(ctx, id, domain.PullRequest{URL: prURL, Number: number}, actionStatusForError(err), err)
 		return ClaimPRResult{}, err
 	}
 	if s.scm == nil || s.prClaimer == nil {
+		s.recordClaimed(ctx, id, domain.PullRequest{URL: prURL, Number: number}, domain.ActivityStatusFailed, ErrSCMUnavailable)
 		return ClaimPRResult{}, ErrSCMUnavailable
 	}
 	repo, err := scmRepoForClaim(prURL)
@@ -107,6 +109,7 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 	refSpec := ports.SCMPRRef{Repo: repo, Number: number, URL: prURL}
 	obs, err := s.fetchClaimObservation(ctx, refSpec)
 	if err != nil {
+		s.recordClaimed(ctx, id, domain.PullRequest{URL: prURL, Number: number}, actionStatusForError(err), err)
 		return ClaimPRResult{}, err
 	}
 	if obs.PR.Number == 0 {
@@ -119,18 +122,22 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 	// first marking the PR ready for review. Only terminal states are rejected;
 	// the draft fact itself is preserved on the persisted PR row below.
 	if obs.PR.Merged || obs.PR.Closed {
+		s.recordClaimed(ctx, id, domain.PullRequest{URL: prURL, Number: number, Title: obs.PR.Title}, domain.ActivityStatusFailed, ErrPRNotOpen)
 		return ClaimPRResult{}, ErrPRNotOpen
 	}
 	reviewMode, err := s.enrichClaimReviews(ctx, refSpec, &obs)
 	if err != nil {
+		s.recordClaimed(ctx, id, domain.PullRequest{URL: prURL, Number: number, Title: obs.PR.Title}, actionStatusForError(err), err)
 		return ClaimPRResult{}, err
 	}
 	now := s.clock().UTC()
 	pr, checks, reviews, threads, comments := claimRowsFromSCM(id, obs, reviewMode, now, rec)
 	outcome, err := s.prClaimer.ClaimPR(ctx, pr, checks, reviews, threads, comments, reviewMode, opts.AllowTakeover)
 	if err != nil {
+		s.recordClaimed(ctx, id, pr, actionStatusForError(err), err)
 		return ClaimPRResult{}, err
 	}
+	s.recordClaimed(ctx, id, pr, domain.ActivityStatusCompleted, nil)
 	// Reconcile immediately rather than waiting for the artifact-output
 	// poller's next tick: a session that already produced artifacts must move
 	// to pr OutputType (and out of the artifact Kanban placement) with the

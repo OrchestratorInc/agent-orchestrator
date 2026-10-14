@@ -154,6 +154,10 @@ const (
 	// the person to answer. It is not an approval: accepting a tool and supplying
 	// form data have different response contracts and different UI.
 	ActivityKindUserInput ActivityKind = "user_input"
+	// ActivityKindAOAction is a daemon-confirmed product mutation. The neutral
+	// action name lives in detail, not in a new kind per operation, so Chat can
+	// label the outcome without reading command text or tool prose.
+	ActivityKindAOAction ActivityKind = "ao_action"
 )
 
 // ActivityStatus is the lifecycle of one activity. A provider may omit an item's

@@ -207,10 +207,17 @@ func (m *Manager) settleAgentSwitchFault(
 	if !ok {
 		return ports.AgentSwitchMutationResult{}, errors.New("agent switch store does not support typed failure settlement")
 	}
+	var result ports.AgentSwitchMutationResult
+	var err error
 	if unacknowledged {
-		return faultStore.FailAgentSwitchIfUnacknowledgedWithFault(ctx, mutation)
+		result, err = faultStore.FailAgentSwitchIfUnacknowledgedWithFault(ctx, mutation)
+	} else {
+		result, err = faultStore.ApplyAgentSwitchMutation(ctx, mutation)
 	}
-	return faultStore.ApplyAgentSwitchMutation(ctx, mutation)
+	if err == nil && result.CoreChanged {
+		m.notifyAgentSwitchSettled(ctx, mutation.Record)
+	}
+	return result, err
 }
 
 func (m *Manager) applyAgentSwitchProgress(
@@ -220,16 +227,24 @@ func (m *Manager) applyAgentSwitchProgress(
 	expectedState domain.AgentSwitchState,
 	expectedTargetGeneration domain.AgentGenerationID,
 ) (ports.AgentSwitchMutationResult, error) {
+	var result ports.AgentSwitchMutationResult
+	var err error
 	if faultStore, ok := store.(ports.AgentSwitchFaultStore); ok {
-		return faultStore.ApplyAgentSwitchMutation(ctx, ports.AgentSwitchMutation{
+		result, err = faultStore.ApplyAgentSwitchMutation(ctx, ports.AgentSwitchMutation{
 			Record: next, ExpectedState: expectedState,
 			ExpectedSourceGenerationID: next.SourceGenerationID,
 			ExpectedTargetGenerationID: expectedTargetGeneration,
 			Authorization:              m.agentSwitchAuthorization(),
 		})
+	} else {
+		var changed bool
+		changed, err = store.UpdateAgentSwitch(ctx, next, expectedState, next.SourceGenerationID, expectedTargetGeneration)
+		result = ports.AgentSwitchMutationResult{CoreChanged: changed, Enrollment: domain.AgentSwitchEnrollmentDisabled}
 	}
-	changed, err := store.UpdateAgentSwitch(ctx, next, expectedState, next.SourceGenerationID, expectedTargetGeneration)
-	return ports.AgentSwitchMutationResult{CoreChanged: changed, Enrollment: domain.AgentSwitchEnrollmentDisabled}, err
+	if err == nil && result.CoreChanged {
+		m.notifyAgentSwitchSettled(ctx, next)
+	}
+	return result, err
 }
 
 func captureAgentSwitchFrames(skip int) []domain.AgentSwitchStackFrame {

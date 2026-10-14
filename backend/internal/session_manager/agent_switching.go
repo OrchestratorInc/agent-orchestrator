@@ -88,6 +88,31 @@ type prFactReader interface {
 	ListPRFactsForSession(context.Context, domain.SessionID) ([]domain.PRFacts, error)
 }
 
+// SetAgentSwitchSettled registers the observer for a durable terminal switch.
+// The admitting call returns before the worker finishes, so completion and
+// failure are reported here, including a later recovery of the same switch.
+func (m *Manager) SetAgentSwitchSettled(fn func(context.Context, domain.AgentSwitch)) {
+	if m == nil {
+		return
+	}
+	m.agentSwitchSettledMu.Lock()
+	m.agentSwitchSettled = fn
+	m.agentSwitchSettledMu.Unlock()
+}
+
+func (m *Manager) notifyAgentSwitchSettled(ctx context.Context, sw domain.AgentSwitch) {
+	if !sw.State.Terminal() {
+		return
+	}
+	m.agentSwitchSettledMu.Lock()
+	fn := m.agentSwitchSettled
+	m.agentSwitchSettledMu.Unlock()
+	if fn == nil {
+		return
+	}
+	fn(context.WithoutCancel(ctx), sw)
+}
+
 func (m *Manager) switchStore() (ports.AgentSwitchStore, error) {
 	store, ok := m.store.(ports.AgentSwitchStore)
 	if !ok {

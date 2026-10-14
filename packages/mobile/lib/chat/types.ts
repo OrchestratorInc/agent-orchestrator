@@ -14,7 +14,8 @@ export type ActivityKind =
 	| "system"
 	| "mcp_tool"
 	| "auto_review"
-	| "user_input";
+	| "user_input"
+	| "ao_action";
 
 export type ApprovalMode = "default" | "accept-edits" | "auto" | "bypass-permissions";
 export type TurnSettings = { model?: string; reasoningEffort?: string; approvalMode?: ApprovalMode };

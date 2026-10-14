@@ -515,6 +515,8 @@ type Manager struct {
 	agentSwitchWorkers       sync.WaitGroup
 	agentSwitchWorkerMu      sync.Mutex
 	agentSwitchWorkersClosed bool
+	agentSwitchSettledMu     sync.Mutex
+	agentSwitchSettled       func(context.Context, domain.AgentSwitch)
 
 	transitionMu sync.Mutex
 	transitions  map[domain.SessionID]*interfaceTransitionRun

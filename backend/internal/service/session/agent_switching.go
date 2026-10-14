@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -23,7 +24,38 @@ func (s *Service) SwitchAgent(ctx context.Context, id domain.SessionID, in Switc
 		Model:          in.Model,
 		IdempotencyKey: in.IdempotencyKey,
 	})
-	return switchRecord, toAPIError(err)
+	if err != nil {
+		apiErr := toAPIError(err)
+		s.recordAgentSwitched(ctx, id, domain.AgentSwitch{IdempotencyKey: in.IdempotencyKey, TargetHarness: in.TargetHarness}, actionStatusForError(err), apiErr)
+		return domain.AgentSwitch{}, apiErr
+	}
+	status := domain.ActivityStatusRunning
+	switch switchRecord.State {
+	case domain.AgentSwitchCompleted:
+		status = domain.ActivityStatusCompleted
+	case domain.AgentSwitchFailed:
+		status = domain.ActivityStatusFailed
+	}
+	s.recordAgentSwitched(ctx, id, switchRecord, status, nil)
+	return switchRecord, nil
+}
+
+// observeSettledAgentSwitch updates the activity admitted with the switch once
+// the daemon-owned worker reaches a durable terminal state. The admitting POST
+// only sees preparing_handoff.
+func (s *Service) observeSettledAgentSwitch(ctx context.Context, sw domain.AgentSwitch) {
+	if s == nil || !sw.State.Terminal() || sw.ID == "" {
+		return
+	}
+	status := domain.ActivityStatusCompleted
+	var err error
+	if sw.State == domain.AgentSwitchFailed {
+		status = domain.ActivityStatusFailed
+		if sw.ErrorCode != "" {
+			err = errors.New(string(sw.ErrorCode))
+		}
+	}
+	s.recordAgentSwitched(context.WithoutCancel(ctx), sw.SessionID, sw, status, err)
 }
 
 // RecoverAgentSwitch retries a durable source restoration without restarting

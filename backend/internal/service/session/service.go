@@ -188,23 +188,24 @@ type outputTypeReconciler interface {
 // session operations to the internal sessionmanager.Manager and owns read-model
 // assembly, including user-facing display status derivation.
 type Service struct {
-	manager             commander
-	store               Store
-	prClaimer           ports.PRClaimer
-	scm                 scmProvider
-	tracker             ports.Tracker
-	clock               func() time.Time
-	dataDir             string
-	telemetry           ports.EventSink
-	logger              *slog.Logger
-	backgroundContext   context.Context
-	agentReadiness      ports.AgentReadinessProvider
-	runBackground       func(func())
-	orchestratorLocksMu sync.Mutex
-	orchestratorLocks   map[domain.ProjectID]*sync.Mutex
-	workspaceCache      *workspaceCache
-	workspaceManifests  *workspaceManifestIndex
-	workspaceEditsMu    sync.Mutex
+	manager                commander
+	store                  Store
+	prClaimer              ports.PRClaimer
+	scm                    scmProvider
+	tracker                ports.Tracker
+	clock                  func() time.Time
+	afterActionStatusCheck func()
+	dataDir                string
+	telemetry              ports.EventSink
+	logger                 *slog.Logger
+	backgroundContext      context.Context
+	agentReadiness         ports.AgentReadinessProvider
+	runBackground          func(func())
+	orchestratorLocksMu    sync.Mutex
+	orchestratorLocks      map[domain.ProjectID]*sync.Mutex
+	workspaceCache         *workspaceCache
+	workspaceManifests     *workspaceManifestIndex
+	workspaceEditsMu       sync.Mutex
 	// workspaceGroup coalesces concurrent cache-miss compare/status lookups
 	// for the same (session, root): "Expand All" on many files fires that
 	// many GetWorkspaceFile calls at once, and without this each one would
@@ -305,6 +306,9 @@ func NewWithDeps(d Deps) *Service {
 	s.workspaceCache = newWorkspaceCache(workspaceCacheTTL, s.clock)
 	s.workspaceManifests = newWorkspaceManifestIndex()
 	s.workspaceManifests.now = s.clock
+	if manager, ok := d.Manager.(*sessionmanager.Manager); ok && manager != nil {
+		manager.SetAgentSwitchSettled(s.observeSettledAgentSwitch)
+	}
 	return s
 }
 
@@ -392,9 +396,11 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		s.invalidateAgentReadinessAfterLaunchFailure(cfg.Harness, err)
 		apiErr := toSpawnAPIError(err)
 		s.emitSpawnFailed(ctx, cfg, apiErr, s.now().Sub(start).Milliseconds())
+		s.recordSpawnOutcome(ctx, cfg, domain.SessionRecord{}, actionStatusForError(err), apiErr)
 		return domain.Session{}, 0, 0, apiErr
 	}
 	s.emitSpawned(ctx, rec, s.now().Sub(start).Milliseconds())
+	s.recordSpawnOutcome(ctx, cfg, rec, domain.ActivityStatusCompleted, nil)
 	if firstSession {
 		s.emitFirstSessionSpawned(ctx, rec, project)
 	}
@@ -706,12 +712,15 @@ func (s *Service) lockOrchestratorProject(projectID domain.ProjectID) func() {
 func (s *Service) Restore(ctx context.Context, id domain.SessionID) (RestoreOutcome, error) {
 	res, err := s.manager.RestoreWithMode(ctx, id)
 	if err != nil {
-		return RestoreOutcome{}, toAPIError(err)
+		apiErr := toAPIError(err)
+		s.recordRestored(ctx, id, domain.SessionRecord{}, actionStatusForError(err), apiErr)
+		return RestoreOutcome{}, apiErr
 	}
 	session, err := s.toSession(ctx, res.Session)
 	if err != nil {
 		return RestoreOutcome{}, err
 	}
+	s.recordRestored(ctx, id, res.Session, domain.ActivityStatusCompleted, nil)
 	return RestoreOutcome{Session: session, Mode: restoreModeView(res.Mode)}, nil
 }
 
@@ -840,14 +849,26 @@ func restoreModeView(mode sessionmanager.RestoreMode) RestoreModeView {
 func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	s.cancelTitleRefinement(id)
 	freed, err := s.manager.Kill(ctx, id)
-	return freed, toAPIError(err)
+	if err != nil {
+		apiErr := toAPIError(err)
+		s.recordTerminated(ctx, id, actionStatusForError(err), apiErr)
+		return freed, apiErr
+	}
+	s.recordTerminated(ctx, id, domain.ActivityStatusCompleted, nil)
+	return freed, nil
 }
 
 // RequestKill acknowledges terminal intent without waiting for cleanup scripts.
 func (s *Service) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
 	s.cancelTitleRefinement(id)
 	result, err := s.manager.RequestKill(ctx, id)
-	return result, toAPIError(err)
+	if err != nil {
+		apiErr := toAPIError(err)
+		s.recordTerminated(ctx, id, actionStatusForError(err), apiErr)
+		return result, apiErr
+	}
+	s.recordTerminated(ctx, id, domain.ActivityStatusCompleted, nil)
+	return result, nil
 }
 
 // artifactDeleter deletes a session's artifact files and version rows. The
@@ -943,11 +964,16 @@ func (s *Service) Rename(ctx context.Context, id domain.SessionID, displayName s
 	}
 	renamed, err := s.store.RenameSession(ctx, id, displayName, time.Now().UTC())
 	if err != nil {
-		return fmt.Errorf("rename %s: %w", id, err)
+		wrapped := fmt.Errorf("rename %s: %w", id, err)
+		s.recordRenamed(ctx, id, rec.DisplayName, displayName, domain.ActivityStatusFailed, wrapped)
+		return wrapped
 	}
 	if !renamed {
-		return apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+		missing := apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+		s.recordRenamed(ctx, id, rec.DisplayName, displayName, domain.ActivityStatusFailed, missing)
+		return missing
 	}
+	s.recordRenamed(ctx, id, rec.DisplayName, displayName, domain.ActivityStatusCompleted, nil)
 	return nil
 }
 
