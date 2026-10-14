@@ -38,53 +38,70 @@ func requireParentsFirst(t *testing.T, ms []mount) {
 }
 
 func TestMountsPerAgentGitLayout(t *testing.T) {
-	for _, worktreeConfig := range []bool{false, true} {
-		t.Run("worktreeConfig="+map[bool]string{false: "off", true: "on"}[worktreeConfig], func(t *testing.T) {
-			s, fr, data := testSandbox(t, nil)
-			if worktreeConfig {
-				fr.git = map[string]string{"extensions.worktreeConfig": "true\n"}
-			}
-			req := perAgentReq(wsOf(data))
-			g, err := s.resolveGit(context.Background(), req)
-			if err != nil {
-				t.Fatal(err)
-			}
-			ms, err := s.mounts(req, g)
-			if err != nil {
-				t.Fatal(err)
-			}
-			git, admin := gitDirOf(data), adminOf(data)
-			want := []mount{
-				{Path: git, ReadOnly: true},
-				{Path: filepath.Join(git, "objects")},
-				{Path: filepath.Join(git, "refs")},
-				{Path: filepath.Join(git, "logs"), Tmpfs: true, Writable: true},
-				{Path: admin},
-				{Path: filepath.Join(admin, "logs"), Tmpfs: true, Writable: true},
-				{Path: filepath.Join(admin, "commondir"), ReadOnly: true},
-				{Path: filepath.Join(admin, "gitdir"), ReadOnly: true},
-				{Path: filepath.Join(wsOf(data), ".git"), ReadOnly: true},
-			}
-			if worktreeConfig {
-				want = append(want, mount{Path: filepath.Join(admin, "config.worktree"), ReadOnly: true})
-			}
-			if got := gitMountsOf(ms, git, wsOf(data)); !reflect.DeepEqual(got, want) {
-				t.Fatalf("git mounts =\n%+v\nwant\n%+v", got, want)
-			}
-			requireParentsFirst(t, ms)
-			for _, d := range []string{filepath.Join(git, "logs"), filepath.Join(admin, "logs")} {
-				if fi, err := os.Lstat(d); err != nil || !fi.IsDir() {
-					t.Fatalf("tmpfs mountpoint %s not created: %v", d, err)
-				}
-			}
-			fi, err := os.Lstat(filepath.Join(admin, "config.worktree"))
-			if worktreeConfig && (err != nil || !fi.Mode().IsRegular() || fi.Size() != 0) {
-				t.Fatalf("config.worktree = %v, %v; want an empty regular file", fi, err)
-			}
-			if !worktreeConfig && err == nil {
-				t.Fatal("config.worktree created although the extension is off")
-			}
-		})
+	s, _, data := testSandbox(t, nil)
+	req := perAgentReq(wsOf(data))
+	g, err := s.resolveGit(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ms, err := s.mounts(req, g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	git, admin := gitDirOf(data), adminOf(data)
+	want := []mount{
+		{Path: git, ReadOnly: true},
+		{Path: filepath.Join(git, "objects")},
+		{Path: filepath.Join(git, "refs")},
+		{Path: filepath.Join(git, "logs"), Tmpfs: true, Writable: true},
+		{Path: admin},
+		{Path: filepath.Join(admin, "logs"), Tmpfs: true, Writable: true},
+		{Path: filepath.Join(admin, "commondir"), ReadOnly: true},
+		{Path: filepath.Join(admin, "gitdir"), ReadOnly: true},
+		{Path: filepath.Join(wsOf(data), ".git"), ReadOnly: true},
+		// Bound read-only whatever extensions.worktreeConfig says: it can be
+		// turned on later, and host git then obeys this file.
+		{Path: filepath.Join(admin, "config.worktree"), ReadOnly: true},
+	}
+	if got := gitMountsOf(ms, git, wsOf(data)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("git mounts =\n%+v\nwant\n%+v", got, want)
+	}
+	requireParentsFirst(t, ms)
+	for _, d := range []string{filepath.Join(git, "logs"), filepath.Join(admin, "logs")} {
+		if fi, err := os.Lstat(d); err != nil || !fi.IsDir() {
+			t.Fatalf("tmpfs mountpoint %s not created: %v", d, err)
+		}
+	}
+	fi, err := os.Lstat(filepath.Join(admin, "config.worktree"))
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() != 0 || fi.Mode().Perm() != 0o644 {
+		t.Fatalf("config.worktree = %v, %v; want an empty 0644 regular file", fi, err)
+	}
+}
+
+func TestMountsPerAgentKeepsExistingConfigWorktreeReadOnly(t *testing.T) {
+	s, _, data := testSandbox(t, nil)
+	cfg := filepath.Join(adminOf(data), "config.worktree")
+	mustWrite(t, cfg, "[core]\n\tfsmonitor = planted\n")
+	req := perAgentReq(wsOf(data))
+	g, err := s.resolveGit(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ms, err := s.mounts(req, g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range ms {
+		if m.Path == cfg {
+			found = m.ReadOnly
+		}
+	}
+	if !found {
+		t.Fatalf("existing config.worktree not bound read-only in %+v", ms)
+	}
+	if body, err := os.ReadFile(cfg); err != nil || !strings.Contains(string(body), "planted") {
+		t.Fatalf("existing config.worktree was rewritten: %q, %v", body, err)
 	}
 }
 
@@ -211,8 +228,7 @@ func TestResolveGitRejects(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, "logs"},
-		"symlinked config.worktree": {func(t *testing.T, fr *fakeRunner, data string, _ *ports.SandboxRequest) {
-			fr.git = map[string]string{"extensions.worktreeConfig": "true\n"}
+		"symlinked config.worktree": {func(t *testing.T, _ *fakeRunner, data string, _ *ports.SandboxRequest) {
 			if err := os.Symlink(writeOutside(t, "secret"), filepath.Join(adminOf(data), "config.worktree")); err != nil {
 				t.Fatal(err)
 			}
@@ -410,16 +426,12 @@ func TestResolveGitRealRejectsForeignWorktree(t *testing.T) {
 	}
 }
 
-func TestResolveGitRealWorktreeConfigExtension(t *testing.T) {
+func TestResolveGitRealCreatesConfigWorktreeWithExtensionOff(t *testing.T) {
 	repo, wt := newRepoWithWorktree(t)
-	gitRun(t, repo, "config", "extensions.worktreeConfig", "true")
 	s, req := realReq(t, repo, wt)
 	g, err := s.resolveGit(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !g.worktreeConfig {
-		t.Fatal("worktreeConfig extension not detected")
 	}
 	if fi, err := os.Lstat(filepath.Join(g.admin, "config.worktree")); err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o644 {
 		t.Fatalf("config.worktree = %v, %v; want a 0644 regular file", fi, err)

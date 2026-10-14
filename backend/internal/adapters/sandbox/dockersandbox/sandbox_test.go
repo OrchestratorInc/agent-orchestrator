@@ -19,8 +19,8 @@ type fakeCall struct {
 }
 
 // fakeRunner scripts docker calls in order. Host git calls are answered
-// out of band: rev-parse names the fixture git dir, worktreeConfig is off and
-// identity keys are unset, unless git overrides a call by substring.
+// out of band: rev-parse names the fixture git dir and identity keys are
+// unset, unless git overrides a call by substring.
 type fakeRunner struct {
 	t        *testing.T
 	script   []fakeCall
@@ -88,8 +88,6 @@ func (f *fakeRunner) gitOutput(line string) ([]byte, error) {
 	switch {
 	case strings.Contains(line, "rev-parse --path-format=absolute --git-common-dir"):
 		return []byte(f.gitDir + "\n"), nil
-	case strings.Contains(line, "extensions.worktreeConfig"):
-		return []byte("false\n"), nil
 	case strings.Contains(line, "config --get"):
 		return nil, errors.New("exit status 1")
 	}

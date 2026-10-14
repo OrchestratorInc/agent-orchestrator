@@ -29,15 +29,21 @@ import (
 // objects/ stays writable, so the agent can add objects or an alternates
 // file. Git verifies objects by hash, so this cannot change what a ref the
 // host already trusts points at.
+//
+// The per-agent admin dir stays writable for the index and HEAD, so the
+// agent can also write <admin>/locked. That only blocks teardown: AO never
+// passes `--force --force`, so `git worktree remove` and prune refuse a
+// locked worktree and keep it, exactly as they do for an operator's lock.
+// Overriding the lock would also override a genuine one, so AO keeps the
+// worktree and the user unlocks it (`git worktree unlock`).
 
 // gitLayout is the host git metadata a sandbox mounts, resolved from the
 // project's repository rather than from anything the container can write.
 type gitLayout struct {
-	dir            string // the repository's common git dir
-	admin          string // per-agent: <dir>/worktrees/<name> of this workspace
-	worktreeConfig bool   // extensions.worktreeConfig is on: mount config.worktree read-only
-	userName       string // host git identity, empty when unset
-	userEmail      string
+	dir       string // the repository's common git dir
+	admin     string // per-agent: <dir>/worktrees/<name> of this workspace
+	userName  string // host git identity, empty when unset
+	userEmail string
 }
 
 // hostGit runs git on the host with fsmonitor and hooks disabled, so even a
@@ -107,16 +113,11 @@ func (s *Sandbox) resolveGit(ctx context.Context, req ports.SandboxRequest) (git
 		if err := ensureRealDir(filepath.Join(g.admin, "logs")); err != nil {
 			return gitLayout{}, err
 		}
-		// --default makes an unset key print false, so any error is real and
-		// fails closed rather than leaving config.worktree writable.
-		on, err := s.hostGit(ctx, req.RepoPath, "config", "--bool", "--default", "false", "extensions.worktreeConfig")
-		if err != nil {
-			return gitLayout{}, fmt.Errorf("%w: read extensions.worktreeConfig for %s: %w", ports.ErrSandboxMisconfigured, req.RepoPath, err)
-		}
-		if g.worktreeConfig = on == "true"; g.worktreeConfig {
-			if err := ensureEmptyFile(filepath.Join(g.admin, "config.worktree")); err != nil {
-				return gitLayout{}, err
-			}
+		// Bound read-only whatever extensions.worktreeConfig says: the
+		// extension can be turned on later on the host (git sparse-checkout
+		// does), and host git would then obey a file the agent planted.
+		if err := ensureEmptyFile(filepath.Join(g.admin, "config.worktree")); err != nil {
+			return gitLayout{}, err
 		}
 	}
 	// Unset identity keys are simply omitted.
@@ -137,17 +138,14 @@ func gitMounts(req ports.SandboxRequest, g gitLayout) []mount {
 		// Sessions that join the container later need their admin dirs.
 		return append(m, mount{Path: filepath.Join(g.dir, "worktrees")})
 	}
-	m = append(m,
+	return append(m,
 		mount{Path: g.admin},
 		mount{Path: filepath.Join(g.admin, "logs"), Tmpfs: true, Writable: true},
 		mount{Path: filepath.Join(g.admin, "commondir"), ReadOnly: true},
 		mount{Path: filepath.Join(g.admin, "gitdir"), ReadOnly: true},
 		mount{Path: filepath.Join(req.WorkspacePath, ".git"), ReadOnly: true},
+		mount{Path: filepath.Join(g.admin, "config.worktree"), ReadOnly: true},
 	)
-	if g.worktreeConfig {
-		m = append(m, mount{Path: filepath.Join(g.admin, "config.worktree"), ReadOnly: true})
-	}
-	return m
 }
 
 // findWorktreeAdmin returns the git dir's admin dir for workspace: the one
