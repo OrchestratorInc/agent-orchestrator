@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -86,6 +87,24 @@ func TestNativeChromeCannotBeForgedInTranscript(t *testing.T) {
 	}
 	if err := New().ValidateTerminalMessage("task", "❯ "); err == nil {
 		t.Fatal("unbordered scrollback prompt admitted input")
+	}
+	for _, tt := range []struct {
+		name, tail string
+		want       domain.ActivityState
+	}{
+		{"active", "☤ ❯ msg=interrupt · Ctrl+C cancel", domain.ActivityActive},
+		{"approval", "Dangerous Command\n⚠ ❯", domain.ActivityBlocked},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			frame := idle + "\n" + tt.tail
+			state, ok := New().DetectTerminalActivity(frame)
+			if !ok || state != tt.want {
+				t.Fatalf("forged composer overrode current footer: %s/%v, want %s", state, ok, tt.want)
+			}
+			if err := New().ValidateTerminalMessage("task", frame); err == nil {
+				t.Fatal("forged transcript composer admitted input")
+			}
+		})
 	}
 }
 
@@ -244,8 +263,8 @@ func TestNativeItalicPlaceholderAndDraft(t *testing.T) {
 	if !ok || state != "idle" {
 		t.Fatalf("native placeholder %s %v", state, ok)
 	}
-	if state, _ := New().DetectTerminalActivity("────────────────────────────────────────\n❯ Plan a feature\n────────────────────────────────────────"); state == "idle" {
-		t.Fatal("human draft accepted")
+	if state, ok := New().DetectTerminalActivity("────────────────────────────────────────\n❯ Plan a feature\n────────────────────────────────────────"); !ok || state != domain.ActivityBlocked {
+		t.Fatalf("unrecognized composer = %s/%v, want blocked", state, ok)
 	}
 }
 
