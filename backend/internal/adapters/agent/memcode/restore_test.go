@@ -55,7 +55,7 @@ func TestRestoreRequiresCurrentWitnessAndEmptyComposer(t *testing.T) {
 	write := func(g, id string, sequence int) {
 		path, _ := witnessPath(data, "ao-1", "launch-1")
 		_ = os.MkdirAll(filepath.Dir(path), 0700)
-		b, _ := json.Marshal(witness{g, id, sequence})
+		b, _ := json.Marshal(witness{Generation: g, NativeID: id, Sequence: sequence})
 		if err := os.WriteFile(path, b, 0600); err != nil {
 			t.Fatal(err)
 		}

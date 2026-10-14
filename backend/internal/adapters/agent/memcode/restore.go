@@ -43,8 +43,8 @@ func (p *Plugin) PrepareNativeRestore(ctx context.Context, cfg ports.RestoreConf
 func (p *restorePlan) Argv() []string { return append([]string(nil), p.argv...) }
 
 // LaunchEnv implements the native TUI adapter contract.
-func (*restorePlan) LaunchEnv() map[string]string {
-	return map[string]string{"AO_MEMCODE_INTERACTIVE_RESTORE": "1"}
+func (p *restorePlan) LaunchEnv() map[string]string {
+	return map[string]string{"AO_MEMCODE_INTERACTIVE_RESTORE": "1", "AO_MEMCODE_RESTORE_TARGET": p.target}
 }
 
 // ResumeInput implements the native TUI adapter contract.

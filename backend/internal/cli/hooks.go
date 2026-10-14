@@ -593,11 +593,12 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		return nil
 	}
 	if agent == "memcode" && event == "session-start" {
-		if err := memcode.EmitStartWitness(c.deps.Out); err != nil {
+		reportAfterRestore, err := memcode.EmitStartWitness(c.deps.Out)
+		if err != nil {
 			c.reportHookFailure(agent, event, sessionID, err)
 			return nil
 		}
-		if os.Getenv("AO_MEMCODE_INTERACTIVE_RESTORE") == "1" {
+		if os.Getenv("AO_MEMCODE_INTERACTIVE_RESTORE") == "1" && !reportAfterRestore {
 			return nil
 		}
 	}
@@ -626,6 +627,9 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	agentSessionID := ""
 	if activitydispatch.SupportsHarness(domain.AgentHarness(agent)) {
 		agentSessionID = hookAgentSessionID(payload)
+	}
+	if agent == "memcode" && event == "session-start" {
+		agentSessionID = os.Getenv("MEMCODE_SESSION_ID")
 	}
 	usage := hookUsageMetadata(agent, payload)
 	var subagentID string
