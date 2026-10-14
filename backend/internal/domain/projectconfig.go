@@ -30,6 +30,12 @@ type ProjectConfig struct {
 	// Env are extra environment variables forwarded into worker session
 	// runtimes. The AO_ namespace is reserved for AO-owned variables.
 	Env map[string]string `json:"env,omitempty"`
+	// EnvRemove names environment variables stripped from a worker's launch
+	// environment (exact names, no globs). Applied before the AO_*/PATH pins,
+	// so listing a pinned name is valid but has no effect; the AO_ prefix
+	// stays reserved. Provisioning hooks (postCreate/preRemove) are not
+	// affected.
+	EnvRemove []string `json:"envRemove,omitempty"`
 	// Symlinks are repo-relative paths symlinked into each session workspace.
 	Symlinks []string `json:"symlinks,omitempty"`
 	// PostCreate are shell commands run in the workspace after it is created.
@@ -235,6 +241,20 @@ func (c ProjectConfig) Validate() error {
 			return fmt.Errorf("env %q: duplicate variable name", key)
 		}
 		seenEnv[folded] = true
+	}
+	seenEnvRemove := make(map[string]bool, len(c.EnvRemove))
+	for _, key := range c.EnvRemove {
+		if !validEnvName(key) {
+			return fmt.Errorf("envRemove %q: invalid variable name", key)
+		}
+		folded := strings.ToUpper(key)
+		if strings.HasPrefix(folded, "AO_") {
+			return fmt.Errorf("envRemove %q: AO_ prefix is reserved", key)
+		}
+		if seenEnvRemove[folded] {
+			return fmt.Errorf("envRemove %q: duplicate variable name", key)
+		}
+		seenEnvRemove[folded] = true
 	}
 	for role, ro := range map[string]RoleOverride{"worker": c.Worker, "orchestrator": c.Orchestrator} {
 		if ro.Harness != "" && !ro.Harness.IsKnown() {

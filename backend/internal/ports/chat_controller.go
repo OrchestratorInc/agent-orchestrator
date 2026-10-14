@@ -31,9 +31,12 @@ type ChatControllerStart struct {
 	DataDir       string
 	WorkspacePath string
 	Env           map[string]string
-	Model         string
-	Effort        string
-	Permissions   PermissionMode
+	// EnvRemove names variables the driver must ensure absent from its process
+	// environment, including names inherited from the daemon's own environ.
+	EnvRemove   []string
+	Model       string
+	Effort      string
+	Permissions PermissionMode
 	// ReadOnly forces the provider's native sandbox to reject workspace writes.
 	// Reviewer-owned conversations set this independently of approval behavior.
 	ReadOnly              bool

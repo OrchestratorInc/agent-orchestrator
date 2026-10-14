@@ -39,6 +39,27 @@ func MergeEnv(project, child map[string]string) map[string]string {
 	return env
 }
 
+// ApplyRemovals deletes the named keys from env (case-folded on Windows, like
+// MergeEnv). Runs on the merged launch environment before the session's
+// protected setters, so AO_ variables and the pinned PATH applied afterwards
+// always win: a configured removal can strip inherited project or daemon
+// values, never an AO-owned one.
+func ApplyRemovals(env map[string]string, remove []string) {
+	if len(remove) == 0 || len(env) == 0 {
+		return
+	}
+	for _, key := range remove {
+		delete(env, key)
+		if runtime.GOOS == "windows" {
+			for existing := range env {
+				if strings.EqualFold(existing, key) {
+					delete(env, existing)
+				}
+			}
+		}
+	}
+}
+
 // RedactValues removes configured values before command output reaches a
 // user-visible error or log. Longer values go first to cover shared prefixes.
 func RedactValues(output string, configured map[string]string) string {
