@@ -1,24 +1,32 @@
 package controllers
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"mime"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
 )
 
-const artifactFilePath = "/api/v1/sessions/{sessionId}/artifact-files/*"
+const (
+	artifactFilePath  = "/api/v1/sessions/{sessionId}/artifact-files/*"
+	artifactFilesPath = "/api/v1/sessions/{sessionId}/artifact-files"
+)
 
 // artifactFile serves a file from the session's artifact directory in the
 // render sandbox, so the chat thread can frame an HTML artifact the way it
@@ -102,4 +110,68 @@ func serveArtifactFile(w http.ResponseWriter, r *http.Request, csp, root, asset 
 
 func writeArtifactFileNotFound(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "ARTIFACT_FILE_NOT_FOUND", "artifact file not found", nil)
+}
+
+// deleteArtifactFile removes one listed file from the session's artifact
+// directory and returns the session with its refreshed artifact list.
+func (c *SessionsController) deleteArtifactFile(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, http.MethodDelete, artifactFilesPath)
+		return
+	}
+	sess, err := c.Svc.Get(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	clean, ok := previewutil.CleanWorkspacePath(r.URL.Query().Get("path"))
+	if !ok || !listsArtifactFile(sess.ArtifactFiles, clean) {
+		writeArtifactFileNotFound(w, r)
+		return
+	}
+	if err := removeArtifactFile(sess.Metadata.ArtifactDir, clean); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			writeArtifactFileNotFound(w, r)
+			return
+		}
+		envelope.WriteError(w, r, fmt.Errorf("delete artifact file: %w", err))
+		return
+	}
+	updated, err := c.Svc.Get(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, updated)})
+}
+
+func listsArtifactFile(files []domain.SessionArtifactFile, relPath string) bool {
+	for _, file := range files {
+		if file.Path == relPath {
+			return true
+		}
+	}
+	return false
+}
+
+// removeArtifactFile removes a regular file beneath dir. os.Root refuses ".."
+// and symlinks that leave dir; a symlink itself is never removed.
+func removeArtifactFile(dir, relPath string) error {
+	if dir == "" {
+		return fs.ErrNotExist
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	name := filepath.FromSlash(relPath)
+	info, err := root.Lstat(name)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fs.ErrNotExist
+	}
+	return root.Remove(name)
 }

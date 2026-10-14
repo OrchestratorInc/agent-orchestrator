@@ -2,6 +2,7 @@ package systeminstall
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -9,7 +10,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-const defaultVerifyTimeout = 5 * time.Second
+// defaultVerifyTimeout bounds the post-install version probe. The first launch
+// of a freshly downloaded CLI can block far beyond its normal startup while
+// macOS assesses the new binary: Cursor's `cursor-agent --version` took ~12s
+// on an Intel Mac right after install versus under 1s afterwards (#5887), and
+// harnesses installed together queue behind each other's assessment.
+const defaultVerifyTimeout = 60 * time.Second
 
 // VerifyResult is the non-authenticating evidence collected after an install.
 type VerifyResult struct {
@@ -71,7 +77,13 @@ func (v *Verifier) Verify(ctx context.Context, target Target) (VerifyResult, err
 	}
 	out := &capturedOutput{max: maxOutputBytes}
 	if err := v.commands.Run(probeCtx, []string{path, "--version"}, out, out); err != nil {
-		return VerifyResult{ResolvedPath: path, Output: out.String()}, fmt.Errorf("run %s version probe: %w", target, err)
+		result := VerifyResult{ResolvedPath: path, Output: out.String()}
+		// The runner kills the probe at the deadline, so err alone only says
+		// "signal: killed". Name the timeout so the failure is actionable.
+		if ctx.Err() == nil && errors.Is(probeCtx.Err(), context.DeadlineExceeded) {
+			return result, fmt.Errorf("run %s version probe: timed out after %s (a newly installed CLI can be slow on its first launch; choose Verify again): %w", target, v.timeout, context.DeadlineExceeded)
+		}
+		return result, fmt.Errorf("run %s version probe: %w", target, err)
 	}
 	return VerifyResult{ResolvedPath: path, Output: out.String()}, nil
 }

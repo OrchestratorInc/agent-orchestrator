@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { CancelledError } from "@tanstack/react-query";
 import { Suspense, type ComponentType, type PropsWithChildren } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppShortcutEvent, KeybindingOverrides } from "../../shared/shortcuts";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
@@ -169,6 +169,7 @@ vi.mock("../lib/bridge", () => ({
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: () => shellMocks.state.workspaceQuery,
+	useWorkspacePolling: () => undefined,
 	useRemoteWorkspaces: () => ({ data: shellMocks.state.remoteWorkspaces, failedHostIds: shellMocks.state.remoteFailedHostIds, loadedProjectHostIds: [] }),
 	useWorkspaceTraySessions: () => ({ data: [] }),
 	workspaceQueryKey: ["workspaces"],
@@ -452,6 +453,11 @@ beforeEach(() => {
 });
 
 describe("shell workspace startup", () => {
+	// The shell lazy-loads the starting chat; warm the module so the first render
+	// that needs it resolves within findBy's default timeout.
+	beforeAll(async () => {
+		await import("../components/chat/OrchestratorStartingChat");
+	});
 	it("rechecks a connected host when its session queries fail", async () => {
 		useUiStore.setState({ developerMode: true, remoteHosts: true });
 		const view = await renderShell();
@@ -639,14 +645,14 @@ describe("shell workspace startup", () => {
 		shellMocks.state.routeParams = { projectId: workspaces[0].id };
 		useUiStore.getState().setProjectProvisioning(workspaces[0].id, true);
 		await renderShell();
-		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+		expect(await screen.findByTestId("cloud-session-loader-screen")).toBeInTheDocument();
 		expect(screen.queryByLabelText("Message the agent")).not.toBeInTheDocument();
 	});
 
 	it("opens optimistic chat during submission without a loading page", async () => {
 		useUiStore.getState().setProjectCreationPending(true);
 		const view = await renderShell();
-		const composer = screen.getByLabelText("Message the agent");
+		const composer = await screen.findByLabelText("Message the agent");
 		expect(composer.closest("form")).toHaveAttribute("data-starting", "true");
 		expect(screen.getByTestId("session-workspace-topbar")).toBeVisible();
 		shellMocks.state.routeParams = { projectId: "proj-1" };

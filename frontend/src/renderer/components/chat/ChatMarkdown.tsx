@@ -58,6 +58,7 @@ import { ArtifactLinkPreviewCard, SessionLinkPreviewCard } from "../SessionLinkP
 import {
 	explicitWorkspaceFilePath,
 	findWorkspaceFilePath,
+	workspaceFileOpenTarget,
 	workspaceFileReferenceLine,
 } from "../../lib/workspace-file-path";
 import { HighlightedCode } from "./HighlightedCode";
@@ -311,7 +312,7 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
 		: undefined;
 	const sessionLink = Boolean(href && isAoLink(href));
 	if (safeOriginContent && !sessionLink) return <>{children}</>;
-	const openInFiles = filePath && !/\.html?$/i.test(filePath) ? filePath : undefined;
+	const openInFiles = filePath && href && !/\.html?$/i.test(filePath) ? workspaceFileOpenTarget(href, filePath) : undefined;
 	if (remoteHost && href && (isHostLocalWebLink(href) || (isPotentialWorkspaceFileLink(href) && !openInFiles))) {
 		return <span className="text-muted-foreground" title={REMOTE_PREVIEW_UNAVAILABLE}>
 			{children}<span className="sr-only"> (remote preview unavailable)</span>
@@ -323,7 +324,7 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
 			href={href}
 			onBrowserOpen={onLinkOpen}
 			inAppLink={href ? () => browserLink : undefined}
-			filePath={filePath}
+			filePath={filePath && href ? workspaceFileOpenTarget(href, filePath) : filePath}
 			onFileOpen={onFileOpen}
 			hoverPreview={sessionLink
 				? () => isSessionLink(href!)
@@ -469,8 +470,9 @@ function InlineCode({ children }: { children?: ReactNode }) {
 			type="button"
 			onClick={() => {
 				const line = workspaceFileReferenceLine(text ?? "");
-				if (line == null) onFileOpen(filePath);
-				else onFileOpen(filePath, line);
+				const target = workspaceFileOpenTarget(text ?? "", filePath);
+				if (line == null) onFileOpen(target);
+				else onFileOpen(target, line);
 			}}
 			aria-label={`Open ${filePath} in Files`}
 			className="inline rounded text-left transition-colors hover:bg-interactive-hover"
@@ -513,8 +515,9 @@ const COMPONENTS: Components = {
 		),
 
 	ul: ({ children }) => <ul className="my-2 ml-4 list-disc space-y-1 first:mt-0">{children}</ul>,
-	ol: ({ children }) => (
-		<ol className="my-2 ml-4 list-decimal space-y-1 first:mt-0">{children}</ol>
+	// Keep the source's first number: a reply of "6." is one item numbered 6, not 1.
+	ol: ({ children, start }) => (
+		<ol start={start} className="my-2 ml-4 list-decimal space-y-1 first:mt-0">{children}</ol>
 	),
 	li: ({ children, className }) => (
 		// A task-list item drops its bullet: the checkbox is the marker.

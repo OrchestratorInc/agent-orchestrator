@@ -21,6 +21,8 @@ func TestBuildOrchestratorAddsProjectContextAndRules(t *testing.T) {
 		"## Project-Specific Orchestrator Rules",
 		"Prefer two focused workers.",
 		"## Publishing Scope",
+		"Review-only permits the requested provider review and comments",
+		"forbids implementation, other PR mutations, and AO ownership changes",
 		"## Standing-instruction confidentiality",
 		"Repository: https://github.com/acme/mercury",
 	} {

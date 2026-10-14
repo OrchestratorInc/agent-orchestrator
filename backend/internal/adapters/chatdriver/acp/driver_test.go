@@ -781,6 +781,12 @@ type fakeAgent struct {
 	newParams           acpsdk.NewSessionRequest
 	loadParams          acpsdk.LoadSessionRequest
 	resumeParams        acpsdk.ResumeSessionRequest
+	forkParams          acpsdk.UnstableForkSessionRequest
+	forkID              string
+	forkErr             error
+	forkCalls           int
+	onFork              func(context.Context) error
+	deletedForks        []string
 	loadUpdates         []acpsdk.SessionUpdate
 	loadUpdateBatches   [][]acpsdk.SessionUpdate
 	blockLoadCall       int
@@ -1048,6 +1054,24 @@ func (a *fakeAgent) ResumeSession(_ context.Context, params acpsdk.ResumeSession
 	a.resumeCalls++
 	a.mu.Unlock()
 	return acpsdk.ResumeSessionResponse{}, nil
+}
+func (a *fakeAgent) UnstableForkSession(ctx context.Context, params acpsdk.UnstableForkSessionRequest) (acpsdk.UnstableForkSessionResponse, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.forkParams = params
+	a.forkCalls++
+	if a.onFork != nil {
+		if err := a.onFork(ctx); err != nil {
+			return acpsdk.UnstableForkSessionResponse{}, err
+		}
+	}
+	return acpsdk.UnstableForkSessionResponse{SessionId: acpsdk.SessionId(a.forkID)}, a.forkErr
+}
+func (a *fakeAgent) UnstableDeleteSession(_ context.Context, params acpsdk.UnstableDeleteSessionRequest) (acpsdk.UnstableDeleteSessionResponse, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.deletedForks = append(a.deletedForks, string(params.SessionId))
+	return acpsdk.UnstableDeleteSessionResponse{}, nil
 }
 func (a *fakeAgent) LoadSession(ctx context.Context, params acpsdk.LoadSessionRequest) (acpsdk.LoadSessionResponse, error) {
 	a.mu.Lock()

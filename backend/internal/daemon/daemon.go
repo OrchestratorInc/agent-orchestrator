@@ -577,7 +577,7 @@ func Run() error {
 
 	persistentHostsReconciled := make(chan struct{})
 	reviewerChatsRecovered := make(chan struct{})
-	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, policyCoordinator, tracker, codexOperationGate, log)
+	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, lcStack.ArtifactVersions, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, policyCoordinator, tracker, codexOperationGate, log)
 	if err != nil {
 		stop()
 		lcStack.Stop()
@@ -610,6 +610,17 @@ func Run() error {
 		},
 	})
 	sessMgr = wiredSessMgr
+	if runner, ok := sessMgr.(interface {
+		RunPromptSuggestionTask(context.Context, domain.SessionID, string, string, string) (string, error)
+	}); ok {
+		chatSvc.SetPromptSuggestionRunner(func(requestCtx context.Context, id domain.SessionID, turnID, systemPrompt, prompt string) (string, error) {
+			taskCtx, cancel := context.WithCancel(requestCtx)
+			stopOnShutdown := context.AfterFunc(ctx, cancel)
+			defer stopOnShutdown()
+			defer cancel()
+			return runner.RunPromptSuggestionTask(taskCtx, id, turnID, systemPrompt, prompt)
+		})
+	}
 	if fenced, ok := sessMgr.(interface{ SetPersistentHostReconcileDone(<-chan struct{}) }); ok {
 		fenced.SetPersistentHostReconcileDone(persistentHostsReconciled)
 	}
@@ -885,17 +896,24 @@ func Run() error {
 			Binary: res.Path, PIDPath: tunnelPID, Log: log,
 		})
 	}
-	if res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir)); !res.NeedsInstall {
+	// A system cloudflared is version-checked by running it (30-120ms, up to a
+	// 5s timeout), so resolve off the boot path. Status reads and anything that
+	// needs a connector, such as restoring an enabled bridge, wait for this
+	// lookup rather than racing it.
+	bs.ResolveTunnelInBackground(func() controllers.TunnelController {
+		res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir))
+		if res.NeedsInstall {
+			// Not fatal: the LAN and Tailscale endpoints still work, and Connect
+			// Mobile behaves exactly as it did before remote access existed.
+			log.Info("mobile remote access unavailable; cloudflared not installed",
+				"rejectedSystemPath", res.SystemPath)
+			return nil
+		}
 		log.Info("mobile remote access available", "cloudflared", res.Path, "source", res.Source)
-		bs.Tunnel = mobilebridge.NewManagedTunnel(mobilebridge.ManagedTunnelDeps{
+		return mobilebridge.NewManagedTunnel(mobilebridge.ManagedTunnelDeps{
 			Binary: res.Path, PIDPath: tunnelPID, Log: log,
 		})
-	} else {
-		// Not fatal: the LAN and Tailscale endpoints still work, and Connect
-		// Mobile behaves exactly as it did before remote access existed.
-		log.Info("mobile remote access unavailable; cloudflared not installed",
-			"rejectedSystemPath", res.SystemPath)
-	}
+	})
 
 	// Stable, machine-bound host identity, served by the unauthenticated
 	// GET /api/v1/identity probe. A failure here is not fatal: the probe then
