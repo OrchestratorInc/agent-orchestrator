@@ -1,11 +1,14 @@
 package modelcatalog
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func TestAiderConfiguredProvidersLayersEnvDotenvAndConfig(t *testing.T) {
@@ -77,5 +80,34 @@ func TestAiderConfiguredProvidersNeedsEveryPartOfACredential(t *testing.T) {
 	got := aiderConfiguredProviders("", env)
 	if want := []string{"cloudflare"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("configured = %v, want %v", got, want)
+	}
+}
+
+func TestAiderCatalogMarksAnthropicCredentials(t *testing.T) {
+	for _, source := range []string{"environment", "config", "option"} {
+		t.Run(source, func(t *testing.T) {
+			home := t.TempDir()
+			env := map[string]string{"HOME": home, "AIDER_ENV_FILE": "", "AIDER_OPENAI_API_KEY": "", "AIDER_ANTHROPIC_API_KEY": "", "ANTHROPIC_API_KEY": ""}
+			for _, sets := range aiderProviderKeys {
+				for _, set := range sets {
+					for _, name := range set {
+						env[name] = ""
+					}
+				}
+			}
+			switch source {
+			case "environment":
+				env["ANTHROPIC_API_KEY"] = "test-key"
+			case "config":
+				writeProviderTestFile(t, filepath.Join(home, ".aider.conf.yml"), "anthropic-api-key: test-key\n")
+			case "option":
+				env["AIDER_ANTHROPIC_API_KEY"] = "test-key"
+			}
+			catalog := ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "claude-sonnet", Provider: "anthropic"}}}
+			markConfiguredProviders(context.Background(), &catalog, ports.AgentModelDiscoveryRequest{AgentID: "aider", Env: env})
+			if want := []string{"anthropic"}; !reflect.DeepEqual(catalog.ConfiguredProviders, want) {
+				t.Fatalf("configured = %v, want %v", catalog.ConfiguredProviders, want)
+			}
+		})
 	}
 }

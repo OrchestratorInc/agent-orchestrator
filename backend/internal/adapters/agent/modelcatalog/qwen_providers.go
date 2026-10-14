@@ -118,22 +118,6 @@ func qwenConfiguredProviders(workingDir string, env map[string]string) []string 
 	return providers
 }
 
-// envFileHasKey reports whether a dotenv file assigns name a value.
-func envFileHasKey(path, name string) bool {
-	raw, err := readModelConfig(path)
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Split(string(raw), "\n") {
-		line = strings.TrimPrefix(strings.TrimSpace(line), "export ")
-		key, value, ok := strings.Cut(line, "=")
-		if ok && strings.TrimSpace(key) == name && strings.Trim(strings.TrimSpace(value), `"'`) != "" {
-			return true
-		}
-	}
-	return false
-}
-
 // uniqueProviders drops repeated provider IDs, keeping first-seen order.
 func uniqueProviders(providers []string) []string {
 	if len(providers) == 0 {

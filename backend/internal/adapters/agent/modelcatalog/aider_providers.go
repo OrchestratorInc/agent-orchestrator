@@ -17,6 +17,7 @@ func init() { browseProviderCredentials["aider"] = aiderConfiguredProviders }
 // LiteLLM does not name (GitHub Copilot's OAuth, Meta Llama, OCI and the
 // catalog's metadata-only providers) are never marked.
 var aiderProviderKeys = map[string][][]string{
+	"anthropic":         {{"ANTHROPIC_API_KEY"}},
 	"openai":            {{"OPENAI_API_KEY"}},
 	"azure":             {{"AZURE_API_KEY", "AZURE_API_BASE", "AZURE_API_VERSION"}},
 	"azure_ai":          {{"AZURE_AI_API_KEY"}},
@@ -145,7 +146,7 @@ func aiderConfiguredProviders(workingDir string, env map[string]string) []string
 		if err != nil {
 			continue
 		}
-		for name, value := range aiderParseDotenv(raw) {
+		for name, value := range parseDotenv(raw) {
 			overrides[name] = value
 		}
 	}
@@ -233,35 +234,6 @@ func aiderUnmarshalConfig(raw []byte, config *aiderConfig) error {
 	config.APIKey = list("api-key")
 	config.SetEnv = list("set-env")
 	return nil
-}
-
-// aiderParseDotenv reads NAME=value lines the way python-dotenv does for plain
-// assignments: an optional export prefix, quoted values, and trailing
-// comments after unquoted values.
-func aiderParseDotenv(raw []byte) map[string]string {
-	values := map[string]string{}
-	for _, line := range strings.Split(string(raw), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
-		name, value, ok := strings.Cut(line, "=")
-		name = strings.TrimSpace(name)
-		if !ok || name == "" {
-			continue
-		}
-		value = strings.TrimSpace(value)
-		if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') {
-			if end := strings.IndexByte(value[1:], value[0]); end >= 0 {
-				value = value[1 : end+1]
-			}
-		} else if index := strings.Index(value, " #"); index >= 0 {
-			value = strings.TrimSpace(value[:index])
-		}
-		values[name] = value
-	}
-	return values
 }
 
 func aiderFirstNonEmpty(values ...string) string {

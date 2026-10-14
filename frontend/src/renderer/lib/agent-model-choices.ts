@@ -61,7 +61,8 @@ function compareVersionsDesc(a: number[], b: number[]) {
 // A context variant ("opus[1m]", "Opus 5.5 (1M context)") is its own choice,
 // not an older release of its family.
 function claudeVariant(model: { id: string; label: string }): string {
-	return (model.id.match(/\[.*?\]/)?.[0] ?? model.label.match(/\(.*?\)/)?.[0] ?? "").toLowerCase();
+	const variant = model.id.match(/\[(.*?)\]/)?.[1] ?? model.label.match(/\((.*?)\)/)?.[1] ?? "";
+	return variant.toLowerCase().replace(/\s*context\s*$/, "").replace(/\s+/g, "");
 }
 
 /** The newest model of each Claude family (and context variant), in Fable, Opus, Sonnet, Haiku order, then everything else, newest first. Models without a family and version stay current. */
@@ -86,17 +87,20 @@ export function splitClaudeModels<T extends { id: string; label: string }>(model
 /**
  * Claude's chat model option offers family aliases ("opus", "sonnet[1m]") and bare ids.
  * Maps a choice to its catalog entry: an id to itself, an alias to the newest model of
- * its family.
+ * its family and context variant.
  */
 export function claudeChoiceModel<T extends { id: string; label: string }>(catalog: T[]): ((value: string) => T | undefined) | undefined {
 	if (catalog.length === 0) return undefined;
 	const newest = splitClaudeModels(catalog).current;
 	return (value: string) => {
-		const id = value.replace(/\[.*?\]$/, "").toLowerCase();
+		const id = value.toLowerCase();
 		const exact = catalog.find((model) => model.id.toLowerCase() === id);
 		if (exact) return exact;
-		return newest.find((model) => model.id.toLowerCase().includes(`-${id}-`)
-			|| agentModelDisplayLabel("claude-code", model.label).toLowerCase().startsWith(id));
+		const family = id.replace(/\[.*?\]$/, "");
+		const variant = claudeVariant({ id, label: "" });
+		return newest.find((model) => claudeVariant(model) === variant
+			&& (model.id.toLowerCase().includes(`-${family}-`)
+				|| agentModelDisplayLabel("claude-code", model.label).toLowerCase().startsWith(family)));
 	};
 }
 

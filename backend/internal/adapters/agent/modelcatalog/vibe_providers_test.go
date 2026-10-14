@@ -54,3 +54,18 @@ api_key_env_var = "OPENROUTER_API_KEY"
 		t.Fatalf("configured = %v, want %v", got, want)
 	}
 }
+
+func TestVibeDoesNotMarkEmptyDotenvCredentialsConfigured(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("VIBE_HOME", "")
+	t.Setenv("MISTRAL_API_KEY", "")
+	vibeHome := filepath.Join(home, ".vibe")
+	writeProviderTestFile(t, filepath.Join(vibeHome, "config.toml"), "[[providers]]\nname = \"mistral\"\napi_key_env_var = \"MISTRAL_API_KEY\"\n")
+	for _, body := range []string{"MISTRAL_API_KEY= # paste your key", "MISTRAL_API_KEY='' # unset", "MISTRAL_API_KEY=old\nMISTRAL_API_KEY="} {
+		writeProviderTestFile(t, filepath.Join(vibeHome, ".env"), body)
+		if got := vibeConfiguredProviders("", nil); len(got) != 0 {
+			t.Fatalf("configured = %v for an empty dotenv credential", got)
+		}
+	}
+}

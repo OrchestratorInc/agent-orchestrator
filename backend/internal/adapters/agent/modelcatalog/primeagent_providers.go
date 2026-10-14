@@ -3,6 +3,7 @@ package modelcatalog
 import (
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func init() { browseProviderCredentials["prime-agent"] = primeAgentConfiguredProviders }
@@ -75,15 +76,20 @@ func primeAgentConfiguredProviders(_ string, env map[string]string) []string {
 	return sortedProviderSet(found)
 }
 
-// primeAgentDir is Prime Agent's agent directory, honoring its own override
-// and then Pi's.
+// primeAgentDir mirrors Prime's getAgentDir: its own override (with tilde
+// expansion), then ~/.prime/agent. Pi's override belongs to another harness.
 func primeAgentDir(env map[string]string) string {
-	for _, name := range []string{"PRIME_AGENT_CODING_AGENT_DIR", "PI_CODING_AGENT_DIR"} {
-		if dir := envValue(env, name); dir != "" {
-			return dir
+	home := catalogHome(env)
+	if dir := envValue(env, "PRIME_AGENT_CODING_AGENT_DIR"); dir != "" {
+		if dir == "~" || strings.HasPrefix(dir, "~/") {
+			if home == "" {
+				return ""
+			}
+			return home + strings.TrimPrefix(dir, "~")
 		}
+		return dir
 	}
-	if home := catalogHome(env); home != "" {
+	if home != "" {
 		return filepath.Join(home, ".prime", "agent")
 	}
 	return ""

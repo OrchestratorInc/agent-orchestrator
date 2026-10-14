@@ -39,3 +39,33 @@ func TestPrimeAgentConfiguredProvidersReadsAuthStoreAndEnvironment(t *testing.T)
 		t.Fatalf("providers with agent dir = %v, want %v", got, want)
 	}
 }
+
+func TestPrimeAgentCredentialsIgnorePiDirectoryAndExpandOwnOverride(t *testing.T) {
+	for _, override := range []string{"", "~/profile", "~"} {
+		t.Run("override="+override, func(t *testing.T) {
+			home := t.TempDir()
+			env := map[string]string{"HOME": home, "PRIME_AGENT_CODING_AGENT_DIR": override, "PI_CODING_AGENT_DIR": filepath.Join(home, "pi")}
+			for _, names := range primeAgentKeyEnv {
+				for _, name := range names {
+					env[name] = ""
+				}
+			}
+			for _, name := range []string{"AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_BEARER_TOKEN_BEDROCK",
+				"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_WEB_IDENTITY_TOKEN_FILE",
+				"GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION", "GOOGLE_APPLICATION_CREDENTIALS"} {
+				env[name] = ""
+			}
+			dir := filepath.Join(home, ".prime", "agent")
+			if override == "~/profile" {
+				dir = filepath.Join(home, "profile")
+			} else if override == "~" {
+				dir = home
+			}
+			writeProviderTestFile(t, filepath.Join(dir, "auth.json"), `{"openai":{"type":"api_key","key":"prime-key"}}`)
+			writeProviderTestFile(t, filepath.Join(home, "pi", "auth.json"), `{"anthropic":{"type":"api_key","key":"pi-key"}}`)
+			if got, want := primeAgentConfiguredProviders("", env), []string{"openai"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("configured = %v, want %v", got, want)
+			}
+		})
+	}
+}

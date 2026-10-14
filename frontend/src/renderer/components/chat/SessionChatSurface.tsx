@@ -385,8 +385,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				default: Boolean(model.isDefault),
 			}));
 	}, [isClaude, claudeCatalog, controllerModels]);
-	// Settings → Harness → Models picks the models offered; the session's current model stays listed.
-	const { models } = useOfferedModels(snapshot?.harness, catalogModels, { hostId, keep: [snapshot?.settings?.model] });
 	// A provider's own model option (ACP config) replaces the native list above,
 	// so the same setting narrows its choices; other options pass through as is.
 	const providerModelOption = configOptions.options?.find(
@@ -396,11 +394,22 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		() => providerModelOption?.choices.map((choice) => ({ id: choice.value })),
 		[providerModelOption],
 	);
+	// Resolve current Claude aliases before filtering so their labels cannot move
+	// to an older enabled model when the current concrete entry is switched off.
+	const resolveClaudeChoice = useMemo(
+		() => isClaude && claudeCatalog ? claudeChoiceModel(claudeCatalog.models) : undefined,
+		[isClaude, claudeCatalog],
+	);
+	const currentModels = [snapshot?.settings?.model, providerModelOption?.currentValue];
+	const { models } = useOfferedModels(snapshot?.harness, catalogModels, {
+		hostId,
+		keep: [...currentModels, ...currentModels.map((id) => id ? resolveClaudeChoice?.(id)?.id : undefined)],
+	});
 	// Claude's choices are family aliases ("sonnet"); Settings names catalog ids.
-	const claudeChoiceID = useMemo(() => {
-		const choiceModel = isClaude && claudeCatalog ? claudeChoiceModel(claudeCatalog.models) : undefined;
-		return choiceModel && ((choice: { id: string }) => choiceModel(choice.id)?.id ?? choice.id);
-	}, [isClaude, claudeCatalog]);
+	const claudeChoiceID = useMemo(
+		() => resolveClaudeChoice && ((choice: { id: string }) => resolveClaudeChoice(choice.id)?.id ?? choice.id),
+		[resolveClaudeChoice],
+	);
 	const { models: offeredProviderModels } = useOfferedModels(snapshot?.harness, providerModelChoices, { hostId, keep: [providerModelOption?.currentValue], modelID: claudeChoiceID });
 	const offeredConfigOptions = useMemo(() => {
 		if (!providerModelOption) return configOptions.options;

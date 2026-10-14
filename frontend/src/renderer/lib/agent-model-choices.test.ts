@@ -90,9 +90,36 @@ describe("claudeChoiceModel", () => {
 	it("maps a family alias to its newest model and an id to itself", () => {
 		const choiceModel = claudeChoiceModel(catalog)!;
 		expect(choiceModel("opus")?.id).toBe("claude-opus-5-5");
-		expect(choiceModel("sonnet[1m]")?.id).toBe("claude-sonnet-5-5");
+		expect(choiceModel("sonnet[1m]")).toBeUndefined();
 		expect(choiceModel("claude-opus-4-9")?.id).toBe("claude-opus-4-9");
 		expect(choiceModel("default")).toBeUndefined();
 		expect(claudeChoiceModel([])).toBeUndefined();
+	});
+});
+
+describe("Claude context variant selection", () => {
+	it("keeps each exact alias on its own Settings switch", () => {
+		const catalog = [model("Opus 5.5", "opus"), model("Opus 5.5 (1M context)", "opus[1m]"), model("Sonnet 5.5", "sonnet")];
+		const resolve = claudeChoiceModel(catalog)!;
+		const offered = (disabled: string) => filterDisabledModels(catalog, [disabled], [], (item) => resolve(item.id)?.id ?? item.id).models.map((item) => item.id);
+		expect(resolve("OPUS[1M]")?.id).toBe("opus[1m]");
+		expect(offered("opus")).toEqual(["opus[1m]", "sonnet"]);
+		expect(offered("opus[1m]")).toEqual(["opus", "sonnet"]);
+	});
+
+	it("resolves family aliases only to the same context variant", () => {
+		const catalog = [
+			model("Claude Opus 5.5 (1M context)", "claude-opus-5-5[1m]"),
+			model("Claude Opus 4.9 (1M context)", "claude-opus-4-9[1m]"),
+			model("Claude Opus 5.5", "claude-opus-5-5"),
+			model("Claude Sonnet 5.5 (1M context)", "claude-sonnet-5-5-long"),
+		];
+		const resolve = claudeChoiceModel(catalog)!;
+		expect(resolve("opus")?.id).toBe("claude-opus-5-5");
+		expect(resolve("opus[1m]")?.id).toBe("claude-opus-5-5[1m]");
+		expect(resolve("sonnet[1m]")?.id).toBe("claude-sonnet-5-5-long");
+		expect(resolve("sonnet")).toBeUndefined();
+		expect(resolve("opus[2m]")).toBeUndefined();
+		expect(resolve("claude-opus-4-9[1m]")?.id).toBe("claude-opus-4-9[1m]");
 	});
 });
