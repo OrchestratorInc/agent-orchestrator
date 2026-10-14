@@ -22,6 +22,7 @@ func (*Plugin) ComposerIsEmpty(output string) bool { return emptyComposer(output
 // ContinuouslyDetectTerminalActivity implements the native TUI adapter contract.
 func (*Plugin) ContinuouslyDetectTerminalActivity() bool { return true }
 
+// TerminalActivityOptions requests styled terminal evidence for native decision cards.
 func (*Plugin) TerminalActivityOptions() ports.TerminalActivityOptions {
 	return ports.TerminalActivityOptions{PreferStyledOutput: true, SupportsBlocked: true}
 }

@@ -421,6 +421,7 @@ type TerminalActivityOptions struct {
 	SupportsBlocked    bool
 }
 
+// TerminalActivityOptionsProvider exposes an adapter's terminal observation needs.
 type TerminalActivityOptionsProvider interface {
 	TerminalActivityOptions() TerminalActivityOptions
 }
