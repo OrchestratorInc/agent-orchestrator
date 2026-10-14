@@ -26,9 +26,10 @@ const gitignoreMaxBytes = 1 << 20
 // os.Root opened on it (the trust boundary): a symlink planted at the file or at
 // any parent directory can neither be read through nor make AO create or
 // replace files outside the root. A parent directory may be a symlink to a
-// directory inside the root (os.Root resolves it there). A non-regular entry
-// (symlink, FIFO) in place of the file itself is treated as absent and
-// replaced on write.
+// directory inside the root (os.Root resolves it there). The file itself is
+// read through a symlink that resolves to a regular file inside the root; any
+// other non-regular entry (an escaping or dangling link, a FIFO) is treated as
+// absent. A write always replaces the entry rather than following it.
 
 func parentDirs(rel string) []string {
 	var dirs []string
@@ -96,10 +97,10 @@ func EnsureParentDirs(root *os.Root, rel string) error {
 	return nil
 }
 
-// ReadRootFile returns the contents of rel when it is a regular file under
-// parent directories that resolve inside root, capped at maxBytes
-// (ErrRootFileTooLarge beyond it). present is false for anything else, which
-// callers treat as absent.
+// ReadRootFile returns the contents of rel when it is a regular file, or a
+// symlink to one inside root, under parent directories that resolve inside
+// root, capped at maxBytes (ErrRootFileTooLarge beyond it). present is false
+// for anything else, which callers treat as absent.
 func ReadRootFile(root *os.Root, rel string, maxBytes int64) (data []byte, present bool, err error) {
 	ok, err := ParentsAreDirs(root, rel)
 	if err != nil || !ok {
@@ -111,6 +112,14 @@ func ReadRootFile(root *os.Root, rel string, maxBytes int64) (data []byte, prese
 	}
 	if err != nil {
 		return nil, false, err
+	}
+	// A link to a file inside the root (a repository that commits
+	// .gemini/settings.json -> ../config/gemini.json) is read through, so its
+	// settings are kept; os.Root refuses one that escapes or dangles.
+	if lfi.Mode()&fs.ModeSymlink != 0 {
+		if lfi, err = root.Stat(rel); err != nil {
+			return nil, false, nil
+		}
 	}
 	if !lfi.Mode().IsRegular() {
 		return nil, false, nil

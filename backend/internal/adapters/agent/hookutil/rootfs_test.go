@@ -53,6 +53,75 @@ func TestEnsureWorkspaceGitignoreSkipsSymlinkedDir(t *testing.T) {
 	}
 }
 
+// A repository that commits .cursor -> config/cursor still gets AO's
+// .gitignore, written in the link's in-repo target; the link is kept.
+func TestEnsureWorkspaceGitignoreWritesThroughInRepoDirLink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows")
+	}
+	ws := t.TempDir()
+	target := filepath.Join(ws, "config", "cursor")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(ws, ".cursor")
+	if err := os.Symlink(filepath.Join("config", "cursor"), link); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureWorkspaceGitignore(link, "hooks.json"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(target, ".gitignore"))
+	if err != nil || !strings.Contains(string(got), GitignoreSentinel) || !strings.Contains(string(got), "/hooks.json\n") {
+		t.Fatalf("gitignore in link target = %q, %v", got, err)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("committed link replaced: %v %v", fi, err)
+	}
+}
+
+// A settings file committed as a link to another in-repo file is read
+// through, so the user's settings survive the merge; one that escapes the
+// root is still absent.
+func TestReadRootFileFollowsOnlyInRootFileLinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows")
+	}
+	ws, outside := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ws, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(ws, ".gemini"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "config", "gemini.json"), []byte(`{"user":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "secret.json"), []byte(`{"secret":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("..", "config", "gemini.json"), filepath.Join(ws, ".gemini", "settings.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "secret.json"), filepath.Join(ws, ".gemini", "escape.json")); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+
+	data, present, err := ReadRootFile(root, filepath.Join(".gemini", "settings.json"), 1<<20)
+	if err != nil || !present || string(data) != `{"user":true}` {
+		t.Fatalf("in-repo link: data=%q present=%v err=%v, want the target's settings", data, present, err)
+	}
+	data, present, err = ReadRootFile(root, filepath.Join(".gemini", "escape.json"), 1<<20)
+	if err != nil || present || data != nil {
+		t.Fatalf("escaping link: data=%q present=%v err=%v, want absent", data, present, err)
+	}
+}
+
 func TestEnsureGitignoreInRootReplacesSymlinkedDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on windows")
