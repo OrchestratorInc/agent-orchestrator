@@ -171,9 +171,13 @@ func TestManagerOwnsBinaryRecognizesSupportedManagerPackages(t *testing.T) {
 			if err := os.WriteFile(binary, []byte("binary"), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			owner := managerOwnsBinary(commandRunnerFunc(func(_ context.Context, argv []string, stdout, _ io.Writer) error {
+			owner := managerOwnsBinary(commandRunnerFunc(func(_ context.Context, argv []string, stdout, stderr io.Writer) error {
 				if !reflect.DeepEqual(argv, tt.wantArgv) {
 					t.Fatalf("argv = %v, want %v", argv, tt.wantArgv)
+				}
+				// Managers print warnings to stderr; they must not corrupt parsed output.
+				if _, err := io.WriteString(stderr, "warning: something unrelated\n"); err != nil {
+					return err
 				}
 				_, err := io.WriteString(stdout, tt.output(root, binary))
 				return err
@@ -332,6 +336,25 @@ func TestNPMPrefixOwningBinaryFindsPrefixesOutsideDaemonNPM(t *testing.T) {
 			t.Fatalf("claimed prefix %q for a package with another name", got)
 		}
 	})
+	t.Run("another manager's node_modules is never claimed", func(t *testing.T) {
+		for name, modulesRoot := range map[string]string{
+			"bun":  filepath.Join(".bun", "install", "global", "node_modules"),
+			"pnpm": filepath.Join("Library", "pnpm", "global", "5", "node_modules"),
+			"yarn": filepath.Join(".config", "yarn", "global", "node_modules"),
+		} {
+			home := t.TempDir()
+			entry := writeNPMPackage(t, filepath.Join(home, modulesRoot), pkg)
+			bin := filepath.Join(home, "bin", "pi")
+			linkBinary(t, bin, entry)
+			if got, ok := npmPrefixOwningBinary(bin, pkg); ok {
+				t.Fatalf("%s: npm claimed prefix %q", name, got)
+			}
+			plan := Plan{Method: "npm", Package: pkg, Command: []string{"npm", "install", "-g", "--prefix", "/daemon/npm", pkg + "@latest"}}
+			if got := targetInstalledCopy(runtime.GOOS, plan, TargetPi, bin); !slices.Equal(got.Command, plan.Command) {
+				t.Fatalf("%s: update retargeted to %v", name, got.Command)
+			}
+		}
+	})
 }
 
 func TestManagerOwnsBinaryAcceptsNPMPrefixOtherThanDaemons(t *testing.T) {
@@ -411,8 +434,14 @@ func TestNPMUpdateValidatesOwningPrefixNotDaemonPrefix(t *testing.T) {
 		})
 		s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
 		ran := &[][]string{}
-		s.commands = commandRunnerFunc(func(_ context.Context, argv []string, stdout, _ io.Writer) error {
+		s.commands = commandRunnerFunc(func(_ context.Context, argv []string, stdout, stderr io.Writer) error {
 			*ran = append(*ran, argv)
+			if argv[len(argv)-1] == "--version" {
+				// npm prints config warnings before the version; they are not the version.
+				if _, err := io.WriteString(stderr, "npm warn config deprecated-key is deprecated\n"); err != nil {
+					return err
+				}
+			}
 			if len(argv) == 2 && argv[1] == "--version" {
 				_, err := io.WriteString(stdout, nodeVersion+"\n")
 				return err

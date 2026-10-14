@@ -613,7 +613,7 @@ func (s *Service) validateNPMUpdateTarget(ctx context.Context, plan Plan, planne
 
 // toolVersion runs a version probe and parses its first line.
 func (s *Service) toolVersion(ctx context.Context, argv ...string) ([3]int, bool) {
-	output, err := runProbe(ctx, s.commands, localProbeTimeout, true, argv)
+	output, err := runProbe(ctx, s.commands, localProbeTimeout, false, argv)
 	if err != nil {
 		return [3]int{}, false
 	}

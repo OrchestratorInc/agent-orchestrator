@@ -14,10 +14,13 @@ export function filterEnabledModels<T extends { id: string }>(
 	keep: ReadonlyArray<string | undefined> = [],
 ): { models: T[]; narrowed: boolean } {
 	if (!enabled?.length) return { models, narrowed: false };
+	// A list that matches nothing any more (renamed or removed models) offers the whole
+	// catalog; a kept model must not stand in for that list.
+	const enabledIDs = new Set(enabled);
+	if (!models.some((model) => enabledIDs.has(model.id))) return { models, narrowed: false };
 	const allowed = new Set([...enabled, ...keep.filter((id): id is string => !!id)]);
 	const filtered = models.filter((model) => allowed.has(model.id));
-	// A list that matches nothing any more (renamed or removed models) offers the whole catalog.
-	return filtered.length && filtered.length < models.length ? { models: filtered, narrowed: true } : { models, narrowed: false };
+	return filtered.length < models.length ? { models: filtered, narrowed: true } : { models, narrowed: false };
 }
 
 export function isDefaultPlaceholderLabel(label: string): boolean {

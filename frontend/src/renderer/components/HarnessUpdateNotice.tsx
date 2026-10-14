@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { useAgentAuthPlans } from "../hooks/useAgentAuth";
 import { cacheAgentReadiness, ensureAgentReadiness, useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
-import { hasConfirmedHarnessUpdate, harnessUpdateNoticeKey, installedAgentIds, installerQueryKey, installersQueryOptions, installJobsQueryKey, installJobsQueryOptions, isActiveInstallJob, isFailedInstallJob, maintenanceMethodId, needsHarnessLogin, updateAdvisoryQueryKey, useHarnessUpdates, useStartHarnessUpdate, versionLabel, type InstallJob } from "../hooks/useHarnessUpdates";
+import { hasConfirmedHarnessUpdate, harnessUpdateNoticeKey, installedAgentIds, installerQueryKey, installersQueryOptions, installJobsQueryKey, installJobsQueryOptions, isActiveInstallJob, isFailedInstallJob, maintenanceMethodId, needsHarnessLogin, updateAdvisoryQueryKey, useHarnessUpdates, useStartHarnessUpdate, versionLabel, type AgentUpdateAdvisory, type InstallJob } from "../hooks/useHarnessUpdates";
 import { AGENT_OPTIONS, agentLabel, type AgentId } from "../lib/agent-options";
 import { aoBridge } from "../lib/bridge";
 import { cn } from "../lib/utils";
@@ -47,6 +47,9 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	const [startingAll, setStartingAll] = useState(false);
 	const [errors, setErrors] = useState<Partial<Record<AgentId, string>>>({});
 	const startedJobs = useRef(new Set<AgentId>());
+	// The advisory each update started here acted on, so its failure can still
+	// be shown after a refresh stops reporting a newer release.
+	const startedUpdates = useRef(new Map<AgentId, AgentUpdateAdvisory>());
 	const stackId = useId();
 	// The expanded stack scrolls; fade its lower edge while more cards sit below.
 	const stackRef = useRef<HTMLDivElement>(null);
@@ -79,8 +82,10 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		}
 	}, [enabled, jobs.data, queryClient]);
 
-	const startUpdate = async (agentId: AgentId, latestVersion: string, methodId: string) => {
+	const startUpdate = async (agentId: AgentId, advisory: AgentUpdateAdvisory, methodId: string) => {
 		if (startingRef.current.has(agentId) || isActiveInstallJob(queryClient.getQueryData<InstallJob[]>(installJobsQueryKey)?.find((job) => job.target === agentId))) return;
+		const latestVersion = advisory.latestVersion!;
+		startedUpdates.current.set(agentId, advisory);
 		startingRef.current.add(agentId);
 		setStarting((current) => new Set([...current, agentId]));
 		setErrors((current) => ({ ...current, [agentId]: undefined }));
@@ -108,12 +113,21 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	// ahead of the most-used one. Failed lookups don't block the other results.
 	if (AGENT_OPTIONS.some((id) => installed.has(id) && advisories.get(id)?.isPending)) return null;
 	const readinessById = new Map(readiness.data?.agents.map((agent) => [agent.id, agent]));
+	// An update started here that failed stays explained until it is dismissed,
+	// even once a refresh reports the harness current: an updater can replace
+	// the binary and still exit with an error.
+	const failedUpdateAdvisory = (agentId: AgentId) => {
+		const advisory = startedUpdates.current.get(agentId);
+		const job = jobs.data?.find((candidate) => candidate.target === agentId);
+		return advisory && (errors[agentId] || (startedJobs.current.has(agentId) && isFailedInstallJob(job))) ? advisory : undefined;
+	};
 	const updates = AGENT_OPTIONS.flatMap((agentId) => {
 		const query = advisories.get(agentId);
-		const advisory = query?.data;
-		if (!installed.has(agentId) || query?.isError || !hasConfirmedHarnessUpdate(advisory)) return [];
-		const key = harnessUpdateNoticeKey(agentId, advisory!.latestVersion!);
-		return dismissed.has(key) ? [] : [{ agentId, advisory: advisory!, key }];
+		const confirmed = installed.has(agentId) && !query?.isError && hasConfirmedHarnessUpdate(query?.data) ? query?.data : undefined;
+		const advisory = confirmed ?? failedUpdateAdvisory(agentId);
+		if (!advisory) return [];
+		const key = harnessUpdateNoticeKey(agentId, advisory.latestVersion!);
+		return dismissed.has(key) ? [] : [{ agentId, advisory, key }];
 	}).sort((left, right) => {
 		const a = readinessById.get(left.agentId);
 		const b = readinessById.get(right.agentId);
@@ -137,7 +151,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		const needsLogin = needsHarnessLogin(authPlans.data?.find((plan) => plan.agentId === agentId), readinessById.get(agentId)?.authentication.state);
 		if (!method?.available || !method.updateAvailable || needsLogin || starting.has(agentId)
 			|| isActiveInstallJob(jobs.data?.find((job) => job.target === agentId))) return [];
-		return [{ agentId, latestVersion: advisory.latestVersion!, methodId: method.id }];
+		return [{ agentId, advisory, methodId: method.id }];
 	}) : [];
 	const startAllUpdates = async () => {
 		if (updateAllInFlight.current || updateAllTargets.length === 0) return;
@@ -146,7 +160,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		setExpanded(true);
 		try {
 			// Each notice keeps its existing target/owner recheck and error display.
-			for (const target of updateAllTargets) await startUpdate(target.agentId, target.latestVersion, target.methodId);
+			for (const target of updateAllTargets) await startUpdate(target.agentId, target.advisory, target.methodId);
 		} finally {
 			updateAllInFlight.current = false;
 			setStartingAll(false);
@@ -212,7 +226,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 				const error = errors[agentId] ?? (failed ? job?.error || t("settings.harness.updateJobFailed") : undefined);
 				const requestAction = () => {
 					if (!needsLogin && method) {
-						void startUpdate(agentId, advisory.latestVersion!, method.id);
+						void startUpdate(agentId, advisory, method.id);
 						return;
 					}
 					// A login runs in a terminal on the Harness page, which starts it once on open.

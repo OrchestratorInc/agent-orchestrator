@@ -67,7 +67,7 @@ async function fetchRemoteMachine(client: ReturnType<typeof clientForSessionHost
 export function detectedCredential(details: HarnessDetails, t: TFunction): string | undefined {
 	const auth = details.readinessAgent?.authentication;
 	const source = auth?.diagnostics?.find((step) => step.source && step.method === "provider_validation" && step.code !== "credential_missing")?.source
-		|| auth?.diagnostics?.find((step) => step.source && step.method === "environment" && step.code === "credential_present")?.source;
+		|| auth?.diagnostics?.find((step) => step.source && step.method === "selected_credential" && step.code === "credential_present")?.source;
 	if (source) return source;
 	const account = auth?.account;
 	if (account?.sourceKind === "keychain") return t("settings.harness.health.keychain");

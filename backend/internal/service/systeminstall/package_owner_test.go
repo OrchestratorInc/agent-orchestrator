@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -115,6 +116,57 @@ func TestUpdateAdvisoryIgnoresDerivedOwnerTheManagerDoesNotConfirm(t *testing.T)
 	if _, ok := s.derivedOwnerFor(TargetGoose); ok {
 		t.Fatal("unconfirmed owner was kept")
 	}
+}
+
+// A listed formula matches a Cellar path by name alone; when the receipt names
+// another tap, the release check and the upgrade must follow that tap.
+func TestUpdateAdvisoryFollowsReceiptTapOverListedFormulaOfTheSameName(t *testing.T) {
+	cellar := filepath.Join(t.TempDir(), "homebrew", "Cellar", "opencode", "1.18.34")
+	binary := writeFileAt(t, filepath.Join(cellar, "bin", "opencode"), "")
+	writeFileAt(t, filepath.Join(cellar, "INSTALL_RECEIPT.json"), `{"source":{"tap":"my-org/tools"}}`)
+	s := newTestService("darwin", "brew", "bash", "npm")
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: binary, Output: "1.18.34"}, nil
+	})
+	// Homebrew's own check is by Cellar name, so it confirms both taps.
+	s.ownsInstallation = func(_ context.Context, _ string, method, pkg string, _ bool) (bool, error) {
+		return method == "homebrew" && filepath.Base(pkg) == "opencode", nil
+	}
+	var queried []string
+	s.managedVersion = func(_ context.Context, plan Plan) (string, error) {
+		queried = append(queried, plan.Package)
+		return "1.19.0", nil
+	}
+	advisory, err := s.UpdateAdvisory(context.Background(), TargetOpencode, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if advisory.MaintenanceMethod != "homebrew" || len(queried) != 1 || queried[0] != "my-org/tools/opencode" {
+		t.Fatalf("advisory = %+v, queried %v; want my-org/tools/opencode", advisory, queried)
+	}
+	owner, ok := s.derivedOwnerFor(TargetOpencode)
+	if !ok || owner.pkg != "my-org/tools/opencode" {
+		t.Fatalf("derived owner = %+v, %t", owner, ok)
+	}
+	plans, err := s.AgentPlans(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, plan := range plans {
+		if plan.AgentID != string(TargetOpencode) {
+			continue
+		}
+		for _, method := range plan.Methods {
+			if method.ID == "homebrew" {
+				if !strings.Contains(method.UpdateCommand, "brew upgrade my-org/tools/opencode") {
+					t.Fatalf("OpenCode homebrew update = %q, want the receipt's tap", method.UpdateCommand)
+				}
+				return
+			}
+		}
+		t.Fatalf("OpenCode methods %+v have no Homebrew method", plan.Methods)
+	}
+	t.Fatal("OpenCode plan missing")
 }
 
 func TestNPMInstallerHarnessUpdatesThroughVendorCommand(t *testing.T) {

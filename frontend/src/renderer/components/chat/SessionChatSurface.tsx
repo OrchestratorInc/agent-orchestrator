@@ -385,6 +385,23 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	}, [isClaude, claudeCatalog, controllerModels]);
 	// Settings → Harness → Models picks the models offered; the session's current model stays listed.
 	const { models } = useOfferedModels(snapshot?.harness, catalogModels, { hostId, keep: [snapshot?.settings?.model] });
+	// A provider's own model option (ACP config) replaces the native list above,
+	// so the same setting narrows its choices; other options pass through as is.
+	const providerModelOption = configOptions.options?.find(
+		(option) => option.type === "select" && (option.category === "model" || option.id === "model"),
+	);
+	const providerModelChoices = useMemo(
+		() => providerModelOption?.choices.map((choice) => ({ id: choice.value })),
+		[providerModelOption],
+	);
+	const { models: offeredProviderModels } = useOfferedModels(snapshot?.harness, providerModelChoices, { hostId, keep: [providerModelOption?.currentValue] });
+	const offeredConfigOptions = useMemo(() => {
+		if (!providerModelOption) return configOptions.options;
+		const offered = new Set(offeredProviderModels.map((choice) => choice.id));
+		return configOptions.options?.map((option) => option === providerModelOption
+			? { ...option, choices: option.choices.filter((choice) => offered.has(choice.value)) }
+			: option);
+	}, [configOptions.options, offeredProviderModels, providerModelOption]);
 	const { skills } = useConversationSkills(
 		session.id,
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot),
@@ -671,7 +688,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				rememberPermissionsPending={projectPermissions.pending}
 				rememberPermissionsError={projectPermissions.error}
 				rememberedPermissionMode={projectPermissions.savedMode}
-				configOptions={configOptions.options}
+				configOptions={offeredConfigOptions}
 				onChooseConfigOption={configOptions.setOption}
 				configOptionPending={configOptions.pending || commands.choosingSettings}
 				configOptionError={controllerCatalogsEnabled ? configOptions.error : undefined}

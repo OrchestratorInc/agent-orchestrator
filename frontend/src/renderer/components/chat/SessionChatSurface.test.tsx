@@ -138,6 +138,7 @@ vi.mock("./ChatWorkspace", async () => {
 			onRememberPermissions,
 			onChooseSettings,
 			configOptionError,
+			configOptions,
 			snapshot,
 			shellTarget,
 			onSend,
@@ -151,6 +152,7 @@ vi.mock("./ChatWorkspace", async () => {
 			onRememberPermissions?: unknown;
 			onChooseSettings?: unknown;
 			configOptionError?: string;
+			configOptions?: ChatConfigOption[];
 			snapshot: { sessionId?: string };
 			shellTarget?: { handleId: string };
 		}) => {
@@ -171,6 +173,11 @@ vi.mock("./ChatWorkspace", async () => {
 					<div data-testid="remember-available">{String(Boolean(onRememberPermissions))}</div>
 					<div data-testid="turn-settings-available">{String(Boolean(onChooseSettings))}</div>
 					<div data-testid="config-option-error">{configOptionError}</div>
+					{configOptions?.map((option) => (
+						<div key={option.id} data-testid={`config-option-${option.id}`}>
+							{option.choices.map((choice) => choice.value).join(",")}
+						</div>
+					))}
 					{headerActions}
 					{sessionTabAction}
 					<button type="button" onClick={() => onLinkOpen?.(LINK)}>
@@ -285,6 +292,30 @@ describe("SessionChatSurface link routing", () => {
 		render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, provider: "opencode" }} /></Wrapper>);
 
 		expect(screen.getByTestId("turn-settings-available")).toHaveTextContent("true");
+	});
+
+	it("offers only enabled models in a provider's model option, keeping its current value", async () => {
+		conversationState.snapshot = { capabilities: ["config_options"], harness: "opencode" };
+		configState.loaded = true;
+		configState.options = [
+			{
+				id: "model", name: "Model", category: "model", type: "select", currentValue: "model-c",
+				choices: [{ value: "model-a", name: "A" }, { value: "model-b", name: "B" }, { value: "model-c", name: "C" }],
+			},
+			{
+				id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "build",
+				choices: [{ value: "build", name: "Build" }, { value: "plan", name: "Plan" }],
+			},
+		];
+		getMock.mockImplementation(async (path: string) => path === "/api/v1/settings"
+			? { data: { defaultSessionMode: "chat", chatHarnesses: [], harnessDefaults: { opencode: { enabledModels: ["model-a"] } } }, error: undefined, response: { status: 200 } }
+			: { data: { switches: agentSwitchState.data }, error: undefined, response: { status: 200 } });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+
+		render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, provider: "opencode" }} /></Wrapper>);
+
+		await waitFor(() => expect(screen.getByTestId("config-option-model")).toHaveTextContent("model-a,model-c"));
+		expect(screen.getByTestId("config-option-mode")).toHaveTextContent("build,plan");
 	});
 
 	it("does not report idle work before the conversation snapshot loads", () => {

@@ -32,6 +32,30 @@ func TestCopilotAuthRecordsItsEvidence(t *testing.T) {
 			t.Fatalf("evidence = %+v, want %+v", got, want)
 		}
 	})
+	t.Run("GitHub CLI token from the environment", func(t *testing.T) {
+		// gh auth token prints GH_TOKEN when it is set, whoever hosts.yml names.
+		clearCopilotAuthProbeEnv(t)
+		t.Setenv("COPILOT_HOME", t.TempDir())
+		ghConfig := t.TempDir()
+		t.Setenv("GH_CONFIG_DIR", ghConfig)
+		if err := os.WriteFile(filepath.Join(ghConfig, "hosts.yml"), []byte("github.com:\n    user: stored-user\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		previous := authprobe.CmdRunner
+		t.Cleanup(func() { authprobe.CmdRunner = previous })
+		authprobe.CmdRunner = func(context.Context, string, ...string) ([]byte, error) {
+			return []byte("gho_from_env\n"), nil
+		}
+		t.Setenv("GH_TOKEN", "gho_from_env")
+		ctx, evidence := ports.WithAuthEvidence(context.Background())
+		if status, ok, err := copilotLocalAuthStatus(ctx); err != nil || !ok || status != ports.AgentAuthStatusAuthorized {
+			t.Fatalf("status = (%q, %v, %v)", status, ok, err)
+		}
+		want := domain.EnvironmentSource("GH_TOKEN").WithMethod(domain.AgentAccountMethodToken)
+		if got := evidence.Identity(); got != want {
+			t.Fatalf("evidence = %+v, want %+v", got, want)
+		}
+	})
 	t.Run("stored login", func(t *testing.T) {
 		clearCopilotAuthProbeEnv(t)
 		dir := t.TempDir()

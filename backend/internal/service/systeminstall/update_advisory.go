@@ -333,10 +333,17 @@ func (s *Service) refreshDerivedOwner(ctx context.Context, planner requestPlanne
 	if source.Package != "" {
 		if source.Method == owner.method && packageWithoutLatest(source.Package) == owner.pkg && source.PackageCask == owner.cask {
 			s.setDerivedOwner(target, &owner)
-		} else {
-			s.setDerivedOwner(target, nil)
+			return
 		}
-		return
+		if source.Method != owner.method {
+			s.setDerivedOwner(target, nil)
+			return
+		}
+		// The same manager claims a different package: a listed formula matched
+		// only by name (another tap's opencode, say), and the binary's own
+		// receipt names the package that actually installed it. Never keep the
+		// listed one, whose releases and upgrade belong to the other package.
+		*source = Plan{}
 	}
 	plan, ok := planner.derivedOwnerPlan(target, owner)
 	if !ok || plan.Package == "" {

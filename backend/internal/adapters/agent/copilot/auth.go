@@ -29,6 +29,10 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return ports.AgentAuthStatusUnknown, nil
 }
 
+// gitHubCLITokenEnvVars take precedence over the GitHub CLI's stored
+// credentials for github.com, in this order.
+var gitHubCLITokenEnvVars = []string{"GH_TOKEN", "GITHUB_TOKEN"}
+
 var copilotTokenEnvVars = []string{
 	"COPILOT_GITHUB_TOKEN",
 	"GH_TOKEN",
@@ -135,6 +139,14 @@ func copilotGHAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, erro
 		return ports.AgentAuthStatusUnknown, false, probeCtx.Err()
 	}
 	if err == nil && copilotUsableToken(string(out)) {
+		// GH_TOKEN and GITHUB_TOKEN override the GitHub CLI's stored login, and
+		// `gh auth token` then prints that token; hosts.yml's user is not its owner.
+		for _, name := range gitHubCLITokenEnvVars {
+			if copilotUsableToken(os.Getenv(name)) {
+				ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodToken))
+				return ports.AgentAuthStatusAuthorized, true, nil
+			}
+		}
 		evidence := domain.CommandSource("gh", "auth", "token").WithMethod(domain.AgentAccountMethodAccount)
 		evidence.Name = gitHubCLIUser(ctx)
 		ports.RecordAuthEvidence(ctx, evidence)

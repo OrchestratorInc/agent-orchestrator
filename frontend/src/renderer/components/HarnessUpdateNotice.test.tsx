@@ -154,6 +154,30 @@ describe("startup harness update notice", () => {
 		expect(within(notice).getByRole("button", { name: "Retry update" })).toBeEnabled();
 	});
 
+	it("keeps a failed update explained after a refresh reports the harness current", async () => {
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		let replaced = false;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			// The updater replaced the binary before it exited with an error.
+			if (path === "/api/v1/agents/{agent}/update-advisory" && replaced) return { data: { agentId: "claude-code", status: "current", currentVersion: "2.1.292", latestVersion: "2.1.292", maintenanceMethod: "official-installer" } } as never;
+			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path !== "/api/v1/agents/{agent}/install") return { data: { agents: [agentReadiness("claude-code", "Claude Code")] } } as never;
+			replaced = true;
+			return { data: { target: "claude-code", status: "installing" } } as never;
+		});
+		const { client } = mountNotice();
+		const notice = await screen.findByRole("region", { name: "Agent updates available" });
+		await userEvent.click(within(notice).getByRole("button", { name: "Update" }));
+		await waitFor(() => expect(client.getQueryData(installJobsQueryKey)).toEqual([expect.objectContaining({ status: "installing" })]));
+		act(() => client.setQueryData(installJobsQueryKey, [{ target: "claude-code", status: "failed", error: "Post-install verification failed" }]));
+		await waitFor(() => expect(client.getQueryData(updateAdvisoryQueryKey("claude-code"))).toMatchObject({ status: "current" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Post-install verification failed");
+		await userEvent.click(screen.getByRole("button", { name: "Dismiss Claude Code update" }));
+		expect(screen.queryByRole("region")).toBeNull();
+	});
+
 	it("stays out of the way while Settings is open", async () => {
 		mountNotice();
 		await screen.findByRole("region", { name: "Agent updates available" });

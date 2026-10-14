@@ -85,7 +85,7 @@ func managerOwnsBinary(commands ports.CommandRunner) func(context.Context, strin
 			if packageLayout(binaryPath) != layoutPipx {
 				return false, nil
 			}
-			output, err := runProbe(ctx, commands, localProbeTimeout, true, []string{"pipx", "list", "--json"})
+			output, err := runProbe(ctx, commands, localProbeTimeout, false, []string{"pipx", "list", "--json"})
 			if err != nil {
 				return false, err
 			}
@@ -143,7 +143,7 @@ func managerOwnsBinary(commands ports.CommandRunner) func(context.Context, strin
 }
 
 func managerPath(ctx context.Context, commands ports.CommandRunner, argv []string) (string, error) {
-	output, err := runProbe(ctx, commands, localProbeTimeout, true, argv)
+	output, err := runProbe(ctx, commands, localProbeTimeout, false, argv)
 	if err != nil {
 		return "", err
 	}
@@ -408,6 +408,12 @@ func advisoryPackageSources(plans []Plan, preferred, layout string) []Plan {
 // Windows, where the prefix also holds the command shim.
 func npmPrefixOwningBinary(binaryPath, pkg string) (string, bool) {
 	if binaryPath == "" || pkg == "" {
+		return "", false
+	}
+	// Bun, pnpm and Yarn also keep global packages under node_modules; npm
+	// must not claim, and then rewrite, a copy another manager installed.
+	switch packageLayout(binaryPath) {
+	case layoutBun, layoutPNPM, layoutYarn, layoutVersionManager:
 		return "", false
 	}
 	resolved, err := filepath.EvalSymlinks(binaryPath)

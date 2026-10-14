@@ -79,5 +79,6 @@ describe("filterEnabledModels", () => {
 
 	it("falls back to the full catalog when no enabled model is listed any more", () => {
 		expect(filterEnabledModels(catalog, ["gone"])).toEqual({ models: catalog, narrowed: false });
+		expect(filterEnabledModels(catalog, ["gone"], ["b"])).toEqual({ models: catalog, narrowed: false });
 	});
 });

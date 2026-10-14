@@ -644,6 +644,21 @@ describe("HarnessSettingsSection", () => {
 		expect(report).toContain("Next step: Run the harness, then check again.");
 	});
 
+	it("shows the credential the readiness check selected when the provider rejects it", async () => {
+		const readiness = readyCatalog();
+		Object.assign(readiness.agents[1].authentication, {
+			state: "unauthorized", account: undefined,
+			diagnostics: [{ method: "selected_credential", code: "credential_present", source: "OPENAI_API_KEY",
+				checkedAt: "2026-10-10T10:00:00Z", cached: false, durationMs: 0 }],
+		});
+		mockInstalledOperations("npm", readiness);
+		renderSection();
+		const page = await findAgentRow("codex");
+		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
+		expect(within(page).getByText("Detected credential")).toBeInTheDocument();
+		expect(within(page).getByText("OPENAI_API_KEY")).toBeInTheDocument();
+	});
+
 	it.each([
 		{ kind: "file", source: "~/.pi/agent/auth.json", expected: "~/.pi/agent/auth.json" },
 		{ kind: "environment", source: "OPENAI_API_KEY", expected: "OPENAI_API_KEY" },

@@ -30,16 +30,18 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		return ports.AgentAuthStatusUnknown, err
 	}
 
-	// AO reads Kimchi's own global config first and falls back to
-	// KIMCHI_API_KEY. Kimchi itself gives the variable precedence at launch, so
-	// with both set the launch uses the variable while this names the config.
+	// Kimchi gives KIMCHI_API_KEY precedence over its global config at launch,
+	// so the check names the variable whenever it is set.
+	if strings.TrimSpace(os.Getenv("KIMCHI_API_KEY")) != "" {
+		authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, "KIMCHI_API_KEY")
+		return ports.AgentAuthStatusAuthorized, nil
+	}
 	status, configErr := kimchiConfigAuthStatus(ctx, kimchiGlobalConfigPath())
 	if configErr == nil && status.HasCredential() {
 		return status, nil
 	}
-	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, "KIMCHI_API_KEY") != "" {
-		return ports.AgentAuthStatusAuthorized, nil
-	}
+	// Records which variable was checked.
+	authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, "KIMCHI_API_KEY")
 	return status, configErr
 }
 
