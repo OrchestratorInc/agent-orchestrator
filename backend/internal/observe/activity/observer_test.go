@@ -464,6 +464,13 @@ func TestRenderedAdapterNeverUsesOldRingComposer(t *testing.T) {
 	if err := observer.Poll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	if len(sink.signals) != 0 {
+		t.Fatalf("quoted modal text emitted activity: %+v", sink.signals)
+	}
+	runtime.rendered += "\n⚠ ❯"
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if len(sink.signals) != 1 || sink.signals[0].State != domain.ActivityBlocked {
 		t.Fatalf("signals=%+v", sink.signals)
 	}
