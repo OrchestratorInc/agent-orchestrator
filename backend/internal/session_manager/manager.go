@@ -2519,7 +2519,9 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 	if !ok {
 		return KillResult{}, nil // already gone: benign race
 	}
-	sandboxProject = rec.ProjectID
+	if m.sandbox != nil && m.sandbox.HasSessionState(rec.ProjectID, rec.ID) {
+		sandboxProject = rec.ProjectID
+	}
 	m.stopPreviewBestEffort(ctx, id)
 	m.destroyBrowserBestEffort(ctx, id)
 	handle := runtimeHandle(rec.Metadata)

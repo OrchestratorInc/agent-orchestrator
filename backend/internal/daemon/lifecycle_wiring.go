@@ -235,6 +235,9 @@ type sessionLifecycle interface {
 	// session's durable metadata before the next prompt routes. A later TUI
 	// rebuild reads it back so ChatUI model changes survive the handoff.
 	PersistChatModel(ctx context.Context, id domain.SessionID, model string) error
+	// ReleaseTerminatedSandbox runs after every terminal path so a shared
+	// sandbox container is released however its last session ended.
+	ReleaseTerminatedSandbox(ctx context.Context, id domain.SessionID)
 }
 
 // sessionLifecycleMessenger adapts sessionLifecycle to ports.AgentMessenger so

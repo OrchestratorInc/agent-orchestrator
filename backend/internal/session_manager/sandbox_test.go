@@ -607,6 +607,57 @@ func TestKillDiscardsSandboxAfterModeChange(t *testing.T) {
 	}
 }
 
+// Killing a session that never ran sandboxed touches no sandbox, even in a
+// project that sandboxes now.
+func TestKillWithoutSandboxStateSkipsSandbox(t *testing.T) {
+	m, st, _, _ := newManager()
+	sb := &fakeSandbox{noState: map[domain.SessionID]bool{"mer-1": true}}
+	m.sandbox = sb
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: sandboxedConfig(domain.SandboxModeShared)}
+	st.sessions["mer-1"] = mkLive("mer-1")
+	if _, err := m.Kill(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(sb.sessionDiscards) != 0 || len(sb.released) != 0 {
+		t.Fatalf("discards = %v, released = %+v, want no sandbox calls", sb.sessionDiscards, sb.released)
+	}
+}
+
+// A live host-only session, such as the unsandboxed orchestrator, does not
+// keep the shared container alive.
+func TestReleaseSharedSandboxIgnoresLiveHostSessions(t *testing.T) {
+	m, st, _, _ := newManager()
+	sb := &fakeSandbox{noState: map[domain.SessionID]bool{"mer-orch": true}}
+	m.sandbox = sb
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: sandboxedConfig(domain.SandboxModeShared)}
+	st.sessions["mer-orch"] = mkLive("mer-orch")
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1"})
+
+	m.ReleaseTerminatedSandbox(ctx, "mer-1")
+	if !sameReleases(sb.released, []releaseCall{{inUse: false}}) {
+		t.Fatalf("released = %+v, want the container released despite the live host session", sb.released)
+	}
+}
+
+// Every terminal path, not only kill, releases the shared container; a
+// session without sandbox state does not reach Docker at all.
+func TestReleaseTerminatedSandboxOnlyForSandboxedSessions(t *testing.T) {
+	m, st, _, _ := newManager()
+	sb := &fakeSandbox{noState: map[domain.SessionID]bool{"mer-2": true}}
+	m.sandbox = sb
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1"})
+	seedTerminal(st, "mer-2", domain.SessionMetadata{WorkspacePath: "/ws/mer-2"})
+
+	m.ReleaseTerminatedSandbox(ctx, "mer-2")
+	if len(sb.released) != 0 {
+		t.Fatalf("released = %+v, want none for a host session", sb.released)
+	}
+	m.ReleaseTerminatedSandbox(ctx, "mer-1")
+	if !sameReleases(sb.released, []releaseCall{{inUse: false}}) {
+		t.Fatalf("released = %+v, want one release", sb.released)
+	}
+}
+
 func TestRestoreDiscardsContainerWhenRuntimeCreateFails(t *testing.T) {
 	sb := &fakeSandbox{}
 	agent := &sandboxAgent{launchArgvAgent: launchArgvAgent{argv: []string{"claude"}}}

@@ -250,6 +250,7 @@ type Manager struct {
 	// receives terminal intent before is_terminated makes the session ineligible
 	// for normal source discovery.
 	usageFinalizer   sessionUsageFinalizer
+	terminationHook  func(context.Context, domain.SessionID)
 	usageReactivator sessionUsageReactivator
 	containers       ports.ContainerReaper
 	projects         projectConfigLoader
@@ -327,6 +328,15 @@ func (m *Manager) SetCompletionTerminator(terminator sessionTerminator) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.completionTerminator = terminator
+}
+
+// SetTerminationHook late-binds a callback that runs after every terminal
+// path, alongside the container reap. Session Manager uses it to release
+// shared sandbox containers (#6663); it is constructed after lifecycle.
+func (m *Manager) SetTerminationHook(hook func(context.Context, domain.SessionID)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.terminationHook = hook
 }
 
 // SetUsageFinalizer wires termination and relaunches to usage collection.
@@ -529,7 +539,7 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 		// every other terminal path (#2652): a crash/SIGKILL detected by the
 		// runtime reaper must not leave the session's Docker containers behind
 		// just because it never called MarkTerminated directly.
-		m.reapSessionContainers(ctx, id)
+		m.afterTermination(ctx, id)
 	}
 	return nil
 }
@@ -1822,7 +1832,7 @@ func (m *Manager) MarkTerminated(ctx context.Context, id domain.SessionID) error
 			return err
 		}
 		if rec.IsTerminated {
-			m.reapSessionContainers(ctx, id)
+			m.afterTermination(ctx, id)
 			return nil
 		}
 
@@ -1864,7 +1874,7 @@ func (m *Manager) MarkTerminated(ctx context.Context, id domain.SessionID) error
 		}
 		switch outcome {
 		case terminationApplied, terminationAlreadyApplied:
-			m.reapSessionContainers(ctx, id)
+			m.afterTermination(ctx, id)
 			return nil
 		case terminationLaunchChanged:
 			return fmt.Errorf("lifecycle: runtime launch changed while terminating session %q", id)
@@ -1874,6 +1884,18 @@ func (m *Manager) MarkTerminated(ctx context.Context, id domain.SessionID) error
 			// finalization commit against the same durable revision.
 			continue
 		}
+	}
+}
+
+// afterTermination runs every terminal path's side effects: the container
+// reap and the late-bound termination hook.
+func (m *Manager) afterTermination(ctx context.Context, id domain.SessionID) {
+	m.reapSessionContainers(ctx, id)
+	m.mu.Lock()
+	hook := m.terminationHook
+	m.mu.Unlock()
+	if hook != nil {
+		hook(ctx, id)
 	}
 }
 

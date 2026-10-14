@@ -647,6 +647,7 @@ func Run() error {
 	sessMgr.SetTerminalInputGate(termMgr)
 	lifecycleMessenger.Bind(sessionLifecycleMessenger{sessMgr})
 	lcStack.LCM.SetCompletionTerminator(sessMgr)
+	lcStack.LCM.SetTerminationHook(sessMgr.ReleaseTerminatedSandbox)
 	lcStack.LCM.SetSessionInputLease(sessMgr)
 	lcStack.LCM.SetSessionOperationGate(sessMgr)
 	termMgr.SetSessionInputLease(sessMgr)

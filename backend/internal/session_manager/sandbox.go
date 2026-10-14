@@ -160,11 +160,27 @@ func sandboxArgv(argv []string, binary string) []string {
 	return out
 }
 
-// releaseSharedSandbox removes a project's shared container once no live
-// session remains and no sandboxed launch is in flight. The adapter evaluates
-// the in-use check under its project lock, so a concurrent shared Ensure
-// cannot slip between the check and the removal. An unreadable session list
-// keeps the container: an unknown is never proof that nothing uses it.
+// ReleaseTerminatedSandbox releases the shared container after any terminal
+// path, not just kill. Lifecycle calls it once a session is terminated; a
+// session that never ran sandboxed touches neither Docker nor the store.
+func (m *Manager) ReleaseTerminatedSandbox(ctx context.Context, id domain.SessionID) {
+	if m.sandbox == nil {
+		return
+	}
+	rec, ok, err := m.store.GetSession(ctx, id)
+	if err != nil || !ok || !m.sandbox.HasSessionState(rec.ProjectID, rec.ID) {
+		return
+	}
+	m.releaseSharedSandbox(ctx, rec.ProjectID)
+}
+
+// releaseSharedSandbox removes a project's shared containers once no live
+// sandboxed session remains and no sandboxed launch is in flight. Live
+// sessions that never ran sandboxed, such as a host orchestrator, do not
+// count. The adapter evaluates the in-use check under its project lock, so a
+// concurrent shared Ensure cannot slip between the check and the removal. An
+// unreadable session list keeps the container: an unknown is never proof
+// that nothing uses it.
 func (m *Manager) releaseSharedSandbox(ctx context.Context, project domain.ProjectID) {
 	if m.sandbox == nil {
 		return
@@ -181,7 +197,7 @@ func (m *Manager) releaseSharedSandbox(ctx context.Context, project domain.Proje
 			return true, err
 		}
 		for _, r := range recs {
-			if !r.IsTerminated {
+			if !r.IsTerminated && m.sandbox.HasSessionState(r.ProjectID, r.ID) {
 				return true, nil
 			}
 		}
