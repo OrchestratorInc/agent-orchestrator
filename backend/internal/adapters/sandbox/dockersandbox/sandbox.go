@@ -65,6 +65,8 @@ type Sandbox struct {
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
+	// Engine kind from `docker info`, cached under mu once known.
+	engineKnown, engineRequiresAlias bool
 }
 
 var _ ports.Sandbox = (*Sandbox)(nil)
@@ -203,6 +205,9 @@ func (s *Sandbox) Ensure(ctx context.Context, req ports.SandboxRequest) (ports.S
 		}
 		fallthrough
 	case status == "":
+		if err := s.ensureNetwork(ctx, docker); err != nil {
+			return ports.SandboxTarget{}, err
+		}
 		labels := map[string]string{labelSandbox: string(req.Config.Mode), labelProject: string(req.ProjectID), labelHash: hash, labelGitDir: git.dir}
 		if req.Config.Mode == domain.SandboxModePerAgent {
 			labels[dockerreap.SessionLabel] = string(req.SessionID)

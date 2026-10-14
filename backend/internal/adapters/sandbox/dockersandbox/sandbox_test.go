@@ -31,6 +31,10 @@ type fakeRunner struct {
 	// isolate answers every network-isolation helper run out of band (the
 	// call is still recorded in calls); the zero value succeeds.
 	isolate fakeCall
+	// netInspect and netCreate answer the sandbox network calls, and engine
+	// is the `docker info` OperatingSystem; all out of band and recorded.
+	netInspect, netCreate fakeCall
+	engine                string
 }
 
 // isolationMarker identifies the network-isolation helper's docker run.
@@ -55,6 +59,14 @@ func (f *fakeRunner) Output(_ context.Context, name string, args ...string) ([]b
 	f.calls = append(f.calls, line)
 	if strings.Contains(line, isolationMarker) {
 		return []byte(f.isolate.out), f.isolate.err
+	}
+	switch {
+	case strings.Contains(line, " network inspect "):
+		return []byte(f.netInspect.out), f.netInspect.err
+	case strings.Contains(line, " network create "):
+		return []byte(f.netCreate.out), f.netCreate.err
+	case strings.Contains(line, " info --format "):
+		return []byte(f.engine + "\n"), nil
 	}
 	if len(f.script) == 0 {
 		f.t.Fatalf("unexpected call: %s", line)

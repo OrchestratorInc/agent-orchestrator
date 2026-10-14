@@ -83,7 +83,7 @@ func containerName(req ports.SandboxRequest, hash string) string {
 
 // containerLayout versions the fixed runArgs flags, which configHash does not
 // otherwise see. Bump it when they change so stopped containers are recreated.
-const containerLayout = 2
+const containerLayout = 3
 
 func configHash(cfg domain.SandboxConfig, mounts []mount) string {
 	data, _ := json.Marshal(struct {
@@ -96,7 +96,7 @@ func configHash(cfg domain.SandboxConfig, mounts []mount) string {
 }
 
 func runArgs(name string, cfg domain.SandboxConfig, labels map[string]string, mounts []mount, user string) []string {
-	args := []string{"run", "-d", "--init", "--name", name, "--security-opt", "no-new-privileges"}
+	args := []string{"run", "-d", "--init", "--name", name, "--security-opt", "no-new-privileges", "--network", sandboxNetwork}
 	keys := make([]string, 0, len(labels))
 	for k := range labels {
 		keys = append(keys, k)

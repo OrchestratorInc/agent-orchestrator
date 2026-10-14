@@ -5,7 +5,7 @@ description: Run Claude Code agents inside Docker containers while Orchestrator,
 
 The sandbox runs an agent inside a Docker container. Orchestrator, your worktrees, and the desktop app stay on the host. The container gets the agent's worktree, the repository's git data, and its own sandbox state. It does not see the rest of your home directory.
 
-The sandbox protects your files and credentials from accidental damage by the agent, and it blocks the container from reaching services on your computer. Don't treat it as a complete security boundary against a deliberately hostile agent: `shared` mode lets sessions tamper with each other's git metadata, internet access is unrestricted, and the isolation is only as strong as Docker itself. See [Limits](#limits).
+The sandbox protects your files and credentials from accidental damage by the agent, and it blocks the container's known routes to your computer (see [Network](#network)). Don't treat it as a complete security boundary against a deliberately hostile agent: `shared` mode lets sessions tamper with each other's git metadata, internet access is unrestricted, and the isolation is only as strong as Docker itself. See [Limits](#limits).
 
 The sandbox is off by default and is configured per project.
 
@@ -72,9 +72,17 @@ Each commit inside the sandbox also prints `Unable to create '.../packed-refs.lo
 
 ## Network
 
-The sandbox blocks access to services on your computer, such as Docker Desktop's `host.docker.internal` and its equivalents in OrbStack and Colima. Each time a sandbox starts, Orchestrator checks that its local API is unreachable from the container and refuses to start the session if it isn't. Internet access is unrestricted.
+Sandboxes run on a dedicated Docker network, `ao-sandbox`, which Orchestrator creates on first use. Each time a sandbox starts, Orchestrator:
 
-Because of this, tools inside the sandbox can't reach dev servers or MCP servers running on your computer.
+- blocks the container's routes to the host addresses that `host.docker.internal`, `gateway.docker.internal`, `host.internal` (OrbStack) and `host.lima.internal` (Colima) resolve to. This also blocks Docker Desktop's built-in HTTP proxy, which can otherwise forward requests to services on your computer.
+- probes Orchestrator's local API port through those addresses, the container's default gateway, and Docker Desktop's proxy. If any probe connects, the session doesn't start.
+- refuses to start on Docker Desktop or OrbStack if it can't resolve the host address it needs to block.
+
+This is tested on Docker Desktop for macOS. On other engines the blocking is best effort, but the probe still refuses to start a sandbox that can reach Orchestrator's API.
+
+Internet access is unrestricted. Tools inside the sandbox can't reach dev servers or MCP servers running on your computer.
+
+If you restart a sandbox container yourself with `docker restart`, the block is gone until Orchestrator next starts a session in it. Agents don't survive that restart, and Orchestrator reapplies the block before it runs anything there again.
 
 ## Authentication
 
@@ -99,7 +107,7 @@ Everything else (spawn, send, session, render, review, browser, project, and so 
 
 ## Limits
 
-- The sandbox blocks access to services on your computer (Docker Desktop's `host.docker.internal` and equivalents) and refuses to start if Orchestrator's local API is still reachable. Internet access is unrestricted, so the agent can send anything it can read to the internet.
+- The sandbox blocks the direct host addresses and Docker Desktop's built-in proxy, and refuses to start if its probes reach Orchestrator's local API. Only Docker Desktop on macOS is tested; other engines are best effort. Internet access is unrestricted, so the agent can send anything it can read to the internet.
 - Tools inside the sandbox can't reach dev servers or MCP servers running on your computer.
 - The isolation relies on Docker. A flaw in Docker or a misconfigured Docker host weakens it.
 - In `shared` mode a hostile agent can rewrite the git metadata of any worktree in the project, which can make git on the host run its commands when you use those worktrees. Use `per-agent` mode for agents you don't trust.
@@ -118,6 +126,7 @@ Everything else (spawn, send, session, render, review, browser, project, and so 
 
 - The image, or the `alpine:3.22` helper image, can't be pulled.
 - The container can still reach Orchestrator's local API after the network block was applied.
+- Orchestrator couldn't resolve the Docker host address it needs to block, or couldn't create the `ao-sandbox` network.
 - The image lacks `/bin/sh` or `claude`.
 - Credentials are missing.
 - The shared-mode workspace isn't an Orchestrator-managed worktree.

@@ -47,6 +47,7 @@ func TestDockerSmoke(t *testing.T) {
 
 	s := New(Config{DataDir: data, ManagedRoot: filepath.Join(data, "worktrees")})
 	ctx := context.Background()
+	removeNetworkIfNew(t)
 	target, err := s.Ensure(ctx, ports.SandboxRequest{SessionID: "smoke1", ProjectID: "smoke", RepoPath: repo, WorkspacePath: ws,
 		RequireBinaries: []string{"git"}, Config: domain.SandboxConfig{Mode: domain.SandboxModePerAgent, Image: "alpine/git:2.49.1"}})
 	if err != nil {
@@ -142,11 +143,27 @@ func TestDockerSmokeHostIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal("the helper's nc probe misses a reachable host listener")
 	}
+	// Docker Desktop's proxy tunnels to host loopback from the default bridge.
+	const proxyURL = "http://192.168.65.7:3128"
+	loopURL := "http://127.0.0.1:" + strconv.Itoa(port) + "/"
+	out, err = exec.Command("docker", "run", "--rm", "alpine:3.22", "env", "http_proxy="+proxyURL, "wget", "-Y", "on", "-qO", "/dev/null", "-T3", loopURL).CombinedOutput()
+	t.Logf("baseline (plain container) proxy wget %s: err=%v %s", loopURL, err, strings.TrimSpace(string(out)))
+	if err != nil {
+		t.Fatal("baseline container cannot reach host loopback through the proxy; the proxy check proves nothing")
+	}
+	// The helper's CONNECT probe must recognise that proxy.
+	out, err = exec.Command("docker", "run", "--rm", isolationImage, "sh", "-c",
+		`printf 'CONNECT 127.0.0.1:%s HTTP/1.1\r\n\r\n' "$1" | nc -w 2 192.168.65.7 3128 | head -n 1`, "sh", strconv.Itoa(port)).CombinedOutput()
+	t.Logf("baseline helper CONNECT probe: err=%v %s", err, strings.TrimSpace(string(out)))
+	if !strings.Contains(string(out), " 200") {
+		t.Fatal("the helper's CONNECT probe misses a proxy that tunnels to host loopback")
+	}
 
 	s := New(Config{DataDir: data, ManagedRoot: filepath.Join(data, "worktrees"), DaemonPort: port})
 	ctx := context.Background()
 	req := ports.SandboxRequest{SessionID: "smokenet1", ProjectID: "smoke", RepoPath: repo, WorkspacePath: ws,
 		Config: domain.SandboxConfig{Mode: domain.SandboxModePerAgent, Image: "alpine:3.22"}}
+	removeNetworkIfNew(t)
 	target, err := s.Ensure(ctx, req)
 	if err != nil {
 		t.Fatal(err)
@@ -157,10 +174,24 @@ func TestDockerSmokeHostIsolation(t *testing.T) {
 		t.Logf("docker exec %s: err=%v %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 		return err
 	}
+	// Docker Desktop's HTTP proxy is reachable from a plain container on the
+	// sandbox network: the /24 blackhole is what blocks it.
+	out, err = exec.Command("docker", "run", "--rm", "--network", sandboxNetwork, "alpine:3.22",
+		"env", "http_proxy="+proxyURL, "wget", "-Y", "on", "-qO", "/dev/null", "-T3", loopURL).CombinedOutput()
+	t.Logf("baseline (plain container on %s) proxy wget %s: err=%v %s", sandboxNetwork, loopURL, err, strings.TrimSpace(string(out)))
 	requireBlocked := func(when string) {
 		t.Helper()
 		if dexec("wget", "-qO-", "-T3", url) == nil {
 			t.Fatalf("%s: sandbox reached the host listener", when)
+		}
+		if dexec("env", "http_proxy="+proxyURL, "wget", "-Y", "on", "-qO-", "-T3", loopURL) == nil {
+			t.Fatalf("%s: sandbox reached the host listener through the proxy", when)
+		}
+		if dexec("sh", "-c", `printf 'CONNECT 127.0.0.1:%s HTTP/1.1\r\n\r\n' "$1" | nc -w 2 192.168.65.7 3128 | head -n 1 | grep ' 200'`, "sh", strconv.Itoa(port)) == nil {
+			t.Fatalf("%s: proxy CONNECT to host loopback succeeded", when)
+		}
+		if dexec("wget", "-qO-", "-T3", proxyURL+"/") == nil {
+			t.Fatalf("%s: sandbox reached the proxy", when)
 		}
 	}
 	requireBlocked("after Ensure")
@@ -182,6 +213,15 @@ func TestDockerSmokeHostIsolation(t *testing.T) {
 	}
 	requireBlocked("after restart + Ensure")
 	_ = dexec("ip", "route")
+}
+
+// removeNetworkIfNew removes the sandbox network after the test when the test
+// creates it. Call it before Ensure, so it runs after the container cleanup.
+func removeNetworkIfNew(t *testing.T) {
+	t.Helper()
+	if exec.Command("docker", "network", "inspect", sandboxNetwork).Run() != nil {
+		t.Cleanup(func() { _ = exec.Command("docker", "network", "rm", sandboxNetwork).Run() })
+	}
 }
 
 func freePort(t *testing.T) int {

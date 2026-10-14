@@ -72,7 +72,7 @@ func TestRunArgs(t *testing.T) {
 	cfg := domain.SandboxConfig{Mode: domain.SandboxModePerAgent, Image: "node:22", CPUs: "2", Memory: "4g", PidsLimit: 256}
 	got := runArgs("ao-sbx-s1", cfg, map[string]string{"ao.session": "s1", "ao.sandbox": "per-agent"},
 		[]mount{{Path: "/w"}, {Path: "/p", ReadOnly: true}}, "501:20")
-	want := []string{"run", "-d", "--init", "--name", "ao-sbx-s1", "--security-opt", "no-new-privileges",
+	want := []string{"run", "-d", "--init", "--name", "ao-sbx-s1", "--security-opt", "no-new-privileges", "--network", "ao-sandbox",
 		"--label", "ao.sandbox=per-agent", "--label", "ao.session=s1",
 		"--user", "501:20",
 		"--mount", "type=bind,src=/w,dst=/w", "--mount", "type=bind,src=/p,dst=/p,readonly",
@@ -134,7 +134,7 @@ func TestRunArgsTmpfsMount(t *testing.T) {
 	cfg := domain.SandboxConfig{Mode: domain.SandboxModeShared, Image: "node:22"}
 	got := runArgs("c", cfg, nil, []mount{{Path: "/w"}, {Path: "/w/orchestrator", Tmpfs: true},
 		{Path: "/g/logs", Tmpfs: true, Writable: true}, {Path: "/g/config", ReadOnly: true}}, "")
-	want := []string{"run", "-d", "--init", "--name", "c", "--security-opt", "no-new-privileges",
+	want := []string{"run", "-d", "--init", "--name", "c", "--security-opt", "no-new-privileges", "--network", "ao-sandbox",
 		"--mount", "type=bind,src=/w,dst=/w", "--mount", "type=tmpfs,destination=/w/orchestrator,readonly",
 		"--mount", "type=tmpfs,destination=/g/logs,tmpfs-mode=1777",
 		"--mount", "type=bind,src=/g/config,dst=/g/config,readonly",
