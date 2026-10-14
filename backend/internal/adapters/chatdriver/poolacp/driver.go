@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -22,7 +21,7 @@ import (
 // New uses Pool's own tools, permissions and durable session history.
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
-		Harness: domain.HarnessPool, Configure: configure,
+		Harness: domain.HarnessPool, Preflight: preflight, Configure: configure,
 		Capabilities:       ports.ChatCapabilities{ports.ChatCapabilityImages: false, ports.ChatCapabilityEmbeddedContext: false, ports.ChatCapabilityResourceLinks: false, ports.ChatCapabilityElicitation: false, ports.ChatCapabilityNestedAgents: false, ports.ChatCapabilityTerminalOutput: false},
 		ValidateInitialize: validateInitialize, ValidateSessionReady: validateSessionReady,
 		SessionMode: sessionMode, SessionOptions: sessionOptions, ValidateTurnSettings: validateTurnSettings,
@@ -44,11 +43,11 @@ func hookDirectory(cfg acpdriver.LaunchConfig) (string, error) {
 }
 
 func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
-	if err := ctx.Err(); err != nil {
+	if err := preflight(ctx); err != nil {
 		return nil, nil, err
 	}
-	if runtime.GOOS == "windows" {
-		return nil, nil, fmt.Errorf("pool Chat private hooks currently require Unix")
+	if err := validateConfiguration(cfg.Env); err != nil {
+		return nil, nil, err
 	}
 	if err := validateTurnSettings(cfg.Permissions, ports.ChatTurnSettings{Approval: cfg.Permissions}); err != nil {
 		return nil, nil, err

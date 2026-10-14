@@ -78,6 +78,7 @@ const (
 	TargetDeepSeek    Target = "deepseek-harness"
 	TargetOpenHands   Target = "openhands"
 	TargetCommandCode Target = "command-code"
+	TargetPool        Target = "pool"
 	// TargetCloudflared is the optional connector that makes a paired phone
 	// reachable from outside the local network.
 	TargetCloudflared Target = "cloudflared"
@@ -91,7 +92,7 @@ var agentTargets = []Target{
 	TargetContinue, TargetDevin, TargetKiro, TargetKilocode, TargetVibe,
 	TargetMuse, TargetAgy, TargetAutohand, TargetKimchi, TargetPrimeAgent,
 	TargetOMP, TargetFX, TargetUnreal, TargetCodewhale, TargetMiMoCode, TargetDeepSeek, TargetOpenHands,
-	TargetCommandCode,
+	TargetCommandCode, TargetPool,
 }
 
 var agentTargetSet = func() map[Target]bool {

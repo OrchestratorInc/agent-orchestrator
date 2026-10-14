@@ -44,6 +44,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetDeepSeek:    "https://github.com/deepseek-ai/deepseek-harness",
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
+	TargetPool:        "https://docs.poolside.ai/cli/install",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -253,6 +254,12 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		if s.goos == "darwin" || s.goos == "linux" {
 			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
 		}
+	case TargetPool:
+		reason := "Install Pool 1.0.16 and complete login using Poolside's guide, then refresh harness status. AO does not install or update Pool automatically."
+		if s.goos != "darwin" && s.goos != "linux" {
+			reason = "AO Pool Chat requires macOS or Linux for private instruction hooks. Native Windows Pool is not supported by this integration."
+		}
+		plans = []Plan{manualPlan(target, reason, agentDocumentationURLs[target])}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
 	default:
