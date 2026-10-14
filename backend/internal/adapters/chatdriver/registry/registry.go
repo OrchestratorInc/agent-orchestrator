@@ -22,6 +22,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pool"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/qwen"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/unrealagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/claudeacp"
@@ -36,6 +37,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/opencodeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/opencodev2acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/piacp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/poolacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/qwenacp"
 	unrealchat "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/unrealagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -91,6 +93,7 @@ func Build(log *slog.Logger, onClaudeAuthRejected func()) *Registry {
 		unrealchat.New(unrealagent.New(), log),
 		deepseekharnessacp.New(deepseekharness.New(), log),
 		commandcodeacp.New(commandcodeagent.New(), log),
+		poolacp.New(pool.New(), log),
 	)
 }
 

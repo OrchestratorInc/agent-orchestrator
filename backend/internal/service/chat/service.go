@@ -2032,6 +2032,9 @@ func (s *Service) PreflightChat(
 	harness domain.AgentHarness,
 	permissions ports.PermissionMode,
 ) error {
+	if harness == domain.HarnessPool && ports.NormalizePermissionMode(permissions) == ports.PermissionModeAuto {
+		return fmt.Errorf("%w: Pool Chat does not support Auto", ports.ErrChatPermissionModeUnsupported)
+	}
 	driver, err := s.drivers.Driver(harness)
 	if err != nil {
 		return fmt.Errorf("%w: %s has no chat driver", ports.ErrChatUnsupported, harness)

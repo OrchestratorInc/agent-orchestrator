@@ -195,7 +195,7 @@ func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	case "claude-code", "codex", "opencode", "opencode-v2", "grok", "cursor", "qwen", "gemini",
 		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin":
 		return ports.CustomModelEntryDirect
-	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
+	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent", "pool":
 		return ports.CustomModelEntryConfigured
 	default:
 		return ports.CustomModelEntryNone
@@ -755,8 +755,8 @@ func hasDiscoverySource(agentID string) bool {
 	switch agentID {
 	// Harnesses whose catalog comes from a daemon-injected surface rather than a
 	// command spec: Codex's app-server, Claude's provider probe, and the ACP
-	// configuration catalog for Cline, DeepSeek Harness, and Devin.
-	case "claude-code", "codex", "deepseek-harness", "devin":
+	// configuration catalog for Cline, DeepSeek Harness, Devin, and Pool.
+	case "claude-code", "codex", "deepseek-harness", "devin", "pool":
 		return true
 	}
 	if hasConfigDiscoverySource(agentID) {
@@ -883,6 +883,18 @@ func CatalogFingerprint(ctx context.Context, agentID, binary, workingDir string,
 // discoveryConfigInputs returns the configuration an agent's discovery consults,
 // or "" when the catalog depends on the binary alone.
 func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env map[string]string) string {
+	if agentID == "pool" {
+		// Native ACP reads saved provider settings and environment overrides.
+		// Hash credentials as well as the provider/model so account changes do
+		// not leave another account's model choices cached. Never return secrets.
+		inputs := make([]string, 0, 5)
+		inputs = append(inputs, fingerprintConfigPaths(modelConfigPaths(agentID, workingDir, env)))
+		for _, key := range []string{"POOLSIDE_API_KEY", "POOLSIDE_STANDALONE_BASE_URL", "POOLSIDE_STANDALONE_MODEL", "POOLSIDE_STANDALONE_CONTEXT_LENGTH"} {
+			inputs = append(inputs, key+"="+envValue(env, key))
+		}
+		digest := sha256.Sum256([]byte(strings.Join(inputs, "\x00")))
+		return fmt.Sprintf("config=%x", digest[:8])
+	}
 	if agentID == "unreal-agent" {
 		provider, selected := unrealConfiguredModel(env)
 		return "provider=" + provider + ";model=" + selected

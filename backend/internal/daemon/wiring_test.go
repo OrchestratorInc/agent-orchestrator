@@ -84,6 +84,7 @@ func TestInstalledAgentHarnessMapsManagedHarnessInstalls(t *testing.T) {
 		{target: systeminstall.TargetKiro, harness: "kiro", ok: true},
 		{target: systeminstall.TargetPi, harness: "pi", ok: true},
 		{target: systeminstall.TargetVibe, harness: "vibe", ok: true},
+		{target: systeminstall.TargetPool, harness: "pool", ok: true},
 		{target: systeminstall.TargetTmux},
 		{target: systeminstall.TargetGH},
 	} {

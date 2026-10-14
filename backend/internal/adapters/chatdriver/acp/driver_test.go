@@ -4697,3 +4697,97 @@ func TestACPDriverResumeStartsFreshOnlyForMissingSessionWhenAllowed(t *testing.T
 		})
 	}
 }
+
+// Lazy native initialization must be checked before reporting a successful turn.
+func TestACPDriverRequiredSessionInitialization(t *testing.T) {
+	agent := &fakeAgent{promptNoPermission: true}
+	var seenID string
+	driver := New(Config{
+		Harness: domain.HarnessPool, Probe: func(context.Context) error { return nil },
+		Launch: func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		ValidateSessionReady: func(_ context.Context, cfg LaunchConfig, id string) error {
+			if cfg.WorkspacePath == "" {
+				t.Fatal("missing workspace")
+			}
+			seenID = id
+			return errors.New("required standing hook absent")
+		},
+	}, nil)
+	driver.useTestProcess(fakeSpawn(agent))
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conv.Close()
+	if seenID != "" {
+		t.Fatal("fresh hook checked before lazy initialization")
+	}
+	ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		event := nextEvent(t, conv.Events())
+		if event.Kind == ports.ChatEventTurnCompleted {
+			if event.TurnState != domain.TurnStateFailed || seenID == "" {
+				t.Fatalf("missing hook reported success: %+v", event)
+			}
+			break
+		}
+	}
+}
+
+func TestACPExplicitScopeOptOutWinsOverProtocol(t *testing.T) {
+	init := acpsdk.InitializeResponse{}
+	init.AgentCapabilities.LoadSession = true
+	init.AgentCapabilities.PromptCapabilities.Image = true
+	configured := ports.ChatCapabilities{ports.ChatCapabilityImages: false, ports.ChatCapabilityNestedAgents: false}
+	caps := conversationCapabilities(configured, init)
+	if caps[ports.ChatCapabilityImages] || caps[ports.ChatCapabilityNestedAgents] || !caps[ports.ChatCapabilityHistory] {
+		t.Fatalf("scoped capabilities: %v", caps)
+	}
+}
+
+func TestACPResumedLazyContextValidation(t *testing.T) {
+	agent := &fakeAgent{promptNoPermission: true}
+	checked := false
+	driver := New(Config{
+		Harness: domain.HarnessPool, Probe: func(context.Context) error { return nil },
+		Launch: func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		ValidateSessionReady: func(_ context.Context, _ LaunchConfig, id string) error {
+			checked = true
+			if id != "claude-session-1" {
+				t.Fatalf("native id: %s", id)
+			}
+			return errors.New("resumed context missing")
+		},
+	}, nil)
+	driver.useTestProcess(fakeSpawn(agent))
+	conv, err := driver.Resume(context.Background(), ports.ChatResumeConfig{WorkspacePath: t.TempDir(), ProviderConversationID: "claude-session-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conv.Close()
+	if checked {
+		t.Fatal("context checked before lazy resumed initialization")
+	}
+	ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		event := nextEvent(t, conv.Events())
+		if event.Kind == ports.ChatEventTurnCompleted {
+			if !checked || event.TurnState != domain.TurnStateFailed {
+				t.Fatalf("missing resumed context reported success: %+v", event)
+			}
+			break
+		}
+	}
+}

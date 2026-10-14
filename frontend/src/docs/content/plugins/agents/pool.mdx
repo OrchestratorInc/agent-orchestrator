@@ -1,0 +1,32 @@
+---
+title: Poolside Pool
+description: Manual setup for Pool's native ACP Chat integration on macOS and Linux.
+---
+
+Pool is a Chat-only harness in this AO integration. AO uses your installed Pool executable and its native tools, permissions, provider configuration, and session history. The qualified protocol identity is `pool-acp` version `1.0.16`; other versions are refused during initialization until qualified.
+
+## Install and configure
+
+1. Open **Settings → Harness → Poolside Pool** and follow the installation guide. Install Pool yourself using [Poolside's instructions](https://docs.poolside.ai/cli/install), including its license acceptance. AO does not install, update, or redistribute Pool.
+2. Complete [native login](https://docs.poolside.ai/get-started/log-in) in a terminal, then check `pool --version`. Keep the executable on the PATH visible to AO.
+3. Refresh harness status in Settings. A configured environment key is reported as **configured**, not verified authorization. An absent key stays **unknown**, because Pool may have a saved native login.
+4. Choose Pool and **Chat** in **New task**. Select a model offered by the native catalog, or retain Pool's native default.
+
+```bash
+ao agent ls --refresh
+ao spawn --project my-app --name pool-task --agent pool --mode chat
+```
+
+For standalone providers, Pool supports `POOLSIDE_API_KEY`, `POOLSIDE_STANDALONE_BASE_URL`, and an optional `POOLSIDE_STANDALONE_MODEL`. Configure these in the environment visible to AO or the project's environment settings; keep secrets out of source control. A project override takes precedence over the daemon environment. The optional `POOLSIDE_STANDALONE_CONTEXT_LENGTH` must be a positive integer within the server's context window.
+
+AO discovers model choices through a short native ACP session without sending a task. Models and the selected default come from Pool. Discovery failures remain errors; AO does not invent a fallback list. Configure any additional model/provider in Pool, then refresh the catalog. A syntactically valid endpoint and a configured key do not prove that provider routing or authorization works.
+
+## Permissions and limits
+
+Manual permissions, Accept edits, and Allow all map to Pool's native `default`, `accept-edits`, and `always-allow` modes. Auto is unsupported. Approvals and rejections use the choices offered by native Pool.
+
+This integration requires macOS or Linux for AO's private instruction hooks. Pool's upstream Windows installer does not establish AO Windows Chat support. Terminal UI, reviewer runs, and Chat/Terminal handoff are unsupported. Images, embedded context, resource links, structured input, nested agents, and terminal-output controls remain unavailable until qualified.
+
+AO adds a private per-session instruction hook under its data directory. Native Pool settings and hooks remain in effect. Pool hooks fail open; AO's matching session/workspace witness detects missing initialization before publishing a completed prompt, but is not a tool-execution security boundary.
+
+Pool currently uses AO's accessible initial avatar. No verified, licensed Pool logo asset is included; this is an intentional branding fallback, not a claim about permission to redistribute Poolside artwork.

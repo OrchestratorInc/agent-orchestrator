@@ -89,6 +89,14 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 	home, _ := os.UserHomeDir()
 	var paths []string
 	switch agentID {
+	case "pool":
+		root := envValue(env, "XDG_CONFIG_HOME")
+		if root == "" && home != "" {
+			root = filepath.Join(home, ".config")
+		}
+		if root != "" {
+			paths = append(paths, filepath.Join(root, "poolside", "settings.yaml"), filepath.Join(root, "poolside", "credentials.json"))
+		}
 	case "qwen":
 		if root := qwenConfigHome(home, env); root != "" {
 			paths = append(paths, filepath.Join(root, "settings.json"))
