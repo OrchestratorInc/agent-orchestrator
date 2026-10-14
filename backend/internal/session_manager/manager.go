@@ -1558,7 +1558,8 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 			}
 		}
 	}
-	if catalog.Stale && validateClaudeModel {
+	trusted := catalogTrustedForSpawn(cfg.Harness, catalog)
+	if !trusted && validateClaudeModel {
 		return ports.AgentConfig{}, fmt.Errorf("%w for model %q: catalog is stale", ports.ErrModelCapabilitiesUnavailable, modelID)
 	}
 	var selected *ports.AgentModelInfo
@@ -1586,13 +1587,30 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	if resolved.Effort == "" {
 		return resolved, nil
 	}
-	if catalog.Stale || selected == nil {
+	if !trusted || selected == nil {
 		return ports.AgentConfig{}, fmt.Errorf("%w for model %q", ports.ErrModelCapabilitiesUnavailable, modelID)
 	}
 	if resolved.Effort != "" && !containsString(selected.Efforts, resolved.Effort) {
 		return ports.AgentConfig{}, fmt.Errorf("%w %q for model %q", ports.ErrUnsupportedEffort, resolved.Effort, modelID)
 	}
 	return resolved, nil
+}
+
+// catalogTrustedForSpawn reports whether a catalog's models and capabilities
+// can validate a launch. A fresh catalog always can. A stale one can only when
+// it is the last successful discovery for the current inputs, which the
+// catalog service keeps (with LastSuccessAt intact) after a transient refresh
+// failure such as a provider timeout. A stale catalog built from fallback
+// aliases or from different credentials carries no LastSuccessAt, and a Claude
+// catalog must also be the provider's own list rather than the static aliases.
+func catalogTrustedForSpawn(harness domain.AgentHarness, catalog ports.AgentModelCatalog) bool {
+	if !catalog.Stale {
+		return true
+	}
+	if catalog.LastSuccessAt == nil || catalog.LastSuccessAt.IsZero() {
+		return false
+	}
+	return harness != domain.HarnessClaudeCode || catalog.Source == "provider"
 }
 
 var (

@@ -457,6 +457,65 @@ func TestResolveClaudeModelWithoutEffortRejectsUnknownAndStaleCatalogs(t *testin
 	}
 }
 
+// A provider hiccup during the spawn-time refresh leaves the last successful
+// provider catalog in place but flagged stale. It still describes the current
+// credentials, so a model it lists must launch rather than fail the spawn.
+func TestResolveClaudeModelAcceptsLastKnownGoodStaleProviderCatalog(t *testing.T) {
+	lastSuccess := time.Date(2026, 10, 12, 6, 20, 0, 0, time.UTC)
+	lastKnownGood := ports.AgentModelCatalog{
+		Source:        "provider",
+		LastSuccessAt: &lastSuccess,
+		Stale:         true,
+		Models: []ports.AgentModelInfo{
+			{ID: "claude-opus-5-5", IsDefault: true, Efforts: []string{"low", "medium", "high"}},
+			{ID: "claude-sonnet-5-5", Efforts: []string{"low", "medium", "high"}},
+		},
+	}
+	cfg := ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		RequestedMode:  domain.SessionModeTUI,
+		AgentConfig:    ports.AgentConfig{Model: "claude-sonnet-5-5", Effort: "medium"},
+		EffortOverride: true,
+	}
+	m := &Manager{modelCatalog: tuningCatalog{catalog: lastKnownGood}}
+	resolved, err := m.resolveAgentConfig(context.Background(), cfg, domain.ProjectConfig{})
+	if err != nil {
+		t.Fatalf("last-known-good stale catalog: %v", err)
+	}
+	if resolved.Model != "claude-sonnet-5-5" || resolved.Effort != "medium" {
+		t.Fatalf("resolved = %#v, want claude-sonnet-5-5 at medium", resolved)
+	}
+
+	unsupported := cfg
+	unsupported.AgentConfig.Effort = "max"
+	if _, err := m.resolveAgentConfig(context.Background(), unsupported, domain.ProjectConfig{}); !errors.Is(err, ports.ErrUnsupportedEffort) {
+		t.Fatalf("unsupported effort error = %v, want ErrUnsupportedEffort", err)
+	}
+
+	missing := cfg
+	missing.AgentConfig.Model = "claude-sonnet-9"
+	if _, err := m.resolveAgentConfig(context.Background(), missing, domain.ProjectConfig{}); !errors.Is(err, ErrUnsupportedModel) {
+		t.Fatalf("missing model error = %v, want ErrUnsupportedModel", err)
+	}
+
+	// The static alias fallback is stale and unverified for the provider, even
+	// when an earlier success time survived; it must not validate a launch.
+	aliases := lastKnownGood
+	aliases.Source = "catalog"
+	m.modelCatalog = tuningCatalog{catalog: aliases}
+	if _, err := m.resolveAgentConfig(context.Background(), cfg, domain.ProjectConfig{}); !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) {
+		t.Fatalf("stale alias catalog error = %v, want ErrModelCapabilitiesUnavailable", err)
+	}
+
+	// A catalog never validated for the current inputs has no success time.
+	unvalidated := lastKnownGood
+	unvalidated.LastSuccessAt = nil
+	m.modelCatalog = tuningCatalog{catalog: unvalidated}
+	if _, err := m.resolveAgentConfig(context.Background(), cfg, domain.ProjectConfig{}); !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) {
+		t.Fatalf("unvalidated stale catalog error = %v, want ErrModelCapabilitiesUnavailable", err)
+	}
+}
+
 func TestResolveCommandCodeTUIAgentConfigPassesEffortThrough(t *testing.T) {
 	// Command Code's catalog advertises no effort levels, so resolution must
 	// forward the raw level without consulting the catalog at all — even a
