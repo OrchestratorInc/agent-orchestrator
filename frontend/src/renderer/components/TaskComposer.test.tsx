@@ -1774,6 +1774,24 @@ describe("TaskComposer", () => {
 		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("model");
 	});
 
+	it("shows Memcode's native model choice instead of an empty model menu", async () => {
+		h.agentCatalog = { agents: [agentReadiness("memcode", "memcode", { authentication: "configured" })] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) return { data: { agentId: "memcode", selectionMode: "catalog", models: [], customModelEntry: "none", allowCustom: false } };
+			return { data: { status: "ok", project: { agent: "memcode", config: { worker: { agent: "memcode" } } } } };
+		});
+
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+
+		expect(await screen.findByText("Model set in memcode")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Model" })).not.toBeInTheDocument();
+		h.post.mockResolvedValueOnce({ data: { workerId: "memcode-task" } });
+		fireEvent.change(task(), { target: { value: "Use the native model" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalled());
+		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("model");
+	});
+
 	it("inherits the project worker model without saving it as a task override", async () => {
 		h.get.mockImplementation(async (path: string) => {
 			if (path.includes("/models")) {

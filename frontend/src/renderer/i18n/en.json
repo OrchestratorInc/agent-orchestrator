@@ -2555,6 +2555,7 @@
 		"Set up structured logging with correlation IDs across all services"
 	],
 	"newTask.model": "Model",
+	"newTask.nativeModel": "Model set in {{agent}}",
 	"newTask.modelNotice.signedOut": "{{agent}} isn't logged in on this computer, so its models couldn't load.",
 	"newTask.modelNotice.expired": "{{agent}}'s saved login has expired. It renews the next time {{agent}} runs, or you can log in again now.",
 	"newTask.modelNotice.cloud": "Showing {{agent}}'s default models because this computer isn't logged in to it. Cloud tasks use your cloud connection and can still start.",
