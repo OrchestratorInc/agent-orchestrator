@@ -195,3 +195,18 @@ func TestLongPrivateContextIsNotTruncated(t *testing.T) {
 		}
 	}
 }
+
+func TestInstructionChunksWalkBackPastIndentedBoundary(t *testing.T) {
+	data := []byte(strings.Repeat("a", 4000) + "\n\n" + strings.Repeat("b", 4000) + "\n\n    indented code\n\n" + strings.Repeat("c", 1000))
+	chunks, err := instructionChunks(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parts []string
+	for _, chunk := range chunks {
+		parts = append(parts, strings.TrimSpace(string(chunk)))
+	}
+	if strings.Join(parts, "\n\n") != string(data) {
+		t.Fatal("walked-back split altered instruction text")
+	}
+}

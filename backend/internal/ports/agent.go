@@ -16,6 +16,9 @@ var (
 	// ErrAgentAuthRequired means a launch-fresh provider check rejected the
 	// credential selected by the session's cwd and environment.
 	ErrAgentAuthRequired = errors.New("agent requires authentication")
+	// ErrNativeHistoryUnavailable means an interactive native restorer has no
+	// saved conversation yet; ordinary restore may launch fresh in its workspace.
+	ErrNativeHistoryUnavailable = errors.New("agent native history unavailable")
 )
 
 // ErrAgentBinaryNotFound is returned by agent adapters when neither PATH nor
@@ -409,6 +412,17 @@ type AgentAfterStartCommand interface {
 // TerminalActivityDetector derives activity only from authoritative terminal UI markers.
 type TerminalActivityDetector interface {
 	DetectTerminalActivity(output string) (domain.ActivityState, bool)
+}
+
+// TerminalActivityOptions lets an adapter declare how the shared observer
+// should read its terminal and which native decision states it can report.
+type TerminalActivityOptions struct {
+	PreferStyledOutput bool
+	SupportsBlocked    bool
+}
+
+type TerminalActivityOptionsProvider interface {
+	TerminalActivityOptions() TerminalActivityOptions
 }
 
 // EmptyComposerDetector is an opt-in safety capability for unsolicited

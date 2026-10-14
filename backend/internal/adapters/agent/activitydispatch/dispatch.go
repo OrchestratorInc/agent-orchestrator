@@ -107,6 +107,7 @@ var signalCoverageOverrides = map[domain.AgentHarness]SignalCoverage{
 	domain.HarnessAider:       SignalCoveragePartial,
 	domain.HarnessCommandCode: SignalCoveragePartial,
 	domain.HarnessContinue:    SignalCoveragePartial,
+	domain.HarnessMemcode:     SignalCoveragePartial,
 }
 
 // CoverageForHarness returns the activity-signal coverage for a selectable

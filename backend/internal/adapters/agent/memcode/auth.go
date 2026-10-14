@@ -46,8 +46,10 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	cmd := process.CommandContext(probeCtx, binary, "auth", "status")
 	cmd.Env = env
 	out, runErr := cmd.CombinedOutput()
-	if status := memcodeAuthStatusFromText(string(out)); status != ports.AgentAuthStatusUnknown && runErr == nil {
-		return status, nil
+	if status := memcodeAuthStatusFromText(string(out)); status != ports.AgentAuthStatusUnknown {
+		if status == ports.AgentAuthStatusUnauthorized || runErr == nil {
+			return status, nil
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, err

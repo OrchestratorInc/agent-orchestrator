@@ -1645,6 +1645,21 @@ func mkLive(id domain.SessionID) domain.SessionRecord {
 	return domain.SessionRecord{ID: id, ProjectID: "mer", Metadata: domain.SessionMetadata{WorkspacePath: "/ws/" + string(id), RuntimeHandleID: "h1"}, Activity: domain.Activity{State: domain.ActivityActive}}
 }
 
+func TestMemcodeIgnoresInheritedModelFromPreviousHarness(t *testing.T) {
+	cfg := domain.ProjectConfig{
+		AgentConfig: domain.AgentConfig{Model: "claude-opus-4-1"},
+		Worker:      domain.RoleOverride{Harness: domain.HarnessCodex, AgentConfig: domain.AgentConfig{Model: "gpt-5"}},
+	}
+	if got := effectiveAgentConfig(domain.HarnessMemcode, domain.KindWorker, cfg).Model; got != "" {
+		t.Fatalf("inherited foreign model = %q, want native selection", got)
+	}
+	cfg.Worker.Harness = domain.HarnessMemcode
+	cfg.Worker.AgentConfig.Model = "opus"
+	if got := effectiveAgentConfig(domain.HarnessMemcode, domain.KindWorker, cfg).Model; got != "opus" {
+		t.Fatalf("memcode project choice = %q, want opus", got)
+	}
+}
+
 func TestSpawn_ResolvesProjectConfig(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{
