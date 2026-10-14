@@ -1,5 +1,6 @@
 {
 	"chat.annotationReferences": "Referenced chat annotations",
+	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} is starting. Messages send in order",
 	"settings.coder.navLabel": "Coder",

@@ -1,5 +1,6 @@
 {
 	"chat.annotationReferences": "Referenced chat annotations",
+	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} 시작 중. 메시지는 순서대로 전송됩니다",
 	"settings.coder.navLabel": "Coder",

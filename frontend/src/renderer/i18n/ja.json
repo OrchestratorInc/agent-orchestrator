@@ -1,5 +1,6 @@
 {
 	"chat.annotationReferences": "Referenced chat annotations",
+	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} を起動しています. メッセージは順番に送信されます",
 	"settings.coder.navLabel": "Coder",
