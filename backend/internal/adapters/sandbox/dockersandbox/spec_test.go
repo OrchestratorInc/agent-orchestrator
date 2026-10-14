@@ -132,9 +132,11 @@ func TestExecArgv(t *testing.T) {
 
 func TestRunArgsTmpfsMount(t *testing.T) {
 	cfg := domain.SandboxConfig{Mode: domain.SandboxModeShared, Image: "node:22"}
-	got := runArgs("c", cfg, nil, []mount{{Path: "/w"}, {Path: "/w/orchestrator", Tmpfs: true}, {Path: "/g/config", ReadOnly: true}}, "")
+	got := runArgs("c", cfg, nil, []mount{{Path: "/w"}, {Path: "/w/orchestrator", Tmpfs: true},
+		{Path: "/g/logs", Tmpfs: true, Writable: true}, {Path: "/g/config", ReadOnly: true}}, "")
 	want := []string{"run", "-d", "--init", "--name", "c",
 		"--mount", "type=bind,src=/w,dst=/w", "--mount", "type=tmpfs,destination=/w/orchestrator,readonly",
+		"--mount", "type=tmpfs,destination=/g/logs,tmpfs-mode=1777",
 		"--mount", "type=bind,src=/g/config,dst=/g/config,readonly",
 		"--entrypoint", "/bin/sh", "node:22", "-c", keepAliveScript}
 	if !reflect.DeepEqual(got, want) {
@@ -142,6 +144,9 @@ func TestRunArgsTmpfsMount(t *testing.T) {
 	}
 	if configHash(cfg, []mount{{Path: "/w/orchestrator", Tmpfs: true}}) == configHash(cfg, []mount{{Path: "/w/orchestrator"}}) {
 		t.Fatal("hash ignores the tmpfs flag")
+	}
+	if configHash(cfg, []mount{{Path: "/g/logs", Tmpfs: true}}) == configHash(cfg, []mount{{Path: "/g/logs", Tmpfs: true, Writable: true}}) {
+		t.Fatal("hash ignores the writable tmpfs flag")
 	}
 }
 

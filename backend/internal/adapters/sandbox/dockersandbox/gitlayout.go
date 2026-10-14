@@ -18,8 +18,17 @@ import (
 // Host git obeys a commondir file, a worktree admin dir's commondir or gitdir
 // file, and a worktree's .git pointer. Any of these, rewritten by the
 // container, could point host git at an attacker's config. So the git dir is
-// mounted read-only, with only objects, refs and logs writable, plus (per
-// agent) the session's own worktree admin dir minus its pointer files.
+// mounted read-only, with only objects and refs writable, plus (per agent)
+// the session's own worktree admin dir minus its pointer files.
+//
+// Reflog dirs are never shared: host git appends to logs/<ref> and follows a
+// symlink planted there, so the container gets a container-local tmpfs over
+// <gitDir>/logs and its admin dir's logs instead. Reflogs written in the
+// sandbox are lost when the container stops.
+//
+// objects/ stays writable, so the agent can add objects or an alternates
+// file. Git verifies objects by hash, so this cannot change what a ref the
+// host already trusts points at.
 
 // gitLayout is the host git metadata a sandbox mounts, resolved from the
 // project's repository rather than from anything the container can write.
@@ -76,10 +85,8 @@ func (s *Sandbox) resolveGit(ctx context.Context, req ports.SandboxRequest) (git
 			return gitLayout{}, err
 		}
 	}
-	if err := os.MkdirAll(filepath.Join(dir, "logs"), 0o755); err != nil { //nolint:gosec // git's own mode for its metadata dirs
-		return gitLayout{}, fmt.Errorf("sandbox git logs dir: %w", err)
-	}
-	if err := requireDir(filepath.Join(dir, "logs")); err != nil {
+	// The tmpfs mountpoints must exist so Docker never creates them.
+	if err := ensureRealDir(filepath.Join(dir, "logs")); err != nil {
 		return gitLayout{}, err
 	}
 	if req.Config.Mode == domain.SandboxModeShared {
@@ -90,7 +97,14 @@ func (s *Sandbox) resolveGit(ctx context.Context, req ports.SandboxRequest) (git
 			return gitLayout{}, err
 		}
 	} else {
+		if fi, err := os.Lstat(filepath.Join(req.WorkspacePath, ".git")); err == nil && fi.IsDir() {
+			return gitLayout{}, fmt.Errorf("%w: per-agent sandbox needs an AO-managed worktree, not the repository's main checkout (%s)",
+				ports.ErrSandboxMisconfigured, req.WorkspacePath)
+		}
 		if g.admin, err = findWorktreeAdmin(dir, req.WorkspacePath); err != nil {
+			return gitLayout{}, err
+		}
+		if err := ensureRealDir(filepath.Join(g.admin, "logs")); err != nil {
 			return gitLayout{}, err
 		}
 		// --default makes an unset key print false, so any error is real and
@@ -117,7 +131,7 @@ func gitMounts(req ports.SandboxRequest, g gitLayout) []mount {
 		{Path: g.dir, ReadOnly: true},
 		{Path: filepath.Join(g.dir, "objects")},
 		{Path: filepath.Join(g.dir, "refs")},
-		{Path: filepath.Join(g.dir, "logs")},
+		{Path: filepath.Join(g.dir, "logs"), Tmpfs: true, Writable: true},
 	}
 	if req.Config.Mode == domain.SandboxModeShared {
 		// Sessions that join the container later need their admin dirs.
@@ -125,6 +139,7 @@ func gitMounts(req ports.SandboxRequest, g gitLayout) []mount {
 	}
 	m = append(m,
 		mount{Path: g.admin},
+		mount{Path: filepath.Join(g.admin, "logs"), Tmpfs: true, Writable: true},
 		mount{Path: filepath.Join(g.admin, "commondir"), ReadOnly: true},
 		mount{Path: filepath.Join(g.admin, "gitdir"), ReadOnly: true},
 		mount{Path: filepath.Join(req.WorkspacePath, ".git"), ReadOnly: true},
@@ -205,6 +220,17 @@ func requireDir(path string) error {
 		return fmt.Errorf("%w: %s must be a directory", ports.ErrSandboxMisconfigured, path)
 	}
 	return nil
+}
+
+// ensureRealDir creates path when it is absent and requires a real directory
+// (not a link) otherwise.
+func ensureRealDir(path string) error {
+	if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
+		if err := os.Mkdir(path, 0o755); err != nil && !errors.Is(err, fs.ErrExist) { //nolint:gosec // git's own mode for its metadata dirs
+			return fmt.Errorf("sandbox git dir %s: %w", path, err)
+		}
+	}
+	return requireDir(path)
 }
 
 func requireRegular(path string) error {

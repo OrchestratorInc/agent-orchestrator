@@ -83,5 +83,15 @@ func TestDockerSmoke(t *testing.T) {
 			t.Fatalf("container could write %s", p)
 		}
 	}
+	// Reflogs are container-local: links planted there never reach the host.
+	for _, p := range []string{filepath.Join(gitDir, "logs", "HEAD"), filepath.Join(admin, "logs", "HEAD")} {
+		out, err := exec.Command(target.Docker, "exec", target.Container, "ln", "-sf", "/tmp/x", p).CombinedOutput()
+		t.Logf("in-container ln -sf /tmp/x %s: err=%v %s", p, err, strings.TrimSpace(string(out)))
+		if fi, lerr := os.Lstat(p); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+			t.Fatalf("planted reflog symlink %s reached the host", p)
+		}
+	}
+	t.Logf("host git log -g -1 (repo): %s", gitRun(t, repo, "log", "-g", "-1", "--format=%gd %gs"))
+	t.Logf("host git log -g -1 (worktree): %s", gitRun(t, ws, "log", "-g", "-1", "--format=%gd %gs"))
 	t.Logf("host git status: %s", gitRun(t, ws, "status", "--short", "--branch"))
 }

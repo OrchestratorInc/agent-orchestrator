@@ -35,6 +35,9 @@ type mount struct {
 	Path     string `json:"path"`
 	ReadOnly bool   `json:"ro,omitempty"`
 	Tmpfs    bool   `json:"tmpfs,omitempty"` // empty read-only tmpfs that hides Path
+	// Writable makes a Tmpfs mount a container-local scratch dir instead:
+	// writes stay in the container and never reach the host.
+	Writable bool `json:"rw,omitempty"`
 }
 
 var (
@@ -104,7 +107,13 @@ func runArgs(name string, cfg domain.SandboxConfig, labels map[string]string, mo
 	// parents first, so a read-only child overmount lands on top.
 	for _, m := range mounts {
 		if m.Tmpfs {
-			args = append(args, "--mount", "type=tmpfs,"+csvField("destination="+m.Path)+",readonly")
+			// The container runs as the host uid, so a writable tmpfs must
+			// not be root-owned 0755.
+			opt := ",readonly"
+			if m.Writable {
+				opt = ",tmpfs-mode=1777"
+			}
+			args = append(args, "--mount", "type=tmpfs,"+csvField("destination="+m.Path)+opt)
 			continue
 		}
 		spec := "type=bind," + csvField("src="+m.Path) + "," + csvField("dst="+m.Path)

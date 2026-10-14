@@ -58,8 +58,9 @@ func TestMountsPerAgentGitLayout(t *testing.T) {
 				{Path: git, ReadOnly: true},
 				{Path: filepath.Join(git, "objects")},
 				{Path: filepath.Join(git, "refs")},
-				{Path: filepath.Join(git, "logs")},
+				{Path: filepath.Join(git, "logs"), Tmpfs: true, Writable: true},
 				{Path: admin},
+				{Path: filepath.Join(admin, "logs"), Tmpfs: true, Writable: true},
 				{Path: filepath.Join(admin, "commondir"), ReadOnly: true},
 				{Path: filepath.Join(admin, "gitdir"), ReadOnly: true},
 				{Path: filepath.Join(wsOf(data), ".git"), ReadOnly: true},
@@ -71,8 +72,10 @@ func TestMountsPerAgentGitLayout(t *testing.T) {
 				t.Fatalf("git mounts =\n%+v\nwant\n%+v", got, want)
 			}
 			requireParentsFirst(t, ms)
-			if fi, err := os.Lstat(filepath.Join(git, "logs")); err != nil || !fi.IsDir() {
-				t.Fatalf("logs dir not created: %v", err)
+			for _, d := range []string{filepath.Join(git, "logs"), filepath.Join(admin, "logs")} {
+				if fi, err := os.Lstat(d); err != nil || !fi.IsDir() {
+					t.Fatalf("tmpfs mountpoint %s not created: %v", d, err)
+				}
 			}
 			fi, err := os.Lstat(filepath.Join(admin, "config.worktree"))
 			if worktreeConfig && (err != nil || !fi.Mode().IsRegular() || fi.Size() != 0) {
@@ -102,7 +105,7 @@ func TestMountsSharedGitLayout(t *testing.T) {
 		{Path: git, ReadOnly: true},
 		{Path: filepath.Join(git, "objects")},
 		{Path: filepath.Join(git, "refs")},
-		{Path: filepath.Join(git, "logs")},
+		{Path: filepath.Join(git, "logs"), Tmpfs: true, Writable: true},
 		{Path: filepath.Join(git, "worktrees")},
 	}
 	if got := gitMountsOf(ms, git, wsOf(data)); !reflect.DeepEqual(got, want) {
@@ -124,7 +127,11 @@ func TestEnsurePassesGitLayoutToDocker(t *testing.T) {
 	}
 	run := runCall(t, fr) + " "
 	git := gitDirOf(data)
-	order := []string{roBindArg(git), bindArg(filepath.Join(git, "objects")), bindArg(adminOf(data)),
+	// Reflogs land on container-local tmpfs, mounted after the bind each one
+	// shadows, so host git never appends through a planted symlink.
+	order := []string{roBindArg(git), bindArg(filepath.Join(git, "objects")),
+		"--mount type=tmpfs,destination=" + filepath.Join(git, "logs") + ",tmpfs-mode=1777 ", bindArg(adminOf(data)),
+		"--mount type=tmpfs,destination=" + filepath.Join(adminOf(data), "logs") + ",tmpfs-mode=1777 ",
 		roBindArg(filepath.Join(adminOf(data), "commondir")), roBindArg(filepath.Join(wsOf(data), ".git"))}
 	last := -1
 	for _, want := range order {
@@ -133,6 +140,9 @@ func TestEnsurePassesGitLayoutToDocker(t *testing.T) {
 			t.Fatalf("docker run missing or misordered %q:\n%s", want, run)
 		}
 		last = i
+	}
+	if strings.Contains(run, "src="+filepath.Join(git, "logs")) {
+		t.Fatalf("host reflogs are bind-mounted:\n%s", run)
 	}
 	if strings.Contains(run, " -v ") {
 		t.Fatalf("docker run still uses -v:\n%s", run)
@@ -187,6 +197,20 @@ func TestResolveGitRejects(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, "commondir"},
+		"main checkout": {func(t *testing.T, _ *fakeRunner, data string, _ *ports.SandboxRequest) {
+			dotGit := filepath.Join(wsOf(data), ".git")
+			if err := os.Remove(dotGit); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(dotGit, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}, "per-agent sandbox needs an AO-managed worktree, not the repository's main checkout"},
+		"symlinked worktree logs": {func(t *testing.T, _ *fakeRunner, data string, _ *ports.SandboxRequest) {
+			if err := os.Symlink(t.TempDir(), filepath.Join(adminOf(data), "logs")); err != nil {
+				t.Fatal(err)
+			}
+		}, "logs"},
 		"symlinked config.worktree": {func(t *testing.T, fr *fakeRunner, data string, _ *ports.SandboxRequest) {
 			fr.git = map[string]string{"extensions.worktreeConfig": "true\n"}
 			if err := os.Symlink(writeOutside(t, "secret"), filepath.Join(adminOf(data), "config.worktree")); err != nil {

@@ -61,10 +61,10 @@ A running per-agent container keeps its old settings until it stops. New setting
 
 The agent can commit, create branches, check out, rebase, and fetch inside the sandbox. Commits use the `user.name` and `user.email` that git on the host has for the repository.
 
-The repository's git directory is read-only inside the container. Only its objects, refs, and reflogs are writable, plus the session's own worktree metadata.
+The repository's git directory is read-only inside the container. Only its objects and refs are writable, plus the session's own worktree metadata. Commits and branches reach the host normally. Reflogs written inside the sandbox stay in the container and are lost when it stops, so `git reflog` on the host doesn't show the agent's moves.
 
 - **`per-agent`:** the container can't change the repository's git config, hooks, or other worktrees' git metadata. Deleting branches or tags, dropping the last stash, and `git gc` fail inside the sandbox, so do those on the host. Commands that change the git config, such as `git remote add` or `git push -u`, fail too.
-- **`shared`:** the same read-only top level, but sessions in a shared container can modify the git metadata of every worktree in the project (including worktrees you create yourself). Use `per-agent` mode for agents you don't trust.
+- **`shared`:** the same read-only top level, but sessions in a shared container can modify the git metadata of every worktree in the project, including its reflogs and worktrees you create yourself. Use `per-agent` mode for agents you don't trust.
 
 Each commit inside the sandbox also prints `Unable to create '.../packed-refs.lock': Read-only file system`. The commit still succeeds.
 
