@@ -450,7 +450,7 @@ export function TaskComposer({
 	const modelAuthIssue = revalidationWarning === undefined ? modelCatalogAuthIssue(modelCatalogQuery.data) : undefined;
 	useModelCatalogAuthRecovery(selectedAgent, hostId, modelAuthIssue);
 	// Settings → Harness → Models picks the models this machine offers; cloud VMs keep their own catalog.
-	const { models: offeredModels, narrowed: modelsNarrowed } = useOfferedModels(selectedAgent, modelCatalogQuery.data?.models, {
+	const { models: offeredModels } = useOfferedModels(selectedAgent, modelCatalogQuery.data?.models, {
 		hostId,
 		keep: [model, mode, projectModelForSelectedAgent, projectModeForSelectedAgent],
 		skip: isCloudProject,
@@ -470,6 +470,9 @@ export function TaskComposer({
 	const catalogModels = offeredModels.filter((item) => isConcreteModelID(item.id));
 	const catalogDefaultOption =
 		catalogModels.find((item) => item.isDefault)?.id ?? "";
+	const catalogDefaultHidden = Boolean(modelCatalogQuery.data?.models.some(
+		(item) => item.isDefault && isConcreteModelID(item.id) && !catalogModels.some((offered) => offered.id === item.id),
+	));
 	const catalogUsesModes = modelCatalogQuery.data?.selectionMode === "mode";
 	// The model this user ran most recently.
 	const lastUsedOption =
@@ -498,8 +501,9 @@ export function TaskComposer({
 		(!catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(catalogUsesModes ? "" : catalogDefaultOption) ||
 		claudeFallbackOption ||
-		// Settings hid the catalog's default model; open on one that is offered.
-		(!catalogUsesModes && modelsNarrowed ? catalogModels[0]?.id ?? "" : "");
+		// Only replace a default the catalog identified and Settings hid. An
+		// unreported default must keep the native model/provider selection.
+		(!catalogUsesModes && catalogDefaultHidden ? catalogModels[0]?.id ?? "" : "");
 	const defaultModeForSelectedAgent =
 		(rememberedModeIsValid ? rememberedMode : "") ||
 		(isConcreteModelID(projectModeForSelectedAgent) ? projectModeForSelectedAgent : "") ||

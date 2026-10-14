@@ -96,6 +96,7 @@ const visibilityMocks = vi.hoisted(() => ({
 vi.mock("../../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: postMock },
 	getApiBaseUrl: () => "",
+	hasTrustedApiBaseUrl: () => true,
 	subscribeApiBaseUrl: () => () => {},
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
 }));
