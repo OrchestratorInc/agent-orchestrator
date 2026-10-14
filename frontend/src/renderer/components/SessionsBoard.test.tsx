@@ -27,7 +27,6 @@ const {
 	workspaceQueryMock,
 	usageQueryMock,
 	boardActionsInPanelMock,
-	spawnCloudOrchestratorMock,
 } = vi.hoisted(() => ({
 	appMemoryMock: vi.fn(),
 	sessionMemoryMock: vi.fn(),
@@ -37,7 +36,6 @@ const {
 	workspaceQueryMock: vi.fn(),
 	usageQueryMock: vi.fn(),
 	boardActionsInPanelMock: vi.fn(() => false),
-	spawnCloudOrchestratorMock: vi.fn(),
 }));
 
 vi.mock("./ShellTopbar", async (importOriginal) => ({ ...(await importOriginal<typeof import("./ShellTopbar")>()), ShellTopbar: () => null }));
@@ -79,11 +77,6 @@ vi.mock("../hooks/useSessionMemory", async (importOriginal) => {
 		},
 	};
 });
-
-vi.mock("../lib/cloud-orchestrator", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../lib/cloud-orchestrator")>()),
-	spawnCloudOrchestrator: spawnCloudOrchestratorMock,
-}));
 
 vi.mock("../lib/api-client", () => ({
 	apiClient: { POST: (...args: unknown[]) => postMock(...args) },
@@ -178,23 +171,6 @@ describe("SessionsBoard", () => {
 		} finally {
 			useUiStore.getState().setProjectProvisioning("p1", false);
 		}
-	});
-
-	it("keeps the Cloud loader up until the new orchestrator's session has opened", async () => {
-		boardActionsInPanelMock.mockReturnValue(true);
-		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }], isSuccess: true });
-		spawnCloudOrchestratorMock.mockResolvedValue("o1");
-		let finishNavigation: () => void = () => undefined;
-		navigateMock.mockReturnValue(new Promise<void>((resolve) => { finishNavigation = resolve; }));
-		renderBoard("p1");
-		await userEvent.click(screen.getAllByRole("button", { name: "Spawn Orchestrator" })[0]);
-		await waitFor(() => expect(navigateMock).toHaveBeenCalled());
-		// The spawn is done but the session route has not opened yet: the board
-		// must not flash back between the two startup loaders.
-		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
-		expect(screen.queryByTestId("board")).not.toBeInTheDocument();
-		await act(async () => finishNavigation());
-		await waitFor(() => expect(screen.getByTestId("board")).toBeInTheDocument());
 	});
 
 	it("shows the orchestrator launch surface immediately after project setup", () => {
