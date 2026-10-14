@@ -5734,9 +5734,42 @@ func (m *Manager) cleanupSystemPromptDir(id domain.SessionID) {
 	if dir == "" {
 		return
 	}
-	if err := os.RemoveAll(dir); err != nil {
+	if err := m.removeSystemPromptDir(id, dir); err != nil {
 		m.logger.Warn("system prompt cleanup failed", "session", id, "path", dir, "err", err)
 	}
+}
+
+// removeSystemPromptDir removes dir, or only its contents for a session that
+// has run sandboxed. A per-agent container bind-mounts the dir itself and may
+// outlive this cleanup (a failed restore of a live session keeps it), so
+// replacing the dir would leave the container's mount on a deleted one and
+// hide every later prompt file from it.
+func (m *Manager) removeSystemPromptDir(id domain.SessionID, dir string) error {
+	if m.sandbox == nil || !m.sandbox.HasSessionState(m.sessionProjectID(id), id) {
+		return os.RemoveAll(dir)
+	}
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, e := range entries {
+		errs = append(errs, os.RemoveAll(filepath.Join(dir, e.Name())))
+	}
+	return errors.Join(errs...)
+}
+
+// sessionProjectID returns the stored session's project, or "" when the row
+// cannot be read.
+func (m *Manager) sessionProjectID(id domain.SessionID) domain.ProjectID {
+	rec, ok, err := m.store.GetSession(context.Background(), id)
+	if err != nil || !ok {
+		return ""
+	}
+	return rec.ProjectID
 }
 
 func workspaceOrchestratorPrompt(repos []domain.WorkspaceRepoRecord) string {

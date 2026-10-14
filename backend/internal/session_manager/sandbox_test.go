@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -683,6 +684,31 @@ func TestCleanupTerminatedSandboxKeepsEnvOfLiveOrLaunchingSessions(t *testing.T)
 	done()
 	if len(sb.envRemovals) != 0 {
 		t.Fatalf("env removals = %v, want none", sb.envRemovals)
+	}
+}
+
+// A sandboxed session's prompts dir is emptied, never replaced: a per-agent
+// container that outlives a failed restore bind-mounts the dir itself. A host
+// session's dir is removed as before.
+func TestCleanupSystemPromptDirKeepsSandboxedMountPoint(t *testing.T) {
+	m, st, _, _ := newManager()
+	m.dataDir = t.TempDir()
+	m.sandbox = &fakeSandbox{noState: map[domain.SessionID]bool{"mer-2": true}}
+	for _, id := range []domain.SessionID{"mer-1", "mer-2"} {
+		seedTerminal(st, id, domain.SessionMetadata{WorkspacePath: "/ws/" + string(id)})
+		if err := os.MkdirAll(m.systemPromptDir(id), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(m.systemPromptDir(id), "system.md"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		m.cleanupSystemPromptDir(id)
+	}
+	if entries, err := os.ReadDir(m.systemPromptDir("mer-1")); err != nil || len(entries) != 0 {
+		t.Fatalf("sandboxed prompts dir: entries=%v err=%v, want an empty dir kept", entries, err)
+	}
+	if _, err := os.Stat(m.systemPromptDir("mer-2")); !os.IsNotExist(err) {
+		t.Fatalf("host prompts dir: err=%v, want removed", err)
 	}
 }
 
