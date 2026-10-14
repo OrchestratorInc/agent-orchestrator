@@ -309,9 +309,9 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 
 // SessionInfo implements the scoped native adapter contract.
 func (p *Plugin) SessionInfo(ctx context.Context, ref ports.SessionRef) (ports.SessionInfo, bool, error) {
-	return p.readSessionInfo(ctx, ref, "")
+	return p.readSessionInfo(ctx, ref, "", "")
 }
-func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launchID string) (ports.SessionInfo, bool, error) {
+func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launchID, persistID string) (ports.SessionInfo, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.SessionInfo{}, false, err
 	}
@@ -348,6 +348,7 @@ func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launch
 		return ports.SessionInfo{}, false, err
 	}
 	found := ""
+	foundCrumbPath := ""
 	for _, lease := range leases.Entries {
 		if !leaseProcessMatches(lease.PID, lease.Start) {
 			continue
@@ -404,13 +405,19 @@ func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launch
 		if found != "" && found != crumb.SessionID {
 			return ports.SessionInfo{}, false, fmt.Errorf("hermes: ambiguous current native identity")
 		}
-		if e := recordObservedTerminal(sessionDir(ref.DataDir, ref.ID), crumbPath); e != nil {
-			return ports.SessionInfo{}, false, e
-		}
 		found = crumb.SessionID
+		foundCrumbPath = crumbPath
 	}
 	if found == "" {
 		return ports.SessionInfo{}, false, nil
+	}
+	if persistID != "" {
+		if found != persistID {
+			return ports.SessionInfo{}, false, fmt.Errorf("hermes: native identity changed before locator persistence")
+		}
+		if err := recordObservedTerminal(sessionDir(ref.DataDir, ref.ID), foundCrumbPath); err != nil {
+			return ports.SessionInfo{}, false, err
+		}
 	}
 	return ports.SessionInfo{AgentSessionID: found}, true, nil
 }
@@ -513,8 +520,26 @@ func (*Plugin) RequiresRenderedActivity() bool { return true }
 
 // ResolveNativeSessionID implements the scoped native adapter contract.
 func (p *Plugin) ResolveNativeSessionID(ctx context.Context, cfg ports.NativeSessionResolveConfig) (string, bool, error) {
-	info, ok, err := p.readSessionInfo(ctx, ports.SessionRef{ID: string(cfg.SessionID), DataDir: cfg.DataDir}, cfg.LaunchID)
+	info, ok, err := p.readSessionInfo(ctx, ports.SessionRef{ID: string(cfg.SessionID), DataDir: cfg.DataDir}, cfg.LaunchID, "")
 	return info.AgentSessionID, ok, err
+}
+
+// ContinuouslyResolveNativeSessionID detects /new even when the TUI remains idle.
+func (*Plugin) ContinuouslyResolveNativeSessionID() bool { return true }
+
+// PersistNativeSessionID records restore evidence after the activity signal.
+func (p *Plugin) PersistNativeSessionID(ctx context.Context, cfg ports.NativeSessionResolveConfig, nativeID string) error {
+	if nativeID == "" {
+		return fmt.Errorf("hermes: native identity required for locator persistence")
+	}
+	_, ok, err := p.readSessionInfo(ctx, ports.SessionRef{ID: string(cfg.SessionID), DataDir: cfg.DataDir}, cfg.LaunchID, nativeID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("hermes: native identity unavailable for locator persistence")
+	}
+	return nil
 }
 
 // Linux exports process start ticks relative to the same integer boot time

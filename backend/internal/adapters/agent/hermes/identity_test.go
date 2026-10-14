@@ -93,6 +93,16 @@ func TestCurrentIdentityUsesOwnedPTYAfterNativeNewWithoutDatabaseCwd(t *testing.
 	if err != nil || !ok || id != "current-new" {
 		t.Fatalf("current PTY identity: %q %v %v", id, ok, err)
 	}
+	observedPath := filepath.Join(sessionDir(data, "identity-fixture"), "observed-terminal")
+	if _, err := os.Stat(observedPath); !os.IsNotExist(err) {
+		t.Fatalf("identity lookup wrote restore locator before persistence: %v", err)
+	}
+	if err := New().PersistNativeSessionID(t.Context(), cfg, id); err != nil {
+		t.Fatal(err)
+	}
+	if recorded, err := os.ReadFile(observedPath); err != nil || string(recorded) != crumbPath {
+		t.Fatalf("persisted restore locator = %q, err=%v", recorded, err)
+	}
 	cfg.LaunchID = "different-launch"
 	if _, ok, err := New().ResolveNativeSessionID(context.Background(), cfg); err != nil || ok {
 		t.Fatalf("accepted unowned generation: %v %v", ok, err)

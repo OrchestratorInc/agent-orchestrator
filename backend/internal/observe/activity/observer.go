@@ -158,9 +158,16 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	if !ok || (state != domain.ActivityActive && state != domain.ActivityIdle && state != domain.ActivityWaitingInput && state != domain.ActivityBlocked) {
 		return
 	}
+	if state == session.Activity.State {
+		continuousIdentity, supports := agent.(ports.AgentContinuousNativeSessionResolver)
+		if !supports || !continuousIdentity.ContinuouslyResolveNativeSessionID() {
+			return
+		}
+	}
 	nativeID := ""
+	resolveCfg := ports.NativeSessionResolveConfig{DataDir: o.dataDir, SessionID: session.ID, LaunchID: session.Metadata.RuntimeLaunchID}
 	if resolver, supports := agent.(ports.AgentNativeSessionResolver); supports && o.dataDir != "" {
-		id, found, resolveErr := resolver.ResolveNativeSessionID(ctx, ports.NativeSessionResolveConfig{DataDir: o.dataDir, SessionID: session.ID, LaunchID: session.Metadata.RuntimeLaunchID})
+		id, found, resolveErr := resolver.ResolveNativeSessionID(ctx, resolveCfg)
 		if resolveErr != nil {
 			o.logger.Debug("activity observer: native identity unavailable", "session", session.ID, "err", resolveErr)
 			return
@@ -191,5 +198,13 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	})
 	if err != nil {
 		o.logger.Error("activity observer: reconciliation failed", "session", session.ID, "err", err)
+		return
+	}
+	if nativeID != "" {
+		if persister, supports := agent.(ports.AgentNativeSessionPersister); supports {
+			if err := persister.PersistNativeSessionID(ctx, resolveCfg, nativeID); err != nil {
+				o.logger.Warn("activity observer: native identity locator unavailable", "session", session.ID, "err", err)
+			}
+		}
 	}
 }

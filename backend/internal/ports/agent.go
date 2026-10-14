@@ -136,6 +136,18 @@ type AgentNativeSessionResolver interface {
 	ResolveNativeSessionID(ctx context.Context, cfg NativeSessionResolveConfig) (sessionID string, ok bool, err error)
 }
 
+// AgentContinuousNativeSessionResolver opts into identity checks when the
+// terminal activity state has not changed, such as after a native /new.
+type AgentContinuousNativeSessionResolver interface {
+	ContinuouslyResolveNativeSessionID() bool
+}
+
+// AgentNativeSessionPersister records adapter-owned restore evidence after AO
+// has accepted the corresponding native identity in an activity signal.
+type AgentNativeSessionPersister interface {
+	PersistNativeSessionID(ctx context.Context, cfg NativeSessionResolveConfig, nativeID string) error
+}
+
 // NativeSessionResolveConfig identifies one supervised agent launch. DataDir
 // and the two AO ids locate adapter-owned launch metadata without trusting a
 // provider-supplied path.
