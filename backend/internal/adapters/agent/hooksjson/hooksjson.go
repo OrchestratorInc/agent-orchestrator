@@ -193,7 +193,16 @@ func (m Manager) Install(ctx context.Context, workspacePath string) error {
 	}
 
 	hooksPath := m.Path(workspacePath)
-	topLevel, rawHooks, err := readHooksFile(hooksPath)
+	// The workspace is the trust boundary, so a missing one is created as before.
+	if err := os.MkdirAll(workspacePath, 0o750); err != nil {
+		return fmt.Errorf("%s.GetAgentHooks: create workspace dir: %w", m.Label, err)
+	}
+	root, rel, err := openWorkspaceRoot(workspacePath, hooksPath)
+	if err != nil {
+		return fmt.Errorf("%s.GetAgentHooks: %w", m.Label, err)
+	}
+	defer func() { _ = root.Close() }()
+	topLevel, rawHooks, _, err := readHooksFile(root, rel, hooksPath)
 	if err != nil {
 		return fmt.Errorf("%s.GetAgentHooks: %w", m.Label, err)
 	}
@@ -213,7 +222,7 @@ func (m Manager) Install(ctx context.Context, workspacePath string) error {
 		}
 	}
 
-	if err := writeHooksFile(hooksPath, topLevel, rawHooks); err != nil {
+	if err := writeHooksFile(root, rel, hooksPath, topLevel, rawHooks); err != nil {
 		return fmt.Errorf("%s.GetAgentHooks: %w", m.Label, err)
 	}
 	if err := hookutil.EnsureWorkspaceGitignore(filepath.Dir(hooksPath), filepath.Base(hooksPath)); err != nil {
@@ -260,12 +269,20 @@ func (m Manager) Uninstall(ctx context.Context, workspacePath string) error {
 	}
 
 	hooksPath := m.Path(workspacePath)
-	if _, err := os.Stat(hooksPath); errors.Is(err, os.ErrNotExist) {
+	root, rel, err := openWorkspaceRoot(workspacePath, hooksPath)
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	topLevel, rawHooks, err := readHooksFile(hooksPath)
 	if err != nil {
 		return fmt.Errorf("%s.UninstallHooks: %w", m.Label, err)
+	}
+	defer func() { _ = root.Close() }()
+	topLevel, rawHooks, present, err := readHooksFile(root, rel, hooksPath)
+	if err != nil {
+		return fmt.Errorf("%s.UninstallHooks: %w", m.Label, err)
+	}
+	if !present {
+		return nil
 	}
 
 	for _, event := range m.managedEvents() {
@@ -279,7 +296,7 @@ func (m Manager) Uninstall(ctx context.Context, workspacePath string) error {
 		}
 	}
 
-	if err := writeHooksFile(hooksPath, topLevel, rawHooks); err != nil {
+	if err := writeHooksFile(root, rel, hooksPath, topLevel, rawHooks); err != nil {
 		return fmt.Errorf("%s.UninstallHooks: %w", m.Label, err)
 	}
 	return nil
@@ -296,12 +313,20 @@ func (m Manager) AreInstalled(ctx context.Context, workspacePath string) (bool, 
 	}
 
 	hooksPath := m.Path(workspacePath)
-	if _, err := os.Stat(hooksPath); errors.Is(err, os.ErrNotExist) {
+	root, rel, err := openWorkspaceRoot(workspacePath, hooksPath)
+	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
-	_, rawHooks, err := readHooksFile(hooksPath)
 	if err != nil {
 		return false, fmt.Errorf("%s.AreHooksInstalled: %w", m.Label, err)
+	}
+	defer func() { _ = root.Close() }()
+	_, rawHooks, present, err := readHooksFile(root, rel, hooksPath)
+	if err != nil {
+		return false, fmt.Errorf("%s.AreHooksInstalled: %w", m.Label, err)
+	}
+	if !present {
+		return false, nil
 	}
 
 	for _, event := range m.managedEvents() {
@@ -346,34 +371,35 @@ func (m Manager) managedEvents() []string {
 // readHooksFile loads the file into a top-level raw map plus the decoded "hooks"
 // sub-map, preserving every key AO doesn't manage. A missing or empty file
 // yields empty maps.
-func readHooksFile(hooksPath string) (topLevel, rawHooks map[string]json.RawMessage, err error) {
+//
+// The read is confined to root (see confine.go). present reports whether rel is
+// a regular file; a symlink, directory or FIFO in its place is treated as
+// absent and is never followed.
+func readHooksFile(root *os.Root, rel, hooksPath string) (topLevel, rawHooks map[string]json.RawMessage, present bool, err error) {
 	topLevel = map[string]json.RawMessage{}
 	rawHooks = map[string]json.RawMessage{}
 
-	data, err := os.ReadFile(hooksPath) //nolint:gosec // path built from caller-owned workspace dir
-	if errors.Is(err, os.ErrNotExist) {
-		return topLevel, rawHooks, nil
-	}
+	data, present, err := readRootFile(root, rel)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read %s: %w", hooksPath, err)
+		return nil, nil, false, fmt.Errorf("read %s: %w", hooksPath, err)
 	}
-	if strings.TrimSpace(string(data)) == "" {
-		return topLevel, rawHooks, nil
+	if !present || strings.TrimSpace(string(data)) == "" {
+		return topLevel, rawHooks, present, nil
 	}
 	if err := json.Unmarshal(data, &topLevel); err != nil {
-		return nil, nil, fmt.Errorf("parse %s: %w", hooksPath, err)
+		return nil, nil, false, fmt.Errorf("parse %s: %w", hooksPath, err)
 	}
 	if hooksRaw, ok := topLevel["hooks"]; ok {
 		if err := json.Unmarshal(hooksRaw, &rawHooks); err != nil {
-			return nil, nil, fmt.Errorf("parse hooks in %s: %w", hooksPath, err)
+			return nil, nil, false, fmt.Errorf("parse hooks in %s: %w", hooksPath, err)
 		}
 	}
-	return topLevel, rawHooks, nil
+	return topLevel, rawHooks, true, nil
 }
 
 // writeHooksFile folds rawHooks back into topLevel and writes the file
 // atomically. An empty hooks map drops the "hooks" key entirely.
-func writeHooksFile(hooksPath string, topLevel, rawHooks map[string]json.RawMessage) error {
+func writeHooksFile(root *os.Root, rel, hooksPath string, topLevel, rawHooks map[string]json.RawMessage) error {
 	if len(rawHooks) == 0 {
 		delete(topLevel, "hooks")
 	} else {
@@ -384,15 +410,12 @@ func writeHooksFile(hooksPath string, topLevel, rawHooks map[string]json.RawMess
 		topLevel["hooks"] = hooksJSON
 	}
 
-	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o750); err != nil {
-		return fmt.Errorf("create hook dir: %w", err)
-	}
 	data, err := json.MarshalIndent(topLevel, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode %s: %w", hooksPath, err)
 	}
 	data = append(data, '\n')
-	if err := hookutil.AtomicWriteFile(hooksPath, data, 0o600); err != nil {
+	if err := writeRootFile(root, rel, data); err != nil {
 		return fmt.Errorf("write %s: %w", hooksPath, err)
 	}
 	return nil
