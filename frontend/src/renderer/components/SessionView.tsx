@@ -653,6 +653,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const expectsTerminal = session?.mode !== "chat" && (!browserOnly || Boolean(session?.cloud));
 	const sessionReady = expectsTerminal ? terminalAttached : cloudStage === "connected";
 	useEffect(() => {
+		if (!cloudReconnecting || !session?.cloud || session.mode !== "chat" || !sessionReady) return;
+		useTerminalResetStore.getState().markConnected(sessionId);
+	}, [cloudReconnecting, session?.cloud, session?.mode, sessionId, sessionReady]);
+	useEffect(() => {
 		if (session?.kind !== "orchestrator" || session.cloud || session.mode === "chat") return;
 		if (terminalAttached || session.provisionState === "failed") {
 			useUiStore.getState().setProjectProvisioning(session.workspaceId, false, hostId);

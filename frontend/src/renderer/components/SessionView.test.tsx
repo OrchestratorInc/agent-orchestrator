@@ -1846,6 +1846,70 @@ describe("SessionView", () => {
 		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting your terminal");
 	});
 
+	it("releases a fully connected restored Cloud Chat session when its worker epoch is reused", async () => {
+		const session = workerSession("sess-2");
+		session.mode = "chat";
+		session.runtimeConnected = true;
+		session.terminalGeneration = "3762";
+		session.cloud = {
+			orgId: "cloud-org",
+			sandboxProvider: "coder",
+			desiredState: "running",
+			observedState: "running",
+		};
+		useTerminalResetStore.setState({
+			baselineEpoch: { "sess-1": 90, "sess-2": 3762 },
+			nonces: { "sess-2": 1 },
+			reconnecting: { "sess-1": true, "sess-2": true },
+		});
+
+		const view = render(<SessionView sessionId="sess-2" />);
+
+		await waitFor(() => expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument());
+		expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
+		expect(useTerminalResetStore.getState()).toMatchObject({
+			baselineEpoch: { "sess-1": 90, "sess-2": 3762 },
+			nonces: { "sess-2": 1 },
+			reconnecting: { "sess-1": true, "sess-2": false },
+		});
+
+		session.mode = "tui";
+		view.rerender(<SessionView sessionId="sess-2" />);
+		expect(useTerminalResetStore.getState().nonces["sess-2"]).toBe(1);
+	});
+
+	it.each([
+		["disconnected", false, "running", undefined],
+		["restarting", true, "restoring", undefined],
+		["failed", true, "failed", "failed"],
+	] as const)("keeps a restored Cloud Chat session pending while its runtime is %s", (_state, runtimeConnected, observedState, runtimeState) => {
+		const session = workerSession("sess-2");
+		session.mode = "chat";
+		session.runtimeConnected = runtimeConnected;
+		session.terminalGeneration = "3762";
+		session.cloud = {
+			orgId: "cloud-org",
+			sandboxProvider: "coder",
+			desiredState: "running",
+			observedState,
+			runtimeState,
+		};
+		useTerminalResetStore.setState({
+			baselineEpoch: { "sess-2": 3762 },
+			nonces: { "sess-2": 1 },
+			reconnecting: { "sess-2": true },
+		});
+
+		render(<SessionView sessionId="sess-2" />);
+
+		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+		expect(useTerminalResetStore.getState()).toMatchObject({
+			baselineEpoch: { "sess-2": 3762 },
+			nonces: { "sess-2": 1 },
+			reconnecting: { "sess-2": true },
+		});
+	});
+
 	it("does not skip agent preparation just because the worker reports running", async () => {
 		autoAttachSessionTerminal.current = false;
 		const session = workerSession("sess-2");
