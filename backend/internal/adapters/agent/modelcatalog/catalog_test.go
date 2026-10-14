@@ -282,7 +282,7 @@ func TestKiroDiscoveryRunsOnlyAfterAConfirmedSignIn(t *testing.T) {
 				return []byte(tc.output), tc.err
 			}
 
-			_, err := Discover(ctx, "kiro", missingBinary, "", tc.env)
+			_, err := (Discoverer{}).Discover(ctx, ports.AgentModelDiscoveryRequest{AgentID: "kiro", Binary: missingBinary, Env: tc.env})
 			if err == nil {
 				t.Fatal("Discover succeeded against a missing binary")
 			}
@@ -324,7 +324,7 @@ func TestDiscoveryWithoutASignInCheckNeverProbes(t *testing.T) {
 		if spec.signIn != nil {
 			continue
 		}
-		if _, err := Discover(context.Background(), agentID, "ao-test-missing-binary", "", nil); errors.Is(err, ports.ErrAgentModelDiscoverySignInRequired) {
+		if _, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: agentID, Binary: "ao-test-missing-binary"}); errors.Is(err, ports.ErrAgentModelDiscoverySignInRequired) {
 			t.Fatalf("%s discovery was skipped for sign-in", agentID)
 		}
 	}

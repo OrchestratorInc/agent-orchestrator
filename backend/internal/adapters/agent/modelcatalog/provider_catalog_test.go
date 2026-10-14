@@ -177,11 +177,12 @@ func TestPiInstalledCatalogUsesItsOwnPackageWithoutCredentials(t *testing.T) {
 	}
 }
 
-func TestOnlySettingsBrowsingListsProvidersWithoutCredentials(t *testing.T) {
+func TestSharedCatalogIncludesNativeCacheButCredentialScopeDoesNot(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake CLI is a shell script")
 	}
 	env := providerTestEnv(t)
+	env["ANTHROPIC_API_KEY"] = "test-key"
 	env["XDG_CACHE_HOME"] = t.TempDir()
 	path := providerCachePath("opencode", env)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -199,19 +200,23 @@ func TestOnlySettingsBrowsingListsProvidersWithoutCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(task.Models) != 1 || task.Models[0].ID != "anthropic/claude-sonnet" {
-		t.Fatalf("task catalog = %#v, want only the CLI's configured models", task.Models)
+	if len(task.Models) != 2 {
+		t.Fatalf("shared catalog = %#v, want native output and the cached provider", task.Models)
 	}
-	request.BrowseAll = true
-	browse, err := (Discoverer{}).Discover(context.Background(), request)
+	if !reflect.DeepEqual(task.ConfiguredProviders, []string{"anthropic"}) {
+		t.Fatalf("shared catalog configured providers = %v", task.ConfiguredProviders)
+	}
+	sharedFingerprint := (Discoverer{}).CatalogFingerprint(context.Background(), request)
+	request.CredentialType = "anthropic_api_key"
+	scoped, err := (Discoverer{}).Discover(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(browse.Models) != 2 {
-		t.Fatalf("browse catalog = %#v, want the cached provider too", browse.Models)
+	if len(scoped.Models) != 1 || scoped.Models[0].ID != "anthropic/claude-sonnet" {
+		t.Fatalf("credential catalog = %#v, want no local-cache expansion", scoped.Models)
 	}
-	if (Discoverer{}).CatalogFingerprint(context.Background(), request) == (Discoverer{}).CatalogFingerprint(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "opencode", Binary: binary, WorkingDir: request.WorkingDir, Env: env}) {
-		t.Fatal("task and browse catalogs share a fingerprint")
+	if sharedFingerprint == (Discoverer{}).CatalogFingerprint(context.Background(), request) {
+		t.Fatal("credential and shared catalogs have the same fingerprint")
 	}
 }
 
@@ -247,16 +252,5 @@ func TestPiInstalledCatalogReadsImportOnlyPiAIAndPrimeAgentFork(t *testing.T) {
 		if len(models) != 1 || models[0].ID != "zai/glm-5" {
 			t.Fatalf("%s models = %#v", owner, models)
 		}
-	}
-}
-
-func TestBrowsesAllProvidersCoversHarnessesThatReportProviders(t *testing.T) {
-	for _, agentID := range []string{"qwen", "cline", "continue", "aider", "crush", "vibe", "kimi", "autohand", "prime-agent", "opencode", "fx"} {
-		if !(Discoverer{}).BrowsesAllProviders(agentID) {
-			t.Fatalf("%s does not browse its providers", agentID)
-		}
-	}
-	if (Discoverer{}).BrowsesAllProviders("codex") {
-		t.Fatal("codex has no provider browsing")
 	}
 }

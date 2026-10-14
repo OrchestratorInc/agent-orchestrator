@@ -252,15 +252,15 @@ type ClaudeFingerprintFunc func(context.Context, ports.AgentModelDiscoveryReques
 // Discover uses the agent-owned model surface configured for this adapter.
 func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
 	catalog, err := d.discover(ctx, request)
-	if err == nil && request.BrowseAll {
-		markBrowsedProviders(&catalog, request)
+	if err == nil {
+		markConfiguredProviders(ctx, &catalog, request)
 	}
 	return catalog, err
 }
 
 func (d Discoverer) discover(ctx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
-	if request.AgentID == "fx" && request.BrowseAll {
-		return discoverFXBrowsingCatalog(ctx, request, func(ctx context.Context, binary string, args []string, dir string, env map[string]string) ([]byte, error) {
+	if request.AgentID == "fx" && request.CredentialType == "" {
+		return discoverFXCatalog(ctx, request, func(ctx context.Context, binary string, args []string, dir string, env map[string]string) ([]byte, error) {
 			return modelCommand(ctx, binary, args, dir, env).CombinedOutput()
 		})
 	}
@@ -309,17 +309,7 @@ func (d Discoverer) discover(ctx context.Context, request ports.AgentModelDiscov
 		}
 		env["XDG_DATA_HOME"] = dataHome
 	}
-	return discoverCommandCatalog(ctx, request.AgentID, request.Binary, request.WorkingDir, env, request.BrowseAll)
-}
-
-// BrowsesAllProviders reports whether Settings browses a broader catalog than
-// task pickers: FX's every-provider listing, a harness whose native provider
-// cache also lists providers without credentials, or a harness that marks
-// its configured providers. Task pickers only offer what the harness can run
-// now.
-func (Discoverer) BrowsesAllProviders(agentID string) bool {
-	return agentID == "fx" || hasLocalProviderCatalog(agentID) ||
-		browseProviderCredentials[agentID] != nil
+	return discoverCommandCatalog(ctx, request.AgentID, request.Binary, request.WorkingDir, env, request.CredentialType == "")
 }
 
 // opencodeCredentialEnv maps an opencode cloud credential type to the env var
@@ -491,21 +481,12 @@ func claudeConfiguredLabel(id string) string {
 // cached catalog, since the binary alone does not change when settings do.
 func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentModelDiscoveryRequest) string {
 	fingerprint := CatalogFingerprint(ctx, request.AgentID, request.Binary, request.WorkingDir, request.Env)
-	if request.AgentID == "fx" && request.BrowseAll {
-		return fingerprint + ":browse-v1:" + fingerprintConfigPaths([]string{fxSettingsPath(request.Env)})
+	if request.AgentID == "fx" && request.CredentialType == "" {
+		return fingerprint + ":shared-providers-v1:" + fingerprintConfigPaths([]string{fxSettingsPath(request.Env)})
 	}
-	if request.BrowseAll && browseProviderCredentials[request.AgentID] != nil {
-		// Browsing catalogs cached before they marked this harness's configured
-		// providers must be rediscovered.
-		return fingerprint + ":browse-providers-v2"
-	}
-	if hasLocalProviderCatalog(request.AgentID) {
-		// Task catalogs cached before they dropped providers without
-		// credentials must be rediscovered.
-		if request.BrowseAll {
-			return fingerprint + ":browse-v2"
-		}
-		return fingerprint + ":configured-v1"
+	if request.CredentialType == "" && (hasLocalProviderCatalog(request.AgentID) || browseProviderCredentials[request.AgentID] != nil) {
+		// Replace older task-only snapshots through the normal background refresh.
+		return fingerprint + ":shared-providers-v1"
 	}
 	if request.AgentID != "claude-code" || d.ClaudeFingerprint == nil {
 		return fingerprint
@@ -527,30 +508,12 @@ func (Discoverer) LabelAliases(agentID string, models, reference []ports.AgentMo
 	return LabelClaudeAliasVersions(models, reference)
 }
 
-// Discover executes model catalog discovery for an agent binary, listing only
-// the providers it can run now.
-func Discover(ctx context.Context, agentID, binary, workingDir string, env map[string]string) (ports.AgentModelCatalog, error) {
-	return discoverCommandCatalog(ctx, agentID, binary, workingDir, env, false)
-}
-
-// discoverCommandCatalog runs the harness's model listing. browseAll adds the
-// providers its native cache knows without credentials, for Settings only.
-func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir string, env map[string]string, browseAll bool) (ports.AgentModelCatalog, error) {
+// discoverCommandCatalog combines native output and local provider metadata.
+// Credential-scoped cloud discovery excludes the device-local catalogs.
+func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir string, env map[string]string, includeLocal bool) (ports.AgentModelCatalog, error) {
 	base := Base(agentID)
 	if agentID == "unreal-agent" {
 		return discoverUnrealCatalog(env), nil
-	}
-	if agentID == "claude-code" {
-		// This package-level entry point has no injected provider lister, so it
-		// yields the static aliases. Daemon wiring uses Discoverer, which does.
-		return discoverClaudeCatalog(
-			ctx, ports.AgentModelDiscoveryRequest{AgentID: agentID, WorkingDir: workingDir, Env: env}, nil)
-	}
-	if agentID == "muse" {
-		return base, nil
-	}
-	if agentID == "codex" {
-		return base, errors.New("codex model discovery requires app-server")
 	}
 	if hasConfigDiscoverySource(agentID) {
 		return discoverConfigCatalog(agentID, workingDir, env)
@@ -579,7 +542,7 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 		return base, fmt.Errorf("%s model discovery: %w", agentID, err)
 	}
 	base.Providers = reportedJSONProviders(output)
-	if browseAll {
+	if includeLocal {
 		reported := localProviderCatalog(runCtx, agentID, binary, workingDir, env)
 		models = append(models, reported.Models...)
 		base.Providers = append(base.Providers, reported.Providers...)
@@ -593,9 +556,6 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 		models = markCodewhaleResolvedDefault(ctx, binary, workingDir, env, models)
 	}
 	base.Models = models
-	if browseAll {
-		base.ConfiguredProviders = configuredProviders(ctx, agentID, env)
-	}
 	base.Source = "cli"
 	base.FetchedAt = time.Now().UTC()
 	return base, nil
@@ -1515,7 +1475,11 @@ func normalize(models []ports.AgentModelInfo) []ports.AgentModelInfo {
 		if out[i].IsDefault != out[j].IsDefault {
 			return out[i].IsDefault
 		}
-		return strings.ToLower(out[i].Label) < strings.ToLower(out[j].Label)
+		left, right := strings.ToLower(out[i].Label), strings.ToLower(out[j].Label)
+		if left != right {
+			return left < right
+		}
+		return out[i].ID < out[j].ID
 	})
 	return out
 }

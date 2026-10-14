@@ -429,9 +429,6 @@ type AgentModelCatalogScopeCache interface {
 // AgentModelDiscoveryRequest describes one bounded, adapter-defined model
 // discovery attempt. Args remain owned by the concrete discovery adapter.
 type AgentModelDiscoveryRequest struct {
-	// BrowseAll is reserved for the separate Harness Settings catalog.
-	// Task pickers and launches keep the harness-configured provider scope.
-	BrowseAll  bool
 	AgentID    string
 	Binary     string
 	WorkingDir string

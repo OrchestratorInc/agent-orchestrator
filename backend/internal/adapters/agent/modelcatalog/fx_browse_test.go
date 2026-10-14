@@ -6,13 +6,14 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-func TestFXBrowsingIncludesDisconnectedProvidersAndNativeIDs(t *testing.T) {
+func TestFXCatalogKeepsDuplicateModelsSelectableByConnection(t *testing.T) {
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, ".fx"), 0o700); err != nil {
 		t.Fatal(err)
@@ -38,7 +39,7 @@ func TestFXBrowsingIncludesDisconnectedProvidersAndNativeIDs(t *testing.T) {
 		t.Errorf("unexpected command %v for %s", args, childEnv["FX_PROVIDER"])
 		return nil, errors.New("unexpected command")
 	}
-	got, err := discoverFXBrowsingCatalog(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "fx", Binary: "fx", Env: env}, run)
+	got, err := discoverFXCatalog(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "fx", Binary: "fx", Env: env}, run)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,27 +48,58 @@ func TestFXBrowsingIncludesDisconnectedProvidersAndNativeIDs(t *testing.T) {
 	}
 	count := 0
 	for _, model := range got.Models {
-		if model.ID == "openai/shared" {
+		if model.ID == "fx:gateway:openai/shared" || model.ID == "fx:codex:openai/shared" {
 			count++
 		}
-		if model.ID == "local-model" && (model.Provider != "local" || model.ContextWindow != 32768) {
+		if model.ID == "fx:local:local-model" && (model.Provider != "local" || model.ContextWindow != 32768) {
 			t.Fatalf("custom metadata = %#v", model)
 		}
 	}
 	if count != 2 || len(got.Models) != 4 || env["FX_PROVIDER"] != "codex" {
-		t.Fatalf("native IDs or caller environment changed: %#v, %v", got.Models, env)
+		t.Fatalf("connection choices or caller environment incorrect: %#v, %v", got.Models, env)
 	}
 	if strings.Contains(got.Warning, "secret") || !strings.Contains(got.Warning, "grok") {
 		t.Fatalf("unsafe or missing failure explanation: %s", got.Warning)
 	}
 }
 
-func TestFXBrowsingRetainsProviderListWithoutLogin(t *testing.T) {
+func TestFXCatalogRetainsProviderListWithoutLogin(t *testing.T) {
 	run := func(_ context.Context, _ string, _ []string, _ string, _ map[string]string) ([]byte, error) {
 		return nil, errors.New("offline")
 	}
-	got, err := discoverFXBrowsingCatalog(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "fx", Binary: "fx", Env: map[string]string{"HOME": t.TempDir()}}, run)
+	got, err := discoverFXCatalog(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "fx", Binary: "fx", Env: map[string]string{"HOME": t.TempDir()}}, run)
 	if err != nil || len(got.Providers) != 3 || len(got.ConfiguredProviders) != 0 || len(got.Models) != 0 || got.Warning == "" {
 		t.Fatalf("catalog = %#v, err = %v", got, err)
+	}
+}
+
+func TestSharedDiscoveryIncludesEveryFXConnection(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake CLI is a shell script")
+	}
+	root := t.TempDir()
+	binary := filepath.Join(root, "fx")
+	script := `#!/bin/sh
+case "$1" in
+status) printf '%s' '{"connected_providers":["codex"]}' ;;
+models) printf '%s' '{"ids":["shared-model"]}' ;;
+esac
+`
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{
+		AgentID: "fx", Binary: binary, Env: map[string]string{"HOME": root},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, model := range catalog.Models {
+		ids = append(ids, model.ID)
+	}
+	want := []string{"fx:codex:shared-model", "fx:gateway:shared-model", "fx:grok:shared-model"}
+	if !reflect.DeepEqual(ids, want) || !reflect.DeepEqual(catalog.ConfiguredProviders, []string{"codex"}) {
+		t.Fatalf("shared catalog = %#v", catalog)
 	}
 }

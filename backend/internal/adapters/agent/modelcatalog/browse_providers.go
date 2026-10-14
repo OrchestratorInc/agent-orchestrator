@@ -1,6 +1,7 @@
 package modelcatalog
 
 import (
+	"context"
 	"sort"
 	"strings"
 
@@ -11,15 +12,18 @@ import (
 // credential for, read from that harness's own configuration, credential
 // store and environment variables. Presence is the evidence: whether the
 // provider accepts the credential is not proven. Each harness registers its
-// check from its own file. Harnesses with their own browsing path (OpenCode,
-// Kilo, MiMo, Pi, OMP and FX) are not listed here.
+// check from its own file. OpenCode, Kilo, MiMo, Pi and OMP use
+// configuredProviders instead.
 var browseProviderCredentials = map[string]func(workingDir string, env map[string]string) []string{}
 
-// markBrowsedProviders marks the providers a Harness Settings catalog's
-// credential check finds as configured.
-func markBrowsedProviders(catalog *ports.AgentModelCatalog, request ports.AgentModelDiscoveryRequest) {
+// markConfiguredProviders marks the providers a catalog's harness holds a
+// credential for, so Settings can tell them apart from the rest.
+func markConfiguredProviders(ctx context.Context, catalog *ports.AgentModelCatalog, request ports.AgentModelDiscoveryRequest) {
 	check := browseProviderCredentials[request.AgentID]
 	if check == nil {
+		if len(catalog.ConfiguredProviders) == 0 {
+			catalog.ConfiguredProviders = configuredProviders(ctx, request.AgentID, request.Env)
+		}
 		return
 	}
 	if request.AgentID == "cline" {

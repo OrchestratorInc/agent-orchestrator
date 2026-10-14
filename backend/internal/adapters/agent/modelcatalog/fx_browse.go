@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/fx"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -21,10 +22,10 @@ func fxSettingsPath(env map[string]string) string {
 	return filepath.Join(catalogHome(env), ".fx", "settings.json")
 }
 
-// FX's subscription catalogs are account-specific. Only Settings opts into
-// browsing every connection; ordinary model discovery keeps FX's active provider.
+// FX's subscription catalogs are account-specific. The shared catalog includes
+// every connection and keeps each connection in its selectable model IDs.
 // FX_PROVIDER is process-local and never changes the user's saved selection.
-func discoverFXBrowsingCatalog(ctx context.Context, request ports.AgentModelDiscoveryRequest, run fxCatalogRunner) (ports.AgentModelCatalog, error) {
+func discoverFXCatalog(ctx context.Context, request ports.AgentModelDiscoveryRequest, run fxCatalogRunner) (ports.AgentModelCatalog, error) {
 	result := Base("fx")
 	result.Source = "cli"
 	result.FetchedAt = time.Now().UTC()
@@ -59,7 +60,7 @@ func discoverFXBrowsingCatalog(ctx context.Context, request ports.AgentModelDisc
 		sort.Strings(ids)
 		for _, id := range ids {
 			result.Models = append(result.Models, ports.AgentModelInfo{
-				ID: id, Label: id, Provider: provider,
+				ID: fx.CatalogModelID(provider, id), Label: id, Provider: provider,
 				ContextWindow: max(0, settings.Providers[provider].ModelMetadata[id].ContextWindow),
 			})
 		}
@@ -113,6 +114,7 @@ func discoverFXBrowsingCatalog(ctx context.Context, request ports.AgentModelDisc
 			}
 			for i := range models {
 				models[i].Provider = provider
+				models[i].ID = fx.CatalogModelID(provider, models[i].ID)
 			}
 			results[index].models = models
 		}()
@@ -132,5 +134,14 @@ func discoverFXBrowsingCatalog(ctx context.Context, request ports.AgentModelDisc
 		result.Metadata = map[string]string{"unavailableProviders": strings.Join(unavailable, ",")}
 		result.Warning = "FX could not list models for: " + strings.Join(unavailable, ", ") + ". Previously cached models may be shown; check that provider's login or connection."
 	}
+	// Preserve native model strings exactly, including whitespace. Only order
+	// the connection-qualified choices; generic normalization trims IDs.
+	sort.SliceStable(result.Models, func(i, j int) bool {
+		left, right := strings.ToLower(result.Models[i].Label), strings.ToLower(result.Models[j].Label)
+		if left != right {
+			return left < right
+		}
+		return result.Models[i].ID < result.Models[j].ID
+	})
 	return result, nil
 }

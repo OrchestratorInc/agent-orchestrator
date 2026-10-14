@@ -49,7 +49,7 @@ async function requestAgentModels(
 export function agentModelsQueryOptions(agentId: string, projectId: string, hostId?: string, catalogOnly = false) {
 	const key = agentModelsQueryKey(agentId, projectId, hostId);
 	return queryOptions({
-		// Keep catalog browsing separate from task pickers that need recency.
+		// Both read the shared daemon catalog; only task responses add recency.
 		queryKey: catalogOnly ? [...key, "catalog"] as const : key,
 		queryFn: () => requestAgentModels(agentId, projectId, "cached", hostId, catalogOnly),
 		enabled: agentId !== "",

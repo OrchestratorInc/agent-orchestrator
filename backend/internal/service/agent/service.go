@@ -233,6 +233,10 @@ func (s *Service) prefetchModelCatalogs(ctx context.Context, force bool) {
 	// for installed adapters that have never been discovered.
 	latest := make(map[string]ports.CachedAgentModelCatalog, len(records)+len(installed))
 	for _, record := range records {
+		// Older builds persisted a separate Settings catalog. It is no longer used.
+		if record.ProjectID == "@browse:all" {
+			continue
+		}
 		key := record.AgentID + "\x00" + record.ProjectID
 		current, exists := latest[key]
 		if !exists || record.FetchedAt.After(current.FetchedAt) {
@@ -284,29 +288,6 @@ func (s *Service) prefetchModelCatalogs(ctx context.Context, force bool) {
 	workers.Wait()
 }
 
-// warmModelCatalogs retains the focused synchronous test seam used by the
-// original static-catalog warmer. Production uses the generalized scheduler.
-func (s *Service) warmModelCatalogs(ctx context.Context) {
-	for _, agentID := range []string{"claude-code", "muse"} {
-		record, ok, err := s.cache.GetAgentModelCatalog(ctx, agentID, "")
-		if err != nil || !ok {
-			continue
-		}
-		var cached ports.AgentModelCatalog
-		if json.Unmarshal([]byte(record.CatalogJSON), &cached) != nil {
-			continue
-		}
-		lastSuccess := record.LastSuccessAt
-		if lastSuccess.IsZero() {
-			lastSuccess = cached.ValidatedAt
-		}
-		if !cached.Stale && !catalogNeedsRevalidation(lastSuccess, s.now()) {
-			continue
-		}
-		_, _ = s.revalidateModels(ctx, agentID, "")
-	}
-}
-
 func (s *Service) monitorModelCatalogFreshness(ctx context.Context) {
 	ticker := time.NewTicker(modelCatalogMonitorInterval)
 	defer ticker.Stop()
@@ -342,29 +323,12 @@ func (s *Service) Models(ctx context.Context, agentID, projectID string, refresh
 }
 
 // ModelCatalog returns the persisted catalog without session-history enrichment.
-// Settings only browses provider/model facts; recency belongs to task pickers.
-// Cached reads never wait for CLI discovery or input checks, which run in the
-// background. A scope with no persisted catalog still needs its first discovery.
+// Settings reads the same harness-reported catalog as task pickers; recency
+// belongs to task pickers. Cached reads never wait for CLI discovery or input
+// checks, which run in the background. A scope with no persisted catalog still
+// needs its first discovery.
 func (s *Service) ModelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
-	if projectID == "" && s.browsesAllProviders(agentID) {
-		projectID = browsingCatalogScope
-	}
 	return s.modelCatalog(ctx, agentID, projectID, refresh)
-}
-
-// This scope cannot collide with a project ID. It must never seed a task picker.
-const browsingCatalogScope = "@browse:all"
-
-// providerBrowser is the optional discoverer capability that names the
-// harnesses whose Settings catalog also lists providers without credentials.
-// Their task pickers keep a separate, configured-only catalog.
-type providerBrowser interface {
-	BrowsesAllProviders(agentID string) bool
-}
-
-func (s *Service) browsesAllProviders(agentID string) bool {
-	browser, ok := s.discoverer.(providerBrowser)
-	return ok && browser.BrowsesAllProviders(agentID)
 }
 
 func (s *Service) modelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
@@ -514,9 +478,6 @@ func credentialTypeFromScope(scope string) (string, bool) {
 }
 
 func (s *Service) modelCatalogScope(ctx context.Context, projectID string) (string, error) {
-	if projectID == browsingCatalogScope {
-		return projectID, nil
-	}
 	// A credential scope has no backing project; keep it verbatim so its catalog
 	// caches under its own key instead of collapsing to the device-global scope.
 	if _, ok := credentialTypeFromScope(projectID); ok {
@@ -537,10 +498,6 @@ func (s *Service) modelCatalogScope(ctx context.Context, projectID string) (stri
 
 func (s *Service) modelDiscoveryRequest(ctx context.Context, agentID, projectID, binary string) (ports.AgentModelDiscoveryRequest, error) {
 	request := ports.AgentModelDiscoveryRequest{AgentID: agentID, Binary: binary}
-	if projectID == browsingCatalogScope {
-		request.BrowseAll = true
-		return s.globalModelDiscoveryRequest(request)
-	}
 	// Credential-scoped discovery reflects a cloud session's pushed credential,
 	// not a local project: leave WorkingDir/Env empty and let the adapter unlock
 	// that provider's models from the credential type alone.
@@ -615,6 +572,9 @@ func (s *Service) InvalidateModelCatalogs(agentID string) {
 			return
 		}
 		for _, record := range records {
+			if record.ProjectID == "@browse:all" {
+				continue
+			}
 			if s.ctx.Err() != nil {
 				return
 			}
@@ -863,9 +823,9 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 		}
 		return fallback, nil
 	}
-	// Browsing is informational: keep a failed provider's previous model list,
-	// while still accepting fresh catalogs from the other connections.
-	if request.BrowseAll && hasCached {
+	// A partial FX refresh updates successful connections and keeps only the
+	// unavailable connections' previous models in the shared catalog.
+	if agentID == "fx" && hasCached {
 		unavailable := strings.Split(discovered.Metadata["unavailableProviders"], ",")
 		for _, model := range cached.Catalog.Models {
 			for _, provider := range unavailable {

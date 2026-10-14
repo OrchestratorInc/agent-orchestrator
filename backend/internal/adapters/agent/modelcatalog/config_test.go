@@ -57,7 +57,7 @@ func TestAutoHandDiscoveryReadsConfigurationWithoutRunningBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := Discover(context.Background(), "autohand", "", "", nil)
+	got, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "autohand"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestQwenConfigDiscoveryUsesQwenHome(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := Discover(context.Background(), "qwen", "", "", nil)
+	got, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "qwen"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestQwenConfigDiscoveryUsesQwenHome(t *testing.T) {
 	}
 }
 
-func TestQwenBrowsingCatalogMarksConfiguredProviders(t *testing.T) {
+func TestQwenSharedCatalogMarksConfiguredProviders(t *testing.T) {
 	home := t.TempDir()
 	qwenHome := filepath.Join(home, ".qwen")
 	t.Setenv("HOME", home)
@@ -112,7 +112,7 @@ func TestQwenBrowsingCatalogMarksConfiguredProviders(t *testing.T) {
 	}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	request := ports.AgentModelDiscoveryRequest{AgentID: "qwen", BrowseAll: true}
+	request := ports.AgentModelDiscoveryRequest{AgentID: "qwen"}
 
 	got, err := Discoverer{}.Discover(context.Background(), request)
 	if err != nil {
@@ -138,15 +138,6 @@ func TestQwenBrowsingCatalogMarksConfiguredProviders(t *testing.T) {
 	}
 	if want := []string{"gemini", "openai", "qwen-oauth"}; !reflect.DeepEqual(got.ConfiguredProviders, want) {
 		t.Fatalf("configured providers = %v, want %v", got.ConfiguredProviders, want)
-	}
-
-	// Task pickers keep only the configured models, with no provider browsing.
-	task, err := Discover(context.Background(), "qwen", "", "", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(task.Providers) != 0 || len(task.ConfiguredProviders) != 0 || len(task.Models) != 2 {
-		t.Fatalf("task catalog = %#v", task)
 	}
 }
 
@@ -253,7 +244,7 @@ func TestConfigCatalogDiscoveryAndFingerprint(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := CatalogFingerprint(context.Background(), "continue", "", "", nil)
-	got, err := Discover(context.Background(), "continue", "", "", nil)
+	got, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "continue"})
 	if err != nil {
 		t.Fatal(err)
 	}
