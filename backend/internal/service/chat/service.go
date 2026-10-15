@@ -331,6 +331,21 @@ func (s *Service) settleOrphanedWork(ctx context.Context, session domain.Session
 	}
 }
 
+// applyConversationSettings overlays a conversation's durable choices onto the
+// launch config of a provider that continues it. A chosen model and approval
+// mode win over what the session was spawned with; effort follows the
+// conversation outright, since an empty effort is itself the choice of the
+// provider default.
+func applyConversationSettings(cfg *StartConfig, settings domain.ConversationSettings) {
+	if settings.Model != "" {
+		cfg.Model = settings.Model
+	}
+	cfg.Effort = settings.ReasoningEffort
+	if settings.ApprovalMode != "" {
+		cfg.Permissions = settings.ApprovalMode
+	}
+}
+
 // Start launches or resumes the Chat controller for a session.
 //
 // A resume that fails is reported as a failure rather than quietly becoming a new
@@ -653,14 +668,8 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	// Conversation settings are durable user choices. Restore the selected
 	// model when rebuilding a controller after a daemon restart; the caller's
 	// session default must not silently replace it.
-	if cfg.ProviderConversationID != "" && conversation.Settings.Model != "" {
-		cfg.Model = conversation.Settings.Model
-	}
 	if cfg.ProviderConversationID != "" {
-		cfg.Effort = conversation.Settings.ReasoningEffort
-	}
-	if cfg.ProviderConversationID != "" && conversation.Settings.ApprovalMode != "" {
-		cfg.Permissions = conversation.Settings.ApprovalMode
+		applyConversationSettings(&cfg, conversation.Settings)
 	}
 	if cfg.ProviderConversationID == "" {
 		if err := capabilityAdmissionError(cfg.Harness, caps, cfg.Permissions); err != nil {
