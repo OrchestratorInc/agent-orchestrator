@@ -4,7 +4,7 @@ import { developerModeStorageKey, windowTranslucencyStorageKey } from "../lib/wi
 import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
-import type { FilesSelection, FilesSource } from "../hooks/useSessionWorkspaceFiles";
+import type { FilesSelection } from "../hooks/useSessionWorkspaceFiles";
 import {
 	applyDocumentTheme,
 	applyDocumentThemeStyle,
@@ -76,8 +76,6 @@ export type InspectorSessionState = {
 	browserUnseen?: boolean;
 	/** Files tab: review changed files directly. Defaults to true; false shows the full tree. */
 	filesChangedOnly?: boolean;
-	/** Files tab: source shared by the docked and maximized explorers. */
-	filesSource?: FilesSource;
 	/** Files tab: the branch and changes under review, shared by the docked and maximized explorers. Unset follows the default. */
 	filesSelection?: FilesSelection;
 	/** Files: display mode picked per path in a centre tab, restored for the same open request after a remount. */
@@ -217,7 +215,6 @@ export type UiState = {
 	setBrowserContentRevealed: (sessionId: string, revealed: boolean) => void;
 	setBrowserUnseen: (sessionId: string, unseen: boolean) => void;
 	setFilesChangedOnly: (sessionId: string, changedOnly: boolean) => void;
-	setFilesSource: (sessionId: string, source: FilesSource) => void;
 	setFilesSelection: (sessionId: string, selection: FilesSelection) => void;
 	/** Back to the checked-out branch and the default changes. */
 	resetFilesSelection: (sessionId: string) => void;
@@ -544,16 +541,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 				inspectorSessions: {
 					...state.inspectorSessions,
 					[sessionId]: { ...current, filesChangedOnly },
-				},
-			};
-		}),
-	setFilesSource: (sessionId, filesSource) =>
-		set((state) => {
-			const current = inspectorState(state.inspectorSessions, sessionId);
-			return {
-				inspectorSessions: {
-					...state.inspectorSessions,
-					[sessionId]: { ...current, filesSource },
 				},
 			};
 		}),

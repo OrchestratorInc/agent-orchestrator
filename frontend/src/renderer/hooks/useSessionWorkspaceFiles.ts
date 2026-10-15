@@ -59,11 +59,7 @@ export type WorkspaceFileDetail = Omit<components["schemas"]["WorkspaceFileRespo
 	fileFingerprint?: string;
 	workspaceVersion?: string;
 };
-/** Every scope the daemon diffs, Uncommitted included. */
-export type WorkspaceReviewScope = components["schemas"]["WorkspaceDiffRequest"]["scope"];
-// The review pane and file panes have no Uncommitted surface yet, so their
-// scopes stay the ones WorkspaceFilesResponse.sections always has.
-export type WorkspaceDiffScope = Exclude<WorkspaceReviewScope, "uncommitted">;
+export type WorkspaceDiffScope = components["schemas"]["WorkspaceDiffRequest"]["scope"];
 export type WorkspaceDiffsResponse = components["schemas"]["WorkspaceDiffsResponse"];
 export type WorkspaceFileRevision = components["schemas"]["WorkspaceFileRevisionResponse"];
 export type WorkspaceFileSearchResponse = components["schemas"]["WorkspaceFileSearchResponse"];
@@ -103,7 +99,7 @@ export type ReviewTarget = {
 	key: string;
 	branch: FilesBranchTarget;
 	changes: FilesChanges;
-	scope: WorkspaceReviewScope;
+	scope: WorkspaceDiffScope;
 	/** Undefined reads the whole range (or a working scope). */
 	commitShas?: readonly string[];
 	/** Undefined reads the checked-out branch. */
@@ -227,18 +223,6 @@ function commitParams(commitSha: string | undefined, commitShas: readonly string
 
 function selectionKeyFor(view: WorkspaceViewParams | undefined, commitSha: string | undefined, commitShas: readonly string[] | undefined): string {
 	return workspaceSelectionKey(view, commitShas ?? (commitSha ? [commitSha] : []));
-}
-
-async function fetchSessionPRFiles(sessionId: string, number: number, sourceUrl: string, errorMessage: string, hostId?: string): Promise<WorkspaceFilesResponse> {
-	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/pr/{prNumber}/files", {
-		params: { path: { sessionId, prNumber: number }, query: { sourceUrl } },
-	});
-	if (error) throw new Error(apiErrorMessage(error, errorMessage));
-	return {
-		...data,
-		sections: { staged: [], unstaged: [], untracked: [], committed: data?.files ?? [] },
-		commits: (data?.commits ?? []).map((commit) => ({ ...commit, files: commit.files ?? [] })),
-	} as WorkspaceFilesResponse;
 }
 
 export const sessionWorkspaceFileQueryKey = (sessionId: string, path: string, scope: WorkspaceDiffScope = "combined", commitSha?: string, hostId?: string) =>
@@ -409,7 +393,7 @@ export function sessionSourceFileQueryOptions(sessionId: string, source: FilesSo
 /** `selectionKey` names the view and commits read (workspaceSelectionKey); "" is the worktree's own scope or range. */
 export const sessionWorkspaceDiffsQueryKey = (
 	sessionId: string,
-	scope: WorkspaceReviewScope,
+	scope: WorkspaceDiffScope,
 	paths: readonly string[],
 	contextLines: number,
 	ignoreWhitespace: boolean,
@@ -440,7 +424,7 @@ export function sessionWorkspaceDiffsQueryOptions({
 	errorMessage?: string;
 	ignoreWhitespace?: boolean;
 	paths: readonly string[];
-	scope: WorkspaceReviewScope;
+	scope: WorkspaceDiffScope;
 	sessionId: string;
 	workspaceVersion?: string;
 	commitSha?: string;
@@ -479,7 +463,7 @@ export async function fetchWorkspaceFileRevision({
 	errorMessage?: string;
 	expectedRevision?: string;
 	path: string;
-	scope: WorkspaceReviewScope;
+	scope: WorkspaceDiffScope;
 	sessionId: string;
 	side: "before" | "after";
 	workspaceVersion?: string;
@@ -522,7 +506,7 @@ export function sessionWorkspaceFileRevisionQueryOptions({
 	hostId,
 }: {
 	path: string;
-	scope: WorkspaceReviewScope;
+	scope: WorkspaceDiffScope;
 	sessionId: string;
 	side: "before" | "after";
 	workspaceVersion?: string;
@@ -542,7 +526,7 @@ export function sessionWorkspaceFileRevisionQueryOptions({
 /** The full contents the review pane loads up front for a file whose patch ends on its last hunk. */
 export const filesReviewEndOfFileQueryKey = (
 	sessionId: string,
-	scope: WorkspaceReviewScope,
+	scope: WorkspaceDiffScope,
 	selectionKey: string,
 	path: string,
 	fileFingerprint: string,
@@ -745,23 +729,6 @@ export function invalidateWorkspaceViews(queryClient: QueryClient, sessionId: st
 	void queryClient.invalidateQueries({ queryKey: prefix, predicate: (query) => query.queryKey.length > prefix.length });
 }
 
-
-export function sessionSourceFilesQueryOptions(sessionId: string, source: FilesSource, errorMessage = "Unable to load files", hostId?: string): UseQueryOptions<WorkspaceFilesResponse> {
-	if (source.kind === "workspace") return sessionWorkspaceFilesQueryOptions(sessionId, errorMessage, hostId);
-	if (source.kind === "pull_request") {
-		return { queryKey: hostId ? ["session-source-files", hostId, sessionId, "pull_request", source.url, source.snapshot ?? ""] : ["session-source-files", sessionId, "pull_request", source.url, source.snapshot ?? ""], queryFn: () => fetchSessionPRFiles(sessionId, source.number, source.url, errorMessage, hostId) };
-	}
-	// Artifact directory listings come from the session summary artifactFiles
-	// contract. The queryFn still needs to exist and type-check even though the
-	// Files explorer disables this query while the artifact source is active.
-	return {
-		queryKey: ["session-source-files", sessionId, "artifact"] as const,
-		queryFn: (): Promise<WorkspaceFilesResponse> => {
-			throw new Error("Artifact sources do not support directory listing");
-		},
-	};
-}
-
 export function workspaceFilesRefetchInterval(state: WorkspaceFileConnectionState, degraded = false): false | number {
 	return state === "degraded" || degraded ? WORKSPACE_FILES_DEGRADED_REFETCH_MS : false;
 }
@@ -820,20 +787,6 @@ const lastPrefetchedReview = new Map<string, string>();
 function isDeferredReviewFile(file: WorkspaceFileSummary) {
 	const name = file.path.split("/").pop()?.toLowerCase() ?? "";
 	return file.size > 512 * 1024 || /^(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|go\.sum|cargo\.lock)$/.test(name);
-}
-
-// The review pane's own default until it reads a ReviewTarget from the Files
-// header; prefetch already follows defaultWorkspaceReviewTarget.
-export function defaultWorkspaceReviewSelection(data: WorkspaceFilesResponse): { commitSha?: string; files: WorkspaceFileSummary[]; scope: WorkspaceDiffScope } {
-	// The Files tab count can be seeded from a files array alone. Prefetch only
-	// runs against a full workspace response.
-	const sections = data.sections;
-	if (!sections) return { scope: "combined", files: [] };
-	const files = (data.files ?? []).filter(isChangedWorkspaceFile);
-	if (files.length > 0) return { scope: "combined", files };
-	const commit = data.commits?.[0];
-	if (commit) return { scope: "committed", commitSha: commit.sha, files: commit.files ?? [] };
-	return { scope: "combined", files };
 }
 
 /**

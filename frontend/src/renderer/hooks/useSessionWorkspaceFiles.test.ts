@@ -5,7 +5,6 @@ import {
 	sessionWorkspaceSearchQueryOptions,
 	sessionSourceFileQueryOptions,
 	sessionSourceFileRevisionQueryOptions,
-	sessionSourceFilesQueryOptions,
 	updateSessionWorkspaceFile,
 	workspaceFilesRefetchInterval,
 } from "./useSessionWorkspaceFiles";
@@ -42,8 +41,7 @@ describe("workspaceFilesRefetchInterval", () => {
 describe("pull request file query keys", () => {
 	const source = { kind: "pull_request", number: 42, url: "https://example.test/pull/42", label: "PR #42", snapshot: "head-2" } as const;
 
-	it("isolates list, detail, and revision caches by snapshot", () => {
-		expect(sessionSourceFilesQueryOptions("session-1", source).queryKey).toContain("head-2");
+	it("isolates detail and revision caches by snapshot", () => {
 		expect(sessionSourceFileQueryOptions("session-1", source, "README.md").queryKey).toContain("head-2");
 		expect(sessionSourceFileRevisionQueryOptions({ path: "README.md", scope: "combined", sessionId: "session-1", side: "after", source }).queryKey).toContain("head-2");
 	});

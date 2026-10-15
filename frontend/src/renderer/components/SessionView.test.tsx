@@ -1052,6 +1052,7 @@ describe("SessionView", () => {
 	});
 
 	it("opens the workspace changes from Files after an artifact was opened", async () => {
+		useUiStore.getState().setFilesSelection("sess-1", { branch: { kind: "branch", name: "main" }, changes: { kind: "commits", shas: [] } });
 		render(<SessionView sessionId="sess-1" />);
 
 		fireEvent.click(screen.getByRole("button", { name: "open artifact feedback" }));
@@ -1059,7 +1060,8 @@ describe("SessionView", () => {
 
 		fireEvent.click(screen.getByRole("button", { name: "open files" }));
 
-		expect(useUiStore.getState().inspectorSessions["sess-1"]?.filesSource).toEqual({ kind: "workspace" });
+		// Files opens on the checked-out branch's default review.
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.filesSelection).toBeUndefined();
 		expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("files");
 		expect(screen.queryByText("artifacts view")).not.toBeInTheDocument();
 	});

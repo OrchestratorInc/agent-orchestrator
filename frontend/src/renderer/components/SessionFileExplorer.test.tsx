@@ -7,8 +7,7 @@ import { SessionFileExplorer } from "./SessionFileExplorer";
 import { FilesTopbarHostContext } from "./files-topbar-host";
 import { TooltipProvider } from "./ui/tooltip";
 import { useUiStore } from "../stores/ui-store";
-import { sessionSourceFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
-import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
+import { sessionSourceFileQueryOptions, type ReviewTarget, type WorkspaceBranches, type WorkspaceCommitSummary, type WorkspaceHistoryResponse } from "../hooks/useSessionWorkspaceFiles";
 import { sessionUiKey } from "../lib/hosts";
 import type { TreeNode } from "../hooks/useSessionWorkspaceTree";
 
@@ -23,6 +22,8 @@ vi.mock("../lib/api-client", () => ({
 		if (error instanceof Error) return error.message;
 		return fallback;
 	},
+	apiErrorCode: () => undefined,
+	apiErrorDetails: () => undefined,
 }));
 
 vi.mock("../lib/host-clients", () => ({
@@ -80,9 +81,10 @@ vi.mock("./FileContentPane", () => ({
 }));
 
 vi.mock("./diffs/WorkspaceReviewPane", () => ({
-	WorkspaceReviewPane: ({ canOpenInCenter = true, filter, onBrowseAll, onOpenFile }: { canOpenInCenter?: boolean; filter: string; onBrowseAll: () => void; onOpenFile?: (path: string, options?: { editing?: boolean; mode?: "diff" | "file" | "rendered" }) => void }) => (
+	WorkspaceReviewPane: ({ canOpenInCenter = true, filter, onBrowseAll, onOpenFile, target }: { canOpenInCenter?: boolean; filter: string; onBrowseAll?: () => void; onOpenFile?: (path: string, options?: { editing?: boolean; mode?: "diff" | "file" | "rendered" }) => void; target: ReviewTarget }) => (
 		<div data-testid="review-pane">
 			<span data-testid="review-filter">{filter}</span>
+			<span data-testid="review-target">{target.key}</span>
 			<button onClick={onBrowseAll} type="button">Browse all files</button>
 			<button onClick={() => onOpenFile?.("src/App.tsx", { mode: "file" })} type="button">Open full file</button>
 			<button onClick={() => onOpenFile?.("README.md", { mode: "rendered" })} type="button">Render README.md</button>
@@ -259,39 +261,6 @@ describe("SessionFileExplorer", () => {
 		titlebar.remove();
 	});
 
-	it("does not offer artifacts as a Files source in the workspace dropdown", async () => {
-		// A PR keeps the source picker itself visible, so the Branch submenu can
-		// actually be opened and inspected.
-		getMock.mockImplementation(async (path: string) => {
-			if (path === "/api/v1/sessions/{sessionId}/pr") {
-				return { data: { sessionId: "sess-artifacts", prs: [{ number: 42, url: "https://example.test/pr/42", sourceBranch: "feature/files", title: "Files" }] } };
-			}
-			return {
-				data: {
-					sessionId: "sess-artifacts",
-					files: [{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 10, binary: false }],
-					truncated: false,
-				},
-			};
-		});
-		renderWithQuery(<SessionFileExplorer sessionId="sess-artifacts" />);
-
-		expect(await screen.findByRole("tablist", { name: "File view" })).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "File source" }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: "Branch" }));
-
-		expect(await screen.findByRole("menuitem", { name: "PR #42 · feature/files" })).toBeInTheDocument();
-		expect(screen.queryByRole("menuitem", { name: "Artifacts (2)" })).not.toBeInTheDocument();
-	});
-
-	it("shows the workspace when a stale artifact source is stored", async () => {
-		const sessionId = "sess-stale-artifact-source";
-		useUiStore.getState().setFilesSource(sessionId, { kind: "artifact" });
-		renderWithQuery(<SessionFileExplorer sessionId={sessionId} />);
-
-		expect(await screen.findByTestId("review-pane")).toBeInTheDocument();
-	});
-
 	it("defaults to the continuous changes review and can switch to the full file tree", async () => {
 		const sessionId = "sess-explorer-2";
 		renderWithQuery(<SessionFileExplorer sessionId={sessionId} />);
@@ -322,188 +291,8 @@ describe("SessionFileExplorer", () => {
 		expect(screen.queryByRole("tab", { name: "Changes" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("tab", { name: "Files" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Split diff view" })).not.toBeInTheDocument();
-		// Nothing to review and no PR: the picker's only entry would be Workspace.
-		expect(screen.queryByRole("button", { name: "File source" })).not.toBeInTheDocument();
-	});
-
-	it("switches to an associated PR without changing the workspace", async () => {
-		getMock.mockImplementation(async (path: string) => {
-			if (path === "/api/v1/sessions/{sessionId}/pr") {
-				return { data: { sessionId: "sess-pr", prs: [{ number: 42, url: "https://example.test/pr/42", sourceBranch: "feature/files", title: "Files" }] } };
-			}
-			return {
-				data: {
-					sessionId: "sess-pr",
-					files: [{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 10, binary: false }],
-					truncated: false,
-				},
-			};
-		});
-		renderWithQuery(<SessionFileExplorer sessionId="sess-pr" />);
-		expect(await screen.findByRole("tablist", { name: "File view" })).toBeInTheDocument();
-
-		// On the workspace the trigger already names it, so there is no Workspace button,
-		// and Branch › lists only PRs because Workspace is not a branch.
-		expect(screen.queryByRole("button", { name: "Workspace" })).not.toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "File source" }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: "Branch" }));
-		const prItem = await screen.findByRole("menuitem", { name: "PR #42 · feature/files" });
-		expect(screen.queryByRole("menuitem", { name: "Workspace" })).not.toBeInTheDocument();
-		await userEvent.click(prItem);
-
-		expect(screen.getByRole("button", { name: "File source" })).toHaveTextContent("PR #42 · feature/files");
-		expect(screen.getByRole("button", { name: "Workspace" })).toBeInTheDocument();
-		// The Changes view is workspace-only, so a PR source hides the switch.
-		expect(screen.queryByRole("tablist", { name: "File view" })).not.toBeInTheDocument();
-		expect(screen.getByTestId("tree-changed-only")).toHaveTextContent("true");
-		// The preview beside the tree gets the same unified/split switch as Changes,
-		// and follows it at any width.
-		expect(screen.getByTestId("content-pane")).toHaveAttribute("data-split", "false");
-		await userEvent.click(screen.getByRole("button", { name: "Split diff view" }));
-		expect(screen.getByRole("button", { name: "Unified diff view" })).toHaveAttribute("aria-pressed", "true");
-		expect(screen.getByTestId("content-pane")).toHaveAttribute("data-split", "true");
-		expect(getMock).toHaveBeenCalledWith(
-			"/api/v1/sessions/{sessionId}/pr/{prNumber}/files",
-			expect.objectContaining({
-				params: {
-					path: { sessionId: "sess-pr", prNumber: 42 },
-					query: { sourceUrl: "https://example.test/pr/42" },
-				},
-			}),
-		);
-	});
-
-	it("lets the user return to Workspace while an active PR has no SCM summary yet", async () => {
-		const sessionId = "sess-pr-scm-loading";
-		const url = "https://example.test/pr/42";
-		useUiStore.getState().setFilesSource(sessionId, { kind: "pull_request", number: 42, url, label: "PR #42 · files" });
-		getMock.mockImplementation((path: string) => {
-			if (path === "/api/v1/sessions/{sessionId}/pr") return new Promise(() => {});
-			return Promise.resolve({ data: { sessionId, files: [], truncated: false } });
-		});
-		renderWithQuery(<SessionFileExplorer sessionId={sessionId} />);
-
-		// Workspace is a button before the picker; the picker itself has nothing
-		// to list until the PR summary arrives, so it stays hidden.
-		const workspaceButton = await screen.findByRole("button", { name: "Workspace" });
-		expect(screen.queryByRole("button", { name: "File source" })).not.toBeInTheDocument();
-		await userEvent.click(workspaceButton);
-
-		expect(useUiStore.getState().inspectorSessions[sessionId]?.filesSource).toEqual({ kind: "workspace" });
-	});
-
-	it("refreshes PR files when the observed head changes", async () => {
-		const sessionId = "sess-pr-refresh";
-		const url = "https://example.test/pr/42";
-		useUiStore.getState().setFilesSource(sessionId, { kind: "pull_request", number: 42, url, label: "PR #42 · files" });
-		getMock.mockImplementation(async (path: string) => {
-			if (path === "/api/v1/sessions/{sessionId}/pr") {
-				return { data: { sessionId, prs: [{ headSha: "head-1", number: 42, url, sourceBranch: "files", title: "Files" }] } };
-			}
-			return { data: { sessionId, files: [], truncated: false } };
-		});
-		const { client } = renderWithQuery(<SessionFileExplorer sessionId={sessionId} />);
-
-		await waitFor(() => expect(client.getQueryData(["session-source-files", sessionId, "pull_request", url, "head-1"])).toBeDefined());
-		client.setQueryData(sessionScmSummaryQueryKey(sessionId), { prs: [{ headSha: "head-2", number: 42, url, sourceBranch: "files", title: "Files" }], linkedPrs: [] });
-		await waitFor(() => expect(client.getQueryData(["session-source-files", sessionId, "pull_request", url, "head-2"])).toBeDefined());
-	});
-
-	it("lists a PR's own commits and narrows the tree and preview to the one picked", async () => {
-		const sessionId = "sess-pr-commits";
-		const url = "https://example.test/pr/42";
-		useUiStore.getState().setFilesSource(sessionId, { kind: "pull_request", number: 42, url, label: "PR #42 · files" });
-		const readme = { path: "README.md", status: "modified", additions: 1, deletions: 1, size: 0, binary: false };
-		const notes = { path: "docs/notes.md", status: "added", additions: 2, deletions: 0, size: 0, binary: false };
-		getMock.mockImplementation(async (path: string) => {
-			if (path === "/api/v1/sessions/{sessionId}/pr") {
-				return { data: { sessionId, prs: [{ headSha: "head-1", number: 42, url, sourceBranch: "files", title: "Files" }] } };
-			}
-			return {
-				data: {
-					sessionId,
-					files: [readme, notes],
-					commits: [
-						{ sha: "bbbbbbb2222222", subject: "docs: add notes", author: "Ada", timestamp: "2026-09-26T10:00:00Z", files: [notes] },
-						{ sha: "aaaaaaa1111111", subject: "docs: update readme", author: "Ada", timestamp: "2026-09-26T09:00:00Z", files: [readme] },
-					],
-					truncated: false,
-				},
-			};
-		});
-		renderWithQuery(<SessionFileExplorer sessionId={sessionId} />);
-
-		await waitFor(() => expect(screen.getByTestId("tree-files")).toHaveTextContent("docs/notes.md"));
-		expect(screen.getByTestId("tree-files")).toHaveTextContent("README.md");
-		// Opened from the keyboard: in jsdom every box sits at 0,0, so the split's
-		// resize handle claims (preventDefaults) any pointerdown, including the
-		// one on the picker.
-		const openPicker = async () => {
-			screen.getByRole("button", { name: "File source" }).focus();
-			await userEvent.keyboard("{Enter}");
-		};
-		await openPicker();
-		await userEvent.click(await screen.findByRole("menuitem", { name: "Commits" }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: /docs: update readme/ }));
-
-		expect(screen.getByRole("button", { name: "File source" })).toHaveTextContent("aaaaaaa");
-		expect(screen.getByTestId("tree-files")).toHaveTextContent("README.md");
-		expect(screen.getByTestId("tree-files")).not.toHaveTextContent("docs/notes.md");
-		expect(screen.getByTestId("content-pane")).toHaveAttribute("data-commit-sha", "aaaaaaa1111111");
-
-		// Changes goes back to the whole pull request.
-		await openPicker();
-		await userEvent.click(await screen.findByRole("menuitem", { name: "Changes" }));
-		expect(screen.getByTestId("tree-files")).toHaveTextContent("docs/notes.md");
-		expect(screen.getByTestId("content-pane")).toHaveAttribute("data-commit-sha", "");
-	});
-
-	it("passes a renamed file's previous path to the PR detail request", async () => {
-		const sessionId = "sess-pr-rename";
-		const url = "https://example.test/pr/42";
-		useUiStore.getState().setFilesSource(sessionId, { kind: "pull_request", number: 42, url, label: "PR #42 · files" });
-		getMock.mockImplementation(async (path: string) => {
-			if (path === "/api/v1/sessions/{sessionId}/pr") {
-				return { data: { sessionId, prs: [{ headSha: "head-1", number: 42, url, sourceBranch: "files", title: "Files" }] } };
-			}
-			return { data: { sessionId, files: [{ path: "src/App.tsx", previousPath: "src/OldApp.tsx", status: "renamed", additions: 0, deletions: 0, size: 10, binary: false }], truncated: false } };
-		});
-		renderWithQuery(<SessionFileExplorer isMaximized sessionId={sessionId} />);
-
-		await userEvent.click(await screen.findByRole("button", { name: "select src/App.tsx" }));
-		expect(screen.getByTestId("content-pane")).toHaveAttribute("data-previous-path", "src/OldApp.tsx");
-	});
-
-	it("selects duplicate PR numbers by URL and preserves the source across remounts", async () => {
-		getMock.mockImplementation(async (path: string) => {
-			if (path === "/api/v1/sessions/{sessionId}/pr") {
-				return { data: { sessionId: "sess-duplicate-pr", prs: [
-					{ number: 42, url: "https://github.example/acme/app/pull/42", sourceBranch: "upstream", title: "Upstream" },
-					{ number: 42, url: "https://gitlab.example/acme/app/-/merge_requests/42", sourceBranch: "canonical", title: "Canonical" },
-				] } };
-			}
-			return { data: { sessionId: "sess-duplicate-pr", files: [], truncated: false } };
-		});
-		const first = renderWithQuery(<SessionFileExplorer sessionId="sess-duplicate-pr" />);
-
-		// The picker appears once the PR list gives it something to switch to.
-		await userEvent.click(await screen.findByRole("button", { name: "File source" }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: "Branch" }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: "PR #42 · canonical" }));
-		await waitFor(() => expect(getMock).toHaveBeenCalledWith(
-			"/api/v1/sessions/{sessionId}/pr/{prNumber}/files",
-			expect.objectContaining({ params: { path: { sessionId: "sess-duplicate-pr", prNumber: 42 }, query: { sourceUrl: "https://gitlab.example/acme/app/-/merge_requests/42" } } }),
-		));
-
-		first.unmount();
-		renderWithQuery(<SessionFileExplorer isMaximized sessionId="sess-duplicate-pr" />);
-		expect((await screen.findAllByText("PR #42 · canonical")).length).toBeGreaterThan(0);
-		expect(useUiStore.getState().inspectorSessions["sess-duplicate-pr"]?.filesSource).toEqual({
-			kind: "pull_request",
-			label: "PR #42 · canonical",
-			number: 42,
-			url: "https://gitlab.example/acme/app/-/merge_requests/42",
-		});
+		// Nothing to review on the checked-out branch: only the branch picker stays.
+		expect(screen.queryByRole("button", { name: /^Changes to review/ })).not.toBeInTheDocument();
 	});
 
 	it("keeps the continuous right-side diff visible when opening the full file in center", async () => {
@@ -591,5 +380,177 @@ describe("SessionFileExplorer", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Maximize files" }));
 		expect(onToggleMaximized).toHaveBeenCalledWith(true);
+	});
+});
+
+describe("SessionFileExplorer review pickers", () => {
+	const SHA = (letter: string) => letter.repeat(40);
+	const changed = { path: "src/App.tsx", status: "modified" as const, additions: 1, deletions: 0, size: 10, binary: false };
+	const staged = { path: "README.md", status: "modified" as const, additions: 2, deletions: 1, size: 10, binary: false };
+	const manifest = {
+		files: [changed, staged],
+		sections: { uncommitted: [changed, staged], committed: [], staged: [staged], unstaged: [changed], untracked: [] },
+		commits: [],
+		summary: { additions: 3, deletions: 1, files: 2 },
+		truncated: false,
+		workspaceVersion: "version-1",
+	};
+	const commit = (letter: string): WorkspaceCommitSummary => ({
+		sha: SHA(letter),
+		subject: `Commit ${letter}`,
+		author: "Ada",
+		timestamp: "2026-10-01T00:00:00Z",
+		files: [{ path: `${letter}.ts`, status: "modified", additions: 2, deletions: 1, size: 10, binary: false, editable: false, fileFingerprint: `fp:${letter}` }],
+	});
+	const branchList: WorkspaceBranches = {
+		sessionId: "",
+		supported: true,
+		truncated: false,
+		branches: [
+			{ kind: "local", name: "feature/login", checkedOut: true, isDefault: false, tipSha: SHA("1"), updatedAt: "2026-10-02T00:00:00Z" },
+			{ kind: "local", name: "main", checkedOut: false, isDefault: true, tipSha: SHA("2"), updatedAt: "2026-10-01T00:00:00Z" },
+			{ kind: "pull_request", name: "fix/crash", checkedOut: false, isDefault: false, tipSha: SHA("3"), prNumber: 42, prUrl: "https://github.com/acme/app/pull/42", updatedAt: "2026-09-30T00:00:00Z" },
+		],
+	};
+	const checkedOutHistory: WorkspaceHistoryResponse = {
+		sessionId: "",
+		commits: [commit("a"), commit("b"), commit("c")],
+		view: { kind: "checked_out", rangeMode: "since_base", tipSha: SHA("1"), baseSha: SHA("9") },
+	};
+	const mainHistory: WorkspaceHistoryResponse = {
+		sessionId: "",
+		commits: [commit("e"), commit("f")],
+		rangeSummary: { files: 2, additions: 4, deletions: 2 },
+		view: { kind: "branch", name: "main", rangeMode: "since_base", baseRef: "origin/main", tipSha: SHA("2"), baseSha: SHA("8") },
+	};
+	const READ_PATHS = ["/workspace/manifest", "/workspace/branches", "/workspace/history", "/workspace/file/revision"];
+
+	function routeReads(branches: WorkspaceBranches = branchList) {
+		getMock.mockImplementation(async (path: string, init: { params: { path: { sessionId: string }; query?: { branch?: string } } }) => {
+			const sessionId = init.params.path.sessionId;
+			if (path.endsWith("/workspace/manifest")) return { data: { ...manifest, sessionId } };
+			if (path.endsWith("/workspace/branches")) return { data: { ...branches, sessionId } };
+			if (path.endsWith("/workspace/history")) return { data: { ...(init.params.query?.branch === "main" ? mainHistory : checkedOutHistory), sessionId } };
+			throw new Error(`Unexpected GET ${path}`);
+		});
+		postMock.mockImplementation(async (_path: string, init: { params: { path: { sessionId: string } } }) => ({
+			data: { sessionId: init.params.path.sessionId, tipSha: SHA("2"), contiguous: true, combinable: true, files: [changed], summary: { files: 1, additions: 1, deletions: 0 }, truncated: false },
+		}));
+	}
+
+	// An open menu hides the rest of the page from role queries, its own trigger included.
+	const changesTrigger = (scope: HTMLElement = document.body) => within(scope).getByRole("button", { hidden: true, name: /^Changes to review:/ });
+	const selectionRequests = () => postMock.mock.calls.filter(([path]) => String(path).endsWith("/workspace/history/selection"));
+
+	beforeEach(() => routeReads());
+
+	it("shows Changes and Branch dropdowns side by side instead of the Workspace button", async () => {
+		renderWithQuery(<SessionFileExplorer sessionId="sess-pickers" />);
+
+		const changes = await screen.findByRole("button", { name: "Changes to review: Uncommitted" });
+		const branch = await screen.findByRole("button", { name: "Branch to review: feature/login" });
+		const header = changes.closest("header");
+		expect(header).toHaveClass("@container/files-header");
+		expect(header).toContainElement(branch);
+		expect(changes.compareDocumentPosition(branch) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Workspace" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "File source" })).not.toBeInTheDocument();
+		expect(screen.getByTestId("review-target")).toHaveTextContent("uncommitted");
+	});
+
+	it("lists local branches with the checked-out one first and updated times", async () => {
+		renderWithQuery(<SessionFileExplorer sessionId="sess-branch-list" />);
+
+		await userEvent.click(await screen.findByRole("button", { name: "Branch to review: feature/login" }));
+		const rows = await screen.findAllByRole("menuitemradio");
+		expect(rows.map((row) => row.textContent)).toEqual([
+			expect.stringMatching(/^feature\/login.*Checked out · Updated/),
+			expect.stringMatching(/^main.*Updated/),
+			expect.stringMatching(/^fix\/crash.*Pull request #42 · Updated/),
+		]);
+		expect(rows[0]).toHaveAttribute("aria-checked", "true");
+	});
+
+	it("picking another branch offers only commits, hides the view tabs, and sends only read requests", async () => {
+		const sessionId = "sess-other-branch";
+		renderWithQuery(<SessionFileExplorer sessionId={sessionId} />);
+		expect(await screen.findByRole("tablist", { name: "File view" })).toBeInTheDocument();
+
+		await userEvent.click(await screen.findByRole("button", { name: "Branch to review: feature/login" }));
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: /^main/ }));
+
+		expect(await screen.findByRole("button", { name: "Branch to review: main" })).toBeInTheDocument();
+		await waitFor(() => expect(changesTrigger()).toHaveAccessibleName("Changes to review: All commits"));
+		expect(screen.queryByRole("tablist", { name: "File view" })).not.toBeInTheDocument();
+		expect(screen.getByTestId("review-target")).toHaveTextContent("branch:main:all");
+		expect(useUiStore.getState().inspectorSessions[sessionId]?.filesSelection).toEqual({ branch: { kind: "branch", name: "main", tipSha: SHA("2") }, changes: null });
+
+		await userEvent.click(changesTrigger());
+		expect(screen.queryByRole("menuitemradio")).not.toBeInTheDocument();
+		expect(await screen.findByRole("menuitemcheckbox", { name: /^All commits/ })).toHaveAttribute("aria-checked", "true");
+		expect(screen.getByRole("menuitemcheckbox", { name: /^Commit e/ })).toBeInTheDocument();
+
+		await waitFor(() => expect(selectionRequests()).toHaveLength(1));
+		expect(selectionRequests()[0][1].body).toEqual(expect.objectContaining({ branch: "main", commitShas: [], expectedTipSha: SHA("2"), expectedBaseSha: SHA("8") }));
+		expect(getMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/history", expect.objectContaining({ params: { path: { sessionId }, query: { branch: "main" } } }));
+		for (const [path] of getMock.mock.calls) expect(READ_PATHS.some((read) => String(path).endsWith(read))).toBe(true);
+		for (const [path] of postMock.mock.calls) expect(String(path)).toMatch(/\/workspace\/(history\/selection|diffs)$/);
+	});
+
+	it("falls back with a notice when the selected branch disappears", async () => {
+		const sessionId = "sess-branch-gone";
+		useUiStore.getState().setFilesSelection(sessionId, { branch: { kind: "branch", name: "spike/old" }, changes: null });
+		renderWithQuery(<SessionFileExplorer sessionId={sessionId} />);
+
+		expect(await screen.findByRole("status")).toHaveTextContent("spike/old is no longer available; showing the checked-out branch.");
+		expect(useUiStore.getState().inspectorSessions[sessionId]?.filesSelection).toBeUndefined();
+		expect(await screen.findByRole("button", { name: "Branch to review: feature/login" })).toBeInTheDocument();
+	});
+
+	it("commit checkboxes keep the menu open and send commitShas, and All commits clears the ticks", async () => {
+		renderWithQuery(<SessionFileExplorer sessionId="sess-ticks" />);
+
+		await userEvent.click(await screen.findByRole("button", { name: "Changes to review: Uncommitted" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: /^Commits/ }));
+		await userEvent.click(await screen.findByRole("menuitemcheckbox", { name: /^Commit a/ }));
+		await userEvent.click(screen.getByRole("menuitemcheckbox", { name: /^Commit c/ }));
+		expect(screen.getAllByRole("menu").length).toBeGreaterThan(0);
+		expect(screen.getByRole("menuitemcheckbox", { name: /^Commit c/ })).toHaveAttribute("aria-checked", "true");
+
+		await waitFor(() => expect(selectionRequests().at(-1)?.[1].body).toEqual(expect.objectContaining({ commitShas: [SHA("a"), SHA("c")], workspaceVersion: "version-1" })));
+		expect(changesTrigger()).toHaveAccessibleName("Changes to review: 2 commits");
+
+		await userEvent.click(screen.getByRole("menuitemcheckbox", { name: /^All commits/ }));
+		expect(screen.getByRole("menuitemcheckbox", { name: /^Commit a/ })).toHaveAttribute("aria-checked", "false");
+		expect(changesTrigger()).toHaveAccessibleName("Changes to review: All commits");
+	});
+
+	it("docked and maximized explorers share the selection", async () => {
+		renderWithQuery(<>
+			<SessionFileExplorer sessionId="sess-shared" />
+			<SessionFileExplorer isMaximized sessionId="sess-shared" />
+		</>);
+		const [docked, maximized] = screen.getAllByRole("region", { name: "Session files" });
+
+		await userEvent.click(await within(docked).findByRole("button", { name: "Changes to review: Uncommitted" }));
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: /^Staged/ }));
+
+		expect(changesTrigger(docked)).toHaveAccessibleName("Changes to review: Staged");
+		expect(changesTrigger(maximized)).toHaveAccessibleName("Changes to review: Staged");
+		expect(within(maximized).getByTestId("review-target")).toHaveTextContent("staged");
+	});
+
+	it("left trigger stays in the All files view and switches to Changes", async () => {
+		const sessionId = "sess-all-files";
+		useUiStore.getState().setFilesChangedOnly(sessionId, false);
+		renderWithQuery(<SessionFileExplorer sessionId={sessionId} />);
+
+		expect(await screen.findByTestId("tree-changed-only")).toHaveTextContent("false");
+		await userEvent.click(await screen.findByRole("button", { name: "Changes to review: Uncommitted" }));
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: /^Unstaged/ }));
+
+		expect(await screen.findByTestId("review-pane")).toBeInTheDocument();
+		expect(screen.getByTestId("review-target")).toHaveTextContent("unstaged");
+		expect(useUiStore.getState().inspectorSessions[sessionId]?.filesChangedOnly).toBe(true);
 	});
 });
