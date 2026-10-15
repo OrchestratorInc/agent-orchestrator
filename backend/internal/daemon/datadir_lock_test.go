@@ -39,3 +39,21 @@ func TestLockDataDirWaitsThenRefusesToStart(t *testing.T) {
 		t.Fatalf("no waiting log line in:\n%s", logs.String())
 	}
 }
+
+// Only a lock that is still held gets the refusal verdict; any other failure
+// while waiting (here a cancelled context) comes back as itself.
+func TestLockDataDirReturnsOtherErrorsAsIs(t *testing.T) {
+	dir := t.TempDir()
+	held, err := datadirlock.Acquire(context.Background(), dir, 0)
+	if err != nil {
+		t.Fatalf("hold lock: %v", err)
+	}
+	t.Cleanup(func() { _ = held.Release() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = lockDataDir(ctx, dir, time.Minute, slog.New(slog.DiscardHandler))
+	if !errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "refusing to start") {
+		t.Fatalf("lockDataDir = %v, want context.Canceled without the lock verdict", err)
+	}
+}

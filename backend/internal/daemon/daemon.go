@@ -164,11 +164,16 @@ func Run(buildVersion string) error {
 	// a successor reclaims it with no stale-lock bookkeeping.
 	//
 	// A desktop takeover spawns this daemon as soon as the old one's /healthz
-	// goes dark, which happens when its shutdown starts: it then drains HTTP for
-	// up to ShutdownTimeout and stops workers in stages capped the same way.
-	// Waiting three shutdown timeouts (30s by default, the desktop's
-	// port-discovery window) covers the drain plus two capped stages.
-	dataDirLock, err := lockDataDir(context.Background(), cfg.DataDir, 3*cfg.ShutdownTimeout, log)
+	// goes dark, which happens when its shutdown starts. With T = ShutdownTimeout,
+	// the old daemon's capped shutdown (end of Run) then takes at most 8T+7s: the
+	// HTTP drain and seven stages capped at T each (failure dispatcher, harness
+	// installer, background workers, agent-switch workers, Codex account-switch
+	// workers, chat StopAll, LAN listener), a 5s agent-switch fault enqueue and
+	// a 2s Sentry flush. Wait 9T+7s (97s by default), one stage of margin. Run's
+	// uncapped waits (startup reconcile, preview, usage, pricing, lifecycle
+	// stack) are not covered: a predecessor stuck in one past the wait still
+	// makes this daemon exit 75.
+	dataDirLock, err := lockDataDir(context.Background(), cfg.DataDir, 9*cfg.ShutdownTimeout+7*time.Second, log)
 	if err != nil {
 		return err
 	}
@@ -1388,8 +1393,12 @@ func lockDataDir(ctx context.Context, dataDir string, wait time.Duration, log *s
 	}
 	log.Warn("waiting for another AO process to release the data dir", "err", err, "wait", wait)
 	start := time.Now()
-	if lock, err = datadirlock.Acquire(ctx, dataDir, wait); err != nil {
+	lock, err = datadirlock.Acquire(ctx, dataDir, wait)
+	if errors.Is(err, datadirlock.ErrLocked) {
 		return nil, fmt.Errorf("%w; waited %s for it to exit, refusing to start", err, wait)
+	}
+	if err != nil {
+		return nil, err
 	}
 	log.Info("data dir lock acquired", "waited", time.Since(start).Round(time.Millisecond))
 	return lock, nil

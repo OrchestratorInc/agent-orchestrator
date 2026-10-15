@@ -112,7 +112,7 @@ func (c *commandContext) runImport(cmd *cobra.Command, opts importOptions) error
 func (c *commandContext) executeImport(ctx context.Context, cfg config.Config, opts legacyimport.Options) (legacyimport.Report, error) {
 	lock, err := datadirlock.Acquire(ctx, cfg.DataDir, 0)
 	if errors.Is(err, datadirlock.ErrLocked) {
-		return legacyimport.Report{}, usageError{fmt.Errorf("%w; stop it first with `ao stop` before importing", err)}
+		return legacyimport.Report{}, usageError{fmt.Errorf("%w; stop that process before importing", err)}
 	}
 	if err != nil {
 		return legacyimport.Report{}, err

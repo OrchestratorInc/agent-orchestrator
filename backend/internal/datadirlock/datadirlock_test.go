@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -72,13 +73,15 @@ func TestReleaseHandsLockToWaiter(t *testing.T) {
 // daemon never wedges its data dir.
 func TestLockReleasedWhenHolderKilled(t *testing.T) {
 	if dir := os.Getenv("AO_DATADIRLOCK_HOLDER"); dir != "" {
-		if _, err := Acquire(context.Background(), dir, 0); err != nil {
+		lock, err := Acquire(context.Background(), dir, 0)
+		if err != nil {
 			fmt.Println("error:", err)
 			os.Exit(1)
 		}
 		fmt.Println("locked")
 		// Hold until killed; exit if the parent test dies and closes stdin.
 		_, _ = io.Copy(io.Discard, os.Stdin)
+		runtime.KeepAlive(lock) // an unreachable *os.File is closed by its finalizer
 		os.Exit(0)
 	}
 

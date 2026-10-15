@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -116,6 +117,10 @@ func TestImportCommand_RefusesWhenDataDirLocked(t *testing.T) {
 	_, _, err = executeCLI(t, Deps{}, "import", "--from", root, "--yes")
 	if !errors.Is(err, datadirlock.ErrLocked) || ExitCode(err) != 2 {
 		t.Fatalf("err = %v (exit %d), want a data-dir-locked usage error", err, ExitCode(err))
+	}
+	// `ao stop` only reaches the daemon in this AO_RUN_FILE; point at the holder's PID instead.
+	if msg := err.Error(); !strings.Contains(msg, "pid "+strconv.Itoa(os.Getpid())) || strings.Contains(msg, "ao stop") {
+		t.Fatalf("refusal should name the holder pid %d and not suggest ao stop: %v", os.Getpid(), err)
 	}
 	if _, statErr := os.Stat(filepath.Join(cfg.dataDir, "ao.db")); !os.IsNotExist(statErr) {
 		t.Fatalf("import touched ao.db under a locked data dir: %v", statErr)
