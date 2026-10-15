@@ -960,6 +960,103 @@ describe("bounded live refresh", () => {
 	});
 });
 
+describe("background session updates", () => {
+	const sessionUpdate = (sessionId: string, payload: Record<string, unknown>) =>
+		cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId, type: "session_updated", payload: { id: sessionId, ...payload } }));
+	const workspaceRefreshes = (client: ReturnType<typeof fakeQueryClient>) =>
+		vi.mocked(client.invalidateQueries).mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === JSON.stringify(["workspaces"])).length;
+	afterEach(() => vi.useRealTimers());
+
+	it("collapses a flood of id-only updates into one refresh per interval", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		// Usage bookkeeping touches every session every couple of seconds.
+		for (let elapsed = 0; elapsed < 12_000; elapsed += 100) {
+			for (const sessionId of ["a", "b", "c"]) sessionUpdate(sessionId, {});
+			await vi.advanceTimersByTimeAsync(100);
+		}
+		// Leading edge at 0s, then one trailing refresh at 5s and 10s.
+		expect(workspaceRefreshes(client)).toBe(3);
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["editor-handoff", "b"] }, { cancelRefetch: false });
+		disconnect();
+	});
+
+	it("refreshes a session update whose status repeats through the background lane", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		sessionUpdate("a", { activity: "active", isTerminated: false });
+		expect(workspaceRefreshes(client)).toBe(1);
+		await vi.advanceTimersByTimeAsync(200);
+		// The first background update after a quiet interval goes out at once.
+		sessionUpdate("b", {});
+		expect(workspaceRefreshes(client)).toBe(2);
+		// Same status again (only an untracked field changed): waits for the interval.
+		await vi.advanceTimersByTimeAsync(200);
+		sessionUpdate("a", { activity: "active", isTerminated: false });
+		await vi.advanceTimersByTimeAsync(200);
+		expect(workspaceRefreshes(client)).toBe(2);
+		await vi.advanceTimersByTimeAsync(5_000);
+		expect(workspaceRefreshes(client)).toBe(3);
+		disconnect();
+	});
+
+	it("shows real status changes and new sessions promptly while the background lane is busy", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		sessionUpdate("a", { activity: "active", isTerminated: false });
+		sessionUpdate("noise", {});
+		await vi.advanceTimersByTimeAsync(1_000);
+		const before = workspaceRefreshes(client);
+
+		sessionUpdate("noise", {});
+		sessionUpdate("a", { activity: "idle", isTerminated: false });
+		await vi.advanceTimersByTimeAsync(150);
+		expect(workspaceRefreshes(client)).toBe(before + 1);
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["editor-handoff", "a"] }, { cancelRefetch: false });
+
+		await vi.advanceTimersByTimeAsync(1_000);
+		sessionUpdate("a", { activity: "idle", isTerminated: true });
+		await vi.advanceTimersByTimeAsync(150);
+		expect(workspaceRefreshes(client)).toBe(before + 2);
+
+		await vi.advanceTimersByTimeAsync(1_000);
+		cdcSources()[0].emit("session_created", JSON.stringify({ sessionId: "new", type: "session_created", payload: { id: "new" } }));
+		await vi.advanceTimersByTimeAsync(150);
+		expect(workspaceRefreshes(client)).toBe(before + 3);
+		disconnect();
+	});
+
+	it("drops background work a prompt refresh already covered", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		sessionUpdate("noise", {});
+		sessionUpdate("noise", {});
+		// A status change refreshes the workspace before the background interval ends.
+		sessionUpdate("a", { activity: "active" });
+		await vi.advanceTimersByTimeAsync(150);
+		const afterPrompt = workspaceRefreshes(client);
+		await vi.advanceTimersByTimeAsync(6_000);
+		expect(workspaceRefreshes(client)).toBe(afterPrompt);
+		disconnect();
+	});
+
+	it("drops a pending background refresh on disconnect", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		sessionUpdate("noise", {});
+		sessionUpdate("noise", {});
+		const beforeDisconnect = workspaceRefreshes(client);
+		disconnect();
+		await vi.advanceTimersByTimeAsync(6_000);
+		expect(workspaceRefreshes(client)).toBe(beforeDisconnect);
+	});
+});
+
 it("does not cancel an unrelated inactive workspace fetch on CDC", async () => {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const key = ["workspaces"];
