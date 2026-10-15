@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -72,6 +73,10 @@ type Ingestor struct {
 	requestRepair    func()
 	openTranscript   func(string) (*os.File, error)
 	afterRead        func()
+	// parkedConflicts maps a source ID to the cursor at which this process
+	// already watched ApplyUsageChunk reject the next chunk as a source event
+	// conflict. See conflictParked.
+	parkedConflicts sync.Map
 }
 
 // NewIngestor constructs a bounded transcript ingestor.
@@ -167,6 +172,12 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 	}
 	if !parserCheckpointsEqual(cursorSample.checkpoint, parserState.Integrity.Checkpoint) {
 		return i.resetSourceGeneration(ctx, source, identity, now)
+	}
+	if i.conflictParked(source.Source) {
+		if source.BindingState == domain.UsageBindingFinalizing {
+			return result, i.completeBinding(ctx, source.Source.BindingID, now)
+		}
+		return result, nil
 	}
 	if source.Source.State == domain.UsageSourceComplete &&
 		source.BindingState != domain.UsageBindingFinalizing &&
@@ -351,6 +362,8 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 	}
 	if err := apply(); err != nil {
 		if errors.Is(err, domain.ErrUsageSourceEventConflict) {
+			// The source is finished; there is no quiet period left to wait out.
+			result.RetryAt = nil
 			if _, markErr := i.store.MarkUsageSourceState(
 				ctx,
 				source.Source.ID,
@@ -361,6 +374,7 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 			); markErr != nil {
 				return result, errors.Join(err, markErr)
 			}
+			i.parkedConflicts.Store(source.Source.ID, source.Source.ByteOffset)
 			if source.BindingState == domain.UsageBindingFinalizing {
 				return result, i.completeBinding(ctx, source.Source.BindingID, now)
 			}
@@ -665,6 +679,31 @@ func (i *Ingestor) retrySource(
 		cause = errors.New(code)
 	}
 	return result, fmt.Errorf("usage source %d: %w", source.ID, cause)
+}
+
+// conflictParked reports whether this process already watched the chunk at the
+// source's cursor fail as a source event conflict. That outcome is final for
+// the generation: the cursor stays in front of the rejected chunk, so the
+// transcript always looks longer than what was ingested, and rereading the same
+// bytes against the same stored rows fails the same way. Retrying it reopened
+// an idle binding on every pass and published a session_updated pair each
+// finalization wait for as long as the daemon ran.
+//
+// Reactivation, or the new generation a replaced transcript gets, earns a fresh
+// attempt. The marker lives in memory on purpose: a restarted daemon, possibly
+// with newer replay rules, retries every parked source once.
+func (i *Ingestor) conflictParked(source domain.UsageSourceRecord) bool {
+	offset, ok := i.parkedConflicts.Load(source.ID)
+	if !ok {
+		return false
+	}
+	if source.State == domain.UsageSourceComplete &&
+		source.LastErrorCode == domain.UsageErrorSourceEventConflict &&
+		offset == source.ByteOffset {
+		return true
+	}
+	i.parkedConflicts.Delete(source.ID)
+	return false
 }
 
 func (i *Ingestor) completeBinding(ctx context.Context, bindingID int64, now time.Time) error {

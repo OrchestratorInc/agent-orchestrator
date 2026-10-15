@@ -1027,6 +1027,56 @@ func TestApplyUsageChunkReplayComparesNewSourceFactsButNotCosts(t *testing.T) {
 	}
 }
 
+// Break caught: live parsing never infers a provider, so replaying a row the
+// legacy repairer attributed by inference arrives unattributed. Treating that
+// as a conflict stranded the replaying source at its first chunk.
+func TestApplyUsageChunkUnattributedReplayKeepsStoredAttribution(t *testing.T) {
+	for _, stored := range []domain.UsageBillingProviderSource{
+		domain.UsageBillingProviderInferred,
+		domain.UsageBillingProviderObserved,
+	} {
+		t.Run(string(stored), func(t *testing.T) {
+			dataDir := t.TempDir()
+			s := sqlitetest.MustOpenAt(t, dataDir)
+			ctx := context.Background()
+			sess := seedUsageSession(t, s, domain.HarnessClaudeCode)
+			now := time.Unix(1700000000, 0).UTC()
+			source := seedUsageSource(t, s, sess, now)
+			event := anthropicUsageEvent("attributed-event", 5, 10, 5, 4)
+			event.BillingProviderID = "anthropic"
+			event.BillingProviderSource = stored
+			mustNoError(t, s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+				ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now,
+			}, []domain.ModelUsageEvent{event}), "seed attributed event")
+
+			base, err := s.LatestSeq(ctx)
+			mustNoError(t, err)
+			replay := event
+			replay.BillingProviderID = ""
+			replay.BillingProviderSource = ""
+			mustNoError(t, s.ApplyUsageChunk(ctx, source.ID, 10, now, domain.SourceCursorState{
+				ByteOffset: 20, State: domain.UsageSourceActive, UpdatedAt: now.Add(time.Second),
+			}, []domain.ModelUsageEvent{replay}), "unattributed replay")
+			assertUsageSourceOffset(t, s, source.ID, 20)
+			// Nothing about the session changed, so nothing is published.
+			assertUsageSessionUpdatedEvents(t, s, base, sess, 0)
+
+			raw, err := sql.Open("sqlite", "file:"+filepath.Join(dataDir, "ao.db"))
+			mustNoError(t, err, "open raw sqlite")
+			t.Cleanup(func() { _ = raw.Close() })
+			var rows int
+			var provider, providerSource string
+			mustNoError(t, raw.QueryRow(`
+SELECT count(*), max(billing_provider_id), max(billing_provider_source)
+FROM model_usage_events
+WHERE source_event_key = 'attributed-event'`).Scan(&rows, &provider, &providerSource))
+			if rows != 1 || provider != "anthropic" || providerSource != string(stored) {
+				t.Fatalf("rows=%d provider=%q source=%q, want the stored attribution kept", rows, provider, providerSource)
+			}
+		})
+	}
+}
+
 func TestApplyUsageChunkLegacyNullProviderReplayUsesGenericTokenFacts(t *testing.T) {
 	dataDir := t.TempDir()
 	s := sqlitetest.MustOpenAt(t, dataDir)
