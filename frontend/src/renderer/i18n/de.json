@@ -2291,7 +2291,6 @@
 	"settings.harness.updateFailed": "Das Update konnte nicht gestartet werden.",
 	"settings.harness.updateJobFailed": "Aktualisierung fehlgeschlagen.",
 	"settings.harness.updateMethodChanged": "Die Installation von {{agent}} hat sich seit dem Laden dieser Seite geändert. Prüfe sie und versuche es erneut.",
-	"settings.harness.updateTargetChanged": "{{version}} ist jetzt die neueste Version. Wähle erneut „Aktualisieren“, um sie zu installieren.",
 	"settings.harness.working": "Wird ausgeführt…",
 	"settings.harness.expandOptions": "Optionen für {{agent}} aufklappen",
 	"settings.harness.collapseOptions": "Optionen für {{agent}} zuklappen",

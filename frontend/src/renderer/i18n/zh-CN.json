@@ -2357,7 +2357,6 @@
 	"settings.harness.updateFailed": "无法开始更新。",
 	"settings.harness.updateJobFailed": "更新失败。",
 	"settings.harness.updateMethodChanged": "自此页面加载以来，{{agent}} 的安装方式已更改。请检查后重试。",
-	"settings.harness.updateTargetChanged": "最新版本现在是 {{version}}。请再次选择“更新”进行安装。",
 	"settings.harness.working": "处理中…",
 	"settings.harness.expandOptions": "展开 {{agent}} 选项",
 	"settings.harness.collapseOptions": "收起 {{agent}} 选项",

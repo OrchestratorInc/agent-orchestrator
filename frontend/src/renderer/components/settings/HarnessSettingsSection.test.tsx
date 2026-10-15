@@ -993,7 +993,7 @@ describe("HarnessSettingsSection", () => {
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
 	});
 
-	it("says why an update did not start when a newer release appeared", async () => {
+	it("installs the newer release the click-time check found through the same method", async () => {
 		mockInstalledOperations("npm");
 		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
 		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
@@ -1005,8 +1005,8 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const row = await findAgentRow("codex");
 		await userEvent.click(await within(row).findByRole("button", { name: "Update" }));
-		expect(await within(row).findByText("v2.0.0 is now the latest release. Select Update again to install it.")).toBeInTheDocument();
-		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
+		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: "npm", operation: "update", expectedVersion: "2.0.0" } }));
+		expect(within(row).queryByText(/Select Update again/)).toBeNull();
 	});
 
 	it("does not let saved job history override missing current ownership evidence", async () => {

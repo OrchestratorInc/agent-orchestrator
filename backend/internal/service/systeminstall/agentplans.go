@@ -402,11 +402,12 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 		case "bun":
 			plan.Command = []string{"bun", "install", "-g", packageWithoutLatest(plan.Package) + "@latest"}
 		case "official-installer":
-			// These Windows self-updaters do not reliably replace the installed
-			// binary headlessly. Re-run the vendor's Windows installer instead;
-			// ownership and post-update version checks still guard the operation.
-			if s.goos == "windows" && installScript != nil &&
-				(plan.Target == TargetAutohand || plan.Target == TargetGrok) {
+			// These self-updaters do not reliably replace the installed binary
+			// headlessly: installerUpdateTargets on every platform, and these
+			// Windows ones. Re-run the vendor's installer instead; ownership and
+			// post-update version checks still guard the operation.
+			if installScript != nil && (installerUpdateTargets[plan.Target] || s.goos == "windows" &&
+				(plan.Target == TargetAutohand || plan.Target == TargetGrok)) {
 				plan.Command = nil
 				plan.Script = installScript
 				break
@@ -446,12 +447,21 @@ var vendorUpdateCommands = map[Target][]string{
 	TargetCursor:     {"cursor-agent", "update"},
 	TargetAmp:        {"amp", "update", "--porcelain"},
 	TargetGrok:       {"grok", "update"},
-	TargetKimi:       {"kimi", "upgrade", "-y"},
 	TargetDroid:      {"droid", "update"},
 	TargetQwen:       {"qwen", "update"},
 	TargetFX:         {"fx", "upgrade"},
 	TargetPi:         {"pi", "update", "self", "--no-approve"},
 	TargetPrimeAgent: {"prime-agent", "update"},
+}
+
+// installerUpdateTargets update by re-running the vendor installer, pinned to
+// the approved release and bound to the confirmed install directory. Kimi's
+// `kimi upgrade` exits 0 without replacing the binary: it reports "already up
+// to date" from its own staged-rollout channel, prints a manual command for
+// installs it does not manage, and on native installs only stages the new
+// binary for a later launch to swap in.
+var installerUpdateTargets = map[Target]bool{
+	TargetKimi: true,
 }
 
 func packageWithoutLatest(pkg string) string {
@@ -536,14 +546,61 @@ func manualPlan(target Target, reason, docsURL string) Plan {
 	return Plan{Target: target, Unsupported: true, Method: "manual", Reason: reason, DocsURL: docsURL}
 }
 
-// pinVendorUpdate asks OpenCode for the exact release the update advisory
-// reported, so the version installed is the one the update badge announced.
+// pinVendorUpdate asks OpenCode and Kimi's installer for the exact release
+// the update advisory reported, so the version installed is the one the
+// update badge announced.
 func pinVendorUpdate(plan Plan, latest string) Plan {
-	if plan.Method != "official-installer" || plan.Target != TargetOpencode || latest == "" || len(plan.Command) < 2 {
+	if plan.Method != "official-installer" || latest == "" {
+		return plan
+	}
+	if plan.Target == TargetKimi && plan.Script != nil {
+		plan.Script = withInstallerEnv(plan.Script, "KIMI_VERSION="+latest)
+		return plan
+	}
+	if plan.Target != TargetOpencode || len(plan.Command) < 2 {
 		return plan
 	}
 	plan.Command = append([]string{plan.Command[0], plan.Command[1], latest}, plan.Command[2:]...)
 	return plan
+}
+
+// withInstallerEnv returns a copy of script whose environment sets entries,
+// replacing any earlier value of the same keys. Keys compare case-insensitively
+// because Windows environment names do.
+func withInstallerEnv(script *ports.InstallScriptCommand, entries ...string) *ports.InstallScriptCommand {
+	next := *script
+	next.Env = nil
+	for _, entry := range script.Env {
+		key, _, _ := strings.Cut(entry, "=")
+		replaced := slices.ContainsFunc(entries, func(set string) bool {
+			setKey, _, _ := strings.Cut(set, "=")
+			return strings.EqualFold(key, setKey)
+		})
+		if !replaced {
+			next.Env = append(next.Env, entry)
+		}
+	}
+	next.Env = append(next.Env, entries...)
+	return &next
+}
+
+// kimiInstallRoot is the KIMI_INSTALL_DIR whose bin/kimi is binaryPath, in
+// binaryPath's own separators. Kimi's installer writes <root>/bin/kimi, so
+// only a binary in that layout can be replaced in place.
+func kimiInstallRoot(binaryPath string) (string, bool) {
+	slashed := strings.ToLower(strings.ReplaceAll(binaryPath, `\`, "/"))
+	for _, suffix := range []string{"/bin/kimi", "/bin/kimi.exe"} {
+		if !strings.HasSuffix(slashed, suffix) {
+			continue
+		}
+		root := binaryPath[:len(binaryPath)-len(suffix)]
+		slashedRoot := slashed[:len(root)]
+		driveRoot := len(slashedRoot) == 2 && slashedRoot[1] == ':'
+		absolute := strings.HasPrefix(slashedRoot, "/") ||
+			len(slashedRoot) > 2 && slashedRoot[1] == ':' && slashedRoot[2] == '/'
+		return root, root != "" && absolute && !driveRoot
+	}
+	return "", false
 }
 
 // targetInstalledCopy points an update at the copy sessions run. A
@@ -566,16 +623,21 @@ func targetInstalledCopy(goos string, plan Plan, target Target, binaryPath strin
 		if driveAbsolute && end == 2 {
 			end++ // Keep the separator in a drive root such as D:\.
 		}
-		script := *plan.Script
-		script.Env = nil
-		for _, entry := range plan.Script.Env {
-			key, _, _ := strings.Cut(entry, "=")
-			if !strings.EqualFold(key, "GROK_BIN_DIR") {
-				script.Env = append(script.Env, entry)
-			}
+		plan.Script = withInstallerEnv(plan.Script, "GROK_BIN_DIR="+binaryPath[:end])
+		plan.ExpectedDestination = binaryPath
+		return plan
+	}
+	if target == TargetKimi && plan.Method == "official-installer" && plan.Script != nil {
+		// The installer defaults to ~/.kimi-code and, unless told not to, edits
+		// shell rc files and renames other kimi commands on PATH. An update only
+		// replaces the binary sessions run.
+		root, ok := kimiInstallRoot(binaryPath)
+		if !ok {
+			plan.Unsupported = true
+			plan.Reason = fmt.Sprintf("AO could not confirm the Kimi installation directory for %s; update it manually.", binaryPath)
+			return plan
 		}
-		script.Env = append(script.Env, "GROK_BIN_DIR="+binaryPath[:end])
-		plan.Script = &script
+		plan.Script = withInstallerEnv(plan.Script, "KIMI_INSTALL_DIR="+root, "KIMI_NO_MODIFY_PATH=1")
 		plan.ExpectedDestination = binaryPath
 		return plan
 	}

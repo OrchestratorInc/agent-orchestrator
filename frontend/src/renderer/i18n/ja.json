@@ -2291,7 +2291,6 @@
 	"settings.harness.updateFailed": "更新を開始できませんでした。",
 	"settings.harness.updateJobFailed": "更新に失敗しました。",
 	"settings.harness.updateMethodChanged": "このページの読み込み後に {{agent}} のインストール方法が変わりました。確認してから、もう一度お試しください。",
-	"settings.harness.updateTargetChanged": "最新リリースは {{version}} になりました。インストールするにはもう一度「更新」を選択してください。",
 	"settings.harness.working": "処理中…",
 	"settings.harness.expandOptions": "{{agent}} のオプションを展開",
 	"settings.harness.collapseOptions": "{{agent}} のオプションを折りたたむ",

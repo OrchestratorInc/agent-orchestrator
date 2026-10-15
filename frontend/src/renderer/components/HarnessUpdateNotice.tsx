@@ -87,13 +87,12 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 
 	const startUpdate = async (agentId: AgentId, advisory: AgentUpdateAdvisory, methodId: string) => {
 		if (startingRef.current.has(agentId) || isActiveInstallJob(queryClient.getQueryData<InstallJob[]>(installJobsQueryKey)?.find((job) => job.target === agentId))) return;
-		const latestVersion = advisory.latestVersion!;
 		startedUpdates.current.set(agentId, advisory);
 		startingRef.current.add(agentId);
 		setStarting((current) => new Set([...current, agentId]));
 		setErrors((current) => ({ ...current, [agentId]: undefined }));
 		try {
-			const result = await startHarnessUpdate({ agentId, latestVersion, methodId });
+			const result = await startHarnessUpdate({ agentId, methodId });
 			if (result.error) setErrors((current) => ({ ...current, [agentId]: result.error }));
 			if (!result.job) return;
 			startedJobs.current.add(agentId);

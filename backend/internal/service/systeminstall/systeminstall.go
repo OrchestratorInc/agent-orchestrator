@@ -1043,7 +1043,7 @@ func (s *Service) Verify(ctx context.Context, target Target) (Job, error) {
 	}
 	go func() { //nolint:gosec // bounded daemon-owned worker intentionally outlives the request.
 		defer s.workers.Done()
-		s.runAgentVerification(s.backgroundContext, job, nil)
+		s.runAgentVerification(s.backgroundContext, job, nil, "")
 	}()
 	return initial, nil
 }
@@ -1222,13 +1222,34 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		s.finishAgentJob(job, StatusFailed, "", fmt.Sprintf("persist verifying state: %v", err), "")
 		return
 	}
-	s.runAgentVerification(s.backgroundContext, job, baseline)
+	updaterReport := ""
+	if plan.Script == nil {
+		updaterReport = lastOutputLine(out.String())
+	}
+	s.runAgentVerification(s.backgroundContext, job, baseline, updaterReport)
+}
+
+// maxUpdaterReportRunes bounds the updater line quoted in a failed update.
+const maxUpdaterReportRunes = 200
+
+// lastOutputLine is the last non-empty line a command printed, shortened to
+// fit an error message.
+func lastOutputLine(output string) string {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	line := strings.TrimSpace(lines[len(lines)-1])
+	if runes := []rune(line); len(runes) > maxUpdaterReportRunes {
+		line = string(runes[:maxUpdaterReportRunes]) + "…"
+	}
+	return line
 }
 
 // runAgentVerification re-probes the harness after a job. For an update, the
 // baseline from before the command decides whether the binary sessions run
-// actually changed; a zero exit status alone is not proof.
-func (s *Service) runAgentVerification(ctx context.Context, job *Job, baseline *installedBaseline) {
+// actually changed; a zero exit status alone is not proof. updaterReport is
+// the update command's last line: self-updaters can exit 0 without replacing
+// the binary ("already up to date", "update manually", "restart to finish"),
+// and a failed update quotes it so the user sees which.
+func (s *Service) runAgentVerification(ctx context.Context, job *Job, baseline *installedBaseline, updaterReport string) {
 	if s.verifier == nil {
 		s.finishAgentJob(job, StatusFailed, "", "adapter-backed install verifier is not configured", "")
 		return
@@ -1248,6 +1269,9 @@ func (s *Service) runAgentVerification(ctx context.Context, job *Job, baseline *
 		output = strings.TrimRight(output, "\n") + "\n" + note
 	}
 	if failure != "" {
+		if updaterReport != "" {
+			failure = fmt.Sprintf("%s; the update command reported: %q", failure, updaterReport)
+		}
 		s.finishAgentJob(job, StatusFailed, output, failure, result.ResolvedPath)
 		return
 	}

@@ -303,13 +303,15 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 }
 
 // vendorMaintainable reports whether the harness can update the binary
-// sessions run through its own self-update command. A release lookup is not
-// installation ownership: binaries inside a package manager or version manager
-// belong to that tool, and harnesses without a self-update command have no
-// vendor maintenance path. The command runs from the resolved binary itself,
-// so it updates that copy however the user placed it.
+// sessions run through its own self-update command or a re-run of its
+// installer. A release lookup is not installation ownership: binaries inside a
+// package manager or version manager belong to that tool, and harnesses
+// without either path have no vendor maintenance path. The command runs from
+// the resolved binary itself, and the installer is bound to its directory, so
+// either updates that copy however the user placed it.
 func vendorMaintainable(target Target, resolvedPath string) bool {
 	_, ok := vendorUpdateCommands[target]
+	ok = ok || installerUpdateTargets[target]
 	return ok && resolvedPath != "" && vendorLayout(target, packageLayout(resolvedPath))
 }
 

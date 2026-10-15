@@ -2328,7 +2328,6 @@
 	"settings.harness.updateFailed": "Não foi possível iniciar a atualização.",
 	"settings.harness.updateJobFailed": "A atualização falhou.",
 	"settings.harness.updateMethodChanged": "A instalação de {{agent}} mudou desde que esta página foi carregada. Revise-a e tente novamente.",
-	"settings.harness.updateTargetChanged": "{{version}} agora é a versão mais recente. Selecione Atualizar novamente para instalá-la.",
 	"settings.harness.working": "Processando…",
 	"settings.harness.expandOptions": "Expandir opções de {{agent}}",
 	"settings.harness.collapseOptions": "Recolher opções de {{agent}}",
