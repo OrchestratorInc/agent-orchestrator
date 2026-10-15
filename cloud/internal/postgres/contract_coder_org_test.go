@@ -12,18 +12,24 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
 
-// A contract customer on Coder (WorkOS metadata capabilities=coder and
-// billing=contract, like 11x) runs on AO's managed Coder and on its own Coder
+// A customer on Coder (WorkOS metadata capabilities=coder; 11x has no billing
+// key, others billing=contract) runs on AO's managed Coder and on its own Coder
 // deployment. With billing enforced and no plan, none of its Coder sessions is
 // billed, needs a plan, is paused for being over a plan, is seen by the billed
 // idle pause, or is refused a wake.
-func TestContractCoderOrganizationCoderIsNeverBilled(t *testing.T) {
+func TestCoderCustomerCoderIsNeverBilled(t *testing.T) {
+	for name, billing := range map[string]string{"no billing key": "", "billing=contract": domain.OrgBillingContract} {
+		t.Run(name, func(t *testing.T) { testCoderCustomerCoderIsNeverBilled(t, billing) })
+	}
+}
+
+func testCoderCustomerCoderIsNeverBilled(t *testing.T, orgBilling string) {
 	store, admin, fixture := openNotificationTestStore(t)
 	ctx := context.Background()
 	store.EnableBilling(7*24*time.Hour, time.Time{})
 	principal := domain.Principal{
 		UserID: fixture.userID, Provider: "local", TeamOrgID: fixture.orgID,
-		OrgCapabilities: []string{"coder"}, OrgBilling: domain.OrgBillingContract,
+		OrgCapabilities: []string{"coder"}, OrgBilling: orgBilling,
 	}
 	// A member's request records the organization's billing for the enforcer.
 	if _, err := store.BillingSummary(ctx, principal, fixture.orgID); err != nil {
@@ -93,10 +99,10 @@ func TestContractCoderOrganizationCoderIsNeverBilled(t *testing.T) {
 	}
 }
 
-// The 00083 backfill pins a contract coder organization's projects to Coder:
+// The 00083 backfill pins a Coder customer's projects to Coder:
 // one that ran on managed Coder, one that ran on its own Coder, and one with
 // Coder dev-kit config that never ran. None moves to Freestyle.
-func TestContractCoderOrganizationProjectsStayOnCoder(t *testing.T) {
+func TestCoderCustomerProjectsStayOnCoder(t *testing.T) {
 	_, admin, fixture := openNotificationTestStore(t)
 	ctx := context.Background()
 	migration, err := os.ReadFile("migrations/00083_project_sandbox_provider_backfill.sql")

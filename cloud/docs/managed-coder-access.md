@@ -1,9 +1,10 @@
 # AO managed Coder access
 
-Every organization can run sessions on AO's managed Coder and on Freestyle.
-Tagging a person's WorkOS organization with `capabilities = coder` makes its
-Coder sessions free (no plan needed), starts it on Coder, and lets it connect
-its own Coder deployment. Anyone with WorkOS dashboard access can set the tag.
+Untagged organizations can run sessions on AO's managed Coder and on
+Freestyle, both on Stripe plans. Tagging a person's WorkOS organization with
+`capabilities = coder` puts it on AO's managed Coder alone, free (no plans to
+buy), and lets it connect its own Coder deployment. Anyone with WorkOS
+dashboard access can set the tag.
 
 ## Give an email free AO managed Coder
 
@@ -18,30 +19,32 @@ its own Coder deployment. Anyone with WorkOS dashboard access can set the tag.
 5. Save. The change applies within 5 minutes. They only need to sign out
    and back in if you had to create the organization in step 2.
 
-That account's new Coder sessions are now free and its default sandbox is
-Coder. Sessions run on AO's own Coder; there is nothing to set up in Coder
-itself. Freestyle stays available to it and still needs a plan.
+That account now runs on AO's managed Coder only, free, with no Freestyle and
+no plans. Sessions run on AO's own Coder; there is nothing to set up in Coder
+itself.
 
 ## Take it away again
 
 1. In WorkOS, open the same organization and its **Metadata**.
 2. Delete the `capabilities` key, then save.
 
-Within 5 minutes the account is like any new user: new Coder sessions need a
-plan, the same as Freestyle. Coder sessions it already has keep running and
-stay free, since a session's billing is fixed when it starts. Projects keep the
-sandbox they were created on; the organization's default only applies to new
-projects, and an admin changes it in Settings, General, Cloud.
+Within 5 minutes the account is like any new user: it is offered Freestyle as
+well, and new Coder sessions need a plan, the same as Freestyle. Coder
+sessions it already has keep running and stay free, since a session's billing
+is fixed when it starts. Projects keep the sandbox they were created on; the
+organization's default only applies to new projects, and an admin changes it
+in Settings, General, Cloud.
 
 ## What each setting gives
 
 | `capabilities` on the organization | Starts on | Coder | Freestyle |
 | --- | --- | --- | --- |
-| `coder` | Coder | Free, plus its own Coder deployment | Stripe plans |
+| `coder` | Coder | Free, plus its own Coder deployment | Not offered |
+| `coder,freestyle` | Coder | Free, plus its own Coder deployment | Stripe plans |
 | not set (the default for everyone) | Freestyle | Stripe plans | Stripe plans |
 
-Both providers are open either way; an admin can change the default in
-Settings, General, Cloud. Use `coder` for internal people.
+With both providers, an admin picks the default in Settings, General, Cloud.
+Use `coder` for internal people and Coder customers.
 
 ## Good to know
 

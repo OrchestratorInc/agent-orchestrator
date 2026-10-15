@@ -33,15 +33,18 @@ func teamPrincipal(capabilities ...string) domain.Principal {
 	return domain.Principal{TeamOrgID: offeringTeamOrgID, ExternalOrgID: "org_workos", OrgCapabilities: capabilities}
 }
 
-// Coder and Freestyle are open to every organization, gated or not; any other
-// provider keeps the capability gate.
+// Coder and Freestyle are open to every organization, gated or not, except
+// that a gated Freestyle stays closed to a Coder customer (capabilities name
+// coder but not freestyle); any other provider keeps the capability gate.
 func TestOrgAllowsProvider(t *testing.T) {
 	s := &Server{capabilityGatedProviders: map[string]bool{"coder": true, "freestyle": true, "nodeops": true}}
-	for _, caps := range [][]string{nil, {"coder"}, {"feature-x"}, {"feature-x", "coder"}} {
-		for _, provider := range []string{"coder", "freestyle"} {
-			if !s.orgAllowsProvider(teamPrincipal(caps...), offeringTeamOrgID, provider) {
-				t.Errorf("orgAllowsProvider(caps=%v, %q) = false, want coder and freestyle open", caps, provider)
-			}
+	for _, caps := range [][]string{nil, {"coder"}, {"feature-x"}, {"feature-x", "coder"}, {"coder", "freestyle"}} {
+		coderOnly := slices.Contains(caps, "coder") && !slices.Contains(caps, "freestyle")
+		if !s.orgAllowsProvider(teamPrincipal(caps...), offeringTeamOrgID, "coder") {
+			t.Errorf("orgAllowsProvider(caps=%v, coder) = false, want coder open", caps)
+		}
+		if got := s.orgAllowsProvider(teamPrincipal(caps...), offeringTeamOrgID, "freestyle"); got == coderOnly {
+			t.Errorf("orgAllowsProvider(caps=%v, freestyle) = %v, want %v", caps, got, !coderOnly)
 		}
 		if s.orgAllowsProvider(teamPrincipal(caps...), offeringTeamOrgID, "nodeops") {
 			t.Errorf("orgAllowsProvider(caps=%v, nodeops) = true, want a gated provider closed without its capability", caps)
@@ -52,6 +55,15 @@ func TestOrgAllowsProvider(t *testing.T) {
 	}
 	if !s.orgAllowsProvider(domain.Principal{}, offeringPersonalOrgID, "docker") {
 		t.Error("a provider that is not gated must stay open")
+	}
+	// Only the organization's own capabilities make it a Coder customer: its
+	// personal organization, and any without metadata, get Freestyle.
+	if !s.orgAllowsProvider(teamPrincipal("coder"), offeringPersonalOrgID, "freestyle") {
+		t.Error("a coder tag on the team organization must not close Freestyle to the personal one")
+	}
+	ungated := &Server{capabilityGatedProviders: map[string]bool{"coder": true}}
+	if !ungated.orgAllowsProvider(teamPrincipal("coder"), offeringTeamOrgID, "freestyle") {
+		t.Error("an ungated Freestyle must stay open to a Coder customer")
 	}
 }
 
@@ -141,7 +153,9 @@ func TestProvidersAndDefaultProviderForOrg(t *testing.T) {
 		wantAllowed []string
 		wantDefault string
 	}{
-		{"coder capability starts on coder", []string{"coder"}, []string{"coder", "freestyle"}, "coder"},
+		// A Coder customer keeps Coder alone, as before every organization was
+		// offered both.
+		{"coder capability alone stays on coder only", []string{"coder"}, []string{"coder"}, "coder"},
 		{"no coder capability starts on freestyle", []string{"freestyle"}, []string{"coder", "freestyle"}, "freestyle"},
 		{"coder capability with freestyle starts on coder", []string{"freestyle", "coder"}, []string{"coder", "freestyle"}, "coder"},
 		{"a new organization starts on freestyle", nil, []string{"coder", "freestyle"}, "freestyle"},
@@ -590,7 +604,7 @@ func TestCreateSessionKeepsCoderConfigProjectOnCoder(t *testing.T) {
 				chosen:        sandbox.ProviderFreestyle,
 			}
 			rec := httptest.NewRecorder()
-			newGenericOfferingServer(store).createSession(rec, offeringSessionRequest(t, teamPrincipal("coder"), ""))
+			newGenericOfferingServer(store).createSession(rec, offeringSessionRequest(t, teamPrincipal("coder", "freestyle"), ""))
 			if rec.Code != http.StatusCreated {
 				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 			}
@@ -633,7 +647,7 @@ func TestPinProjectProvider(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			principal := teamPrincipal()
 			if tc.principalCap != "" {
-				principal = teamPrincipal(tc.principalCap)
+				principal = teamPrincipal(tc.principalCap, "freestyle")
 			}
 			pinned, err := unchosen.pinProjectProvider(ctx, principal, offeringTeamOrgID, json.RawMessage(tc.config))
 			if err != nil {
