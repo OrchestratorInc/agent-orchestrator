@@ -14,6 +14,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/litmus"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
@@ -65,7 +66,7 @@ func (m *Manager) runReplacementPreRemove(id domain.SessionID, projectID domain.
 var replacementCleanupBudget = killTeardownBudget
 
 func (m *Manager) runPreRemoveContext(ctx context.Context, projectID domain.ProjectID, workspacePath string) error {
-	if workspacePath == "" {
+	if workspacePath == "" || litmus.IsRunDir(m.dataDir, workspacePath) {
 		return nil
 	}
 	project, err := m.loadProject(ctx, projectID)

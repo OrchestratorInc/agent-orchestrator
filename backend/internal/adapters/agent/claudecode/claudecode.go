@@ -186,6 +186,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if err != nil {
 		return nil, err
 	}
+	policy, providerArgs := claudePermission(permissions)
 	return agentruntime.BuildLaunchCommand(agentruntime.LaunchConfig{
 		Harness:          agentruntime.HarnessClaudeCode,
 		Binary:           binary,
@@ -196,10 +197,20 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		Prompt:           cfg.Prompt,
 		SystemPrompt:     cfg.SystemPrompt,
 		SystemPromptFile: cfg.SystemPromptFile,
-		Permission:       agentruntime.PermissionPolicy(permissions),
+		Permission:       policy,
+		ProviderArgs:     providerArgs,
 		AllowedTools:     cfg.AllowedTools,
 		DisallowedTools:  cfg.DisallowedTools,
 	})
+}
+
+// claudePermission maps an AO permission mode to the runtime policy plus extra
+// host-owned flags. dontAsk has no provider-neutral policy, so it rides as a flag.
+func claudePermission(mode ports.PermissionMode) (agentruntime.PermissionPolicy, []string) {
+	if mode == ports.PermissionModeDontAsk {
+		return agentruntime.PermissionDefault, []string{"--permission-mode", "dontAsk"}
+	}
+	return agentruntime.PermissionPolicy(mode), nil
 }
 
 // freshLaunchNativeSessionID keeps a fresh launch from adopting someone else's
@@ -273,6 +284,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, err
 	}
+	policy, providerArgs := claudePermission(cfg.Permissions)
 	return agentruntime.BuildRestoreCommand(agentruntime.RestoreConfig{
 		Harness:          agentruntime.HarnessClaudeCode,
 		Binary:           binary,
@@ -283,7 +295,8 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		Prompt:           cfg.Prompt,
 		SystemPrompt:     cfg.SystemPrompt,
 		SystemPromptFile: cfg.SystemPromptFile,
-		Permission:       agentruntime.PermissionPolicy(cfg.Permissions),
+		Permission:       policy,
+		ProviderArgs:     providerArgs,
 		AllowedTools:     cfg.AllowedTools,
 		DisallowedTools:  cfg.DisallowedTools,
 	})

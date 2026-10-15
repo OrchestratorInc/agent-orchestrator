@@ -25,11 +25,20 @@ import (
 	"embed"
 )
 
-//go:embed using-ao
+//go:embed using-ao litmus
 var files embed.FS
 
 // SkillName is the installed skill's directory name under <dataDir>/skills.
 const SkillName = "using-ao"
+
+// LitmusSkillName is the PR-testing skill's directory name under
+// <dataDir>/skills. Testing sessions get a pointer to it instead of using-ao.
+const LitmusSkillName = "litmus"
+
+// LitmusDir returns the absolute directory the litmus skill installs into.
+func LitmusDir(dataDir string) string {
+	return filepath.Join(dataDir, "skills", LitmusSkillName)
+}
 
 // Dir returns the absolute directory the skill installs into for a given data
 // dir. Callers building prompts use this so the path they cite always matches
@@ -44,7 +53,10 @@ func Dir(dataDir string) string {
 // concurrent readers yet. A failure is returned but is non-fatal to boot (the
 // skill enhances `ao --help`, it is not load-bearing).
 func Install(dataDir string) error {
-	return Materialize(Dir(dataDir))
+	if err := Materialize(Dir(dataDir)); err != nil {
+		return err
+	}
+	return materialize(LitmusSkillName, LitmusDir(dataDir))
 }
 
 // Materialize writes the embedded using-ao skill into destDir (the skill root
@@ -52,19 +64,23 @@ func Install(dataDir string) error {
 // replacing any existing copy. Callers that need AO-ownership guards must apply
 // them before calling Materialize.
 func Materialize(destDir string) error {
+	return materialize(SkillName, destDir)
+}
+
+func materialize(skill, destDir string) error {
 	if strings.TrimSpace(destDir) == "" {
 		return fmt.Errorf("skillassets.Materialize: destDir is required")
 	}
 	if err := os.RemoveAll(destDir); err != nil {
 		return fmt.Errorf("clear skill dir %q: %w", destDir, err)
 	}
-	// embed.FS always uses forward-slash paths rooted at "using-ao"; strip that
+	// embed.FS always uses forward-slash paths rooted at the skill name; strip that
 	// prefix and map each entry onto destDir with the platform separator.
-	return fs.WalkDir(files, SkillName, func(p string, d fs.DirEntry, err error) error {
+	return fs.WalkDir(files, skill, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		rel := strings.TrimPrefix(p, SkillName)
+		rel := strings.TrimPrefix(p, skill)
 		rel = strings.TrimPrefix(rel, "/")
 		target := destDir
 		if rel != "" {

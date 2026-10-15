@@ -1,0 +1,39 @@
+# Default recipe for orchestratorinc/agent-orchestrator: a private Electron dev
+# instance per leg. Strings are expanded with the leg's environment
+# (LITMUS_ROOT, LITMUS_LEG, LITMUS_RUN_ID, LITMUS_RUN_NUM, LITMUS_DEBUG_PORT, LITMUS_DAEMON_PORT, AO_*).
+# Project ids carry the run id: the private AO registers worktrees and branches (ao/<id>/root) in the
+# shared clone, so two runs must never reuse one. The display names are what a video shows, so they
+# read as samples and carry only the session number.
+kind: electron
+repo: orchestratorinc/agent-orchestrator
+toolchain:
+  node: "24"          # npm ci fails on this lockfile under Node 22
+install:
+  dir: frontend
+  cmd: npm ci --no-audit --no-fund
+  cacheKey: [frontend/package-lock.json]
+build:
+  dir: frontend
+  cmd: npm run predev
+run:
+  dir: frontend
+  # Prepare already ran predev; launch Forge directly so npm scripts in the dev tree keep their normal behavior.
+  cmd: ./node_modules/.bin/electron-forge
+  args: [start, --, "--remote-debugging-port=$LITMUS_DEBUG_PORT"]
+ready:
+  daemonPath: /readyz
+  debugPath: /json/version
+  pageTargets: 1
+seed:
+  # A real chat session on the project's own harness, so the chat composer exists.
+  - cmd: '"$LITMUS_ROOT/frontend/daemon/ao" project add --path "$LITMUS_ROOT" --id "litmus-$LITMUS_LEG-$LITMUS_RUN_ID" --name "Sample project $LITMUS_RUN_NUM"'
+  - cmd: '"$LITMUS_ROOT/frontend/daemon/ao" spawn --harness claude-code --mode chat --project "litmus-$LITMUS_LEG-$LITMUS_RUN_ID" --name "Sample chat $LITMUS_RUN_NUM" --prompt "Reply with the single word READY and stop." --skip-agent-check'
+    waitFor: '"$LITMUS_ROOT/frontend/daemon/ao" session ls --json | grep -q ''"role": "worker"'''
+env:
+  # The app's cloud parts (Local/Cloud tabs, sign-in) show only when the cloud offering flag is on, the
+  # client identity is the entitled one, and a control plane is configured. The control-plane address is
+  # a baked default in backend/internal/config/config.go (production), so these two switch the gate on
+  # for the test windows. No account is involved; sign-in stays a button.
+  AO_CLIENT: eleven_x
+  AO_CLOUD_OFFERING: "on"
+isolation: true            # adds the AO_* block that keeps the target off the real AO

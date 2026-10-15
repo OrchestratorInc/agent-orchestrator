@@ -1,0 +1,158 @@
+{
+ "run": {
+  "id": "run_ao-14",
+  "sessionId": "ao-14",
+  "repo": "orchestratorinc/agent-orchestrator",
+  "requestedRepo": "orchestratorinc/agent-orchestrator",
+  "prNumber": 6266,
+  "baseRef": "main",
+  "areas": [
+   {
+    "name": "Renderer settings",
+    "files": 2,
+    "stems": [
+     "HarnessLogo",
+     "HarnessSettingsSection"
+    ]
+   },
+   {
+    "name": "Renderer",
+    "files": 1,
+    "stems": [
+     "styles"
+    ]
+   },
+   {
+    "name": "Tests",
+    "files": 1
+   }
+  ],
+  "createdAt": "2026-10-11T23:30:17.808863+05:30"
+ },
+ "checks": [
+  {
+   "id": "c1",
+   "name": "Harness toolbar layout",
+   "expect": "Search field is full width; Local/Cloud tabs appear above it when cloud is on",
+   "state": "partial",
+   "note": "Search field sits at the top of Settings > Harness above the list. Local/Cloud tabs did not appear because cloud is off in this setup, so tab placement above search was not seen.",
+   "receipts": [
+    {
+     "seq": 1,
+     "leg": "head",
+     "action": "click",
+     "args": [
+      "@e23"
+     ],
+     "beforePath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-14/receipts/head-before.png",
+     "afterPath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-14/receipts/1-after.png",
+     "consoleTail": "--- AGENT_BROWSER_PAGE_CONTENT nonce=c934adbbf8ae07c2627616f5ca446629 origin=unknown ---\n\n--- END_AGENT_BROWSER_PAGE_CONTENT nonce=c934adbbf8ae07c2627616f5ca446629 ---",
+     "at": "2026-10-11T23:30:52.067067+05:30",
+     "targetRole": "button",
+     "targetName": "Settings"
+    },
+    {
+     "seq": 2,
+     "leg": "head",
+     "action": "click",
+     "args": [
+      "@e35"
+     ],
+     "beforePath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-14/receipts/1-after.png",
+     "afterPath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-14/receipts/2-after.png",
+     "consoleTail": "--- AGENT_BROWSER_PAGE_CONTENT nonce=ba33d01927a5332c78e8d9e92f21bc1f origin=unknown ---\n\n--- END_AGENT_BROWSER_PAGE_CONTENT nonce=ba33d01927a5332c78e8d9e92f21bc1f ---",
+     "at": "2026-10-11T23:30:55.382026+05:30",
+     "targetRole": "button",
+     "targetName": "Harness"
+    }
+   ]
+  },
+  {
+   "id": "c2",
+   "name": "Harness rows and logos",
+   "expect": "Each harness row has a divider, a uniform logo tile, and status text wraps without a dot unless Connected",
+   "state": "partial",
+   "note": "Rows list every harness; Connected rows show only the word Connected, others show text (Signed out, Available via ...). The long Kiro and npm-prefix messages show in full. Dividers and logo tiles were not confirmed from page text.",
+   "receipts": [
+    {
+     "seq": 3,
+     "leg": "head",
+     "action": "fill",
+     "args": [
+      "@e53",
+      "kiro"
+     ],
+     "beforePath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-14/receipts/2-after.png",
+     "afterPath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-14/receipts/3-after.png",
+     "consoleTail": "--- AGENT_BROWSER_PAGE_CONTENT nonce=bf52a4b04bcfa146bf520c9f4bfb4126 origin=unknown ---\n\n--- END_AGENT_BROWSER_PAGE_CONTENT nonce=bf52a4b04bcfa146bf520c9f4bfb4126 ---",
+     "at": "2026-10-11T23:31:00.794265+05:30",
+     "targetRole": "textbox",
+     "targetName": "Search harnesses"
+    }
+   ]
+  },
+  {
+   "id": "c3",
+   "name": "Harness toolbar layout",
+   "expect": "Search field is full width; Local/Cloud tabs appear above it when cloud is on",
+   "state": "partial",
+   "note": "Search field above the list; no Local/Cloud tabs since cloud is off, same as the PR build.",
+   "leg": "base",
+   "receipts": [
+    {
+     "seq": 4,
+     "leg": "base",
+     "action": "click",
+     "args": [
+      "@e23"
+     ],
+     "beforePath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-14/receipts/base-before.png",
+     "afterPath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-14/receipts/4-after.png",
+     "consoleTail": "--- AGENT_BROWSER_PAGE_CONTENT nonce=f12bf8293f4ab11bb5fb20bc8412869a origin=unknown ---\n\n--- END_AGENT_BROWSER_PAGE_CONTENT nonce=f12bf8293f4ab11bb5fb20bc8412869a ---",
+     "at": "2026-10-11T23:31:45.45068+05:30",
+     "targetRole": "button",
+     "targetName": "Settings"
+    },
+    {
+     "seq": 5,
+     "leg": "base",
+     "action": "click",
+     "args": [
+      "@e35"
+     ],
+     "beforePath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-14/receipts/4-after.png",
+     "afterPath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-14/receipts/5-after.png",
+     "consoleTail": "--- AGENT_BROWSER_PAGE_CONTENT nonce=9706ada76e906eeadc65737c6257a07e origin=unknown ---\n\n--- END_AGENT_BROWSER_PAGE_CONTENT nonce=9706ada76e906eeadc65737c6257a07e ---",
+     "at": "2026-10-11T23:31:50.991933+05:30",
+     "targetRole": "button",
+     "targetName": "Harness"
+    }
+   ]
+  },
+  {
+   "id": "c4",
+   "name": "Harness rows and logos",
+   "expect": "Each harness row has a divider, a uniform logo tile, and status text wraps without a dot unless Connected",
+   "state": "partial",
+   "note": "Same harness list and status text; layout differences (dividers, logo tiles, dots) not distinguishable from page text.",
+   "leg": "base",
+   "receipts": [
+    {
+     "seq": 6,
+     "leg": "base",
+     "action": "fill",
+     "args": [
+      "@e53",
+      "kiro"
+     ],
+     "beforePath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-14/receipts/5-after.png",
+     "afterPath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-14/receipts/6-after.png",
+     "consoleTail": "--- AGENT_BROWSER_PAGE_CONTENT nonce=94569ccd931b752d7242973c2b39c621 origin=unknown ---\n\n--- END_AGENT_BROWSER_PAGE_CONTENT nonce=94569ccd931b752d7242973c2b39c621 ---",
+     "at": "2026-10-11T23:31:58.400712+05:30",
+     "targetRole": "textbox",
+     "targetName": "Search harnesses"
+    }
+   ]
+  }
+ ]
+}

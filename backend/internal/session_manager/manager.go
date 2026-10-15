@@ -23,6 +23,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/litmus"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
@@ -997,6 +998,11 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 	}
 
+	if isTestingSpawn(ctx) {
+		if err := m.testerSettings(&cfg); err != nil {
+			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
+		}
+	}
 	// Resolve the effective agent config (project base + role override + spawn
 	// override) and validate the model before any durable state is created. A
 	// model the harness cannot honor should not leave a seed row behind.
@@ -1054,6 +1060,10 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		agentConfig = resolved
 	}
 	cfg.RequestedMode = mode
+	testing := isTestingSpawn(ctx)
+	if testing && (!litmus.Supported(string(cfg.Harness)) || mode != domain.SessionModeTUI || cfg.Kind != domain.KindWorker) {
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: got %s %s %s", ErrTestingHarness, cfg.Harness, cfg.Kind, mode)
+	}
 
 	// Adapters whose model picker is an agent-owned mode list (e.g. Amp) keep
 	// their selectable values in AgentConfig.Mode. Normalize a copy for the
@@ -1258,7 +1268,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
 		}
 	}
-	if ws.Path == "" {
+	if ws.Path == "" && testing {
+		ws, err = createTestingWorkspace(m.dataDir, id, cfg.ProjectID)
+	} else if ws.Path == "" {
 		baseRefs := m.refreshDefaultBranchesBestEffort(ctx, project)
 		ws, workspaceProject, err = m.createSessionWorkspace(ctx, project, cfg, id, branch, baseRefs)
 	}
@@ -1345,6 +1357,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	}
 	m.augmentAgentRuntimeEnv(agent, env)
 	pinRuntimePermissionEnv(env, adapterConfig.Permissions)
+	applyTestingEnv(env, m.dataDir, id, ws.Path)
 	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok {
 		status, authErr := validator.ValidateLaunchAuth(ctx, ws.Path, env)
 		if authErr != nil {
@@ -1371,6 +1384,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		Config:           adapterConfig,
 		Permissions:      adapterConfig.Permissions,
 	}
+	applyTestingLaunch(&launchCfg, m.dataDir, cfg.Harness)
 	delivery, err := agent.GetPromptDeliveryStrategy(ctx, launchCfg)
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
@@ -1450,7 +1464,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	if prompt != "" {
 		metadata.LatestUserPromptAt = m.clock()
 	}
-	if projectKind == domain.ProjectKindSingleRepo {
+	if projectKind == domain.ProjectKindSingleRepo && !testing {
 		metadata.DiffBaseSHA, metadata.DiffBaseRef = resolveSpawnDiffBase(ctx, ws.Path, ws.BaseRef)
 	}
 	if cfg.AutomationRunID != nil {
@@ -2023,6 +2037,10 @@ func spawnGitSingleLine(ctx context.Context, root string, args ...string) (strin
 }
 
 func (m *Manager) destroySpawnWorkspace(ctx context.Context, ws ports.WorkspaceInfo, workspaceProject *ports.WorkspaceProjectInfo) bool {
+	if litmus.IsRunDir(m.dataDir, ws.Path) { // no worktree to remove; drop the run dir if nothing was put in it
+		_ = os.Remove(ws.Path)
+		return true
+	}
 	if release, ok := ctx.Value(spawnWorkspaceGateKey{}).(func()); ok {
 		release()
 	}
@@ -2628,7 +2646,7 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 		if freed {
 			m.cleanupAgentWorkspace(ctx, rec, ws.Path)
 		}
-	} else if ws.Path != "" {
+	} else if ws.Path != "" && !litmus.IsRunDir(m.dataDir, ws.Path) { // a run dir holds the evidence; it is kept
 		if err := m.workspace.Destroy(ctx, ws); err != nil {
 			return KillResult{}, m.terminateWithPreservedWorkspace(ctx, id, err, true)
 		}
@@ -3366,6 +3384,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	m.augmentAgentRuntimeEnv(agent, env)
 	pinRuntimePermissionEnv(env, agentConfig.Permissions)
+	applyTestingEnv(env, m.dataDir, rec.ID, ws.Path)
 	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok {
 		status, authErr := validator.ValidateLaunchAuth(ctx, ws.Path, env)
 		if authErr != nil {
@@ -3383,7 +3402,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	var mode RestoreMode
 	if forceFresh {
 		argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
-			systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true)
+			systemPrompt, systemPromptFile, agentConfig, rec.Kind, rec.Harness, m.dataDir, true)
 	} else {
 		argv, delivery, mode, err = restoreArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
 			systemPrompt, systemPromptFile, agentConfig, rec.Kind, rec.Harness, m.dataDir, env)
@@ -3407,6 +3426,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		Config:           agentConfig,
 		Permissions:      agentConfig.Permissions,
 	}
+	applyTestingLaunch(&launchCfg, m.dataDir, rec.Harness)
 	afterStartPrompt := rec.Metadata.Prompt
 	if delivery == ports.PromptDeliveryAfterStart && mode != RestoreModeNative {
 		afterStartPrompt, err = buildAfterStartPrompt(ctx, agent, launchCfg)
@@ -4244,6 +4264,9 @@ func (m *Manager) markSessionWorktreesActive(ctx context.Context, rows []domain.
 }
 
 func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.ProjectRecord, rec domain.SessionRecord) (ports.WorkspaceInfo, error) {
+	if litmus.IsRunDir(m.dataDir, rec.Metadata.WorkspacePath) {
+		return createTestingWorkspace(m.dataDir, rec.ID, rec.ProjectID)
+	}
 	if projectKindForSession(project, rec.ProjectID) != domain.ProjectKindWorkspace {
 		recreated, err := workspacePathMissing(rec.Metadata.WorkspacePath)
 		if err != nil {
@@ -5144,6 +5167,9 @@ func (m *Manager) isWorkspaceInUse(ctx context.Context, projectID domain.Project
 // call) — most commonly because a scoped shell terminal could not be
 // confirmed closed, so reclaiming would pull the ground out from under it.
 func (m *Manager) cleanupOne(ctx context.Context, rec domain.SessionRecord, ws ports.WorkspaceInfo) (ports.WorkspaceReclaim, string) {
+	if litmus.IsRunDir(m.dataDir, ws.Path) { // a testing session's run dir is evidence, not a worktree
+		return ports.WorkspaceReclaimAlreadyAbsent, ""
+	}
 	{
 		release := m.acquireWorkspaceGate(rec.ProjectID)
 
@@ -5544,7 +5570,13 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 			cfg.AdditionalSections = append(cfg.AdditionalSections, workspacePrompt)
 		}
 	}
-	if pointer := strings.TrimSpace(m.aoSkillPointer(chat)); pointer != "" {
+	var pointer string
+	if m.isTestingSession(ctx, sessionID) {
+		pointer = m.litmusSkillPointer()
+	} else {
+		pointer = m.aoSkillPointer(chat)
+	}
+	if pointer = strings.TrimSpace(pointer); pointer != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, pointer)
 	}
 	if artifactPrompt := strings.TrimSpace(m.artifactPrompt(sessionID, chat)); artifactPrompt != "" {
@@ -5987,6 +6019,9 @@ func HookPATH(executable func() (string, error), getenv func(string) string, pro
 // post-create commands. Either failing aborts the spawn so a half-provisioned
 // workspace never launches an agent.
 func (m *Manager) provisionWorkspace(ctx context.Context, project domain.ProjectRecord, workspacePath string) error {
+	if litmus.IsRunDir(m.dataDir, workspacePath) {
+		return nil
+	}
 	if err := applySymlinks(project.Path, workspacePath, project.Config.Symlinks); err != nil {
 		return err
 	}
@@ -6372,7 +6407,7 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 // signals via ok=false (e.g. no native session id captured yet). Returns
 // ErrNotResumable when transcript-preserving restore is required but unavailable,
 // or when a promptless, unresumable worker has nothing to restore from.
-func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, _ domain.AgentHarness, dataDir string, env map[string]string) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
+func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, harness domain.AgentHarness, dataDir string, env map[string]string) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
 	ref := ports.SessionRef{
 		ID:            string(id),
 		WorkspacePath: workspacePath,
@@ -6381,7 +6416,9 @@ func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, wo
 			ports.MetadataKeySessionMode:    string(domain.SessionModeTUI),
 		},
 	}
-	cmd, ok, err := agent.GetRestoreCommand(ctx, ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions})
+	restoreCfg := ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions}
+	applyTestingRestore(&restoreCfg, dataDir, harness)
+	cmd, ok, err := agent.GetRestoreCommand(ctx, restoreCfg)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("restore command: %w", err)
 	}
@@ -6399,7 +6436,7 @@ func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, wo
 	// a saved prompt, rather than stranding the work behind ErrNotResumable. A
 	// worker that never got that far (no id, no prompt) still stays unresumable.
 	return freshLaunchArgv(ctx, agent, id, workspacePath, meta, systemPrompt,
-		systemPromptFile, agentConfig, kind, dataDir, conversationLost)
+		systemPromptFile, agentConfig, kind, harness, dataDir, conversationLost)
 }
 
 // nativeConversationMissing reports whether the agent can see a persisted
@@ -6434,7 +6471,7 @@ func nativeConversationMissing(ctx context.Context, agent ports.Agent, ref ports
 // freshLaunchArgv builds the non-resume half of restoreArgv. Interface
 // transitions also use it when an adapter proves its reserved id has no
 // persisted history, both for preflight and for the actual target launch.
-func freshLaunchArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, dataDir string, allowPromptless bool) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
+func freshLaunchArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, harness domain.AgentHarness, dataDir string, allowPromptless bool) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
 	// A saved prompt is replayed fresh. An orchestrator is promptless by design
 	// and relaunches with the system prompt only. A promptless WORKER has no task
 	// and no session id to restore from: do not blank-relaunch it.
@@ -6455,6 +6492,7 @@ func freshLaunchArgv(ctx context.Context, agent ports.Agent, id domain.SessionID
 		Config:           agentConfig,
 		Permissions:      agentConfig.Permissions,
 	}
+	applyTestingLaunch(&launchCfg, dataDir, harness)
 	delivery, err := agent.GetPromptDeliveryStrategy(ctx, launchCfg)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("prompt delivery: %w", err)

@@ -1,0 +1,110 @@
+{
+ "run": {
+  "id": "run_ao-10",
+  "sessionId": "ao-10",
+  "repo": "orchestratorinc/agent-orchestrator",
+  "requestedRepo": "orchestratorinc/agent-orchestrator",
+  "prNumber": 6403,
+  "baseRef": "main",
+  "areas": [
+   {
+    "name": "Tests",
+    "files": 5
+   },
+   {
+    "name": "Renderer components",
+    "files": 1,
+    "stems": [
+     "TitlebarNav"
+    ]
+   }
+  ],
+  "createdAt": "2026-10-11T22:47:14.51277+05:30"
+ },
+ "checks": [
+  {
+   "id": "c1",
+   "name": "Arrows beside brand, sidebar open",
+   "expect": "With the sidebar expanded, Go back and Go forward buttons are visible next to the Orchestrator.inc brand",
+   "state": "pass",
+   "note": "With the sidebar expanded on the PR build, Collapse sidebar, Go back, Go forward (both disabled on Home) and the Orchestrator.inc brand are all present.",
+   "receipts": [
+    {
+     "seq": 1,
+     "leg": "head",
+     "action": "press",
+     "args": [
+      "Shift"
+     ],
+     "afterPath": "receipts/1-after.png",
+     "at": "2026-10-11T22:48:26.864164+05:30"
+    }
+   ]
+  },
+  {
+   "id": "c2",
+   "name": "Arrows survive navigation and collapse",
+   "expect": "After opening a project then collapsing and re-expanding the sidebar, both arrows remain visible and Go back becomes enabled",
+   "state": "pass",
+   "note": "On the PR build, opening a project enabled Go back. Collapsing the sidebar kept both arrows, and re-expanding it showed both arrows plus the Orchestrator.inc brand.",
+   "receipts": [
+    {
+     "seq": 2,
+     "leg": "head",
+     "action": "click",
+     "args": [
+      "@e21"
+     ],
+     "afterPath": "receipts/2-after.png",
+     "at": "2026-10-11T22:48:29.616379+05:30",
+     "targetRole": "button",
+     "targetName": "Sample project 10 /Users/dev/.ao/data/litmus/host/litmus/repos/orchestratorinc__agent-orchestrator/2db3ffe275d8f946d7dcbaeb415c6c99efa22602 just now"
+    },
+    {
+     "seq": 3,
+     "leg": "head",
+     "action": "click",
+     "args": [
+      "@e7"
+     ],
+     "afterPath": "receipts/3-after.png",
+     "at": "2026-10-11T22:48:33.783207+05:30",
+     "targetRole": "button",
+     "targetName": "Collapse sidebar"
+    },
+    {
+     "seq": 4,
+     "leg": "head",
+     "action": "click",
+     "args": [
+      "@e7"
+     ],
+     "afterPath": "receipts/4-after.png",
+     "at": "2026-10-11T22:48:35.534026+05:30",
+     "targetRole": "button",
+     "targetName": "Expand sidebar"
+    }
+   ]
+  },
+  {
+   "id": "c3",
+   "name": "Arrows beside brand, sidebar open",
+   "expect": "With the sidebar expanded, Go back and Go forward buttons are visible next to the Orchestrator.inc brand",
+   "state": "fail",
+   "note": "On main with the sidebar expanded, only Collapse sidebar and the Orchestrator.inc brand show. Go back and Go forward are missing, which is the bug the PR fixes.",
+   "leg": "base",
+   "receipts": [
+    {
+     "seq": 5,
+     "leg": "base",
+     "action": "press",
+     "args": [
+      "Shift"
+     ],
+     "afterPath": "receipts/5-after.png",
+     "at": "2026-10-11T22:49:13.496446+05:30"
+    }
+   ]
+  }
+ ]
+}

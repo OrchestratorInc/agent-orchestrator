@@ -8,6 +8,10 @@ trigger: "Using the ao CLI in an AO workspace: creating Cues, spawning workers, 
 
 `ao` is a thin CLI over the local AO daemon. Every command is `ao <command> --help` for the authoritative flag list.
 
+When the user asks you to test, try out, check, or verify a pull request, in any wording, run `ao testing start --pr <url or owner/repo#N>` to start Litmus, then tell the user Litmus has started. Never check the PR out or run its test suites yourself, and never ask the user which way to test it.
+
+A run takes about 25 minutes. When the user asks for the result, run `ao testing runs`, then `ao testing show <runId>` and give the verdict and each drafted bug comment, then ask the user whether to post them. A run in `awaiting-approval` posts nothing until the user says so: on a clear yes run `ao testing post <runId>`, which posts every comment with its picture and clip; on no run `ao testing discard <runId>`. Never post without the user's yes.
+
 | Command | What it does | When to use | Details |
 |---|---|---|---|
 | `spawn` | Spawn a project worker, orchestrator, or projectless standalone worker | Starting a new task or issue | [commands/spawn.md](commands/spawn.md) |
@@ -24,6 +28,7 @@ trigger: "Using the ao CLI in an AO workspace: creating Cues, spawning workers, 
 | `preview` | Start a session-owned app or open an exact URL/file | Running and showing the worker's relevant app, Markdown, HTML, PDF, or image | [commands/preview.md](commands/preview.md) |
 | `render` | Show a self-contained HTML page inline in a chat thread | Answering with a chart, table, diagram, or mockup | [commands/render.md](commands/render.md) |
 | `browser` | Inspect and control the session's shared live browser | Verifying a web app through snapshots, interactions, waits, screenshots, console, and errors | [commands/browser.md](commands/browser.md) |
+| `testing` | Spawn a PR-testing worker (`ao testing start --pr <url>`); the worker follows the litmus skill | Asked to test, try, check or verify a pull request (any wording) | - |
 | `start` | Fetch (if needed) and open the AO desktop app | Launching the app | [commands/start.md](commands/start.md) |
 | `stop` | Stop the AO daemon | Shutting down AO | [commands/stop.md](commands/stop.md) |
 | `status` | Show daemon status | Verifying the daemon is up and healthy | [commands/status.md](commands/status.md) |

@@ -3406,6 +3406,72 @@ type InstallIDParam struct {
 	InstallID string `path:"installId" description:"The device's stable install id."`
 }
 
+// TestingStatusQuery is the query of GET /api/v1/testing/status.
+type TestingStatusQuery struct {
+	SessionID string `query:"sessionId" required:"true" description:"The testing worker's AO session id."`
+}
+
+// TestingCheckIDParam is the {id} path parameter of the check routes.
+type TestingCheckIDParam struct {
+	ID string `path:"id" description:"Check id within the run, e.g. c1."`
+}
+
+// TestingRunsQuery is the query of GET /api/v1/testing/runs.
+type TestingRunsQuery struct {
+	ProjectID string `query:"projectId,omitempty" description:"Only runs of this AO project (runs started before projects were recorded are listed for every project). Omit for all runs."`
+	Limit     *int   `query:"limit,omitempty" minimum:"1" maximum:"200" description:"Maximum runs to return, newest first. Defaults to 50."`
+}
+
+// TestingRunIDParam is the {id} path parameter of the run routes.
+type TestingRunIDParam struct {
+	ID string `path:"id" description:"Run id, e.g. run_ao-25."`
+}
+
+// TestingProjectIDParam is the {id} path parameter of the project settings routes.
+type TestingProjectIDParam struct {
+	ID string `path:"id" description:"AO project id."`
+}
+
+// UpdateTestingProjectSettingsRequest is the partial body accepted when
+// updating a project's Litmus settings. Review is a pointer so an omitted
+// value preserves the stored setting while an explicit false turns it off.
+type UpdateTestingProjectSettingsRequest struct {
+	AskBeforePosting bool   `json:"askBeforePosting" description:"When on, a finished run writes its comment and waits for approval instead of posting it."`
+	Review           *bool  `json:"review,omitempty" description:"When on, a failing verdict also submits a REQUEST_CHANGES review beside its comment. Omit to keep the stored value."`
+	Harness          string `json:"harness,omitempty" description:"Agent the project's testers run on: claude-code or codex. Empty uses the project's worker agent, then claude-code." enum:"claude-code,codex"`
+	Model            string `json:"model,omitempty" description:"Model the project's testers run on. Empty uses the project's worker model, then the Litmus default."`
+	Effort           string `json:"effort,omitempty" description:"Reasoning effort the project's testers run at. Empty uses the project's worker effort, then the Litmus default."`
+}
+
+// TestingRequest is the body of every POST /api/v1/testing verb; each verb reads
+// only the fields it needs. SessionID attributes the call to the worker's run; start and recipe validate need none.
+type TestingRequest struct {
+	SessionID     string   `json:"sessionId,omitempty" description:"the calling session; start, post and prune refuse it when it is a Litmus tester's own session."`
+	ProjectID     string   `json:"projectId,omitempty" description:"start: the project the worker runs in; rerun: only for a run that did not record its project."`
+	RunID         string   `json:"runId,omitempty" description:"rerun only: the run whose pull request is tested again."`
+	Harness       string   `json:"harness,omitempty"`
+	PRURL         string   `json:"prUrl,omitempty"`
+	Leg           string   `json:"leg,omitempty" enum:"base,head"`
+	Name          string   `json:"name,omitempty"`
+	Expect        string   `json:"expect,omitempty"`
+	Result        string   `json:"result,omitempty" enum:"pass,fail,partial,absent,skipped"`
+	Note          string   `json:"note,omitempty"`
+	SameFault     bool     `json:"sameFault,omitempty" description:"check end only, base leg: the failure or partial is the same fault as on the PR build."`
+	Shot          int      `json:"shot,omitempty" description:"check end only: head receipt number whose after-shot shows the failure."`
+	Summary       string   `json:"summary,omitempty"`
+	Blocked       bool     `json:"blocked,omitempty" description:"submit only: stop early with a reason; a recorded failure keeps the overall result fail."`
+	Reason        string   `json:"reason,omitempty" description:"submit with blocked: what failed; required and non-empty."`
+	SkipBase      string   `json:"skipBase,omitempty" description:"submit only: why the base was not run; lets a submit through while a prepared base is unlaunched."`
+	Action        string   `json:"action,omitempty"`
+	Args          []string `json:"args,omitempty" description:"drive: the action's arguments."`
+	Path          string   `json:"path,omitempty"`
+	NoComment     bool     `json:"noComment,omitempty" description:"start only: the run's verdict is written to comment.md but not posted to the pull request."`
+	NoEvidence    bool     `json:"noEvidence,omitempty" description:"start only: no screenshots or GIFs are published to the repo's litmus/evidence branch for the comment."`
+	KeepRuns      *int     `json:"keepRuns,omitempty" minimum:"0" description:"prune only: finished run dirs to keep besides unfinished ones (default 20)."`
+	KeepCheckouts *int     `json:"keepCheckouts,omitempty" minimum:"0" description:"prune only: most recent finished runs whose checkouts are kept besides those of unfinished runs (default 2)."`
+	DryRun        bool     `json:"dryRun,omitempty" description:"prune only: report what would be deleted and delete nothing."`
+}
+
 // CreateConversationSideChatRequest opens an independent launch-scoped side chat.
 type CreateConversationSideChatRequest struct {
 	ForceNew       bool                                 `json:"forceNew,omitempty"`

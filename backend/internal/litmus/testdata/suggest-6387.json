@@ -1,0 +1,16 @@
+{
+ "title": "fix(cli): acknowledge reports inside Claude paste wrappers",
+ "body": "Code changes: +27 -2\\\nTests: +116 -6\\\nOthers: +0 -0\n\n## What\n\nRestore correlated acceptance of report deliveries when Claude Code wraps pasted input. Add regressions for the prompt shapes seen in the replay investigation.\n\n## Why\n\nClaude Code's leading `<pasted_content id=\"eead\">` wrapper hides the `<ao-report-delivery>` envelope from the strict hook parsers. The hook records human origin without the delivery ID. Semantic acceptance then times out, the coordinator releases the claim, and the same stuck-report batch returns about every three minutes.\n\nThe open and closed issue/PR audit found no existing fix for this wrapper bug. The old Untrivial-ai repository redirects to OrchestratorInc. Main at `6942e179517f23c490d6ef0bbbc0d96c99408426` still reproduces it. Related #6119 concerns Qwen batch starvation and has a different cause.\n\nLocal evidence pointer: `/Users/dev/.ao/data/artifacts/ao-agentic-testing-23/report-replay-rootcause.md`, investigated baseline `70813e6687dd9870e79b1a772961f65a893c8686`. The tests retain paste boundaries from native transcript lines 1538, 687, 659, and 1303, with unrelated report text shortened.\n\n## How\n\n- Normalize only a known leading Claude paste wrapper before authorship and delivery-ID parsing. Require its closing tag and preserve text after the pasted segment, including the rest of a split report envelope.\n- Keep the raw prompt for human checkpoints. Human text before the report still prevents classification as coordination.\n- Preserve main's `CoordinationDeliveryID` path and leave `ReportDeliveryID` strict. Test malformed wrappers, invalid IDs, mixed human prompts, and another agent.\n\nTerminated-worker filtering, acceptance receipts, and coordinator retry policy remain outside this fix.\n\n## Testing\n\nPassed locally with AO sess",
+ "files": [
+  {
+   "path": "backend/internal/cli/hooks.go",
+   "additions": 27,
+   "deletions": 2
+  },
+  {
+   "path": "backend/internal/cli/hooks_test.go",
+   "additions": 116,
+   "deletions": 6
+  }
+ ]
+}

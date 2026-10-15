@@ -17,6 +17,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/litmus"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/githubpat"
 	importsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/importer"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
@@ -90,6 +91,8 @@ func Build() ([]byte, error) {
 			"Connect Mobile LAN bridge control (loopback/desktop only)"),
 		*(&openapi31.Tag{Name: "browser"}).WithDescription(
 			"Target-isolated desktop browser runtime (loopback only)"),
+		*(&openapi31.Tag{Name: "testing"}).WithDescription(
+			"Agentic pull-request testing: spawn a tester, then pin, build, drive and judge the PR"),
 		*(&openapi31.Tag{Name: "fs"}).WithDescription(
 			"Read-only filesystem browsing for remote clients"),
 		*(&openapi31.Tag{Name: "system"}).WithDescription(
@@ -297,6 +300,30 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersBrowserStatusResponse":                    "BrowserStatusResponse",
 	"ControllersBrowserCommandRequest":                    "BrowserCommandRequest",
 	"ControllersBrowserCommandResponse":                   "BrowserCommandResponse",
+	"ControllersUpdateTestingProjectSettingsRequest":      "UpdateTestingProjectSettingsRequest",
+	"ControllersTestingRequest":                           "TestingRequest",
+	"LitmusCheck":                                         "TestingCheck",
+	"LitmusPostedComment":                                 "TestingPostedComment",
+	"LitmusElementBox":                                    "TestingElementBox",
+	"LitmusEngineInfo":                                    "TestingEngineInfo",
+	"LitmusLeg":                                           "TestingLeg",
+	"LitmusReady":                                         "TestingReady",
+	"LitmusReceipt":                                       "TestingReceipt",
+	"LitmusThemeShot":                                     "TestingThemeShot",
+	"LitmusRecipe":                                        "TestingRecipe",
+	"LitmusRun":                                           "TestingRun",
+	"LitmusRunStatus":                                     "TestingRunStatus",
+	"LitmusRunSummary":                                    "TestingRunSummary",
+	"LitmusRunList":                                       "TestingRunList",
+	"LitmusRunDetail":                                     "TestingRunDetail",
+	"LitmusRunPR":                                         "TestingRunPr",
+	"LitmusRerun":                                         "TestingRerun",
+	"LitmusProjectSettings":                               "TestingProjectSettings",
+	"LitmusSeedStep":                                      "TestingSeedStep",
+	"LitmusStarted":                                       "TestingStarted",
+	"LitmusStep":                                          "TestingStep",
+	"LitmusToolchain":                                     "TestingToolchain",
+	"LitmusVerdict":                                       "TestingVerdict",
 	"ControllersSetSessionMergePolicyRequest":             "SetSessionMergePolicyRequest",
 	"ControllersSetSessionMergePolicyResponse":            "SetSessionMergePolicyResponse",
 	"ControllersSetSessionAutoInjectReviewRequest":        "SetSessionAutoInjectReviewRequest",
@@ -677,6 +704,7 @@ func operations() []operation {
 	ops = append(ops, mobileOperations()...)
 	ops = append(ops, mobileDeviceOperations()...)
 	ops = append(ops, browserOperations()...)
+	ops = append(ops, testingOperations()...)
 	ops = append(ops, shellTerminalOperations()...)
 	ops = append(ops, cueOperations()...)
 	ops = append(ops, systemOperations()...)
@@ -872,6 +900,46 @@ func browserOperations() []operation {
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
+	}
+}
+
+// testingOperations declares the /api/v1/testing routes. Must stay 1:1 with the
+// routes TestingController.Register mounts (enforced by the parity test).
+func testingOperations() []operation {
+	errs := []respUnit{{http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}}
+	post := func(path, id, summary string, ok any, params ...any) operation {
+		return operation{method: http.MethodPost, path: "/api/v1/testing" + path, id: id, tag: "testing", summary: summary, pathParams: params,
+			reqBody: controllers.TestingRequest{}, resps: append([]respUnit{{http.StatusOK, ok}}, errs...)}
+	}
+	check := []any{controllers.TestingCheckIDParam{}}
+	return []operation{
+		post("/start", "startTesting", "Spawn a worker that tests a pull request", litmus.Started{}),
+		{method: http.MethodGet, path: "/api/v1/testing/status", id: "getTestingStatus", tag: "testing", summary: "Get the calling session's run and its checks",
+			pathParams: []any{controllers.TestingStatusQuery{}}, resps: append([]respUnit{{http.StatusOK, litmus.RunStatus{}}}, errs...)},
+		post("/intake", "intakeTesting", "Pin a pull request; the run's 25 minute budget starts when the builds are ready", litmus.Run{}),
+		post("/prepare", "prepareTesting", "Prepare the base and head clones and builds", litmus.Run{}),
+		post("/launch", "launchTesting", "Launch a private copy of the base or head build", litmus.Run{}),
+		post("/checks", "addTestingCheck", "Add a check with the observable the worker expects", litmus.Check{}),
+		post("/checks/{id}/start", "startTestingCheck", "Start a check so receipts attach to it", litmus.Check{}, check...),
+		post("/checks/{id}/end", "endTestingCheck", "End a check with an outcome; refused without a receipt", litmus.Check{}, check...),
+		post("/checks/{id}/replay", "replayTestingCheck", "Repeat a PR check on the base build through fresh element matches", map[string]any{}, check...),
+		post("/checks/{id}/compare", "compareTestingCheck", "Diff a check's last base and head after-shots", map[string]any{}, check...),
+		post("/submit", "submitTesting", "Submit the verdict built from the checks and their receipts", litmus.Verdict{}),
+		post("/cleanup", "cleanupTesting", "Stop the run's targets and remove its private state", litmus.Run{}),
+		post("/drive", "driveTesting", "Run one driving action on a launched leg", map[string]any{}),
+		post("/recipe/validate", "validateTestingRecipe", "Validate a per-repo recipe file", litmus.Recipe{}),
+		{method: http.MethodGet, path: "/api/v1/testing/runs", id: "listTestingRuns", tag: "testing", summary: "List a project's testing runs, newest first, with verdict, duration and comment state",
+			pathParams: []any{controllers.TestingRunsQuery{}}, resps: append([]respUnit{{http.StatusOK, litmus.RunList{}}}, errs...)},
+		{method: http.MethodGet, path: "/api/v1/testing/runs/{id}", id: "getTestingRun", tag: "testing", summary: "Get one run with its verdict.md, comment.md and checks",
+			pathParams: []any{controllers.TestingRunIDParam{}}, resps: append([]respUnit{{http.StatusOK, litmus.RunDetail{}}}, errs...)},
+		post("/runs/{id}/post", "postTestingRun", "Publish the evidence and post the comment of a run awaiting approval", litmus.Run{}, controllers.TestingRunIDParam{}),
+		post("/runs/{id}/discard", "discardTestingRun", "Close a run awaiting approval without posting its comment", litmus.Run{}, controllers.TestingRunIDParam{}),
+		post("/rerun", "rerunTesting", "Start a new tester on the pull request of an earlier run", litmus.Rerun{}),
+		{method: http.MethodGet, path: "/api/v1/testing/projects/{id}/settings", id: "getTestingProjectSettings", tag: "testing", summary: "Get a project's Litmus settings",
+			pathParams: []any{controllers.TestingProjectIDParam{}}, resps: append([]respUnit{{http.StatusOK, litmus.ProjectSettings{}}}, errs...)},
+		{method: http.MethodPut, path: "/api/v1/testing/projects/{id}/settings", id: "setTestingProjectSettings", tag: "testing", summary: "Set a project's Litmus settings, such as asking before posting a comment",
+			pathParams: []any{controllers.TestingProjectIDParam{}}, reqBody: controllers.UpdateTestingProjectSettingsRequest{}, resps: append([]respUnit{{http.StatusOK, litmus.ProjectSettings{}}}, errs...)},
+		post("/prune", "pruneTesting", "Delete old litmus checkouts and run dirs the retention rules no longer need", litmus.PruneReport{}),
 	}
 }
 

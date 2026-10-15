@@ -100,6 +100,9 @@ func (m *Manager) switchStore() (ports.AgentSwitchStore, error) {
 // execution. A successful return means the preparing_handoff row and input
 // fence are durable; completion remains observable through the switch record.
 func (m *Manager) SwitchAgent(ctx context.Context, id domain.SessionID, cfg SwitchAgentConfig) (domain.AgentSwitch, error) {
+	if err := m.refuseTestingSession(ctx, id); err != nil {
+		return domain.AgentSwitch{}, err
+	}
 	// Register before admission so shutdown cannot pass its dependency barrier
 	// while this call is between durable creation and worker/refusal handling.
 	if err := m.beginAgentSwitchAttempt(); err != nil {

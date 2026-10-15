@@ -1,0 +1,89 @@
+{
+ "run": {
+  "id": "run_ao-11",
+  "sessionId": "ao-11",
+  "repo": "orchestratorinc/agent-orchestrator",
+  "requestedRepo": "orchestratorinc/agent-orchestrator",
+  "prNumber": 6266,
+  "baseRef": "main",
+  "areas": [
+   {
+    "name": "Renderer settings",
+    "files": 2,
+    "stems": [
+     "HarnessLogo",
+     "HarnessSettingsSection"
+    ]
+   },
+   {
+    "name": "Renderer",
+    "files": 1,
+    "stems": [
+     "styles"
+    ]
+   },
+   {
+    "name": "Tests",
+    "files": 1
+   }
+  ],
+  "createdAt": "2026-10-11T22:54:19.739394+05:30"
+ },
+ "checks": [
+  {
+   "id": "c1",
+   "name": "Harness toolbar layout",
+   "expect": "Settings > Harness shows tabs above a full-width search field, rows with dividers and logo tiles",
+   "state": "partial",
+   "note": "The PR build shows a full-width search field above one row per harness in Settings > Harness; the Local/Cloud tabs did not appear because cloud is off here. I only checked page structure, not the dividers or logo tiles visually.",
+   "receipts": [
+    {
+     "seq": 1,
+     "leg": "head",
+     "action": "click",
+     "args": [
+      "@e23"
+     ],
+     "afterPath": "receipts/1-after.png",
+     "at": "2026-10-11T22:56:35.690747+05:30",
+     "targetRole": "button",
+     "targetName": "Settings"
+    },
+    {
+     "seq": 2,
+     "leg": "head",
+     "action": "click",
+     "args": [
+      "@e35"
+     ],
+     "afterPath": "receipts/2-after.png",
+     "at": "2026-10-11T22:56:38.460069+05:30",
+     "targetRole": "button",
+     "targetName": "Harness"
+    }
+   ]
+  },
+  {
+   "id": "c2",
+   "name": "Harness search filters rows",
+   "expect": "Typing a provider name in search narrows the list to matching rows",
+   "state": "pass",
+   "note": "Typing grok in the PR build's harness search narrowed the list from about 35 rows to only Grok, which kept its Connected status and Refresh login button.",
+   "receipts": [
+    {
+     "seq": 3,
+     "leg": "head",
+     "action": "fill",
+     "args": [
+      "@e53",
+      "grok"
+     ],
+     "afterPath": "receipts/3-after.png",
+     "at": "2026-10-11T22:56:49.260097+05:30",
+     "targetRole": "textbox",
+     "targetName": "Search harnesses"
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "title": "feat: refine Harness settings layout",
+ "body": "Code changes: +210 -14\\\nTests: +40 -0\\\nOthers: +0 -0\n\n## What\n\nUpdate the Harness settings layout for both Local and Cloud. Put icon tabs above the full-width search field, use consistent provider logo tiles, and add row dividers and inset spacing. Keep the existing Refresh login buttons.\n\n## Why\n\nThe previous toolbar crowded search and the login panels lost width to a left indent. The sticky toolbar could also cover rows while scrolling.\n\n## How\n\n- Add a settings-only logo component using existing bundled assets, with contrast adjustments for light and dark themes.\n- Show a neutral dot only beside Connected; other statuses use text. Allow long status messages to wrap.\n- Give rows 12px horizontal padding, remove login-panel indentation, and increase local terminal height from 300px to 360px.\n- Let the toolbar scroll with the list.\n\nAuthentication, installation, and status detection are unchanged. This PR contains only four frontend files.\n\n## Testing\n\n- Harness settings and logo tests: 51 passed.\n- Frontend TypeScript check passed.\n- Renderer production build passed.\n- Before/after screenshot checks passed against baseline `8e0b3b8c4` and this commit at 1440\u00d7900 with the same fake daemon/cloud data. Verified both tabs, 12px row padding, and no subtitle.\n- Earlier light/dark terminal open/close checks passed with fake REST and terminal bridges. Real account login was not completed.\n- The global commit hook ran `npm run lint`, which failed in untouched backend tests, including `claudecode`, `crush`, `fake`, `goose`, and `importer`. The Go lint phase did not run. Used the hook's one-time bypass for this frontend-only commit.\n\n## Screenshots\n\nSame viewport and fixture data in each pair. Screenshot assets are stored separately from the four-file code diff. These captures sho",
+ "files": [
+  {
+   "path": "frontend/src/renderer/components/settings/HarnessLogo.test.tsx",
+   "additions": 40,
+   "deletions": 0
+  },
+  {
+   "path": "frontend/src/renderer/components/settings/HarnessLogo.tsx",
+   "additions": 140,
+   "deletions": 0
+  },
+  {
+   "path": "frontend/src/renderer/components/settings/HarnessSettingsSection.tsx",
+   "additions": 14,
+   "deletions": 14
+  },
+  {
+   "path": "frontend/src/renderer/styles.css",
+   "additions": 56,
+   "deletions": 0
+  }
+ ]
+}

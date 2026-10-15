@@ -63,6 +63,10 @@ func CLIActorType(actorType, commandPath string) string {
 	if normalized == "ao hooks" || normalized == "ao report" {
 		return "agent"
 	}
+	// `ao testing ...` verbs are only ever run by a Litmus testing worker.
+	if normalized == "ao testing" || strings.HasPrefix(normalized, "ao testing ") {
+		return "agent"
+	}
 	return "system"
 }
 

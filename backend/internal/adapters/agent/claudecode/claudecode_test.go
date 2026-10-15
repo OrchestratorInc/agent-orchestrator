@@ -203,6 +203,7 @@ func TestGetLaunchCommandMapsPermissionModes(t *testing.T) {
 		{"auto", ports.PermissionModeAuto, []string{"--permission-mode", "auto"}, ""},
 		{"bypass-permissions", ports.PermissionModeBypassPermissions, []string{"--permission-mode", "bypassPermissions"}, ""},
 		{"empty omits permission flags", "", nil, "--permission-mode"},
+		{"dont-ask denies what would prompt", ports.PermissionModeDontAsk, []string{"--permission-mode", "dontAsk"}, ""},
 	}
 
 	for _, tt := range tests {
@@ -728,6 +729,26 @@ func TestGetRestoreCommandReadsAgentSessionID(t *testing.T) {
 	want := []string{"claude", "--permission-mode", "bypassPermissions", "--resume", "claude-native-1", "--", "continue from AO"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
+	}
+}
+
+func TestGetRestoreCommandCarriesDontAskAndToolLists(t *testing.T) {
+	cmd, ok, err := (&Plugin{resolvedBinary: "claude"}).GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		Permissions:     ports.PermissionModeDontAsk,
+		AllowedTools:    []string{"Read"},
+		DisallowedTools: []string{"Write"},
+		Session: ports.SessionRef{
+			ID:       "sess-r",
+			Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "claude-native-1"},
+		},
+	})
+	if err != nil || !ok {
+		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
+	}
+	for _, want := range [][]string{{"--permission-mode", "dontAsk"}, {"--allowedTools", "Read"}, {"--disallowedTools", "Write"}} {
+		if !containsSubsequence(cmd, want) {
+			t.Fatalf("restore cmd %#v does not contain %#v", cmd, want)
+		}
 	}
 }
 

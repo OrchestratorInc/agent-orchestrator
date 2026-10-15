@@ -1,0 +1,209 @@
+{
+ "run": {
+  "id": "run_ao-17",
+  "sessionId": "ao-17",
+  "repo": "orchestratorinc/agent-orchestrator",
+  "requestedRepo": "orchestratorinc/agent-orchestrator",
+  "prNumber": 6266,
+  "baseSha": "8e0b3b8c4da31cec06ef5f8506f3272940373796",
+  "headSha": "77aafd49ca023aa1eb819685e23425b573e099a5",
+  "areas": [
+   {
+    "name": "Renderer settings",
+    "files": 2,
+    "stems": [
+     "HarnessLogo",
+     "HarnessSettingsSection"
+    ]
+   },
+   {
+    "name": "Renderer",
+    "files": 1,
+    "stems": [
+     "styles"
+    ]
+   },
+   {
+    "name": "Tests",
+    "files": 1
+   }
+  ],
+  "baseRef": "main",
+  "state": "submitted",
+  "createdAt": "2026-10-11T23:58:23.817699+05:30",
+  "deadline": "2026-10-12T00:13:23.817699+05:30",
+  "legs": [
+   {
+    "name": "head",
+    "worktree": "/Users/dev/.ao/data/litmus/host/litmus/repos/orchestratorinc__agent-orchestrator/77aafd49ca023aa1eb819685e23425b573e099a5",
+    "buildManifest": "/Users/dev/.ao/data/litmus/host/litmus/repos/orchestratorinc__agent-orchestrator/77aafd49ca023aa1eb819685e23425b573e099a5/manifest.json",
+    "pid": 29236,
+    "pidStart": "2026-10-11T23:58:36+05:30",
+    "dataDir": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-17/head/data",
+    "daemonPort": 60843,
+    "debugPort": 60844,
+    "runFile": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-17/head/running.json",
+    "engine": {
+     "binary": "/Users/dev/Desktop/Litmus/ao/frontend/agent-browser/agent-browser",
+     "runDir": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-17",
+     "session": "head-acfe56",
+     "namespace": "head-acfe56",
+     "endpoint": "http://127.0.0.1:60844",
+     "socketDir": "/tmp/litmus-acfe562f"
+    },
+    "state": "cleaned",
+    "recordStartedAt": "2026-10-11T23:59:12.658095+05:30",
+    "recordStoppedAt": "2026-10-12T00:01:01.273524+05:30",
+    "recordCursor": true,
+    "recordFps": "10"
+   },
+   {
+    "name": "base",
+    "worktree": "/Users/dev/.ao/data/litmus/host/litmus/repos/orchestratorinc__agent-orchestrator/8e0b3b8c4da31cec06ef5f8506f3272940373796",
+    "buildManifest": "/Users/dev/.ao/data/litmus/host/litmus/repos/orchestratorinc__agent-orchestrator/8e0b3b8c4da31cec06ef5f8506f3272940373796/manifest.json",
+    "pid": 31449,
+    "pidStart": "2026-10-11T23:59:46+05:30",
+    "dataDir": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-17/base/data",
+    "daemonPort": 61160,
+    "debugPort": 61161,
+    "runFile": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-17/base/running.json",
+    "engine": {
+     "binary": "/Users/dev/Desktop/Litmus/ao/frontend/agent-browser/agent-browser",
+     "runDir": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-17",
+     "session": "base-78480a",
+     "namespace": "base-78480a",
+     "endpoint": "http://127.0.0.1:61161",
+     "socketDir": "/tmp/litmus-78480ac8"
+    },
+    "state": "cleaned",
+    "recordStartedAt": "2026-10-12T00:00:36.511238+05:30",
+    "recordStoppedAt": "2026-10-12T00:01:01.569029+05:30",
+    "recordCursor": true,
+    "recordFps": "10"
+   }
+  ],
+  "comment": "post",
+  "commentUrl": "https://github.com/OrchestratorInc/agent-orchestrator/pull/6266#issuecomment-6111697092",
+  "commentState": "updated",
+  "evidence": "post",
+  "evidenceState": "published",
+  "evidenceCommit": "c9f429e12bbb62e5892663847e44ac9cd21a3ce7",
+  "repoVisibility": "public",
+  "repoId": 1156994049,
+  "videoState": "attached",
+  "videoUrls": {
+   "base": "https://github.com/user-attachments/assets/c3a1e792-2dfe-4c92-8376-4e664dfc7059",
+   "head": "https://github.com/user-attachments/assets/9baaaafc-7964-4ae1-adb1-6894bfb2d6cc"
+  }
+ },
+ "checks": [
+  {
+   "id": "c1",
+   "name": "Search field above list",
+   "expect": "Settings > Harness shows a full-width search field at the top, above the provider rows, each with a logo tile and divider between rows",
+   "state": "pass",
+   "note": "On the PR build the full-width search field sits above the provider list, with uniform logo tiles, row dividers, and a dot only beside Connected. Not yet compared against main; Local/Cloud tabs were not visible because cloud is off here.",
+   "receipts": [
+    {
+     "seq": 1,
+     "leg": "head",
+     "action": "click",
+     "args": [
+      "@e23"
+     ],
+     "beforePath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-17/receipts/head-before.png",
+     "afterPath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-17/receipts/1-after.png",
+     "consoleTail": "--- AGENT_BROWSER_PAGE_CONTENT nonce=bb0ac4b0a863a42b7bc4a0619238cb29 origin=unknown ---\n\n--- END_AGENT_BROWSER_PAGE_CONTENT nonce=bb0ac4b0a863a42b7bc4a0619238cb29 ---",
+     "at": "2026-10-11T23:59:18.013375+05:30",
+     "targetRole": "button",
+     "targetName": "Settings"
+    },
+    {
+     "seq": 2,
+     "leg": "head",
+     "action": "click",
+     "args": [
+      "@e35"
+     ],
+     "beforePath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-17/receipts/1-after.png",
+     "afterPath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-17/receipts/2-after.png",
+     "consoleTail": "--- AGENT_BROWSER_PAGE_CONTENT nonce=ff5bf039943b5489f15d4fee79c4d108 origin=unknown ---\n\n--- END_AGENT_BROWSER_PAGE_CONTENT nonce=ff5bf039943b5489f15d4fee79c4d108 ---",
+     "at": "2026-10-11T23:59:22.307186+05:30",
+     "targetRole": "button",
+     "targetName": "Harness"
+    }
+   ]
+  },
+  {
+   "id": "c2",
+   "name": "Toolbar scrolls with list",
+   "expect": "Scrolling the Harness list moves the search toolbar away with the rows and it does not cover rows",
+   "state": "skipped",
+   "note": "On the PR build the list did not scroll with PageDown or End, so I could not see whether the toolbar moves with the rows. Not compared against main.",
+   "receipts": [
+    {
+     "seq": 3,
+     "leg": "head",
+     "action": "press",
+     "args": [
+      "PageDown"
+     ],
+     "beforePath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-17/receipts/2-after.png",
+     "afterPath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-17/receipts/3-after.png",
+     "consoleTail": "--- AGENT_BROWSER_PAGE_CONTENT nonce=f4d4ab765af704395f0df9404023eda4 origin=unknown ---\n\n--- END_AGENT_BROWSER_PAGE_CONTENT nonce=f4d4ab765af704395f0df9404023eda4 ---",
+     "at": "2026-10-11T23:59:35.786999+05:30"
+    },
+    {
+     "seq": 4,
+     "leg": "head",
+     "action": "press",
+     "args": [
+      "End"
+     ],
+     "beforePath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-17/receipts/3-after.png",
+     "afterPath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-17/receipts/4-after.png",
+     "consoleTail": "--- AGENT_BROWSER_PAGE_CONTENT nonce=3eee6c156c8eaa9b472ea05bb9f79dbb origin=unknown ---\n\n--- END_AGENT_BROWSER_PAGE_CONTENT nonce=3eee6c156c8eaa9b472ea05bb9f79dbb ---",
+     "at": "2026-10-11T23:59:41.03764+05:30"
+    }
+   ]
+  },
+  {
+   "id": "c3",
+   "name": "Search field above list",
+   "expect": "Settings > Harness shows a full-width search field at the top, above the provider rows, each with a logo tile and divider between rows",
+   "state": "fail",
+   "note": "On main the search field is already full width above the list, but rows have no logo tiles, no dividers and no status dot. The PR build adds the tiles, dividers and the Connected-only dot.",
+   "leg": "base",
+   "receipts": [
+    {
+     "seq": 5,
+     "leg": "base",
+     "action": "click",
+     "args": [
+      "@e23"
+     ],
+     "beforePath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-17/receipts/base-before.png",
+     "afterPath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-17/receipts/5-after.png",
+     "consoleTail": "--- AGENT_BROWSER_PAGE_CONTENT nonce=44ec381b42e37f32ee56d4b245b4110d origin=unknown ---\n\n--- END_AGENT_BROWSER_PAGE_CONTENT nonce=44ec381b42e37f32ee56d4b245b4110d ---",
+     "at": "2026-10-12T00:00:45.236828+05:30",
+     "targetRole": "button",
+     "targetName": "Settings"
+    },
+    {
+     "seq": 6,
+     "leg": "base",
+     "action": "click",
+     "args": [
+      "@e35"
+     ],
+     "beforePath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-17/receipts/5-after.png",
+     "afterPath": "/Users/dev/.ao/data/litmus/host/litmus/runs/run_ao-17/receipts/6-after.png",
+     "consoleTail": "--- AGENT_BROWSER_PAGE_CONTENT nonce=d908a57881b6ab49b02d8740e4cd509a origin=unknown ---\n\n--- END_AGENT_BROWSER_PAGE_CONTENT nonce=d908a57881b6ab49b02d8740e4cd509a ---",
+     "at": "2026-10-12T00:00:52.528142+05:30",
+     "targetRole": "button",
+     "targetName": "Harness"
+    }
+   ]
+  }
+ ]
+}

@@ -774,6 +774,11 @@ const (
 	PermissionModeBypassPermissions = domain.PermissionModeBypassPermissions
 )
 
+// PermissionModeDontAsk is Claude Code's unattended mode: any call that would
+// prompt is denied, while allow rules still run. Litmus testing sessions use it
+// per launch; it is not a stored project setting.
+const PermissionModeDontAsk PermissionMode = "dontAsk"
+
 // NormalizePermissionMode collapses an empty or unrecognized mode to
 // PermissionModeDefault, leaving the four known modes unchanged. Adapters call
 // it so a stored value they don't recognize defers to the agent's own config

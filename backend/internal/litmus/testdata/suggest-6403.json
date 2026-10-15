@@ -1,0 +1,36 @@
+{
+ "title": "fix(shell): keep navigation arrows visible with the sidebar expanded",
+ "body": "Code changes: +32 -42  \nTests: +129 -9  \nOthers: +0 -0\n\nExpanding the sidebar unmounted both history buttons once the brand appeared. Keep the toggle, back, and forward buttons in their existing fixed positions and show the draggable brand after them. The existing brand clipping and sidebar width clamp keep the label inside the sidebar.\n\nThe native Electron reproduction matched the supplied screenshots: zero history buttons after expansion, and two after collapse. After this change, both states have both buttons. Only the buttons have native `no-drag` regions. History availability, the Home-page lock, and Windows' separate titlebar keep their existing behavior.\n\nHistory shows a deliberate UI change that regressed expanded-sidebar navigation. [31f9cc59c](https://github.com/Untrivial-ai/agent-orchestrator/commit/31f9cc59c7365afee6acc2dc3e8f377d2a78e41c), authored by ronish, introduced the brand/history hover swap in #6284. [64e8193e7](https://github.com/Untrivial-ai/agent-orchestrator/commit/64e8193e7f9eb2283cd133c78b867e741dcc9708), also authored by ronish, removed hover and keyboard reveal in #6292. The resulting `arrowsVisible = !showBrand` condition explains the missing controls. The shell layout still describes a fixed history cluster that survives sidebar toggles.\n\nValidation:\n\n- Eight focused component tests pass. The complete frontend suite passed locally and in CI: 404 files, 6,462 tests, 6 skipped.\n- Fifteen focused browser tests passed, including macOS/Linux navigation, saved sidebar widths of 200 and 420px, label readability, tab clearance, fullscreen alignment, and resize clamps. The CI follow-up passed 18 repeated navigation cases and the E2E typecheck. Full frontend typecheck also passed locally using Node 24 with a 3 GiB heap.\n- Native Electron before/afte",
+ "files": [
+  {
+   "path": "frontend/src/renderer/components/TitlebarNav.linux.test.tsx",
+   "additions": 8,
+   "deletions": 1
+  },
+  {
+   "path": "frontend/src/renderer/components/TitlebarNav.test.tsx",
+   "additions": 52,
+   "deletions": 8
+  },
+  {
+   "path": "frontend/src/renderer/components/TitlebarNav.tsx",
+   "additions": 32,
+   "deletions": 42
+  },
+  {
+   "path": "frontend/e2e/files-narrow-inspector.spec.ts",
+   "additions": 2,
+   "deletions": 0
+  },
+  {
+   "path": "frontend/e2e/titlebar-alignment.spec.ts",
+   "additions": 5,
+   "deletions": 0
+  },
+  {
+   "path": "frontend/e2e/titlebar-history.spec.ts",
+   "additions": 62,
+   "deletions": 0
+  }
+ ]
+}

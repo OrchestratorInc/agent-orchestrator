@@ -14,6 +14,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/litmus"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/presence"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
@@ -56,6 +57,7 @@ type APIDeps struct {
 	Telemetry                ports.EventSink
 	Mobile                   *controllers.MobileController
 	Browser                  controllers.BrowserService
+	Testing                  controllers.TestingService
 	PreviewServer            controllers.ManagedPreviewServer
 	SessionCapabilities      controllers.SessionCapabilityValidator
 	ShellPreviewCapabilities controllers.ShellPreviewCapabilityValidator
@@ -137,6 +139,7 @@ type API struct {
 	settings      *controllers.SettingsController
 	dev           *controllers.DevController
 	browser       *controllers.BrowserController
+	testing       *controllers.TestingController
 	system        *controllers.SystemController
 	identity      *controllers.IdentityController
 	endpoints     *controllers.EndpointsController
@@ -195,6 +198,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
 		browser:       &controllers.BrowserController{Svc: deps.Browser},
+		testing:       &controllers.TestingController{Svc: deps.Testing},
 		system:        &controllers.SystemController{Checks: deps.SystemChecks},
 		identity:      &controllers.IdentityController{HostID: deps.HostID},
 		endpoints:     &controllers.EndpointsController{Source: deps.Endpoints},
@@ -226,9 +230,14 @@ func (a *API) Register(root chi.Router) {
 			r.Use(func(next http.Handler) http.Handler {
 				ordinary := middleware.Timeout(timeout)(next)
 				upload := middleware.Timeout(max(timeout, 10*time.Minute))(next)
+				replay := middleware.Timeout(max(timeout, litmus.RunBudget+time.Minute))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 					if attachmentUploadRoute(req) {
 						upload.ServeHTTP(w, req)
+						return
+					}
+					if req.Method == http.MethodPost && chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/testing/checks/{id}/replay" {
+						replay.ServeHTTP(w, req)
 						return
 					}
 					ordinary.ServeHTTP(w, req)
@@ -255,6 +264,9 @@ func (a *API) Register(root chi.Router) {
 			a.settings.Register(r)
 			a.dev.Register(r)
 			a.browser.Register(r)
+			if a.deps.Testing != nil {
+				a.testing.Register(r)
+			}
 			a.system.Register(r)
 			a.identity.Register(r)
 			a.endpoints.Register(r)

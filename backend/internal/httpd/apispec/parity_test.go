@@ -15,6 +15,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
+	"github.com/aoagents/agent-orchestrator/backend/internal/litmus"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
 
@@ -48,6 +49,8 @@ func TestRouteSpecParity(t *testing.T) {
 		Mobile:       &controllers.MobileController{},
 		DeviceRoster: stubDeviceRoster{},
 		DeviceLive:   stubDeviceLive{},
+		// Testing mounts only when wired; its operations are in the spec unconditionally.
+		Testing: litmus.New(litmus.NewStore(t.TempDir()), nil),
 	}
 	router := httpd.NewRouterWithControl(config.Config{}, log, nil, deps, httpd.ControlDeps{})
 
