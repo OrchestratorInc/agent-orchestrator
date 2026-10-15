@@ -9,6 +9,7 @@ import {
 	revalidateAgentModels,
 	type AgentModelCatalog,
 } from "../hooks/useAgentModelsQuery";
+import { useOfferedModels } from "../hooks/useOfferedModels";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
 import { NativeModePicker } from "./NativeModePicker";
 
@@ -41,6 +42,7 @@ export function AgentModelPicker({
 	const queryClient = useQueryClient();
 	const query = useQuery(agentModelsQueryOptions(agentId, projectId, hostId));
 	const catalog: AgentModelCatalog | undefined = query.data;
+	const { models: offeredModels } = useOfferedModels(agentId, catalog?.models, { hostId, keep: [value, mode] });
 	const revalidationQuery = useQuery({
 		queryKey: hostId
 			? ["agent-model-revalidation", hostId, agentId, projectId, catalog?.validatedAt ?? ""]
@@ -91,7 +93,7 @@ export function AgentModelPicker({
 	if (catalog?.selectionMode === "mode") {
 		return (
 			<NativeModePicker
-				models={catalog.models ?? []}
+				models={offeredModels}
 				mode={mode}
 				onModeChange={onModeChange}
 				disabled={disabled || agentId === ""}
@@ -101,7 +103,7 @@ export function AgentModelPicker({
 	}
 
 	const customModelEntry = catalog?.customModelEntry ?? (catalog?.allowCustom ? "direct" : "none");
-	const displayModels = (catalog?.models ?? []).map((item) =>
+	const displayModels = offeredModels.map((item) =>
 		item.id === "auto" ? { ...item, label: t("settings.models.autoRouteLabel") } : item,
 	);
 	const selectCatalogModel = (nextModel: string) => {

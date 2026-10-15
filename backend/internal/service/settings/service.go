@@ -7,9 +7,13 @@ package settings
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -21,10 +25,12 @@ type Store interface {
 	GetAppSettings(ctx context.Context) (Snapshot, error)
 	SetDefaultSessionMode(ctx context.Context, mode domain.SessionMode, now time.Time) error
 	SetCloudOffering(ctx context.Context, enabled bool, now time.Time) error
+	SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault, now time.Time) error
 }
 
 // Snapshot is the current preference set.
 type Snapshot struct {
+	HarnessDefaults    map[string]domain.HarnessDefault
 	DefaultSessionMode domain.SessionMode
 	// CloudOffering is the user's cloud toggle (Settings, Developer Mode).
 	CloudOffering          bool
@@ -175,4 +181,56 @@ func (s *Service) ChatHarnesses(candidates []domain.AgentHarness) []domain.Agent
 		}
 	}
 	return out
+}
+
+// maxDisabledModels bounds the picker denylist; the largest catalog (OpenCode
+// via models.dev) lists under 9,000 models.
+const maxDisabledModels = 20000
+
+// normalizeDisabledModels trims and de-duplicates ids, keeping the given order.
+func normalizeDisabledModels(ids []string) ([]string, bool) {
+	if len(ids) > maxDisabledModels {
+		return nil, false
+	}
+	out := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || len(id) > 256 || strings.ContainsFunc(id, unicode.IsControl) {
+			return nil, false
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	if len(out) == 0 {
+		return nil, true
+	}
+	return out, true
+}
+
+// ErrInvalidHarnessDefault marks invalid preference input at the API boundary.
+var ErrInvalidHarnessDefault = errors.New("invalid harness default")
+
+// ErrUnknownHarness marks a preference for a harness AO does not know.
+var ErrUnknownHarness = errors.New("unknown harness")
+
+// SetHarnessDefault replaces the selected harness's picker preference. The
+// store writes only that harness's entry, so concurrent saves for other
+// harnesses are kept.
+func (s *Service) SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault) (Snapshot, error) {
+	if !slices.Contains(domain.AllHarnesses, agent) {
+		return Snapshot{}, fmt.Errorf("%w %q", ErrUnknownHarness, agent)
+	}
+	disabled, ok := normalizeDisabledModels(value.DisabledModels)
+	if !ok {
+		return Snapshot{}, fmt.Errorf("%w: disabled models must be at most %d model ids of up to 256 characters", ErrInvalidHarnessDefault, maxDisabledModels)
+	}
+	value.DisabledModels = disabled
+	if err := s.store.SetHarnessDefault(ctx, agent, value, s.now()); err != nil {
+		return Snapshot{}, err
+	}
+	return s.Get(ctx)
 }

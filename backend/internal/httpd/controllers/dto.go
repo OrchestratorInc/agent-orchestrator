@@ -1713,14 +1713,16 @@ type AgentAuthenticationObservation = domain.AgentAuthenticationObservation
 // AgentModelsQuery scopes a model catalog to a project where providers may be
 // configured per workspace.
 type AgentModelsQuery struct {
-	ProjectID string `query:"projectId,omitempty" description:"Optional project identifier used as the model-catalog cache scope."`
+	CatalogOnly bool   `query:"catalogOnly,omitempty" description:"Return catalog facts without reading session history for model recency. Cached catalogs are served while discovery refreshes in the background."`
+	ProjectID   string `query:"projectId,omitempty" description:"Optional project identifier used as the model-catalog cache scope."`
 }
 
 // AgentModelsRefreshQuery controls forced refresh versus cheap background
 // revalidation for a project-scoped model catalog.
 type AgentModelsRefreshQuery struct {
-	ProjectID  string `query:"projectId,omitempty" description:"Optional project identifier used as the model-catalog cache scope."`
-	Revalidate bool   `query:"revalidate,omitempty" description:"When true, compare executable and config metadata before running discovery."`
+	CatalogOnly bool   `query:"catalogOnly,omitempty" description:"Refresh the Harness Settings browsing catalog without session-history enrichment; FX includes all connections in a separate cache."`
+	ProjectID   string `query:"projectId,omitempty" description:"Optional project identifier used as the model-catalog cache scope."`
+	Revalidate  bool   `query:"revalidate,omitempty" description:"When true, compare executable and config metadata before running discovery."`
 }
 
 // AgentModelsResponse is the normalized model picker for one agent.
@@ -2045,11 +2047,17 @@ type ListAutomationRunsResponse struct {
 // AgentInstallResponse is shared by the agent harness start and status routes.
 type AgentInstallResponse = systeminstall.Job
 
+// AgentUpdateAdvisoryQuery allows an explicit user action to bypass cached version evidence.
+type AgentUpdateAdvisoryQuery struct {
+	Refresh bool `query:"refresh,omitempty" description:"Re-probe the installed binary, ownership and latest release instead of reusing cached advisory evidence."`
+}
+
 // StartAgentInstallRequest selects one method returned by the installer
 // catalog. The daemon still owns the argv behind the method id.
 type StartAgentInstallRequest struct {
-	Method    string                       `json:"method,omitempty" description:"Server-issued installation method id. Omit to use the recommended viable method."`
-	Operation systeminstall.AgentOperation `json:"operation,omitempty" enum:"install,reinstall" description:"Requested operation. Defaults to install for older clients."`
+	Method          string                       `json:"method,omitempty" description:"Server-issued installation method id. Omit to use the recommended viable method for an install or reinstall, and the method that owns the installed copy for an update."`
+	Operation       systeminstall.AgentOperation `json:"operation,omitempty" enum:"install,reinstall,update" description:"Requested operation. Defaults to install for older clients."`
+	ExpectedVersion string                       `json:"expectedVersion,omitempty" description:"For updates, the available version explicitly approved by the user. The update must reach it. It is installed only when it lies between the installed version and the latest release AO found; otherwise that latest release is installed. A version at or below the installed one, or one sent with another operation, is rejected with INVALID_UPDATE_VERSION."`
 }
 
 // AgentInstallJobsResponse hydrates Settings with the latest durable job for
@@ -3223,6 +3231,8 @@ type SetConversationTitleResponse struct {
 
 // SettingsResponse is the daemon-owned preference set.
 type SettingsResponse struct {
+	// HarnessDefaults are per-harness picker preferences, keyed by harness id.
+	HarnessDefaults map[string]domain.HarnessDefault `json:"harnessDefaults,omitempty"`
 	// DefaultSessionMode applies to sessions created from now on. Changing it
 	// never alters an existing session; only an explicit interface transition can.
 	DefaultSessionMode string `json:"defaultSessionMode" enum:"chat,tui"`
@@ -3257,6 +3267,13 @@ type AgentInstallerCatalogResponse struct {
 // UpdateSessionInterfaceRequest changes the default interface for new sessions.
 type UpdateSessionInterfaceRequest struct {
 	DefaultSessionMode string `json:"defaultSessionMode" enum:"chat,tui"`
+}
+
+// UpdateHarnessDefaultRequest replaces one harness's picker preference.
+type UpdateHarnessDefaultRequest struct {
+	// DisabledModels lists the model ids (each up to 256 characters) clients
+	// should leave out of their pickers. An empty list offers every catalog model.
+	DisabledModels *[]string `json:"disabledModels" required:"true" maxItems:"20000"`
 }
 
 // UpdateCloudOfferingRequest flips the user's cloud toggle.

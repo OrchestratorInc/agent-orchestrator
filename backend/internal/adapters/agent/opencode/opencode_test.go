@@ -21,12 +21,12 @@ func TestOpenCodeLocalAuthStatusAuthorizedWithEnv(t *testing.T) {
 	clearOpenCodeAuthEnv(t)
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
 
-	status, ok, err := opencodeLocalAuthStatus(context.Background())
+	status, err := opencodeAuthStatusWithoutCLI(context.Background(), t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if status != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("status = %q, want %q", status, ports.AgentAuthStatusAuthorized)
 	}
 }
 
@@ -39,12 +39,12 @@ func TestOpenCodeLocalAuthStatusAuthorizedWithAuthFile(t *testing.T) {
 		}
 	}`)
 
-	status, ok, err := opencodeLocalAuthStatus(context.Background())
+	status, err := opencodeAuthStatusWithoutCLI(context.Background(), t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if status != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("status = %q, want %q", status, ports.AgentAuthStatusAuthorized)
 	}
 }
 
@@ -52,12 +52,12 @@ func TestOpenCodeLocalAuthStatusUnknownWithEmptyAuthFile(t *testing.T) {
 	clearOpenCodeAuthEnv(t)
 	writeOpenCodeAuthFile(t, `{}`)
 
-	status, ok, err := opencodeLocalAuthStatus(context.Background())
+	status, err := opencodeAuthStatusWithoutCLI(context.Background(), t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusUnknown {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusUnknown)
+	if status != ports.AgentAuthStatusUnknown {
+		t.Fatalf("status = %q, want %q", status, ports.AgentAuthStatusUnknown)
 	}
 }
 
@@ -89,12 +89,12 @@ func TestOpenCodeLocalAuthStatusAuthorizedWithActiveDBAccount(t *testing.T) {
 	})
 	t.Setenv("OPENCODE_DATA_DIR", dataDir)
 
-	status, ok, err := opencodeLocalAuthStatus(context.Background())
+	status, err := opencodeAuthStatusWithoutCLI(context.Background(), t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if status != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("status = %q, want %q", status, ports.AgentAuthStatusAuthorized)
 	}
 }
 
@@ -123,12 +123,12 @@ func TestOpenCodeLocalAuthStatusDBAccountOverridesEmptyAuthFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	status, ok, err := opencodeLocalAuthStatus(context.Background())
+	status, err := opencodeAuthStatusWithoutCLI(context.Background(), t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if status != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("status = %q, want %q", status, ports.AgentAuthStatusAuthorized)
 	}
 }
 
@@ -157,12 +157,12 @@ func TestOpenCodeLocalAuthStatusAuthorizedWithControlDBAccount(t *testing.T) {
 	})
 	t.Setenv("XDG_DATA_HOME", dataHome)
 
-	status, ok, err := opencodeLocalAuthStatus(context.Background())
+	status, err := opencodeAuthStatusWithoutCLI(context.Background(), t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if status != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("status = %q, want %q", status, ports.AgentAuthStatusAuthorized)
 	}
 }
 
@@ -189,12 +189,12 @@ func TestOpenCodeLocalAuthStatusWithV2Credential(t *testing.T) {
 			})
 			t.Setenv("OPENCODE_DATA_DIR", dataDir)
 
-			status, ok, err := opencodeLocalAuthStatus(context.Background())
+			status, err := opencodeAuthStatusWithoutCLI(context.Background(), t)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !ok || status != tt.want {
-				t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, tt.want)
+			if status != tt.want {
+				t.Fatalf("status = %q, want %q", status, tt.want)
 			}
 		})
 	}
@@ -236,12 +236,12 @@ func TestOpenCodeLocalAuthStatusUnknownWithEmptyDBAccounts(t *testing.T) {
 	})
 	t.Setenv("OPENCODE_DATA_DIR", dataDir)
 
-	status, ok, err := opencodeLocalAuthStatus(context.Background())
+	status, err := opencodeAuthStatusWithoutCLI(context.Background(), t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusUnknown {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusUnknown)
+	if status != ports.AgentAuthStatusUnknown {
+		t.Fatalf("status = %q, want %q", status, ports.AgentAuthStatusUnknown)
 	}
 }
 
@@ -292,12 +292,12 @@ func TestOpenCodeLocalAuthStatusUnknownWhenMissing(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
-	status, ok, err := opencodeLocalAuthStatus(context.Background())
+	status, err := opencodeAuthStatusWithoutCLI(context.Background(), t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok || status != ports.AgentAuthStatusUnknown {
-		t.Fatalf("status = (%q, %v), want (%q, false)", status, ok, ports.AgentAuthStatusUnknown)
+	if status != ports.AgentAuthStatusUnknown {
+		t.Fatalf("status = %q, want %q", status, ports.AgentAuthStatusUnknown)
 	}
 }
 
@@ -336,6 +336,14 @@ func writeOpenCodeAuthFile(t *testing.T, content string) {
 	if err := os.WriteFile(filepath.Join(authDir, "auth.json"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// opencodeAuthStatusWithoutCLI runs the production auth check with an
+// opencode executable that cannot start, so only stored credentials and the
+// environment can answer.
+func opencodeAuthStatusWithoutCLI(ctx context.Context, t *testing.T) (ports.AgentAuthStatus, error) {
+	t.Helper()
+	return (&Plugin{resolvedBinary: filepath.Join(t.TempDir(), "opencode")}).AuthStatus(ctx)
 }
 
 func clearOpenCodeAuthEnv(t *testing.T) {
