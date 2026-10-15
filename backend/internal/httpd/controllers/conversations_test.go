@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -135,6 +136,32 @@ func TestChatViewRouteValidatesAndForwardsLease(t *testing.T) {
 
 func (f *fakeConversationService) EditMessage(context.Context, domain.SessionID, string, ports.ChatUserMessage) (chatsvc.EditMessageResult, error) {
 	return chatsvc.EditMessageResult{}, nil
+}
+
+// The driver surfaces a model the provider does not offer as a typed error, so
+// the envelope a client parses — not the driver text — is what must be stable.
+func TestSendMapsConfigOptionInvalidToValidationEnvelope(t *testing.T) {
+	service := &fakeConversationService{
+		sendErr: fmt.Errorf("%w: ACP session model does not offer %q",
+			ports.ErrChatConfigOptionInvalid, "claude-haiku-5-5"),
+	}
+	server := conversationTestServer(t, service)
+	resp, err := http.Post(server.URL+"/api/v1/sessions/p1-1/conversation/messages",
+		"application/json", bytes.NewBufferString(`{"text":"hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s, want 400 validation envelope", resp.StatusCode, body)
+	}
+	if !bytes.Contains(body, []byte(`"code":"CHAT_CONFIG_OPTION_INVALID"`)) {
+		t.Fatalf("body = %s, want CHAT_CONFIG_OPTION_INVALID code", body)
+	}
 }
 
 func (f *fakeConversationService) ActivateBranch(context.Context, domain.SessionID, string) (string, error) {
