@@ -804,12 +804,22 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		baseline.expected = expected
 	}
 	if operation == AgentOperationUpdate && baseline != nil {
+		// A cached latest at or below the version just probed is stale (the
+		// harness was updated elsewhere); pinning it would move it backwards.
+		if baseline.latest != "" && versionAtMost(baseline.scheme, baseline.latest, baseline.version) {
+			baseline.latest = ""
+		}
 		// Install the release the user approved when it is one the advisory
 		// knows exists, else the one the advisory announced. The client value
 		// never reaches the command unless it lies between installed and latest.
 		pin := baseline.latest
 		if baseline.expected != "" && baseline.version != "" && versionAtMost(baseline.scheme, baseline.expected, baseline.latest) {
 			pin = baseline.expected
+		}
+		if pin != "" {
+			// The job succeeds once it reaches the release it installs, even
+			// if a newer one was announced meanwhile.
+			baseline.latest = pin
 		}
 		plan = pinVendorUpdate(plan, pin)
 	}

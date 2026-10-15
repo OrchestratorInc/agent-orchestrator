@@ -1898,6 +1898,29 @@ func TestOpenCodeVendorUpdatePinsApprovedReleaseOverAdvisory(t *testing.T) {
 	if want := []string{"/Users/test/.opencode/bin/opencode", "upgrade", "1.18.35", "--method", "curl"}; !slices.Equal(ran, want) {
 		t.Fatalf("ran %v, want the approved release %v", ran, want)
 	}
+	// Reaching the approved release is success, though 1.18.36 was announced.
+	waitForStatus(t, s, TargetOpencode, StatusSucceeded)
+}
+
+func TestOpenCodeVendorUpdateNeverPinsAStaleCachedRelease(t *testing.T) {
+	s := newTestService("darwin", "bash")
+	// The cache still announces 1.18.35, but 1.18.36 was installed since.
+	s.updateAdvisories = map[Target]UpdateAdvisory{TargetOpencode: {AgentID: string(TargetOpencode), Status: UpdateStatusBehindLatest, CurrentVersion: "1.18.34", LatestVersion: "1.18.35", CheckedAt: time.Now()}}
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/Users/test/.opencode/bin/opencode", Output: "1.18.36"}, nil
+	})
+	var ran []string
+	s.commands = commandRunnerFunc(func(_ context.Context, argv []string, _, _ io.Writer) error {
+		ran = argv
+		return nil
+	})
+	if _, err := s.StartAgentOperation(context.Background(), TargetOpencode, "official-installer", AgentOperationUpdate, ""); err != nil {
+		t.Fatal(err)
+	}
+	s.workers.Wait()
+	if slices.Contains(ran, "1.18.35") {
+		t.Fatalf("ran %v, which installs the stale cached release over 1.18.36", ran)
+	}
 }
 
 func TestOpenCodeVendorUpdateNeverPinsUnvettedApprovedRelease(t *testing.T) {

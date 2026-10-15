@@ -196,10 +196,13 @@ func (s *Service) confirmInstalledOwner(ctx context.Context, target Target, plan
 	switch {
 	case err != nil && verified.ResolvedPath != "":
 		// A broken binary cannot report its version, but AO's own successful
-		// install through this method still identifies it. The update runs on
-		// the resolved path, never on whichever copy PATH finds first.
+		// install through this method still identifies it, as long as the
+		// method still owns the binary sessions resolve: the user may have
+		// installed another copy since. The update runs on the resolved path,
+		// never on whichever copy PATH finds first.
 		job, statusErr := s.Status(ctx, target)
-		if statusErr != nil || job.Status != StatusSucceeded || job.Method != plan.Method {
+		if statusErr != nil || job.Status != StatusSucceeded || job.Method != plan.Method ||
+			!s.methodOwnsBinary(ctx, plan, verified.ResolvedPath) {
 			return nil, fmt.Errorf("%w: AO could not confirm which %s installation is in use (%w); update it manually", ErrInstallOwner, target, err)
 		}
 		version, _ := scheme.find(job.Output)
