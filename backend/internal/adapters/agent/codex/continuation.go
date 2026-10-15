@@ -55,7 +55,7 @@ func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSession
 	if err != nil {
 		return ports.NativeSessionAvailabilityUnknown, err
 	}
-	_, ok, err := findCodexTranscript(ctx, filepath.Join(ref.ConfigDir, "sessions"), sessionID)
+	_, ok, err := findCodexRollout(ctx, filepath.Join(ref.ConfigDir, "sessions"), sessionID, codexRolloutStored)
 	if err != nil {
 		return ports.NativeSessionAvailabilityUnknown, err
 	}
@@ -93,6 +93,24 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 }
 
 func findCodexTranscript(ctx context.Context, root, sessionID string) (string, bool, error) {
+	return findCodexRollout(ctx, root, sessionID, func(name, id string) bool { return strings.HasSuffix(name, "-"+id+".jsonl") })
+}
+
+// codexRolloutStored also accepts the forms Codex stores a resumable thread in:
+// an inactive rollout compressed to .jsonl.zst, and `<thread>_<segment>` files.
+func codexRolloutStored(name, id string) bool {
+	name = strings.TrimSuffix(name, ".zst")
+	if !strings.HasSuffix(name, ".jsonl") {
+		return false
+	}
+	name = strings.TrimSuffix(name, ".jsonl")
+	if before, _, ok := strings.Cut(name, "-"+id+"_"); ok && before != "" {
+		return true
+	}
+	return strings.HasSuffix(name, "-"+id)
+}
+
+func findCodexRollout(ctx context.Context, root, sessionID string, match func(name, id string) bool) (string, bool, error) {
 	var found string
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -101,7 +119,7 @@ func findCodexTranscript(ctx context.Context, root, sessionID string) (string, b
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if entry.Type().IsRegular() && strings.HasSuffix(entry.Name(), "-"+sessionID+".jsonl") {
+		if entry.Type().IsRegular() && match(entry.Name(), sessionID) {
 			found = path
 			return fs.SkipAll
 		}

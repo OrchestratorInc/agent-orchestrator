@@ -1013,7 +1013,7 @@ func Run(buildVersion string) error {
 		DeviceRoster:       deviceRoster,
 		DeviceLive:         presenceTracker,
 		Import:             importsvc.New(importsvc.Deps{Store: store}),
-		SessionImport:      sessionimport.New(store),
+		SessionImport:      sessionimport.New(store, cfg.DataDir),
 		Directories:        fsbrowsersvc.New(),
 		ShellTerminals:     shellTermSvc,
 		Cues:               cuesvc.New(cuesvc.Deps{Store: store, Sessions: sessionSvc, Terminals: shellTermSvc}),
