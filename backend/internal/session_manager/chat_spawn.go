@@ -497,7 +497,7 @@ func (m *Manager) resumeChatController(
 	if agent, ok := m.agents.Agent(rec.Harness); ok {
 		m.augmentAgentRuntimeEnv(agent, env)
 	}
-	applyImportedConfigEnv(rec, env)
+	m.applyImportedConfigEnv(ctx, rec, env)
 
 	historyMode := ports.ChatHistoryImport
 	var providerHandoff *domain.ChatProviderHandoff
@@ -542,7 +542,7 @@ func (m *Manager) resumeChatController(
 			if agent, ok := m.agents.Agent(rec.Harness); ok {
 				m.augmentAgentRuntimeEnv(agent, launchEnv)
 			}
-			applyImportedConfigEnv(rec, launchEnv)
+			m.applyImportedConfigEnv(launchCtx, rec, launchEnv)
 
 			rec = prepared
 			return launchEnv, nil
