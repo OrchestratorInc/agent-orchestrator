@@ -3185,17 +3185,16 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 			return RestoreResult{}, fmt.Errorf("resume agent %s: hibernation state changed: %w", id, ErrResumeInProgress)
 		}
 	}
-	return m.resumeAgentRecordWithPolicy(ctx, "resume agent", rec, false, false)
+	return m.resumeAgentRecordWithPolicy(ctx, "resume agent", rec, false)
 }
 
 func (m *Manager) resumeAgentRecordWithPolicy(
 	ctx context.Context,
 	operation string,
 	rec domain.SessionRecord,
-	forceFresh bool,
 	requireNativeHistory bool,
 ) (RestoreResult, error) {
-	return m.resumeAgentRecordWithReservedGeneration(ctx, operation, rec, forceFresh, requireNativeHistory, "")
+	return m.resumeAgentRecordWithReservedGeneration(ctx, operation, rec, false, requireNativeHistory, "")
 }
 
 func (m *Manager) resumeAgentRecordWithReservedGeneration(

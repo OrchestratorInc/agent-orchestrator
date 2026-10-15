@@ -39,7 +39,7 @@ func (m *Manager) emitVersionSwitch(rec domain.SessionRecord, mode, result strin
 
 // ObserveChatVersionSwitch reports how a Chat session's move to a new release
 // ended. Chat Service calls it once the wake that follows the move settles.
-func (m *Manager) ObserveChatVersionSwitch(id domain.SessionID, _ string, result string) {
+func (m *Manager) ObserveChatVersionSwitch(id domain.SessionID, _, result string) {
 	rec, err := m.getRecord(context.Background(), id)
 	if err != nil {
 		rec = domain.SessionRecord{ID: id}

@@ -111,7 +111,7 @@ func (m *Manager) refreshStaleTerminal(ctx context.Context, store staleTerminalS
 	}
 	defer releaseHarness()
 	version := current.StaleBinary.Version
-	if _, err := m.resumeAgentRecordWithPolicy(operationCtx, "version refresh", current, false, true); err != nil {
+	if _, err := m.resumeAgentRecordWithPolicy(operationCtx, "version refresh", current, true); err != nil {
 		m.logger.Warn("version_switch_failed: terminal session could not restart on the new harness release",
 			"sessionID", id, "harness", current.Harness, "version", version, "error", err)
 		m.emitVersionSwitch(current, "tui", "failed")

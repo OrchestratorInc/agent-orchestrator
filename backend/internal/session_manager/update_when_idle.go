@@ -207,7 +207,7 @@ func (m *Manager) resumeAfterUpdate(ctx context.Context, id domain.SessionID) er
 	}
 	defer releaseHarness()
 	// The input gate stays closed until the new process is up.
-	_, err = m.resumeAgentRecordWithPolicy(ctx, "resume after update", rec, false, true)
+	_, err = m.resumeAgentRecordWithPolicy(ctx, "resume after update", rec, true)
 	result := "succeeded"
 	if err != nil {
 		result = "failed"
