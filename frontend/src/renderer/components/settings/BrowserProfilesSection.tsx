@@ -1,4 +1,4 @@
-import { Eraser, Import, MoreHorizontal, Pencil, Plus, Trash2, UserRound } from "lucide-react";
+import { Eraser, Import, MoreHorizontal, Pencil, Plus, Star, Trash2, UserRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { AoBridge } from "../../../preload";
@@ -24,6 +24,7 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 	const { t } = useTranslation();
 	const bridge = (aoBridge as Partial<AoBridge>).browserProfiles as ProfileBridge | undefined;
 	const [profiles, setProfiles] = useState<Profile[]>([]);
+	const [defaultProfileId, setDefaultProfileIdState] = useState<string | null>(null);
 	const [loading, setLoading] = useState(Boolean(bridge));
 	const [error, setError] = useState("");
 	const [name, setName] = useState("");
@@ -39,6 +40,7 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 		try {
 			const result = await bridge.list();
 			setProfiles(result.profiles);
+			setDefaultProfileIdState(result.defaultProfileId ?? null);
 			setError(result.error?.message ?? "");
 		} catch (reason) {
 			setError(reason instanceof Error ? reason.message : t("settings.browserProfiles.loadFailed"));
@@ -53,6 +55,18 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 		// the load for every i18n/theme render.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [bridge]);
+
+	const toggleDefault = async (profile: Profile) => {
+		if (!bridge) return;
+		const nextId = defaultProfileId === profile.id ? null : profile.id;
+		try {
+			await bridge.setDefault(nextId);
+			setDefaultProfileIdState(nextId);
+			setError("");
+		} catch (reason) {
+			setError(reason instanceof Error ? reason.message : t("settings.browserProfiles.saveDefaultFailed"));
+		}
+	};
 
 	const create = async () => {
 		if (!bridge || !name.trim()) return;
@@ -94,6 +108,7 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 			} else {
 				await bridge.delete(pendingAction.profile.id);
 				setProfiles((current) => current.filter((profile) => profile.id !== pendingAction.profile.id));
+				setDefaultProfileIdState((current) => (current === pendingAction.profile.id ? null : current));
 			}
 			setError("");
 			setPendingAction(null);
@@ -169,6 +184,8 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 							<BrowserProfileRow
 								key={profile.id}
 								profile={profile}
+								isDefault={defaultProfileId === profile.id}
+								onToggleDefault={() => void toggleDefault(profile)}
 								renaming={renamingId === profile.id}
 								onRenameStart={() => setRenamingId(profile.id)}
 								onRenameEnd={(value) => void rename(profile, value)}
@@ -227,6 +244,8 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
  */
 function BrowserProfileRow({
 	profile,
+	isDefault,
+	onToggleDefault,
 	renaming,
 	onRenameStart,
 	onRenameEnd,
@@ -235,6 +254,8 @@ function BrowserProfileRow({
 	onDelete,
 }: {
 	profile: Profile;
+	isDefault: boolean;
+	onToggleDefault: () => void;
 	renaming: boolean;
 	onRenameStart: () => void;
 	onRenameEnd: (value: string) => void;
@@ -286,7 +307,7 @@ function BrowserProfileRow({
 					/>
 				) : (
 					<span className="block truncate text-sm text-settings-label" title={profile.name}>
-						{profile.name}
+						{isDefault ? `${profile.name} (${t("settings.browserProfiles.defaultBadge")})` : profile.name}
 					</span>
 				)}
 			</div>
@@ -321,6 +342,12 @@ function BrowserProfileRow({
 					>
 						<Pencil aria-hidden="true" />
 						{t("shell.rename")}
+					</DropdownMenuItem>
+					<DropdownMenuItem onSelect={onToggleDefault}>
+						<Star aria-hidden="true" className={isDefault ? "fill-current" : undefined} />
+						{t(isDefault ? "settings.browserProfiles.unsetDefault" : "settings.browserProfiles.setDefault", {
+							profile: profile.name,
+						})}
 					</DropdownMenuItem>
 					<DropdownMenuItem onSelect={onClear}>
 						<Eraser aria-hidden="true" />

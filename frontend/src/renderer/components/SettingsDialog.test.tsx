@@ -96,6 +96,7 @@ vi.mock("./CuesDialog", () => ({
 
 vi.mock("./ProjectScriptsSettings", () => ({
 	ProjectScriptsSettings: ({ projectId }: { projectId: string }) => <div data-testid="project-scripts-settings">{projectId}</div>,
+	CloudProjectScriptsSettings: ({ projectId, cloudOrgId }: { projectId: string; cloudOrgId: string }) => <div data-testid="cloud-project-scripts-settings">{cloudOrgId}/{projectId}</div>,
 }));
 
 // The dialog reads the cloud gate to decide whether the Cloud nav page exists;
@@ -194,9 +195,20 @@ describe("SettingsDialog", () => {
 		expect(await screen.findByTestId("cloud-project-settings")).toHaveTextContent("org-1");
 		expect(screen.getByRole("button", { name: "General" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Agents" })).toBeInTheDocument();
-		for (const section of ["Scripts", "Environment", "Cues"]) {
+		// Scripts are project settings on Cloud projects too; environment and cues stay local.
+		expect(screen.getByRole("button", { name: "Scripts" })).toBeInTheDocument();
+		for (const section of ["Environment", "Cues"]) {
 			expect(screen.queryByRole("button", { name: section })).not.toBeInTheDocument();
 		}
+		expect(screen.queryByTestId("project-scripts-settings")).not.toBeInTheDocument();
+	});
+
+	it("opens a cloud project's Scripts page from the control plane", async () => {
+		cloudProjectsState.data = [{ id: "cloud-1", orgId: "org-1", displayName: "ao-landing" }];
+		useUiStore.getState().openProjectSettings("cloud-1", { section: "scripts" });
+		renderSettingsDialog();
+
+		expect(await screen.findByTestId("cloud-project-scripts-settings")).toHaveTextContent("org-1/cloud-1");
 		expect(screen.queryByTestId("project-scripts-settings")).not.toBeInTheDocument();
 	});
 

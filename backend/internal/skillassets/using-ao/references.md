@@ -40,7 +40,8 @@ Natural-language-to-command mappings for common AO tasks.
 | Merge a pull request | `ao pr merge <pr-number>` |
 | Resolve pull-request review threads | `ao pr resolve-comments <pr-number> [comment-id...]` |
 | Submit a code review verdict | `ao review submit <session-id> --run <run-id> --verdict approved` |
-| Get an independent / adversarial review of my PR | `ao review trigger` (inside the worker), or `ao review trigger <worker-session-id>`; never spawn a reviewer worker |
+| Get an independent / adversarial review of an AO worker's implementation PR | `ao review trigger` (inside the owning worker), or `ao review trigger <worker-session-id>` |
+| Review someone else's PR | Spawn or use a normal review-only worker without claiming the target PR; submit the requested provider review directly |
 | Inspect, cancel, or rerun a review | `ao review ls [session-id]`, `ao review cancel [session-id]`, or `ao review trigger [session-id] --rerun` |
 | Switch a running session's agent | `ao session switch-agent <id> <target-harness>` |
 | Configure a project's default branch or model | `ao project set-config <id> --default-branch <branch> --model <model>` |

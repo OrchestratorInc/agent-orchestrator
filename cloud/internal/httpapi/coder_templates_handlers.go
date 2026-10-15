@@ -180,16 +180,62 @@ func (l allowedTemplateLister) TemplateParameters(ctx context.Context, templateI
 	return reader.TemplateParameters(ctx, templateID)
 }
 
+func (l allowedTemplateLister) EvaluateTemplateParameters(ctx context.Context, templateID string, values map[string]string) ([]coder.TemplateParameter, error) {
+	evaluator, ok := l.inner.(CoderTemplateParameterEvaluator)
+	if !ok {
+		return nil, coder.ErrDynamicParametersUnsupported
+	}
+	if !l.has(templateID) {
+		return nil, coder.ErrTemplateNotFound
+	}
+	return evaluator.EvaluateTemplateParameters(ctx, templateID, values)
+}
+
 // CoderTemplateParameterReader reads the rich parameters a Coder template's
 // active version declares. The coder provider client implements it.
 type CoderTemplateParameterReader interface {
 	TemplateParameters(ctx context.Context, templateID string) ([]coder.TemplateParameter, error)
 }
 
+// CoderTemplateParameterEvaluator evaluates a template's parameters against
+// draft values, so parameters a template declares only for certain values of
+// another (a dynamic-parameters template) are listed once they apply. The
+// coder provider client implements it.
+type CoderTemplateParameterEvaluator interface {
+	EvaluateTemplateParameters(ctx context.Context, templateID string, values map[string]string) ([]coder.TemplateParameter, error)
+}
+
 // getCoderTemplateParameters returns the parameters of one Coder template, for
 // the project form's "Template options". Like the template list it reads the
 // organization's own Coder connection when it has one, else the deployment's.
 func (s *Server) getCoderTemplateParameters(w http.ResponseWriter, r *http.Request) {
+	s.writeCoderTemplateParameters(w, r, nil, false)
+}
+
+type evaluateCoderTemplateParametersRequest struct {
+	Values map[string]string `json:"values"`
+}
+
+// evaluateCoderTemplateParameters returns a Coder template's parameters with
+// the form's draft values applied, so a parameter the template declares only
+// for some value of another (11x's "Other GitHub repository" once "Other" is
+// picked) appears as soon as it applies. A classic-flow template, or a Coder
+// without dynamic parameters, answers with its static parameters, exactly as
+// the GET does.
+func (s *Server) evaluateCoderTemplateParameters(w http.ResponseWriter, r *http.Request) {
+	var request evaluateCoderTemplateParametersRequest
+	if err := decodeJSON(w, r, &request); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Request body must be JSON with a values object.")
+		return
+	}
+	if err := domain.ValidateCoderTemplateParameterValues(request.Values); err != nil {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
+		return
+	}
+	s.writeCoderTemplateParameters(w, r, request.Values, true)
+}
+
+func (s *Server) writeCoderTemplateParameters(w http.ResponseWriter, r *http.Request, values map[string]string, evaluate bool) {
 	orgID, templateID := chi.URLParam(r, "orgId"), chi.URLParam(r, "templateId")
 	if requireUUID(orgID, "orgId") != nil || requireUUID(templateID, "templateId") != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId and templateId must be UUIDs.")
@@ -208,7 +254,12 @@ func (s *Server) getCoderTemplateParameters(w http.ResponseWriter, r *http.Reque
 		writeError(w, r, http.StatusNotFound, "coder_template_not_found", "The Coder template was not found.")
 		return
 	}
-	parameters, err := reader.TemplateParameters(r.Context(), templateID)
+	var parameters []coder.TemplateParameter
+	if evaluate {
+		parameters, _, err = s.evaluatedCoderTemplateParameters(r.Context(), reader, templateID, values, requestID(r))
+	} else {
+		parameters, err = reader.TemplateParameters(r.Context(), templateID)
+	}
 	if errors.Is(err, coder.ErrTemplateNotFound) {
 		writeError(w, r, http.StatusNotFound, "coder_template_not_found", "The Coder template was not found.")
 		return
@@ -229,6 +280,33 @@ func (s *Server) getCoderTemplateParameters(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]any{"parameters": parameters})
 }
 
+// evaluatedCoderTemplateParameters reads a template's parameters with values
+// applied when the template and Coder support dynamic parameters (evaluated
+// reports true), and otherwise its static rich parameters. An evaluation that
+// fails for any reason other than an unknown template falls back to the static
+// list, so a Coder hiccup never hides the form or blocks a save.
+func (s *Server) evaluatedCoderTemplateParameters(
+	ctx context.Context,
+	reader CoderTemplateParameterReader,
+	templateID string,
+	values map[string]string,
+	reqID string,
+) (parameters []coder.TemplateParameter, evaluated bool, err error) {
+	if evaluator, ok := reader.(CoderTemplateParameterEvaluator); ok {
+		parameters, err = evaluator.EvaluateTemplateParameters(ctx, templateID, values)
+		switch {
+		case err == nil:
+			return parameters, true, nil
+		case errors.Is(err, coder.ErrTemplateNotFound):
+			return nil, false, err
+		case !errors.Is(err, coder.ErrDynamicParametersUnsupported):
+			s.logger.Warn("evaluate coder template parameters; using the static list", "error", err, "request_id", reqID)
+		}
+	}
+	parameters, err = reader.TemplateParameters(ctx, templateID)
+	return parameters, false, err
+}
+
 // coderTemplateParameterReaderForOrg resolves the same per-organization (or
 // deployment) Coder client the template list uses, as a parameter reader. Nil
 // means no Coder is configured for the organization.
@@ -244,37 +322,73 @@ func (s *Server) coderTemplateParameterReaderForOrg(ctx context.Context, orgID s
 	return reader, nil
 }
 
-// unknownCoderTemplateParameters checks a project's template parameter values
-// against the parameters the template declares. It is best effort: when the
-// template's parameters cannot be read (no Coder, Coder unreachable) it
-// reports none unknown, so a transient Coder read never blocks a project
-// save. Only a readable parameter list can reject a name.
-func (s *Server) unknownCoderTemplateParameters(
+// coderTemplateParameterProblem checks a project's template parameter values
+// against the parameters the template declares with those values applied
+// (parameters a dynamic template declares conditionally count once their
+// trigger is set), and, for an evaluated template, against Coder's own checks
+// of each value. It returns the user-facing problem, or "" when the values are
+// acceptable. It is best effort: when the template's parameters cannot be read
+// (no Coder, Coder unreachable) it reports no problem, so a transient Coder
+// read never blocks a project save.
+func (s *Server) coderTemplateParameterProblem(
 	ctx context.Context,
 	orgID, templateID string,
 	parameters map[string]string,
 	reqID string,
-) []string {
+) string {
 	if len(parameters) == 0 || templateID == "" {
-		return nil
+		return ""
 	}
 	reader, err := s.coderTemplateParameterReaderForOrg(ctx, orgID)
 	if err != nil || reader == nil {
 		if err != nil {
 			s.logger.Warn("validate coder template parameters: resolve reader", "error", err, "request_id", reqID)
 		}
-		return nil
+		return ""
 	}
-	declared, err := reader.TemplateParameters(ctx, templateID)
+	declared, evaluated, err := s.evaluatedCoderTemplateParameters(ctx, reader, templateID, parameters, reqID)
 	if err != nil {
 		s.logger.Warn("validate coder template parameters: read template", "error", err, "request_id", reqID)
-		return nil
+		return ""
 	}
 	names := make([]string, 0, len(declared))
 	for _, parameter := range declared {
 		names = append(names, parameter.Name)
 	}
-	return domain.UnknownCoderTemplateParameters(parameters, names)
+	if unknown := domain.UnknownCoderTemplateParameters(parameters, names); len(unknown) > 0 {
+		return unknownCoderTemplateParametersMessage(unknown)
+	}
+	if !evaluated {
+		return ""
+	}
+	var problems []string
+	for _, parameter := range declared {
+		if _, set := parameters[parameter.Name]; !set {
+			// A parameter left at its default can still report a problem
+			// caused by another value; that value's own diagnostic names it.
+			continue
+		}
+		for _, diagnostic := range parameter.Diagnostics {
+			if diagnostic.Severity != "error" {
+				continue
+			}
+			label := strings.TrimSpace(parameter.DisplayName)
+			if label == "" {
+				label = parameter.Name
+			}
+			problem := label + ": " + strings.TrimSuffix(diagnostic.Summary, ".")
+			if diagnostic.Detail != "" {
+				problem += " (" + diagnostic.Detail + ")"
+			}
+			problems = append(problems, problem)
+			break
+		}
+	}
+	if len(problems) == 0 {
+		return ""
+	}
+	slices.Sort(problems)
+	return "The Coder template rejected these values: " + strings.Join(problems, "; ") + "."
 }
 
 // validateProjectCoderParameters checks the template parameters a free-form
@@ -292,8 +406,8 @@ func (s *Server) validateProjectCoderParameters(w http.ResponseWriter, r *http.R
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Coder template parameters require choosing a template.")
 		return false
 	}
-	if unknown := s.unknownCoderTemplateParameters(r.Context(), orgID, templateID, cfg.Parameters, requestID(r)); len(unknown) > 0 {
-		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", unknownCoderTemplateParametersMessage(unknown))
+	if problem := s.coderTemplateParameterProblem(r.Context(), orgID, templateID, cfg.Parameters, requestID(r)); problem != "" {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", problem)
 		return false
 	}
 	return true

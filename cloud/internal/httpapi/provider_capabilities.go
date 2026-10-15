@@ -416,6 +416,8 @@ func resolveCoderPlacement(
 		ReadyProbe:                cfg.ReadyProbe,
 		ReadyProbeTimeoutSeconds:  cfg.ReadyProbeTimeoutSeconds,
 		ReuseExistingCheckout:     cfg.ReusesExistingCheckout(),
+		WorkingDirectory:          cfg.WorkingDirectory,
+		ProtectSecretFiles:        cfg.ProtectsSecretFiles(),
 	}
 	return placement, nil
 }

@@ -540,6 +540,18 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 // instead of overwriting them with a stale full projection.
 const maxActivitySignalProjectionRetries = 3
 
+// nonInteractiveNativeEntrypoint reports whether a hook came from a headless
+// Claude process. Claude forces CLAUDE_CODE_ENTRYPOINT to sdk-cli for -p runs,
+// even when the parent interactive session exported "cli", while SDK hosts set
+// sdk-ts/sdk-py. Other values, including unset, keep today's semantics.
+func nonInteractiveNativeEntrypoint(entrypoint string) bool {
+	switch strings.TrimSpace(entrypoint) {
+	case "sdk-cli", "sdk-ts", "sdk-py":
+		return true
+	}
+	return false
+}
+
 // ApplyActivitySignal records an authoritative agent activity signal and any
 // native agent session id carried alongside it. Metadata-only hooks leave the
 // existing activity and first-signal facts untouched.
@@ -556,6 +568,15 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 	s.TranscriptPath = strings.TrimSpace(s.TranscriptPath)
 	s.LaunchID = strings.TrimSpace(s.LaunchID)
 	s.ControllerGeneration = strings.TrimSpace(s.ControllerGeneration)
+	// A non-interactive provider process (e.g. a summarizer's `claude -p` run in
+	// the session worktree) inherits AO_SESSION_ID and AO_RUNTIME_LAUNCH_ID, so
+	// the launch-generation fence below cannot reject it. AO never launches such
+	// a process as a hook-reporting session runtime, and Chat controllers report
+	// through ControllerGeneration rather than hooks. Its identity, transcript,
+	// and SessionEnd must not replace the live runtime's facts (#6454).
+	if s.ControllerGeneration == "" && nonInteractiveNativeEntrypoint(s.NativeEntrypoint) {
+		return nil
+	}
 	s.ProviderTurnID = strings.TrimSpace(s.ProviderTurnID)
 	s.SubmissionID = strings.TrimSpace(s.SubmissionID)
 	if s.SubagentID != "" {
@@ -883,11 +904,13 @@ retryProjection:
 			s.LatestAssistantUpdate = ""
 		}
 	}
-	// An explicit prompt submission is proof that an agent was relaunched in the
-	// preserved shell. Other same-generation callbacks may have been delayed
-	// behind the process-exit report and cannot resurrect an exited workload.
+	// An explicit prompt submission or authoritative liveness probe is proof
+	// that an agent remains alive in the preserved shell. Other same-generation
+	// callbacks may have been delayed behind the process-exit report and cannot
+	// resurrect an exited workload.
 	if rec.Activity.State == domain.ActivityExited && (s.Valid || s.SubagentID != "") && s.State != domain.ActivityExited &&
-		(s.State != domain.ActivityActive || s.Event != "user-prompt-submit") && !currentChatController {
+		(s.State != domain.ActivityActive || s.Event != "user-prompt-submit") && !currentChatController &&
+		s.Event != "liveness-probe" {
 		m.mu.Unlock()
 		return nil
 	}
@@ -1266,7 +1289,8 @@ func cursorResolvedExecutionKey(s ports.ActivitySignal) (string, bool) {
 // session. Generic active/tool events remain insufficient to clear blocked.
 func isTurnBoundaryEvent(event string) bool {
 	return event == "user-prompt-submit" || event == "stop" || event == "session-end" ||
-		event == "process-exited" || event == "chat.controller.stopped" || event == "permission-resolved"
+		event == "process-exited" || event == "chat.controller.stopped" || event == "permission-resolved" ||
+		event == "liveness-probe"
 }
 
 // applyToolPrecedenceLocked folds an event-tagged activity signal through the

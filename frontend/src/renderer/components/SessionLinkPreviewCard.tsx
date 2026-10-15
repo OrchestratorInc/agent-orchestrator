@@ -260,7 +260,7 @@ const MARKDOWN_PREVIEW_COMPONENTS: Components = {
 	h6: ({ children }) => <p className={MARKDOWN_PREVIEW_HEADING}>{children}</p>,
 	p: ({ children }) => <p className="mt-1 break-words first:mt-0">{children}</p>,
 	ul: ({ children }) => <ul className="mt-1 list-disc space-y-0.5 pl-4 first:mt-0">{children}</ul>,
-	ol: ({ children }) => <ol className="mt-1 list-decimal space-y-0.5 pl-4 first:mt-0">{children}</ol>,
+	ol: ({ children, start }) => <ol start={start} className="mt-1 list-decimal space-y-0.5 pl-4 first:mt-0">{children}</ol>,
 	blockquote: ({ children }) => <blockquote className="mt-1 border-l-2 border-border pl-2 text-muted-foreground first:mt-0">{children}</blockquote>,
 	pre: ({ children }) => <pre className="mt-1 overflow-hidden rounded-sm bg-surface px-1.5 py-1 font-mono text-[11px] first:mt-0">{children}</pre>,
 	code: ({ children }) => <code className="font-mono text-[0.95em] text-markdown-code">{children}</code>,

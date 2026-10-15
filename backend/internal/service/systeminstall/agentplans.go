@@ -3,6 +3,8 @@ package systeminstall
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -94,12 +96,21 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		}
 	case TargetCursor:
 		plans = []Plan{s.officialByOS(target, "https://cursor.com/install", "bash", "https://cursor.com/install?win32=true", agentDocumentationURLs[target])}
+	// Aider's installer runs `uv tool install aider-chat`, so uv owns the binary
+	// it leaves behind; listing uv lets updates go through it.
 	case TargetAider:
-		plans = []Plan{s.officialByOS(target, "https://aider.chat/install.sh", "sh", "https://aider.chat/install.ps1", agentDocumentationURLs[target])}
+		plans = []Plan{s.officialByOS(target, "https://aider.chat/install.sh", "sh", "https://aider.chat/install.ps1", agentDocumentationURLs[target]), s.planUV(target, "aider-chat")}
 	case TargetGrok:
 		plans = []Plan{s.officialByOS(target, "https://x.ai/cli/install.sh", "bash", "https://x.ai/cli/install.ps1", agentDocumentationURLs[target])}
 	case TargetKimi:
-		plans = []Plan{s.officialByOS(target, "https://code.kimi.com/kimi-code/install.sh", "bash", "https://code.kimi.com/kimi-code/install.ps1", agentDocumentationURLs[target])}
+		official := s.officialByOS(target, "https://code.kimi.com/kimi-code/install.sh", "bash", "https://code.kimi.com/kimi-code/install.ps1", agentDocumentationURLs[target])
+		if s.goos == "darwin" {
+			// Homebrew core ships Kimi as the kimi-code formula; listing it lets AO
+			// recognise and update brew-installed copies.
+			plans = []Plan{official, s.planBrew(target, "kimi-code")}
+		} else {
+			plans = []Plan{official}
+		}
 	case TargetPi:
 		plans = []Plan{s.planNPM(target, "@earendil-works/pi-coding-agent")}
 		if s.goos == "darwin" || s.goos == "linux" {
@@ -258,6 +269,11 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 	default:
 		plans = []Plan{{Target: target, Unsupported: true, Method: "manual", Reason: "unknown install target"}}
 	}
+	if owner, ok := s.derivedOwnerFor(target); ok {
+		if derived, ok := s.derivedOwnerPlan(target, owner); ok {
+			plans = withDerivedOwner(plans, derived)
+		}
+	}
 	for index := range plans {
 		plans[index].DocsURL = agentDocumentationURLs[target]
 		if target != TargetOpencodeV2 || plans[index].Method != "npm" {
@@ -326,35 +342,120 @@ func (s requestPlanner) planKiroInstall() Plan {
 }
 
 func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Plan {
+	if operation == AgentOperationUpdate && plan.Method == "npm" && (plan.daemonRuntimeRejected || plan.daemonPrefixRejected) {
+		// The installed copy may live under another prefix (nvm, fnm, ~/.local)
+		// with its own Node. The update validates that installation once the
+		// owner is known, and applies this reason again if it uses the daemon's.
+		plan.deferredReason = plan.Reason
+		plan.Unsupported, plan.Reason = false, ""
+	}
 	if operation == AgentOperationInstall || plan.Unsupported {
 		return plan
 	}
-	switch plan.Method {
-	case "homebrew":
-		// planHomebrew already chooses install when another manager owns the
-		// harness and reinstall when the formula/cask itself is present.
-	case "npm":
-		plan.Command = append(plan.Command, "--force")
-	case "winget":
-		plan.Command = append(plan.Command, "--force")
-	case "uv":
-		pkg := plan.Command[len(plan.Command)-1]
-		plan.Command = []string{"uv", "tool", "install", pkg, "--force", "--reinstall"}
-	case "pipx":
-		pkg := plan.Command[len(plan.Command)-1]
-		plan.Command = []string{"pipx", "install", "--force", pkg}
-	case "bun":
-		plan.Command = append(plan.Command, "--force")
-	case "official-installer":
-		plan.Unsupported = true
-		plan.Command = nil
-		plan.Script = nil
-		plan.Reason = "This vendor installer does not provide a verified headless reinstall operation."
-	default:
-		plan.Unsupported = true
-		plan.Reason = "This installation method does not provide an explicit reinstall operation."
+	installScript := plan.Script
+	plan.Script = nil
+	if operation == AgentOperationReinstall {
+		switch plan.Method {
+		case "homebrew":
+		case "npm":
+			plan.Command = append(plan.Command, "--force")
+		case "winget":
+			plan.Command = append(plan.Command, "--force")
+		case "uv":
+			plan.Command = []string{"uv", "tool", "install", plan.Package, "--force", "--reinstall"}
+		case "pipx":
+			plan.Command = []string{"pipx", "install", "--force", plan.Package}
+		case "bun":
+			plan.Command = append(plan.Command, "--force")
+		case "official-installer":
+			plan.Unsupported = true
+			plan.Command = nil
+			plan.Script = nil
+			plan.Reason = "This vendor installer does not provide a verified headless reinstall operation."
+		default:
+			plan.Unsupported = true
+			plan.Reason = "This installation method does not provide an explicit reinstall operation."
+		}
+		return plan
 	}
+
+	if operation == AgentOperationUpdate {
+		switch plan.Method {
+		case "homebrew":
+			// The runner sets HOMEBREW_NO_AUTO_UPDATE, and the advisory reads the
+			// live Homebrew API, so refresh local metadata before upgrading.
+			plan.Prepare = [][]string{{"brew", "update"}}
+			plan.Command = []string{"brew", "upgrade"}
+			if plan.PackageCask {
+				plan.Command = append(plan.Command, "--cask")
+			}
+			plan.Command = append(plan.Command, plan.Package)
+		case "npm":
+			pkg := packageWithoutLatest(plan.Package)
+			plan.Command = []string{"npm", "install", "-g", "--prefix", plan.PackagePrefix, pkg + "@latest"}
+		case "winget":
+			plan.Command = []string{"winget", "upgrade", "-e", "--id", plan.Package, "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"}
+		case "uv":
+			plan.Command = []string{"uv", "tool", "upgrade", plan.Package}
+		case "pipx":
+			plan.Command = []string{"pipx", "upgrade", plan.Package}
+		case "bun":
+			plan.Command = []string{"bun", "install", "-g", packageWithoutLatest(plan.Package) + "@latest"}
+		case "official-installer":
+			// These Windows self-updaters do not reliably replace the installed
+			// binary headlessly. Re-run the vendor's Windows installer instead;
+			// ownership and post-update version checks still guard the operation.
+			if s.goos == "windows" && installScript != nil &&
+				(plan.Target == TargetAutohand || plan.Target == TargetGrok) {
+				plan.Command = nil
+				plan.Script = installScript
+				break
+			}
+			command, ok := vendorUpdateCommands[plan.Target]
+			if !ok {
+				plan.Unsupported = true
+				plan.Reason = "This vendor installer does not expose a supported update command."
+			} else {
+				plan.Command = slices.Clone(command)
+			}
+		default:
+			plan.Unsupported = true
+			plan.Reason = "This installation method does not provide a supported update command."
+		}
+		return plan
+	}
+
 	return plan
+}
+
+// vendorUpdateCommands are the harnesses' own self-update commands, used only
+// when the vendor installer, not a package manager, owns the running binary.
+// Each updates the stable channel without a terminal: Kimchi's "self" leaves
+// its extensions alone and --force skips its confirmation prompt, and
+// OpenCode is told the install method AO already proved. Amp's --porcelain
+// prints a one-line result instead of interactive progress, and Pi updates
+// only itself without trusting project-local files.
+var vendorUpdateCommands = map[Target][]string{
+	TargetClaudeCode: {"claude", "update"},
+	TargetCodex:      {"codex", "update"},
+	TargetOpencode:   {"opencode", "upgrade", "--method", "curl"},
+	TargetGoose:      {"goose", "update"},
+	TargetKimchi:     {"kimchi", "update", "self", "--force"},
+	TargetOMP:        {"omp", "update"},
+	TargetAutohand:   {"autohand", "update"},
+	TargetCursor:     {"cursor-agent", "update"},
+	TargetAmp:        {"amp", "update", "--porcelain"},
+	TargetGrok:       {"grok", "update"},
+	TargetKimi:       {"kimi", "upgrade", "-y"},
+	TargetDroid:      {"droid", "update"},
+	TargetQwen:       {"qwen", "update"},
+	TargetFX:         {"fx", "upgrade"},
+	TargetPi:         {"pi", "update", "self", "--no-approve"},
+	TargetPrimeAgent: {"prime-agent", "update"},
+}
+
+func packageWithoutLatest(pkg string) string {
+	return strings.TrimSuffix(pkg, "@latest")
 }
 
 // planAgent preserves the legacy single-plan call sites while selecting from
@@ -391,7 +492,9 @@ func (s *Service) planShellInstaller(target Target, url, shell string) Plan {
 }
 
 func (s *Service) planPowerShellInstaller(target Target, url string) Plan {
-	for _, shell := range []string{"pwsh.exe", "powershell.exe", "pwsh", "powershell"} {
+	// WindowsApps can expose a pwsh.exe execution alias that LookPath finds but
+	// the daemon cannot launch. Prefer the Windows PowerShell binary instead.
+	for _, shell := range []string{"powershell.exe", "powershell", "pwsh.exe", "pwsh"} {
 		resolved, err := s.executables.LookPath(shell)
 		if err != nil {
 			continue
@@ -411,7 +514,7 @@ func (s *Service) planUV(target Target, pkg string) Plan {
 	if _, err := s.executables.LookPath("uv"); err != nil {
 		return Plan{Target: target, Unsupported: true, Method: "uv", Reason: "uv was not found on PATH. Install uv, then retry."}
 	}
-	return Plan{Target: target, Method: "uv", Command: []string{"uv", "tool", "install", pkg}}
+	return Plan{Target: target, Method: "uv", Command: []string{"uv", "tool", "install", pkg}, Package: pkg}
 }
 
 func (s *Service) planBun(target Target) Plan {
@@ -419,16 +522,141 @@ func (s *Service) planBun(target Target) Plan {
 	if _, err := s.executables.LookPath("bun"); err != nil {
 		return Plan{Target: target, Unsupported: true, Method: "bun", Reason: "Bun was not found on PATH."}
 	}
-	return Plan{Target: target, Method: "bun", Command: []string{"bun", "install", "-g", pkg}}
+	return Plan{Target: target, Method: "bun", Command: []string{"bun", "install", "-g", pkg}, Package: pkg}
 }
 
 func (s *Service) planPipx(target Target, pkg string) Plan {
 	if _, err := s.executables.LookPath("pipx"); err != nil {
 		return Plan{Target: target, Unsupported: true, Method: "pipx", Reason: "pipx was not found on PATH. Install pipx, then retry."}
 	}
-	return Plan{Target: target, Method: "pipx", Command: []string{"pipx", "install", pkg}}
+	return Plan{Target: target, Method: "pipx", Command: []string{"pipx", "install", pkg}, Package: pkg}
 }
 
 func manualPlan(target Target, reason, docsURL string) Plan {
 	return Plan{Target: target, Unsupported: true, Method: "manual", Reason: reason, DocsURL: docsURL}
+}
+
+// pinVendorUpdate asks OpenCode for the exact release the update advisory
+// reported, so the version installed is the one the update badge announced.
+func pinVendorUpdate(plan Plan, latest string) Plan {
+	if plan.Method != "official-installer" || plan.Target != TargetOpencode || latest == "" || len(plan.Command) < 2 {
+		return plan
+	}
+	plan.Command = append([]string{plan.Command[0], plan.Command[1], latest}, plan.Command[2:]...)
+	return plan
+}
+
+// targetInstalledCopy points an update at the copy sessions run. A
+// vendor self-update runs from that binary rather than whichever copy PATH
+// finds first, and npm acts on the global prefix that holds the package with
+// that prefix's own Node, which need not be the daemon's npm.
+func targetInstalledCopy(goos string, plan Plan, target Target, binaryPath string) Plan {
+	if goos == "windows" && target == TargetGrok && plan.Method == "official-installer" && plan.Script != nil {
+		// PowerShell's installer defaults to the user's profile. Bind its
+		// destination even when the confirmed copy lives on another drive/share.
+		slashed := strings.ReplaceAll(binaryPath, `\`, "/")
+		driveAbsolute := len(slashed) >= 3 && ((slashed[0] >= 'A' && slashed[0] <= 'Z') || (slashed[0] >= 'a' && slashed[0] <= 'z')) && slashed[1:3] == ":/"
+		uncAbsolute := strings.HasPrefix(slashed, "//") && len(strings.Split(strings.TrimPrefix(slashed, "//"), "/")) >= 3
+		if !driveAbsolute && !uncAbsolute {
+			plan.Unsupported = true
+			plan.Reason = "AO could not preserve the confirmed Grok installation directory; update it manually."
+			return plan
+		}
+		end := strings.LastIndex(slashed, "/")
+		if driveAbsolute && end == 2 {
+			end++ // Keep the separator in a drive root such as D:\.
+		}
+		script := *plan.Script
+		script.Env = nil
+		for _, entry := range plan.Script.Env {
+			key, _, _ := strings.Cut(entry, "=")
+			if !strings.EqualFold(key, "GROK_BIN_DIR") {
+				script.Env = append(script.Env, entry)
+			}
+		}
+		script.Env = append(script.Env, "GROK_BIN_DIR="+binaryPath[:end])
+		plan.Script = &script
+		plan.ExpectedDestination = binaryPath
+		return plan
+	}
+	if len(plan.Command) == 0 {
+		return plan
+	}
+	switch plan.Method {
+	case "official-installer":
+		if command, ok := vendorUpdateCommands[target]; ok && plan.Command[0] == command[0] {
+			plan.Command = append([]string{binaryPath}, plan.Command[1:]...)
+		}
+	case "npm":
+		prefix, ok := npmPrefixOwningBinary(binaryPath, packageWithoutLatest(plan.Package))
+		if !ok || plan.Command[0] != "npm" {
+			return plan
+		}
+		args := slices.Clone(plan.Command[1:])
+		for index := 0; index+1 < len(args); index++ {
+			if args[index] == "--prefix" {
+				args[index+1] = prefix
+			}
+		}
+		plan.PackagePrefix = prefix
+		plan.ownerPrefixFound = true
+		plan.Command = append(npmCommandForPrefix(goos, prefix), args...)
+	}
+	return plan
+}
+
+// validateNPMUpdateTarget checks the installation an npm update acts on.
+// planNPM validated the daemon's Node/npm and global prefix; an update that
+// targets another prefix, or that deferred a daemon rejection, is validated
+// against the owning prefix and the runtime that will run the update: that
+// prefix's own Node and npm when it has them, else the daemon's.
+func (s *Service) validateNPMUpdateTarget(ctx context.Context, plan Plan, plannedPrefix string) Plan {
+	deferred, runtimeRejected, prefixRejected, ownerFound := plan.deferredReason, plan.daemonRuntimeRejected, plan.daemonPrefixRejected, plan.ownerPrefixFound
+	plan.deferredReason, plan.daemonRuntimeRejected, plan.daemonPrefixRejected, plan.ownerPrefixFound = "", false, false, false
+	if plan.Method != "npm" || plan.Unsupported {
+		return plan
+	}
+	reject := func(reason string) Plan {
+		plan.Unsupported = true
+		plan.Reason = reason
+		return plan
+	}
+	if !samePath(plan.PackagePrefix, plannedPrefix) || prefixRejected {
+		if !ownerFound && deferred != "" {
+			return reject(deferred)
+		}
+		writable := false
+		if s.pathWritable != nil && plan.PackagePrefix != "" {
+			writable, _ = s.pathWritable.PathWritable(ctx, plan.PackagePrefix)
+		}
+		if !writable {
+			return reject(fmt.Sprintf("The npm prefix %s that holds the %s sessions run is not writable by the current user. Update it manually; AO will not use sudo.", plan.PackagePrefix, plan.Target))
+		}
+	}
+	if len(plan.Command) > 1 && plan.Command[0] != "npm" {
+		// npmCommandForPrefix chose this prefix's own Node and npm.
+		minimum := minimumNodeVersionForTarget(plan.Target)
+		node, nodeOK := s.toolVersion(ctx, plan.Command[0], "--version")
+		_, npmOK := s.toolVersion(ctx, plan.Command[0], plan.Command[1], "--version")
+		if !nodeOK || !npmOK {
+			return reject(fmt.Sprintf("AO could not validate the Node.js and npm in %s that update %s.", plan.PackagePrefix, plan.Target))
+		}
+		if !versionAtLeast(node, minimum) {
+			return reject(fmt.Sprintf("Node.js %s+ is required to update %s with the Node in %s; found %s.", formatToolVersion(minimum), plan.Target, plan.PackagePrefix, formatToolVersion(node)))
+		}
+	} else if runtimeRejected {
+		// npm from PATH runs the update on the daemon's own Node.
+		return reject(deferred)
+	}
+	return plan
+}
+
+// toolVersion runs a version probe and parses its first line.
+func (s *Service) toolVersion(ctx context.Context, argv ...string) ([3]int, bool) {
+	output, err := runProbe(ctx, s.commands, localProbeTimeout, false, argv)
+	if err != nil {
+		return [3]int{}, false
+	}
+	line, _, _ := strings.Cut(strings.TrimSpace(output), "\n")
+	return parseToolVersion(strings.TrimSpace(line))
 }

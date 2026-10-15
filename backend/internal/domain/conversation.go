@@ -720,6 +720,12 @@ var ErrNoQueuedTurn = errors.New("no queued turn")
 // ErrSessionNotProvisioning rejects a pre-controller turn after startup ended.
 var ErrSessionNotProvisioning = errors.New("session is not provisioning")
 
+// ErrConversationRebound rejects a pre-controller turn aimed at a conversation the
+// session no longer holds, such as an orchestrator's provisioning row after its
+// first controller moved the queue to the project conversation. The caller should
+// look the session's conversation up again.
+var ErrConversationRebound = errors.New("conversation is no longer bound to the session")
+
 // ErrNoConversationTurn reports a turn id that is not in the conversation it was
 // named against. It lives here rather than in the storage layer so a controller and
 // an HTTP handler can both recognize it without importing SQLite.

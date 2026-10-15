@@ -103,6 +103,9 @@ func (m *Manager) InterfaceTransitionStatus(
 	if rec.IsTerminated {
 		status.ReasonCode = "SESSION_TERMINATED"
 		status.Reason = "Terminated sessions must be restored before switching interfaces."
+	} else if interfaceWorkspaceUnavailable(rec) {
+		status.ReasonCode = "WORKSPACE_UNAVAILABLE"
+		status.Reason = "This session's workspace was never set up. Retry start before switching interfaces."
 	} else if target == domain.SessionModeChat && (m.chat == nil || !m.chat.SupportsChat(rec.Harness)) {
 		status.ReasonCode = "CHAT_UNSUPPORTED"
 		status.Reason = fmt.Sprintf("%s does not support Chat UI.", rec.Harness)
@@ -139,6 +142,14 @@ func (m *Manager) InterfaceTransitionStatus(
 		}
 	}
 	return status, nil
+}
+
+// interfaceWorkspaceUnavailable reports a session whose start failed before
+// its workspace existed. Neither controller can launch without one, so a switch
+// would only fail and leave both stopped. A session still provisioning is not
+// refused: its workspace is on the way.
+func interfaceWorkspaceUnavailable(rec domain.SessionRecord) bool {
+	return strings.TrimSpace(rec.Metadata.WorkspacePath) == "" && !rec.ProvisionState.IsProvisioning()
 }
 
 // StartInterfaceTransition durably claims the session and starts the handoff in
@@ -178,6 +189,9 @@ func (m *Manager) StartInterfaceTransition(
 	if target == source {
 		return domain.SessionInterfaceTransition{}, fmt.Errorf("%w: session %s is already in %s mode",
 			ErrInterfaceAlreadySelected, id, source)
+	}
+	if interfaceWorkspaceUnavailable(rec) {
+		return domain.SessionInterfaceTransition{}, fmt.Errorf("%w: session %s", ErrInterfaceWorkspaceUnavailable, id)
 	}
 	nativeID, err := m.handoffNativeConversationID(ctx, rec)
 	if err != nil {
@@ -1215,9 +1229,11 @@ func (m *Manager) rollbackInterfaceTransition(
 	}
 	// A fresh relaunch drops the provider id only in memory. When the epoch never
 	// committed, a Chat source still owns that id durably, so it must resume it:
-	// a fresh start would present an owner the database does not hold.
+	// a fresh start would present an owner the database does not hold. A Chat
+	// whose controller never started holds no id, so it can only start fresh.
 	fresh := transition.NativeConversationID == "" &&
-		(modeChanged || transition.SourceMode != domain.SessionModeChat)
+		(modeChanged || transition.SourceMode != domain.SessionModeChat ||
+			!m.chatHoldsProviderConversation(ctx, transition.SessionID))
 	if err := m.startTransitionTarget(
 		ctx,
 		transition.SessionID,
@@ -1230,6 +1246,17 @@ func (m *Manager) rollbackInterfaceTransition(
 		return
 	}
 	_ = m.finishInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionFailed, code, cause.Error())
+}
+
+// chatHoldsProviderConversation reports whether the session durably holds a
+// provider conversation id. A read failure counts as holding one, so rollback
+// keeps resuming instead of starting fresh on uncertain evidence.
+func (m *Manager) chatHoldsProviderConversation(ctx context.Context, id domain.SessionID) bool {
+	rec, found, err := m.store.GetSession(ctx, id)
+	if err != nil || !found {
+		return true
+	}
+	return strings.TrimSpace(rec.Metadata.ProviderConversationID) != ""
 }
 
 func (m *Manager) stopTransitionTargetConclusive(ctx context.Context, transition domain.SessionInterfaceTransition) error {

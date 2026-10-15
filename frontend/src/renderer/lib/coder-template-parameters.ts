@@ -62,30 +62,21 @@ export function withParameterValue(
 }
 
 /**
- * The `coder.parameters` patch that turns `saved` into `draft` on the project
- * settings endpoint, which merges the map key by key. A key reset to its
- * default is sent with the default value (a string the endpoint accepts), so the
- * stored override stops differing from the template either way. Undefined when
- * nothing changed.
+ * The `coder.parameters` map to save so the project holds `draft`, or
+ * undefined when it already does. The project settings endpoint replaces the
+ * map as a whole, so the whole draft is sent: a key reset to its default is
+ * simply absent, and a value whose parameter no longer applies (dropped by the
+ * form after an edit) is removed with it.
  */
-export function parameterOverridesPatch(
+export function parameterOverridesUpdate(
 	parameters: readonly CloudCpCoderTemplateParameter[],
 	saved: Readonly<Record<string, string>>,
 	draft: Readonly<Record<string, string>>,
 ): Record<string, string> | undefined {
-	const byName = new Map(parameters.map((parameter) => [parameter.name, parameter]));
-	const patch: Record<string, string> = {};
-	for (const [name, value] of Object.entries(draft)) {
-		if (saved[name] !== value) patch[name] = value;
-	}
-	for (const name of Object.keys(saved)) {
-		if (name in draft) continue;
-		const parameter = byName.get(name);
-		// A saved key the template no longer declares is left alone, as is one
-		// already stored at the default.
-		if (parameter && !isDefaultParameterValue(parameter, saved[name] ?? "")) patch[name] = parameter.defaultValue ?? "";
-	}
-	return Object.keys(patch).length > 0 ? patch : undefined;
+	const current = changedParameterOverrides(parameters, saved);
+	const sameKeys = Object.keys(current).length === Object.keys(draft).length;
+	if (sameKeys && Object.entries(draft).every(([name, value]) => current[name] === value)) return undefined;
+	return { ...draft };
 }
 
 /** Saved overrides minus those equal to the current template default. */

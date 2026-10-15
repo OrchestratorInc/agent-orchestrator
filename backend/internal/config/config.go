@@ -32,6 +32,12 @@ const (
 	// DefaultShutdownTimeout is the hard cap on graceful shutdown. After this
 	// the process exits even if connections are still draining.
 	DefaultShutdownTimeout = 10 * time.Second
+	// DefaultHarnessUpdateInterval is how often the daemon re-checks installed
+	// harnesses for updates after its startup check. A full pass probes each
+	// harness CLI, so it runs a few times a day rather than continuously.
+	DefaultHarnessUpdateInterval = 6 * time.Hour
+	// MinHarnessUpdateInterval is the shortest AO_HARNESS_UPDATE_INTERVAL accepted.
+	MinHarnessUpdateInterval = time.Hour
 	// DefaultAgent is the compatibility value used when AO_AGENT is unset. The
 	// daemon validates it at startup, but worker/orchestrator spawns resolve from
 	// explicit requests or project role config instead of falling back to it.
@@ -145,6 +151,14 @@ type Config struct {
 	AllowedOrigins []string
 	// Telemetry controls local/remote telemetry sinks.
 	Telemetry TelemetryConfig
+	// HarnessUpdateChecks lets the daemon compare installed harnesses with their
+	// release sources over the network. AO_HARNESS_UPDATE_CHECKS=off disables
+	// it for offline or policy-restricted machines.
+	HarnessUpdateChecks bool
+	// HarnessUpdateInterval is how often the daemon re-checks installed
+	// harnesses after its startup check. AO_HARNESS_UPDATE_INTERVAL overrides
+	// it; values below MinHarnessUpdateInterval are rejected.
+	HarnessUpdateInterval time.Duration
 	// StartupWorkingDirectory is the daemon process cwd before startup
 	// normalizes it. The desktop uses this to identify dev daemons after the
 	// process cwd is moved to the stable data dir.
@@ -220,7 +234,9 @@ func Load() (Config, error) {
 			Remote:      TelemetryRemoteOff,
 			PostHogHost: DefaultTelemetryPostHogHost,
 		},
-		LocalOffering: true,
+		LocalOffering:         true,
+		HarnessUpdateChecks:   true,
+		HarnessUpdateInterval: DefaultHarnessUpdateInterval,
 	}
 
 	if raw := os.Getenv("AO_PORT"); raw != "" {
@@ -282,6 +298,23 @@ func Load() (Config, error) {
 		cfg.AllowedOrigins = origins
 	}
 
+	if raw, present := os.LookupEnv("AO_HARNESS_UPDATE_CHECKS"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_HARNESS_UPDATE_CHECKS", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.HarnessUpdateChecks = v
+	}
+	if raw, present := os.LookupEnv("AO_HARNESS_UPDATE_INTERVAL"); present && strings.TrimSpace(raw) != "" {
+		d, err := parsePositiveDuration("AO_HARNESS_UPDATE_INTERVAL", strings.TrimSpace(raw))
+		if err != nil {
+			return Config{}, err
+		}
+		if d < MinHarnessUpdateInterval {
+			return Config{}, fmt.Errorf("invalid AO_HARNESS_UPDATE_INTERVAL %q: must be at least %s", raw, MinHarnessUpdateInterval)
+		}
+		cfg.HarnessUpdateInterval = d
+	}
 	if raw, present := os.LookupEnv("AO_TELEMETRY_EVENTS"); present && strings.TrimSpace(raw) != "" {
 		v, err := parseToggleEnv("AO_TELEMETRY_EVENTS", raw)
 		if err != nil {

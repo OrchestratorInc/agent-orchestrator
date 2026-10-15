@@ -1,9 +1,11 @@
-import { ChevronDown, Code2, FolderOpen, SquareTerminal } from "lucide-react";
+import { ChevronDown, Code2, Copy, FolderOpen, SquareTerminal } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { OpenTarget, OpenTargetId } from "../../shared/editor-handoff";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
-import { useEditorHandoffState, useOpenSessionTarget, workspaceCheckFailed } from "../hooks/useEditorHandoff";
+import { useEditorHandoffState, useOpenSessionTarget, workspaceCheckFailed, editorHandoffErrorMessage } from "../hooks/useEditorHandoff";
+import { aoBridge } from "../lib/bridge";
+import { useUiStore } from "../stores/ui-store";
 import { TopbarActionError, TopbarButton } from "./TopbarButton";
 import {
 	DropdownMenu,
@@ -18,6 +20,8 @@ import {
 	AndroidStudioIcon,
 	AntigravityIcon,
 	CursorIcon,
+	FinderIcon,
+	GhosttyIcon,
 	JetBrainsIcon,
 	SublimeIcon,
 	VSCodeIcon,
@@ -57,8 +61,25 @@ const editorColors: Record<string, string> = {
 };
 
 function TargetIcon({ target, className }: { target?: OpenTarget; className?: string }) {
-	if (target?.kind === "file_manager") return <FolderOpen className={className} aria-hidden="true" />;
-	if (target?.kind === "terminal") return <SquareTerminal className={className} aria-hidden="true" />;
+	const [failedIcon, setFailedIcon] = useState<string>();
+	if (target?.kind === "file_manager") {
+		const Icon = target.name === "Finder" ? FinderIcon : FolderOpen;
+		return <Icon className={className} aria-hidden="true" />;
+	}
+	if (target?.id === "terminal") return <SquareTerminal className={className} aria-hidden="true" />;
+	if (target?.id === "ghostty") return <GhosttyIcon className={className} aria-hidden="true" />;
+	const iconDataUrl = target?.iconDataUrl;
+	if (iconDataUrl?.startsWith("data:image/png;base64,") && iconDataUrl !== failedIcon) {
+		// Use the same SVG slot and sizing rules as every other menu icon.
+		return (
+			<svg width="24" height="24" viewBox="0 0 24 24" className={className} aria-hidden="true">
+				<image href={iconDataUrl} width="24" height="24" onError={() => setFailedIcon(iconDataUrl)} />
+			</svg>
+		);
+	}
+	if (target?.kind === "terminal") {
+		return <SquareTerminal className={className} aria-hidden="true" />;
+	}
 	const Icon = (target && editorIcons[target.id]) || Code2;
 	const color = target ? editorColors[target.id] : undefined;
 	return <Icon className={className} style={color ? { color } : undefined} aria-hidden="true" />;
@@ -83,17 +104,31 @@ export function TopbarOpenEditorButton({
 	const { t } = useTranslation();
 	const stateQuery = useEditorHandoffState(sessionId, { sessionCreatedAt, sessionTerminated });
 	const open = useOpenSessionTarget();
+	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	const [copyPending, setCopyPending] = useState(false);
 	const state = stateQuery.data;
 	const [menuOpen, setMenuOpen] = useState(false);
 	const targets = state?.targets ?? [];
 	const editors = targets.filter((target) => target.kind === "editor");
 	const preferred = editors.find((target) => target.id === state?.preferredEditorId);
-	const safeTargets = targets.filter((target) => target.kind !== "editor");
+	const openInTargets = targets.filter((target) => target.kind === "file_manager" || target.kind === "terminal");
 	const workspaceAvailable = state?.workspaceAvailable === true;
-	const busy = stateQuery.isPending || open.isPending;
+	const busy = stateQuery.isPending || open.isPending || copyPending;
 	const mainDisabled = busy || !workspaceAvailable || !preferred;
 	const menuDisabled = busy || !workspaceAvailable || targets.length === 0;
 
+	const copyPath = async () => {
+		setCopyPending(true);
+		try {
+			await aoBridge.editorHandoff.copyWorkspacePath(sessionId);
+			showGlobalToast(t("shortcut.sessionPathCopied"));
+		} catch (error) {
+			showGlobalToast(t("shortcut.sessionPathCopyFailed"), editorHandoffErrorMessage(error) ?? undefined, "error");
+			void stateQuery.refetch();
+		} finally {
+			setCopyPending(false);
+		}
+	};
 	const launch = (targetId?: OpenTargetId) => {
 		open.reset();
 		open.mutate({ sessionId, projectId, ...(targetId ? { targetId } : {}) });
@@ -154,7 +189,10 @@ export function TopbarOpenEditorButton({
 					</TooltipTrigger>
 					<TooltipContent side="bottom">{mainTitle}</TooltipContent>
 				</Tooltip>
-				<DropdownMenu onOpenChange={setMenuOpen}>
+				<DropdownMenu onOpenChange={(isOpen) => {
+					setMenuOpen(isOpen);
+					if (isOpen) void stateQuery.refreshTargets().catch(() => stateQuery.refetch());
+				}}>
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<span className="inline-flex">
@@ -173,18 +211,24 @@ export function TopbarOpenEditorButton({
 						<TooltipContent side="bottom">{t("editor.openOptionsAria")}</TooltipContent>
 					</Tooltip>
 					<DropdownMenuContent align="end" className="min-w-52">
-						{safeTargets.map((target) => (
+						<DropdownMenuItem onSelect={() => void copyPath()}>
+							<Copy className="size-icon-sm" aria-hidden="true" />
+							{t("editor.copyPath")}
+						</DropdownMenuItem>
+						{openInTargets.length > 0 ? <DropdownMenuSeparator /> : null}
+						{openInTargets.length > 0 ? <DropdownMenuLabel>{t("editor.openIn")}</DropdownMenuLabel> : null}
+						{openInTargets.map((target) => (
 							<DropdownMenuItem key={target.id} onSelect={() => launch(target.id)}>
 								<TargetIcon target={target} className="size-icon-sm" />
-								{t("editor.openInTarget", { name: target.name })}
+								{target.name}
 							</DropdownMenuItem>
 						))}
-						{safeTargets.length > 0 && editors.length > 0 ? <DropdownMenuSeparator /> : null}
+						{editors.length > 0 ? <DropdownMenuSeparator /> : null}
 						{editors.length > 0 ? <DropdownMenuLabel>{t("editor.openWith")}</DropdownMenuLabel> : null}
-						{editors.map((editor) => (
-							<DropdownMenuItem key={editor.id} onSelect={() => launch(editor.id)}>
-								<TargetIcon target={editor} className="size-icon-sm" />
-								{editor.name}
+						{editors.map((target) => (
+							<DropdownMenuItem key={target.id} onSelect={() => launch(target.id)}>
+								<TargetIcon target={target} className="size-icon-sm" />
+								{target.name}
 							</DropdownMenuItem>
 						))}
 					</DropdownMenuContent>
