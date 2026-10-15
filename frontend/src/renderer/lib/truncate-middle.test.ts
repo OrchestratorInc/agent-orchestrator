@@ -8,7 +8,9 @@ describe("truncateMiddle", () => {
 
 	it("leaves text that already fits alone", () => {
 		expect(truncateMiddle("v2.1.300")).toBe("v2.1.300");
-		expect(truncateMiddle("2026.10.14-0f9")).toBe("2026.10.14-0f9");
+		// Head 8 + "…" + tail 4 is 13 characters: 13 characters fit as they are.
+		expect(truncateMiddle("v0.0.179-6e24")).toBe("v0.0.179-6e24");
+		expect(truncateMiddle("v0.0.179-6e245")).toBe("v0.0.179…e245");
 	});
 
 	it("takes custom head and tail lengths", () => {
