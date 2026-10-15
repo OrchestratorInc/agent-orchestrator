@@ -2638,7 +2638,8 @@ func (s *Store) AppendAssistantDelta(
 }
 
 // SettleAssistantMessage replaces streamed text with the provider's settled text
-// and stops the streaming marker.
+// and stops the streaming marker. An empty settle means the provider settled
+// nothing, so it keeps the streamed text.
 func (s *Store) SettleAssistantMessage(
 	ctx context.Context,
 	conversationID, providerItemID, providerTurnID, text, messageID string,
@@ -2647,7 +2648,7 @@ func (s *Store) SettleAssistantMessage(
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 
-	_, err := q.SelectConversationMessageByProviderItem(ctx,
+	existing, err := q.SelectConversationMessageByProviderItem(ctx,
 		gen.SelectConversationMessageByProviderItemParams{
 			ConversationID: conversationID,
 			ProviderItemID: providerItemID,
@@ -2680,6 +2681,9 @@ func (s *Store) SettleAssistantMessage(
 	}
 	if err != nil {
 		return fmt.Errorf("lookup message %s: %w", providerItemID, err)
+	}
+	if text == "" {
+		text = existing.Text
 	}
 
 	if err := q.SettleConversationMessage(ctx, gen.SettleConversationMessageParams{
