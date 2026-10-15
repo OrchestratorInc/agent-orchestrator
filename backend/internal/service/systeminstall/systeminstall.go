@@ -200,6 +200,9 @@ type Plan struct {
 	// keepPreviousRelease asks the installer to leave the replaced release on
 	// disk because live sessions still run it.
 	keepPreviousRelease bool
+	// managed installs this update side by side in AO's versioned directory
+	// (see managed.go) instead of rewriting the installed copy.
+	managed bool
 
 	// daemonRuntimeRejected and daemonPrefixRejected mark an npm plan rejected
 	// only for the daemon's own Node/npm or global prefix. An install runs
@@ -358,6 +361,9 @@ type Deps struct {
 	// sessions to end, as before update-while-running existed
 	// (AO_UPDATE_WHILE_RUNNING=off).
 	DisableUpdateWhileRunning bool
+	// ManagedRoot is where AO keeps versioned harness installs (under the AO
+	// data dir). Empty keeps every update in place.
+	ManagedRoot string
 	// WindowsUpdateWhenIdle lets a Windows update wait for idle sessions, stop
 	// them, update and resume them, instead of refusing while they run
 	// (AO_WINDOWS_UPDATE_WHEN_IDLE).
@@ -404,6 +410,10 @@ type Service struct {
 	updateChecksDisabled bool
 	// updateWhileRunningDisabled forces every update to wait for sessions.
 	updateWhileRunningDisabled bool
+	// managedRoot holds AO's versioned harness installs; "" turns them off.
+	managedRoot string
+	// invalidateBinary makes a harness adapter resolve its executable again.
+	invalidateBinary func(Target)
 	// windowsUpdateWhenIdle turns Windows' blocked level into update-when-idle.
 	windowsUpdateWhenIdle bool
 	// changing marks harnesses whose installation is being changed, so a
@@ -490,6 +500,7 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 		updateChecksDisabled:       deps.DisableUpdateChecks,
 		updateWhileRunningDisabled: deps.DisableUpdateWhileRunning,
 		windowsUpdateWhenIdle:      deps.WindowsUpdateWhenIdle,
+		managedRoot:                deps.ManagedRoot,
 		goos:                       runtime.GOOS,
 		installTimeout:             defaultInstallTimeout,
 		persistenceTimeout:         defaultPersistenceTimeout,
@@ -762,11 +773,15 @@ func (s *Service) StartAgentOperationWithSessions(ctx context.Context, target Ta
 		if baseline, err = s.confirmInstalledOwner(ctx, target, plan); err != nil {
 			return Job{}, err
 		}
-		plannedPrefix := plan.PackagePrefix
-		if baseline != nil && baseline.path != "" {
-			plan = targetInstalledCopy(s.goos, plan, target, baseline.path)
+		if !plan.managed {
+			// A managed update installs into AO's own directory, so the
+			// installed copy's prefix and its Node do not apply.
+			plannedPrefix := plan.PackagePrefix
+			if baseline != nil && baseline.path != "" {
+				plan = targetInstalledCopy(s.goos, plan, target, baseline.path)
+			}
+			plan = s.validateNPMUpdateTarget(ctx, plan, plannedPrefix)
 		}
-		plan = s.validateNPMUpdateTarget(ctx, plan, plannedPrefix)
 	}
 	if operation == AgentOperationUpdate && expected != "" {
 		if baseline == nil {
@@ -1220,7 +1235,9 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		s.deferHomebrewCleanup(plan.Target, packageWithoutLatest(plan.Package))
 	}
 	var runErr error
-	if plan.Script != nil {
+	if plan.managed {
+		runErr = s.runManagedInstall(ctx, plan, baseline, env, outputWriter)
+	} else if plan.Script != nil {
 		if s.installScripts == nil {
 			runErr = errors.New("remote installer runner is not configured")
 		} else {

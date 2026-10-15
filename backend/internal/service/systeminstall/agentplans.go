@@ -3,6 +3,7 @@ package systeminstall
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -424,6 +425,14 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 		}
 		if !plan.Unsupported {
 			plan.UpdateWhileRunning = updateWhileRunningLevel(s.goos, plan.Target, plan.Method, plan.PackageCask)
+		}
+		if s.managedEligible(plan) {
+			// Installed side by side, so no session's files are touched, on any
+			// platform: the update is safe while sessions run.
+			plan.managed = true
+			plan.UpdateWhileRunning = UpdateWhileRunningSafe
+			argv, _ := managedInstallCommand(plan.Method, packageWithoutLatest(plan.Package), "", filepath.Join(s.managedTargetDir(plan.Target), "versions", "<next>"))
+			plan.Command, plan.Prepare = argv, nil
 		}
 		return plan
 	}

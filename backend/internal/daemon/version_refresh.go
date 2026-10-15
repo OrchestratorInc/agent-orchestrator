@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"path/filepath"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
@@ -55,6 +56,7 @@ func runVersionRefreshSweep(ctx context.Context, cfg config.Config, settings ver
 		}
 		if installs != nil {
 			installs.RunDeferredCleanups(ctx)
+			installs.RemoveUnusedManagedReleases(ctx)
 		}
 	}
 }
@@ -105,4 +107,13 @@ func versionRefreshPolicy(ctx context.Context, cfg config.Config, settings versi
 		MinIdle:   cfg.VersionRefreshIdle,
 		WakeChats: !settings.ChatHibernationEnabled(),
 	}
+}
+
+// managedHarnessRoot is where AO keeps versioned harness installs: under the
+// AO data dir, like every other piece of AO state.
+func managedHarnessRoot(cfg config.Config) string {
+	if !cfg.ManagedHarnessInstalls || cfg.DataDir == "" {
+		return ""
+	}
+	return filepath.Join(cfg.DataDir, "harnesses")
 }

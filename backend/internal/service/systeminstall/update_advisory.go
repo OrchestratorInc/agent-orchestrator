@@ -235,14 +235,28 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 	// The binary's package-manager root decides the source, so harnesses the
 	// user installed outside AO are covered as well as AO-installed ones.
 	var source Plan
+	managedCopy := s.isManagedPath(verified.ResolvedPath)
+	if record, ok := s.readManagedRecord(target); ok && managedCopy {
+		// AO's versioned install has no package-manager receipt to read; its
+		// record names the method and package that installed it.
+		for _, candidate := range plans {
+			if candidate.Method == record.Method && packageWithoutLatest(candidate.Package) == record.Package {
+				source = candidate
+				break
+			}
+		}
+	}
 	for _, candidate := range sources {
+		if source.Package != "" {
+			break
+		}
 		owned, err := s.ownsInstallation(ctx, verified.ResolvedPath, candidate.Method, packageWithoutLatest(candidate.Package), candidate.PackageCask)
 		if err == nil && owned {
 			source = candidate
 			break
 		}
 	}
-	if plannerReady {
+	if plannerReady && !managedCopy {
 		s.refreshDerivedOwner(ctx, planner, target, verified.ResolvedPath, &source)
 	}
 	if source.Package == "" && s.officialVersion == nil {

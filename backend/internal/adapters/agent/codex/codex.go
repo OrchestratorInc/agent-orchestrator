@@ -385,6 +385,9 @@ func ResolveCodexBinary(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if managed, ok := binaryutil.ManagedBinary("codex"); ok {
+		return managed, nil
+	}
 
 	if runtime.GOOS == "windows" {
 		candidates := []string{}

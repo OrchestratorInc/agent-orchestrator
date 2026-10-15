@@ -66,6 +66,34 @@ move it to warn if 0.5 shows otherwise.
   sessions, stops them, updates and resumes them. 0.7 and a Windows QA pass
   are still owed.
 
+## Managed versioned installs (npm, Bun, uv, pipx)
+
+These package managers rewrite a package's directory in place, so a session
+still running the old release could fail on its next lazy load (a JS chunk, a
+bundled helper such as ripgrep, a Python module), and on Windows the rewrite
+fails while the release runs. AO therefore installs each update of these
+methods into a fresh directory of its own and switches to it atomically, the
+way Claude Code's native installer keeps each release apart:
+
+```
+~/.ao/data/harnesses/<agent>/versions/v12/   one release, never modified after install
+~/.ao/data/harnesses/<agent>/current          → versions/v12 (symlink; junction on Windows)
+~/.ao/data/harnesses/<agent>/managed.json     method, package, CLI, version
+~/.ao/data/harnesses/bin/<cli>                launcher → ../<agent>/current/<bin>
+```
+
+1. Install into the next `versions/vN` (npm `--prefix`, `BUN_INSTALL`,
+   `UV_TOOL_DIR`/`UV_TOOL_BIN_DIR`, `PIPX_HOME`/`PIPX_BIN_DIR`).
+2. Run the new copy's `--version`; on failure delete the directory, nothing changes.
+3. Switch `current` (atomic rename on Unix; junction swap under the harness lock on Windows).
+4. Harness resolvers check `~/.ao/data/harnesses/bin` first, so new sessions start the new release.
+5. Sessions on the old release are marked stale and restart once idle.
+6. An old release is deleted once no live session of that harness is stale (retried while Windows holds it).
+
+These updates are `safe` on every platform, Windows included. The user's own
+global install (their terminal's `claude`) is left untouched; login and config
+are shared. `AO_MANAGED_HARNESS_INSTALLS=off` updates in place instead.
+
 ## Flags
 
 | Flag | Default | Effect |
@@ -75,3 +103,4 @@ move it to warn if 0.5 shows otherwise.
 | `AO_VERSION_REFRESH_IDLE` | 10m | Quiet time before a session moves |
 | `AO_TUI_VERSION_REFRESH` | on | Also restart idle terminal sessions |
 | `AO_WINDOWS_UPDATE_WHEN_IDLE` | on | Windows updates wait for idle sessions instead of refusing |
+| `AO_MANAGED_HARNESS_INSTALLS` | on | npm, Bun, uv and pipx updates install side by side under the AO data dir |

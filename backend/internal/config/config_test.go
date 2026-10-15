@@ -597,6 +597,18 @@ func TestLoadPhaseThreeToggles(t *testing.T) {
 	}
 }
 
+func TestLoadManagedHarnessInstallsToggle(t *testing.T) {
+	t.Setenv("AO_MANAGED_HARNESS_INSTALLS", "")
+	cfg, err := Load()
+	if err != nil || !cfg.ManagedHarnessInstalls {
+		t.Fatalf("default managed installs = %t, %v", cfg.ManagedHarnessInstalls, err)
+	}
+	t.Setenv("AO_MANAGED_HARNESS_INSTALLS", "off")
+	if cfg, err = Load(); err != nil || cfg.ManagedHarnessInstalls {
+		t.Fatalf("off: managed installs = %t, %v", cfg.ManagedHarnessInstalls, err)
+	}
+}
+
 func TestLoadHarnessUpdateInterval(t *testing.T) {
 	t.Setenv("AO_HARNESS_UPDATE_INTERVAL", "")
 	cfg, err := Load()

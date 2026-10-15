@@ -224,6 +224,11 @@ func (s *Service) confirmInstalledOwner(ctx context.Context, target Target, plan
 }
 
 func (s *Service) methodOwnsBinary(ctx context.Context, plan Plan, path string) bool {
+	if s.isManagedPath(path) {
+		// AO's own versioned install: the method that installed it owns it.
+		record, ok := s.readManagedRecord(plan.Target)
+		return ok && record.Method == plan.Method
+	}
 	switch plan.Method {
 	case "npm", "homebrew", "bun", "uv", "pipx", "winget":
 		if s.ownsInstallation == nil || plan.Package == "" {

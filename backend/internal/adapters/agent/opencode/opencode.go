@@ -656,6 +656,10 @@ func BinaryCandidates(ctx context.Context) ([]string, error) {
 		found = append(found, path)
 	}
 
+	// AO's managed copy, when there is one, is tried first.
+	if managed, ok := binaryutil.ManagedBinary("opencode"); ok {
+		add(managed)
+	}
 	names := []string{"opencode"}
 	if runtime.GOOS == "windows" {
 		names = []string{"opencode.cmd", "opencode.exe", "opencode"}
@@ -740,4 +744,12 @@ func (p *Plugin) opencodeBinary(ctx context.Context) (string, error) {
 	}
 	p.resolvedBinary = binary
 	return binary, nil
+}
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
 }

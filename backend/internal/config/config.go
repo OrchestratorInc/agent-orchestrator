@@ -183,6 +183,11 @@ type Config struct {
 	// instead of refusing while they run (AO_WINDOWS_UPDATE_WHEN_IDLE=off
 	// disables it).
 	WindowsUpdateWhenIdle bool
+	// ManagedHarnessInstalls installs npm, Bun, uv and pipx harness updates
+	// side by side under the AO data dir and switches to them atomically, so
+	// no update touches files a running session uses
+	// (AO_MANAGED_HARNESS_INSTALLS=off updates the installed copy in place).
+	ManagedHarnessInstalls bool
 	// StartupWorkingDirectory is the daemon process cwd before startup
 	// normalizes it. The desktop uses this to identify dev daemons after the
 	// process cwd is moved to the stable data dir.
@@ -258,14 +263,15 @@ func Load() (Config, error) {
 			Remote:      TelemetryRemoteOff,
 			PostHogHost: DefaultTelemetryPostHogHost,
 		},
-		LocalOffering:         true,
-		HarnessUpdateChecks:   true,
-		HarnessUpdateInterval: DefaultHarnessUpdateInterval,
-		UpdateWhileRunning:    true,
-		VersionRefresh:        true,
-		VersionRefreshIdle:    DefaultVersionRefreshIdle,
-		TUIVersionRefresh:     true,
-		WindowsUpdateWhenIdle: true,
+		LocalOffering:          true,
+		HarnessUpdateChecks:    true,
+		HarnessUpdateInterval:  DefaultHarnessUpdateInterval,
+		UpdateWhileRunning:     true,
+		VersionRefresh:         true,
+		VersionRefreshIdle:     DefaultVersionRefreshIdle,
+		TUIVersionRefresh:      true,
+		WindowsUpdateWhenIdle:  true,
+		ManagedHarnessInstalls: true,
 	}
 
 	if raw := os.Getenv("AO_PORT"); raw != "" {
@@ -361,6 +367,13 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 		cfg.WindowsUpdateWhenIdle = v
+	}
+	if raw, present := os.LookupEnv("AO_MANAGED_HARNESS_INSTALLS"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_MANAGED_HARNESS_INSTALLS", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.ManagedHarnessInstalls = v
 	}
 	if raw, present := os.LookupEnv("AO_VERSION_REFRESH_IDLE"); present && strings.TrimSpace(raw) != "" {
 		d, err := parsePositiveDuration("AO_VERSION_REFRESH_IDLE", strings.TrimSpace(raw))
