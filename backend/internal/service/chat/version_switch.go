@@ -13,18 +13,15 @@ type versionSwitchStore interface {
 }
 
 // SwitchToInstalledRelease stops an idle provider that still runs a replaced
-// harness release, then, when wake is true, starts it again on the installed
-// one. Without wake the session stays asleep until its next message or view,
-// which is what idle hibernation would do with it anyway. It reports whether
-// the provider was stopped.
-func (s *Service) SwitchToInstalledRelease(ctx context.Context, id domain.SessionID, minIdle time.Duration, wake bool) (bool, error) {
+// harness release and starts it again on the installed one right away, so the
+// user finds the session ready and never restarts it themselves. It reports
+// whether the provider was stopped.
+func (s *Service) SwitchToInstalledRelease(ctx context.Context, id domain.SessionID, minIdle time.Duration) (bool, error) {
 	stopped, err := s.HibernateChatForVersionRefresh(ctx, id, minIdle)
 	if err != nil || !stopped {
 		return false, err
 	}
-	if wake {
-		s.startBackgroundWake(id)
-	}
+	s.startBackgroundWake(id)
 	return true, nil
 }
 

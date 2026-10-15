@@ -20,15 +20,13 @@ const versionRefreshSweepTick = time.Minute
 
 type versionRefreshSettings interface {
 	VersionRefreshEnabled(ctx context.Context) bool
-	ChatHibernationEnabled() bool
 }
 
 // runVersionRefreshSweep moves idle Chat sessions, and with
 // AO_TUI_VERSION_REFRESH idle terminal sessions, still on a replaced harness
 // release to the installed one, and removes Homebrew kegs kept for sessions
-// that have all moved. It runs whether or not idle hibernation is on: with it
-// off, a moved session is started again right away; with it on, the session
-// sleeps as idle hibernation would have left it and wakes on the new release.
+// that have all moved. It runs whether or not idle hibernation is on, and a
+// moved chat is always started again right away on the new release.
 func runVersionRefreshSweep(ctx context.Context, cfg config.Config, settings versionRefreshSettings, sessions sessionLifecycle, installs *systeminstall.Service, telemetry ports.EventSink, log *slog.Logger) {
 	ticker := time.NewTicker(versionRefreshSweepTick)
 	defer ticker.Stop()
@@ -42,7 +40,7 @@ func runVersionRefreshSweep(ctx context.Context, cfg config.Config, settings ver
 		gauge.observe(ctx, sessions)
 		policy := versionRefreshPolicy(ctx, cfg, settings)
 		if policy.Chats {
-			if err := sessions.RefreshStaleChats(ctx, policy.MinIdle, policy.WakeChats); err != nil && ctx.Err() == nil {
+			if err := sessions.RefreshStaleChats(ctx, policy.MinIdle); err != nil && ctx.Err() == nil {
 				log.Warn("moving idle chats to the installed harness release failed", "err", err)
 			}
 		}
@@ -105,7 +103,6 @@ func versionRefreshPolicy(ctx context.Context, cfg config.Config, settings versi
 		Chats:     enabled,
 		Terminals: enabled && cfg.TUIVersionRefresh,
 		MinIdle:   cfg.VersionRefreshIdle,
-		WakeChats: !settings.ChatHibernationEnabled(),
 	}
 }
 

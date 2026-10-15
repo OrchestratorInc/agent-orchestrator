@@ -13,9 +13,6 @@ type VersionRefreshPolicy struct {
 	Chats     bool
 	Terminals bool
 	MinIdle   time.Duration
-	// WakeChats starts a moved chat again at once; false leaves it asleep, as
-	// idle hibernation would, until its next message or view.
-	WakeChats bool
 }
 
 // SetVersionRefreshPolicy late-binds the daemon's version-refresh setting.
@@ -66,7 +63,7 @@ func (m *Manager) SessionTurnEnded(rec domain.SessionRecord) {
 		}
 		if chat {
 			if refresher, ok := m.chat.(versionRefresher); ok && policy.Chats {
-				_ = m.refreshStaleChat(ctx, refresher, id, policy.MinIdle, policy.WakeChats)
+				_ = m.refreshStaleChat(ctx, refresher, id, policy.MinIdle)
 			}
 			return
 		}

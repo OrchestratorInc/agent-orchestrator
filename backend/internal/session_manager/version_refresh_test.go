@@ -34,12 +34,10 @@ func (s *staleBinaryFakeStore) CountStaleBinarySessions(context.Context) (map[do
 type recordingRefresher struct {
 	*recordingLauncher
 	calls []domain.SessionID
-	wake  []bool
 }
 
-func (r *recordingRefresher) SwitchToInstalledRelease(_ context.Context, id domain.SessionID, _ time.Duration, wake bool) (bool, error) {
+func (r *recordingRefresher) SwitchToInstalledRelease(_ context.Context, id domain.SessionID, _ time.Duration) (bool, error) {
 	r.calls = append(r.calls, id)
-	r.wake = append(r.wake, wake)
 	return true, nil
 }
 
@@ -71,11 +69,11 @@ func TestRefreshStaleChatsSkipsSessionsInAnotherOperation(t *testing.T) {
 	defer mgr.endAgentOperation("busy", agentOperationResume)
 
 	before := time.Now().UTC()
-	if err := mgr.RefreshStaleChats(ctx, 10*time.Minute, true); err != nil {
+	if err := mgr.RefreshStaleChats(ctx, 10*time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if len(refresher.calls) != 1 || refresher.calls[0] != "mer-1" || !refresher.wake[0] {
-		t.Fatalf("switched %v (wake %v), want only mer-1 with wake", refresher.calls, refresher.wake)
+	if len(refresher.calls) != 1 || refresher.calls[0] != "mer-1" {
+		t.Fatalf("switched %v, want only mer-1", refresher.calls)
 	}
 	if want := before.Add(-10 * time.Minute); stale.idleBefore.Before(want.Add(-time.Second)) || stale.idleBefore.After(want.Add(time.Second)) {
 		t.Fatalf("idle cutoff = %s, want about %s", stale.idleBefore, want)
