@@ -99,7 +99,7 @@ describe("ReviewChangesMenu", () => {
 		const { commits } = renderMenu({ mode: "view", value: { kind: "commits", shas: [] } });
 		await openMenu();
 		const row = await screen.findByRole("menuitemcheckbox", { name: /^commit 1/ });
-		expect(row).toHaveTextContent("commit 1+1−12h");
+		expect(row).toHaveTextContent("commit 1+1−1");
 
 		await userEvent.click(row);
 		expect(commits.onToggle).toHaveBeenCalledWith(shaOf(1));
@@ -108,6 +108,26 @@ describe("ReviewChangesMenu", () => {
 		await userEvent.click(screen.getByRole("menuitemcheckbox", { name: /^All commits/ }));
 		expect(commits.onToggleAll).toHaveBeenCalledTimes(1);
 		expect(screen.getByRole("menu")).toBeInTheDocument();
+	});
+
+	it("keeps commit rows plain: no icons or times, the box last, grey totals until ticked", async () => {
+		const rows = commitRows(2);
+		renderMenu({ mode: "view", value: { kind: "commits", shas: [rows[1].sha] } }, { allStats: { additions: 9, deletions: 3 } });
+		await openMenu();
+		const all = await screen.findByRole("menuitemcheckbox", { name: /^All commits/ });
+		const unticked = screen.getByRole("menuitemcheckbox", { name: /^commit 0/ });
+		const ticked = screen.getByRole("menuitemcheckbox", { name: /^commit 1/ });
+		for (const row of [all, unticked, ticked]) {
+			// Only the checkbox's own check mark is drawn; no row icon, no time.
+			expect(row.querySelectorAll("svg").length).toBeLessThanOrEqual(1);
+			expect(row.lastElementChild).toHaveClass("size-4", "rounded-sm");
+		}
+		expect(unticked).not.toHaveTextContent(/\d+[mhd]$/);
+		expect(within(unticked).getByText("+0").parentElement).toHaveClass("text-passive");
+		expect(within(ticked).getByText("+1")).toHaveClass("text-success");
+		expect(within(all).getByText("+9").parentElement).toHaveClass("text-passive");
+		// No divider between All commits and the commits.
+		expect(screen.getByRole("menu").querySelector('[role="separator"]')).toBeNull();
 	});
 
 	it("checks ticked commits and names them on the trigger", async () => {
@@ -163,6 +183,16 @@ describe("ReviewChangesMenu", () => {
 		// The open tooltip must not swallow Escape: one press closes the menu.
 		await userEvent.keyboard("{Escape}");
 		expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+	});
+
+	it("opens the commit tooltip on keyboard focus even after pointer use", async () => {
+		renderMenu({ mode: "view", value: { kind: "commits", shas: [] } });
+		await openMenu();
+		const all = await screen.findByRole("menuitemcheckbox", { name: /^All commits/ });
+		await userEvent.hover(all);
+		await userEvent.keyboard("{ArrowDown}");
+		expect(screen.getByRole("menuitemcheckbox", { name: /^commit 0/ })).toHaveFocus();
+		expect(await screen.findByRole("tooltip")).toHaveTextContent(shaOf(0));
 	});
 
 	it("waits for the hover delay before showing a commit tooltip under the pointer", async () => {

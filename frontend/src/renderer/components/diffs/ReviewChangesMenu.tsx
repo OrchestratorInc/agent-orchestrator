@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 // Aliased: @pierre/diffs also exports a FileDiff the review pane imports.
 import { Check, FileDiff as FileDiffIcon, FilePen, GitCommitHorizontal, History, ListChecks, type LucideIcon } from "lucide-react";
 import { cn } from "../../lib/utils";
-import { formatTimeTerse } from "../../lib/format-time";
 import { SettingsMenuTrigger } from "../settings/SettingsMenuTrigger";
 import {
 	DropdownMenu,
@@ -150,11 +149,9 @@ export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable
 	const commitBlock = (
 		<>
 			<DropdownMenuCheckboxItem checked={allTicked} onCheckedChange={commits.onToggleAll} onSelect={keepMenuOpen}>
-				<History aria-hidden="true" />
 				<span className="min-w-0 flex-1 truncate">{allLabel}</span>
-				{commits.allStats ? <ChangeStats stats={commits.allStats} /> : null}
+				{commits.allStats ? <ChangeStats muted={!allTicked} stats={commits.allStats} /> : null}
 			</DropdownMenuCheckboxItem>
-			<DropdownMenuSeparator />
 			{commits.state === "loading" ? (
 				<DropdownMenuItem disabled>{t("files.changes.loadingCommits")}</DropdownMenuItem>
 			) : commits.state === "error" ? (
@@ -172,15 +169,7 @@ export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable
 			) : commits.rows.length === 0 ? (
 				<DropdownMenuItem disabled>{emptyLabel}</DropdownMenuItem>
 			) : (
-				<div
-					className="board-scrollbar flex max-h-72 flex-col gap-px overflow-y-auto pr-0.5"
-					onKeyDownCapture={() => {
-						pointerModality.current = false;
-					}}
-					onPointerMoveCapture={() => {
-						pointerModality.current = true;
-					}}
-				>
+				<div className="board-scrollbar flex max-h-72 flex-col gap-px overflow-y-auto pr-0.5">
 					{shownRows.map((row) => (
 						<CommitRow
 							checked={ticked.has(row.sha)}
@@ -210,18 +199,29 @@ export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable
 	);
 
 	const commitsActive = value.kind === "commits";
+	// Tracked across the whole menu: keyboard focus can reach the first commit
+	// row from All commits, outside the rows' own list.
+	const modalityHandlers = {
+		onKeyDownCapture: () => {
+			pointerModality.current = false;
+		},
+		onPointerMoveCapture: () => {
+			pointerModality.current = true;
+		},
+	};
 	return (
 		<DropdownMenu
 			onOpenChange={(open) => {
 				setMenuOpen(open);
-				if (!open) setVisibleCount(COMMIT_PAGE);
+				if (open) pointerModality.current = false;
+				else setVisibleCount(COMMIT_PAGE);
 			}}
 			open={menuOpen}
 		>
 			<DropdownMenuTrigger asChild>
 				<SettingsMenuTrigger
 					aria-label={t("files.changes.trigger", { value: triggerValue })}
-					className={cn("h-control-md min-w-0 max-w-56 shrink text-xs", className)}
+					className={cn("h-control-md min-w-0 max-w-56 shrink-[0.1] text-xs", className)}
 					title={triggerValue}
 				>
 					<TriggerIcon aria-hidden="true" className="size-icon-sm shrink-0 text-passive @max-[20rem]/files-header:hidden" />
@@ -230,11 +230,11 @@ export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable
 				</SettingsMenuTrigger>
 			</DropdownMenuTrigger>
 			{mode === "view" ? (
-				<DropdownMenuContent align="start" className="w-[min(26rem,calc(100vw-2rem))]">
+				<DropdownMenuContent align="start" className="w-[min(26rem,calc(100vw-2rem))]" {...modalityHandlers}>
 					{commitBlock}
 				</DropdownMenuContent>
 			) : (
-				<DropdownMenuContent align="start" className="w-72 max-w-[calc(100vw-2rem)]">
+				<DropdownMenuContent align="start" className="w-72 max-w-[calc(100vw-2rem)]" {...modalityHandlers}>
 					<DropdownMenuRadioGroup value={value.kind === "commits" ? "" : value.kind}>
 						{scopes.map(({ scope, stats: scopeStats }) => {
 							const Icon = scopeIcons[scope];
@@ -254,16 +254,11 @@ export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable
 								<DropdownMenuSubTrigger className={cn(commitsActive && "text-foreground")}>
 									<GitCommitHorizontal aria-hidden="true" />
 									<span className="min-w-0 flex-1 truncate">{t("files.commits")}</span>
-									{commitsActive ? (
-										<span className="shrink-0 text-caption text-passive">
-											{tickedShas.length === 0 ? allLabel : t("files.changes.commitCount", { count: tickedShas.length })}
-										</span>
-									) : null}
 									<span className="flex size-4 shrink-0 items-center justify-center">
 										{commitsActive ? <Check aria-hidden="true" className="text-logo-accent!" /> : null}
 									</span>
 								</DropdownMenuSubTrigger>
-								<DropdownMenuSubContent className="w-[min(26rem,calc(100vw-2rem))]">{commitBlock}</DropdownMenuSubContent>
+								<DropdownMenuSubContent className="w-[min(26rem,calc(100vw-2rem))]" {...modalityHandlers}>{commitBlock}</DropdownMenuSubContent>
 							</DropdownMenuSub>
 						</>
 					) : null}
@@ -312,8 +307,7 @@ function CommitRow({
 				onSelect={keepMenuOpen}
 			>
 				<span className="min-w-0 flex-1 truncate">{row.subject}</span>
-				<ChangeStats stats={row} />
-				<span className="shrink-0 text-caption text-passive">{formatTimeTerse(row.timestamp)}</span>
+				<ChangeStats muted={!checked} stats={row} />
 				<TooltipTrigger asChild>
 					<span aria-hidden="true" className="absolute inset-0" />
 				</TooltipTrigger>
@@ -328,11 +322,12 @@ function CommitRow({
 	);
 }
 
-function ChangeStats({ stats, className }: { stats: ReviewChangeStats; className?: string }) {
+/** `muted` greys an unticked commit's totals, so colour marks what the review includes. */
+function ChangeStats({ stats, muted = false, className }: { stats: ReviewChangeStats; muted?: boolean; className?: string }) {
 	return (
-		<span className={cn("flex shrink-0 items-center gap-1.5 text-caption tabular-nums", className)}>
-			<span className="text-success">+{stats.additions}</span>
-			<span className="text-error">−{stats.deletions}</span>
+		<span className={cn("flex shrink-0 items-center gap-1.5 text-caption tabular-nums", muted && "text-passive", className)}>
+			<span className={muted ? undefined : "text-success"}>+{stats.additions}</span>
+			<span className={muted ? undefined : "text-error"}>−{stats.deletions}</span>
 		</span>
 	);
 }

@@ -99,7 +99,7 @@ export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, on
 			<DropdownMenuTrigger asChild>
 				<SettingsMenuTrigger
 					aria-label={t("files.branches.trigger", { branch: triggerLabel })}
-					className={cn("h-control-md min-w-0 max-w-44 shrink-[2] text-xs", className)}
+					className={cn("h-control-md min-w-16 max-w-44 shrink-[10] text-xs", className)}
 					title={triggerLabel}
 				>
 					<TriggerIcon aria-hidden="true" className="size-icon-sm shrink-0 text-passive @max-[20rem]/files-header:hidden" />

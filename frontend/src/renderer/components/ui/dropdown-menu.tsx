@@ -84,9 +84,10 @@ export function DropdownMenuRadioItem({
 }
 
 /**
- * A multi-choice row with a leading box drawn like the review pane's viewed
- * checkbox. Radix closes the menu on select; callers that toggle several rows
- * in one visit call `event.preventDefault()` in `onSelect`.
+ * A multi-choice row with a trailing box drawn like the review pane's viewed
+ * checkbox, in the same reserved column as a radio row's check. Radix closes
+ * the menu on select; callers that toggle several rows in one visit call
+ * `event.preventDefault()` in `onSelect`.
  */
 export function DropdownMenuCheckboxItem({
 	className,
@@ -95,16 +96,16 @@ export function DropdownMenuCheckboxItem({
 }: React.ComponentProps<typeof DropdownMenuPrimitive.CheckboxItem>) {
 	return (
 		<DropdownMenuPrimitive.CheckboxItem className={cn(actionMenuItemClass, "group/checkbox-item", className)} {...props}>
+			{children}
 			{/* The row forces 15px icons; the check fits the 16px box at 12px. */}
 			<span
 				aria-hidden="true"
-				className="flex size-4 shrink-0 items-center justify-center rounded-sm border border-muted-foreground/70 group-data-[state=checked]/checkbox-item:border-foreground group-data-[state=checked]/checkbox-item:bg-foreground [&_svg]:size-3! [&_svg]:text-background!"
+				className="ml-auto flex size-4 shrink-0 items-center justify-center rounded-sm border border-muted-foreground/70 group-data-[state=checked]/checkbox-item:border-foreground group-data-[state=checked]/checkbox-item:bg-foreground [&_svg]:size-3! [&_svg]:text-background!"
 			>
 				<DropdownMenuPrimitive.ItemIndicator className="flex">
 					<Check />
 				</DropdownMenuPrimitive.ItemIndicator>
 			</span>
-			{children}
 		</DropdownMenuPrimitive.CheckboxItem>
 	);
 }

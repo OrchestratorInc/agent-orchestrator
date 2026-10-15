@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionFileExplorer } from "./SessionFileExplorer";
-import { FilesTopbarHostContext } from "./files-topbar-host";
+import { FilesActionsHostContext, FilesTopbarHostContext } from "./files-topbar-host";
 import { TooltipProvider } from "./ui/tooltip";
 import { useUiStore } from "../stores/ui-store";
 import { sessionSourceFileQueryOptions, type ReviewTarget, type WorkspaceBranches, type WorkspaceCommitSummary, type WorkspaceHistoryResponse } from "../hooks/useSessionWorkspaceFiles";
@@ -80,10 +80,12 @@ vi.mock("./FileContentPane", () => ({
 }));
 
 vi.mock("./diffs/WorkspaceReviewPane", () => ({
-	WorkspaceReviewPane: ({ canOpenInCenter = true, filter, onBrowseAll, onOpenFile, target }: { canOpenInCenter?: boolean; filter: string; onBrowseAll?: () => void; onOpenFile?: (path: string, options?: { editing?: boolean; mode?: "diff" | "file" | "rendered" }) => void; target: ReviewTarget }) => (
+	WorkspaceReviewPane: ({ canOpenInCenter = true, collapseRequest, filter, onAllCollapsedChange, onBrowseAll, onOpenFile, target }: { canOpenInCenter?: boolean; collapseRequest?: { expand: boolean; key: number }; filter: string; onAllCollapsedChange?: (allCollapsed: boolean) => void; onBrowseAll?: () => void; onOpenFile?: (path: string, options?: { editing?: boolean; mode?: "diff" | "file" | "rendered" }) => void; target: ReviewTarget }) => (
 		<div data-testid="review-pane">
 			<span data-testid="review-filter">{filter}</span>
 			<span data-testid="review-target">{target.key}</span>
+			<span data-testid="review-collapse">{collapseRequest ? `${collapseRequest.expand ? "expand" : "collapse"}:${collapseRequest.key}` : ""}</span>
+			<button onClick={() => onAllCollapsedChange?.(true)} type="button">Report all collapsed</button>
 			<button onClick={onBrowseAll} type="button">Browse all files</button>
 			<button onClick={() => onOpenFile?.("src/App.tsx", { mode: "file" })} type="button">Open full file</button>
 			<button onClick={() => onOpenFile?.("README.md", { mode: "rendered" })} type="button">Render README.md</button>
@@ -185,7 +187,7 @@ describe("SessionFileExplorer", () => {
 		await userEvent.click(screen.getByRole("button", { name: "select src/App.tsx" }));
 		expect(screen.queryByTestId("content-pane")).not.toBeInTheDocument();
 		expect(screen.getByTestId("tree-changed-only")).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Split diff view" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "View options" })).not.toBeInTheDocument();
 		expect(onOpenFile).toHaveBeenCalledWith("src/App.tsx", { mode: "file" });
 	});
 
@@ -256,8 +258,31 @@ describe("SessionFileExplorer", () => {
 
 		const filter = screen.getByRole("textbox", { name: "Filter files" });
 		expect(titlebar).toContainElement(filter);
-		expect(screen.getByRole("button", { name: "Minimize files" }).closest("header")).not.toContainElement(filter);
+		// With no actions slot the ⋯ menu and minimize follow the filter into the titlebar.
+		expect(titlebar).toContainElement(screen.getByRole("button", { name: "Minimize files" }));
+		expect(titlebar).toContainElement(screen.getByRole("button", { name: "View options" }));
 		titlebar.remove();
+	});
+
+	it("puts the ⋯ menu and maximize in the top bar's actions slot, apart from the filter", async () => {
+		const filterHost = document.createElement("div");
+		const actionsHost = document.createElement("div");
+		document.body.append(filterHost, actionsHost);
+		renderWithQuery(
+			<FilesTopbarHostContext.Provider value={filterHost}>
+				<FilesActionsHostContext.Provider value={actionsHost}>
+					<SessionFileExplorer onToggleMaximized={vi.fn()} sessionId="sess-explorer-actions" />
+				</FilesActionsHostContext.Provider>
+			</FilesTopbarHostContext.Provider>,
+		);
+
+		expect(await screen.findByTestId("review-pane")).toBeInTheDocument();
+		expect(filterHost).toContainElement(screen.getByRole("textbox", { name: "Filter files" }));
+		expect(actionsHost).toContainElement(screen.getByRole("button", { name: "View options" }));
+		expect(actionsHost).toContainElement(screen.getByRole("button", { name: "Maximize files" }));
+		expect(screen.getByRole("button", { name: "View options" }).closest("header")).toBeNull();
+		filterHost.remove();
+		actionsHost.remove();
 	});
 
 	it("defaults to the continuous changes review and can switch to the full file tree", async () => {
@@ -289,7 +314,7 @@ describe("SessionFileExplorer", () => {
 		expect(screen.queryByTestId("review-pane")).not.toBeInTheDocument();
 		expect(screen.queryByRole("tab", { name: "Changes" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("tab", { name: "Files" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Split diff view" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "View options" })).not.toBeInTheDocument();
 		// Nothing to review on the checked-out branch: only the branch picker stays.
 		expect(screen.queryByRole("button", { name: /^Changes to review/ })).not.toBeInTheDocument();
 	});
@@ -364,13 +389,36 @@ describe("SessionFileExplorer", () => {
 		expect(screen.queryByRole("button", { name: "Wrap lines" })).not.toBeInTheDocument();
 	});
 
-	it("toggles between unified and split diff layout", async () => {
-		renderWithQuery(<SessionFileExplorer sessionId="sess-explorer-3" />);
+	it("switches the diff layout from the ⋯ menu's Layout submenu", async () => {
+		window.localStorage.setItem("ao.files.diffStyle", "unified");
+		const onSplitChange = vi.fn();
+		renderWithQuery(<SessionFileExplorer onSplitChange={onSplitChange} sessionId="sess-explorer-3" />);
+		expect(await screen.findByTestId("review-pane")).toBeInTheDocument();
+		// The old one-button toggle is gone; Layout lives in the menu.
+		expect(screen.queryByRole("button", { name: "Split diff view" })).not.toBeInTheDocument();
 
-		const toggle = screen.getByRole("button", { name: "Split diff view" });
-		expect(toggle).toHaveAttribute("aria-pressed", "false");
-		await userEvent.click(toggle);
-		expect(screen.getByRole("button", { name: "Unified diff view" })).toHaveAttribute("aria-pressed", "true");
+		await userEvent.click(screen.getByRole("button", { name: "View options" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: /Layout/ }));
+		expect(await screen.findByRole("menuitemradio", { name: "Unified" })).toHaveAttribute("aria-checked", "true");
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Split" }));
+
+		expect(onSplitChange).toHaveBeenCalledWith(true);
+		expect(window.localStorage.getItem("ao.files.diffStyle")).toBe("split");
+	});
+
+	it("asks the review to collapse or expand every file from the ⋯ menu", async () => {
+		renderWithQuery(<SessionFileExplorer sessionId="sess-explorer-collapse" />);
+		expect(await screen.findByTestId("review-pane")).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "View options" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Collapse all files" }));
+		expect(screen.getByTestId("review-collapse")).toHaveTextContent("collapse:1");
+
+		// Once the review reports every file collapsed, the menu offers the way back.
+		await userEvent.click(screen.getByRole("button", { name: "Report all collapsed" }));
+		await userEvent.click(screen.getByRole("button", { name: "View options" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Expand all files" }));
+		expect(screen.getByTestId("review-collapse")).toHaveTextContent("expand:2");
 	});
 
 	it("lets the caller toggle between rail and maximized layouts", async () => {

@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	defaultWorkspaceReviewTarget,
@@ -252,12 +252,10 @@ describe("WorkspaceReviewPane", () => {
 		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/diffs", expect.objectContaining({
 			body: expect.objectContaining({ commitSha: "commit-1", paths: ["src/App.tsx"], scope: "committed", workspaceVersion: "workspace-1" }),
 		}));
-		expect(screen.getByText("0 of 1 viewed")).toBeInTheDocument();
 		expect(screen.getByTestId("code-view")).toHaveClass("overflow-y-auto");
 		expect(screen.getByTestId("code-view")).toHaveAttribute("data-overflow", "wrap");
 		expect(screen.getByTestId("code-view")).toHaveAttribute("data-surface-css", expect.stringContaining("--diffs-bg: var(--color-bg-primary)"));
 		await userEvent.click(screen.getByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
-		expect(screen.getByText("1 of 1 viewed")).toBeInTheDocument();
 		expect(screen.getByTestId("code-view").querySelector("[data-collapsed]"))?.toHaveAttribute("data-collapsed", "true");
 		expect(screen.getByRole("checkbox", { name: "Mark src/App.tsx as not viewed" })).toHaveClass("size-4");
 		// Checked styling comes from theme tokens (foreground box, background
@@ -454,19 +452,33 @@ describe("WorkspaceReviewPane", () => {
 		expect(screen.getByTestId("code-view").querySelector("[data-collapsed]"))?.toHaveAttribute("data-collapsed", "false");
 	});
 
-	it("uses one toggle for collapsing and expanding all files", async () => {
+	it("collapses and expands every file when the Files menu asks, and reports which it is", async () => {
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		const onAllCollapsedChange = vi.fn();
+		function Harness() {
+			const [request, setRequest] = useState<{ expand: boolean; key: number }>();
+			return (
+				<>
+					<button onClick={() => setRequest((current) => ({ expand: false, key: (current?.key ?? 0) + 1 }))} type="button">collapse</button>
+					<button onClick={() => setRequest((current) => ({ expand: true, key: (current?.key ?? 0) + 1 }))} type="button">expand</button>
+					<WorkspaceReviewPane annotation={annotation()} collapseRequest={request} onAllCollapsedChange={onAllCollapsedChange} target={reviewTarget(data)} filter="" sessionId="sess-1" split={false} />
+				</>
+			);
+		}
+		renderWithQuery(<Harness />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		expect(onAllCollapsedChange).toHaveBeenLastCalledWith(false);
+		// The pane carries no title row of its own: the Files header names the review.
+		expect(screen.queryByText(/of 1 viewed/)).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Collapse all files" })).not.toBeInTheDocument();
 
-		const toggle = screen.getByRole("button", { name: "Collapse all files" });
-		await userEvent.click(toggle);
-		expect(screen.getByRole("button", { name: "Expand all files" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "collapse" }));
 		expect(screen.getByTestId("code-view").querySelectorAll('[data-collapsed="true"]')).toHaveLength(1);
+		expect(onAllCollapsedChange).toHaveBeenLastCalledWith(true);
 
-		await userEvent.click(screen.getByRole("button", { name: "Expand all files" }));
-		expect(screen.getByRole("button", { name: "Collapse all files" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "expand" }));
 		expect(screen.getByTestId("code-view").querySelectorAll('[data-collapsed="false"]')).toHaveLength(1);
+		expect(onAllCollapsedChange).toHaveBeenLastCalledWith(false);
 	});
 
 	it("shows a feedback box for every open line comment and drops only the one that closes", async () => {
@@ -680,7 +692,6 @@ describe("WorkspaceReviewPane", () => {
 				workspaceVersion: undefined,
 			}),
 		})));
-		expect(screen.getByText("2 commits")).toBeInTheDocument();
 	});
 
 	it("renders the not-combinable message with Include commits in between", async () => {
@@ -721,15 +732,6 @@ describe("WorkspaceReviewPane", () => {
 		expect(screen.getByText("Unable to combine commits")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 		expect(onRetry).toHaveBeenCalledOnce();
-	});
-
-	it("names a default branch's whole view as the latest commits it covers", () => {
-		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false }]);
-		const target: ReviewTarget = { ...reviewTarget(data, { kind: "commits", shas: [] }), branch: { kind: "branch", name: "main" }, files: undefined, state: "pending" };
-		renderWithQuery(<WorkspaceReviewPane allCommitsLabel="Latest 50 commits" annotation={annotation()} target={target} filter="" sessionId="sess-1" split={false} />);
-
-		expect(screen.getByText("Latest 50 commits")).toBeInTheDocument();
-		expect(screen.queryByText("All commits")).not.toBeInTheDocument();
 	});
 
 	it("hides open and edit actions for non-openable targets", async () => {

@@ -3,13 +3,12 @@ import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
-	Columns2,
 	FolderTree,
 	Folders,
 	GitCompareArrows,
 	Maximize2,
 	Minimize2,
-	Rows3,
+	MoreHorizontal,
 	Search,
 } from "lucide-react";
 import {
@@ -31,7 +30,18 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "./ui/resizable";
-import { useFilesTopbarHost } from "./files-topbar-host";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
+	DropdownMenuSub,
+	DropdownMenuSubContent,
+	DropdownMenuSubTrigger,
+	DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
+import { useFilesActionsHost, useFilesTopbarHost } from "./files-topbar-host";
 import { FileTree } from "./FileTree";
 import { FileContentPane, type FileOpenOptions } from "./FileContentPane";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
@@ -92,6 +102,11 @@ export function SessionFileExplorer({
 	// view's own preview (the center pane is hidden behind the overlay).
 	const [previewRequest, setPreviewRequest] = useState<(FileOpenOptions & { key: number }) | null>(null);
 	const filesTopbarHost = useFilesTopbarHost();
+	const filesActionsHost = useFilesActionsHost();
+	// The review owns which files are collapsed; the ⋯ menu asks it to collapse
+	// or expand them all and reads back which of the two to offer.
+	const [reviewAllCollapsed, setReviewAllCollapsed] = useState(false);
+	const [collapseRequest, setCollapseRequest] = useState<{ expand: boolean; key: number }>();
 	const [treeOpen, setTreeOpen] = useState(true);
 	const uiKey = sessionUiKey(sessionId, hostId);
 	const queryClient = useQueryClient();
@@ -185,11 +200,19 @@ export function SessionFileExplorer({
 
 	// The file tree only shows the worktree, so another branch has no Files view to switch to.
 	const hasViewTabs = hasChanges && !onOtherBranch;
-	// Docked with nothing to pick or review, the header would hold only the
-	// maximize button (the filter lives in the top bar), so it floats over the
-	// tree's top-right corner instead of reserving an empty row above it. The
-	// pickers wait for the manifest, so until it arrives the row is kept.
-	const floatingHeader = Boolean(filesTopbarHost) && Boolean(filesData) && !showChangesTrigger && !branchMenu && !showChanges && !splitView && !hasViewTabs;
+	const showTreeToggle = splitView && !hasViewTabs;
+	// With the filter and actions in a top bar, the header holds only the pickers
+	// and view tabs, so it is dropped when there are none. The pickers wait for
+	// the manifest, so until it arrives the row is kept and nothing jumps.
+	const showHeader = !filesTopbarHost || !filesData || showChangesTrigger || Boolean(branchMenu) || hasViewTabs || showTreeToggle;
+	const setLayout = (next: boolean) => {
+		if (controlledSplit === undefined) setInternalSplit(next);
+		onSplitChange?.(next);
+	};
+	// Unified/split applies wherever a diff shows: the Changes review and the
+	// preview beside the tree.
+	const showLayout = showChanges || splitView;
+	const showCollapse = showChanges && Boolean(filesData);
 	// In the preview + tree split the (already active) All-files tab doubles as
 	// the tree toggle, so the header doesn't carry two file-tree buttons.
 	const allFilesTabLabel = !showChanges && splitView ? (treeOpen ? t("files.hideFileTree") : t("files.showFileTree")) : t("files.allFiles");
@@ -207,133 +230,145 @@ export function SessionFileExplorer({
 		</label>
 	);
 
+	const viewMenu = showLayout || showCollapse ? (
+		<DropdownMenu>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<DropdownMenuTrigger asChild>
+						<Button aria-label={t("files.viewOptions")} className="shrink-0 data-[state=open]:bg-interactive-active" size="icon-sm" type="button" variant="ghost">
+							<MoreHorizontal className="size-icon-base" aria-hidden="true" />
+						</Button>
+					</DropdownMenuTrigger>
+				</TooltipTrigger>
+				<TooltipContent side="bottom">{t("files.viewOptions")}</TooltipContent>
+			</Tooltip>
+			<DropdownMenuContent align="end" className="w-56">
+				{showLayout ? (
+					<DropdownMenuSub>
+						<DropdownMenuSubTrigger>
+							<span className="min-w-0 flex-1 truncate">{t("files.layout")}</span>
+							<span className="shrink-0 text-caption text-passive">{split ? t("files.layoutSplit") : t("files.layoutUnified")}</span>
+						</DropdownMenuSubTrigger>
+						<DropdownMenuSubContent className="w-40">
+							<DropdownMenuRadioGroup onValueChange={(value) => setLayout(value === "split")} value={split ? "split" : "unified"}>
+								<DropdownMenuRadioItem value="unified">{t("files.layoutUnified")}</DropdownMenuRadioItem>
+								<DropdownMenuRadioItem value="split">{t("files.layoutSplit")}</DropdownMenuRadioItem>
+							</DropdownMenuRadioGroup>
+						</DropdownMenuSubContent>
+					</DropdownMenuSub>
+				) : null}
+				{showCollapse ? (
+					<DropdownMenuItem onSelect={() => setCollapseRequest((current) => ({ expand: reviewAllCollapsed, key: (current?.key ?? 0) + 1 }))}>
+						{reviewAllCollapsed ? t("files.expandAll") : t("files.collapseAll")}
+					</DropdownMenuItem>
+				) : null}
+			</DropdownMenuContent>
+		</DropdownMenu>
+	) : null;
+	const maximizeButton = onToggleMaximized ? (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					aria-label={isMaximized ? t("files.minimize") : t("files.maximize")}
+					className="shrink-0"
+					onClick={() => onToggleMaximized(!isMaximized)}
+					size="icon-sm"
+					type="button"
+					variant="ghost"
+				>
+					{isMaximized ? (
+						<Minimize2 className="size-icon-base" aria-hidden="true" />
+					) : (
+						<Maximize2 className="size-icon-base" aria-hidden="true" />
+					)}
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent side="bottom">{isMaximized ? t("files.minimize") : t("files.maximize")}</TooltipContent>
+		</Tooltip>
+	) : null;
+	const actions = viewMenu || maximizeButton ? <>{viewMenu}{maximizeButton}</> : null;
+
 	return (
 		<section className="relative flex h-full min-h-0 flex-col bg-background text-foreground" aria-label={t("files.sessionFiles")}>
-			{/* The header keeps one geometry in every view (Changes, Files, the
-			    preview + tree split), so switching views never moves its controls;
-			    the split draws its divider on the content below instead.
-			    The trailing actions sit 4px from the right edge with 4px gaps, the same
-			    as the pinned top-bar buttons above them and the review rows below. */}
-			{/* The header is a size container so the pickers can drop their icons and
-			    stats as it narrows; a floating header sizes to its content, so it isn't one. */}
-			<header className={floatingHeader ? "absolute right-0 top-0 z-10 flex items-center gap-1 pr-1 pt-1" : "@container/files-header flex shrink-0 items-center gap-1 pb-3 pl-3 pr-1 pt-2"}>
-				{/* What to review, then which branch: the changes picker truncates
-				    last, the branch picker first. -ml-2 cancels the first trigger's
-				    own 8px inline padding so its label starts on the same 12px gutter
-				    as the context row's text below. */}
-				{showChangesTrigger || branchMenu ? (
-					<div className="-ml-2 flex min-w-0 shrink items-center gap-1">
-						{showChangesTrigger ? <ReviewChangesMenu {...review.changesMenu} /> : null}
-						{branchMenu ? <ReviewBranchMenu {...branchMenu} /> : null}
-					</div>
-				) : null}
-				{/* The inspector top bar or the maximized overlay's titlebar hosts the
-				    filter; without a host it sits centred between the picker and the actions. */}
-				{filesTopbarHost ? null : <span aria-hidden="true" className="flex-1" />}
-				{filesTopbarHost ? createPortal(filterField, filesTopbarHost) : filterField}
-				<span aria-hidden="true" className="flex-1" />
-				{/* Unified/split applies wherever a diff shows: the Changes review and
-				    the preview beside the tree. */}
-				{showChanges || splitView ? (
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<Button
-								aria-label={split ? t("files.unifiedDiff") : t("files.splitDiff")}
-								aria-pressed={split}
-								className="shrink-0"
-								onClick={() => {
-									const next = !split;
-									if (controlledSplit === undefined) setInternalSplit(next);
-									onSplitChange?.(next);
-								}}
-								size="icon-sm"
-								type="button"
-								variant="ghost"
-							>
-								{split ? (
-									<Columns2 className="size-icon-base" aria-hidden="true" />
-								) : (
-									<Rows3 className="size-icon-base" aria-hidden="true" />
-								)}
-							</Button>
-						</TooltipTrigger>
-						<TooltipContent side="bottom">{split ? t("files.unifiedDiff") : t("files.splitDiff")}</TooltipContent>
-					</Tooltip>
-				) : null}
-				{hasViewTabs ? (
-					<div aria-label={t("files.viewMode")} className="flex shrink-0 items-center gap-1" role="tablist">
+			{/* The inspector top bar or the maximized overlay's titlebar hosts the
+			    filter, and the ⋯ menu and maximize sit at the top bar's trailing
+			    edge; without hosts they stay in this header. */}
+			{filesTopbarHost ? createPortal(filterField, filesTopbarHost) : null}
+			{filesActionsHost && actions ? createPortal(actions, filesActionsHost)
+				: filesTopbarHost && actions ? createPortal(<div className="ml-auto flex shrink-0 items-center gap-1 pr-2">{actions}</div>, filesTopbarHost)
+				: null}
+			{showHeader ? (
+				/* The header is a size container so the pickers can drop their icons
+				   and stats as it narrows. Its trailing controls sit 4px from the right
+				   edge with 4px gaps, like the pinned top-bar buttons above them. */
+				<header className="@container/files-header flex shrink-0 items-center gap-1 pb-3 pl-3 pr-1 pt-2">
+					{/* What to review, then which branch: the changes picker truncates
+					    last, the branch picker first. -ml-2 cancels the first trigger's
+					    own 8px inline padding so its label starts on the 12px gutter. */}
+					{showChangesTrigger || branchMenu ? (
+						<div className="-ml-2 flex min-w-0 shrink items-center gap-1">
+							{showChangesTrigger ? <ReviewChangesMenu {...review.changesMenu} /> : null}
+							{branchMenu ? <ReviewBranchMenu {...branchMenu} /> : null}
+						</div>
+					) : null}
+					{filesTopbarHost ? null : <span aria-hidden="true" className="flex-1" />}
+					{filesTopbarHost ? null : filterField}
+					<span aria-hidden="true" className="flex-1" />
+					{hasViewTabs ? (
+						<div aria-label={t("files.viewMode")} className="flex shrink-0 items-center gap-1" role="tablist">
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<button
+										aria-label={t("files.reviewChanges")}
+										aria-selected={showChanges}
+										className={cn(viewTabClass, "w-control-md justify-center px-0", showChanges ? "bg-interactive-active text-foreground" : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground")}
+										onClick={() => handleViewChange(true)}
+										role="tab"
+										type="button"
+									>
+										<GitCompareArrows aria-hidden="true" className="size-icon-base" />
+									</button>
+								</TooltipTrigger>
+								<TooltipContent side="bottom">{t("files.reviewChanges")}</TooltipContent>
+							</Tooltip>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<button
+										aria-label={allFilesTabLabel}
+										aria-selected={!showChanges}
+										className={cn(viewTabClass, "w-control-md justify-center px-0", !showChanges ? "bg-interactive-active text-foreground" : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground")}
+										onClick={() => (!showChanges && splitView ? setTreeOpen((open) => !open) : handleViewChange(false))}
+										role="tab"
+										type="button"
+									>
+										<Folders aria-hidden="true" className="size-icon-base" />
+									</button>
+								</TooltipTrigger>
+								<TooltipContent side="bottom">{allFilesTabLabel}</TooltipContent>
+							</Tooltip>
+						</div>
+					) : null}
+					{showTreeToggle ? (
 						<Tooltip>
 							<TooltipTrigger asChild>
-								<button
-									aria-label={t("files.reviewChanges")}
-									aria-selected={showChanges}
-									className={cn(viewTabClass, "w-control-md justify-center px-0", showChanges ? "bg-interactive-active text-foreground" : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground")}
-									onClick={() => handleViewChange(true)}
-									role="tab"
+								<Button
+									aria-label={treeOpen ? t("files.hideFileTree") : t("files.showFileTree")}
+									aria-pressed={treeOpen}
+									className="shrink-0"
+									onClick={() => setTreeOpen((open) => !open)}
+									size="icon-sm"
 									type="button"
+									variant="ghost"
 								>
-									<GitCompareArrows aria-hidden="true" className="size-icon-base" />
-								</button>
+									<FolderTree className="size-icon-base" aria-hidden="true" />
+								</Button>
 							</TooltipTrigger>
-							<TooltipContent side="bottom">{t("files.reviewChanges")}</TooltipContent>
+							<TooltipContent side="bottom">{treeOpen ? t("files.hideFileTree") : t("files.showFileTree")}</TooltipContent>
 						</Tooltip>
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<button
-									aria-label={allFilesTabLabel}
-									aria-selected={!showChanges}
-									className={cn(viewTabClass, "w-control-md justify-center px-0", !showChanges ? "bg-interactive-active text-foreground" : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground")}
-									onClick={() => (!showChanges && splitView ? setTreeOpen((open) => !open) : handleViewChange(false))}
-									role="tab"
-									type="button"
-								>
-									<Folders aria-hidden="true" className="size-icon-base" />
-								</button>
-							</TooltipTrigger>
-							<TooltipContent side="bottom">{allFilesTabLabel}</TooltipContent>
-						</Tooltip>
-					</div>
-				) : null}
-				{splitView && !hasViewTabs ? (
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<Button
-								aria-label={treeOpen ? t("files.hideFileTree") : t("files.showFileTree")}
-								aria-pressed={treeOpen}
-								className="shrink-0"
-								onClick={() => setTreeOpen((open) => !open)}
-								size="icon-sm"
-								type="button"
-								variant="ghost"
-							>
-								<FolderTree className="size-icon-base" aria-hidden="true" />
-							</Button>
-						</TooltipTrigger>
-						<TooltipContent side="bottom">{treeOpen ? t("files.hideFileTree") : t("files.showFileTree")}</TooltipContent>
-					</Tooltip>
-				) : null}
-				{onToggleMaximized ? (
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<Button
-								aria-label={isMaximized ? t("files.minimize") : t("files.maximize")}
-								className="shrink-0"
-								onClick={() => onToggleMaximized(!isMaximized)}
-								size="icon-sm"
-								type="button"
-								variant="ghost"
-							>
-								{isMaximized ? (
-									<Minimize2 className="size-icon-base" aria-hidden="true" />
-								) : (
-									<Maximize2 className="size-icon-base" aria-hidden="true" />
-								)}
-							</Button>
-						</TooltipTrigger>
-						<TooltipContent side="bottom">{isMaximized ? t("files.minimize") : t("files.maximize")}</TooltipContent>
-					</Tooltip>
-				) : null}
-			</header>
+					) : null}
+					{filesActionsHost || filesTopbarHost ? null : actions}
+				</header>
+			) : null}
 			{/* The branch already shows in its picker; this row only appears to
 			    explain an automatic fall back to the checked-out branch. */}
 			{review.notice ? (
@@ -352,7 +387,6 @@ export function SessionFileExplorer({
 					<WorkspaceReviewPane
 						annotation={annotation}
 						target={review.target}
-						allCommitsLabel={review.allCommitsLabel}
 						onRetry={review.retryTarget}
 						hostId={hostId}
 						filter={filter}
@@ -363,6 +397,8 @@ export function SessionFileExplorer({
 						onShowAllCommits={review.showAllCommits}
 						sessionId={sessionId}
 						split={split}
+						collapseRequest={collapseRequest}
+						onAllCollapsedChange={setReviewAllCollapsed}
 					/>
 				) : null
 			) : splitView ? (

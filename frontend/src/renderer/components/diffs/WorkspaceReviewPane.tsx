@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } 
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { parsePatchFiles, type CodeViewItem, type FileDiffMetadata } from "@pierre/diffs";
 import { CodeView } from "@pierre/diffs/react";
-import { ChevronRight, ChevronsDownUp, ChevronsUpDown, FileCode2, MessageSquarePlus, MoreVertical, Pencil } from "lucide-react";
+import { ChevronRight, FileCode2, MessageSquarePlus, MoreVertical, Pencil } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
 	fetchWorkspaceFileRevision,
@@ -171,7 +171,6 @@ function useViewedFiles(sessionId: string, selectionKey: string, files: readonly
 export function WorkspaceReviewPane({
 	annotation,
 	target,
-	allCommitsLabel,
 	onRetry,
 	filter,
 	onBrowseAll,
@@ -182,12 +181,12 @@ export function WorkspaceReviewPane({
 	sessionId,
 	hostId,
 	split,
+	collapseRequest,
+	onAllCollapsedChange,
 }: {
 	annotation: FileAnnotationModel;
 	/** What to review: the Files header's branch and changes. */
 	target: ReviewTarget;
-	/** The Changes menu's name for All commits, e.g. "Latest 50 commits"; "All commits" when omitted. */
-	allCommitsLabel?: string;
 	/** Reads a failed target again. */
 	onRetry?: () => void;
 	filter: string;
@@ -207,6 +206,10 @@ export function WorkspaceReviewPane({
 	sessionId: string;
 	hostId?: string;
 	split: boolean;
+	/** From the Files ⋯ menu: collapse (or expand) every file; a new key asks again. */
+	collapseRequest?: { expand: boolean; key: number };
+	/** Tells the ⋯ menu whether every file is collapsed, so it offers the other action. */
+	onAllCollapsedChange?: (allCollapsed: boolean) => void;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -485,21 +488,26 @@ export function WorkspaceReviewPane({
 		setCollapsedPaths(new Set());
 	}, [files]);
 	const allFilesCollapsed = files.length > 0 && files.every((file) => collapsedPaths.has(file.path));
-	const toggleAll = allFilesCollapsed ? expandAll : collapseAll;
+	useEffect(() => {
+		onAllCollapsedChange?.(allFilesCollapsed);
+	}, [allFilesCollapsed, onAllCollapsedChange]);
+	// Only a request made while this pane is showing acts; one already handled
+	// before a remount must not collapse the next review.
+	const handledCollapseKey = useRef(collapseRequest?.key);
+	const collapseActions = useRef({ collapseAll, expandAll });
+	collapseActions.current = { collapseAll, expandAll };
+	useEffect(() => {
+		if (!collapseRequest || collapseRequest.key === handledCollapseKey.current) return;
+		handledCollapseKey.current = collapseRequest.key;
+		if (collapseRequest.expand) collapseActions.current.expandAll();
+		else collapseActions.current.collapseAll();
+	}, [collapseRequest]);
 	const retryAll = () => patchQueries.forEach((query) => void query.refetch());
 	const firstError = patchQueries.find((query) => query.error)?.error;
 	const groupError = patchQueries.flatMap((query) => query.data?.groups ?? []).flatMap((group) => group.errors ?? [])[0];
 	const loading = patchQueries.some((query) => query.isPending);
-	const viewedCount = allFiles.filter((file) => viewed.has(file.path)).length;
 	const fileOpenContext = target.sha ? { commitSha: target.sha, scope } : { scope };
-	const totalAdditions = allFiles.reduce((sum, file) => sum + file.additions, 0);
-	const totalDeletions = allFiles.reduce((sum, file) => sum + file.deletions, 0);
 	const changes = target.changes;
-	const targetLabel = changes.kind === "commits"
-		? target.subject ?? (changes.shas.length === 0 ? allCommitsLabel ?? t("files.changes.allCommits") : t("files.changes.commitCount", { count: changes.shas.length }))
-		: changes.kind === "uncommitted" ? t("files.changes.uncommitted")
-		: changes.kind === "combined" ? t("files.reviewChanges")
-		: t(`files.section.${changes.kind}`);
 	const emptyMessage = changes.kind === "uncommitted" || changes.kind === "staged" || changes.kind === "unstaged"
 		? t(`files.changes.empty.${changes.kind}`)
 		: changes.kind === "combined" ? t("files.noneChanged") : t("files.noneInSource");
@@ -518,30 +526,6 @@ export function WorkspaceReviewPane({
 			onPointerMove={gutterHover.onPointerMove}
 			ref={reviewRef}
 		>
-			{/* Context row (like a VCS "Committed ▾ <subject> +x −y" bar): what is
-			    being reviewed on the left, review progress on the right. Trailing
-			    controls sit on the Files header's action columns (18px / 50px from
-			    the right edge), so the right side reads as one aligned column. */}
-			<div className="flex h-8 shrink-0 items-center gap-2 border-b border-border pb-1 pl-3 pr-1">
-				<span className="min-w-0 truncate text-xs text-foreground" title={target.subject}>{targetLabel}</span>
-				{target.sha ? <span className="shrink-0 text-caption text-passive">{target.sha.slice(0, 7)}</span> : null}
-				{target.state === "ready" ? (
-					<>
-						<span className="flex shrink-0 items-center gap-1.5 text-caption tabular-nums">
-							<span className="text-success">+{totalAdditions}</span>
-							<span className="text-error">−{totalDeletions}</span>
-						</span>
-						<div className="ml-auto flex shrink-0 items-center gap-1 text-caption text-muted-foreground">
-							<span className="tabular-nums">{t("files.reviewProgress", { total: allFiles.length, viewed: viewedCount })}</span>
-							<HeaderActionTooltip label={t(allFilesCollapsed ? "files.expandAll" : "files.collapseAll")}>
-								<Button aria-label={t(allFilesCollapsed ? "files.expandAll" : "files.collapseAll")} onClick={toggleAll} size="icon-sm" type="button" variant="ghost">
-									{allFilesCollapsed ? <ChevronsUpDown aria-hidden="true" /> : <ChevronsDownUp aria-hidden="true" />}
-								</Button>
-							</HeaderActionTooltip>
-						</div>
-					</>
-				) : null}
-			</div>
 			{target.state === "pending" ? (
 				<PanelMessage compact>{(target.commitShas?.length ?? 0) > 1 ? t("files.changes.combining") : t("files.loading")}</PanelMessage>
 			) : target.state === "error" ? (

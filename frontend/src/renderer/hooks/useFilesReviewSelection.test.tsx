@@ -128,7 +128,6 @@ describe("useFilesReviewSelection", () => {
 			["branch:main", false],
 			["pr:https://github.com/acme/app/pull/42", false],
 		]);
-		expect(result.current.allCommitsLabel).toBe("All commits");
 	});
 
 	it("reads another branch only through its history and the selection route, fenced by the tip it listed", async () => {
@@ -147,8 +146,6 @@ describe("useFilesReviewSelection", () => {
 		expect(result.current.target).toMatchObject({ key: "branch:main:all", scope: "committed", view: { branch: "main", expectedTipSha: SHA("2") }, openable: false, files: [file("x.ts", 4, 2)] });
 		expect(result.current.changesMenu).toMatchObject({ mode: "view", value: { kind: "commits", shas: [] }, stats: { additions: 4, deletions: 2 } });
 		expect(result.current.changesMenu.commits.rangeMode).toBe("recent");
-		// A default branch has no base, so its whole view is its latest commits.
-		expect(result.current.allCommitsLabel).toBe("Latest 2 commits");
 		expect(result.current.branchMenu?.trigger).toEqual({ kind: "branch", name: "main" });
 		// Picking a branch never writes: only reads leave the renderer.
 		expect(postMock.mock.calls.every((call) => String(call[0]).endsWith("/workspace/history/selection"))).toBe(true);
@@ -171,6 +168,22 @@ describe("useFilesReviewSelection", () => {
 		expect(selectionRequests()[0]?.[1]?.body).toEqual({ commitShas: [SHA("a"), SHA("b"), SHA("c")], workspaceVersion: "v1" });
 		expect(result.current.target).toMatchObject({ commitShas: [SHA("a"), SHA("b"), SHA("c")], openable: false, files: [file("x.ts", 4, 2)] });
 		expect(result.current.changesMenu.stats).toEqual({ additions: 4, deletions: 2 });
+	});
+
+	it("shows no totals for ticked commits until they combine, and none when they can't", async () => {
+		postMock.mockResolvedValue({
+			data: { sessionId: SESSION, tipSha: SHA("2"), contiguous: false, combinable: false, conflict: { commitSha: SHA("a"), paths: ["x.ts"], reason: "conflict" }, files: [], summary: { files: 0, additions: 0, deletions: 0 }, truncated: false },
+		});
+		useUiStore.getState().setFilesSelection(SESSION, { branch: { kind: "checked_out" }, changes: { kind: "commits", shas: [] } });
+		const { result } = renderSelection(manifest());
+		await waitFor(() => expect(result.current.changesMenu.commits.state).toBe("ready"));
+
+		act(() => result.current.changesMenu.commits.onToggle(SHA("a")));
+		act(() => result.current.changesMenu.commits.onToggle(SHA("c")));
+		// Still settling: the rows' sum would count a line changed twice, so nothing shows.
+		expect(result.current.changesMenu.stats).toBeUndefined();
+		await waitFor(() => expect(result.current.target.state).toBe("not_combinable"));
+		expect(result.current.changesMenu.stats).toBeUndefined();
 	});
 
 	it("falls back to the checked-out branch with a notice when the picked branch leaves the list", async () => {

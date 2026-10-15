@@ -50,8 +50,6 @@ export type FilesReviewSelection = {
 	/** Null where other branches cannot be read (scratch sessions, an older daemon, a degraded manifest) and until that is known. */
 	branchMenu: ReviewBranchMenuProps | null;
 	target: ReviewTarget;
-	/** What the review calls All commits: the latest N on a default branch, whose range has no base. */
-	allCommitsLabel: string;
 	/** Reads again what a failed target read: the picked branch's history or the combined commits. */
 	retryTarget: () => void;
 	/** Explains a fall back to the checked-out branch; "" otherwise. */
@@ -202,10 +200,12 @@ export function useFilesReviewSelection({
 	function triggerStats(): ReviewChangeStats | undefined {
 		if (changes.kind !== "commits") return scopes.find((option) => option.scope === changes.kind)?.stats;
 		if (changes.shas.length === 0) return allStats;
-		const summary = selectionQuery.data?.summary;
-		if (changes.shas.length > 1 && request && settledKey === changesKey(changes) && summary) return { additions: summary.additions, deletions: summary.deletions };
-		const ticked = new Set(changes.shas);
-		return sumChanges(commitRows.filter((row) => ticked.has(row.sha)));
+		if (changes.shas.length === 1) return sumChanges(commitRows.filter((row) => row.sha === changes.shas[0]));
+		// Several commits only have totals once they combine; the rows' sum would
+		// count a line changed twice, and commits that can't combine have none.
+		const selection = selectionQuery.data;
+		if (request && settledKey === changesKey(changes) && selection?.combinable) return { additions: selection.summary.additions, deletions: selection.summary.deletions };
+		return undefined;
 	}
 
 	const changesMenu: ReviewChangesMenuProps = {
@@ -269,7 +269,6 @@ export function useFilesReviewSelection({
 		changesMenu,
 		branchMenu,
 		target,
-		allCommitsLabel: history?.view?.rangeMode === "recent" && commitRows.length > 0 ? t("files.changes.latestCommits", { count: commitRows.length }) : t("files.changes.allCommits"),
 		retryTarget: () => {
 			if (historyQuery.isError) void historyQuery.refetch();
 			if (selectionQuery.isError) void selectionQuery.refetch();
