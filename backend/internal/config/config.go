@@ -175,6 +175,10 @@ type Config struct {
 	// VersionRefreshIdle is how long a session must be quiet before it moves,
 	// so a warm prompt cache is not thrown away (AO_VERSION_REFRESH_IDLE).
 	VersionRefreshIdle time.Duration
+	// TUIVersionRefresh also restarts idle terminal sessions on a newly
+	// installed release (AO_TUI_VERSION_REFRESH). Off by default until the
+	// per-harness resume checks pass.
+	TUIVersionRefresh bool
 	// StartupWorkingDirectory is the daemon process cwd before startup
 	// normalizes it. The desktop uses this to identify dev daemons after the
 	// process cwd is moved to the stable data dir.
@@ -337,6 +341,13 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 		cfg.VersionRefresh = v
+	}
+	if raw, present := os.LookupEnv("AO_TUI_VERSION_REFRESH"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_TUI_VERSION_REFRESH", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.TUIVersionRefresh = v
 	}
 	if raw, present := os.LookupEnv("AO_VERSION_REFRESH_IDLE"); present && strings.TrimSpace(raw) != "" {
 		d, err := parsePositiveDuration("AO_VERSION_REFRESH_IDLE", strings.TrimSpace(raw))

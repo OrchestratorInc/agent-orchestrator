@@ -981,6 +981,9 @@ func (*fakeSessionLifecycle) HibernateIdleChats(context.Context) error { return 
 func (*fakeSessionLifecycle) RefreshStaleChats(context.Context, time.Duration, bool) error {
 	return nil
 }
+func (*fakeSessionLifecycle) RefreshStaleTerminals(context.Context, time.Duration) error {
+	return nil
+}
 func (*fakeSessionLifecycle) MarkHarnessUpdated(context.Context, domain.AgentHarness, string, time.Time) error {
 	return nil
 }

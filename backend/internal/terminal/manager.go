@@ -171,6 +171,19 @@ func (m *Manager) BeginInputDrain(terminalID string) (lastInputAt time.Time, rel
 	}
 }
 
+// AttachedClients counts the clients (desktop, mobile or remote) currently
+// attached to terminalID. A closed tab or dropped connection leaves on its
+// own, and a dead connection is reaped by the heartbeat, so this works as a
+// view lease without a separate expiry.
+func (m *Manager) AttachedClients(terminalID string) int {
+	m.sharedMu.Lock()
+	defer m.sharedMu.Unlock()
+	if s := m.shared[terminalID]; s != nil {
+		return len(s.members)
+	}
+	return 0
+}
+
 func (m *Manager) writeInput(terminalID string, a *attachment, raw []byte, release func()) {
 	m.inputMu.Lock()
 	defer m.inputMu.Unlock()

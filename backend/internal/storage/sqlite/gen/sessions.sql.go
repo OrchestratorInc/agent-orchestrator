@@ -1166,6 +1166,42 @@ func (q *Queries) ListVersionRefreshChatCandidates(ctx context.Context, idleBefo
 	return items, nil
 }
 
+const listVersionRefreshTerminalCandidates = `-- name: ListVersionRefreshTerminalCandidates :many
+SELECT id FROM sessions
+WHERE session_mode = 'tui' AND is_terminated = 0 AND is_task_preparation = 0
+    AND kind <> 'orchestrator'
+    AND activity_state = 'idle' AND activity_last_at IS NOT NULL
+    AND activity_last_at <= ?1
+    AND trim(agent_session_id) <> '' AND trim(runtime_handle_id) <> ''
+    AND stale_binary_since IS NOT NULL AND stale_binary_switch_failed_at IS NULL
+    AND stale_binary_launch = runtime_launch_id
+`
+
+// Idle terminal sessions whose current launch still runs a replaced release
+// and can be resumed natively.
+func (q *Queries) ListVersionRefreshTerminalCandidates(ctx context.Context, idleBefore time.Time) ([]domain.SessionID, error) {
+	rows, err := q.db.QueryContext(ctx, listVersionRefreshTerminalCandidates, idleBefore)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []domain.SessionID{}
+	for rows.Next() {
+		var id domain.SessionID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markHarnessSessionsStale = `-- name: MarkHarnessSessionsStale :execrows
 UPDATE sessions
 SET stale_binary_since = CASE

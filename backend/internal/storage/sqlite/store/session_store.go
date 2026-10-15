@@ -373,6 +373,16 @@ func (s *Store) ListVersionRefreshChatCandidates(ctx context.Context, idleBefore
 	return ids, nil
 }
 
+// ListVersionRefreshTerminalCandidates lists idle, natively resumable terminal
+// sessions, quiet since idleBefore, whose current launch runs a replaced release.
+func (s *Store) ListVersionRefreshTerminalCandidates(ctx context.Context, idleBefore time.Time) ([]domain.SessionID, error) {
+	ids, err := s.qr.ListVersionRefreshTerminalCandidates(ctx, idleBefore)
+	if err != nil {
+		return nil, fmt.Errorf("list terminals for version refresh: %w", err)
+	}
+	return ids, nil
+}
+
 // CountStaleBinarySessions counts live launches still on a replaced release, per harness.
 func (s *Store) CountStaleBinarySessions(ctx context.Context) (map[domain.AgentHarness]int64, error) {
 	rows, err := s.qr.CountStaleBinarySessions(ctx)

@@ -205,6 +205,7 @@ type sessionLifecycle interface {
 	ReconcileBackground(ctx context.Context) error
 	HibernateIdleChats(ctx context.Context) error
 	RefreshStaleChats(ctx context.Context, minIdle time.Duration, wake bool) error
+	RefreshStaleTerminals(ctx context.Context, minIdle time.Duration) error
 	MarkHarnessUpdated(ctx context.Context, harness domain.AgentHarness, version string, at time.Time) error
 	CountStaleBinarySessions(ctx context.Context) (map[domain.AgentHarness]int64, error)
 	RestoreAll(ctx context.Context) error

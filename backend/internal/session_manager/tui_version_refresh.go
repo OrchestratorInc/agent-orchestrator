@@ -1,0 +1,145 @@
+package sessionmanager
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+)
+
+// tuiVersionRefreshHarnesses resume a terminal conversation natively with its
+// model, permissions and working directory intact, so restarting one on a new
+// release is invisible apart from the restart itself. Extend only after a
+// harness passes the resume checks in
+// docs/research/harness-update-while-running-capabilities.md.
+var tuiVersionRefreshHarnesses = map[domain.AgentHarness]bool{
+	domain.HarnessClaudeCode: true,
+	domain.HarnessCodex:      true,
+}
+
+type staleTerminalStore interface {
+	ListVersionRefreshTerminalCandidates(ctx context.Context, idleBefore time.Time) ([]domain.SessionID, error)
+	SetSessionVersionSwitchFailed(ctx context.Context, id domain.SessionID, version string, at time.Time) error
+}
+
+// terminalViewers counts clients attached to a terminal.
+type terminalViewers interface {
+	AttachedClients(terminalID string) int
+}
+
+// RefreshStaleTerminals restarts idle terminal sessions that still run a
+// replaced harness release on the installed one. A restart is the Resume
+// action run in place: the agent process is replaced and its conversation
+// resumed natively, while the session, worktree, reviewer, shells and browser
+// stay as they are. A session is left alone while anyone is attached to its
+// terminal, while it has been active within minIdle, while its terminal has
+// input newer than its idle report, while its agent runs any shell command,
+// or when its conversation cannot be resumed natively.
+func (m *Manager) RefreshStaleTerminals(ctx context.Context, minIdle time.Duration) error {
+	store, ok := m.store.(staleTerminalStore)
+	if !ok {
+		return nil
+	}
+	ids, err := store.ListVersionRefreshTerminalCandidates(ctx, m.clock().Add(-minIdle))
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, id := range ids {
+		if err := m.refreshStaleTerminal(ctx, store, id, minIdle); err != nil {
+			errs = append(errs, fmt.Errorf("restart terminal %s on the installed release: %w", id, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (m *Manager) refreshStaleTerminal(ctx context.Context, store staleTerminalStore, id domain.SessionID, minIdle time.Duration) error {
+	operationCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	if err := m.beginAgentOperation(operationCtx, id, agentOperationResume); err != nil {
+		if errors.Is(err, errAgentOperationInProgress) {
+			return nil
+		}
+		return err
+	}
+	defer m.endAgentOperation(id, agentOperationResume)
+	if active, err := m.hasActiveInterfaceTransition(operationCtx, id); err != nil || active {
+		return err
+	}
+	rec, err := m.getRecord(operationCtx, id)
+	if err != nil {
+		return err
+	}
+	if !m.terminalRestartEligible(rec, minIdle) {
+		return nil
+	}
+	// Close the terminal's input path, then require the idle report to be newer
+	// than any keystroke accepted before the gate: text being typed is never lost.
+	lastInputAt, releaseInput := m.beginTerminalInputDrain(rec)
+	if releaseInput != nil {
+		defer releaseInput()
+	}
+	current, err := m.getRecord(operationCtx, id)
+	if err != nil {
+		return err
+	}
+	if current.Metadata.RuntimeLaunchID != rec.Metadata.RuntimeLaunchID ||
+		!m.terminalRestartEligible(current, minIdle) || !tuiIdleAfterInput(current, lastInputAt) {
+		return nil
+	}
+	inspector, ok := m.runtime.(ports.WorkloadCommandInspector)
+	if !ok {
+		return nil
+	}
+	commands, err := inspector.RunningWorkloadCommands(operationCtx, runtimeHandle(current.Metadata), ports.SupervisedProcessRef{
+		SessionID: current.ID, LaunchID: current.Metadata.RuntimeLaunchID,
+	})
+	if err != nil || commands > 0 {
+		// A command the agent started (tests, a dev server) would die with it.
+		return nil
+	}
+	if nativeID, _, err := m.nativeConversationID(operationCtx, current); err != nil || nativeID == "" {
+		return nil
+	}
+	// Hold the harness like any launch, so an update cannot replace the binary
+	// while the new process starts.
+	releaseHarness, err := m.beginHarnessUse(current.Harness)
+	if err != nil {
+		return nil
+	}
+	defer releaseHarness()
+	version := current.StaleBinary.Version
+	if _, err := m.resumeAgentRecordWithPolicy(operationCtx, "version refresh", current, false, true); err != nil {
+		m.logger.Warn("version_switch_failed: terminal session could not restart on the new harness release",
+			"sessionID", id, "harness", current.Harness, "version", version, "error", err)
+		if recordErr := store.SetSessionVersionSwitchFailed(context.WithoutCancel(ctx), id, version, m.clock()); recordErr != nil {
+			return errors.Join(err, recordErr)
+		}
+		return err
+	}
+	m.logger.Info("terminal session restarted on the new harness release", "sessionID", id, "harness", current.Harness, "version", version)
+	return nil
+}
+
+// terminalRestartEligible is the durable-fact and viewer check, read before
+// and again after the input gate closes.
+func (m *Manager) terminalRestartEligible(rec domain.SessionRecord, minIdle time.Duration) bool {
+	if domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI || rec.IsTerminated || rec.Kind == domain.KindOrchestrator ||
+		!tuiVersionRefreshHarnesses[rec.Harness] || rec.StaleBinary == nil || rec.StaleBinary.SwitchFailedAt != nil ||
+		rec.Activity.State != domain.ActivityIdle || rec.Activity.LastActivityAt.Add(minIdle).After(m.clock()) {
+		return false
+	}
+	handle := runtimeHandle(rec.Metadata)
+	if handle.ID == "" {
+		return false
+	}
+	m.terminalInputGateMu.Lock()
+	gate := m.terminalInputGate
+	m.terminalInputGateMu.Unlock()
+	viewers, ok := gate.(terminalViewers)
+	// Without a way to count viewers, assume someone may be watching.
+	return ok && viewers.AttachedClients(handle.ID) == 0
+}
