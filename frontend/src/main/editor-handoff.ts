@@ -506,7 +506,12 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 			if (options?.refreshTerminals === true) await refreshTerminals();
 			const editors = resolveEditors();
 			const terminals = resolveTerminals();
-			const targets = [...editors.map(({ target }) => target), fileManager, ...terminals.map(({ target }) => target)];
+			// Linux's generic launcher may be the same binary (or an alternatives
+			// symlink) as a named terminal. Show it only as a fallback in the menu;
+			// the generic target remains available to existing shortcut/artifact callers.
+			const menuTerminals = deps.platform === "linux" && terminals.some(({ target }) => target.id !== "terminal")
+				? terminals.filter(({ target }) => target.id !== "terminal") : terminals;
+			const targets = [...editors.map(({ target }) => target), fileManager, ...menuTerminals.map(({ target }) => target)];
 			const targetsWithIcons = await Promise.all(targets.map(async (target) => {
 				if (target.iconDataUrl) return target;
 				const terminal = terminals.find((entry) => entry.target.id === target.id);

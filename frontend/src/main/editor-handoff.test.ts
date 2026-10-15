@@ -93,6 +93,46 @@ describe("editor handoff", () => {
 		expect(input.launch).toHaveBeenCalledWith(`/bin/${id}`, args, "/worktrees/ao-1");
 	});
 
+	it.each([false, true])("lists GNOME once when x-terminal-emulator is installed: %s", async (alternatives) => {
+		const input = deps({ platform: "linux", env: { PATH: "/usr/bin" }, isDirectory: () => false,
+			isExecutable: installedExecutables("/usr/bin/gnome-terminal", ...(alternatives ? ["/usr/bin/x-terminal-emulator"] : [])) });
+		const handoff = createEditorHandoff(input);
+		const terminals = (await handoff.getState("ao-1")).targets.filter((target) => target.kind === "terminal");
+		expect(terminals).toEqual([{ id: "gnome-terminal", name: "GNOME Terminal", kind: "terminal" }]);
+		await handoff.open({ sessionId: "ao-1", targetId: "gnome-terminal" });
+		expect(input.launch).toHaveBeenCalledWith("/usr/bin/gnome-terminal", ["--working-directory=/worktrees/ao-1"], "/worktrees/ao-1");
+	});
+
+	it("keeps the generic Linux menu fallback when no named terminal resolves", async () => {
+		const input = deps({ platform: "linux", isDirectory: () => false, isExecutable: installedExecutables("/bin/x-terminal-emulator") });
+		const handoff = createEditorHandoff(input);
+		expect((await handoff.getState("ao-1")).targets.filter((target) => target.kind === "terminal"))
+			.toEqual([{ id: "terminal", name: "Terminal", kind: "terminal" }]);
+		await handoff.open({ sessionId: "ao-1", targetId: "terminal" });
+		expect(input.launch).toHaveBeenCalledWith("/bin/x-terminal-emulator", [], "/worktrees/ao-1");
+	});
+
+	it("retains distinct named Linux terminals and the generic target for existing callers", async () => {
+		const input = deps({ platform: "linux", isDirectory: () => false,
+			isExecutable: installedExecutables("/bin/gnome-terminal", "/bin/kitty", "/bin/x-terminal-emulator") });
+		const handoff = createEditorHandoff(input);
+		expect((await handoff.getState("ao-1")).targets.filter((target) => target.kind === "terminal").map((target) => target.id))
+			.toEqual(["kitty", "gnome-terminal"]);
+		await handoff.open({ sessionId: "ao-1", targetId: "terminal" });
+		expect(input.launch).toHaveBeenCalledWith("/bin/x-terminal-emulator", [], "/worktrees/ao-1");
+		await handoff.openArtifacts({ sessionId: "ao-1", targetId: "terminal" });
+		expect(input.launch).toHaveBeenLastCalledWith("/bin/x-terminal-emulator", [], "/ao/data/artifacts/ao-1");
+	});
+
+	it("restores the generic Linux menu fallback when the named terminal is removed", async () => {
+		let installed = true;
+		const handoff = createEditorHandoff(deps({ platform: "linux", isDirectory: () => false,
+			isExecutable: (value) => value === "/bin/x-terminal-emulator" || (installed && value === "/bin/gnome-terminal") }));
+		expect((await handoff.getState("ao-1")).targets.filter((target) => target.kind === "terminal").map((target) => target.id)).toEqual(["gnome-terminal"]);
+		installed = false;
+		expect((await handoff.getState("ao-1")).targets.filter((target) => target.kind === "terminal").map((target) => target.id)).toEqual(["terminal"]);
+	});
+
 	it("discovers Windows Terminal from PATH", async () => {
 		const input = winDeps({ isExecutable: installedExecutables("C\\bin\\wt.exe") });
 		await createEditorHandoff(input).open({ sessionId: "ao-1", targetId: "windows-terminal" });
