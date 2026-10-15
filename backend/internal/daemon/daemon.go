@@ -29,6 +29,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	chatdriverregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/registry"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/systemexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry/policyauthority"
@@ -578,7 +579,16 @@ func Run() error {
 
 	persistentHostsReconciled := make(chan struct{})
 	reviewerChatsRecovered := make(chan struct{})
-	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, lcStack.ArtifactVersions, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, policyCoordinator, tracker, codexOperationGate, log)
+	reviewers, err := reviewer.NewResolver()
+	if err != nil {
+		stop()
+		lcStack.Stop()
+		if cdcErr := cdcPipe.Stop(); cdcErr != nil {
+			log.Error("cdc pipeline shutdown", "err", cdcErr)
+		}
+		return fmt.Errorf("reviewer resolver: %w", err)
+	}
+	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, lcStack.ArtifactVersions, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, policyCoordinator, tracker, codexOperationGate, reviewers, log)
 	if err != nil {
 		stop()
 		lcStack.Stop()
@@ -709,6 +719,7 @@ func Run() error {
 	binaryCaches := []harnessBinaryCache{
 		resolverBinaryCache{agents: agents},
 		chatDrivers,
+		reviewers,
 		pluginBinaryCache{harness: domain.HarnessCodex, plugin: codexModelPlugin},
 	}
 	systemInstall.SetBinaryInvalidator(func(target systeminstall.Target) {

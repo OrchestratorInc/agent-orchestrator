@@ -279,7 +279,7 @@ func telemetryEmitsSpawned(cfg config.Config) bool {
 // (issue #2685). The returned service is mounted at httpd APIDeps.Sessions.
 // It also returns the manager so the caller can wire Reconcile into the boot
 // sequence.
-func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.Runtime, store *sqlite.Store, lcm *lifecycle.Manager, artifactVersions *artifactversions.Capturer, messenger ports.AgentMessenger, telemetry ports.EventSink, notifications notificationSink, agents ports.AgentResolver, agentReadiness ports.AgentReadinessProvider, previewLifecycle sessionmanager.PreviewLifecycle, browserLifecycle sessionmanager.BrowserLifecycle, browserCapabilities sessionmanager.BrowserCapabilityIssuer, chat sessionmanager.ChatLauncher, reviewerRecoveryDone <-chan struct{}, defaults sessionmanager.SessionModeDefaults, reportingPolicy ports.AgentSwitchReportingPolicy, tracker ports.Tracker, codexOperationGate ports.CodexOperationGate, log *slog.Logger) (*sessionsvc.Service, reviewsvc.Manager, sessionLifecycle, error) {
+func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.Runtime, store *sqlite.Store, lcm *lifecycle.Manager, artifactVersions *artifactversions.Capturer, messenger ports.AgentMessenger, telemetry ports.EventSink, notifications notificationSink, agents ports.AgentResolver, agentReadiness ports.AgentReadinessProvider, previewLifecycle sessionmanager.PreviewLifecycle, browserLifecycle sessionmanager.BrowserLifecycle, browserCapabilities sessionmanager.BrowserCapabilityIssuer, chat sessionmanager.ChatLauncher, reviewerRecoveryDone <-chan struct{}, defaults sessionmanager.SessionModeDefaults, reportingPolicy ports.AgentSwitchReportingPolicy, tracker ports.Tracker, codexOperationGate ports.CodexOperationGate, reviewers *reviewer.Resolver, log *slog.Logger) (*sessionsvc.Service, reviewsvc.Manager, sessionLifecycle, error) {
 	gitWS, err := gitworktree.New(gitworktree.Options{
 		// Per-session worktrees live under the data dir, so a single AO_DATA_DIR
 		// override moves all durable per-user state together.
@@ -357,9 +357,10 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 	// from the reviewer registry (distinct from the worker agent set). The
 	// reviewer posts its review to the PR itself, so the service needs no SCM
 	// writer.
-	reviewers, err := reviewer.NewResolver()
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("reviewer resolver: %w", err)
+	if reviewers == nil {
+		if reviewers, err = reviewer.NewResolver(); err != nil {
+			return nil, nil, nil, fmt.Errorf("reviewer resolver: %w", err)
+		}
 	}
 	reviewerChat, _ := chat.(reviewcore.ReviewerChatController)
 	reviewEngine := reviewcore.New(reviewcore.Deps{
