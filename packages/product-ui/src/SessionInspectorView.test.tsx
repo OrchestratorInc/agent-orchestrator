@@ -80,6 +80,19 @@ describe("SessionInspectorShellView", () => {
     expect(body).toHaveClass("p-0", "overflow-hidden");
     expect(body).not.toHaveClass("p-3", "pb-4", "overflow-y-auto");
   });
+  it("renders the artifacts view under its own tab and sizes the tab reserve to the tab count", () => {
+    const withArtifacts = [...tabs, { id: "artifacts" as const, icon: <svg />, label: "Artifacts" }];
+    const { container } = render(<SessionInspectorShellView
+      activeView="artifacts" ariaLabel="Session inspector" browserPoppedOut={false}
+      artifactsView={<div data-testid="artifacts-slot" />}
+      tabs={withArtifacts} onViewChange={vi.fn()}
+    />);
+    const body = screen.getByTestId("artifacts-slot").parentElement;
+    expect(body).toHaveClass("p-0", "overflow-hidden");
+    expect(body).not.toHaveClass("overflow-y-auto");
+    expect(screen.getByRole("tab", { name: "Artifacts" })).toHaveAttribute("aria-selected", "true");
+    expect(container.querySelector<HTMLElement>(".session-inspector__topbar")?.style.getPropertyValue("--inspector-tab-count")).toBe("5");
+  });
   it("preserves the tab semantics, responsive labels, badge, and host slots", () => {
     const onViewChange = vi.fn();
     const { rerender } = render(

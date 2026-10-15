@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CloudCpCoderTemplateParameter } from "./cloud-cp/types";
-import { changedParameterOverrides, editableTemplateParameters, parameterOverridesPatch, withParameterValue } from "./coder-template-parameters";
+import { changedParameterOverrides, editableTemplateParameters, parameterOverridesUpdate, withParameterValue } from "./coder-template-parameters";
 
 const region: CloudCpCoderTemplateParameter = { name: "region", type: "string", mutable: true, required: false, defaultValue: "eu" };
 const docker: CloudCpCoderTemplateParameter = { name: "docker", type: "bool", mutable: true, required: false, defaultValue: "true" };
@@ -29,13 +29,15 @@ describe("coder template parameters", () => {
 		expect(changedParameterOverrides(parameters, undefined)).toEqual({});
 	});
 
-	it("patches changed keys and resets removed ones to their default", () => {
+	it("saves the whole draft map, since the endpoint replaces it", () => {
 		const saved = { region: "us", docker: "false" };
-		expect(parameterOverridesPatch(parameters, saved, { region: "ap", docker: "false" })).toEqual({ region: "ap" });
-		// docker back to default: sent at the default so a merging endpoint stores it.
-		expect(parameterOverridesPatch(parameters, saved, { region: "us" })).toEqual({ docker: "true" });
-		expect(parameterOverridesPatch(parameters, saved, saved)).toBeUndefined();
-		// A saved key already at its default, or unknown to the template, is not re-sent.
-		expect(parameterOverridesPatch(parameters, { region: "eu", gone: "1" }, {})).toBeUndefined();
+		// One changed key still sends every override, so docker survives.
+		expect(parameterOverridesUpdate(parameters, saved, { region: "ap", docker: "false" })).toEqual({ region: "ap", docker: "false" });
+		// docker back to its default: absent from the map, so it is removed.
+		expect(parameterOverridesUpdate(parameters, saved, { region: "us" })).toEqual({ region: "us" });
+		expect(parameterOverridesUpdate(parameters, saved, saved)).toBeUndefined();
+		// A saved key already at its default changes nothing; dropping an unknown one does.
+		expect(parameterOverridesUpdate(parameters, { region: "eu" }, {})).toBeUndefined();
+		expect(parameterOverridesUpdate(parameters, { gone: "1" }, {})).toEqual({});
 	});
 });

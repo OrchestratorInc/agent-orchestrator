@@ -486,6 +486,9 @@ func (s *Server) createGitHubProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
+	if !s.requireAdminForProjectScripts(w, r, orgID, config) {
+		return
+	}
 	if !s.validateProjectSandboxProvider(w, r, principalFrom(r), orgID, config) {
 		return
 	}

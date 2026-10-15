@@ -32,6 +32,10 @@ var (
 	ErrInstallMethod = errors.New("systeminstall: invalid install method")
 	// ErrInstallActive prevents a second operation from being silently discarded.
 	ErrInstallActive = errors.New("systeminstall: harness install operation already active")
+	// ErrInstallOwner refuses to update a binary the selected method did not install.
+	ErrInstallOwner = errors.New("systeminstall: installation owner not confirmed")
+	// ErrUpdateVersion rejects an invalid caller-supplied verification target.
+	ErrUpdateVersion = errors.New("systeminstall: invalid expected update version")
 )
 
 // Target is one of the fixed install targets AO knows how to install.
@@ -171,9 +175,17 @@ func (f executableFinderFunc) LookPath(file string) (string, error) { return f(f
 // branch on Unsupported; callers that only need to know whether a route exists
 // should test len(Command).
 type Plan struct {
-	Target              Target
-	Command             []string // argv, e.g. ["brew", "install", "tmux"]
+	Target  Target
+	Command []string // argv, e.g. ["brew", "install", "tmux"]
+	// Prepare runs before Command with the same environment, e.g. refreshing
+	// Homebrew's metadata so `brew upgrade` sees the release AO announced. A
+	// failed step is noted in the output; Command still runs and post-update
+	// verification decides the outcome.
+	Prepare             [][]string
 	Script              *ports.InstallScriptCommand
+	Package             string
+	PackagePrefix       string
+	PackageCask         bool
 	Manager             string // resolving package manager ("brew", "apt-get", ...), empty when none applies
 	NeedsRoot           bool   // Command must run as root; the caller supplies the privilege
 	Unsupported         bool
@@ -182,6 +194,20 @@ type Plan struct {
 	Method              string
 	DocsURL             string
 	ExpectedDestination string
+
+	// daemonRuntimeRejected and daemonPrefixRejected mark an npm plan rejected
+	// only for the daemon's own Node/npm or global prefix. An install runs
+	// there, so it stays rejected; an update acts on the installation that owns
+	// the binary, so it re-checks against that one instead.
+	daemonRuntimeRejected bool
+	daemonPrefixRejected  bool
+	// deferredReason is the daemon rejection an update deferred; it applies
+	// again when the owning installation turns out to use the daemon's runtime
+	// or prefix, or cannot be found.
+	deferredReason string
+	// ownerPrefixFound records that targetInstalledCopy located the npm prefix
+	// that owns the installed binary.
+	ownerPrefixFound bool
 }
 
 // AgentPlan is the display-safe plan returned to the settings page. Command is
@@ -213,10 +239,12 @@ type AgentInstallMethod struct {
 	ReinstallAvailable  bool   `json:"reinstallAvailable"`
 	ReinstallCommand    string `json:"reinstallCommand,omitempty"`
 	ReinstallReason     string `json:"reinstallReason,omitempty"`
+	UpdateAvailable     bool   `json:"updateAvailable"`
+	UpdateCommand       string `json:"updateCommand,omitempty"`
+	UpdateReason        string `json:"updateReason,omitempty"`
 }
 
-// AgentOperation distinguishes a first installation from an explicit rebuild
-// of an existing harness environment.
+// AgentOperation selects a fixed install, reinstall, or update plan.
 type AgentOperation string
 
 const (
@@ -224,10 +252,12 @@ const (
 	AgentOperationInstall AgentOperation = "install"
 	// AgentOperationReinstall requests an explicit rebuild of an existing installation.
 	AgentOperationReinstall AgentOperation = "reinstall"
+	// AgentOperationUpdate refreshes the installed agent CLI using its selected method.
+	AgentOperationUpdate AgentOperation = "update"
 )
 
 func (operation AgentOperation) valid() bool {
-	return operation == AgentOperationInstall || operation == AgentOperationReinstall
+	return operation == AgentOperationInstall || operation == AgentOperationReinstall || operation == AgentOperationUpdate
 }
 
 // Status is the lifecycle state of an install Job.
@@ -264,7 +294,7 @@ const defaultPersistenceTimeout = 2 * time.Second
 
 var devinInstalledLine = regexp.MustCompile(`Installed devin v\S+ to [^\r\n]+/devin\.`)
 
-// Job is the tracked state of one install run for a Target.
+// Job is the tracked state of one harness operation for a Target.
 type Job struct {
 	Target              Target `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,cloudflared" description:"Fixed install target this job ran (or is running) for."`
 	Status              Status `json:"status" enum:"idle,running,installing,verifying,succeeded,failed,unsupported,interrupted" description:"Current lifecycle state of the job."`
@@ -290,18 +320,30 @@ type HarnessVerifier interface {
 	Verify(ctx context.Context, target Target) (VerifyResult, error)
 }
 
-// SessionLister exposes durable lifecycle facts used to keep the Droid vendor
-// installer away from active Droid processes.
+// SessionLister exposes durable lifecycle facts used to keep maintenance
+// operations away from active harness processes.
 type SessionLister interface {
 	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
 }
 
+// ReviewerLister exposes reviewer processes, which have no session row of
+// their own: live TUI reviewer panes and reviewer chats with a live controller.
+type ReviewerLister interface {
+	ListLiveReviewerHandles(ctx context.Context) ([]domain.ReviewerHandle, error)
+	ListRecoverableChatReviews(ctx context.Context) ([]domain.Review, error)
+}
+
 // Deps are the durable and adapter-backed dependencies used for harness jobs.
 type Deps struct {
-	JobStore           ports.AgentInstallJobStore
-	Verifier           HarnessVerifier
-	Sessions           SessionLister
-	PrivateNPMPrefixes map[Target]string
+	JobStore ports.AgentInstallJobStore
+	Verifier HarnessVerifier
+	Sessions SessionLister
+	// Reviewers, when set, keeps maintenance away from live reviewers too.
+	Reviewers ReviewerLister
+	// DisableUpdateChecks stops update advisories from reaching the network
+	// (AO_HARNESS_UPDATE_CHECKS=off).
+	DisableUpdateChecks bool
+	PrivateNPMPrefixes  map[Target]string
 }
 
 // Service runs real install commands for the fixed Target allowlist.
@@ -312,8 +354,8 @@ type Service struct {
 	stop              context.CancelFunc
 	stopping          bool
 	workers           sync.WaitGroup
-	droidGate         sync.RWMutex
-	fxGate            sync.RWMutex
+	harnessGatesMu    sync.Mutex
+	harnessGates      map[domain.AgentHarness]*sync.RWMutex
 
 	executables         ports.ExecutableFinder
 	commands            ports.CommandRunner
@@ -325,6 +367,7 @@ type Service struct {
 	jobStore            ports.AgentInstallJobStore
 	verifier            HarnessVerifier
 	sessions            SessionLister
+	reviewers           ReviewerLister
 	// goos selects the platform branch in planFor. Real use is always
 	// runtime.GOOS; tests override it to exercise every OS branch from one
 	// machine, the same seam lookPath provides for PATH probing.
@@ -334,8 +377,20 @@ type Service struct {
 	// a real multi-minute wait.
 	installTimeout time.Duration
 	// persistenceTimeout bounds worker-owned transition and terminal writes.
-	persistenceTimeout time.Duration
-	onSucceeded        func(Target)
+	persistenceTimeout   time.Duration
+	onSucceeded          func(Target)
+	managedVersion       managedVersionChecker
+	ownsInstallation     func(context.Context, string, string, string, bool) (bool, error)
+	updateAdvisories     map[Target]UpdateAdvisory
+	updateChecksDisabled bool
+	derivedOwners        map[Target]derivedOwner
+	updateAdvisoryCalls  map[Target]*updateAdvisoryCall
+	// updateCheckSlots bounds concurrent update checks to
+	// maxConcurrentUpdateChecks; created on first use.
+	updateCheckSlots chan struct{}
+	// officialVersion reads a vendor release channel when no package manager
+	// owns the harness binary.
+	officialVersion func(context.Context, Target) (string, error)
 }
 
 // requestPlanner carries one immutable capability snapshot through all recipe
@@ -359,8 +414,8 @@ func (s *Service) newRequestPlanner(ctx context.Context) (requestPlanner, error)
 	return planner, nil
 }
 
-// SetOnSucceeded registers the daemon callback invoked after a verified
-// install. It is called outside the job mutex.
+// SetOnSucceeded registers the daemon callback invoked after a successful
+// harness operation. It is called outside the job mutex.
 func (s *Service) SetOnSucceeded(callback func(Target)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -382,22 +437,30 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 	pathWritable, _ := executables.(ports.PathWritableProbe)
 	backgroundContext, stop := context.WithCancel(context.Background())
 	return &Service{
-		jobs:                make(map[Target]*Job),
-		executables:         executables,
-		commands:            commands,
-		installCommands:     installCommands,
-		installScripts:      installScripts,
-		installCapabilities: installCapabilities,
-		pathWritable:        pathWritable,
-		privateNPMPrefixes:  deps.PrivateNPMPrefixes,
-		jobStore:            deps.JobStore,
-		verifier:            deps.Verifier,
-		sessions:            deps.Sessions,
-		goos:                runtime.GOOS,
-		installTimeout:      defaultInstallTimeout,
-		persistenceTimeout:  defaultPersistenceTimeout,
-		stop:                stop,
-		backgroundContext:   backgroundContext,
+		jobs:                 make(map[Target]*Job),
+		harnessGates:         make(map[domain.AgentHarness]*sync.RWMutex),
+		executables:          executables,
+		commands:             commands,
+		installCommands:      installCommands,
+		installScripts:       installScripts,
+		installCapabilities:  installCapabilities,
+		jobStore:             deps.JobStore,
+		verifier:             deps.Verifier,
+		sessions:             deps.Sessions,
+		reviewers:            deps.Reviewers,
+		updateChecksDisabled: deps.DisableUpdateChecks,
+		goos:                 runtime.GOOS,
+		installTimeout:       defaultInstallTimeout,
+		persistenceTimeout:   defaultPersistenceTimeout,
+		stop:                 stop,
+		backgroundContext:    backgroundContext,
+		managedVersion:       newManagedVersionChecker(commands, nil),
+		officialVersion:      officialReleaseVersion(runtime.GOOS, runtime.GOARCH),
+		ownsInstallation:     managerOwnsBinary(commands),
+		updateAdvisories:     make(map[Target]UpdateAdvisory),
+		updateAdvisoryCalls:  make(map[Target]*updateAdvisoryCall),
+		pathWritable:         pathWritable,
+		privateNPMPrefixes:   deps.PrivateNPMPrefixes,
 	}
 }
 
@@ -421,9 +484,11 @@ func (s *Service) AgentPlans(ctx context.Context) ([]AgentPlan, error) {
 		}
 		recommended := recommendedPlanIndex(plans)
 		plan := plans[recommended]
+		updateByMethod := plansByMethod(planner.agentMethodPlans(target, AgentOperationUpdate))
 		methods := make([]AgentInstallMethod, 0, len(plans))
 		for index, methodPlan := range plans {
 			reinstallPlan := reinstallByMethod[methodPlan.Method]
+			updatePlan := operationPlanFor(updateByMethod, methodPlan.Method)
 			methods = append(methods, AgentInstallMethod{
 				ID: methodPlan.Method, Label: installMethodLabel(methodPlan.Method),
 				Available: !methodPlan.Unsupported, Recommended: index == recommended,
@@ -431,6 +496,8 @@ func (s *Service) AgentPlans(ctx context.Context) ([]AgentPlan, error) {
 				ExpectedDestination: methodPlan.ExpectedDestination,
 				ReinstallAvailable:  !reinstallPlan.Unsupported,
 				ReinstallCommand:    displayCommand(reinstallPlan), ReinstallReason: reinstallPlan.Reason,
+				UpdateAvailable: !updatePlan.Unsupported,
+				UpdateCommand:   displayCommand(updatePlan), UpdateReason: updatePlan.Reason,
 			})
 		}
 		out = append(out, AgentPlan{
@@ -443,6 +510,23 @@ func (s *Service) AgentPlans(ctx context.Context) ([]AgentPlan, error) {
 		})
 	}
 	return out, nil
+}
+
+func plansByMethod(plans []Plan) map[string]Plan {
+	out := make(map[string]Plan, len(plans))
+	for _, plan := range plans {
+		out[plan.Method] = plan
+	}
+	return out
+}
+
+// operationPlanFor treats a method missing from a later listing, such as a
+// derived owner cleared in between, as unsupported rather than misaligned.
+func operationPlanFor(plans map[string]Plan, method string) Plan {
+	if plan, ok := plans[method]; ok {
+		return plan
+	}
+	return Plan{Method: method, Unsupported: true, Reason: "This installation method is no longer detected."}
 }
 
 func recommendedPlanIndex(plans []Plan) int {
@@ -547,33 +631,38 @@ func (s *Service) Start(ctx context.Context, target Target) (Job, error) {
 // empty method chooses the first currently viable method for compatibility
 // with older clients.
 func (s *Service) StartAgent(ctx context.Context, target Target, method string) (Job, error) {
-	return s.StartAgentOperation(ctx, target, method, AgentOperationInstall)
+	return s.StartAgentOperation(ctx, target, method, AgentOperationInstall, "")
 }
 
-// StartAgentOperation begins a harness install or reinstall using one
-// server-owned method ID and operation.
-func (s *Service) StartAgentOperation(ctx context.Context, target Target, method string, operation AgentOperation) (Job, error) {
+// StartAgentOperation begins a harness operation using one server-owned
+// method ID and operation. An empty method chooses the recommended method
+// for an install or reinstall and the method that owns the installed copy for
+// an update. expected is the release the user approved for an update, or "".
+func (s *Service) StartAgentOperation(ctx context.Context, target Target, method string, operation AgentOperation, expected string) (Job, error) {
 	if err := ctx.Err(); err != nil {
 		return Job{}, err
 	}
 	if !operation.valid() {
 		return Job{}, fmt.Errorf("%w: unknown install operation %q", ErrInstallMethod, operation)
 	}
+	if expected != "" {
+		if _, ok := parseUpdateVersion(expected); !ok || operation != AgentOperationUpdate {
+			return Job{}, ErrUpdateVersion
+		}
+	}
 	if !IsAgentTarget(target) {
 		return Job{}, fmt.Errorf("systeminstall: unknown harness target %q", target)
 	}
 	var releaseHarness func()
-	if target == TargetDroid || target == TargetFX {
-		gate := &s.droidGate
-		if target == TargetFX {
-			gate = &s.fxGate
-		}
+	requiresHarnessGate := target == TargetDroid || target == TargetFX || operation == AgentOperationReinstall || operation == AgentOperationUpdate
+	if requiresHarnessGate {
 		s.mu.Lock()
 		if current, ok := s.jobs[target]; ok && activeStatus(current.Status) {
 			s.mu.Unlock()
 			return Job{}, ErrInstallActive
 		}
 		s.mu.Unlock()
+		gate := s.harnessGate(domain.AgentHarness(target))
 		if !gate.TryLock() {
 			return Job{}, fmt.Errorf("%w: a %s session is starting", ErrHarnessActive, target)
 		}
@@ -586,13 +675,16 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		if s.sessions != nil {
 			sessions, err := s.sessions.ListAllSessions(ctx)
 			if err != nil {
-				return Job{}, fmt.Errorf("systeminstall: list sessions before %s install: %w", target, err)
+				return Job{}, fmt.Errorf("systeminstall: list sessions before harness operation: %w", err)
 			}
 			for _, session := range sessions {
 				if session.Harness == domain.AgentHarness(target) && !session.IsTerminated {
-					return Job{}, fmt.Errorf("%w: end %s session %s before installing or reinstalling %s", ErrHarnessActive, target, session.ID, target)
+					return Job{}, fmt.Errorf("%w: end %s session %s before changing its installation", ErrHarnessActive, target, session.ID)
 				}
 			}
+		}
+		if err := s.requireNoLiveReviewer(ctx, target); err != nil {
+			return Job{}, err
 		}
 	}
 
@@ -605,6 +697,11 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 	if method == "" {
 		plans := planner.agentMethodPlans(target, operation)
 		plan = plans[recommendedPlanIndex(plans)]
+		if operation == AgentOperationUpdate {
+			if owner, ok := s.owningUpdatePlan(ctx, target, plans); ok {
+				plan = owner
+			}
+		}
 	} else {
 		plan, err = planner.resolveAgentMethod(target, method, operation)
 		if err != nil {
@@ -612,13 +709,56 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		}
 	}
 
+	var baseline *installedBaseline
+	if operation == AgentOperationUpdate {
+		if baseline, err = s.confirmInstalledOwner(ctx, target, plan); err != nil {
+			return Job{}, err
+		}
+		plannedPrefix := plan.PackagePrefix
+		if baseline != nil && baseline.path != "" {
+			plan = targetInstalledCopy(s.goos, plan, target, baseline.path)
+		}
+		plan = s.validateNPMUpdateTarget(ctx, plan, plannedPrefix)
+	}
+	if operation == AgentOperationUpdate && expected != "" {
+		if baseline == nil {
+			baseline = &installedBaseline{scheme: versionSchemeFor(target)}
+		}
+		// An update never moves the installed copy backwards.
+		if versionAtMost(baseline.scheme, expected, baseline.version) {
+			return Job{}, ErrUpdateVersion
+		}
+		// Pin the version the user approved into this job's immutable baseline.
+		// Concurrent advisory refreshes cannot erase this verification floor.
+		baseline.expected = expected
+	}
+	if operation == AgentOperationUpdate && baseline != nil {
+		// Install the release the user approved when it is one the advisory
+		// knows exists, else the one the advisory announced. The client value
+		// never reaches the command unless it lies between installed and latest.
+		pin := baseline.latest
+		if baseline.expected != "" && baseline.version != "" && versionAtMost(baseline.scheme, baseline.expected, baseline.latest) {
+			pin = baseline.expected
+		}
+		plan = pinVendorUpdate(plan, pin)
+	}
+
+	now := time.Now().UTC()
+	if plan.Unsupported && operation != AgentOperationInstall {
+		// A refused update or reinstall changes nothing, so it is reported to
+		// the caller without replacing the record of the installation's last job.
+		return Job{
+			Target: target, Status: StatusUnsupported, Method: plan.Method,
+			Command: displayCommand(plan), ExpectedDestination: plan.ExpectedDestination,
+			Error: plan.Reason, Notice: plan.Notice, StartedAt: &now, FinishedAt: &now, UpdatedAt: &now,
+		}, nil
+	}
 	s.mu.Lock()
 	if current, ok := s.jobs[target]; ok && activeStatus(current.Status) {
 		s.mu.Unlock()
 		return Job{}, ErrInstallActive
 	}
 	previous, hadPrevious := s.jobs[target]
-	now := time.Now().UTC()
 	status := StatusInstalling
 	finishedAt := (*time.Time)(nil)
 	if plan.Unsupported {
@@ -661,23 +801,88 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		if workerRelease != nil {
 			defer workerRelease()
 		}
-		s.runAgentInstall(s.backgroundContext, plan, job)
+		s.runAgentOperation(s.backgroundContext, plan, operation, job, baseline)
 	}()
 	return initial, nil
 }
 
-// TryBeginHarnessUse prevents Droid and fx session launches from racing
-// replacement of their executables. The returned release must be called after launch.
-func (s *Service) TryBeginHarnessUse(harness domain.AgentHarness) (func(), bool) {
-	var gate *sync.RWMutex
-	switch harness {
-	case domain.HarnessDroid:
-		gate = &s.droidGate
-	case domain.HarnessFX:
-		gate = &s.fxGate
-	default:
-		return func() {}, true
+// owningUpdatePlan picks the update plan whose method owns the binary
+// sessions run, for an update request that names no method. The latest
+// advisory's maintenance method is preferred; otherwise each available
+// method is checked against the resolved binary. ok is false when no method
+// is confirmed, and the caller's plan is then refused by confirmInstalledOwner.
+func (s *Service) owningUpdatePlan(ctx context.Context, target Target, plans []Plan) (Plan, bool) {
+	s.mu.Lock()
+	advisory, hasAdvisory := s.updateAdvisories[target]
+	s.mu.Unlock()
+	if hasAdvisory && advisory.MaintenanceMethod != "" {
+		for _, plan := range plans {
+			if plan.Method == advisory.MaintenanceMethod && !plan.Unsupported {
+				return plan, true
+			}
+		}
 	}
+	if s.verifier == nil {
+		return Plan{}, false
+	}
+	verified, _ := s.verifier.Verify(ctx, target)
+	if verified.ResolvedPath == "" {
+		return Plan{}, false
+	}
+	for _, plan := range plans {
+		if !plan.Unsupported && s.methodOwnsBinary(ctx, plan, verified.ResolvedPath) {
+			return plan, true
+		}
+	}
+	return Plan{}, false
+}
+
+// requireNoLiveReviewer refuses a harness operation while a reviewer runs on
+// that harness. Reviewer launches hold the harness gate until their handle is
+// recorded, so a reviewer that is still starting is refused at the gate.
+func (s *Service) requireNoLiveReviewer(ctx context.Context, target Target) error {
+	if s.reviewers == nil {
+		return nil
+	}
+	handles, err := s.reviewers.ListLiveReviewerHandles(ctx)
+	if err != nil {
+		return fmt.Errorf("systeminstall: list reviewers before harness operation: %w", err)
+	}
+	for _, handle := range handles {
+		if string(handle.Harness) == string(target) {
+			return fmt.Errorf("%w: close the %s reviewer for session %s before changing its installation", ErrHarnessActive, target, handle.SessionID)
+		}
+	}
+	chats, err := s.reviewers.ListRecoverableChatReviews(ctx)
+	if err != nil {
+		return fmt.Errorf("systeminstall: list reviewer chats before harness operation: %w", err)
+	}
+	for _, review := range chats {
+		if string(review.Harness) == string(target) && review.ControllerGeneration != "" {
+			return fmt.Errorf("%w: close the %s reviewer for session %s before changing its installation", ErrHarnessActive, target, review.SessionID)
+		}
+	}
+	return nil
+}
+
+func (s *Service) harnessGate(harness domain.AgentHarness) *sync.RWMutex {
+	s.harnessGatesMu.Lock()
+	defer s.harnessGatesMu.Unlock()
+	if s.harnessGates == nil {
+		s.harnessGates = make(map[domain.AgentHarness]*sync.RWMutex)
+	}
+	gate := s.harnessGates[harness]
+	if gate == nil {
+		gate = &sync.RWMutex{}
+		s.harnessGates[harness] = gate
+	}
+	return gate
+}
+
+// TryBeginHarnessUse prevents session launches from racing replacement of the
+// selected harness executable. The returned release must be called after launch.
+func (s *Service) TryBeginHarnessUse(harness domain.AgentHarness) (func(), bool) {
+	gate := s.harnessGate(harness)
 	if !gate.TryRLock() {
 		return nil, false
 	}
@@ -838,7 +1043,7 @@ func (s *Service) Verify(ctx context.Context, target Target) (Job, error) {
 	}
 	go func() { //nolint:gosec // bounded daemon-owned worker intentionally outlives the request.
 		defer s.workers.Done()
-		s.runAgentVerification(s.backgroundContext, job)
+		s.runAgentVerification(s.backgroundContext, job, nil)
 	}()
 	return initial, nil
 }
@@ -940,7 +1145,7 @@ func (s *Service) run(parent context.Context, argv []string, job *Job) {
 	}
 }
 
-func (s *Service) runAgentInstall(parent context.Context, plan Plan, job *Job) {
+func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation AgentOperation, job *Job, baseline *installedBaseline) {
 	ctx, cancel := context.WithTimeout(parent, s.installTimeout)
 	defer cancel()
 	out := &capturedOutput{max: maxOutputBytes}
@@ -967,25 +1172,49 @@ func (s *Service) runAgentInstall(parent context.Context, plan Plan, job *Job) {
 				_, _ = fmt.Fprintf(out, "\nsource: %s\nsha256: %s\n", command.URL, result.SHA256)
 			}
 		}
-	} else if s.installCommands != nil {
-		runErr = s.installCommands.RunInstall(ctx, ports.InstallCommand{
-			Argv: plan.Command,
-			Env:  env,
-		}, out, out)
 	} else {
-		runErr = s.commands.Run(ctx, plan.Command, out, out)
+		runCommand := func(argv []string) error {
+			if s.installCommands != nil {
+				return s.installCommands.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: env}, out, out)
+			}
+			return s.commands.Run(ctx, argv, out, out)
+		}
+		for _, argv := range plan.Prepare {
+			if err := runCommand(argv); err != nil && ctx.Err() == nil {
+				_, _ = fmt.Fprintf(out, "\n%s failed (%v); continuing.\n", strings.Join(argv, " "), err)
+			}
+		}
+		if ctx.Err() == nil {
+			runErr = runCommand(plan.Command)
+		}
 	}
 	if ctx.Err() == context.DeadlineExceeded {
-		s.finishAgentJob(job, StatusFailed, out.String(), fmt.Sprintf("install timed out after %s", s.installTimeout), "")
+		s.finishAgentJob(job, StatusFailed, out.String(), fmt.Sprintf("%s timed out after %s", operation, s.installTimeout), "")
 		return
 	}
 	if ctx.Err() == context.Canceled {
-		s.finishAgentJob(job, StatusInterrupted, out.String(), "daemon shutdown interrupted the install", "")
+		s.finishAgentJob(job, StatusInterrupted, out.String(), fmt.Sprintf("daemon shutdown interrupted %s", operation), "")
 		return
 	}
 	installConfirmed := runErr != nil && devinOutput != nil && devinOutput.Confirmed()
-	if runErr != nil && !installConfirmed {
-		s.finishAgentJob(job, StatusFailed, out.String(), runErr.Error(), "")
+	// Autohand's Windows installer can finish replacing the CLI, then fail
+	// while installing its separate Computer control component. Verify the
+	// actual CLI version before deciding whether the requested update worked.
+	autohandCLIInstalled := runErr != nil && s.goos == "windows" && plan.Target == TargetAutohand &&
+		plan.Method == "official-installer" && plan.Script != nil &&
+		strings.Contains(out.String(), "Installed to ") &&
+		strings.Contains(out.String(), "Computer control could not be installed.")
+	if autohandCLIInstalled {
+		_, _ = io.WriteString(out, "\nAutohand CLI install will be verified. Computer control needs a separate repair: autohand computer install\n")
+	}
+	if runErr != nil && !installConfirmed && !autohandCLIInstalled {
+		message := runErr.Error()
+		if plan.Target == TargetAutohand && plan.Method == "official-installer" &&
+			strings.Contains(out.String(), "Downloaded Autohand CLI failed to start") &&
+			strings.Contains(out.String(), "The existing installation was not changed.") {
+			message = fmt.Sprintf("Autohand could not start the downloaded CLI; the existing installation was not changed. Its startup check can time out on a busy machine. Let other updates finish, then retry. (%v)", runErr)
+		}
+		s.finishAgentJob(job, StatusFailed, out.String(), message, "")
 		return
 	}
 
@@ -993,10 +1222,13 @@ func (s *Service) runAgentInstall(parent context.Context, plan Plan, job *Job) {
 		s.finishAgentJob(job, StatusFailed, "", fmt.Sprintf("persist verifying state: %v", err), "")
 		return
 	}
-	s.runAgentVerification(s.backgroundContext, job)
+	s.runAgentVerification(s.backgroundContext, job, baseline)
 }
 
-func (s *Service) runAgentVerification(ctx context.Context, job *Job) {
+// runAgentVerification re-probes the harness after a job. For an update, the
+// baseline from before the command decides whether the binary sessions run
+// actually changed; a zero exit status alone is not proof.
+func (s *Service) runAgentVerification(ctx context.Context, job *Job, baseline *installedBaseline) {
 	if s.verifier == nil {
 		s.finishAgentJob(job, StatusFailed, "", "adapter-backed install verifier is not configured", "")
 		return
@@ -1010,7 +1242,16 @@ func (s *Service) runAgentVerification(ctx context.Context, job *Job) {
 		s.finishAgentJob(job, StatusFailed, result.Output, err.Error(), result.ResolvedPath)
 		return
 	}
-	s.finishAgentJob(job, StatusSucceeded, result.Output, "", result.ResolvedPath)
+	output := result.Output
+	failure, note := updateOutcome(baseline, result)
+	if note != "" {
+		output = strings.TrimRight(output, "\n") + "\n" + note
+	}
+	if failure != "" {
+		s.finishAgentJob(job, StatusFailed, output, failure, result.ResolvedPath)
+		return
+	}
+	s.finishAgentJob(job, StatusSucceeded, output, "", result.ResolvedPath)
 }
 
 func (s *Service) transitionAgentJob(job *Job, status Status, output, errorMessage, resolvedPath string) error {
@@ -1039,6 +1280,10 @@ func (s *Service) finishAgentJob(job *Job, status Status, output, errorMessage, 
 	}
 	job.FinishedAt = &now
 	job.UpdatedAt = &now
+	delete(s.updateAdvisories, job.Target)
+	delete(s.updateAdvisoryCalls, job.Target)
+	// The next advisory re-derives the owner of whatever binary now runs.
+	delete(s.derivedOwners, job.Target)
 	snapshot := *job
 	callback := s.onSucceeded
 	target := job.Target
@@ -1046,7 +1291,7 @@ func (s *Service) finishAgentJob(job *Job, status Status, output, errorMessage, 
 	if err := s.persistJobBestEffort(snapshot); err != nil {
 		s.mu.Lock()
 		job.Status = StatusFailed
-		job.Error = fmt.Sprintf("persist terminal install state: %v", err)
+		job.Error = fmt.Sprintf("persist terminal operation state: %v", err)
 		s.mu.Unlock()
 		return
 	}
@@ -1116,6 +1361,8 @@ func (s *Service) resolvePlan(target Target) Plan {
 	return s.planFor(target)
 }
 
+// displayCommand renders the plan for display. Prepare steps are joined with
+// "; " rather than "&&": a failed step is noted and Command still runs.
 func displayCommand(plan Plan) string {
 	if plan.Script != nil {
 		return fmt.Sprintf("%s <downloaded from %s>", strings.Join(plan.Script.Interpreter, " "), plan.Script.URL)
@@ -1124,7 +1371,11 @@ func displayCommand(plan Plan) string {
 	if plan.NeedsRoot && len(argv) > 0 {
 		argv = append([]string{"sudo"}, argv...)
 	}
-	return strings.Join(argv, " ")
+	steps := make([]string, 0, len(plan.Prepare)+1)
+	for _, prepare := range plan.Prepare {
+		steps = append(steps, strings.Join(prepare, " "))
+	}
+	return strings.Join(append(steps, strings.Join(argv, " ")), "; ")
 }
 
 // capturedOutput is an io.Writer that keeps only the last max bytes written,
@@ -1295,7 +1546,7 @@ func (p requestPlanner) planNPM(target Target, pkg string) Plan {
 			Method: "npm", Reason: "npm was not found on PATH. Install Node.js from https://nodejs.org first, then retry.",
 		}
 	}
-	plan := Plan{Target: target, Command: []string{"npm", "install", "-g", pkg}, Method: "npm"}
+	plan := Plan{Target: target, Command: []string{"npm", "install", "-g", pkg}, Method: "npm", Package: pkg}
 	privatePrefix := ""
 	if target == TargetOpencodeV2 {
 		privatePrefix = strings.TrimSpace(s.privateNPMPrefixes[target])
@@ -1324,15 +1575,15 @@ func (p requestPlanner) planNPM(target Target, pkg string) Plan {
 		}
 		nodeVersion, nodeOK := parseToolVersion(npm.NodeVersion)
 		_, npmOK := parseToolVersion(npm.NPMVersion)
+		runtimeReason := ""
 		if !nodeOK || !npmOK {
-			plan.Unsupported = true
-			plan.Reason = "npm and Node.js versions could not be validated."
-			return plan
+			runtimeReason = "npm and Node.js versions could not be validated."
+		} else if minimumNode := minimumNodeVersionForTarget(target); !versionAtLeast(nodeVersion, minimumNode) {
+			runtimeReason = fmt.Sprintf("Node.js %s+ is required for %s's npm recipe; found %s.", formatToolVersion(minimumNode), target, npm.NodeVersion)
 		}
-		minimumNode := minimumNodeVersionForTarget(target)
-		if !versionAtLeast(nodeVersion, minimumNode) {
+		if runtimeReason != "" && privatePrefix != "" {
 			plan.Unsupported = true
-			plan.Reason = fmt.Sprintf("Node.js %s+ is required for %s's npm recipe; found %s.", formatToolVersion(minimumNode), target, npm.NodeVersion)
+			plan.Reason = runtimeReason
 			return plan
 		}
 		prefix := npm.GlobalPrefix
@@ -1352,13 +1603,24 @@ func (p requestPlanner) planNPM(target Target, pkg string) Plan {
 				return plan
 			}
 		}
+		plan.PackagePrefix = prefix
 		if prefix == "" {
 			plan.Unsupported = true
 			plan.Reason = "npm's global install prefix could not be resolved."
 			return plan
 		}
+		if runtimeReason != "" {
+			// The daemon's Node/npm cannot run this recipe. Reported before any
+			// prefix problem, as it always was; an update may still use another.
+			plan.Unsupported = true
+			plan.Reason = runtimeReason
+			plan.daemonRuntimeRejected = true
+			plan.daemonPrefixRejected = !prefixWritable
+			return plan
+		}
 		if !prefixWritable {
 			plan.Unsupported = true
+			plan.daemonPrefixRejected = privatePrefix == ""
 			if privatePrefix != "" {
 				plan.Reason = fmt.Sprintf("OpenCode 2's private npm prefix %s is not writable by the current user.", prefix)
 			} else {
@@ -1500,7 +1762,7 @@ func (p requestPlanner) planHomebrew(target Target, pkg string, cask bool) Plan 
 		command = append(command, "--cask")
 	}
 	command = append(command, pkg)
-	return Plan{Target: target, Command: command, Method: "homebrew"}
+	return Plan{Target: target, Command: command, Method: "homebrew", Package: pkg, PackageCask: cask}
 }
 
 func homebrewPackageInstalled(inventory map[string]bool, pkg string) bool {
@@ -1524,7 +1786,7 @@ func (s *Service) planWinget(target Target, id string) Plan {
 	command := []string{"winget", "install", "-e", "--id", id}
 	if IsAgentTarget(target) {
 		command = append(command, "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity")
-		return Plan{Target: target, Command: command, Method: "winget"}
+		return Plan{Target: target, Command: command, Method: "winget", Package: id}
 	}
 	return Plan{Target: target, Command: command}
 }

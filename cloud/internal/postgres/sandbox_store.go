@@ -1030,6 +1030,41 @@ func (s *Store) WorkerLaunchSpec(
 	return launch, nil
 }
 
+// ProjectCleanupCommands returns the current Cleanup commands (Project
+// settings > Scripts) of the project a session belongs to, read when its
+// sandbox is deleted so Cleanup follows the project's config at removal time.
+// That includes a project being removed: archiving it marks its sandboxes
+// deleted, and their Cleanup is the project's last commands. A session whose
+// project is gone is ErrNotFound; the caller then falls back to the commands
+// the worker installed.
+func (s *Store) ProjectCleanupCommands(ctx context.Context, orgID, sessionID string) ([]string, error) {
+	var commands []string
+	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		var config []byte
+		err := tx.QueryRow(
+			ctx,
+			`SELECT project.config
+			FROM ao_sessions session
+			JOIN ao_projects project ON project.id = session.project_id AND project.org_id = session.org_id
+			WHERE session.id = $1 AND session.org_id = $2`,
+			sessionID,
+			orgID,
+		).Scan(&config)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("load project cleanup commands: %w", err)
+		}
+		_, commands = domain.ProjectScripts(config)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return commands, nil
+}
+
 // RegisterWorkerBootstrap records the epoch a bootstrap exchange authorized. It
 // does not claim the worker is ready — only a heartbeat does that.
 func (s *Store) RegisterWorkerBootstrap(
@@ -1117,19 +1152,33 @@ func (s *Store) MarkWorkerSeen(
 			SET worker_last_seen_at = now(),
 				startup_started_at = NULL,
 				startup_attempts = 0,
-				startup_error_code = '',
-				startup_error_message = '',
-				startup_error_at = NULL,
+				-- A checked-in worker clears the reconciler's startup error, but
+				-- not one it reported itself because it could not prepare the
+				-- workspace (domain.WorkspaceStartupErrorCodes): that one stays
+				-- until the worker reports the workspace ready.
+				startup_error_code = CASE WHEN startup_error_code = ANY($3) THEN startup_error_code ELSE '' END,
+				startup_error_message = CASE WHEN startup_error_code = ANY($3) THEN startup_error_message ELSE '' END,
+				startup_error_at = CASE WHEN startup_error_code = ANY($3) THEN startup_error_at ELSE NULL END,
 				observed_state = CASE
 					WHEN observed_state IN ('requested', 'provisioning', 'restoring', 'bootstrapping', 'disconnected')
 						THEN 'running'
 					ELSE observed_state
 				END,
-				reconcile_after = now() + interval '30 seconds',
+				-- A live worker defers supervision, but never the deletion of its
+				-- own sandbox: the worker heartbeats until the compute is gone,
+				-- so pushing the row 30s out on every 20s heartbeat would keep a
+				-- deletion that needs another tick (Coder runs the project's
+				-- Cleanup before deleting) from ever being reconciled again.
+				reconcile_after = CASE
+					WHEN desired_state = 'deleted'
+						THEN LEAST(reconcile_after, now() + interval '30 seconds')
+					ELSE now() + interval '30 seconds'
+				END,
 				updated_at = now()
 			WHERE session_id = $1 AND org_id = $2`,
 			sessionID,
 			orgID,
+			domain.WorkspaceStartupErrorCodes(),
 		)
 		if err != nil {
 			return fmt.Errorf("mark sandbox worker seen: %w", err)

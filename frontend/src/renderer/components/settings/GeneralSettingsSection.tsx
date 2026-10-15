@@ -8,6 +8,7 @@ import { useSoundNotificationsStore } from "../../stores/sound-notifications-sto
 import { useUiStore } from "../../stores/ui-store";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { CliLinkSettings } from "./CliLinkSettingsRow";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { SettingsInputRow, SettingsRow } from "./SettingsRow";
@@ -18,7 +19,7 @@ import { cn } from "../../lib/utils";
 import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface } from "../../hooks/useSettings";
 import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
-import { isWindowsPlatform } from "../../lib/platform";
+import { isMacPlatform, isWindowsPlatform } from "../../lib/platform";
 
 /**
  * Default interface for new sessions. Daemon-owned so `ao spawn` and mobile
@@ -260,7 +261,9 @@ export function GeneralSettingsSection({
 				</SettingsRow>
 				{developerMode && <CloudOfferingRow />}
 				{developerMode && <DiagnosticsRow />}
+				<CliLinkSettings enabled={developerMode} />
 				{developerMode && <SideChatsRow />}
+				{developerMode && isMacPlatform() && <WindowTranslucencyRow />}
 			</SettingsSection>
 		</>
 	);
@@ -325,6 +328,28 @@ function SideChatsRow() {
 				<Switch aria-label={t("settings.sideChats")} checked={sideChats} onCheckedChange={setSideChats} />
 			</SettingsRow>
 			<p className="px-3 pb-2 text-xs leading-relaxed text-muted-foreground">{t("settings.sideChatsHint")}</p>
+		</div>
+	);
+}
+
+/**
+ * Developer Mode-only, macOS-only toggle for window translucency: native
+ * vibrancy blurs the desktop behind a translucent shell. Renderer state.
+ */
+function WindowTranslucencyRow() {
+	const { t } = useTranslation();
+	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
+	const setWindowTranslucency = useUiStore((state) => state.setWindowTranslucency);
+	return (
+		<div className="flex w-full flex-col">
+			<SettingsRow label={t("settings.windowTranslucency")}>
+				<Switch
+					aria-label={t("settings.windowTranslucency")}
+					checked={windowTranslucency}
+					onCheckedChange={setWindowTranslucency}
+				/>
+			</SettingsRow>
+			<p className="px-3 pb-2 text-xs leading-relaxed text-muted-foreground">{t("settings.windowTranslucencyHint")}</p>
 		</div>
 	);
 }

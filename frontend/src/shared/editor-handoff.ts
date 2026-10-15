@@ -49,6 +49,16 @@ export type OpenSessionTargetInput = {
 
 export type OpenSessionTargetResult = OpenTarget;
 
+/** Where a session's artifact directory can open: the system file manager or a terminal. */
+export type OpenArtifactsTargetId = Extract<OpenTargetId, "file-manager" | "terminal">;
+
+export type OpenSessionArtifactsInput = {
+	sessionId: string;
+	targetId: OpenArtifactsTargetId;
+	/** One artifact, relative to the artifact directory: the file manager reveals it and a terminal opens in its folder. */
+	path?: string;
+};
+
 const editorIDSet = new Set<string>(EDITOR_IDS);
 
 export function isEditorId(value: unknown): value is EditorId {

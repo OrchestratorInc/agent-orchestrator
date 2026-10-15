@@ -6,12 +6,14 @@ import { aoBridge } from "../../lib/bridge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
+import { Switch } from "../ui/switch";
 import type { CloudCpOrgCoderConfig, CloudCpPutOrgCoderConfigRequest } from "../../lib/cloud-cp";
 import { useCloudGate } from "../../hooks/useCloudGate";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import { useCloudOrg } from "../../hooks/useCloudOrg";
 import { useCoderTemplates } from "../../hooks/useCoderTemplates";
 import { orgCoderConfigQueryKey, useOrgCoderConfig } from "../../hooks/useOrgCoderConfig";
+import { canManageBilling } from "../../lib/cloud-offering";
 import { useCloudSession } from "../../lib/cloud-session";
 import {
 	onboardingFieldErrorClass,
@@ -22,11 +24,12 @@ import { SettingsSection } from "./SettingsSection";
 
 /**
  * Bring-your-own-Coder configuration: the connection the control plane uses to
- * drive the org's own Coder deployment. The form is deliberately minimal: the
- * only two things an engineer pastes are the Coder **Base URL** and an **API
- * token**. Everything else is derived or chosen elsewhere: the workspace owner
- * is resolved from the token by the control plane on save, and the template is
- * chosen per project via the creation picker. Only shown when the org's
+ * drive the org's own Coder deployment. Connecting takes only the Coder **Base
+ * URL** and an **API token**: the workspace owner is resolved from the token by
+ * the control plane on save, and the template is chosen per project via the
+ * creation picker. Once connected, the **Workspace setup** fields say how AO
+ * works inside the template's workspaces (who the agent runs as, where it
+ * works, and the scripts around each session). Only shown when the org's
  * offering includes the coder provider (gated by the settings catalog). Mirrors CloudCredentialsSection's shape: the
  * outer component reads only the daemon cloud gate (a query the settings page
  * already runs), so a local-only app renders nothing and never mounts the cloud
@@ -82,14 +85,19 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 
 	// A save sends a new token when one is pasted: the control plane re-derives the
 	// workspace owner from it and the form never round-trips the stored secret.
-	// Without one there is nothing to save: the dev-environment settings are not
-	// edited here (onboarding sets them) and are carried through unchanged. So
-	// once a connection is saved and its templates are loaded, Save is not
-	// clickable until a token is pasted; re-fetching templates is the refresh
-	// button on the Templates section, not Save.
-	const timeoutInvalid = devEnv.readyProbe.trim() !== "" && !isValidReadyProbeTimeout(devEnv.readyProbeTimeout);
+	// Without one, Save is clickable only when the workspace setup changed; the
+	// stored setup is carried through every save so a token rotation never resets
+	// it. Re-fetching templates is the refresh button on the Templates section.
+	// A control plane that reports protectSecretFiles knows every Workspace
+	// setup field; an older one knows only the ones it had before.
+	const currentControlPlane = loaded?.protectSecretFiles !== undefined;
+	const devEnvFieldErrors = devEnvErrors(devEnv);
+	const devEnvInvalid = Object.keys(devEnvFieldErrors).length > 0;
 	const devEnvDirty = loaded != null && !sameDevEnv(devEnv, devEnvDraftOf(loaded));
-	const canSave = !busy && orgId !== "" && baseUrl.trim() !== "" && !timeoutInvalid
+	// The control plane lets only org owners and admins change the connection. A
+	// role the renderer does not know yet leaves the decision to the server.
+	const readOnly = org?.role !== undefined && !canManageBilling(org);
+	const canSave = !busy && !readOnly && orgId !== "" && baseUrl.trim() !== "" && !devEnvInvalid
 		&& (token.trim() !== "" || (tokenStored && devEnvDirty));
 	const save = async () => {
 		if (!canSave) return;
@@ -100,7 +108,9 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 				...carriedCoderConfig(loaded),
 				baseUrl: baseUrl.trim(),
 				token: token.trim() === "" ? undefined : token.trim(),
-				...devEnvRequestFields(devEnv),
+				// A first connection has no Workspace setup yet (the form shows once
+				// a connection is saved), so it sends none of those fields.
+				...(loaded ? devEnvRequestFields(devEnv, currentControlPlane) : {}),
 			});
 			setToken("");
 			// The connection now points at a (possibly new) Coder, so its template list
@@ -175,10 +185,17 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 					</div>
 				</div>
 
-				{/* The dev-environment settings (workerUser, reuseExistingCheckout,
-				    readyProbe) are set per customer during onboarding, not here; the
-				    form still carries the stored values through every save so a
-				    token change never resets them. */}
+				{tokenStored ? (
+					<WorkspaceSetupFields
+						draft={devEnv}
+						errors={devEnvFieldErrors}
+						disabled={busy || readOnly}
+						readOnly={readOnly}
+						currentControlPlane={currentControlPlane}
+						onChange={(patch) => setDevEnv((current) => ({ ...current, ...patch }))}
+					/>
+				) : null}
+
 				{tokenStored ? (
 					// Read-only catalog of every template on the connected Coder — so the
 					// whole Coder story lives inside AO. Same tidy name + one-line-spec
@@ -263,62 +280,267 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	);
 }
 
-const READY_PROBE_TIMEOUT_MIN = 30;
-const READY_PROBE_TIMEOUT_MAX = 3600;
+/** A path, not copy: the same in every language. */
+const WORKING_DIRECTORY_EXAMPLE = "~/work/{repo}";
+
+/**
+ * How AO works inside the connected Coder's workspaces: who the worker and
+ * agent run as, where the session works, and the ready check that waits for
+ * the template's own setup. The values are org-wide and apply to sessions
+ * started after a save. Per-session setup and cleanup commands are project
+ * settings (Project settings > Scripts), as for a local project.
+ */
+function WorkspaceSetupFields({ draft, errors, disabled, readOnly, currentControlPlane, onChange }: {
+	draft: DevEnvDraft;
+	errors: Partial<Record<keyof DevEnvDraft, DevEnvErrorKey>>;
+	disabled: boolean;
+	readOnly: boolean;
+	/** False on an older control plane, which rejects the newer fields. */
+	currentControlPlane: boolean;
+	onChange: (patch: Partial<DevEnvDraft>) => void;
+}) {
+	const { t } = useTranslation();
+	const fieldError = (field: keyof DevEnvDraft) => {
+		const key = errors[field];
+		return key ? <p id={`coder-${field}-error`} className={onboardingFieldErrorClass} role="alert">{t(`settings.coder.${key}`)}</p> : null;
+	};
+	const describedBy = (field: keyof DevEnvDraft, hintId: string) => (errors[field] ? `${hintId} coder-${field}-error` : hintId);
+	const secondsField = (field: "readyProbeTimeout", label: string, hint: string) => (
+		<div className="flex flex-col gap-1.5">
+			<Label htmlFor={`coder-${field}`} className={onboardingFormLabelClass}>{label}</Label>
+			<p id={`coder-${field}-hint`} className={onboardingFieldHintClass}>{hint}</p>
+			<Input
+				id={`coder-${field}`}
+				type="text"
+				inputMode="numeric"
+				autoComplete="off"
+				className="w-32 font-mono text-[13px]"
+				disabled={disabled}
+				aria-invalid={errors[field] ? true : undefined}
+				aria-describedby={describedBy(field, `coder-${field}-hint`)}
+				value={draft[field]}
+				onChange={(event) => onChange({ [field]: event.target.value })}
+			/>
+			{fieldError(field)}
+		</div>
+	);
+	return (
+		<div className="flex flex-col gap-4 border-t border-border pt-4">
+			<div className="flex flex-col gap-1">
+				<p className={onboardingFormLabelClass}>{t("settings.coder.workspaceSetupTitle")}</p>
+				<p className={onboardingFieldHintClass}>{t("settings.coder.workspaceSetupHint")}</p>
+				{readOnly ? <p className={onboardingFieldHintClass}>{t("settings.coder.workspaceSetupReadOnly")}</p> : null}
+			</div>
+
+			<div className="flex items-start justify-between gap-4">
+				<div className="flex min-w-0 flex-col gap-1">
+					<Label htmlFor="coder-worker-user" className={onboardingFormLabelClass}>{t("settings.coder.workerUserLabel")}</Label>
+					<p id="coder-worker-user-hint" className={onboardingFieldHintClass}>{t("settings.coder.workerUserHint")}</p>
+				</div>
+				<Switch
+					id="coder-worker-user"
+					className="mt-1"
+					aria-describedby="coder-worker-user-hint"
+					disabled={disabled}
+					checked={draft.workspaceUser}
+					onCheckedChange={(checked) => onChange({ workspaceUser: checked })}
+				/>
+			</div>
+
+			<div className="flex items-start justify-between gap-4">
+				<div className="flex min-w-0 flex-col gap-1">
+					<Label htmlFor="coder-reuse-checkout" className={onboardingFormLabelClass}>{t("settings.coder.reuseCheckoutLabel")}</Label>
+					<p id="coder-reuse-checkout-hint" className={onboardingFieldHintClass}>{t("settings.coder.reuseCheckoutHint")}</p>
+				</div>
+				<Switch
+					id="coder-reuse-checkout"
+					className="mt-1"
+					aria-describedby="coder-reuse-checkout-hint"
+					disabled={disabled || !draft.workspaceUser}
+					checked={draft.workspaceUser && draft.reuseCheckout}
+					onCheckedChange={(checked) => onChange({ reuseCheckout: checked })}
+				/>
+			</div>
+
+			{currentControlPlane ? <div className="flex items-start justify-between gap-4">
+				<div className="flex min-w-0 flex-col gap-1">
+					<Label htmlFor="coder-protect-secret-files" className={onboardingFormLabelClass}>{t("settings.coder.protectSecretFilesLabel")}</Label>
+					<p id="coder-protect-secret-files-hint" className={onboardingFieldHintClass}>{t("settings.coder.protectSecretFilesHint")}</p>
+				</div>
+				<Switch
+					id="coder-protect-secret-files"
+					className="mt-1"
+					aria-describedby="coder-protect-secret-files-hint"
+					disabled={disabled}
+					checked={draft.protectSecretFiles}
+					onCheckedChange={(checked) => onChange({ protectSecretFiles: checked })}
+				/>
+			</div> : null}
+
+			{currentControlPlane ? <div className="flex flex-col gap-1.5">
+				<Label htmlFor="coder-workingDirectory" className={onboardingFormLabelClass}>{t("settings.coder.workingDirectoryLabel")}</Label>
+				<p id="coder-workingDirectory-hint" className={onboardingFieldHintClass}>{t("settings.coder.workingDirectoryHint")}</p>
+				<Input
+					id="coder-workingDirectory"
+					type="text"
+					autoComplete="off"
+					spellCheck={false}
+					className="font-mono text-[13px]"
+					placeholder={WORKING_DIRECTORY_EXAMPLE}
+					disabled={disabled}
+					aria-invalid={errors.workingDirectory ? true : undefined}
+					aria-describedby={describedBy("workingDirectory", "coder-workingDirectory-hint")}
+					value={draft.workingDirectory}
+					onChange={(event) => onChange({ workingDirectory: event.target.value })}
+				/>
+				{fieldError("workingDirectory")}
+			</div> : null}
+
+			<div className="flex flex-col gap-1.5">
+				<Label htmlFor="coder-readyProbe" className={onboardingFormLabelClass}>{t("settings.coder.readyProbeLabel")}</Label>
+				<p id="coder-readyProbe-hint" className={onboardingFieldHintClass}>{t("settings.coder.readyProbeHint")}</p>
+				<Input
+					id="coder-readyProbe"
+					type="text"
+					autoComplete="off"
+					spellCheck={false}
+					className="font-mono text-[13px]"
+					placeholder="grep -q '^Ready' ~/.bootstrap-status"
+					disabled={disabled}
+					aria-invalid={errors.readyProbe ? true : undefined}
+					aria-describedby={describedBy("readyProbe", "coder-readyProbe-hint")}
+					value={draft.readyProbe}
+					onChange={(event) => onChange({ readyProbe: event.target.value })}
+				/>
+				{fieldError("readyProbe")}
+			</div>
+			{draft.readyProbe.trim() !== "" ? secondsField("readyProbeTimeout", t("settings.coder.readyProbeTimeoutLabel"), t("settings.coder.readyProbeTimeoutHint")) : null}
+
+			<p className={onboardingFieldHintClass}>{t("settings.coder.projectScriptsHint")}</p>
+		</div>
+	);
+}
+
+const READY_PROBE_MAX_LENGTH = 1000;
+/** Seconds ranges the control plane accepts; a blank field uses its default. */
+const READY_PROBE_TIMEOUT_RANGE = { min: 30, max: 3600 } as const;
 
 /** The dev-environment fields as the form edits them. */
 interface DevEnvDraft {
 	workspaceUser: boolean;
 	reuseCheckout: boolean;
+	protectSecretFiles: boolean;
+	workingDirectory: string;
 	readyProbe: string;
 	/** Seconds as typed; "" uses the default. */
 	readyProbeTimeout: string;
 }
 
-const EMPTY_DEV_ENV: DevEnvDraft = { workspaceUser: false, reuseCheckout: true, readyProbe: "", readyProbeTimeout: "" };
+const EMPTY_DEV_ENV: DevEnvDraft = {
+	workspaceUser: false,
+	reuseCheckout: true,
+	protectSecretFiles: true,
+	workingDirectory: "",
+	readyProbe: "",
+	readyProbeTimeout: "",
+};
 
 function devEnvDraftOf(config: CloudCpOrgCoderConfig): DevEnvDraft {
 	return {
 		workspaceUser: config.workerUser === "workspace",
 		// Reusing the template's checkout defaults on for the workspace user.
 		reuseCheckout: config.reuseExistingCheckout ?? true,
+		// Keeping the agent out of .env files is on unless turned off.
+		protectSecretFiles: config.protectSecretFiles ?? true,
+		workingDirectory: config.workingDirectory ?? "",
 		readyProbe: config.readyProbe ?? "",
-		readyProbeTimeout: config.readyProbeTimeoutSeconds ? String(config.readyProbeTimeoutSeconds) : "",
+		readyProbeTimeout: secondsDraft(config.readyProbeTimeoutSeconds),
 	};
+}
+
+function secondsDraft(seconds: number | undefined): string {
+	return seconds ? String(seconds) : "";
 }
 
 function sameDevEnv(a: DevEnvDraft, b: DevEnvDraft): boolean {
 	return a.workspaceUser === b.workspaceUser
 		&& (!a.workspaceUser || a.reuseCheckout === b.reuseCheckout)
+		&& a.protectSecretFiles === b.protectSecretFiles
+		&& a.workingDirectory.trim() === b.workingDirectory.trim()
 		&& a.readyProbe.trim() === b.readyProbe.trim()
 		&& (a.readyProbe.trim() === "" || a.readyProbeTimeout.trim() === b.readyProbeTimeout.trim());
 }
 
 /** Blank uses the default; otherwise a whole number of seconds in range. */
-function isValidReadyProbeTimeout(value: string): boolean {
+function isValidSeconds(value: string, range: { min: number; max: number }): boolean {
 	const trimmed = value.trim();
 	if (trimmed === "") return true;
 	if (!/^\d+$/.test(trimmed)) return false;
 	const seconds = Number(trimmed);
-	return seconds >= READY_PROBE_TIMEOUT_MIN && seconds <= READY_PROBE_TIMEOUT_MAX;
+	return seconds >= range.min && seconds <= range.max;
+}
+
+const WORKING_DIRECTORY_MAX_LENGTH = 512;
+const WORKING_DIRECTORY_REPO_PLACEHOLDER = "{repo}";
+
+/**
+ * The working directory the control plane accepts: absolute or under the
+ * workspace user's home (`~/` or `$HOME/`), naming a directory below that
+ * root, at most 512 characters, with no control characters, no `.` or `..`
+ * segment, and no placeholder other than `{repo}`.
+ */
+function isValidWorkingDirectory(value: string): boolean {
+	const trimmed = value.trim();
+	if (trimmed === "") return true;
+	if ([...trimmed].length > WORKING_DIRECTORY_MAX_LENGTH) return false;
+	// eslint-disable-next-line no-control-regex
+	if (/[\u0000-\u001f\u007f]/.test(trimmed)) return false;
+	const root = ["~/", "$HOME/", "/"].find((prefix) => trimmed.startsWith(prefix));
+	if (root === undefined) return false;
+	const rest = trimmed.slice(root.length);
+	if (rest.replace(/^\/+|\/+$/g, "") === "") return false;
+	if (rest.split("/").some((segment) => segment === "." || segment === "..")) return false;
+	return !/[{}$`\\]/.test(rest.split(WORKING_DIRECTORY_REPO_PLACEHOLDER).join(""));
+}
+
+type DevEnvErrorKey =
+	| "workingDirectoryNeedsWorkspaceUser"
+	| "workingDirectoryInvalid"
+	| "readyProbeTooLong"
+	| "readyProbeTimeoutInvalid";
+
+/** Field-level problems, mirroring the control plane's validation. */
+function devEnvErrors(draft: DevEnvDraft): Partial<Record<keyof DevEnvDraft, DevEnvErrorKey>> {
+	const errors: Partial<Record<keyof DevEnvDraft, DevEnvErrorKey>> = {};
+	const workingDirectory = draft.workingDirectory.trim();
+	if (workingDirectory !== "" && !draft.workspaceUser) errors.workingDirectory = "workingDirectoryNeedsWorkspaceUser";
+	else if (!isValidWorkingDirectory(workingDirectory)) errors.workingDirectory = "workingDirectoryInvalid";
+	const probe = draft.readyProbe.trim();
+	if (probe.length > READY_PROBE_MAX_LENGTH) errors.readyProbe = "readyProbeTooLong";
+	if (probe !== "" && !isValidSeconds(draft.readyProbeTimeout, READY_PROBE_TIMEOUT_RANGE)) errors.readyProbeTimeout = "readyProbeTimeoutInvalid";
+	return errors;
 }
 
 /**
- * The dev-environment fields for the PUT body, each only when it differs from
- * the default: the PUT replaces the stored config (so leaving one out resets
- * it), and an older control plane rejects fields it does not know.
+ * The dev-environment fields for the PUT body. The control plane keeps the
+ * stored value of any field the request leaves out, so every field it knows is
+ * sent, defaults included: that is how clearing the ready check or the
+ * working directory, or turning the workspace user off, takes effect. An older
+ * control plane (it does not report protectSecretFiles) rejects the newer
+ * fields, so it gets only the ones it already had; the form hides the others.
  */
-function devEnvRequestFields(draft: DevEnvDraft): Partial<CloudCpPutOrgCoderConfigRequest> {
-	const fields: Partial<CloudCpPutOrgCoderConfigRequest> = {};
-	if (draft.workspaceUser) {
-		fields.workerUser = "workspace";
-		fields.reuseExistingCheckout = draft.reuseCheckout;
-	}
+function devEnvRequestFields(draft: DevEnvDraft, currentControlPlane: boolean): Partial<CloudCpPutOrgCoderConfigRequest> {
 	const probe = draft.readyProbe.trim();
-	if (probe !== "") {
-		fields.readyProbe = probe;
-		const timeout = draft.readyProbeTimeout.trim();
-		if (timeout !== "") fields.readyProbeTimeoutSeconds = Number(timeout);
+	const timeout = draft.readyProbeTimeout.trim();
+	const fields: Partial<CloudCpPutOrgCoderConfigRequest> = {
+		workerUser: draft.workspaceUser ? "workspace" : "ao-worker",
+		reuseExistingCheckout: draft.workspaceUser && draft.reuseCheckout,
+		readyProbe: probe,
+		readyProbeTimeoutSeconds: probe !== "" && timeout !== "" ? Number(timeout) : 0,
+	};
+	if (currentControlPlane) {
+		fields.workingDirectory = draft.workspaceUser ? draft.workingDirectory.trim() : "";
+		fields.protectSecretFiles = draft.protectSecretFiles;
 	}
 	return fields;
 }

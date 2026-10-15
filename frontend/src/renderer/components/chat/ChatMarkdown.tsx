@@ -37,7 +37,7 @@ import {
 	type MouseEvent as ReactMouseEvent,
 	type ReactNode,
 } from "react";
-import Markdown, { defaultUrlTransform, type Components } from "react-markdown";
+import Markdown, { defaultUrlTransform, type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { WrapText } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -58,6 +58,7 @@ import { ArtifactLinkPreviewCard, SessionLinkPreviewCard } from "../SessionLinkP
 import {
 	explicitWorkspaceFilePath,
 	findWorkspaceFilePath,
+	workspaceFileOpenTarget,
 	workspaceFileReferenceLine,
 } from "../../lib/workspace-file-path";
 import { HighlightedCode } from "./HighlightedCode";
@@ -83,7 +84,6 @@ export const ActivityTitle = memo(function ActivityTitle({ text }: { text: strin
 
 /** GitHub-flavoured markdown: tables, strikethrough, task lists, autolinks. */
 const PLUGINS = [remarkGfm, remarkSessionLinks];
-const STREAMING_REHYPE = [rehypeStreamFade];
 // Reduced motion gets plain text, not a span per character that never animates.
 const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 // How long a settled reply keeps its fade spans, so the last characters (and the final
@@ -159,6 +159,12 @@ function chatUrlTransform(url: string, key: string): string | undefined {
 	return defaultUrlTransform(url);
 }
 
+/**
+ * True while the surrounding chat is rendering its first commit. A stable ref,
+ * not a value, so ending the opening never re-renders every reply.
+ */
+export const ChatOpeningRef = createContext<{ readonly current: boolean }>({ current: false });
+
 export const ChatMarkdown = memo(function ChatMarkdown({
 	text,
 	streaming = false,
@@ -181,6 +187,12 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	// beat past the end of the stream.
 	const [fading, setFading] = useState(streaming);
 	if (streaming && !fading) setFading(true);
+	// A reply already on screen when its chat opens (switching to a chat
+	// mid-stream) is not new; only characters that arrive afterwards fade in. A
+	// reply that arrives later fades from its first character.
+	const chatOpening = useContext(ChatOpeningRef);
+	const [settledOffset] = useState(() => (chatOpening.current ? text.length : 0));
+	const streamingRehype = useMemo<Options["rehypePlugins"]>(() => [[rehypeStreamFade, { settledOffset }]], [settledOffset]);
 	useEffect(() => {
 		if (streaming) return;
 		const timer = setTimeout(() => setFading(false), FADE_SHED_MS);
@@ -199,7 +211,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 			>
 				<Markdown
 					remarkPlugins={PLUGINS}
-					rehypePlugins={fading && !prefersReducedMotion() ? STREAMING_REHYPE : undefined}
+					rehypePlugins={fading && !prefersReducedMotion() ? streamingRehype : undefined}
 					components={COMPONENTS}
 					urlTransform={chatUrlTransform}
 				>
@@ -311,7 +323,7 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
 		: undefined;
 	const sessionLink = Boolean(href && isAoLink(href));
 	if (safeOriginContent && !sessionLink) return <>{children}</>;
-	const openInFiles = filePath && !/\.html?$/i.test(filePath) ? filePath : undefined;
+	const openInFiles = filePath && href && !/\.html?$/i.test(filePath) ? workspaceFileOpenTarget(href, filePath) : undefined;
 	if (remoteHost && href && (isHostLocalWebLink(href) || (isPotentialWorkspaceFileLink(href) && !openInFiles))) {
 		return <span className="text-muted-foreground" title={REMOTE_PREVIEW_UNAVAILABLE}>
 			{children}<span className="sr-only"> (remote preview unavailable)</span>
@@ -323,7 +335,7 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
 			href={href}
 			onBrowserOpen={onLinkOpen}
 			inAppLink={href ? () => browserLink : undefined}
-			filePath={filePath}
+			filePath={filePath && href ? workspaceFileOpenTarget(href, filePath) : filePath}
 			onFileOpen={onFileOpen}
 			hoverPreview={sessionLink
 				? () => isSessionLink(href!)
@@ -469,8 +481,9 @@ function InlineCode({ children }: { children?: ReactNode }) {
 			type="button"
 			onClick={() => {
 				const line = workspaceFileReferenceLine(text ?? "");
-				if (line == null) onFileOpen(filePath);
-				else onFileOpen(filePath, line);
+				const target = workspaceFileOpenTarget(text ?? "", filePath);
+				if (line == null) onFileOpen(target);
+				else onFileOpen(target, line);
 			}}
 			aria-label={`Open ${filePath} in Files`}
 			className="inline rounded text-left transition-colors hover:bg-interactive-hover"
@@ -513,8 +526,9 @@ const COMPONENTS: Components = {
 		),
 
 	ul: ({ children }) => <ul className="my-2 ml-4 list-disc space-y-1 first:mt-0">{children}</ul>,
-	ol: ({ children }) => (
-		<ol className="my-2 ml-4 list-decimal space-y-1 first:mt-0">{children}</ol>
+	// Keep the source's first number: a reply of "6." is one item numbered 6, not 1.
+	ol: ({ children, start }) => (
+		<ol start={start} className="my-2 ml-4 list-decimal space-y-1 first:mt-0">{children}</ol>
 	),
 	li: ({ children, className }) => (
 		// A task-list item drops its bullet: the checkbox is the marker.
