@@ -123,8 +123,8 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plans) != 36 {
-		t.Fatalf("got %d plans, want 36", len(plans))
+	if len(plans) != 37 {
+		t.Fatalf("got %d plans, want 37", len(plans))
 	}
 	seen := make(map[string]bool, len(plans))
 	for _, plan := range plans {
@@ -492,6 +492,8 @@ func TestNPMPlanUsesTargetSpecificNodeFloors(t *testing.T) {
 		{name: "auggie accepts node 20", target: TargetAuggie, nodeVersion: "v20.0.0", wantAllowed: true},
 		{name: "auggie rejects node 18", target: TargetAuggie, nodeVersion: "v18.20.0", wantReason: "Node.js 20+"},
 		{name: "claude rejects node 20", target: TargetClaudeCode, nodeVersion: "v20.19.0", wantReason: "Node.js 22+"},
+		{name: "codebuddy rejects node 18.20.7", target: TargetCodeBuddy, nodeVersion: "v18.20.7", wantReason: "Node.js 18.20.8+"},
+		{name: "codebuddy accepts node 18.20.8", target: TargetCodeBuddy, nodeVersion: "v18.20.8", wantAllowed: true},
 		{name: "pi rejects node 22.18", target: TargetPi, nodeVersion: "v22.18.0", wantReason: "Node.js 22.19+"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

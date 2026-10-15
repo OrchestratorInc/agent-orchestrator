@@ -1,0 +1,96 @@
+{
+  "utc": "2026-10-11T15:27:12.313354+00:00",
+  "source": "5827f13d75b639eac6ed76f6d572b6752c060da5",
+  "receipts": [
+    {
+      "session": "codebuddy-tui-proof-001-2",
+      "status": 200,
+      "body": {
+        "ok": true,
+        "sessionId": "codebuddy-tui-proof-001-2",
+        "freed": true
+      },
+      "terminatedReadback": true
+    },
+    {
+      "session": "codebuddy-tui-proof-001-1",
+      "status": 200,
+      "body": {
+        "ok": true,
+        "sessionId": "codebuddy-tui-proof-001-1"
+      },
+      "terminatedReadback": true
+    },
+    {
+      "session": "codebuddy-tui-proof-001-3",
+      "status": 200,
+      "body": {
+        "ok": true,
+        "sessionId": "codebuddy-tui-proof-001-3",
+        "freed": true
+      },
+      "terminatedReadback": true
+    }
+  ],
+  "gates": {
+    "emptyPromptNativeTUIInitialized": true,
+    "finalHeadIndependentControlUnchanged": true,
+    "allOwnedPTYNativeSupervisorsGone": true,
+    "ownedElectronDaemonGone": true
+  },
+  "finalControl": "codebuddy-tui-proof-001-3",
+  "controlOwnership": {
+    "host": {
+      "pid": 929701,
+      "kernelStart": "77818593"
+    },
+    "supervisor": {
+      "pid": 929707,
+      "kernelStart": "77818595"
+    },
+    "agent": {
+      "pid": 929719,
+      "kernelStart": "77818603"
+    }
+  },
+  "mainOwnership": {
+    "host": {
+      "pid": 928832,
+      "kernelStart": "77774696"
+    },
+    "supervisor": {
+      "pid": 928837,
+      "kernelStart": "77774697"
+    },
+    "agent": {
+      "pid": 928844,
+      "kernelStart": "77774698"
+    }
+  },
+  "controlGeneration": "b64fb77b-e308-4e0b-860f-44096cd457bf",
+  "electronCleanup": [
+    {
+      "pid": 928447,
+      "kernelStart": "77767987"
+    },
+    {
+      "pid": 928393,
+      "kernelStart": "77767289"
+    }
+  ],
+  "daemonShutdown": {
+    "status": 202,
+    "body": {
+      "pid": 928665,
+      "service": "agent-orchestrator-daemon",
+      "status": "shutting_down"
+    },
+    "ownership": {
+      "pid": 928665,
+      "kernelStart": "77768353"
+    },
+    "sha256": "1cb98f502fa15c2d6abce2a0078a35f2cc5e8f59460c208ffabc830b285c71f8"
+  },
+  "finishedUTC": "2026-10-11T15:30:30.303779+00:00",
+  "preserved": "Native profiles/install, private scratch DBs/run evidence, dirty worktrees, production PID625660/service and other production sessions"
+}

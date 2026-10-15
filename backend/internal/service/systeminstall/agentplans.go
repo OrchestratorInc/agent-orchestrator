@@ -44,11 +44,14 @@ var agentDocumentationURLs = map[Target]string{
 	TargetDeepSeek:    "https://github.com/deepseek-ai/deepseek-harness",
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
+	TargetCodeBuddy:   "https://www.codebuddy.cn/docs/cli/quickstart",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
 	var plans []Plan
 	switch target {
+	case TargetCodeBuddy:
+		plans = []Plan{s.planNPM(target, "@tencent-ai/codebuddy-code@2.164.0")}
 	case TargetClaudeCode:
 		official := s.officialByOS(target, "https://claude.ai/install.sh", "bash", "https://claude.ai/install.ps1", agentDocumentationURLs[target])
 		if s.goos == "darwin" {

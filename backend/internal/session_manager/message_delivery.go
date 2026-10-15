@@ -40,6 +40,7 @@ func (m *Manager) WaitForMessageDeliveryReady(ctx context.Context, id domain.Ses
 	emptyComposerReadyWhileWaiting := false
 	var handle ports.RuntimeHandle
 	requireFirstSignal := false
+	requireViewport := false
 	if mode == domain.SessionModeTUI {
 		if rec.Metadata.RuntimeHandleID == "" {
 			return ErrIncompleteHandle
@@ -49,6 +50,7 @@ func (m *Manager) WaitForMessageDeliveryReady(ctx context.Context, id domain.Ses
 			return fmt.Errorf("%w: %s", ErrUnknownHarness, rec.Harness)
 		}
 		detector, _ = agent.(ports.TerminalActivityDetector)
+		_, requireViewport = agent.(ports.TerminalMessageInputGuard)
 		emptyComposerDetector, _ = agent.(ports.EmptyComposerDetector)
 		if readiness, ok := agent.(ports.WaitingInputComposerReadiness); ok {
 			emptyComposerReadyWhileWaiting = readiness.EmptyComposerProvesWaitingInputReady()
@@ -82,7 +84,18 @@ func (m *Manager) WaitForMessageDeliveryReady(ctx context.Context, id domain.Ses
 		if mode == domain.SessionModeTUI {
 			if detector != nil {
 				ready = false
-				if output, outputErr := m.runtime.GetOutput(ctx, handle, messageDeliveryReadyLines); outputErr == nil {
+				var output string
+				var outputErr error
+				if requireViewport {
+					if reader, available := m.runtime.(ports.StyledTerminalOutputReader); available {
+						output, outputErr = reader.GetStyledOutput(ctx, handle, messageDeliveryReadyLines)
+					} else {
+						outputErr = ports.ErrStyledTerminalOutputUnavailable
+					}
+				} else {
+					output, outputErr = m.runtime.GetOutput(ctx, handle, messageDeliveryReadyLines)
+				}
+				if outputErr == nil {
 					state, authoritative := detector.DetectTerminalActivity(output)
 					ready = authoritative && state == domain.ActivityIdle
 					if !authoritative &&
