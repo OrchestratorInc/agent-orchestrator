@@ -338,6 +338,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersListWorkspaceFilesResponse":               "ListWorkspaceFilesResponse",
 	"ControllersWorkspaceManifestResponse":                "WorkspaceManifestResponse",
 	"ControllersWorkspaceHistoryResponse":                 "WorkspaceHistoryResponse",
+	"ControllersWorkspaceHistoryQuery":                    "WorkspaceHistoryQuery",
+	"ControllersWorkspaceViewResponse":                    "WorkspaceViewResponse",
 	"ControllersListPRFilesResponse":                      "ListPRFilesResponse",
 	"ControllersWorkspaceFileSummary":                     "WorkspaceFileSummary",
 	"ControllersWorkspaceFileSections":                    "WorkspaceFileSections",
@@ -2739,9 +2741,10 @@ func sessionOperations() []operation {
 		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/workspace/history", id: "getSessionWorkspaceHistory", tag: "sessions",
 			summary:    "Get lazy commit and upstream metadata for a workspace review",
-			pathParams: []any{controllers.SessionIDParam{}},
+			pathParams: []any{controllers.SessionIDParam{}, controllers.WorkspaceHistoryQuery{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.WorkspaceHistoryResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},

@@ -179,11 +179,19 @@ type WorkspaceManifest struct {
 // latency-sensitive manifest. It deliberately avoids enumerating every file
 // in the repository.
 type WorkspaceHistory struct {
-	SessionID        domain.SessionID
+	SessionID domain.SessionID
+	// View describes whose history this is: the checked-out worktree, another
+	// local branch, or a pull request that is not checked out.
+	View             WorkspaceViewInfo
 	Commits          []CommitSummary
 	CommitsTruncated bool
-	Ahead            *int
-	Behind           *int
+	// RangeSummary totals the view's whole range (All commits). Only branch and
+	// pull request views fill it; the checked-out view sums its committed
+	// section instead.
+	RangeSummary *WorkspaceSummary
+	// Ahead and Behind are only filled for the checked-out view.
+	Ahead  *int
+	Behind *int
 }
 
 // WorkspaceFileSummary is one file row in the session workspace browser.
@@ -357,41 +365,31 @@ func (s *Service) ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (
 }
 
 // GetWorkspaceHistory loads commit and upstream metadata without paying for
-// the legacy all-files inventory used by the full workspace browser.
-func (s *Service) GetWorkspaceHistory(ctx context.Context, id domain.SessionID) (WorkspaceHistory, error) {
-	rec, err := s.sessionWorkspaceRecord(ctx, id)
+// the legacy all-files inventory used by the full workspace browser. The zero
+// view reads the checked-out worktree; a branch or pull request view reads
+// that view's revisions only.
+func (s *Service) GetWorkspaceHistory(ctx context.Context, id domain.SessionID, view WorkspaceView) (WorkspaceHistory, error) {
+	resolved, err := s.resolveWorkspaceView(ctx, id, view)
 	if err != nil {
 		return WorkspaceHistory{}, err
 	}
-	project, projectOK, err := s.sessionProject(ctx, rec)
-	if err != nil {
-		return WorkspaceHistory{}, err
+	if resolved.Kind != WorkspaceViewCheckedOut {
+		return workspaceViewHistory(ctx, id, resolved)
 	}
-	if isStandaloneScratchWorkspace(rec) || (projectOK && project.Kind.WithDefault() == domain.ProjectKindWorkspace) {
-		return WorkspaceHistory{SessionID: id, Commits: []CommitSummary{}}, nil
-	}
-	prs, err := s.workspaceComparePRs(ctx, rec.ID)
-	if err != nil {
-		return WorkspaceHistory{}, err
-	}
-	resolve := func(rctx context.Context) workspaceCompareTarget {
-		return resolveWorkspaceCompare(rctx, rec.Metadata.WorkspacePath, rec.Metadata.DiffBaseSHA, rec.Metadata.DiffBaseRef, defaultBranchForProject(project, projectOK), prs)
-	}
-	compare, _, err := s.resolveWorkspaceChanges(ctx, id, rec.Metadata.WorkspacePath, resolve)
-	if err != nil {
-		return WorkspaceHistory{}, err
+	if resolved.root == "" {
+		return WorkspaceHistory{SessionID: id, View: resolved.WorkspaceViewInfo, Commits: []CommitSummary{}}, nil
 	}
 	var commits workspaceCommits
 	var ahead, behind *int
 	g, gctx := errgroup.WithContext(ctx)
-	if base := strings.TrimSpace(compare.gitBase()); base != "" && base != "HEAD" {
+	if resolved.rangeBefore != "" {
 		g.Go(func() (err error) {
-			commits.list, commits.truncated, err = gitCommitLog(gctx, rec.Metadata.WorkspacePath, base)
+			commits.list, commits.truncated, err = gitCommitLog(gctx, resolved.root, resolved.rangeBefore)
 			return err
 		})
 	}
 	g.Go(func() error {
-		ahead, behind = gitAheadBehind(gctx, rec.Metadata.WorkspacePath)
+		ahead, behind = gitAheadBehind(gctx, resolved.root)
 		return nil
 	})
 	if err := g.Wait(); err != nil {
@@ -400,7 +398,7 @@ func (s *Service) GetWorkspaceHistory(ctx context.Context, id domain.SessionID) 
 	if commits.list == nil {
 		commits.list = []CommitSummary{}
 	}
-	return WorkspaceHistory{SessionID: id, Commits: commits.list, CommitsTruncated: commits.truncated, Ahead: ahead, Behind: behind}, nil
+	return WorkspaceHistory{SessionID: id, View: resolved.WorkspaceViewInfo, Commits: commits.list, CommitsTruncated: commits.truncated, Ahead: ahead, Behind: behind}, nil
 }
 
 func workspaceDegradedCode(err error) string {
@@ -986,6 +984,17 @@ func gitCommitExists(ctx context.Context, root, rev string) bool {
 
 func gitMergeBase(ctx context.Context, root, ref string) (string, bool) {
 	out, err := gitWorkspaceOutput(ctx, root, "merge-base", "HEAD", ref)
+	if err != nil {
+		return "", false
+	}
+	sha := strings.TrimSpace(out)
+	return sha, sha != ""
+}
+
+// gitMergeBaseOf is gitMergeBase for two arbitrary revisions rather than
+// HEAD and one, so a view that is not checked out can find its own base.
+func gitMergeBaseOf(ctx context.Context, root, a, b string) (string, bool) {
+	out, err := gitWorkspaceOutput(ctx, root, "merge-base", a, b)
 	if err != nil {
 		return "", false
 	}
@@ -2183,24 +2192,32 @@ func gitCommitLog(ctx context.Context, root, base string) ([]CommitSummary, bool
 	return commits, truncated, nil
 }
 
-// gitCommitLogChanges lists up to maxCommits commits in revRange, newest
-// first, with each commit's name-status changes and numstat counts. Both are
-// collected in two Git passes, rather than spawning Git once or twice for every
-// commit, and each pass keeps at most maxBytes of output. A commit either
-// fits whole in both passes or is left out, never listed with part of its
-// files. truncated reports that older commits were left out.
+// gitCommitLogChanges is gitCommitLogChangesArgs for one revision range.
 func gitCommitLogChanges(ctx context.Context, root, revRange string, maxCommits, maxBytes int) ([]CommitSummary, map[string]commitChangeSet, map[string]map[string][2]int, bool, error) {
+	return gitCommitLogChangesArgs(ctx, root, []string{revRange}, maxCommits, maxBytes)
+}
+
+// gitCommitLogChangesArgs lists up to maxCommits commits selected by revArgs
+// (a range, or e.g. --first-parent and a tip), newest first, with each
+// commit's name-status changes and numstat counts. Both are collected in two
+// Git passes, rather than spawning Git once or twice for every commit, and
+// each pass keeps at most maxBytes of output. A commit either fits whole in
+// both passes or is left out, never listed with part of its files. truncated
+// reports that older commits were left out.
+func gitCommitLogChangesArgs(ctx context.Context, root string, revArgs []string, maxCommits, maxBytes int) ([]CommitSummary, map[string]commitChangeSet, map[string]map[string][2]int, bool, error) {
 	// Reading one commit past the cap tells a full list from a truncated one.
 	maxCount := "--max-count=" + strconv.Itoa(maxCommits+1)
+	statusArgs := append([]string{"log", maxCount, "--format=%x1e%H%x1f%s%x1f%an%x1f%aI", "--name-status", "--find-renames", "-z"}, revArgs...)
+	numstatArgs := append([]string{"log", maxCount, "--format=%x1e%H", "--numstat", "--find-renames", "-z"}, revArgs...)
 	var statusOutput, numstatOutput string
 	var statusCapped, numstatCapped bool
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) {
-		statusOutput, statusCapped, err = gitWorkspaceOutputCapped(gctx, root, maxBytes, "log", maxCount, "--format=%x1e%H%x1f%s%x1f%an%x1f%aI", "--name-status", "--find-renames", "-z", revRange)
+		statusOutput, statusCapped, err = gitWorkspaceOutputCapped(gctx, root, maxBytes, statusArgs...)
 		return err
 	})
 	g.Go(func() (err error) {
-		numstatOutput, numstatCapped, err = gitWorkspaceOutputCapped(gctx, root, maxBytes, "log", maxCount, "--format=%x1e%H", "--numstat", "--find-renames", "-z", revRange)
+		numstatOutput, numstatCapped, err = gitWorkspaceOutputCapped(gctx, root, maxBytes, numstatArgs...)
 		return err
 	})
 	if err := g.Wait(); err != nil {

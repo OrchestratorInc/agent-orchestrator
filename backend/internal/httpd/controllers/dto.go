@@ -301,6 +301,15 @@ type WorkspaceFileRevisionQuery struct {
 	CommitSHA        string `query:"commitSha,omitempty" description:"Exact commit SHA for a committed-scope comparison."`
 }
 
+// WorkspaceHistoryQuery selects whose history GET
+// /api/v1/sessions/{sessionId}/workspace/history reads. With neither branch
+// nor prNumber it reads the checked-out worktree.
+type WorkspaceHistoryQuery struct {
+	Branch    string `query:"branch,omitempty" description:"Local branch to read instead of the checked-out worktree. Read from revisions only; nothing is checked out."`
+	PRNumber  int    `query:"prNumber,omitempty" minimum:"1" description:"Associated pull request to read instead of the checked-out worktree."`
+	SourceURL string `query:"sourceUrl,omitempty" description:"Stable URL of the pull request, for PRs that share a number. Requires prNumber."`
+}
+
 // PRFilesQuery selects the associated pull request when multiple providers or
 // repositories can have the same pull-request number.
 type PRFilesQuery struct {
@@ -615,10 +624,22 @@ type WorkspaceManifestResponse struct {
 // header. It is intentionally separate from the first-paint manifest.
 type WorkspaceHistoryResponse struct {
 	SessionID        domain.SessionID         `json:"sessionId"`
+	View             WorkspaceViewResponse    `json:"view"`
 	Commits          []WorkspaceCommitSummary `json:"commits"`
 	CommitsTruncated bool                     `json:"commitsTruncated,omitempty"`
-	Ahead            *int                     `json:"ahead,omitempty"`
-	Behind           *int                     `json:"behind,omitempty"`
+	RangeSummary     *WorkspaceSummary        `json:"rangeSummary,omitempty" description:"Totals for All commits. Views only."`
+	Ahead            *int                     `json:"ahead,omitempty" description:"Checked-out view only."`
+	Behind           *int                     `json:"behind,omitempty" description:"Checked-out view only."`
+}
+
+// WorkspaceViewResponse describes whose history a workspace read covers.
+type WorkspaceViewResponse struct {
+	Kind      sessionsvc.WorkspaceViewKind  `json:"kind" enum:"checked_out,branch,pull_request"`
+	Name      string                        `json:"name,omitempty" description:"Branch name, or the pull request's source branch."`
+	TipSHA    string                        `json:"tipSha,omitempty" description:"Fence a later view read with it as expectedTipSha."`
+	BaseSHA   string                        `json:"baseSha,omitempty" description:"Set only in since_base mode. Fence a later view read with it as expectedBaseSha."`
+	BaseRef   string                        `json:"baseRef,omitempty"`
+	RangeMode sessionsvc.WorkspaceRangeMode `json:"rangeMode" enum:"since_base,recent" description:"since_base lists the commits since baseSha; recent lists the newest 50 first-parent commits of a default branch, or of a branch with no default branch to measure from."`
 }
 
 // ListPRFilesResponse is the exact base...head changed-file set for one PR.

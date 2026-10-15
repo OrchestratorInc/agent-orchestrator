@@ -30,6 +30,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -120,7 +121,7 @@ type SessionService interface {
 	GetWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error)
 	RefreshWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error)
 	ReconcileWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error)
-	GetWorkspaceHistory(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceHistory, error)
+	GetWorkspaceHistory(ctx context.Context, id domain.SessionID, view sessionsvc.WorkspaceView) (sessionsvc.WorkspaceHistory, error)
 	ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceFiles, error)
 	GetWorkspaceFile(ctx context.Context, id domain.SessionID, path string, section sessionsvc.WorkspaceFileSection) (sessionsvc.WorkspaceFileDetail, error)
 	GetWorkspaceFileAtCommit(ctx context.Context, id domain.SessionID, path, commitSHA string) (sessionsvc.WorkspaceFileDetail, error)
@@ -848,12 +849,37 @@ func (c *SessionsController) getWorkspaceHistory(w http.ResponseWriter, r *http.
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/history")
 		return
 	}
-	history, err := c.Svc.GetWorkspaceHistory(r.Context(), sessionID(r))
+	view, err := workspaceViewQuery(r.URL.Query())
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	history, err := c.Svc.GetWorkspaceHistory(r.Context(), sessionID(r), view)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, workspaceHistoryResponse(history))
+}
+
+// workspaceViewQuery parses the branch or pull request a workspace read
+// selects. It only parses; the service validates the selection.
+func workspaceViewQuery(query url.Values) (sessionsvc.WorkspaceView, error) {
+	view := sessionsvc.WorkspaceView{
+		Branch:    strings.TrimSpace(query.Get("branch")),
+		SourceURL: strings.TrimSpace(query.Get("sourceUrl")),
+	}
+	if query.Has("branch") && view.Branch == "" {
+		return sessionsvc.WorkspaceView{}, apierr.Invalid("INVALID_WORKSPACE_BRANCH", "branch must not be empty", nil)
+	}
+	if raw := strings.TrimSpace(query.Get("prNumber")); raw != "" {
+		number, err := strconv.Atoi(raw)
+		if err != nil || number <= 0 {
+			return sessionsvc.WorkspaceView{}, apierr.Invalid("INVALID_WORKSPACE_VIEW", "prNumber must be a positive integer", nil)
+		}
+		view.PRNumber = number
+	}
+	return view, nil
 }
 
 func (c *SessionsController) getWorkspaceFile(w http.ResponseWriter, r *http.Request) {
@@ -2824,9 +2850,14 @@ func workspaceManifestResponse(manifest sessionsvc.WorkspaceManifest) WorkspaceM
 }
 
 func workspaceHistoryResponse(history sessionsvc.WorkspaceHistory) WorkspaceHistoryResponse {
+	var rangeSummary *WorkspaceSummary
+	if history.RangeSummary != nil {
+		summary := WorkspaceSummary(*history.RangeSummary)
+		rangeSummary = &summary
+	}
 	return WorkspaceHistoryResponse{
-		SessionID: history.SessionID, Commits: workspaceCommitsResponse(history.Commits),
-		CommitsTruncated: history.CommitsTruncated, Ahead: history.Ahead, Behind: history.Behind,
+		SessionID: history.SessionID, View: WorkspaceViewResponse(history.View), Commits: workspaceCommitsResponse(history.Commits),
+		CommitsTruncated: history.CommitsTruncated, RangeSummary: rangeSummary, Ahead: history.Ahead, Behind: history.Behind,
 	}
 }
 

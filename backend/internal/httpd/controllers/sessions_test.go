@@ -83,6 +83,8 @@ type fakeSessionService struct {
 	workspaceTreePath          string
 	workspacePaths             []string
 	workspaceReconciles        int
+	workspaceHistoryView       sessionsvc.WorkspaceView
+	workspaceViewHistory       *sessionsvc.WorkspaceHistory
 	spawnErr                   error
 	lastSpawn                  ports.SpawnConfig
 	orchestratorMode           domain.SessionMode
@@ -698,10 +700,14 @@ func (f *fakeSessionService) ReconcileWorkspaceManifest(ctx context.Context, id 
 	return f.GetWorkspaceManifest(ctx, id)
 }
 
-func (f *fakeSessionService) GetWorkspaceHistory(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceHistory, error) {
+func (f *fakeSessionService) GetWorkspaceHistory(ctx context.Context, id domain.SessionID, view sessionsvc.WorkspaceView) (sessionsvc.WorkspaceHistory, error) {
+	f.workspaceHistoryView = view
 	files, err := f.ListWorkspaceFiles(ctx, id)
 	if err != nil {
 		return sessionsvc.WorkspaceHistory{}, err
+	}
+	if f.workspaceViewHistory != nil {
+		return *f.workspaceViewHistory, nil
 	}
 	return sessionsvc.WorkspaceHistory{
 		SessionID: files.SessionID, Commits: files.Commits, CommitsTruncated: files.CommitsTruncated,
@@ -3505,6 +3511,62 @@ func TestSessionsAPI_GetWorkspaceManifestOmitsUnchangedInventory(t *testing.T) {
 	// can only mean an older daemon.
 	if !strings.Contains(string(body), `"staged":[]`) {
 		t.Fatalf("manifest body = %s, want empty sections as arrays", body)
+	}
+}
+
+func TestSessionsAPI_GetWorkspaceHistoryForBranchView(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.workspaceViewHistory = &sessionsvc.WorkspaceHistory{
+		SessionID: "ao-1",
+		View: sessionsvc.WorkspaceViewInfo{
+			Kind: sessionsvc.WorkspaceViewBranch, Name: "feature/login", TipSHA: "tip-sha", BaseSHA: "base-sha", BaseRef: "origin/main",
+			RangeMode: sessionsvc.WorkspaceRangeSinceBase,
+		},
+		Commits:      []sessionsvc.CommitSummary{{SHA: "tip-sha", Subject: "add login"}},
+		RangeSummary: &sessionsvc.WorkspaceSummary{Files: 2, Additions: 5, Deletions: 1},
+	}
+	srv := newSessionTestServer(t, svc)
+
+	body, status, headers := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/history?branch=feature%2Flogin", "")
+	assertJSON(t, headers)
+	if status != http.StatusOK {
+		t.Fatalf("GET branch history = %d, want 200; body=%s", status, body)
+	}
+	if svc.workspaceHistoryView != (sessionsvc.WorkspaceView{Branch: "feature/login"}) {
+		t.Fatalf("view = %+v, want branch feature/login", svc.workspaceHistoryView)
+	}
+	var got controllers.WorkspaceHistoryResponse
+	mustJSON(t, body, &got)
+	want := controllers.WorkspaceViewResponse{Kind: "branch", Name: "feature/login", TipSHA: "tip-sha", BaseSHA: "base-sha", BaseRef: "origin/main", RangeMode: "since_base"}
+	if got.View != want {
+		t.Fatalf("view = %+v, want %+v", got.View, want)
+	}
+	if got.RangeSummary == nil || *got.RangeSummary != (controllers.WorkspaceSummary{Files: 2, Additions: 5, Deletions: 1}) {
+		t.Fatalf("rangeSummary = %+v", got.RangeSummary)
+	}
+	if len(got.Commits) != 1 || got.Commits[0].SHA != "tip-sha" || got.Ahead != nil || got.Behind != nil {
+		t.Fatalf("history = %+v, want one commit and no ahead/behind", got)
+	}
+
+	_, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/history?prNumber=42&sourceUrl=https%3A%2F%2Fgithub.com%2Facme%2Frepo%2Fpull%2F42", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET PR history = %d, want 200", status)
+	}
+	if svc.workspaceHistoryView != (sessionsvc.WorkspaceView{PRNumber: 42, SourceURL: "https://github.com/acme/repo/pull/42"}) {
+		t.Fatalf("view = %+v, want PR 42 with its source URL", svc.workspaceHistoryView)
+	}
+	_, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/history", "")
+	if status != http.StatusOK || svc.workspaceHistoryView != (sessionsvc.WorkspaceView{}) {
+		t.Fatalf("GET history = %d with view %+v, want 200 and the checked-out view", status, svc.workspaceHistoryView)
+	}
+
+	for _, tc := range []struct{ query, code string }{
+		{"branch=", "INVALID_WORKSPACE_BRANCH"},
+		{"prNumber=abc", "INVALID_WORKSPACE_VIEW"},
+		{"prNumber=0", "INVALID_WORKSPACE_VIEW"},
+	} {
+		body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/history?"+tc.query, "")
+		assertErrorCode(t, body, status, http.StatusBadRequest, tc.code)
 	}
 }
 

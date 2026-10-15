@@ -9771,6 +9771,30 @@ paths:
         schema:
           description: Session identifier, e.g. project-1.
           type: string
+      - description: Local branch to read instead of the checked-out worktree. Read
+          from revisions only; nothing is checked out.
+        in: query
+        name: branch
+        schema:
+          description: Local branch to read instead of the checked-out worktree. Read
+            from revisions only; nothing is checked out.
+          type: string
+      - description: Associated pull request to read instead of the checked-out worktree.
+        in: query
+        name: prNumber
+        schema:
+          description: Associated pull request to read instead of the checked-out
+            worktree.
+          minimum: 1
+          type: integer
+      - description: Stable URL of the pull request, for PRs that share a number.
+          Requires prNumber.
+        in: query
+        name: sourceUrl
+        schema:
+          description: Stable URL of the pull request, for PRs that share a number.
+            Requires prNumber.
+          type: string
       responses:
         "200":
           content:
@@ -9778,6 +9802,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/WorkspaceHistoryResponse'
           description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
         "404":
           content:
             application/json:
@@ -18611,10 +18641,12 @@ components:
     WorkspaceHistoryResponse:
       properties:
         ahead:
+          description: Checked-out view only.
           type:
           - "null"
           - integer
         behind:
+          description: Checked-out view only.
           type:
           - "null"
           - integer
@@ -18624,10 +18656,16 @@ components:
           type: array
         commitsTruncated:
           type: boolean
+        rangeSummary:
+          $ref: '#/components/schemas/WorkspaceSummary'
+          description: Totals for All commits. Views only.
         sessionId:
           type: string
+        view:
+          $ref: '#/components/schemas/WorkspaceViewResponse'
       required:
       - sessionId
+      - view
       - commits
       type: object
     WorkspaceManifestResponse:
@@ -18749,6 +18787,38 @@ components:
       - name
       - path
       - type
+      type: object
+    WorkspaceViewResponse:
+      properties:
+        baseRef:
+          type: string
+        baseSha:
+          description: Set only in since_base mode. Fence a later view read with it
+            as expectedBaseSha.
+          type: string
+        kind:
+          enum:
+          - checked_out
+          - branch
+          - pull_request
+          type: string
+        name:
+          description: Branch name, or the pull request's source branch.
+          type: string
+        rangeMode:
+          description: since_base lists the commits since baseSha; recent lists the
+            newest 50 first-parent commits of a default branch, or of a branch with
+            no default branch to measure from.
+          enum:
+          - since_base
+          - recent
+          type: string
+        tipSha:
+          description: Fence a later view read with it as expectedTipSha.
+          type: string
+      required:
+      - kind
+      - rangeMode
       type: object
 tags:
 - description: Supported and locally runnable agent adapters

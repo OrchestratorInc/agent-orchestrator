@@ -6534,11 +6534,16 @@ export interface components {
             status: "unmodified" | "modified" | "added" | "deleted" | "renamed";
         };
         WorkspaceHistoryResponse: {
+            /** @description Checked-out view only. */
             ahead?: null | number;
+            /** @description Checked-out view only. */
             behind?: null | number;
             commits: components["schemas"]["WorkspaceCommitSummary"][];
             commitsTruncated?: boolean;
+            /** @description Totals for All commits. Views only. */
+            rangeSummary?: components["schemas"]["WorkspaceSummary"];
             sessionId: string;
+            view: components["schemas"]["WorkspaceViewResponse"];
         };
         WorkspaceManifestResponse: {
             compareBaseRef?: string;
@@ -6584,6 +6589,22 @@ export interface components {
             status?: "unmodified" | "modified" | "added" | "deleted" | "renamed";
             /** @enum {string} */
             type: "file" | "dir";
+        };
+        WorkspaceViewResponse: {
+            baseRef?: string;
+            /** @description Set only in since_base mode. Fence a later view read with it as expectedBaseSha. */
+            baseSha?: string;
+            /** @enum {string} */
+            kind: "checked_out" | "branch" | "pull_request";
+            /** @description Branch name, or the pull request's source branch. */
+            name?: string;
+            /**
+             * @description since_base lists the commits since baseSha; recent lists the newest 50 first-parent commits of a default branch, or of a branch with no default branch to measure from.
+             * @enum {string}
+             */
+            rangeMode: "since_base" | "recent";
+            /** @description Fence a later view read with it as expectedTipSha. */
+            tipSha?: string;
         };
     };
     responses: never;
@@ -18589,7 +18610,14 @@ export interface operations {
     };
     getSessionWorkspaceHistory: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Local branch to read instead of the checked-out worktree. Read from revisions only; nothing is checked out. */
+                branch?: string;
+                /** @description Associated pull request to read instead of the checked-out worktree. */
+                prNumber?: number;
+                /** @description Stable URL of the pull request, for PRs that share a number. Requires prNumber. */
+                sourceUrl?: string;
+            };
             header?: never;
             path: {
                 /** @description Session identifier, e.g. project-1. */
@@ -18606,6 +18634,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkspaceHistoryResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Not Found */

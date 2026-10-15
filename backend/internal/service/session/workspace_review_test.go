@@ -158,12 +158,16 @@ func TestCommitReviewUsesOnlyTheSelectedCommit(t *testing.T) {
 	if len(files.Commits) != 2 || files.Commits[0].Subject != "second change" || files.Commits[1].Subject != "first change" {
 		t.Fatalf("commits = %+v, want newest first", files.Commits)
 	}
-	history, err := svc.GetWorkspaceHistory(context.Background(), "ao-1")
+	history, err := svc.GetWorkspaceHistory(context.Background(), "ao-1", WorkspaceView{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(history.Commits) != 2 || history.Commits[0].Subject != "second change" || history.Commits[1].Subject != "first change" {
 		t.Fatalf("history commits = %+v, want newest first", history.Commits)
+	}
+	head := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+	if view := history.View; view.Kind != WorkspaceViewCheckedOut || view.Name != "ao/commit-review" || view.TipSHA != head || view.BaseSHA != base || view.RangeMode != WorkspaceRangeSinceBase || history.RangeSummary != nil {
+		t.Fatalf("history view = %+v, range summary = %+v; want the checked-out base..HEAD range and no range summary", view, history.RangeSummary)
 	}
 
 	diffs, err := svc.GetWorkspaceDiffs(context.Background(), "ao-1", WorkspaceDiffInput{
