@@ -1,9 +1,12 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Alert } from "react-native";
 import type { RouteSession } from "./sessionRoute";
+import type { CloudInterfaceControls } from "../cloud/useCloudInterfaceTransition";
+import type { CloudInterfaceStatus } from "../cloud/interfaceTransition";
 
 const fixture = vi.hoisted(() => {
-	const source = { switchToChat: vi.fn(), resumeSession: vi.fn() };
+	const source = { switchToChat: vi.fn(), resumeSession: vi.fn(), startInterfaceTransition: vi.fn() };
 	return {
 		source,
 		client: {},
@@ -11,6 +14,8 @@ const fixture = vi.hoisted(() => {
 		setOptions: vi.fn(),
 		replace: vi.fn(),
 		write: vi.fn(),
+		sendInput: vi.fn(() => true),
+		sendPrompt: vi.fn(async () => true),
 		onStatus: null as null | ((status: string) => void),
 		terminals: [] as Array<{ input: { onStatus: (status: string) => void; onError: (message: string) => void; onOutput: (bytes: Uint8Array) => void }; disconnect: ReturnType<typeof vi.fn> }>,
 	};
@@ -40,7 +45,7 @@ vi.mock("../cloud/authStore", () => ({ useCloudAuth: () => ({ client: fixture.cl
 vi.mock("../cloud/terminal", () => ({ createCloudTerminal: (input: { onStatus: (status: string) => void; onError: (message: string) => void; onOutput: (bytes: Uint8Array) => void }) => {
 	fixture.onStatus = input.onStatus;
 	const disconnect = vi.fn(); fixture.terminals.push({ input, disconnect });
-	return { connect: async () => {}, disconnect, resize: () => {}, sendInput: () => false, sendPrompt: async () => false };
+	return { connect: async () => {}, disconnect, resize: () => {}, sendInput: fixture.sendInput, sendPrompt: fixture.sendPrompt };
 } }));
 vi.mock("../store", () => ({ useApp: () => ({ refreshSource: fixture.refreshSource, sourceFor: () => fixture.source }) }));
 vi.mock("../haptics", () => ({ haptics: { error: vi.fn(), success: vi.fn() } }));
@@ -75,12 +80,24 @@ let renderer: ReactTestRenderer | undefined;
 const text = (value: string) => renderer!.root.findAll((node) => String(node.type) === "Text" && node.props.children === value);
 const component = (name: string) => renderer!.root.findAll((node) => node.type === name);
 const startupLabel = () => renderer!.root.findAll((node) => node.props.accessibilityLabel?.startsWith("Starting Cloud terminal:"))[0]?.props.accessibilityLabel;
+const chatButton = () => fixture.setOptions.mock.calls.map(([options]) => options.headerRight).filter(Boolean).at(-1)!();
+const alertChoice = (label: string) => vi.mocked(Alert.alert).mock.calls.at(-1)?.[2]?.find((button) => button.text === label);
+function handoffControls(latest: Partial<CloudInterfaceStatus> = {}) {
+	const status: CloudInterfaceStatus = { supported: true, targetMode: "chat", currentMode: "tui", runtimeConnected: true, sourceBusy: false, sourceWaitingForInput: false, ...latest };
+	return {
+		status, transition: status.transition, loading: false, starting: false, cancelling: false,
+		start: vi.fn(async () => {}), refresh: vi.fn(async () => ({ ok: true as const, status })),
+		cancel: vi.fn(async () => {}), acknowledgeNotice: vi.fn(async () => {}),
+	} as unknown as CloudInterfaceControls;
+}
 
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	fixture.onStatus = null;
 	fixture.terminals = [];
 	fixture.write.mockClear(); fixture.replace.mockClear();
+	fixture.setOptions.mockClear(); fixture.sendInput.mockClear(); fixture.sendPrompt.mockClear();
+	vi.mocked(Alert.alert).mockClear();
 	const error = console.error;
 	vi.spyOn(console, "error").mockImplementation((...args) => {
 		if (String(args[0]).startsWith("react-test-renderer is deprecated")) return;
@@ -95,7 +112,181 @@ afterEach(async () => {
 	vi.unstubAllGlobals();
 });
 
+describe("Cloud terminal to Chat policy", () => {
+	it.each(["stopped", "offline"])("opens already-selected Chat for a %s worker without switching or resuming", async (observedState) => {
+		const controls = handoffControls({ currentMode: "chat", runtimeConnected: false });
+		const offline = { ...session(observedState, false), mode: "chat" as const, cloud: { desiredState: "paused", observedState } };
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={offline} source={cloudSource} interfaceSwitch={controls} />); });
+		await act(async () => { await chatButton().props.onPress(); });
+		expect(controls.refresh).toHaveBeenCalledOnce();
+		expect(fixture.replace).toHaveBeenCalledWith({ pathname: "/session/[id]", params: { id: "session-1", source: "cloud", sourceId: "org-1" } });
+		expect(controls.start).not.toHaveBeenCalled();
+		expect(fixture.source.resumeSession).not.toHaveBeenCalled();
+		expect(Alert.alert).not.toHaveBeenCalled();
+	});
+	it("opens already-selected Chat even when another handoff is unsupported", async () => {
+		const controls = handoffControls({ currentMode: "chat", runtimeConnected: false, supported: false });
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={session("stopped", false)} source={cloudSource} interfaceSwitch={controls} />); });
+		await act(async () => { await chatButton().props.onPress(); });
+		expect(fixture.replace).toHaveBeenCalledOnce();
+		expect(controls.start).not.toHaveBeenCalled(); expect(Alert.alert).not.toHaveBeenCalled();
+	});
+	it.each(["draining", "target_starting", "recovery_required"] as const)("does not open already-selected Chat while a fresh %s fence is active", async (phase) => {
+		const controls = handoffControls({ currentMode: "chat", runtimeConnected: false, transition: { id: "h1", sessionId: "session-1", sourceMode: "tui", targetMode: "chat", policy: "drain", phase, createdAt: "now", updatedAt: "now" } });
+		controls.status = { ...controls.status!, transition: undefined }; controls.transition = undefined;
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={session("stopped", false)} source={cloudSource} interfaceSwitch={controls} />); });
+		await act(async () => { await chatButton().props.onPress(); });
+		expect(controls.refresh).toHaveBeenCalledOnce();
+		expect(fixture.replace).not.toHaveBeenCalled(); expect(controls.start).not.toHaveBeenCalled(); expect(Alert.alert).not.toHaveBeenCalled();
+	});
+	it("still rejects an unsupported actual Terminal to Chat handoff", async () => {
+		const controls = handoffControls({ supported: false, reason: "Agent does not support Chat handoff" });
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} interfaceSwitch={controls} />); });
+		await act(async () => { await chatButton().props.onPress(); });
+		expect(Alert.alert).toHaveBeenCalledWith("Chat unavailable", "Agent does not support Chat handoff");
+		expect(fixture.replace).not.toHaveBeenCalled(); expect(controls.start).not.toHaveBeenCalled();
+	});
+	it("checks current activity and stops an idle terminal instead of waiting for another Stop hook", async () => {
+		const controls = handoffControls();
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} interfaceSwitch={controls} />); });
+		await act(async () => { await chatButton().props.onPress(); });
+		expect(controls.refresh).toHaveBeenCalledOnce();
+		expect(controls.start).toHaveBeenCalledWith("chat", "interrupt");
+		expect(Alert.alert).not.toHaveBeenCalled();
+	});
+	it.each(["drain", "interrupt"] as const)("asks before switching a freshly busy terminal with %s policy", async (policy) => {
+		const controls = handoffControls({ sourceBusy: true });
+		controls.status = { ...controls.status!, sourceBusy: false };
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} interfaceSwitch={controls} />); });
+		await act(async () => { await chatButton().props.onPress(); });
+		expect(controls.start).not.toHaveBeenCalled();
+		expect(alertChoice("Finish, then switch")).toBeDefined();
+		await act(async () => { await alertChoice(policy === "drain" ? "Finish, then switch" : "Stop and switch")!.onPress!(); });
+		expect(controls.start).toHaveBeenCalledWith("chat", policy);
+	});
+	it("explains that draining a waiting terminal needs the user's answer", async () => {
+		const controls = handoffControls({ sourceBusy: true, sourceWaitingForInput: true });
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} interfaceSwitch={controls} />); });
+		await act(async () => { await chatButton().props.onPress(); });
+		expect(String(vi.mocked(Alert.alert).mock.calls.at(-1)?.[1])).toMatch(/waiting for your input/i);
+		await act(async () => { alertChoice("Keep Terminal")!.onPress?.(); });
+		expect(controls.start).not.toHaveBeenCalled();
+	});
+	it("requires explicit stop confirmation if current activity cannot be read", async () => {
+		const controls = handoffControls();
+		vi.mocked(controls.refresh).mockResolvedValueOnce({ ok: false, error: "Network lost", status: undefined });
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} interfaceSwitch={controls} />); });
+		await act(async () => { await chatButton().props.onPress(); });
+		expect(controls.start).not.toHaveBeenCalled();
+		expect(alertChoice("Finish, then switch")).toBeUndefined();
+		await act(async () => { await alertChoice("Stop and switch")!.onPress!(); });
+		expect(controls.start).toHaveBeenCalledWith("chat", "interrupt");
+	});
+	it("does not restart a switch another client has already begun", async () => {
+		const controls = handoffControls({ transition: { id: "h1", sessionId: "session-1", sourceMode: "tui", targetMode: "chat", policy: "drain", phase: "draining", createdAt: "now", updatedAt: "now" } });
+		controls.status = { ...controls.status!, transition: undefined }; controls.transition = undefined;
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} interfaceSwitch={controls} />); });
+		await act(async () => { await chatButton().props.onPress(); });
+		expect(controls.start).not.toHaveBeenCalled(); expect(Alert.alert).not.toHaveBeenCalled();
+	});
+	it("does not apply an old confirmation to a different routed worker", async () => {
+		const controls = handoffControls({ sourceBusy: true });
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} interfaceSwitch={controls} />); });
+		await act(async () => { await chatButton().props.onPress(); });
+		const stop = alertChoice("Stop and switch")!;
+		expect(stop).toBeDefined();
+		await act(async () => { renderer!.update(<CloudTerminalSessionScreen session={session("running", true, "session-2")} source={cloudSource} interfaceSwitch={handoffControls()} />); });
+		await act(async () => { await stop.onPress!(); });
+		expect(controls.start).not.toHaveBeenCalled();
+	});
+	it("does not act on a late activity check for the previous worker", async () => {
+		const controls = handoffControls();
+		let resolve!: (value: Awaited<ReturnType<CloudInterfaceControls["refresh"]>>) => void;
+		vi.mocked(controls.refresh).mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} interfaceSwitch={controls} />); });
+		let request!: Promise<void>;
+		await act(async () => { request = chatButton().props.onPress(); });
+		await act(async () => { renderer!.update(<CloudTerminalSessionScreen session={session("running", true, "session-2")} source={cloudSource} interfaceSwitch={handoffControls()} />); });
+		await act(async () => { resolve({ ok: true, status: controls.status! }); await request; });
+		expect(controls.start).not.toHaveBeenCalled(); expect(Alert.alert).not.toHaveBeenCalled();
+	});
+	it("does not duplicate the fresh activity check on two immediate taps", async () => {
+		const controls = handoffControls();
+		let resolve!: (value: Awaited<ReturnType<CloudInterfaceControls["refresh"]>>) => void;
+		vi.mocked(controls.refresh).mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} interfaceSwitch={controls} />); });
+		let requests!: Promise<void>[];
+		await act(async () => { const press = chatButton().props.onPress; requests = [press(), press()]; });
+		expect(controls.refresh).toHaveBeenCalledOnce();
+		await act(async () => { resolve({ ok: true, status: controls.status! }); await Promise.all(requests); });
+		expect(controls.start).toHaveBeenCalledOnce();
+	});
+	it("does not show a stop dialog for an aborted activity check", async () => {
+		const controls = handoffControls();
+		vi.mocked(controls.refresh).mockResolvedValueOnce(undefined);
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} interfaceSwitch={controls} />); });
+		await act(async () => { await chatButton().props.onPress(); });
+		expect(Alert.alert).not.toHaveBeenCalled(); expect(controls.start).not.toHaveBeenCalled();
+	});
+	it("does not discard text typed while checking current activity", async () => {
+		const controls = handoffControls();
+		let resolve!: (value: Awaited<ReturnType<CloudInterfaceControls["refresh"]>>) => void;
+		vi.mocked(controls.refresh).mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} interfaceSwitch={controls} />); });
+		let request!: Promise<void>;
+		await act(async () => { request = chatButton().props.onPress(); });
+		await act(async () => { component("Composer")[0].props.onChangeText("typed during request"); });
+		await act(async () => { resolve({ ok: true, status: controls.status! }); await request; });
+		expect(controls.start).not.toHaveBeenCalled(); expect(alertChoice("Stop and switch")).toBeDefined();
+		expect(component("Composer")[0].props.value).toBe("typed during request");
+	});
+	it("does not discard an unsent mobile terminal draft without confirmation", async () => {
+		const controls = handoffControls();
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} interfaceSwitch={controls} />); });
+		await act(async () => { component("Composer")[0].props.onChangeText("my draft"); });
+		await act(async () => { await chatButton().props.onPress(); });
+		expect(controls.start).not.toHaveBeenCalled();
+		expect(component("Composer")[0].props.value).toBe("my draft");
+		expect(alertChoice("Stop and switch")).toBeDefined();
+	});
+});
+
 describe("Cloud terminal startup", () => {
+	it.each([false, true])("does not acquire a terminal for a finally stopped runtime with error=%s", async (hasError) => {
+		const stopped = session("terminated", false);
+		if (hasError) stopped.cloud!.startupError = { code: "bootstrap_failed", message: "Worker could not start", at: "now" };
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={stopped} source={cloudSource} />); });
+		expect(fixture.terminals).toHaveLength(0); expect(component("Composer")).toHaveLength(0);
+	});
+	it("keeps the same terminal and input available during a cancellable drain", async () => {
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} />); });
+		const terminal = fixture.terminals[0];
+		act(() => { component("XtermJsWebView")[0].props.onInitialized(); terminal.input.onStatus("ready"); });
+		const controls = handoffControls({ transition: { id: "h1", sessionId: "session-1", sourceMode: "tui", targetMode: "chat", policy: "drain", phase: "draining", createdAt: "now", updatedAt: "now" } });
+		await act(async () => { renderer!.update(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} interfaceSwitch={controls} />); });
+		expect(terminal.disconnect).not.toHaveBeenCalled(); expect(fixture.terminals).toHaveLength(1);
+		expect(component("Composer")).toHaveLength(1); expect(component("KeyRow")).toHaveLength(1);
+		act(() => { terminal.input.onOutput(new Uint8Array([3])); component("KeyRow")[0].props.onKey("\r"); });
+		expect(fixture.write).toHaveBeenCalledWith(new Uint8Array([3])); expect(fixture.sendInput).toHaveBeenCalledWith("\r");
+		await act(async () => { component("Composer")[0].props.onChangeText("yes"); });
+		await act(async () => { await component("Composer")[0].props.onSend(); });
+		expect(fixture.sendPrompt).toHaveBeenCalledWith("yes");
+	});
+	it("keeps the terminal while submitting a drain, before Cloud accepts it", async () => {
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} />); });
+		const terminal = fixture.terminals[0];
+		const controls = { ...handoffControls(), starting: true, startingPolicy: "drain" } as CloudInterfaceControls;
+		await act(async () => { renderer!.update(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} interfaceSwitch={controls} />); });
+		expect(terminal.disconnect).not.toHaveBeenCalled(); expect(component("Composer")).toHaveLength(1);
+	});
+	it.each(["interrupt", "source_stopping"])("fences terminal input once %s begins", async (phase) => {
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} />); });
+		const terminal = fixture.terminals[0];
+		const controls = handoffControls({ transition: { id: "h1", sessionId: "session-1", sourceMode: "tui", targetMode: "chat", policy: phase === "interrupt" ? "interrupt" : "drain", phase: phase === "interrupt" ? "draining" : "source_stopping", createdAt: "now", updatedAt: "now" } });
+		await act(async () => { renderer!.update(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} interfaceSwitch={controls} />); });
+		expect(terminal.disconnect).toHaveBeenCalledOnce(); expect(component("Composer")).toHaveLength(0);
+		expect(component("KeyRow")).toHaveLength(0);
+	});
 	it("writes output after a cancelled handoff without waiting for a retained WebView to initialize again", async () => {
 		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} />); });
 		act(() => { component("XtermJsWebView")[0].props.onInitialized(); fixture.terminals[0].input.onOutput(new Uint8Array([1])); });

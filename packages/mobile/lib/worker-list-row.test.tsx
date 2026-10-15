@@ -13,6 +13,7 @@ vi.mock("expo-router", () => ({ useRouter: () => ({ push: counters.push }), useF
 vi.mock("react-native", () => ({
 	Alert: { alert: vi.fn() }, AppState: { addEventListener: (_event: string, callback: (state: string) => void) => { counters.foreground = callback; return { remove: vi.fn() }; } }, RefreshControl: "RefreshControl",
 	Keyboard: { dismiss: vi.fn() },
+	Image: "Image",
 	Platform: { OS: "ios" },
 	Pressable: "Pressable",
 	StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
@@ -21,7 +22,8 @@ vi.mock("react-native", () => ({
 	View: "View",
 	FlatList: TestList,
 }));
-vi.mock("./AgentLogo", () => ({ AgentLogo: "AgentLogo" }));
+// Metro resolves these bundled PNGs; retain the real AgentLogo component.
+vi.mock("./harnessLogoAssets", () => ({ logoFor: (harness?: string) => harness === "claude-code" ? 101 : null }));
 vi.mock("./icons", () => ({ Feather: "Feather" }));
 vi.mock("react-native-svg", () => ({ default: "Svg", Path: "Path", Rect: "Rect" }));
 vi.mock("./haptics", () => ({ haptics: { select: vi.fn(), tap: counters.tap, warning: vi.fn(), success: vi.fn(), error: vi.fn() } }));
@@ -211,6 +213,9 @@ describe("WorkerListRow", () => {
 		expect(renderer.root.findByProps({ testID: "worker-machine-identity" })).toBeTruthy();
 		expect(renderer.root.findByProps({ testID: "machine-identity-name" }).props.children).toBe("A very long development machine name");
 		expect(renderer.root.findByProps({ testID: "machine-identity-symbol" }).props.appearance).toEqual({ symbol: "server" });
+		expect(renderer.root.findAll((node) => String(node.type) === "Feather" && node.props.name === "server")).toHaveLength(1);
+		expect(renderer.root.findAll((node) => String(node.type) === "View" && node.props.accessibilityRole === "image")).toHaveLength(0);
+		act(() => renderer.unmount());
 	});
 });
 
@@ -234,18 +239,15 @@ let renderer: ReactTestRenderer | undefined;
 afterEach(async () => { if (renderer) await act(async () => renderer?.unmount()); renderer = undefined; counters.push.mockClear(); counters.tap.mockClear(); });
 describe("Cloud worker row", () => {
 	it.each([
-		["cloud", "org-1", "Cloud", "cloud"],
-		["local", "desktop-1", "Local", "server"],
-	] as const)("shows a borderless %s icon while preserving the spoken source", async (kind, id, sourceLabel, iconName) => {
-		const props = { interactionMode: "open-only", session: cloudSession, source: { kind, id }, projectName: "Tap" } as unknown as Parameters<typeof WorkerListRow>[0];
+		["cloud", "org-1", "Cloud"],
+		["local", "desktop-1", "Local"],
+	] as const)("shows %s identity without adding a second environment logo", async (kind, id, sourceLabel) => {
+		const props = { interactionMode: "open-only", session: { ...cloudSession, harness: "claude-code" }, source: { kind, id }, projectName: "Tap" } as unknown as Parameters<typeof WorkerListRow>[0];
 		await act(async () => { renderer = create(<WorkerListRow {...props} />); });
-		const badge = renderer!.root.findAll((node) => String(node.type) === "View" && node.props.accessibilityLabel === `${sourceLabel} environment`)[0];
-		expect(badge).toBeDefined();
-		expect(badge.props.style.borderColor).toBeUndefined();
-		expect(badge.props.style.borderWidth).toBeUndefined();
-		expect(badge.props.style.backgroundColor).toBeUndefined();
-		expect(badge.findAll((node) => String(node.type) === "Feather" && node.props.name === iconName && node.props.color === "primary")).toHaveLength(1);
-		expect(renderer!.root.findAll((node) => String(node.type) === "Text" && node.props.children === sourceLabel)).toHaveLength(0);
+		expect(renderer!.root.findAll((node) => String(node.type) === "Feather" && node.props.name === "cloud")).toHaveLength(kind === "cloud" ? 1 : 0);
+		if (kind === "cloud") expect(renderer!.root.findByProps({ testID: "machine-identity-name" }).props.children).toBe("Cloud");
+		expect(renderer!.root.findAll((node) => String(node.type) === "Image" && node.props.source === 101)).toHaveLength(1);
+		expect(renderer!.root.findAll((node) => String(node.type) === "Text" && node.props.children === "Cloud")).toHaveLength(kind === "cloud" ? 1 : 0);
 		const rowButton = renderer!.root.findAll((node) => String(node.type) === "Pressable" && node.props.accessibilityRole === "button")[0];
 		expect(rowButton.props.accessibilityLabel).toContain(sourceLabel);
 	});

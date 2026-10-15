@@ -8,10 +8,16 @@ vi.mock("expo-secure-store", () => ({
 }));
 
 import { clearTokens, isExpired, readTokens, writeTokens } from "./tokens";
+import { resolveCloudDeployment } from "./deployment";
 
 beforeEach(() => store.clear());
 
 describe("cloud tokens", () => {
+  it("retains existing staging credentials when its login return is unchanged", async () => {
+    const previousKey = '["https://staging-api.aoagents.dev","client_01KZ3VRKC374HS91XGRDPT3671","aoagents.ao://callback","workos"]';
+    await writeTokens({ accessToken: "existing-staging", expiresAt: 2000 }, previousKey);
+    expect(await readTokens(resolveCloudDeployment({ development: true }).key)).toMatchObject({ accessToken: "existing-staging" });
+  });
   it("never adopts ambiguous legacy tokens or touches pairing credentials", async () => {
     store.set("ao.cloud.tokens", JSON.stringify({ accessToken: "legacy", expiresAt: 1000 }));
     store.set("ao.account.session", JSON.stringify({ refreshToken: "legacy" }));

@@ -40,12 +40,10 @@ export const WorkerDock = memo(function WorkerDock({
 	onSearchOpen,
 	onSearchClose,
 	projectFiltered,
-	environmentFilter,
 	onSelectEnvironment,
 	projectOptions,
-	environments = [],
-	selectedEnvironmentId = "all",
-	onSelectMachine,
+	environments,
+	selectedEnvironmentId,
 	selectedProjectId,
 	selectedProjectLabel,
 	onSelectProject,
@@ -108,27 +106,13 @@ export const WorkerDock = memo(function WorkerDock({
 							systemImage="globe"
 							modifiers={[menuOrder("fixed")]}
 						>
-							{(["all", "local", "cloud"] as const).map((environment) => (
-								<Button
-									key={environment}
-									label={environment === "all" ? "All environments" : environment === "local" ? "Local" : "Cloud"}
-									systemImage={environmentFilter === environment ? "checkmark" : undefined}
-									onPress={() => {
-										haptics.select();
-										startTransition(() => onSelectEnvironment(environment));
-									}}
-								/>
-							))}
-						</Menu>
-
-						{onSelectMachine && environmentFilter !== "cloud" ? <Menu label="Machine" systemImage="tray.2" modifiers={[menuOrder("fixed")]}>
 							{environmentOptions.map((environment) => (
 								<Toggle key={environment.id} label={environment.label}
 									systemImage={machineMenuImage(environment.id === ALL_WORKER_ENVIRONMENTS ? "server" : machineAppearance({ id: environment.id, name: environment.label, appearance: environment.appearance }).symbol)}
 									isOn={environment.id === selectedEnvironmentId} modifiers={[tint(t.textSecondary)]}
-									onIsOnChange={() => { haptics.select(); startTransition(() => onSelectMachine(environment.id)); }} />
+									onIsOnChange={() => { haptics.select(); startTransition(() => onSelectEnvironment(environment.id)); }} />
 							))}
-						</Menu> : null}
+						</Menu>
 						{/* The label is the selection on its own: naming the menu in front
 						    of it pushed the row past the width the menu reserves, and it
 						    wrapped. */}

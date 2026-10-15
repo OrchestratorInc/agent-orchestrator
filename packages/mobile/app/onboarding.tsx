@@ -79,7 +79,7 @@ export default function OnboardingScreen() {
 						{cloudSignIn.busy ? (
 							<ActivityIndicator size="small" />
 						) : (
-							<Text style={styles.cloudAltText}>Use AO Cloud instead</Text>
+							<Text style={styles.cloudAltText}>Use Orchestrator Cloud instead</Text>
 						)}
 					</Pressable>
 				</View>

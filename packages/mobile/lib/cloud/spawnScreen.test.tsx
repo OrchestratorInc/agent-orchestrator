@@ -8,6 +8,7 @@ const f = vi.hoisted(() => ({
 	sourceFor: vi.fn(), configForHost: vi.fn(() => null), isCurrent: vi.fn(),
 	board: { projects: [{ source: { kind: "cloud", id: "o1" }, value: { id: "p1", name: "Demo" } }], sources: { '["cloud","o1"]': { resolved: true, loading: false } } },
 	available: [{ kind: "cloud", id: "o1" }],
+	hostStates: [] as Array<{ hostId: string; name: string }>,
 }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
 	getItem: async (key: string) => f.storage.get(key) ?? null, setItem: async (key: string, value: string) => { f.storage.set(key, value); }, removeItem: async (key: string) => { f.storage.delete(key); },
@@ -20,7 +21,7 @@ vi.mock("expo-document-picker", () => ({ getDocumentAsync: vi.fn() }));
 vi.mock("expo-file-system", () => ({ File: class {} }));
 vi.mock("../icons", () => ({ Feather: "Feather" }));
 vi.mock("../api", () => ({ ApiError: class extends Error {}, getAgentModels: vi.fn(), getAgents: vi.fn(), getProject: vi.fn(), getSettings: vi.fn() }));
-vi.mock("../store", () => ({ useApp: () => ({ scopedBoard: f.board, availableSources: f.available, sourceFor: f.sourceFor, spawnOn: f.spawn, configForHost: f.configForHost, hostStates: [], configResolved: true, switchHost: vi.fn(), setActiveProject: vi.fn() }) }));
+vi.mock("../store", () => ({ useApp: () => ({ scopedBoard: f.board, availableSources: f.available, sourceFor: f.sourceFor, spawnOn: f.spawn, configForHost: f.configForHost, hostStates: f.hostStates, configResolved: true, switchHost: vi.fn(), setActiveProject: vi.fn() }) }));
 vi.mock("./authStore", () => ({ useCloudAuth: () => ({ client: f.client, orgId: "o1", isCurrentSession: f.isCurrent }) }));
 vi.mock("../ThemeProvider", () => ({ useTheme: () => ({}), useThemedStyles: (fn: (v: unknown) => unknown) => fn({}) }));
 vi.mock("../haptics", () => ({ haptics: { tap: vi.fn(), success: vi.fn(), error: vi.fn() } }));
@@ -39,11 +40,24 @@ beforeEach(() => {
 	vi.spyOn(console, "error").mockImplementation(() => {});
 	f.storage.clear(); f.current = true; f.callbacks = []; f.push.mockReset(); f.back.mockReset(); f.spawn.mockReset().mockResolvedValue({ id: "s1", projectId: "p1" });
 	f.sourceFor.mockImplementation(() => f.source); f.isCurrent.mockImplementation(() => f.current);
+	f.available = [{ kind: "cloud", id: "o1" }]; f.hostStates = [];
 	f.client.getProject.mockReset().mockResolvedValue({ project: f.project });
 	f.client.listUserProviderConnections.mockReset().mockResolvedValue([{ provider: "codex", label: "default", validationState: "valid" }]);
 });
 afterEach(async () => { if (renderer) await act(async () => renderer!.unmount()); renderer = undefined; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 describe("Cloud spawn sheet", () => {
+	it("offers machine names and Cloud as destination labels", async () => {
+		f.available = [{ kind: "local", id: "host-a" }, { kind: "local", id: "host-b" }, { kind: "cloud", id: "o1" }];
+		f.hostStates = [{ hostId: "host-a", name: "Alpha" }, { hostId: "host-b", name: "Beta" }];
+		f.sourceFor.mockImplementation((source) => source.id === "host-b" ? null : f.source);
+		await mount();
+		expect(controls().destinations).toEqual([
+			{ source: { kind: "local", id: "host-a" }, label: "Alpha", available: true, unavailableReason: null },
+			{ source: { kind: "local", id: "host-b" }, label: "Beta", available: false, unavailableReason: null },
+			{ source: { kind: "cloud", id: "o1" }, label: "Cloud", available: true, unavailableReason: null },
+		]);
+		expect(controls().destination).toEqual({ kind: "cloud", id: "o1" });
+	});
 	it("shows project-default and custom model choices without a desktop catalog", async () => {
 		await mount(); expect(controls().showModels).toBe(true); expect(controls().showAttachments).toBe(false);
 		expect(controls().modelLabel).toBe("configured"); expect(controls().models).toContainEqual({ id: "__custom__", label: "Custom model…" });

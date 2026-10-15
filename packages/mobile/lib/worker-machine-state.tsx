@@ -32,7 +32,7 @@ export function WorkerMachineState({ host, environments, onSelectEnvironment, on
 			</Text>
 			<View style={styles.actions}>
 				{!connecting ? <Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRetry} /> : null}
-				<EnvironmentPicker environments={environments} selectedEnvironmentId={host.hostId} onSelectEnvironment={onSelectEnvironment} />
+				<EnvironmentPicker environments={environments} selectedEnvironmentId={environments.find((environment) => environment.source?.kind === "local" && environment.source.id === host.hostId)?.id ?? host.hostId} onSelectEnvironment={onSelectEnvironment} />
 			</View>
 		</View>
 	);

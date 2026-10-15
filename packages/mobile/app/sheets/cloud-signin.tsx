@@ -1,4 +1,4 @@
-import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { Redirect, Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { Platform } from "react-native";
 import { CloudSignInSheet } from "../../lib/CloudSignInSheet";
 import { backOr } from "../../lib/backNavigation";
@@ -11,6 +11,8 @@ import { localAuthAvailable } from "../../lib/cloud/localAuthAvailable";
 export default function CloudSignInSheetRoute() {
 	const router = useRouter();
 	const { from } = useLocalSearchParams<{ from?: string }>();
+	// Hosted entry points open AuthKit directly; this route is only a local form.
+	if (!localAuthAvailable(CLOUD_BASE_URL)) return <Redirect href={from === "onboarding" ? "/onboarding" : "/"} />;
 
 	function done() {
 		if (from === "onboarding") router.replace("/");

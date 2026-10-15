@@ -8,6 +8,7 @@ import type { CloudTokens } from "./tokens";
 export type AuthBrowserResult = { type: "success"; url: string } | { type: string };
 
 export type WorkOSSignInDeps = {
+	callbackUri: string;
 	createPkce(): Promise<{ verifier: string; challenge: string }>;
 	makeState(): string;
 	/** Builds the hosted AuthKit URL. Injected so this module imports no config. */
@@ -30,6 +31,10 @@ export async function runWorkOSSignIn(deps: WorkOSSignInDeps): Promise<CloudToke
 	if (result.type !== "success" || typeof (result as { url?: unknown }).url !== "string") return null;
 
 	const url = new URL((result as { url: string }).url);
+	const callback = new URL(deps.callbackUri);
+	if (url.protocol !== callback.protocol || url.host !== callback.host || url.pathname !== callback.pathname || url.username || url.password) {
+		throw new Error("Sign-in could not be completed: an unexpected callback was returned.");
+	}
 	const returnedState = url.searchParams.get("state");
 	if (returnedState !== state) {
 		throw new Error("Sign-in could not be completed: the response state did not match this request.");

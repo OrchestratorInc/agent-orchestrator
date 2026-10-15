@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostedProjectRow } from "./hostedRows";
 import { MachineIdentity } from "./MachineIdentity";
 import type { OrchestratorProjectRow } from "./orchestratorView";
-import { darkTheme, lightTheme } from "./theme";
 
 const fixture = vi.hoisted(() => ({ scheme: "dark" as "dark" | "light" }));
 
@@ -36,7 +35,7 @@ vi.mock("react-native", async () => {
 	};
 });
 
-import { ProjectCard } from "./project-card";
+import { ProjectCard, ProjectMachineIndicator } from "./project-card";
 
 const row: OrchestratorProjectRow = {
 	project: { id: "project-1", name: "Tap", kind: "single_repo" },
@@ -68,26 +67,51 @@ afterEach(async () => {
 	vi.unstubAllGlobals();
 });
 
-describe("project environment badge", () => {
+describe("project source identity", () => {
 	it.each([
-		["dark", darkTheme],
-		["light", lightTheme],
-	] as const)("shows borderless Local and Cloud icons in %s mode", async (scheme, theme) => {
+		"dark",
+		"light",
+	] as const)("identifies Cloud projects once with main's name and symbol treatment in %s mode", async (scheme) => {
 		fixture.scheme = scheme;
-		for (const [sourceLabel, iconName] of [["Local", "server"], ["Cloud", "cloud"]] as const) {
-			await act(async () => { renderer = create(<ProjectCard row={row} sourceLabel={sourceLabel} busy={false} onOpenProject={vi.fn()} />); });
-			const badge = renderer!.root.findAll((node) => String(node.type) === "View" && node.props.accessibilityLabel === `${sourceLabel} environment`)[0];
-			expect(badge).toBeDefined();
-			expect(badge.props.style.borderColor).toBeUndefined();
-			expect(badge.props.style.borderWidth).toBeUndefined();
-			expect(badge.props.style.backgroundColor).toBeUndefined();
-			expect(badge.findAll((node) => String(node.type) === "Feather" && node.props.name === iconName && node.props.color === theme.textPrimary)).toHaveLength(1);
-			expect(renderer!.root.findAll((node) => String(node.type) === "Text" && node.props.children === sourceLabel)).toHaveLength(0);
-			const rowButton = renderer!.root.findAll((node) => String(node.type) === "Pressable" && node.props.accessibilityRole === "button")[0];
-			expect(rowButton.props.accessibilityLabel).toContain(sourceLabel);
-			await act(async () => renderer?.unmount());
-			renderer = undefined;
-		}
+		await act(async () => { renderer = create(<ProjectCard row={row} sourceLabel="Cloud" busy={false} onOpenProject={vi.fn()} />); });
+		expect(renderer!.root.findAll((node) => String(node.type) === "Feather" && node.props.name === "cloud")).toHaveLength(1);
+		expect(renderer!.root.findAllByType(MachineIdentity)).toHaveLength(1);
+		expect(renderer!.root.findByType(MachineIdentity).props.appearance).toEqual({ symbol: "cloud" });
+		expect(renderer!.root.findAll((node) => String(node.type) === "Text" && node.props.children === "Cloud")).toHaveLength(1);
+		const rowButton = renderer!.root.findAll((node) => String(node.type) === "Pressable" && node.props.accessibilityRole === "button")[0];
+		expect(rowButton.props.accessibilityLabel).toContain("Cloud");
+	});
+
+	it.each(["dark", "light"] as const)("shows one quiet Cloud identity in the project header in %s mode", async (scheme) => {
+		fixture.scheme = scheme;
+		await act(async () => {
+			renderer = create(<ProjectMachineIndicator source={{ kind: "cloud", id: "org-1" }} hosts={[
+				{ hostId: "org-1", name: "Build Laptop", appearance: { symbol: "laptop" } },
+			]} />);
+		});
+		expect(renderer!.root.findAllByType(MachineIdentity)).toHaveLength(1);
+		const identity = renderer!.root.findByType(MachineIdentity);
+		expect(identity.props.name).toBe("Cloud");
+		expect(identity.props.appearance).toEqual({ symbol: "cloud" });
+		const name = renderer!.root.find((node) => String(node.type) === "Text" && node.props.children === "Cloud");
+		expect(name.props.numberOfLines).toBe(1);
+		expect(name.props.ellipsizeMode).toBe("tail");
+		const symbol = renderer!.root.find((node) => String(node.type) === "Feather" && node.props.name === "cloud");
+		expect(symbol.props.color).toBe(name.props.style.color);
+		const view = renderer!.root.find((node) => String(node.type) === "View" && node.props.testID === "project-machine-identity");
+		const style = Object.assign({}, ...view.props.style);
+		expect(style).toMatchObject({ minWidth: 0, maxWidth: 132, flexShrink: 1 });
+		expect(style.borderWidth).toBeUndefined();
+		expect(style.backgroundColor).toBeUndefined();
+	});
+
+	it.each([null, { kind: "local", id: "unknown-host" }] as const)("does not invent a project machine for unresolved source %j", async (source) => {
+		await act(async () => {
+			renderer = create(<ProjectMachineIndicator source={source} hosts={[
+				{ hostId: "host-mac", name: "Mac", appearance: { symbol: "server" } },
+			]} />);
+		});
+		expect(renderer!.root.findAllByType(MachineIdentity)).toHaveLength(0);
 	});
 });
 
@@ -112,30 +136,22 @@ describe("ProjectCard", () => {
 		let renderer!: ReactTestRenderer;
 
 		act(() => {
-			renderer = create(<ProjectCard row={row} busy={false} onOpenProject={() => {}} onOrchestrator={() => {}} />);
+			renderer = create(<ProjectCard row={row} sourceLabel="Local" busy={false} onOpenProject={() => {}} onOrchestrator={() => {}} />);
 		});
 
 		const identity = renderer.root.findByType(MachineIdentity);
 		expect(identity.props.name).toBe("Build Laptop");
 		expect(identity.props.appearance).toEqual({ symbol: "laptop" });
+		expect(renderer.root.findAll((node) => String(node.type) === "Feather" && ["cloud", "server"].includes(node.props.name))).toHaveLength(0);
+		expect(renderer.root.findAll((node) => String(node.type) === "Text" && node.props.children === "Local")).toHaveLength(0);
+		act(() => renderer.unmount());
 	});
 
 	it("shows the routed machine rather than the default machine in a project header", async () => {
-		const projectCard = await import("./project-card") as typeof import("./project-card") & {
-			ProjectMachineIndicator?: (props: {
-				hostId: string | undefined;
-				hosts: Array<{ hostId: string; name: string; appearance: { symbol: "server" | "laptop" } }>;
-			}) => React.ReactNode;
-		};
-		expect(projectCard.ProjectMachineIndicator).toBeTypeOf("function");
-		if (!projectCard.ProjectMachineIndicator) return;
-		const ProjectMachineIndicator = projectCard.ProjectMachineIndicator;
-		let renderer!: ReactTestRenderer;
-
-		act(() => {
+		await act(async () => {
 			renderer = create(
 				<ProjectMachineIndicator
-					hostId="host-dev"
+					source={{ kind: "local", id: "host-dev" }}
 					hosts={[
 						{ hostId: "host-mac", name: "Mac", appearance: { symbol: "server" } },
 						{ hostId: "host-dev", name: "Development Laptop", appearance: { symbol: "laptop" } },
@@ -144,7 +160,7 @@ describe("ProjectCard", () => {
 			);
 		});
 
-		const identity = renderer.root.findByType(MachineIdentity);
+		const identity = renderer!.root.findByType(MachineIdentity);
 		expect(identity.props.name).toBe("Development Laptop");
 		expect(identity.props.appearance).toEqual({ symbol: "laptop" });
 	});

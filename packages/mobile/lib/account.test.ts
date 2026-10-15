@@ -34,14 +34,14 @@ beforeEach(async () => {
 it("shares Cloud's AuthKit callback, verified account, and SecureStore credential owner", async () => {
 	await expect(signInToAccount()).resolves.toEqual(account);
 	const [authorizationUrl, redirect] = browser.openAuthSessionAsync.mock.calls[0] as [string, string];
-	expect(redirect).toBe("aoagents.ao://callback");
+	expect(redirect).toBe(CLOUD_DEPLOYMENT.callbackUri);
 	expect(new URL(authorizationUrl).searchParams.get("redirect_uri")).toBe(CLOUD_DEPLOYMENT.redirectUri);
 	expect(getAccountSessionOwner(CLOUD_DEPLOYMENT).getSnapshot().account).toEqual(await loadAccount());
 	expect(await getAccountAccessToken()).toBe(token);
 	expect([...secure.keys()].every((key) => key.startsWith("ao.cloud.tokens.v2."))).toBe(true);
 });
 it("rejects wrong state before exchanging a code", async () => {
-	browser.openAuthSessionAsync.mockResolvedValueOnce({ type: "success", url: "aoagents.ao://callback?code=once&state=wrong" });
+	browser.openAuthSessionAsync.mockResolvedValueOnce({ type: "success", url: `${CLOUD_DEPLOYMENT.callbackUri}?code=once&state=wrong` });
 	await expect(signInToAccount()).rejects.toThrow(/state/i);
 	expect(fetch).not.toHaveBeenCalled();
 });

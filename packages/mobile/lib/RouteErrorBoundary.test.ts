@@ -54,10 +54,11 @@ const deferredRoutes = ["(tabs)/_layout.tsx", "settings/_layout.tsx"];
 describe("route error boundaries", () => {
 	it("places every route file on exactly one list", () => {
 		// expo-router takes any .js/.jsx/.ts/.tsx under app/ as a route, bar the
-		// `+api`, `+html`, `+middleware` and `+native-intent` files, of which this app
-		// has none. The recursive listing joins with the platform separator.
+		// `+api`, `+html`, `+middleware` and `+native-intent` files. The native
+		// intent hook does not render a screen and needs no screen fallback.
+		// The recursive listing joins with the platform separator.
 		const routes = readdirSync(appDir, { recursive: true, encoding: "utf8" })
-			.filter((file) => /\.[jt]sx?$/.test(file))
+			.filter((file) => /\.[jt]sx?$/.test(file) && file !== "+native-intent.tsx")
 			.map((file) => file.split(sep).join("/"))
 			.sort();
 		const placed = [rootLayout, ...screenRoutes, ...sheetRoutes, ...deferredRoutes];

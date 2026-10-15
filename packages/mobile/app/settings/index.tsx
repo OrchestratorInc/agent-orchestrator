@@ -30,6 +30,7 @@ import { getPushStatus, openNotificationSettings, registerForPush, unregisterFro
 import { describePushToggle, describeRegisterFailure, type PushStatus } from "../../lib/pushStatus";
 import { useApp } from "../../lib/store";
 import { useCloudAuth } from "../../lib/cloud/authStore";
+import { useCloudSignInAction } from "../../lib/cloud/useCloudSignInAction";
 import {
 	describeSoftwareUpdateRow,
 	describeStoreRow,
@@ -224,7 +225,7 @@ function SettingsCard({ children }: { children: ReactNode }) {
 }
 
 /**
- * The signed-in AO Cloud account, with the only way this device's stored
+ * The signed-in Orchestrator Cloud account, with the only way this device's stored
  * bearer token gets removed: `authStore.signOut` has no other caller, so
  * without this row a cloud credential can be stored but never revoked or
  * switched.
@@ -235,13 +236,13 @@ function SettingsCard({ children }: { children: ReactNode }) {
  */
 function CloudAccountRow() {
 	const cloudAuth = useCloudAuth();
-	const router = useRouter();
+	const cloudSignIn = useCloudSignInAction();
 	const email = cloudAuth.account?.email;
 	const [signingOut, setSigningOut] = useState(false);
 
 	function confirmSignOut() {
 		Alert.alert(
-			"Sign out of AO Cloud?",
+			"Sign out of Orchestrator Cloud?",
 			"This device's saved credential will be removed. You'll need to sign in again to see cloud sessions.",
 			[
 				{ text: "Cancel", style: "cancel" },
@@ -261,11 +262,11 @@ function CloudAccountRow() {
 	return (
 		<CardRow
 			icon="cloud"
-			label="AO Cloud account"
-			value={signedIn ? (signingOut ? "Signing out…" : (email ?? "Signed in")) : "Not signed in"}
-			disabled={signingOut}
-			loading={signingOut}
-			onPress={signedIn ? () => { haptics.warning(); confirmSignOut(); } : () => router.push("/sheets/cloud-signin")}
+			label="Orchestrator Cloud account"
+			value={signedIn ? (signingOut ? "Signing out…" : (email ?? "Signed in")) : cloudSignIn.busy ? "Signing in…" : "Not signed in"}
+			disabled={signingOut || cloudSignIn.busy}
+			loading={signingOut || cloudSignIn.busy}
+			onPress={signedIn ? () => { haptics.warning(); confirmSignOut(); } : () => { void cloudSignIn.signIn(); }}
 		/>
 	);
 }

@@ -78,7 +78,7 @@ export function CloudUnreadyState() {
 		return (
 			<EmptyState
 				icon="cloud"
-				title="Sign in to AO Cloud"
+				title="Sign in to Orchestrator Cloud"
 				message="Sign in to see and drive the agents running in your cloud workspace."
 				action={<Button title="Sign in" icon="log-in" loading={cloudSignIn.busy} onPress={cloudSignIn.signIn} />}
 			/>

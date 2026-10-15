@@ -1,21 +1,23 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DashboardSession } from "./api";
+import type { DashboardSession, ProjectInfo } from "./api";
 import type { HostSnapshot } from "./otherHosts";
 
 const fixtures = vi.hoisted(() => ({
 	platform: "ios",
 	hostStates: [] as HostSnapshot[],
+	cloud: null as { orgId: string; sessions: DashboardSession[]; projects: ProjectInfo[] } | null,
 	refreshAll: vi.fn(async () => {}),
 	refreshHost: vi.fn(async (_hostId: string) => {}),
 	showMenu: vi.fn(),
 	push: vi.fn(),
+	signIn: vi.fn(async () => true),
 	theme: new Proxy({}, { get: () => "#000000" }),
 }));
 
 vi.mock("expo-router", () => ({ useRouter: () => ({ push: fixtures.push, navigate: vi.fn() }) }));
 vi.mock("react-native", () => ({
-	ActivityIndicator: "ActivityIndicator", FlatList: "FlatList", View: "View", Text: "Text", Pressable: "Pressable", Platform: { get OS() { return fixtures.platform; } },
+	ActivityIndicator: "ActivityIndicator", Alert: { alert: vi.fn() }, FlatList: "FlatList", View: "View", Text: "Text", Pressable: "Pressable", Platform: { get OS() { return fixtures.platform; } },
 	Keyboard: { dismiss: vi.fn() }, StyleSheet: { create: (styles: object) => styles },
 }));
 vi.mock("react-native-reanimated", () => ({ default: { View: "AnimatedView" }, useAnimatedStyle: () => ({}) }));
@@ -24,6 +26,7 @@ vi.mock("react-native-keyboard-controller", () => ({
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) }));
 vi.mock("./haptics", () => ({ haptics: { tap: vi.fn(), select: vi.fn() } }));
+vi.mock("./cloud/authStore", () => ({ useCloudAuth: () => ({ signedIn: false, signInWithWorkOS: fixtures.signIn }) }));
 vi.mock("./icons", () => ({ Feather: "Feather" }));
 vi.mock("react-native-svg", () => ({ default: "Svg", Path: "Path", Rect: "Rect" }));
 vi.mock("@expo/ui/community/menu", async () => {
@@ -43,11 +46,19 @@ vi.mock("./store", async () => {
 	refreshAll: fixtures.refreshAll, refreshHost: fixtures.refreshHost,
 	allSessions: fixtures.hostStates.flatMap((host) => host.sessions.map((session) => ({ ...session, hostId: host.hostId }))), allProjects: [],
 	hostStates: fixtures.hostStates, notificationsUnread: 0,
-	scopedBoard: compose(fixtures.hostStates.map((host) => ({
+	availableSources: [
+		...fixtures.hostStates.map(host => ({ kind: "local" as const, id: host.hostId })),
+		...(fixtures.cloud ? [{ kind: "cloud" as const, id: fixtures.cloud.orgId }] : []),
+	],
+	scopedBoard: compose([...fixtures.hostStates.map((host) => ({
 		source: { kind: "local" as const, id: host.hostId },
 		status: { resolved: !host.loading, available: !!host.config, loading: host.loading, stale: !!host.error, error: host.error },
 		snapshot: { board: { projects: host.projects, sessions: host.sessions, orchestrators: host.orchestrators } },
-	}))),
+	})), ...(fixtures.cloud ? [{
+		source: { kind: "cloud" as const, id: fixtures.cloud.orgId },
+		status: { resolved: true, available: true, loading: false, stale: false, error: null },
+		snapshot: { board: { projects: fixtures.cloud.projects, sessions: fixtures.cloud.sessions, orchestrators: [] } },
+	}] : [])]),
 	}) };
 });
 vi.mock("./StaleBanner", () => ({ StaleBanner: "StaleBanner" }));
@@ -80,7 +91,7 @@ import FleetScreen from "../app/(tabs)/index";
 let renderer: ReactTestRenderer;
 function selectWindows() {
 	act(() => { renderer = create(<FleetScreen />); });
-	act(() => renderer.root.findByType("WorkerDock" as never).props.onSelectMachine("windows"));
+	act(() => renderer.root.findByType("WorkerDock" as never).props.onSelectEnvironment('["local","windows"]'));
 }
 function emptyState() {
 	const status = renderer.root.findAllByProps({ testID: "worker-machine-status" })[0];
@@ -110,12 +121,22 @@ beforeEach(() => {
 	fixtures.refreshHost.mockClear();
 	fixtures.showMenu.mockClear();
 	fixtures.push.mockClear();
+	fixtures.signIn.mockClear();
+	fixtures.cloud = null;
 	fixtures.hostStates = [
 		snapshot({ hostId: "mac", name: "Mac", connection: "open", error: null, sessions: [session("worker-1")] }),
 		snapshot({}),
 	];
 });
 afterEach(() => { act(() => renderer?.unmount()); vi.unstubAllGlobals(); });
+
+it("opens hosted sign-in directly from the empty Workers board", async () => {
+	fixtures.hostStates = [];
+	await act(async () => { renderer = create(<FleetScreen />); });
+	await act(async () => { await renderer.root.findByProps({ title: "Sign in to Orchestrator Cloud" }).props.onPress(); });
+	expect(fixtures.signIn).toHaveBeenCalledOnce();
+	expect(fixtures.push).not.toHaveBeenCalled();
+});
 
 describe("Workers dock stability", () => {
 	it("keeps the dock's environments across polls that change only machine state", () => {
@@ -174,8 +195,8 @@ describe("Workers selected-machine reachability", () => {
 		const menu = renderer.root.findByType("MenuView" as never);
 		expect(menu.props.actions.map((action: { title: string }) => action.title)).toEqual(["All environments", "Mac", "Windows"]);
 		expect(menu.props.actions[2].state).toBe("on");
-		act(() => menu.props.onPressAction({ nativeEvent: { event: "mac" } }));
-		expect(renderer.root.findByType("WorkerDock" as never).props.selectedEnvironmentId).toBe("mac");
+		act(() => menu.props.onPressAction({ nativeEvent: { event: '["local","mac"]' } }));
+		expect(renderer.root.findByType("WorkerDock" as never).props.selectedEnvironmentId).toBe('["local","mac"]');
 	});
 	it("opens an environment-only sheet on Android and applies a choice immediately", () => {
 		fixtures.platform = "android";
@@ -191,7 +212,7 @@ describe("Workers selected-machine reachability", () => {
 		expect(choices[2].props.accessibilityState.checked).toBe(true);
 		expect(choices[2].findAllByType("Feather" as never)[0].props.name).toBe("laptop");
 		act(() => choices[1].props.onPress());
-		expect(renderer.root.findByType("WorkerDock" as never).props.selectedEnvironmentId).toBe("mac");
+		expect(renderer.root.findByType("WorkerDock" as never).props.selectedEnvironmentId).toBe('["local","mac"]');
 		expect(renderer.root.findAllByType("BottomSheet" as never)).toHaveLength(0);
 	});
 	it("dismisses the Android sheet without changing the environment", () => {
@@ -200,7 +221,7 @@ describe("Workers selected-machine reachability", () => {
 		act(() => renderer.root.findByProps({ accessibilityLabel: "Switch environment" }).props.onPress());
 		act(() => renderer.root.findByType("BottomSheet" as never).props.onClose());
 		expect(renderer.root.findByType("BottomSheet" as never).props.index).toBe(-1);
-		expect(renderer.root.findByType("WorkerDock" as never).props.selectedEnvironmentId).toBe("windows");
+		expect(renderer.root.findByType("WorkerDock" as never).props.selectedEnvironmentId).toBe('["local","windows"]');
 	});
 	it("keeps the small connecting indicator beside its status and away from the picker", () => {
 		Object.assign(fixtures.hostStates[1], { connection: "connecting", loading: true, error: null, appearance: { symbol: "laptop" } });
@@ -227,5 +248,62 @@ describe("Workers selected-machine reachability", () => {
 		selectWindows();
 		expect(renderer.root.findByType("WorkerBoardList" as never).props.sessions).toHaveLength(1);
 		expect(renderer.root.findAllByType("EmptyState" as never)).toHaveLength(0);
+	});
+});
+
+describe("one Workers environment selection", () => {
+	function dock() { return renderer.root.findByType("WorkerDock" as never); }
+	function workers() { return renderer.root.findByType("WorkerBoardList" as never).props.sessions; }
+	function choose(id: string) { act(() => dock().props.onSelectEnvironment(id)); }
+	beforeEach(() => {
+		fixtures.hostStates[0].projects = [{ id: "project-1", name: "Desktop project", kind: "single_repo" }];
+		fixtures.cloud = { orgId: "mac", sessions: [session("cloud-recent")], projects: [{ id: "project-1", name: "Cloud project", kind: "single_repo" }] };
+		act(() => { renderer = create(<FleetScreen />); });
+	});
+	it("offers named machines and Cloud in the same choice without colliding source IDs", () => {
+		expect(dock().props.environments.map((item: { id: string; name: string }) => [item.id, item.name])).toEqual([
+			['["local","mac"]', "Mac"], ['["local","windows"]', "Windows"], ['["cloud","mac"]', "Cloud"],
+		]);
+	});
+	it("switches from a machine to Cloud for all worker lanes and project options", () => {
+		choose('["local","mac"]');
+		expect(workers().map((entry: { value: DashboardSession }) => entry.value.id)).toEqual(["worker-1"]);
+		act(() => dock().props.onSelectProject('["local","mac","project-1"]'));
+		const localIdentity = renderer.root.findByType("WorkerBoardList" as never).props.identityKey;
+		choose('["cloud","mac"]');
+		expect(dock().props.selectedProjectId).toBe("all");
+		expect(workers().map((entry: { value: DashboardSession }) => entry.value.id)).toEqual(["cloud-recent"]);
+		expect(dock().props.projectOptions).toEqual([{ id: "all", label: "All projects" }, { id: '["cloud","mac","project-1"]', label: "Cloud project · Cloud" }]);
+		expect(renderer.root.findByType("WorkerBoardList" as never).props.identityKey).not.toBe(localIdentity);
+		act(() => dock().props.onSpawn());
+		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { source: "cloud", sourceId: "mac" } });
+		choose("all");
+		expect(workers()).toHaveLength(2);
+	});
+	it("preserves a matching project and its exact source when spawning", () => {
+		choose('["cloud","mac"]');
+		act(() => dock().props.onSelectProject('["cloud","mac","project-1"]'));
+		choose("all");
+		expect(dock().props.selectedProjectId).toBe('["cloud","mac","project-1"]');
+		act(() => dock().props.onSpawn());
+		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { projectId: "project-1", source: "cloud", sourceId: "mac" } });
+	});
+	it("clears a departed Cloud organization rather than spawning on its old scope", () => {
+		choose('["cloud","mac"]');
+		act(() => dock().props.onSelectProject('["cloud","mac","project-1"]'));
+		fixtures.cloud = { orgId: "next-org", sessions: [], projects: [] };
+		act(() => renderer.update(<FleetScreen />));
+		expect(dock().props.selectedEnvironmentId).toBe("all");
+		expect(dock().props.selectedProjectId).toBe("all");
+		act(() => dock().props.onSpawn());
+		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: {} });
+	});
+	it("supports a Cloud-only account without inventing a local machine destination", () => {
+		fixtures.hostStates = [];
+		act(() => renderer.update(<FleetScreen />));
+		choose('["cloud","mac"]');
+		expect(workers()).toHaveLength(1);
+		act(() => dock().props.onSpawn());
+		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { source: "cloud", sourceId: "mac" } });
 	});
 });

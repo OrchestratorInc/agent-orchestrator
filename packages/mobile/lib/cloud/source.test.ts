@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import NativeAbortController from "abort-controller";
 const storage = vi.hoisted(() => ({ data: new Map<string, string>(), setItem: vi.fn() }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
 	getItem: async (key: string) => storage.data.get(key) ?? null,
@@ -42,6 +43,78 @@ function clientStub<T extends Record<string, unknown> = Record<string, never>>(o
 		...overrides,
 	};
 }
+
+describe("Cloud Chat with React Native cancellation signals", () => {
+	beforeEach(() => vi.stubGlobal("AbortController", NativeAbortController));
+	afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+	const events = [
+		{ sessionId: "s1", sequence: 1, type: "chat.user_message", createdAt: "now", payload: { text: "hi" } },
+		{ sessionId: "s1", sequence: 2, type: "chat.assistant_delta", createdAt: "now", payload: { text: "hello" } },
+	];
+	it("loads user and assistant messages without the optional native throwIfAborted method", async () => {
+		const controller = new AbortController();
+		expect(controller.signal.throwIfAborted).toBeUndefined();
+		const source = createCloudSessionSource({ client: clientStub({
+			getSession: vi.fn(async () => ({ session: { ...fullSession("s1"), interfaceMode: "chat" } })),
+			replayEvents: vi.fn(async () => ({ events, nextAfter: 2, hasMore: false })),
+		}) as never, orgId: "o1" });
+		const page = await source.getConversationPage("s1", undefined, { signal: controller.signal });
+		expect(page.items).toMatchObject([{ role: "user", text: "hi" }, { role: "assistant", text: "hello" }]);
+		expect(page.latestSequence).toBe(2);
+	});
+	it("polls newly arrived replies with native signals", async () => {
+		vi.useFakeTimers();
+		const source = createCloudSessionSource({ client: clientStub({
+			replayEvents: vi.fn().mockResolvedValueOnce({ events: [events[0]], nextAfter: 1, hasMore: false })
+				.mockResolvedValue({ events: [events[1]], nextAfter: 2, hasMore: false }),
+		}) as never, orgId: "o1" });
+		const listener = vi.fn(); const onError = vi.fn();
+		const unsubscribe = source.subscribeEvents("s1", listener, { onError });
+		try {
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(listener.mock.calls.map(([event]) => event.payload.text)).toEqual(["hi", "hello"]);
+			expect(onError).not.toHaveBeenCalled();
+		} finally { unsubscribe(); }
+	});
+	it("can retry loading after a cancelled native replay without adopting the cancelled history", async () => {
+		let finishReplay!: (value: unknown) => void;
+		const source = createCloudSessionSource({ client: clientStub({
+			getSession: vi.fn(async () => ({ session: fullSession("s1") })),
+			replayEvents: vi.fn().mockImplementationOnce(() => new Promise((resolve) => { finishReplay = resolve; }))
+				.mockResolvedValue({ events, nextAfter: 2, hasMore: false }),
+		}) as never, orgId: "o1" });
+		const controller = new AbortController();
+		const page = source.getConversationPage("s1", undefined, { signal: controller.signal });
+		const cancelled = expect(page).rejects.toMatchObject({ name: "AbortError" });
+		controller.abort(); await cancelled;
+		finishReplay({ events, nextAfter: 2, hasMore: false });
+		expect(cloudConversationReplayCache.get("test-scope", "s1")).toBeUndefined();
+		expect((await source.getConversationPage("s1")).items).toHaveLength(2);
+	});
+	it("switches to Chat through polling with a native caller signal", async () => {
+		vi.useFakeTimers();
+		const source = createCloudSessionSource({ client: clientStub({
+			getSession: vi.fn().mockResolvedValueOnce({ session: { ...fullSession("s1"), interfaceMode: "tui" } })
+				.mockResolvedValueOnce({ session: { ...fullSession("s1"), interfaceMode: "tui" } })
+				.mockResolvedValue({ session: { ...fullSession("s1"), interfaceMode: "chat" } }),
+			getSessionInterfaceTransition: vi.fn().mockResolvedValueOnce({ supported: true, targetMode: "chat" })
+				.mockResolvedValueOnce({ supported: true, targetMode: "chat" })
+				.mockResolvedValueOnce({ supported: true, targetMode: "chat", transition: { phase: "target_starting", sourceMode: "tui", targetMode: "chat" } })
+				.mockResolvedValue({ supported: true, targetMode: "tui", transition: { phase: "completed", sourceMode: "tui", targetMode: "chat" } }),
+			startSessionInterfaceTransition: vi.fn(async () => ({ transition: { phase: "requested", sourceMode: "tui", targetMode: "chat" } })),
+		}) as never, orgId: "o1" });
+		const switching = source.switchToChat!("s1", { signal: new AbortController().signal }).then(() => "completed", (error: unknown) => error);
+		await vi.advanceTimersByTimeAsync(2_000);
+		expect(await switching).toBe("completed");
+	});
+	it("rejects an already cancelled native interface read before accessing Cloud", async () => {
+		const getSession = vi.fn(); const getSessionInterfaceTransition = vi.fn();
+		const source = createCloudSessionSource({ client: clientStub({ getSession, getSessionInterfaceTransition }) as never, orgId: "o1" });
+		const controller = new AbortController(); controller.abort();
+		await expect(source.getInterfaceTransition!("s1", { signal: controller.signal })).rejects.toMatchObject({ name: "AbortError" });
+		expect(getSession).not.toHaveBeenCalled(); expect(getSessionInterfaceTransition).not.toHaveBeenCalled();
+	});
+});
 
 describe("createCloudSessionSource", () => {
 	it("acknowledges the original recovery notice without unlocking either controller", async () => {

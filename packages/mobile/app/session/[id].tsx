@@ -24,6 +24,7 @@ import type { Theme } from "../../lib/theme";
 import { Button, EmptyState } from "../../lib/ui";
 import { useCloudInterfaceTransition } from "../../lib/cloud/useCloudInterfaceTransition";
 import { cloudInterfaceDisplayMode, cloudInterfaceSettledTarget } from "../../lib/cloud/interfaceTransition";
+import { useCloudSignInAction } from "../../lib/cloud/useCloudSignInAction";
 
 /**
  * The committed session mode is daemon-authoritative, including after an
@@ -36,6 +37,7 @@ export default function MobileSessionRoute() {
 	const { id: rawId, view: requestedView, source: sourceParam, sourceId, startup, hostId } = useLocalSearchParams<{ id: string; view?: string; source?: string; sourceId?: string; startup?: string; hostId?: string }>();
 	const id = String(rawId ?? "");
 	const router = useRouter();
+	const cloudSignIn = useCloudSignInAction();
 	const { scopedBoard, sourceFor, refreshSource, configForHost, hostStates } = useApp();
 	const route = resolveSessionRouteSource({ id, source: sourceParam, sourceId, hostId }, [...scopedBoard.sessions, ...scopedBoard.orchestrators]);
 	const source: SourceRef | null = route.kind === "found" ? route.source : null;
@@ -138,8 +140,9 @@ export default function MobileSessionRoute() {
 		<View style={styles.center}>
 			<EmptyState icon="wifi-off" title={source.kind === "cloud" ? "Cloud session unavailable" : "Desktop session unavailable"}
 				message="This session belongs to a source that is no longer connected."
-				action={<Button title={source.kind === "cloud" ? "Sign in to Cloud" : "Pair desktop"}
-					onPress={() => router.push(source.kind === "cloud" ? "/sheets/cloud-signin" : "/pair")} />} />
+				action={<Button title={source.kind === "cloud" ? "Sign in to Orchestrator Cloud" : "Pair desktop"}
+					loading={source.kind === "cloud" && cloudSignIn.busy}
+					onPress={() => { if (source.kind === "cloud") void cloudSignIn.signIn(); else router.push("/pair"); }} />} />
 		</View>
 	);
 	if (source?.kind === "cloud" && currentSource) {

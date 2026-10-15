@@ -17,6 +17,7 @@ export function useCloudInterfaceTransition(source: SessionSource | undefined, s
 	const [visible, setVisible] = useState(false);
 	const [loading, setLoading] = useState(Boolean(ownerKey));
 	const [starting, setStarting] = useState(false);
+	const [startingPolicy, setStartingPolicy] = useState<"drain" | "interrupt">();
 	const [cancelling, setCancelling] = useState(false);
 	const [acknowledgingNotice, setAcknowledgingNotice] = useState(false);
 	const [acknowledgeNoticeError, setAcknowledgeNoticeError] = useState<string>();
@@ -55,7 +56,7 @@ export function useCloudInterfaceTransition(source: SessionSource | undefined, s
 
 	useFocusEffect(useCallback(() => {
 		if (!ownerKey) return;
-		const stop = () => { for (const request of requests.current) request.abort(); requests.current.clear(); busy.current = false; setVisible(false); };
+		const stop = () => { for (const request of requests.current) request.abort(); requests.current.clear(); busy.current = false; setStarting(false); setStartingPolicy(undefined); setVisible(false); };
 		const update = (state: string) => {
 			stop();
 			if (state === "active") { setVisible(true); setStarting(false); setCancelling(false); setAcknowledgingNotice(false); void refresh(); }
@@ -77,7 +78,7 @@ export function useCloudInterfaceTransition(source: SessionSource | undefined, s
 
 	const start = useCallback(async (targetMode: "chat" | "tui", policy: "drain" | "interrupt", settings?: TurnSettings) => {
 		if (!owns() || !source?.startInterfaceTransition) throw new Error("Cloud interface switching is unavailable.");
-		if (busy.current) return; busy.current = true; setStarting(true); setError(undefined);
+		if (busy.current) return; busy.current = true; setStarting(true); setStartingPolicy(policy); setError(undefined);
 		readController.current?.abort();
 		const controller = controllerFor();
 		try {
@@ -87,7 +88,7 @@ export function useCloudInterfaceTransition(source: SessionSource | undefined, s
 			const next = { ...statusRef.current, supported: statusRef.current?.supported ?? true, targetMode, currentMode: result.transition.sourceMode, transition: result.transition };
 			statusRef.current = next; setOwned({ key: ownerKey, status: next }); setFailure({ count: 0 });
 		} catch (cause) { if (owns() && !controller.signal.aborted) setError(cloudRequestErrorCopy(cause)); throw cause; }
-		finally { requests.current.delete(controller); if (owns() && !controller.signal.aborted) { busy.current = false; setStarting(false); } }
+		finally { requests.current.delete(controller); if (owns() && !controller.signal.aborted) { busy.current = false; setStarting(false); setStartingPolicy(undefined); } }
 	}, [controllerFor, ownerKey, owns, sessionId, source]);
 	const cancel = useCallback(async () => {
 		if (!owns() || !source?.cancelInterfaceTransition) throw new Error("Cloud cancellation is unavailable.");
@@ -104,6 +105,6 @@ export function useCloudInterfaceTransition(source: SessionSource | undefined, s
 		catch (cause) { if (owns() && !controller.signal.aborted) setAcknowledgeNoticeError(cloudRequestErrorCopy(cause)); throw cause; }
 		finally { requests.current.delete(controller); if (owns()) setAcknowledgingNotice(false); }
 	}, [controllerFor, owns, refresh, sessionId, source]);
-	return { status, transition: status?.transition, loading, starting, cancelling, acknowledgingNotice, acknowledgeNoticeError, error, fetchFailed: failure.count > 0, start, cancel, acknowledgeNotice, refresh };
+	return { status, transition: status?.transition, loading, starting, startingPolicy, cancelling, acknowledgingNotice, acknowledgeNoticeError, error, fetchFailed: failure.count > 0, start, cancel, acknowledgeNotice, refresh };
 }
 export type CloudInterfaceControls = ReturnType<typeof useCloudInterfaceTransition>;

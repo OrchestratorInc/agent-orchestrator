@@ -44,7 +44,7 @@ vi.mock("@expo/ui/swift-ui", async () => {
 		Group: host("Group"),
 		HStack: host("HStack"),
 		Image: host("Image"),
-		Menu: host("Menu"),
+		Menu: ({ children, label, ...props }: { children?: React.ReactNode; label?: React.ReactNode }) => React.createElement("Menu", props, label, children),
 		Spacer: host("Spacer"),
 		Text: host("Text"),
 		VStack: host("VStack"),
@@ -82,7 +82,7 @@ describe("SpawnComposerControls on iOS", () => {
 		const onSelectProject = vi.fn();
 		await act(async () => {
 			renderer = create(<SpawnComposerControls
-				destinations={[{ source: { kind: "local", id: "desktop-1" }, label: "Local · Paired desktop", available: true }, { source: { kind: "cloud", id: "org-1" }, label: "Cloud", available: true }]}
+				destinations={[{ source: { kind: "local", id: "desktop-1" }, label: "Paired desktop", available: true }, { source: { kind: "cloud", id: "org-1" }, label: "Cloud", available: true }]}
 				destination={null}
 				onSelectDestination={vi.fn()}
 				projects={[{ id: "project-1", label: "Tap" }]}
@@ -107,7 +107,8 @@ describe("SpawnComposerControls on iOS", () => {
 		const controlsHost = renderer!.root.findAll((node) => String(node.type) === "Host").find((node) => node.findAll((child) => String(child.type) === "Menu").length >= 2);
 		expect(controlsHost).toBeDefined();
 		const labels = menus[0].findAll((node) => String(node.type) === "Button").map((node) => node.props.label);
-		expect(labels).toEqual(["Local · Paired desktop", "Cloud"]);
+		expect(labels).toEqual(["Paired desktop", "Cloud"]);
+		expect(menus[0].findAll((node) => String(node.type) === "Image")[0].props.systemName).toBe("desktopcomputer");
 		const projectButton = menus[1].findAll((node) => String(node.type) === "Button")
 			.find((node) => node.findAll((child) => String(child.type) === "Text" && child.props.children === "Tap").length > 0);
 		expect(projectButton).toBeDefined();
@@ -144,6 +145,9 @@ describe("SpawnComposerControls on iOS", () => {
 			.findAll((node) => String(node.type) === "Text")
 			.map((node) => node.props.children);
 		expect(text).toContain("Claude Code");
+		const destinationMenu = renderer!.root.findAll((node) => String(node.type) === "Menu")[0];
+		expect(destinationMenu.findAll((node) => String(node.type) === "Text")[0].props.children).toBe("Cloud");
+		expect(destinationMenu.findAll((node) => String(node.type) === "Image")[0].props.systemName).toBe("cloud");
 		expect(renderer!.root.findAll((node) => String(node.type) === "Button").some((node) => node.props.label === "Automatic")).toBe(true);
 		const buttons = renderer!.root.findAll((node) => String(node.type) === "Button");
 		expect(buttons.some((node) => node.props.label === "Custom model…")).toBe(true);
@@ -152,11 +156,11 @@ describe("SpawnComposerControls on iOS", () => {
 });
 
 describe("iOS spawn machine selector", () => {
-	it("places a checked Run on menu beside the project selector", async () => {
+	it("labels the checked destination with its machine name", async () => {
 		const onSelectDestination = vi.fn();
 		await act(async () => {
 			renderer = create(<SpawnComposerControls
-				destinations={[{ source: { kind: "local", id: "host-a" }, label: "Alpha", available: true }, { source: { kind: "local", id: "host-b" }, label: "Beta", available: true }]}
+				destinations={[{ source: { kind: "local", id: "host-a" }, label: "Alpha", available: true }, { source: { kind: "local", id: "host-b" }, label: "Beta", available: true }, { source: { kind: "local", id: "host-c" }, label: "Gamma", available: false }]}
 				destination={{ kind: "local", id: "host-a" }}
 				onSelectDestination={onSelectDestination}
 				projects={[{ id: "project-1", label: "Project" }]}
@@ -179,11 +183,16 @@ describe("iOS spawn machine selector", () => {
 
 		const menus = renderer!.root.findAll((node) => String(node.type) === "Menu");
 		expect(menus).toHaveLength(4);
+		expect(menus[0].findAll((node) => String(node.type) === "Text")[0].props.children).toBe("Alpha");
+		expect(menus[0].findAll((node) => String(node.type) === "Image")[0].props.systemName).toBe("desktopcomputer");
 		const hostButtons = menus[0].findAll((node) => String(node.type) === "Button");
 		expect(hostButtons.map((node) => [node.props.label, node.props.systemImage])).toEqual([
 			["Alpha", "checkmark"],
 			["Beta", undefined],
+			["Gamma · Unavailable", undefined],
 		]);
+		await act(async () => hostButtons[2].props.onPress());
+		expect(onSelectDestination).not.toHaveBeenCalled();
 		await act(async () => hostButtons[1].props.onPress());
 		expect(onSelectDestination).toHaveBeenCalledWith({ kind: "local", id: "host-b" });
 	});

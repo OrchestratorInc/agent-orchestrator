@@ -1,6 +1,5 @@
 import type { DashboardSession, ProjectInfo } from "./api";
-import { resourceKey, type Scoped } from "./environment/scopedBoard";
-import type { EnvironmentKind } from "./environment/types";
+import { resourceKey, sourceKey, type Scoped, type SourceRef } from "./environment/scopedBoard";
 import { hostedProjectKey } from "./hostedRows";
 import type { MachineAppearance } from "./machineAppearance";
 
@@ -9,11 +8,11 @@ export const ALL_WORKER_ENVIRONMENTS = "all";
 
 export const boardWorkerKey = (entry: Scoped<DashboardSession>): string => resourceKey(entry.source, entry.value.id);
 
-export function scopedWorkerProjectOptions(projects: readonly Scoped<ProjectInfo>[], environment: "all" | EnvironmentKind) {
+export function scopedWorkerProjectOptions(projects: readonly Scoped<ProjectInfo>[], source: SourceRef | null) {
 	return [
 		{ id: ALL_WORKER_PROJECTS, label: "All projects" },
 		...projects
-			.filter((entry) => environment === "all" || entry.source.kind === environment)
+			.filter((entry) => !source || sourceKey(entry.source) === sourceKey(source))
 			.map((entry) => ({
 				id: resourceKey(entry.source, entry.value.id),
 				label: `${entry.value.name} · ${entry.source.kind === "cloud" ? "Cloud" : "Local"}`,
@@ -22,7 +21,7 @@ export function scopedWorkerProjectOptions(projects: readonly Scoped<ProjectInfo
 }
 
 type WorkerProject = { id: string; name: string; hostId?: string; hostName?: string };
-export type WorkerEnvironment = { id: string; name: string; appearance?: MachineAppearance };
+export type WorkerEnvironment = { id: string; name: string; appearance?: MachineAppearance; source?: SourceRef };
 
 export function spawnProjectParam(projectId: string, projects?: readonly WorkerProject[]): { projectId: string; hostId?: string } | undefined {
 	if (projectId === ALL_WORKER_PROJECTS) return undefined;

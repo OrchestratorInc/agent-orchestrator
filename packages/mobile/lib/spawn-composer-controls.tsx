@@ -31,8 +31,8 @@ export function SpawnComposerControls({
 			<View style={styles.destinationRow}>
 				<Host style={styles.destinationHost} colorScheme={scheme} seedColor={t.accent}>
 					<Picker selectedValue={destination ? sourceKey(destination) : ""} onValueChange={(key) => { const next = destinations.find((option) => sourceKey(option.source) === key); if (next?.available) onSelectDestination(next.source); }} appearance="menu">
-						<Picker.Item label="Run on · Choose destination" value="" />
-						{destinations.map((option) => <Picker.Item key={sourceKey(option.source)} label={`Run on ${option.label}${option.available ? "" : " · Unavailable"}`} value={sourceKey(option.source)} />)}
+						<Picker.Item label="Choose destination" value="" />
+						{destinations.map((option) => <Picker.Item key={sourceKey(option.source)} label={`${option.label}${option.available ? "" : " · Unavailable"}`} value={sourceKey(option.source)} />)}
 					</Picker>
 				</Host>
 				<Host style={styles.destinationHost} colorScheme={scheme} seedColor={t.accent}>

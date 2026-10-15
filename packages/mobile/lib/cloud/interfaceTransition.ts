@@ -1,7 +1,8 @@
 import type { Session, SessionInterfaceTransitionStatus } from "@aoagents/cloud-client";
-import { mobileInterfaceTransitionIsActive } from "../session/interfaceTransition";
+import { mobileInterfaceTransitionIsActive, mobileInterfaceTransitionIsCancellable } from "../session/interfaceTransition";
+import { throwIfCloudRequestAborted } from "./cancellation";
 
-export type CloudInterfaceStatus = SessionInterfaceTransitionStatus & { currentMode?: "chat" | "tui"; runtimeConnected?: boolean };
+export type CloudInterfaceStatus = SessionInterfaceTransitionStatus & { currentMode?: "chat" | "tui"; runtimeConnected?: boolean; sourceBusy?: boolean; sourceWaitingForInput?: boolean };
 export function mergeCloudInterfaceStatus(previous: SessionInterfaceTransitionStatus | undefined, wire: SessionInterfaceTransitionStatus, session: Session): CloudInterfaceStatus {
 	let transition = wire.transition;
 	const old = previous?.transition;
@@ -11,10 +12,16 @@ export function mergeCloudInterfaceStatus(previous: SessionInterfaceTransitionSt
 		else if (old.phase === "cancelled" || old.phase === "failed" || old.phase === "recovery_required") transition = old;
 		else if (mobileInterfaceTransitionIsActive(old)) transition = old;
 	}
-	return { ...wire, transition, currentMode: session.interfaceMode, runtimeConnected: session.runtimeConnected && !session.isTerminated };
+	const sourceWaitingForInput = session.activityState === "waiting_input" || session.activityState === "blocked" || session.status === "needs_input";
+	const sourceBusy = sourceWaitingForInput || session.activityState === "active" || session.status === "working";
+	return { ...wire, transition, currentMode: session.interfaceMode, runtimeConnected: session.runtimeConnected && !session.isTerminated, sourceBusy, sourceWaitingForInput };
 }
 export function cloudInterfaceInputLocked(status?: CloudInterfaceStatus): boolean {
 	return mobileInterfaceTransitionIsActive(status?.transition) || status?.transition?.phase === "recovery_required";
+}
+export function cloudInterfaceDrainWaiting(status?: CloudInterfaceStatus): boolean {
+	const transition = status?.transition;
+	return Boolean(status?.currentMode === "tui" && transition?.sourceMode === "tui" && transition.policy === "drain" && mobileInterfaceTransitionIsCancellable(transition));
 }
 export function cloudInterfaceSettledTarget(status?: CloudInterfaceStatus): "chat" | "tui" | undefined {
 	const transition = status?.transition;
@@ -34,11 +41,11 @@ export function cloudInterfacePollDelay(input: { status?: CloudInterfaceStatus; 
 	return undefined;
 }
 export async function cloudInterfaceDelay(ms: number, signal?: AbortSignal): Promise<void> {
-	signal?.throwIfAborted();
+	throwIfCloudRequestAborted(signal);
 	await new Promise<void>((resolve) => {
 		const finish = () => { clearTimeout(timer); signal?.removeEventListener("abort", finish); resolve(); };
 		const timer = setTimeout(finish, ms); signal?.addEventListener("abort", finish, { once: true });
 		if (signal?.aborted) finish();
 	});
-	signal?.throwIfAborted();
+	throwIfCloudRequestAborted(signal);
 }

@@ -12,8 +12,8 @@ import {
 import type { Theme } from "./theme";
 import type { HostedProjectRow } from "./hostedRows";
 import type { HostSnapshot } from "./otherHosts";
+import type { SourceRef } from "./environment/scopedBoard";
 import { rowDividerWidth } from "./divider";
-import { EnvironmentBadge } from "./environment-badge-icon";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { fontScaleCap, space, type } from "./tokens";
 import { Dot } from "./ui";
@@ -64,12 +64,11 @@ export function ProjectCard({
 					<Text style={styles.project} numberOfLines={1}>
 						{row.project.name}
 					</Text>
-					{sourceLabel && <EnvironmentBadge sourceLabel={sourceLabel} theme={t} />}
-					{hostName && <MachineIdentity
+					{sourceLabel === "Cloud" ? <MachineIdentity name="Cloud" appearance={{ symbol: "cloud" }} style={styles.machineIdentity} /> : hostName ? <MachineIdentity
 						name={hostName}
 						appearance={machineAppearance({ id: hostedProject?.hostId ?? hostName, name: hostName, appearance: hostedProject?.hostAppearance })}
 						style={styles.machineIdentity}
-					/>}
+					/> : null}
 					<Feather name="chevron-right" size={15} color={t.textFaint} />
 				</View>
 
@@ -149,14 +148,18 @@ function OrchestratorPill({
 
 /** The machine owning a project route, shown as quiet context in its header. */
 export function ProjectMachineIndicator({
-	hostId,
+	source,
 	hosts,
 }: {
-	hostId: string | undefined;
+	source: SourceRef | null;
 	hosts: readonly Pick<HostSnapshot, "hostId" | "name" | "appearance">[];
 }) {
 	const styles = useThemedStyles(makeStyles);
-	const host = hosts.find((candidate) => candidate.hostId === hostId);
+	if (!source) return null;
+	if (source.kind === "cloud") {
+		return <MachineIdentity name="Cloud" appearance={{ symbol: "cloud" }} style={styles.projectMachineIdentity} testID="project-machine-identity" />;
+	}
+	const host = hosts.find((candidate) => candidate.hostId === source.id);
 	if (!host) return null;
 	return <MachineIdentity name={host.name} appearance={host.appearance} style={styles.projectMachineIdentity} testID="project-machine-identity" />;
 }

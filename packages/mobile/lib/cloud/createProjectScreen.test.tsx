@@ -39,6 +39,7 @@ vi.mock("@expo/ui", async () => {
 	const React = await import("react");
 	return { Host: "Host", Picker: Object.assign(({ children, ...props }: { children?: React.ReactNode }) => React.createElement("Picker", props, children), { Item: "PickerItem" }) };
 });
+vi.mock("@expo/ui/community/menu", () => ({ MenuView: "MenuView" }));
 
 vi.mock("react-native", () => ({
 	ActivityIndicator: "ActivityIndicator",
@@ -47,6 +48,7 @@ vi.mock("react-native", () => ({
 	Platform: { OS: "ios" },
 	Pressable: "Pressable",
 	ScrollView: "ScrollView",
+	Keyboard: { dismiss: vi.fn() },
 	StyleSheet: { create: (styles: unknown) => styles },
 	Text: "Text",
 	TextInput: "TextInput",
@@ -56,6 +58,7 @@ vi.mock("react-native", () => ({
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ bottom: 0 }) }));
 vi.mock("expo-router", () => ({ useRouter: () => ({ back: vi.fn(), replace: state.replace }) }));
 vi.mock("expo-crypto", () => ({ randomUUID: () => "test-key" }));
+vi.mock("../icons", () => ({ Feather: "Feather" }));
 vi.mock("@expo/vector-icons", () => ({ Feather: "Feather" }));
 vi.mock("../ThemeProvider", () => {
 	const theme = Object.fromEntries(["bgSurface", "blue", "borderSubtle", "textPrimary", "textSecondary", "textTertiary", "borderDefault", "bgElevated", "amber", "red", "tintBlue"].map((key) => [key, "#000"]));
@@ -247,7 +250,7 @@ describe("Add Cloud project sheet", () => {
 	it("keeps account resolution loading instead of showing a false sign-in error", async () => {
 		const root = await mount();
 		expect(root.findAll((node) => String(node.type) === "ActivityIndicator")).toHaveLength(1);
-		expect(root.findAll((node) => String(node.type) === "Text").map((node) => node.props.children)).not.toContain("Sign in to AO Cloud before adding a project.");
+		expect(root.findAll((node) => String(node.type) === "Text").map((node) => node.props.children)).not.toContain("Sign in to Orchestrator Cloud before adding a project.");
 		expect(state.listUserProviderConnections).not.toHaveBeenCalled();
 	});
 
@@ -281,6 +284,11 @@ describe("Add Cloud project sheet", () => {
 		await act(async () => { root.findByProps({ title: "Check repository access" }).props.onPress(); });
 		const marks = root.findAll((node) => String(node.type) === "Image").map((node) => node.props.source);
 		expect(marks).toEqual(["asset-claude-code", "asset-claude-code"]);
+		for (const label of ["Worker agent", "Orchestrator agent"]) {
+			const selector = root.findByProps({ testID: label });
+			expect(selector.findAllByType("Image" as never)).toHaveLength(1);
+			expect(selector.findAllByType("Text" as never).map(node => node.props.children)).toContain("Claude Code");
+		}
 	});
 
 	it("connects GitHub using the selected Cloud environment and offers manual setup", async () => {
@@ -308,9 +316,15 @@ describe("Add Cloud project sheet", () => {
 		], page: { hasMore: false } } as never);
 		state.listUserProviderConnections.mockResolvedValue([{ provider: "claude-code", label: "default", validationState: "valid" }] as never);
 		const root = await mount();
+		expect(root.findAllByProps({ accessibilityRole: "radio" })).toHaveLength(0);
+		await act(async () => { root.findByProps({ accessibilityRole: "combobox", accessibilityLabel: "Select a repository" }).props.onPress(); });
+		expect(root.findAllByProps({ accessibilityRole: "radio" })).toHaveLength(0);
 		await act(async () => { root.findByProps({ accessibilityLabel: "Search repositories" }).props.onChangeText("beta"); });
 		expect(root.findAllByProps({ accessibilityLabel: "Select me/alpha" })).toHaveLength(0);
 		await act(async () => { root.findByProps({ accessibilityLabel: "Select me/beta" }).props.onPress(); });
+		expect(root.findAllByProps({ accessibilityLabel: "Search repositories" })).toHaveLength(0);
+		expect(root.findAllByProps({ accessibilityRole: "radio" })).toHaveLength(0);
+		expect(root.findByProps({ accessibilityRole: "combobox", accessibilityLabel: "Select a repository" }).props.accessibilityValue).toEqual({ text: "me/beta" });
 		await act(async () => { root.findByProps({ title: "Continue" }).props.onPress(); });
 		await act(async () => { await root.findByProps({ title: "Create project" }).props.onPress(); });
 		expect(state.createProjectFromGitHub).toHaveBeenCalledWith("org-1", {
@@ -320,6 +334,32 @@ describe("Add Cloud project sheet", () => {
 		}, expect.objectContaining({ idempotencyKey: "test-key", signal: expect.any(AbortSignal) }));
 		expect(state.refreshSource).toHaveBeenCalledWith({ kind: "cloud", id: "org-1" });
 		expect(state.replace).toHaveBeenCalledWith({ pathname: "/project/[id]", params: { id: "project-1", source: "cloud", sourceId: "org-1" } });
+	});
+
+	it("keeps the repository selection while a replacement search has no matches or is dismissed", async () => {
+		state.signedIn = true; state.orgId = "org-1"; state.orgLoading = false;
+		state.listGitHubInstallations.mockResolvedValue([{ id: "install-1", status: "active", syncStatus: "ready" }] as never);
+		state.listGitHubRepositories.mockResolvedValue({ items: [
+			{ githubRepositoryId: "1", name: "alpha", fullName: "me/alpha", htmlUrl: "https://github.com/me/alpha", defaultBranch: "main", access: "active", isArchived: false, isPrivate: true },
+		], page: { hasMore: false } } as never);
+		const root = await mount();
+		const picker = () => root.findByProps({ accessibilityRole: "combobox", accessibilityLabel: "Select a repository" });
+		await act(async () => picker().props.onPress());
+		await act(async () => root.findByProps({ accessibilityLabel: "Search repositories" }).props.onChangeText("   "));
+		expect(root.findAllByProps({ accessibilityRole: "radio" })).toHaveLength(0);
+		await act(async () => root.findByProps({ accessibilityLabel: "Search repositories" }).props.onChangeText(" ALPHA "));
+		await act(async () => root.findByProps({ accessibilityLabel: "Select me/alpha" }).props.onPress());
+		expect(picker().findAllByProps({ name: "lock" })).toHaveLength(1);
+		await act(async () => picker().props.onPress());
+		await act(async () => root.findByProps({ accessibilityLabel: "Search repositories" }).props.onChangeText("missing"));
+		expect(root.findAllByType("Text" as never).map(node => node.props.children)).toContain("No matching repositories");
+		await act(async () => root.findByProps({ label: "Back" }).props.onPress());
+		expect(root.findAllByProps({ accessibilityLabel: "Search repositories" })).toHaveLength(0);
+		expect(picker().props.accessibilityValue).toEqual({ text: "me/alpha" });
+		expect(root.findByProps({ title: "Continue" }).props.disabled).toBe(false);
+		await act(async () => picker().props.onPress());
+		expect(root.findByProps({ accessibilityLabel: "Search repositories" }).props.value).toBe("");
+		expect(root.findAllByProps({ accessibilityRole: "radio" })).toHaveLength(0);
 	});
 
 	it("asks Cloud to sync a newly connected installation before listing repositories", async () => {

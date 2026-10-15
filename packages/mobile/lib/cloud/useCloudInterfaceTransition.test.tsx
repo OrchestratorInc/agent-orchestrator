@@ -8,9 +8,51 @@ vi.mock("react-native", () => ({ AppState: { get currentState() { return f.state
 import { useCloudInterfaceTransition } from "./useCloudInterfaceTransition";
 let renderer: ReactTestRenderer | undefined; let hook: ReturnType<typeof useCloudInterfaceTransition>;
 const transition = { id: "h1", sessionId: "s1", sourceMode: "chat" as const, targetMode: "tui" as const, phase: "requested" as const, policy: "drain" as const, createdAt: "now", updatedAt: "now" };
-function Harness({ source, settled }: { source: SessionSource; settled?: () => void }) { hook = useCloudInterfaceTransition(source, "s1", settled); return null; }
+function Harness({ source, sessionId = "s1", settled }: { source?: SessionSource; sessionId?: string; settled?: () => void }) { hook = useCloudInterfaceTransition(source, sessionId, settled); return null; }
 beforeEach(() => { vi.useFakeTimers(); f.focused = true; f.state = "active"; vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); vi.spyOn(console, "error").mockImplementation(() => {}); });
 afterEach(async () => { await act(async () => renderer?.unmount()); renderer = undefined; vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+it.each(["drain", "interrupt"] as const)("exposes the accepted %s policy until the start request settles", async (policy) => {
+	let finish!: (result: { transition: typeof transition }) => void;
+	const source = { kind: "cloud", scopeKey: "one", getInterfaceTransition: async () => ({ supported: true, targetMode: "tui" }), startInterfaceTransition: () => new Promise<{ transition: typeof transition }>((resolve) => { finish = resolve; }) } as unknown as SessionSource;
+	await act(async () => { renderer = create(<Harness source={source} />); });
+	let starting!: Promise<void>;
+	await act(async () => { starting = hook.start("tui", policy); });
+	expect(hook.starting).toBe(true); expect(hook.startingPolicy).toBe(policy);
+	await act(async () => { await hook.start("tui", policy === "drain" ? "interrupt" : "drain"); });
+	expect(hook.startingPolicy).toBe(policy);
+	await act(async () => { finish({ transition }); await starting; });
+	expect(hook.starting).toBe(false); expect(hook.startingPolicy).toBeUndefined();
+});
+it("clears the starting policy after a failed start", async () => {
+	let reject!: (cause: Error) => void;
+	const source = { kind: "cloud", scopeKey: "one", getInterfaceTransition: async () => ({ supported: true, targetMode: "tui" }), startInterfaceTransition: () => new Promise((_, fail) => { reject = fail; }) } as unknown as SessionSource;
+	await act(async () => { renderer = create(<Harness source={source} />); });
+	let failed!: Promise<unknown>;
+	await act(async () => { failed = hook.start("tui", "drain").catch((cause: unknown) => cause); });
+	expect(hook.startingPolicy).toBe("drain");
+	const cause = new Error("Start failed");
+	await act(async () => { reject(cause); expect(await failed).toBe(cause); });
+	expect(hook.starting).toBe(false); expect(hook.startingPolicy).toBeUndefined(); expect(hook.error).toBeTruthy();
+});
+it.each(["background", "blur", "account", "session", "source", "unavailable"] as const)("clears the starting policy and ignores a late start after %s cleanup", async (cleanup) => {
+	let finish!: (result: { transition: typeof transition }) => void;
+	let signal!: AbortSignal;
+	const source = { kind: "cloud", scopeKey: "one", getInterfaceTransition: async () => ({ supported: true, targetMode: "tui" }), startInterfaceTransition: (_: string, __: unknown, options: { signal: AbortSignal }) => { signal = options.signal; return new Promise<{ transition: typeof transition }>((resolve) => { finish = resolve; }); } } as unknown as SessionSource;
+	await act(async () => { renderer = create(<Harness source={source} />); });
+	let starting!: Promise<void>;
+	await act(async () => { starting = hook.start("tui", "drain"); });
+	expect(hook.startingPolicy).toBe("drain");
+	await act(async () => {
+		if (cleanup === "background") f.listener?.("background");
+		else if (cleanup === "blur") { f.focused = false; renderer!.update(<Harness source={source} />); }
+		else if (cleanup === "session") renderer!.update(<Harness source={source} sessionId="s2" />);
+		else if (cleanup === "unavailable") renderer!.update(<Harness />);
+		else renderer!.update(<Harness source={{ ...source, scopeKey: cleanup === "account" ? "two" : "one" }} />);
+	});
+	expect(signal.aborted).toBe(true); expect(hook.starting).toBe(false); expect(hook.startingPolicy).toBeUndefined();
+	await act(async () => { finish({ transition }); await starting; });
+	expect(hook.startingPolicy).toBeUndefined(); expect(hook.transition).toBeUndefined();
+});
 it("keeps ownership through early mode commit and pauses polling in background", async () => {
 	let status: CloudInterfaceStatus = { supported: true, targetMode: "tui", currentMode: "chat", runtimeConnected: true };
 	const getInterfaceTransition = vi.fn(async () => status);

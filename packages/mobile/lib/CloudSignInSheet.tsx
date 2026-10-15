@@ -11,7 +11,7 @@ import { SheetScreen } from "./ui";
 
 type Mode = "sign-in" | "register";
 
-/** Sign in to AO Cloud through hosted AuthKit or a local development server. */
+/** Sign in to Orchestrator Cloud through hosted AuthKit or a local development server. */
 export function CloudSignInSheet({ onDone, onClose }: { onDone: () => void; onClose: () => void }) {
 	const t = useTheme();
 	const s = useThemedStyles(makeStyles);
@@ -80,8 +80,8 @@ export function CloudSignInSheet({ onDone, onClose }: { onDone: () => void; onCl
 
 	return (
 		<SheetScreen
-			title="Sign in to AO Cloud"
-			subtitle="Continue through AO Cloud's secure sign-in page."
+			title="Sign in to Orchestrator Cloud"
+			subtitle="Continue through Orchestrator Cloud's secure sign-in page."
 		>
 			<View style={{ paddingTop: 8, gap: 14 }}>
 				<Pressable
@@ -93,7 +93,7 @@ export function CloudSignInSheet({ onDone, onClose }: { onDone: () => void; onCl
 					}}
 					style={[s.submit, submitting && s.submitDisabled]}
 				>
-					{submitting ? <ActivityIndicator color={t.onAccent} /> : <Text style={s.submitText}>Continue with AO Cloud</Text>}
+					{submitting ? <ActivityIndicator color={t.onAccent} /> : <Text style={s.submitText}>Continue with Orchestrator Cloud</Text>}
 				</Pressable>
 
 				{showLocalAuth ? (

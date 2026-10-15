@@ -9,14 +9,6 @@ function source(relativePath: string): string {
 const dock = source("./worker-dock.ios.tsx");
 
 describe("worker dock menu", () => {
-	// The dock sits at the bottom of the screen, so its menus open upward — and a
-	// menu that opens upward draws its items in reverse under SwiftUI's default
-	// order. That is what put "All projects" last and the project list above the
-	// search row. `menuOrder("fixed")` is the documented off switch.
-	it("pins the item order for the options, environment, machine, and project menus", () => {
-		expect(dock.match(/menuOrder\("fixed"\)/g) ?? []).toHaveLength(4);
-	});
-
 	// The prefix pushed the row past the width the menu reserves and wrapped it.
 	it("labels the projects menu with the selection alone", () => {
 		expect(dock).toContain("<Menu label={selectedProjectLabel} systemImage=\"folder\"");

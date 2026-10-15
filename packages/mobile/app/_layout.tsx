@@ -276,8 +276,8 @@ function Shell() {
 					name="sheets/connect"
 					options={{ ...CONNECT_SHEET_OPTIONS, contentStyle: { backgroundColor: t.bgSurface } }}
 				/>
-				{/* Hosted sign-in has no fields. The route opts into Android's
-				    keyboard-aware detents only for a local development login. */}
+				{/* Only local development credentials use this form route.
+				    Hosted sign-in opens AuthKit directly from its entry point. */}
 				<Stack.Screen
 					name="sheets/cloud-signin"
 					options={{ ...CONNECT_SHEET_OPTIONS, sheetAllowedDetents: "fitToContents", contentStyle: { backgroundColor: t.bgSurface } }}

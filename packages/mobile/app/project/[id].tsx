@@ -18,6 +18,7 @@ import { workerListBottomInset } from "../../lib/worker-dock-layout";
 import { backOr } from "../../lib/backNavigation";
 import { resourceKey, sourceKey, sourceSlice } from "../../lib/environment/scopedBoard";
 import { resolveSessionRouteSource } from "../../lib/session/sessionRoute";
+import { useCloudSignInAction } from "../../lib/cloud/useCloudSignInAction";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -34,6 +35,7 @@ function ProjectScreenContent() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
+	const cloudSignIn = useCloudSignInAction();
 	const insets = useSafeAreaInsets();
 	const { id, source: sourceParam, sourceId, hostId } = useLocalSearchParams<{ id: string; source?: string; sourceId?: string; hostId?: string }>();
 	const { scopedBoard, sourceFor, refreshSource, hostStates } = useApp();
@@ -90,7 +92,7 @@ function ProjectScreenContent() {
 						onPress={() => backOr(router, "/projects")}
 					/>
 				}
-				right={<ProjectMachineIndicator hostId={source?.kind === "local" ? source.id : undefined} hosts={hostStates} />}
+				right={<ProjectMachineIndicator source={source} hosts={hostStates} />}
 			/>
 			{source && status && <StaleBanner sourceLabel={source.kind === "cloud" ? "Cloud" : "Local"} sourceStatus={status} onRetry={onRefresh} />}
 
@@ -100,8 +102,9 @@ function ProjectScreenContent() {
 			) : source && !configured && status?.resolved && !row ? (
 				<EmptyState icon="wifi-off" title={source.kind === "cloud" ? "Cloud project unavailable" : "Desktop project unavailable"}
 					message="This project belongs to a source that is no longer connected."
-					action={<Button title={source.kind === "cloud" ? "Sign in to Cloud" : "Pair desktop"}
-						onPress={() => router.push(source.kind === "cloud" ? "/sheets/cloud-signin" : "/pair")} />} />
+					action={<Button title={source.kind === "cloud" ? "Sign in to Orchestrator Cloud" : "Pair desktop"}
+						loading={source.kind === "cloud" && cloudSignIn.busy}
+						onPress={() => { if (source.kind === "cloud") void cloudSignIn.signIn(); else router.push("/pair"); }} />} />
 			) : detailState !== "project" || !row ? (
 				detailState === "loading" ? (
 					<View style={styles.center}>
@@ -152,7 +155,8 @@ function ProjectScreenContent() {
 						onSearchClose={() => {}}
 						onOpenControls={() => {}}
 						projectFiltered={false}
-						environmentFilter="all"
+						environments={[]}
+						selectedEnvironmentId="all"
 						onSelectEnvironment={() => {}}
 						projectOptions={[{ id: "all", label: "All projects" }]}
 						selectedProjectId="all"

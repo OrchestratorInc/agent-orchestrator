@@ -82,8 +82,8 @@ export function SpawnComposerControls({
 						<Menu
 							label={
 								<HStack spacing={7}>
-									<Image systemName="desktopcomputer" size={iconSize.sm} />
-									<Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1), truncationMode("tail")]}>Run on {destinationLabel}</Text>
+									<Image systemName={destination?.kind === "cloud" ? "cloud" : "desktopcomputer"} size={iconSize.sm} />
+									<Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1), truncationMode("tail")]}>{destinationLabel}</Text>
 									<Image systemName="chevron.up.chevron.down" size={iconSize.xs} />
 								</HStack>
 							}

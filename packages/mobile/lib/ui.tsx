@@ -20,7 +20,7 @@ import { useEnterTransition, usePressScale } from "./motionHooks";
 import { NativeHeaderButton, type NativeHeaderButtonIcon } from "./native-header-button";
 import { useOptionalSidebarNavigation } from "./sidebar-navigation-context";
 import { useReducedMotion } from "./useReducedMotion";
-import { fontScaleCap, press, space, type } from "./tokens";
+import { fontScaleCap, press, space, touchTarget, type } from "./tokens";
 import type { ConnStatus } from "./store";
 import { statusVisual, type Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
@@ -425,7 +425,7 @@ export function Button({
 	title: string;
 	onPress: () => void;
 	/** `success` is desktop's green merge action. */
-	variant?: "primary" | "ghost" | "danger" | "success";
+	variant?: "primary" | "ghost" | "text" | "danger" | "success";
 	loading?: boolean;
 	disabled?: boolean;
 	icon?: keyof typeof Feather.glyphMap;
@@ -436,9 +436,10 @@ export function Button({
 	const isPrimary = variant === "primary";
 	const isDanger = variant === "danger";
 	const isSuccess = variant === "success";
+	const isText = variant === "text";
 	// `onAccent`, not a literal: near-black reads best on the dark theme's light
 	// accent, but is invisible on light mode's darker one, which needs white.
-	const fg = isPrimary ? t.onAccent : isDanger ? t.red : isSuccess ? t.bgBase : t.accent;
+	const fg = isPrimary ? t.onAccent : isDanger ? t.red : isSuccess ? t.bgBase : isText ? t.textSecondary : t.accent;
 	const pressFx = usePressScale(disabled || loading);
 	return (
 		<Animated.View style={[style, pressFx.style]}>
@@ -461,7 +462,8 @@ export function Button({
 				style={({ pressed }) => [
 					s.btn,
 					isPrimary && s.btnPrimary,
-					!isPrimary && s.btnGhost,
+					!isPrimary && !isText && s.btnGhost,
+					isText && s.btnTextOnly,
 					isDanger && s.btnDanger,
 					isSuccess && s.btnSuccess,
 					(disabled || loading) && { opacity: 0.5 },
@@ -473,7 +475,7 @@ export function Button({
 				) : (
 					<View style={s.btnInner}>
 						{icon ? <Feather name={icon} size={15} color={fg} style={{ marginRight: space.xs }} /> : null}
-						<Text maxFontSizeMultiplier={fontScaleCap.body} style={[s.btnText, { color: fg }]}>
+						<Text maxFontSizeMultiplier={fontScaleCap.body} style={[s.btnText, isText && s.btnQuietText, { color: fg }]}>
 							{title}
 						</Text>
 					</View>
@@ -988,6 +990,8 @@ const makeStyles = (t: Theme) =>
 			borderColor: t.borderStrong,
 			backgroundColor: t.bgElevated,
 		},
+		btnTextOnly: { minHeight: touchTarget, paddingVertical: space.sm, justifyContent: "center" },
+		btnQuietText: { ...type.subheadline },
 		btnDanger: { borderColor: t.tintRed, backgroundColor: t.tintRed },
 		btnSuccess: { borderColor: t.green, backgroundColor: t.green },
 		btnText: { fontFamily: "Geist_600SemiBold", fontSize: type.subheadline.fontSize, fontWeight: "600" },

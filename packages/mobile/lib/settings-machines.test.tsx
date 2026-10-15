@@ -3,13 +3,15 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const fixtures = vi.hoisted(() => ({
 	navigate: vi.fn(),
+	push: vi.fn(),
+	signIn: vi.fn(async () => true),
 	hosts: [{ id: "dev", name: "Dev", endpoints: [], token: "token", platform: "darwin", lastConnected: 1 }],
 	theme: new Proxy({}, { get: () => "#000000" }),
 }));
 vi.mock("expo-router", async () => {
 	const React = await import("react");
 	return {
-		useRouter: () => ({ navigate: fixtures.navigate }),
+		useRouter: () => ({ navigate: fixtures.navigate, push: fixtures.push }),
 		useFocusEffect: (effect: () => void) => React.useEffect(effect, [effect]),
 	};
 });
@@ -28,7 +30,7 @@ vi.mock("./icons", () => ({ Feather: "Feather" }));
 vi.mock("./api", () => ({ ApiError: class ApiError extends Error {}, pingServer: vi.fn() }));
 vi.mock("./account", () => ({ loadAccount: async () => null, signInToAccount: vi.fn(), signOutOfAccount: vi.fn() }));
 vi.mock("./accountHosts", () => ({ clearAccountHosts: vi.fn(), syncAccountHosts: vi.fn() }));
-vi.mock("./cloud/authStore", () => ({ useCloudAuth: () => ({ signedIn: false }) }));
+vi.mock("./cloud/authStore", () => ({ useCloudAuth: () => ({ signedIn: false, signInWithWorkOS: fixtures.signIn }) }));
 vi.mock("./config", () => ({ isConfigured: () => false }));
 vi.mock("./hosts", () => ({ activeHost: async () => fixtures.hosts[0], loadHosts: async () => fixtures.hosts }));
 vi.mock("./disconnect", () => ({ forgetPairedHost: vi.fn(), forgetServer: vi.fn() }));
@@ -57,13 +59,15 @@ let renderer: ReactTestRenderer | undefined;
 it("offers one shared AO account rather than independent Cloud and machine-sync sign-ins", async () => {
 	await act(async () => { renderer = create(<SettingsScreen />); });
 	const labels = renderer!.root.findAllByType("Text" as never).map((node) => node.props.children);
-	expect(labels).toContain("AO Cloud account");
+	expect(labels).toContain("Orchestrator Cloud account");
 	expect(labels).not.toContain("Sign in to Orchestrator Cloud");
 });
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	vi.stubGlobal("__DEV__", false);
 	fixtures.navigate.mockClear();
+	fixtures.push.mockClear();
+	fixtures.signIn.mockClear();
 	const error = console.error;
 	vi.spyOn(console, "error").mockImplementation((...args) => {
 		if (String(args[0]).startsWith("react-test-renderer is deprecated")) return;
@@ -74,6 +78,13 @@ afterEach(() => {
 	act(() => renderer?.unmount());
 	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
+});
+
+it("opens hosted sign-in directly from the shared Cloud account row", async () => {
+	await act(async () => { renderer = create(<SettingsScreen />); });
+	await act(async () => { await renderer!.root.findByProps({ label: "Orchestrator Cloud account" }).props.onPress(); });
+	expect(fixtures.signIn).toHaveBeenCalledOnce();
+	expect(fixtures.push).not.toHaveBeenCalled();
 });
 
 it("shows Add a machine below Test connection with the dropdown closed and opens pairing", async () => {

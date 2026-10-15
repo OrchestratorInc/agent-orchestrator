@@ -44,7 +44,7 @@ export function SpawnComposerControls({
 	const destinationLabel = destinations.find((option) => destination && sourceKey(option.source) === sourceKey(destination))?.label ?? "Choose where to run";
 	const options = openMenu === "destination" ? destinationOptions : openMenu === "project" ? projects : openMenu === "harness" ? agents : modelOptions;
 	const selectedValue = openMenu === "destination" ? (destination ? sourceKey(destination) : "") : openMenu === "project" ? (projectId ?? "") : openMenu === "harness" ? harness : modelSelection;
-	const menuTitle = openMenu === "destination" ? "Run on" : openMenu === "project" ? "Project" : openMenu === "harness" ? "Agent" : "Model";
+	const menuTitle = openMenu === "destination" ? "Destination" : openMenu === "project" ? "Project" : openMenu === "harness" ? "Agent" : "Model";
 
 	const selectOption = (value: string) => {
 		if (openMenu === "destination") {
@@ -77,7 +77,7 @@ export function SpawnComposerControls({
 	return (
 		<View style={styles.stack}>
 			<View style={styles.destinationRow}>
-				<SelectorButton label={`Run on ${destinationLabel}`} icon="monitor" onPress={() => setOpenMenu("destination")} style={styles.destinationButton} />
+				<SelectorButton label={destinationLabel} icon={destination?.kind === "cloud" ? "cloud" : "monitor"} onPress={() => setOpenMenu("destination")} style={styles.destinationButton} />
 				<SelectorButton label={projectLabel} icon={selectedProject?.icon ?? "folder"} onPress={() => setOpenMenu("project")} style={styles.destinationButton} />
 			</View>
 

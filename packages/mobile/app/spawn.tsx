@@ -79,7 +79,7 @@ function SpawnModalContent() {
 		? scopedBoard.projects.filter((entry) => sourceKey(entry.source) === sourceKey(destination)).map((entry) => entry.value)
 		: [], [destination, scopedBoard.projects]);
 	const projectsKnown = destination !== null && !!scopedBoard.sources[sourceKey(destination)]?.resolved && !scopedBoard.sources[sourceKey(destination)]?.loading;
-	const destinations = availableSources.map((source) => ({ source, label: source.kind === "local" ? `Local · ${hostStates.find((host) => host.hostId === source.id)?.name ?? "Desktop"}` : "Cloud", available: !!sourceFor(source), unavailableReason: scopedBoard.sources[sourceKey(source)]?.error ?? null }));
+	const destinations = availableSources.map((source) => ({ source, label: source.kind === "local" ? hostStates.find((host) => host.hostId === source.id)?.name ?? "Desktop" : "Cloud", available: !!sourceFor(source), unavailableReason: scopedBoard.sources[sourceKey(source)]?.error ?? null }));
 
 	const [projectId, setProjectId] = useState<string | null>(null);
 	const [harness, setHarness] = useState("");

@@ -29,7 +29,6 @@ describe("worker board list identity", () => {
 	it("remounts the whole animation boundary without retaining outgoing rows", () => {
 		expect(list).toContain("<LayoutAnimationConfig key={identityKey} skipEntering skipExiting>");
 		expect(list).not.toContain("<FlatList\n\t\t\t\t\tref={listRef}\n\t\t\t\t\tkey={identityKey}");
-		expect(board).toContain("const boardIdentityKey = `${environmentFilter}|${workerEnvironmentId}|${workerProjectId}|${query.trim()}`;");
 		expect(board).toContain("key={boardIdentityKey}");
 		expect(board).toContain("identityKey={boardIdentityKey}");
 	});

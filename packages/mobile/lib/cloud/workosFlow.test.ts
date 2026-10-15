@@ -5,6 +5,7 @@ const tokens = { accessToken: "a", refreshToken: "r", expiresAt: 10_000 };
 
 function deps(over: Partial<Parameters<typeof runWorkOSSignIn>[0]> = {}) {
 	return {
+		callbackUri: "aoagents.ao://callback",
 		createPkce: async () => ({ verifier: "v", challenge: "c" }),
 		makeState: () => "st",
 		authUrl: ({ challenge, state }: { challenge: string; state: string }) =>
@@ -15,7 +16,7 @@ function deps(over: Partial<Parameters<typeof runWorkOSSignIn>[0]> = {}) {
 	};
 }
 
-describe("runWorkOSSignIn", () => {
+	describe("runWorkOSSignIn", () => {
 	it("exchanges the returned code with the matching verifier", async () => {
 		const d = deps();
 		expect(await runWorkOSSignIn(d)).toEqual(tokens);
@@ -26,6 +27,21 @@ describe("runWorkOSSignIn", () => {
 		const d = deps({ openAuth: vi.fn(async () => ({ type: "cancel" as const })) });
 		expect(await runWorkOSSignIn(d)).toBeNull();
 		expect(d.exchange).not.toHaveBeenCalled();
+	});
+	it.each([
+		"aomobile://callback?code=xyz&state=st",
+		"https://other.test/callback?code=xyz&state=st",
+		"aoagents.ao://callback.evil.test?code=xyz&state=st",
+		"aoagents.ao://callback/unrelated?code=xyz&state=st",
+		"aoagents.ao://user@callback?code=xyz&state=st",
+	])("refuses an unexpected callback even with matching state: %s", async (url) => {
+		const d = deps({ openAuth: vi.fn(async () => ({ type: "success" as const, url })) });
+		await expect(runWorkOSSignIn(d)).rejects.toThrow(/callback/i);
+		expect(d.exchange).not.toHaveBeenCalled();
+	});
+	it("accepts the configured production native bounce", async () => {
+		const d = deps({ callbackUri: "ao-app://callback", openAuth: vi.fn(async () => ({ type: "success" as const, url: "ao-app://callback?code=xyz&state=st" })) });
+		expect(await runWorkOSSignIn(d)).toEqual(tokens);
 	});
 
 	// Without this check a crafted deep link could complete a sign-in the user

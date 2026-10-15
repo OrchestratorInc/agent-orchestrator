@@ -33,7 +33,7 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => {
 	return {
 		accessibilityIdentifier: noop, accessibilityLabel: noop, Animation: { spring: noop }, animation: noop,
 		buttonBorderShape: noop, buttonStyle: noop, controlSize: noop, frame: noop, labelStyle: noop,
-		menuOrder: noop, opacity: noop, padding: noop, scaleEffect: noop, textFieldStyle: noop, tint: noop,
+		menuOrder: (order: string) => ({ name: "menuOrder", order }), opacity: noop, padding: noop, scaleEffect: noop, textFieldStyle: noop, tint: noop,
 	};
 });
 
@@ -72,8 +72,8 @@ describe("iOS worker environment filter menu", () => {
 			return <Suspense fallback={<p>Loading replacement</p>}>
 				<WorkerDock query="" onQueryChange={vi.fn()} onSpawn={vi.fn()}
 					searchOpen={false} onSearchOpen={vi.fn()} onSearchClose={vi.fn()} onOpenControls={vi.fn()}
-					projectFiltered={false} environmentFilter="all" onSelectEnvironment={vi.fn()} environments={[{ id: "mac", name: "Mac" }, { id: "dev", name: "Dev" }]}
-					selectedEnvironmentId="mac" onSelectMachine={setSelected}
+					projectFiltered={false} onSelectEnvironment={setSelected} environments={[{ id: "mac", name: "Mac" }, { id: "dev", name: "Dev" }]}
+					selectedEnvironmentId="mac"
 					projectOptions={[{ id: '["local","mac","test"]', label: "Test project" }]}
 					selectedProjectId="all" selectedProjectLabel="All projects" onSelectProject={setSelected} />
 				<Board selected={selected} />
@@ -92,20 +92,24 @@ describe("iOS worker environment filter menu", () => {
 			renderer = create(<WorkerDock
 				query="" onQueryChange={vi.fn()} onSpawn={vi.fn()}
 				searchOpen={false} onSearchOpen={vi.fn()} onSearchClose={vi.fn()} onOpenControls={vi.fn()}
-				projectFiltered={false} environmentFilter="all" onSelectEnvironment={vi.fn()}
-				environments={[{ id: "mac", name: "Studio Mac", appearance: { symbol: "laptop" } }, { id: "dev", name: "Dev", appearance: { symbol: "server" } }]}
-				selectedEnvironmentId="mac" onSelectMachine={selectEnvironment}
+				projectFiltered={false} onSelectEnvironment={selectEnvironment}
+				environments={[{ id: "mac", name: "Studio Mac", appearance: { symbol: "laptop" } }, { id: "dev", name: "Dev", appearance: { symbol: "server" } }, { id: "cloud", name: "Cloud", appearance: { symbol: "cloud" } }]}
+				selectedEnvironmentId="mac"
 				projectOptions={[{ id: '["local","mac","app"]', label: "AO" }]}
 				selectedProjectId="all" selectedProjectLabel="All projects" onSelectProject={vi.fn()}
 			/>);
 		});
 
 		const menus = renderer!.root.findAll((node) => String(node.type) === "Menu");
-		const environment = menus.find((node) => node.props.label === "Machine");
+		// Upward-opening native menus must keep the presented item order.
+		for (const menu of menus) expect(menu.props.modifiers).toContainEqual({ name: "menuOrder", order: "fixed" });
+		const environment = menus.find((node) => node.props.label === "Environment");
 		expect(environment).toBeDefined();
-		expect(environment!.props.systemImage).toBe("tray.2");
+		expect(menus.filter((node) => node.props.label === "Environment")).toHaveLength(1);
+		expect(menus.some((node) => node.props.label === "Machine")).toBe(false);
 		expect(environment!.findAll((node) => String(node.type) === "Toggle").map((node) => node.props.label))
-			.toEqual(["All environments", "Studio Mac", "Dev"]);
+			.toEqual(["All environments", "Studio Mac", "Dev", "Cloud"]);
+		expect(environment!.findAll((node) => String(node.type) === "Toggle" && node.props.isOn).map((node) => node.props.label)).toEqual(["Studio Mac"]);
 		const mac = environment!.findAll((node) => String(node.type) === "Toggle" && node.props.label === "Studio Mac")[0];
 		expect(mac.props.systemImage).toBe("laptopcomputer");
 		expect(mac.props.isOn).toBe(true);
@@ -122,7 +126,7 @@ it("keeps newer native search input while React acknowledges an earlier prefix, 
 		const [query, setQuery] = useState("");
 		return <WorkerDock query={query} onQueryChange={setQuery} onSpawn={vi.fn()}
 			searchOpen onSearchOpen={vi.fn()} onSearchClose={vi.fn()} onOpenControls={vi.fn()}
-			projectFiltered={false} environmentFilter="all" onSelectEnvironment={vi.fn()} environments={[]} selectedEnvironmentId="all" onSelectMachine={vi.fn()}
+			projectFiltered={false} onSelectEnvironment={vi.fn()} environments={[]} selectedEnvironmentId="all"
 			projectOptions={[]} selectedProjectId="all" selectedProjectLabel="All projects" onSelectProject={vi.fn()} />;
 	}
 	act(() => { renderer = create(<Screen />); });
@@ -140,7 +144,7 @@ it("keeps newer native search input while React acknowledges an earlier prefix, 
 it("keeps AB when A and AB callbacks both arrive before the parent acknowledges A", () => {
 	const screen = (query: string) => <WorkerDock query={query} onQueryChange={vi.fn()} onSpawn={vi.fn()}
 		searchOpen onSearchOpen={vi.fn()} onSearchClose={vi.fn()} onOpenControls={vi.fn()}
-		projectFiltered={false} environmentFilter="all" onSelectEnvironment={vi.fn()} environments={[]} selectedEnvironmentId="all" onSelectMachine={vi.fn()}
+		projectFiltered={false} onSelectEnvironment={vi.fn()} environments={[]} selectedEnvironmentId="all"
 		projectOptions={[]} selectedProjectId="all" selectedProjectLabel="All projects" onSelectProject={vi.fn()} />;
 	act(() => { renderer = create(screen("")); });
 	const change = (value: string) => { native.value = value; act(() => renderer!.root.findAll(node => String(node.type) === "TextField")[0].props.onTextChange(value)); };
@@ -158,7 +162,7 @@ it("keeps AB when A and AB callbacks both arrive before the parent acknowledges 
 it("clears native text even when the parent has not acknowledged any typing yet", () => {
 	act(() => { renderer = create(<WorkerDock query="" onQueryChange={vi.fn()} onSpawn={vi.fn()}
 		searchOpen onSearchOpen={vi.fn()} onSearchClose={vi.fn()} onOpenControls={vi.fn()}
-		projectFiltered={false} environmentFilter="all" onSelectEnvironment={vi.fn()} environments={[]} selectedEnvironmentId="all" onSelectMachine={vi.fn()}
+		projectFiltered={false} onSelectEnvironment={vi.fn()} environments={[]} selectedEnvironmentId="all"
 		projectOptions={[]} selectedProjectId="all" selectedProjectLabel="All projects" onSelectProject={vi.fn()} />); });
 	native.value = "AB";
 	act(() => renderer!.root.findAll(node => String(node.type) === "TextField")[0].props.onTextChange("AB"));
@@ -173,7 +177,7 @@ it("coalesces repeated native values without mistaking a later external reset fo
 		resetQuery = setQuery;
 		return <WorkerDock query={query} onQueryChange={setQuery} onSpawn={vi.fn()}
 			searchOpen onSearchOpen={vi.fn()} onSearchClose={vi.fn()} onOpenControls={vi.fn()}
-			projectFiltered={false} environmentFilter="all" onSelectEnvironment={vi.fn()} environments={[]} selectedEnvironmentId="all" onSelectMachine={vi.fn()}
+			projectFiltered={false} onSelectEnvironment={vi.fn()} environments={[]} selectedEnvironmentId="all"
 			projectOptions={[]} selectedProjectId="all" selectedProjectLabel="All projects" onSelectProject={vi.fn()} />;
 	}
 	act(() => { renderer = create(<Screen />); });
@@ -200,7 +204,7 @@ it("forwards new typing after Clear cancels the uncommitted parent echo and sear
 		reopen = () => setOpen(true);
 		return <WorkerDock query={query} onQueryChange={(next) => { changes(next); setQuery(next); }} onSpawn={vi.fn()}
 			searchOpen={open} onSearchOpen={reopen} onSearchClose={() => { setQuery(""); setOpen(false); }} onOpenControls={vi.fn()}
-			projectFiltered={false} environmentFilter="all" onSelectEnvironment={vi.fn()} environments={[]} selectedEnvironmentId="all" onSelectMachine={vi.fn()}
+			projectFiltered={false} onSelectEnvironment={vi.fn()} environments={[]} selectedEnvironmentId="all"
 			projectOptions={[]} selectedProjectId="all" selectedProjectLabel="All projects" onSelectProject={vi.fn()} />;
 	}
 	act(() => { renderer = create(<Screen />); });
@@ -228,7 +232,8 @@ describe("iOS worker filter menu", () => {
 				query="" onQueryChange={vi.fn()} onSpawn={vi.fn()}
 				searchOpen={false} onSearchOpen={vi.fn()} onSearchClose={vi.fn()} onOpenControls={vi.fn()}
 				projectFiltered={false}
-				environmentFilter="all" onSelectEnvironment={selectEnvironment}
+				environments={[{ id: "mac", name: "Studio Mac", appearance: { symbol: "laptop" } }, { id: "cloud", name: "Cloud", appearance: { symbol: "cloud" } }]}
+				selectedEnvironmentId="cloud" onSelectEnvironment={selectEnvironment}
 				projectOptions={[{ id: "all", label: "All projects" }, { id: "cloud:org-1:tap", label: "Tap · Cloud" }]}
 				selectedProjectId="all" selectedProjectLabel="All projects" onSelectProject={selectProject}
 			/>);
@@ -236,10 +241,12 @@ describe("iOS worker filter menu", () => {
 		const menus = renderer!.root.findAll((node) => String(node.type) === "Menu");
 		const environment = menus.find((node) => node.props.label === "Environment");
 		expect(environment).toBeDefined();
-		expect(environment!.findAll((node) => String(node.type) === "Button").map((node) => node.props.label))
-			.toEqual(["All environments", "Local", "Cloud"]);
-		const cloud = environment!.findAll((node) => String(node.type) === "Button" && node.props.label === "Cloud")[0];
-		act(() => cloud.props.onPress());
+		expect(environment!.findAll((node) => String(node.type) === "Toggle").map((node) => node.props.label))
+			.toEqual(["All environments", "Studio Mac", "Cloud"]);
+		const cloud = environment!.findAll((node) => String(node.type) === "Toggle" && node.props.label === "Cloud")[0];
+		expect(cloud.props.systemImage).toBe("cloud");
+		expect(environment!.findAll((node) => String(node.type) === "Toggle" && node.props.isOn).map((node) => node.props.label)).toEqual(["Cloud"]);
+		act(() => cloud.props.onIsOnChange(true));
 		expect(selectEnvironment).toHaveBeenCalledWith("cloud");
 		expect(hapticSelect).toHaveBeenCalledOnce();
 		const project = menus.find((node) => node.props.label === "All projects");

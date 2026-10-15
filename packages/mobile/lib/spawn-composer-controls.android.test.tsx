@@ -56,7 +56,7 @@ describe("SpawnComposerControls", () => {
 	it("opens the destination choice inside the composer", async () => {
 		const onSelectDestination = vi.fn();
 		const props = {
-			destinations: [{ source: { kind: "local", id: "desktop-1" }, label: "Local · Paired desktop", available: true }, { source: { kind: "cloud", id: "org-1" }, label: "Cloud", available: true }],
+			destinations: [{ source: { kind: "local", id: "desktop-1" }, label: "Paired desktop", available: true }, { source: { kind: "cloud", id: "org-1" }, label: "Cloud", available: true }],
 			destination: null,
 			onSelectDestination,
 			projects: [], projectId: null, onSelectProject: vi.fn(), agents: [], harness: "", onSelectHarness: vi.fn(),
@@ -64,15 +64,17 @@ describe("SpawnComposerControls", () => {
 			voice: { state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn() }, onSpawn: vi.fn(), busy: false, disabled: true,
 		} as unknown as Parameters<typeof SpawnComposerControls>[0];
 		await act(async () => { renderer = create(<SpawnComposerControls {...props} />); });
-		const runOn = renderer!.root.findAll((node) => String(node.type) === "Pressable" && node.props.accessibilityLabel === "Run on Choose where to run")[0];
+		const destination = renderer!.root.findAll((node) => String(node.type) === "Pressable" && node.props.accessibilityLabel === "Choose where to run")[0];
+		expect(destination).toBeDefined();
+		expect(destination.findAll((node) => String(node.type) === "Feather")[0].props.name).toBe("monitor");
 		const project = renderer!.root.findAll((node) => String(node.type) === "Pressable" && node.props.accessibilityLabel === "Choose project")[0];
 		const selectorRow = renderer!.root.findAll((node) => String(node.type) === "View")
-			.find((node) => node.props.style?.flexDirection === "row" && node.findAll((child) => String(child.type) === "Pressable" && ["Run on Choose where to run", "Choose project"].includes(child.props.accessibilityLabel)).length === 2);
+			.find((node) => node.props.style?.flexDirection === "row" && node.findAll((child) => String(child.type) === "Pressable" && ["Choose where to run", "Choose project"].includes(child.props.accessibilityLabel)).length === 2);
 		expect(selectorRow?.props.style).toMatchObject({ flexDirection: "row" });
-		expect(runOn.props.style).toContainEqual(expect.objectContaining({ flex: 1, minWidth: 0 }));
+		expect(destination.props.style).toContainEqual(expect.objectContaining({ flex: 1, minWidth: 0 }));
 		expect(project.props.style).toContainEqual(expect.objectContaining({ flex: 1, minWidth: 0 }));
-		await act(async () => runOn.props.onPress());
-		expect(renderer!.root.findAll((node) => String(node.type) === "Text").some((node) => node.props.children === "Run on")).toBe(true);
+		await act(async () => destination.props.onPress());
+		expect(renderer!.root.findAll((node) => String(node.type) === "Text").some((node) => node.props.children === "Destination")).toBe(true);
 		const cloud = renderer!.root.findAll((node) => String(node.type) === "Pressable").find((node) => node.findAll((child) => String(child.type) === "Text" && child.props.children === "Cloud").length > 0);
 		await act(async () => cloud?.props.onPress());
 		expect(onSelectDestination).toHaveBeenCalledWith({ kind: "cloud", id: "org-1" });
@@ -108,6 +110,9 @@ describe("SpawnComposerControls", () => {
 			.map((node) => node.props.accessibilityLabel)
 			.filter(Boolean);
 		expect(labels).toContain("Claude Code");
+		expect(labels).toContain("Cloud");
+		const destination = renderer!.root.findAll((node) => String(node.type) === "Pressable" && node.props.accessibilityLabel === "Cloud")[0];
+		expect(destination.findAll((node) => String(node.type) === "Feather")[0].props.name).toBe("cloud");
 		expect(labels).not.toContain("Attach a file");
 		expect(labels).toContain("Automatic");
 	});
@@ -117,7 +122,7 @@ describe("Android spawn machine selector", () => {
 	it("shows the connected default and selects another machine", async () => {
 		const onSelectDestination = vi.fn();
 		const props = {
-			destinations: [{ source: { kind: "local", id: "host-a" }, label: "Alpha", available: true }, { source: { kind: "local", id: "host-b" }, label: "Beta", available: true }],
+			destinations: [{ source: { kind: "local", id: "host-a" }, label: "Alpha", available: true }, { source: { kind: "local", id: "host-b" }, label: "Beta", available: true }, { source: { kind: "local", id: "host-c" }, label: "Gamma", available: false }],
 			destination: { kind: "local", id: "host-a" },
 			onSelectDestination,
 			projects: [{ id: "project-1", label: "Project" }], projectId: "project-1", onSelectProject: vi.fn(),
@@ -126,9 +131,16 @@ describe("Android spawn machine selector", () => {
 		} as unknown as Parameters<typeof SpawnComposerControls>[0];
 		await act(async () => { renderer = create(<SpawnComposerControls {...props} />); });
 
-		const runOn = renderer!.root.findAll((node) => String(node.type) === "Pressable" && node.props.accessibilityLabel === "Run on Alpha")[0];
-		expect(runOn).toBeDefined();
-		await act(async () => runOn.props.onPress());
+		const destination = renderer!.root.findAll((node) => String(node.type) === "Pressable" && node.props.accessibilityLabel === "Alpha")[0];
+		expect(destination).toBeDefined();
+		expect(destination.findAll((node) => String(node.type) === "Feather")[0].props.name).toBe("monitor");
+		await act(async () => destination.props.onPress());
+		const unavailable = renderer!.root.findAll((node) => String(node.type) === "Pressable").find((node) =>
+			node.findAll((child) => String(child.type) === "Text" && child.props.children === "Gamma · Unavailable").length > 0,
+		);
+		expect(unavailable).toBeDefined();
+		await act(async () => unavailable!.props.onPress());
+		expect(onSelectDestination).not.toHaveBeenCalled();
 		const beta = renderer!.root.findAll((node) => String(node.type) === "Pressable").find((node) =>
 			node.findAll((child) => String(child.type) === "Text" && child.props.children === "Beta").length > 0,
 		);

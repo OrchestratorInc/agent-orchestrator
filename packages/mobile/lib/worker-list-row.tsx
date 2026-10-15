@@ -4,7 +4,6 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Keyboard, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import type { DashboardSession } from "./api";
 import { resourceKey, type SourceRef } from "./environment/scopedBoard";
-import { EnvironmentBadge } from "./environment-badge-icon";
 import { AgentLogo } from "./AgentLogo";
 import { haptics } from "./haptics";
 import { prLine, workerRowPresentation, workerStatusGlyph } from "./agentsView";
@@ -365,6 +364,7 @@ function WorkerRowContents({
 	t: Theme;
 }) {
 	const canSave = Boolean(normalizeConversationTitle(renameTitle)) && !renameSaving;
+	const identity: typeof machine = sourceLabel === "Cloud" ? { name: "Cloud", appearance: { symbol: "cloud" } } : machine;
 	return (
 		<>
 			<View style={styles.eyebrow}>
@@ -372,7 +372,6 @@ function WorkerRowContents({
 				<Text style={styles.project} numberOfLines={1}>
 					{row.project}
 				</Text>
-				<EnvironmentBadge sourceLabel={sourceLabel} theme={t} />
 				{/* Paired with the tinted label so status reads by shape as well as
 				    colour. Only shown alongside a real status — when the row is
 				    showing an elapsed time instead, there is no state to depict.
@@ -432,14 +431,14 @@ function WorkerRowContents({
 			)}
 
 			{renameError ? <Text accessibilityRole="alert" style={styles.renameError}>{renameError}</Text> : null}
-			{details || machine ? (
+			{details || identity ? (
 				<View style={styles.metadata}>
 					{details ? (
 						<Text style={[styles.details, prsTone && { color: toneColor(t, prsTone) }]} numberOfLines={1}>
 							{details}
 						</Text>
 					) : <View style={styles.metadataSpacer} />}
-					{machine ? <MachineIdentity testID="worker-machine-identity" name={machine.name} appearance={machine.appearance} style={styles.machineIdentity} /> : null}
+					{identity ? <MachineIdentity testID="worker-machine-identity" name={identity.name} appearance={identity.appearance} style={styles.machineIdentity} /> : null}
 				</View>
 			) : null}
 		</>

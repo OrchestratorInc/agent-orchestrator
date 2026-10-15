@@ -10,6 +10,7 @@ import Archive from "lucide-react-native/icons/archive";
 import ArrowDown from "lucide-react-native/icons/arrow-down";
 import ArrowUp from "lucide-react-native/icons/arrow-up";
 import Bell from "lucide-react-native/icons/bell";
+import BookOpen from "lucide-react-native/icons/book-open";
 import Bookmark from "lucide-react-native/icons/bookmark";
 import CameraOff from "lucide-react-native/icons/camera-off";
 import Check from "lucide-react-native/icons/check";
@@ -60,6 +61,7 @@ import Layers from "lucide-react-native/icons/layers";
 import Link from "lucide-react-native/icons/link";
 import List from "lucide-react-native/icons/list";
 import LoaderCircle from "lucide-react-native/icons/loader-circle";
+import Lock from "lucide-react-native/icons/lock";
 import LogOut from "lucide-react-native/icons/log-out";
 import Map from "lucide-react-native/icons/map";
 import Maximize from "lucide-react-native/icons/maximize";
@@ -134,6 +136,7 @@ export const glyphs = {
 	"arrow-down": ArrowDown,
 	"arrow-up": ArrowUp,
 	"bell": Bell,
+	"book": BookOpen,
 	"bookmark": Bookmark,
 	"camera-off": CameraOff,
 	"check": Check,
@@ -184,6 +187,7 @@ export const glyphs = {
 	"link": Link,
 	"list": List,
 	"loader": LoaderCircle,
+	"lock": Lock,
 	"log-out": LogOut,
 	"map": Map,
 	"maximize": Maximize,

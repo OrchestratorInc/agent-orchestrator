@@ -5,7 +5,6 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { ProjectInfo } from "./api";
 import type { Scoped } from "./environment/scopedBoard";
-import type { EnvironmentKind } from "./environment/types";
 import { haptics } from "./haptics";
 import { MachineAvatar } from "./MachineIdentity";
 import { machineAppearance } from "./machineAppearance";
@@ -21,11 +20,9 @@ export function WorkerControlsSheet({
 	open,
 	onDismiss,
 	onSearch,
-	environments = [],
-	selectedEnvironmentId = "all",
-	onSelectMachine,
+	environments,
+	selectedEnvironmentId,
 	projects,
-	environmentFilter,
 	onSelectEnvironment,
 	selectedProjectId,
 	onSelectProject,
@@ -33,12 +30,10 @@ export function WorkerControlsSheet({
 	open: boolean;
 	onDismiss: () => void;
 	onSearch: () => void;
-	environments?: readonly WorkerEnvironment[];
-	selectedEnvironmentId?: string;
-	onSelectMachine?: (machineId: string) => void;
+	environments: readonly WorkerEnvironment[];
+	selectedEnvironmentId: string;
 	projects: readonly Scoped<ProjectInfo>[];
-	environmentFilter: "all" | EnvironmentKind;
-	onSelectEnvironment: (environment: "all" | EnvironmentKind) => void;
+	onSelectEnvironment: (environmentId: string) => void;
 	selectedProjectId: string;
 	onSelectProject: (projectId: string) => void;
 }) {
@@ -49,10 +44,10 @@ export function WorkerControlsSheet({
 	// its window is still animating out. Focusing search then leaves the field
 	// focused without a keyboard (reproduced on a Samsung M31), so wait for the
 	// hide to finish, as the sheet did before it moved to onClose.
-	const [machineId, setMachineId] = useState(selectedEnvironmentId);
-	useLayoutEffect(() => { if (open) setMachineId(selectedEnvironmentId); }, [open, selectedEnvironmentId]);
-	const scopedProjects = projects.filter((entry) => entry.source.kind === "cloud" || machineId === "all" || entry.source.id === machineId);
-	const projectOptions = scopedWorkerProjectOptions(scopedProjects, environmentFilter);
+	const [environmentId, setEnvironmentId] = useState(selectedEnvironmentId);
+	useLayoutEffect(() => { if (open) setEnvironmentId(selectedEnvironmentId); }, [open, selectedEnvironmentId]);
+	const selectedSource = environments.find((environment) => environment.id === environmentId)?.source ?? null;
+	const projectOptions = scopedWorkerProjectOptions(projects, selectedSource);
 	const draft = useWorkerControlsDraft({ open, selectedEnvironmentId: "all", selectedProjectId, projects: projectOptions.map((project) => ({ id: project.id, name: project.label })), onSelectEnvironment: () => {}, onSelectProject, onDismiss, onSearch, searchDelayMs: ANDROID_SHEET_HIDE_MS });
 	const environmentOptions = workerEnvironmentOptions(environments);
 
@@ -94,25 +89,9 @@ export function WorkerControlsSheet({
 				</Pressable>
 
 				<Text style={styles.sectionLabel}>ENVIRONMENT</Text>
-				<View style={styles.environmentOptions}>
-					{(["all", "local", "cloud"] as const).map((option) => (
-						<Pressable key={option} accessibilityRole="button" accessibilityState={{ selected: environmentFilter === option }}
-							onPress={() => {
-								haptics.select();
-								if (option !== environmentFilter) onSelectEnvironment(option);
-								if (!scopedWorkerProjectOptions(scopedProjects, option).some((project) => project.id === selectedProjectId)) onSelectProject(ALL_WORKER_PROJECTS);
-								onDismiss();
-							}}
-							style={[styles.environmentOption, environmentFilter === option && styles.selectedRow]}>
-							<Text style={[styles.environmentLabel, environmentFilter === option && styles.selectedLabel]}>{option === "all" ? "All" : option === "local" ? "Local" : "Cloud"}</Text>
-						</Pressable>
-					))}
-				</View>
-				{onSelectMachine && environmentFilter !== "cloud" ? <>
-				<Text style={styles.sectionLabel}>MACHINES</Text>
 				<View style={styles.optionList}>
 					{environmentOptions.map((environment, index) => {
-						const selected = environment.id === machineId;
+						const selected = environment.id === environmentId;
 						return (
 							<Pressable
 								key={environment.id}
@@ -122,11 +101,11 @@ export function WorkerControlsSheet({
 								android_ripple={{ color: t.accentTint }}
 								onPress={() => {
 									haptics.select();
-									setMachineId(environment.id);
-									if (environment.id !== machineId) onSelectMachine(environment.id);
-									const nextProjects = projects.filter((entry) => entry.source.kind === "cloud" || environment.id === "all" || entry.source.id === environment.id);
-									if (!scopedWorkerProjectOptions(nextProjects, environmentFilter).some((project) => project.id === selectedProjectId)) onSelectProject(ALL_WORKER_PROJECTS);
-									onDismiss();
+									setEnvironmentId(environment.id);
+									if (environment.id !== environmentId) onSelectEnvironment(environment.id);
+									const nextSource = environments.find((entry) => entry.id === environment.id)?.source ?? null;
+									if (!scopedWorkerProjectOptions(projects, nextSource).some((project) => project.id === draft.projectId)) draft.selectProject(ALL_WORKER_PROJECTS);
+									else draft.close();
 								}}
 								style={[styles.optionRow, index > 0 && styles.separator, selected && styles.selectedRow]}
 							>
@@ -140,7 +119,6 @@ export function WorkerControlsSheet({
 					})}
 				</View>
 
-				</> : null}
 				<Text style={styles.sectionLabel}>PROJECTS</Text>
 				<BottomSheetScrollView style={styles.projectList} showsVerticalScrollIndicator={false}>
 					{projectOptions.map((project, index) => {
@@ -180,9 +158,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	sectionLabel: { fontFamily: "Geist_600SemiBold", marginTop: space.xl, marginBottom: space.sm, paddingHorizontal: space.xxs, color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, letterSpacing: 1, fontWeight: "600" },
 	optionList: { borderRadius: 16, borderCurve: "continuous", backgroundColor: t.bgElevated, overflow: "hidden" },
 	projectList: { flex: 1, borderRadius: 16, borderCurve: "continuous", backgroundColor: t.bgElevated, overflow: "hidden" },
-	environmentLabel: { color: t.textPrimary, fontSize: type.callout.fontSize },
-	environmentOptions: { flexDirection: "row", gap: space.sm },
-	environmentOption: { flex: 1, minHeight: 44, alignItems: "center", justifyContent: "center", borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault },
 	optionRow: { minHeight: 52, paddingHorizontal: space.lg, flexDirection: "row", alignItems: "center", gap: space.md },
 	separator: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderSubtle },
 	selectedRow: { backgroundColor: t.accentTint },

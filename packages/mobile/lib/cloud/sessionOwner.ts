@@ -152,10 +152,11 @@ export function signInToDeployment(deployment: CloudDeployment = CLOUD_DEPLOYMEN
 	return owner.signIn(() => {
 		if (CLOUD_CONFIGURATION_ERROR && deployment.key === CLOUD_DEPLOYMENT.key) throw new Error(CLOUD_CONFIGURATION_ERROR);
 		return runWorkOSSignIn({
+			callbackUri: deployment.callbackUri,
 			createPkce: createPkcePair,
 			makeState: () => toBase64Url(btoa(String.fromCharCode(...Crypto.getRandomBytes(32)))),
 			authUrl: ({ challenge, state }) => buildWorkOSAuthUrl({ clientId: deployment.clientId, redirectUri: deployment.redirectUri, codeChallenge: challenge, state }),
-			openAuth: (url) => WebBrowser.openAuthSessionAsync(url, deployment.redirectUri),
+			openAuth: (url) => WebBrowser.openAuthSessionAsync(url, deployment.callbackUri),
 			exchange: ({ code, codeVerifier }) => exchangeWorkOSCode({ clientId: deployment.clientId, code, codeVerifier }),
 		});
 	});

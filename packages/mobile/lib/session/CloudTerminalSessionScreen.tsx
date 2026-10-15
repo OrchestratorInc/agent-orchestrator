@@ -23,7 +23,7 @@ import { useVoiceInput } from "../voice/useVoiceInput";
 import type { RouteSession } from "./sessionRoute";
 import { useChatViewLease } from "../chat/useChatViewLease";
 import { useCloudInterfaceTransition, type CloudInterfaceControls } from "../cloud/useCloudInterfaceTransition";
-import { cloudInterfaceInputLocked, cloudInterfaceSettledTarget } from "../cloud/interfaceTransition";
+import { cloudInterfaceDrainWaiting, cloudInterfaceInputLocked, cloudInterfaceSettledTarget } from "../cloud/interfaceTransition";
 import { mobileInterfaceTransitionIsCancellable } from "./interfaceTransition";
 
 const CLOUD_TERMINAL_JS = `
@@ -186,6 +186,8 @@ export function CloudTerminalSessionScreen({ session, source, showSpawnStartup =
 	const ownInterfaceSwitch = useCloudInterfaceTransition(!interfaceSwitch ? sessionSource : undefined, session.id, refreshBoard);
 	const handoff = interfaceSwitch ?? ownInterfaceSwitch;
 	const handoffLocked = Boolean(handoff?.loading || handoff?.starting || cloudInterfaceInputLocked(handoff?.status));
+	const drainWaiting = cloudInterfaceDrainWaiting(handoff?.status) || Boolean(handoff?.starting && handoff.startingPolicy === "drain" && handoff.status?.currentMode === "tui" && !cloudInterfaceInputLocked(handoff.status));
+	const terminalInputLocked = Boolean(handoff?.loading || handoffLocked && !drainWaiting);
 	const recoveryRequired = handoff?.transition?.phase === "recovery_required";
 	const stage = cloudLifecycleStage(session);
 	const paused = isResumable(stage);
@@ -213,9 +215,15 @@ export function CloudTerminalSessionScreen({ session, source, showSpawnStartup =
 	const [headerRightReady, setHeaderRightReady] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [draft, setDraft] = useState("");
+	const liveDraft = useRef(draft); liveDraft.current = draft;
 	const [sending, setSending] = useState(false);
 	const [resuming, setResuming] = useState(false);
 	const [switchingChat, setSwitchingChat] = useState(false);
+	const chatIntent = useRef({ version: 0, busy: false });
+	useEffect(() => {
+		chatIntent.current.version++; chatIntent.current.busy = false; setSwitchingChat(false);
+		return () => { chatIntent.current.version++; chatIntent.current.busy = false; };
+	}, [transportIdentity, sessionSource]);
 	const [size, setSize] = useState<{ cols: number; rows: number } | null>(null);
 	const sessionTitle = "displayName" in session ? session.displayName : "Orchestrator";
 	const voice = useVoiceInput({
@@ -225,28 +233,55 @@ export function CloudTerminalSessionScreen({ session, source, showSpawnStartup =
 	});
 
 	const openChat = useCallback(async () => {
-		if (switchingChat || handoffLocked) return;
-		if (sessionSource?.startInterfaceTransition && handoff) {
-			if (!handoff.status?.supported) { Alert.alert("Chat unavailable", handoff.status?.reason || handoff.error || "This agent does not support native Chat handoff."); return; }
-			try { await handoff.start("chat", "drain"); }
-			catch (cause) { Alert.alert("Couldn’t switch to Chat", cloudRequestErrorCopy(cause)); }
-			return;
-		}
-		if (!sessionSource?.switchToChat) {
-			Alert.alert("Chat unavailable", "Your Cloud workspace is not ready. Sign in again and retry.");
-			return;
-		}
+		if (chatIntent.current.busy || handoffLocked) return;
+		const version = ++chatIntent.current.version; chatIntent.current.busy = true;
+		const current = () => chatIntent.current.version === version && liveTransportIdentity.current === transportIdentity;
 		setSwitchingChat(true);
 		try {
+			if (sessionSource?.startInterfaceTransition && handoff) {
+				const begin = async (policy: "drain" | "interrupt") => {
+					if (!current()) return;
+					try { await handoff.start("chat", policy); }
+					catch (cause) { if (current()) Alert.alert("Couldn’t switch to Chat", cloudRequestErrorCopy(cause)); }
+				};
+				// A cached idle row may predate terminal input. Match desktop by
+				// checking authoritative activity before stopping without a prompt.
+				const read = await handoff.refresh();
+				if (!current() || !read || read.ok && read.stale) return;
+				if (read?.ok && cloudInterfaceInputLocked(read.status)) return;
+				// Opening the selected interface is navigation, not a handoff.
+				// Paused/offline workers can still show Chat history and Resume.
+				if (read?.ok && read.status.currentMode === "chat") {
+					await refreshBoard();
+					if (current()) router.replace({ pathname: "/session/[id]", params: { id: session.id, source: source.kind, sourceId: source.id } });
+					return;
+				}
+				if (read?.ok && !read.status.supported) {
+					Alert.alert("Chat unavailable", read.status.reason || "This agent does not support native Chat handoff."); return;
+				}
+				const activityKnown = Boolean(read?.ok && read.status.currentMode === "tui" && read.status.runtimeConnected && read.status.sourceBusy !== undefined);
+				if (activityKnown && read?.ok && !read.status.sourceBusy && !liveDraft.current.trim()) { await begin("interrupt"); return; }
+				const waiting = read?.ok && read.status.sourceWaitingForInput;
+				const message = !activityKnown
+					? "Couldn’t confirm whether this terminal is busy. Stopping may interrupt its current work."
+					: waiting ? "This turn is waiting for your input. Finish waits for your answer; stop cancels it and switches now."
+						: "Keep the same Orchestrator session, worktree, and native agent conversation. Stop cancels any current work and switches now.";
+				const choices: NonNullable<Parameters<typeof Alert.alert>[2]> = [{ text: "Keep Terminal", style: "cancel" }];
+				if (activityKnown && read?.ok && read.status.sourceBusy) choices.push({ text: "Finish, then switch", onPress: () => void begin("drain") });
+				choices.push({ text: "Stop and switch", style: "destructive", onPress: () => void begin("interrupt") });
+				Alert.alert("Switch to Chat?", message + (liveDraft.current.trim() ? " Unsent text in this phone’s composer will not be sent." : ""), choices);
+				return;
+			}
+			if (!sessionSource?.switchToChat) throw new Error("Your Cloud workspace is not ready. Sign in again and retry.");
 			await sessionSource.switchToChat(session.id);
 			await refreshBoard();
-			router.replace({ pathname: "/session/[id]", params: { id: session.id, source: source.kind, sourceId: source.id } });
+			if (current()) router.replace({ pathname: "/session/[id]", params: { id: session.id, source: source.kind, sourceId: source.id } });
 		} catch (cause) {
-			Alert.alert("Couldn’t open Chat", cause instanceof Error ? cause.message : "Try again shortly.");
+			if (current()) Alert.alert("Couldn’t open Chat", cloudRequestErrorCopy(cause));
 		} finally {
-			setSwitchingChat(false);
+			if (current()) { chatIntent.current.busy = false; setSwitchingChat(false); }
 		}
-	}, [handoff, handoffLocked, refreshBoard, router, session.id, sessionSource, source.kind, source.id, switchingChat]);
+	}, [handoff, handoffLocked, refreshBoard, router, session.id, sessionSource, source.kind, source.id, transportIdentity]);
 	useEffect(() => {
 		if (!interfaceSwitch && cloudInterfaceSettledTarget(handoff?.status) === "chat") router.replace({ pathname: "/session/[id]", params: { id: session.id, source: source.kind, sourceId: source.id } });
 	}, [handoff?.status, interfaceSwitch, router, session.id, source.kind, source.id]);
@@ -260,12 +295,12 @@ export function CloudTerminalSessionScreen({ session, source, showSpawnStartup =
 		if (!headerRightReady) return;
 		navigation.setOptions({
 			title: sessionTitle || "Cloud terminal",
-			headerRight: () => <Pressable accessibilityRole="button" accessibilityLabel="Open Chat UI" disabled={switchingChat} onPress={openChat} style={styles.chatButton}>
+			headerRight: () => <Pressable accessibilityRole="button" accessibilityLabel="Open Chat UI" disabled={switchingChat || handoffLocked} onPress={openChat} style={styles.chatButton}>
 				{switchingChat ? <ActivityIndicator size="small" color={t.accent} /> : <Feather name="message-square" size={16} color={t.accent} />}
 				<Text style={styles.chatButtonText}>{switchingChat ? "Switching…" : "Chat"}</Text>
 			</Pressable>,
 		});
-	}, [headerRightReady, navigation, openChat, sessionTitle, styles, switchingChat, t.accent]);
+	}, [handoffLocked, headerRightReady, navigation, openChat, sessionTitle, styles, switchingChat, t.accent]);
 
 	useEffect(() => {
 		xtermReady.current = false;
@@ -277,7 +312,7 @@ export function CloudTerminalSessionScreen({ session, source, showSpawnStartup =
 		pendingOutput.current = [];
 		setTerminalState({ identity: transportIdentity, status: "connecting" });
 		setError(null);
-		if (paused || archived || startupStopped || handoffLocked) return;
+		if (paused || archived || startupStopped || terminalInputLocked) return;
 		if (!orgId || source.kind !== "cloud" || orgId !== source.id || !sessionSource) {
 			setTerminalState({ identity: transportIdentity, status: "error" });
 			setError("Your Cloud workspace is not ready. Sign in again and retry.");
@@ -309,7 +344,7 @@ export function CloudTerminalSessionScreen({ session, source, showSpawnStartup =
 			terminalRef.current = null;
 			pendingOutput.current = [];
 		};
-	}, [client, orgId, paused, archived, startupStopped, handoffLocked, scheme, session.id, session.cloud?.workerEpoch, source.kind, source.id, sessionSource, transportIdentity]);
+	}, [client, orgId, paused, archived, startupStopped, terminalInputLocked, scheme, session.id, session.cloud?.workerEpoch, source.kind, source.id, sessionSource, transportIdentity]);
 
 	const resumeSandbox = useCallback(async () => {
 		if (resuming) return;
@@ -375,7 +410,7 @@ export function CloudTerminalSessionScreen({ session, source, showSpawnStartup =
 
 	const sendPrompt = useCallback(async () => {
 		const text = draft.trim();
-		if (!text || sending || handoffLocked) return;
+		if (!text || sending || terminalInputLocked) return;
 		setSending(true);
 		try {
 			const line = terminalPayload(text);
@@ -390,7 +425,7 @@ export function CloudTerminalSessionScreen({ session, source, showSpawnStartup =
 		} finally {
 			setSending(false);
 		}
-	}, [draft, sending, handoffLocked]);
+	}, [draft, sending, terminalInputLocked]);
 
 	const rootPad = rootKeyboardPad(Platform.OS === "android" ? "android" : "ios", keyboardHeight, insets.bottom);
 	const bottomPad = dockInset(keyboardHeight, insets.bottom, keyboardVisible);
@@ -422,7 +457,7 @@ export function CloudTerminalSessionScreen({ session, source, showSpawnStartup =
 	</View>;
 	return <View style={[styles.screen, !showStartup && rootPad > 0 && { paddingBottom: rootPad }]}>
 		{handoffLocked || handoff?.error || handoff?.transition?.phase === "failed" && !handoff.transition.noticeAcknowledgedAt ? <View style={styles.statusBar}>
-			<Text style={styles.statusText}>{recoveryRequired ? handoff?.transition?.errorDetail || "The interface needs recovery. Both controllers are unavailable; your history is preserved." : handoff?.error || handoff?.transition?.errorDetail || (handoff?.transition ? "Switching to Chat · " + handoff.transition.phase.replaceAll("_", " ") : "Checking Cloud interface…")}</Text>
+			<Text style={styles.statusText}>{recoveryRequired ? handoff?.transition?.errorDetail || "The interface needs recovery. Both controllers are unavailable; your history is preserved." : handoff?.error || handoff?.transition?.errorDetail || (drainWaiting ? "Waiting to switch to Chat…" : handoff?.transition ? "Switching to Chat · " + handoff.transition.phase.replaceAll("_", " ") : "Checking Cloud interface…")}</Text>
 			{mobileInterfaceTransitionIsCancellable(handoff?.transition) ? <Pressable accessibilityRole="button" accessibilityLabel="Cancel interface switch" onPress={() => void handoff?.cancel().catch(() => {})} style={styles.chatButton}><Text style={styles.chatButtonText}>Cancel</Text></Pressable> : null}
 			{recoveryRequired || handoff?.transition?.phase === "failed" ? <Pressable accessibilityRole="button" accessibilityLabel="Dismiss interface notice" onPress={() => void handoff?.acknowledgeNotice(handoff.transition!.id).catch(() => {})} style={styles.chatButton}><Text style={styles.chatButtonText}>Dismiss</Text></Pressable> : handoff?.error ? <Pressable accessibilityRole="button" accessibilityLabel="Retry interface status" onPress={() => void handoff.refresh()} style={styles.chatButton}><Text style={styles.chatButtonText}>Retry</Text></Pressable> : null}
 		</View> : null}
@@ -442,7 +477,7 @@ export function CloudTerminalSessionScreen({ session, source, showSpawnStartup =
 				webViewOptions={webViewOptions}
 				logger={logger}
 				onInitialized={onInitialized}
-				onData={(data) => { if (!terminalRef.current?.sendInput(data)) setError("Terminal is not ready yet."); }}
+				onData={(data) => { if (!terminalInputLocked && !terminalRef.current?.sendInput(data)) setError("Terminal is not ready yet."); }}
 				style={styles.xterm}
 			/>
 			{showStartup ? <View style={styles.startupOverlay} accessible accessibilityLabel={`Starting Cloud terminal: ${startupSteps[startupStep]}`}>
@@ -459,7 +494,7 @@ export function CloudTerminalSessionScreen({ session, source, showSpawnStartup =
 				</View>
 			</View> : null}
 		</View>
-		{!showStartup && !handoffLocked ? <View style={[styles.dock, { paddingBottom: bottomPad }]}>
+		{!showStartup && !terminalInputLocked ? <View style={[styles.dock, { paddingBottom: bottomPad }]}>
 			<KeyRow onKey={(key) => { if (!terminalRef.current?.sendInput(key)) setError("Terminal is not ready yet."); }} />
 			<Composer
 				value={draft}

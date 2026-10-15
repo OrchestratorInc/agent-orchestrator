@@ -134,12 +134,16 @@ describe("combined Worker filters", () => {
 		{ source: cloud, value: { id: "same", name: "Shared" } },
 	] as Scoped<ProjectInfo>[];
 	it("qualifies identical project IDs and filters by environment", () => {
-		const all = scopedWorkerProjectOptions(projects, "all");
+		const all = scopedWorkerProjectOptions(projects, null);
 		expect(all).toHaveLength(3);
 		expect(all[1].id).not.toBe(all[2].id);
 		expect(all[1].label).toContain("Local");
 		expect(all[2].label).toContain("Cloud");
-		expect(scopedWorkerProjectOptions(projects, "cloud")).toHaveLength(2);
+		expect(scopedWorkerProjectOptions(projects, cloud)).toEqual([
+			{ id: "all", label: "All projects" }, { id: '["cloud","org","same"]', label: "Shared · Cloud" },
+		]);
+		expect(scopedWorkerProjectOptions(projects, { kind: "local", id: "org" })).toEqual([{ id: "all", label: "All projects" }]);
+		expect(scopedWorkerProjectOptions(projects, { kind: "local", id: "other-machine" })).toEqual([{ id: "all", label: "All projects" }]);
 	});
 	it("gives same-ID workers distinct row identities", () => {
 		const a = { source: local, value: { id: "same" } } as Scoped<DashboardSession>;

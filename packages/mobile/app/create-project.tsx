@@ -1,15 +1,15 @@
-import { Feather } from "@expo/vector-icons";
+import { Feather as BrandFeather } from "@expo/vector-icons";
 import { Checkbox, Column, Host, Picker } from "@expo/ui";
 import { CloudApiError, type CoderTemplate, type CoderTemplateParameter, type CreateGitHubProjectInput, type CreateProjectInput, type GitHubInstallation, type GitHubRepository, type OrgCoderConfigResponse, type ProjectConfig } from "@aoagents/cloud-client";
 import * as Crypto from "expo-crypto";
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, AppState, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, AppState, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { AgentLogo } from "../lib/AgentLogo";
 import { backOr } from "../lib/backNavigation";
 import { readyHarnesses } from "../lib/cloud/agentReadiness";
 import { useCloudAuth } from "../lib/cloud/authStore";
+import { CloudAgentSelect } from "../lib/cloud/cloud-agent-select";
 import { loadGrantedRepositories } from "../lib/cloud/githubProjectRepositories";
 import { createGitHubConnectionAttempt } from "../lib/cloud/githubConnection";
 import { cloudAccountScopeKey } from "../lib/cloud/deployment";
@@ -17,12 +17,13 @@ import { offersProviderChoice } from "../lib/cloud/offering";
 import { acceptCloudOperation, clearCloudOperation, prepareCloudOperation, readCloudOperationsForScope, reserveCloudOperation, type CloudOperation } from "../lib/cloud/operation";
 import { cloudProjectInput, coderParameterProblem, coderSetupProblem, findCloudProjectForRepository, initialProjectCreationStep, normalizedGitHubRepository, validGitHubRepositoryURL } from "../lib/cloud/projectCreation";
 import { haptics } from "../lib/haptics";
+import { Feather } from "../lib/icons";
 import { openGitHub } from "../lib/openGitHub";
 import { useApp } from "../lib/store";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemeState, useThemedStyles } from "../lib/ThemeProvider";
 import { Button, HeaderIconButton } from "../lib/ui";
-import { radius, sheetInset, space, touchTarget, type as typography } from "../lib/tokens";
+import { fontScaleCap, iconSize, radius, sheetInset, space, touchTarget, type as typography } from "../lib/tokens";
 
 export { SheetErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
 
@@ -86,6 +87,7 @@ export default function CreateCloudProject() {
 	const [installations, setInstallations] = useState<GitHubInstallation[]>([]);
 	const [repositories, setRepositories] = useState<GitHubRepository[]>([]);
 	const [repositorySearch, setRepositorySearch] = useState("");
+	const [repositoryPickerOpen, setRepositoryPickerOpen] = useState(false);
 	const [selectedRepositoryId, setSelectedRepositoryId] = useState("");
 	const [projectSource, setProjectSource] = useState<"app" | "manual">("app");
 	const [githubError, setGithubError] = useState<string | null>(null);
@@ -110,7 +112,7 @@ export default function CreateCloudProject() {
 		: readyInstallations.length > 0 ? `Connected to ${readyInstallations.map((item) => item.accountLogin).join(", ")}`
 		: connecting ? `Syncing repositories from ${activeInstallations.map((item) => item.accountLogin).join(", ")}`
 		: `Repository sync needs attention for ${activeInstallations.map((item) => item.accountLogin).join(", ")}`;
-	const visibleRepositories = useMemo(() => repositories.filter((repository) => repository.fullName.toLowerCase().includes(repositorySearch.trim().toLowerCase())), [repositories, repositorySearch]);
+	const visibleRepositories = useMemo(() => repositorySearch.trim() ? repositories.filter((repository) => repository.fullName.toLowerCase().includes(repositorySearch.trim().toLowerCase())) : [], [repositories, repositorySearch]);
 	const shownRepositories = visibleRepositories.slice(0, 30);
 	const displayedStep = step === "loading" || step === "unavailable" || setupScope === scopeKey ? step : "loading";
 	const scopedReserved = reserved?.operation.scopeKey === scopeKey ? reserved : null;
@@ -129,6 +131,7 @@ export default function CreateCloudProject() {
 	}, []);
 	useEffect(() => {
 		manualAbort.current?.abort(); manualAbort.current = null;
+		setRepositoryPickerOpen(false); setRepositorySearch("");
 		setToken(""); setRepositoryUrl(""); setDisplayName(""); setDefaultBranch("main"); setReadOnly(false); setHasSavedToken(false); setBusy(false);
 		return () => { createAbort.current?.abort(); createAbort.current = null; manualAbort.current?.abort(); manualAbort.current = null; };
 	}, [scopeKey, sessionEpoch]);
@@ -244,12 +247,12 @@ export default function CreateCloudProject() {
 			return;
 		}
 		if (!signedIn) {
-			setError("Sign in to AO Cloud before adding a project.");
+			setError("Sign in to Orchestrator Cloud before adding a project.");
 			setStep("unavailable");
 			return;
 		}
 		if (!orgId) {
-			setError(orgError ?? "Could not load your AO Cloud workspace.");
+			setError(orgError ?? "Could not load your Orchestrator Cloud workspace.");
 			setStep("unavailable");
 			return;
 		}
@@ -577,6 +580,7 @@ export default function CreateCloudProject() {
 
 	const back = () => {
 		haptics.tap();
+		if (step === "github" && repositoryPickerOpen) { setRepositoryPickerOpen(false); setRepositorySearch(""); Keyboard.dismiss(); return; }
 		if (step === "agents") { setError(null); setStep(projectSource === "app" ? "github" : "repository"); }
 		else if (step === "github-token" || step === "repository") { setError(null); setStep("github"); }
 		else backOr(router);
@@ -586,17 +590,17 @@ export default function CreateCloudProject() {
 		<View style={styles.screen} collapsable={false}>
 			<View style={styles.header}>
 				<HeaderIconButton icon="back" label="Back" onPress={back} />
-				<Text style={styles.headerTitle}>Add Cloud project</Text>
+				<Text maxFontSizeMultiplier={fontScaleCap.title} style={styles.headerTitle}>Add Cloud project</Text>
 				<HeaderIconButton icon="close" label="Close" onPress={() => backOr(router)} />
 			</View>
-			<ScrollView contentInsetAdjustmentBehavior="automatic" automaticallyAdjustKeyboardInsets={Platform.OS === "ios"} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: insets.bottom + 28 }}>
+			<ScrollView contentInsetAdjustmentBehavior="automatic" automaticallyAdjustKeyboardInsets={Platform.OS === "ios"} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: insets.bottom + sheetInset.bottom }}>
 				<View style={styles.content}>
 				{scopedReserved ? <View style={styles.group}>
 					<Text style={styles.title}>{scopedReserved.operation.acceptedId ? "Project created" : "Finish your previous request"}</Text>
 					<Text selectable style={styles.description}>{scopedReserved.operation.payload.input.displayName}{scopedReserved.operation.acceptedId ? " is ready to open." : " has a saved request. Retry keeps the same project settings and request key."}</Text>
 					<Button title={scopedReserved.operation.acceptedId ? "Open project" : "Retry creation"} loading={busy} disabled={busy || (!scopedReserved.operation.acceptedId && Boolean(computeProblem || prefixProblem || Object.keys(parameterErrors).length))} onPress={() => submitOperation(scopedReserved)} />
-					{!scopedReserved.operation.acceptedId ? <Button title="Check existing projects" variant="ghost" disabled={busy} onPress={() => submitOperation(scopedReserved, true)} /> : null}
-					<Button title="Discard retry record" variant="ghost" disabled={busy} onPress={discardReserved} />
+					{!scopedReserved.operation.acceptedId ? <Button title="Check existing projects" variant="text" disabled={busy} onPress={() => submitOperation(scopedReserved, true)} /> : null}
+					<Button title="Discard retry record" variant="text" disabled={busy} onPress={discardReserved} />
 				</View> : null}
 				{displayedStep === "loading" ? <ActivityIndicator color={t.accent} style={styles.loading} /> : null}
 				{displayedStep === "unavailable" ? (
@@ -604,7 +608,7 @@ export default function CreateCloudProject() {
 						<Text style={styles.title}>Can't add a project yet</Text>
 						<Text style={styles.description}>{error}</Text>
 						{signedIn ? <Button title="Retry" onPress={() => orgError || !orgId ? void retryOrgResolution() : setSetupAttempt((value) => value + 1)} /> : null}
-						<Button title="Close" variant="ghost" onPress={() => backOr(router)} />
+						<Button title="Close" variant="text" onPress={() => backOr(router)} />
 					</View>
 				) : null}
 				{displayedStep === "github" ? (
@@ -613,55 +617,72 @@ export default function CreateCloudProject() {
 						<Text style={styles.description}>Import a repository you’ve granted AO access to on GitHub.</Text>
 						{activeInstallations.length === 0 ? (
 							<View style={styles.connectCard}>
-								<View style={styles.connectHeading}><Feather name="github" size={22} color={t.textPrimary} /><Text style={styles.connectTitle}>Connect GitHub</Text></View>
+								<View style={styles.connectHeading}><BrandFeather name="github" size={iconSize.lg} color={t.textPrimary} /><Text style={styles.connectTitle}>Connect GitHub</Text></View>
 								<Text style={styles.hint}>GitHub will open in a browser so you can choose which repositories AO may access. No token to copy or paste.</Text>
 								<Button title={openingGitHub ? "Opening GitHub…" : connecting ? "Waiting for GitHub approval…" : "Connect GitHub"} loading={connecting} disabled={connecting} onPress={() => void connectGitHub()} />
-								{connecting ? <Button title="Stop waiting" variant="ghost" onPress={stopWaiting} /> : null}
+								{connecting ? <Button title="Stop waiting" variant="text" onPress={stopWaiting} /> : null}
 							</View>
 						) : (
 							<>
 								<View style={styles.connectedRow}>
-									<Feather name={githubReadyToImport ? "check-circle" : connecting ? "loader" : "alert-circle"} size={17} color={githubReadyToImport ? t.green : t.amber} />
+									<Feather name={githubReadyToImport ? "check-circle" : connecting ? "loader" : "alert-circle"} size={iconSize.md} color={githubReadyToImport ? t.green : t.amber} />
 									<Text style={styles.connectedText}>{githubStatusText}</Text>
 								</View>
-								{activeInstallations.some((item) => item.syncStatus !== "ready") ? <Button title={connecting ? "Syncing repositories…" : "Retry repository sync"} variant="ghost" loading={busy} disabled={connecting} onPress={() => void syncRepositories()} /> : null}
-								{connecting ? <Button title="Stop waiting" variant="ghost" onPress={stopWaiting} /> : null}
+								{activeInstallations.some((item) => item.syncStatus !== "ready") ? <Button title={connecting ? "Syncing repositories…" : "Retry repository sync"} variant="text" loading={busy} disabled={connecting} onPress={() => void syncRepositories()} /> : null}
+								{connecting ? <Button title="Stop waiting" variant="text" onPress={stopWaiting} /> : null}
 								{loadingRepositories ? <ActivityIndicator color={t.accent} /> : null}
 								{repositories.length > 0 ? (
 									<>
-										<TextInput style={styles.input} value={repositorySearch} onChangeText={setRepositorySearch} placeholder="Search repositories" placeholderTextColor={t.textTertiary} autoCapitalize="none" autoCorrect={false} accessibilityLabel="Search repositories" />
-										<View style={styles.repositoryList}>
-											{visibleRepositories.length === 0 ? <Text style={styles.emptyText}>No matching repositories</Text> : shownRepositories.map((repository) => (
-												<Pressable key={repository.githubRepositoryId} accessibilityRole="radio" accessibilityState={{ selected: selectedRepositoryId === repository.githubRepositoryId }} accessibilityLabel={`Select ${repository.fullName}`} onPress={() => { haptics.select(); setProjectSource("app"); setSelectedRepositoryId(repository.githubRepositoryId); setDisplayName(repository.name); setRepositoryUrl(repository.htmlUrl); setDefaultBranch(repository.defaultBranch); }} style={[styles.repositoryOption, selectedRepositoryId === repository.githubRepositoryId && styles.repositorySelected]}>
-													<View style={styles.repositoryIdentity}><Feather name="book" size={18} color={t.textSecondary} /><View style={styles.repositoryCopy}><Text style={styles.repositoryName} numberOfLines={1}>{repository.fullName}</Text><Text style={styles.repositoryMeta}>{repository.isPrivate ? "Private" : "Public"} · {repository.defaultBranch}</Text></View></View>
-													{selectedRepositoryId === repository.githubRepositoryId ? <Feather name="check" size={18} color={t.accent} /> : null}
-												</Pressable>
-											))}
+										<View style={styles.field}>
+											<Text style={styles.label}>Repository</Text>
+											<Pressable accessibilityRole="combobox" accessibilityLabel="Select a repository" accessibilityValue={{ text: selectedRepository?.fullName ?? "None selected" }} accessibilityState={{ expanded: repositoryPickerOpen, disabled: busy || !githubReadyToImport || loadingRepositories || Boolean(scopedReserved) }} disabled={busy || !githubReadyToImport || loadingRepositories || Boolean(scopedReserved)}
+												onPress={() => { haptics.tap(); setRepositoryPickerOpen(!repositoryPickerOpen); setRepositorySearch(""); if (repositoryPickerOpen) Keyboard.dismiss(); }}
+												style={styles.repositoryTrigger}>
+												<Feather name={selectedRepository?.isPrivate ? "lock" : "book"} size={iconSize.md} color={t.textSecondary} />
+												<Text style={[styles.repositoryTriggerText, !selectedRepository && { color: t.textSecondary }]} numberOfLines={1}>{selectedRepository?.fullName ?? "Select a repository"}</Text>
+												<Feather name={repositoryPickerOpen ? "chevron-up" : "chevron-down"} size={iconSize.sm} color={t.textSecondary} />
+											</Pressable>
 										</View>
-										{visibleRepositories.length > shownRepositories.length ? <Text style={styles.hint}>Showing the first 30 repositories. Search to narrow the list.</Text> : null}
+										{repositoryPickerOpen ? <>
+											<View style={styles.repositorySearch}>
+												<Feather name="search" size={iconSize.md} color={t.textSecondary} />
+												<TextInput style={styles.repositorySearchInput} value={repositorySearch} onChangeText={setRepositorySearch} placeholder="Search repositories" placeholderTextColor={t.textSecondary} autoFocus autoCapitalize="none" autoCorrect={false} accessibilityLabel="Search repositories" editable={!busy && githubReadyToImport && !loadingRepositories && !scopedReserved} />
+											</View>
+											{!repositorySearch.trim() ? <Text style={styles.hint}>Search by repository name.</Text> : <View style={styles.repositoryList}>
+												{visibleRepositories.length === 0 ? <Text style={styles.emptyText}>No matching repositories</Text> : shownRepositories.map((repository) => (
+													<Pressable key={repository.githubRepositoryId} accessibilityRole="radio" accessibilityState={{ selected: selectedRepositoryId === repository.githubRepositoryId }} accessibilityLabel={`Select ${repository.fullName}`} disabled={busy || !githubReadyToImport || loadingRepositories || Boolean(scopedReserved)} onPress={() => { if (busy || !githubReadyToImport || loadingRepositories || scopedReserved) return; haptics.select(); setProjectSource("app"); setSelectedRepositoryId(repository.githubRepositoryId); setDisplayName(repository.name); setRepositoryUrl(repository.htmlUrl); setDefaultBranch(repository.defaultBranch); setRepositoryPickerOpen(false); setRepositorySearch(""); Keyboard.dismiss(); }} style={[styles.repositoryOption, selectedRepositoryId === repository.githubRepositoryId && styles.repositorySelected]}>
+														<View style={styles.repositoryIdentity}><Feather name={repository.isPrivate ? "lock" : "book"} size={iconSize.md} color={t.textSecondary} /><View style={styles.repositoryCopy}><Text style={styles.repositoryName} numberOfLines={1}>{repository.fullName}</Text><Text style={styles.repositoryMeta}>{repository.defaultBranch}</Text></View></View>
+														{selectedRepositoryId === repository.githubRepositoryId ? <Feather name="check" size={iconSize.md} color={t.accent} /> : null}
+													</Pressable>
+												))}
+											</View>}
+											{visibleRepositories.length > shownRepositories.length ? <Text style={styles.hint}>Showing the first 30 matches. Refine your search to see fewer.</Text> : null}
+										</> : null}
 										<Button title="Continue" disabled={!selectedRepository} onPress={() => { setError(null); setStep("agents"); }} />
 									</>
 								) : !loadingRepositories && readyInstallations.length > 0 ? (
 									<View style={styles.group}>
 										<Text style={styles.hint}>No repositories are available to import. Grant AO access to a repository in GitHub, then refresh this list.</Text>
-										<Button title="Manage GitHub access" variant="ghost" icon="external-link" disabled={connecting} onPress={() => void connectGitHub()} />
+										<Button title="Manage GitHub access" variant="text" icon="external-link" disabled={connecting} onPress={() => void connectGitHub()} />
 									</View>
 								) : null}
-								<Button title="Refresh repositories" variant="ghost" onPress={() => { void githubAttempt.refresh(); }} />
+								<Button title="Refresh repositories" variant="text" onPress={() => { void githubAttempt.refresh(); }} />
 							</>
 						)}
 						{githubError ? <Text accessibilityRole="alert" style={styles.error}>{githubError}</Text> : null}
-						<Button title="Set up manually with a token" variant="ghost" onPress={() => { setError(null); stopWaiting(); setProjectSource("manual"); setSelectedRepositoryId(""); setRepositoryUrl(""); setDisplayName(""); setStep(hasSavedToken ? "repository" : "github-token"); }} />
+						<Button title="Set up manually with a token" variant="text" onPress={() => { setError(null); stopWaiting(); setProjectSource("manual"); setSelectedRepositoryId(""); setRepositoryUrl(""); setDisplayName(""); setStep(hasSavedToken ? "repository" : "github-token"); }} />
 					</View>
 				) : null}
 				{displayedStep === "github-token" ? (
 					<View style={styles.group}>
 						<Text style={styles.title}>Connect GitHub</Text>
-						<Text style={styles.description}>For manual setup, add a fine-grained token with access to the repository. AO Cloud stores it securely and never shows it again.</Text>
-						<Text style={styles.label}>GitHub access token</Text>
-						<TextInput style={styles.input} value={token} onChangeText={setToken} placeholder="github_pat_…" placeholderTextColor={t.textTertiary} secureTextEntry autoCapitalize="none" autoCorrect={false} textContentType="password" accessibilityLabel="GitHub access token" />
+						<Text style={styles.description}>For manual setup, add a fine-grained token with access to the repository. Orchestrator Cloud stores it securely and never shows it again.</Text>
+						<View style={styles.field}>
+							<Text style={styles.label}>GitHub access token</Text>
+							<TextInput style={styles.input} value={token} onChangeText={setToken} placeholder="github_pat_…" placeholderTextColor={t.textTertiary} selectionColor={t.accent} secureTextEntry autoCapitalize="none" autoCorrect={false} textContentType="password" accessibilityLabel="GitHub access token" />
+						</View>
 						<Text style={styles.hint}>Use a fine-grained token with Contents read and write access to the repository.</Text>
-						<Button title="Create a GitHub token" variant="ghost" icon="external-link" onPress={() => void openGitHub("https://github.com/settings/personal-access-tokens/new", { fromSheet: true, throwOnFailure: true }).catch((cause) => setError(messageFor(cause, "Could not open GitHub.")))} />
+						<Button title="Create a GitHub token" variant="text" icon="external-link" onPress={() => void openGitHub("https://github.com/settings/personal-access-tokens/new", { fromSheet: true, throwOnFailure: true }).catch((cause) => setError(messageFor(cause, "Could not open GitHub.")))} />
 						<Button title="Save token and continue" loading={busy} disabled={token.trim().length < 8} onPress={() => void saveToken()} />
 					</View>
 				) : null}
@@ -669,35 +690,41 @@ export default function CreateCloudProject() {
 					<View style={styles.group}>
 						<Text style={styles.title}>Import a repository</Text>
 						<Text style={styles.description}>Enter the repository URL and branch for this project.</Text>
-						<Text style={styles.label}>Repository URL</Text>
-						<TextInput style={styles.input} value={repositoryUrl} onChangeText={(value) => { setRepositoryUrl(value); setReadOnly(false); }} placeholder="https://github.com/owner/repo" placeholderTextColor={t.textTertiary} autoCapitalize="none" autoCorrect={false} keyboardType="url" accessibilityLabel="Repository URL" editable={!busy && !scopedReserved} />
-						<Text style={styles.label}>Project name</Text>
-						<TextInput style={styles.input} value={displayName} onChangeText={(value) => { setDisplayName(value); }} placeholder="My project" placeholderTextColor={t.textTertiary} accessibilityLabel="Project name" editable={!busy && !scopedReserved} />
-						<Text style={styles.label}>Default branch</Text>
-						<TextInput style={styles.input} value={defaultBranch} onChangeText={(value) => { setDefaultBranch(value); }} placeholder="main" placeholderTextColor={t.textTertiary} autoCapitalize="none" autoCorrect={false} accessibilityLabel="Default branch" editable={!busy && !scopedReserved} />
+						<View style={styles.field}>
+							<Text style={styles.label}>Repository URL</Text>
+							<TextInput style={styles.input} value={repositoryUrl} onChangeText={(value) => { setRepositoryUrl(value); setReadOnly(false); }} placeholder="https://github.com/owner/repo" placeholderTextColor={t.textTertiary} selectionColor={t.accent} autoCapitalize="none" autoCorrect={false} keyboardType="url" accessibilityLabel="Repository URL" editable={!busy && !scopedReserved} />
+						</View>
+						<View style={styles.field}>
+							<Text style={styles.label}>Project name</Text>
+							<TextInput style={styles.input} value={displayName} onChangeText={(value) => { setDisplayName(value); }} placeholder="My project" placeholderTextColor={t.textTertiary} selectionColor={t.accent} accessibilityLabel="Project name" editable={!busy && !scopedReserved} />
+						</View>
+						<View style={styles.field}>
+							<Text style={styles.label}>Default branch</Text>
+							<TextInput style={styles.input} value={defaultBranch} onChangeText={(value) => { setDefaultBranch(value); }} placeholder="main" placeholderTextColor={t.textTertiary} selectionColor={t.accent} autoCapitalize="none" autoCorrect={false} accessibilityLabel="Default branch" editable={!busy && !scopedReserved} />
+						</View>
 						{readOnly ? <Text style={styles.warning}>Your GitHub token can read this repository but cannot push changes. Workers may be unable to publish their work.</Text> : null}
 						<Button title={readOnly ? "Continue anyway" : "Check repository access"} loading={busy} onPress={() => readOnly ? (setReadOnly(false), setStep("agents")) : void checkRepository()} />
-						<Button title="Change GitHub token" variant="ghost" onPress={() => { setError(null); setStep("github-token"); }} />
+						<Button title="Change GitHub token" variant="text" onPress={() => { setError(null); setStep("github-token"); }} />
 					</View>
 				) : null}
 				{displayedStep === "agents" && !scopedReserved?.operation.acceptedId ? (
 					<View style={styles.group}>
 						<Text style={styles.title}>Review project</Text>
-						{selectedRepository ? <View style={styles.selectedSummary}><Feather name="book" size={18} color={t.textSecondary} /><View><Text style={styles.repositoryName}>{selectedRepository.fullName}</Text><Text style={styles.repositoryMeta}>Default branch · {selectedRepository.defaultBranch}</Text></View></View> : null}
-						{selectedRepository ? <><Text style={styles.label}>Project name</Text><TextInput style={styles.input} value={displayName} onChangeText={(value) => { setDisplayName(value); }} placeholder="Project name" placeholderTextColor={t.textTertiary} accessibilityLabel="Project name" editable={!busy && !scopedReserved} /></> : null}
-						<Text style={styles.description}>Uses the coding agents connected in desktop Settings. Creating the project does not start an orchestrator or worker.</Text>
-						{agents.length === 0 ? <><Text style={styles.warning}>Connect a personal default coding agent in desktop Settings, then refresh here. Your project draft will stay in place.</Text><Button title="Refresh connected agents" variant="ghost" disabled={busy} onPress={refreshAgents} /></> : (
-							<>
-								<CloudChoice label="Worker agent" value={workerAgent} options={agents.map((agent) => ({ value: agent, label: AGENT_LABELS[agent] ?? agent }))} onChange={setWorkerAgent} harness={workerAgent} enabled={!busy && !scopedReserved} styles={styles} scheme={scheme} />
-								<CloudChoice label="Orchestrator agent" value={orchestratorAgent} options={agents.map((agent) => ({ value: agent, label: AGENT_LABELS[agent] ?? agent }))} onChange={setOrchestratorAgent} harness={orchestratorAgent} enabled={!busy && !scopedReserved} styles={styles} scheme={scheme} />
-							</>
+						{selectedRepository ? <View style={styles.selectedSummary}><Feather name="book" size={iconSize.md} color={t.textSecondary} /><View style={styles.repositoryCopy}><Text style={styles.repositoryName}>{selectedRepository.fullName}</Text><Text style={styles.repositoryMeta}>Default branch · {selectedRepository.defaultBranch}</Text></View></View> : null}
+						{selectedRepository ? <View style={styles.field}><Text style={styles.label}>Project name</Text><TextInput style={styles.input} value={displayName} onChangeText={(value) => { setDisplayName(value); }} placeholder="Project name" placeholderTextColor={t.textTertiary} selectionColor={t.accent} accessibilityLabel="Project name" editable={!busy && !scopedReserved} /></View> : null}
+						<Text style={styles.description}>Uses your connected coding agents. Creating a project doesn’t start any sessions.</Text>
+						{agents.length === 0 ? <><Text style={styles.warning}>Connect a personal default coding agent in desktop Settings, then refresh here. Your project draft will stay in place.</Text><Button title="Refresh connected agents" variant="text" disabled={busy} onPress={refreshAgents} /></> : (
+							<View style={styles.agentGroup}>
+								<CloudAgentSelect label="Worker agent" value={workerAgent} options={agents.map((agent) => ({ value: agent, label: AGENT_LABELS[agent] ?? agent }))} onChange={setWorkerAgent} enabled={!busy && !scopedReserved} />
+								<CloudAgentSelect label="Orchestrator agent" value={orchestratorAgent} options={agents.map((agent) => ({ value: agent, label: AGENT_LABELS[agent] ?? agent }))} onChange={setOrchestratorAgent} enabled={!busy && !scopedReserved} separator />
+							</View>
 						)}
 						{offersProviderChoice(offering ?? undefined) ? <CloudChoice label="Cloud provider" value={effectiveProvider} options={offering!.providers.map((provider) => ({ value: provider, label: provider === "coder" ? "Coder" : provider === "freestyle" ? "Freestyle" : provider }))} onChange={setProviderChoice} enabled={!busy && !scopedReserved} styles={styles} scheme={scheme} /> : null}
 						{usesCoder ? <>
 							<Text style={styles.label}>Workspace</Text>
 							{computeLoading ? <ActivityIndicator color={t.accent} /> : null}
 							{coderConfig ? <CloudChoice label="Coder template" value={templateId} options={[{ value: "", label: coderConfig.configured ? "Choose a template" : "Deployment default" }, ...coderTemplates.map((template) => ({ value: template.id, label: template.displayName || template.name }))]} onChange={(value) => { setTemplateId(value); setParameterValues({}); }} enabled={!busy && !scopedReserved} styles={styles} scheme={scheme} /> : null}
-							{coderConfig?.configured ? <><Text style={styles.label}>Workspace name prefix</Text><TextInput value={workspacePrefix} onChangeText={setWorkspacePrefix} editable={!busy && !scopedReserved} style={styles.input} autoCapitalize="none" autoCorrect={false} placeholder="ao" placeholderTextColor={t.textTertiary} accessibilityLabel="Workspace name prefix" /></> : null}
+							{coderConfig?.configured ? <View style={styles.field}><Text style={styles.label}>Workspace name prefix</Text><TextInput value={workspacePrefix} onChangeText={setWorkspacePrefix} editable={!busy && !scopedReserved} style={styles.input} autoCapitalize="none" autoCorrect={false} placeholder="ao" placeholderTextColor={t.textTertiary} selectionColor={t.accent} accessibilityLabel="Workspace name prefix" /></View> : null}
 							{parametersLoading ? <ActivityIndicator color={t.accent} /> : null}
 							{parameters.map((parameter) => {
 								const value = valueForParameter(parameter);
@@ -709,13 +736,13 @@ export default function CreateCloudProject() {
 								return <View key={parameter.name} style={styles.group}>
 									{parameter.type === "list(string)" && parameter.options.length ? <><Text style={styles.label}>{label}</Text><Host matchContents={{ vertical: true }} colorScheme={scheme}><Column>{parameter.options.map((option) => <Checkbox key={option.value} label={option.name} value={selected.includes(option.value)} disabled={busy || Boolean(scopedReserved)} onValueChange={(checked) => update(JSON.stringify(checked ? [...new Set([...selected, option.value])] : selected.filter((item) => item !== option.value)))} />)}</Column></Host></>
 									: parameter.type === "bool" || parameter.options.length ? <CloudChoice label={label} value={value} options={[...(value ? [] : [{ label: "Choose a value", value: "" }]), ...(parameter.type === "bool" ? [{ label: "True", value: "true" }, { label: "False", value: "false" }] : parameter.options.map((option) => ({ label: option.name, value: option.value })))]} onChange={update} enabled={!busy && !scopedReserved} styles={styles} scheme={scheme} />
-									: <><Text style={styles.label}>{label}</Text><TextInput style={styles.input} value={value} onChangeText={update} editable={!busy && !scopedReserved} autoCapitalize="none" autoCorrect={false} keyboardType={parameter.type === "number" ? "numbers-and-punctuation" : "default"} multiline={parameter.name === "startup_script"} accessibilityLabel={label} /></>}
+									: <View style={styles.field}><Text style={styles.label}>{label}</Text><TextInput style={styles.input} value={value} onChangeText={update} editable={!busy && !scopedReserved} selectionColor={t.accent} autoCapitalize="none" autoCorrect={false} keyboardType={parameter.type === "number" ? "numbers-and-punctuation" : "default"} multiline={parameter.name === "startup_script"} accessibilityLabel={label} /></View>}
 									{parameter.description ? <Text style={styles.hint}>{parameter.description}</Text> : null}
 									{parameterErrors[parameter.name] ? <Text selectable accessibilityRole="alert" style={styles.error}>{parameterErrors[parameter.name]}</Text> : null}
 								</View>;
 							})}
 							{computeProblem || prefixProblem ? <Text selectable accessibilityRole="alert" style={styles.warning}>{computeProblem ?? prefixProblem}</Text> : null}
-							{computeError || parametersError ? <Button title="Retry Coder settings" variant="ghost" onPress={() => setComputeAttempt((value) => value + 1)} /> : null}
+							{computeError || parametersError ? <Button title="Retry Coder settings" variant="text" onPress={() => setComputeAttempt((value) => value + 1)} /> : null}
 						</> : null}
 						{!scopedReserved ? <Button title="Create project" loading={busy} disabled={busy || agents.length === 0 || !displayName.trim() || Boolean(computeProblem || prefixProblem || Object.keys(parameterErrors).length)} onPress={createProject} /> : null}
 					</View>
@@ -728,14 +755,13 @@ export default function CreateCloudProject() {
 	);
 }
 
-function CloudChoice({ label, value, options, onChange, harness, enabled, styles, scheme }: {
+function CloudChoice({ label, value, options, onChange, enabled, styles, scheme }: {
 	label: string; value: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void;
-	harness?: string; enabled: boolean; styles: ReturnType<typeof makeStyles>; scheme: "dark" | "light";
+	enabled: boolean; styles: ReturnType<typeof makeStyles>; scheme: "dark" | "light";
 }) {
-	return <View style={styles.group}>
+	return <View style={styles.field}>
 		<Text style={styles.label}>{label}</Text>
 		<View style={styles.agentOption}>
-			{harness ? <AgentLogo harness={harness} size={24} /> : null}
 			<Host style={{ flex: 1, minHeight: touchTarget }} matchContents={{ vertical: true }} colorScheme={scheme}>
 				<Picker testID={label} selectedValue={value} onValueChange={onChange} enabled={enabled} appearance="menu">
 					{options.map((option) => <Picker.Item key={option.value} value={option.value} label={option.label} />)}
@@ -750,35 +776,38 @@ function messageFor(cause: unknown, fallback: string): string {
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
-	screen: { flex: 1, backgroundColor: t.bgSurface },
-	header: { minHeight: touchTarget + space.lg, flexDirection: "row", alignItems: "center", paddingHorizontal: space.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.borderSubtle },
-	headerTitle: { ...typography.headline, flex: 1, textAlign: "center", color: t.textPrimary },
-	content: { paddingHorizontal: sheetInset.horizontal, paddingTop: sheetInset.top, gap: space.lg },
-	loading: { marginTop: 56 },
+	screen: { flex: 1, backgroundColor: t.bgBase },
+	header: { minHeight: touchTarget + space.xl, flexDirection: "row", alignItems: "center", paddingHorizontal: space.sm },
+	headerTitle: { ...typography.title3, flex: 1, textAlign: "center", color: t.textPrimary },
+	content: { paddingHorizontal: space.lg, paddingTop: space.xs, gap: space.lg },
+	loading: { marginTop: space.huge },
 	group: { gap: space.md },
-	connectCard: { gap: space.md, paddingVertical: space.md },
-	connectHeading: { flexDirection: "row", alignItems: "center", gap: 10 },
-	connectTitle: { color: t.textPrimary, fontSize: 17, fontWeight: "600" },
-	connectedRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 4 },
-	connectedText: { color: t.textSecondary, fontSize: 14, flexShrink: 1 },
-	repositoryList: { borderWidth: 1, borderColor: t.borderDefault, borderRadius: 14, overflow: "hidden", backgroundColor: t.bgElevated },
-	repositoryOption: { minHeight: 63, paddingHorizontal: 14, paddingVertical: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.borderSubtle },
+	field: { gap: space.xs },
+	connectCard: { gap: space.md, paddingTop: space.sm },
+	connectHeading: { flexDirection: "row", alignItems: "center", gap: space.sm },
+	connectTitle: { ...typography.subheadline, color: t.textPrimary },
+	connectedRow: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingVertical: space.xxs },
+	connectedText: { ...typography.footnote, color: t.textSecondary, flexShrink: 1 },
+	repositoryList: { borderRadius: radius.md, borderCurve: "continuous", overflow: "hidden", backgroundColor: t.bgElevated },
+	repositoryTrigger: { minHeight: touchTarget + space.sm, paddingHorizontal: space.md, flexDirection: "row", alignItems: "center", gap: space.sm, borderRadius: radius.md, borderCurve: "continuous", backgroundColor: t.bgElevated },
+	repositoryTriggerText: { ...typography.subheadline, flex: 1, color: t.textPrimary },
+	repositorySearch: { minHeight: touchTarget + space.sm, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md, borderRadius: radius.md, borderCurve: "continuous", backgroundColor: t.bgElevated },
+	repositorySearchInput: { ...typography.subheadline, minHeight: touchTarget, flex: 1, minWidth: 0, color: t.textPrimary, paddingVertical: space.sm },
+	repositoryOption: { minHeight: touchTarget + space.md, paddingHorizontal: space.md, paddingVertical: space.sm, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.borderSubtle },
 	repositorySelected: { backgroundColor: t.accentTint },
-	repositoryIdentity: { flexDirection: "row", alignItems: "center", gap: 12, flex: 1 },
-	repositoryCopy: { flex: 1, gap: 3 },
-	repositoryName: { color: t.textPrimary, fontSize: 15, fontWeight: "600" },
-	repositoryMeta: { color: t.textTertiary, fontSize: 12 },
-	emptyText: { color: t.textSecondary, fontSize: 14, padding: 18 },
-	selectedSummary: { flexDirection: "row", alignItems: "center", gap: 12, padding: 14, borderRadius: 12, backgroundColor: t.bgElevated },
-	title: { ...typography.title2, color: t.textPrimary },
-	description: { ...typography.subheadline, color: t.textSecondary },
-	label: { ...typography.caption1, color: t.textSecondary, marginTop: space.xs },
-	input: { ...typography.body, minHeight: touchTarget + space.xs, paddingHorizontal: space.md, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, borderRadius: radius.md, backgroundColor: t.bgElevated, color: t.textPrimary },
+	repositoryIdentity: { flexDirection: "row", alignItems: "center", gap: space.md, flex: 1 },
+	repositoryCopy: { flex: 1, gap: space.hair },
+	repositoryName: { ...typography.subheadline, color: t.textPrimary },
+	repositoryMeta: { ...typography.caption1, color: t.textTertiary },
+	emptyText: { ...typography.footnote, color: t.textSecondary, padding: space.lg },
+	selectedSummary: { flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md, borderRadius: radius.md, borderCurve: "continuous", backgroundColor: t.bgElevated },
+	title: { ...typography.headline, color: t.textPrimary },
+	description: { ...typography.footnote, color: t.textSecondary },
+	label: { ...typography.caption1, color: t.textSecondary },
+	input: { ...typography.subheadline, minHeight: touchTarget + space.sm, paddingHorizontal: space.md, paddingVertical: space.sm, borderRadius: radius.md, borderCurve: "continuous", backgroundColor: t.bgElevated, color: t.textPrimary },
 	hint: { ...typography.footnote, color: t.textSecondary },
-	warning: { ...typography.subheadline, color: t.amber, marginVertical: space.xs },
-	error: { ...typography.subheadline, color: t.red },
-	agentOption: { minHeight: touchTarget + space.sm, paddingHorizontal: space.md, borderRadius: radius.md, backgroundColor: t.bgElevated, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-	agentIdentity: { flexDirection: "row", alignItems: "center", gap: 12 },
-	agentSelected: { borderColor: t.accent, backgroundColor: t.accentTint },
-	agentText: { color: t.textPrimary, fontSize: 15, fontWeight: "600" },
+	warning: { ...typography.footnote, color: t.amber, marginVertical: space.xs },
+	error: { ...typography.footnote, color: t.red },
+	agentGroup: { borderRadius: radius.md, borderCurve: "continuous", backgroundColor: t.bgElevated, overflow: "hidden" },
+	agentOption: { minHeight: touchTarget + space.sm, paddingHorizontal: space.md, borderRadius: radius.md, borderCurve: "continuous", backgroundColor: t.bgElevated, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
 });

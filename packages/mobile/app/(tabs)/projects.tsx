@@ -3,7 +3,8 @@ import { useMemo, useState } from "react";
 import { ActivityIndicator, RefreshControl, SectionList, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCloudAuth } from "../../lib/cloud/authStore";
-import { resourceKey, sourceSlice, type Scoped } from "../../lib/environment/scopedBoard";
+import { useCloudSignInAction } from "../../lib/cloud/useCloudSignInAction";
+import { resourceKey, sourceKey, sourceSlice, type Scoped } from "../../lib/environment/scopedBoard";
 import { haptics } from "../../lib/haptics";
 import { orchestratorProjectSections, type OrchestratorProjectRow } from "../../lib/orchestratorView";
 import { ProjectCard } from "../../lib/project-card";
@@ -23,6 +24,7 @@ export default function ProjectsScreen() {
 	const styles = useThemedStyles(makeStyles);
 	const insets = useSafeAreaInsets();
 	const router = useRouter();
+	const cloudSignIn = useCloudSignInAction();
 	const { scopedBoard, refreshAll, notificationsUnread, hostStates } = useApp();
 	const { projects, sources } = scopedBoard;
 	const sourceStatuses = Object.entries(sources);
@@ -36,10 +38,20 @@ export default function ProjectsScreen() {
 			const sourceEntries = new Map(projects.map((entry) => [JSON.stringify([entry.source.kind, entry.source.id]), entry.source]));
 			return [...sourceEntries.values()].flatMap((source) => {
 				const slice = sourceSlice(scopedBoard, source);
+				const host = source.kind === "local" ? hostStates.find((candidate) => candidate.hostId === source.id) : undefined;
 				return orchestratorProjectSections(slice.projects, slice.sessions, slice.orchestrators).map((section) => ({
 					...section,
-					title: `${source.kind === "cloud" ? "Cloud" : hostStates.find((host) => host.hostId === source.id)?.name ?? "Local"} · ${section.title}`,
-					data: section.data.map((value) => ({ source, value })),
+					key: `${sourceKey(source)}:${section.key}`,
+					title: `${source.kind === "cloud" ? "Cloud" : host?.name ?? "Local"} · ${section.title}`,
+					data: section.data.map((value) => ({
+						source,
+						value: host ? { ...value, project: {
+							...value.project,
+							hostId: host.hostId,
+							hostName: `${host.name}${host.connection === "closed" ? " (offline)" : ""}`,
+							hostAppearance: host.appearance,
+						} } : value,
+					})),
 				}));
 			});
 		},
@@ -111,8 +123,8 @@ export default function ProjectsScreen() {
 							<EmptyState
 								icon="folder"
 								title="Connect a workspace"
-								message="Pair a desktop or sign in to Cloud to see projects here."
-								action={<Button title="Sign in to Cloud" onPress={() => router.push("/sheets/cloud-signin")} />}
+								message="Pair a desktop or sign in to Orchestrator Cloud to see projects here."
+								action={<Button title="Sign in to Orchestrator Cloud" loading={cloudSignIn.busy} onPress={() => { void cloudSignIn.signIn(); }} />}
 							/>
 						) : (
 							<EmptyState
