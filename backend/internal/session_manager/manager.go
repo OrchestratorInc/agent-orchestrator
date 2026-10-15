@@ -545,6 +545,9 @@ type Manager struct {
 	terminalInputGate   TerminalInputGate
 	// updateStops holds input gates of terminals stopped for an update.
 	updateStops updateStops
+	// versionTelemetry receives version-move events; nil drops them.
+	versionTelemetryMu sync.Mutex
+	versionTelemetry   ports.EventSink
 
 	reviewersMu sync.Mutex
 	reviewers   ReviewerTerminator

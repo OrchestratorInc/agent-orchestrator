@@ -209,6 +209,8 @@ type sessionLifecycle interface {
 	BusyHarnessSessions(ctx context.Context, harness domain.AgentHarness) ([]domain.SessionWait, error)
 	StopHarnessSessions(ctx context.Context, harness domain.AgentHarness) ([]domain.SessionID, error)
 	ResumeHarnessSessions(ctx context.Context, ids []domain.SessionID) error
+	SetVersionTelemetry(sink ports.EventSink)
+	ObserveChatVersionSwitch(id domain.SessionID, version, result string)
 	MarkHarnessUpdated(ctx context.Context, harness domain.AgentHarness, version string, at time.Time) error
 	CountStaleBinarySessions(ctx context.Context) (map[domain.AgentHarness]int64, error)
 	RestoreAll(ctx context.Context) error

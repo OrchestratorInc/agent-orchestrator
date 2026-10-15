@@ -86,13 +86,15 @@ type Service struct {
 	// moving to, until its wake succeeds or fails.
 	versionSwitchMu sync.Mutex
 	versionSwitches map[domain.SessionID]string
-	viewMu          sync.Mutex
-	viewLeases      map[domain.SessionID]map[string]time.Time
-	viewClosedAt    map[domain.SessionID]time.Time
-	wakeMu          sync.Mutex
-	waking          map[domain.SessionID]int
-	wakeRuns        map[domain.SessionID]*wakeRun
-	backgroundWakes map[domain.SessionID]bool
+	// versionSwitchObserver hears how each such move ended.
+	versionSwitchObserver func(id domain.SessionID, version, result string)
+	viewMu                sync.Mutex
+	viewLeases            map[domain.SessionID]map[string]time.Time
+	viewClosedAt          map[domain.SessionID]time.Time
+	wakeMu                sync.Mutex
+	waking                map[domain.SessionID]int
+	wakeRuns              map[domain.SessionID]*wakeRun
+	backgroundWakes       map[domain.SessionID]bool
 
 	runPromptSuggestion   func(context.Context, domain.SessionID, string, string, string) (string, error)
 	promptSuggestionSlots chan struct{}

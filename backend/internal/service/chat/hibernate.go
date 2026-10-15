@@ -611,7 +611,9 @@ func (s *Service) startBackgroundWake(id domain.SessionID) {
 			s.failQueuedTurns(ctx, id, fmt.Sprintf("could not wake the agent: %v", err))
 			return
 		}
-		s.takeVersionSwitch(id)
+		if version, switched := s.takeVersionSwitch(id); switched {
+			s.observeVersionSwitch(id, version, "succeeded")
+		}
 		if err := s.DrainQueued(ctx, id); err != nil {
 			s.failQueuedTurns(ctx, id, fmt.Sprintf("could not deliver the message: %v", err))
 		}

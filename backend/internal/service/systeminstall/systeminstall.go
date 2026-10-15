@@ -410,6 +410,10 @@ type Service struct {
 	idleUpdates map[Target]*idleUpdateRun
 	// idleCoordinator stops and resumes a harness's sessions around such a run.
 	idleCoordinator IdleUpdateCoordinator
+	// telemetry receives update and version-move events; nil drops them.
+	telemetry ports.EventSink
+	// updateLevels remembers the level each running update was started under.
+	updateLevels map[Target]UpdateWhileRunning
 	// updateObserver marks sessions an update left on the replaced release.
 	updateObserver HarnessUpdateObserver
 	// deferredCleanups are Homebrew formulas whose old keg is kept until the
@@ -783,13 +787,30 @@ func (s *Service) StartAgentOperationWithSessions(ctx context.Context, target Ta
 		// Sessions are checked once the plan is final: whether an update may run
 		// alongside them depends on the method that owns the installed copy.
 		withSessions, err := s.gateRunningSessions(ctx, target, operation, plan, allowRunningSessions)
-		if errors.Is(err, errUpdateWhenIdle) && !plan.Unsupported {
+		var active *HarnessActiveError
+		switch {
+		case errors.Is(err, errUpdateWhenIdle) && !plan.Unsupported:
+			s.emitHarnessUpdate(target, UpdateWhileRunningIdle, "waiting", 0)
 			// Wait for idle sessions without holding the harness meanwhile.
 			return s.startIdleUpdate(ctx, plan, baseline)
+		case errors.As(err, &active):
+			result := "refused_sessions"
+			if active.NeedsConsent {
+				result = "needs_consent"
+			} else if active.Starting {
+				result = "refused_starting"
+			}
+			s.emitHarnessUpdate(target, active.Level, result, active.Count())
 		}
 		if err != nil {
 			return Job{}, err
 		}
+		s.mu.Lock()
+		if s.updateLevels == nil {
+			s.updateLevels = make(map[Target]UpdateWhileRunning)
+		}
+		s.updateLevels[target] = s.effectiveUpdateLevel(plan.UpdateWhileRunning)
+		s.mu.Unlock()
 		plan.keepPreviousRelease = withSessions
 	}
 
@@ -1319,6 +1340,8 @@ func (s *Service) finishAgentJob(job *Job, status Status, output, errorMessage, 
 	}
 	job.FinishedAt = &now
 	job.UpdatedAt = &now
+	level, wasUpdate := s.updateLevels[job.Target]
+	delete(s.updateLevels, job.Target)
 	delete(s.updateAdvisories, job.Target)
 	delete(s.updateAdvisoryCalls, job.Target)
 	// The next advisory re-derives the owner of whatever binary now runs.
@@ -1333,6 +1356,9 @@ func (s *Service) finishAgentJob(job *Job, status Status, output, errorMessage, 
 		job.Error = fmt.Sprintf("persist terminal operation state: %v", err)
 		s.mu.Unlock()
 		return
+	}
+	if wasUpdate {
+		s.emitHarnessUpdate(target, level, string(status), 0)
 	}
 	if status == StatusSucceeded && callback != nil {
 		callback(target)
