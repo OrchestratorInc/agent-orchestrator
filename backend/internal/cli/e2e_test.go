@@ -290,6 +290,33 @@ func TestE2E_ShutdownGuard(t *testing.T) {
 	mustContain(t, out, `"state": "ready"`)
 }
 
+// Two daemons share AO_DATA_DIR but have their own ports and run-files (issue
+// #3716). The second must not open ao.db: it waits 3x AO_SHUTDOWN_TIMEOUT for
+// the data-dir lock and exits 75. Once the owner stops, it starts normally.
+func TestE2E_SecondDaemonOnSameDataDir(t *testing.T) {
+	first := newEnv(t)
+	first.startDaemon(t)
+
+	second := newEnv(t)
+	second.dataDir = first.dataDir
+	out, code := second.runEnv(t, append(second.environ(""), "AO_SHUTDOWN_TIMEOUT=1s"), "daemon")
+	if code != 75 {
+		t.Fatalf("second daemon exit %d, want 75", code)
+	}
+	mustContain(t, out, "waiting for another AO process to release the data dir")
+	mustContain(t, out, "refusing to start")
+	if _, err := os.Stat(second.runFile); !os.IsNotExist(err) {
+		t.Fatal("the refused daemon must not write a run-file")
+	}
+	out, _ = first.run(t, "status", "--json")
+	mustContain(t, out, `"state": "ready"`)
+
+	if out, code := first.run(t, "stop"); code != 0 {
+		t.Fatalf("stop first daemon: exit %d, out %s", code, out)
+	}
+	second.startDaemon(t)
+}
+
 func TestE2E_StaleRunFile(t *testing.T) {
 	e := newEnv(t)
 	// PID 2147483647 is never alive -> the CLI must classify this as stale.

@@ -160,11 +160,17 @@ func Run(buildVersion string) error {
 	// but the same AO_DATA_DIR would otherwise open and hot-migrate the database
 	// underneath the first daemon, invalidating its prepared statements against
 	// the new schema (issue #3716). The lock is scoped to the data dir alone and
-	// is released on clean shutdown; a crashed holder's lock is dropped by the OS,
-	// so a successor reclaims it with no stale-lock bookkeeping.
-	dataDirLock, err := datadirlock.Acquire(cfg.DataDir)
+	// is held until Run returns; a crashed holder's lock is dropped by the OS, so
+	// a successor reclaims it with no stale-lock bookkeeping.
+	//
+	// A desktop takeover spawns this daemon as soon as the old one's /healthz
+	// goes dark, which happens when its shutdown starts: it then drains HTTP for
+	// up to ShutdownTimeout and stops workers in stages capped the same way.
+	// Waiting three shutdown timeouts (30s by default, the desktop's
+	// port-discovery window) covers the drain plus two capped stages.
+	dataDirLock, err := lockDataDir(context.Background(), cfg.DataDir, 3*cfg.ShutdownTimeout, log)
 	if err != nil {
-		return fmt.Errorf("acquire data dir lock: %w", err)
+		return err
 	}
 	defer func() { _ = dataDirLock.Release() }()
 
@@ -1370,6 +1376,23 @@ func usagePipelineWatchRoots(roots usagesvc.SourceRoots) []string {
 // can capture it separately from any structured stdout protocol added later.
 func newLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
+
+// lockDataDir takes the data-dir lock. When another AO process holds it, as a
+// predecessor still shutting down during a takeover does, it logs and waits up
+// to wait for that process to exit, then refuses to start.
+func lockDataDir(ctx context.Context, dataDir string, wait time.Duration, log *slog.Logger) (*datadirlock.Lock, error) {
+	lock, err := datadirlock.Acquire(ctx, dataDir, 0)
+	if !errors.Is(err, datadirlock.ErrLocked) {
+		return lock, err
+	}
+	log.Warn("waiting for another AO process to release the data dir", "err", err, "wait", wait)
+	start := time.Now()
+	if lock, err = datadirlock.Acquire(ctx, dataDir, wait); err != nil {
+		return nil, fmt.Errorf("%w; waited %s for it to exit, refusing to start", err, wait)
+	}
+	log.Info("data dir lock acquired", "waited", time.Since(start).Round(time.Millisecond))
+	return lock, nil
 }
 
 func stabilizeWorkingDirectory(dataDir string) error {
