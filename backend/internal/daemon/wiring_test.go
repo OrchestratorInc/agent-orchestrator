@@ -978,6 +978,15 @@ func (f *fakeSessionLifecycle) ReconcileBackground(_ context.Context) error {
 }
 
 func (*fakeSessionLifecycle) HibernateIdleChats(context.Context) error { return nil }
+func (*fakeSessionLifecycle) RefreshStaleChats(context.Context, time.Duration, bool) error {
+	return nil
+}
+func (*fakeSessionLifecycle) MarkHarnessUpdated(context.Context, domain.AgentHarness, string, time.Time) error {
+	return nil
+}
+func (*fakeSessionLifecycle) CountStaleBinarySessions(context.Context) (map[domain.AgentHarness]int64, error) {
+	return nil, nil
+}
 
 func (f *fakeSessionLifecycle) RestoreAll(_ context.Context) error {
 	f.restoreAllCalled = true

@@ -26,6 +26,7 @@ type Store interface {
 	SetDefaultSessionMode(ctx context.Context, mode domain.SessionMode, now time.Time) error
 	SetCloudOffering(ctx context.Context, enabled bool, now time.Time) error
 	SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault, now time.Time) error
+	SetVersionRefresh(ctx context.Context, enabled bool, now time.Time) error
 }
 
 // Snapshot is the current preference set.
@@ -35,7 +36,10 @@ type Snapshot struct {
 	// CloudOffering is the user's cloud toggle (Settings, Developer Mode).
 	CloudOffering          bool
 	ChatHibernationEnabled bool
-	UpdatedAt              time.Time
+	// VersionRefresh moves idle open sessions to a harness release installed
+	// while they ran (Settings, General). On by default.
+	VersionRefresh bool
+	UpdatedAt      time.Time
 }
 
 // Offering reports which AO offerings this daemon exposes to clients. It is
@@ -92,6 +96,8 @@ type Service struct {
 	offering        Offering
 	now             func() time.Time
 	chatHibernation atomic.Bool
+	// versionRefresh caches the durable toggle: 0 unread, 1 on, 2 off.
+	versionRefresh atomic.Int32
 }
 
 // New builds the service.
@@ -111,7 +117,45 @@ func (s *Service) Offering() Offering {
 func (s *Service) Get(ctx context.Context) (Snapshot, error) {
 	snapshot, err := s.store.GetAppSettings(ctx)
 	snapshot.ChatHibernationEnabled = s.chatHibernation.Load()
+	if err == nil {
+		s.cacheVersionRefresh(snapshot.VersionRefresh)
+	}
 	return snapshot, err
+}
+
+func (s *Service) cacheVersionRefresh(enabled bool) {
+	if enabled {
+		s.versionRefresh.Store(1)
+	} else {
+		s.versionRefresh.Store(2)
+	}
+}
+
+// VersionRefreshEnabled reports the user's "move open sessions to new
+// versions" toggle. It reads the store once and then serves the cached value;
+// an unreadable store counts as off until a read succeeds.
+func (s *Service) VersionRefreshEnabled(ctx context.Context) bool {
+	switch s.versionRefresh.Load() {
+	case 1:
+		return true
+	case 2:
+		return false
+	}
+	snapshot, err := s.store.GetAppSettings(ctx)
+	if err != nil {
+		return false
+	}
+	s.cacheVersionRefresh(snapshot.VersionRefresh)
+	return snapshot.VersionRefresh
+}
+
+// SetVersionRefresh changes whether idle open sessions move to new harness releases.
+func (s *Service) SetVersionRefresh(ctx context.Context, enabled bool) (Snapshot, error) {
+	if err := s.store.SetVersionRefresh(ctx, enabled, s.now()); err != nil {
+		return Snapshot{}, err
+	}
+	s.cacheVersionRefresh(enabled)
+	return s.Get(ctx)
 }
 
 // DefaultSessionMode resolves the default for a spawn that named no mode. A read

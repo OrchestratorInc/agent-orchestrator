@@ -156,6 +156,7 @@ type AppSetting struct {
 	UpdatedAt          time.Time
 	CloudOffering      bool
 	HarnessDefaults    string
+	VersionRefresh     bool
 }
 
 type Automation struct {
@@ -691,6 +692,10 @@ type Session struct {
 	HibernatedAt                     sql.NullTime
 	BranchState                      string
 	RequestedOutput                  string
+	StaleBinarySince                 sql.NullTime
+	StaleBinaryVersion               string
+	StaleBinaryLaunch                string
+	StaleBinarySwitchFailedAt        sql.NullTime
 }
 
 type SessionArtifactVersion struct {

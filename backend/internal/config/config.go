@@ -36,6 +36,10 @@ const (
 	// harnesses for updates after its startup check. A full pass probes each
 	// harness CLI, so it runs a few times a day rather than continuously.
 	DefaultHarnessUpdateInterval = 6 * time.Hour
+	// DefaultVersionRefreshIdle is how long an open session must be quiet before
+	// it moves to a newly installed harness release. Provider prompt caches
+	// expire well within it, so the move costs no cached context.
+	DefaultVersionRefreshIdle = 10 * time.Minute
 	// MinHarnessUpdateInterval is the shortest AO_HARNESS_UPDATE_INTERVAL accepted.
 	MinHarnessUpdateInterval = time.Hour
 	// DefaultAgent is the compatibility value used when AO_AGENT is unset. The
@@ -164,6 +168,13 @@ type Config struct {
 	// and the user confirms. AO_UPDATE_WHILE_RUNNING=off makes every update
 	// wait for those sessions to end again.
 	UpdateWhileRunning bool
+	// VersionRefresh lets idle open sessions move to a harness release an
+	// update installed while they ran. AO_VERSION_REFRESH=off is the kill
+	// switch; the user's Settings toggle applies on top of it.
+	VersionRefresh bool
+	// VersionRefreshIdle is how long a session must be quiet before it moves,
+	// so a warm prompt cache is not thrown away (AO_VERSION_REFRESH_IDLE).
+	VersionRefreshIdle time.Duration
 	// StartupWorkingDirectory is the daemon process cwd before startup
 	// normalizes it. The desktop uses this to identify dev daemons after the
 	// process cwd is moved to the stable data dir.
@@ -243,6 +254,8 @@ func Load() (Config, error) {
 		HarnessUpdateChecks:   true,
 		HarnessUpdateInterval: DefaultHarnessUpdateInterval,
 		UpdateWhileRunning:    true,
+		VersionRefresh:        true,
+		VersionRefreshIdle:    DefaultVersionRefreshIdle,
 	}
 
 	if raw := os.Getenv("AO_PORT"); raw != "" {
@@ -317,6 +330,20 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 		cfg.UpdateWhileRunning = v
+	}
+	if raw, present := os.LookupEnv("AO_VERSION_REFRESH"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_VERSION_REFRESH", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.VersionRefresh = v
+	}
+	if raw, present := os.LookupEnv("AO_VERSION_REFRESH_IDLE"); present && strings.TrimSpace(raw) != "" {
+		d, err := parsePositiveDuration("AO_VERSION_REFRESH_IDLE", strings.TrimSpace(raw))
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.VersionRefreshIdle = d
 	}
 	if raw, present := os.LookupEnv("AO_HARNESS_UPDATE_INTERVAL"); present && strings.TrimSpace(raw) != "" {
 		d, err := parsePositiveDuration("AO_HARNESS_UPDATE_INTERVAL", strings.TrimSpace(raw))

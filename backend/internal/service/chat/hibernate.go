@@ -149,12 +149,58 @@ func (s *Service) liveViewLeasesLocked(id domain.SessionID) map[string]time.Time
 	return views
 }
 
+// hibernateOptions selects why a provider is stopped. Idle hibernation is the
+// developer-mode setting; a version refresh stops a provider still running a
+// replaced harness release so its next start uses the installed one.
+type hibernateOptions struct {
+	versionRefresh bool
+	// minIdle is how long the session must have been quiet.
+	minIdle time.Duration
+	// ignoreViews lets a refresh run under an open view: the user's next
+	// message is about to wake the session anyway.
+	ignoreViews bool
+}
+
+func (o hibernateOptions) enabled(s *Service) bool {
+	if o.versionRefresh {
+		return true
+	}
+	return s.hibernationEnabled != nil && s.hibernationEnabled()
+}
+
+// eligible is the durable-fact check, read before and again after the
+// provider confirms it has no background work.
+func (o hibernateOptions) eligible(s *Service, rec domain.SessionRecord) bool {
+	if !rec.EligibleForChatHibernation() || rec.Activity.LastActivityAt.Add(o.minIdle).After(s.now()) {
+		return false
+	}
+	return !o.versionRefresh || (rec.StaleBinary != nil && rec.StaleBinary.SwitchFailedAt == nil)
+}
+
+func (o hibernateOptions) viewed(s *Service, id domain.SessionID) bool {
+	return !o.ignoreViews && s.hasChatView(id)
+}
+
 // HibernateChat stops a quiescent provider without ending its AO session. A
 // false result means the final locked eligibility check found useful work.
 func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool, error) {
+	return s.hibernateChat(ctx, id, hibernateOptions{minIdle: chatHibernateGrace})
+}
+
+// HibernateChatForVersionRefresh stops an idle provider that still runs a
+// harness release an update replaced, whatever the hibernation setting. It
+// applies the same checks as idle hibernation, so it never stops a provider
+// with a turn, queued message, pending approval or background work, and never
+// one the user is viewing. minIdle keeps a recently used session, whose
+// prompt cache is still warm, on its release until it has been quiet longer.
+func (s *Service) HibernateChatForVersionRefresh(ctx context.Context, id domain.SessionID, minIdle time.Duration) (bool, error) {
+	return s.hibernateChat(ctx, id, hibernateOptions{versionRefresh: true, minIdle: max(minIdle, chatHibernateGrace)})
+}
+
+func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts hibernateOptions) (bool, error) {
 	// Skip eligibility and queue reads while the feature is off. Recheck before
 	// stopping the provider in case the setting changes during those reads.
-	if s.hibernationEnabled == nil || !s.hibernationEnabled() {
+	if !opts.enabled(s) {
 		return false, nil
 	}
 	marker, ok := s.sessions.(hibernationStore)
@@ -175,8 +221,7 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 		gate.unlock()
 		return false, err
 	}
-	if !rec.EligibleForChatHibernation() || s.hasChatView(id) ||
-		rec.Activity.LastActivityAt.Add(chatHibernateGrace).After(s.now()) {
+	if !opts.eligible(s, rec) || opts.viewed(s, id) {
 		gate.unlock()
 		return false, nil
 	}
@@ -208,7 +253,7 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 	}
 	defer gate.unlock()
 	current, err := s.Controller(id)
-	if err != nil || current != controller || s.hasChatView(id) {
+	if err != nil || current != controller || opts.viewed(s, id) {
 		return false, nil
 	}
 	// Send and provider lifecycle projection use the same dispatch lock. Fence
@@ -263,11 +308,11 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 		controller.sendMu.Unlock()
 		return false, err
 	}
-	if !fresh.EligibleForChatHibernation() || fresh.Activity.LastActivityAt.Add(chatHibernateGrace).After(s.now()) {
+	if !opts.eligible(s, fresh) {
 		controller.sendMu.Unlock()
 		return false, nil
 	}
-	if s.hibernationEnabled == nil || !s.hibernationEnabled() {
+	if !opts.enabled(s) {
 		controller.sendMu.Unlock()
 		return false, nil
 	}
@@ -312,6 +357,13 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 		case <-recoveryCtx.Done():
 			return false, fmt.Errorf("wait for hibernated chat controller: %w", recoveryCtx.Err())
 		}
+	}
+	if opts.versionRefresh {
+		// The wake that follows starts the installed release; remember which
+		// one, so a failed start keeps the user's queued messages.
+		s.noteVersionSwitch(id, fresh.StaleBinary.Version)
+		s.log.Info("chat session stopped to move to a new harness release", "session", id, "harness", fresh.Harness, "version", fresh.StaleBinary.Version)
+		return true, nil
 	}
 	s.log.Info("chat session hibernated", "session", id, "harness", fresh.Harness)
 	return true, nil
@@ -542,9 +594,13 @@ func (s *Service) startBackgroundWake(id domain.SessionID) {
 		}()
 		ctx := context.Background()
 		if err := s.wakeHibernated(ctx, id); err != nil {
+			if s.versionSwitchFailed(ctx, id, err) {
+				return
+			}
 			s.failQueuedTurns(ctx, id, fmt.Sprintf("could not wake the agent: %v", err))
 			return
 		}
+		s.takeVersionSwitch(id)
 		if err := s.DrainQueued(ctx, id); err != nil {
 			s.failQueuedTurns(ctx, id, fmt.Sprintf("could not deliver the message: %v", err))
 		}

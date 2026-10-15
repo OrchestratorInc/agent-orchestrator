@@ -3337,6 +3337,23 @@ export interface paths {
         patch: operations["updateSessionInterface"];
         trace?: never;
     };
+    "/api/v1/settings/version-refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Choose whether idle open sessions move to newly installed harness releases */
+        patch: operations["updateVersionRefresh"];
+        trace?: never;
+    };
     "/api/v1/shell-terminals": {
         parameters: {
             query?: never;
@@ -4295,6 +4312,7 @@ export interface components {
             reviewerHarness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "opencode-v2" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
             /** @enum {string} */
             scmStatus?: "pr_open" | "draft" | "ci_failed" | "review_pending" | "changes_requested" | "commented" | "approved" | "mergeable" | "merged";
+            staleBinary?: components["schemas"]["SessionStaleBinary"];
             /** @enum {string} */
             status: "working" | "pr_open" | "draft" | "ci_failed" | "review_pending" | "changes_requested" | "commented" | "approved" | "mergeable" | "merged" | "needs_input" | "exited" | "idle" | "terminated" | "no_signal";
             /** @enum {string} */
@@ -5769,6 +5787,14 @@ export interface components {
         SessionResponse: {
             session: components["schemas"]["ControllersSessionView"];
         };
+        SessionStaleBinary: {
+            /** Format: date-time */
+            since: string;
+            /** Format: date-time */
+            switchFailedAt?: null | string;
+            /** @description Harness release now installed; the session moves to it on its next launch. */
+            version: string;
+        };
         SessionStepResponse: {
             /**
              * Format: date-time
@@ -5927,6 +5953,8 @@ export interface components {
             };
             localEnabled: boolean;
             trackerIntakeEnabled: boolean;
+            /** @description After a harness update, idle open sessions restart on the new release instead of running the old one until they happen to restart. */
+            versionRefresh: boolean;
         };
         ShellTerminalEnvelope: {
             shellTerminal: components["schemas"]["ShellTerminalResponse"];
@@ -6371,6 +6399,9 @@ export interface components {
         UpdateShellTerminalRequest: {
             /** @description New tab title for the shell terminal. Trimmed; must be non-empty. */
             title: string;
+        };
+        UpdateVersionRefreshRequest: {
+            enabled: null | boolean;
         };
         UpdateWorkspaceFileRequest: {
             content: string;
@@ -19053,6 +19084,57 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["UpdateSessionInterfaceRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateVersionRefresh: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateVersionRefreshRequest"];
             };
         };
         responses: {

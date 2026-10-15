@@ -162,6 +162,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersDesktopArtifactLocationResponse":           "DesktopArtifactLocationResponse",
 	"ControllersUpdateSessionInterfaceRequest":             "UpdateSessionInterfaceRequest",
 	"ControllersUpdateChatHibernationRequest":              "UpdateChatHibernationRequest",
+	"ControllersUpdateVersionRefreshRequest":               "UpdateVersionRefreshRequest",
 	"ControllersConversationSnapshotResponse":              "ConversationSnapshotResponse",
 	"ControllersConversationTurnResponse":                  "ConversationTurnResponse",
 	"ControllersConversationTurnDiffResponse":              "ConversationTurnDiffResponse",
@@ -265,6 +266,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"DomainSession":                   "Session",
 	"DomainSessionProvisionStep":      "SessionProvisionStep",
 	"DomainSessionBranchState":        "SessionBranchState",
+	"DomainSessionStaleBinary":        "SessionStaleBinary",
 	"DomainProjectConfig":             "ProjectConfig",
 	"DomainTrackerIntakeConfig":       "TrackerIntakeConfig",
 	"ControllersTriggerReviewRequest": "TriggerReviewRequest",
@@ -982,6 +984,17 @@ func shellTerminalOperations() []operation {
 			method: http.MethodPatch, path: "/api/v1/settings/chat-hibernation", id: "updateChatHibernation", tag: "settings",
 			summary: "Turn idle Chat hibernation on or off for this machine",
 			reqBody: controllers.UpdateChatHibernationRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SettingsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/settings/version-refresh", id: "updateVersionRefresh", tag: "settings",
+			summary: "Choose whether idle open sessions move to newly installed harness releases",
+			reqBody: controllers.UpdateVersionRefreshRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.SettingsResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},

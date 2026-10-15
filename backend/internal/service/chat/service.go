@@ -79,13 +79,20 @@ type Service struct {
 	sides              *sideManager
 	wakeChat           func(context.Context, domain.SessionID) error
 	hibernationEnabled func() bool
-	viewMu             sync.Mutex
-	viewLeases         map[domain.SessionID]map[string]time.Time
-	viewClosedAt       map[domain.SessionID]time.Time
-	wakeMu             sync.Mutex
-	waking             map[domain.SessionID]int
-	wakeRuns           map[domain.SessionID]*wakeRun
-	backgroundWakes    map[domain.SessionID]bool
+	// versionRefresh reports whether open sessions move to a newly installed
+	// harness release, and how long they must be quiet first.
+	versionRefresh func() (time.Duration, bool)
+	// versionSwitches holds the release each stopped-for-refresh session is
+	// moving to, until its wake succeeds or fails.
+	versionSwitchMu sync.Mutex
+	versionSwitches map[domain.SessionID]string
+	viewMu          sync.Mutex
+	viewLeases      map[domain.SessionID]map[string]time.Time
+	viewClosedAt    map[domain.SessionID]time.Time
+	wakeMu          sync.Mutex
+	waking          map[domain.SessionID]int
+	wakeRuns        map[domain.SessionID]*wakeRun
+	backgroundWakes map[domain.SessionID]bool
 
 	runPromptSuggestion   func(context.Context, domain.SessionID, string, string, string) (string, error)
 	promptSuggestionSlots chan struct{}
@@ -168,6 +175,10 @@ type Options struct {
 	ReconcileOutputType func(context.Context, domain.SessionID) error
 	// HibernationEnabled reads the daemon-owned feature gate. Nil is disabled.
 	HibernationEnabled func() bool
+	// VersionRefresh reports whether an idle session still on a replaced
+	// harness release moves to the installed one on its next message, and the
+	// quiet time required first. Nil never moves a session.
+	VersionRefresh func() (time.Duration, bool)
 }
 
 // New builds a Chat service.
@@ -198,6 +209,7 @@ func New(opts Options) *Service {
 		dataDir:                opts.DataDir,
 		reconcileOutput:        opts.ReconcileOutputType,
 		hibernationEnabled:     opts.HibernationEnabled,
+		versionRefresh:         opts.VersionRefresh,
 		controllers:            make(map[domain.SessionID]*Controller),
 		ownerControllers:       make(map[domain.ConversationOwner]*Controller),
 		startConfigs:           make(map[domain.ConversationOwner]StartConfig),
@@ -1180,6 +1192,13 @@ func (s *Service) Send(
 	record, err := s.requireChatSession(ctx, id)
 	if err != nil {
 		return domain.ConversationTurn{}, err
+	}
+	if s.switchBeforeSend(ctx, record) {
+		// The provider stopped on its old release. The hibernated path below
+		// queues this message and wakes the session on the installed one.
+		if record, err = s.requireChatSession(ctx, id); err != nil {
+			return domain.ConversationTurn{}, err
+		}
 	}
 	if msg.ClientMessageID != "" && len(msg.Excerpts) > 0 {
 		if controller, controllerErr := s.Controller(id); controllerErr == nil {

@@ -395,8 +395,13 @@ type Service struct {
 	updateChecksDisabled bool
 	// updateWhileRunningDisabled forces every update to wait for sessions.
 	updateWhileRunningDisabled bool
-	derivedOwners              map[Target]derivedOwner
-	updateAdvisoryCalls        map[Target]*updateAdvisoryCall
+	// updateObserver marks sessions an update left on the replaced release.
+	updateObserver HarnessUpdateObserver
+	// deferredCleanups are Homebrew formulas whose old keg is kept until the
+	// sessions that run it have moved to the new release.
+	deferredCleanups    map[Target]string
+	derivedOwners       map[Target]derivedOwner
+	updateAdvisoryCalls map[Target]*updateAdvisoryCall
 	// updateCheckSlots bounds concurrent update checks to
 	// maxConcurrentUpdateChecks; created on first use.
 	updateCheckSlots chan struct{}
@@ -1164,6 +1169,7 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 	if plan.keepPreviousRelease && plan.Method == "homebrew" && !plan.PackageCask {
 		// Live sessions still run the old keg; it is cleaned up after they move.
 		env = append(env, "HOMEBREW_NO_INSTALL_CLEANUP=1")
+		s.deferHomebrewCleanup(plan.Target, packageWithoutLatest(plan.Package))
 	}
 	var runErr error
 	if plan.Script != nil {
@@ -1256,6 +1262,13 @@ func (s *Service) runAgentVerification(ctx context.Context, job *Job, baseline *
 	if failure != "" {
 		s.finishAgentJob(job, StatusFailed, output, failure, result.ResolvedPath)
 		return
+	}
+	if baseline != nil {
+		// Only updates carry a baseline. Mark the sessions it left behind
+		// before reporting success, while launches still wait on this update.
+		if installed, ok := baseline.scheme.find(result.Output); ok {
+			s.noteHarnessUpdated(job.Target, installed.display)
+		}
 	}
 	s.finishAgentJob(job, StatusSucceeded, output, "", result.ResolvedPath)
 }

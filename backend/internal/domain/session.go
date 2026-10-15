@@ -282,6 +282,11 @@ type SessionRecord struct {
 	// HibernatedAt records that the idle Chat controller was stopped while the
 	// session and conversation remain resumable. Nil means no recorded hibernation.
 	HibernatedAt *time.Time `json:"hibernatedAt,omitempty"`
+	// StaleBinary is set while the session's current launch still runs a
+	// harness release an update has since replaced. It is derived when the row
+	// is read: any later launch starts on the installed release and reads as
+	// current without a write.
+	StaleBinary *SessionStaleBinary `json:"staleBinary,omitempty"`
 	// TerminateOnPRMerge is a user-controlled lifecycle policy. When enabled,
 	// completing the session's PR set through a merge tears down the session.
 	TerminateOnPRMerge bool              `json:"terminateOnPrMerge"`
@@ -328,6 +333,17 @@ type SessionRecord struct {
 	// branch-state reconcile writes it only when a fact changes; nil until the first
 	// observation, and a failed git read keeps the last known value.
 	BranchState *SessionBranchState `json:"branchState,omitempty"`
+}
+
+// SessionStaleBinary describes a launch left on a replaced harness release.
+type SessionStaleBinary struct {
+	// Version is the release now installed, which the session moves to.
+	Version string `json:"version" description:"Harness release now installed; the session moves to it on its next launch."`
+	// Since is when an update first left this launch on an older release.
+	Since time.Time `json:"since"`
+	// SwitchFailedAt is set when an automatic move to Version failed. The
+	// session keeps its queued messages and waits for the user to resume it.
+	SwitchFailedAt *time.Time `json:"switchFailedAt,omitempty"`
 }
 
 // SessionBranchState is the session branch's commit and push facts.

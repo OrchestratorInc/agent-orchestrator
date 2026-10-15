@@ -565,6 +565,24 @@ func TestLoadUpdateWhileRunningToggle(t *testing.T) {
 	}
 }
 
+func TestLoadVersionRefreshSettings(t *testing.T) {
+	t.Setenv("AO_VERSION_REFRESH", "")
+	t.Setenv("AO_VERSION_REFRESH_IDLE", "")
+	cfg, err := Load()
+	if err != nil || !cfg.VersionRefresh || cfg.VersionRefreshIdle != DefaultVersionRefreshIdle {
+		t.Fatalf("defaults: refresh=%t idle=%s err=%v", cfg.VersionRefresh, cfg.VersionRefreshIdle, err)
+	}
+	t.Setenv("AO_VERSION_REFRESH", "off")
+	t.Setenv("AO_VERSION_REFRESH_IDLE", "30m")
+	if cfg, err = Load(); err != nil || cfg.VersionRefresh || cfg.VersionRefreshIdle != 30*time.Minute {
+		t.Fatalf("overrides: refresh=%t idle=%s err=%v", cfg.VersionRefresh, cfg.VersionRefreshIdle, err)
+	}
+	t.Setenv("AO_VERSION_REFRESH_IDLE", "soon")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid AO_VERSION_REFRESH_IDLE was accepted")
+	}
+}
+
 func TestLoadHarnessUpdateInterval(t *testing.T) {
 	t.Setenv("AO_HARNESS_UPDATE_INTERVAL", "")
 	cfg, err := Load()

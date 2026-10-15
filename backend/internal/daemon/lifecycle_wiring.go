@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/activitydispatch"
@@ -203,6 +204,9 @@ type sessionLifecycle interface {
 	ReconcileStartupSafety(ctx context.Context) error
 	ReconcileBackground(ctx context.Context) error
 	HibernateIdleChats(ctx context.Context) error
+	RefreshStaleChats(ctx context.Context, minIdle time.Duration, wake bool) error
+	MarkHarnessUpdated(ctx context.Context, harness domain.AgentHarness, version string, at time.Time) error
+	CountStaleBinarySessions(ctx context.Context) (map[domain.AgentHarness]int64, error)
 	RestoreAll(ctx context.Context) error
 	WaitBackgroundWorkers(ctx context.Context) error
 	WaitAgentSwitchWorkers(ctx context.Context) error

@@ -412,7 +412,10 @@ func Run() error {
 		DataDir:             cfg.DataDir,
 		ReconcileOutputType: lcStack.LCM.ReconcileSessionOutputType,
 		HibernationEnabled:  settingsSvc.ChatHibernationEnabled,
-		AppRunID:            cfg.AppRunID,
+		VersionRefresh: func() (time.Duration, bool) {
+			return cfg.VersionRefreshIdle, cfg.VersionRefresh && settingsSvc.VersionRefreshEnabled(ctx)
+		},
+		AppRunID: cfg.AppRunID,
 		StopProviderHost: func(ctx context.Context, id domain.SessionID) error {
 			return persistenthost.Shutdown(ctx, cfg.DataDir, string(id))
 		},
@@ -694,6 +697,7 @@ func Run() error {
 		return fmt.Errorf("recover harness install jobs: %w", err)
 	}
 	sessMgr.SetHarnessUseGate(systemInstall)
+	systemInstall.SetHarnessUpdateObserver(sessMgr)
 	systemInstall.SetOnSucceeded(func(target systeminstall.Target) {
 		harness, ok := installedAgentHarness(target)
 		if !ok {
@@ -1106,6 +1110,7 @@ func Run() error {
 				}
 			}
 		}()
+		go runVersionRefreshSweep(ctx, cfg, settingsSvc, sessMgr, systemInstall, log)
 	})
 
 	// Both graceful shutdown paths (SIGTERM and POST /shutdown) funnel through
