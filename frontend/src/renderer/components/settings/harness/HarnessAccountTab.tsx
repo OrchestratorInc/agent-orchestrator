@@ -1,6 +1,7 @@
 import { BookOpen, Check, Copy, ExternalLink, LoaderCircle, LogOut } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { advisoryInUse, versionLabel, type InstallJob } from "../../../hooks/useHarnessUpdates";
+import { advisoryInUse, isWaitingForIdleJob, versionLabel, type HarnessInUse, type InstallJob } from "../../../hooks/useHarnessUpdates";
+import { IdleUpdateStatus } from "./UpdateWhileRunningDialog";
 import type { TerminalSessionState } from "../../../hooks/useTerminalSession";
 import { aoBridge } from "../../../lib/bridge";
 import { Button } from "../../ui/button";
@@ -13,7 +14,7 @@ const ACTION_CLASS = "h-8 min-w-20 px-3 focus-visible:ring-2 focus-visible:ring-
 
 /** Install, update and login each own one row. While a job or login runs,
 	* the row that started it shows progress instead. */
-export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied, diagnosticsExpanded, onToggleDiagnostics, onCopyDiagnostics, onInstall, onSelectMethod, onCopyCommand, onUpdate, onLogin, onLogout, onVerify, onCloseAuth, onRetryAuth, onTerminalState }: {
+export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied, diagnosticsExpanded, onToggleDiagnostics, onCopyDiagnostics, onInstall, onSelectMethod, onCopyCommand, onUpdate, onLogin, onLogout, onVerify, onCloseAuth, onRetryAuth, onTerminalState, onViewSessions }: {
 	details: HarnessDetails;
 	hostId?: string;
 	/** A login or logout terminal is open for any harness. */
@@ -32,6 +33,8 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 	onCloseAuth: () => void;
 	onRetryAuth: () => void;
 	onTerminalState: (state: TerminalSessionState) => void;
+	/** Lists sessions an update waits for. */
+	onViewSessions?: (inUse: HarnessInUse) => void;
 }) {
 	const { t } = useTranslation();
 	const { plan, job, isInstalled, authPlan, rowAuthWorkflow, authBusy, installMethod, availableMethods, failed } = details;
@@ -94,6 +97,7 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 				<span className="text-xs text-settings-label"><HarnessTimestamp value={details.updatedAt} /></span>
 			</HarnessDetailRow> : null}
 		</HarnessDetailGroup>
+		{job && isWaitingForIdleJob(job) ? <div className="-mt-3"><IdleUpdateStatus agentId={details.agentId} job={job} hostId={hostId} onViewSessions={(waiting) => onViewSessions?.(waiting)} /></div> : null}
 		{isInstalled && details.showUpdate && !details.canUpdate ? <p className="-mt-3 text-xs text-settings-muted">{details.updateReason}</p> : null}
 		{isInstalled && details.updateUnknown && !details.advisoryQuery?.isPending && !details.manualOnly ? <p className="-mt-3 text-xs text-settings-muted">{t("settings.harness.updateCheckUnavailable")}</p> : null}
 		{/* A harness with no installable method explains how it is maintained instead. */}

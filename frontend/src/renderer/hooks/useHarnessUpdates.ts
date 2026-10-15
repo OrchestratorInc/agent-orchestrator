@@ -47,7 +47,22 @@ export function installJobsQueryOptions(hostId?: string) {
 }
 
 export function isActiveInstallJob(job?: Pick<InstallJob, "status">): boolean {
-	return job?.status === "running" || job?.status === "installing" || job?.status === "verifying";
+	return job?.status === "running" || job?.status === "waiting_for_idle" || job?.status === "installing" || job?.status === "verifying";
+}
+
+/** An update queued until the harness's sessions are idle (Windows). */
+export function isWaitingForIdleJob(job?: Pick<InstallJob, "status">): boolean {
+	return job?.status === "waiting_for_idle";
+}
+
+/** How long a waiting update reads as normal before it names what it waits for. */
+export const IDLE_WAIT_DETAIL_MS = 5 * 60_000;
+
+/** Cancels an update still waiting for idle sessions; sessions are left untouched. */
+export async function cancelHarnessUpdate(agentId: AgentId, hostId?: string): Promise<InstallJob> {
+	const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/install/cancel", { params: { path: { agent: agentId } } });
+	if (error || !data) throw new Error(apiErrorMessage(error, appI18n.t("settings.harness.cancelUpdateFailed")));
+	return data;
 }
 
 export function isFailedInstallJob(job?: Pick<InstallJob, "status">): boolean {

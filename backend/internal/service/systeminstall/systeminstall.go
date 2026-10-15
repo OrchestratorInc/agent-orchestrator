@@ -271,14 +271,17 @@ type Status string
 
 // The full set of Job lifecycle states.
 const (
-	StatusIdle        Status = "idle"
-	StatusRunning     Status = "running"
-	StatusInstalling  Status = "installing"
-	StatusVerifying   Status = "verifying"
-	StatusSucceeded   Status = "succeeded"
-	StatusFailed      Status = "failed"
-	StatusUnsupported Status = "unsupported"
-	StatusInterrupted Status = "interrupted"
+	StatusIdle    Status = "idle"
+	StatusRunning Status = "running"
+	// StatusWaitingForIdle holds an update until every session using the
+	// harness is idle; it then stops them, updates and resumes them.
+	StatusWaitingForIdle Status = "waiting_for_idle"
+	StatusInstalling     Status = "installing"
+	StatusVerifying      Status = "verifying"
+	StatusSucceeded      Status = "succeeded"
+	StatusFailed         Status = "failed"
+	StatusUnsupported    Status = "unsupported"
+	StatusInterrupted    Status = "interrupted"
 )
 
 // maxOutputBytes bounds Job.Output so a chatty installer can't grow memory
@@ -303,7 +306,7 @@ var devinInstalledLine = regexp.MustCompile(`Installed devin v\S+ to [^\r\n]+/de
 // Job is the tracked state of one harness operation for a Target.
 type Job struct {
 	Target              Target `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,cloudflared" description:"Fixed install target this job ran (or is running) for."`
-	Status              Status `json:"status" enum:"idle,running,installing,verifying,succeeded,failed,unsupported,interrupted" description:"Current lifecycle state of the job."`
+	Status              Status `json:"status" enum:"idle,running,waiting_for_idle,installing,verifying,succeeded,failed,unsupported,interrupted" description:"Current lifecycle state of the job. waiting_for_idle: the update runs once every session using the harness is idle (Windows)."`
 	Method              string `json:"method,omitempty" description:"Server-owned installation method selected for this harness job."`
 	Command             string `json:"command,omitempty" description:"Human-readable install command, e.g. \"brew install tmux\", for display even before/without output."`
 	ExpectedDestination string `json:"expectedDestination,omitempty" description:"Expected or adapter-resolved executable destination."`
@@ -315,9 +318,11 @@ type Job struct {
 	// timestamp) even when nothing has happened yet. A nil pointer actually
 	// omits the field, matching FinishedAt's documented "zero until the job
 	// finishes" contract.
-	StartedAt  *time.Time `json:"startedAt,omitempty"`
-	FinishedAt *time.Time `json:"finishedAt,omitempty" description:"Absent until the job finishes."`
-	UpdatedAt  *time.Time `json:"updatedAt,omitempty"`
+	// WaitingOn lists the sessions a waiting_for_idle job still waits for.
+	WaitingOn  []domain.SessionWait `json:"waitingOn,omitempty" description:"While waiting_for_idle, the sessions the update still waits for and why."`
+	StartedAt  *time.Time           `json:"startedAt,omitempty"`
+	FinishedAt *time.Time           `json:"finishedAt,omitempty" description:"Absent until the job finishes."`
+	UpdatedAt  *time.Time           `json:"updatedAt,omitempty"`
 }
 
 // HarnessVerifier performs post-install binary verification without probing
@@ -353,7 +358,11 @@ type Deps struct {
 	// sessions to end, as before update-while-running existed
 	// (AO_UPDATE_WHILE_RUNNING=off).
 	DisableUpdateWhileRunning bool
-	PrivateNPMPrefixes        map[Target]string
+	// WindowsUpdateWhenIdle lets a Windows update wait for idle sessions, stop
+	// them, update and resume them, instead of refusing while they run
+	// (AO_WINDOWS_UPDATE_WHEN_IDLE).
+	WindowsUpdateWhenIdle bool
+	PrivateNPMPrefixes    map[Target]string
 }
 
 // Service runs real install commands for the fixed Target allowlist.
@@ -395,6 +404,12 @@ type Service struct {
 	updateChecksDisabled bool
 	// updateWhileRunningDisabled forces every update to wait for sessions.
 	updateWhileRunningDisabled bool
+	// windowsUpdateWhenIdle turns Windows' blocked level into update-when-idle.
+	windowsUpdateWhenIdle bool
+	// idleUpdates are the waiting or running update-when-idle runs.
+	idleUpdates map[Target]*idleUpdateRun
+	// idleCoordinator stops and resumes a harness's sessions around such a run.
+	idleCoordinator IdleUpdateCoordinator
 	// updateObserver marks sessions an update left on the replaced release.
 	updateObserver HarnessUpdateObserver
 	// deferredCleanups are Homebrew formulas whose old keg is kept until the
@@ -467,6 +482,7 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 		reviewers:                  deps.Reviewers,
 		updateChecksDisabled:       deps.DisableUpdateChecks,
 		updateWhileRunningDisabled: deps.DisableUpdateWhileRunning,
+		windowsUpdateWhenIdle:      deps.WindowsUpdateWhenIdle,
 		goos:                       runtime.GOOS,
 		installTimeout:             defaultInstallTimeout,
 		persistenceTimeout:         defaultPersistenceTimeout,
@@ -767,6 +783,10 @@ func (s *Service) StartAgentOperationWithSessions(ctx context.Context, target Ta
 		// Sessions are checked once the plan is final: whether an update may run
 		// alongside them depends on the method that owns the installed copy.
 		withSessions, err := s.gateRunningSessions(ctx, target, operation, plan, allowRunningSessions)
+		if errors.Is(err, errUpdateWhenIdle) && !plan.Unsupported {
+			// Wait for idle sessions without holding the harness meanwhile.
+			return s.startIdleUpdate(ctx, plan, baseline)
+		}
 		if err != nil {
 			return Job{}, err
 		}
@@ -887,7 +907,7 @@ func (s *Service) harnessGate(harness domain.AgentHarness) *sync.RWMutex {
 // update advisory.
 func (s *Service) TryBeginHarnessUse(harness domain.AgentHarness) (func(), bool) {
 	gate := s.harnessGate(harness)
-	if !gate.TryRLock() {
+	if !gate.TryRLock() && !s.waitForIdleBatch(Target(harness), gate) {
 		return nil, false
 	}
 	if IsAgentTarget(Target(harness)) {
@@ -1360,7 +1380,7 @@ func jobFromRecord(record ports.AgentInstallJobRecord) Job {
 }
 
 func activeStatus(status Status) bool {
-	return status == StatusRunning || status == StatusInstalling || status == StatusVerifying
+	return status == StatusRunning || status == StatusWaitingForIdle || status == StatusInstalling || status == StatusVerifying
 }
 
 func combineOutput(existing, next string) string {

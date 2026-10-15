@@ -179,6 +179,11 @@ type Config struct {
 	// installed release (AO_TUI_VERSION_REFRESH). Off by default until the
 	// per-harness resume checks pass.
 	TUIVersionRefresh bool
+	// WindowsUpdateWhenIdle lets a Windows harness update wait until the
+	// harness's sessions are idle, then stop them, update and resume them,
+	// instead of refusing while they run (AO_WINDOWS_UPDATE_WHEN_IDLE). Off by
+	// default until Windows QA passes.
+	WindowsUpdateWhenIdle bool
 	// StartupWorkingDirectory is the daemon process cwd before startup
 	// normalizes it. The desktop uses this to identify dev daemons after the
 	// process cwd is moved to the stable data dir.
@@ -348,6 +353,13 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 		cfg.TUIVersionRefresh = v
+	}
+	if raw, present := os.LookupEnv("AO_WINDOWS_UPDATE_WHEN_IDLE"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_WINDOWS_UPDATE_WHEN_IDLE", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.WindowsUpdateWhenIdle = v
 	}
 	if raw, present := os.LookupEnv("AO_VERSION_REFRESH_IDLE"); present && strings.TrimSpace(raw) != "" {
 		d, err := parsePositiveDuration("AO_VERSION_REFRESH_IDLE", strings.TrimSpace(raw))

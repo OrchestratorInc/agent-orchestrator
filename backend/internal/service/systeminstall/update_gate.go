@@ -22,6 +22,10 @@ const (
 	UpdateWhileRunningWarn UpdateWhileRunning = "warn"
 	// UpdateWhileRunningBlocked means live sessions must end before the update.
 	UpdateWhileRunningBlocked UpdateWhileRunning = "blocked"
+	// UpdateWhileRunningIdle means the update waits until every live session
+	// is idle, then stops them, updates and resumes them (Windows, where a
+	// running executable cannot be replaced).
+	UpdateWhileRunningIdle UpdateWhileRunning = "idle"
 )
 
 // HarnessActiveError reports the live work that kept a harness operation from
@@ -99,10 +103,14 @@ var versionedVendorInstalls = map[Target]bool{
 	TargetGrok:       true,
 }
 
-// effectiveUpdateLevel applies the AO_UPDATE_WHILE_RUNNING switch.
+// effectiveUpdateLevel applies the AO_UPDATE_WHILE_RUNNING switch, and on
+// Windows AO_WINDOWS_UPDATE_WHEN_IDLE, which waits instead of refusing.
 func (s *Service) effectiveUpdateLevel(level UpdateWhileRunning) UpdateWhileRunning {
 	if s.updateWhileRunningDisabled || level == "" {
 		return UpdateWhileRunningBlocked
+	}
+	if level == UpdateWhileRunningBlocked && s.goos == "windows" && s.windowsUpdateWhenIdle && s.idleCoordinatorReady() {
+		return UpdateWhileRunningIdle
 	}
 	return level
 }
@@ -180,6 +188,9 @@ func (s *Service) gateRunningSessions(ctx context.Context, target Target, operat
 		active.NeedsConsent = true
 		return false, active
 	}
+	if level == UpdateWhileRunningIdle {
+		return false, errUpdateWhenIdle
+	}
 	return true, nil
 }
 
@@ -189,7 +200,7 @@ func (s *Service) gateRunningSessions(ctx context.Context, target Target, operat
 type UpdateInUse struct {
 	LiveSessions int                `json:"liveSessions" description:"Sessions running this harness, directly or through their reviewer."`
 	SessionIDs   []string           `json:"sessionIds,omitempty" description:"Sessions that run this harness or own a reviewer that does."`
-	Level        UpdateWhileRunning `json:"level" enum:"safe,warn,blocked" description:"Whether an update can run while they do: safe keeps the running release, warn may disturb it, blocked requires them to end."`
+	Level        UpdateWhileRunning `json:"level" enum:"safe,warn,blocked,idle" description:"Whether an update can run while they do: safe keeps the running release, warn may disturb it, blocked requires them to end, idle waits until they are idle and restarts them around the update."`
 }
 
 func (s *Service) updateInUse(ctx context.Context, target Target, advisory UpdateAdvisory) *UpdateInUse {

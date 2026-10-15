@@ -543,6 +543,8 @@ type Manager struct {
 
 	terminalInputGateMu sync.Mutex
 	terminalInputGate   TerminalInputGate
+	// updateStops holds input gates of terminals stopped for an update.
+	updateStops updateStops
 
 	reviewersMu sync.Mutex
 	reviewers   ReviewerTerminator

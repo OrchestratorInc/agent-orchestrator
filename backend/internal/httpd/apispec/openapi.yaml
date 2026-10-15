@@ -155,6 +155,51 @@ paths:
         harness
       tags:
       - agents
+  /api/v1/agents/{agent}/install/cancel:
+    post:
+      operationId: cancelAgentInstall
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstallJob'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Cancel an update that is waiting for the harness's sessions to be idle
+      tags:
+      - agents
   /api/v1/agents/{agent}/logout:
     post:
       operationId: logoutAgent
@@ -11450,11 +11495,13 @@ components:
       properties:
         level:
           description: 'Whether an update can run while they do: safe keeps the running
-            release, warn may disturb it, blocked requires them to end.'
+            release, warn may disturb it, blocked requires them to end, idle waits
+            until they are idle and restarts them around the update.'
           enum:
           - safe
           - warn
           - blocked
+          - idle
           type: string
         liveSessions:
           description: Sessions running this harness, directly or through their reviewer.
@@ -14343,10 +14390,12 @@ components:
           - "null"
           - string
         status:
-          description: Current lifecycle state of the job.
+          description: 'Current lifecycle state of the job. waiting_for_idle: the
+            update runs once every session using the harness is idle (Windows).'
           enum:
           - idle
           - running
+          - waiting_for_idle
           - installing
           - verifying
           - succeeded
@@ -14403,6 +14452,12 @@ components:
           type:
           - "null"
           - string
+        waitingOn:
+          description: While waiting_for_idle, the sessions the update still waits
+            for and why.
+          items:
+            $ref: '#/components/schemas/SessionWait'
+          type: array
       required:
       - target
       - status
@@ -16671,6 +16726,22 @@ components:
       - incomplete
       - totals
       - harnesses
+      type: object
+    SessionWait:
+      properties:
+        reason:
+          enum:
+          - working
+          - command
+          - approval
+          - starting
+          - reviewer
+          type: string
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - reason
       type: object
     SetActivityRequest:
       properties:

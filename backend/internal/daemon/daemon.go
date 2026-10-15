@@ -686,6 +686,7 @@ func Run() error {
 		Reviewers:                 store,
 		DisableUpdateChecks:       !cfg.HarnessUpdateChecks,
 		DisableUpdateWhileRunning: !cfg.UpdateWhileRunning,
+		WindowsUpdateWhenIdle:     cfg.WindowsUpdateWhenIdle,
 		PrivateNPMPrefixes:        privateNPMPrefixes,
 	})
 	if err := systemInstall.Recover(ctx); err != nil {
@@ -698,6 +699,7 @@ func Run() error {
 	}
 	sessMgr.SetHarnessUseGate(systemInstall)
 	systemInstall.SetHarnessUpdateObserver(sessMgr)
+	systemInstall.SetIdleUpdateCoordinator(sessMgr)
 	systemInstall.SetOnSucceeded(func(target systeminstall.Target) {
 		harness, ok := installedAgentHarness(target)
 		if !ok {

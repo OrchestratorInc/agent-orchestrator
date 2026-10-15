@@ -583,6 +583,20 @@ func TestLoadVersionRefreshSettings(t *testing.T) {
 	}
 }
 
+func TestLoadPhaseThreeToggles(t *testing.T) {
+	t.Setenv("AO_TUI_VERSION_REFRESH", "")
+	t.Setenv("AO_WINDOWS_UPDATE_WHEN_IDLE", "")
+	cfg, err := Load()
+	if err != nil || cfg.TUIVersionRefresh || cfg.WindowsUpdateWhenIdle {
+		t.Fatalf("defaults: tui=%t windows=%t err=%v", cfg.TUIVersionRefresh, cfg.WindowsUpdateWhenIdle, err)
+	}
+	t.Setenv("AO_TUI_VERSION_REFRESH", "on")
+	t.Setenv("AO_WINDOWS_UPDATE_WHEN_IDLE", "on")
+	if cfg, err = Load(); err != nil || !cfg.TUIVersionRefresh || !cfg.WindowsUpdateWhenIdle {
+		t.Fatalf("on: tui=%t windows=%t err=%v", cfg.TUIVersionRefresh, cfg.WindowsUpdateWhenIdle, err)
+	}
+}
+
 func TestLoadHarnessUpdateInterval(t *testing.T) {
 	t.Setenv("AO_HARNESS_UPDATE_INTERVAL", "")
 	cfg, err := Load()

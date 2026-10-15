@@ -44,6 +44,26 @@ move it to warn if 0.5 shows otherwise.
 | 0.6 | Formula upgrade with `HOMEBREW_NO_INSTALL_CLEANUP=1` keeps the old keg | Formula level | Homebrew documents this; confirm on a real upgrade |
 | 0.7 | Windows in-use behaviour per installer | Windows design (P3) | Pending |
 
-Until 0.1 and 0.2 pass for a harness, leave it out of
-`versionRefreshHarnesses` (Phase 2/3), so its sessions are marked but never
-switched automatically.
+## Where each result is used
+
+- **Chat (Phase 2)** moves sessions only through the existing hibernate and
+  native-resume path, so it relies on the same resume capability idle
+  hibernation already uses. 0.2 (new version resumes an old conversation) is
+  the remaining risk; `AO_VERSION_REFRESH=off` turns it off.
+- **Terminal (Phase 3A, `AO_TUI_VERSION_REFRESH`, off by default)** restarts
+  only harnesses listed in `tuiVersionRefreshHarnesses`
+  (`backend/internal/session_manager/tui_version_refresh.go`): Claude Code and
+  Codex for now. Add a harness only after 0.1 and 0.2 pass for it.
+- **Windows (Phase 3B, `AO_WINDOWS_UPDATE_WHEN_IDLE`, off by default)** waits
+  for idle sessions, stops them, updates and resumes them. Needs 0.7 and a
+  Windows QA pass before the default changes.
+
+## Flags
+
+| Flag | Default | Effect |
+|---|---|---|
+| `AO_UPDATE_WHILE_RUNNING` | on | Safe/warn updates may run alongside sessions after confirmation |
+| `AO_VERSION_REFRESH` | on | Kill switch for moving idle sessions to a new release (Settings toggle applies on top) |
+| `AO_VERSION_REFRESH_IDLE` | 10m | Quiet time before a session moves |
+| `AO_TUI_VERSION_REFRESH` | off | Also restart idle terminal sessions |
+| `AO_WINDOWS_UPDATE_WHEN_IDLE` | off | Windows updates wait for idle sessions instead of refusing |

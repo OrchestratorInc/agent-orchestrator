@@ -984,6 +984,15 @@ func (*fakeSessionLifecycle) RefreshStaleChats(context.Context, time.Duration, b
 func (*fakeSessionLifecycle) RefreshStaleTerminals(context.Context, time.Duration) error {
 	return nil
 }
+func (*fakeSessionLifecycle) BusyHarnessSessions(context.Context, domain.AgentHarness) ([]domain.SessionWait, error) {
+	return nil, nil
+}
+func (*fakeSessionLifecycle) StopHarnessSessions(context.Context, domain.AgentHarness) ([]domain.SessionID, error) {
+	return nil, nil
+}
+func (*fakeSessionLifecycle) ResumeHarnessSessions(context.Context, []domain.SessionID) error {
+	return nil
+}
 func (*fakeSessionLifecycle) MarkHarnessUpdated(context.Context, domain.AgentHarness, string, time.Time) error {
 	return nil
 }

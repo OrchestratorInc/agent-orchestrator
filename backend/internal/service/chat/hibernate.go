@@ -154,6 +154,9 @@ func (s *Service) liveViewLeasesLocked(id domain.SessionID) map[string]time.Time
 // replaced harness release so its next start uses the installed one.
 type hibernateOptions struct {
 	versionRefresh bool
+	// forUpdate stops an idle provider so an installer can replace its
+	// executable; the session wakes on its next message or once the update ends.
+	forUpdate bool
 	// minIdle is how long the session must have been quiet.
 	minIdle time.Duration
 	// ignoreViews lets a refresh run under an open view: the user's next
@@ -162,7 +165,7 @@ type hibernateOptions struct {
 }
 
 func (o hibernateOptions) enabled(s *Service) bool {
-	if o.versionRefresh {
+	if o.versionRefresh || o.forUpdate {
 		return true
 	}
 	return s.hibernationEnabled != nil && s.hibernationEnabled()
@@ -195,6 +198,14 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 // prompt cache is still warm, on its release until it has been quiet longer.
 func (s *Service) HibernateChatForVersionRefresh(ctx context.Context, id domain.SessionID, minIdle time.Duration) (bool, error) {
 	return s.hibernateChat(ctx, id, hibernateOptions{versionRefresh: true, minIdle: max(minIdle, chatHibernateGrace)})
+}
+
+// HibernateChatForUpdate stops an idle provider, whatever the hibernation
+// setting and even while the user views it, so an installer that cannot
+// replace a running executable can run. Work in flight, queued messages,
+// pending approvals and background work still keep it running.
+func (s *Service) HibernateChatForUpdate(ctx context.Context, id domain.SessionID) (bool, error) {
+	return s.hibernateChat(ctx, id, hibernateOptions{forUpdate: true, ignoreViews: true})
 }
 
 func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts hibernateOptions) (bool, error) {

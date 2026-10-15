@@ -689,6 +689,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			onSelectMethod={(methodId) => setSelectedMethods((current) => ({ ...current, [agentId]: methodId }))}
 			onCopyCommand={(command) => void copyText(agentId, command)}
 			onUpdate={() => requestUpdate(agentId)}
+			onViewSessions={(waiting) => setInUseSessions({ agentId, inUse: waiting })}
 			onLogin={() => void startAuth(agentId)}
 			onLogout={() => setLogoutRequest(agentId)}
 			onVerify={() => void verifyInstall(agentId)}

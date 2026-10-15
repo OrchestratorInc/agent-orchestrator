@@ -377,6 +377,7 @@ describe("harness updates while sessions run", () => {
 	let advisories: Record<string, Record<string, unknown>>;
 	let installs: Array<{ agent: string; body: Record<string, unknown> }>;
 	let installResponse: (agent: string, body: Record<string, unknown>) => unknown;
+	let jobs: Array<Record<string, unknown>>;
 
 	beforeEach(async () => {
 		await appI18n.changeLanguage("en");
@@ -385,12 +386,13 @@ describe("harness updates while sessions run", () => {
 		advisories = { "claude-code": claudeAdvisory };
 		installs = [];
 		installResponse = (agent) => ({ data: { target: agent, status: "installing" } });
+		jobs = [];
 		const agents = () => Object.keys(advisories);
 		const readiness = () => ({ agents: agents().map((id) => agentReadiness(id as never, id)) });
 		vi.spyOn(apiClient, "GET").mockImplementation(async (path, options) => {
 			if (path === "/api/v1/agents/readiness") return { data: readiness() } as never;
 			if (path === "/api/v1/agents/installers") return { data: { agents: agents().map((agentId) => ({ agentId, methods: [{ id: "official-installer", available: true, updateAvailable: true }] })) } } as never;
-			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs } } as never;
 			if (path === "/api/v1/agents/auth-plans") return { data: { plans: agents().map((agentId) => ({ agentId, action: "login", available: true })) } } as never;
 			if (path === "/api/v1/agents/{agent}/update-advisory") {
 				const agent = (options as { params: { path: { agent: string } } }).params.path.agent;
@@ -399,8 +401,12 @@ describe("harness updates while sessions run", () => {
 			return { data: undefined } as never;
 		});
 		vi.spyOn(apiClient, "POST").mockImplementation(async (path, options) => {
-			if (path !== "/api/v1/agents/{agent}/install") return { data: readiness() } as never;
+			if (path !== "/api/v1/agents/{agent}/install" && path !== "/api/v1/agents/{agent}/install/cancel") return { data: readiness() } as never;
 			const request = options as { params: { path: { agent: string } }; body: Record<string, unknown> };
+			if (path === "/api/v1/agents/{agent}/install/cancel") {
+				jobs = [{ target: request.params.path.agent, status: "interrupted", error: "Update cancelled; sessions were left as they were." }];
+				return { data: jobs[0] } as never;
+			}
 			installs.push({ agent: request.params.path.agent, body: request.body });
 			return installResponse(request.params.path.agent, request.body) as never;
 		});
@@ -498,5 +504,33 @@ describe("harness updates while sessions run", () => {
 		await userEvent.click(within(dialog).getByRole("button", { name: "Update anyway" }));
 		await waitFor(() => expect(installs.map((install) => install.body.allowRunningSessions)).toEqual([true, true]));
 		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+
+	it("explains a Windows update waiting for idle sessions and lets the user cancel it", async () => {
+		jobs = [{ target: "claude-code", status: "waiting_for_idle", startedAt: new Date().toISOString(), waitingOn: [{ sessionId: "s1", reason: "command" }] }];
+		mountNotice();
+		const status = await screen.findByText("Updating when sessions are idle");
+		expect(status).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install/cancel", { params: { path: { agent: "claude-code" } } }));
+		expect(installs).toHaveLength(0);
+	});
+
+	it("names the session a long-waiting update waits for", async () => {
+		jobs = [{ target: "claude-code", status: "waiting_for_idle", startedAt: new Date(Date.now() - 10 * 60_000).toISOString(), waitingOn: [{ sessionId: "s1", reason: "command" }] }];
+		mountNotice();
+		expect(await screen.findByText("Waiting for s1 (dev server or command running)")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "View" }));
+		expect(await screen.findByRole("dialog", { name: "Sessions using Claude Code" })).toBeInTheDocument();
+	});
+
+	it("words the confirmation for an update that waits for idle sessions", async () => {
+		advisories["claude-code"] = { ...claudeAdvisory, inUse: { liveSessions: 1, sessionIds: ["s1"], level: "idle" } };
+		mountNotice();
+		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
+		const dialog = await screen.findByRole("dialog");
+		expect(dialog).toHaveTextContent("AO will wait until the 1 open session is idle");
+		await userEvent.click(within(dialog).getByRole("button", { name: "Update when idle" }));
+		await waitFor(() => expect(installs[0]?.body.allowRunningSessions).toBe(true));
 	});
 });

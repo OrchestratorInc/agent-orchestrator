@@ -24,6 +24,7 @@ type Installer interface {
 	AgentJobs(ctx context.Context) ([]systeminstall.Job, error)
 	Verify(ctx context.Context, target systeminstall.Target) (systeminstall.Job, error)
 	UpdateAdvisory(ctx context.Context, target systeminstall.Target, refresh bool) (systeminstall.UpdateAdvisory, error)
+	CancelAgentOperation(ctx context.Context, target systeminstall.Target) (systeminstall.Job, error)
 }
 
 // SystemInstallController owns the system prerequisite and agent harness install routes.
@@ -39,6 +40,7 @@ func (c *SystemInstallController) Register(r chi.Router) {
 	r.Get("/agents/install-jobs", c.agentJobs)
 	r.Get("/agents/{agent}/update-advisory", c.updateAdvisory)
 	r.Post("/agents/{agent}/install", c.startAgent)
+	r.Post("/agents/{agent}/install/cancel", c.cancelAgent)
 	r.Get("/agents/{agent}/install", c.agentStatus)
 	r.Post("/agents/{agent}/verify", c.verifyAgent)
 }
@@ -113,6 +115,27 @@ func (c *SystemInstallController) startAgent(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	envelope.WriteJSON(w, http.StatusAccepted, job)
+}
+
+func (c *SystemInstallController) cancelAgent(w http.ResponseWriter, r *http.Request) {
+	if c.Installer == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/agents/{agent}/install/cancel")
+		return
+	}
+	target, ok := parseAgentInstallTarget(w, r)
+	if !ok {
+		return
+	}
+	job, err := c.Installer.CancelAgentOperation(r.Context(), target)
+	if errors.Is(err, systeminstall.ErrNotWaiting) {
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "INSTALL_NOT_WAITING", "no update is waiting for idle sessions for this harness", nil)
+		return
+	}
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, job)
 }
 
 func (c *SystemInstallController) agentJobs(w http.ResponseWriter, r *http.Request) {

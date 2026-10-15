@@ -35,6 +35,8 @@ type fakeInstaller struct {
 	refreshAdvisory bool
 	expectedVersion string
 	allowRunning    bool
+	cancelJob       systeminstall.Job
+	cancelErr       error
 }
 
 func (f *fakeInstaller) Start(_ context.Context, target systeminstall.Target) (systeminstall.Job, error) {
@@ -60,6 +62,11 @@ func (f *fakeInstaller) StartAgentOperationWithSessions(_ context.Context, targe
 	f.lastOperation = operation
 	f.expectedVersion = expectedVersion
 	return f.startJob, f.startErr
+}
+
+func (f *fakeInstaller) CancelAgentOperation(_ context.Context, target systeminstall.Target) (systeminstall.Job, error) {
+	f.lastTarget = target
+	return f.cancelJob, f.cancelErr
 }
 
 func (f *fakeInstaller) AgentJobs(context.Context) ([]systeminstall.Job, error) {

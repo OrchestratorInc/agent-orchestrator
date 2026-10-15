@@ -346,6 +346,29 @@ type SessionStaleBinary struct {
 	SwitchFailedAt *time.Time `json:"switchFailedAt,omitempty"`
 }
 
+// SessionWaitReason says why an update that runs when sessions are idle is
+// still waiting for a session.
+type SessionWaitReason string
+
+const (
+	// SessionWaitWorking means the agent is taking a turn.
+	SessionWaitWorking SessionWaitReason = "working"
+	// SessionWaitCommand means the agent runs a command, such as a dev server.
+	SessionWaitCommand SessionWaitReason = "command"
+	// SessionWaitApproval means the agent waits for the user's answer.
+	SessionWaitApproval SessionWaitReason = "approval"
+	// SessionWaitStarting means the session is still starting.
+	SessionWaitStarting SessionWaitReason = "starting"
+	// SessionWaitReviewer means a reviewer runs the harness.
+	SessionWaitReviewer SessionWaitReason = "reviewer"
+)
+
+// SessionWait is one session an update waits for.
+type SessionWait struct {
+	SessionID SessionID         `json:"sessionId"`
+	Reason    SessionWaitReason `json:"reason" enum:"working,command,approval,starting,reviewer"`
+}
+
 // SessionBranchState is the session branch's commit and push facts.
 type SessionBranchState struct {
 	// Commits is how many commits the branch has on top of its base.

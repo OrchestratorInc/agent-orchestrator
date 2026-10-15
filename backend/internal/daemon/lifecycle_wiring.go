@@ -206,6 +206,9 @@ type sessionLifecycle interface {
 	HibernateIdleChats(ctx context.Context) error
 	RefreshStaleChats(ctx context.Context, minIdle time.Duration, wake bool) error
 	RefreshStaleTerminals(ctx context.Context, minIdle time.Duration) error
+	BusyHarnessSessions(ctx context.Context, harness domain.AgentHarness) ([]domain.SessionWait, error)
+	StopHarnessSessions(ctx context.Context, harness domain.AgentHarness) ([]domain.SessionID, error)
+	ResumeHarnessSessions(ctx context.Context, ids []domain.SessionID) error
 	MarkHarnessUpdated(ctx context.Context, harness domain.AgentHarness, version string, at time.Time) error
 	CountStaleBinarySessions(ctx context.Context) (map[domain.AgentHarness]int64, error)
 	RestoreAll(ctx context.Context) error
