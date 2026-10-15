@@ -123,8 +123,8 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plans) != 36 {
-		t.Fatalf("got %d plans, want 36", len(plans))
+	if len(plans) != 37 {
+		t.Fatalf("got %d plans, want 37", len(plans))
 	}
 	seen := make(map[string]bool, len(plans))
 	for _, plan := range plans {
@@ -492,6 +492,7 @@ func TestNPMPlanUsesTargetSpecificNodeFloors(t *testing.T) {
 		{name: "auggie accepts node 20", target: TargetAuggie, nodeVersion: "v20.0.0", wantAllowed: true},
 		{name: "auggie rejects node 18", target: TargetAuggie, nodeVersion: "v18.20.0", wantReason: "Node.js 20+"},
 		{name: "claude rejects node 20", target: TargetClaudeCode, nodeVersion: "v20.19.0", wantReason: "Node.js 22+"},
+		{name: "strands rejects node 20", target: TargetStrands, nodeVersion: "v20.19.0", wantReason: "Node.js 22+"},
 		{name: "pi rejects node 22.18", target: TargetPi, nodeVersion: "v22.18.0", wantReason: "Node.js 22.19+"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -691,5 +692,29 @@ func TestCodewhaleInstallPlanIsManualOnly(t *testing.T) {
 	}
 	if !strings.Contains(plan.Reason, "does not automatically install Codewhale") {
 		t.Fatalf("Codewhale reason = %q", plan.Reason)
+	}
+}
+
+func TestStrandsKeepsPinnedInstallSeparateFromReleasePackage(t *testing.T) {
+	planner, err := newTestService("linux", "npm").newRequestPlanner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range []AgentOperation{AgentOperationInstall, AgentOperationReinstall} {
+		plans := planner.agentMethodPlans(TargetStrands, operation)
+		if len(plans) != 1 {
+			t.Fatalf("%s plans = %+v", operation, plans)
+		}
+		plan := plans[0]
+		if plan.Unsupported || plan.Package != "@strands-agents/cli" || !slices.Contains(plan.Command, "@strands-agents/cli@0.2.0") {
+			t.Fatalf("%s plan lost package identity or release pin: %+v", operation, plan)
+		}
+		if (operation == AgentOperationReinstall) != slices.Contains(plan.Command, "--force") {
+			t.Fatalf("%s reinstall flag = %v", operation, plan.Command)
+		}
+	}
+	plans := planner.agentMethodPlans(TargetStrands, AgentOperationUpdate)
+	if len(plans) != 1 || !plans[0].Unsupported || len(plans[0].Command) != 0 || plans[0].Script != nil {
+		t.Fatalf("unqualified Strands update was offered: %+v", plans)
 	}
 }

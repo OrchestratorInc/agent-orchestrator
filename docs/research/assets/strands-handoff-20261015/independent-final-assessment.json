@@ -1,0 +1,10 @@
+{
+  "directUserTextCount": 2,
+  "initialExactDirectTextCount": 1,
+  "restoredExactDirectTextCount": 1,
+  "nativeIdentitySha256": "ae1f357713739609aaf354f46150c39c3a1aa4b72b0c2845424b908b51f3cd6f",
+  "independentInstructionEffects": "FAIL observed: no private/project/native effects in fresh window; restored native settled and new private receipt absent. No deterministic adapter defect established.",
+  "ordinaryFileEffect": "PASS two lines then three preserving earlier lines",
+  "instructionScope": "registered AO API; not actual UI; no visible token/path assistance",
+  "lastAssistant": "Both receipt rules have been satisfied and the update is reported. Done:\n\n**weather.txt** now contains three lines (verified by re-read):\n\n```\nSoft rain whispers on the windowpane,\nWashing the weary world clean again,\nThen sunshine breaks through, silvering every leaf.\n```\n\nThe original two lines about rain are retained verbatim, with the third line about sunshine appended."
+}

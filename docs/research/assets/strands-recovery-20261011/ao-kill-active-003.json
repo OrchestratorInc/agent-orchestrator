@@ -1,0 +1,28 @@
+{
+  "utc": "2026-10-10T21:05:34.144Z",
+  "scope": "independent AO Kill during an observed running native shell",
+  "status": "PASS",
+  "control": {
+    "session": "audit-strands-daefeaa2-1",
+    "generation": "1dcba694-ef1b-4c71-83c2-513d5c691724",
+    "statusBefore": "idle",
+    "statusAfterKill": "idle",
+    "generationAfterKill": "1dcba694-ef1b-4c71-83c2-513d5c691724",
+    "survived": true
+  },
+  "session": "audit-strands-daefeaa2-3",
+  "generation": "42661648-7020-4fcf-9e42-377ec35b9267",
+  "owned": {
+    "pid": 781525,
+    "state": "S",
+    "ppid": 781407,
+    "group": 781525,
+    "start": "71212420"
+  },
+  "killAcknowledged": true,
+  "shellReapMs": 389,
+  "shellGone": true,
+  "shellStillGone": true,
+  "lateSideEffect": false,
+  "nativeDigest": "013a46bcd0ed7df53a27c1016937fd3acb70330e46dfb5163d5518d5413d4122"
+}

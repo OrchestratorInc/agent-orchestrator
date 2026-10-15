@@ -1,0 +1,9 @@
+{
+  "source": "98365b809f8378f642f09d711eb727654a86090d",
+  "binarySha256": "7eb497daf80994fd2f710cdb70725f0d754aa64c2c0b9ae489a24d56b5ad3ab1",
+  "uiSource": "878957f4583fbe7762ebef29708a0f79a61acc5d",
+  "utc": "2026-10-10T21:03:59.342051+00:00",
+  "observed": "real Electron startup/renderer failure under service TasksMax256; no initialized native session UI claim",
+  "pngSha256": "c76ba77e564904b5811a937819415c8f2adeab1045f8b51b08cf6422ca6777fd",
+  "recovery": "stopped older owned AO002 daemon; changed only own user-service TasksMax256->512; serial compute lock preserved"
+}

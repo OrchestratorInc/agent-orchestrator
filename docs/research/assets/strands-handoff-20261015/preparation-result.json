@@ -1,0 +1,101 @@
+{
+  "status": "blocked",
+  "updatedAt": "2026-10-15T06:16:33.622293+00:00",
+  "harness": "strands",
+  "pr": 6517,
+  "remoteHead": "7ebd0dcaac36a39557e54ceccb844c54bb1f08d4",
+  "sourceHead": "f13d91d2207fb09a802168616b6128e8373dd74b",
+  "baseMain": "54b28374912cb2771f17b8cc32a9482e6d607bce",
+  "skillHead": "5af6c2306250c7b2ada2563af5247e2d2c7eddf0",
+  "changedFiles": [
+    "backend/internal/storage/sqlite/migrate_burned_versions_test.go"
+  ],
+  "changeScope": "One manual conflict resolution retaining migrations0198 and0201; current main merged locally with252 automatic upstream changed files; no duplicate adapter fixes. Local merge commit only.",
+  "completed": [
+    "Read latest PR source/body/comments/reviews/checks and newest skill read only; snapshots retained outside source",
+    "Verified existing reviewed fixes, preserved exact missing-history failure and limited TUI/free-form model scope",
+    "Reconciled main ledger conflict locally, preserving prior work/evidence ancestry",
+    "Created all required screenshot checkpoint rows before runtime/UI; no synthetic images",
+    "Used exact-source CI daemon artifact; new Linux registered-AO diagnostic24PASS/1authBLOCKED/1catalogFAIL/2NOT_RUN",
+    "Witnessed child cancellation/no-late-file, exact native restore/ready composer/history/new post-Kill private instructions in assisted runner",
+    "Independent ordinary fresh/restored file effects observed; same nativeID; instruction receipt effects absent explicitly FAIL/incomplete",
+    "Preserved finished runner retained-handle issue and cleanup failure, performed exact-owned recovery cleanup",
+    "Saved review-ready report, category counts, unpublished draft body/comment, hashes and cleanup"
+  ],
+  "evidencePaths": [
+    "reports/review-report.md",
+    "reports/screenshot-checkpoints.md",
+    "reports/provenance.json",
+    "reports/source-review.json",
+    "reports/independent-final-assessment.json",
+    "reports/github-final-status.json",
+    "reports/main-reconciliation.json",
+    "reports/main-reconciliation.patch",
+    "reports/main-merge-analysis.txt",
+    "reports/runtime-to-merged-source-files.txt",
+    "reports/draft-pr-body.md",
+    "reports/draft-pr-comment.md",
+    "reports/change-counts.json",
+    "reports/cleanup.json",
+    "reports/final-process-check.json",
+    "reports/credential-scan.json",
+    "reports/run-runtime-001.py",
+    "reports/independent-control.py",
+    "attempt-ao-001/report.json",
+    "attempt-ao-001/report.md",
+    "attempt-ao-001/command.json",
+    "attempt-ao-001/contract.json",
+    "attempt-independent-001/receipt.json",
+    "attempt-independent-001/fresh-effects.json",
+    "attempt-independent-001/restored-effects.json",
+    "runtime-ci/SOURCE_COMMIT",
+    "runtime-ci/SHA256SUMS",
+    "runtime-ci/BUILD_INFO",
+    "skill-reference/HEAD",
+    "reports/hashes.json"
+  ],
+  "remaining": [
+    "Real Electron UI journey BLOCKED: no genuine frontend dependencies and insufficient disk preserving512MiB reserve; all applicable screenshot steps NOT_RUN",
+    "Independent ordinary-task fresh/restored private/project/native instruction effects NOT_QUALIFIED; restored settled without new receipt, despite assistant claiming success",
+    "Merged-source CI NOT_RUN; existing24green checks qualify remote7ebd0dca only",
+    "New executing-child Kill isolation/no late effects and reconnect continuation NOT_RUN; historical stronger Kill control retained separately",
+    "New negative native config/history runtime and other OS/provider/release claims NOT_RUN",
+    "Future publisher must review unpublished local merge/evidence before authorized harness publication; skill6509 no writes"
+  ],
+  "ci": {
+    "existingHead": "7ebd0dcaac36a39557e54ceccb844c54bb1f08d4",
+    "listedChecks": 24,
+    "successful": 24,
+    "remoteMergeable": "UNKNOWN",
+    "localMergedSource": "NOT_RUN"
+  },
+  "runtime": {
+    "source": "7ebd0dcaac36a39557e54ceccb844c54bb1f08d4",
+    "sha256": "371f73a34e67c7bf2b1a3116affd7aa8959bf1d545fddd46d016c725dd36082f",
+    "strict": "FAIL diagnostic only",
+    "gateCounts": {
+      "PASS": 24,
+      "FAIL": 1,
+      "BLOCKED": 1,
+      "NOT_RUN": 2
+    },
+    "independentInstructions": "FAIL effects / overall incomplete; ordinary file effects pass"
+  },
+  "cleanup": {
+    "allOwnedSessionRecordsTerminated": true,
+    "ownedDaemonStopped": true,
+    "ownedRuntimeProcessesRemaining": 0,
+    "protectedProcessesSurvived": true,
+    "productionService": "active",
+    "freeBytes": 866725888,
+    "evidenceAndProfilesRetained": true,
+    "mountsTouched": false
+  },
+  "publication": {
+    "localCommit": "f13d91d2207fb09a802168616b6128e8373dd74b",
+    "pushed": false,
+    "remoteWrites": false,
+    "skill6509Writes": false,
+    "finalPublisherDeferred": true
+  }
+}

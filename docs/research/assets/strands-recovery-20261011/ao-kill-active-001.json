@@ -1,0 +1,20 @@
+{
+  "utc": "2026-10-10T20:51:07.114Z",
+  "scope": "independent AO Kill during an observed running native shell",
+  "status": "PASS",
+  "session": "audit-strands-63a7e0bf-2",
+  "generation": "caab97ef-bbe1-4974-81e5-bbe532318e90",
+  "owned": {
+    "pid": 775614,
+    "state": "S",
+    "ppid": 775408,
+    "group": 775614,
+    "start": "71124103"
+  },
+  "killAcknowledged": true,
+  "shellReapMs": 685,
+  "shellGone": true,
+  "shellStillGone": true,
+  "lateSideEffect": false,
+  "nativeDigest": "dee01b27a548f4f0c560d8e056c0ef77b771196f3738c8c59a5b37cfa33a84a5"
+}

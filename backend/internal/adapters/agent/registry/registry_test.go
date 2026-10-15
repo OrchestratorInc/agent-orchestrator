@@ -324,3 +324,20 @@ func hasLine(content, line string) bool {
 	}
 	return false
 }
+
+func TestStrandsAdapterIsSelectable(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("strands")
+	if !ok || !domain.HarnessStrands.IsKnown() {
+		t.Fatal("Strands is not selectable")
+	}
+	if adapter.Manifest().Name != "Strands" {
+		t.Fatal(adapter.Manifest())
+	}
+	if _, ok := adapter.(ports.Agent); !ok {
+		t.Fatal("missing TUI agent")
+	}
+}

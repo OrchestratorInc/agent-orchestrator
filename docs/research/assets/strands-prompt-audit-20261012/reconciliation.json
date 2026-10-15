@@ -1,0 +1,17 @@
+{
+  "at": "2026-10-12T18:05:31.825462+00:00",
+  "harness": "strands",
+  "pr": 6517,
+  "previousHead": "19d844a87314a8a2428244f9dbaf878c6c4c5607",
+  "canonicalMain": "fca1b72c0a6e9106dae0cbe76b5621358356aa4e",
+  "resolvedPaths": [
+    "backend/internal/storage/sqlite/migrate_burned_versions_test.go",
+    "frontend/src/docs/content/plugins/agents/index.mdx"
+  ],
+  "preservedEvidence": "All preexisting docs/research bytes unchanged; ancestry retained by merge commit.",
+  "validation": "PR CI only; no local suites run.",
+  "liveFresh": "NOT_RUN_THIS_RECONCILIATION",
+  "liveRestore": "NOT_RUN_THIS_RECONCILIATION",
+  "providerRole": "NOT_RUN_THIS_RECONCILIATION",
+  "historicalProof": "Retained at original tested source/native revision; never promoted by merge."
+}

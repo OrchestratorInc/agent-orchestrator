@@ -1,0 +1,6 @@
+{
+  "aoPermissions": "bypass-permissions",
+  "aoModel": "",
+  "visibleNativePermission": "Auto",
+  "scope": "AO003 permission metadata; distinct from native one-time approval cancellation controls"
+}

@@ -55,6 +55,7 @@ The current daemon registers the following capabilities. Availability still depe
 | `deepseek-harness` | Yes | Yes | — |
 | `openhands` | Yes | — | — |
 | `command-code` | Yes | Yes | — |
+| `strands` | Yes | — | — |
 
 The table shows shipped capabilities, not whether an agent is ready on your machine. Run the catalog for current readiness or when scripting:
 
@@ -119,3 +120,7 @@ To make Codex the default worker, use `ao project set-config my-app --worker-age
 	<Card title="Cursor" description="Terminal UI and native ACP Chat." href="/plugins/agents/cursor" />
 	<Card title="Aider" description="Built-in terminal harness." href="/plugins/agents/aider" />
 </Cards>
+
+### Strands
+
+Strands CLI 0.2.0 supports TUI sessions only. Install `@strands-agents/cli@0.2.0` and configure its native provider/model first. AO preserves the saved model and domain instructions, adds private standing instructions, and restores validated exact native history. AO uses supported SDK plugins to pass cancellation to the native workspace sandbox. Saved custom MCP servers, plugins, tools, subagent modules, sandboxes and shell options are rejected, and automatic user/project MCP discovery is disabled. Ask Permissions requires native default mode without always-allowed tools; bypass requires explicit native bypass configuration. AO runs foreground tools only; native background dispatch is disabled so settled activity reflects completed tools. Model-driven native configuration reload is disabled. Native in-TUI session/workspace changes are rejected while AO plugins remain loaded. Explicit human `/setup`, `/tools`, and profile/plugin reconfiguration inside a managed terminal are unsupported and can invalidate activity/restore guarantees; exit and start a new AO session after changing native configuration. Chat and interface handoff are unavailable.
