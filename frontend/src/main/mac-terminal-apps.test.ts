@@ -11,6 +11,15 @@ describe("macOS terminal discovery", () => {
 		expect(await discoverMacTerminalApps(async () => JSON.stringify(apps))).toEqual(apps);
 	});
 
+	it("keeps only embedded PNG icons, without forwarding icon paths or remote URLs", async () => {
+		const app = { bundleId: "org.example.shell", name: "Shell", appPath: "/Applications/Shell.app" };
+		const iconDataUrl = "data:image/png;base64,dGVzdA==";
+		expect(await discoverMacTerminalApps(async () => JSON.stringify([{ ...app, iconDataUrl }]))).toEqual([{ ...app, iconDataUrl }]);
+		for (const icon of ["https://example.test/icon.png", "/Applications/Shell.app/icon.png", "data:image/png;base64,"]) {
+			expect(await discoverMacTerminalApps(async () => JSON.stringify([{ ...app, iconDataUrl: icon }]))).toEqual([app]);
+		}
+	});
+
 	it("ignores malformed metadata rather than exposing unsafe paths or names", async () => {
 		const app = { bundleId: "org.example.shell", name: "Shell", appPath: "/Applications/Shell.app" };
 		const entries = [null, {}, { ...app, bundleId: 42 }, { ...app, name: "" }, { ...app, name: "  " },

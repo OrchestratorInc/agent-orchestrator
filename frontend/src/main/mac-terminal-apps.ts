@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 
-export type MacTerminalApp = { bundleId: string; name: string; appPath: string };
+export type MacTerminalApp = { bundleId: string; name: string; appPath: string; iconDataUrl?: string };
 
 // Query Launch Services, rather than scanning app names or developer-tool
 // categories (which would also match IDEs). Shell-role handlers can execute
@@ -18,6 +18,23 @@ var ids = {};
   var values = ObjC.deepUnwrap(ObjC.castRefToObject(handlers));
   if (Array.isArray(values)) values.forEach(function(id) { ids[id] = true; });
 });
+function iconForBundle(bundle, info, url) {
+  try {
+    var file = info.CFBundleIconFile || "";
+    var dot = file.lastIndexOf(".");
+    var iconPath = file ? bundle.pathForResourceOfType(dot < 0 ? file : file.slice(0, dot), dot < 0 ? "icns" : file.slice(dot + 1)) : null;
+    var image = iconPath && !iconPath.isNil() ? $.NSImage.alloc.initWithContentsOfFile(iconPath) : null;
+    if (!image || image.isNil() || !image.isValid) image = $.NSWorkspace.sharedWorkspace.iconForFile(url.path);
+    var bitmap = $.NSBitmapImageRep.alloc.initWithBitmapDataPlanesPixelsWidePixelsHighBitsPerSampleSamplesPerPixelHasAlphaIsPlanarColorSpaceNameBytesPerRowBitsPerPixel(null, 64, 64, 8, 4, true, false, $.NSCalibratedRGBColorSpace, 0, 0);
+    $.NSGraphicsContext.saveGraphicsState;
+    try {
+      $.NSGraphicsContext.setCurrentContext($.NSGraphicsContext.graphicsContextWithBitmapImageRep(bitmap));
+      image.drawInRectFromRectOperationFraction($.NSMakeRect(0, 0, 64, 64), $.NSZeroRect, $.NSCompositingOperationSourceOver, 1);
+    } finally { $.NSGraphicsContext.restoreGraphicsState; }
+    var png = bitmap.representationUsingTypeProperties($.NSPNGFileType, $({}));
+    return "data:image/png;base64," + ObjC.unwrap(png.base64EncodedStringWithOptions(0));
+  } catch (_) { return undefined; }
+}
 var apps = [];
 Object.keys(ids).forEach(function(id) {
   try {
@@ -32,7 +49,7 @@ Object.keys(ids).forEach(function(id) {
     });
     if (!folders) return;
     apps.push({ bundleId: info.CFBundleIdentifier, name: info.CFBundleDisplayName || info.CFBundleName,
-      appPath: ObjC.unwrap(url.path) });
+      appPath: ObjC.unwrap(url.path), iconDataUrl: iconForBundle(bundle, info, url) });
   } catch (_) { /* Ignore stale registrations or unreadable bundles. */ }
 });
 JSON.stringify(apps);
@@ -56,5 +73,8 @@ export async function discoverMacTerminalApps(
 		typeof entry.bundleId === "string" && /^[a-z0-9.-]+$/i.test(entry.bundleId) &&
 		typeof entry.name === "string" && Boolean(entry.name.trim()) &&
 		typeof entry.appPath === "string" && path.posix.isAbsolute(entry.appPath) && entry.appPath.endsWith(".app"),
-	);
+	).map(({ bundleId, name, appPath, iconDataUrl }) => ({
+		bundleId, name, appPath,
+		...(typeof iconDataUrl === "string" && /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(iconDataUrl) ? { iconDataUrl } : {}),
+	}));
 }

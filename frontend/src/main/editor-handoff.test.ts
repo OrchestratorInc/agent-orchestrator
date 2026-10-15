@@ -130,6 +130,17 @@ describe("editor handoff", () => {
 		expect(input.launch).toHaveBeenCalledTimes(1);
 	});
 
+	it("prefers extracted bundle icons over Electron's generic file icon", async () => {
+		const iconDataUrl = "data:image/png;base64,YWN0dWFs";
+		const readIcon = vi.fn().mockResolvedValue("data:image/png;base64,cGxhY2Vob2xkZXI=");
+		const input = deps({ readIcon, isDirectory: () => true, discoverTerminalApps: vi.fn().mockResolvedValue([
+			{ bundleId: "dev.warp.Warp-Stable", name: "Warp", appPath: "/Applications/Warp.app", iconDataUrl },
+		]) });
+		const { targets } = await createEditorHandoff(input).getState("ao-1");
+		expect(targets.find((target) => target.name === "Warp")).toMatchObject({ iconDataUrl });
+		expect(readIcon).not.toHaveBeenCalledWith("/Applications/Warp.app");
+	});
+
 	it("discovers new installations on the next query and deduplicates existing built-in targets", async () => {
 		const discoverTerminalApps = vi.fn().mockResolvedValue([]);
 		const handoff = createEditorHandoff(deps({ discoverTerminalApps, isDirectory: () => true }));

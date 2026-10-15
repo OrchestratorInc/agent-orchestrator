@@ -399,6 +399,8 @@ function resolveInstalledTerminals(
 				if (!isDirectory(appPath)) continue;
 				for (const app of registered) claimedApps.add(app.appPath);
 				claimedApps.add(appPath);
+				const iconDataUrl = registered.find((app) => app.appPath === appPath)?.iconDataUrl;
+				if (iconDataUrl) target.iconDataUrl = iconDataUrl;
 				return [{ target, command: {
 					command: "/usr/bin/open",
 					iconPath: appPath,
@@ -422,7 +424,7 @@ function resolveInstalledTerminals(
 		claimedBundleIds.add(app.bundleId.toLowerCase());
 		// An opaque stable ID crosses IPC; installation paths remain in main.
 		const id: TerminalId = `terminal-app:${createHash("sha256").update(app.bundleId.toLowerCase()).digest("hex")}`;
-		return [{ target: { id, name: app.name, kind: "terminal" as const }, command: {
+		return [{ target: { id, name: app.name, kind: "terminal" as const, ...(app.iconDataUrl ? { iconDataUrl: app.iconDataUrl } : {}) }, command: {
 			command: "/usr/bin/open",
 			iconPath: app.appPath,
 			argsForWorkspace: (dir: string) => ["-a", app.appPath, dir],
@@ -501,6 +503,7 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 		async getState(sessionId) {
 			const { targets, terminals } = await resolveAll();
 			const targetsWithIcons = await Promise.all(targets.map(async (target) => {
+				if (target.iconDataUrl) return target;
 				const terminal = terminals.find((entry) => entry.target.id === target.id);
 				const iconPath = terminal
 					? terminal.command.iconPath ?? terminal.command.command
