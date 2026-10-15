@@ -134,12 +134,10 @@ export async function fetchUpdateAdvisory(agentId: AgentId, hostId?: string, ref
 }
 
 /**
- * Sessions that kept an update from starting. `confirm` means the update can
- * run once the user agrees to it running alongside them; `blocked` means they
- * must end first, or one is still starting.
+ * Sessions that keep an update from starting: they must end first
+ * (update-while-running is off), or one is still starting.
  */
 export type HarnessInUse = {
-	kind: "confirm" | "blocked";
 	count: number;
 	sessionIds: string[];
 	level: UpdateWhileRunningLevel;
@@ -150,41 +148,28 @@ export type HarnessInUse = {
 export type HarnessUpdateStart = { job?: InstallJob; error?: string; inUse?: HarnessInUse };
 
 /**
- * What the Update button does for the sessions the advisory saw: update right
- * away, or list the sessions that must end first. Like T3 Code, an update
- * installs while sessions run; they restart on the new release once idle (on
- * Windows the daemon waits for them first). Only "blocked" (update-while-running
- * turned off, or an older daemon) still lists them. A daemon that still asks
- * for consent answers HARNESS_IN_USE_CONFIRM, which opens the confirmation.
+ * The sessions an update must wait for, when the advisory says it cannot run
+ * alongside them. Like T3 Code, an update otherwise installs while sessions
+ * run, and they restart on the new release once idle; on Windows the daemon
+ * waits for them itself.
  */
-export type HarnessUpdateAction = "update" | "confirm" | "blocked";
-
-export function harnessUpdateAction(advisory?: Pick<AgentUpdateAdvisory, "inUse">): HarnessUpdateAction {
-	const inUse = advisory?.inUse;
-	return inUse && inUse.liveSessions > 0 && inUse.level === "blocked" ? "blocked" : "update";
-}
-
-/** The advisory's view of the sessions in use, in the shape a refused update reports. */
 export function advisoryInUse(advisory?: Pick<AgentUpdateAdvisory, "inUse">): HarnessInUse | undefined {
-	const action = harnessUpdateAction(advisory);
-	if (action === "update" || !advisory?.inUse) return undefined;
-	return { kind: action, count: advisory.inUse.liveSessions, sessionIds: advisory.inUse.sessionIds ?? [], level: advisory.inUse.level, starting: false };
+	const inUse = advisory?.inUse;
+	if (!inUse || inUse.liveSessions <= 0 || inUse.level !== "blocked") return undefined;
+	return { count: inUse.liveSessions, sessionIds: inUse.sessionIds ?? [], level: inUse.level, starting: false };
 }
 
-/** Reads a 409 HARNESS_IN_USE_CONFIRM or HARNESS_ACTIVE into the sessions it names. */
+/** Reads a 409 HARNESS_ACTIVE into the sessions it names. */
 export function harnessInUseFromError(error: unknown): HarnessInUse | undefined {
-	const code = apiErrorCode(error);
 	// An older daemon refuses without details; its message is shown as before.
 	const details = apiErrorDetails(error);
-	if ((code !== "HARNESS_IN_USE_CONFIRM" && code !== "HARNESS_ACTIVE") || !details) return undefined;
+	if (apiErrorCode(error) !== "HARNESS_ACTIVE" || !details) return undefined;
 	const ids = (value: unknown) => Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : [];
 	const sessionIds = [...new Set([...ids(details.sessionIds), ...ids(details.reviewerSessionIds)])];
-	const level = details.level === "safe" || details.level === "warn" ? details.level : "blocked";
 	return {
-		kind: code === "HARNESS_IN_USE_CONFIRM" ? "confirm" : "blocked",
 		count: typeof details.count === "number" ? details.count : sessionIds.length,
 		sessionIds,
-		level,
+		level: "blocked",
 		starting: details.starting === true,
 	};
 }
@@ -197,14 +182,12 @@ export function harnessInUseFromError(error: unknown): HarnessInUse | undefined 
 export function useStartHarnessUpdate(hostId?: string) {
 	const queryClient = useQueryClient();
 	const { t } = useTranslation();
-	return useCallback(async ({ agentId, latestVersion, methodId, canStart, allowRunningSessions = false }: {
+	return useCallback(async ({ agentId, latestVersion, methodId, canStart }: {
 		agentId: AgentId;
 		latestVersion: string | undefined;
 		methodId: string;
 		/** Checked after the click-time probe, e.g. so an unmounted page starts nothing. */
 		canStart?: () => boolean;
-		/** The user agreed to update while sessions use the harness. */
-		allowRunningSessions?: boolean;
 	}): Promise<HarnessUpdateStart> => {
 		try {
 			const key = updateAdvisoryQueryKey(agentId, hostId);
@@ -217,7 +200,7 @@ export function useStartHarnessUpdate(hostId?: string) {
 			if (maintenanceMethodId(fresh) !== methodId) return { error: t("settings.harness.updateMethodChanged", { agent: agentLabel(agentId) }) };
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/install", {
 				params: { path: { agent: agentId } },
-				body: { method: methodId, operation: "update", expectedVersion: fresh.latestVersion, ...(allowRunningSessions ? { allowRunningSessions: true } : {}) },
+				body: { method: methodId, operation: "update", expectedVersion: fresh.latestVersion },
 			});
 			const inUse = harnessInUseFromError(error);
 			if (inUse) return { inUse };

@@ -51,7 +51,7 @@ import { diagnosticsText, healthText, machineText } from "./harness-diagnostics"
 import { HarnessHealthTab } from "./HarnessHealthTab";
 import { FOCUS_HIGHLIGHT_MS, HARNESS_TAB_CLASS, HARNESS_TABS_CLASS, HarnessStatusDot, useWideLayout, type HarnessDetailTab } from "./harness-ui";
 import { HarnessModelsPanel, MULTI_PROVIDER_HARNESSES } from "./HarnessModelsPanel";
-import { HarnessSessionsDialog, UpdateWhileRunningDialog } from "./UpdateWhileRunningDialog";
+import { HarnessSessionsDialog } from "./HarnessSessionsDialog";
 
 const AUTH_TERMINAL_LIFETIME_MS = 15 * 60_000;
 // The first check right after a login terminal exits can fail transiently (the
@@ -92,9 +92,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const startAgentAuth = useStartAgentAuth(hostId);
 	const startAgentLogout = useStartAgentAuth(hostId, "logout");
 	const [logoutRequest, setLogoutRequest] = useState<AgentId | null>(null);
-	// An update that would run alongside open sessions waits for the user's
-	// answer; one that cannot lists the sessions it waits for.
-	const [inUseConfirm, setInUseConfirm] = useState<{ agentId: AgentId; inUse: HarnessInUse } | null>(null);
+	// An update that cannot run alongside open sessions lists the ones it waits for.
 	const [inUseSessions, setInUseSessions] = useState<{ agentId: AgentId; inUse: HarnessInUse } | null>(null);
 	const [authStates, setAuthStates] = useState<AgentAuthStates>({});
 	const [checkingAuth, setCheckingAuth] = useState<AgentId[]>([]);
@@ -377,7 +375,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		setPendingAgentIds(new Set(pendingActions.current));
 	};
 
-	const startAgentOperation = async (agentId: AgentId, method: string, operation: AgentOperation, allowRunningSessions = false): Promise<boolean> => {
+	const startAgentOperation = async (agentId: AgentId, method: string, operation: AgentOperation): Promise<boolean> => {
 		if (isActiveInstallJob(queryClient.getQueryData<InstallJob[]>(jobsKey)?.find((job) => job.target === agentId))
 			|| authWorkflowRef.current?.agentId === agentId || authStartPendingRef.current) return false;
 		if (operation === "update" && (!installed.has(agentId)
@@ -400,12 +398,10 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 					latestVersion: queryClient.getQueryData<AgentUpdateAdvisory>(updateAdvisoryQueryKey(agentId, hostId))?.latestVersion,
 					methodId: method,
 					canStart: () => mountedRef.current,
-					allowRunningSessions,
 				});
-				// Sessions are not a failure to retry: ask, or show what to end.
+				// Sessions are not a failure to retry: show what to end.
 				if (result.inUse) {
-					if (result.inUse.kind === "confirm") setInUseConfirm({ agentId, inUse: result.inUse });
-					else setInUseSessions({ agentId, inUse: result.inUse });
+					setInUseSessions({ agentId, inUse: result.inUse });
 					return false;
 				}
 				if (result.error) return fail(result.error);
@@ -438,17 +434,8 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		if (!method || !supportsUpdate(methods.find((candidate) => candidate.id === method))) return;
 		setActionErrors((current) => ({ ...current, [agentId]: undefined }));
 		const inUse = advisoryInUse(queryClient.getQueryData<AgentUpdateAdvisory>(updateAdvisoryQueryKey(agentId, hostId)));
-		if (inUse?.kind === "blocked") { setInUseSessions({ agentId, inUse }); return; }
-		if (inUse?.kind === "confirm") { setInUseConfirm({ agentId, inUse }); return; }
+		if (inUse) { setInUseSessions({ agentId, inUse }); return; }
 		void startAgentOperation(agentId, method, "update");
-	};
-
-	const confirmUpdateWhileRunning = () => {
-		const request = inUseConfirm;
-		if (!request) return;
-		setInUseConfirm(null);
-		const method = operationMethodId(request.agentId);
-		if (method) void startAgentOperation(request.agentId, method, "update", true);
 	};
 
 	const verifyInstall = async (agentId: AgentId) => {
@@ -840,11 +827,6 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 				error={logoutRequest ? authStates[logoutRequest]?.error : null}
 				onConfirm={() => { if (logoutRequest) void startAuth(logoutRequest, "logout").then((started) => { if (started) setLogoutRequest(null); }); }}
 				onOpenChange={(open) => { if (!open && !authStartPendingRef.current) setLogoutRequest(null); }}
-			/>
-			<UpdateWhileRunningDialog
-				updates={inUseConfirm ? [{ ...inUseConfirm, latestVersion: queryClient.getQueryData<AgentUpdateAdvisory>(updateAdvisoryQueryKey(inUseConfirm.agentId, hostId))?.latestVersion }] : []}
-				onConfirm={confirmUpdateWhileRunning}
-				onOpenChange={(open) => { if (!open) setInUseConfirm(null); }}
 			/>
 			<HarnessSessionsDialog
 				agentId={inUseSessions?.agentId ?? null}

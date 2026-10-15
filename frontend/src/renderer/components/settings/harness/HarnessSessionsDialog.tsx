@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { cancelHarnessUpdate, IDLE_WAIT_DETAIL_MS, installJobsQueryKeyForHost, upsertInstallJob, versionLabel, type HarnessInUse, type InstallJob } from "../../../hooks/useHarnessUpdates";
+import { cancelHarnessUpdate, IDLE_WAIT_DETAIL_MS, installJobsQueryKeyForHost, upsertInstallJob, type HarnessInUse, type InstallJob } from "../../../hooks/useHarnessUpdates";
 import { Button } from "../../ui/button";
 import { workspaceQueryKeyForHost } from "../../../hooks/useWorkspaceQuery";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
@@ -9,43 +9,6 @@ import { useNavigateToSession } from "../../../lib/navigate-to-session";
 import type { WorkspaceSummary } from "../../../types/workspace";
 import { useUiStore } from "../../../stores/ui-store";
 import { ConfirmDialog } from "../../ConfirmDialog";
-
-export type InUseUpdate = { agentId: AgentId; inUse: HarnessInUse; latestVersion?: string };
-
-/**
- * Asks before updating harnesses that open sessions still run. A safe update
- * keeps the running release; a warn update may disturb it, so its wording says so.
- */
-export function UpdateWhileRunningDialog({ updates, busy, onConfirm, onOpenChange }: {
-	updates: InUseUpdate[];
-	busy?: boolean;
-	onConfirm: () => void;
-	onOpenChange: (open: boolean) => void;
-}) {
-	const { t } = useTranslation();
-	const single = updates.length === 1 ? updates[0] : undefined;
-	const describe = ({ agentId, inUse, latestVersion }: InUseUpdate) => inUse.level === "idle"
-		? t("settings.harness.inUseIdle", { count: inUse.count, agent: agentLabel(agentId) })
-		: inUse.level === "warn"
-		? t("settings.harness.inUseWarn", { count: inUse.count, agent: agentLabel(agentId) })
-		: t("settings.harness.inUseSafe", { count: inUse.count, version: latestVersion ? versionLabel(latestVersion) : t("settings.harness.newVersion") });
-	return <ConfirmDialog
-		open={updates.length > 0}
-		title={single ? t("settings.harness.inUseConfirmTitle", { agent: agentLabel(single.agentId) }) : t("settings.harness.updateAllConfirmTitle")}
-		description={single ? describe(single) : t("settings.harness.updateAllConfirmDescription")}
-		confirmLabel={t(updates.every(({ inUse }) => inUse.level === "idle") ? "settings.harness.inUseConfirmIdle" : "settings.harness.inUseConfirm")}
-		busy={busy}
-		onConfirm={onConfirm}
-		onOpenChange={onOpenChange}
-	>
-		{single ? null : <ul className="space-y-1.5 text-control text-settings-muted">
-			{updates.map(({ agentId, inUse }) => <li key={agentId} className="flex items-baseline justify-between gap-3">
-				<span className="font-medium text-settings-label">{agentLabel(agentId)}</span>
-				<span className={inUse.level === "warn" ? "text-warning" : undefined}>{t(inUse.level === "idle" ? "settings.harness.inUseRowIdle" : inUse.level === "warn" ? "settings.harness.inUseRowWarn" : "settings.harness.inUseRowSafe", { count: inUse.count })}</span>
-			</li>)}
-		</ul>}
-	</ConfirmDialog>;
-}
 
 /** Explains why an update must wait and lists the sessions it waits for, each one link away. */
 export function HarnessSessionsDialog({ agentId, inUse, hostId, onOpenChange }: {
@@ -141,7 +104,7 @@ export function IdleUpdateStatus({ agentId, job, hostId, now = Date.now(), onVie
 				: t("settings.harness.waitingForIdle")}
 		</span>
 		{waitedLong && waitingOn.length > 0 ? <Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-caption"
-			onClick={() => onViewSessions({ kind: "blocked", count: waitingOn.length, sessionIds: waitingOn.map((wait) => wait.sessionId), level: "idle", starting: false })}>
+			onClick={() => onViewSessions({ count: waitingOn.length, sessionIds: waitingOn.map((wait) => wait.sessionId), level: "idle", starting: false })}>
 			{t("settings.harness.viewWaitingSessions")}
 		</Button> : null}
 		<Button type="button" size="sm" variant="outline" className="h-6 px-2 text-caption" disabled={cancelling} onClick={() => void cancel()}>

@@ -696,18 +696,9 @@ func (s *Service) StartAgent(ctx context.Context, target Target, method string) 
 // method ID and operation. An empty method chooses the recommended method
 // for an install or reinstall and the method that owns the installed copy for
 // an update. expected is the release the user approved for an update, or "".
-// It never runs alongside live sessions; see StartAgentOperationWithSessions.
+// An update runs alongside live sessions, which restart on the new release
+// once idle; see gateRunningSessions.
 func (s *Service) StartAgentOperation(ctx context.Context, target Target, method string, operation AgentOperation, expected string) (Job, error) {
-	return s.StartAgentOperationWithSessions(ctx, target, method, operation, expected, false)
-}
-
-// StartAgentOperationWithSessions is StartAgentOperation with the caller's
-// answer to running an update while the harness's sessions stay open.
-// allowRunningSessions is the user's consent; it lets an update whose method
-// is safe or warn proceed, and never unblocks a blocked one. Without it, live
-// sessions return a HarnessActiveError whose NeedsConsent says whether asking
-// would help.
-func (s *Service) StartAgentOperationWithSessions(ctx context.Context, target Target, method string, operation AgentOperation, expected string, allowRunningSessions bool) (Job, error) {
 	if err := ctx.Err(); err != nil {
 		return Job{}, err
 	}
@@ -747,7 +738,7 @@ func (s *Service) StartAgentOperationWithSessions(ctx context.Context, target Ta
 		}()
 		if operation != AgentOperationUpdate {
 			// Only an update can run alongside sessions; anything else waits.
-			if _, err := s.gateRunningSessions(ctx, target, operation, Plan{}, false); err != nil {
+			if _, err := s.gateRunningSessions(ctx, target, operation, Plan{}); err != nil {
 				return Job{}, err
 			}
 		}
@@ -814,7 +805,7 @@ func (s *Service) StartAgentOperationWithSessions(ctx context.Context, target Ta
 	if operation == AgentOperationUpdate {
 		// Sessions are checked once the plan is final: whether an update may run
 		// alongside them depends on the method that owns the installed copy.
-		withSessions, err := s.gateRunningSessions(ctx, target, operation, plan, allowRunningSessions)
+		withSessions, err := s.gateRunningSessions(ctx, target, operation, plan)
 		var active *HarnessActiveError
 		switch {
 		case errors.Is(err, errUpdateWhenIdle) && !plan.Unsupported:
@@ -823,9 +814,7 @@ func (s *Service) StartAgentOperationWithSessions(ctx context.Context, target Ta
 			return s.startIdleUpdate(ctx, plan, baseline)
 		case errors.As(err, &active):
 			result := "refused_sessions"
-			if active.NeedsConsent {
-				result = "needs_consent"
-			} else if active.Starting {
+			if active.Starting {
 				result = "refused_starting"
 			}
 			s.emitHarnessUpdate(target, active.Level, result, active.Count())

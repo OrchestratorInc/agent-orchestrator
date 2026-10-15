@@ -34,7 +34,6 @@ type fakeInstaller struct {
 	advisory        systeminstall.UpdateAdvisory
 	refreshAdvisory bool
 	expectedVersion string
-	allowRunning    bool
 	cancelJob       systeminstall.Job
 	cancelErr       error
 }
@@ -54,8 +53,7 @@ func (f *fakeInstaller) AgentPlans(context.Context) ([]systeminstall.AgentPlan, 
 	return f.plans, f.plansErr
 }
 
-func (f *fakeInstaller) StartAgentOperationWithSessions(_ context.Context, target systeminstall.Target, method string, operation systeminstall.AgentOperation, expectedVersion string, allowRunningSessions bool) (systeminstall.Job, error) {
-	f.allowRunning = allowRunningSessions
+func (f *fakeInstaller) StartAgentOperation(_ context.Context, target systeminstall.Target, method string, operation systeminstall.AgentOperation, expectedVersion string) (systeminstall.Job, error) {
 	f.startCalls++
 	f.lastTarget = target
 	f.lastMethod = method
@@ -201,30 +199,21 @@ func TestAgentInstallMapsMethodAndActiveHarnessErrors(t *testing.T) {
 	}
 }
 
-func TestAgentInstallHarnessInUseErrors(t *testing.T) {
+func TestAgentInstallHarnessActiveDetails(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	for _, tt := range []struct {
 		name     string
 		err      error
-		wantCode string
 		wantBody []string
 	}{
 		{
-			name:     "consent needed",
-			err:      &systeminstall.HarnessActiveError{Target: systeminstall.TargetClaudeCode, SessionIDs: []domain.SessionID{"s1", "s2"}, Level: systeminstall.UpdateWhileRunningSafe, NeedsConsent: true},
-			wantCode: "HARNESS_IN_USE_CONFIRM",
-			wantBody: []string{`"count":2`, `"sessionIds":["s1","s2"]`, `"level":"safe"`, `"starting":false`},
-		},
-		{
-			name:     "blocked",
+			name:     "sessions must end first",
 			err:      &systeminstall.HarnessActiveError{Target: systeminstall.TargetAuggie, SessionIDs: []domain.SessionID{"s1"}, ReviewerIDs: []domain.SessionID{"s2"}, Level: systeminstall.UpdateWhileRunningBlocked},
-			wantCode: "HARNESS_ACTIVE",
-			wantBody: []string{`"count":2`, `"reviewerSessionIds":["s2"]`, `"level":"blocked"`},
+			wantBody: []string{`"count":2`, `"sessionIds":["s1"]`, `"reviewerSessionIds":["s2"]`, `"level":"blocked"`, `"starting":false`},
 		},
 		{
 			name:     "starting",
 			err:      &systeminstall.HarnessActiveError{Target: systeminstall.TargetCodex, Starting: true, Level: systeminstall.UpdateWhileRunningBlocked},
-			wantCode: "HARNESS_ACTIVE",
 			wantBody: []string{`"starting":true`, `"count":0`},
 		},
 	} {
@@ -232,8 +221,8 @@ func TestAgentInstallHarnessInUseErrors(t *testing.T) {
 			installer := &fakeInstaller{startErr: tt.err}
 			srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Installer: installer}, httpd.ControlDeps{}))
 			defer srv.Close()
-			body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/agents/claude-code/install", `{"operation":"update","allowRunningSessions":true}`)
-			if status != http.StatusConflict || !strings.Contains(string(body), `"code":"`+tt.wantCode+`"`) {
+			body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/agents/claude-code/install", `{"operation":"update"}`)
+			if status != http.StatusConflict || !strings.Contains(string(body), `"code":"HARNESS_ACTIVE"`) {
 				t.Fatalf("status = %d body=%s", status, body)
 			}
 			for _, want := range tt.wantBody {
@@ -241,18 +230,7 @@ func TestAgentInstallHarnessInUseErrors(t *testing.T) {
 					t.Fatalf("body missing %s: %s", want, body)
 				}
 			}
-			if !installer.allowRunning {
-				t.Fatal("allowRunningSessions was not forwarded")
-			}
 		})
-	}
-	// An older client sends no consent and gets the confirmation 409.
-	installer := &fakeInstaller{startErr: &systeminstall.HarnessActiveError{Target: systeminstall.TargetClaudeCode, SessionIDs: []domain.SessionID{"s1"}, Level: systeminstall.UpdateWhileRunningSafe, NeedsConsent: true}}
-	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Installer: installer}, httpd.ControlDeps{}))
-	defer srv.Close()
-	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/agents/claude-code/install", `{"operation":"update"}`)
-	if status != http.StatusConflict || installer.allowRunning || !strings.Contains(string(body), `"code":"HARNESS_IN_USE_CONFIRM"`) {
-		t.Fatalf("old client: status = %d allow=%t body=%s", status, installer.allowRunning, body)
 	}
 }
 

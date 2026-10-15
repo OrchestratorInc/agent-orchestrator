@@ -11,7 +11,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// errUpdateWhenIdle tells StartAgentOperationWithSessions to queue the update
+// errUpdateWhenIdle tells StartAgentOperation to queue the update
 // until the harness's sessions are idle instead of running it now.
 var errUpdateWhenIdle = errors.New("systeminstall: update waits for idle sessions")
 

@@ -417,7 +417,6 @@ describe("harness updates while sessions run", () => {
 		mountNotice();
 		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
 		await waitFor(() => expect(installs).toHaveLength(1));
-		expect(installs[0].body).not.toHaveProperty("allowRunningSessions");
 		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 
@@ -455,17 +454,6 @@ describe("harness updates while sessions run", () => {
 		expect(screen.queryByRole("button", { name: "Retry update" })).toBeNull();
 		expect(screen.queryByRole("alert")).toBeNull();
 		expect(screen.getByRole("status")).toHaveTextContent("1 open session is using Claude Code.");
-	});
-
-	it("asks when the click-time check finds sessions the cached advisory missed", async () => {
-		installResponse = (_agent, body) => body.allowRunningSessions
-			? { data: { target: "claude-code", status: "installing" } }
-			: { error: { error: "conflict", code: "HARNESS_IN_USE_CONFIRM", message: "confirm", requestId: "r1", details: { count: 1, sessionIds: ["s1"], reviewerSessionIds: [], level: "warn", starting: false } } };
-		mountNotice();
-		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
-		const dialog = await screen.findByRole("dialog");
-		await userEvent.click(within(dialog).getByRole("button", { name: "Update anyway" }));
-		await waitFor(() => expect(installs.map((install) => install.body.allowRunningSessions)).toEqual([undefined, true]));
 	});
 
 	it("updates all without asking, skips harnesses whose sessions must end, and summarizes", async () => {

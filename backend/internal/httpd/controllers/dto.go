@@ -2055,10 +2055,9 @@ type AgentUpdateAdvisoryQuery struct {
 // StartAgentInstallRequest selects one method returned by the installer
 // catalog. The daemon still owns the argv behind the method id.
 type StartAgentInstallRequest struct {
-	Method               string                       `json:"method,omitempty" description:"Server-issued installation method id. Omit to use the recommended viable method for an install or reinstall, and the method that owns the installed copy for an update."`
-	Operation            systeminstall.AgentOperation `json:"operation,omitempty" enum:"install,reinstall,update" description:"Requested operation. Defaults to install for older clients."`
-	ExpectedVersion      string                       `json:"expectedVersion,omitempty" description:"For updates, the available version explicitly approved by the user. The update must reach it. It is installed only when it lies between the installed version and the latest release AO found; otherwise that latest release is installed. A version at or below the installed one, or one sent with another operation, is rejected with INVALID_UPDATE_VERSION."`
-	AllowRunningSessions bool                         `json:"allowRunningSessions,omitempty" description:"For updates, the user's consent to update while sessions using this harness stay open. Accepted for older clients and no longer required: an update runs alongside live sessions, which restart on the new release once idle, and on Windows it waits for them to be idle (202 waiting_for_idle). 409 HARNESS_ACTIVE remains for AO_UPDATE_WHILE_RUNNING=off, a reinstall, or a session that is starting. Both 409s carry details {count, sessionIds, reviewerSessionIds, level, starting}. Consent never unblocks a blocked update."`
+	Method          string                       `json:"method,omitempty" description:"Server-issued installation method id. Omit to use the recommended viable method for an install or reinstall, and the method that owns the installed copy for an update."`
+	Operation       systeminstall.AgentOperation `json:"operation,omitempty" enum:"install,reinstall,update" description:"Requested operation. Defaults to install for older clients."`
+	ExpectedVersion string                       `json:"expectedVersion,omitempty" description:"For updates, the available version explicitly approved by the user. The update must reach it. It is installed only when it lies between the installed version and the latest release AO found; otherwise that latest release is installed. A version at or below the installed one, or one sent with another operation, is rejected with INVALID_UPDATE_VERSION."`
 }
 
 // AgentInstallJobsResponse hydrates Settings with the latest durable job for

@@ -12,7 +12,7 @@ import { isWindowsPlatform } from "../lib/platform";
 import { cn, truncateMiddle } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
-import { HarnessSessionsDialog, IdleUpdateStatus, UpdateWhileRunningDialog, type InUseUpdate } from "./settings/harness/UpdateWhileRunningDialog";
+import { HarnessSessionsDialog, IdleUpdateStatus } from "./settings/harness/HarnessSessionsDialog";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
@@ -48,9 +48,8 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	const updateAllInFlight = useRef(false);
 	const [startingAll, setStartingAll] = useState(false);
 	const [errors, setErrors] = useState<Partial<Record<AgentId, string>>>({});
-	// Sessions a click-time check found: asked about, or listed when they must end first.
+	// Sessions a click-time check found that must end first.
 	const [inUse, setInUse] = useState<Partial<Record<AgentId, HarnessInUse>>>({});
-	const [confirming, setConfirming] = useState<{ updates: InUseUpdate[]; run: () => void } | null>(null);
 	const [sessionsView, setSessionsView] = useState<{ agentId: AgentId; inUse: HarnessInUse } | null>(null);
 	const [updateAllSummary, setUpdateAllSummary] = useState<string | null>(null);
 	const startedJobs = useRef(new Set<AgentId>());
@@ -90,7 +89,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	}, [enabled, jobs.data, queryClient]);
 
 	/** Resolves to the sessions that kept the update from starting, if any. */
-	const startUpdate = async (agentId: AgentId, advisory: AgentUpdateAdvisory, methodId: string, allowRunningSessions = false): Promise<HarnessInUse | undefined> => {
+	const startUpdate = async (agentId: AgentId, advisory: AgentUpdateAdvisory, methodId: string): Promise<HarnessInUse | undefined> => {
 		if (startingRef.current.has(agentId) || isActiveInstallJob(queryClient.getQueryData<InstallJob[]>(installJobsQueryKey)?.find((job) => job.target === agentId))) return undefined;
 		const latestVersion = advisory.latestVersion!;
 		startedUpdates.current.set(agentId, advisory);
@@ -99,7 +98,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		setErrors((current) => ({ ...current, [agentId]: undefined }));
 		setInUse((current) => ({ ...current, [agentId]: undefined }));
 		try {
-			const result = await startHarnessUpdate({ agentId, latestVersion, methodId, allowRunningSessions });
+			const result = await startHarnessUpdate({ agentId, latestVersion, methodId });
 			if (result.inUse) {
 				setInUse((current) => ({ ...current, [agentId]: result.inUse }));
 				return result.inUse;
@@ -176,9 +175,8 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		let started = 0;
 		try {
 			// Each notice keeps its existing target/owner recheck and error display.
-			// Consent covers only harnesses the user just saw listed.
 			for (const target of targets) {
-				const refused = await startUpdate(target.agentId, target.advisory, target.methodId, Boolean(advisoryInUse(target.advisory)));
+				const refused = await startUpdate(target.agentId, target.advisory, target.methodId);
 				if (refused) skipped.push({ agentId: target.agentId, count: refused.count });
 				else started += 1;
 			}
@@ -193,23 +191,17 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 			}));
 		}
 	};
-	// One confirmation covers every harness with open sessions; harnesses whose
-	// sessions must end first are skipped and named in the summary.
+	// Harnesses whose sessions must end first are skipped and named in the summary.
 	const startAllUpdates = () => {
 		if (updateAllInFlight.current || updateAllTargets.length === 0) return;
 		const skipped: Array<{ agentId: AgentId; count: number }> = [];
 		const runnable = updateAllTargets.filter(({ agentId, advisory }) => {
 			const sessions = advisoryInUse(advisory);
-			if (sessions?.kind !== "blocked") return true;
+			if (!sessions) return true;
 			skipped.push({ agentId, count: sessions.count });
 			return false;
 		});
-		const asking = runnable.flatMap(({ agentId, advisory }) => {
-			const sessions = advisoryInUse(advisory);
-			return sessions ? [{ agentId, inUse: sessions, latestVersion: advisory.latestVersion }] : [];
-		});
-		if (asking.length > 0) setConfirming({ updates: asking, run: () => void runAllUpdates(runnable, skipped) });
-		else void runAllUpdates(runnable, skipped);
+		void runAllUpdates(runnable, skipped);
 	};
 
 	// Top-right and only on hover or focus, so it never covers the harness logo.
@@ -282,14 +274,8 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 				const sessions = inUse[agentId] ?? advisoryInUse(advisory);
 				const requestAction = () => {
 					if (!needsLogin && method) {
-						if (sessions?.kind === "blocked") { setSessionsView({ agentId, inUse: sessions }); return; }
-						if (sessions?.kind === "confirm") {
-							setConfirming({ updates: [{ agentId, inUse: sessions, latestVersion: advisory.latestVersion }], run: () => void startUpdate(agentId, advisory, method.id, true) });
-							return;
-						}
-						void startUpdate(agentId, advisory, method.id).then((refused) => {
-							if (refused?.kind === "confirm") setConfirming({ updates: [{ agentId, inUse: refused, latestVersion: advisory.latestVersion }], run: () => void startUpdate(agentId, advisory, method.id, true) });
-						});
+						if (sessions) { setSessionsView({ agentId, inUse: sessions }); return; }
+						void startUpdate(agentId, advisory, method.id);
 						return;
 					}
 					// A login runs in a terminal on the Harness page, which starts it once on open.
@@ -305,7 +291,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 						<p className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-1 text-caption"><span className="whitespace-nowrap font-mono text-settings-label" title={versionLabel(advisory.currentVersion!)}>{truncateMiddle(versionLabel(advisory.currentVersion!))}</span><ArrowRight className="size-3 shrink-0 text-settings-muted" role="img" aria-label={t("settings.harness.availableVersion")} /><span className="whitespace-nowrap font-mono font-medium text-settings-accent" title={versionLabel(advisory.latestVersion!)}>{truncateMiddle(versionLabel(advisory.latestVersion!))}</span></p>
 					{busy ? <Button size="sm" variant="secondary" className="h-7 min-w-16 shrink-0 px-2 text-xs disabled:opacity-100" aria-busy="true" disabled><LoaderCircle className="size-3 animate-spin" aria-hidden="true" />{t(isWaitingForIdleJob(job) ? "settings.harness.waiting" : "settings.harness.updating")}</Button>
 						: ready && ((needsLogin && authPlan?.available) || (!needsLogin && canUpdate)) ? <Button size="sm" className="h-7 min-w-16 shrink-0 px-2 text-xs" disabled={startingAll} onClick={requestAction}>{needsLogin ? t(authPlan?.action === "setup" ? "settings.harness.setup" : "settings.harness.login")
-							: sessions?.kind === "blocked" ? (sessions.starting ? t("settings.harness.update") : t("settings.harness.viewSessions", { count: sessions.count }))
+							: sessions ? (sessions.starting ? t("settings.harness.update") : t("settings.harness.viewSessions", { count: sessions.count }))
 							: t(error ? "settings.harness.retryUpdate" : "settings.harness.update")}</Button>
 						: ready && !needsLogin && plan?.documentationUrl ? <Tooltip>
 							<TooltipTrigger asChild><Button size="sm" variant="outline" className="h-7 shrink-0 px-2 text-xs" onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button></TooltipTrigger>
@@ -315,7 +301,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 					</div>
 					{error && !busy ? <p role="alert" className="mt-1 break-words text-caption text-error">{error}</p> : null}
 					{job && isWaitingForIdleJob(job) ? <IdleUpdateStatus agentId={agentId} job={job} onViewSessions={(waiting) => setSessionsView({ agentId, inUse: waiting })} /> : null}
-					{!error && !busy && inUse[agentId]?.kind === "blocked" ? <p role="status" className="mt-1 break-words text-caption text-settings-muted">
+					{!error && !busy && inUse[agentId] ? <p role="status" className="mt-1 break-words text-caption text-settings-muted">
 						{inUse[agentId]!.starting ? t("settings.harness.inUseStarting", { agent: agentLabel(agentId) }) : t("settings.harness.inUseBlocked", { count: inUse[agentId]!.count, agent: agentLabel(agentId) })}
 					</p> : null}
 				</article>;
@@ -323,11 +309,6 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 			{updateAllSummary && !startingAll ? <p role="status" className="rounded-xl border border-border bg-card px-2.5 py-2 text-caption text-settings-muted shadow-md">{updateAllSummary}</p> : null}
 		</div>
 		</div>
-		<UpdateWhileRunningDialog
-			updates={confirming?.updates ?? []}
-			onConfirm={() => { const run = confirming?.run; setConfirming(null); run?.(); }}
-			onOpenChange={(open) => { if (!open) setConfirming(null); }}
-		/>
 		<HarnessSessionsDialog
 			agentId={sessionsView?.agentId ?? null}
 			inUse={sessionsView?.inUse}

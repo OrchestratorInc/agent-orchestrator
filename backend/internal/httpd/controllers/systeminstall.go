@@ -18,7 +18,7 @@ import (
 // against the fixed systeminstall.Target allowlist.
 type Installer interface {
 	Start(ctx context.Context, target systeminstall.Target) (systeminstall.Job, error)
-	StartAgentOperationWithSessions(ctx context.Context, target systeminstall.Target, method string, operation systeminstall.AgentOperation, expectedVersion string, allowRunningSessions bool) (systeminstall.Job, error)
+	StartAgentOperation(ctx context.Context, target systeminstall.Target, method string, operation systeminstall.AgentOperation, expectedVersion string) (systeminstall.Job, error)
 	Status(ctx context.Context, target systeminstall.Target) (systeminstall.Job, error)
 	AgentPlans(ctx context.Context) ([]systeminstall.AgentPlan, error)
 	AgentJobs(ctx context.Context) ([]systeminstall.Job, error)
@@ -106,7 +106,7 @@ func (c *SystemInstallController) startAgent(w http.ResponseWriter, r *http.Requ
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_INSTALL_OPERATION", "operation must be install, reinstall, or update", nil)
 		return
 	}
-	job, err := c.Installer.StartAgentOperationWithSessions(r.Context(), target, request.Method, operation, request.ExpectedVersion, request.AllowRunningSessions)
+	job, err := c.Installer.StartAgentOperation(r.Context(), target, request.Method, operation, request.ExpectedVersion)
 	if err != nil {
 		if writeAgentInstallError(w, r, err) {
 			return
@@ -175,10 +175,6 @@ func writeAgentInstallError(w http.ResponseWriter, r *http.Request, err error) b
 	var active *systeminstall.HarnessActiveError
 	if errors.As(err, &active) {
 		details := harnessActiveDetails(active)
-		if active.NeedsConsent {
-			envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "HARNESS_IN_USE_CONFIRM", "sessions are using this harness; confirm to update it while they stay open", details)
-			return true
-		}
 		message := "end active sessions for this harness before changing its installation"
 		if active.Starting {
 			message = "a session for this harness is starting; try again when it has started"

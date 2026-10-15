@@ -138,20 +138,17 @@ func TestUpdateWhileRunningDecisionTable(t *testing.T) {
 		name         string
 		sessions     []domain.SessionRecord
 		method       string
-		consent      bool
 		disabled     bool
 		wantRun      bool
-		wantConsent  bool
 		wantLevel    UpdateWhileRunning
 		wantStarting bool
 		starting     bool
 	}{
 		{name: "no live sessions runs", sessions: nil, method: "homebrew", wantRun: true},
 		{name: "safe runs without asking", sessions: live, method: "homebrew", wantRun: true},
-		{name: "safe with consent runs", sessions: live, method: "homebrew", consent: true, wantRun: true},
 		{name: "npm runs too, like T3", sessions: live, method: "npm", wantRun: true},
-		{name: "starting session refuses", sessions: nil, method: "homebrew", consent: true, starting: true, wantStarting: true, wantLevel: UpdateWhileRunningBlocked},
-		{name: "kill switch blocks", sessions: live, method: "homebrew", consent: true, disabled: true, wantLevel: UpdateWhileRunningBlocked},
+		{name: "starting session refuses", sessions: nil, method: "homebrew", starting: true, wantStarting: true, wantLevel: UpdateWhileRunningBlocked},
+		{name: "kill switch blocks", sessions: live, method: "homebrew", disabled: true, wantLevel: UpdateWhileRunningBlocked},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			s, _ := updateWhileRunningService(t, tt.sessions)
@@ -171,7 +168,7 @@ func TestUpdateWhileRunningDecisionTable(t *testing.T) {
 			if tt.method == "npm" {
 				target = TargetAuggie
 			}
-			_, err := s.StartAgentOperationWithSessions(context.Background(), target, tt.method, AgentOperationUpdate, "", tt.consent)
+			_, err := s.StartAgentOperation(context.Background(), target, tt.method, AgentOperationUpdate, "")
 			s.workers.Wait()
 			if tt.wantRun {
 				if err != nil {
@@ -183,8 +180,8 @@ func TestUpdateWhileRunningDecisionTable(t *testing.T) {
 			if !errors.As(err, &active) || !errors.Is(err, ErrHarnessActive) {
 				t.Fatalf("update = %v, want HarnessActiveError matching ErrHarnessActive", err)
 			}
-			if active.NeedsConsent != tt.wantConsent || active.Level != tt.wantLevel || active.Starting != tt.wantStarting {
-				t.Fatalf("error = %+v, want consent=%t level=%s starting=%t", active, tt.wantConsent, tt.wantLevel, tt.wantStarting)
+			if active.Level != tt.wantLevel || active.Starting != tt.wantStarting {
+				t.Fatalf("error = %+v, want level=%s starting=%t", active, tt.wantLevel, tt.wantStarting)
 			}
 			if !tt.wantStarting && active.Count() != 1 {
 				t.Fatalf("count = %d, want 1", active.Count())
@@ -210,10 +207,10 @@ func TestSleepingSessionsDoNotBlockUpdates(t *testing.T) {
 
 func TestReinstallNeverRunsAlongsideSessions(t *testing.T) {
 	s, _ := updateWhileRunningService(t, []domain.SessionRecord{{ID: "kimi-1", Harness: domain.AgentHarness(TargetKimi)}})
-	_, err := s.StartAgentOperationWithSessions(context.Background(), TargetKimi, "homebrew", AgentOperationReinstall, "", true)
+	_, err := s.StartAgentOperation(context.Background(), TargetKimi, "homebrew", AgentOperationReinstall, "")
 	var active *HarnessActiveError
-	if !errors.As(err, &active) || active.NeedsConsent || active.Level != UpdateWhileRunningBlocked {
-		t.Fatalf("reinstall with consent = %v, want blocked", err)
+	if !errors.As(err, &active) || active.Level != UpdateWhileRunningBlocked {
+		t.Fatalf("reinstall alongside sessions = %v, want blocked", err)
 	}
 }
 
@@ -228,7 +225,7 @@ func TestHomebrewCleanupDeferredOnlyWithLiveSessions(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			s, ran := updateWhileRunningService(t, tt.sessions)
-			if _, err := s.StartAgentOperationWithSessions(context.Background(), TargetKimi, "homebrew", AgentOperationUpdate, "", true); err != nil {
+			if _, err := s.StartAgentOperation(context.Background(), TargetKimi, "homebrew", AgentOperationUpdate, ""); err != nil {
 				t.Fatal(err)
 			}
 			s.workers.Wait()
@@ -371,7 +368,7 @@ func TestUpdatesRunAlongsideSessionsWithoutAsking(t *testing.T) {
 	s.sessions = sessionListerStub{sessions: []domain.SessionRecord{{ID: "codex-1", Harness: domain.HarnessCodex}}}
 	for _, level := range []UpdateWhileRunning{UpdateWhileRunningSafe, UpdateWhileRunningWarn} {
 		plan := Plan{Target: TargetCodex, Method: "homebrew", PackageCask: true, UpdateWhileRunning: level}
-		if withSessions, err := s.gateRunningSessions(context.Background(), TargetCodex, AgentOperationUpdate, plan, false); err != nil || !withSessions {
+		if withSessions, err := s.gateRunningSessions(context.Background(), TargetCodex, AgentOperationUpdate, plan); err != nil || !withSessions {
 			t.Fatalf("%s update without consent = %t, %v; want it to run", level, withSessions, err)
 		}
 	}

@@ -135,7 +135,7 @@ func TestWindowsUpdateWaitsForIdleSessions(t *testing.T) {
 
 func TestWindowsIdleUpdateStopsUpdatesAndResumes(t *testing.T) {
 	s, coordinator, ran := windowsIdleService(t, false)
-	if _, err := s.StartAgentOperationWithSessions(context.Background(), TargetAuggie, "npm", AgentOperationUpdate, "", true); err != nil {
+	if _, err := s.StartAgentOperation(context.Background(), TargetAuggie, "npm", AgentOperationUpdate, ""); err != nil {
 		t.Fatal(err)
 	}
 	job := waitForJob(t, s, TargetAuggie, func(job Job) bool { return job.Status == StatusSucceeded || job.Status == StatusFailed })
@@ -151,7 +151,7 @@ func TestWindowsIdleUpdateStopsUpdatesAndResumes(t *testing.T) {
 
 func TestWindowsIdleUpdateFailureResumesOnTheOldRelease(t *testing.T) {
 	s, coordinator, _ := windowsIdleService(t, true)
-	if _, err := s.StartAgentOperationWithSessions(context.Background(), TargetAuggie, "npm", AgentOperationUpdate, "", true); err != nil {
+	if _, err := s.StartAgentOperation(context.Background(), TargetAuggie, "npm", AgentOperationUpdate, ""); err != nil {
 		t.Fatal(err)
 	}
 	job := waitForJob(t, s, TargetAuggie, func(job Job) bool { return job.Status == StatusSucceeded || job.Status == StatusFailed })
@@ -168,7 +168,7 @@ func TestWindowsIdleUpdateFailureResumesOnTheOldRelease(t *testing.T) {
 func TestCancelledIdleUpdateLeavesSessionsUntouched(t *testing.T) {
 	s, coordinator, ran := windowsIdleService(t, false)
 	coordinator.busy = []domain.SessionWait{{SessionID: "auggie-1", Reason: domain.SessionWaitWorking}}
-	if _, err := s.StartAgentOperationWithSessions(context.Background(), TargetAuggie, "npm", AgentOperationUpdate, "", true); err != nil {
+	if _, err := s.StartAgentOperation(context.Background(), TargetAuggie, "npm", AgentOperationUpdate, ""); err != nil {
 		t.Fatal(err)
 	}
 	job, err := s.CancelAgentOperation(context.Background(), TargetAuggie)
@@ -188,7 +188,7 @@ func TestIdleUpdateNeverRunsNPMWhileASessionStillRuns(t *testing.T) {
 	s, coordinator, ran := windowsIdleService(t, false)
 	// Stopping fails, so a session keeps running.
 	coordinator.stopErr = errors.New("chat has work in progress")
-	if _, err := s.StartAgentOperationWithSessions(context.Background(), TargetAuggie, "npm", AgentOperationUpdate, "", true); err != nil {
+	if _, err := s.StartAgentOperation(context.Background(), TargetAuggie, "npm", AgentOperationUpdate, ""); err != nil {
 		t.Fatal(err)
 	}
 	waitForJob(t, s, TargetAuggie, func(Job) bool {

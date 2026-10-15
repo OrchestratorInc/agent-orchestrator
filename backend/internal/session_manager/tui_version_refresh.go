@@ -13,8 +13,7 @@ import (
 // tuiVersionRefreshHarnesses resume a terminal conversation natively with its
 // model, permissions and working directory intact, so restarting one on a new
 // release is invisible apart from the restart itself. Extend only after a
-// harness passes the resume checks in
-// docs/research/harness-update-while-running-capabilities.md.
+// harness is shown to resume with its model, permissions and directory intact.
 var tuiVersionRefreshHarnesses = map[domain.AgentHarness]bool{
 	domain.HarnessClaudeCode: true,
 	domain.HarnessCodex:      true,

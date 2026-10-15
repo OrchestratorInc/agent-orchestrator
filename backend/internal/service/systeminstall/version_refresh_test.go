@@ -41,7 +41,7 @@ func TestSuccessfulUpdateMarksSessionsWhileHoldingTheHarness(t *testing.T) {
 	observer := &updateObserverStub{}
 	observer.gateHeld = func() bool { return harnessHeld(s, domain.AgentHarness(TargetKimi)) }
 	s.SetHarnessUpdateObserver(observer)
-	if _, err := s.StartAgentOperationWithSessions(context.Background(), TargetKimi, "homebrew", AgentOperationUpdate, "", true); err != nil {
+	if _, err := s.StartAgentOperation(context.Background(), TargetKimi, "homebrew", AgentOperationUpdate, ""); err != nil {
 		t.Fatal(err)
 	}
 	s.workers.Wait()
@@ -78,7 +78,7 @@ func TestKeptKegIsCleanedUpOnceSessionsMove(t *testing.T) {
 	s, ran := updateWhileRunningService(t, []domain.SessionRecord{{ID: "kimi-1", Harness: domain.AgentHarness(TargetKimi)}})
 	observer := &updateObserverStub{stale: map[domain.AgentHarness]int64{domain.AgentHarness(TargetKimi): 1}}
 	s.SetHarnessUpdateObserver(observer)
-	if _, err := s.StartAgentOperationWithSessions(context.Background(), TargetKimi, "homebrew", AgentOperationUpdate, "", true); err != nil {
+	if _, err := s.StartAgentOperation(context.Background(), TargetKimi, "homebrew", AgentOperationUpdate, ""); err != nil {
 		t.Fatal(err)
 	}
 	s.workers.Wait()

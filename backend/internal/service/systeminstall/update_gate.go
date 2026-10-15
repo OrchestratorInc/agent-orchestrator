@@ -37,17 +37,12 @@ type HarnessActiveError struct {
 	Level       UpdateWhileRunning
 	// Starting means a session or reviewer launch holds the harness right now.
 	Starting bool
-	// NeedsConsent means the update can run once the caller confirms it may
-	// proceed while these sessions run.
-	NeedsConsent bool
 }
 
 func (e *HarnessActiveError) Error() string {
 	switch {
 	case e.Starting:
 		return fmt.Sprintf("%v: a %s session is starting", ErrHarnessActive, e.Target)
-	case e.NeedsConsent:
-		return fmt.Sprintf("%v: confirm updating %s while %d session(s) run", ErrHarnessActive, e.Target, e.Count())
 	default:
 		return fmt.Sprintf("%v: end %d %s session(s) before changing its installation", ErrHarnessActive, e.Count(), e.Target)
 	}
@@ -173,9 +168,7 @@ func uniqueSessionIDs(ids []domain.SessionID) []domain.SessionID {
 //	>0    idle       wait for idle sessions, then stop, update, resume (errUpdateWhenIdle)
 //	>0    blocked    HarnessActiveError (AO_UPDATE_WHILE_RUNNING=off, a reinstall,
 //	                 or Windows without update-when-idle)
-//
-// allowRunningSessions is kept for older clients; no level needs it any more.
-func (s *Service) gateRunningSessions(ctx context.Context, target Target, operation AgentOperation, plan Plan, allowRunningSessions bool) (bool, error) {
+func (s *Service) gateRunningSessions(ctx context.Context, target Target, operation AgentOperation, plan Plan) (bool, error) {
 	sessions, reviewers, err := s.harnessInUse(ctx, target)
 	if err != nil {
 		return false, err
@@ -196,7 +189,6 @@ func (s *Service) gateRunningSessions(ctx context.Context, target Target, operat
 	}
 	// Like T3 Code, install now and leave running processes alone: they keep
 	// the release they loaded and restart on the new one once idle.
-	_ = allowRunningSessions
 	return true, nil
 }
 
