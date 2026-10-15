@@ -341,7 +341,7 @@ func (s *Service) ensureManagedLauncher(target Target, record managedRecord) err
 }
 
 // RemoveUnusedManagedReleases deletes every release directory that is neither
-// current nor run by a live session. What a session runs is recorded per
+// current (per managed.json or the current link) nor run by a live session. What a session runs is recorded per
 // launch in the database, so a daemon restart, or a Chat that reconnected to
 // its old process, never lets a release in use be deleted. A directory a
 // process still holds (Windows refuses the delete) is left for the next call.
@@ -382,7 +382,15 @@ func (s *Service) RemoveUnusedManagedReleases(ctx context.Context) {
 			gate.Unlock()
 			continue
 		}
-		keep := map[string]bool{record.Dir: true}
+		// current can be ahead of the record when an update switched it but
+		// failed or stopped before recording the switch; it is what launches
+		// run, so it is kept too. Without it, nothing is known to be safe.
+		current, err := os.Readlink(filepath.Join(s.managedTargetDir(target), "current"))
+		if err != nil {
+			gate.Unlock()
+			continue
+		}
+		keep := map[string]bool{record.Dir: true, filepath.Base(current): true}
 		for _, release := range inUse {
 			keep[release] = true
 		}

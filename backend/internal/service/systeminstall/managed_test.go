@@ -27,11 +27,15 @@ type releaseStoreStub struct {
 	current map[domain.AgentHarness]string
 	inUse   map[domain.AgentHarness][]string
 	failUse bool
+	failSet bool
 }
 
 func (r *releaseStoreStub) SetManagedHarnessRelease(_ context.Context, harness domain.AgentHarness, release string, _ time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.failSet {
+		return errors.New("database unavailable")
+	}
 	if r.current == nil {
 		r.current = map[domain.AgentHarness]string{}
 	}
@@ -219,6 +223,29 @@ func TestFailedManagedInstallLeavesTheCurrentReleaseAlone(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.root, "codex", "versions", "v2")); !os.IsNotExist(err) {
 		t.Fatalf("the failed release directory was kept: %v", err)
+	}
+}
+
+func TestCleanupKeepsTheReleaseCurrentPointsAtAfterAFailedRecord(t *testing.T) {
+	f := newManagedCodexFixture(t, nil)
+	if job := f.update(t, "1.1.0"); job.Status != StatusSucceeded {
+		t.Fatalf("first update = %+v", job)
+	}
+	// The switch to v2 happens, then recording it fails: managed.json still
+	// names v1 while current already points at v2.
+	f.releases.failSet = true
+	if job := f.update(t, "1.2.0"); job.Status != StatusFailed {
+		t.Fatalf("update with a failed record = %+v", job)
+	}
+	if target, _ := os.Readlink(filepath.Join(f.root, "codex", "current")); target != filepath.Join("versions", "v2") {
+		t.Fatalf("current = %q, want the switched-to v2", target)
+	}
+	f.releases.failSet = false
+	f.s.RemoveUnusedManagedReleases(context.Background())
+	for _, name := range []string{"v1", "v2"} {
+		if _, err := os.Stat(filepath.Join(f.root, "codex", "versions", name)); err != nil {
+			t.Fatalf("cleanup deleted %s, which managed.json or current names: %v", name, err)
+		}
 	}
 }
 
