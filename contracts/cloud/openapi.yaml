@@ -2945,6 +2945,13 @@ components:
       properties:
         configured:
           type: boolean
+        editable:
+          type: boolean
+          description: >-
+            The organization may save a connection (it holds the coder
+            capability). False for an organization that may only read and clear
+            a stored connection. Absent from older control planes, which only
+            answer organizations that may save.
         coderConfig:
           $ref: "#/components/schemas/OrgCoderConfig"
         validationState:

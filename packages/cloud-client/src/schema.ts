@@ -1721,6 +1721,8 @@ export interface components {
         CoderWorkerUser: "ao-worker" | "workspace";
         OrgCoderConfigResponse: {
             configured: boolean;
+            /** @description The organization may save a connection (it holds the coder capability). False for an organization that may only read and clear a stored connection. Absent from older control planes, which only answer organizations that may save. */
+            editable?: boolean;
             coderConfig?: components["schemas"]["OrgCoderConfig"];
             validationState?: string;
             /** Format: date-time */

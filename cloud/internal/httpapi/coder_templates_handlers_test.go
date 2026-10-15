@@ -244,6 +244,9 @@ func TestCoderOnlyEndpointsForbiddenWithoutCoder(t *testing.T) {
 		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &body) != nil || !body.Configured || body.CoderConfig == nil {
 			t.Fatalf("status = %d, body = %s; want the leftover connection", rec.Code, rec.Body.String())
 		}
+		if body.Editable {
+			t.Fatalf("body = %s; want a read-only connection without the coder capability", rec.Body.String())
+		}
 		rec = httptest.NewRecorder()
 		server.deleteOrgCoderConfig(rec, coderConfigRequest(t, http.MethodDelete, "", []string{sandbox.ProviderFreestyle}))
 		if rec.Code != http.StatusNoContent {

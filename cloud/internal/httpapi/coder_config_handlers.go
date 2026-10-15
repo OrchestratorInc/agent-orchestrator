@@ -68,7 +68,11 @@ type putOrgCoderConfigRequest struct {
 // connection. It never carries the token — only the non-secret config plus the
 // connection's validation metadata.
 type orgCoderConfigResponse struct {
-	Configured      bool                   `json:"configured"`
+	Configured bool `json:"configured"`
+	// Editable reports whether the organization may save a connection (it holds
+	// the coder capability). One without it may still read and clear a stored
+	// connection its sessions run on.
+	Editable        bool                   `json:"editable"`
 	CoderConfig     *domain.OrgCoderConfig `json:"coderConfig,omitempty"`
 	ValidationState string                 `json:"validationState,omitempty"`
 	ValidatedAt     *time.Time             `json:"validatedAt,omitempty"`
@@ -93,6 +97,7 @@ func (s *Server) getOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 	// connection gets "none" rather than a refusal. An org that lost the coder
 	// capability but still has a connection sees it, because its sessions still
 	// run there; saving one stays capability-gated.
+	editable := s.orgHasCustomCoder(principalFrom(r), orgID)
 	store, ok := s.store.(providerConnectionStore)
 	if !ok {
 		writeError(w, r, http.StatusNotImplemented, "not_implemented", "Provider connections are unavailable.")
@@ -117,6 +122,7 @@ func (s *Server) getOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 		updatedAt := connection.UpdatedAt
 		writeJSON(w, http.StatusOK, orgCoderConfigResponse{
 			Configured:      true,
+			Editable:        editable,
 			CoderConfig:     &cfg,
 			ValidationState: connection.ValidationState,
 			ValidatedAt:     validatedAt,
@@ -124,7 +130,7 @@ func (s *Server) getOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	writeJSON(w, http.StatusOK, orgCoderConfigResponse{Configured: false})
+	writeJSON(w, http.StatusOK, orgCoderConfigResponse{Configured: false, Editable: editable})
 }
 
 // putOrgCoderConfig stores an organization's bring-your-own Coder connection:
@@ -334,7 +340,9 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 	validatedAt := connection.ValidatedAt
 	updatedAt := connection.UpdatedAt
 	writeJSON(w, http.StatusOK, orgCoderConfigResponse{
-		Configured:      true,
+		Configured: true,
+		// Saving requires the coder capability (requireOrgCustomCoder above).
+		Editable:        true,
 		CoderConfig:     &normalized,
 		ValidationState: connection.ValidationState,
 		ValidatedAt:     validatedAt,

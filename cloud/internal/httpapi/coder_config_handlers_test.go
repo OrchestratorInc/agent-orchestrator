@@ -486,8 +486,8 @@ func TestGetOrgCoderConfigReturnsConfigWithoutToken(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if !resp.Configured || resp.CoderConfig == nil {
-		t.Fatalf("expected configured response, got %+v", resp)
+	if !resp.Configured || resp.CoderConfig == nil || !resp.Editable {
+		t.Fatalf("expected an editable configured response, got %+v", resp)
 	}
 	if resp.CoderConfig.BaseURL != "https://coder.acme.example.com" || resp.CoderConfig.TemplateID != coderCfgTemplate {
 		t.Fatalf("config = %+v", resp.CoderConfig)

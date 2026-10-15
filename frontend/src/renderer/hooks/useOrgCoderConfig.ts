@@ -36,8 +36,11 @@ export function useOrgCoderConfig(enabled = true) {
 			// config yet" case — the common state for a newly-onboarded org. A stored
 			// connection always carries a token (the PUT requires one) and the token
 			// itself is never returned, so surface its presence as tokenSet — the flag
-			// the templates catalog and the live template fetch unlock on.
-			return response.coderConfig ? { ...response.coderConfig, tokenSet: true } : null;
+			// the templates catalog and the live template fetch unlock on. An older
+			// control plane answers only orgs that may save, so absent means editable.
+			return response.coderConfig
+				? { ...response.coderConfig, tokenSet: true, editable: response.editable !== false }
+				: null;
 		},
 	});
 }
