@@ -9,7 +9,7 @@ import { advisoryInUse, hasConfirmedHarnessUpdate, harnessUpdateNoticeKey, insta
 import { AGENT_OPTIONS, agentLabel, type AgentId } from "../lib/agent-options";
 import { aoBridge } from "../lib/bridge";
 import { isWindowsPlatform } from "../lib/platform";
-import { cn } from "../lib/utils";
+import { cn, truncateMiddle } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
 import { HarnessSessionsDialog, IdleUpdateStatus, UpdateWhileRunningDialog, type InUseUpdate } from "./settings/harness/UpdateWhileRunningDialog";
@@ -302,7 +302,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 						<p className="min-w-0 flex-1 break-words text-[13px] font-medium">{agentLabel(agentId)}</p>
 					</div>
 					<div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
-						<p className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-1 text-caption"><span className="break-all font-mono text-settings-label">{versionLabel(advisory.currentVersion!)}</span><ArrowRight className="size-3 shrink-0 text-settings-muted" role="img" aria-label={t("settings.harness.availableVersion")} /><span className="break-all font-mono font-medium text-settings-accent">{versionLabel(advisory.latestVersion!)}</span></p>
+						<p className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-1 text-caption"><span className="whitespace-nowrap font-mono text-settings-label" title={versionLabel(advisory.currentVersion!)}>{truncateMiddle(versionLabel(advisory.currentVersion!))}</span><ArrowRight className="size-3 shrink-0 text-settings-muted" role="img" aria-label={t("settings.harness.availableVersion")} /><span className="whitespace-nowrap font-mono font-medium text-settings-accent" title={versionLabel(advisory.latestVersion!)}>{truncateMiddle(versionLabel(advisory.latestVersion!))}</span></p>
 					{busy ? <Button size="sm" variant="secondary" className="h-7 min-w-16 shrink-0 px-2 text-xs disabled:opacity-100" aria-busy="true" disabled><LoaderCircle className="size-3 animate-spin" aria-hidden="true" />{t(isWaitingForIdleJob(job) ? "settings.harness.waiting" : "settings.harness.updating")}</Button>
 						: ready && ((needsLogin && authPlan?.available) || (!needsLogin && canUpdate)) ? <Button size="sm" className="h-7 min-w-16 shrink-0 px-2 text-xs" disabled={startingAll} onClick={requestAction}>{needsLogin ? t(authPlan?.action === "setup" ? "settings.harness.setup" : "settings.harness.login")
 							: sessions?.kind === "blocked" ? (sessions.starting ? t("settings.harness.update") : t("settings.harness.viewSessions", { count: sessions.count }))

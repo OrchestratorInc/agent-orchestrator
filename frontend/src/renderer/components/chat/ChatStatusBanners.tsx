@@ -18,7 +18,7 @@ import { useTranslation } from "react-i18next";
 import { CircleArrowUp, KeyRound, Plug, TriangleAlert, X } from "lucide-react";
 import { useSettings } from "../../hooks/useSettings";
 import { versionLabel } from "../../hooks/useHarnessUpdates";
-import { cn } from "../../lib/utils";
+import { cn, truncateMiddle } from "../../lib/utils";
 import type { SessionStaleBinary } from "../../types/workspace";
 import { Button } from "../ui/button";
 import type { ConversationAccount, ConversationThreadState, McpServer } from "../../types/conversation";
@@ -262,7 +262,7 @@ export const VersionSwitchBanner = memo(function VersionSwitchBanner({
 function VersionSwitchNotice({ staleBinary, hostId }: { staleBinary: SessionStaleBinary; hostId?: string }) {
 	const { t } = useTranslation();
 	const { settings } = useSettings(hostId);
-	const version = versionLabel(staleBinary.version);
+	const version = truncateMiddle(versionLabel(staleBinary.version));
 	if (staleBinary.switchFailedAt) {
 		return (
 			<div role="alert" className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5">

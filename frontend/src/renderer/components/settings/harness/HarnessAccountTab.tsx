@@ -4,7 +4,7 @@ import { advisoryInUse, isWaitingForIdleJob, versionLabel, type HarnessInUse, ty
 import { IdleUpdateStatus } from "./UpdateWhileRunningDialog";
 import type { TerminalSessionState } from "../../../hooks/useTerminalSession";
 import { aoBridge } from "../../../lib/bridge";
-import { cn } from "../../../lib/utils";
+import { cn, truncateMiddle } from "../../../lib/utils";
 import { Button } from "../../ui/button";
 import { SettingsOptionMenu } from "../SettingsOptionMenu";
 import type { HarnessDetails } from "./describe-harness";
@@ -91,7 +91,7 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 				description={isInstalled ? (details.maintenanceMethod?.label ? t("settings.harness.installedWith", { method: details.maintenanceMethod.label }) : undefined) : details.installNote}
 			>
 				{isInstalled ? <span className="break-all font-mono text-xs text-settings-label">{details.versionText}{details.versionUnverified && details.currentVersion ? ` · ${t("settings.harness.unverified")}` : ""}</span> : null}
-				{isInstalled && details.updateAvailable ? <span className="whitespace-nowrap text-xs font-medium text-settings-accent">{t("settings.harness.versionAvailable", { version: versionLabel(details.advisory!.latestVersion!) })}</span> : null}
+				{isInstalled && details.updateAvailable ? <span className="whitespace-nowrap text-xs font-medium text-settings-accent" title={versionLabel(details.advisory!.latestVersion!)}>{t("settings.harness.versionAvailable", { version: truncateMiddle(versionLabel(details.advisory!.latestVersion!)) })}</span> : null}
 				{isInstalled && !details.updateUnknown && !details.updateAvailable && !details.busy ? <span className="text-xs text-settings-muted">{t(details.advisory?.status === "ahead_of_latest" ? "settings.harness.aheadOfLatest" : "settings.harness.latest")}</span> : null}
 				{installationAction}
 			</HarnessDetailRow>
