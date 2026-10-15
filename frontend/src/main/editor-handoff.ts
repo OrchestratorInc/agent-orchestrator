@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { constants, statSync } from "node:fs";
 import path from "node:path";
 import {
@@ -11,6 +12,7 @@ import {
 	type OpenTarget,
 	type TerminalId,
 } from "../shared/editor-handoff";
+import type { MacTerminalApp } from "./mac-terminal-apps";
 
 type Platform = NodeJS.Platform;
 
@@ -93,6 +95,8 @@ export type EditorHandoffDeps = {
 	copyText?: (text: string) => void;
 	/** Reads a native app icon as a data URL; installation paths stay in main. */
 	readIcon?: (appPath: string) => Promise<string>;
+	/** Registered macOS shell apps that accept folder-open events. */
+	discoverTerminalApps?: () => Promise<MacTerminalApp[]>;
 	isExecutable?: (candidatePath: string) => boolean;
 	isDirectory?: (candidatePath: string) => boolean;
 	logError?: (message: string, error: unknown) => void;
@@ -379,14 +383,22 @@ function resolveInstalledTerminals(
 	deps: EditorHandoffDeps,
 	isExecutable: (candidatePath: string) => boolean,
 	isDirectory: (candidatePath: string) => boolean,
+	macApps: MacTerminalApp[],
 ): { target: OpenTarget; command: ResolvedCommand }[] {
-	return TERMINAL_CANDIDATES.flatMap((candidate) => {
+	const claimedApps = new Set<string>();
+	const known = TERMINAL_CANDIDATES.flatMap((candidate) => {
 		if (!candidate.platforms.includes(deps.platform)) return [];
 		const target: OpenTarget = { id: candidate.id, name: candidate.name, kind: "terminal" };
 		if (deps.platform === "darwin" && candidate.macApp) {
-			for (const root of ["/Applications", path.posix.join(deps.homeDir, "Applications")]) {
-				const appPath = path.posix.join(root, `${candidate.macApp}.app`);
+			const registered = macApps.filter((app) => path.posix.basename(app.appPath) === `${candidate.macApp}.app`);
+			const appPaths = [
+				...registered.map((app) => app.appPath),
+				...["/Applications", path.posix.join(deps.homeDir, "Applications")].map((root) => path.posix.join(root, `${candidate.macApp}.app`)),
+			];
+			for (const appPath of appPaths) {
 				if (!isDirectory(appPath)) continue;
+				for (const app of registered) claimedApps.add(app.appPath);
+				claimedApps.add(appPath);
 				return [{ target, command: {
 					command: "/usr/bin/open",
 					iconPath: appPath,
@@ -403,6 +415,20 @@ function resolveInstalledTerminals(
 		const command = candidate.command && resolveOnPath(candidate.command, deps.platform, deps.env, isExecutable);
 		return command ? [{ target, command: { command, argsForWorkspace: candidate.args } }] : [];
 	});
+	const claimedBundleIds = new Set(["com.apple.terminal"]);
+	const discovered = macApps.flatMap((app) => {
+		if (claimedBundleIds.has(app.bundleId.toLowerCase()) || claimedApps.has(app.appPath) || !isDirectory(app.appPath)) return [];
+		claimedApps.add(app.appPath);
+		claimedBundleIds.add(app.bundleId.toLowerCase());
+		// An opaque stable ID crosses IPC; installation paths remain in main.
+		const id: TerminalId = `terminal-app:${createHash("sha256").update(app.bundleId.toLowerCase()).digest("hex")}`;
+		return [{ target: { id, name: app.name, kind: "terminal" as const }, command: {
+			command: "/usr/bin/open",
+			iconPath: app.appPath,
+			argsForWorkspace: (dir: string) => ["-a", app.appPath, dir],
+		} }];
+	});
+	return [...known, ...discovered.sort((a, b) => a.target.name.localeCompare(b.target.name))];
 }
 
 export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
@@ -431,13 +457,21 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 	// Re-resolve editors and terminal on every call instead of freezing them at
 	// construction. Editor discovery reads deps.env each time, so an editor
 	// installed (or removed) after startup is picked up instead of being stale.
-	const resolveAll = () => {
+	const resolveAll = async () => {
+		let macApps: MacTerminalApp[] = [];
+		if (deps.platform === "darwin" && deps.discoverTerminalApps) {
+			try {
+				macApps = await deps.discoverTerminalApps();
+			} catch (error) {
+				deps.logError?.("failed to discover terminal apps", error);
+			}
+		}
 		const editors = EDITOR_CANDIDATES.flatMap((candidate) => {
 			const command = resolveEditor(candidate, deps, isExecutable, isDirectory);
 			return command ? [{ target: { id: candidate.id, name: candidate.name, kind: "editor" } as OpenTarget, command }] : [];
 		});
 		const terminal = resolveTerminal(deps, isExecutable);
-		const terminals = [...(terminal ? [terminal] : []), ...resolveInstalledTerminals(deps, isExecutable, isDirectory)];
+		const terminals = [...(terminal ? [terminal] : []), ...resolveInstalledTerminals(deps, isExecutable, isDirectory, macApps)];
 		const targets = [...editors.map(({ target }) => target), fileManager, ...terminals.map(({ target }) => target)];
 		return { editors, terminals, targets };
 	};
@@ -465,7 +499,7 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 
 	return {
 		async getState(sessionId) {
-			const { targets, terminals } = resolveAll();
+			const { targets, terminals } = await resolveAll();
 			const targetsWithIcons = await Promise.all(targets.map(async (target) => {
 				const terminal = terminals.find((entry) => entry.target.id === target.id);
 				const iconPath = terminal
@@ -492,7 +526,7 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 		async open(input) {
 			const sessionId = input.sessionId.trim();
 			if (!sessionId) throw new Error("Session is required.");
-			const { editors, terminals, targets } = resolveAll();
+			const { editors, terminals, targets } = await resolveAll();
 			const preferredEditorId = await deps.readPreference();
 			const targetId = input.targetId ?? preferredEditorId;
 			if (input.targetId && input.targetId !== "file-manager" && !isTerminalId(input.targetId) && !isEditorId(input.targetId)) {

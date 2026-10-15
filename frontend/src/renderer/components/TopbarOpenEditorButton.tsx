@@ -189,7 +189,10 @@ export function TopbarOpenEditorButton({
 					</TooltipTrigger>
 					<TooltipContent side="bottom">{mainTitle}</TooltipContent>
 				</Tooltip>
-				<DropdownMenu onOpenChange={setMenuOpen}>
+				<DropdownMenu onOpenChange={(isOpen) => {
+					setMenuOpen(isOpen);
+					if (isOpen) void stateQuery.refetch();
+				}}>
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<span className="inline-flex">

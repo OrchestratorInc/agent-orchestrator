@@ -109,6 +109,62 @@ describe("editor handoff", () => {
 		expect(input.launch).not.toHaveBeenCalled();
 	});
 
+	it.each(["Warp", "Future Terminal"])("discovers %s from OS capabilities without adding its name to the registry", async (name) => {
+		const appPath = `/Volumes/Tools/${name}.app`;
+		const app = { bundleId: `org.example.${name.replaceAll(" ", "-")}`, name, appPath };
+		const discoverTerminalApps = vi.fn().mockResolvedValue([app]);
+		const workspace = "/work trees/it's $safe; $(touch nope)";
+		const input = deps({ discoverTerminalApps, isDirectory: (value) => value === appPath,
+			resolveWorkspace: vi.fn().mockResolvedValue(workspace), readIcon: vi.fn().mockResolvedValue("data:image/png;base64,dGVzdA==") });
+		const handoff = createEditorHandoff(input);
+		const state = await handoff.getState("ao-1");
+		const target = state.targets.find((target) => target.name === name)!;
+		expect(target).toMatchObject({ kind: "terminal", iconDataUrl: "data:image/png;base64,dGVzdA==" });
+		expect(target.id).toMatch(/^terminal-app:[a-f0-9]{64}$/);
+		expect(JSON.stringify(state)).not.toContain(appPath);
+		await handoff.open({ sessionId: "ao-1", targetId: target.id });
+		expect(input.launch).toHaveBeenCalledWith("/usr/bin/open", ["-a", appPath, workspace], workspace);
+		expect(input.writePreference).not.toHaveBeenCalled();
+		discoverTerminalApps.mockResolvedValue([]);
+		await expect(handoff.open({ sessionId: "ao-1", targetId: target.id })).rejects.toThrow("not available");
+		expect(input.launch).toHaveBeenCalledTimes(1);
+	});
+
+	it("discovers new installations on the next query and deduplicates existing built-in targets", async () => {
+		const discoverTerminalApps = vi.fn().mockResolvedValue([]);
+		const handoff = createEditorHandoff(deps({ discoverTerminalApps, isDirectory: () => true }));
+		expect((await handoff.getState("ao-1")).targets.some((target) => target.name === "Warp")).toBe(false);
+		discoverTerminalApps.mockResolvedValue([
+			{ bundleId: "com.apple.Terminal", name: "Terminal", appPath: "/System/Applications/Utilities/Terminal.app" },
+			{ bundleId: "com.mitchellh.ghostty", name: "Ghostty", appPath: "/Applications/Ghostty.app" },
+			{ bundleId: "dev.warp.Warp-Stable", name: "Warp", appPath: "/Applications/Warp.app" },
+		]);
+		const { targets } = await handoff.getState("ao-1");
+		for (const name of ["Terminal", "Ghostty", "Warp"]) expect(targets.filter((target) => target.name === name)).toHaveLength(1);
+	});
+
+	it("resolves known terminal adapters in nonstandard install locations", async () => {
+		const appPath = "/Volumes/External Apps/WezTerm.app";
+		const input = deps({ isDirectory: (value) => value === appPath, discoverTerminalApps: vi.fn().mockResolvedValue([
+			{ bundleId: "com.github.wez.wezterm", name: "WezTerm", appPath },
+		]) });
+		await createEditorHandoff(input).open({ sessionId: "ao-1", targetId: "wezterm" });
+		expect(input.launch).toHaveBeenCalledWith("/usr/bin/open", ["-n", "-a", appPath, "--args", "start", "--cwd", "/worktrees/ao-1"], "/worktrees/ao-1");
+	});
+
+	it("preserves safe fallbacks when OS discovery fails and rejects unregistered dynamic IDs", async () => {
+		const handoff = createEditorHandoff(deps({ discoverTerminalApps: vi.fn().mockRejectedValue(new Error("Timed out")) }));
+		expect((await handoff.getState("ao-1")).targets.some((target) => target.id === "terminal")).toBe(true);
+		await expect(handoff.open({ sessionId: "ao-1", targetId: `terminal-app:${"a".repeat(64)}` })).rejects.toThrow("not available");
+		await expect(handoff.open({ sessionId: "ao-1", targetId: "terminal-app:/tmp/untrusted" as never })).rejects.toThrow("not supported");
+	});
+
+	it("never runs macOS discovery on Linux or Windows", async () => {
+		const discoverTerminalApps = vi.fn();
+		for (const platform of ["linux", "win32"] as const) await createEditorHandoff(deps({ platform, discoverTerminalApps })).getState("ao-1");
+		expect(discoverTerminalApps).not.toHaveBeenCalled();
+	});
+
 	it("copies the resolved workspace verbatim without launching an app or changing preferences", async () => {
 		const copyText = vi.fn();
 		const input = deps({ copyText });

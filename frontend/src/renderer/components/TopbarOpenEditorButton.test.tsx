@@ -108,6 +108,18 @@ describe("TopbarOpenEditorButton", () => {
 		setState(availableState);
 	});
 
+	it("discovers newly installed terminals when opening the menu and renders their native icon", async () => {
+		const target = { id: `terminal-app:${"a".repeat(64)}` as const, name: "Warp", kind: "terminal" as const, iconDataUrl: "data:image/png;base64,dGVzdA==" };
+		window.ao!.editorHandoff.getState = vi.fn().mockResolvedValueOnce(availableState)
+			.mockResolvedValue({ ...availableState, targets: [...availableState.targets, target] });
+		renderButton();
+		await userEvent.click(await screen.findByRole("button", { name: "Open workspace options" }));
+		const warp = await screen.findByRole("menuitem", { name: "Warp" });
+		expect(warp.querySelector("image")).toHaveAttribute("href", target.iconDataUrl);
+		await userEvent.click(warp);
+		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1", targetId: target.id }));
+	});
+
 	it("copies the workspace through the native bridge without opening a target", async () => {
 		const copy = vi.spyOn(window.ao!.editorHandoff, "copyWorkspacePath").mockResolvedValue(undefined);
 		renderButton();

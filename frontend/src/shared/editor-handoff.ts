@@ -25,7 +25,7 @@ export const EDITOR_IDS = [
 
 export type EditorId = (typeof EDITOR_IDS)[number];
 export const TERMINAL_IDS = ["terminal", "ghostty", "iterm2", "wezterm", "kitty", "alacritty", "gnome-terminal", "konsole", "xfce4-terminal", "windows-terminal"] as const;
-export type TerminalId = (typeof TERMINAL_IDS)[number];
+export type TerminalId = (typeof TERMINAL_IDS)[number] | `terminal-app:${string}`;
 export type OpenTargetId = EditorId | "file-manager" | TerminalId;
 export type OpenTargetKind = "editor" | "file_manager" | "terminal";
 
@@ -70,5 +70,5 @@ export function isEditorId(value: unknown): value is EditorId {
 }
 
 export function isTerminalId(value: unknown): value is TerminalId {
-	return typeof value === "string" && (TERMINAL_IDS as readonly string[]).includes(value);
+	return typeof value === "string" && ((TERMINAL_IDS as readonly string[]).includes(value) || /^terminal-app:[a-f0-9]{64}$/.test(value));
 }
