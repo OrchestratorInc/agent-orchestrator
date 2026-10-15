@@ -75,6 +75,31 @@ func TestCoderSessionsAreBilledWithoutTheCoderCapability(t *testing.T) {
 	}
 }
 
+// Coder on the organization's own deployment runs on its own capacity, so it
+// is never billed, with or without the coder capability.
+func TestBringYourOwnCoderSessionsAreNeverBilled(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	store.EnableBilling(7*24*time.Hour, time.Time{})
+	connectionID := uuid.NewString()
+	if _, err := admin.Exec(ctx,
+		`INSERT INTO ao_provider_connections (id, org_id, provider, label, encrypted_secret, secret_nonce, validation_state)
+		VALUES ($1, $2, 'coder', 'default', '\x00', '\x00', 'valid')`, connectionID, fixture.orgID); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.CreateSession(ctx, domain.Principal{UserID: fixture.userID, Provider: "local"},
+		fixture.orgID, "byo-"+uuid.NewString(), 10, domain.CreateSession{
+			ProjectID: fixture.projectID, Kind: "worker", Harness: "codex", DisplayName: "byo",
+			Provider: "coder", SandboxConnectionID: connectionID,
+		})
+	if err != nil {
+		t.Fatalf("own Coder without the capability or a plan: %v", err)
+	}
+	if sandboxBilled(t, admin, session.ID) {
+		t.Fatal("a session on the organization's own Coder was marked billed")
+	}
+}
+
 // The coder capability is read from a cache that can change between a create
 // and its retry; the retry must still replay the first create.
 func TestCreateSessionRetryIgnoresAChangedCoderCapability(t *testing.T) {

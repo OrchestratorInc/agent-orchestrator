@@ -700,8 +700,11 @@ func createSessionTx(
 	// lock as the quota above, so concurrent creators cannot both take the
 	// last slot. This covers sessions an orchestrator spawns too. Freestyle
 	// sandboxes are billed, and Coder ones unless the organization holds the
-	// coder capability; a spawned worker inherits its parent's billing.
-	billed, err := sandboxBilledTx(ctx, tx, orgID, sessionProvider(input.Provider), input.CoderCapability, parentSessionID)
+	// coder capability or runs them on its own Coder; a spawned worker
+	// inherits its parent's billing.
+	billed, err := sandboxBilledTx(
+		ctx, tx, orgID, sessionProvider(input.Provider), input.SandboxConnectionID, input.CoderCapability, parentSessionID,
+	)
 	if err != nil {
 		return domain.Session{}, err
 	}

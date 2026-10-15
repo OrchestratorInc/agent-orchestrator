@@ -264,16 +264,22 @@ func sessionProvider(requested string) string {
 //   - Coder is billed unless the organization holds the coder capability. A
 //     worker spawned by a parent session on Coder inherits the parent's
 //     billing, so an unbilled orchestrator's workers stay unbilled.
+//   - Coder on the organization's own deployment (a bring-your-own
+//     connection) is never billed: plans sell AO's capacity, not the
+//     organization's.
 //   - Every other provider (docker, nodeops, ...) is not sold by plans and is
 //     not billed. The capability gate (orgAllowsProvider) still decides which
 //     organizations may run on it.
 func sandboxBilledTx(
-	ctx context.Context, tx pgx.Tx, orgID, provider string, coderCapability bool, parentSessionID string,
+	ctx context.Context, tx pgx.Tx, orgID, provider, connectionID string, coderCapability bool, parentSessionID string,
 ) (bool, error) {
 	switch provider {
 	case sandbox.ProviderFreestyle:
 		return true, nil
 	case sandbox.ProviderCoder:
+		if connectionID != "" {
+			return false, nil
+		}
 		// Billed unless the organization holds the coder capability; see below.
 	default:
 		return false, nil
