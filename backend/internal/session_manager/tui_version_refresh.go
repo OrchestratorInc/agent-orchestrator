@@ -85,7 +85,7 @@ func (m *Manager) refreshStaleTerminal(ctx context.Context, store staleTerminalS
 		return err
 	}
 	if current.Metadata.RuntimeLaunchID != rec.Metadata.RuntimeLaunchID ||
-		!m.terminalRestartEligible(current, minIdle) || !tuiIdleAfterInput(current, lastInputAt) {
+		!m.terminalRestartEligible(current, minIdle) || !m.terminalIdleForRestart(operationCtx, current, lastInputAt) {
 		return nil
 	}
 	inspector, ok := m.runtime.(ports.WorkloadCommandInspector)
@@ -123,6 +123,52 @@ func (m *Manager) refreshStaleTerminal(ctx context.Context, store staleTerminalS
 	m.emitVersionSwitch(current, "tui", "succeeded")
 	m.logger.Info("terminal session restarted on the new harness release", "sessionID", id, "harness", current.Harness, "version", version)
 	return nil
+}
+
+// terminalIdleForRestart proves, with the input gate closed, that restarting
+// loses nothing typed. An idle report newer than the last input is proof.
+// Input that changed nothing (a focus change when a viewer leaves, the
+// terminal's reply to a query) sends no new idle report, so it would keep the
+// session on the old release for good. Then the provider's screen, sampled
+// once that input settled, must show an idle agent with an empty composer.
+func (m *Manager) terminalIdleForRestart(ctx context.Context, rec domain.SessionRecord, lastInputAt time.Time) bool {
+	if tuiIdleAfterInput(rec, lastInputAt) {
+		return true
+	}
+	if rec.Activity.State != domain.ActivityIdle || m.clock().Before(lastInputAt.Add(interfaceTransitionIdleSettle)) {
+		return false
+	}
+	agent, ok := m.agents.Agent(rec.Harness)
+	if !ok {
+		return false
+	}
+	inspector, ok := agent.(ports.TerminalSurfaceInspector)
+	if !ok {
+		return false
+	}
+	styled, ok := m.runtime.(ports.StyledTerminalOutputReader)
+	if !ok {
+		return false
+	}
+	handle := runtimeHandle(rec.Metadata)
+	for sample := 0; sample < interfaceTransitionSurfaceIdleSamples; sample++ {
+		if sample > 0 {
+			select {
+			case <-ctx.Done():
+				return false
+			case <-time.After(interfaceTransitionPoll):
+			}
+		}
+		output, err := styled.GetStyledOutput(ctx, handle, interfaceTransitionOutputLines)
+		if err != nil {
+			return false
+		}
+		observation := inspector.InspectTerminalSurface(output)
+		if observation.Work != ports.TerminalSurfaceWorkIdle || observation.Composer != ports.TerminalComposerEmpty {
+			return false
+		}
+	}
+	return true
 }
 
 // terminalRestartEligible is the durable-fact and viewer check, read before
