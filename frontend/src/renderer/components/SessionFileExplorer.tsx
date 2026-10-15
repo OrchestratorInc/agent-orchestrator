@@ -204,7 +204,6 @@ export function SessionFileExplorer({
 	// With the filter and actions in a top bar, the header holds only the pickers
 	// and view tabs, so it is dropped when there are none. The pickers wait for
 	// the manifest, so until it arrives the row is kept and nothing jumps.
-	const showHeader = !filesTopbarHost || !filesData || showChangesTrigger || Boolean(branchMenu) || hasViewTabs || showTreeToggle;
 	const setLayout = (next: boolean) => {
 		if (controlledSplit === undefined) setInternalSplit(next);
 		onSplitChange?.(next);
@@ -213,6 +212,11 @@ export function SessionFileExplorer({
 	// preview beside the tree.
 	const showLayout = showChanges || splitView;
 	const showCollapse = showChanges && Boolean(filesData);
+	// With the filter and maximize in a top bar, the header holds only the
+	// pickers, the ⋯ menu and the view tabs, so it is dropped when there are
+	// none. The pickers wait for the manifest, so until it arrives the row is
+	// kept and nothing jumps.
+	const showHeader = !filesTopbarHost || !filesData || showChangesTrigger || Boolean(branchMenu) || showLayout || showCollapse || hasViewTabs || showTreeToggle;
 	// In the preview + tree split the (already active) All-files tab doubles as
 	// the tree toggle, so the header doesn't carry two file-tree buttons.
 	const allFilesTabLabel = !showChanges && splitView ? (treeOpen ? t("files.hideFileTree") : t("files.showFileTree")) : t("files.allFiles");
@@ -286,16 +290,15 @@ export function SessionFileExplorer({
 			<TooltipContent side="bottom">{isMaximized ? t("files.minimize") : t("files.maximize")}</TooltipContent>
 		</Tooltip>
 	) : null;
-	const actions = viewMenu || maximizeButton ? <>{viewMenu}{maximizeButton}</> : null;
 
 	return (
 		<section className="relative flex h-full min-h-0 flex-col bg-background text-foreground" aria-label={t("files.sessionFiles")}>
 			{/* The inspector top bar or the maximized overlay's titlebar hosts the
-			    filter, and the ⋯ menu and maximize sit at the top bar's trailing
-			    edge; without hosts they stay in this header. */}
+			    filter, and maximize sits at the top bar's trailing edge; without
+			    hosts they stay in this header. */}
 			{filesTopbarHost ? createPortal(filterField, filesTopbarHost) : null}
-			{filesActionsHost && actions ? createPortal(actions, filesActionsHost)
-				: filesTopbarHost && actions ? createPortal(<div className="ml-auto flex shrink-0 items-center gap-1 pr-2">{actions}</div>, filesTopbarHost)
+			{filesActionsHost && maximizeButton ? createPortal(maximizeButton, filesActionsHost)
+				: filesTopbarHost && maximizeButton ? createPortal(<div className="ml-auto flex shrink-0 items-center pr-2">{maximizeButton}</div>, filesTopbarHost)
 				: null}
 			{showHeader ? (
 				/* The header is a size container so the pickers can drop their icons
@@ -314,6 +317,7 @@ export function SessionFileExplorer({
 					{filesTopbarHost ? null : <span aria-hidden="true" className="flex-1" />}
 					{filesTopbarHost ? null : filterField}
 					<span aria-hidden="true" className="flex-1" />
+					{viewMenu}
 					{hasViewTabs ? (
 						<div aria-label={t("files.viewMode")} className="flex shrink-0 items-center gap-1" role="tablist">
 							<Tooltip>
@@ -366,7 +370,7 @@ export function SessionFileExplorer({
 							<TooltipContent side="bottom">{treeOpen ? t("files.hideFileTree") : t("files.showFileTree")}</TooltipContent>
 						</Tooltip>
 					) : null}
-					{filesActionsHost || filesTopbarHost ? null : actions}
+					{filesActionsHost || filesTopbarHost ? null : maximizeButton}
 				</header>
 			) : null}
 			{/* The branch already shows in its picker; this row only appears to

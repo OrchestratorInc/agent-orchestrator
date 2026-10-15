@@ -258,13 +258,13 @@ describe("SessionFileExplorer", () => {
 
 		const filter = screen.getByRole("textbox", { name: "Filter files" });
 		expect(titlebar).toContainElement(filter);
-		// With no actions slot the ⋯ menu and minimize follow the filter into the titlebar.
+		// With no actions slot, minimize follows the filter into the titlebar; the ⋯ menu stays in the header.
 		expect(titlebar).toContainElement(screen.getByRole("button", { name: "Minimize files" }));
-		expect(titlebar).toContainElement(screen.getByRole("button", { name: "View options" }));
+		expect(screen.getByRole("button", { name: "View options" }).closest("header")).not.toBeNull();
 		titlebar.remove();
 	});
 
-	it("puts the ⋯ menu and maximize in the top bar's actions slot, apart from the filter", async () => {
+	it("puts maximize in the top bar's actions slot and the ⋯ menu before the view tabs", async () => {
 		const filterHost = document.createElement("div");
 		const actionsHost = document.createElement("div");
 		document.body.append(filterHost, actionsHost);
@@ -278,9 +278,14 @@ describe("SessionFileExplorer", () => {
 
 		expect(await screen.findByTestId("review-pane")).toBeInTheDocument();
 		expect(filterHost).toContainElement(screen.getByRole("textbox", { name: "Filter files" }));
-		expect(actionsHost).toContainElement(screen.getByRole("button", { name: "View options" }));
 		expect(actionsHost).toContainElement(screen.getByRole("button", { name: "Maximize files" }));
-		expect(screen.getByRole("button", { name: "View options" }).closest("header")).toBeNull();
+		const viewOptions = screen.getByRole("button", { name: "View options" });
+		expect(actionsHost).not.toContainElement(viewOptions);
+		const header = viewOptions.closest("header");
+		expect(header).not.toBeNull();
+		// Same row as the pickers, right before the Changes / Files tabs.
+		expect(viewOptions.compareDocumentPosition(screen.getByRole("tab", { name: "Changes" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(header).toContainElement(screen.getByRole("tab", { name: "Changes" }));
 		filterHost.remove();
 		actionsHost.remove();
 	});

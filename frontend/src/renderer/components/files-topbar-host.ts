@@ -13,9 +13,9 @@ export function useFilesTopbarHost(): HTMLElement | null {
 }
 
 /**
- * The top-bar slot for the Files actions (the ⋯ menu and maximize): the
- * inspector top bar's trailing edge, just before its pinned buttons. Without
- * it they follow the filter into its host, or stay in the panel's header.
+ * The top-bar slot for the Files maximize button: the inspector top bar's
+ * trailing edge, just before its pinned buttons. Without it the button follows
+ * the filter into its host, or stays in the panel's header.
  */
 export const FilesActionsHostContext = createContext<HTMLElement | null>(null);
 
