@@ -10,7 +10,7 @@ import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { CliLinkSettings } from "./CliLinkSettingsRow";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
-import { DefaultCloudSandboxRow } from "./DefaultCloudSandboxRow";
+import { DefaultCloudSandboxSection } from "./DefaultCloudSandboxRow";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { SettingsInputRow, SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
@@ -247,6 +247,8 @@ export function GeneralSettingsSection({
 				) : null}
 			</SettingsSection>
 
+			<DefaultCloudSandboxSection />
+
 			<SettingsSection title={t("settings.privacy")} grouped>
 				<TelemetryEventsRow />
 			</SettingsSection>
@@ -403,7 +405,6 @@ function CloudOfferingRow() {
 					{error}
 				</p>
 			) : null}
-			{settings?.cloudOffering ? <DefaultCloudSandboxRow /> : null}
 		</div>
 	);
 }

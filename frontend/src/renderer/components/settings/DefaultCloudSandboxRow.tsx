@@ -8,6 +8,7 @@ import { cloudMeQueryKey } from "../../lib/cloud-offering";
 import { cn } from "../../lib/utils";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { SettingsRow } from "./SettingsRow";
+import { SettingsSection } from "./SettingsSection";
 
 /**
  * Where the org's cloud sessions run when a project does not pick a provider,
@@ -22,6 +23,28 @@ export function DefaultCloudSandboxRow() {
 	const { cloudEnabled } = useCloudGate();
 	if (!cloudEnabled) return null;
 	return <DefaultCloudSandboxRowInner />;
+}
+
+/**
+ * The row in its own Cloud section of General settings, for every signed-in
+ * cloud user (not only Developer Mode), so admins can reach the choice. The
+ * section is left out, heading included, whenever the row has nothing to show.
+ */
+export function DefaultCloudSandboxSection() {
+	const { cloudEnabled } = useCloudGate();
+	if (!cloudEnabled) return null;
+	return <DefaultCloudSandboxSectionInner />;
+}
+
+function DefaultCloudSandboxSectionInner() {
+	const { t } = useTranslation();
+	const offering = useCloudOffering();
+	if (offering.providers.length === 0 || !offering.org?.id) return null;
+	return (
+		<SettingsSection title={t("settings.cloud")} sectionId="cloudSandbox" grouped>
+			<DefaultCloudSandboxRowInner />
+		</SettingsSection>
+	);
 }
 
 function DefaultCloudSandboxRowInner() {

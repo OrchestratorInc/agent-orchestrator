@@ -1,9 +1,10 @@
+import type { ComponentType } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../../i18n";
-import { DefaultCloudSandboxRow } from "./DefaultCloudSandboxRow";
+import { DefaultCloudSandboxRow, DefaultCloudSandboxSection } from "./DefaultCloudSandboxRow";
 
 const mocks = vi.hoisted(() => ({
 	client: { putOrgSandboxProvider: vi.fn() },
@@ -21,12 +22,12 @@ vi.mock("../../hooks/useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled
 vi.mock("../../hooks/useCloudCp", () => ({ useCloudCp: () => ({ client: mocks.client, ready: true }) }));
 vi.mock("../../hooks/useCloudOffering", () => ({ useCloudOffering: () => mocks.offering }));
 
-function renderRow() {
+function renderRow(Row: ComponentType = DefaultCloudSandboxRow) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const invalidate = vi.spyOn(queryClient, "invalidateQueries");
 	render(
 		<QueryClientProvider client={queryClient}>
-			<DefaultCloudSandboxRow />
+			<Row />
 		</QueryClientProvider>,
 	);
 	return { invalidate };
@@ -89,5 +90,24 @@ describe("DefaultCloudSandboxRow", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Default cloud sandbox" }));
 		await userEvent.click(screen.getByRole("menuitem", { name: "Instant" }));
 		expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't save the default sandbox. Try again.");
+	});
+
+	describe("as its own Cloud section", () => {
+		it("shows the row under a Cloud heading", () => {
+			renderRow(DefaultCloudSandboxSection);
+			expect(screen.getByRole("heading", { name: "Cloud" })).toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "Default cloud sandbox" })).toBeEnabled();
+		});
+
+		it.each([
+			["cloud is off", () => { mocks.cloudEnabled = false; }],
+			["the org has no cloud sandbox", () => { Object.assign(mocks.offering, { providers: [], offersProviderChoice: false }); }],
+			["the user is not signed in to an org", () => { mocks.offering.org = undefined; }],
+		])("leaves the whole section out when %s", (_case, arrange) => {
+			arrange();
+			renderRow(DefaultCloudSandboxSection);
+			expect(screen.queryByRole("heading", { name: "Cloud" })).not.toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Default cloud sandbox" })).not.toBeInTheDocument();
+		});
 	});
 });
