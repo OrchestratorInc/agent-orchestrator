@@ -14,3 +14,7 @@ Prepared source reviewed before report commit: `f13d91d2207fb09a802168616b6128e8
 The preparation report is a dated snapshot: its unpublished/local-only/CI NOT_RUN statements describe that stage. Publication and exact-head CI are reported separately on this PR. Original attempts, profiles and logs remain private and intact.
 
 No credential stores, raw databases, environment dumps or private profiles are included. No skill6509 files/branch/body/comments were changed. Existing production/tunnel/unrelated processes remain untouched; publisher started no runtimes. All original failures and incomplete rows remain retained.
+
+## Publication CI correction
+
+The first publication head293493b9 failed the live-feeds job at run38693179146: the registry URL included the install version suffix and returned HTTP400. The original failed run remains preserved. The Strands plan now exposes the unversioned package identity for registry/ownership checks while retaining @0.2.0 in install/reinstall argv. Automatic Update is refused because the adapter explicitly accepts only0.2.0; a latest release must be separately qualified. Regression cases were added but not run locally; the new head requires its own PR CI. This source correction does not change any historical runtime or UI gate.

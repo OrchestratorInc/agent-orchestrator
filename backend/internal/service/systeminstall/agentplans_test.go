@@ -694,3 +694,27 @@ func TestCodewhaleInstallPlanIsManualOnly(t *testing.T) {
 		t.Fatalf("Codewhale reason = %q", plan.Reason)
 	}
 }
+
+func TestStrandsKeepsPinnedInstallSeparateFromReleasePackage(t *testing.T) {
+	planner, err := newTestService("linux", "npm").newRequestPlanner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range []AgentOperation{AgentOperationInstall, AgentOperationReinstall} {
+		plans := planner.agentMethodPlans(TargetStrands, operation)
+		if len(plans) != 1 {
+			t.Fatalf("%s plans = %+v", operation, plans)
+		}
+		plan := plans[0]
+		if plan.Unsupported || plan.Package != "@strands-agents/cli" || !slices.Contains(plan.Command, "@strands-agents/cli@0.2.0") {
+			t.Fatalf("%s plan lost package identity or release pin: %+v", operation, plan)
+		}
+		if (operation == AgentOperationReinstall) != slices.Contains(plan.Command, "--force") {
+			t.Fatalf("%s reinstall flag = %v", operation, plan.Command)
+		}
+	}
+	plans := planner.agentMethodPlans(TargetStrands, AgentOperationUpdate)
+	if len(plans) != 1 || !plans[0].Unsupported || len(plans[0].Command) != 0 || plans[0].Script != nil {
+		t.Fatalf("unqualified Strands update was offered: %+v", plans)
+	}
+}

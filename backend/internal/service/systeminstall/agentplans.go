@@ -266,7 +266,11 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
 		}
 	case TargetStrands:
-		plans = []Plan{s.planNPM(target, "@strands-agents/cli@0.2.0")}
+		plan := s.planNPM(target, "@strands-agents/cli@0.2.0")
+		// Registry and installation ownership use the package name, while the
+		// install/reinstall command retains the experimentally qualified release.
+		plan.Package = "@strands-agents/cli"
+		plans = []Plan{plan}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
 	default:
@@ -345,6 +349,13 @@ func (s requestPlanner) planKiroInstall() Plan {
 }
 
 func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Plan {
+	if plan.Target == TargetStrands && operation == AgentOperationUpdate {
+		plan.Unsupported = true
+		plan.Command = nil
+		plan.Script = nil
+		plan.Reason = "This experimental adapter requires Strands CLI 0.2.0; newer releases need separate qualification."
+		return plan
+	}
 	if operation == AgentOperationUpdate && plan.Method == "npm" && (plan.daemonRuntimeRejected || plan.daemonPrefixRejected) {
 		// The installed copy may live under another prefix (nvm, fnm, ~/.local)
 		// with its own Node. The update validates that installation once the
