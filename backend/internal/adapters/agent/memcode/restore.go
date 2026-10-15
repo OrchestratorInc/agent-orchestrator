@@ -114,14 +114,28 @@ func emptyComposer(output string) bool {
 	if len(lines) > 16 {
 		lines = lines[len(lines)-16:]
 	}
-	idle, composer, footer := false, false, false
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		idle = idle || line == "○ idle"
-		composer = composer || line == "→  Ask memcode…   ·   $ = shell"
-		footer = footer || strings.HasPrefix(line, "memcode · ")
+	// A discussed panic can be only one line above the current composer.
+	// Scope crash rejection to the newest idle chrome, rather than transcript
+	// text that happens to fit in the same short terminal capture.
+	idle := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "○ idle" {
+			idle = i
+		}
 	}
-	return idle && composer && footer && !strings.Contains(strings.Join(lines, "\n"), "panic:")
+	if idle < 0 {
+		return false
+	}
+	composer, footer := false, false
+	for _, line := range lines[idle+1:] {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, "panic:") || thinkingLine.MatchString(line) {
+			return false
+		}
+		composer = composer || line == "→  Ask memcode…   ·   $ = shell"
+		footer = footer || composer && strings.HasPrefix(line, "memcode · ")
+	}
+	return composer && footer
 }
 func transcript(workspace, id string) ([32]byte, int, error) {
 	var zero [32]byte
