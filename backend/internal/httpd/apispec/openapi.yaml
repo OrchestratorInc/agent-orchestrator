@@ -9675,11 +9675,62 @@ paths:
         schema:
           description: Opaque revision token used for optimistic consistency checks.
           type: string
-      - description: Exact commit SHA for a committed-scope comparison.
+      - description: Exact commit SHA for a committed-scope comparison. Cannot be
+          combined with commitShas.
         in: query
         name: commitSha
         schema:
-          description: Exact commit SHA for a committed-scope comparison.
+          description: Exact commit SHA for a committed-scope comparison. Cannot be
+            combined with commitShas.
+          type: string
+      - description: Comma-separated full SHAs (max 250) whose combined changes are
+          compared. Requires the committed scope.
+        in: query
+        name: commitShas
+        schema:
+          description: Comma-separated full SHAs (max 250) whose combined changes
+            are compared. Requires the committed scope.
+          type: string
+      - description: Local branch to read instead of the checked-out worktree. Requires
+          the committed scope.
+        in: query
+        name: branch
+        schema:
+          description: Local branch to read instead of the checked-out worktree. Requires
+            the committed scope.
+          type: string
+      - description: Associated pull request to read instead of the checked-out worktree.
+          Requires the committed scope.
+        in: query
+        name: prNumber
+        schema:
+          description: Associated pull request to read instead of the checked-out
+            worktree. Requires the committed scope.
+          minimum: 1
+          type: integer
+      - description: Stable URL of the pull request, for PRs that share a number.
+          Requires prNumber.
+        in: query
+        name: sourceUrl
+        schema:
+          description: Stable URL of the pull request, for PRs that share a number.
+            Requires prNumber.
+          type: string
+      - description: The branch or pull request view's tipSha from its history. A
+          moved tip fails with WORKSPACE_REF_MOVED.
+        in: query
+        name: expectedTipSha
+        schema:
+          description: The branch or pull request view's tipSha from its history.
+            A moved tip fails with WORKSPACE_REF_MOVED.
+          type: string
+      - description: The branch or pull request view's baseSha from its history. A
+          moved base fails with WORKSPACE_REF_MOVED.
+        in: query
+        name: expectedBaseSha
+        schema:
+          description: The branch or pull request view's baseSha from its history.
+            A moved base fails with WORKSPACE_REF_MOVED.
           type: string
       responses:
         "200":
@@ -9827,6 +9878,64 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Get lazy commit and upstream metadata for a workspace review
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/workspace/history/selection:
+    post:
+      operationId: getSessionWorkspaceCommitSelection
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceCommitSelectionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceCommitSelectionResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Resolve ticked commits, or a view's whole range, to their combined
+        changed files
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/workspace/manifest:
@@ -18290,6 +18399,92 @@ components:
       - cacheReadTokens
       - estimatedCost
       type: object
+    WorkspaceCommitConflictResponse:
+      properties:
+        commitSha:
+          description: The ticked commit whose changes did not apply.
+          type: string
+        paths:
+          description: Up to 20 paths that did not apply.
+          items:
+            type: string
+          type: array
+        reason:
+          enum:
+          - conflict
+          - unsupported_history
+          type: string
+      required:
+      - commitSha
+      - paths
+      - reason
+      type: object
+    WorkspaceCommitSelectionRequest:
+      properties:
+        branch:
+          description: Local branch to read instead of the checked-out worktree.
+          type: string
+        commitShas:
+          description: Full SHAs. Empty = the whole range (All commits).
+          items:
+            type: string
+          maxItems: 250
+          type: array
+        expectedBaseSha:
+          description: The view's baseSha from its history. A moved base fails with
+            WORKSPACE_REF_MOVED.
+          type: string
+        expectedTipSha:
+          description: The view's tipSha from its history. A moved tip fails with
+            WORKSPACE_REF_MOVED.
+          type: string
+        prNumber:
+          description: Associated pull request to read instead of the checked-out
+            worktree.
+          minimum: 1
+          type: integer
+        sourceUrl:
+          description: Stable URL of the pull request, for PRs that share a number.
+            Requires prNumber.
+          type: string
+        workspaceVersion:
+          description: Fence for checked-out selections.
+          type: string
+      required:
+      - commitShas
+      type: object
+    WorkspaceCommitSelectionResponse:
+      properties:
+        baseSha:
+          type: string
+        combinable:
+          type: boolean
+        conflict:
+          $ref: '#/components/schemas/WorkspaceCommitConflictResponse'
+        contiguous:
+          description: True when the commits form one unbroken range.
+          type: boolean
+        files:
+          items:
+            $ref: '#/components/schemas/WorkspaceFileSummary'
+          type: array
+        sessionId:
+          type: string
+        summary:
+          $ref: '#/components/schemas/WorkspaceSummary'
+        tipSha:
+          type: string
+        truncated:
+          type: boolean
+      required:
+      - sessionId
+      - tipSha
+      - contiguous
+      - combinable
+      - files
+      - summary
+      - truncated
+      type: object
     WorkspaceCommitSummary:
       properties:
         author:
@@ -18367,13 +18562,33 @@ components:
       type: object
     WorkspaceDiffRequest:
       properties:
-        commitSha:
-          description: Exact commit SHA for a committed-scope comparison.
+        branch:
+          description: Local branch to read instead of the checked-out worktree. Requires
+            the committed scope.
           type: string
+        commitSha:
+          description: Exact commit SHA for a committed-scope comparison. Cannot be
+            combined with commitShas.
+          type: string
+        commitShas:
+          description: Full SHAs whose combined changes are compared. Requires the
+            committed scope.
+          items:
+            type: string
+          maxItems: 250
+          type: array
         contextLines:
           maximum: 20
           minimum: 0
           type: integer
+        expectedBaseSha:
+          description: The view's baseSha from its history. A moved base fails with
+            WORKSPACE_REF_MOVED.
+          type: string
+        expectedTipSha:
+          description: The view's tipSha from its history. A moved tip fails with
+            WORKSPACE_REF_MOVED.
+          type: string
         ignoreWhitespace:
           type: boolean
         paths:
@@ -18382,6 +18597,11 @@ components:
           maxItems: 100
           minItems: 1
           type: array
+        prNumber:
+          description: Associated pull request to read instead of the checked-out
+            worktree. Requires the committed scope.
+          minimum: 1
+          type: integer
         scope:
           enum:
           - combined
@@ -18390,6 +18610,10 @@ components:
           - staged
           - unstaged
           - untracked
+          type: string
+        sourceUrl:
+          description: Stable URL of the pull request, for PRs that share a number.
+            Requires prNumber.
           type: string
         workspaceVersion:
           type: string

@@ -298,7 +298,13 @@ type WorkspaceFileRevisionQuery struct {
 	Side             string `query:"side,omitempty" enum:"before,after" description:"Comparison side. Defaults to after."`
 	WorkspaceVersion string `query:"workspaceVersion,omitempty" description:"Opaque workspace snapshot token used for consistency checks."`
 	ExpectedRevision string `query:"expectedRevision,omitempty" description:"Opaque revision token used for optimistic consistency checks."`
-	CommitSHA        string `query:"commitSha,omitempty" description:"Exact commit SHA for a committed-scope comparison."`
+	CommitSHA        string `query:"commitSha,omitempty" description:"Exact commit SHA for a committed-scope comparison. Cannot be combined with commitShas."`
+	CommitSHAs       string `query:"commitShas,omitempty" description:"Comma-separated full SHAs (max 250) whose combined changes are compared. Requires the committed scope."`
+	Branch           string `query:"branch,omitempty" description:"Local branch to read instead of the checked-out worktree. Requires the committed scope."`
+	PRNumber         int    `query:"prNumber,omitempty" minimum:"1" description:"Associated pull request to read instead of the checked-out worktree. Requires the committed scope."`
+	SourceURL        string `query:"sourceUrl,omitempty" description:"Stable URL of the pull request, for PRs that share a number. Requires prNumber."`
+	ExpectedTipSHA   string `query:"expectedTipSha,omitempty" description:"The branch or pull request view's tipSha from its history. A moved tip fails with WORKSPACE_REF_MOVED."`
+	ExpectedBaseSHA  string `query:"expectedBaseSha,omitempty" description:"The branch or pull request view's baseSha from its history. A moved base fails with WORKSPACE_REF_MOVED."`
 }
 
 // WorkspaceHistoryQuery selects whose history GET
@@ -728,7 +734,47 @@ type WorkspaceDiffRequest struct {
 	ContextLines     int      `json:"contextLines" minimum:"0" maximum:"20"`
 	IgnoreWhitespace bool     `json:"ignoreWhitespace"`
 	WorkspaceVersion string   `json:"workspaceVersion,omitempty"`
-	CommitSHA        string   `json:"commitSha,omitempty" description:"Exact commit SHA for a committed-scope comparison."`
+	CommitSHA        string   `json:"commitSha,omitempty" description:"Exact commit SHA for a committed-scope comparison. Cannot be combined with commitShas."`
+	CommitSHAs       []string `json:"commitShas,omitempty" maxItems:"250" description:"Full SHAs whose combined changes are compared. Requires the committed scope."`
+	Branch           string   `json:"branch,omitempty" description:"Local branch to read instead of the checked-out worktree. Requires the committed scope."`
+	PRNumber         int      `json:"prNumber,omitempty" minimum:"1" description:"Associated pull request to read instead of the checked-out worktree. Requires the committed scope."`
+	SourceURL        string   `json:"sourceUrl,omitempty" description:"Stable URL of the pull request, for PRs that share a number. Requires prNumber."`
+	ExpectedTipSHA   string   `json:"expectedTipSha,omitempty" description:"The view's tipSha from its history. A moved tip fails with WORKSPACE_REF_MOVED."`
+	ExpectedBaseSHA  string   `json:"expectedBaseSha,omitempty" description:"The view's baseSha from its history. A moved base fails with WORKSPACE_REF_MOVED."`
+}
+
+// WorkspaceCommitSelectionRequest asks for the combined changed files of
+// ticked commits in a view, or of its whole range.
+type WorkspaceCommitSelectionRequest struct {
+	Branch           string   `json:"branch,omitempty" description:"Local branch to read instead of the checked-out worktree."`
+	PRNumber         int      `json:"prNumber,omitempty" minimum:"1" description:"Associated pull request to read instead of the checked-out worktree."`
+	SourceURL        string   `json:"sourceUrl,omitempty" description:"Stable URL of the pull request, for PRs that share a number. Requires prNumber."`
+	ExpectedTipSHA   string   `json:"expectedTipSha,omitempty" description:"The view's tipSha from its history. A moved tip fails with WORKSPACE_REF_MOVED."`
+	ExpectedBaseSHA  string   `json:"expectedBaseSha,omitempty" description:"The view's baseSha from its history. A moved base fails with WORKSPACE_REF_MOVED."`
+	CommitSHAs       []string `json:"commitShas" maxItems:"250" description:"Full SHAs. Empty = the whole range (All commits)."`
+	WorkspaceVersion string   `json:"workspaceVersion,omitempty" description:"Fence for checked-out selections."`
+}
+
+// WorkspaceCommitSelectionResponse is the combined changed-file set of a
+// commit selection. Commits that cannot be combined are not an error: the
+// response has combinable false, no files, and a conflict.
+type WorkspaceCommitSelectionResponse struct {
+	SessionID  domain.SessionID                 `json:"sessionId"`
+	TipSHA     string                           `json:"tipSha"`
+	BaseSHA    string                           `json:"baseSha,omitempty"`
+	Contiguous bool                             `json:"contiguous" description:"True when the commits form one unbroken range."`
+	Combinable bool                             `json:"combinable"`
+	Conflict   *WorkspaceCommitConflictResponse `json:"conflict,omitempty"`
+	Files      []WorkspaceFileSummary           `json:"files"`
+	Summary    WorkspaceSummary                 `json:"summary"`
+	Truncated  bool                             `json:"truncated"`
+}
+
+// WorkspaceCommitConflictResponse names why ticked commits cannot be combined.
+type WorkspaceCommitConflictResponse struct {
+	CommitSHA string                                   `json:"commitSha" description:"The ticked commit whose changes did not apply."`
+	Paths     []string                                 `json:"paths" description:"Up to 20 paths that did not apply."`
+	Reason    sessionsvc.WorkspaceCommitConflictReason `json:"reason" enum:"conflict,unsupported_history"`
 }
 
 // WorkspaceDiffDeferredResponse describes a file omitted from an initial patch.

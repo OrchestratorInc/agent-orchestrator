@@ -3168,6 +3168,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/workspace/history/selection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve ticked commits, or a view's whole range, to their combined changed files */
+        post: operations["getSessionWorkspaceCommitSelection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/workspace/manifest": {
         parameters: {
             query?: never;
@@ -6415,6 +6432,42 @@ export interface components {
             /** @description Input not read from an existing provider cache. Includes cache writes. */
             uncachedInputTokens: null | number;
         };
+        WorkspaceCommitConflictResponse: {
+            /** @description The ticked commit whose changes did not apply. */
+            commitSha: string;
+            /** @description Up to 20 paths that did not apply. */
+            paths: string[];
+            /** @enum {string} */
+            reason: "conflict" | "unsupported_history";
+        };
+        WorkspaceCommitSelectionRequest: {
+            /** @description Local branch to read instead of the checked-out worktree. */
+            branch?: string;
+            /** @description Full SHAs. Empty = the whole range (All commits). */
+            commitShas: string[];
+            /** @description The view's baseSha from its history. A moved base fails with WORKSPACE_REF_MOVED. */
+            expectedBaseSha?: string;
+            /** @description The view's tipSha from its history. A moved tip fails with WORKSPACE_REF_MOVED. */
+            expectedTipSha?: string;
+            /** @description Associated pull request to read instead of the checked-out worktree. */
+            prNumber?: number;
+            /** @description Stable URL of the pull request, for PRs that share a number. Requires prNumber. */
+            sourceUrl?: string;
+            /** @description Fence for checked-out selections. */
+            workspaceVersion?: string;
+        };
+        WorkspaceCommitSelectionResponse: {
+            baseSha?: string;
+            combinable: boolean;
+            conflict?: components["schemas"]["WorkspaceCommitConflictResponse"];
+            /** @description True when the commits form one unbroken range. */
+            contiguous: boolean;
+            files: components["schemas"]["WorkspaceFileSummary"][];
+            sessionId: string;
+            summary: components["schemas"]["WorkspaceSummary"];
+            tipSha: string;
+            truncated: boolean;
+        };
         WorkspaceCommitSummary: {
             author: string;
             files: components["schemas"]["WorkspaceFileSummary"][];
@@ -6441,13 +6494,25 @@ export interface components {
             truncated: boolean;
         };
         WorkspaceDiffRequest: {
-            /** @description Exact commit SHA for a committed-scope comparison. */
+            /** @description Local branch to read instead of the checked-out worktree. Requires the committed scope. */
+            branch?: string;
+            /** @description Exact commit SHA for a committed-scope comparison. Cannot be combined with commitShas. */
             commitSha?: string;
+            /** @description Full SHAs whose combined changes are compared. Requires the committed scope. */
+            commitShas?: string[];
             contextLines: number;
+            /** @description The view's baseSha from its history. A moved base fails with WORKSPACE_REF_MOVED. */
+            expectedBaseSha?: string;
+            /** @description The view's tipSha from its history. A moved tip fails with WORKSPACE_REF_MOVED. */
+            expectedTipSha?: string;
             ignoreWhitespace: boolean;
             paths: string[];
+            /** @description Associated pull request to read instead of the checked-out worktree. Requires the committed scope. */
+            prNumber?: number;
             /** @enum {string} */
             scope: "combined" | "uncommitted" | "committed" | "staged" | "unstaged" | "untracked";
+            /** @description Stable URL of the pull request, for PRs that share a number. Requires prNumber. */
+            sourceUrl?: string;
             workspaceVersion?: string;
         };
         WorkspaceDiffsResponse: {
@@ -18490,8 +18555,20 @@ export interface operations {
                 workspaceVersion?: string;
                 /** @description Opaque revision token used for optimistic consistency checks. */
                 expectedRevision?: string;
-                /** @description Exact commit SHA for a committed-scope comparison. */
+                /** @description Exact commit SHA for a committed-scope comparison. Cannot be combined with commitShas. */
                 commitSha?: string;
+                /** @description Comma-separated full SHAs (max 250) whose combined changes are compared. Requires the committed scope. */
+                commitShas?: string;
+                /** @description Local branch to read instead of the checked-out worktree. Requires the committed scope. */
+                branch?: string;
+                /** @description Associated pull request to read instead of the checked-out worktree. Requires the committed scope. */
+                prNumber?: number;
+                /** @description Stable URL of the pull request, for PRs that share a number. Requires prNumber. */
+                sourceUrl?: string;
+                /** @description The branch or pull request view's tipSha from its history. A moved tip fails with WORKSPACE_REF_MOVED. */
+                expectedTipSha?: string;
+                /** @description The branch or pull request view's baseSha from its history. A moved base fails with WORKSPACE_REF_MOVED. */
+                expectedBaseSha?: string;
             };
             header?: never;
             path: {
@@ -18647,6 +18724,78 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionWorkspaceCommitSelection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceCommitSelectionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceCommitSelectionResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -69,7 +70,11 @@ type fakeSessionService struct {
 	workspaceRevisionSide      sessionsvc.WorkspaceFileBlobSide
 	workspaceRevisionVersion   string
 	workspaceExpectedRevision  string
-	workspaceRevisionCommitSHA string
+	workspaceSelectionRevision sessionsvc.WorkspaceSelectionRevisionInput
+	workspaceSelection         sessionsvc.WorkspaceCommitSelection
+	workspaceSelectionView     sessionsvc.WorkspaceView
+	workspaceSelectionSHAs     []string
+	workspaceSelectionVersion  string
 	prFiles                    sessionsvc.PRFiles
 	prFileCommitSHA            string
 	prRevisionCommitSHA        string
@@ -835,9 +840,24 @@ func (f *fakeSessionService) GetPRFileRevisionAtCommit(ctx context.Context, id d
 	return f.GetPRFileRevision(ctx, id, number, sourceURL, path, side)
 }
 
-func (f *fakeSessionService) GetWorkspaceFileRevisionAtCommit(ctx context.Context, id domain.SessionID, path string, side sessionsvc.WorkspaceFileBlobSide, workspaceVersion, expectedRevision, commitSHA string) (sessionsvc.WorkspaceFileRevision, error) {
-	f.workspaceRevisionCommitSHA = commitSHA
-	return f.GetWorkspaceFileRevision(ctx, id, path, sessionsvc.WorkspaceDiffCommitted, side, workspaceVersion, expectedRevision)
+func (f *fakeSessionService) GetWorkspaceSelectionFileRevision(ctx context.Context, id domain.SessionID, input sessionsvc.WorkspaceSelectionRevisionInput) (sessionsvc.WorkspaceFileRevision, error) {
+	f.workspaceSelectionRevision = input
+	return f.GetWorkspaceFileRevision(ctx, id, input.Path, input.Scope, input.Side, input.WorkspaceVersion, input.ExpectedRevision)
+}
+
+func (f *fakeSessionService) GetWorkspaceCommitSelection(_ context.Context, id domain.SessionID, view sessionsvc.WorkspaceView, commitSHAs []string, workspaceVersion string) (sessionsvc.WorkspaceCommitSelection, error) {
+	f.workspaceSelectionView = view
+	f.workspaceSelectionSHAs = commitSHAs
+	f.workspaceSelectionVersion = workspaceVersion
+	if f.workspaceErr != nil {
+		return sessionsvc.WorkspaceCommitSelection{}, f.workspaceErr
+	}
+	if _, ok := f.sessions[id]; !ok {
+		return sessionsvc.WorkspaceCommitSelection{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+	selection := f.workspaceSelection
+	selection.SessionID = id
+	return selection, nil
 }
 
 func (f *fakeSessionService) ResolveWorkspacePath(_ context.Context, id domain.SessionID, rawPath string) (sessionsvc.WorkspacePathResolution, error) {
@@ -3809,8 +3829,110 @@ func TestSessionsAPI_GetWorkspaceFileRevisionAtCommit(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("GET workspace commit revision = %d body=%s", status, body)
 	}
-	if svc.workspaceRevisionCommitSHA != "abc123" || svc.workspaceRevisionScope != sessionsvc.WorkspaceDiffCommitted {
-		t.Fatalf("commit revision args = sha:%q scope:%q", svc.workspaceRevisionCommitSHA, svc.workspaceRevisionScope)
+	if got := svc.workspaceSelectionRevision; got.CommitSHA != "abc123" || got.Scope != sessionsvc.WorkspaceDiffCommitted || got.CommitSHAs != nil {
+		t.Fatalf("commit revision input = %+v", got)
+	}
+}
+
+func TestSessionsAPI_RevisionParsesCommaSeparatedCommitShas(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+	body, status, headers := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/file/revision?path=README.md&scope=committed&side=before&commitShas=aaa,%20bbb,,ccc&branch=feature%2Flogin&expectedTipSha=tip&expectedBaseSha=base&workspaceVersion=v1", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET workspace selection revision = %d body=%s", status, body)
+	}
+	if headers.Get("Cache-Control") != "no-store" || headers.Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("security headers = %#v", headers)
+	}
+	want := sessionsvc.WorkspaceSelectionRevisionInput{
+		Path: "README.md", Side: sessionsvc.WorkspaceBlobBefore, Scope: sessionsvc.WorkspaceDiffCommitted, WorkspaceVersion: "v1",
+		View:       sessionsvc.WorkspaceView{Branch: "feature/login", ExpectedTipSHA: "tip", ExpectedBaseSHA: "base"},
+		CommitSHAs: []string{"aaa", "bbb", "ccc"},
+	}
+	got := svc.workspaceSelectionRevision
+	if got.Path != want.Path || got.Side != want.Side || got.Scope != want.Scope || got.View != want.View || got.WorkspaceVersion != want.WorkspaceVersion || !slices.Equal(got.CommitSHAs, want.CommitSHAs) {
+		t.Fatalf("selection revision input = %+v, want %+v", got, want)
+	}
+
+	// A PR view alone, without commits, still reads the selection.
+	if _, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/file/revision?path=README.md&scope=committed&prNumber=42", ""); status != http.StatusOK || svc.workspaceSelectionRevision.View.PRNumber != 42 {
+		t.Fatalf("GET PR view revision = %d, input %+v", status, svc.workspaceSelectionRevision)
+	}
+	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/file/revision?path=README.md&prNumber=abc", "")
+	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_WORKSPACE_VIEW")
+}
+
+func TestSessionsAPI_GetWorkspaceDiffsWithCommitShas(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/workspace/diffs", `{"scope":"committed","paths":["README.md"],"contextLines":3,"commitShas":["aaa","bbb"],"prNumber":42,"sourceUrl":" https://github.com/acme/repo/pull/42 ","expectedTipSha":"tip","expectedBaseSha":"base"}`)
+	if status != http.StatusOK {
+		t.Fatalf("POST workspace selection diffs = %d body=%s", status, body)
+	}
+	in := svc.workspaceDiffInput
+	wantView := sessionsvc.WorkspaceView{PRNumber: 42, SourceURL: "https://github.com/acme/repo/pull/42", ExpectedTipSHA: "tip", ExpectedBaseSHA: "base"}
+	if in.Scope != sessionsvc.WorkspaceDiffCommitted || !slices.Equal(in.CommitSHAs, []string{"aaa", "bbb"}) || in.View != wantView || in.CommitSHA != "" {
+		t.Fatalf("selection diff input = %+v", in)
+	}
+
+	svc.workspaceErr = apierr.Conflict("WORKSPACE_COMMITS_NOT_COMBINABLE", "The selected commits cannot be combined", map[string]any{"commitSha": "bbb", "paths": []string{"README.md"}, "reason": "conflict"})
+	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/workspace/diffs", `{"scope":"committed","paths":["README.md"],"contextLines":3,"commitShas":["aaa","bbb"]}`)
+	assertErrorCode(t, body, status, http.StatusConflict, "WORKSPACE_COMMITS_NOT_COMBINABLE")
+}
+
+func TestSessionsAPI_GetWorkspaceCommitSelection(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.workspaceSelection = sessionsvc.WorkspaceCommitSelection{
+		View:       sessionsvc.WorkspaceViewInfo{Kind: sessionsvc.WorkspaceViewBranch, Name: "feature/login", TipSHA: "tip", BaseSHA: "base"},
+		Contiguous: false, Combinable: true,
+		Files:   []sessionsvc.WorkspaceFileSummary{{Path: "a.txt", Status: sessionsvc.WorkspaceFileAdded, Additions: 1, Size: 2}},
+		Summary: sessionsvc.WorkspaceSummary{Files: 1, Additions: 1},
+	}
+	srv := newSessionTestServer(t, svc)
+
+	body, status, headers := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/workspace/history/selection", `{"branch":"feature/login","expectedTipSha":"tip","commitShas":["aaa","bbb"],"workspaceVersion":"v1"}`)
+	assertJSON(t, headers)
+	if status != http.StatusOK {
+		t.Fatalf("POST commit selection = %d body=%s", status, body)
+	}
+	if svc.workspaceSelectionView != (sessionsvc.WorkspaceView{Branch: "feature/login", ExpectedTipSHA: "tip"}) || !slices.Equal(svc.workspaceSelectionSHAs, []string{"aaa", "bbb"}) || svc.workspaceSelectionVersion != "v1" {
+		t.Fatalf("service args = view %+v shas %v version %q", svc.workspaceSelectionView, svc.workspaceSelectionSHAs, svc.workspaceSelectionVersion)
+	}
+	var got controllers.WorkspaceCommitSelectionResponse
+	mustJSON(t, body, &got)
+	if got.SessionID != "ao-1" || got.TipSHA != "tip" || got.BaseSHA != "base" || got.Contiguous || !got.Combinable || got.Conflict != nil || len(got.Files) != 1 || got.Files[0].Path != "a.txt" || got.Summary.Files != 1 {
+		t.Fatalf("response = %+v", got)
+	}
+
+	// Commits that cannot be combined are data, not an error.
+	svc.workspaceSelection = sessionsvc.WorkspaceCommitSelection{
+		View:     sessionsvc.WorkspaceViewInfo{TipSHA: "tip"},
+		Conflict: &sessionsvc.WorkspaceCommitSelectionConflict{CommitSHA: "bbb", Paths: []string{"a.txt"}, Reason: sessionsvc.WorkspaceCommitConflict},
+	}
+	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/workspace/history/selection", `{"commitShas":["aaa","bbb"]}`)
+	if status != http.StatusOK {
+		t.Fatalf("POST conflicting selection = %d body=%s", status, body)
+	}
+	for _, want := range []string{`"combinable":false`, `"files":[]`, `"conflict":{"commitSha":"bbb","paths":["a.txt"],"reason":"conflict"}`} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("body = %s, want %s", body, want)
+		}
+	}
+
+	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/workspace/history/selection", `{"commitShas":`)
+	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_JSON")
+	for _, tc := range []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{apierr.Invalid("INVALID_WORKSPACE_COMMIT_SHA", "Commit SHAs must be full object names", nil), http.StatusBadRequest, "INVALID_WORKSPACE_COMMIT_SHA"},
+		{apierr.NotFound("WORKSPACE_COMMIT_NOT_FOUND", "Commit is not available"), http.StatusNotFound, "WORKSPACE_COMMIT_NOT_FOUND"},
+		{apierr.Conflict("WORKSPACE_REF_MOVED", "The reviewed branch moved", map[string]any{"tipSha": "new"}), http.StatusConflict, "WORKSPACE_REF_MOVED"},
+	} {
+		svc.workspaceErr = tc.err
+		body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/workspace/history/selection", `{"commitShas":["x"]}`)
+		assertErrorCode(t, body, status, tc.status, tc.code)
 	}
 }
 

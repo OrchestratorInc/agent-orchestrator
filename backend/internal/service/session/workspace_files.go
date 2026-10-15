@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
@@ -2771,11 +2772,25 @@ func truncateUTF8(in string, limit int) (string, bool) {
 	return in[:end], true
 }
 
-func gitWorkspaceOutput(ctx context.Context, root string, args ...string) (string, error) {
+// workspaceGitCommand builds the non-interactive, hook-free Git command every
+// workspace read runs, before any output handling.
+func workspaceGitCommand(ctx context.Context, root string, args ...string) *exec.Cmd {
 	globalArgs := make([]string, 0, 10+len(args))
 	globalArgs = append(globalArgs, "--no-pager", "--no-optional-locks", "-c", "core.hooksPath="+os.DevNull, "-c", "diff.external=", "-c", "core.fsmonitor=false", "-C", root)
 	cmd := aoprocess.CommandContext(ctx, "git", append(globalArgs, args...)...)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
+	return cmd
+}
+
+func gitWorkspaceOutput(ctx context.Context, root string, args ...string) (string, error) {
+	return gitWorkspaceOutputEnv(ctx, root, nil, args...)
+}
+
+// gitWorkspaceOutputEnv is gitWorkspaceOutput with extra environment entries,
+// such as a scratch GIT_INDEX_FILE.
+func gitWorkspaceOutputEnv(ctx context.Context, root string, env []string, args ...string) (string, error) {
+	cmd := workspaceGitCommand(ctx, root, args...)
+	cmd.Env = append(cmd.Env, env...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -2823,10 +2838,7 @@ func (w *cappedWorkspaceOutput) Write(p []byte) (int, error) {
 // gitWorkspaceOutputCapped drains all output while retaining only a bounded
 // prefix, preventing large diffs from becoming an unbounded in-memory buffer.
 func gitWorkspaceOutputCapped(ctx context.Context, root string, limit int, args ...string) (string, bool, error) {
-	globalArgs := make([]string, 0, 10+len(args))
-	globalArgs = append(globalArgs, "--no-pager", "--no-optional-locks", "-c", "core.hooksPath="+os.DevNull, "-c", "diff.external=", "-c", "core.fsmonitor=false", "-C", root)
-	cmd := aoprocess.CommandContext(ctx, "git", append(globalArgs, args...)...)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
+	cmd := workspaceGitCommand(ctx, root, args...)
 	stdout := &cappedWorkspaceOutput{limit: limit}
 	stderr := &cappedWorkspaceOutput{limit: 64 * 1024}
 	cmd.Stdout = stdout

@@ -134,7 +134,8 @@ type SessionService interface {
 	GetWorkspaceFileBlob(ctx context.Context, id domain.SessionID, path string, side sessionsvc.WorkspaceFileBlobSide) (sessionsvc.WorkspaceFileBlob, error)
 	GetWorkspaceDiffs(ctx context.Context, id domain.SessionID, input sessionsvc.WorkspaceDiffInput) (sessionsvc.WorkspaceDiffs, error)
 	GetWorkspaceFileRevision(ctx context.Context, id domain.SessionID, path string, scope sessionsvc.WorkspaceDiffScope, side sessionsvc.WorkspaceFileBlobSide, workspaceVersion, expectedRevision string) (sessionsvc.WorkspaceFileRevision, error)
-	GetWorkspaceFileRevisionAtCommit(ctx context.Context, id domain.SessionID, path string, side sessionsvc.WorkspaceFileBlobSide, workspaceVersion, expectedRevision, commitSHA string) (sessionsvc.WorkspaceFileRevision, error)
+	GetWorkspaceSelectionFileRevision(ctx context.Context, id domain.SessionID, input sessionsvc.WorkspaceSelectionRevisionInput) (sessionsvc.WorkspaceFileRevision, error)
+	GetWorkspaceCommitSelection(ctx context.Context, id domain.SessionID, view sessionsvc.WorkspaceView, commitSHAs []string, workspaceVersion string) (sessionsvc.WorkspaceCommitSelection, error)
 	SearchWorkspaceFiles(ctx context.Context, id domain.SessionID, query, cursor string, limit int) (sessionsvc.WorkspaceFileSearch, error)
 	ResolveWorkspacePath(ctx context.Context, id domain.SessionID, rawPath string) (sessionsvc.WorkspacePathResolution, error)
 	ListWorkspaceTree(ctx context.Context, id domain.SessionID, path string) (sessionsvc.WorkspaceTree, error)
@@ -221,6 +222,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/attachments", c.stageAttachments)
 	r.Get("/sessions/{sessionId}/workspace/manifest", c.getWorkspaceManifest)
 	r.Get("/sessions/{sessionId}/workspace/history", c.getWorkspaceHistory)
+	r.Post("/sessions/{sessionId}/workspace/history/selection", c.getWorkspaceCommitSelection)
 	r.Get("/sessions/{sessionId}/workspace/files", c.listWorkspaceFiles)
 	r.Get("/sessions/{sessionId}/workspace/file", c.getWorkspaceFile)
 	r.Put("/sessions/{sessionId}/workspace/file", c.updateWorkspaceFile)
@@ -862,13 +864,40 @@ func (c *SessionsController) getWorkspaceHistory(w http.ResponseWriter, r *http.
 	envelope.WriteJSON(w, http.StatusOK, workspaceHistoryResponse(history))
 }
 
+func (c *SessionsController) getWorkspaceCommitSelection(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/workspace/history/selection")
+		return
+	}
+	var in WorkspaceCommitSelectionRequest
+	if err := decodeJSON(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	view := workspaceView(in.Branch, in.PRNumber, in.SourceURL, in.ExpectedTipSHA, in.ExpectedBaseSHA)
+	selection, err := c.Svc.GetWorkspaceCommitSelection(r.Context(), sessionID(r), view, in.CommitSHAs, strings.TrimSpace(in.WorkspaceVersion))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, workspaceCommitSelectionResponse(selection))
+}
+
+// workspaceView builds the view a JSON body selects. The service validates it.
+func workspaceView(branch string, prNumber int, sourceURL, expectedTipSHA, expectedBaseSHA string) sessionsvc.WorkspaceView {
+	return sessionsvc.WorkspaceView{
+		Branch:          strings.TrimSpace(branch),
+		PRNumber:        prNumber,
+		SourceURL:       strings.TrimSpace(sourceURL),
+		ExpectedTipSHA:  strings.TrimSpace(expectedTipSHA),
+		ExpectedBaseSHA: strings.TrimSpace(expectedBaseSHA),
+	}
+}
+
 // workspaceViewQuery parses the branch or pull request a workspace read
 // selects. It only parses; the service validates the selection.
 func workspaceViewQuery(query url.Values) (sessionsvc.WorkspaceView, error) {
-	view := sessionsvc.WorkspaceView{
-		Branch:    strings.TrimSpace(query.Get("branch")),
-		SourceURL: strings.TrimSpace(query.Get("sourceUrl")),
-	}
+	view := workspaceView(query.Get("branch"), 0, query.Get("sourceUrl"), query.Get("expectedTipSha"), query.Get("expectedBaseSha"))
 	if query.Has("branch") && view.Branch == "" {
 		return sessionsvc.WorkspaceView{}, apierr.Invalid("INVALID_WORKSPACE_BRANCH", "branch must not be empty", nil)
 	}
@@ -1038,6 +1067,8 @@ func (c *SessionsController) getWorkspaceDiffs(w http.ResponseWriter, r *http.Re
 		IgnoreWhitespace: in.IgnoreWhitespace,
 		WorkspaceVersion: in.WorkspaceVersion,
 		CommitSHA:        strings.TrimSpace(in.CommitSHA),
+		CommitSHAs:       in.CommitSHAs,
+		View:             workspaceView(in.Branch, in.PRNumber, in.SourceURL, in.ExpectedTipSHA, in.ExpectedBaseSHA),
 	})
 	if err != nil {
 		envelope.WriteError(w, r, err)
@@ -1061,13 +1092,30 @@ func (c *SessionsController) getWorkspaceFileRevision(w http.ResponseWriter, r *
 	if side == "" {
 		side = sessionsvc.WorkspaceBlobAfter
 	}
+	view, err := workspaceViewQuery(query)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
 	commitSHA := strings.TrimSpace(query.Get("commitSha"))
+	var commitSHAs []string
+	for _, sha := range strings.Split(query.Get("commitShas"), ",") {
+		if sha = strings.TrimSpace(sha); sha != "" {
+			commitSHAs = append(commitSHAs, sha)
+		}
+	}
+	scope := sessionsvc.WorkspaceDiffScope(strings.TrimSpace(query.Get("scope")))
+	workspaceVersion := strings.TrimSpace(query.Get("workspaceVersion"))
+	expectedRevision := strings.TrimSpace(query.Get("expectedRevision"))
 	var revision sessionsvc.WorkspaceFileRevision
-	var err error
-	if commitSHA != "" {
-		revision, err = c.Svc.GetWorkspaceFileRevisionAtCommit(r.Context(), sessionID(r), relPath, side, strings.TrimSpace(query.Get("workspaceVersion")), strings.TrimSpace(query.Get("expectedRevision")), commitSHA)
+	// A branch or pull request view, or ticked commits, read a commit
+	// selection; anything else reads the checked-out comparison as before.
+	if view.Branch != "" || view.PRNumber != 0 || view.SourceURL != "" || commitSHA != "" || len(commitSHAs) > 0 {
+		revision, err = c.Svc.GetWorkspaceSelectionFileRevision(r.Context(), sessionID(r), sessionsvc.WorkspaceSelectionRevisionInput{
+			Path: relPath, Side: side, Scope: scope, View: view, CommitSHA: commitSHA, CommitSHAs: commitSHAs, WorkspaceVersion: workspaceVersion, ExpectedRevision: expectedRevision,
+		})
 	} else {
-		revision, err = c.Svc.GetWorkspaceFileRevision(r.Context(), sessionID(r), relPath, sessionsvc.WorkspaceDiffScope(strings.TrimSpace(query.Get("scope"))), side, strings.TrimSpace(query.Get("workspaceVersion")), strings.TrimSpace(query.Get("expectedRevision")))
+		revision, err = c.Svc.GetWorkspaceFileRevision(r.Context(), sessionID(r), relPath, scope, side, workspaceVersion, expectedRevision)
 	}
 	if err != nil {
 		envelope.WriteError(w, r, err)
@@ -2941,6 +2989,24 @@ func workspaceFileResponse(file sessionsvc.WorkspaceFileDetail) WorkspaceFileRes
 		WorkspaceVersion: file.WorkspaceVersion,
 		FileFingerprint:  file.FileFingerprint,
 	}
+}
+
+func workspaceCommitSelectionResponse(selection sessionsvc.WorkspaceCommitSelection) WorkspaceCommitSelectionResponse {
+	response := WorkspaceCommitSelectionResponse{
+		SessionID:  selection.SessionID,
+		TipSHA:     selection.View.TipSHA,
+		BaseSHA:    selection.View.BaseSHA,
+		Contiguous: selection.Contiguous,
+		Combinable: selection.Combinable,
+		Files:      workspaceFileSummariesResponse(selection.Files),
+		Summary:    WorkspaceSummary(selection.Summary),
+		Truncated:  selection.Truncated,
+	}
+	if conflict := selection.Conflict; conflict != nil {
+		paths := append([]string{}, conflict.Paths...)
+		response.Conflict = &WorkspaceCommitConflictResponse{CommitSHA: conflict.CommitSHA, Paths: paths, Reason: conflict.Reason}
+	}
+	return response
 }
 
 func workspaceDiffsResponse(diffs sessionsvc.WorkspaceDiffs) WorkspaceDiffsResponse {
