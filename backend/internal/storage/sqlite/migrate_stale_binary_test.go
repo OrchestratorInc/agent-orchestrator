@@ -9,7 +9,7 @@ import (
 // The stale-binary columns and their change trigger apply and roll back
 // cleanly, and existing sessions read as current after the upgrade.
 func TestMigrateSessionStaleBinaryRoundTrip(t *testing.T) {
-	db := openMigratedDatabaseCopyAt(t, t.TempDir(), 198, pragmas)
+	db := openMigratedDatabaseCopyAt(t, t.TempDir(), 199, pragmas)
 	for _, query := range []string{
 		`INSERT INTO projects (id, path, registered_at) VALUES ('project', '/tmp/project', CURRENT_TIMESTAMP)`,
 		`INSERT INTO sessions (id, project_id, num, activity_last_at, created_at, updated_at)
@@ -23,7 +23,7 @@ func TestMigrateSessionStaleBinaryRoundTrip(t *testing.T) {
 	defer gooseMu.Unlock()
 	goose.SetBaseFS(migrationsFS)
 	defer goose.SetBaseFS(nil)
-	if err := goose.UpTo(db, "migrations", 200); err != nil {
+	if err := goose.UpTo(db, "migrations", 201); err != nil {
 		t.Fatalf("migrate up: %v", err)
 	}
 	var since any
@@ -45,13 +45,13 @@ func TestMigrateSessionStaleBinaryRoundTrip(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM change_log WHERE session_id = 'session' AND event_type = 'session_updated'`).Scan(&changes); err != nil || changes != 1 {
 		t.Fatalf("change events = %d, %v", changes, err)
 	}
-	if err := goose.DownTo(db, "migrations", 198); err != nil {
+	if err := goose.DownTo(db, "migrations", 199); err != nil {
 		t.Fatalf("migrate down: %v", err)
 	}
 	if _, err := db.Exec(`SELECT stale_binary_since FROM sessions`); err == nil {
 		t.Fatal("stale_binary_since survived the rollback")
 	}
-	if err := goose.UpTo(db, "migrations", 200); err != nil {
+	if err := goose.UpTo(db, "migrations", 201); err != nil {
 		t.Fatalf("migrate up again: %v", err)
 	}
 }
