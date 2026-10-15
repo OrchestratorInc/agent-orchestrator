@@ -18,6 +18,7 @@ export function HarnessSettingsSection({
 	hostId,
 	initialView = "local",
 	startLogin = false,
+	showDiagnostics = false,
 	titleHidden = false,
 }: {
 	focusAgentId?: string;
@@ -25,6 +26,8 @@ export function HarnessSettingsSection({
 	initialView?: HarnessView;
 	/** Start focusAgentId's local login flow once its row is ready (a shortcut from a login error elsewhere). */
 	startLogin?: boolean;
+	/** Open focusAgentId's local install or update diagnostics (a shortcut from a failed update notice). */
+	showDiagnostics?: boolean;
 	titleHidden?: boolean;
 }) {
 	const { t } = useTranslation();
@@ -57,6 +60,6 @@ export function HarnessSettingsSection({
 				triggerClassName="w-fit max-w-full"
 			/> : null}
 		{showToolbar && !cloudView && selectedHostId !== LOCAL_HOST && !remoteOffline ? <p className="text-xs text-muted-foreground">{t("settings.harness.remoteBrowserAuthNote")}</p> : null}
-		{cloudView ? <CloudHarnessContent focusAgentId={focusAgentId} search={search} /> : remoteOffline ? <p className="text-xs text-error" role="alert">{t("remote.hostOffline")}</p> : <LocalHarnessContent key={selectedHostId} focusAgentId={focusAgentId} hostId={selectedHostId === LOCAL_HOST ? undefined : selectedHostId} search={search} onDetailChange={setDetailOpen} startLogin={startLogin && selectedHostId === (hostId ?? LOCAL_HOST)} />}
+		{cloudView ? <CloudHarnessContent focusAgentId={focusAgentId} search={search} /> : remoteOffline ? <p className="text-xs text-error" role="alert">{t("remote.hostOffline")}</p> : <LocalHarnessContent key={selectedHostId} focusAgentId={focusAgentId} hostId={selectedHostId === LOCAL_HOST ? undefined : selectedHostId} search={search} onDetailChange={setDetailOpen} startLogin={startLogin && selectedHostId === (hostId ?? LOCAL_HOST)} showDiagnostics={showDiagnostics && selectedHostId === (hostId ?? LOCAL_HOST)} />}
 	</SettingsSection>;
 }

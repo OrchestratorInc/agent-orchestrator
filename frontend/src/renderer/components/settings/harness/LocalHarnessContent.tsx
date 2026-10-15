@@ -72,7 +72,7 @@ const INSTALL_STATE_RANK = {
 	not_installed: 2,
 } as const;
 
-export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, startLogin = false }: { focusAgentId?: string; hostId?: string; search: string; startLogin?: boolean; onDetailChange?: (open: boolean) => void }) {
+export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, startLogin = false, showDiagnostics = false }: { focusAgentId?: string; hostId?: string; search: string; startLogin?: boolean; showDiagnostics?: boolean; onDetailChange?: (open: boolean) => void }) {
 	const { i18n, t } = useTranslation();
 	const queryClient = useQueryClient();
 	const client = clientForSessionHost(hostId);
@@ -109,6 +109,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const detailRef = useRef<HTMLDivElement>(null);
 	const focusHandledRef = useRef(false);
 	const focusPrimaryActionRef = useRef(false);
+	const focusDiagnosticsRef = useRef(false);
 	const highlightTimerRef = useRef<number | null>(null);
 	const [highlightedAgentId, setHighlightedAgentId] = useState<AgentId | null>(null);
 	// The list opens one harness at a time; its page has Account, Models and Health tabs.
@@ -260,10 +261,18 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		if (agents.isPending || installers.isPending || jobs.isPending || authPlans.isPending) return;
 		focusHandledRef.current = true;
 		focusPrimaryActionRef.current = true;
-		openDetail(targetAgentId);
+		// A failed update notice lands here: open the job's diagnostics ready to
+		// copy, or the Health report when the failure never produced a job.
+		if (showDiagnostics && describe(targetAgentId).hasDiagnostics) {
+			focusDiagnosticsRef.current = true;
+			setExpandedDiagnostics((current) => ({ ...current, [targetAgentId]: true }));
+			openDetail(targetAgentId);
+		} else {
+			openDetail(targetAgentId, showDiagnostics ? "health" : "account");
+		}
 		setHighlightedAgentId(targetAgentId);
 		highlightTimerRef.current = window.setTimeout(() => setHighlightedAgentId(null), FOCUS_HIGHLIGHT_MS);
-	}, [agents.isPending, authPlans.isPending, installers.isPending, jobs.isPending, targetAgentId]);
+	}, [agents.isPending, authPlans.isPending, installers.isPending, jobs.isPending, showDiagnostics, targetAgentId]);
 
 	useEffect(() => {
 		if (!focusPrimaryActionRef.current || !selectedAgentId) return;
@@ -272,6 +281,15 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		focusPrimaryActionRef.current = false;
 		// No scrollIntoView: the open page always fills the dialog, whose body does not
 		// scroll, and scrolling it anyway shifts the page up with no way back.
+		const diagnostics = focusDiagnosticsRef.current ? detail.querySelector<HTMLElement>("[data-harness-diagnostics]") : null;
+		focusDiagnosticsRef.current = false;
+		if (diagnostics) {
+			// Scroll only the tab's own scroller to bring the diagnostics up.
+			const scroller = diagnostics.closest<HTMLElement>("[role=tabpanel]");
+			if (scroller) scroller.scrollTop += diagnostics.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+			diagnostics.querySelector<HTMLElement>("[data-harness-copy-diagnostics]")?.focus({ preventScroll: true });
+			return;
+		}
 		const primaryAction = detail.querySelector<HTMLElement>("[data-harness-primary-action]:not(:disabled)");
 		(primaryAction ?? detail.querySelector<HTMLElement>("[role=tab][data-state=active]"))?.focus({ preventScroll: true });
 	}, [selectedAgentId]);
@@ -339,19 +357,26 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		}
 	}, [jobs.data, operationAttempts]);
 
+	// Collapse a failed install's diagnostics once the harness becomes installed.
+	// A harness that was already installed keeps them open: its failure was an update.
+	const observedInstalled = useRef<Set<AgentId> | null>(null);
 	useEffect(() => {
+		if (!agents.data) return;
+		const previous = observedInstalled.current;
+		observedInstalled.current = installed;
+		if (!previous) return;
 		setExpandedDiagnostics((current) => {
 			let changed = false;
 			const next = { ...current };
 			for (const agentId of installed) {
-				if (next[agentId]) {
+				if (!previous.has(agentId) && next[agentId]) {
 					delete next[agentId];
 					changed = true;
 				}
 			}
 			return changed ? next : current;
 		});
-	}, [installed]);
+	}, [agents.data, installed]);
 
 	const updateJob = (job: InstallJob) => {
 		setActionErrors((current) => ({ ...current, [job.target as AgentId]: undefined }));

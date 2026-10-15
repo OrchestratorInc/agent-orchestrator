@@ -112,6 +112,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const [focusAgentId, setFocusAgentId] = useState<string>();
 	const [harnessView, setHarnessView] = useState<"local" | "cloud">();
 	const [startLogin, setStartLogin] = useState(false);
+	const [showDiagnostics, setShowDiagnostics] = useState(false);
 	const [activeProjectSection, setActiveProjectSection] = useState<ProjectSettingsSection>("general");
 	const [pendingProjectSection, setPendingProjectSection] = useState<ProjectSettingsSection | null>(null);
 	const [projectSaveState, setProjectSaveState] = useState<ProjectSettingsSaveState>(initialProjectSaveState);
@@ -193,6 +194,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		setFocusAgentId(settingsModal?.scope === "global" ? settingsModal.focusAgentId : undefined);
 		setHarnessView(settingsModal?.scope === "global" ? settingsModal.harnessView : undefined);
 		setStartLogin(settingsModal?.scope === "global" && settingsModal.startLogin === true);
+		setShowDiagnostics(settingsModal?.scope === "global" && settingsModal.showDiagnostics === true);
 	}, [settingsModal]);
 
 	useEffect(() => {
@@ -274,7 +276,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			if (displaySettings?.scope === "project") {
 				return <ProjectSettingsForm projectId={displaySettings.projectId} hostId={remoteHostId} cloudOrgId={cloudOrgId} section={activeProjectSection as ProjectFormSection} onSaveState={setProjectSaveState} />;
 			}
-			return <GlobalSettingsForm cloudEnabled={cloudEnabled} customCoder={customCoder} selfServeBilling={selfServeBilling} focusAgentId={focusAgentId} hostId={displaySettings?.scope === "global" ? displaySettings.hostId : undefined} harnessView={harnessView} startLogin={startLogin} section={activeSection} />;
+			return <GlobalSettingsForm cloudEnabled={cloudEnabled} customCoder={customCoder} selfServeBilling={selfServeBilling} focusAgentId={focusAgentId} hostId={displaySettings?.scope === "global" ? displaySettings.hostId : undefined} harnessView={harnessView} startLogin={startLogin} showDiagnostics={showDiagnostics} section={activeSection} />;
 		},
 	};
 }

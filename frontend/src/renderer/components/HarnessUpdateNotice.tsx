@@ -253,7 +253,11 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 						</Tooltip>
 						: <Button size="sm" variant="outline" className="h-7 shrink-0 px-2 text-xs" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true })}>{t("settings.harness.viewDetails")}</Button>}
 					</div>
-					{error && !busy ? <p role="alert" className="mt-1 break-words text-caption text-error">{error}</p> : null}
+					{/* One click to the Harness page with this failure's diagnostics open, ready to copy. */}
+					{error && !busy ? <div className="mt-1 flex flex-col items-start gap-1">
+						<p role="alert" className="break-words text-caption text-error">{error}</p>
+						<Button type="button" size="sm" variant="outline" className="h-6 px-2 text-[length:var(--font-size-caption)]" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, showDiagnostics: true })}>{t("settings.harness.showDiagnostics")}</Button>
+					</div> : null}
 				</article>;
 			})}
 		</div>
