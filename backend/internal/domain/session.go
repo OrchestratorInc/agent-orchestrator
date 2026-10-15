@@ -161,9 +161,23 @@ const (
 	ArtifactVersionSourceUser ArtifactVersionSource = "user"
 )
 
+// SessionImportSource keeps provider provenance and durable workspace adoption facts.
+// Importing does not grant AO ownership of the source working directory.
+type SessionImportSource struct {
+	NativeID      string `json:"nativeId"`
+	ConfigDir     string `json:"configDir"`
+	CWD           string `json:"cwd"`
+	Adopted       bool   `json:"adopted"`
+	Transferred   bool   `json:"transferred"`
+	Prepared      bool   `json:"prepared"`
+	WorkingSubdir string `json:"workingSubdir,omitempty"`
+}
+
 // SessionMetadata is the typed, off-status metadata for a session: operational
 // handles and seed inputs used by Session Manager and reaper.
 type SessionMetadata struct {
+	ImportSource *SessionImportSource `json:"-"`
+
 	// Permissions pins the resolved launch policy independently of future project defaults.
 	Permissions PermissionMode `json:"permissions,omitempty"`
 
@@ -526,6 +540,7 @@ func (r SessionRecord) ControllerOwner() SessionControllerOwner {
 // plus derived display facts. None of Status, SCMStatus, or KanbanColumn is
 // persisted.
 type Session struct {
+	NeedsResume bool `json:"needsResume"`
 	SessionRecord
 	// WorkspaceCleanup is a durable teardown fact for the current generation.
 	WorkspaceCleanup WorkspaceDisposition `json:"workspaceCleanup,omitempty" enum:"pending,removed,preserved_dirty,failed,not_applicable"`
@@ -577,4 +592,9 @@ func (s Session) LastEventAt() time.Time {
 		consider(pr.LastReviewAt)
 	}
 	return latest
+}
+
+// NeedsImportResume reports history that has not yet acquired an AO controller.
+func (s SessionRecord) NeedsImportResume() bool {
+	return s.Metadata.ImportSource != nil && !s.Metadata.ImportSource.Adopted
 }
