@@ -25,7 +25,8 @@ func (s *Store) WorkerGitHubCheckoutContext(
 			`SELECT project.id, project.github_repository_grant_id, grant_row.id,
 				installation.github_installation_id,
 				repository.github_repository_id, repository.full_name,
-				repository.clone_url, project.default_branch
+				repository.clone_url, project.default_branch,
+				installation.access_scope, COALESCE(installation.scope_user_id::text, '')
 			FROM ao_sessions session
 			JOIN ao_projects project
 			  ON project.org_id = session.org_id AND project.id = session.project_id
@@ -50,6 +51,7 @@ func (s *Store) WorkerGitHubCheckoutContext(
 			  AND repository.is_archived = false
 			  AND repository.is_disabled = false
 			  AND btrim(repository.clone_url) <> ''
+			  AND `+githubUserScopeIntactSQL+`
 			ORDER BY grant_row.granted_at DESC
 			LIMIT 1`,
 			orgID, sessionID,
@@ -62,6 +64,8 @@ func (s *Store) WorkerGitHubCheckoutContext(
 			&authorization.FullName,
 			&authorization.CloneURL,
 			&authorization.DefaultBranch,
+			&authorization.AccessScope,
+			&authorization.ScopeUserID,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrForbidden

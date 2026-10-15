@@ -1175,6 +1175,7 @@ export function createBrowserViewHost(
   const ensureSession = (
     sessionId: string,
     rendererId?: number,
+    createInitialTab = true,
   ): BrowserSessionEntry => {
     const existingViewId = viewIdsBySessionId.get(sessionId);
     const viewId = existingViewId ?? `${rendererId ?? 0}:${sessionId}`;
@@ -1212,7 +1213,7 @@ export function createBrowserViewHost(
       entries.set(viewId, session);
       viewIdsBySessionId.set(sessionId, viewId);
       try {
-        createTab(session, true);
+        if (createInitialTab) createTab(session, true);
       } catch (error) {
         for (const entry of session.tabs.values()) {
           tabsByWebContentsId.delete(entry.view.webContents.id);
@@ -1243,6 +1244,7 @@ export function createBrowserViewHost(
     sessionId: string,
     rendererId?: number,
     isUnavailable?: () => boolean,
+    createInitialTab = true,
   ): Promise<BrowserSessionEntry> => {
     const store = options.browserProfileStore;
     if (store) {
@@ -1259,7 +1261,7 @@ export function createBrowserViewHost(
         "Browser renderer is no longer available",
       );
     }
-    return ensureSession(sessionId, rendererId);
+    return ensureSession(sessionId, rendererId, createInitialTab);
   };
 
   const queueNativeOperation = <T>(
@@ -1489,6 +1491,7 @@ export function createBrowserViewHost(
         normalizedURL = normalized.href;
       }
       const entry = createTab(session, activate, syncNativeOnActivate);
+      registerBrowserSignalWatcher(session);
       await entry.ready;
       if (normalizedURL) {
         const navigation = navigateEntry(entry, normalizedURL);
@@ -1558,12 +1561,6 @@ export function createBrowserViewHost(
     tabId = session.activeTabId,
   ): BrowserTabsState {
     assertTabsNotReplacing(session);
-    if (session.tabs.size === 1) {
-      throw browserError(
-        "CANNOT_CLOSE_LAST_TAB",
-        "The only browser tab cannot be closed",
-      );
-    }
     const tab = session.tabs.get(tabId);
     if (!tab)
       throw browserError(
@@ -1577,14 +1574,27 @@ export function createBrowserViewHost(
     // resolves — a second ⌘W in that window bypasses every before-input-event
     // handler and hits the menu's Close item, killing the app window.
     const nextTabId = wasActive
-      ? [...session.tabs.keys()].filter((id) => id !== tabId).at(-1)!
+      ? [...session.tabs.keys()].filter((id) => id !== tabId).at(-1)
       : undefined;
     if (nextTabId) activateTab(session, nextTabId, false);
     disposeNetworkCapture(tab, "tab-closed");
     if (session.networkTabId === tabId) session.networkTabId = undefined;
+    if (session.tabs.size === 1) unregisterBrowserSignalWatcher(session);
     session.tabs.delete(tabId);
     tabsByWebContentsId.delete(tab.view.webContents.id);
     destroyTabView(tab);
+    if (session.tabs.size === 0) {
+      session.activeTabId = "";
+      session.nativeActiveTabId = undefined;
+      session.snapshotDeltaBaseline = undefined;
+      destroyDevTools(session);
+      session.visible = false;
+      session.bounds = OFFSCREEN_BOUNDS;
+      shellContents(options).focus();
+      forgetNativeFocus(session.viewId);
+      forgetBrowserShortcutTarget(session.viewId);
+      shellContents(options).send("browser:navState", emptyNavState(session.viewId));
+    }
     if (wasActive && nextTabId) {
       const replacement = session.tabs.get(nextTabId);
       if (replacement) {
@@ -1612,6 +1622,15 @@ export function createBrowserViewHost(
       return listTabs(session);
     }
     return queueNativeOperation(session, async () => {
+      if (!session.tabs.size) {
+        // Connecting agent-browser to zero targets bootstraps its own page
+        // before tab-new runs. Create the first user tab directly so one
+        // request cannot produce both a bootstrap page and a requested page.
+        await openTab(session, url, true);
+        session.nativeActiveTabId = undefined;
+        session.snapshotDeltaBaseline = undefined;
+        return listTabs(session);
+      }
       await options.agentBrowserRuntime!.runAction(
         session.sessionId,
         "tab-new",
@@ -1632,6 +1651,8 @@ export function createBrowserViewHost(
     queueNativeOperation(
       session,
       async () => {
+        if (!session.tabs.has(tabId)) return listTabs(session);
+        if (session.tabs.size === 1) return closeTab(session, tabId);
         try {
           await ensureNativeActiveTab(session, signal);
         } catch (error) {
@@ -1684,10 +1705,7 @@ export function createBrowserViewHost(
     tabId: string,
   ): Promise<BrowserTabsState> => {
     if (!session.tabs.has(tabId)) return listTabs(session);
-    // Keep a blank landing tab after closing the final page, just as when
-    // opening the browser for the first time. Create it before disposing the
-    // focused view so the shell retains focus and the native target stays valid.
-    if (session.tabs.size === 1) await openUserTab(session);
+    // Dispose the final native target directly: no replacement page is needed.
     if (!options.agentBrowserRuntime) return closeTab(session, tabId);
     return closeNativeTab(session, tabId);
   };
@@ -1736,6 +1754,7 @@ export function createBrowserViewHost(
         focusLocation(session);
         return;
       }
+      if (!session.tabs.size && !["new-tab", "reopen-tab"].includes(action)) return;
       if (action === "find") {
         focusFind(session);
         return;
@@ -1779,7 +1798,6 @@ export function createBrowserViewHost(
         const shell = shellContents(options);
         shell.focus();
         void closeUserTab(session, closingTabId)
-          .then(() => focusLocation(session))
           .catch(() => undefined);
         return;
       }
@@ -1922,6 +1940,7 @@ export function createBrowserViewHost(
   const openDevTools = async (
     session: BrowserSessionEntry,
   ): Promise<BrowserDevToolsState> => {
+    if (!session.tabs.size) return pushDevToolsState(session);
     const entry = activeEntry(session);
     if (isBlankBrowserEntry(entry)) {
       if (session.devtools) destroyDevTools(session);
@@ -2129,9 +2148,13 @@ export function createBrowserViewHost(
         "Browser target is unavailable",
       );
     assertProfileStable(session);
-    return withBrowserOperation(session, () =>
-      navigateEntry(activeEntry(session), url),
-    );
+    return withBrowserOperation(session, async () => {
+      if (!session.tabs.size) {
+        const entry = await openTab(session, url, true);
+        return pushNavState(options, entry);
+      }
+      return navigateEntry(activeEntry(session), url);
+    });
   };
 
   const navigateEntry = async (
@@ -2185,6 +2208,7 @@ export function createBrowserViewHost(
       );
     assertProfileStable(session);
     return withBrowserOperation(session, async () => {
+      if (!session.tabs.size) return emptyNavState(viewId);
       const entry = activeEntry(session);
       cancelAnnotation(options, entry, "navigation");
       if (session.devtools) destroyDevTools(session);
@@ -2375,7 +2399,12 @@ export function createBrowserViewHost(
     assertCurrentSession();
     session.activeTabId = "";
     session.nextTabNumber = 1;
-    const tabs = savedTabs.length > 0 ? savedTabs : [{ tabId: "t1" }];
+    const tabs = savedTabs;
+    if (!tabs.length) {
+      session.nextTabNumber = nextTabNumber;
+      session.nativeActiveTabId = undefined;
+      return;
+    }
     let highestTabNumber = 1;
     for (const saved of tabs) {
       assertCurrentSession();
@@ -2558,7 +2587,7 @@ export function createBrowserViewHost(
       pushTabsState(options, session);
       pushProfileState(session);
       pushDevToolsState(session);
-      pushNavState(options, activeEntry(session));
+      if (session.tabs.size) pushNavState(options, activeEntry(session));
       if (normalizedRequestedProfileId === null)
         explicitTemporarySessionIds.add(session.sessionId);
       else explicitTemporarySessionIds.delete(session.sessionId);
@@ -2596,7 +2625,7 @@ export function createBrowserViewHost(
           pushTabsState(options, session);
           pushProfileState(session);
           pushDevToolsState(session);
-          pushNavState(options, activeEntry(session));
+          if (session.tabs.size) pushNavState(options, activeEntry(session));
         } catch (restoreError) {
           console.error("browser profile view rollback failed:", restoreError);
         }
@@ -2666,7 +2695,7 @@ export function createBrowserViewHost(
     reapplyBounds = false,
   ): BrowserNavState => {
     const session = entries.get(viewId);
-    if (!session) return emptyNavState(viewId);
+    if (!session || !session.tabs.size) return emptyNavState(viewId);
     assertProfileStable(session);
     const entry = activeEntry(session);
     if (cancelForNavigation) {
@@ -2685,7 +2714,7 @@ export function createBrowserViewHost(
   ): void => {
     if (!isRendererOwned(event, input.viewId)) return;
     const browserSession = entries.get(input.viewId);
-    if (!browserSession) return;
+    if (!browserSession || !browserSession.tabs.size) return;
     assertProfileStable(browserSession);
     const entry = activeEntry(browserSession);
     if (!input.enabled) {
@@ -2844,7 +2873,7 @@ export function createBrowserViewHost(
   ): void => {
     if (!isRendererOwned(event, input.viewId)) return;
     const browserSession = entries.get(input.viewId);
-    if (browserSession) discardAnnotationSession(activeEntry(browserSession));
+    if (browserSession?.tabs.size) discardAnnotationSession(activeEntry(browserSession));
   };
 
   const forwardAnnotationAction = (
@@ -2853,7 +2882,7 @@ export function createBrowserViewHost(
   ): void => {
     if (!isRendererOwned(event, input.viewId)) return;
     const browserSession = entries.get(input.viewId);
-    if (!browserSession) return;
+    if (!browserSession || !browserSession.tabs.size) return;
     const entry = activeEntry(browserSession);
     if (!entry.annotationEnabled) return;
     entry.view.webContents.send("browser:annotation:action", input.action);
@@ -2874,15 +2903,16 @@ export function createBrowserViewHost(
     ipcDisposers.push(() => options.ipcMain.off(channel, fn));
   };
 
-  handle("browser:ensure", async (event, sessionId: string) => {
+  handle("browser:ensure", async (event, sessionId: string, createInitialTab: boolean = true) => {
     const session = await ensureSessionReady(
       sessionId,
       event.sender.id,
       () => event.sender.isDestroyed?.() ?? false,
+      createInitialTab,
     );
     pushDevToolsState(session);
     pushProfileState(session);
-    return pushNavState(options, activeEntry(session));
+    return session.tabs.size ? pushNavState(options, activeEntry(session)) : emptyNavState(session.viewId);
   });
   on("browser:setBounds", (event, input: BrowserBoundsInput) => {
     if (!input || !isRendererOwned(event, input.viewId)) return;
@@ -3107,7 +3137,7 @@ export function createBrowserViewHost(
   });
   handle("browser:find:get", (event, viewId: string) => {
     const session = entries.get(viewId);
-    return session && isRendererOwned(event, viewId)
+    return session && session.tabs.size > 0 && isRendererOwned(event, viewId)
       ? publicFindState(activeEntry(session))
       : {
           viewId,
@@ -3244,9 +3274,20 @@ export function createBrowserViewHost(
           "Browser profile switching is in progress",
         );
       }
+      if (!session.tabs.size && action === "tabs") return agentTabsResult(session);
       const commandId = randomUUID();
       setAgentBrowserActivity(session, action, true, commandId, "started");
       try {
+        if (!session.tabs.size) {
+          if (action === "tab-new") {
+            const url = typeof args.url === "string" && args.url.trim()
+              ? normalizeAgentBrowserURL(args.url)
+              : undefined;
+            await openUserTab(session, url);
+            return agentTabResult(activeEntry(session), true);
+          }
+          await openTab(session, undefined, true);
+        }
         const entry = activeEntry(session);
         const runNative = async (
           nativeAction: string,
@@ -3884,7 +3925,7 @@ export function createBrowserViewHost(
     getLastFocusedPanelContents: () => {
       if (lastFocusedViewId === null) return null;
       const session = entries.get(lastFocusedViewId);
-      if (!session) return null;
+      if (!session || !session.tabs.size) return null;
       const entry = activeEntry(session);
       // Stored narrowed as BrowserWebContents but is a full WebContents at runtime.
       const contents = entry.view.webContents as unknown as WebContents;
@@ -3922,7 +3963,7 @@ export function createBrowserViewHost(
       const targetViewId = lastFocusedViewId ?? lastUsedViewId;
       if (targetViewId === null) return;
       const session = entries.get(targetViewId);
-      if (!session || !session.visible) return;
+      if (!session || !session.visible || !session.tabs.size) return;
       const entry = activeEntry(session);
       const bounds = session.bounds;
       if (bounds.width <= 0 || bounds.height <= 0) return;
@@ -3933,7 +3974,7 @@ export function createBrowserViewHost(
       });
       setTimeout(() => {
         const current = entries.get(targetViewId);
-        if (!current || !current.visible) return;
+        if (!current || !current.visible || !current.tabs.size) return;
         applyBrowserViewBounds(activeEntry(current).view, current.bounds, true);
       }, 0);
     },

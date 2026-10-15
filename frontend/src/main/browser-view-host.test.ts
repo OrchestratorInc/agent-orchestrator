@@ -608,7 +608,7 @@ describe("browser shortcut routing", () => {
 		expect(webContents.findInPage).toHaveBeenCalledOnce();
 	});
 
-	it("replaces the last tab with a blank tab and keeps the browser panel open on ⌘W", async () => {
+	it("closes the last tab without a replacement on Ctrl+W", async () => {
 		const { emitBeforeInput, host, invoke, shellSend } = setupHost();
 		const state = await invoke("browser:ensure", "sess-1");
 		await invoke("browser:navigate", { viewId: state.viewId, url: "https://example.test/" });
@@ -628,8 +628,9 @@ describe("browser shortcut routing", () => {
 			);
 		});
 		const tabs = (await invoke("browser:getTabs", state.viewId)) as unknown as BrowserTabsState;
-		expect(tabs.tabs).toHaveLength(1);
-		expect(tabs.activeTabId).not.toBe(oldTabId);
+		expect(tabs.tabs).toHaveLength(0);
+		expect(tabs.activeTabId).toBe("");
+		expect(host.isLastUsedBrowser()).toBe(false);
 	});
 
 	it("opens, focuses, and closes browser tabs without dispatching terminal shortcuts", async () => {
@@ -676,8 +677,10 @@ describe("browser shortcut routing", () => {
 		);
 
 		emitBeforeInput({ key: "w", control: true });
-		await Promise.resolve();
-		expect(webContents.close).toHaveBeenCalledOnce();
+		await vi.waitFor(async () => {
+			expect((await invoke("browser:getTabs", state.viewId) as unknown as BrowserTabsState).tabs).toHaveLength(0);
+		});
+		expect(webContents.close).toHaveBeenCalledTimes(2);
 	});
 
 	it("keeps browser shortcuts targeted after a blank-tab hide clears native focus", async () => {
@@ -744,8 +747,7 @@ describe("browser shortcut routing", () => {
 		expect(shellSend).not.toHaveBeenCalledWith(CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL);
 		expect(host.isLastUsedBrowser()).toBe(true);
 
-		// Second ⌘W with one tab left swaps it for a blank tab and keeps
-		// browser shortcuts targeting the open panel.
+		// Second ⌘W removes the final tab and releases the browser shortcut target.
 		shellSend.mockClear();
 		const secondClose = emitShellBeforeInput({ key: "w", control: true });
 		expect(secondClose.preventDefault).toHaveBeenCalled();
@@ -759,7 +761,8 @@ describe("browser shortcut routing", () => {
 			);
 		});
 		const tabs = (await invoke("browser:getTabs", state.viewId)) as unknown as BrowserTabsState;
-		expect(tabs.tabs).toHaveLength(1);
+		expect(tabs.tabs).toHaveLength(0);
+		expect(host.isLastUsedBrowser()).toBe(false);
 	});
 
 	it("consumes auto-repeat browser chords without re-firing", async () => {
@@ -1185,24 +1188,62 @@ function fakeBrowserProfileStore(
 }
 
 describe("browser:closeTab automation-runtime fallback", () => {
-	it("replaces the final page with a fresh blank tab through the renderer close action", async () => {
+	it("starts with zero tabs when the renderer requests an empty browser", async () => {
 		const { invoke, views } = setupTabHost();
-		const initial = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		const initial = await invoke("browser:ensure", "sess-1", false) as BrowserNavState;
+		expect(views).toHaveLength(0);
+		expect(await invoke("browser:getTabs", initial.viewId)).toMatchObject({ tabs: [], activeTabId: "" });
+		expect(await invoke("browser:ensure", "sess-1", false)).toMatchObject({ url: "" });
+		const opened = await invoke("browser:openTab", { viewId: initial.viewId }) as BrowserTabsState;
+		expect(opened.tabs).toHaveLength(1);
+		expect(views[0].webContents.session.webRequest.onCompleted).toHaveBeenCalledOnce();
+	});
+
+	it("creates only one first tab when automation bootstraps an initial page", async () => {
+		const { invoke, runtime } = setupTabHost();
+		const runAction = vi.mocked(runtime.runAction);
+		const original = runAction.getMockImplementation()!;
+		runAction.mockImplementation(async (sessionId, action, args, provider, signal) => {
+			// The real runtime connects before running the requested command.
+			// Connecting to an empty browser creates an initial page of its own.
+			if (!provider.listTargets().length) await provider.createTarget("about:blank");
+			return original(sessionId, action, args, provider, signal);
+		});
+		const { viewId } = await invoke("browser:ensure", "sess-1", false) as BrowserNavState;
+		const first = await invoke("browser:openTab", { viewId }) as BrowserTabsState;
+		expect(first.tabs).toHaveLength(1);
+		const second = await invoke("browser:openTab", { viewId }) as BrowserTabsState;
+		expect(second.tabs).toHaveLength(2);
+		await invoke("browser:closeTab", { viewId, tabId: second.activeTabId });
+		await invoke("browser:closeTab", { viewId, tabId: first.activeTabId });
+		const reopened = await invoke("browser:openTab", { viewId }) as BrowserTabsState;
+		expect(reopened.tabs).toHaveLength(1);
+	});
+
+	it("opens just one tab for an agent tab-new after empty renderer initialization", async () => {
+		const { host, invoke } = setupTabHost();
+		const initial = await invoke("browser:ensure", "sess-1", false) as BrowserNavState;
+		await host.execute("sess-1", "tab-new", { url: "https://example.test/" });
+		expect((await invoke("browser:getTabs", initial.viewId) as BrowserTabsState).tabs).toHaveLength(1);
+	});
+
+	it("closes the final page and can create and close a new blank tab", async () => {
+		const { invoke, views } = setupTabHost();
+		const initial = await invoke("browser:ensure", "sess-1") as BrowserNavState;
 		await invoke("browser:navigate", { viewId: initial.viewId, url: "https://example.test/" });
-		const before = (await invoke("browser:getTabs", initial.viewId)) as BrowserTabsState;
-		const closed = (await invoke("browser:closeTab", { viewId: initial.viewId, tabId: before.activeTabId })) as BrowserTabsState;
-
-		expect(closed.tabs).toHaveLength(1);
-		expect(closed.activeTabId).not.toBe(before.activeTabId);
-		expect(closed.tabs[0].url).toBe("about:blank");
+		const before = await invoke("browser:getTabs", initial.viewId) as BrowserTabsState;
+		const closed = await invoke("browser:closeTab", { viewId: initial.viewId, tabId: before.activeTabId }) as BrowserTabsState;
+		expect(closed).toMatchObject({ tabs: [], activeTabId: "", change: { kind: "closed" } });
 		expect(views[0].webContents.close).toHaveBeenCalledOnce();
-		expect(views[1].webContents.close).not.toHaveBeenCalled();
-
-		// Closing the blank landing tab works too and leaves a usable landing tab.
-		const blankClosed = (await invoke("browser:closeTab", { viewId: initial.viewId, tabId: closed.activeTabId })) as BrowserTabsState;
-		expect(blankClosed.tabs).toHaveLength(1);
-		expect(blankClosed.activeTabId).not.toBe(closed.activeTabId);
-		expect(blankClosed.tabs[0].url).toBe("about:blank");
+		expect(views[0].webContents.session.webRequest.onCompleted).toHaveBeenLastCalledWith(null);
+		expect(views).toHaveLength(1);
+		expect(await invoke("browser:ensure", "sess-1", false)).toMatchObject({ url: "" });
+		const opened = await invoke("browser:openTab", { viewId: initial.viewId }) as BrowserTabsState;
+		expect(opened.tabs).toHaveLength(1);
+		const blankClosed = await invoke("browser:closeTab", { viewId: initial.viewId, tabId: opened.activeTabId }) as BrowserTabsState;
+		expect(blankClosed.tabs).toHaveLength(0);
+		await invoke("browser:navigate", { viewId: initial.viewId, url: "https://example.test/again" });
+		expect((await invoke("browser:getTabs", initial.viewId) as BrowserTabsState).tabs).toHaveLength(1);
 	});
 
 	// Regression: observed in a real long-running session as

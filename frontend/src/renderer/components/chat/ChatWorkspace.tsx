@@ -2470,6 +2470,7 @@ export function Timeline({
 	const initialLayoutDone = useRef(false);
 	const initialLayoutAt = useRef(0);
 	const lastScrollTop = useRef(0);
+	const skipRelatchFollow = useRef(false);
 	const setPinnedNow = useCallback((next: boolean) => {
 		pinnedRef.current = next;
 		setPinned(next);
@@ -3520,7 +3521,9 @@ export function Timeline({
 		anchorGeometry.current = null;
 		syncPromptSpacer();
 		const node = scroller.current;
-		if (node && pinnedRef.current) {
+		const relatched = skipRelatchFollow.current;
+		skipRelatchFollow.current = false;
+		if (node && pinnedRef.current && !(relatched && !glideRequested.current)) {
 			if (glideRequested.current) {
 				glideRequested.current = false;
 				glideToEnd();
@@ -3619,6 +3622,9 @@ export function Timeline({
 		} else if (distance >= 64 || (movedUp && distance > 2)) {
 			if (pinnedRef.current) releaseFollow();
 		} else if (!pinnedRef.current && !movedUp) {
+			// The reader is already here: the follow layout this re-pin triggers must not
+			// snap the last few pixels under their scroll, which reads as a jitter.
+			skipRelatchFollow.current = true;
 			setPinnedNow(true);
 		}
 		updateScrollbar();

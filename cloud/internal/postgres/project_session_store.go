@@ -546,6 +546,7 @@ func (s *Store) CreateGitHubScratchProject(
 				  AND grant_row.github_repository_id = $4
 				  AND grant_row.revoked_at IS NULL
 				  AND installation.status = 'active'
+				  AND `+githubUserScopeIntactSQL+`
 				RETURNING id, org_id, display_name, repository_url, default_branch,
 					github_repository_id, config, created_at, updated_at`,
 				orgID,

@@ -9,7 +9,7 @@ FROM ${AO_CONTROL_PLANE_IMAGE} AS ao-release
 FROM node:22-bookworm-slim AS node-runtime
 
 FROM codercom/enterprise-base:ubuntu
-ARG CLAUDE_CODE_VERSION=2.1.228
+ARG CLAUDE_CODE_VERSION=2.1.287
 # OpenCode v2 ships as a NEW package, @opencode/cli (v1 was opencode-ai, whose
 # `latest` never crosses to v2). Pinned to the v2 major. The shared adapter
 # (backend/internal/adapters/agent/opencode) is ported to v2's plugin/CLI surface

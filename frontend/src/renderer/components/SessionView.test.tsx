@@ -10,7 +10,7 @@ import { useFilesTopbarHost } from "./files-topbar-host";
 import { SessionTopbarProvider } from "./SessionTopbarPortal";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
-import type { BrowserAgentActivityState } from "../../main/browser-view-host";
+import type { BrowserTabsState, BrowserAgentActivityState } from "../../main/browser-view-host";
 import { inspectorIsOpen, rememberedFileDisplayMode, useUiStore, type InspectorView } from "../stores/ui-store";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
@@ -640,7 +640,7 @@ vi.mock("./CloudWorkspaceDiff", () => ({
 const { browserDestroy, browserViewOptions, browserViewState } = vi.hoisted(() => ({
 	browserDestroy: vi.fn(),
 	browserViewOptions: { current: undefined as { active: boolean; sessionId: string; terminated: boolean } | undefined },
-	browserViewState: { url: "", agentBrowserActive: false, agentBrowserActivity: null as BrowserAgentActivityState | null },
+	browserViewState: { url: "", tabCount: 1, agentBrowserActive: false, agentBrowserActivity: null as BrowserAgentActivityState | null },
 }));
 vi.mock("../hooks/useBrowserView", () => ({
 	useBrowserView: (options: { active: boolean; sessionId: string; terminated: boolean }) => {
@@ -661,8 +661,8 @@ vi.mock("../hooks/useBrowserView", () => ({
 			goForward: vi.fn(),
 			reload: vi.fn(),
 			stop: vi.fn(),
-			tabs: [{ id: "t1", url: "http://127.0.0.1:4173/", title: "Calculator", active: true }],
-			activeTabId: "t1",
+			tabs: browserViewState.tabCount ? [{ id: "t1", url: "http://127.0.0.1:4173/", title: "Calculator", active: true }] : [],
+			activeTabId: browserViewState.tabCount ? "t1" : "",
 			tabNotice: "",
 			agentBrowserActive: browserViewState.agentBrowserActive,
 			agentBrowserActivity: browserViewState.agentBrowserActivity,
@@ -961,6 +961,7 @@ describe("SessionView", () => {
 		browserDestroy.mockReset();
 		browserViewOptions.current = undefined;
 		browserViewState.url = "";
+		browserViewState.tabCount = 1;
 		browserViewState.agentBrowserActive = false;
 		browserViewState.agentBrowserActivity = null;
 		shellTerminalsState.data = [];
@@ -1651,7 +1652,7 @@ describe("SessionView", () => {
 		expect(loader).toHaveTextContent("Creating the workspace");
 		expect(loader).toHaveTextContent("Preparing your repository and agent");
 		expect(loader).toHaveTextContent("Connecting your terminal");
-		expect(within(loader).getByTestId("multi-step-loader-step").querySelector(".multi-step-loader__step")).toBeInTheDocument();
+		expect(within(loader).getByTestId("multi-step-loader-step").querySelector(".multi-step-loader__shimmer")).toBeInTheDocument();
 		expect(within(loader).queryByRole("progressbar")).not.toBeInTheDocument();
 		expect(loader).not.toHaveTextContent("Coder");
 		expect(loader).not.toHaveClass("right-4", "top-4");
@@ -5530,6 +5531,27 @@ describe("SessionView", () => {
 		rerender(<SessionView sessionId="sess-2" />);
 		expect(inspectorButton()).toHaveAttribute("data-view", "browser");
 		expect(browserUnseen("sess-2")).toBe(false);
+	});
+
+	it.each([false, true])("keeps the empty Browser selected after its final tab closes (popped out: %s)", (poppedOut) => {
+		let tabsListener: ((state: BrowserTabsState) => void) | undefined;
+		vi.spyOn(window.ao!.browser, "onTabsState").mockImplementation((listener) => {
+			tabsListener = listener;
+			return () => undefined;
+		});
+		browserViewState.url = "https://example.test/";
+		const { rerender } = render(<SessionView sessionId="sess-1" />);
+		act(() => useUiStore.getState().setInspectorView("sess-1", "browser"));
+		if (poppedOut) fireEvent.click(screen.getByRole("button", { name: "pop browser" }));
+		act(() => {
+			browserViewState.url = "";
+			browserViewState.tabCount = 0;
+			tabsListener?.({ viewId: "browser:sess-1", activeTabId: "", tabs: [], change: { kind: "closed", tabId: "t1" } });
+		});
+		rerender(<SessionView sessionId="sess-1" />);
+		expect(inspectorButton()).toHaveAttribute("data-view", "browser");
+		if (poppedOut) expect(screen.getByRole("button", { name: "browser center" })).toBeInTheDocument();
+		vi.mocked(window.ao!.browser.onTabsState).mockRestore();
 	});
 
 	it.each(["open", "tab-new"])("reveals Browser once for explicit %s commands", (action) => {
