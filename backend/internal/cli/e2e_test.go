@@ -292,8 +292,8 @@ func TestE2E_ShutdownGuard(t *testing.T) {
 }
 
 // Two daemons share AO_DATA_DIR but have their own ports and run-files (issue
-// #3716). The second must not open ao.db: it waits 9x AO_SHUTDOWN_TIMEOUT + 7s
-// for the data-dir lock (7.9s here) and exits 75. Once the owner stops, it
+// #3716). The second must not open ao.db: it waits 9x AO_SHUTDOWN_TIMEOUT + 18s
+// for the data-dir lock (18.9s here) and exits 75. Once the owner stops, it
 // starts normally.
 func TestE2E_SecondDaemonOnSameDataDir(t *testing.T) {
 	first := newEnv(t)
@@ -302,7 +302,7 @@ func TestE2E_SecondDaemonOnSameDataDir(t *testing.T) {
 	second := newEnv(t)
 	second.dataDir = first.dataDir
 	// A regressed lock would let this daemon serve forever, so bound the run.
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, aoBin, "daemon")
 	cmd.Env = append(second.environ(""), "AO_SHUTDOWN_TIMEOUT=100ms")
@@ -311,14 +311,14 @@ func TestE2E_SecondDaemonOnSameDataDir(t *testing.T) {
 	out := string(b)
 	t.Logf("$ ao daemon (second daemon, same data dir)\n%s", out)
 	if ctx.Err() != nil {
-		t.Fatal("second daemon was still running 25s into a 7.9s lock wait; killed it")
+		t.Fatal("second daemon was still running 35s into an 18.9s lock wait; killed it")
 	}
 	var ee *exec.ExitError
 	if !asExit(err, &ee) || ee.ExitCode() != 75 {
 		t.Fatalf("second daemon: %v, want exit 75", err)
 	}
 	mustContain(t, out, "waiting for another AO process to release the data dir")
-	mustContain(t, out, "waited 7.9s for it to exit, refusing to start")
+	mustContain(t, out, "waited 18.9s for it to exit, refusing to start")
 	if _, err := os.Stat(second.runFile); !os.IsNotExist(err) {
 		t.Fatal("the refused daemon must not write a run-file")
 	}

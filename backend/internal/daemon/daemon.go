@@ -165,15 +165,18 @@ func Run(buildVersion string) error {
 	//
 	// A desktop takeover spawns this daemon as soon as the old one's /healthz
 	// goes dark, which happens when its shutdown starts. With T = ShutdownTimeout,
-	// the old daemon's capped shutdown (end of Run) then takes at most 8T+7s: the
-	// HTTP drain and seven stages capped at T each (failure dispatcher, harness
-	// installer, background workers, agent-switch workers, Codex account-switch
-	// workers, chat StopAll, LAN listener), a 5s agent-switch fault enqueue and
-	// a 2s Sentry flush. Wait 9T+7s (97s by default), one stage of margin. Run's
-	// uncapped waits (startup reconcile, preview, usage, pricing, lifecycle
-	// stack) are not covered: a predecessor stuck in one past the wait still
-	// makes this daemon exit 75.
-	dataDirLock, err := lockDataDir(context.Background(), cfg.DataDir, 9*cfg.ShutdownTimeout+7*time.Second, log)
+	// the old daemon's capped shutdown (end of Run) then takes at most 8T+18s:
+	//   - the HTTP drain and seven stages capped at T each: failure dispatcher,
+	//     harness installer, background workers, agent-switch workers, Codex
+	//     account-switch workers, chat StopAll, LAN listener;
+	//   - fixed caps: 5s agent-switch fault enqueue, 3s `tailscale serve off`,
+	//     5s closed-lid lease release plus 3s caffeinate exit (keep-awake), and
+	//     a 2s Sentry flush.
+	// Wait 9T+18s (108s by default), one stage of margin. Run's uncapped waits
+	// (startup reconcile, preview servers, chat side stops, usage, pricing,
+	// lifecycle stack) are not covered: a predecessor stuck in one past the
+	// wait still makes this daemon exit 75.
+	dataDirLock, err := lockDataDir(context.Background(), cfg.DataDir, 9*cfg.ShutdownTimeout+18*time.Second, log)
 	if err != nil {
 		return err
 	}
