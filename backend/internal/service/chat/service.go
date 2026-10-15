@@ -89,7 +89,7 @@ type Service struct {
 
 	runPromptSuggestion   func(context.Context, domain.SessionID, string, string, string) (string, error)
 	promptSuggestionSlots chan struct{}
-	turnFailureWake  func()
+	turnFailureWake       func()
 
 	mu               sync.RWMutex
 	controllers      map[domain.SessionID]*Controller

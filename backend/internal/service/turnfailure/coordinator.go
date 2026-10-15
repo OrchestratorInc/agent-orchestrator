@@ -91,6 +91,9 @@ func (c *Coordinator) RunDue(ctx context.Context) error {
 		return err
 	}
 	failure := rows[0]
+	// Keep a binding even if its recipient terminates: semantic deduplication is
+	// session-scoped, so rebinding after an uncertain acknowledgement could wake
+	// two orchestrators for one failure. Retain the row instead of guessing.
 	target := failure.TargetSessionID
 	if target == "" {
 		target, err = c.orchestrator(ctx, failure.ProjectID)
