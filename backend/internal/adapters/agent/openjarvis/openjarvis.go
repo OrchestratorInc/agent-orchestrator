@@ -67,21 +67,21 @@ func (*Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 }
 func validateLine(message string) error {
 	if !utf8.ValidString(message) || len(message) > 3000 {
-		return fmt.Errorf("openjarvis: input must be valid UTF-8 and at most 3000 bytes")
+		return fmt.Errorf("%w: openjarvis input must be valid UTF-8 and at most 3000 bytes", ports.ErrAgentInputRejected)
 	}
 	if strings.TrimSpace(message) != message || message == "" {
-		return fmt.Errorf("openjarvis: provide a nonempty plain line without surrounding whitespace")
+		return fmt.Errorf("%w: openjarvis requires a nonempty plain line without surrounding whitespace", ports.ErrAgentInputRejected)
 	}
 	for _, r := range message {
 		if unicode.IsControl(r) {
-			return fmt.Errorf("openjarvis: multiline and control-character input are unsupported")
+			return fmt.Errorf("%w: openjarvis multiline and control-character input are unsupported", ports.ErrAgentInputRejected)
 		}
 	}
 	if strings.Contains(message, "You>") || strings.Contains(message, "Confirm:") {
-		return fmt.Errorf("openjarvis: native composer/decision markers are reserved in programmatic input")
+		return fmt.Errorf("%w: openjarvis native composer/decision markers are reserved in programmatic input", ports.ErrAgentInputRejected)
 	}
 	if strings.HasPrefix(message, "/") {
-		return fmt.Errorf("openjarvis: native slash commands must be entered directly in the terminal")
+		return fmt.Errorf("%w: openjarvis native slash commands must be entered directly in the terminal", ports.ErrAgentInputRejected)
 	}
 	return nil
 }
@@ -95,7 +95,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		return nil, fmt.Errorf("openjarvis: AO tool restriction overrides unsupported; configure native tools/security")
 	}
 	if cfg.Permissions != "" && cfg.Permissions != ports.PermissionModeDefault {
-		return nil, fmt.Errorf("openjarvis: only native default permissions are supported")
+		return nil, fmt.Errorf("%w: openjarvis supports only native default permissions", ports.ErrAgentPermissionModeUnsupported)
 	}
 	if cfg.Prompt != "" {
 		if err := validateLine(cfg.Prompt); err != nil {
@@ -126,7 +126,7 @@ func (*Plugin) GetRestoreCommand(ctx context.Context, _ ports.RestoreConfig) ([]
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
-	return nil, false, fmt.Errorf("openjarvis: native chat history is in memory; restore is unsupported (start a new session)")
+	return nil, false, fmt.Errorf("%w: openjarvis native chat history is in memory; start a new session explicitly", ports.ErrAgentRestoreUnsupported)
 }
 
 // GetAgentHooks implements the scoped native adapter contract.
@@ -237,7 +237,7 @@ func (p *Plugin) ValidateTerminalMessage(message, screen string) error {
 	}
 	state, ok := p.DetectTerminalActivity(screen)
 	if !ok || state != domain.ActivityIdle {
-		return fmt.Errorf("openjarvis: terminal is not at an observed empty input composer; active turns and native decisions refuse AO sends")
+		return fmt.Errorf("%w: openjarvis terminal is not at an observed empty input composer; active turns and native decisions refuse AO sends", ports.ErrAgentInputRejected)
 	}
 	return nil
 }

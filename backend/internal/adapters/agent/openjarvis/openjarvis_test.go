@@ -2,6 +2,7 @@ package openjarvis
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,12 +16,12 @@ import (
 func TestInputFailsClosed(t *testing.T) {
 	p := New()
 	for _, message := range []string{"", "one\ntwo", "one\rtwo", "yes\x03", "\x1b[200~yes", "/clear", strings.Repeat("é", 1501), " leading", "trailing ", "Explain You>", "Confirm: yes"} {
-		if err := p.ValidateTerminalMessage(message, "You> "); err == nil {
+		if err := p.ValidateTerminalMessage(message, "You> "); !errors.Is(err, ports.ErrAgentInputRejected) {
 			t.Fatalf("accepted %q", message)
 		}
 	}
 	for _, screen := range []string{"", "You> working", "You> Explain the marker You>\n", "You> draft ending You>", "You> old\nConfirm: Allow execution of tool 'shell_exec'? [y/N]", "Generation interrupted.", "Agent 'orchestrator' failed: missing tools"} {
-		if err := p.ValidateTerminalMessage("yes", screen); err == nil {
+		if err := p.ValidateTerminalMessage("yes", screen); !errors.Is(err, ports.ErrAgentInputRejected) {
 			t.Fatalf("accepted current screen %q", screen)
 		}
 	}
@@ -65,13 +66,13 @@ func TestOverlayPreservesSecurityPersonaAndPrefix(t *testing.T) {
 }
 func TestRestoreAlwaysRefused(t *testing.T) {
 	_, ok, err := New().GetRestoreCommand(context.Background(), ports.RestoreConfig{})
-	if ok || err == nil {
+	if ok || !errors.Is(err, ports.ErrAgentRestoreUnsupported) {
 		t.Fatal("native restore fabricated")
 	}
 }
 func TestUnsupportedPermissions(t *testing.T) {
 	for _, mode := range []ports.PermissionMode{ports.PermissionModeAcceptEdits, ports.PermissionModeAuto, ports.PermissionModeBypassPermissions} {
-		if _, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{Permissions: mode}); err == nil {
+		if _, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{Permissions: mode}); !errors.Is(err, ports.ErrAgentPermissionModeUnsupported) {
 			t.Fatalf("mode %s accepted", mode)
 		}
 	}
