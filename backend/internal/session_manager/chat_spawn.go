@@ -208,6 +208,8 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		return domain.SessionRecord{}, wrapSpawnStage(id, ErrChatController, err)
 	}
 	defer releaseCodexAdmission()
+	// Read before StartChat claims a new generation for the session.
+	previousGeneration := in.record.Metadata.ControllerGeneration
 	agentConfig := in.cfg.AgentConfig
 	if !in.cfg.AgentConfigResolved {
 		agentConfig = applySpawnAgentConfig(effectiveAgentConfig(in.cfg.Harness, in.cfg.Kind, in.project.Config), in.cfg.AgentConfig)
@@ -287,8 +289,11 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 			}
 			committedConversation, commitErr := m.markChatControllerSpawned(
 				ctx, id, metadata, started.Conversation, started.ProviderBoundary,
-				started.CommitProviderHistory, nil, started.LiveReconnect,
+				started.CommitProviderHistory, nil, started.LiveReconnect, previousGeneration,
 			)
+			if commitErr == nil {
+				previousGeneration = metadata.ControllerGeneration
+			}
 			completionErr = commitErr
 			controllerCommitted = completionErr == nil
 			return ChatControllerCommit{
@@ -504,6 +509,8 @@ func (m *Manager) resumeChatController(
 	}
 	freshIfMissing := !requireNativeHistory && !reconnectOnly && providerHandoff == nil && m.providerNeverPersisted(ctx, rec)
 	var completionErr error
+	// Read before StartChat claims a new generation for the session.
+	previousGeneration := rec.Metadata.ControllerGeneration
 	_, err = m.chat.StartChat(ctx, ChatStart{
 		ReconnectOnly:           reconnectOnly,
 		SessionID:               rec.ID,
@@ -568,9 +575,10 @@ func (m *Manager) resumeChatController(
 
 			committedConversation, commitErr := m.markChatControllerSpawned(
 				ctx, rec.ID, metadata, started.Conversation, started.ProviderBoundary,
-				started.CommitProviderHistory, providerHandoff, started.LiveReconnect,
+				started.CommitProviderHistory, providerHandoff, started.LiveReconnect, previousGeneration,
 			)
 			if commitErr == nil {
+				previousGeneration = metadata.ControllerGeneration
 				// Chat retains this callback for controller rebuilds. Consume the
 				// reservation after publication so those rebuilds resume normally.
 				providerHandoff = nil
@@ -648,23 +656,21 @@ func (m *Manager) markChatControllerSpawned(
 	commitProviderHistory func(context.Context) error,
 	handoff *domain.ChatProviderHandoff,
 	liveReconnect bool,
+	previousGeneration string,
 ) (domain.ConversationRecord, error) {
 	if liveReconnect {
 		if providerBoundary != nil {
 			return domain.ConversationRecord{}, errors.New("live Chat reconnect cannot replace the provider boundary")
 		}
 		// The same provider process continues under a new generation: it still
-		// runs the release it started from, and keeps its stale mark.
-		previous, previousErr := m.getRecord(ctx, id)
-		if previousErr == nil {
-			m.carryHarnessRelease(ctx, id, previous.Metadata.ControllerGeneration, metadata.ControllerGeneration)
-		}
+		// runs the release it started from, and keeps its stale mark. The
+		// session row already holds the new generation (StartChat claimed it),
+		// so the old one comes from the caller.
+		m.carryHarnessRelease(ctx, id, previousGeneration, metadata.ControllerGeneration)
 		if err := m.lcm.MarkChatReconnected(ctx, id, metadata); err != nil {
 			return conversation, err
 		}
-		if previousErr == nil {
-			m.carryStaleBinary(ctx, id, previous.Metadata.ControllerGeneration, metadata.ControllerGeneration)
-		}
+		m.carryStaleBinary(ctx, id, previousGeneration, metadata.ControllerGeneration)
 		return conversation, nil
 	}
 	if handoff != nil && (providerBoundary == nil || commitProviderHistory == nil) {
