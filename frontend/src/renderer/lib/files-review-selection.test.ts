@@ -8,6 +8,7 @@ import {
 	buildReviewTarget,
 	commitSelectionRequest,
 	defaultChanges,
+	filesProjectKind,
 	findBranchRow,
 	followsDefaultSelection,
 	isLegacyManifest,
@@ -311,5 +312,22 @@ describe("branch rows", () => {
 		expect(findBranchRow(rows, { kind: "branch", name: "deleted" })).toBeUndefined();
 		expect(findBranchRow(rows, PR)).toBe(pr);
 		expect(findBranchRow(rows, { ...PR, url: "https://github.com/acme/app/pull/43" })).toBeUndefined();
+	});
+
+	it("finds a PR whose branch became local in that branch's row, which carries the PR", () => {
+		const local = row({ name: "fix/crash", prNumber: 42, prUrl: "https://github.com/acme/app/pull/42" });
+		const checkedOut = row({ name: "feature/login", checkedOut: true, prNumber: 43, prUrl: "https://github.com/acme/app/pull/43" });
+		expect(findBranchRow([checkedOut, local], PR)).toBe(local);
+		expect(findBranchRow([checkedOut, local], { ...PR, url: "https://github.com/acme/app/pull/43" })).toBe(checkedOut);
+		expect(findBranchRow([row({ name: "fix/crash" })], PR)).toBeUndefined();
+	});
+});
+
+describe("filesProjectKind", () => {
+	it("reads a standalone worker as scratch and a standalone orchestrator as one repository, as the daemon does", () => {
+		expect(filesProjectKind({ workspaceId: "__standalone__", kind: "worker" }, "standalone")).toBe("scratch");
+		expect(filesProjectKind({ workspaceId: "__standalone__", kind: "orchestrator" }, undefined)).toBe("single_repo");
+		expect(filesProjectKind({ workspaceId: "proj", kind: "worker" }, "workspace")).toBe("workspace");
+		expect(filesProjectKind({ workspaceId: "proj", kind: "worker" }, undefined)).toBeUndefined();
 	});
 });

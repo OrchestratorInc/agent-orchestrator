@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient, UseQueryOptions } from "@tanstack/react-query";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import type { components } from "../../api/schema";
-import { apiErrorCode, apiErrorDetails, apiErrorMessage } from "../lib/api-client";
+import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { CHECKED_OUT_BRANCH, buildReviewTarget, defaultChanges, followsDefaultSelection, isLegacyManifest, workspaceSelectionKey } from "../lib/files-review-selection";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
@@ -126,7 +126,6 @@ export class WorkspaceRequestError extends Error {
 		message: string,
 		readonly code?: string,
 		readonly status?: number,
-		readonly details?: Record<string, unknown>,
 	) {
 		super(message);
 		this.name = "WorkspaceRequestError";
@@ -134,11 +133,21 @@ export class WorkspaceRequestError extends Error {
 }
 
 function workspaceRequestError(error: unknown, response: Response | undefined, fallback: string): WorkspaceRequestError {
-	return new WorkspaceRequestError(apiErrorMessage(error, fallback), apiErrorCode(error), response?.status, apiErrorDetails(error));
+	return new WorkspaceRequestError(apiErrorMessage(error, fallback), apiErrorCode(error), response?.status);
 }
 
 export function workspaceErrorCode(error: unknown): string | undefined {
 	return error instanceof WorkspaceRequestError ? error.code : undefined;
+}
+
+/**
+ * Retries a failed read up to three times, except a 4xx answer: it comes back
+ * the same every time, and the recovery keyed on its code (a moved tip, a gone
+ * branch) would wait out the backoff.
+ */
+export function retryWorkspaceRead(failureCount: number, error: Error): boolean {
+	const status = error instanceof WorkspaceRequestError ? error.status : undefined;
+	return failureCount < 3 && !(status !== undefined && status >= 400 && status < 500);
 }
 
 export const sessionWorkspaceFilesQueryKey = (sessionId: string, hostId?: string) =>
@@ -443,6 +452,7 @@ export function sessionWorkspaceDiffsQueryOptions({
 			if (!data) throw new Error(errorMessage);
 			return data;
 		},
+		retry: retryWorkspaceRead,
 	};
 }
 
@@ -680,6 +690,7 @@ export function sessionWorkspaceHistoryQueryOptions(sessionId: string, errorMess
 			: prefix,
 		queryFn: () => fetchSessionWorkspaceHistory(sessionId, errorMessage, hostId, branch),
 		staleTime: Infinity,
+		retry: retryWorkspaceRead,
 	};
 }
 
@@ -689,6 +700,7 @@ export function sessionWorkspaceBranchesQueryOptions(sessionId: string, errorMes
 		queryKey: branchesQueryKey(sessionId, hostId),
 		queryFn: () => fetchSessionWorkspaceBranches(sessionId, errorMessage, hostId),
 		staleTime: 15_000,
+		retry: retryWorkspaceRead,
 	};
 }
 
@@ -719,6 +731,7 @@ export function sessionWorkspaceCommitSelectionQueryOptions({
 			: ["session-workspace-commit-selection", sessionId, selectionKey, workspaceVersion ?? ""] as const,
 		queryFn: () => fetchWorkspaceCommitSelection({ commitShas, errorMessage, hostId, sessionId, view, workspaceVersion }),
 		staleTime: Infinity,
+		retry: retryWorkspaceRead,
 	};
 }
 
@@ -832,6 +845,8 @@ export async function prefetchDefaultWorkspaceReviewDiffs(queryClient: QueryClie
 				view: target.view,
 				hostId,
 			}),
+			// A prefetch never retries, as fetchQuery's own default.
+			retry: false,
 			staleTime: Infinity,
 			gcTime: 30 * 60 * 1000,
 		})));

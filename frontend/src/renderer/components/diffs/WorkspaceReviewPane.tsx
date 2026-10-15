@@ -171,6 +171,8 @@ function useViewedFiles(sessionId: string, selectionKey: string, files: readonly
 export function WorkspaceReviewPane({
 	annotation,
 	target,
+	allCommitsLabel,
+	onRetry,
 	filter,
 	onBrowseAll,
 	onOpenFile: onOpenFileProp,
@@ -184,6 +186,10 @@ export function WorkspaceReviewPane({
 	annotation: FileAnnotationModel;
 	/** What to review: the Files header's branch and changes. */
 	target: ReviewTarget;
+	/** The Changes menu's name for All commits, e.g. "Latest 50 commits"; "All commits" when omitted. */
+	allCommitsLabel?: string;
+	/** Reads a failed target again. */
+	onRetry?: () => void;
 	filter: string;
 	/** Offered when there is nothing to review; omitted where the file tree can't show the change. */
 	onBrowseAll?: () => void;
@@ -490,7 +496,7 @@ export function WorkspaceReviewPane({
 	const totalDeletions = allFiles.reduce((sum, file) => sum + file.deletions, 0);
 	const changes = target.changes;
 	const targetLabel = changes.kind === "commits"
-		? target.subject ?? (changes.shas.length === 0 ? t("files.changes.allCommits") : t("files.changes.commitCount", { count: changes.shas.length }))
+		? target.subject ?? (changes.shas.length === 0 ? allCommitsLabel ?? t("files.changes.allCommits") : t("files.changes.commitCount", { count: changes.shas.length }))
 		: changes.kind === "uncommitted" ? t("files.changes.uncommitted")
 		: changes.kind === "combined" ? t("files.reviewChanges")
 		: t(`files.section.${changes.kind}`);
@@ -539,7 +545,7 @@ export function WorkspaceReviewPane({
 			{target.state === "pending" ? (
 				<PanelMessage compact>{(target.commitShas?.length ?? 0) > 1 ? t("files.changes.combining") : t("files.loading")}</PanelMessage>
 			) : target.state === "error" ? (
-				<PanelMessage>{target.error?.message || t("files.error.loadWorkspace")}</PanelMessage>
+				<PanelMessage action={onRetry ? <RetryButton onClick={onRetry} /> : undefined}>{target.error?.message || t("files.error.loadWorkspace")}</PanelMessage>
 			) : target.state === "not_combinable" ? (
 				<PanelMessage
 					action={(

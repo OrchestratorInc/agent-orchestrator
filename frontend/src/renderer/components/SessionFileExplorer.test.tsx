@@ -23,7 +23,6 @@ vi.mock("../lib/api-client", () => ({
 		return fallback;
 	},
 	apiErrorCode: () => undefined,
-	apiErrorDetails: () => undefined,
 }));
 
 vi.mock("../lib/host-clients", () => ({

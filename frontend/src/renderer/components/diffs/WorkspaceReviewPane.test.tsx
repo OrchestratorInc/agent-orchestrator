@@ -712,6 +712,26 @@ describe("WorkspaceReviewPane", () => {
 		expect(postMock).not.toHaveBeenCalled();
 	});
 
+	it("offers Retry when the commits it combines fail to load", async () => {
+		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false }]);
+		const target: ReviewTarget = { ...reviewTarget(data, { kind: "commits", shas: ["b".repeat(40), "a".repeat(40)] }), files: undefined, state: "error", error: new Error("Unable to combine commits") };
+		const onRetry = vi.fn();
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={target} filter="" onRetry={onRetry} sessionId="sess-1" split={false} />);
+
+		expect(screen.getByText("Unable to combine commits")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(onRetry).toHaveBeenCalledOnce();
+	});
+
+	it("names a default branch's whole view as the latest commits it covers", () => {
+		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false }]);
+		const target: ReviewTarget = { ...reviewTarget(data, { kind: "commits", shas: [] }), branch: { kind: "branch", name: "main" }, files: undefined, state: "pending" };
+		renderWithQuery(<WorkspaceReviewPane allCommitsLabel="Latest 50 commits" annotation={annotation()} target={target} filter="" sessionId="sess-1" split={false} />);
+
+		expect(screen.getByText("Latest 50 commits")).toBeInTheDocument();
+		expect(screen.queryByText("All commits")).not.toBeInTheDocument();
+	});
+
 	it("hides open and edit actions for non-openable targets", async () => {
 		const image = { path: "logo.png", status: "modified" as const, additions: 0, deletions: 0, size: 128, binary: true };
 		const file = { path: "src/App.tsx", status: "modified" as const, additions: 1, deletions: 1, size: 20, binary: false, editable: true, fileFingerprint: "file-1" };

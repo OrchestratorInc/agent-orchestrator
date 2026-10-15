@@ -66,6 +66,8 @@ export type ReviewChangesMenuProps = {
 	/** Totals for `value`, shown on the trigger; omit while they are unknown. */
 	stats?: ReviewChangeStats;
 	scopes: readonly ReviewChangesScopeOption[];
+	/** False hides Commits › where the checked-out branch has none to list (a scratch session, a workspace project). */
+	commitsAvailable?: boolean;
 	/** Called for every pick, including the selected scope, so the caller can also switch views. */
 	onSelectScope: (scope: ReviewChangesScope) => void;
 	commits: ReviewChangesCommits;
@@ -85,7 +87,7 @@ const scopeIcons: Record<ReviewChangesScope, LucideIcon> = {
 // event is cancelled.
 const keepMenuOpen = (event: Event) => event.preventDefault();
 
-export function ReviewChangesMenu({ mode, value, stats, scopes, onSelectScope, commits, className }: ReviewChangesMenuProps) {
+export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable = true, onSelectScope, commits, className }: ReviewChangesMenuProps) {
 	const { t } = useTranslation();
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [visibleCount, setVisibleCount] = useState(COMMIT_PAGE);
@@ -245,22 +247,26 @@ export function ReviewChangesMenu({ mode, value, stats, scopes, onSelectScope, c
 							);
 						})}
 					</DropdownMenuRadioGroup>
-					<DropdownMenuSeparator />
-					<DropdownMenuSub>
-						<DropdownMenuSubTrigger className={cn(commitsActive && "text-foreground")}>
-							<GitCommitHorizontal aria-hidden="true" />
-							<span className="min-w-0 flex-1 truncate">{t("files.commits")}</span>
-							{commitsActive ? (
-								<span className="shrink-0 text-caption text-passive">
-									{tickedShas.length === 0 ? allLabel : t("files.changes.commitCount", { count: tickedShas.length })}
-								</span>
-							) : null}
-							<span className="flex size-4 shrink-0 items-center justify-center">
-								{commitsActive ? <Check aria-hidden="true" className="text-logo-accent!" /> : null}
-							</span>
-						</DropdownMenuSubTrigger>
-						<DropdownMenuSubContent className="w-[min(26rem,calc(100vw-2rem))]">{commitBlock}</DropdownMenuSubContent>
-					</DropdownMenuSub>
+					{commitsAvailable ? (
+						<>
+							<DropdownMenuSeparator />
+							<DropdownMenuSub>
+								<DropdownMenuSubTrigger className={cn(commitsActive && "text-foreground")}>
+									<GitCommitHorizontal aria-hidden="true" />
+									<span className="min-w-0 flex-1 truncate">{t("files.commits")}</span>
+									{commitsActive ? (
+										<span className="shrink-0 text-caption text-passive">
+											{tickedShas.length === 0 ? allLabel : t("files.changes.commitCount", { count: tickedShas.length })}
+										</span>
+									) : null}
+									<span className="flex size-4 shrink-0 items-center justify-center">
+										{commitsActive ? <Check aria-hidden="true" className="text-logo-accent!" /> : null}
+									</span>
+								</DropdownMenuSubTrigger>
+								<DropdownMenuSubContent className="w-[min(26rem,calc(100vw-2rem))]">{commitBlock}</DropdownMenuSubContent>
+							</DropdownMenuSub>
+						</>
+					) : null}
 				</DropdownMenuContent>
 			)}
 		</DropdownMenu>

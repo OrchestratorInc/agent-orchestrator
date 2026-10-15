@@ -22,6 +22,7 @@ import {
 	toggleCommit,
 } from "../lib/files-review-selection";
 import { sessionUiKey } from "../lib/hosts";
+import type { ProjectKind } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
 import { useLatestCallback } from "./useStable";
 import {
@@ -36,24 +37,25 @@ import {
 	type FilesSelection,
 	type ReviewTarget,
 	type WorkspaceFilesResponse,
-	type WorkspaceHistoryResponse,
 } from "./useSessionWorkspaceFiles";
 
 /** Ticks reach the queries this long after the last one, so a run of ticks sends one request. */
 const TICK_SETTLE_MS = 250;
 const LEGACY_SCOPES: readonly ReviewChangesScope[] = ["combined", "staged", "unstaged"];
 const WORKING_SCOPES: readonly ReviewChangesScope[] = ["uncommitted", "staged", "unstaged"];
+const UNCOMMITTED_SCOPES: readonly ReviewChangesScope[] = ["uncommitted"];
 
 export type FilesReviewSelection = {
 	changesMenu: ReviewChangesMenuProps;
-	/** Null where other branches cannot be read: scratch sessions, an older daemon, a degraded manifest. */
+	/** Null where other branches cannot be read (scratch sessions, an older daemon, a degraded manifest) and until that is known. */
 	branchMenu: ReviewBranchMenuProps | null;
 	target: ReviewTarget;
-	/** The picked branch's history; the checked-out branch's carries ahead/behind. */
-	history: WorkspaceHistoryResponse | undefined;
+	/** What the review calls All commits: the latest N on a default branch, whose range has no base. */
+	allCommitsLabel: string;
+	/** Reads again what a failed target read: the picked branch's history or the combined commits. */
+	retryTarget: () => void;
 	/** Explains a fall back to the checked-out branch; "" otherwise. */
 	notice: string;
-	legacy: boolean;
 	/** Ticks every listed commit between the oldest and newest tick, which always combine. */
 	includeCommitsBetween: () => void;
 	showAllCommits: () => void;
@@ -68,12 +70,15 @@ export function useFilesReviewSelection({
 	sessionId,
 	hostId,
 	manifest,
+	projectKind,
 	onBranchChange,
 }: {
 	sessionId: string;
 	hostId?: string;
 	/** The checked-out manifest. History and branches wait for it, so they never hold up opening Files. */
 	manifest: WorkspaceFilesResponse | undefined;
+	/** Undefined while unknown: the scopes then read as a single repository's, and the branch list says whether others can be read. */
+	projectKind?: ProjectKind;
 	/** Called after the branch changes (picked, or gone), e.g. to drop a preview of the old one. */
 	onBranchChange?: () => void;
 }): FilesReviewSelection {
@@ -88,26 +93,33 @@ export function useFilesReviewSelection({
 	const [notice, setNotice] = useState({ uiKey, text: "" });
 
 	const legacy = isLegacyManifest(manifest);
-	// An older daemon reads only the worktree, so a picked branch reads as it.
-	const selection: FilesSelection = legacy && stored.branch.kind !== "checked_out" ? DEFAULT_FILES_SELECTION : stored;
+	const scratch = projectKind === "scratch";
+	// Scratch sessions have no Git, and a workspace project's manifest fills
+	// only Uncommitted for its repositories, so neither has the other scopes.
+	const uncommittedOnly = !legacy && (scratch || projectKind === "workspace");
+	// An older daemon and a scratch session read only the worktree, so a picked branch reads as it.
+	const selection: FilesSelection = (legacy || scratch) && stored.branch.kind !== "checked_out" ? DEFAULT_FILES_SELECTION : stored;
 	const branch = selection.branch;
 
 	const branchesQuery = useQuery({
 		...sessionWorkspaceBranchesQueryOptions(sessionId, t("files.branches.error"), hostId),
-		enabled: Boolean(manifest) && !legacy,
+		enabled: Boolean(manifest) && !legacy && !scratch,
 	});
 	const branchRows = branchesQuery.data?.branches;
 	const selectedRow = branchRows ? findBranchRow(branchRows, branch) : undefined;
+	// The PR's branch became local, and the local row carries the PR now.
+	const prBranchRow = branch.kind === "pull_request" && selectedRow?.kind === "local" ? selectedRow : undefined;
 	// Key another branch's history by the tip the list shows now, so a moved tip reads anew.
-	const historyBranch: FilesBranchTarget = branch.kind === "checked_out" || !selectedRow?.tipSha ? branch : { ...branch, tipSha: selectedRow.tipSha };
+	const historyBranch: FilesBranchTarget = branch.kind === "checked_out" || !selectedRow?.tipSha || prBranchRow ? branch : { ...branch, tipSha: selectedRow.tipSha };
 	const historyQuery = useQuery({
 		...sessionWorkspaceHistoryQueryOptions(sessionId, t("files.error.loadWorkspace"), hostId, historyBranch),
-		enabled: Boolean(manifest),
+		enabled: Boolean(manifest) && !(uncommittedOnly && branch.kind === "checked_out"),
 	});
 	const history = historyQuery.data;
 
-	const changes = normalizeChanges(selection, manifest, legacy, history);
-	const settledChanges = useSettledChanges(changes, branchKey(branch));
+	const changes = uncommittedOnly && branch.kind === "checked_out" ? scopeChanges("uncommitted") : normalizeChanges(selection, manifest, legacy, history);
+	// Keyed by session too: the explorer stays mounted across a session switch, which is no tick.
+	const settledChanges = useSettledChanges(changes, `${uiKey}|${branchKey(branch)}`);
 	const request = commitSelectionRequest(branch, settledChanges, manifest, history);
 	const selectionQuery = useQuery({
 		...sessionWorkspaceCommitSelectionQueryOptions({
@@ -156,6 +168,13 @@ export function useFilesReviewSelection({
 		setNotice({ uiKey, text: t("files.explorer.branchUnavailable", { branch: goneName }) });
 		branchChanged();
 	}, [branchChanged, branchGone, goneName, resetFilesSelection, t, uiKey]);
+	// The PR is still there, so the pick quietly follows it to its local branch.
+	// Its ticks may not be that branch's commits, so it shows them all.
+	useEffect(() => {
+		if (!prBranchRow) return;
+		setFilesSelection(uiKey, { branch: branchTargetOf(prBranchRow), changes: ALL_COMMITS });
+		branchChanged();
+	}, [branchChanged, prBranchRow, setFilesSelection, uiKey]);
 
 	const pick = (next: FilesSelection) => {
 		setNotice({ uiKey, text: "" });
@@ -173,8 +192,8 @@ export function useFilesReviewSelection({
 		[history],
 	);
 	const scopes = useMemo<ReviewChangesScopeOption[]>(
-		() => (legacy ? LEGACY_SCOPES : WORKING_SCOPES).map((scope) => ({ scope, stats: manifest ? sumChanges(scopeFiles(manifest, scope, legacy)) : undefined })),
-		[legacy, manifest],
+		() => (legacy ? LEGACY_SCOPES : uncommittedOnly ? UNCOMMITTED_SCOPES : WORKING_SCOPES).map((scope) => ({ scope, stats: manifest ? sumChanges(scopeFiles(manifest, scope, legacy)) : undefined })),
+		[legacy, manifest, uncommittedOnly],
 	);
 	const allStats: ReviewChangeStats | undefined = branch.kind === "checked_out"
 		? manifest ? sumChanges(manifest.sections.committed) : undefined
@@ -194,6 +213,7 @@ export function useFilesReviewSelection({
 		value: changes,
 		stats,
 		scopes,
+		commitsAvailable: !uncommittedOnly,
 		onSelectScope: (scope) => pickChanges(scopeChanges(scope)),
 		commits: {
 			state: history ? "ready" : historyQuery.isError ? "error" : "loading",
@@ -215,7 +235,10 @@ export function useFilesReviewSelection({
 	const branchTrigger: ReviewBranchTrigger = branch.kind === "branch" ? { kind: "branch", name: branch.name }
 		: branch.kind === "pull_request" ? { kind: "pull_request", number: branch.number, branch: branch.branch }
 		: { kind: "checked_out", name: checkedOutRow?.name || undefined, detached: checkedOutRow?.detached };
-	const branchMenu: ReviewBranchMenuProps | null = legacy || branchesQuery.data?.supported === false || branchesRouteMissing ? null : {
+	// A scratch session, an older daemon and a degraded manifest read no other
+	// branch. Until the project kind is known, the list says whether one can.
+	const branchesUnknown = projectKind === undefined && !branchesQuery.data && !branchesQuery.isError;
+	const branchMenu: ReviewBranchMenuProps | null = !manifest || legacy || scratch || branchesQuery.data?.supported === false || branchesRouteMissing || branchesUnknown ? null : {
 		trigger: branchTrigger,
 		state: branchRows ? "ready" : branchesQuery.isError ? "error" : "loading",
 		rows: (branchRows ?? []).map((row): ReviewBranchRow => ({
@@ -246,9 +269,12 @@ export function useFilesReviewSelection({
 		changesMenu,
 		branchMenu,
 		target,
-		history,
+		allCommitsLabel: history?.view?.rangeMode === "recent" && commitRows.length > 0 ? t("files.changes.latestCommits", { count: commitRows.length }) : t("files.changes.allCommits"),
+		retryTarget: () => {
+			if (historyQuery.isError) void historyQuery.refetch();
+			if (selectionQuery.isError) void selectionQuery.refetch();
+		},
 		notice: notice.uiKey === uiKey ? notice.text : "",
-		legacy,
 		includeCommitsBetween: () => {
 			if (changes.kind === "commits") pick({ branch, changes: { kind: "commits", shas: ticksIncludingBetween(changes.shas, listed) } });
 		},
@@ -258,18 +284,19 @@ export function useFilesReviewSelection({
 
 /**
  * The changes reads are keyed by. A tick shows in the menu at once but reaches
- * the queries only once ticking pauses; any other pick applies at once.
+ * the queries only once ticking pauses; any other pick, and any change of
+ * `scope` (the session and branch), applies at once.
  */
-function useSettledChanges(changes: FilesChanges, branch: string): FilesChanges {
+function useSettledChanges(changes: FilesChanges, scope: string): FilesChanges {
 	const key = changesKey(changes);
-	const [settled, setSettled] = useState({ branch, key, changes });
+	const [settled, setSettled] = useState({ scope, key, changes });
 	const latest = useRef(changes);
 	latest.current = changes;
-	const ticking = settled.key !== key && settled.branch === branch && changes.kind === "commits" && settled.changes.kind === "commits";
+	const ticking = settled.key !== key && settled.scope === scope && changes.kind === "commits" && settled.changes.kind === "commits";
 	useEffect(() => {
-		if (settled.key === key && settled.branch === branch) return;
-		const timer = setTimeout(() => setSettled({ branch, key, changes: latest.current }), ticking ? TICK_SETTLE_MS : 0);
+		if (settled.key === key && settled.scope === scope) return;
+		const timer = setTimeout(() => setSettled({ scope, key, changes: latest.current }), ticking ? TICK_SETTLE_MS : 0);
 		return () => clearTimeout(timer);
-	}, [branch, key, settled.branch, settled.key, ticking]);
+	}, [scope, key, settled.scope, settled.key, ticking]);
 	return ticking ? settled.changes : changes;
 }

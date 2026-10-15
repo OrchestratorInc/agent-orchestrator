@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	WorkspaceRequestError,
+	retryWorkspaceRead,
 	sessionWorkspaceFileQueryOptions,
 	sessionWorkspaceFilesQueryOptions,
 	sessionWorkspaceSearchQueryOptions,
@@ -35,6 +37,16 @@ describe("workspaceFilesRefetchInterval", () => {
 
 	it("polls while Git-state enrichment is degraded", () => {
 		expect(workspaceFilesRefetchInterval("connected", true)).toBe(30_000);
+	});
+});
+
+describe("retryWorkspaceRead", () => {
+	it("retries a failed read three times, but never a 4xx answer, which would only fail again", () => {
+		expect(retryWorkspaceRead(0, new Error("offline"))).toBe(true);
+		expect(retryWorkspaceRead(2, new WorkspaceRequestError("busy", "INTERNAL", 500))).toBe(true);
+		expect(retryWorkspaceRead(3, new Error("offline"))).toBe(false);
+		expect(retryWorkspaceRead(0, new WorkspaceRequestError("moved", "WORKSPACE_REF_MOVED", 409))).toBe(false);
+		expect(retryWorkspaceRead(0, new WorkspaceRequestError("gone", "WORKSPACE_BRANCH_NOT_FOUND", 404))).toBe(false);
 	});
 });
 

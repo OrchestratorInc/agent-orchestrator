@@ -11,6 +11,7 @@ import type {
 	WorkspaceViewInfo,
 	WorkspaceViewParams,
 } from "../hooks/useSessionWorkspaceFiles";
+import { STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID, toProjectKind, type ProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 
 // Pure rules for what the Files review shows. The stored pick is healed on
 // every read and never written back, so a pick survives the data that made it
@@ -285,16 +286,32 @@ export function branchTargetOf(row: WorkspaceBranch): FilesBranchTarget {
 	return { kind: "branch", name: row.name, tipSha: row.tipSha };
 }
 
-/** The listed row for a branch target; none means that branch or PR is gone. */
+/**
+ * The listed row for a branch target; none means that branch or PR is gone.
+ * A PR whose branch has become local is listed as that local branch, which
+ * carries the PR.
+ */
 export function findBranchRow(rows: readonly WorkspaceBranch[], branch: FilesBranchTarget): WorkspaceBranch | undefined {
 	switch (branch.kind) {
 		case "checked_out":
 			return rows.find((row) => row.checkedOut);
 		case "branch":
 			return rows.find((row) => row.kind === "local" && row.name === branch.name);
-		case "pull_request":
-			return rows.find((row) => row.kind === "pull_request" && (branch.url ? row.prUrl === branch.url : row.prNumber === branch.number));
+		case "pull_request": {
+			const isPR = (row: WorkspaceBranch) => (branch.url ? row.prUrl === branch.url : row.prNumber === branch.number);
+			return rows.find((row) => row.kind === "pull_request" && isPR(row)) ?? rows.find((row) => row.kind === "local" && isPR(row));
+		}
 	}
+}
+
+/**
+ * The project kind the Files review reads a session as, as the daemon does: a
+ * standalone worker has no Git, and a standalone orchestrator's folder reads
+ * as one repository. Undefined while unknown.
+ */
+export function filesProjectKind(session: Pick<WorkspaceSession, "workspaceId" | "kind">, workspaceKind: WorkspaceSummary["kind"]): ProjectKind | undefined {
+	if (session.workspaceId === STANDALONE_WORKSPACE_ID || workspaceKind === STANDALONE_PROJECT_KIND) return session.kind === "orchestrator" ? "single_repo" : "scratch";
+	return toProjectKind(workspaceKind);
 }
 
 export type ChangeStats = { additions: number; deletions: number };

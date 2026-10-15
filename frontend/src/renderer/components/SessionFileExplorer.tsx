@@ -40,6 +40,7 @@ import { ReviewChangesMenu } from "./diffs/ReviewChangesMenu";
 import { ReviewBranchMenu } from "./diffs/ReviewBranchMenu";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
 import { sessionUiKey } from "../lib/hosts";
+import type { ProjectKind } from "../types/workspace";
 
 const WORKSPACE_SOURCE: FilesSource = { kind: "workspace" };
 
@@ -67,6 +68,8 @@ type SessionFileExplorerProps = {
 	onOpenFile?: (path: string, options?: FileOpenOptions) => void;
 	onSplitChange?: (split: boolean) => void;
 	onToggleMaximized?: (next: boolean) => void;
+	/** Which Git scopes and branches the review offers; undefined while unknown. */
+	projectKind?: ProjectKind;
 	split?: boolean;
 };
 
@@ -77,6 +80,7 @@ export function SessionFileExplorer({
 	onOpenFile,
 	onSplitChange,
 	onToggleMaximized,
+	projectKind,
 	split: controlledSplit,
 }: SessionFileExplorerProps) {
 	const { t } = useTranslation();
@@ -109,6 +113,7 @@ export function SessionFileExplorer({
 		sessionId,
 		hostId,
 		manifest: filesData,
+		projectKind,
 		// A preview of the old branch's file would be stale.
 		onBranchChange: () => {
 			setPreviewRequest(null);
@@ -182,8 +187,9 @@ export function SessionFileExplorer({
 	const hasViewTabs = hasChanges && !onOtherBranch;
 	// Docked with nothing to pick or review, the header would hold only the
 	// maximize button (the filter lives in the top bar), so it floats over the
-	// tree's top-right corner instead of reserving an empty row above it.
-	const floatingHeader = Boolean(filesTopbarHost) && !showChangesTrigger && !branchMenu && !showChanges && !splitView && !hasViewTabs;
+	// tree's top-right corner instead of reserving an empty row above it. The
+	// pickers wait for the manifest, so until it arrives the row is kept.
+	const floatingHeader = Boolean(filesTopbarHost) && Boolean(filesData) && !showChangesTrigger && !branchMenu && !showChanges && !splitView && !hasViewTabs;
 	// In the preview + tree split the (already active) All-files tab doubles as
 	// the tree toggle, so the header doesn't carry two file-tree buttons.
 	const allFilesTabLabel = !showChanges && splitView ? (treeOpen ? t("files.hideFileTree") : t("files.showFileTree")) : t("files.allFiles");
@@ -346,6 +352,8 @@ export function SessionFileExplorer({
 					<WorkspaceReviewPane
 						annotation={annotation}
 						target={review.target}
+						allCommitsLabel={review.allCommitsLabel}
+						onRetry={review.retryTarget}
 						hostId={hostId}
 						filter={filter}
 						onBrowseAll={onOtherBranch ? undefined : () => handleViewChange(false)}

@@ -14,7 +14,6 @@ const { getMock, postMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi
 vi.mock("../lib/api-client", () => ({
 	apiClient: { POST: postMock, GET: getMock },
 	apiErrorCode: () => undefined,
-	apiErrorDetails: () => undefined,
 	apiErrorMessage: (_error: unknown, fallback = "Request failed") => fallback,
 }));
 
