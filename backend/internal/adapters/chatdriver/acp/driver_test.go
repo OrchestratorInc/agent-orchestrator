@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -606,6 +607,130 @@ func TestPersistentACPResumeAdoptsLivePromptWithoutSecondSetup(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for host ack")
+	}
+}
+
+// A reconnect rebuilds the catalog from the host's session/new snapshot, which
+// predates initial_settings and every picker change since. Left as is, the
+// picker shows the agent's launch default as the session's permission mode
+// after every daemon restart, while the provider process is still in the mode
+// AO last applied. The restored settings move the catalog without touching the
+// provider; a value the catalog does not offer stays where the snapshot had it.
+func TestPersistentACPResumeShowsRestoredSettingsAsCurrent(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		permissions ports.PermissionMode
+		model       string
+		effort      string
+		want        map[string]string
+	}{
+		{
+			name: "offered", permissions: ports.PermissionModeBypassPermissions, model: "opus", effort: "high",
+			want: map[string]string{"mode": "bypassPermissions", "model": "opus", "effort": "high"},
+		},
+		{
+			name: "not offered", permissions: ports.PermissionModeAuto, model: "haiku",
+			want: map[string]string{"mode": "default", "model": "default", "effort": "default"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			initialize, err := json.Marshal(acpsdk.InitializeResponse{
+				ProtocolVersion: acpsdk.ProtocolVersionNumber,
+				AgentCapabilities: acpsdk.AgentCapabilities{
+					SessionCapabilities: acpsdk.SessionCapabilities{Resume: &acpsdk.SessionResumeCapabilities{}},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			session, err := json.Marshal(acpsdk.NewSessionResponse{
+				SessionId: "provider-session",
+				ConfigOptions: []acpsdk.SessionConfigOption{
+					selectConfigOption("model", "Model", "model", "default", "default", "opus", "sonnet"),
+					selectConfigOption("effort", "Effort", "thought_level", "default", "default", "low", "high"),
+				},
+				Modes: &acpsdk.SessionModeState{
+					CurrentModeId: "default",
+					AvailableModes: []acpsdk.SessionMode{
+						{Id: "default", Name: "Manual"}, {Id: "bypassPermissions", Name: "Bypass Permissions"},
+					},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			daemon, host := net.Pipe()
+			t.Cleanup(func() { _ = host.Close() })
+			driver := New(Config{
+				Harness: domain.HarnessClaudeCode,
+				Capabilities: ports.ChatCapabilities{
+					ports.ChatCapabilityStreaming: true, ports.ChatCapabilityResume: true,
+				},
+				Launch: func(context.Context, LaunchConfig) (Launch, error) {
+					return Launch{Command: "fake"}, nil
+				},
+				SessionMode: func(permission ports.PermissionMode) string {
+					switch permission {
+					case ports.PermissionModeBypassPermissions:
+						return "bypassPermissions"
+					case ports.PermissionModeAuto:
+						return "auto"
+					}
+					return ""
+				},
+				SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+					var options []SessionOption
+					if settings.Model != "" {
+						options = append(options, SessionOption{ID: "model", Value: settings.Model})
+					}
+					if settings.Effort != "" {
+						options = append(options, SessionOption{ID: "effort", Value: settings.Effort})
+					}
+					return options
+				},
+			}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			driver.connectHost = func(context.Context, persistenthost.Config) (*persistenthost.Transport, error) {
+				return &persistenthost.Transport{
+					Stdin: daemon, Stdout: daemon, Reconnected: true,
+					ACPState: &persistenthost.ACPState{
+						InitializeResult: initialize, SessionResult: session,
+						SessionID: "provider-session", InitialPermissions: string(ports.PermissionModeAuto),
+					},
+				}, nil
+			}
+
+			opened, err := driver.Resume(context.Background(), ports.ChatResumeConfig{
+				SessionID: "ao-session", DataDir: t.TempDir(), WorkspacePath: t.TempDir(),
+				ProviderConversationID: "provider-session", ProviderScopeID: "scope",
+				Model: tc.model, Effort: tc.effort, Permissions: tc.permissions,
+			})
+			if err != nil {
+				t.Fatalf("Resume: %v", err)
+			}
+			conv := opened.(*conversation)
+			t.Cleanup(func() { _ = conv.Close() })
+
+			// The catalog moves without a provider round-trip: nothing is written
+			// to the live host.
+			_ = host.SetReadDeadline(time.Now().Add(40 * time.Millisecond))
+			probe := make([]byte, 1)
+			if _, err := host.Read(probe); err == nil {
+				t.Fatal("reconnect wrote to the live host to restore settings")
+			}
+			_ = host.SetReadDeadline(time.Time{})
+
+			options, err := conv.ListConfigOptions(context.Background())
+			if err != nil {
+				t.Fatalf("ListConfigOptions: %v", err)
+			}
+			got := make(map[string]string, len(options))
+			for _, option := range options {
+				got[option.ID] = option.Current.Select
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("current config options after reconnect = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

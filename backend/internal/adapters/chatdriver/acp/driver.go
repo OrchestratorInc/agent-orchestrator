@@ -422,6 +422,9 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		)
 		conv.setReportedProviderConversationID(reportedProviderConversationID)
 		conv.initialPermission = ports.PermissionMode(live.InitialPermissions)
+		// The snapshot's current values are the agent's launch defaults; the
+		// provider process is in the state these settings describe.
+		conv.markSettingsApplied(ports.ChatTurnSettings{Model: cfg.Model, Effort: cfg.Effort, Approval: cfg.Permissions})
 		conv.setSessionPreamble(d.sessionPreamble(launchCfg))
 		return conv, nil
 	}
