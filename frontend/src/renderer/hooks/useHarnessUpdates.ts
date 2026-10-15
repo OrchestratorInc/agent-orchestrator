@@ -117,8 +117,12 @@ export async function fetchUpdateAdvisory(agentId: AgentId, hostId?: string, ref
 	return data;
 }
 
-/** No job and no error: the click-time check found nothing left to install. */
-export type HarnessUpdateStart = { job?: InstallJob; error?: string };
+/**
+ * No job and no error: the click-time check found nothing left to install.
+ * advisory is that check's result once an install was requested, so a failed
+ * update names the release it actually tried.
+ */
+export type HarnessUpdateStart = { job?: InstallJob; error?: string; advisory?: AgentUpdateAdvisory };
 
 /**
  * Starts an update the user saw, shared by the notice and the Harness page.
@@ -148,9 +152,9 @@ export function useStartHarnessUpdate(hostId?: string) {
 				params: { path: { agent: agentId } },
 				body: { method: methodId, operation: "update", expectedVersion: fresh.latestVersion },
 			});
-			if (error || !data) return { error: apiErrorMessage(error, t("settings.harness.updateFailed")) };
+			if (error || !data) return { error: apiErrorMessage(error, t("settings.harness.updateFailed")), advisory: fresh };
 			queryClient.setQueryData<InstallJob[]>(installJobsQueryKeyForHost(hostId), (current) => upsertInstallJob(current, data));
-			return { job: data };
+			return { job: data, advisory: fresh };
 		} catch (error) {
 			return { error: error instanceof Error ? error.message : t("settings.harness.updateFailed") };
 		}

@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -718,6 +719,14 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		if baseline != nil && baseline.path != "" {
 			plan = targetInstalledCopy(s.goos, plan, target, baseline.path)
 		}
+		if target == TargetKimi {
+			binaryPath := ""
+			if baseline != nil {
+				binaryPath = baseline.path
+			}
+			home, _ := os.UserHomeDir()
+			plan = bindKimiInstallerUpdate(s.goos, plan, binaryPath, home, os.Getenv("PATH"))
+		}
 		plan = s.validateNPMUpdateTarget(ctx, plan, plannedPrefix)
 	}
 	if operation == AgentOperationUpdate && expected != "" {
@@ -1232,15 +1241,28 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 // maxUpdaterReportRunes bounds the updater line quoted in a failed update.
 const maxUpdaterReportRunes = 200
 
-// lastOutputLine is the last non-empty line a command printed, shortened to
-// fit an error message.
+// terminalEscape matches ANSI CSI and OSC sequences that colour or retitle
+// terminal output.
+var terminalEscape = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
+
+// lastOutputLine is the last non-empty line a command printed, as a terminal
+// would show it: escape sequences removed and only the text after a line's
+// last carriage return, shortened to fit an error message.
 func lastOutputLine(output string) string {
-	lines := strings.Split(strings.TrimSpace(output), "\n")
-	line := strings.TrimSpace(lines[len(lines)-1])
-	if runes := []rune(line); len(runes) > maxUpdaterReportRunes {
-		line = string(runes[:maxUpdaterReportRunes]) + "…"
+	output = terminalEscape.ReplaceAllString(strings.ReplaceAll(output, "\r\n", "\n"), "")
+	lines := strings.Split(output, "\n")
+	for index := len(lines) - 1; index >= 0; index-- {
+		segments := strings.Split(lines[index], "\r")
+		line := strings.TrimSpace(segments[len(segments)-1])
+		if line == "" {
+			continue
+		}
+		if runes := []rune(line); len(runes) > maxUpdaterReportRunes {
+			line = string(runes[:maxUpdaterReportRunes]) + "…"
+		}
+		return line
 	}
-	return line
+	return ""
 }
 
 // runAgentVerification re-probes the harness after a job. For an update, the

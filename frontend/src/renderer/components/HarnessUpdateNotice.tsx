@@ -93,6 +93,8 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		setErrors((current) => ({ ...current, [agentId]: undefined }));
 		try {
 			const result = await startHarnessUpdate({ agentId, methodId });
+			// The click-time check may have moved the target to a newer release.
+			if (result.advisory) startedUpdates.current.set(agentId, result.advisory);
 			if (result.error) setErrors((current) => ({ ...current, [agentId]: result.error }));
 			if (!result.job) return;
 			startedJobs.current.add(agentId);

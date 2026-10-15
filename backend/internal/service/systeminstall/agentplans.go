@@ -3,6 +3,7 @@ package systeminstall
 import (
 	"context"
 	"fmt"
+	"path"
 	"slices"
 	"strings"
 
@@ -584,23 +585,76 @@ func withInstallerEnv(script *ports.InstallScriptCommand, entries ...string) *po
 	return &next
 }
 
-// kimiInstallRoot is the KIMI_INSTALL_DIR whose bin/kimi is binaryPath, in
-// binaryPath's own separators. Kimi's installer writes <root>/bin/kimi, so
-// only a binary in that layout can be replaced in place.
-func kimiInstallRoot(binaryPath string) (string, bool) {
-	slashed := strings.ToLower(strings.ReplaceAll(binaryPath, `\`, "/"))
-	for _, suffix := range []string{"/bin/kimi", "/bin/kimi.exe"} {
-		if !strings.HasSuffix(slashed, suffix) {
-			continue
-		}
-		root := binaryPath[:len(binaryPath)-len(suffix)]
-		slashedRoot := slashed[:len(root)]
-		driveRoot := len(slashedRoot) == 2 && slashedRoot[1] == ':'
-		absolute := strings.HasPrefix(slashedRoot, "/") ||
-			len(slashedRoot) > 2 && slashedRoot[1] == ':' && slashedRoot[2] == '/'
-		return root, root != "" && absolute && !driveRoot
+// bindKimiInstallerUpdate binds a Kimi installer update to the Kimi Code
+// native install sessions run. Only the installer's own default root,
+// ~/.kimi-code, is accepted: a kimi in ~/.local, ~/.cargo or /usr/local may
+// belong to another tool (the legacy Python kimi-cli, a cargo build), and the
+// installer would replace it with the native binary. KIMI_NO_MODIFY_PATH and
+// a PATH without <root>/bin keep the installer from editing shell rc files
+// and from its legacy-shim migration, which renames or deletes other kimi
+// commands on PATH; the update only replaces <root>/bin/kimi.
+func bindKimiInstallerUpdate(goos string, plan Plan, binaryPath, home, pathList string) Plan {
+	if plan.Target != TargetKimi || plan.Method != "official-installer" || plan.Script == nil {
+		return plan
 	}
-	return "", false
+	root, ok := kimiInstallRoot(goos, binaryPath, home)
+	if !ok {
+		plan.Unsupported = true
+		plan.Reason = fmt.Sprintf("AO updates Kimi Code only in its default ~/.kimi-code installation; %q is managed elsewhere, so update it manually.", binaryPath)
+		return plan
+	}
+	env := []string{"KIMI_INSTALL_DIR=" + root, "KIMI_NO_MODIFY_PATH=1"}
+	if pathList != "" {
+		env = append(env, "PATH="+pathWithoutDir(goos, pathList, root+kimiPathSeparator(goos)+"bin"))
+	}
+	plan.Script = withInstallerEnv(plan.Script, env...)
+	plan.ExpectedDestination = binaryPath
+	return plan
+}
+
+// kimiInstallRoot is the KIMI_INSTALL_DIR whose bin/kimi is binaryPath, when
+// that is Kimi Code's default root under home. Windows paths compare
+// case-insensitively with either separator; other platforms compare exactly.
+func kimiInstallRoot(goos, binaryPath, home string) (string, bool) {
+	if home == "" {
+		return "", false
+	}
+	if goos != "windows" {
+		root, found := strings.CutSuffix(binaryPath, "/bin/kimi")
+		return root, found && path.Clean(root) == path.Clean(home+"/.kimi-code")
+	}
+	slashed := strings.ToLower(strings.ReplaceAll(binaryPath, `\`, "/"))
+	if !strings.HasSuffix(slashed, "/bin/kimi.exe") {
+		return "", false
+	}
+	root := binaryPath[:len(binaryPath)-len("/bin/kimi.exe")]
+	want := strings.ToLower(strings.ReplaceAll(home, `\`, "/")) + "/.kimi-code"
+	return root, path.Clean(slashed[:len(root)]) == path.Clean(want)
+}
+
+func kimiPathSeparator(goos string) string {
+	if goos == "windows" {
+		return `\`
+	}
+	return "/"
+}
+
+// pathWithoutDir removes dir from a PATH list, comparing as the platform does.
+func pathWithoutDir(goos, pathList, dir string) string {
+	separator, clean := ":", path.Clean
+	if goos == "windows" {
+		separator = ";"
+		clean = func(entry string) string {
+			return path.Clean(strings.ToLower(strings.ReplaceAll(entry, `\`, "/")))
+		}
+	}
+	var kept []string
+	for _, entry := range strings.Split(pathList, separator) {
+		if entry == "" || clean(entry) != clean(dir) {
+			kept = append(kept, entry)
+		}
+	}
+	return strings.Join(kept, separator)
 }
 
 // targetInstalledCopy points an update at the copy sessions run. A
@@ -624,20 +678,6 @@ func targetInstalledCopy(goos string, plan Plan, target Target, binaryPath strin
 			end++ // Keep the separator in a drive root such as D:\.
 		}
 		plan.Script = withInstallerEnv(plan.Script, "GROK_BIN_DIR="+binaryPath[:end])
-		plan.ExpectedDestination = binaryPath
-		return plan
-	}
-	if target == TargetKimi && plan.Method == "official-installer" && plan.Script != nil {
-		// The installer defaults to ~/.kimi-code and, unless told not to, edits
-		// shell rc files and renames other kimi commands on PATH. An update only
-		// replaces the binary sessions run.
-		root, ok := kimiInstallRoot(binaryPath)
-		if !ok {
-			plan.Unsupported = true
-			plan.Reason = fmt.Sprintf("AO could not confirm the Kimi installation directory for %s; update it manually.", binaryPath)
-			return plan
-		}
-		plan.Script = withInstallerEnv(plan.Script, "KIMI_INSTALL_DIR="+root, "KIMI_NO_MODIFY_PATH=1")
 		plan.ExpectedDestination = binaryPath
 		return plan
 	}

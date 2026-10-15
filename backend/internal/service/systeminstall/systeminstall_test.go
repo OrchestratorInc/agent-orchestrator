@@ -1653,13 +1653,18 @@ func TestAutohandWindowsInstallerVerifiesCLIAfterComputerControlFailure(t *testi
 }
 
 func TestKimiUpdateReinstallsAdvisoryReleaseIntoConfirmedDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("PATH", "/usr/bin:"+home+"/.kimi-code/bin:/bin")
+	binary := home + "/.kimi-code/bin/kimi"
 	s := newTestService("darwin", "bash")
 	t.Cleanup(s.stop)
 	s.updateAdvisories = map[Target]UpdateAdvisory{TargetKimi: {AgentID: string(TargetKimi), Status: UpdateStatusBehindLatest, CurrentVersion: "2.0.2", LatestVersion: "2.2.0", CheckedAt: time.Now()}}
 	var version atomic.Value
 	version.Store("2.0.2")
 	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
-		return VerifyResult{ResolvedPath: "/Users/test/tools/kimi/bin/kimi", Output: version.Load().(string)}, nil
+		return VerifyResult{ResolvedPath: binary, Output: version.Load().(string)}, nil
 	})
 	captured := make(chan ports.InstallScriptCommand, 1)
 	s.installScripts = installScriptRunnerFunc(func(_ context.Context, command ports.InstallScriptCommand, _, _ io.Writer) (ports.InstallScriptResult, error) {
@@ -1679,34 +1684,83 @@ func TestKimiUpdateReinstallsAdvisoryReleaseIntoConfirmedDirectory(t *testing.T)
 	if command.URL != "https://code.kimi.com/kimi-code/install.sh" {
 		t.Fatalf("installer = %s", command.URL)
 	}
-	for _, want := range []string{"KIMI_INSTALL_DIR=/Users/test/tools/kimi", "KIMI_NO_MODIFY_PATH=1", "KIMI_VERSION=2.2.0"} {
+	for _, want := range []string{"KIMI_INSTALL_DIR=" + home + "/.kimi-code", "KIMI_NO_MODIFY_PATH=1", "KIMI_VERSION=2.2.0", "PATH=/usr/bin:/bin"} {
 		if !slices.Contains(command.Env, want) {
 			t.Fatalf("installer environment = %v, want %q", command.Env, want)
 		}
 	}
 }
 
-func TestKimiUpdateInstallRoot(t *testing.T) {
-	for binary, want := range map[string]string{
-		"/Users/test/.kimi-code/bin/kimi":        "/Users/test/.kimi-code",
-		`C:\Users\test\.kimi-code\bin\kimi.exe`:  `C:\Users\test\.kimi-code`,
-		`\\server\share\kimi\BIN\Kimi.exe`:       `\\server\share\kimi`,
-		"/Users/test/.kimi-code/bin/kimi-legacy": "",
-		"/Users/test/.kimi-code/kimi":            "",
-		"/bin/kimi":                              "",
-		"relative/bin/kimi":                      "",
-		`C:\bin\kimi.exe`:                        "",
-		"":                                       "",
+func TestKimiUpdateBindsOnlyKimiCodeDefaultInstall(t *testing.T) {
+	for _, test := range []struct {
+		goos, binary, home, root string
+	}{
+		{"darwin", "/Users/test/.kimi-code/bin/kimi", "/Users/test", "/Users/test/.kimi-code"},
+		{"linux", "/home/u/.kimi-code/bin/kimi", "/home/u/", "/home/u/.kimi-code"},
+		{"windows", `C:\Users\Test\.Kimi-Code\BIN\Kimi.exe`, `C:\Users\test`, `C:\Users\Test\.Kimi-Code`},
+		// Another tool's kimi: the legacy Python kimi-cli, a cargo build, a system copy.
+		{"darwin", "/Users/test/.local/bin/kimi", "/Users/test", ""},
+		{"darwin", "/Users/test/.cargo/bin/kimi", "/Users/test", ""},
+		{"darwin", "/usr/local/bin/kimi", "/Users/test", ""},
+		{"windows", `C:\Users\test\.local\bin\kimi.exe`, `C:\Users\test`, ""},
+		// Case and executable names are exact outside Windows.
+		{"linux", "/home/u/.kimi-code/BIN/kimi", "/home/u", ""},
+		{"darwin", "/Users/test/.kimi-code/bin/kimi.exe", "/Users/test", ""},
+		{"darwin", "/Users/test/.kimi-code/bin/kimi-legacy", "/Users/test", ""},
+		{"darwin", "", "/Users/test", ""},
+		{"darwin", "/Users/test/.kimi-code/bin/kimi", "", ""},
 	} {
-		plan := targetInstalledCopy("darwin", Plan{Target: TargetKimi, Method: "official-installer", Script: &ports.InstallScriptCommand{Env: []string{"kimi_install_dir=/elsewhere", "KEEP=yes"}}}, TargetKimi, binary)
-		if want == "" {
+		script := &ports.InstallScriptCommand{Env: []string{"kimi_install_dir=/elsewhere", "KEEP=yes"}}
+		plan := bindKimiInstallerUpdate(test.goos, Plan{Target: TargetKimi, Method: "official-installer", Script: script}, test.binary, test.home, "")
+		if test.root == "" {
 			if !plan.Unsupported || plan.Reason == "" {
-				t.Errorf("%q: update was not refused: %+v", binary, plan)
+				t.Errorf("%s %q: update was not refused: %+v", test.goos, test.binary, plan)
 			}
 			continue
 		}
-		if plan.Unsupported || !slices.Equal(plan.Script.Env, []string{"KEEP=yes", "KIMI_INSTALL_DIR=" + want, "KIMI_NO_MODIFY_PATH=1"}) {
-			t.Errorf("%q: plan = %+v env = %v, want KIMI_INSTALL_DIR=%s", binary, plan, plan.Script.Env, want)
+		want := []string{"KEEP=yes", "KIMI_INSTALL_DIR=" + test.root, "KIMI_NO_MODIFY_PATH=1"}
+		if plan.Unsupported || !slices.Equal(plan.Script.Env, want) || plan.ExpectedDestination != test.binary {
+			t.Errorf("%s %q: plan = %+v env = %v, want %v", test.goos, test.binary, plan, plan.Script.Env, want)
+		}
+		if !slices.Equal(script.Env, []string{"kimi_install_dir=/elsewhere", "KEEP=yes"}) {
+			t.Errorf("original script was mutated: %v", script.Env)
+		}
+	}
+	brew := Plan{Target: TargetKimi, Method: "homebrew", Command: []string{"brew", "upgrade", "kimi-code"}}
+	if got := bindKimiInstallerUpdate("darwin", brew, "/opt/homebrew/bin/kimi", "/Users/test", "/usr/bin"); !reflect.DeepEqual(got, brew) {
+		t.Fatalf("Homebrew plan changed: %+v", got)
+	}
+}
+
+// The installer skips its legacy-shim migration, which renames or deletes
+// other kimi commands on PATH, only while its own bin directory is off PATH.
+func TestKimiUpdateKeepsItsBinDirectoryOffInstallerPath(t *testing.T) {
+	for _, test := range []struct {
+		goos, binary, home, pathList, want string
+	}{
+		{"darwin", "/Users/test/.kimi-code/bin/kimi", "/Users/test", "/usr/bin:/Users/test/.kimi-code/bin/:/Users/test/.local/bin:/bin", "PATH=/usr/bin:/Users/test/.local/bin:/bin"},
+		{"windows", `C:\Users\Test\.kimi-code\bin\kimi.exe`, `C:\Users\Test`, `C:\Windows;c:\users\test\.KIMI-CODE\Bin;C:\tools`, `PATH=C:\Windows;C:\tools`},
+	} {
+		plan := bindKimiInstallerUpdate(test.goos, Plan{Target: TargetKimi, Method: "official-installer", Script: &ports.InstallScriptCommand{}}, test.binary, test.home, test.pathList)
+		if plan.Unsupported || !slices.Contains(plan.Script.Env, test.want) {
+			t.Errorf("%s: env = %v, want %q", test.goos, plan.Script.Env, test.want)
+		}
+	}
+}
+
+func TestLastOutputLineShowsWhatTheTerminalWouldShow(t *testing.T) {
+	long := strings.Repeat("é", maxUpdaterReportRunes+50)
+	for output, want := range map[string]string{
+		"":            "",
+		" \n\r\n\t\n": "",
+		"Checking...\nDroid is already up to date.\n\n": "Droid is already up to date.",
+		"\x1b[32m✓\x1b[0m Already up to date!\r\n":      "✓ Already up to date!",
+		"Downloading 10%\rDownloading 100%\rDone\n":     "Done",
+		"\x1b]0;title\x07Updated to 2.2.0\n":            "Updated to 2.2.0",
+		long:                                            strings.Repeat("é", maxUpdaterReportRunes) + "…",
+	} {
+		if got := lastOutputLine(output); got != want {
+			t.Errorf("lastOutputLine(%q) = %q, want %q", output, got, want)
 		}
 	}
 }
