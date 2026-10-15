@@ -54,6 +54,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		{"deepseek-harness", "Set up DeepSeek", "dsh", "Opens DeepSeek's Models page to store an API key and pick a model route; leave it running until the key is saved", "https://github.com/deepseek-ai/deepseek-harness", "", ActionSetup, []string{"dsh", "--profile", "web"}},
 		{"openhands", "Set up OpenHands", "openhands", "Native first-run LLM settings; AO forwards terminal input without persisting or logging the raw input, while OpenHands stores settings in ~/.openhands", "https://docs.openhands.dev/openhands/usage/cli/quick-start", "", ActionSetup, []string{"openhands"}},
 		{"command-code", "Log in to Command Code", "command-code", "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart", "", ActionLogin, []string{"command-code", "login"}},
+		{"openjarvis", "Configure OpenJarvis", "", "Configure credentials using the native provider setup; credential presence remains configured, not verified authorization.", "https://open-jarvis.github.io/OpenJarvis/user-guide/code-assistant/", "", ActionSetup, nil},
 	}
 
 	svc := New(foundExecutables(cases), nil)
@@ -70,7 +71,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		// with no command to drive. DeepSeek Harness has no login subcommand either,
 		// but its web profile serves the Models page that writes the credential, so
 		// its setup is a terminal plan.
-		case "aider", "unreal-agent":
+		case "aider", "unreal-agent", "openjarvis":
 			wantLaunchMode = LaunchDocumentation
 		}
 		if seen[got.AgentID] {

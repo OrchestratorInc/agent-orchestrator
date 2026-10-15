@@ -13654,6 +13654,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - openjarvis
           - fake
           type: string
         approvalMode:
@@ -14333,6 +14334,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - openjarvis
           - cloudflared
           type: string
         updatedAt:
@@ -17458,6 +17460,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - openjarvis
           type: string
         issueId:
           type: string

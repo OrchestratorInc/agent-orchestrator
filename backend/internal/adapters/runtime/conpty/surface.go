@@ -4,6 +4,7 @@ import (
 	"io"
 	"strings"
 
+	uv "github.com/charmbracelet/ultraviolet"
 	vt "github.com/unixshells/vt-go"
 )
 
@@ -32,7 +33,38 @@ func (s *renderedSurface) Write(p []byte) {
 }
 
 func (s *renderedSurface) Resize(cols, rows int) {
+	// vt-go preserves top rows on shrink. A normal REPL may emit its prompt
+	// only once, so retain the current cursor-bearing rows rather than losing
+	// them below the new bottom. Alternate-screen redraw behavior is unchanged.
+	cursor := s.emulator.CursorPosition()
+	shift := cursor.Y - rows + 1
+	if rows <= 0 || cols <= 0 || s.emulator.IsAltScreen() || shift <= 0 {
+		s.emulator.Resize(cols, rows)
+		return
+	}
+	width := min(cols, s.emulator.Width())
+	cells := make([][]*uv.Cell, rows)
+	for y := range rows {
+		cells[y] = make([]*uv.Cell, cols)
+		for x := range width {
+			cell := s.emulator.CellAt(x, y+shift)
+			if cell != nil && (cell.Width <= 1 || x+cell.Width <= cols) {
+				cells[y][x] = cell.Clone()
+			}
+		}
+	}
 	s.emulator.Resize(cols, rows)
+	for y := range rows {
+		for x := range cols {
+			s.emulator.SetCell(x, y, nil)
+		}
+		for x := 0; x < cols; x++ {
+			if cell := cells[y][x]; cell != nil && cell.Width > 0 {
+				s.emulator.SetCell(x, y, cell)
+				x += cell.Width - 1
+			}
+		}
+	}
 }
 
 func (s *renderedSurface) Tail(lines int) string {

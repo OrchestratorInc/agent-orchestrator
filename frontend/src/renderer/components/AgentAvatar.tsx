@@ -48,6 +48,7 @@ import kimchiLogo from "../assets/agents/kimchi.svg";
 import kiroLogo from "../assets/agents/kiro.svg";
 import museLogo from "../assets/agents/muse.svg";
 import mimoCodeLogo from "../assets/agents/mimo-code.svg";
+import openjarvisLogo from "../assets/agents/openjarvis.png";
 import ompLogo from "../assets/agents/omp.svg";
 import openhandsDarkLogo from "../assets/agents/openhands-dark.svg";
 import openhandsLightLogo from "../assets/agents/openhands-light.svg";
@@ -68,6 +69,7 @@ import vibeLogo from "../assets/agents/vibe.svg";
 // background; a single mark reads on both. Agents without an asset fall back to
 // a lettered tile.
 const LOGOS: AgentLogoSources = {
+	openjarvis: openjarvisLogo,
 	codex: codexLogo,
 	codewhale: { light: codewhaleLightLogo, dark: codewhaleDarkLogo },
 	"command-code": { light: commandCodeLightLogo, dark: commandCodeDarkLogo },

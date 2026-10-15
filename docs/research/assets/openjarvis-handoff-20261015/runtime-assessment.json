@@ -1,0 +1,57 @@
+{
+  "utc": "2026-10-15T06:27:48.695277+00:00",
+  "scope": "Linux registered AO API/native; runtime remote77574094 only; no UI/strict runner/current merged-source qualification",
+  "ordinaryFresh": {
+    "initialFileEffect": "hello\n",
+    "followup": "hello\nworld\n",
+    "visiblePromptMentionsPrivateTokenOrReceipt": false,
+    "privateEffect": "PRIVATE_OJ_1015\n",
+    "nativeEffect": "NATIVE_OJ_1015\n",
+    "projectEffect": null,
+    "projectInstructions": "FAIL/NOT_QUALIFIED",
+    "nativeConfigUnchanged": true
+  },
+  "cancel": {
+    "PID": 1185793,
+    "kernelStart": "109115643",
+    "reaped": true,
+    "noLate": true
+  },
+  "postCancelUncertainSend": {
+    "status": "FAIL",
+    "error": "{'error': 'internal', 'code': 'INTERNAL_ERROR', 'message': 'Internal server error', 'requestId': 'vps-linux/wgrCmjPfKx-000092', 'reporting_owner': 'http'}",
+    "action": "No retry; exact owned sessions killed"
+  },
+  "recoveryKill": {
+    "PID": 1186049,
+    "kernelStart": "109127706",
+    "reaped": true,
+    "noLate": true,
+    "terminated": true
+  },
+  "controlSurvived": true,
+  "restore": "N/A in-memory history; refusal observed HTTP500, record remains terminated",
+  "restoreRefusal": {
+    "HTTP": 500,
+    "response": {
+      "error": "internal",
+      "code": "INTERNAL_ERROR",
+      "message": "Internal server error",
+      "requestId": "vps-linux/iZAMaIO8u9-000013",
+      "reporting_owner": "http"
+    },
+    "terminatedAfter": true
+  },
+  "chatRefusal": {
+    "HTTP": 409,
+    "response": {
+      "error": "conflict",
+      "code": "SESSION_MODE_UNSUPPORTED",
+      "message": "spawn: chat mode unsupported for harness: openjarvis has no chat driver",
+      "requestId": "vps-linux/iZAMaIO8u9-000015",
+      "reporting_owner": "http"
+    }
+  },
+  "ui": "BLOCKED",
+  "editedSourceCI": "NOT_RUN"
+}

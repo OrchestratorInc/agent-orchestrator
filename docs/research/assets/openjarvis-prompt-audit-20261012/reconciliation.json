@@ -1,0 +1,17 @@
+{
+  "at": "2026-10-12T18:05:32.075443+00:00",
+  "harness": "openjarvis",
+  "pr": 6537,
+  "previousHead": "46d2c3e9b68a80a5c7f50b191c164b6c3b5c1172",
+  "canonicalMain": "fca1b72c0a6e9106dae0cbe76b5621358356aa4e",
+  "resolvedPaths": [
+    "backend/internal/storage/sqlite/migrate_burned_versions_test.go",
+    "frontend/src/docs/content/plugins/agents/index.mdx"
+  ],
+  "preservedEvidence": "All preexisting docs/research bytes unchanged; ancestry retained by merge commit.",
+  "validation": "PR CI only; no local suites run.",
+  "liveFresh": "NOT_RUN_THIS_RECONCILIATION",
+  "liveRestore": "NOT_RUN_THIS_RECONCILIATION",
+  "providerRole": "NOT_RUN_THIS_RECONCILIATION",
+  "historicalProof": "Retained at original tested source/native revision; never promoted by merge."
+}

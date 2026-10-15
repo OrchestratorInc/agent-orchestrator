@@ -13,6 +13,15 @@ function themeSources(name: string) {
 }
 
 describe("AgentAvatar", () => {
+	it("renders the openjarvis brand asset", () => {
+		render(<AgentAvatar provider="openjarvis" />);
+
+		expect(screen.getByRole("img", { name: "openjarvis" })).toHaveAttribute(
+			"src",
+			expect.stringContaining("openjarvis.png"),
+		);
+	});
+
 	it("renders the official fx light and dark marks under one accessible name", () => {
 		render(<AgentAvatar provider="fx" />);
 
