@@ -8,6 +8,7 @@ import { cacheAgentReadiness, ensureAgentReadiness, useAgentReadinessQuery, useE
 import { advisoryInUse, hasConfirmedHarnessUpdate, harnessUpdateNoticeKey, installedAgentIds, installerQueryKey, installersQueryOptions, installJobsQueryKey, installJobsQueryOptions, isActiveInstallJob, isFailedInstallJob, isWaitingForIdleJob, maintenanceMethodId, needsHarnessLogin, updateAdvisoryQueryKey, useHarnessUpdates, useStartHarnessUpdate, versionLabel, type AgentUpdateAdvisory, type HarnessInUse, type InstallJob } from "../hooks/useHarnessUpdates";
 import { AGENT_OPTIONS, agentLabel, type AgentId } from "../lib/agent-options";
 import { aoBridge } from "../lib/bridge";
+import { isWindowsPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
@@ -219,7 +220,10 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	const summary = !isExpanded && updates.length > 1;
 	// The caption size is written as a length: tailwind-merge reads a bare `text-caption`
 	// as a text colour and drops the button's own, leaving white text on the light fill.
-	const updateAllButton = (className: string) => <Button type="button" size="sm" className={cn(className, "text-[length:var(--font-size-caption)]")}
+	// While updates start the button stays solid: it reports progress, not an
+	// unavailable action.
+	const updateAllButton = (className: string) => <Button type="button" size="sm" className={cn(className, "text-[length:var(--font-size-caption)]", startingAll && "disabled:opacity-100")}
+		aria-busy={startingAll || undefined}
 		disabled={startingAll || updateAllTargets.length === 0} onClick={() => void startAllUpdates()}>
 		{startingAll ? <LoaderCircle className="size-3 animate-spin" aria-hidden="true" /> : null}
 		<span>{startingAll ? t("settings.harness.startingAllUpdates")
@@ -228,10 +232,14 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	// Portaled to the end of <body>: Electron applies window drag regions in DOM
 	// order, so a later drag strip (the home page's) would otherwise override no-drag.
 	return createPortal(<aside role="region" aria-label={t("settings.harness.updateNoticeTitle")}
-		className="fixed right-4 top-3 isolate z-[calc(var(--z-overlay)-1)] w-[min(300px,calc(100vw-32px))] text-card-foreground"
+		className="fixed right-4 isolate z-[calc(var(--z-overlay)-1)] w-[min(300px,calc(100vw-32px))] text-card-foreground"
 		data-browser-native-overlay="true" data-state="open"
 		// The stack reaches the window's drag region, which would swallow its clicks.
-		style={{ WebkitAppRegion: "no-drag" } as CSSProperties}>
+		// Below the top bar (and Windows' own titlebar), so the stack and its
+		// Show less / Update all row never cover New task or Orchestrator.
+		style={{ WebkitAppRegion: "no-drag", top: isWindowsPlatform()
+			? "calc(var(--size-window-titlebar) + var(--size-toolbar) + var(--space-3))"
+			: "calc(var(--size-toolbar) + var(--space-3))" } as CSSProperties}>
 		{/* The stack toggle sits above the cards so it never reads as part of one notice. */}
 		{/* Above the stack, whose negative margin reaches up into this row. */}
 		{isExpanded ? <div className="relative z-20 mb-4 flex items-center justify-between gap-2">
@@ -295,7 +303,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 					</div>
 					<div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
 						<p className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-1 text-caption"><span className="break-all font-mono text-settings-label">{versionLabel(advisory.currentVersion!)}</span><ArrowRight className="size-3 shrink-0 text-settings-muted" role="img" aria-label={t("settings.harness.availableVersion")} /><span className="break-all font-mono font-medium text-settings-accent">{versionLabel(advisory.latestVersion!)}</span></p>
-					{busy ? <Button size="sm" variant="outline" className="h-7 min-w-16 shrink-0 px-2 text-xs" disabled><LoaderCircle className="size-3 animate-spin" aria-hidden="true" />{t(isWaitingForIdleJob(job) ? "settings.harness.waiting" : "settings.harness.updating")}</Button>
+					{busy ? <Button size="sm" variant="secondary" className="h-7 min-w-16 shrink-0 px-2 text-xs disabled:opacity-100" aria-busy="true" disabled><LoaderCircle className="size-3 animate-spin" aria-hidden="true" />{t(isWaitingForIdleJob(job) ? "settings.harness.waiting" : "settings.harness.updating")}</Button>
 						: ready && ((needsLogin && authPlan?.available) || (!needsLogin && canUpdate)) ? <Button size="sm" className="h-7 min-w-16 shrink-0 px-2 text-xs" disabled={startingAll} onClick={requestAction}>{needsLogin ? t(authPlan?.action === "setup" ? "settings.harness.setup" : "settings.harness.login")
 							: sessions?.kind === "blocked" ? (sessions.starting ? t("settings.harness.update") : t("settings.harness.viewSessions", { count: sessions.count }))
 							: t(error ? "settings.harness.retryUpdate" : "settings.harness.update")}</Button>
