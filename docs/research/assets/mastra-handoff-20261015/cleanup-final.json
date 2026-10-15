@@ -1,0 +1,34 @@
+{
+  "utc": "2026-10-15T05:53:27.671514+00:00",
+  "runtimeIdentities": [
+    {
+      "pid": 1179198,
+      "kernelStart": "108889516",
+      "aliveAtFinalCheck": false
+    },
+    {
+      "pid": 1179203,
+      "kernelStart": "108889518",
+      "aliveAtFinalCheck": false
+    },
+    {
+      "pid": 1177555,
+      "kernelStart": "108837208",
+      "aliveAtFinalCheck": false
+    },
+    {
+      "pid": 1177560,
+      "kernelStart": "108837216",
+      "aliveAtFinalCheck": false
+    },
+    {
+      "pid": 1177568,
+      "kernelStart": "108837218",
+      "aliveAtFinalCheck": false
+    }
+  ],
+  "allOwnedRuntimeIdentitiesGone": true,
+  "diskFreeBytes": 1113088000,
+  "remainingOwnedProcesses": [],
+  "finalProcessInventoryUTC": "2026-10-15T05:53:52.991989+00:00"
+}

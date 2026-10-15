@@ -1,0 +1,252 @@
+[
+  {
+    "file": "archived.json",
+    "bytes": 1565,
+    "sha256": "0e7fd5d57a8fa16d6e2fdfa03330eb9d8eda13513104093304b411ee18d11d58"
+  },
+  {
+    "file": "archived.png",
+    "bytes": 56871,
+    "sha256": "bb1d5fcdaf7853bce95109ab337c6e9ccbcbe3f8a5b0ac9787eb1701266480cf"
+  },
+  {
+    "file": "auth-before.json",
+    "bytes": 1550,
+    "sha256": "39806176f766ce063cdd9aea8bee744ef5bffe61c85abe78af89bf89c130bdd5"
+  },
+  {
+    "file": "auth-before.png",
+    "bytes": 92871,
+    "sha256": "846b6b40274b2b042fb63c07e859e294e2de45fdf4b130a4576b9c8f638f9498"
+  },
+  {
+    "file": "auth-guidance-return.json",
+    "bytes": 1577,
+    "sha256": "3c6c25ec51604386cddba885aae43b002040a345ffd26e727e302ee08bfcd411"
+  },
+  {
+    "file": "auth-guidance-return.png",
+    "bytes": 33830,
+    "sha256": "f5337c93f75ac85095e9a93adcf95e45dc2cd08970c15e92c539831cf79ce55f"
+  },
+  {
+    "file": "cancel-result.json",
+    "bytes": 263,
+    "sha256": "034be5ceb77bdeb392021c614cc88f1dde827e2ec121e67f3ae1c1f36d098c82"
+  },
+  {
+    "file": "checkpoints.json",
+    "bytes": 11215,
+    "sha256": "85c1134e0b9a89467f412710f37d178b79fd609c6b7d108875aa824cc49c8523"
+  },
+  {
+    "file": "cleanup-final.json",
+    "bytes": 758,
+    "sha256": "fb3328d8c7f50981464f172ead6bf601f7849c2e404324237f52c64aa647248a"
+  },
+  {
+    "file": "cleanup-host.json",
+    "bytes": 563,
+    "sha256": "42e56d5ccdc30c78412787212827d2b825506ffae1a1b5c9546bd7b2866d636e"
+  },
+  {
+    "file": "cleanup-session.json",
+    "bytes": 697,
+    "sha256": "35c05eb3b15d2efba7fc5c1567bab54a629a0d0e21a512fa858e7efce03d8425"
+  },
+  {
+    "file": "cleanup-ui.json",
+    "bytes": 1597,
+    "sha256": "a402a999ec68a3a2bfa2b203d2bcdf2c646c76c59cdf709b822eaef57a1deb0b"
+  },
+  {
+    "file": "diagnostic-cleanup.json",
+    "bytes": 205,
+    "sha256": "727a3a01a331381407cb453395f6c85d2e2ecef293fe5e9a28d80ad453cda9db"
+  },
+  {
+    "file": "diagnostic-state.jsonl",
+    "bytes": 2200,
+    "sha256": "41737f336f049515d6ebed851a149a7d820c8f3d2a1a649481e52a2249ad322f"
+  },
+  {
+    "file": "github-final-status.json",
+    "bytes": 4669,
+    "sha256": "044e2a18800379906683aaf79535c2b191de429b3c6000a921edbda4069ecd3c"
+  },
+  {
+    "file": "history-count-corrected.json",
+    "bytes": 464,
+    "sha256": "6016da2f1e24c723e77c1e7cfd73e070e7c650a1a2d7435e3d7c3db245aefd30"
+  },
+  {
+    "file": "initial-proof.json",
+    "bytes": 750,
+    "sha256": "95c68af093b0f228d740bd83f9abec6de8def55de78001c04a36d950a02f5fa7"
+  },
+  {
+    "file": "install-offer-manual.json",
+    "bytes": 1577,
+    "sha256": "ef8f148cc92734dcf7cce7760e0768f83a93b46569e4affbadf6f801d9feb94f"
+  },
+  {
+    "file": "install-offer-manual.png",
+    "bytes": 42346,
+    "sha256": "9e2728760a4eff11ed35162d7c822475dadd792b5fa70a0c43b8067e41e14766"
+  },
+  {
+    "file": "kanban-return.json",
+    "bytes": 1680,
+    "sha256": "04536d96a469a2ca8cfce9d0422cd7d4a39effa610fc4e2da5fa093d86566687"
+  },
+  {
+    "file": "kanban-return.png",
+    "bytes": 50237,
+    "sha256": "7c1846f971b6dec3c962adeb4df5a751fb9ae0498b55b411ddba8532ba0b79f6"
+  },
+  {
+    "file": "kill-confirm.json",
+    "bytes": 1677,
+    "sha256": "7184fa8924082f5fb96268eed0a7ca125a52d37993b6708145ffd5e546a18db1"
+  },
+  {
+    "file": "kill-confirm.png",
+    "bytes": 102236,
+    "sha256": "1a12a81482ffdf4663fe7565fcc7111f01443f014dcbe805b9eea4c8ca961c9d"
+  },
+  {
+    "file": "kill-process-after.json",
+    "bytes": 402,
+    "sha256": "88cc3450bd09c9b3aa0df25ae104964aa6015e1d062264e1365f5e7992590f2a"
+  },
+  {
+    "file": "kill-process-before.json",
+    "bytes": 269,
+    "sha256": "62201518ebda0b203ff01cd70aab31d870b2aa811b585940f0260effdbf4ebe9"
+  },
+  {
+    "file": "native-fingerprint.json",
+    "bytes": 483,
+    "sha256": "1d9bf9cb755241d35a5ff37424d81a3ef61b6a24f44d5ffdb3bfd31800e25e33"
+  },
+  {
+    "file": "restore-configured-observation.json",
+    "bytes": 371,
+    "sha256": "91824b9db804c72fb6ef8db9e1eaa5666a65d1fe619a03e506b18942db28fac0"
+  },
+  {
+    "file": "restore-first-control.json",
+    "bytes": 346,
+    "sha256": "0b4d4f9de050ff90783222c8162f80e53e95df253a17ef5535b61c06aa8c31f1"
+  },
+  {
+    "file": "restore-identity.json",
+    "bytes": 243,
+    "sha256": "74725a205e3873c8496abcc943aabe6dde781af049272369c101009d7092569a"
+  },
+  {
+    "file": "restore-ready.json",
+    "bytes": 1680,
+    "sha256": "c7c3f8ce807c570aab2f1f5cd7bc073c9973ded3fc87ffb2b22aae8ac8e05aa5"
+  },
+  {
+    "file": "restore-ready.png",
+    "bytes": 76141,
+    "sha256": "5c88d677623391ed2eff04d628b32c7964f60ed5b585300c4ec757a2b763a78d"
+  },
+  {
+    "file": "restore-settled.json",
+    "bytes": 1686,
+    "sha256": "15ab128666a65fcfb188a4c6f78b29f9992854b0c96700dce54ef9702ecb3665"
+  },
+  {
+    "file": "restore-settled.png",
+    "bytes": 73256,
+    "sha256": "980283502021755ff57201631d50835413468f22c9211f97674f456daa94fcd1"
+  },
+  {
+    "file": "scripts-manifest.json",
+    "bytes": 7552,
+    "sha256": "a8204e2d759675fb26ecfe93bbc1943d78ac7dd8370797929dde621b33ef7c2e"
+  },
+  {
+    "file": "task-agent-visible.json",
+    "bytes": 1571,
+    "sha256": "bb87abedf0a202597c8f4f1734915cb44095814717fd1cd53ca2aec574dec9a0"
+  },
+  {
+    "file": "task-agent-visible.png",
+    "bytes": 68393,
+    "sha256": "e3eff3d5cc9f5515384f1f877dbefc70dce30631601db8b2fb878209cf928945"
+  },
+  {
+    "file": "task-cancel-active.json",
+    "bytes": 1695,
+    "sha256": "ed842b3d0e6ed136404a62fd12305bdd16ae9c139921c91a371e0a24318db96a"
+  },
+  {
+    "file": "task-cancel-active.png",
+    "bytes": 77648,
+    "sha256": "d2c47ad14524e2901436bdadef78329bc038d1fd58065945645e5729daa76059"
+  },
+  {
+    "file": "task-cancel-result.json",
+    "bytes": 1695,
+    "sha256": "319ff40fcd65e3c360d461fea46950c2c4cbee885ff883d26c955a6ccec8b3aa"
+  },
+  {
+    "file": "task-cancel-result.png",
+    "bytes": 77792,
+    "sha256": "3403df929701e806449aa2bf6196c350271e43ca53156775f7173020102f80b6"
+  },
+  {
+    "file": "task-create-permission-failure.json",
+    "bytes": 1606,
+    "sha256": "76e297997c12d2c11bfdc2e0f0f4cac89806aa8a46f9ff4be8798fefe17abd74"
+  },
+  {
+    "file": "task-create-permission-failure.png",
+    "bytes": 70321,
+    "sha256": "a08d4cef11decf52aaf44677e9d0d22fecfd4858338e54a551d2f83241e60b22"
+  },
+  {
+    "file": "task-followup-result.json",
+    "bytes": 1701,
+    "sha256": "3787954b1f54d19d44ada70716f301d8e831c674dc8822523552ef07f065cfdf"
+  },
+  {
+    "file": "task-followup-result.png",
+    "bytes": 74514,
+    "sha256": "91ae13c11ae80a72d5ab9c3541e53b422e189753360834f67a9d47007435d1a9"
+  },
+  {
+    "file": "task-model-menu.json",
+    "bytes": 1570,
+    "sha256": "0b5862ed86248adba7ee5a4effd5bbec6ae16c88bd16ef9f83c9ee979ab1498d"
+  },
+  {
+    "file": "task-model-menu.png",
+    "bytes": 53153,
+    "sha256": "10ef3bfbf064d1732a35581b5a91c17222034215c42deaca3a00e15ed9d18802"
+  },
+  {
+    "file": "task-model-project-default.json",
+    "bytes": 1595,
+    "sha256": "a1bfb3d91f172fa9af27535720eb3ad1a5a24224505f150fdf7e4dec08c0e2ef"
+  },
+  {
+    "file": "task-model-project-default.png",
+    "bytes": 59072,
+    "sha256": "75426efafa9f23829b719d9fdf718960b7a2bb15c020885a5c81b28b348f794e"
+  },
+  {
+    "file": "task-settled-ready.json",
+    "bytes": 1695,
+    "sha256": "9ccf94e27cec7dc68450ccd6f11ae798eb81474a14828501914e3bc6efa96e0c"
+  },
+  {
+    "file": "task-settled-ready.png",
+    "bytes": 77460,
+    "sha256": "411ce1c27296cb4bd269d57604eeceaf4980743c20368b5b53236cba0a942d1b"
+  }
+]

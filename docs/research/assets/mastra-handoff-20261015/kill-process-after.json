@@ -1,0 +1,21 @@
+{
+  "utc": "2026-10-15T05:41:38.624003+00:00",
+  "owned": [
+    {
+      "pid": 1177555,
+      "kernelStart": "108837208",
+      "stillAlive": false
+    },
+    {
+      "pid": 1177560,
+      "kernelStart": "108837216",
+      "stillAlive": false
+    },
+    {
+      "pid": 1177568,
+      "kernelStart": "108837218",
+      "stillAlive": false
+    }
+  ],
+  "checkedUTC": "2026-10-15T05:41:45.979995+00:00"
+}

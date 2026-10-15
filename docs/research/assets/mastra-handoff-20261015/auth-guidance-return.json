@@ -1,0 +1,26 @@
+{
+  "attempt": "attempt-006",
+  "checkpoint": "auth-guidance-return",
+  "utc": "2026-10-15T05:49:34.965842+00:00",
+  "capture": "scrot actual AO Electron Xvfb display",
+  "image": "auth-guidance-return.png",
+  "imageSHA256": "f5337c93f75ac85095e9a93adcf95e45dc2cd08970c15e92c539831cf79ce55f",
+  "daemon": {
+    "executablePath": "/home/azureuser/.ao/audits/mastra-handoff-20261014/runtime-build/ao",
+    "pid": 1180503,
+    "service": "agent-orchestrator-daemon",
+    "startupWorkingDirectory": "/home/azureuser/.ao/audits/mastra-handoff-20261014/source/frontend",
+    "status": "ready",
+    "workingDirectory": "/home/azureuser/.ao/audits/mastra-handoff-20261014/attempt-006/data"
+  },
+  "daemonSHA256": "131dfcfc88ba10e34eb7b9f475a0c3570ba24d6886f9654657ca044827989b2f",
+  "source": "787eaa740e7e571a6491fcdfb9b676a75448caef",
+  "UI_source": "787eaa740e7e571a6491fcdfb9b676a75448caef",
+  "harness": "mastra-code",
+  "host": "local isolated Linux VPS",
+  "session": "pre-session unless noted in functional receipt",
+  "attachment": "local only; final publisher deferred",
+  "localOriginal": "attempt-006/screens/auth-guidance-return.png",
+  "sanitization": "Visually inspected original actual viewport; no credential contents/device codes/passwords shown. No pixel edits.",
+  "provenanceLimit": "Original capture helper probes serving daemon/executable immediately before scrot. Later captures and cleanup probe confirm same serving PID/hash; no independent immediate after-probe for each original image. This annotation is a later reconstruction, original bytes retained."
+}

@@ -1,0 +1,9 @@
+{
+  "utc": "2026-10-15T05:43:24.164568+00:00",
+  "launcherPath": "/home/azureuser/.ao/audits/candidate-integrations-20261011/native/mastra/runtime/node_modules/mastracode/dist/cli.js",
+  "launcherSHA256": "e606fc8a07cc68ab456762c8ff17cc3d5558a4a3677f35487ddf773472ea994b",
+  "observedVersion": "0.45.0 (native update notice)",
+  "node": "24.21.0",
+  "upstreamSource": "8a0fd46222d8737e4c369291a3efa59e632aadbd",
+  "scope": "existing installed native dependencies; not reinstalled"
+}

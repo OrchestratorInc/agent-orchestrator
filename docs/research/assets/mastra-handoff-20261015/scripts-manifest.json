@@ -1,0 +1,262 @@
+[
+  {
+    "path": "tools/agent-menu.js",
+    "bytes": 61,
+    "sha256": "34b5b6586dd260e6cf8adbd873d137ad03934dfc7fe5f1900703cbc6473dae04"
+  },
+  {
+    "path": "tools/archive-list.js",
+    "bytes": 94,
+    "sha256": "0abf3a87d678519d6cf3543e3fa616d34fc1974eb7e57acd7a8a6cb8b0b6aece"
+  },
+  {
+    "path": "tools/archive.js",
+    "bytes": 71,
+    "sha256": "43ef0bc85e6b8ba0ab071f479156df321de7d4cddbd33becd886cd8a36ab21af"
+  },
+  {
+    "path": "tools/auth-action.js",
+    "bytes": 68,
+    "sha256": "53e1fa1cdaed14abfb0d78002edd1b4869bfc188e88aadf8c12bb31a5523a465"
+  },
+  {
+    "path": "tools/back.js",
+    "bytes": 90,
+    "sha256": "a5ea9fa654c47dafd04c688e247b17010876902c117d73de364e25d5a98b2692"
+  },
+  {
+    "path": "tools/cancel-watch.py",
+    "bytes": 1784,
+    "sha256": "aadc171e52f7fcec5e92dfce2acadec4cb3e41708c6e6614ed6a0b67b91fb6c9"
+  },
+  {
+    "path": "tools/capture-negative.py",
+    "bytes": 1185,
+    "sha256": "1fdcece1827f0eda73e0cf121c85b84064f555e47d28aeff041c39d5975513b1"
+  },
+  {
+    "path": "tools/capture-no-auth.py",
+    "bytes": 1185,
+    "sha256": "8ddc66b046559f55cb368502e68870db38daeb0689d9667eb8414b77b90d770c"
+  },
+  {
+    "path": "tools/capture.py",
+    "bytes": 1185,
+    "sha256": "eafea8e6666e7580e59457decb9cac1b75051345289faaa0d1e857faaaf1b90a"
+  },
+  {
+    "path": "tools/card-markup.js",
+    "bytes": 91,
+    "sha256": "c8b2b6af2dd048908aea27c34a61d002eba4487d3fd8a06f1795b4d8a2140e3d"
+  },
+  {
+    "path": "tools/cdp-errors.cjs",
+    "bytes": 339,
+    "sha256": "b94303f7fbaa6142b3bfffe16cb762fe379d7458c8a4a34d8148de73de2bf5b3"
+  },
+  {
+    "path": "tools/cdp.cjs",
+    "bytes": 689,
+    "sha256": "dcbd568c99f3ea94706a4bd292c9ccdb81e1c7ae7fcebcee3d7a9e571e77f2b5"
+  },
+  {
+    "path": "tools/close-settings.js",
+    "bytes": 70,
+    "sha256": "1a31e106946d2d84bf0dfc28657e01f5acefb18661879c4bab7e96b4fcafe362"
+  },
+  {
+    "path": "tools/configure-bypass.py",
+    "bytes": 795,
+    "sha256": "0cd45971bdab6f9758020d5c9dd71b46f4409ff910916edbbeb5aa890facb525"
+  },
+  {
+    "path": "tools/configure-model-retry.py",
+    "bytes": 752,
+    "sha256": "fc5604e8df378c56db12144b643149f5b908092b11f391fe9a7978c88ec5432d"
+  },
+  {
+    "path": "tools/configure-model.py",
+    "bytes": 741,
+    "sha256": "914b65c34097f60b3a307e63c475d7bc7fb934f4cbe601cd9bffeaa713cb2c1a"
+  },
+  {
+    "path": "tools/confirm.js",
+    "bytes": 91,
+    "sha256": "63ceca16a0af80b88bd96af305bf6d82ea2fc957844b22b5e46a3d65679000a5"
+  },
+  {
+    "path": "tools/controls.js",
+    "bytes": 237,
+    "sha256": "201210f5de2ca63e45f13ededc54a2208e3f2d904d57849d3b813973bf6a7f1c"
+  },
+  {
+    "path": "tools/dark.js",
+    "bytes": 115,
+    "sha256": "371478df0a3b6b3d682d1c8372579d975a6ae07208cf70315564493a883ee2e1"
+  },
+  {
+    "path": "tools/diagnostic-plugin.py",
+    "bytes": 1299,
+    "sha256": "025e14492ef38278764ed87818e6602cc4f913c0fbba151f38096b26efbea617"
+  },
+  {
+    "path": "tools/diagnostic-restore.py",
+    "bytes": 990,
+    "sha256": "17e2d9c439ac009d4eded1738f62d0f366ee9708ccc3742dfb34a17bdf2b8005"
+  },
+  {
+    "path": "tools/fill-task.cjs",
+    "bytes": 429,
+    "sha256": "35cf2a30313df3c9045acc3273c480c5d4b63d823b3d4b954deee92b3a7aae1b"
+  },
+  {
+    "path": "tools/filter-mastra.cjs",
+    "bytes": 331,
+    "sha256": "dcb707e6a686251c4159aadd63d4df6f685db84fb2c41f8ee4005b7ab0d09e28"
+  },
+  {
+    "path": "tools/harness-page.js",
+    "bytes": 93,
+    "sha256": "c217c823fee80019b4b4dd8babf43b2a0434d7c45452684e2c16afe64c639069"
+  },
+  {
+    "path": "tools/install-guide.js",
+    "bytes": 68,
+    "sha256": "53e1fa1cdaed14abfb0d78002edd1b4869bfc188e88aadf8c12bb31a5523a465"
+  },
+  {
+    "path": "tools/install-ui-002.py",
+    "bytes": 1257,
+    "sha256": "3aabd25fecaa05783eabb11b8f7623758bdc9fcf32f041091e5931155909770c"
+  },
+  {
+    "path": "tools/install-ui-004.py",
+    "bytes": 1576,
+    "sha256": "036dc97fc1c3148afcc8d87375a6365ca85c49cd7f313feb85b12259d6d3901e"
+  },
+  {
+    "path": "tools/install-ui.py",
+    "bytes": 1231,
+    "sha256": "0d0abf77d7117af02d22257f142b9c8f8170f09bb49b4dd38165e140574c440b"
+  },
+  {
+    "path": "tools/launch-ui-negative.py",
+    "bytes": 1113,
+    "sha256": "c68470a8cdd04ab673a31649d8225e3705fb694007b294a87ca35c52c675fc9b"
+  },
+  {
+    "path": "tools/launch-ui-no-auth.py",
+    "bytes": 1212,
+    "sha256": "6bd048c16ffa1fae8ef227f2a3207c9b22bac6e18f634f38d68a7504f3a8d469"
+  },
+  {
+    "path": "tools/launch-ui.py",
+    "bytes": 1047,
+    "sha256": "64de46b43b4095124fdd5878ea68947ce92735c74d8554171f759d97d89691e1"
+  },
+  {
+    "path": "tools/native-key.cjs",
+    "bytes": 484,
+    "sha256": "80af2019280c9e2ee494d07bbcc8ec39bb3dd9afb1ae0c966cbf6e94aaedf4fe"
+  },
+  {
+    "path": "tools/native-type.cjs",
+    "bytes": 488,
+    "sha256": "adf43ec37e36af45f8b93a8b6a62c4c5e6f0d7218adc98d4cdefa98d4075c215"
+  },
+  {
+    "path": "tools/new-task-toolbar.js",
+    "bytes": 64,
+    "sha256": "26fa9e26490672328babaac6ca9b5ae7d0bc2f7e76c4f8bb5259549ac31f9d9e"
+  },
+  {
+    "path": "tools/new-task.js",
+    "bytes": 92,
+    "sha256": "8a68358752431360c4d4819eb610e7622affbe8ebc05ebdc17b748ffd36dd065"
+  },
+  {
+    "path": "tools/open-archived-card.js",
+    "bytes": 75,
+    "sha256": "8ab45ca28ba99ebf59b44b9a95cfde4c87c40385f11886b2a5ed31067ebef9be"
+  },
+  {
+    "path": "tools/open-archived.js",
+    "bytes": 115,
+    "sha256": "f77c719a4dc5ae64f45012ff4bcaf7e8bb06216c92ce778c2393bd4b0db0a0be"
+  },
+  {
+    "path": "tools/open-project.js",
+    "bytes": 116,
+    "sha256": "f01734b9e5f57e9d95cff71540b22a86c8f437a5c9968f28a920df8093f2542e"
+  },
+  {
+    "path": "tools/open-settings.js",
+    "bytes": 135,
+    "sha256": "01103f9699e3c58b87baf10522a81762e7083a63942d7822b29bfdaf4fe379f8"
+  },
+  {
+    "path": "tools/prepare-project.py",
+    "bytes": 1299,
+    "sha256": "12fbe590cf238505ac71f4fd042c7ad7e45284c31f666fa1e277c31b72f2ee4e"
+  },
+  {
+    "path": "tools/project-retry.py",
+    "bytes": 831,
+    "sha256": "8b65e289719aa0049e7807c5db149bd742750ccfb6bef8e298e244e7da76aa52"
+  },
+  {
+    "path": "tools/reload.js",
+    "bytes": 18,
+    "sha256": "9cdc6aad1a6857cb2346f3be3d2122d7d12fd51bd6b2a5f7dea8321f0f7f37e2"
+  },
+  {
+    "path": "tools/restore-click.js",
+    "bytes": 105,
+    "sha256": "00036b9bec626e77be2b0b223bf009b4bf6cb98890840c5716bdabd2d7a3b239"
+  },
+  {
+    "path": "tools/restore-config.py",
+    "bytes": 1194,
+    "sha256": "750a1f69ada77b4d617a9cdd918924e9cdf45ad4f58d2eaef44baa8d04a4e71a"
+  },
+  {
+    "path": "tools/select-mastra.js",
+    "bytes": 123,
+    "sha256": "d656e70496663ad7b7339ba860be772e7ce718c99033b7705a4d26b6fae66f46"
+  },
+  {
+    "path": "tools/stop-owned-ui.py",
+    "bytes": 1675,
+    "sha256": "9133d86738b3a1a28af97a5c9c97b9b1cba29d59f272ebe0e37cba3a25ce8910"
+  },
+  {
+    "path": "tools/stop-ui-003.py",
+    "bytes": 1229,
+    "sha256": "5e025dd018bb20216957c1c99ea4096821a40d868957e8d49f42c81668504e64"
+  },
+  {
+    "path": "tools/submit-task.js",
+    "bytes": 95,
+    "sha256": "7a044c7bf2641db0e0d699b1867438207b5ddc4bd4e54aa02aa62dd6d23655ca"
+  },
+  {
+    "path": "tools/terminal-observe.cjs",
+    "bytes": 437,
+    "sha256": "126c47a92742fa237d7f4467f89dd2d3c6a1659cf43421a353ceca333877f14f"
+  },
+  {
+    "path": "tools/ui-control.cjs",
+    "bytes": 699,
+    "sha256": "bb2be7301439c84ec24162f2df0c5be09aa80b502e327e3506b0ee5fa928a475"
+  },
+  {
+    "path": "tools/ui-inner.sh",
+    "bytes": 340,
+    "sha256": "c82c205f7fc3a54b4a66dfb4e9bc70d724687bb1822e3581e072b6a82cf2d61b"
+  },
+  {
+    "path": "tools/write-handoff.py",
+    "bytes": 9923,
+    "sha256": "994dab80e632692916e1196ea12da0bdad5eeb56eb1c89c01cc3cb59d239a328"
+  }
+]
