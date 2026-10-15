@@ -40,9 +40,11 @@ export function createTrayLifecycle(deps: TrayLifecycleDeps): TrayLifecycle {
 
 	return {
 		openSession(target) {
-			const contents = getContents();
 			deps.focusWindow();
-			if (contents && !contents.isLoading()) {
+			// Read after focusing: a crashed shell is being rebuilt, so the target
+			// waits for the replacement renderer to report ready.
+			const contents = getContents();
+			if (contents && !contents.isDestroyed?.() && !contents.isCrashed?.() && !contents.isLoading()) {
 				contents.send(TRAY_OPEN_SESSION_CHANNEL, target);
 				return;
 			}

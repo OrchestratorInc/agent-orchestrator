@@ -8,6 +8,7 @@ import {
 	BaseWindow,
 	BrowserWindow,
 	clipboard,
+	crashReporter,
 	dialog,
 	ipcMain,
 	Menu,
@@ -67,6 +68,11 @@ import {
 	writeUiSettings,
 	type UiSettings,
 } from "./main/ui-settings";
+import { createShellRecovery, type ShellRecoveryTrigger, type ShellWindowSnapshot } from "./main/shell-recovery";
+import { crashDumpsDir, formatAppMetrics, PROCESS_METRICS_INTERVAL_MS } from "./main/process-diagnostics";
+// Main-process copy comes from the generated catalog (scripts/sync-tray-catalog.mjs),
+// not the renderer locale files, which would land in main.js.
+import { trayCatalogs } from "./main/tray-catalog.generated";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -126,7 +132,7 @@ import {
 	resolveWindowsShellProbe,
 	type ShellRunner,
 } from "./shared/shell-env";
-import { DEFAULT_TERMINAL_SHELL, type TerminalShellPreference } from "./shared/ui-locale";
+import { DEFAULT_TERMINAL_SHELL, type AppLocale, type TerminalShellPreference } from "./shared/ui-locale";
 import { bundledTmuxBinaryPath, stableBundledTmuxBinaryPath } from "./shared/bundled-tmux";
 import {
 	handleCloudDeepLink,
@@ -258,6 +264,18 @@ app.setPath(
 		? path.join(os.homedir(), ".ao", "electron")
 		: (process.env.AO_DEV_ELECTRON_DIR ?? path.join(os.homedir(), ".ao", "dev", "electron")),
 );
+// Keep crash dumps local and inside that profile rather than trusting the
+// default to follow userData. Nothing is uploaded; the dumps are for diagnosis.
+// Must start before any renderer exists, or that renderer goes unmonitored.
+app.setPath("crashDumps", crashDumpsDir(app.getPath("userData")));
+crashReporter.start({ uploadToServer: false });
+// Helper processes (GPU, network, utilities) die silently otherwise.
+app.on("child-process-gone", (_event, details) => {
+	const name = details.serviceName ?? details.name;
+	console.error(
+		`AO: child process gone type=${details.type} reason=${details.reason} exitCode=${details.exitCode}${name ? ` name=${name}` : ""}`,
+	);
+});
 
 // Resolve once against the launch cwd, before the daemon can chdir. The exact
 // absolute value is shared by policy bootstrap and every daemon spawn.
@@ -353,6 +371,20 @@ const desktopQuit = createDesktopQuitController({
 	},
 	hideDock: () => app.dock?.hide(),
 	quit: () => app.quit(),
+});
+// Set between the window's "close" and "closed": a shell renderer that exits
+// then is being torn down with its window, not crashing.
+let mainWindowClosing = false;
+// Main's copy of the UI locale, for native dialogs.
+let uiLocale: AppLocale = DEFAULT_UI_SETTINGS.locale;
+const shellRecovery = createShellRecovery({
+	now: () => Date.now(),
+	log: (message) => console.error(message),
+	isQuitting: () => browserQuitRequested || isUpdateRestartRequested(),
+	isClosing: () => mainWindowClosing,
+	snapshot: snapshotMainWindow,
+	rebuild: rebuildMainWindow,
+	confirmReload: confirmShellReload,
 });
 let browserRuntimeLink: BrowserRuntimeLinkHandle | null = null;
 let browserRuntimeLinkIdentity: BrowserRuntimeIdentity | null = null;
@@ -565,9 +597,19 @@ function showWhenRendererLoaded(window: BaseWindow, contents: WebContents): void
 	contents.once("did-fail-load", show);
 }
 
+function isShellRendererDead(): boolean {
+	const contents = getShellWebContents();
+	return contents !== null && !contents.isDestroyed() && contents.isCrashed();
+}
+
 function focusMainWindow(): void {
 	if (!mainWindow) {
 		createWindow();
+		return;
+	}
+	// Showing a window whose renderer died only shows a blank window.
+	if (isShellRendererDead()) {
+		void shellRecovery.recoverNow("focus");
 		return;
 	}
 	if (mainWindow.isMinimized()) mainWindow.restore();
@@ -723,7 +765,13 @@ async function disposeAllBrowserViewHosts(): Promise<void> {
 	}
 }
 
-async function createWindowInternal(): Promise<void> {
+type CreateWindowOptions = {
+	/** False builds the window hidden, so a rebuild can restore its state before showing it. */
+	show?: boolean;
+	bounds?: Electron.Rectangle;
+};
+
+async function createWindowInternal(options: CreateWindowOptions = {}): Promise<void> {
 	await disposeAllBrowserViewHosts();
 	const agentBrowserRuntime = new AgentBrowserRuntime({
 		binaryPath: resolveAgentBrowserBinaryPath(),
@@ -750,6 +798,7 @@ async function createWindowInternal(): Promise<void> {
 	const windowOptions: Electron.BaseWindowConstructorOptions = {
 		width: 1320,
 		height: 860,
+		...options.bounds,
 		minWidth: 960,
 		minHeight: 640,
 		title: app.isPackaged ? APP_DISPLAY_NAME : `${APP_DISPLAY_NAME} (dev)`,
@@ -788,6 +837,7 @@ async function createWindowInternal(): Promise<void> {
 					}),
 	};
 	mainWindow = new BaseWindow(windowOptions);
+	mainWindowClosing = false;
 	const composition = createWindowComposition({
 		mainWindow,
 		WebContentsView,
@@ -910,6 +960,7 @@ async function createWindowInternal(): Promise<void> {
 		}
 		// Doing nothing honors the renderer's request to stay, so a quit's close
 		// did not happen and AO keeps its Dock icon.
+		mainWindowClosing = false;
 		desktopQuit.windowCloseCanceled();
 	});
 
@@ -926,6 +977,7 @@ async function createWindowInternal(): Promise<void> {
 			return;
 		}
 		if (chatDraftRisks.length > 0) chatDraftWindowCloseConfirmed = true;
+		mainWindowClosing = true;
 	});
 
 	// Application shortcuts are handled here so they fire no matter which web
@@ -1058,13 +1110,29 @@ async function createWindowInternal(): Promise<void> {
 		terminalFontSizeFocused = false;
 		trayLifecycle.clear();
 	});
-	shellWebContents.on("render-process-gone", () => trayLifecycle.clear());
+	shellWebContents.on("render-process-gone", (_event, details) => {
+		trayLifecycle.clear();
+		// The dead renderer's drafts are gone and it can no longer answer the
+		// draft guard, so they must not block closing or rebuilding the window.
+		resetChatDraftState();
+		// Only the current window's shell recovers; a window already closed or
+		// replaced is being torn down.
+		if (getShellWebContents() !== shellWebContents || !mainWindow || mainWindow.isDestroyed()) return;
+		shellRecovery.handleRenderProcessGone(details);
+	});
+	shellWebContents.on("unresponsive", () => console.warn("AO: shell renderer unresponsive"));
+	shellWebContents.on("responsive", () => console.warn("AO: shell renderer responsive again"));
+	shellWebContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+		if (!isMainFrame) return;
+		console.error(`AO: shell failed to load url=${validatedURL} code=${errorCode} ${errorDescription}`);
+	});
 
 	mainWindow.on("closed", () => {
-		chatDraftRisks = [];
-		chatDraftDialog = undefined;
-		chatDraftQuitConfirmed = false;
-		chatDraftWindowCloseConfirmed = false;
+		// A rebuild replaces the window: a tray target waits for the new shell,
+		// and this is not the close a background quit is waiting on.
+		const replacing = shellRecovery.isRecovering();
+		mainWindowClosing = false;
+		resetChatDraftState();
 		disposeBrowserRuntimeLink();
 		keybindingRecordingActive = false;
 		if (windowComposition === composition) windowComposition = null;
@@ -1083,16 +1151,78 @@ async function createWindowInternal(): Promise<void> {
 		// focus listener died with the window, so leaving the id set would make
 		// the next bounce skip attaching one to the replacement window.
 		cancelDockBounce();
+		if (replacing) return;
 		trayLifecycle.clearPendingTarget();
 		desktopQuit.windowClosed();
 	});
 }
 
-function createWindow(): Promise<void> {
+function resetChatDraftState(): void {
+	chatDraftRisks = [];
+	chatDraftDialog = undefined;
+	chatDraftQuitConfirmed = false;
+	chatDraftWindowCloseConfirmed = false;
+}
+
+function snapshotMainWindow(): ShellWindowSnapshot | null {
+	const window = mainWindow;
+	if (!window || window.isDestroyed()) return null;
+	return {
+		bounds: window.getNormalBounds(),
+		fullScreen: window.isFullScreen(),
+		maximized: window.isMaximized(),
+		minimized: window.isMinimized(),
+		visible: window.isVisible(),
+		focused: window.isFocused(),
+	};
+}
+
+// Same path as the manual recovery (close the window, then "Show AO"), but
+// keeping the window where it was. destroy() skips "close", so the draft guard
+// cannot block it; the dead renderer's drafts are already lost.
+async function rebuildMainWindow(snapshot: ShellWindowSnapshot | null, trigger: ShellRecoveryTrigger): Promise<void> {
+	resetChatDraftState();
+	const previous = mainWindow;
+	if (previous && !previous.isDestroyed()) {
+		const closed = new Promise<void>((resolve) => previous.once("closed", () => resolve()));
+		previous.destroy();
+		await closed;
+	}
+	if (browserQuitRequested) return;
+	await createWindow({ show: false, bounds: snapshot?.bounds });
+	const window = mainWindow;
+	if (!window || window.isDestroyed()) return;
+	// A user action asked for the window; an automatic recovery must not take
+	// focus from whatever the user is doing now.
+	const bringForward = trigger !== "crash" || !snapshot || snapshot.focused;
+	if (bringForward) window.show();
+	else window.showInactive();
+	if (snapshot?.fullScreen) window.setFullScreen(true);
+	else if (snapshot?.maximized) window.maximize();
+	if (bringForward) window.focus();
+	else if (snapshot?.minimized) window.minimize();
+}
+
+async function confirmShellReload(): Promise<boolean> {
+	const copy = trayCatalogs[uiLocale] ?? trayCatalogs.en;
+	const options: Electron.MessageBoxOptions = {
+		type: "warning",
+		message: copy["desktopRecovery.message"],
+		detail: copy["desktopRecovery.detail"],
+		buttons: [copy["desktopRecovery.reload"], copy["desktopRecovery.later"]],
+		defaultId: 0,
+		cancelId: 1,
+	};
+	const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+	const result = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
+	return result.response === 0;
+}
+
+function createWindow(options: CreateWindowOptions = {}): Promise<void> {
 	if (createWindowPromise) return createWindowPromise;
 	// A background quit hid the Dock icon; bring it back with the window.
 	void app.dock?.show();
-	const pending = createWindowInternal();
+	const pending = createWindowInternal(options);
 	createWindowPromise = pending;
 	void pending.then(
 		() => {
@@ -2748,6 +2878,7 @@ ipcMain.handle("uiSettings:get", async (): Promise<UiSettings> => {
 		const runFile = runFilePath();
 	const result = !runFile ? coerceUiSettings(settings) : await writeUiSettings(path.dirname(runFile), settings);
 	trayController?.setLocale(result.locale);
+	uiLocale = result.locale;
 	soundNotificationsEnabled = result.soundNotificationsEnabled;
 	terminalShellPreference = result.terminalShell;
 	shellEnvPromise = null;
@@ -2855,10 +2986,10 @@ ipcMain.handle(
 			});
 			toast.on("click", () => {
 				if (!mainWindow) return;
-				if (mainWindow.isMinimized()) mainWindow.restore();
-				mainWindow.show();
-				mainWindow.focus();
-				getShellWebContents()?.send("notifications:click", notification.id);
+				focusMainWindow();
+				// After a crash the window is being rebuilt; there is no shell to tell.
+				const contents = getShellWebContents();
+				if (contents && !contents.isDestroyed() && !contents.isCrashed()) contents.send("notifications:click", notification.id);
 			});
 			toast.show();
 		}
@@ -3078,6 +3209,10 @@ app.on("second-instance", (_event, argv) => {
 	}
 	const window = BaseWindow.getAllWindows()[0];
 	if (!window) return;
+	if (isShellRendererDead()) {
+		void shellRecovery.recoverNow("focus");
+		return;
+	}
 	if (window.isMinimized()) window.restore();
 	window.show();
 	window.focus();
@@ -3281,6 +3416,7 @@ app.whenReady().then(async () => {
 		? await readUiSettings(path.dirname(keybindingRunFile))
 		: { ...DEFAULT_UI_SETTINGS };
 	soundNotificationsEnabled = initialUiSettings.soundNotificationsEnabled;
+	uiLocale = initialUiSettings.locale;
 	terminalShellPreference = initialUiSettings.terminalShell;
 	if (browserQuitRequested) return;
 	if (isTrayEnabled(process.platform)) {
@@ -3323,8 +3459,15 @@ app.whenReady().then(async () => {
 	app.on("activate", () => {
 		if (BaseWindow.getAllWindows().length === 0) {
 			void createWindow().catch((error) => console.error("failed to recreate main window:", error));
+		} else if (isShellRendererDead()) {
+			void shellRecovery.recoverNow("activate");
 		}
 	});
+
+	const metricsTimer = setInterval(() => {
+		console.log(formatAppMetrics(app.getAppMetrics(), getShellWebContents()?.getOSProcessId()));
+	}, PROCESS_METRICS_INTERVAL_MS);
+	metricsTimer.unref();
 });
 
 // Daemon teardown is now handled via the OS-native supervisor socket: the daemon
