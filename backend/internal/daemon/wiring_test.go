@@ -117,19 +117,30 @@ func (p *installationInvalidations) InvalidateAgentInstallation(harness string) 
 	p.harnesses = append(p.harnesses, harness)
 }
 
-// Launches resolve through the daemon's adapters, not the agent service's: an
-// install that clears only the service's cache leaves sessions on the old binary.
-func TestInvalidateHarnessBinaryClearsLaunchAndServiceCaches(t *testing.T) {
+// Launches, Chat drivers and model discovery each hold their own plugins: an
+// install that clears only the agent service's cache leaves them on the old binary.
+func TestInvalidateHarnessBinaryClearsEveryCache(t *testing.T) {
 	launch := &cachedBinaryAgent{}
+	models := &cachedBinaryAgent{}
 	readiness := &installationInvalidations{}
 
-	invalidateHarnessBinary(cachedBinaryAgents{"pi": launch}, readiness, "pi")
-
+	invalidateHarnessBinary(readiness, "pi",
+		resolverBinaryCache{agents: cachedBinaryAgents{"pi": launch}},
+		pluginBinaryCache{harness: domain.HarnessCodex, plugin: models},
+	)
 	if launch.invalidated != 1 {
 		t.Fatalf("launch adapter invalidations = %d, want 1", launch.invalidated)
 	}
+	if models.invalidated != 0 {
+		t.Fatalf("another harness's plugin was invalidated %d times", models.invalidated)
+	}
 	if len(readiness.harnesses) != 1 || readiness.harnesses[0] != "pi" {
 		t.Fatalf("service invalidations = %v, want [pi]", readiness.harnesses)
+	}
+
+	invalidateHarnessBinary(readiness, "codex", pluginBinaryCache{harness: domain.HarnessCodex, plugin: models})
+	if models.invalidated != 1 {
+		t.Fatalf("model discovery plugin invalidations = %d, want 1", models.invalidated)
 	}
 }
 

@@ -501,7 +501,8 @@ func Run() error {
 	if err := chatSvc.InitializeSideChats(ctx); err != nil {
 		log.Warn("side chat initialization failed", "error", err)
 	}
-	codexModelDriver := codexappserver.New(codexagent.New(), log)
+	codexModelPlugin := codexagent.New()
+	codexModelDriver := codexappserver.New(codexModelPlugin, log)
 	modelDiscoverer := modelcatalog.Discoverer{
 		CodexModels: func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatModel, error) {
 			return codexModelDriver.DiscoverModels(listCtx, request.WorkingDir, request.Env)
@@ -705,9 +706,14 @@ func Run() error {
 	systemInstall.SetIdleUpdateCoordinator(sessMgr)
 	// Harness resolvers prefer AO's managed launchers once an update created them.
 	binaryutil.SetManagedBinDir(systemInstall.ManagedBinDir())
+	binaryCaches := []harnessBinaryCache{
+		resolverBinaryCache{agents: agents},
+		chatDrivers,
+		pluginBinaryCache{harness: domain.HarnessCodex, plugin: codexModelPlugin},
+	}
 	systemInstall.SetBinaryInvalidator(func(target systeminstall.Target) {
 		if harness, ok := installedAgentHarness(target); ok {
-			invalidateHarnessBinary(agents, agentSvc, harness)
+			invalidateHarnessBinary(agentSvc, harness, binaryCaches...)
 		}
 	})
 	systemInstall.SetTelemetry(telemetrySink)
@@ -721,7 +727,7 @@ func Run() error {
 		if !ok {
 			return
 		}
-		invalidateHarnessBinary(agents, agentSvc, harness)
+		invalidateHarnessBinary(agentSvc, harness, binaryCaches...)
 		agentSvc.RecheckAgent(harness)
 	})
 
@@ -1276,16 +1282,43 @@ func installedAgentHarness(target systeminstall.Target) (string, bool) {
 	return "", false
 }
 
-// invalidateHarnessBinary makes the harness's executable resolve again
-// everywhere. Launches and install verification use the daemon's adapters,
-// the agent service its own instances, and each caches the path it found:
-// clearing only one leaves the other on the binary from before the install.
-func invalidateHarnessBinary(agents ports.AgentResolver, readiness ports.AgentReadinessProvider, harness string) {
-	readiness.InvalidateAgentInstallation(harness)
-	if agent, ok := agents.Agent(domain.AgentHarness(harness)); ok {
+// harnessBinaryCache holds agent plugins that cache the executable they resolved.
+type harnessBinaryCache interface {
+	InvalidateBinaryResolution(harness domain.AgentHarness)
+}
+
+// resolverBinaryCache is the plugins an AgentResolver hands out.
+type resolverBinaryCache struct{ agents ports.AgentResolver }
+
+func (c resolverBinaryCache) InvalidateBinaryResolution(harness domain.AgentHarness) {
+	if agent, ok := c.agents.Agent(harness); ok {
 		if invalidator, ok := agent.(ports.AgentBinaryResolutionInvalidator); ok {
 			invalidator.InvalidateBinaryResolution()
 		}
+	}
+}
+
+// pluginBinaryCache is one harness's plugin held outside any resolver.
+type pluginBinaryCache struct {
+	harness domain.AgentHarness
+	plugin  ports.AgentBinaryResolutionInvalidator
+}
+
+func (c pluginBinaryCache) InvalidateBinaryResolution(harness domain.AgentHarness) {
+	if harness == c.harness {
+		c.plugin.InvalidateBinaryResolution()
+	}
+}
+
+// invalidateHarnessBinary makes the harness's executable resolve again
+// everywhere. Launches and install verification, the agent service, Chat
+// drivers and model discovery each hold their own plugin instances, each
+// caching the path it found: missing one leaves it on the binary from before
+// the install.
+func invalidateHarnessBinary(readiness ports.AgentReadinessProvider, harness string, caches ...harnessBinaryCache) {
+	readiness.InvalidateAgentInstallation(harness)
+	for _, cache := range caches {
+		cache.InvalidateBinaryResolution(domain.AgentHarness(harness))
 	}
 }
 
