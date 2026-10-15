@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,7 +52,7 @@ func TestPreviewAndSelectedImport(t *testing.T) {
 	root := t.TempDir()
 	project := t.TempDir()
 	st := &importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: project}}}
-	svc := New(st)
+	svc := New(st, "")
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessClaudeCode: root}
 	current := "11111111-1111-4111-8111-111111111111"
 	old := "22222222-2222-4222-8222-222222222222"
@@ -101,10 +102,13 @@ func TestPreviewAndSelectedImport(t *testing.T) {
 	if err != nil || repeated[0].SessionID != rec.ID || len(st.sessions) != 1 {
 		t.Fatalf("repeat: %v %v", repeated, err)
 	}
-	writeClaude(t, root, current, project, "changed", time.Now())
+	moved := writeClaude(t, root, current, t.TempDir(), "moved to an unregistered folder", time.Now())
 	stale, err := svc.Import(ctx, []string{recentID})
 	if err != nil || stale[0].Status != "failed" || len(st.sessions) != 1 {
 		t.Fatalf("stale: %v %v", stale, err)
+	}
+	if moved != path {
+		t.Fatal(moved)
 	}
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
@@ -120,7 +124,7 @@ func TestCodexCanonicalMessagesAndValidation(t *testing.T) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, "rollout.jsonl")
+	path := filepath.Join(dir, "rollout-2026-10-01T10-00-00-11111111-1111-4111-8111-111111111111.jsonl")
 	body := `{"type":"session_meta","payload":{"id":"11111111-1111-4111-8111-111111111111","cwd":""}}
 {"type":"event_msg","payload":{"type":"user_message","message":"hello"}}
 {"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}
@@ -137,8 +141,15 @@ func TestCodexCanonicalMessagesAndValidation(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body+"{broken\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readTranscript(context.Background(), domain.HarnessCodex, root, path); err == nil {
-		t.Fatal("malformed accepted")
+	if torn, err := readTranscript(context.Background(), domain.HarnessCodex, root, path); err != nil || len(torn.messages) != 2 {
+		t.Fatalf("a torn final record hid the conversation: %#v %v", torn, err)
+	}
+	misnamed := filepath.Join(dir, "rollout-2026-10-01T10-00-00-22222222-2222-4222-8222-222222222222.jsonl")
+	if err := os.WriteFile(misnamed, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readTranscript(context.Background(), domain.HarnessCodex, root, misnamed); err == nil {
+		t.Fatal("rollout identity mismatch accepted")
 	}
 	relative := writeClaude(t, root, "22222222-2222-4222-8222-222222222222", "relative-folder", "invalid source folder", time.Now())
 	if _, err := readTranscript(context.Background(), domain.HarnessClaudeCode, root, relative); err == nil {
@@ -187,8 +198,10 @@ func TestClaudeImportFollowsActiveAncestry(t *testing.T) {
 			if err := os.WriteFile(path, []byte(body+tail+"\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := readTranscript(context.Background(), domain.HarnessClaudeCode, root, path); err == nil {
-				t.Fatal("invalid ancestry accepted")
+			// The reachable branch stays readable instead of hiding the conversation.
+			history, err := readTranscript(context.Background(), domain.HarnessClaudeCode, root, path)
+			if err != nil || len(history.messages) != 1 || history.messages[0].Text != strings.Fields(name)[0] {
+				t.Fatalf("history = %#v, %v", history.messages, err)
 			}
 		})
 	}

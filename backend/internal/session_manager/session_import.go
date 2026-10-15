@@ -8,7 +8,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 )
 
@@ -45,7 +45,7 @@ func writableTranscriptOwner(ctx context.Context, path string) bool {
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	out, _ := exec.CommandContext(probeCtx, "lsof", "-F", "pcfa", "--", path).Output()
+	out, _ := process.CommandContext(probeCtx, "lsof", "-F", "pcfa", "--", path).Output()
 	command := ""
 	for _, line := range strings.Split(string(out), "\n") {
 		if strings.HasPrefix(line, "p") {
@@ -62,7 +62,7 @@ func writableTranscriptOwner(ctx context.Context, path string) bool {
 }
 
 func importGit(ctx context.Context, path string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", path}, args...)...)
+	cmd := process.CommandContext(ctx, "git", append([]string{"-C", path}, args...)...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -193,6 +193,8 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 				}
 			}
 		default:
+			// A standalone chat's folder is the home or a provider scratch folder, never a tree to copy.
+			copyFrom = ""
 			if created {
 				ws, _, err = m.createSessionWorkspace(ctx, project, ports.SpawnConfig{ProjectID: rec.ProjectID, Kind: rec.Kind}, rec.ID, branch, nil)
 				if err != nil {
@@ -567,7 +569,7 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 	defer func() {
 		if !committed {
 			for _, state := range states {
-				_ = exec.Command("git", "-C", filepath.Join(destination, state.rel), "reset", "--mixed", "HEAD").Run()
+				_ = process.Command("git", "-C", filepath.Join(destination, state.rel), "reset", "--mixed", "HEAD").Run()
 			}
 		}
 	}()
@@ -575,7 +577,7 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 		if len(state.staged) == 0 {
 			continue
 		}
-		cmd := exec.CommandContext(ctx, "git", "-C", filepath.Join(destination, state.rel), "apply", "--cached", "--binary", "-")
+		cmd := process.CommandContext(ctx, "git", "-C", filepath.Join(destination, state.rel), "apply", "--cached", "--binary", "-")
 		cmd.Stdin = bytes.NewReader(state.staged)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("preserve staged edits: %w: %s", err, out)
