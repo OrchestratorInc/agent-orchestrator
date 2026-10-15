@@ -506,7 +506,6 @@ func run(logger *slog.Logger) error {
 		AvailableSandboxProviders: cfg.AvailableSandboxProviders,
 		CapabilityGatedProviders:  cfg.CapabilityGatedProviders,
 		DefaultOrgCapabilities:    cfg.DefaultOrgCapabilities,
-		DefaultOrgBilling:         cfg.DefaultOrgBilling,
 		Provisioning:              provisioningDefaults(cfg),
 		WorkerTokens:              workerTokens,
 		WorkerTokenTTL:            cfg.WorkerTokenTTL(),

@@ -134,22 +134,6 @@ func TestOrgCapabilitiesDefaultsAndScoping(t *testing.T) {
 	}
 }
 
-func TestOrgBillingArrangementDefaultsAndScoping(t *testing.T) {
-	s := &Server{defaultOrgBilling: domain.OrgBillingSelfServe}
-	contract := teamPrincipal("coder")
-	contract.OrgBilling = domain.OrgBillingContract
-	if got := s.orgBillingArrangement(contract, offeringTeamOrgID); got != domain.OrgBillingContract {
-		t.Fatalf("team org = %q, want contract", got)
-	}
-	if got := s.orgBillingArrangement(contract, offeringPersonalOrgID); got != domain.OrgBillingSelfServe {
-		t.Fatalf("personal org = %q, want the self_serve default", got)
-	}
-	s.defaultOrgBilling = domain.OrgBillingContract
-	if got := s.orgBillingArrangement(teamPrincipal(), offeringTeamOrgID); got != domain.OrgBillingContract {
-		t.Fatalf("team org without billing metadata = %q, want the contract default", got)
-	}
-}
-
 func TestProvidersAndDefaultProviderForOrg(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -185,8 +169,6 @@ func TestProvidersAndDefaultProviderForOrg(t *testing.T) {
 type offeringStore struct {
 	Store
 	memberships   []domain.Membership
-	plan          string
-	grandfathered bool
 	projectConfig json.RawMessage
 	created       bool
 	captured      domain.CreateSession
@@ -194,10 +176,6 @@ type offeringStore struct {
 
 func (s *offeringStore) ListMemberships(context.Context, domain.Principal) ([]domain.Membership, error) {
 	return s.memberships, nil
-}
-
-func (s *offeringStore) OrgBillingStanding(context.Context, domain.Principal, string) (string, bool, error) {
-	return s.plan, s.grandfathered, nil
 }
 
 func (s *offeringStore) UserAgentCredentialAvailable(context.Context, string, string) (bool, error) {
@@ -321,26 +299,21 @@ func TestMeOfferingIsPerOrganization(t *testing.T) {
 
 func TestMeOfferingBillingMode(t *testing.T) {
 	cases := []struct {
-		name          string
-		orgBilling    string
-		plan          string
-		grandfathered bool
-		want          string
+		name       string
+		orgBilling string
+		want       string
 	}{
-		// Freestyle is paid by everyone: contract, internal and grandfathered
-		// organizations are self-serve too.
-		{"self-serve", "", "free", false, domain.BillingModeSelfServe},
-		{"contract metadata", domain.OrgBillingContract, "free", false, domain.BillingModeSelfServe},
-		{"internal plan", "", domain.PlanInternal, false, domain.BillingModeSelfServe},
-		{"grandfathered", "", "free", true, domain.BillingModeSelfServe},
-		{"coder only with the coder capability has nothing to buy", "", "free", false, domain.BillingModeOff},
+		// Freestyle is paid by everyone: contract organizations are self-serve
+		// too (the internal plan and grandfathering are store-side; see the
+		// billing store's tests).
+		{"self-serve", "", domain.BillingModeSelfServe},
+		{"contract metadata", domain.OrgBillingContract, domain.BillingModeSelfServe},
+		{"coder only with the coder capability has nothing to buy", "", domain.BillingModeOff},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &offeringStore{
-				memberships:   []domain.Membership{{OrgID: offeringTeamOrgID, Role: "member"}},
-				plan:          tc.plan,
-				grandfathered: tc.grandfathered,
+				memberships: []domain.Membership{{OrgID: offeringTeamOrgID, Role: "member"}},
 			}
 			s := newOfferingServer(store)
 			s.billingOptions = &BillingOptions{Stripe: &fakeStripe{}}

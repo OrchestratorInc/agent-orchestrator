@@ -1064,11 +1064,12 @@ func (s *Store) BillingSummary(ctx context.Context, principal domain.Principal, 
 		now := time.Now()
 		summary.BillingMode = policy.mode(billing)
 		summary.Plan = billing.Plan
-		summary.Exempt = summary.BillingMode == domain.BillingModeContract
+		// Exempt stays false: every organization pays for Freestyle (mode).
+		// Desktop releases from before that still read it, so it is kept.
 		summary.SubscriptionStatus = billing.SubscriptionStatus
 		summary.CurrentPeriodEnd = billing.PeriodEnd
 		summary.Limits = billing.Limits
-		summary.Entitled = summary.Exempt || policy.entitled(billing, now)
+		summary.Entitled = policy.entitled(billing, now)
 		if billing.Limits != nil && len(billing.Limits.Features) > 0 {
 			summary.Features = append([]string(nil), billing.Limits.Features...)
 		}
@@ -1231,10 +1232,11 @@ type billedRunningSession struct {
 	busy            bool
 }
 
-// PauseOverLimit pauses a self-serve organization's running Freestyle
-// sessions when it is over its plan, and its newest running sessions beyond
-// the plan's running slots. Contract, internal and grandfathered
-// organizations, and every other provider, are never touched.
+// PauseOverLimit pauses an organization's running billed sessions (Freestyle,
+// and Coder without the coder capability; see sandboxBilledTx) when it is over
+// its plan, and its newest running billed sessions beyond the plan's running
+// slots. Every organization pays for those, contract, internal and
+// grandfathered ones included; unbilled sandboxes are never touched.
 //
 // An idle session is paused at once. A busy one (a turn or review in flight)
 // may finish its work: it is paused once the organization has been over its

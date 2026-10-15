@@ -27,19 +27,6 @@ func (s *Server) orgCapabilities(principal domain.Principal, orgID string) []str
 	return s.defaultOrgCapabilities
 }
 
-// orgBillingArrangement returns the organization's billing arrangement
-// (domain.OrgBillingContract or domain.OrgBillingSelfServe), with the same
-// scoping rule as orgCapabilities.
-func (s *Server) orgBillingArrangement(principal domain.Principal, orgID string) string {
-	if orgID != "" && orgID == principal.TeamOrgID && principal.OrgBilling != "" {
-		return principal.OrgBilling
-	}
-	if s.defaultOrgBilling != "" {
-		return s.defaultOrgBilling
-	}
-	return domain.OrgBillingSelfServe
-}
-
 // orgAllowsProvider reports whether an organization may use the given sandbox
 // provider. Coder and Freestyle are open to every organization: each picks its
 // default in the desktop's settings (putOrgSandboxProvider), and plans meter
