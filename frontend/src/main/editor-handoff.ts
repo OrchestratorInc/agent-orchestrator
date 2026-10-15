@@ -5,6 +5,7 @@ import {
 	isEditorId,
 	isTerminalId,
 	type EditorHandoffState,
+	type EditorHandoffStateOptions,
 	type EditorId,
 	type OpenSessionArtifactsInput,
 	type OpenSessionTargetInput,
@@ -103,7 +104,7 @@ export type EditorHandoffDeps = {
 };
 
 export type EditorHandoff = {
-	getState(sessionId: string): Promise<EditorHandoffState>;
+	getState(sessionId: string, options?: EditorHandoffStateOptions): Promise<EditorHandoffState>;
 	open(input: OpenSessionTargetInput): Promise<OpenSessionTargetResult>;
 	openArtifacts(input: OpenSessionArtifactsInput): Promise<OpenSessionTargetResult>;
 	copyWorkspacePath(sessionId: string): Promise<void>;
@@ -456,26 +457,27 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 		return icon;
 	};
 
-	// Re-resolve editors and terminal on every call instead of freezing them at
-	// construction. Editor discovery reads deps.env each time, so an editor
-	// installed (or removed) after startup is picked up instead of being stale.
-	const resolveAll = async () => {
-		let macApps: MacTerminalApp[] = [];
-		if (deps.platform === "darwin" && deps.discoverTerminalApps) {
-			try {
-				macApps = await deps.discoverTerminalApps();
-			} catch (error) {
+	// Only an explicit menu refresh queries Launch Services and renders bundle
+	// icons. Readiness polling, CDC invalidations, and launches use this shared
+	// main-process snapshot; file existence is still checked at resolution time.
+	let macApps: MacTerminalApp[] = [];
+	let terminalRefresh: Promise<void> | undefined;
+	const refreshTerminals = () => {
+		if (deps.platform !== "darwin" || !deps.discoverTerminalApps) return Promise.resolve();
+		if (!terminalRefresh) {
+			terminalRefresh = deps.discoverTerminalApps().then((apps) => { macApps = apps; }).catch((error) => {
 				deps.logError?.("failed to discover terminal apps", error);
-			}
+			}).finally(() => { terminalRefresh = undefined; });
 		}
-		const editors = EDITOR_CANDIDATES.flatMap((candidate) => {
-			const command = resolveEditor(candidate, deps, isExecutable, isDirectory);
-			return command ? [{ target: { id: candidate.id, name: candidate.name, kind: "editor" } as OpenTarget, command }] : [];
-		});
+		return terminalRefresh;
+	};
+	const resolveEditors = () => EDITOR_CANDIDATES.flatMap((candidate) => {
+		const command = resolveEditor(candidate, deps, isExecutable, isDirectory);
+		return command ? [{ target: { id: candidate.id, name: candidate.name, kind: "editor" } as OpenTarget, command }] : [];
+	});
+	const resolveTerminals = () => {
 		const terminal = resolveTerminal(deps, isExecutable);
-		const terminals = [...(terminal ? [terminal] : []), ...resolveInstalledTerminals(deps, isExecutable, isDirectory, macApps)];
-		const targets = [...editors.map(({ target }) => target), fileManager, ...terminals.map(({ target }) => target)];
-		return { editors, terminals, targets };
+		return [...(terminal ? [terminal] : []), ...resolveInstalledTerminals(deps, isExecutable, isDirectory, macApps)];
 	};
 
 	const openTarget = async (target: OpenTarget, resolved: ResolvedCommand | undefined, directory: string, revealPath?: string) => {
@@ -500,8 +502,11 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 	};
 
 	return {
-		async getState(sessionId) {
-			const { targets, terminals } = await resolveAll();
+		async getState(sessionId, options) {
+			if (options?.refreshTerminals === true) await refreshTerminals();
+			const editors = resolveEditors();
+			const terminals = resolveTerminals();
+			const targets = [...editors.map(({ target }) => target), fileManager, ...terminals.map(({ target }) => target)];
 			const targetsWithIcons = await Promise.all(targets.map(async (target) => {
 				if (target.iconDataUrl) return target;
 				const terminal = terminals.find((entry) => entry.target.id === target.id);
@@ -529,21 +534,20 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 		async open(input) {
 			const sessionId = input.sessionId.trim();
 			if (!sessionId) throw new Error("Session is required.");
-			const { editors, terminals, targets } = await resolveAll();
 			const preferredEditorId = await deps.readPreference();
 			const targetId = input.targetId ?? preferredEditorId;
 			if (input.targetId && input.targetId !== "file-manager" && !isTerminalId(input.targetId) && !isEditorId(input.targetId)) {
 				throw new Error("That open target is not supported.");
 			}
-			const target = targets.find((target) => target.id === targetId);
+			const entry = targetId === "file-manager" ? undefined
+				: (isTerminalId(targetId) ? resolveTerminals() : resolveEditors()).find(({ target }) => target.id === targetId);
+			const target = targetId === "file-manager" ? fileManager : entry?.target;
 			if (!target) {
 				if (isEditorId(targetId)) throw new Error("That editor is not installed. Choose another option.");
 				throw new Error("That open target is not available.");
 			}
 			const workspacePath = await deps.resolveWorkspace(sessionId);
-			const resolved = target.kind === "terminal"
-				? terminals.find(({ target: terminal }) => terminal.id === target.id)?.command
-				: editors.find(({ target: editor }) => editor.id === target.id)?.command;
+			const resolved = entry?.command;
 			await openTarget(target, resolved, workspacePath);
 			if (target.kind === "editor") await deps.writePreference(target.id as EditorId);
 			return target;

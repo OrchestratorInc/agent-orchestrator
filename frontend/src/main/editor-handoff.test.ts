@@ -117,7 +117,7 @@ describe("editor handoff", () => {
 		const input = deps({ discoverTerminalApps, isDirectory: (value) => value === appPath,
 			resolveWorkspace: vi.fn().mockResolvedValue(workspace), readIcon: vi.fn().mockResolvedValue("data:image/png;base64,dGVzdA==") });
 		const handoff = createEditorHandoff(input);
-		const state = await handoff.getState("ao-1");
+		const state = await handoff.getState("ao-1", { refreshTerminals: true });
 		const target = state.targets.find((target) => target.name === name)!;
 		expect(target).toMatchObject({ kind: "terminal", iconDataUrl: "data:image/png;base64,dGVzdA==" });
 		expect(target.id).toMatch(/^terminal-app:[a-f0-9]{64}$/);
@@ -126,6 +126,7 @@ describe("editor handoff", () => {
 		expect(input.launch).toHaveBeenCalledWith("/usr/bin/open", ["-a", appPath, workspace], workspace);
 		expect(input.writePreference).not.toHaveBeenCalled();
 		discoverTerminalApps.mockResolvedValue([]);
+		await handoff.getState("ao-1", { refreshTerminals: true });
 		await expect(handoff.open({ sessionId: "ao-1", targetId: target.id })).rejects.toThrow("not available");
 		expect(input.launch).toHaveBeenCalledTimes(1);
 	});
@@ -136,21 +137,21 @@ describe("editor handoff", () => {
 		const input = deps({ readIcon, isDirectory: () => true, discoverTerminalApps: vi.fn().mockResolvedValue([
 			{ bundleId: "dev.warp.Warp-Stable", name: "Warp", appPath: "/Applications/Warp.app", iconDataUrl },
 		]) });
-		const { targets } = await createEditorHandoff(input).getState("ao-1");
+		const { targets } = await createEditorHandoff(input).getState("ao-1", { refreshTerminals: true });
 		expect(targets.find((target) => target.name === "Warp")).toMatchObject({ iconDataUrl });
 		expect(readIcon).not.toHaveBeenCalledWith("/Applications/Warp.app");
 	});
 
-	it("discovers new installations on the next query and deduplicates existing built-in targets", async () => {
+	it("discovers new installations on menu refresh and deduplicates existing built-in targets", async () => {
 		const discoverTerminalApps = vi.fn().mockResolvedValue([]);
 		const handoff = createEditorHandoff(deps({ discoverTerminalApps, isDirectory: () => true }));
-		expect((await handoff.getState("ao-1")).targets.some((target) => target.name === "Warp")).toBe(false);
+		expect((await handoff.getState("ao-1", { refreshTerminals: true })).targets.some((target) => target.name === "Warp")).toBe(false);
 		discoverTerminalApps.mockResolvedValue([
 			{ bundleId: "com.apple.Terminal", name: "Terminal", appPath: "/System/Applications/Utilities/Terminal.app" },
 			{ bundleId: "com.mitchellh.ghostty", name: "Ghostty", appPath: "/Applications/Ghostty.app" },
 			{ bundleId: "dev.warp.Warp-Stable", name: "Warp", appPath: "/Applications/Warp.app" },
 		]);
-		const { targets } = await handoff.getState("ao-1");
+		const { targets } = await handoff.getState("ao-1", { refreshTerminals: true });
 		for (const name of ["Terminal", "Ghostty", "Warp"]) expect(targets.filter((target) => target.name === name)).toHaveLength(1);
 	});
 
@@ -159,21 +160,76 @@ describe("editor handoff", () => {
 		const input = deps({ isDirectory: (value) => value === appPath, discoverTerminalApps: vi.fn().mockResolvedValue([
 			{ bundleId: "com.github.wez.wezterm", name: "WezTerm", appPath },
 		]) });
-		await createEditorHandoff(input).open({ sessionId: "ao-1", targetId: "wezterm" });
+		const handoff = createEditorHandoff(input);
+		await handoff.getState("ao-1", { refreshTerminals: true });
+		await handoff.open({ sessionId: "ao-1", targetId: "wezterm" });
 		expect(input.launch).toHaveBeenCalledWith("/usr/bin/open", ["-n", "-a", appPath, "--args", "start", "--cwd", "/worktrees/ao-1"], "/worktrees/ao-1");
 	});
 
 	it("preserves safe fallbacks when OS discovery fails and rejects unregistered dynamic IDs", async () => {
 		const handoff = createEditorHandoff(deps({ discoverTerminalApps: vi.fn().mockRejectedValue(new Error("Timed out")) }));
-		expect((await handoff.getState("ao-1")).targets.some((target) => target.id === "terminal")).toBe(true);
+		expect((await handoff.getState("ao-1", { refreshTerminals: true })).targets.some((target) => target.id === "terminal")).toBe(true);
 		await expect(handoff.open({ sessionId: "ao-1", targetId: `terminal-app:${"a".repeat(64)}` })).rejects.toThrow("not available");
 		await expect(handoff.open({ sessionId: "ao-1", targetId: "terminal-app:/tmp/untrusted" as never })).rejects.toThrow("not supported");
 	});
 
 	it("never runs macOS discovery on Linux or Windows", async () => {
 		const discoverTerminalApps = vi.fn();
-		for (const platform of ["linux", "win32"] as const) await createEditorHandoff(deps({ platform, discoverTerminalApps })).getState("ao-1");
+		for (const platform of ["linux", "win32"] as const) await createEditorHandoff(deps({ platform, discoverTerminalApps })).getState("ao-1", { refreshTerminals: true });
 		expect(discoverTerminalApps).not.toHaveBeenCalled();
+	});
+
+	it("caches discovery across sessions and polling, refreshing only for an explicit menu request", async () => {
+		const app = { bundleId: "org.example.shell", name: "Shell", appPath: "/Applications/Shell.app" };
+		const discoverTerminalApps = vi.fn().mockResolvedValue([app]);
+		const handoff = createEditorHandoff(deps({ discoverTerminalApps, isDirectory: () => true }));
+		await handoff.getState("ao-1");
+		expect(discoverTerminalApps).not.toHaveBeenCalled();
+		await handoff.getState("ao-1", { refreshTerminals: true });
+		for (let i = 0; i < 10; i++) {
+			expect((await handoff.getState(`ao-${i}`)).targets.some((target) => target.name === "Shell")).toBe(true);
+		}
+		expect(discoverTerminalApps).toHaveBeenCalledTimes(1);
+		await handoff.getState("ao-2", { refreshTerminals: true });
+		expect(discoverTerminalApps).toHaveBeenCalledTimes(2);
+	});
+
+	it("never blocks editor/Finder launches or readiness checks on an in-flight terminal refresh", async () => {
+		let finish!: (apps: []) => void;
+		const discoverTerminalApps = vi.fn(() => new Promise<[]>((resolve) => { finish = resolve; }));
+		const input = deps({ discoverTerminalApps });
+		const handoff = createEditorHandoff(input);
+		await handoff.open({ sessionId: "ao-1" });
+		await handoff.open({ sessionId: "ao-1", targetId: "file-manager" });
+		expect(discoverTerminalApps).not.toHaveBeenCalled();
+		const refresh = handoff.getState("ao-1", { refreshTerminals: true });
+		const secondRefresh = handoff.getState("ao-2", { refreshTerminals: true });
+		await handoff.open({ sessionId: "ao-1", targetId: "cursor" });
+		await handoff.open({ sessionId: "ao-1", targetId: "file-manager" });
+		await handoff.open({ sessionId: "ao-1", targetId: "terminal" });
+		expect((await handoff.getState("ao-3")).workspaceAvailable).toBe(true);
+		expect(input.launch).toHaveBeenCalledTimes(3);
+		expect(input.openDirectory).toHaveBeenCalledTimes(2);
+		expect(discoverTerminalApps).toHaveBeenCalledTimes(1);
+		finish([]);
+		await Promise.all([refresh, secondRefresh]);
+	});
+
+	it("keeps the previous discovery snapshot after a failed refresh but never launches a removed cached app", async () => {
+		let installed = true;
+		const app = { bundleId: "org.example.shell", name: "Shell", appPath: "/Applications/Shell.app" };
+		const discoverTerminalApps = vi.fn().mockResolvedValue([app]);
+		const input = deps({ discoverTerminalApps, isDirectory: (value) => installed && value === app.appPath });
+		const handoff = createEditorHandoff(input);
+		const state = await handoff.getState("ao-1", { refreshTerminals: true });
+		const target = state.targets.find((target) => target.name === "Shell")!;
+		discoverTerminalApps.mockRejectedValue(new Error("Timed out"));
+		expect((await handoff.getState("ao-1", { refreshTerminals: true })).targets).toContainEqual(target);
+		await handoff.open({ sessionId: "ao-1", targetId: target.id });
+		expect(discoverTerminalApps).toHaveBeenCalledTimes(2);
+		installed = false;
+		await expect(handoff.open({ sessionId: "ao-1", targetId: target.id })).rejects.toThrow("not available");
+		expect(input.launch).toHaveBeenCalledTimes(1);
 	});
 
 	it("copies the resolved workspace verbatim without launching an app or changing preferences", async () => {

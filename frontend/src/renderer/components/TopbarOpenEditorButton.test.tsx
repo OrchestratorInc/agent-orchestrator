@@ -115,6 +115,8 @@ describe("TopbarOpenEditorButton", () => {
 		renderButton();
 		await userEvent.click(await screen.findByRole("button", { name: "Open workspace options" }));
 		const warp = await screen.findByRole("menuitem", { name: "Warp" });
+		expect(window.ao!.editorHandoff.getState).toHaveBeenNthCalledWith(1, "sess-1");
+		expect(window.ao!.editorHandoff.getState).toHaveBeenNthCalledWith(2, "sess-1", { refreshTerminals: true });
 		expect(warp.querySelector("image")).toHaveAttribute("href", target.iconDataUrl);
 		await userEvent.click(warp);
 		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1", targetId: target.id }));
@@ -327,6 +329,7 @@ describe("TopbarOpenEditorButton", () => {
 				await vi.runOnlyPendingTimersAsync();
 			});
 			expect(getState).toHaveBeenCalledTimes(11);
+			expect(getState.mock.calls.every((args) => args.length === 1 && args[0] === "sess-1")).toBe(true);
 			expect(screen.getByRole("button", { name: "Session workspace is not available." })).toBeDisabled();
 		} finally {
 			vi.useRealTimers();

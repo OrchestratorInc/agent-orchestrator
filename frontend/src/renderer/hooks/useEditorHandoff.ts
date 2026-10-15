@@ -65,7 +65,8 @@ export function workspaceCheckFailed(state: EditorHandoffState | undefined): boo
 export function useEditorHandoffState(sessionId: string, readiness: EditorHandoffReadiness = {}) {
 	const awaitWorkspace = shouldAwaitWorkspace(readiness);
 	const failedChecks = useRef(0);
-	return useQuery<EditorHandoffState>({
+	const queryClient = useQueryClient();
+	const query = useQuery<EditorHandoffState>({
 		queryKey: editorHandoffQueryKey(sessionId),
 		enabled: Boolean(sessionId),
 		staleTime: 10_000,
@@ -91,6 +92,14 @@ export function useEditorHandoffState(sessionId: string, readiness: EditorHandof
 			}
 		},
 	});
+	return {
+		...query,
+		async refreshTargets() {
+			await queryClient.cancelQueries({ queryKey: editorHandoffQueryKey(sessionId), exact: true });
+			const state = await aoBridge.editorHandoff.getState(sessionId, { refreshTerminals: true });
+			queryClient.setQueryData(editorHandoffQueryKey(sessionId), state);
+		},
+	};
 }
 
 export type OpenSessionTargetMutationInput = {

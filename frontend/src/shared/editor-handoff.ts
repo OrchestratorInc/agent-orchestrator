@@ -37,6 +37,8 @@ export type OpenTarget = {
 	iconDataUrl?: string;
 };
 
+export type EditorHandoffStateOptions = { refreshTerminals?: boolean };
+
 export type EditorHandoffState = {
 	targets: OpenTarget[];
 	preferredEditorId: EditorId;

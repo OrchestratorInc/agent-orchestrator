@@ -191,7 +191,7 @@ export function TopbarOpenEditorButton({
 				</Tooltip>
 				<DropdownMenu onOpenChange={(isOpen) => {
 					setMenuOpen(isOpen);
-					if (isOpen) void stateQuery.refetch();
+					if (isOpen) void stateQuery.refreshTargets().catch(() => stateQuery.refetch());
 				}}>
 					<Tooltip>
 						<TooltipTrigger asChild>

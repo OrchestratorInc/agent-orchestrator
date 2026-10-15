@@ -2317,9 +2317,9 @@ ipcMain.handle("sideChats:capture", async (event, closedSideId?: string, cancelC
 	return captureSideChatState(closedSideId, cancelClose);
 });
 
-ipcMain.handle("editorHandoff:getState", (event, sessionId: string) => {
+ipcMain.handle("editorHandoff:getState", (event, sessionId: string, options) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
-	return editorHandoff.getState(typeof sessionId === "string" ? sessionId : "");
+	return editorHandoff.getState(typeof sessionId === "string" ? sessionId : "", { refreshTerminals: options?.refreshTerminals === true });
 });
 ipcMain.handle("editorHandoff:open", (event, input) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
