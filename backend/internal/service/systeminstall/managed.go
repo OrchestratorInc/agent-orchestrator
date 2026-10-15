@@ -201,12 +201,12 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 	}
 	targetDir := s.managedTargetDir(plan.Target)
 	versionsDir := filepath.Join(targetDir, "versions")
-	if err := os.MkdirAll(versionsDir, 0o755); err != nil {
+	if err := os.MkdirAll(versionsDir, 0o750); err != nil {
 		return fmt.Errorf("create managed install directory: %w", err)
 	}
 	name := nextManagedDir(versionsDir)
 	dir := filepath.Join(versionsDir, name)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create release directory: %w", err)
 	}
 	keep := false
@@ -246,7 +246,7 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 	if pin != "" {
 		installed, okInstalled := scheme.parse(version)
 		wanted, okWanted := scheme.parse(pin)
-		if comparison, comparable := scheme.compare(installed, wanted); okInstalled && okWanted && comparable && comparison < 0 {
+		if comparison, okCompare := scheme.compare(installed, wanted); okInstalled && okWanted && okCompare && comparison < 0 {
 			return fmt.Errorf("the new copy reports %s, not %s", version, pin)
 		}
 	}
@@ -319,7 +319,7 @@ func (s *Service) switchManagedCurrent(ctx context.Context, targetDir, name stri
 // current release. It never changes once written, so resolvers may cache it.
 func (s *Service) ensureManagedLauncher(target Target, record managedRecord) error {
 	binDir := s.ManagedBinDir()
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
+	if err := os.MkdirAll(binDir, 0o750); err != nil {
 		return fmt.Errorf("create launcher directory: %w", err)
 	}
 	if s.goos == "windows" {
@@ -404,7 +404,7 @@ func (s *Service) RemoveUnusedManagedReleases(ctx context.Context) {
 
 func writeFileAtomic(path string, data []byte) error {
 	tmp := path + ".tmp-" + strconv.FormatInt(time.Now().UnixNano(), 36)
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {

@@ -53,7 +53,7 @@ func ManagedCurrentDir(launcher, target string) (string, bool) {
 	}
 	launcherDir := filepath.Clean(filepath.Dir(launcher))
 	binDir := filepath.Clean(*dir)
-	if launcherDir != binDir && !(runtime.GOOS == "windows" && strings.EqualFold(launcherDir, binDir)) {
+	if launcherDir != binDir && (runtime.GOOS != "windows" || !strings.EqualFold(launcherDir, binDir)) {
 		return "", false
 	}
 	return filepath.Join(filepath.Dir(binDir), target, "current"), true
