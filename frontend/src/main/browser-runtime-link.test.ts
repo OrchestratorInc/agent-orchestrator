@@ -431,7 +431,9 @@ describe("browser runtime link", () => {
 
 		// Before the fix every refused attempt reported connected and redialed every 200 ms.
 		expect(connections).toBe(1);
-		expect(states).toEqual([CONNECTING, REJECTED]);
+		// The daemon's reason reaches the Browser panel, which names a cause only for
+		// a code that identifies one.
+		expect(states).toEqual([CONNECTING, { ...REJECTED, rejectionCode: "BROWSER_RUNTIME_TOKEN_REJECTED" }]);
 		expect(logs.filter((line) => line.includes("connected"))).toEqual([]);
 		expect(logs.filter((line) => line.includes("refused"))).toEqual([
 			expect.stringContaining("BROWSER_RUNTIME_TOKEN_REJECTED: token mismatch"),

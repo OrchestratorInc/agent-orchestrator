@@ -177,6 +177,8 @@ export type BrowserRuntimeState = {
 	connecting: boolean;
 	/** The daemon refused this app's hello. Reconnecting with the same token can't help. */
 	rejected: boolean;
+	/** The daemon's reason for the refusal (a BROWSER_RUNTIME_* code), when it gave one. */
+	rejectionCode?: string;
 };
 
 export type BrowserDevToolsState = {

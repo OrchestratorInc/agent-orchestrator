@@ -1442,16 +1442,33 @@ describe("BrowserPanel", () => {
 		expect(hookState.reconnectRuntime).toHaveBeenCalledOnce();
 	});
 
-	it("says the daemon refused the runtime and how to recover, without a Reconnect that can't help (#6466)", () => {
-		hookState.runtimeState = { connected: false, connecting: false, rejected: true };
-		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+	it.each([
+		{
+			rejectionCode: "BROWSER_RUNTIME_TOKEN_REJECTED",
+			message:
+				"The AO daemon refused the browser runtime because another AO launch started it. Run `ao stop`, then reopen AO.",
+		},
+		{
+			rejectionCode: "BROWSER_RUNTIME_PROTOCOL_MISMATCH",
+			message:
+				"The AO daemon refused the browser runtime because it comes from a different AO version than this app. Run `ao stop`, then reopen AO.",
+		},
+		// A malformed hello, a code this app doesn't know, or none: no cause is claimed.
+		{ rejectionCode: "BROWSER_RUNTIME_BAD_HELLO", message: "The AO daemon refused the browser runtime. Run `ao stop`, then reopen AO." },
+		{ rejectionCode: undefined, message: "The AO daemon refused the browser runtime. Run `ao stop`, then reopen AO." },
+	])(
+		"says why the daemon refused the runtime ($rejectionCode), without a Reconnect that can't help (#6466)",
+		({ rejectionCode, message }) => {
+			hookState.runtimeState = { connected: false, connecting: false, rejected: true, rejectionCode };
+			render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 
-		expect(screen.getByTestId("browser-runtime-alert")).toHaveTextContent(
-			"The AO daemon refused the browser runtime because another AO launch started it. Run `ao stop`, then reopen AO.",
-		);
-		// Reconnecting resends the same token, which the daemon would refuse again.
-		expect(screen.queryByRole("button", { name: "Reconnect" })).not.toBeInTheDocument();
-	});
+			const alert = screen.getByTestId("browser-runtime-alert");
+			expect(alert).toHaveTextContent(message);
+			expect(alert.querySelector("span")).toHaveAttribute("title", message);
+			// Reconnecting resends the same token, which the daemon would refuse again.
+			expect(screen.queryByRole("button", { name: "Reconnect" })).not.toBeInTheDocument();
+		},
+	);
 
 	it("shows no runtime alert while a handshake is in flight", () => {
 		hookState.runtimeState = { connected: false, connecting: true, rejected: false };

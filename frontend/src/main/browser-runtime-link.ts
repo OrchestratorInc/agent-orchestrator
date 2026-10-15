@@ -298,12 +298,14 @@ export function connectBrowserRuntime(
 			refuse: (error) => {
 				if (accepted || refused || socket !== next || connectionEpoch !== epoch) return;
 				refused = true;
+				// Keep the daemon's reason: a stale token, a protocol mismatch and a
+				// malformed hello are all refusals, with different causes.
 				const reason = error ? `${error.code}: ${error.message}` : "no reason given";
 				log(
-					`browser-runtime-link: the AO daemon refused this app's browser runtime (${reason}). ` +
-						"It was started by another AO launch; run `ao stop`, then reopen AO.",
+					`browser-runtime-link: the AO daemon refused this app's browser runtime (${reason}); ` +
+						"run `ao stop`, then reopen AO.",
 				);
-				setState(REJECTED);
+				setState({ ...REJECTED, rejectionCode: error?.code });
 			},
 		};
 		next.on("connect", () => {

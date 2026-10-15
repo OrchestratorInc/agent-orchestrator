@@ -255,8 +255,10 @@ func TestBrokerRejectsInvalidRuntimeToken(t *testing.T) {
 			if reply.Type != "hello-rejected" || reply.Error == nil || reply.Error.Code != tc.code {
 				t.Fatalf("reply = %#v, want hello-rejected with %s", reply, tc.code)
 			}
-			if err := dec.Decode(&reply); err == nil {
-				t.Fatalf("rejected runtime connection remained open; read %#v", reply)
+			// Only EOF proves the daemon closed the connection; a deadline timeout
+			// would mean it stayed open.
+			if err := dec.Decode(&reply); !errors.Is(err, io.EOF) {
+				t.Fatalf("read after hello-rejected: err = %v, reply = %#v; want io.EOF from the daemon closing", err, reply)
 			}
 			if broker.Status().Connected {
 				t.Fatal("broker accepted an invalid hello")
