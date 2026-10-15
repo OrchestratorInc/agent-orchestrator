@@ -12,8 +12,10 @@ agent's integration PR, not in this guide.
 Read the checkout's `AGENTS.md`, documented run commands, current adapter, and
 available test harnesses first. Resolve the execution host, native version/model,
 existing authorized credentials, isolated profile, selected agent ID, and a fresh
-report basename. Ask only for inputs that cannot be established from the repo or
-existing authorization. The runner's TUI spawn currently requests
+report basename outside the Git checkout. Generated reports/captures stay in
+untracked host storage and are shared through the integration PR's evidence
+comments/attachments, never committed. Ask only for inputs that cannot be
+established from the repo or existing authorization. The runner's TUI spawn currently requests
 `bypass-permissions`; that scope must be authorized and does not qualify manual
 or accept-edits permission modes.
 

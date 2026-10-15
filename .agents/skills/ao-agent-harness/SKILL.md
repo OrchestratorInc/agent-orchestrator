@@ -101,10 +101,14 @@ with functional evidence and provenance. A single running screenshot does not
 cover the journey. Missing steps or planned UI remain explicit non-pass rows;
 a runner PASS cannot fill missing `AO UI evidence: BLOCKED`.
 
-Keep each attempt and failure distinct. Detailed harness reports, JSON receipts,
-screenshots, and provenance belong with that harness's integration PR. The skill
-contains reusable guidance and tooling. Publish reports only when requested or
-already authorized, and inspect artifacts for secrets before sharing.
+Keep each attempt and failure distinct. Publish detailed harness evidence in
+**comments on that harness's integration PR**, with screenshots/logs/receipts as
+GitHub attachments or bounded inline text. Keep generated audit files outside the
+Git checkout; never commit reports, receipts, audit screenshots or logs to either
+the integration branch or skill branch. The PR description links to its evidence
+comments. Source docs, product logos/licenses and reusable synthetic tests remain
+normal source files. Follow [comment-only evidence ownership](references/evidence-and-handoff.md#evidence-ownership-by-integration-pr).
+Publish only when requested or already authorized; inspect artifacts for secrets.
 
 ## Validate changes
 

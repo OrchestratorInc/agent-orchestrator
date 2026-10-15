@@ -197,7 +197,7 @@ capture there too. If the UI cannot run or capture fails, keep the functional
 results and report `AO UI evidence: BLOCKED`; do not claim the integration is
 fully verified or convert missing screenshots into a pass.
 
-Maintain a per-harness, per-attempt checkpoint index in the report/PR comment:
+Maintain a per-harness, per-attempt checkpoint index in its PR evidence comment:
 
 | Checkpoint/substep | Action and expected → observed state | Functional status | Screenshot/attachment status | Image and functional proof or reason |
 | --- | --- | --- | --- | --- |
@@ -265,16 +265,18 @@ runner. Without that host helper, original failures have text/API evidence and
 gap. Never upload credential stores, process environments, raw sensitive
 terminal output, or a whole profile directory with a report.
 
-For a PR report, record the tested commit and binary hash, native version,
+In a PR evidence comment, record tested source/binary hashes, native version,
 provider/model (without credentials), fixture/live/CI scope, gate summary,
-failed attempts and fixes, unresolved limitations, screenshot provenance, and
-cleanup result. Embed the required checkpoint images in journey order in the
-PR report/comment using `![checkpoint: observed state](image-url)` and link them
-from the index. Every claimed running interface needs its own real AO UI proof.
-Use a durable GitHub attachment or a committed, revision-pinned image URL that
-renders on GitHub. A local/VPS path, expiring CI artifact, or plain text link to
-an unavailable image is not an attachment. Verify the published image URL is
-accessible and renders, and read back the report/comment after publication.
+failed attempts/fixes, limitations, screenshot provenance and cleanup result.
+Embed required checkpoint images in journey order using
+`![checkpoint: observed state](attachment-url)` and link them from the index.
+Every claimed running interface needs its own real AO UI proof. Upload new images
+as durable GitHub attachments that render in the comment; never commit them to
+obtain a raw/blob URL. Attach sanitized logs/receipts, or include bounded excerpts
+and JSON in fenced blocks. Split oversized evidence into numbered PR comments
+linked from one index comment; retain attempt identity and original-byte hashes.
+A local/VPS path, expiring CI artifact or unavailable image link is insufficient.
+Verify attachment access/rendering and read back the published comments.
 If upload/rendering fails, label the attachment unavailable and the AO UI
 evidence `BLOCKED` until corrected. Do not create reports on other services
 unless the user requested that publication.
@@ -311,7 +313,9 @@ runner cannot replace those checks.
 
 ## Current status and reproduction receipt
 
-Maintain one current-status section in the authorized PR report. Include the
+Maintain one current-status evidence comment on the authorized integration PR.
+Link it from the concise PR description; keep detailed matrices, screenshots,
+logs and receipts in comments/attachments. Include the
 [completion matrix](integration-path.md#completion-matrix) and these fields:
 
 - **Current head:** SHA, CI result/links for that SHA, merge/conflict state and
@@ -349,15 +353,32 @@ and automated validation are unchanged.
 
 ## Evidence ownership by integration PR
 
-Keep each harness's detailed reports, JSON receipts, screenshots, and provenance
-on its integration PR branch or as attachments to that PR. Embed images and link
-receipts in its authorized PR report/comment. Keep tested source/native revisions
-separate from the evidence commit. The skill/tooling PR contains reusable guidance,
-runner/tests, and links to external evidence when useful.
+Audit evidence belongs in comments on the harness's integration PR and their
+GitHub attachments. The PR description contains a concise validation summary
+and links to the current evidence/index comments. Do not commit per-run Markdown
+reports, JSON receipts/contracts/provenance, logs or audit screenshots anywhere
+in the integration or skill branch, including `docs/research/` and asset folders.
+Generated runtime files still exist in isolated local/VPS storage outside the
+Git checkout; this policy changes publication, not runner output or retention.
+Reusable synthetic test fixtures, source documentation and shipped product
+assets such as harness logos and their licenses remain legitimate source files.
 
-When relocating evidence, preserve original bytes, hashes, failure labels, and
-standalone-versus-registered scope. Verify destination assets and published links
-before removing old paths. Relocation does not establish a new runtime PASS.
+If upload/comment publication is unavailable, keep sanitized originals in host
+storage, report attachment/publication `BLOCKED` and give the reason. Do not
+substitute an evidence commit, external report service or expiring CI artifact.
+Keep prior failed-attempt comments intact; later reproductions get separate
+attempt-labelled comments. A current index may link all attempts without
+rewriting failures into success. Never upload credentials or whole profiles.
+
+For evidence already committed in an open PR, preserve original bytes, hashes,
+failure labels and standalone-versus-registered scope; publish the report in
+comments and upload its artifacts there. Verify every destination attachment and
+comment link before removing only evidence files from the current PR diff.
+Record migration and any unavailable originals in the comment, recheck the final
+diff and category counts, and retain historical comments/commit references as
+historical proof. Do not rewrite Git history or remove product assets/fixtures.
+Evidence relocation establishes no new runtime PASS. New evidence must use
+attachments even when old, already-published pinned links remain historical.
 
 ## Independent standing-instruction controls
 

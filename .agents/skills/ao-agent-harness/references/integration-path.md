@@ -299,7 +299,12 @@ validation scope. Link the existing PR and issue when continuing work. Preserve
 failed attempts separately from the final run; a later passing fixture or live
 attempt does not erase a real failed reproduction.
 
-A useful report separates:
+Keep the PR description concise: source behavior, validation summary and links
+to its evidence comments. Publish detailed reports, checkpoint indexes, matrices,
+logs/receipts and images as PR comments/attachments; never commit per-run evidence
+files. Follow [comment-only evidence ownership](evidence-and-handoff.md#evidence-ownership-by-integration-pr).
+
+A useful evidence comment separates:
 
 - strict audit status from individual functional lifecycle results;
 - adapter defects from fixture/launcher defects and upstream limitations;
@@ -307,9 +312,9 @@ A useful report separates:
 - stored/configured credentials from verified provider authorization;
 - actual AO UI screenshots from native-only terminals, mirrors, and later reproductions.
 
-For each harness, publish the complete checkpoint index and embed its real AO
-UI screenshots in journey order, with required capture records and durable
-GitHub-renderable URLs. A passing fixture suite, runner result or final running
+For each harness, publish the complete checkpoint index in a PR evidence comment
+and embed real AO UI screenshots in journey order, with required capture records
+and durable GitHub attachment URLs. A passing fixture suite, runner result or final running
 image cannot fill missing earlier steps. Missing AO UI capture or attachment
 means `AO UI evidence: BLOCKED` and an incomplete
 integration handoff. List every non-pass gate separately with its actual failure
@@ -321,7 +326,8 @@ to unrelated channels or merge/publish releases as part of integration testing.
 
 ## Completion matrix
 
-Include one matrix in the integration PR's current-status section before handoff.
+Include one matrix in the integration PR's current-status evidence comment before
+handoff; link that comment from the PR description.
 Use columns **Area | Supported scope | Verification | Proof or reason**.
 Keep every row; scope an excluded interface explicitly rather than deleting it.
 
