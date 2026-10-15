@@ -780,10 +780,14 @@ export function createBrowserViewHost(
   ): BrowserProfileId | null => {
     const store = options.browserProfileStore;
     if (!store || explicitTemporarySessionIds.has(sessionId)) return null;
-    const boundProfileId = store.getSessionProfileId(sessionId);
-    if (boundProfileId && store.getProfile(boundProfileId))
-      return boundProfileId;
-    return store.profiles[0]?.id ?? null;
+    const sessionProfileId = store.getSessionProfileId(sessionId);
+    if (sessionProfileId === null) return null;
+    if (sessionProfileId && store.getProfile(sessionProfileId))
+      return sessionProfileId;
+    const defaultProfileId = store.getDefaultProfileId();
+    if (defaultProfileId && store.getProfile(defaultProfileId))
+      return defaultProfileId;
+    return null;
   };
   const ipcDisposers: Array<() => void> = [];
   let disposePromise: Promise<void> | null = null;

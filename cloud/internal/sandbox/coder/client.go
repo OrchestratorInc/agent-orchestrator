@@ -125,6 +125,18 @@ type Client struct {
 	readyProbeInterval     time.Duration
 	readyProbeInlineWindow time.Duration
 	now                    func() time.Time
+	// A bring-your-own connection's working directory and secret-file
+	// protection (see sandbox.CoderSessionProfile). The durable root locates
+	// the Cleanup hook the worker installs.
+	workingDirectory   string
+	protectSecretFiles bool
+	durableRoot        string
+	// cleanupWait bounds how long one Delete waits for the project's Cleanup
+	// commands; zero uses cleanupBudget.
+	cleanupWait time.Duration
+	// cleanupInline bounds how long one Delete waits for a Cleanup run before
+	// returning to the reconciler; zero uses cleanupInlineWait.
+	cleanupInline time.Duration
 }
 
 var (
@@ -250,6 +262,12 @@ func (c *Client) ForSandbox(record domain.Sandbox) (sandbox.Provider, error) {
 	sessionClient.expectedWorkspaceName = WorkspaceNameWithPrefix(profile.WorkspaceNamePrefix, record.SessionID)
 	sessionClient.runAsWorkspaceUser = profile.RunsAsWorkspaceUser()
 	sessionClient.reuseCheckout = profile.RunsAsWorkspaceUser() && profile.ReuseExistingCheckout
+	sessionClient.durableRoot = profile.DurableRoot
+	sessionClient.workingDirectory = ""
+	sessionClient.protectSecretFiles = profile.ProtectsSecretFiles()
+	if profile.RunsAsWorkspaceUser() {
+		sessionClient.workingDirectory = profile.WorkingDirectory
+	}
 	sessionClient.readyProbe = profile.ReadyProbe
 	sessionClient.readyProbeTimeout = 0
 	if profile.ReadyProbe != "" {
@@ -371,6 +389,9 @@ type TemplateParameter struct {
 	DefaultValue string                    `json:"defaultValue"`
 	Options      []TemplateParameterOption `json:"options"`
 	Order        int                       `json:"order"`
+	// Diagnostics are Coder's problems with the parameter's value; only an
+	// evaluation against draft values (EvaluateTemplateParameters) sets them.
+	Diagnostics []TemplateParameterDiagnostic `json:"diagnostics,omitempty"`
 }
 
 // TemplateParameterOption is one choice of an option-backed parameter.
@@ -729,6 +750,11 @@ func (c *Client) ExtendDeadline(ctx context.Context, id sandbox.ID, deadline tim
 }
 
 func (c *Client) Delete(ctx context.Context, id sandbox.ID) error {
+	if !c.cleanupFinished(ctx, id) {
+		// The project's Cleanup commands are still running in the workspace.
+		// The reconciler re-issues Delete on its next tick.
+		return nil
+	}
 	err := c.transition(ctx, id, "delete")
 	if errors.Is(err, sandbox.ErrNotFound) {
 		return nil
@@ -1001,6 +1027,9 @@ func (c *Client) specializeBootstrap(bootstrap sandbox.WorkerBootstrap, arch, ho
 	if err != nil {
 		return sandbox.WorkerBootstrap{}, err
 	}
+	if c.protectSecretFiles {
+		resolved.Environment[ProtectSecretFilesEnv] = "1"
+	}
 	if !c.runAsWorkspaceUser {
 		return resolved, nil
 	}
@@ -1018,6 +1047,7 @@ func (c *Client) specializeBootstrap(bootstrap sandbox.WorkerBootstrap, arch, ho
 	if c.reuseCheckout {
 		resolved.Environment[ReuseExistingCheckoutEnv] = "1"
 	}
+	c.addLifecycleEnvironment(resolved.Environment, c.workspaceName(bootstrap.DurableIdentity))
 	return resolved, nil
 }
 

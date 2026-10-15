@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { CancelledError } from "@tanstack/react-query";
+import { CancelledError, type QueryClient } from "@tanstack/react-query";
 import { Suspense, type ComponentType, type PropsWithChildren } from "react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppShortcutEvent, KeybindingOverrides } from "../../shared/shortcuts";
@@ -92,6 +92,7 @@ const shellMocks = vi.hoisted(() => {
 		}),
 		router: {
 			history: { canGoBack: vi.fn(() => true), back: vi.fn(), forward: vi.fn() },
+			subscribe: vi.fn(() => () => {}),
 		},
 		getPathForFile: vi.fn((file: File) => `/dropped/${file.name}`),
 		onOpenFolderPath: vi.fn((listener: (path: string) => void) => {
@@ -129,6 +130,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@tanstack/react-router")>()),
 	createFileRoute: () => (options: unknown) => ({ options }),
 	Outlet: () => null,
+	useMatch: () => undefined,
 	useMatchRoute: () => (options: { to: string }) => shellMocks.state.matchRouteTarget === options.to,
 	useNavigate: () => shellMocks.navigate,
 	useRouter: () => shellMocks.router,
@@ -821,6 +823,22 @@ describe("shell workspace startup", () => {
 		);
 
 		await waitFor(() => expect(shellMocks.state.shellValue?.workspaceStartupState).toBe("ready"));
+	});
+});
+
+describe("shell route loader", () => {
+	const loader = Route.options.loader as (args: { context: { queryClient: Pick<QueryClient, "fetchQuery"> } }) => Promise<unknown>;
+
+	it("treats a workspace fetch cancelled by a newer refetch as warmed, not a shell error", async () => {
+		const fetchQuery = vi.fn(() => Promise.reject(new CancelledError()));
+		await expect(loader({ context: { queryClient: { fetchQuery } as unknown as QueryClient } })).resolves.toBeUndefined();
+		expect(fetchQuery).toHaveBeenCalledTimes(1);
+	});
+
+	it("still fails the shell on a real workspace fetch error", async () => {
+		const failure = new Error("daemon down");
+		const fetchQuery = vi.fn(() => Promise.reject(failure));
+		await expect(loader({ context: { queryClient: { fetchQuery } as unknown as QueryClient } })).rejects.toBe(failure);
 	});
 });
 

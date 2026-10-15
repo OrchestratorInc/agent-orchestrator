@@ -165,6 +165,209 @@ export function patchClaudeHibernationCheck(adapterPath) {
 	return true;
 }
 
+/**
+ * Settle a prompt that Claude Code folded into a task-notification cycle.
+ *
+ * When a prompt arrives while Claude Code runs a cycle it started itself (for
+ * example after a background command finished), the CLI adds the prompt to
+ * that cycle. The cycle's single result keeps its task-notification origin, so
+ * claude-agent-acp 0.70 treats it as autonomous and never answers the prompt:
+ * the session stays "Working" until the user sends something else. The result
+ * names the prompts it answered in user_message_uuid(s); route it through the
+ * user lane when it names a pending, not held-open turn. Port of upstream
+ * agentclientprotocol/claude-agent-acp#1233 for issue #1145.
+ */
+export function patchClaudeFoldedPromptSettlement(adapterPath) {
+	const source = readFileSync(adapterPath, "utf8");
+	if (source.includes("// AO: a result naming a pending prompt answers it.")) return false;
+	const original = "const isAutonomousResult = message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind);";
+	const at = source.indexOf(original);
+	if (at < 0 || source.indexOf(original, at + 1) >= 0 || !source.includes("const findUnsettledTurn = (uuid) =>")) {
+		throw new Error("claude-agent-acp autonomous result classification no longer matches AO's folded-prompt patch");
+	}
+	const replacement = [
+		"// AO: a result naming a pending prompt answers it.",
+		"                        const answeredPromptUuids = Array.isArray(message.user_message_uuids)",
+		"                            ? message.user_message_uuids",
+		'                            : typeof message.user_message_uuid === "string" ? [message.user_message_uuid] : [];',
+		"                        const answersPendingPrompt = answeredPromptUuids.some((uuid) => {",
+		"                            const turn = findUnsettledTurn(uuid);",
+		"                            return turn !== undefined && !isHeldOpen(turn);",
+		"                        });",
+		"                        const isAutonomousResult = message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind) && !answersPendingPrompt;",
+	].join("\n");
+	writeFileSync(adapterPath, source.slice(0, at) + replacement + source.slice(at + original.length));
+	return true;
+}
+
+/**
+ * Drop trailing-idle debt that can no longer be paid.
+ *
+ * claude-agent-acp 0.70 counts one owed `idle` per result and absorbs that many
+ * idles before treating one as a turn-over signal. Claude Code 2.1.270+ emits a
+ * single idle for a turn plus the task-notification cycle that follows it, so
+ * one unit is never paid. The leftover then swallows the idle a steered turn
+ * settles on, leaving that turn "Working" forever. A transition into `running`
+ * proves every earlier idle was already emitted, so reset the debt there. Port
+ * of the sweep upstream shipped in claude-agent-acp 0.79.
+ */
+export function patchClaudeStaleIdleDebt(adapterPath) {
+	const source = readFileSync(adapterPath, "utf8");
+	if (source.includes("// AO: drop idle debt that can no longer be paid.")) return false;
+	const original = [
+		'case "session_state_changed": {',
+		"                                session.lastSessionState = message.state;",
+		'                                if (message.state === "idle") {',
+	].join("\n");
+	const at = source.indexOf(original);
+	if (at < 0 || source.indexOf(original, at + 1) >= 0 || !source.includes("session.owedTrailingIdles--;")) {
+		throw new Error("claude-agent-acp session state handling no longer matches AO's idle-debt patch");
+	}
+	const replacement = [
+		'case "session_state_changed": {',
+		"                                // AO: drop idle debt that can no longer be paid.",
+		"                                const previousState = session.lastSessionState;",
+		"                                session.lastSessionState = message.state;",
+		'                                if (message.state === "running" && previousState !== "running") {',
+		"                                    session.owedTrailingIdles = 0;",
+		"                                }",
+		'                                if (message.state === "idle") {',
+	].join("\n");
+	writeFileSync(adapterPath, source.slice(0, at) + replacement + source.slice(at + original.length));
+	return true;
+}
+
+/**
+ * Settle steered turns the way upstream claude-agent-acp#1166 does.
+ *
+ * A steer aborts the running cycle and runs the steered message as a second
+ * cycle, so 0.70 parks a steered turn's results and settles it at an idle. An
+ * owed idle can absorb that idle (the "Working forever" stall), or the turn
+ * waits for an echo the CLI never replays. #1166 settles the turn at a result
+ * that names the steer in user_message_uuid(s). That result still owes its
+ * trailing idle. Unstamped results settle at the first idle after a result
+ * that followed the steered echo (`steeredAwaitingResult`), ahead of idle
+ * debt. AO adds one rule: a result that names a steer answers it, whatever its
+ * origin. Claude Code folds a steer sent during a task-notification cycle into
+ * that cycle's result. Drop this patch when AO moves to claude-agent-acp
+ * 0.86 or later.
+ */
+export function patchClaudeSteerSettlement(adapterPath) {
+	let source = readFileSync(adapterPath, "utf8");
+	if (source.includes("// AO: port of claude-agent-acp#1166.")) return false;
+	const patches = [
+		[
+			"function isSteering(turn) {\n    return turn != null && turn.steeredEchoes !== undefined && !turn.settled;\n}",
+			[
+				"function isSteering(turn) {",
+				"    return turn != null && turn.steeredEchoes !== undefined && !turn.settled;",
+				"}",
+				"// AO: port of claude-agent-acp#1166.",
+				"function isSteeredSettleReady(turn) {",
+				"    return isSteering(turn) && turn.steeredEchoes.size === 0 && turn.steeredSettle !== undefined && !turn.steeredAwaitingResult;",
+				"}",
+				"function leaveSteerLane(turn) {",
+				"    turn.steeredEchoes = undefined;",
+				"    turn.steeredUuids = undefined;",
+				"    turn.steeredAwaitingResult = undefined;",
+				"    turn.steeredSettle = undefined;",
+				"}",
+			].join("\n"),
+		],
+		[
+			"(turnInFlight.steeredEchoes ??= new Set()).add(steeredUuid);",
+			"(turnInFlight.steeredEchoes ??= new Set()).add(steeredUuid);\n        (turnInFlight.steeredUuids ??= new Set()).add(steeredUuid);",
+		],
+		[
+			"session.activeTurn.steeredSettle = outcome;",
+			"session.activeTurn.steeredSettle = outcome;\n                session.activeTurn.steeredAwaitingResult = false;",
+		],
+		[
+			"session.activeTurn.steeredEchoes.delete(message.uuid);",
+			[
+				"if (session.activeTurn.steeredEchoes.delete(message.uuid)) {",
+				"                                        // The recorded outcome predates the steered cycle.",
+				"                                        session.activeTurn.steeredAwaitingResult = true;",
+				"                                    }",
+			].join("\n"),
+		],
+		[
+			[
+				"// Plain Turn so the fields can be cleared below; isSteering",
+				"                                        // narrows steeredEchoes to non-optional.",
+				"                                        const steered = session.activeTurn;",
+				"                                        if (steered.steeredEchoes?.size === 0 && steered.steeredSettle !== undefined) {",
+				"                                            // Via the subagent gate, not settleActive: a steered turn",
+				"                                            // can also have spawned background subagents, which own it",
+				"                                            // from here (settles now if none is live, holds otherwise).",
+				"                                            steered.deferredSettle = steered.steeredSettle;",
+				"                                            steered.steeredEchoes = undefined;",
+				"                                            steered.steeredSettle = undefined;",
+				"                                            settleDeferredIfDrained();",
+				"                                        }",
+			].join("\n"),
+			"// AO: the ready lane above settles a steered turn; this one swallows the idle.",
+		],
+		[
+			"else if (session.owedTrailingIdles > 0) {",
+			[
+				"else if (isSteeredSettleReady(session.activeTurn)) {",
+				"                                        // Ahead of idle debt: the outcome is final, and debt",
+				"                                        // absorption could swallow the only idle this turn gets.",
+				"                                        // Via the subagent gate, not settleActive: a steered turn",
+				"                                        // can also have spawned background subagents.",
+				"                                        const steered = session.activeTurn;",
+				"                                        steered.deferredSettle = steered.steeredSettle;",
+				"                                        leaveSteerLane(steered);",
+				"                                        settleDeferredIfDrained();",
+				"                                    }",
+				"                                    else if (session.owedTrailingIdles > 0) {",
+			].join("\n"),
+		],
+		[
+			"const isAutonomousResult = message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind)",
+			[
+				"const resultUuids = message.user_message_uuids ??",
+				"                            (message.user_message_uuid !== undefined ? [message.user_message_uuid] : []);",
+				"                        // AO: a result that names a steer answers it, whatever its origin.",
+				"                        const namesSteer = !session.cancelled && resultUuids.some((uuid) =>",
+				"                            (session.turnQueue ?? []).some((turn) => isSteering(turn) && turn.steeredUuids?.has(uuid)));",
+				"                        const isAutonomousResult = message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind) && !namesSteer",
+			].join("\n"),
+		],
+		[
+			"recordResultForOrphanCommands();\n                                ensureActiveTurn();",
+			[
+				"recordResultForOrphanCommands();",
+				"                                ensureActiveTurn();",
+				"                                // A result naming a steer consumed it: retire its echo and,",
+				"                                // with no other steer outstanding, leave the steer lane so",
+				"                                // this result settles the turn and owes its trailing idle.",
+				"                                const steeredTurn = session.activeTurn;",
+				"                                if (!session.cancelled && isSteering(steeredTurn)) {",
+				"                                    let answersSteer = false;",
+				"                                    for (const uuid of resultUuids) {",
+				"                                        steeredTurn.steeredEchoes.delete(uuid);",
+				"                                        if (steeredTurn.steeredUuids?.has(uuid)) answersSteer = true;",
+				"                                    }",
+				"                                    if (answersSteer && steeredTurn.steeredEchoes.size === 0) {",
+				"                                        leaveSteerLane(steeredTurn);",
+				"                                    }",
+				"                                }",
+			].join("\n"),
+		],
+	];
+	for (const [original, replacement] of patches) {
+		const at = source.indexOf(original);
+		if (at < 0 || source.indexOf(original, at + 1) >= 0) {
+			throw new Error("claude-agent-acp no longer matches AO's steer settlement patch");
+		}
+		source = source.slice(0, at) + replacement + source.slice(at + original.length);
+	}
+	writeFileSync(adapterPath, source);
+	return true;
+}
+
 export function pruneNodeDistribution(nodeRoot) {
 	// The Unix archives expose npm/corepack as bin/ symlinks into lib/. Remove
 	// the entry points before their targets so packagers never see dangling

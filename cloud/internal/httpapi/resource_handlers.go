@@ -268,6 +268,9 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
+	if !s.requireAdminForProjectScripts(w, r, orgID, config) {
+		return
+	}
 	if !s.validateProjectSandboxProvider(w, r, principalFrom(r), orgID, config) {
 		return
 	}
@@ -290,10 +293,10 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		coderConfig = s.sanitizeCoderConfig(r.Context(), coderConfig, requestID(r))
 		// Template parameters must be ones the chosen template declares (best
 		// effort: only a readable parameter list can reject a name).
-		if unknown := s.unknownCoderTemplateParameters(
+		if problem := s.coderTemplateParameterProblem(
 			r.Context(), orgID, coderConfig.TemplateID, coderConfig.Parameters, requestID(r),
-		); len(unknown) > 0 {
-			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", unknownCoderTemplateParametersMessage(unknown))
+		); problem != "" {
+			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", problem)
 			return
 		}
 		config, err = domain.MergeProjectCoderConfig(config, coderConfig)
@@ -609,6 +612,9 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		coderOpts, coderOverride = placement.options, placement.override
+		if coderOverride != nil {
+			coderOverride.DefaultWorkspaceNamePrefix = domain.CoderWorkspaceNamePrefixFor(project.DisplayName)
+		}
 		if placement.connectionID != "" {
 			request.SandboxProviderConnectionID = placement.connectionID
 		}
@@ -1080,6 +1086,11 @@ func (s *Server) sanitizeCoderConfig(ctx context.Context, cfg domain.ProjectCode
 // settings carry a workspace name prefix Coder would refuse: every session of
 // the project would otherwise fail to provision.
 func validateProjectCoderConfig(config json.RawMessage) error {
+	// The project's Setup and Cleanup commands are checked here too, so both
+	// project create paths reject them in the wrong shape.
+	if err := domain.ValidateProjectScriptsConfig(config); err != nil {
+		return err
+	}
 	if cfg, ok := domain.DecodeProjectCoderConfig(config); ok {
 		if err := domain.ValidateCoderWorkspaceNamePrefix(cfg.WorkspaceNamePrefix); err != nil {
 			return err

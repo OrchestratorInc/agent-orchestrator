@@ -8,26 +8,68 @@ import { CloudSessionStartupError } from "./CloudSessionStartupError";
 import { TooltipProvider } from "./ui/tooltip";
 
 const retrySessionStartup = vi.hoisted(() => vi.fn());
+const requestWorkspaceCheckout = vi.hoisted(() => vi.fn());
 vi.mock("../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ client: { retrySessionStartup }, ready: true, baseUrl: "https://cloud.test" }),
+	useCloudCp: () => ({ client: { retrySessionStartup, requestWorkspaceCheckout }, ready: true, baseUrl: "https://cloud.test" }),
 }));
 
 function mount(problem: Parameters<typeof CloudSessionStartupError>[0]["problem"], coderWorkspaceUrl?: string) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	const invalidate = vi.spyOn(client, "invalidateQueries");
-	render(
+	const view = (next: typeof problem) => (
 		<QueryClientProvider client={client}>
 			<TooltipProvider>
-				<CloudSessionStartupError coderWorkspaceUrl={coderWorkspaceUrl} orgId="org-1" sessionId="sess-1" problem={problem} />
+				<CloudSessionStartupError coderWorkspaceUrl={coderWorkspaceUrl} orgId="org-1" sessionId="sess-1" problem={next} />
 			</TooltipProvider>
-		</QueryClientProvider>,
+		</QueryClientProvider>
 	);
-	return { invalidate };
+	const { rerender } = render(view(problem));
+	return { invalidate, rerender: (next: typeof problem) => rerender(view(next)) };
 }
 
 describe("CloudSessionStartupError", () => {
 	beforeEach(() => {
 		retrySessionStartup.mockReset();
+		requestWorkspaceCheckout.mockReset();
+	});
+
+	it("shows a failed project Setup step with its output and retries it through the worker", async () => {
+		requestWorkspaceCheckout.mockResolvedValue({ requested: true });
+		const message = "Setup step 1 failed: exit status 3. Fix the project's Setup script (Project settings > Scripts), then reopen this session to retry.";
+		mount({ phase: "failed", code: "project_setup_failed", message, detail: "starting per-session stack\nmissing secret" });
+		expect(screen.getByRole("heading", { name: "The project's Setup script failed" })).toBeInTheDocument();
+		expect(screen.getByText(message)).toBeInTheDocument();
+		const output = screen.getByTestId("cloud-session-startup-detail");
+		expect(output).toHaveTextContent("missing secret");
+		expect(output.className).toContain("font-mono");
+
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(requestWorkspaceCheckout).toHaveBeenCalledWith("org-1", "sess-1");
+		expect(retrySessionStartup).not.toHaveBeenCalled();
+	});
+
+	it("shows the workspace being prepared again after Retry until a newer failure arrives", async () => {
+		requestWorkspaceCheckout.mockResolvedValue({ requested: true });
+		const failure = { phase: "failed" as const, code: "project_setup_failed", message: "Setup step 1 failed: exit status 3.", detail: "missing secret", at: "2026-10-14T10:00:00Z" };
+		const { rerender } = mount(failure);
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(await screen.findByText(/Preparing the workspace again/)).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: "Preparing the workspace" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Retrying…" })).toBeDisabled();
+		expect(screen.queryByTestId("cloud-session-startup-detail")).not.toBeInTheDocument();
+
+		// The same step failed again: the new failure and its output show, and Retry is back.
+		rerender({ ...failure, detail: "still missing", at: "2026-10-14T10:05:00Z" });
+		expect(screen.getByRole("heading", { name: "The project's Setup script failed" })).toBeInTheDocument();
+		expect(screen.getByText("Setup step 1 failed: exit status 3.")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+		expect(screen.getByTestId("cloud-session-startup-detail")).toHaveTextContent("still missing");
+	});
+
+	it("names a repository checkout failure", () => {
+		mount({ phase: "failed", code: "repository_checkout_failed", message: "Repository checkout failed. Check this project's GitHub access, then reopen this session to retry." });
+		expect(screen.getByRole("heading", { name: "The repository checkout failed" })).toBeInTheDocument();
+		expect(screen.queryByTestId("cloud-session-startup-detail")).not.toBeInTheDocument();
 	});
 
 	it("shows a pending retry, then refetches the session", async () => {

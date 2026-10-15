@@ -412,6 +412,24 @@ and retains failed deletions for retry. Adopted sides from the current desktop
 launch retain Electron's recovery path; previous-launch forks are retired. A
 child whose ACP reply never returns still has an unknown identity.
 
+ChatUI next-message suggestions use the same isolated native fork contract when
+an active desktop launch and the live provider's fork capability are available.
+Exact-turn providers receive the resolved native turn ID; current-context
+providers revalidate and fence the latest completed turn while copying. The
+child uses a scratch workspace, background permissions, its parent's model and
+the lowest advertised reasoning effort. Codex forks omit turn history from the fork response, enforce read-only access,
+and have tool network access disabled. Temporary forks retain a provider rollout
+so the existing cleanup API can delete them after their host stops. ACP retains the existing no-tools
+instruction policy rather than an enforced read-only sandbox. Unsupported
+providers and standalone daemons retain the bounded transcript-copy fallback.
+Suggestions create no visible side chat or durable transcript. Child IDs enter
+the same cleanup journal before loading and remain unadopted, so a replacement
+daemon retires them even within the same desktop launch. Completion and
+cancellation stop the child host before provider deletion; unsupported deletion
+can leave provider-side history, and genuine deletion failures retain ownership
+for retry through an active parent of the same harness.
+
+
 ```mermaid
 sequenceDiagram
     participant Client

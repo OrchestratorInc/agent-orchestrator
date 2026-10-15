@@ -1596,6 +1596,45 @@ paths:
         shell terminal
       tags:
       - cues
+  /api/v1/desktop/sessions/{sessionId}/artifacts:
+    get:
+      operationId: getDesktopSessionArtifacts
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopArtifactLocationResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Resolve a session artifact directory for the loopback desktop supervisor
+      tags:
+      - sessions
   /api/v1/desktop/sessions/{sessionId}/workspace:
     get:
       operationId: getDesktopSessionWorkspace
@@ -4518,6 +4557,54 @@ paths:
       summary: Retry safe source restoration for an agent switch
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/artifact-files:
+    delete:
+      operationId: deleteSessionArtifactFile
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Artifact-directory-relative file path, as listed in the session's
+          artifactFiles.
+        in: query
+        name: path
+        schema:
+          description: Artifact-directory-relative file path, as listed in the session's
+            artifactFiles.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Delete one file from a session's artifact directory and return the
+        session with its refreshed artifact list
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/artifact-files/*:
     get:
       operationId: getSessionArtifactFile
@@ -5405,6 +5492,69 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: List the models the provider offers for a chat session
+      tags:
+      - conversations
+  /api/v1/sessions/{sessionId}/conversation/prompt-suggestion:
+    post:
+      operationId: suggestSessionConversationPrompt
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationPromptSuggestionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationPromptSuggestionResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "429":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Too Many Requests
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Suggest the next human message after a completed chat turn
       tags:
       - conversations
   /api/v1/sessions/{sessionId}/conversation/queue/reorder:
@@ -12708,6 +12858,23 @@ components:
       - text
       - status
       type: object
+    ConversationPromptSuggestionRequest:
+      properties:
+        turnId:
+          type: string
+      required:
+      - turnId
+      type: object
+    ConversationPromptSuggestionResponse:
+      properties:
+        prompt:
+          type: string
+        turnId:
+          type: string
+      required:
+      - turnId
+      - prompt
+      type: object
     ConversationRateLimitsPayload:
       properties:
         planLabel:
@@ -13251,6 +13418,16 @@ components:
       required:
       - ok
       - workerId
+      type: object
+    DesktopArtifactLocationResponse:
+      properties:
+        artifactDir:
+          type: string
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - artifactDir
       type: object
     DesktopWorkspaceLocationResponse:
       properties:

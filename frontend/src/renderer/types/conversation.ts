@@ -434,7 +434,12 @@ export interface SystemEventDetail {
 		| "context.reset"
 		| "context.boundary"
 		| "render"
-		| "artifact";
+		| "artifact"
+		| "workspace.setup";
+	/** workspace.setup: how the project's Setup commands ended (exitCode, durationMs and output carry the rest). */
+	setupStatus?: "succeeded" | "failed" | "timed_out";
+	/** workspace.setup: the 1-based Setup step that failed or timed out. */
+	setupStep?: number;
 	/** render */
 	render?: RenderRef;
 	/** artifact */

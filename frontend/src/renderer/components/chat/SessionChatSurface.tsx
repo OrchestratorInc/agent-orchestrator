@@ -35,6 +35,7 @@ import {
 	useWorkspaceFilePaths,
 } from "../../hooks/useConversation";
 import { useAgentSwitchProviderCatalogs } from "../../hooks/useAgentSwitchProviderCatalogs";
+import { useConversationPromptSuggestion } from "../../hooks/useConversationPromptSuggestion";
 import { useRememberProjectPermissions } from "../../hooks/useRememberProjectPermissions";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
 import { isWebLink, isWorkspaceHtmlLink } from "../../lib/external-link-policy";
@@ -499,6 +500,15 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const switchLocksChat = Boolean(
 		switchPresentation?.lockAgentTerminal && !switchPresentation.allowSourceInput,
 	);
+	const promptSuggestion = useConversationPromptSuggestion(snapshot, Boolean(
+		targetChatControllerReady && !controllerBusy && !localEchos.length &&
+		!commands.rollbackPending && !commands.editMessagePending && !commands.activateBranchPending && !commands.compacting &&
+		!session.isTerminated && session.provisionState !== "failed" && session.provisionState !== "provisioning" &&
+		!isLoading && !error && !refreshError && !unavailable &&
+		!agentSwitching && !switchLocksChat && !handoffDialogOpen &&
+		!controllerTransitioning && !agentResuming && !newWorkDisabled && !arriving &&
+		!workspaceFileActive && !workspaceActiveTabKey && !reviewerTarget && !reviewerChatSelected && !shellTarget,
+	), hostId);
 	const renderShellFallback = Boolean(shellTarget && session);
 	// A switch from the terminal shows the chat before the daemon has a
 	// conversation to read. The starting snapshot stands in for the whole
@@ -588,6 +598,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				assetBaseUrl={assetBaseUrl}
 				remoteHostId={hostId}
 				snapshot={renderSnapshot}
+				promptSuggestion={promptSuggestion}
 				agentInputDisabled={switchLocksChat || handoffDialogOpen}
 				newWorkDisabled={newWorkDisabled}
 				onLinkOpen={openLinkInBrowser}

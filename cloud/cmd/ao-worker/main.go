@@ -61,9 +61,15 @@ var workerCapabilities = []string{
 	"terminal.workspace",
 	"terminal.agent",
 	"notification.events",
+	worker.CapabilityWorkspacePathPlaceholder,
 }
 
 func main() {
+	// The coding agent runs this binary as its PreToolUse hook (see
+	// workerexec.RunSecretFileGuard); answer it before any worker setup.
+	if len(os.Args) == 2 && os.Args[1] == workerexec.SecretFileGuardArg {
+		os.Exit(workerexec.RunSecretFileGuard(os.Stdin, os.Stderr))
+	}
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	if err := run(logger); err != nil {
 		logger.Error("worker exited", "error", err)
@@ -122,6 +128,12 @@ func run(logger *slog.Logger) error {
 		logger.Warn("worker self-update check failed; continuing", "error", err)
 	}
 
+	// The session's first worker start has no persisted worker token yet (a
+	// self-update re-exec happens before connect, so it still counts).
+	// Project Setup runs only when the session's workspace is first prepared.
+	_, tokenErr := os.Stat(client.tokenFile)
+	firstStart := errors.Is(tokenErr, os.ErrNotExist)
+
 	bootstrap, err := client.connect(ctx, logger, bootstrapToken)
 	if err != nil {
 		return err
@@ -144,12 +156,39 @@ func run(logger *slog.Logger) error {
 	// A Coder template that already cloned the repository (and runs its dev
 	// stack there) can ask the session to work in that checkout instead of a
 	// fresh clone. Decide before anything captures the workspace path.
+	// A configured working directory replaces that search: the session works
+	// exactly there, adopting the template's checkout or cloning into it.
+	workingDirectory := readWorkingDirectory()
+	protectSecretFiles := os.Getenv(worker.ProtectSecretFilesEnv) == "1"
+	secretFileGuard := ""
+	if protectSecretFiles {
+		secretFileGuard = secretFileGuardCommand(logger)
+	}
 	reuse := worker.ReuseDecision{Workspace: workspace}
-	if os.Getenv(worker.ReuseExistingCheckoutEnv) == "1" &&
-		strings.TrimSpace(bootstrap.Launch.RepositoryURL) != "" &&
-		!worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL) {
+	var workingDirectoryErr error
+	hasRepository := strings.TrimSpace(bootstrap.Launch.RepositoryURL) != "" &&
+		!worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL)
+	switch {
+	case workingDirectory != "" && hasRepository:
+		reuse, workingDirectoryErr = resolveConfiguredWorkspace(ctx, logger, bootstrap, workingDirectory, workspace, dataDir)
+		workspace = reuse.Workspace
+	case os.Getenv(worker.ReuseExistingCheckoutEnv) == "1" && hasRepository:
 		reuse = resolveReusedWorkspace(ctx, logger, bootstrap, workspace, dataDir)
 		workspace = reuse.Workspace
+	}
+	scriptEnvironment := worker.SessionScriptEnvironment{
+		SessionID:     bootstrap.SessionID,
+		SessionKind:   bootstrap.Launch.Kind,
+		Branch:        bootstrap.Launch.Branch,
+		WorkspaceDir:  workspace,
+		RepositoryURL: bootstrap.Launch.RepositoryURL,
+		ProjectID:     bootstrap.Launch.ProjectID,
+		ProjectName:   bootstrap.Launch.ProjectName,
+	}
+	// The project's Cleanup commands run before the workspace is deleted; the
+	// provider runs this hook (Coder today) since the worker is gone by then.
+	if err := worker.WriteCleanupHook(dataDir, bootstrap.Launch.PreRemove, workspace, scriptEnvironment); err != nil {
+		logger.Warn("install project cleanup hook", "error", err)
 	}
 
 	// The workspace shell is deliberately available before checkout starts. A
@@ -201,13 +240,24 @@ func run(logger *slog.Logger) error {
 		committedInterface = workertransport.InterfaceTUI
 	}
 	var chatRunner workertransport.ChatRunner
-	if err := verifyHarnessAvailable(bootstrap.Launch.Harness); err != nil {
+	if _, supported := workerexec.SupportedHarness(bootstrap.Launch.Harness); !supported {
 		// Workspace files and shell terminals use the same worker transport as the
-		// coding agent. Keep that transport alive when a rootfs is missing the
-		// selected harness instead of making the whole sandbox unreachable.
-		logger.Warn("coding-agent harness unavailable; continuing with workspace transport", "error", err)
+		// coding agent. Keep that transport alive when the selected harness is
+		// unknown instead of making the whole sandbox unreachable.
+		logger.Warn("coding-agent harness unavailable; continuing with workspace transport",
+			"error", verifyHarnessAvailable(bootstrap.Launch.Harness))
 	} else {
-		b := workerexec.HarnessBuilder{DataDir: dataDir, Launch: bootstrap.Launch, Env: map[string]string{}}
+		if err := verifyHarnessAvailable(bootstrap.Launch.Harness); err != nil {
+			// A template that installs its tools in the background (the Coder
+			// agent reports ready before its own bootstrap finishes) can add the
+			// binary moments later. The command is built lazily, so wire the agent
+			// up anyway; startInteractiveAgent waits for the binary to appear.
+			logger.Warn("coding-agent harness not installed yet; waiting for it", "error", err)
+		}
+		b := workerexec.HarnessBuilder{
+			DataDir: dataDir, Launch: bootstrap.Launch, Env: map[string]string{},
+			ProtectSecretFiles: protectSecretFiles, SecretFileGuard: secretFileGuard,
+		}
 		b.Env["AO_CLOUD_WORKER_API_URL"] = client.baseURL
 		b.Env["AO_CLOUD_WORKER_TOKEN_FILE"] = client.tokenFile
 		b.Env["AO_SESSION_ID"] = bootstrap.SessionID
@@ -312,6 +362,7 @@ func run(logger *slog.Logger) error {
 		}
 		command, err := (workerexec.HarnessBuilder{
 			DataDir: dataDir, ConfigRoot: filepath.Join(dataDir, "reviews", input.ReviewRunID),
+			ProtectSecretFiles: protectSecretFiles, SecretFileGuard: secretFileGuard,
 		}).BuildInteractive(launch, credential, workspace)
 		if err != nil {
 			return workerexec.Command{}, err
@@ -390,8 +441,14 @@ func run(logger *slog.Logger) error {
 	// failure) so the agent never hangs.
 	go func() {
 		chatReadyClosed := false
+		// reopened records that the session was reopened after a failed start,
+		// so the retry reads the project's current Setup commands.
+		reopened := false
 		for {
-			err := prepareWorkspace(runCtx, logger, client, bootstrap, workspace, dataDir, publicURL, reuse)
+			err := workingDirectoryErr
+			if err == nil {
+				err = prepareWorkspace(runCtx, logger, client, bootstrap, workspace, dataDir, publicURL, reuse)
+			}
 			if err == nil {
 				break
 			}
@@ -399,8 +456,10 @@ func run(logger *slog.Logger) error {
 				return
 			}
 			logger.Error("background workspace startup failed; waiting for session open", "error", err)
+			failure := checkoutStartupFailure(err)
+			reportWorkspaceStartup(runCtx, logger, client, failure)
 			if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {
-				runner.SetWorkspaceStartupError("Repository checkout failed. Check this project's GitHub access, then reopen this session to retry.")
+				runner.SetWorkspaceStartupError(failure.Message)
 			}
 			if !chatReadyClosed {
 				close(chatWorkspaceReady)
@@ -410,6 +469,15 @@ func run(logger *slog.Logger) error {
 			case <-runCtx.Done():
 				return
 			case <-checkoutRequested:
+				reopened = true
+			}
+			if workingDirectoryErr != nil {
+				// The whole worker (agent, terminal, Cleanup hook) was set up
+				// around the fallback workspace, so the configured directory is
+				// resolved again by a fresh worker: the control plane starts a
+				// new one when this one exits.
+				logger.Info("working directory: session reopened; restarting the worker to check the directory again")
+				os.Exit(workingDirectoryRetryExitCode)
 			}
 		}
 		// Restore a previously deleted session's state before the agent launches.
@@ -420,9 +488,42 @@ func run(logger *slog.Logger) error {
 				logger.Warn("report restored branch heads", "error", err)
 			}
 		}
+		// The project's Setup commands run last, in the prepared checkout, and
+		// gate the agent like the checkout does: a failed step keeps the agent
+		// from starting until the session is reopened.
+		scripts := projectScripts{PostCreate: bootstrap.Launch.PostCreate, PreRemove: bootstrap.Launch.PreRemove}
+		for {
+			if reopened {
+				scripts = refreshProjectScripts(runCtx, logger, client, dataDir, workspace, scriptEnvironment, scripts)
+			}
+			failed := runProjectSetup(runCtx, logger, client, dataDir, firstStart, scripts.PostCreate, workspace, scriptEnvironment)
+			if failed == nil {
+				break
+			}
+			if runCtx.Err() != nil {
+				return
+			}
+			failure := setupStartupFailure(*failed)
+			reportWorkspaceStartup(runCtx, logger, client, failure)
+			if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {
+				runner.SetWorkspaceStartupError(failure.Message + ": " + failed.Output)
+			}
+			if !chatReadyClosed {
+				close(chatWorkspaceReady)
+				chatReadyClosed = true
+			}
+			select {
+			case <-runCtx.Done():
+				return
+			case <-checkoutRequested:
+				reopened = true
+			}
+		}
 		if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {
 			runner.SetWorkspaceStartupError("")
 		}
+		// Clears a failure this or an earlier worker reported for the session.
+		reportWorkspaceStartup(runCtx, logger, client, worker.WorkspaceStartupEvent{Status: worker.WorkspaceStartupReady})
 		close(rehydrateDone)
 		if !chatReadyClosed {
 			close(chatWorkspaceReady)
@@ -660,8 +761,10 @@ func startInteractiveAgent(
 		return nil
 	case <-rehydrateDone:
 	}
-	if err := verifyHarnessAvailable(bootstrap.Launch.Harness); err != nil {
-		logger.Warn("coding-agent harness unavailable", "error", err)
+	if err := waitForHarness(ctx, logger, bootstrap.Launch.Harness); err != nil {
+		if ctx.Err() == nil {
+			logger.Warn("coding-agent harness unavailable", "error", err)
+		}
 		return nil
 	}
 	if strings.TrimSpace(bootstrap.Launch.Interface) == workertransport.InterfaceChat {
@@ -1128,6 +1231,48 @@ func anonymousCheckoutEnabled() bool {
 	return err == nil && enabled
 }
 
+// harnessWaitInterval and harnessWaitLimit pace and bound how long the worker
+// waits for a supported coding-agent harness binary that is not installed yet,
+// for a template that installs its tools after the Coder agent reports ready.
+// The limit matches the default bring-your-own Coder startup budget.
+var (
+	harnessWaitInterval = 10 * time.Second
+	harnessWaitLimit    = 20 * time.Minute
+)
+
+// waitForHarness returns nil once the harness binary is on PATH, checking
+// again every harnessWaitInterval for at most harnessWaitLimit. It returns the
+// availability error at once for an unknown harness, and the last one when the
+// binary never appears.
+func waitForHarness(ctx context.Context, logger *slog.Logger, harness string) error {
+	err := verifyHarnessAvailable(harness)
+	if err == nil {
+		return nil
+	}
+	if _, supported := workerexec.SupportedHarness(harness); !supported {
+		return err
+	}
+	logger.Info("coding-agent harness not installed yet; checking again", "harness", harness,
+		"interval", harnessWaitInterval.String(), "limit", harnessWaitLimit.String())
+	deadline := time.NewTimer(harnessWaitLimit)
+	defer deadline.Stop()
+	ticker := time.NewTicker(harnessWaitInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return err
+		case <-ticker.C:
+			if err = verifyHarnessAvailable(harness); err == nil {
+				logger.Info("coding-agent harness found; starting the agent", "harness", harness)
+				return nil
+			}
+		}
+	}
+}
+
 func verifyHarnessAvailable(harness string) error {
 	// Derive the expected binary from the harness registry (the same source
 	// BuildInteractive launches from) so every registered harness is gated
@@ -1352,6 +1497,7 @@ func (c *client) doMethod(
 	}
 	if token := c.currentToken(); token != "" {
 		request.Header.Set("Authorization", "Worker "+token)
+		request.Header.Set(worker.CapabilitiesHeader, strings.Join(workerCapabilities, ","))
 	}
 	response, err := c.http.Do(request)
 	if err != nil {
@@ -1407,4 +1553,26 @@ func (c *client) currentToken() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.token
+}
+
+// workingDirectoryRetryExitCode is how the worker exits when a session that
+// failed on its configured working directory is reopened, so a fresh worker
+// resolves the directory again (EX_TEMPFAIL).
+const workingDirectoryRetryExitCode = 75
+
+// secretFileGuardCommand is the hook command that runs this binary's
+// secret-file guard. A self-updated worker re-execs from its healed copy, so
+// os.Executable names the binary that is actually current. Without it the
+// Read/Edit deny rules still apply; only the shell guard is skipped.
+func secretFileGuardCommand(logger *slog.Logger) string {
+	self, err := os.Executable()
+	if err != nil {
+		logger.Warn("resolve worker executable for the secret file guard", "error", err)
+		return ""
+	}
+	if strings.ContainsAny(self, " \t\n\"'\\$`") {
+		logger.Warn("worker executable path cannot be used as a hook command", "path", self)
+		return ""
+	}
+	return self + " " + workerexec.SecretFileGuardArg
 }

@@ -590,6 +590,7 @@ var _ interface {
 var _ sessionmanager.ChatLauncher = chatLauncher{}
 var _ interface {
 	RunBackgroundTask(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)
+	RunPromptSuggestionTask(context.Context, domain.SessionID, string, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)
 	ArmChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy) error
 	PrepareChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy) error
 	AbortChatHandoff(domain.SessionID)
@@ -672,6 +673,10 @@ func (c chatLauncher) StartChat(ctx context.Context, cfg sessionmanager.ChatStar
 
 func (c chatLauncher) RunBackgroundTask(ctx context.Context, harness domain.AgentHarness, cfg ports.ChatStartConfig, prompt string) (string, error) {
 	return c.svc.RunBackgroundTask(ctx, harness, cfg, prompt)
+}
+
+func (c chatLauncher) RunPromptSuggestionTask(ctx context.Context, id domain.SessionID, turnID string, harness domain.AgentHarness, cfg ports.ChatStartConfig, prompt string) (string, error) {
+	return c.svc.RunPromptSuggestionTask(ctx, id, turnID, harness, cfg, prompt)
 }
 
 func (c chatLauncher) StartChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error) {

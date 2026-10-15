@@ -49,6 +49,7 @@ import { readUpdateSettings, type UpdateSettings, type UpdateStatus } from "./ma
 import { readKeybindingOverrides, writeKeybindingOverrides } from "./main/keybinding-settings";
 import { readEditorSettings, writeEditorPreference } from "./main/editor-settings";
 import { createEditorHandoff } from "./main/editor-handoff";
+import { registerCliLinkIpc } from "./main/cli-link-ipc";
 import { launchCommand } from "./main/launch-command";
 import { blocksRenderFrameNavigation } from "./main/render-frame-guard";
 import { agentPageRequestAllowed } from "./main/render-frame-network";
@@ -68,7 +69,7 @@ import {
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { chmod, copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -1066,6 +1067,9 @@ async function createWindowInternal(): Promise<void> {
 		disposeBrowserRuntimeLink();
 		keybindingRecordingActive = false;
 		if (windowComposition === composition) windowComposition = null;
+		// Vibrancy belongs to the closed window. The shell of a recreated window
+		// (macOS Quit keeps the process, then Dock reopen) asks for it again.
+		windowTranslucent = false;
 		void disposeBrowserViewHost()
 			.finally(() => {
 				composition.dispose();
@@ -1137,7 +1141,13 @@ function editorStateDir(): string {
 const workspaceCheckUnavailable = (message: string) =>
 	Object.assign(new Error(message), { code: "SERVICE_UNAVAILABLE" });
 
-async function resolveSessionWorkspaceForDesktop(sessionId: string): Promise<string> {
+// Reads one absolute session path from the loopback-only desktop routes.
+async function fetchDesktopSessionPath(
+	sessionId: string,
+	route: "workspace" | "artifacts",
+	field: "workspacePath" | "artifactDir",
+	unavailableMessage: string,
+): Promise<string> {
 	if (daemonStatus.state !== "ready" || !daemonStatus.port) {
 		throw workspaceCheckUnavailable("AO daemon is not ready.");
 	}
@@ -1145,7 +1155,7 @@ async function resolveSessionWorkspaceForDesktop(sessionId: string): Promise<str
 	const timer = setTimeout(() => controller.abort(), DAEMON_PROBE_TIMEOUT_MS);
 	try {
 		const response = await net.fetch(
-			`http://127.0.0.1:${daemonStatus.port}/api/v1/desktop/sessions/${encodeURIComponent(sessionId)}/workspace`,
+			`http://127.0.0.1:${daemonStatus.port}/api/v1/desktop/sessions/${encodeURIComponent(sessionId)}/${route}`,
 			{ signal: controller.signal },
 		).catch((error: unknown) => {
 			if (error instanceof Error && error.name === "AbortError") throw error;
@@ -1156,14 +1166,14 @@ async function resolveSessionWorkspaceForDesktop(sessionId: string): Promise<str
 			throw error;
 		}) as Record<string, unknown>;
 		if (!response.ok) {
-			const message = typeof body.message === "string" ? body.message : "Session workspace is not available.";
+			const message = typeof body.message === "string" ? body.message : unavailableMessage;
 			throw Object.assign(new Error(message), typeof body.code === "string" ? { code: body.code } : {});
 		}
-		const workspacePath = body.workspacePath;
-		if (typeof workspacePath !== "string" || !path.isAbsolute(workspacePath)) {
-			throw new Error("Session workspace is not available.");
+		const sessionPath = body[field];
+		if (typeof sessionPath !== "string" || !path.isAbsolute(sessionPath)) {
+			throw new Error(unavailableMessage);
 		}
-		return workspacePath;
+		return sessionPath;
 	} catch (error) {
 		if (error instanceof Error && error.name === "AbortError") {
 			throw workspaceCheckUnavailable("Timed out while resolving the session workspace.");
@@ -1174,11 +1184,22 @@ async function resolveSessionWorkspaceForDesktop(sessionId: string): Promise<str
 	}
 }
 
+function resolveSessionWorkspaceForDesktop(sessionId: string): Promise<string> {
+	return fetchDesktopSessionPath(sessionId, "workspace", "workspacePath", "Session workspace is not available.");
+}
+
+// The daemon owns each session's artifact directory, which can live outside
+// this app's data dir when the daemon runs with its own AO_DATA_DIR.
+function resolveSessionArtifactDirForDesktop(sessionId: string): Promise<string> {
+	return fetchDesktopSessionPath(sessionId, "artifacts", "artifactDir", "This session has no artifacts folder yet.");
+}
+
 const editorHandoff = createEditorHandoff({
 	platform: process.platform,
 	env: process.env,
 	homeDir: os.homedir(),
 	resolveWorkspace: resolveSessionWorkspaceForDesktop,
+	resolveArtifactDir: resolveSessionArtifactDirForDesktop,
 	readPreference: async () => (await readEditorSettings(editorStateDir())).preferredEditorId,
 	writePreference: async (editorId) => {
 		await writeEditorPreference(editorStateDir(), editorId);
@@ -1188,6 +1209,11 @@ const editorHandoff = createEditorHandoff({
 		const error = await shell.openPath(workspacePath);
 		if (error) throw new Error(error);
 	},
+	revealPath: async (filePath) => {
+		if (!(await stat(filePath).catch(() => undefined))) throw new Error(`${filePath} does not exist`);
+		shell.showItemInFolder(filePath);
+	},
+	realPath: (candidatePath) => realpath(candidatePath),
 	copyText: (text) => clipboard.writeText(text),
 	logError: (message, error) => console.error(message, error),
 });
@@ -1318,6 +1344,15 @@ function ensureShellEnv(): Promise<void> {
 		});
 	}
 	return shellEnvPromise;
+}
+
+// The daemon spawn waits on this probe (0.2-2s), so start it with the process
+// rather than after the window opens. Windows probes the shell chosen in UI
+// settings, which are not loaded yet, so it still starts with the daemon.
+let earlyShellEnvProbe: Promise<void> | null = null;
+if (process.platform !== "win32") {
+	earlyShellEnvProbe = ensureShellEnv();
+	earlyShellEnvProbe.catch(() => undefined);
 }
 
 // One id per app launch, minted eagerly so every daemon spawn in this process
@@ -1808,6 +1843,17 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	if (startEpoch !== daemonStartEpoch) {
 		return daemonStatus;
 	}
+	// The early probe runs while Electron itself is starting, the busiest moment
+	// of launch. If it failed there, probe once more before settling for a bare
+	// PATH for the daemon's whole run.
+	if (!cachedShellEnv && earlyShellEnvProbe && shellEnvPromise === earlyShellEnvProbe) {
+		earlyShellEnvProbe = null;
+		shellEnvPromise = null;
+		await ensureShellEnv();
+		if (startEpoch !== daemonStartEpoch) {
+			return daemonStatus;
+		}
+	}
 
 	// Wedged-orphan kill+replace: both attach paths returned null, but a process
 	// may still be holding the port. The only reachable case here is a hung/wedged
@@ -2220,6 +2266,15 @@ async function restartDaemon(): Promise<DaemonStatus> {
 	return startDaemonForRestart();
 }
 
+registerCliLinkIpc({
+	isPackaged: () => app.isPackaged,
+	resourcesPath: process.resourcesPath,
+	appImage: process.env.APPIMAGE,
+	dataDir: desktopDataDir,
+	appVersion: app.getVersion(),
+	shellPath: () => cachedShellEnv?.PATH ?? process.env.PATH,
+});
+
 ipcMain.handle("daemon:getStatus", () => refreshDaemonStatus());
 ipcMain.handle("daemon:start", () => startDaemon());
 ipcMain.handle("daemon:stop", () => stopDaemon());
@@ -2267,6 +2322,10 @@ ipcMain.handle("editorHandoff:open", (event, input) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
 	return editorHandoff.open(input && typeof input === "object" ? input : { sessionId: "" });
 });
+ipcMain.handle("editorHandoff:openArtifacts", (event, input) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
+	return editorHandoff.openArtifacts(input && typeof input === "object" ? input : { sessionId: "", targetId: "file-manager" });
+});
 ipcMain.handle("editorHandoff:copyWorkspacePath", (event, sessionId: string) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
 	return editorHandoff.copyWorkspacePath(typeof sessionId === "string" ? sessionId : "");
@@ -2303,7 +2362,9 @@ ipcMain.handle("theme:set-window-background", (_event, color: unknown) => {
 });
 
 ipcMain.handle("theme:set-window-translucent", (_event, enabled: unknown) => {
-	if (process.platform !== "darwin" || typeof enabled !== "boolean" || enabled === windowTranslucent) return;
+	// No early return when the value is unchanged: each new shell document asks
+	// again, and re-applying is cheap and recovers any native state that drifted.
+	if (process.platform !== "darwin" || typeof enabled !== "boolean") return;
 	if (!mainWindow || mainWindow.isDestroyed()) return;
 	windowTranslucent = enabled;
 	mainWindow.setVibrancy(enabled ? "under-window" : null);
@@ -3230,9 +3291,15 @@ app.whenReady().then(async () => {
 	if (process.platform === "darwin") {
 		powerMonitor.on("shutdown", () => desktopQuit.quitCompletely());
 	}
+	// Boot the daemon alongside the window, not after it: the board cannot show
+	// until the daemon answers. createWindow links the browser runtime itself
+	// when the daemon is already ready by the time the window exists. Windows
+	// keeps the old order until this path has been tried there.
+	const daemonStartsWithWindow = process.platform !== "win32";
+	if (daemonStartsWithWindow) void startDaemon();
 	await createWindow();
 	if (browserQuitRequested) return;
-	void startDaemon();
+	if (!daemonStartsWithWindow) void startDaemon();
 	initAutoUpdates();
 
 	// Windows/Linux: on first launch, the deep-link URL may arrive as a

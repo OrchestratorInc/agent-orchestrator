@@ -476,11 +476,11 @@ ON CONFLICT(id) DO UPDATE SET
 	return nil
 }
 
-// The PR previously used 0130, 0148, 0149, 0163, and 0179 for
+// The PR previously used 0130, 0148, 0149, 0163, 0179, and 0197 for
 // schema_app_version. Main now uses those numbers for review completeness,
-// notification dismissal, reviewer chat, the FX harness, and sender metadata,
-// so release an old marker only when the corresponding physical schema change
-// is absent.
+// notification dismissal, reviewer chat, the FX harness, sender metadata, and
+// split orchestrator conversations. Release an old marker only when the
+// corresponding upstream migration still needs to run.
 func repairSchemaAppVersionMigrationHistory(db *sql.DB) error {
 	version, present, err := readSchemaAppVersion(context.Background(), db)
 	if err != nil || !present {
@@ -527,6 +527,9 @@ func repairSchemaAppVersionMigrationHistory(db *sql.DB) error {
 		if senderColumns != 0 {
 			return nil
 		}
+	case 197:
+		// The old PR migration only stamped the version. Reapply main's 0197
+		// so its conversation data repair is not silently skipped.
 	default:
 		return nil
 	}

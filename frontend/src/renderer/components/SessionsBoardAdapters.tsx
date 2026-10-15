@@ -12,7 +12,7 @@ import {
 	type BoardUsagePresentation,
 	type ProductUITranslator,
 } from "@aoagents/product-ui";
-import { Archive, Check, Copy, GitBranch, Globe, LoaderCircle, RotateCcw, Shapes } from "lucide-react";
+import { Archive, Check, Copy, FileText, GitBranch, Globe, LoaderCircle, RotateCcw } from "lucide-react";
 import type { MessageKey } from "../i18n";
 import { aoBridge } from "../lib/bridge";
 import { formatTimeCompact } from "../lib/format-time";
@@ -139,6 +139,7 @@ export function ArchivedSessionCardAdapter({
 	restoreError?: string;
 	session: WorkspaceSession;
 }) {
+	const { t } = useTranslation();
 	const branch = session.branch ?? "";
 	return (
 		<DesktopSessionCard
@@ -147,11 +148,19 @@ export function ArchivedSessionCardAdapter({
 				<ArchiveRestoreButton
 					isDisabled={isRestoreDisabled}
 					isRestoring={isRestoring}
-					label={`Restore ${session.title}`}
+					label={t("shell.restoreNamed", { title: session.title })}
 					onClick={restoreAction}
 				/>
 			}
-			branchAction={branch ? <CopyActionButton label={`branch ${branch}`} value={branch} /> : undefined}
+			branchAction={
+				branch ? (
+					<CopyActionButton
+						copiedLabel={t("shell.copiedBranchNamed", { branch })}
+						copyLabel={t("shell.copyBranchNamed", { branch })}
+						value={branch}
+					/>
+				) : undefined
+			}
 			footer={<ArchiveRestoreError message={restoreError} />}
 			interactive={false}
 			session={session}
@@ -326,7 +335,7 @@ function BoardArtifactLinks({
 	return (
 		<div className="flex min-w-0 flex-col gap-0.5" data-testid="board-session-artifacts">
 			{latest.map((artifact) => {
-				const Icon = artifact.kind === "html" ? Globe : Shapes;
+				const Icon = artifact.kind === "html" ? Globe : FileText;
 				return (
 					<button
 						aria-label={t("shell.openArtifactNamed", { name: artifact.name })}
@@ -460,7 +469,15 @@ function ArchiveRestoreError({ message }: { message?: string }) {
 	) : null;
 }
 
-function CopyActionButton({ label, value }: { label: string; value: string }) {
+function CopyActionButton({
+	copiedLabel,
+	copyLabel,
+	value,
+}: {
+	copiedLabel: string;
+	copyLabel: string;
+	value: string;
+}) {
 	const [copied, setCopied] = useState(false);
 	const copiedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	useEffect(
@@ -469,7 +486,7 @@ function CopyActionButton({ label, value }: { label: string; value: string }) {
 		},
 		[],
 	);
-	const buttonLabel = copied ? `Copied ${label}` : `Copy ${label}`;
+	const buttonLabel = copied ? copiedLabel : copyLabel;
 	const copyValue = async (event: MouseEvent<HTMLButtonElement>) => {
 		event.stopPropagation();
 		try {

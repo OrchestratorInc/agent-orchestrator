@@ -2078,7 +2078,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 						onPointerLeave={() => linkPreviewControlsRef.current.hide()}
 					>
 						{linkPreviewQuery.data ? (
-							<LinkPreviewCard url={linkPreview.url} preview={linkPreviewQuery.data} />
+							<LinkPreviewCard url={linkPreview.url} preview={linkPreviewQuery.data} onBrowserOpen={props.onLinkOpen} />
 						) : (
 							<LinkPreviewCardLoading />
 						)}

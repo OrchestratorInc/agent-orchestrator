@@ -83,3 +83,53 @@ func TestSideForkRecordsReturnedChildBeforeStarting(t *testing.T) {
 		t.Fatal("failed journal accepted child work")
 	}
 }
+
+func TestBackgroundForkIsReadOnlyAndOmitsResponseHistory(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.reply("thread/fork", `{"thread":{"id":"suggestion-child"},"model":"test-model"}`)
+	conv, err := d.ForkIntoHost(t.Context(), "parent", "native-turn", ports.ChatStartConfig{WorkspacePath: t.TempDir(), Permissions: ports.PermissionModeAuto, ReadOnly: true, DisableNetwork: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conv.Close()
+	var params map[string]any
+	if err := json.Unmarshal(srv.awaitFrame(func(f frame) bool { return f.Method == "thread/fork" }).Params, &params); err != nil {
+		t.Fatal(err)
+	}
+	if params["ephemeral"] != nil || params["excludeTurns"] != true || params["sandbox"] != "read-only" || params["approvalPolicy"] != "never" {
+		t.Fatalf("fork policies=%+v", params)
+	}
+	if conv.(ports.ChatSandboxNetwork).SandboxAllowsNetwork("") {
+		t.Fatal("background inherited network access")
+	}
+}
+
+func TestForkCleanupAcceptsOnlyTheExactMissingRollout(t *testing.T) {
+	for _, tc := range []struct {
+		name, message string
+		code          int
+		wantError     bool
+	}{
+		{"already gone", "no rollout found for thread id child", -32600, false},
+		{"wrong child", "no rollout found for thread id other", -32600, true},
+		{"wrong error class", "no rollout found for thread id child", -32603, true},
+		{"ordinary refusal", "cannot delete an active thread", -32600, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, srv := newTestDriver(t)
+			conv, err := d.Start(t.Context(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conv.Close()
+			srv.replyError("thread/delete", tc.code, tc.message)
+			err = conv.(ports.ChatForkDeleter).DeleteFork(t.Context(), "child")
+			if (err != nil) != tc.wantError {
+				t.Fatalf("cleanup error=%v wantError=%v", err, tc.wantError)
+			}
+			if err := conv.(ports.ChatForkDeleter).DeleteFork(t.Context(), conv.ProviderConversationID()); err == nil {
+				t.Fatal("parent deletion allowed")
+			}
+		})
+	}
+}

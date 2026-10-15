@@ -235,6 +235,50 @@ INSERT INTO schema_app_version (id, version) VALUES (1, 179);
 	}
 }
 
+func TestMigrateRepairsPriorSchemaAppVersionMigrationNumber197(t *testing.T) {
+	db := openMigratedDatabaseCopyNoForeignKeys(t, 196)
+	mustExec(t, db, `
+CREATE TABLE schema_app_version (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    version INTEGER NOT NULL CHECK (version >= 0),
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO schema_app_version (id, version) VALUES (1, 197);
+INSERT INTO goose_db_version (version_id, is_applied) VALUES (197, 1);
+INSERT INTO projects (id, path, display_name, registered_at)
+VALUES ('project', '/tmp/project', 'Project', '2026-10-15T00:00:00Z');
+INSERT INTO sessions (
+    id, project_id, num, kind, harness, session_mode, provision_state,
+    controller_generation, activity_last_at, created_at, updated_at
+) VALUES (
+    'orchestrator', 'project', 1, 'orchestrator', 'codex', 'chat', 'ready',
+    'gen-1', '2026-10-15T00:00:00Z', '2026-10-15T00:00:00Z', '2026-10-15T00:00:00Z'
+);
+INSERT INTO conversations (
+    id, scope, project_id, session_id, current_session_id, active_branch_id, created_at, updated_at
+) VALUES
+    ('provisioning', 'session', 'project', 'orchestrator', 'orchestrator', 'provisioning:root', '2026-10-15T00:00:00Z', '2026-10-15T00:00:00Z'),
+    ('live', 'project', 'project', NULL, 'orchestrator', 'live:root', '2026-10-15T00:00:00Z', '2026-10-15T00:00:00Z');
+`)
+
+	for range 2 {
+		if err := migrate(db); err != nil {
+			t.Fatalf("migrate prior PR database: %v", err)
+		}
+	}
+	var current sql.NullString
+	if err := db.QueryRow(`SELECT current_session_id FROM conversations WHERE id = 'provisioning'`).Scan(&current); err != nil {
+		t.Fatal(err)
+	}
+	var version int64
+	if err := db.QueryRow(`SELECT version FROM schema_app_version WHERE id = 1`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if current.Valid || version != 198 {
+		t.Fatalf("provisioning session = %q, schema version = %d; want detached and 198", current.String, version)
+	}
+}
+
 func TestMigrateRefusesNewerSchemaAppVersion(t *testing.T) {
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
 	if err != nil {

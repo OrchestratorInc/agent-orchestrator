@@ -92,6 +92,8 @@ type OrchestratorPlacement struct {
 	// ProjectConfig is the orchestrator project's config (coder dev-kit config
 	// lives under its "coder" key).
 	ProjectConfig json.RawMessage
+	// ProjectName is the orchestrator project's display name.
+	ProjectName string
 	// CoderConnections are the organization's Coder provider connections,
 	// without secrets.
 	CoderConnections []ProviderConnection

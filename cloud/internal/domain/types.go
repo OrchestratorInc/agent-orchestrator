@@ -239,6 +239,39 @@ func ValidateCoderWorkspaceNamePrefix(prefix string) error {
 	return nil
 }
 
+// CoderWorkspaceNamePrefixFor derives a workspace name prefix from a project
+// name: lower-cased, every run of other characters a single hyphen, starting
+// with a letter, at most MaxCoderWorkspaceNamePrefix characters, so it
+// always passes ValidateCoderWorkspaceNamePrefix. A name with no letters gives
+// "ao", the default prefix.
+func CoderWorkspaceNamePrefixFor(projectName string) string {
+	var slug strings.Builder
+	hyphen := false
+	for _, character := range strings.ToLower(projectName) {
+		switch {
+		case character >= 'a' && character <= 'z', character >= '0' && character <= '9' && slug.Len() > 0:
+			if hyphen && slug.Len() > 0 {
+				slug.WriteByte('-')
+			}
+			hyphen = false
+			slug.WriteRune(character)
+		default:
+			hyphen = true
+		}
+		if slug.Len() >= MaxCoderWorkspaceNamePrefix {
+			break
+		}
+	}
+	prefix := strings.TrimRight(slug.String(), "-")
+	if len(prefix) > MaxCoderWorkspaceNamePrefix {
+		prefix = strings.TrimRight(prefix[:MaxCoderWorkspaceNamePrefix], "-")
+	}
+	if prefix == "" || ValidateCoderWorkspaceNamePrefix(prefix) != nil {
+		return "ao"
+	}
+	return prefix
+}
+
 // DecodeProjectCoderConfig extracts the coder dev-kit config from a project's
 // Config json. ok is false when the project has no coder config.
 func DecodeProjectCoderConfig(config json.RawMessage) (cfg ProjectCoderConfig, ok bool) {
@@ -358,6 +391,18 @@ type OrgCoderConfig struct {
 	// applies with the workspace worker user, where it defaults to true;
 	// normalization pins it to false for the ao-worker user.
 	ReuseExistingCheckout *bool `json:"reuseExistingCheckout,omitempty"`
+	// WorkingDirectory names the directory a session works in: an absolute
+	// path, or one under the workspace user's home ("~/" or "$HOME/"), which
+	// may contain {repo} for the repository name, for example ~/work/{repo}.
+	// An existing checkout of the session repository there is adopted, a
+	// missing directory gets a fresh clone, and anything else fails the
+	// checkout. It replaces the ReuseExistingCheckout search and requires the
+	// workspace worker user.
+	WorkingDirectory string `json:"workingDirectory,omitempty"`
+	// ProtectSecretFiles stops the coding agent's own file tools from reading
+	// or editing secret environment files (.env, .env.*). It defaults to true;
+	// normalization makes the effective value explicit.
+	ProtectSecretFiles *bool `json:"protectSecretFiles,omitempty"`
 }
 
 // Bounds for OrgCoderConfig.StartupTimeoutSeconds.

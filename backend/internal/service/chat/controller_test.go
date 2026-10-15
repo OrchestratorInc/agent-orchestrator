@@ -68,7 +68,7 @@ func fullSnapshotReader(st *sqlite.Store) chatsvc.SnapshotReader {
 			return chatsvc.ConversationRows{}, err
 		}
 		return chatsvc.ConversationRows{
-			Conversation: rows.Conversation, Turns: rows.Turns,
+			Conversation: rows.Conversation, ActiveBranch: rows.ActiveBranch, Turns: rows.Turns,
 			Messages: rows.Messages, Activities: rows.Activities,
 			BranchPoints: rows.BranchPoints, BranchedFromEarlierMessage: rows.BranchedFromEarlierMessage,
 		}, nil
@@ -3204,6 +3204,7 @@ func newHarnessWithConversationAndStoreForHarness(
 	chatStore := wrapStore(st)
 	svc := chatsvc.New(chatsvc.Options{
 		Store:    chatStore,
+		Reader:   fullSnapshotReader(st),
 		Sessions: st,
 		StopProviderHost: func(context.Context, domain.SessionID) error {
 			h.hostStops.Add(1)

@@ -7,12 +7,14 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
 )
@@ -205,5 +207,79 @@ func TestInlineArtifactOriginServesItsFilesButNotTheAPI(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden || resp.Header.Get("Access-Control-Allow-Origin") != "" {
 		t.Fatalf("API from the inline origin: status=%d ACAO=%q, want 403 and no ACAO", resp.StatusCode, resp.Header.Get("Access-Control-Allow-Origin"))
+	}
+}
+
+// deleteArtifactFileServer serves session ao-1 with the given artifact files
+// on disk, of which listed are the ones its session read reports.
+func deleteArtifactFileServer(t *testing.T, files map[string]string, listed ...string) (*httptest.Server, string) {
+	t.Helper()
+	dir := t.TempDir()
+	for name, content := range files {
+		file := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := newFakeSessionService()
+	s := svc.sessions["ao-1"]
+	s.Metadata.ArtifactDir = dir
+	for _, name := range listed {
+		s.ArtifactFiles = append(s.ArtifactFiles, domain.SessionArtifactFile{Path: name, Name: path.Base(name)})
+	}
+	svc.sessions["ao-1"] = s
+	return newSessionTestServer(t, svc), dir
+}
+
+func deleteArtifactFile(t *testing.T, srv *httptest.Server, relPath string) int {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/sessions/ao-1/artifact-files?path="+url.QueryEscape(relPath), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
+func TestDeleteArtifactFileRemovesAListedFile(t *testing.T) {
+	srv, dir := deleteArtifactFileServer(t, map[string]string{"plans/notes.md": "# notes", "keep.md": "keep"}, "plans/notes.md", "keep.md")
+
+	if status := deleteArtifactFile(t, srv, "plans/notes.md"); status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "plans", "notes.md")); !os.IsNotExist(err) {
+		t.Fatalf("notes.md still exists: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "keep.md")); err != nil {
+		t.Fatalf("keep.md was removed: %v", err)
+	}
+}
+
+func TestDeleteArtifactFileRefusesAnythingButAListedRegularFile(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv, dir := deleteArtifactFileServer(t, map[string]string{"unlisted.md": "x", "plans/a.md": "a"}, "gone.md", "plans", "link.md", "../outside.md")
+	if err := os.Symlink(outside, filepath.Join(dir, "link.md")); err != nil {
+		t.Logf("symlink unavailable: %v", err)
+	}
+
+	for _, relPath := range []string{"unlisted.md", "gone.md", "plans", "link.md", "../outside.md", ""} {
+		if status := deleteArtifactFile(t, srv, relPath); status != http.StatusNotFound {
+			t.Errorf("DELETE %q status = %d, want 404", relPath, status)
+		}
+	}
+	for _, file := range []string{filepath.Join(dir, "unlisted.md"), filepath.Join(dir, "plans", "a.md"), outside} {
+		if _, err := os.Stat(file); err != nil {
+			t.Errorf("%s was removed: %v", file, err)
+		}
 	}
 }

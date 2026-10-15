@@ -32,6 +32,7 @@ export function ArtifactFileView({
 	path,
 	rawUrl,
 	sessionId,
+	toolbarHost,
 }: {
 	artifactName: string;
 	feedbackRequestKey?: number;
@@ -40,6 +41,8 @@ export function ArtifactFileView({
 	path: string;
 	rawUrl?: string;
 	sessionId: string;
+	/** The header the pane renders its mode and action buttons into. */
+	toolbarHost?: HTMLElement | null;
 }) {
 	const annotation = useFileAnnotation(sessionId, { hostId, source: artifactName });
 	const source = useMemo(() => ({ kind: "artifact" as const, rawUrl }), [rawUrl]);
@@ -56,7 +59,7 @@ export function ArtifactFileView({
 	return (
 		<div className="flex h-full min-h-0 flex-col bg-background">
 			<div className="board-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain">
-				<FileContentPane annotation={annotation} initialMode={initialModeFor(path)} hostId={hostId} path={path} sessionId={sessionId} source={source} split={false} />
+				<FileContentPane annotation={annotation} initialMode={initialModeFor(path)} hostId={hostId} path={path} sessionId={sessionId} source={source} split={false} toolbarHost={toolbarHost} />
 			</div>
 		</div>
 	);

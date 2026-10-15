@@ -311,6 +311,8 @@ ao session cleanup --dry-run
 ### ao session claim-pr
 
 Attach an existing PR to the current AO session, or target another session explicitly.
+Use this for authorized implementation continuation. Reviewing someone else's PR
+does not require or permit a claim; use a normal review-only worker session.
 
 **Syntax:**
 ```

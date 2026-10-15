@@ -435,6 +435,14 @@ export async function updateSessionWorkspaceFile({
 	return data as WorkspaceFileDetail;
 }
 
+/** Deletes one listed file from the session's artifact directory. */
+export async function deleteSessionArtifactFile({ path, sessionId, hostId }: { path: string; sessionId: string; hostId?: string }): Promise<void> {
+	const { error } = await clientForSessionHost(hostId).DELETE("/api/v1/sessions/{sessionId}/artifact-files", {
+		params: { path: { sessionId }, query: { path } },
+	});
+	if (error) throw new Error(apiErrorMessage(error, "Unable to delete artifact"));
+}
+
 export function sessionWorkspaceSearchQueryOptions(
 	sessionId: string,
 	query: string,
