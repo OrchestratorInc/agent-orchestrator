@@ -204,8 +204,7 @@ func TestCoderOnlyEndpointsForbiddenWithoutCoder(t *testing.T) {
 	// Bring-your-own Coder needs the coder capability; the shared deployment's
 	// templates are open to every organization that may run on Coder.
 	customCoder := map[string]func(*Server, http.ResponseWriter, *http.Request){
-		"PUT coder-config":    (*Server).putOrgCoderConfig,
-		"DELETE coder-config": (*Server).deleteOrgCoderConfig,
+		"PUT coder-config": (*Server).putOrgCoderConfig,
 	}
 	refused := func(t *testing.T, rec *httptest.ResponseRecorder) {
 		t.Helper()
@@ -221,17 +220,34 @@ func TestCoderOnlyEndpointsForbiddenWithoutCoder(t *testing.T) {
 		})
 	}
 	// Desktop releases from before managed Coder opened to every org read the
-	// connection for any org that runs on Coder; it has none, not a refusal.
+	// connection for any org that runs on Coder; one without a connection has
+	// none, not a refusal.
 	t.Run("org without the coder capability reads no connection", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		gated().getOrgCoderConfig(rec, coderConfigRequest(t, http.MethodGet, "", []string{sandbox.ProviderFreestyle}))
+		var body orgCoderConfigResponse
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &body) != nil || body.Configured || body.CoderConfig != nil {
+			t.Fatalf("status = %d, body = %s; want 200 with no connection", rec.Code, rec.Body.String())
+		}
+	})
+	// An org that lost the capability keeps running sessions on a connection it
+	// still has, so it must see that connection and be able to remove it.
+	t.Run("org without the coder capability sees and clears a leftover connection", func(t *testing.T) {
 		server := gated()
-		server.store.(*coderConfigFakeStore).connections = []domain.ProviderConnection{{
+		store := server.store.(*coderConfigFakeStore)
+		store.connections = []domain.ProviderConnection{{
 			Provider: sandbox.ProviderCoder, Label: defaultAgentConnectionLabel, Config: json.RawMessage(`{"baseUrl":"https://coder.example"}`),
 		}}
 		rec := httptest.NewRecorder()
 		server.getOrgCoderConfig(rec, coderConfigRequest(t, http.MethodGet, "", []string{sandbox.ProviderFreestyle}))
 		var body orgCoderConfigResponse
-		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &body) != nil || body.Configured || body.CoderConfig != nil {
-			t.Fatalf("status = %d, body = %s; want 200 with no connection", rec.Code, rec.Body.String())
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &body) != nil || !body.Configured || body.CoderConfig == nil {
+			t.Fatalf("status = %d, body = %s; want the leftover connection", rec.Code, rec.Body.String())
+		}
+		rec = httptest.NewRecorder()
+		server.deleteOrgCoderConfig(rec, coderConfigRequest(t, http.MethodDelete, "", []string{sandbox.ProviderFreestyle}))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("delete status = %d, body = %s; want 204", rec.Code, rec.Body.String())
 		}
 	})
 	endpoints := map[string]func(*Server, http.ResponseWriter, *http.Request){
@@ -241,6 +257,7 @@ func TestCoderOnlyEndpointsForbiddenWithoutCoder(t *testing.T) {
 	for name, handler := range customCoder {
 		endpoints[name] = handler
 	}
+	endpoints["DELETE coder-config"] = (*Server).deleteOrgCoderConfig
 	for endpointName, handler := range endpoints {
 		t.Run("deployment without coder/"+endpointName, func(t *testing.T) {
 			rec := httptest.NewRecorder()

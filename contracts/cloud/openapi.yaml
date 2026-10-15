@@ -1243,7 +1243,7 @@ paths:
     get:
       operationId: getOrgCoderConfig
       tags: [Providers]
-      description: The organization's bring-your-own Coder connection, without its token. 403 provider_forbidden when the organization may not run on Coder; an organization without the coder capability reads configured=false.
+      description: The organization's bring-your-own Coder connection, without its token. 403 provider_forbidden when the organization may not run on Coder; configured=false when it has no connection.
       responses:
         "200":
           description: The connection, or configured=false when there is none.

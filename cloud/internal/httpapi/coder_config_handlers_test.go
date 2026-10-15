@@ -538,8 +538,10 @@ func TestDeleteOrgCoderConfigRemovesConnection(t *testing.T) {
 	}
 }
 
-// An unentitled org may neither write nor clear a coder connection.
-func TestDeleteOrgCoderConfigRejectsWhenOrgNotEntitled(t *testing.T) {
+// An org without the coder capability may not write a connection, but it can
+// clear one it was left with: its sessions keep running on a stored
+// connection, so removing it must not need the capability.
+func TestDeleteOrgCoderConfigAllowsOrgWithoutCapability(t *testing.T) {
 	t.Parallel()
 	store := &coderConfigFakeStore{}
 	srv, _ := newCoderConfigServer(t, store, true) // coder is capability-gated
@@ -547,11 +549,11 @@ func TestDeleteOrgCoderConfigRejectsWhenOrgNotEntitled(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.deleteOrgCoderConfig(rec, coderConfigRequest(t, http.MethodDelete, "", nil))
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403; body = %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body = %s", rec.Code, rec.Body.String())
 	}
-	if store.deleted != 0 {
-		t.Fatal("an unentitled org must not delete a coder config")
+	if store.deleted != 1 {
+		t.Fatal("an org without the capability could not clear its coder config")
 	}
 }
 

@@ -87,15 +87,12 @@ func (s *Server) getOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOrgCoder(w, r, orgID) {
 		return
 	}
-	// Every org that may run on Coder can read this, but only one with the coder
-	// capability has a connection to read. Desktop releases from before managed
-	// Coder opened to every org still load it for any org that runs on Coder
-	// (Create Project, project settings, the Coder page), so answer "none" rather
-	// than refusing; saving or clearing one stays capability-gated.
-	if !s.orgHasCustomCoder(principalFrom(r), orgID) {
-		writeJSON(w, http.StatusOK, orgCoderConfigResponse{Configured: false})
-		return
-	}
+	// Every org that may run on Coder can read this. Desktop releases from before
+	// managed Coder opened to every org load it for any org that runs on Coder
+	// (Create Project, project settings, the Coder page), so an org without a
+	// connection gets "none" rather than a refusal. An org that lost the coder
+	// capability but still has a connection sees it, because its sessions still
+	// run there; saving one stays capability-gated.
 	store, ok := s.store.(providerConnectionStore)
 	if !ok {
 		writeError(w, r, http.StatusNotImplemented, "not_implemented", "Provider connections are unavailable.")
@@ -449,15 +446,16 @@ func (s *Server) storedCoderToken(r *http.Request, orgID, baseURL string) ([]byt
 
 // deleteOrgCoderConfig removes an organization's bring-your-own Coder connection.
 // It mirrors deleteAgentConnection: the delete is admin-gated inside the store
-// (requireOrgAdmin), and capability-gated here so an org that is not entitled to
-// the coder provider can neither write nor clear a connection.
+// (requireOrgAdmin). Clearing needs only that the org may run on Coder, not the
+// coder capability, so an org that lost the capability can still remove a
+// connection its sessions would otherwise keep using.
 func (s *Server) deleteOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 	if requireUUID(orgID, "orgId") != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId must be a UUID.")
 		return
 	}
-	if !s.requireOrgCustomCoder(w, r, orgID) {
+	if !s.requireOrgCoder(w, r, orgID) {
 		return
 	}
 	store, ok := s.store.(providerConnectionStore)
