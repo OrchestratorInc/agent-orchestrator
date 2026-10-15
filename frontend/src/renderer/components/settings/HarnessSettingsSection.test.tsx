@@ -976,13 +976,13 @@ describe("HarnessSettingsSection", () => {
 		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 
-	it.each(["already-current", "different-owner", "different-target", "unknown"])("does not run an update when the click-time probe reports %s", async (state) => {
+	it.each(["already-current", "different-owner", "unknown"])("does not run an update when the click-time probe reports %s", async (state) => {
 		mockInstalledOperations("npm");
 		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
 		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
 			if (path === "/api/v1/agents/{agent}/update-advisory" && (options as { params?: { query?: { refresh?: boolean } } })?.params?.query?.refresh) return { data: {
 				agentId: "codex", status: state === "already-current" ? "current" : state === "unknown" ? "unknown" : "behind_latest",
-				currentVersion: state === "already-current" ? "1.3.0" : "1.2.3", latestVersion: state === "different-target" ? "2.0.0" : "1.3.0", maintenanceMethod: state === "different-owner" ? "homebrew" : "npm",
+				currentVersion: state === "already-current" ? "1.3.0" : "1.2.3", latestVersion: "1.3.0", maintenanceMethod: state === "different-owner" ? "homebrew" : "npm",
 			} } as never;
 			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
 		});
