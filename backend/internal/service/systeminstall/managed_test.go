@@ -344,3 +344,31 @@ func TestManagedReinstallRepairsTheManagedCopy(t *testing.T) {
 		t.Fatalf("current after reinstall = %q", target)
 	}
 }
+
+func TestManagedBunInstallOverridesTheUsersGlobalDirectories(t *testing.T) {
+	dir := filepath.Join("root", "versions", "v1")
+	_, env := managedInstallCommand("bun", "@oh-my-pi/pi-coding-agent", "1.2.0", dir)
+	for _, want := range []string{
+		"BUN_INSTALL=" + dir,
+		"BUN_INSTALL_GLOBAL_DIR=" + filepath.Join(dir, "install", "global"),
+		"BUN_INSTALL_BIN=" + filepath.Join(dir, "bin"),
+	} {
+		if !slices.Contains(env, want) {
+			t.Fatalf("env = %v, missing %s", env, want)
+		}
+	}
+}
+
+func TestNoManagedNPMCopyWhenTheDaemonNodeIsTooOld(t *testing.T) {
+	s := newTestService("darwin", "npm")
+	s.managedRoot = t.TempDir()
+	s.installCommands = installCommandRunnerFunc(func(context.Context, ports.InstallCommand, io.Writer, io.Writer) error { return nil })
+	plan := Plan{Target: TargetPi, Method: "npm", Package: "@earendil-works/pi-coding-agent"}
+	if !s.managedEligible(plan) {
+		t.Fatal("npm plan not eligible for a managed copy")
+	}
+	plan.daemonRuntimeRejected = true
+	if s.managedEligible(plan) {
+		t.Fatal("a managed copy would install with a Node that is too old")
+	}
+}

@@ -79,7 +79,11 @@ func (s *Service) SetBinaryInvalidator(invalidate func(Target)) {
 // managedEligible reports whether an update through plan installs side by side.
 func (s *Service) managedEligible(plan Plan) bool {
 	return s.managedRoot != "" && s.installCommands != nil && managedMethods[plan.Method] &&
-		plan.Package != "" && plan.Target != TargetOpencodeV2 && !plan.Unsupported
+		plan.Package != "" && plan.Target != TargetOpencodeV2 && !plan.Unsupported &&
+		// A managed npm copy installs and runs with the npm and Node on PATH,
+		// the daemon's; when that Node is too old, the update keeps validating
+		// the installed copy's own Node instead.
+		(plan.Method != "npm" || !plan.daemonRuntimeRejected)
 }
 
 func (s *Service) managedTargetDir(target Target) string {
@@ -152,7 +156,13 @@ func managedInstallCommand(method, pkg, pin, dir string) (argv, env []string) {
 		if pin != "" {
 			spec = pkg + "@" + pin
 		}
-		return []string{"bun", "install", "-g", spec}, []string{"BUN_INSTALL=" + dir}
+		// BUN_INSTALL alone loses to a global or bin directory the user set
+		// (env or bunfig), which would install over the copy sessions run.
+		return []string{"bun", "install", "-g", spec}, []string{
+			"BUN_INSTALL=" + dir,
+			"BUN_INSTALL_GLOBAL_DIR=" + filepath.Join(dir, "install", "global"),
+			"BUN_INSTALL_BIN=" + filepath.Join(dir, "bin"),
+		}
 	case "uv":
 		spec := pkg
 		if pin != "" {
