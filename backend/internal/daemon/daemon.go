@@ -677,12 +677,13 @@ func Run() error {
 		privateNPMPrefixes[systeminstall.TargetOpencodeV2] = prefix
 	}
 	systemInstall := systeminstall.NewWithDeps(hostCommands, hostCommands, systeminstall.Deps{
-		JobStore:            store,
-		Verifier:            systeminstall.NewVerifier(agents, hostCommands),
-		Sessions:            store,
-		Reviewers:           store,
-		DisableUpdateChecks: !cfg.HarnessUpdateChecks,
-		PrivateNPMPrefixes:  privateNPMPrefixes,
+		JobStore:                  store,
+		Verifier:                  systeminstall.NewVerifier(agents, hostCommands),
+		Sessions:                  store,
+		Reviewers:                 store,
+		DisableUpdateChecks:       !cfg.HarnessUpdateChecks,
+		DisableUpdateWhileRunning: !cfg.UpdateWhileRunning,
+		PrivateNPMPrefixes:        privateNPMPrefixes,
 	})
 	if err := systemInstall.Recover(ctx); err != nil {
 		stop()

@@ -194,6 +194,12 @@ type Plan struct {
 	Method              string
 	DocsURL             string
 	ExpectedDestination string
+	// UpdateWhileRunning is set on update plans: whether the update may run
+	// while sessions use the binary. Empty means blocked.
+	UpdateWhileRunning UpdateWhileRunning
+	// keepPreviousRelease asks the installer to leave the replaced release on
+	// disk because live sessions still run it.
+	keepPreviousRelease bool
 
 	// daemonRuntimeRejected and daemonPrefixRejected mark an npm plan rejected
 	// only for the daemon's own Node/npm or global prefix. An install runs
@@ -343,7 +349,11 @@ type Deps struct {
 	// DisableUpdateChecks stops update advisories from reaching the network
 	// (AO_HARNESS_UPDATE_CHECKS=off).
 	DisableUpdateChecks bool
-	PrivateNPMPrefixes  map[Target]string
+	// DisableUpdateWhileRunning makes every update wait for the harness's
+	// sessions to end, as before update-while-running existed
+	// (AO_UPDATE_WHILE_RUNNING=off).
+	DisableUpdateWhileRunning bool
+	PrivateNPMPrefixes        map[Target]string
 }
 
 // Service runs real install commands for the fixed Target allowlist.
@@ -383,8 +393,10 @@ type Service struct {
 	ownsInstallation     func(context.Context, string, string, string, bool) (bool, error)
 	updateAdvisories     map[Target]UpdateAdvisory
 	updateChecksDisabled bool
-	derivedOwners        map[Target]derivedOwner
-	updateAdvisoryCalls  map[Target]*updateAdvisoryCall
+	// updateWhileRunningDisabled forces every update to wait for sessions.
+	updateWhileRunningDisabled bool
+	derivedOwners              map[Target]derivedOwner
+	updateAdvisoryCalls        map[Target]*updateAdvisoryCall
 	// updateCheckSlots bounds concurrent update checks to
 	// maxConcurrentUpdateChecks; created on first use.
 	updateCheckSlots chan struct{}
@@ -437,30 +449,31 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 	pathWritable, _ := executables.(ports.PathWritableProbe)
 	backgroundContext, stop := context.WithCancel(context.Background())
 	return &Service{
-		jobs:                 make(map[Target]*Job),
-		harnessGates:         make(map[domain.AgentHarness]*sync.RWMutex),
-		executables:          executables,
-		commands:             commands,
-		installCommands:      installCommands,
-		installScripts:       installScripts,
-		installCapabilities:  installCapabilities,
-		jobStore:             deps.JobStore,
-		verifier:             deps.Verifier,
-		sessions:             deps.Sessions,
-		reviewers:            deps.Reviewers,
-		updateChecksDisabled: deps.DisableUpdateChecks,
-		goos:                 runtime.GOOS,
-		installTimeout:       defaultInstallTimeout,
-		persistenceTimeout:   defaultPersistenceTimeout,
-		stop:                 stop,
-		backgroundContext:    backgroundContext,
-		managedVersion:       newManagedVersionChecker(commands, nil),
-		officialVersion:      officialReleaseVersion(runtime.GOOS, runtime.GOARCH),
-		ownsInstallation:     managerOwnsBinary(commands),
-		updateAdvisories:     make(map[Target]UpdateAdvisory),
-		updateAdvisoryCalls:  make(map[Target]*updateAdvisoryCall),
-		pathWritable:         pathWritable,
-		privateNPMPrefixes:   deps.PrivateNPMPrefixes,
+		jobs:                       make(map[Target]*Job),
+		harnessGates:               make(map[domain.AgentHarness]*sync.RWMutex),
+		executables:                executables,
+		commands:                   commands,
+		installCommands:            installCommands,
+		installScripts:             installScripts,
+		installCapabilities:        installCapabilities,
+		jobStore:                   deps.JobStore,
+		verifier:                   deps.Verifier,
+		sessions:                   deps.Sessions,
+		reviewers:                  deps.Reviewers,
+		updateChecksDisabled:       deps.DisableUpdateChecks,
+		updateWhileRunningDisabled: deps.DisableUpdateWhileRunning,
+		goos:                       runtime.GOOS,
+		installTimeout:             defaultInstallTimeout,
+		persistenceTimeout:         defaultPersistenceTimeout,
+		stop:                       stop,
+		backgroundContext:          backgroundContext,
+		managedVersion:             newManagedVersionChecker(commands, nil),
+		officialVersion:            officialReleaseVersion(runtime.GOOS, runtime.GOARCH),
+		ownsInstallation:           managerOwnsBinary(commands),
+		updateAdvisories:           make(map[Target]UpdateAdvisory),
+		updateAdvisoryCalls:        make(map[Target]*updateAdvisoryCall),
+		pathWritable:               pathWritable,
+		privateNPMPrefixes:         deps.PrivateNPMPrefixes,
 	}
 }
 
@@ -638,7 +651,18 @@ func (s *Service) StartAgent(ctx context.Context, target Target, method string) 
 // method ID and operation. An empty method chooses the recommended method
 // for an install or reinstall and the method that owns the installed copy for
 // an update. expected is the release the user approved for an update, or "".
+// It never runs alongside live sessions; see StartAgentOperationWithSessions.
 func (s *Service) StartAgentOperation(ctx context.Context, target Target, method string, operation AgentOperation, expected string) (Job, error) {
+	return s.StartAgentOperationWithSessions(ctx, target, method, operation, expected, false)
+}
+
+// StartAgentOperationWithSessions is StartAgentOperation with the caller's
+// answer to running an update while the harness's sessions stay open.
+// allowRunningSessions is the user's consent; it lets an update whose method
+// is safe or warn proceed, and never unblocks a blocked one. Without it, live
+// sessions return a HarnessActiveError whose NeedsConsent says whether asking
+// would help.
+func (s *Service) StartAgentOperationWithSessions(ctx context.Context, target Target, method string, operation AgentOperation, expected string, allowRunningSessions bool) (Job, error) {
 	if err := ctx.Err(); err != nil {
 		return Job{}, err
 	}
@@ -664,7 +688,7 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		s.mu.Unlock()
 		gate := s.harnessGate(domain.AgentHarness(target))
 		if !gate.TryLock() {
-			return Job{}, fmt.Errorf("%w: a %s session is starting", ErrHarnessActive, target)
+			return Job{}, &HarnessActiveError{Target: target, Starting: true, Level: UpdateWhileRunningBlocked}
 		}
 		releaseHarness = gate.Unlock
 		defer func() {
@@ -672,19 +696,11 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 				releaseHarness()
 			}
 		}()
-		if s.sessions != nil {
-			sessions, err := s.sessions.ListAllSessions(ctx)
-			if err != nil {
-				return Job{}, fmt.Errorf("systeminstall: list sessions before harness operation: %w", err)
+		if operation != AgentOperationUpdate {
+			// Only an update can run alongside sessions; anything else waits.
+			if _, err := s.gateRunningSessions(ctx, target, operation, Plan{}, false); err != nil {
+				return Job{}, err
 			}
-			for _, session := range sessions {
-				if session.Harness == domain.AgentHarness(target) && !session.IsTerminated {
-					return Job{}, fmt.Errorf("%w: end %s session %s before changing its installation", ErrHarnessActive, target, session.ID)
-				}
-			}
-		}
-		if err := s.requireNoLiveReviewer(ctx, target); err != nil {
-			return Job{}, err
 		}
 	}
 
@@ -741,6 +757,15 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 			pin = baseline.expected
 		}
 		plan = pinVendorUpdate(plan, pin)
+	}
+	if operation == AgentOperationUpdate {
+		// Sessions are checked once the plan is final: whether an update may run
+		// alongside them depends on the method that owns the installed copy.
+		withSessions, err := s.gateRunningSessions(ctx, target, operation, plan, allowRunningSessions)
+		if err != nil {
+			return Job{}, err
+		}
+		plan.keepPreviousRelease = withSessions
 	}
 
 	now := time.Now().UTC()
@@ -837,34 +862,6 @@ func (s *Service) owningUpdatePlan(ctx context.Context, target Target, plans []P
 	return Plan{}, false
 }
 
-// requireNoLiveReviewer refuses a harness operation while a reviewer runs on
-// that harness. Reviewer launches hold the harness gate until their handle is
-// recorded, so a reviewer that is still starting is refused at the gate.
-func (s *Service) requireNoLiveReviewer(ctx context.Context, target Target) error {
-	if s.reviewers == nil {
-		return nil
-	}
-	handles, err := s.reviewers.ListLiveReviewerHandles(ctx)
-	if err != nil {
-		return fmt.Errorf("systeminstall: list reviewers before harness operation: %w", err)
-	}
-	for _, handle := range handles {
-		if string(handle.Harness) == string(target) {
-			return fmt.Errorf("%w: close the %s reviewer for session %s before changing its installation", ErrHarnessActive, target, handle.SessionID)
-		}
-	}
-	chats, err := s.reviewers.ListRecoverableChatReviews(ctx)
-	if err != nil {
-		return fmt.Errorf("systeminstall: list reviewer chats before harness operation: %w", err)
-	}
-	for _, review := range chats {
-		if string(review.Harness) == string(target) && review.ControllerGeneration != "" {
-			return fmt.Errorf("%w: close the %s reviewer for session %s before changing its installation", ErrHarnessActive, target, review.SessionID)
-		}
-	}
-	return nil
-}
-
 func (s *Service) harnessGate(harness domain.AgentHarness) *sync.RWMutex {
 	s.harnessGatesMu.Lock()
 	defer s.harnessGatesMu.Unlock()
@@ -881,10 +878,15 @@ func (s *Service) harnessGate(harness domain.AgentHarness) *sync.RWMutex {
 
 // TryBeginHarnessUse prevents session launches from racing replacement of the
 // selected harness executable. The returned release must be called after launch.
+// A launch also notices a binary replaced outside AO and drops its stale
+// update advisory.
 func (s *Service) TryBeginHarnessUse(harness domain.AgentHarness) (func(), bool) {
 	gate := s.harnessGate(harness)
 	if !gate.TryRLock() {
 		return nil, false
+	}
+	if IsAgentTarget(Target(harness)) {
+		s.forgetReplacedBinary(Target(harness))
 	}
 	return gate.RUnlock, true
 }
@@ -1158,6 +1160,10 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 	env := []string{
 		"CI=1", "NONINTERACTIVE=1", "HOMEBREW_NO_AUTO_UPDATE=1",
 		"NPM_CONFIG_AUDIT=false", "NPM_CONFIG_FUND=false",
+	}
+	if plan.keepPreviousRelease && plan.Method == "homebrew" && !plan.PackageCask {
+		// Live sessions still run the old keg; it is cleaned up after they move.
+		env = append(env, "HOMEBREW_NO_INSTALL_CLEANUP=1")
 	}
 	var runErr error
 	if plan.Script != nil {

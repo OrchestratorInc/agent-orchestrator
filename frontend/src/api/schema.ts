@@ -3817,6 +3817,7 @@ export interface components {
             /** Format: date-time */
             checkedAt: string;
             currentVersion?: string;
+            inUse?: components["schemas"]["AgentUpdateInUse"];
             latestVersion?: string;
             maintenanceMethod?: string;
             /** @enum {string} */
@@ -3824,6 +3825,17 @@ export interface components {
             source?: string;
             /** @enum {string} */
             status: "unknown" | "current" | "behind_latest" | "ahead_of_latest";
+        };
+        AgentUpdateInUse: {
+            /**
+             * @description Whether an update can run while they do: safe keeps the running release, warn may disturb it, blocked requires them to end.
+             * @enum {string}
+             */
+            level: "safe" | "warn" | "blocked";
+            /** @description Sessions running this harness, directly or through their reviewer. */
+            liveSessions: number;
+            /** @description Sessions that run this harness or own a reviewer that does. */
+            sessionIds?: string[];
         };
         AppMemoryResponse: {
             /** @description False when there was no earlier sample to measure against: cpuPercent is unknown, not zero. */
@@ -6155,6 +6167,8 @@ export interface components {
             terminalInput?: string;
         };
         StartAgentInstallRequest: {
+            /** @description For updates, the user's consent to update while sessions using this harness stay open. Without it, live sessions return 409 HARNESS_IN_USE_CONFIRM when the update method keeps them usable (level safe or warn), and 409 HARNESS_ACTIVE when they must end first (level blocked) or a session is starting. Both 409s carry details {count, sessionIds, reviewerSessionIds, level, starting}. Consent never unblocks a blocked update. */
+            allowRunningSessions?: boolean;
             /** @description For updates, the available version explicitly approved by the user. The update must reach it. It is installed only when it lies between the installed version and the latest release AO found; otherwise that latest release is installed. A version at or below the installed one, or one sent with another operation, is rejected with INVALID_UPDATE_VERSION. */
             expectedVersion?: string;
             /** @description Server-issued installation method id. Omit to use the recommended viable method for an install or reinstall, and the method that owns the installed copy for an update. */

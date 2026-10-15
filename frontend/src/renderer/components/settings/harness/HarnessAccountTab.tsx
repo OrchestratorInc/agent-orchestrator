@@ -1,6 +1,6 @@
 import { BookOpen, Check, Copy, ExternalLink, LoaderCircle, LogOut } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { versionLabel, type InstallJob } from "../../../hooks/useHarnessUpdates";
+import { advisoryInUse, versionLabel, type InstallJob } from "../../../hooks/useHarnessUpdates";
 import type { TerminalSessionState } from "../../../hooks/useTerminalSession";
 import { aoBridge } from "../../../lib/bridge";
 import { Button } from "../../ui/button";
@@ -35,6 +35,9 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 }) {
 	const { t } = useTranslation();
 	const { plan, job, isInstalled, authPlan, rowAuthWorkflow, authBusy, installMethod, availableMethods, failed } = details;
+	// Sessions that must end first turn Update into a way to find them.
+	const blockedBy = advisoryInUse(details.advisory);
+	const updateBlocked = blockedBy?.kind === "blocked";
 	const progressAction = <span role="status"><Button type="button" size="sm" variant="outline" className={ACTION_CLASS} disabled><LoaderCircle className="animate-spin" aria-hidden="true" />{details.progressLabel}</Button></span>;
 	const authBusyAction = <Button type="button" size="sm" className={ACTION_CLASS} disabled>
 		{rowAuthWorkflow && !["running", "verifying", "closing"].includes(rowAuthWorkflow.phase) ? null : <LoaderCircle className="animate-spin" aria-hidden="true" />}
@@ -62,8 +65,9 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 				<ExternalLink aria-hidden="true" />{t("settings.harness.installGuide")}
 			</Button> : null
 		) : details.showUpdate && !details.needsLogin ? (
-			details.canUpdate ? <Button type="button" data-harness-primary-action="" size="sm" className={ACTION_CLASS} onClick={onUpdate}>
-				{t(failed && details.currentOperation === "update" ? "settings.harness.retryUpdate" : "settings.harness.update")}
+			details.canUpdate ? <Button type="button" data-harness-primary-action="" size="sm" variant={updateBlocked ? "outline" : undefined} className={ACTION_CLASS} onClick={onUpdate}>
+				{updateBlocked ? t("settings.harness.viewSessions", { count: blockedBy.count })
+					: t(failed && details.currentOperation === "update" ? "settings.harness.retryUpdate" : "settings.harness.update")}
 			</Button> : plan?.documentationUrl ? <Button type="button" data-harness-primary-action="" size="sm" variant="outline" className={ACTION_CLASS} onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button> : null
 		) : null;
 	const accountAction = authBusy ? authBusyAction

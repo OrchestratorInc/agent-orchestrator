@@ -422,6 +422,9 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 			plan.Unsupported = true
 			plan.Reason = "This installation method does not provide a supported update command."
 		}
+		if !plan.Unsupported {
+			plan.UpdateWhileRunning = updateWhileRunningLevel(s.goos, plan.Target, plan.Method, plan.PackageCask)
+		}
 		return plan
 	}
 

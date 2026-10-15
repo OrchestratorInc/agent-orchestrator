@@ -62,7 +62,16 @@ type UpdateAdvisory struct {
 	MaintenanceMethod string              `json:"maintenanceMethod,omitempty"`
 	Reason            UpdateUnknownReason `json:"reason,omitempty" enum:"ownership_unconfirmed,unsupported_source,version_unparseable,channel_unconfirmed,lookup_failed,disabled,build_unordered"`
 	CheckedAt         time.Time           `json:"checkedAt"`
+	// InUse is computed on every read, so it reflects sessions opened or ended
+	// since the release check ran.
+	InUse *UpdateInUse `json:"inUse,omitempty"`
 
+	// maintenanceCask records that MaintenanceMethod upgrades a Homebrew cask,
+	// which replaces the running release instead of keeping it like a formula.
+	maintenanceCask bool
+	// binaryIdentity fingerprints the binary the check probed, so a launch can
+	// notice it was replaced outside AO.
+	binaryIdentity binaryIdentity
 	// probeFailed marks an unknown result whose version probe failed or
 	// printed no version, which a busy machine or slow CLI start can cause
 	// once. It is retried like a failed release lookup.
@@ -100,6 +109,15 @@ type updateAdvisoryCall struct {
 // lookupFailedRetryAfter ago. A refresh re-checks while other readers keep
 // getting the previous result until the new one replaces it.
 func (s *Service) UpdateAdvisory(ctx context.Context, target Target, refresh bool) (UpdateAdvisory, error) {
+	advisory, err := s.releaseAdvisory(ctx, target, refresh)
+	if err != nil {
+		return advisory, err
+	}
+	advisory.InUse = s.updateInUse(ctx, target, advisory)
+	return advisory, nil
+}
+
+func (s *Service) releaseAdvisory(ctx context.Context, target Target, refresh bool) (UpdateAdvisory, error) {
 	if !IsAgentTarget(target) {
 		return UpdateAdvisory{}, fmt.Errorf("systeminstall: unknown harness %q", target)
 	}
@@ -206,6 +224,7 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 	// Keep the adapter-selected path even when its version probe fails. This is
 	// display-only evidence; ownership and commands continue using the raw path.
 	advisory.BinaryPath = displayBinaryPath(verified.ResolvedPath)
+	advisory.binaryIdentity = identifyBinary(verified.ResolvedPath)
 	if err != nil {
 		advisory.Reason = UpdateReasonOwnershipUnconfirmed
 		advisory.probeFailed = true
@@ -242,6 +261,7 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 	advisory.CurrentVersion = current.display
 	if source.Package != "" {
 		advisory.MaintenanceMethod = source.Method
+		advisory.maintenanceCask = source.PackageCask
 	} else if vendorMaintainable(target, verified.ResolvedPath) {
 		advisory.MaintenanceMethod = "official-installer"
 	}
@@ -383,4 +403,52 @@ func displayBinaryPath(path string) string {
 		}
 	}
 	return path
+}
+
+// binaryIdentity is a cheap fingerprint of an installed binary: the file a
+// launcher link resolves to, its size, and its modification time. Every
+// supported installer changes at least one of them when it installs a release.
+type binaryIdentity struct {
+	path     string
+	resolved string
+	size     int64
+	modTime  int64
+}
+
+func identifyBinary(path string) binaryIdentity {
+	if path == "" {
+		return binaryIdentity{}
+	}
+	identity := binaryIdentity{path: path}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return identity
+	}
+	identity.resolved = resolved
+	if info, err := os.Stat(resolved); err == nil {
+		identity.size = info.Size()
+		identity.modTime = info.ModTime().UnixNano()
+	}
+	return identity
+}
+
+// forgetReplacedBinary drops target's cached advisory when the binary it
+// probed was replaced since, typically by an update run in a terminal. The
+// next read checks the release that is installed now.
+func (s *Service) forgetReplacedBinary(target Target) {
+	s.mu.Lock()
+	advisory, ok := s.updateAdvisories[target]
+	s.mu.Unlock()
+	if !ok || advisory.binaryIdentity.path == "" {
+		return
+	}
+	if identifyBinary(advisory.binaryIdentity.path) == advisory.binaryIdentity {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if current, ok := s.updateAdvisories[target]; ok && current.binaryIdentity == advisory.binaryIdentity {
+		delete(s.updateAdvisories, target)
+		delete(s.derivedOwners, target)
+	}
 }

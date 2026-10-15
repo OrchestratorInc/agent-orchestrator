@@ -159,6 +159,11 @@ type Config struct {
 	// harnesses after its startup check. AO_HARNESS_UPDATE_INTERVAL overrides
 	// it; values below MinHarnessUpdateInterval are rejected.
 	HarnessUpdateInterval time.Duration
+	// UpdateWhileRunning lets a harness update run while the harness's
+	// sessions stay open, when its installer keeps the running release usable
+	// and the user confirms. AO_UPDATE_WHILE_RUNNING=off makes every update
+	// wait for those sessions to end again.
+	UpdateWhileRunning bool
 	// StartupWorkingDirectory is the daemon process cwd before startup
 	// normalizes it. The desktop uses this to identify dev daemons after the
 	// process cwd is moved to the stable data dir.
@@ -237,6 +242,7 @@ func Load() (Config, error) {
 		LocalOffering:         true,
 		HarnessUpdateChecks:   true,
 		HarnessUpdateInterval: DefaultHarnessUpdateInterval,
+		UpdateWhileRunning:    true,
 	}
 
 	if raw := os.Getenv("AO_PORT"); raw != "" {
@@ -304,6 +310,13 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 		cfg.HarnessUpdateChecks = v
+	}
+	if raw, present := os.LookupEnv("AO_UPDATE_WHILE_RUNNING"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_UPDATE_WHILE_RUNNING", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.UpdateWhileRunning = v
 	}
 	if raw, present := os.LookupEnv("AO_HARNESS_UPDATE_INTERVAL"); present && strings.TrimSpace(raw) != "" {
 		d, err := parsePositiveDuration("AO_HARNESS_UPDATE_INTERVAL", strings.TrimSpace(raw))

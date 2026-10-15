@@ -1303,7 +1303,12 @@ func TestHarnessMaintenanceGateBlocksCodexLaunchThroughWorkerLifetime(t *testing
 }
 
 func TestHarnessMaintenanceSeesSessionCreatedBeforeLaunchGateRelease(t *testing.T) {
-	s := newTestService("darwin")
+	s := newTestService("darwin", "npm")
+	// Sessions are checked once the update proves which method owns the copy.
+	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/verified/codex", Output: "codex 1.0.0"}, nil
+	})
 	release, ok := s.TryBeginHarnessUse(domain.HarnessCodex)
 	if !ok {
 		t.Fatal("Codex launch lease was unexpectedly rejected")
@@ -1801,8 +1806,8 @@ func TestHarnessUpdateIsBlockedWhileItsReviewerRuns(t *testing.T) {
 		handles: []domain.ReviewerHandle{{Harness: domain.ReviewerClaudeCode, HandleID: "pane-1"}},
 		chats:   []domain.Review{{Harness: domain.ReviewerCodex, InterfaceMode: domain.ReviewerInterfaceChat}},
 	}
-	if err := s.requireNoLiveReviewer(context.Background(), TargetCodex); err != nil {
-		t.Fatalf("requireNoLiveReviewer = %v, want nil", err)
+	if sessions, reviewers, err := s.harnessInUse(context.Background(), TargetCodex); err != nil || len(sessions)+len(reviewers) != 0 {
+		t.Fatalf("harnessInUse = %v, %v, %v; want nothing in use", sessions, reviewers, err)
 	}
 }
 

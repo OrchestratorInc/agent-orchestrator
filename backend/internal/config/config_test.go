@@ -546,6 +546,25 @@ func TestLoadHarnessUpdateChecksToggle(t *testing.T) {
 	}
 }
 
+func TestLoadUpdateWhileRunningToggle(t *testing.T) {
+	t.Setenv("AO_UPDATE_WHILE_RUNNING", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.UpdateWhileRunning {
+		t.Fatal("update while running is off by default")
+	}
+	t.Setenv("AO_UPDATE_WHILE_RUNNING", "off")
+	if cfg, err = Load(); err != nil || cfg.UpdateWhileRunning {
+		t.Fatalf("AO_UPDATE_WHILE_RUNNING=off: enabled=%t err=%v", cfg.UpdateWhileRunning, err)
+	}
+	t.Setenv("AO_UPDATE_WHILE_RUNNING", "maybe")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid AO_UPDATE_WHILE_RUNNING value was accepted")
+	}
+}
+
 func TestLoadHarnessUpdateInterval(t *testing.T) {
 	t.Setenv("AO_HARNESS_UPDATE_INTERVAL", "")
 	cfg, err := Load()

@@ -151,16 +151,16 @@ describe("startup harness update notice", () => {
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
 	});
 
-	it("explains a refused update in the notice", async () => {
+	it("explains a refused update in the notice and offers a retry", async () => {
 		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
 		vi.mocked(apiClient.POST).mockImplementation(async (path) => path === "/api/v1/agents/{agent}/install"
-			? { error: { code: "HARNESS_ACTIVE", message: "End claude-code session s-1 before changing its installation" } } as never
+			? { error: { code: "INSTALL_ACTIVE", message: "An install job is already active for claude-code" } } as never
 			: { data: { agents: [agentReadiness("claude-code", "Claude Code")] } } as never);
 		vi.mocked(apiClient.GET).mockImplementation(get);
 		mountNotice();
 		const notice = await screen.findByRole("region", { name: "Agent updates available" });
 		await userEvent.click(within(notice).getByRole("button", { name: "Update" }));
-		expect(await within(notice).findByRole("alert")).toHaveTextContent("End claude-code session s-1");
+		expect(await within(notice).findByRole("alert")).toHaveTextContent("An install job is already active");
 		expect(within(notice).getByRole("button", { name: "Retry update" })).toBeEnabled();
 	});
 
@@ -369,5 +369,134 @@ describe("startup harness update notice", () => {
 		await screen.findByRole("region");
 		act(() => client.setQueryData(updateAdvisoryQueryKey("claude-code"), { agentId: "claude-code", status, currentVersion: "2.1.291", latestVersion: "2.1.292" }));
 		await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
+	});
+});
+
+describe("harness updates while sessions run", () => {
+	const claudeAdvisory = { agentId: "claude-code", status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.292", maintenanceMethod: "official-installer", source: "official-release", checkedAt: "2026-10-07T00:00:00Z" };
+	let advisories: Record<string, Record<string, unknown>>;
+	let installs: Array<{ agent: string; body: Record<string, unknown> }>;
+	let installResponse: (agent: string, body: Record<string, unknown>) => unknown;
+
+	beforeEach(async () => {
+		await appI18n.changeLanguage("en");
+		localStorage.clear();
+		useUiStore.setState({ settingsModal: null });
+		advisories = { "claude-code": claudeAdvisory };
+		installs = [];
+		installResponse = (agent) => ({ data: { target: agent, status: "installing" } });
+		const agents = () => Object.keys(advisories);
+		const readiness = () => ({ agents: agents().map((id) => agentReadiness(id as never, id)) });
+		vi.spyOn(apiClient, "GET").mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/readiness") return { data: readiness() } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: agents().map((agentId) => ({ agentId, methods: [{ id: "official-installer", available: true, updateAvailable: true }] })) } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: agents().map((agentId) => ({ agentId, action: "login", available: true })) } } as never;
+			if (path === "/api/v1/agents/{agent}/update-advisory") {
+				const agent = (options as { params: { path: { agent: string } } }).params.path.agent;
+				return { data: advisories[agent] } as never;
+			}
+			return { data: undefined } as never;
+		});
+		vi.spyOn(apiClient, "POST").mockImplementation(async (path, options) => {
+			if (path !== "/api/v1/agents/{agent}/install") return { data: readiness() } as never;
+			const request = options as { params: { path: { agent: string } }; body: Record<string, unknown> };
+			installs.push({ agent: request.params.path.agent, body: request.body });
+			return installResponse(request.params.path.agent, request.body) as never;
+		});
+	});
+	afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+	it("updates right away when no session uses the harness", async () => {
+		mountNotice();
+		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
+		await waitFor(() => expect(installs).toHaveLength(1));
+		expect(installs[0].body).not.toHaveProperty("allowRunningSessions");
+		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+
+	it("asks before updating a harness open sessions use, then sends that consent", async () => {
+		advisories["claude-code"] = { ...claudeAdvisory, inUse: { liveSessions: 2, sessionIds: ["s1", "s2"], level: "safe" } };
+		mountNotice();
+		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
+		const dialog = await screen.findByRole("dialog");
+		expect(dialog).toHaveTextContent("Update Claude Code while it's in use?");
+		expect(dialog).toHaveTextContent("2 open sessions keep running the current version. New sessions start on v2.1.292");
+		expect(installs).toHaveLength(0);
+		await userEvent.click(within(dialog).getByRole("button", { name: "Update anyway" }));
+		await waitFor(() => expect(installs).toHaveLength(1));
+		expect(installs[0].body).toEqual({ method: "official-installer", operation: "update", expectedVersion: "2.1.292", allowRunningSessions: true });
+	});
+
+	it("warns that a replacing installer may interrupt open sessions", async () => {
+		advisories["claude-code"] = { ...claudeAdvisory, inUse: { liveSessions: 1, sessionIds: ["s1"], level: "warn" } };
+		mountNotice();
+		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
+		expect(await screen.findByRole("dialog")).toHaveTextContent("Claude Code's installer replaces the version 1 open session is running. It may stop working until it restarts");
+	});
+
+	it("offers the sessions to end instead of an update that cannot run alongside them", async () => {
+		advisories["claude-code"] = { ...claudeAdvisory, inUse: { liveSessions: 2, sessionIds: ["s1", "s2"], level: "blocked" } };
+		mountNotice();
+		await userEvent.click(await screen.findByRole("button", { name: "View sessions (2)" }));
+		expect(await screen.findByRole("dialog")).toHaveTextContent("Sessions using Claude Code");
+		expect(installs).toHaveLength(0);
+	});
+
+	it("never offers Retry when the daemon says sessions must end first", async () => {
+		installResponse = () => ({ error: { error: "conflict", code: "HARNESS_ACTIVE", message: "end active sessions", requestId: "r1", details: { count: 1, sessionIds: ["s1"], reviewerSessionIds: [], level: "blocked", starting: false } } });
+		mountNotice();
+		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
+		expect(await screen.findByRole("button", { name: "View sessions (1)" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Retry update" })).toBeNull();
+		expect(screen.queryByRole("alert")).toBeNull();
+		expect(screen.getByRole("status")).toHaveTextContent("1 open session is using Claude Code.");
+	});
+
+	it("asks when the click-time check finds sessions the cached advisory missed", async () => {
+		installResponse = (_agent, body) => body.allowRunningSessions
+			? { data: { target: "claude-code", status: "installing" } }
+			: { error: { error: "conflict", code: "HARNESS_IN_USE_CONFIRM", message: "confirm", requestId: "r1", details: { count: 1, sessionIds: ["s1"], reviewerSessionIds: [], level: "safe", starting: false } } };
+		mountNotice();
+		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
+		const dialog = await screen.findByRole("dialog");
+		await userEvent.click(within(dialog).getByRole("button", { name: "Update anyway" }));
+		await waitFor(() => expect(installs.map((install) => install.body.allowRunningSessions)).toEqual([undefined, true]));
+	});
+
+	it("confirms Update all once, skips harnesses whose sessions must end, and summarizes", async () => {
+		advisories = {
+			"claude-code": { ...claudeAdvisory, inUse: { liveSessions: 2, sessionIds: ["s1", "s2"], level: "safe" } },
+			codex: { ...claudeAdvisory, agentId: "codex", inUse: { liveSessions: 2, sessionIds: ["s3", "s4"], level: "blocked" } },
+			cursor: { ...claudeAdvisory, agentId: "cursor" },
+		};
+		mountNotice();
+		await userEvent.click(await screen.findByRole("button", { name: "Update all" }));
+		// One harness needs consent, so the one confirmation names it.
+		const dialog = await screen.findByRole("dialog");
+		expect(dialog).toHaveTextContent("Update Claude Code while it's in use?");
+		expect(dialog).not.toHaveTextContent("Codex");
+		expect(installs).toHaveLength(0);
+		await userEvent.click(within(dialog).getByRole("button", { name: "Update anyway" }));
+		await waitFor(() => expect(installs.map((install) => install.agent).sort()).toEqual(["claude-code", "cursor"]));
+		expect(installs.find((install) => install.agent === "claude-code")?.body.allowRunningSessions).toBe(true);
+		expect(installs.find((install) => install.agent === "cursor")?.body).not.toHaveProperty("allowRunningSessions");
+		expect(await screen.findByText("Updating 2 · Skipped Codex (2)")).toBeInTheDocument();
+	});
+
+	it("lists every harness one Update all confirmation covers", async () => {
+		advisories = {
+			"claude-code": { ...claudeAdvisory, inUse: { liveSessions: 2, sessionIds: ["s1", "s2"], level: "safe" } },
+			codex: { ...claudeAdvisory, agentId: "codex", maintenanceMethod: "official-installer", inUse: { liveSessions: 1, sessionIds: ["s3"], level: "warn" } },
+		};
+		mountNotice();
+		await userEvent.click(await screen.findByRole("button", { name: "Update all" }));
+		const dialog = await screen.findByRole("dialog");
+		expect(dialog).toHaveTextContent("Update harnesses that are in use?");
+		expect(dialog).toHaveTextContent("2 sessions keep running");
+		expect(dialog).toHaveTextContent("1 session may be interrupted");
+		await userEvent.click(within(dialog).getByRole("button", { name: "Update anyway" }));
+		await waitFor(() => expect(installs.map((install) => install.body.allowRunningSessions)).toEqual([true, true]));
+		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 });

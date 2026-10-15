@@ -4,13 +4,14 @@ import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { appI18n } from "../i18n";
 import { AGENT_OPTIONS, agentLabel, type AgentId } from "../lib/agent-options";
-import { apiErrorMessage } from "../lib/api-client";
+import { apiErrorCode, apiErrorDetails, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { LOCAL_HOST } from "../lib/hosts";
 import type { AgentAuthPlan } from "./useAgentAuth";
 import type { AgentReadiness } from "./useAgentReadinessQuery";
 
 export type AgentUpdateAdvisory = components["schemas"]["AgentUpdateAdvisory"];
+export type UpdateWhileRunningLevel = components["schemas"]["AgentUpdateInUse"]["level"];
 export type InstallJob = components["schemas"]["InstallJob"];
 export const installerQueryKey = ["agent-installers"] as const;
 export const installJobsQueryKey = ["agent-install-jobs"] as const;
@@ -117,8 +118,55 @@ export async function fetchUpdateAdvisory(agentId: AgentId, hostId?: string, ref
 	return data;
 }
 
+/**
+ * Sessions that kept an update from starting. `confirm` means the update can
+ * run once the user agrees to it running alongside them; `blocked` means they
+ * must end first, or one is still starting.
+ */
+export type HarnessInUse = {
+	kind: "confirm" | "blocked";
+	count: number;
+	sessionIds: string[];
+	level: UpdateWhileRunningLevel;
+	starting: boolean;
+};
+
 /** No job and no error: the click-time check found nothing left to install. */
-export type HarnessUpdateStart = { job?: InstallJob; error?: string };
+export type HarnessUpdateStart = { job?: InstallJob; error?: string; inUse?: HarnessInUse };
+
+/** What the Update button does for the sessions the advisory saw: update right away, ask first, or list them. */
+export type HarnessUpdateAction = "update" | "confirm" | "blocked";
+
+export function harnessUpdateAction(advisory?: Pick<AgentUpdateAdvisory, "inUse">): HarnessUpdateAction {
+	const inUse = advisory?.inUse;
+	if (!inUse || inUse.liveSessions <= 0) return "update";
+	return inUse.level === "blocked" ? "blocked" : "confirm";
+}
+
+/** The advisory's view of the sessions in use, in the shape a refused update reports. */
+export function advisoryInUse(advisory?: Pick<AgentUpdateAdvisory, "inUse">): HarnessInUse | undefined {
+	const action = harnessUpdateAction(advisory);
+	if (action === "update" || !advisory?.inUse) return undefined;
+	return { kind: action, count: advisory.inUse.liveSessions, sessionIds: advisory.inUse.sessionIds ?? [], level: advisory.inUse.level, starting: false };
+}
+
+/** Reads a 409 HARNESS_IN_USE_CONFIRM or HARNESS_ACTIVE into the sessions it names. */
+export function harnessInUseFromError(error: unknown): HarnessInUse | undefined {
+	const code = apiErrorCode(error);
+	// An older daemon refuses without details; its message is shown as before.
+	const details = apiErrorDetails(error);
+	if ((code !== "HARNESS_IN_USE_CONFIRM" && code !== "HARNESS_ACTIVE") || !details) return undefined;
+	const ids = (value: unknown) => Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : [];
+	const sessionIds = [...new Set([...ids(details.sessionIds), ...ids(details.reviewerSessionIds)])];
+	const level = details.level === "safe" || details.level === "warn" ? details.level : "blocked";
+	return {
+		kind: code === "HARNESS_IN_USE_CONFIRM" ? "confirm" : "blocked",
+		count: typeof details.count === "number" ? details.count : sessionIds.length,
+		sessionIds,
+		level,
+		starting: details.starting === true,
+	};
+}
 
 /**
  * Starts an update the user saw, shared by the notice and the Harness page.
@@ -128,12 +176,14 @@ export type HarnessUpdateStart = { job?: InstallJob; error?: string };
 export function useStartHarnessUpdate(hostId?: string) {
 	const queryClient = useQueryClient();
 	const { t } = useTranslation();
-	return useCallback(async ({ agentId, latestVersion, methodId, canStart }: {
+	return useCallback(async ({ agentId, latestVersion, methodId, canStart, allowRunningSessions = false }: {
 		agentId: AgentId;
 		latestVersion: string | undefined;
 		methodId: string;
 		/** Checked after the click-time probe, e.g. so an unmounted page starts nothing. */
 		canStart?: () => boolean;
+		/** The user agreed to update while sessions use the harness. */
+		allowRunningSessions?: boolean;
 	}): Promise<HarnessUpdateStart> => {
 		try {
 			const key = updateAdvisoryQueryKey(agentId, hostId);
@@ -146,8 +196,10 @@ export function useStartHarnessUpdate(hostId?: string) {
 			if (maintenanceMethodId(fresh) !== methodId) return { error: t("settings.harness.updateMethodChanged", { agent: agentLabel(agentId) }) };
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/install", {
 				params: { path: { agent: agentId } },
-				body: { method: methodId, operation: "update", expectedVersion: fresh.latestVersion },
+				body: { method: methodId, operation: "update", expectedVersion: fresh.latestVersion, ...(allowRunningSessions ? { allowRunningSessions: true } : {}) },
 			});
+			const inUse = harnessInUseFromError(error);
+			if (inUse) return { inUse };
 			if (error || !data) return { error: apiErrorMessage(error, t("settings.harness.updateFailed")) };
 			queryClient.setQueryData<InstallJob[]>(installJobsQueryKeyForHost(hostId), (current) => upsertInstallJob(current, data));
 			return { job: data };
