@@ -45,7 +45,9 @@ export type WorkspaceFileDetail = Omit<components["schemas"]["WorkspaceFileRespo
 	fileFingerprint?: string;
 	workspaceVersion?: string;
 };
-export type WorkspaceDiffScope = components["schemas"]["WorkspaceDiffRequest"]["scope"];
+// The renderer has no Uncommitted review surface yet, so its scopes stay the
+// ones WorkspaceFilesResponse.sections can index.
+export type WorkspaceDiffScope = Exclude<components["schemas"]["WorkspaceDiffRequest"]["scope"], "uncommitted">;
 export type WorkspaceDiffsResponse = components["schemas"]["WorkspaceDiffsResponse"];
 export type WorkspaceFileRevision = components["schemas"]["WorkspaceFileRevisionResponse"];
 export type WorkspaceFileSearchResponse = components["schemas"]["WorkspaceFileSearchResponse"];

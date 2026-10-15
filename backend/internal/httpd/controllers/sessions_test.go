@@ -3478,7 +3478,8 @@ func TestSessionsAPI_GetWorkspaceManifestOmitsUnchangedInventory(t *testing.T) {
 			{Path: "src/app.go", Status: sessionsvc.WorkspaceFileUnmodified},
 		},
 		Sections: sessionsvc.WorkspaceFileSections{
-			Unstaged: []sessionsvc.WorkspaceFileSummary{{Path: "README.md", Status: sessionsvc.WorkspaceFileModified, Additions: 2, Deletions: 1}},
+			Uncommitted: []sessionsvc.WorkspaceFileSummary{{Path: "README.md", Status: sessionsvc.WorkspaceFileModified, Additions: 2, Deletions: 1}},
+			Unstaged:    []sessionsvc.WorkspaceFileSummary{{Path: "README.md", Status: sessionsvc.WorkspaceFileModified, Additions: 2, Deletions: 1}},
 		},
 		Summary: sessionsvc.WorkspaceSummary{Files: 1, Additions: 2, Deletions: 1},
 	}
@@ -3496,6 +3497,14 @@ func TestSessionsAPI_GetWorkspaceManifestOmitsUnchangedInventory(t *testing.T) {
 	}
 	if len(got.Files) != 1 || got.Files[0].Path != "README.md" {
 		t.Fatalf("manifest files = %+v, want only changed README.md", got.Files)
+	}
+	if len(got.Sections.Uncommitted) != 1 || got.Sections.Uncommitted[0].Path != "README.md" {
+		t.Fatalf("manifest uncommitted section = %+v, want README.md", got.Sections.Uncommitted)
+	}
+	// Empty sections still serialize as arrays, so a missing uncommitted key
+	// can only mean an older daemon.
+	if !strings.Contains(string(body), `"staged":[]`) {
+		t.Fatalf("manifest body = %s, want empty sections as arrays", body)
 	}
 }
 

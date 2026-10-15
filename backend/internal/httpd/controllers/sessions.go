@@ -2865,10 +2865,11 @@ func workspaceFileSummariesResponse(files []sessionsvc.WorkspaceFileSummary) []W
 
 func workspaceFileSectionsResponse(sections sessionsvc.WorkspaceFileSections) WorkspaceFileSections {
 	return WorkspaceFileSections{
-		Staged:    workspaceFileSummariesResponse(sections.Staged),
-		Unstaged:  workspaceFileSummariesResponse(sections.Unstaged),
-		Untracked: workspaceFileSummariesResponse(sections.Untracked),
-		Committed: workspaceFileSummariesResponse(sections.Committed),
+		Uncommitted: workspaceFileSummariesResponse(sections.Uncommitted),
+		Staged:      workspaceFileSummariesResponse(sections.Staged),
+		Unstaged:    workspaceFileSummariesResponse(sections.Unstaged),
+		Untracked:   workspaceFileSummariesResponse(sections.Untracked),
+		Committed:   workspaceFileSummariesResponse(sections.Committed),
 	}
 }
 

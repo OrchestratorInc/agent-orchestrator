@@ -264,11 +264,12 @@ type ArtifactFileResponse struct {
 type WorkspaceFileQuery struct {
 	Path string `query:"path" description:"Session-worktree-relative file path."`
 	// Section scopes the diff to one git-state section (see WorkspaceFileSections):
-	// staged compares the index against HEAD, unstaged compares the worktree
-	// against the index. A file can carry independent changes in both. Omit (or
-	// pass committed/untracked) to diff the worktree against the compare base,
-	// as before this field existed.
-	Section   string `query:"section,omitempty" enum:"committed,staged,unstaged,untracked" description:"Git-state section the file was opened from (see WorkspaceFileSections). staged diffs the index against HEAD; unstaged diffs the worktree against the index; omitted/committed/untracked diff the worktree against the compare base."`
+	// uncommitted compares the worktree against HEAD, staged compares the index
+	// against HEAD, unstaged compares the worktree against the index. A file can
+	// carry independent changes in both staged and unstaged. Omit (or pass
+	// committed/untracked) to diff the worktree against the compare base, as
+	// before this field existed.
+	Section   string `query:"section,omitempty" enum:"uncommitted,committed,staged,unstaged,untracked" description:"Git-state section the file was opened from (see WorkspaceFileSections). uncommitted diffs the worktree against HEAD; staged diffs the index against HEAD; unstaged diffs the worktree against the index; omitted/committed/untracked diff the worktree against the compare base."`
 	CommitSHA string `query:"commitSha,omitempty" description:"Exact commit SHA to read as an immutable committed-scope snapshot."`
 }
 
@@ -293,7 +294,7 @@ type WorkspaceFileBlobQuery struct {
 // WorkspaceFileRevisionQuery selects one text-capable comparison side.
 type WorkspaceFileRevisionQuery struct {
 	Path             string `query:"path" required:"true" description:"Session-worktree-relative file path."`
-	Scope            string `query:"scope,omitempty" enum:"combined,committed,staged,unstaged,untracked" description:"Comparison scope. Defaults to combined."`
+	Scope            string `query:"scope,omitempty" enum:"combined,uncommitted,committed,staged,unstaged,untracked" description:"Comparison scope. Defaults to combined."`
 	Side             string `query:"side,omitempty" enum:"before,after" description:"Comparison side. Defaults to after."`
 	WorkspaceVersion string `query:"workspaceVersion,omitempty" description:"Opaque workspace snapshot token used for consistency checks."`
 	ExpectedRevision string `query:"expectedRevision,omitempty" description:"Opaque revision token used for optimistic consistency checks."`
@@ -633,14 +634,16 @@ type ListPRFilesResponse struct {
 }
 
 // WorkspaceFileSections groups a session workspace's changed files by git
-// state: staged (index vs HEAD), unstaged (worktree vs index), untracked, and
-// committed (HEAD vs the compare base). A partially staged file can appear in
-// both staged and unstaged.
+// state: uncommitted (worktree vs HEAD, untracked files included), staged
+// (index vs HEAD), unstaged (worktree vs index), untracked, and committed
+// (HEAD vs the compare base). A partially staged file can appear in both
+// staged and unstaged, but only once in uncommitted.
 type WorkspaceFileSections struct {
-	Staged    []WorkspaceFileSummary `json:"staged"`
-	Unstaged  []WorkspaceFileSummary `json:"unstaged"`
-	Untracked []WorkspaceFileSummary `json:"untracked"`
-	Committed []WorkspaceFileSummary `json:"committed"`
+	Uncommitted []WorkspaceFileSummary `json:"uncommitted" description:"Worktree vs HEAD, untracked files included. Always present; a response without it comes from an older daemon."`
+	Staged      []WorkspaceFileSummary `json:"staged"`
+	Unstaged    []WorkspaceFileSummary `json:"unstaged"`
+	Untracked   []WorkspaceFileSummary `json:"untracked"`
+	Committed   []WorkspaceFileSummary `json:"committed"`
 }
 
 // WorkspaceCommitSummary is one commit between the compare base and HEAD.
@@ -699,7 +702,7 @@ type WorkspaceFileResponse struct {
 
 // WorkspaceDiffRequest requests renderer-independent unified patches.
 type WorkspaceDiffRequest struct {
-	Scope            string   `json:"scope" enum:"combined,committed,staged,unstaged,untracked"`
+	Scope            string   `json:"scope" enum:"combined,uncommitted,committed,staged,unstaged,untracked"`
 	Paths            []string `json:"paths" minItems:"1" maxItems:"100"`
 	ContextLines     int      `json:"contextLines" minimum:"0" maximum:"20"`
 	IgnoreWhitespace bool     `json:"ignoreWhitespace"`

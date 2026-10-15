@@ -31,11 +31,12 @@ type WorkspaceDiffScope string
 
 // Supported workspace comparison scopes.
 const (
-	WorkspaceDiffCombined  WorkspaceDiffScope = "combined"
-	WorkspaceDiffCommitted WorkspaceDiffScope = "committed"
-	WorkspaceDiffStaged    WorkspaceDiffScope = "staged"
-	WorkspaceDiffUnstaged  WorkspaceDiffScope = "unstaged"
-	WorkspaceDiffUntracked WorkspaceDiffScope = "untracked"
+	WorkspaceDiffCombined    WorkspaceDiffScope = "combined"
+	WorkspaceDiffUncommitted WorkspaceDiffScope = "uncommitted"
+	WorkspaceDiffCommitted   WorkspaceDiffScope = "committed"
+	WorkspaceDiffStaged      WorkspaceDiffScope = "staged"
+	WorkspaceDiffUnstaged    WorkspaceDiffScope = "unstaged"
+	WorkspaceDiffUntracked   WorkspaceDiffScope = "untracked"
 )
 
 // WorkspaceDiffInput requests a bounded set of patches from one comparison scope.
@@ -116,10 +117,10 @@ func normalizeWorkspaceDiffScope(scope WorkspaceDiffScope) (WorkspaceDiffScope, 
 		return WorkspaceDiffCombined, nil
 	}
 	switch scope {
-	case WorkspaceDiffCombined, WorkspaceDiffCommitted, WorkspaceDiffStaged, WorkspaceDiffUnstaged, WorkspaceDiffUntracked:
+	case WorkspaceDiffCombined, WorkspaceDiffUncommitted, WorkspaceDiffCommitted, WorkspaceDiffStaged, WorkspaceDiffUnstaged, WorkspaceDiffUntracked:
 		return scope, nil
 	default:
-		return "", apierr.Invalid("INVALID_WORKSPACE_DIFF_SCOPE", "scope must be combined, committed, staged, unstaged, or untracked", nil)
+		return "", apierr.Invalid("INVALID_WORKSPACE_DIFF_SCOPE", "scope must be combined, uncommitted, committed, staged, unstaged, or untracked", nil)
 	}
 }
 
@@ -132,7 +133,7 @@ func finalizeWorkspaceFiles(files WorkspaceFiles) WorkspaceFiles {
 		files.Files[i].Editable = workspaceFileEditable(files.Files[i].Size, files.Files[i].Binary, files.Files[i].Status == WorkspaceFileDeleted)
 		files.Files[i].FileFingerprint = summaryFingerprint(files.Files[i])
 	}
-	sections := []*[]WorkspaceFileSummary{&files.Sections.Staged, &files.Sections.Unstaged, &files.Sections.Untracked, &files.Sections.Committed}
+	sections := []*[]WorkspaceFileSummary{&files.Sections.Uncommitted, &files.Sections.Staged, &files.Sections.Unstaged, &files.Sections.Untracked, &files.Sections.Committed}
 	for _, section := range sections {
 		for i := range *section {
 			(*section)[i].Editable = workspaceFileEditable((*section)[i].Size, (*section)[i].Binary, (*section)[i].Status == WorkspaceFileDeleted)
@@ -168,7 +169,7 @@ func finalizeWorkspaceManifest(manifest WorkspaceManifest) WorkspaceManifest {
 		manifest.Files[i].Editable = workspaceFileEditable(manifest.Files[i].Size, manifest.Files[i].Binary, manifest.Files[i].Status == WorkspaceFileDeleted)
 		manifest.Files[i].FileFingerprint = summaryFingerprint(manifest.Files[i])
 	}
-	sections := []*[]WorkspaceFileSummary{&manifest.Sections.Staged, &manifest.Sections.Unstaged, &manifest.Sections.Untracked, &manifest.Sections.Committed}
+	sections := []*[]WorkspaceFileSummary{&manifest.Sections.Uncommitted, &manifest.Sections.Staged, &manifest.Sections.Unstaged, &manifest.Sections.Untracked, &manifest.Sections.Committed}
 	for _, section := range sections {
 		for i := range *section {
 			(*section)[i].Editable = workspaceFileEditable((*section)[i].Size, (*section)[i].Binary, (*section)[i].Status == WorkspaceFileDeleted)
@@ -313,14 +314,14 @@ func workspaceDiffGroup(ctx context.Context, targetGroup *workspaceDiffTargetGro
 		return group, nil
 	}
 
-	// git diff never reports an untracked file, so the combined (base..worktree)
-	// scope has to synthesize its added-file patch the same way GetWorkspaceFile
-	// already does. Without this the path returns a successful but patchless
-	// group and the review pane has no diff to render for it.
+	// git diff never reports an untracked file, so the scopes that end at the
+	// worktree have to synthesize its added-file patch the same way
+	// GetWorkspaceFile already does. Without this the path returns a successful
+	// but patchless group and the review pane has no diff to render for it.
 	var untrackedPatch strings.Builder
 	tracked := make([]workspaceFileTarget, 0, len(targetGroup.targets))
 	for _, target := range targetGroup.targets {
-		if !untrackedCombinedTarget(target, scope) {
+		if !untrackedWorkingTarget(target, scope) {
 			tracked = append(tracked, target)
 			continue
 		}
@@ -341,6 +342,8 @@ func workspaceDiffGroup(ctx context.Context, targetGroup *workspaceDiffTargetGro
 	case WorkspaceDiffStaged:
 		args = append(args, "--cached")
 	case WorkspaceDiffUnstaged:
+	case WorkspaceDiffUncommitted:
+		args = append(args, headRevOrEmptyTree(ctx, targetGroup.root))
 	case WorkspaceDiffCommitted:
 		if targetGroup.commit != "" {
 			args = append(args, targetGroup.commit+"^", targetGroup.commit)
@@ -375,12 +378,13 @@ func workspaceDiffGroup(ctx context.Context, targetGroup *workspaceDiffTargetGro
 	return group, nil
 }
 
-// untrackedCombinedTarget reports whether target is a working-tree file git's
-// diff machinery cannot see for this scope. Only the combined scope compares
-// base..worktree, where an untracked file is a genuine addition; the staged,
-// unstaged, and committed scopes have no untracked side by definition.
-func untrackedCombinedTarget(target workspaceFileTarget, scope WorkspaceDiffScope) bool {
-	if scope != WorkspaceDiffCombined {
+// untrackedWorkingTarget reports whether target is a working-tree file git's
+// diff machinery cannot see for this scope. The combined, uncommitted, and
+// unstaged scopes end at the worktree, where an untracked file is a genuine
+// addition (git status lists it beside unstaged changes); the staged and
+// committed scopes have no untracked side by definition.
+func untrackedWorkingTarget(target workspaceFileTarget, scope WorkspaceDiffScope) bool {
+	if scope != WorkspaceDiffCombined && scope != WorkspaceDiffUncommitted && scope != WorkspaceDiffUnstaged {
 		return false
 	}
 	_, ok := target.changes.untracked[target.rel]
@@ -435,7 +439,7 @@ func (s *Service) getWorkspaceFileRevision(ctx context.Context, id domain.Sessio
 	}
 	// Unversioned live text reads are independent of Git comparison metadata.
 	// Snapshot-fenced and historical reads retain the complete validation path.
-	fastWorktree := side == WorkspaceBlobAfter && strings.TrimSpace(rawCommitSHA) == "" && workspaceVersion == "" && (resolvedScope == WorkspaceDiffCombined || resolvedScope == WorkspaceDiffUnstaged || resolvedScope == WorkspaceDiffUntracked)
+	fastWorktree := side == WorkspaceBlobAfter && strings.TrimSpace(rawCommitSHA) == "" && workspaceVersion == "" && (resolvedScope == WorkspaceDiffCombined || resolvedScope == WorkspaceDiffUncommitted || resolvedScope == WorkspaceDiffUnstaged || resolvedScope == WorkspaceDiffUntracked)
 	target, err := s.resolveWorkspaceFileTargetWithCompare(ctx, id, rawPath, !fastWorktree)
 	if err != nil {
 		return WorkspaceFileRevision{}, err
@@ -528,6 +532,12 @@ func workspaceRevisionBytes(ctx context.Context, target workspaceFileTarget, sco
 		} else {
 			return readWorktreeRevision(target.root, target.rel)
 		}
+	case WorkspaceDiffUncommitted:
+		if side == WorkspaceBlobBefore {
+			spec = "HEAD:" + beforePath
+		} else {
+			return readWorktreeRevision(target.root, target.rel)
+		}
 	case WorkspaceDiffCommitted:
 		if side == WorkspaceBlobBefore {
 			if commitSHA != "" {
@@ -571,12 +581,17 @@ func scopedWorkspaceFileStatus(ctx context.Context, target workspaceFileTarget, 
 		}
 		return WorkspaceFileUnmodified, "", nil
 	}
+	if untrackedWorkingTarget(target, scope) {
+		return WorkspaceFileAdded, "", nil
+	}
 	var args []string
 	switch scope {
 	case WorkspaceDiffStaged:
 		args = []string{"--cached"}
 	case WorkspaceDiffUnstaged:
 		args = nil
+	case WorkspaceDiffUncommitted:
+		args = []string{headRevOrEmptyTree(ctx, target.root)}
 	case WorkspaceDiffCommitted:
 		if commitSHA != "" {
 			args = []string{commitSHA + "^", commitSHA}

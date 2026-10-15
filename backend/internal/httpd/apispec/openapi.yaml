@@ -9439,17 +9439,18 @@ paths:
           description: Session-worktree-relative file path.
           type: string
       - description: Git-state section the file was opened from (see WorkspaceFileSections).
-          staged diffs the index against HEAD; unstaged diffs the worktree against
-          the index; omitted/committed/untracked diff the worktree against the compare
-          base.
+          uncommitted diffs the worktree against HEAD; staged diffs the index against
+          HEAD; unstaged diffs the worktree against the index; omitted/committed/untracked
+          diff the worktree against the compare base.
         in: query
         name: section
         schema:
           description: Git-state section the file was opened from (see WorkspaceFileSections).
-            staged diffs the index against HEAD; unstaged diffs the worktree against
-            the index; omitted/committed/untracked diff the worktree against the compare
-            base.
+            uncommitted diffs the worktree against HEAD; staged diffs the index against
+            HEAD; unstaged diffs the worktree against the index; omitted/committed/untracked
+            diff the worktree against the compare base.
           enum:
+          - uncommitted
           - committed
           - staged
           - unstaged
@@ -9647,6 +9648,7 @@ paths:
           description: Comparison scope. Defaults to combined.
           enum:
           - combined
+          - uncommitted
           - committed
           - staged
           - unstaged
@@ -18353,6 +18355,7 @@ components:
         scope:
           enum:
           - combined
+          - uncommitted
           - committed
           - staged
           - unstaged
@@ -18547,6 +18550,12 @@ components:
           items:
             $ref: '#/components/schemas/WorkspaceFileSummary'
           type: array
+        uncommitted:
+          description: Worktree vs HEAD, untracked files included. Always present;
+            a response without it comes from an older daemon.
+          items:
+            $ref: '#/components/schemas/WorkspaceFileSummary'
+          type: array
         unstaged:
           items:
             $ref: '#/components/schemas/WorkspaceFileSummary'
@@ -18556,6 +18565,7 @@ components:
             $ref: '#/components/schemas/WorkspaceFileSummary'
           type: array
       required:
+      - uncommitted
       - staged
       - unstaged
       - untracked

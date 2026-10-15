@@ -6447,7 +6447,7 @@ export interface components {
             ignoreWhitespace: boolean;
             paths: string[];
             /** @enum {string} */
-            scope: "combined" | "committed" | "staged" | "unstaged" | "untracked";
+            scope: "combined" | "uncommitted" | "committed" | "staged" | "unstaged" | "untracked";
             workspaceVersion?: string;
         };
         WorkspaceDiffsResponse: {
@@ -6515,6 +6515,8 @@ export interface components {
         WorkspaceFileSections: {
             committed: components["schemas"]["WorkspaceFileSummary"][];
             staged: components["schemas"]["WorkspaceFileSummary"][];
+            /** @description Worktree vs HEAD, untracked files included. Always present; a response without it comes from an older daemon. */
+            uncommitted: components["schemas"]["WorkspaceFileSummary"][];
             unstaged: components["schemas"]["WorkspaceFileSummary"][];
             untracked: components["schemas"]["WorkspaceFileSummary"][];
         };
@@ -18255,8 +18257,8 @@ export interface operations {
             query?: {
                 /** @description Session-worktree-relative file path. */
                 path?: string;
-                /** @description Git-state section the file was opened from (see WorkspaceFileSections). staged diffs the index against HEAD; unstaged diffs the worktree against the index; omitted/committed/untracked diff the worktree against the compare base. */
-                section?: "committed" | "staged" | "unstaged" | "untracked";
+                /** @description Git-state section the file was opened from (see WorkspaceFileSections). uncommitted diffs the worktree against HEAD; staged diffs the index against HEAD; unstaged diffs the worktree against the index; omitted/committed/untracked diff the worktree against the compare base. */
+                section?: "uncommitted" | "committed" | "staged" | "unstaged" | "untracked";
                 /** @description Exact commit SHA to read as an immutable committed-scope snapshot. */
                 commitSha?: string;
             };
@@ -18460,7 +18462,7 @@ export interface operations {
                 /** @description Session-worktree-relative file path. */
                 path: string;
                 /** @description Comparison scope. Defaults to combined. */
-                scope?: "combined" | "committed" | "staged" | "unstaged" | "untracked";
+                scope?: "combined" | "uncommitted" | "committed" | "staged" | "unstaged" | "untracked";
                 /** @description Comparison side. Defaults to after. */
                 side?: "before" | "after";
                 /** @description Opaque workspace snapshot token used for consistency checks. */

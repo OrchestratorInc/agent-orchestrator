@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -38,9 +39,11 @@ func (s *Service) computeWorkspaceManifest(ctx context.Context, id domain.Sessio
 		if err != nil {
 			return WorkspaceManifest{}, err
 		}
+		// Every scratch file is uncommitted: there is no Git history to compare.
 		return finalizeWorkspaceManifest(WorkspaceManifest{
 			SessionID: id,
 			Files:     files,
+			Sections:  WorkspaceFileSections{Uncommitted: slices.Clone(files)},
 			Summary:   workspaceSummaryFromFiles(files),
 			Truncated: truncated,
 		}), nil
@@ -83,6 +86,17 @@ func (s *Service) gitWorkspaceManifest(
 		Truncated:      truncated,
 	}
 	if !includeSections {
+		// A workspace project reviews only its uncommitted changes.
+		uncommitted, err := workspaceUncommittedFiles(ctx, root, prefix, excludePrefixes)
+		if err != nil {
+			if errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
+				return WorkspaceManifest{}, err
+			}
+			manifest.Degraded = true
+			manifest.DegradedCode = workspaceDegradedCode(err)
+			return finalizeWorkspaceManifest(manifest), nil
+		}
+		manifest.Sections.Uncommitted = uncommitted
 		return finalizeWorkspaceManifest(manifest), nil
 	}
 	sections, err := workspaceGitSections(ctx, root, compare.gitBase())
@@ -117,7 +131,8 @@ func (s *Service) workspaceProjectManifest(ctx context.Context, rec domain.Sessi
 	prefixes := workspaceProjectPrefixes(rec.Metadata.WorkspacePath, rows)
 	childPrefixes := nonEmptyWorkspacePrefixes(prefixes)
 	defaultBranch := defaultBranchForProject(project, true)
-	var files []WorkspaceFileSummary
+	var files, uncommitted []WorkspaceFileSummary
+	var uncommittedErr error
 	truncated := false
 	compares := make([]workspaceCompareTarget, 0, len(rows))
 	for _, row := range rows {
@@ -148,10 +163,15 @@ func (s *Service) workspaceProjectManifest(ctx context.Context, rec domain.Sessi
 		compares = append(compares, compare)
 		files, truncated = appendWorkspaceFilesWithCap(files, repoFiles, truncated)
 		truncated = truncated || repoTruncated
+		if uncommittedErr == nil {
+			var repoUncommitted []WorkspaceFileSummary
+			repoUncommitted, uncommittedErr = workspaceUncommittedFiles(ctx, row.WorktreePath, prefix, exclude)
+			uncommitted = append(uncommitted, repoUncommitted...)
+		}
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	compare := aggregateWorkspaceCompare(compares)
-	return finalizeWorkspaceManifest(WorkspaceManifest{
+	manifest := WorkspaceManifest{
 		SessionID:      rec.ID,
 		CompareBaseSHA: compare.BaseSHA,
 		CompareBaseRef: compare.BaseRef,
@@ -159,14 +179,32 @@ func (s *Service) workspaceProjectManifest(ctx context.Context, rec domain.Sessi
 		Files:          files,
 		Summary:        workspaceSummaryFromFiles(files),
 		Truncated:      truncated,
-	}), nil
+	}
+	// listWorkspaceProjectFiles computes the same section, so the manifest and
+	// /files keep one workspaceVersion.
+	if uncommittedErr != nil {
+		if errors.Is(uncommittedErr, ports.ErrWorkspaceRepoUnavailable) {
+			return WorkspaceManifest{}, uncommittedErr
+		}
+		manifest.Degraded = true
+		manifest.DegradedCode = workspaceDegradedCode(uncommittedErr)
+		return finalizeWorkspaceManifest(manifest), nil
+	}
+	sort.Slice(uncommitted, func(i, j int) bool { return uncommitted[i].Path < uncommitted[j].Path })
+	manifest.Sections.Uncommitted = uncommitted
+	return finalizeWorkspaceManifest(manifest), nil
 }
 
 // workspaceGitSections computes only the section summaries required by the
 // first review paint. Commit history and ahead/behind remain lazy enrichment.
 func workspaceGitSections(ctx context.Context, root, base string) (WorkspaceFileSections, error) {
 	var sections WorkspaceFileSections
+	var uncommittedTracked []WorkspaceFileSummary
 	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() (err error) {
+		uncommittedTracked, err = workspaceUncommittedTracked(gctx, root)
+		return err
+	})
 	g.Go(func() error {
 		statuses, previous, counts, err := workspaceDiffStats(gctx, root, "--cached")
 		if err != nil {
@@ -204,5 +242,6 @@ func workspaceGitSections(ctx context.Context, root, base string) (WorkspaceFile
 	if err := g.Wait(); err != nil {
 		return WorkspaceFileSections{}, err
 	}
+	sections.Uncommitted = mergeUncommittedFiles(uncommittedTracked, sections.Untracked)
 	return sections, nil
 }
