@@ -356,6 +356,15 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 	installScript := plan.Script
 	plan.Script = nil
 	if operation == AgentOperationReinstall {
+		if record, ok := s.readManagedRecord(plan.Target); ok && record.Method == plan.Method && s.managedEligible(plan) {
+			// Sessions run AO's managed copy, so a reinstall repairs that one:
+			// the same release, installed fresh beside it.
+			plan.managed = true
+			plan.managedPin = record.Version
+			argv, _ := managedInstallCommand(plan.Method, record.Package, record.Version, filepath.Join(s.managedTargetDir(plan.Target), "versions", "<next>"))
+			plan.Command, plan.Prepare = argv, nil
+			return plan
+		}
 		switch plan.Method {
 		case "homebrew":
 		case "npm":

@@ -450,10 +450,16 @@ func resolveNativeWindowsClaude(path, goos string) string {
 
 func windowsNativeClaudeCandidatesForShim(shim string) []string {
 	dir := filepath.Dir(shim)
-	return []string{
+	candidates := []string{
 		filepath.Join(dir, "claude.exe"),
 		filepath.Join(dir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"),
 	}
+	// AO's managed launcher lives apart from the npm prefix it starts; the
+	// native executable is in the current managed release.
+	if current, ok := binaryutil.ManagedCurrentDir(shim, "claude-code"); ok {
+		candidates = append(candidates, filepath.Join(current, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"))
+	}
+	return candidates
 }
 
 func (p *Plugin) claudeBinary(ctx context.Context) (string, error) {

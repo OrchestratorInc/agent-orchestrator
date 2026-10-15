@@ -188,11 +188,7 @@ func (m *Manager) RetryVersionMoves(ctx context.Context) error {
 	var errs []error
 	for _, id := range m.versionRetries.pending() {
 		rec, err := m.getRecord(ctx, id)
-		if err != nil || rec.IsTerminated || rec.Activity.State != domain.ActivityExited {
-			m.versionRetries.done(id)
-			continue
-		}
-		if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat && m.chat != nil && m.chat.HasLiveChatController(id) {
+		if err != nil || rec.IsTerminated || !versionMoveStopped(rec, m.chat) {
 			m.versionRetries.done(id)
 			continue
 		}
@@ -206,6 +202,17 @@ func (m *Manager) RetryVersionMoves(ctx context.Context) error {
 		m.versionRetries.done(id)
 	}
 	return errors.Join(errs...)
+}
+
+// versionMoveStopped reports whether a failed version move left rec without
+// its agent. A terminal agent exits. A Chat provider that failed to wake keeps
+// its idle activity, since hibernation suppresses the stop, so it counts as
+// stopped while no controller runs it.
+func versionMoveStopped(rec domain.SessionRecord, chat ChatLauncher) bool {
+	if domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat {
+		return rec.Activity.State == domain.ActivityExited
+	}
+	return chat != nil && !chat.HasLiveChatController(rec.ID)
 }
 
 // launchFactsCarrier keeps a session's release facts across a live reconnect.

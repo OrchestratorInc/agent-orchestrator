@@ -80,6 +80,11 @@ func (s *Service) RunDeferredCleanups(ctx context.Context) {
 		if !gate.TryLock() {
 			continue
 		}
+		// Reviewers are not sessions, so the stale count above misses them.
+		if _, reviewers, err := s.harnessInUse(ctx, target); err != nil || len(reviewers) > 0 {
+			gate.Unlock()
+			continue
+		}
 		s.mu.Lock()
 		active := false
 		if job, ok := s.jobs[target]; ok {

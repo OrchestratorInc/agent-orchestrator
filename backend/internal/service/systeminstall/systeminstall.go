@@ -203,6 +203,8 @@ type Plan struct {
 	// managed installs this update side by side in AO's versioned directory
 	// (see managed.go) instead of rewriting the installed copy.
 	managed bool
+	// managedPin is the release a managed reinstall installs again.
+	managedPin string
 
 	// daemonRuntimeRejected and daemonPrefixRejected mark an npm plan rejected
 	// only for the daemon's own Node/npm or global prefix. An install runs

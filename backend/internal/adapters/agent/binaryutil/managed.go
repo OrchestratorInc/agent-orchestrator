@@ -43,6 +43,22 @@ func ManagedBinary(names ...string) (string, bool) {
 	return "", false
 }
 
+// ManagedCurrentDir returns the current release directory of target when
+// launcher is one of AO's managed launchers. A resolver that needs a file
+// inside the install, not the launcher, looks there.
+func ManagedCurrentDir(launcher, target string) (string, bool) {
+	dir := managedBinDir.Load()
+	if dir == nil || launcher == "" || target == "" {
+		return "", false
+	}
+	launcherDir := filepath.Clean(filepath.Dir(launcher))
+	binDir := filepath.Clean(*dir)
+	if launcherDir != binDir && !(runtime.GOOS == "windows" && strings.EqualFold(launcherDir, binDir)) {
+		return "", false
+	}
+	return filepath.Join(filepath.Dir(binDir), target, "current"), true
+}
+
 func managedCandidates(dir, name string) []string {
 	if name == "" || strings.ContainsAny(name, `/\`) {
 		return nil

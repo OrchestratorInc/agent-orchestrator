@@ -278,3 +278,42 @@ func TestManagedCopyCountsAsOwnedByItsMethod(t *testing.T) {
 		t.Fatal("another method claimed the managed install")
 	}
 }
+
+func TestReleasesAreKeptWhileAReviewerRunsTheHarness(t *testing.T) {
+	f := newManagedCodexFixture(t, nil)
+	f.update(t, "1.1.0")
+	f.update(t, "1.2.0")
+	// A reviewer is not a session, so no release row says which copy it runs.
+	f.s.reviewers = reviewerListerStub{handles: []domain.ReviewerHandle{{SessionID: "worker-1", Harness: domain.ReviewerCodex, HandleID: "pane-1"}}}
+	f.s.RemoveUnusedManagedReleases(context.Background())
+	if _, err := os.Stat(filepath.Join(f.root, "codex", "versions", "v1")); err != nil {
+		t.Fatalf("deleted a release while a reviewer could run it: %v", err)
+	}
+	f.s.reviewers = nil
+	f.s.RemoveUnusedManagedReleases(context.Background())
+	if _, err := os.Stat(filepath.Join(f.root, "codex", "versions", "v1")); !os.IsNotExist(err) {
+		t.Fatalf("the unused release was kept once no reviewer ran: %v", err)
+	}
+}
+
+func TestManagedReinstallRepairsTheManagedCopy(t *testing.T) {
+	f := newManagedCodexFixture(t, nil)
+	if job := f.update(t, "1.1.0"); job.Status != StatusSucceeded {
+		t.Fatalf("update = %+v", job)
+	}
+	if _, err := f.s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationReinstall, ""); err != nil {
+		t.Fatal(err)
+	}
+	f.s.workers.Wait()
+	if job, _ := f.s.Status(context.Background(), TargetCodex); job.Status != StatusSucceeded {
+		t.Fatalf("reinstall = %+v", job)
+	}
+	// The same release, installed fresh beside the copy sessions run.
+	last := f.installs[len(f.installs)-1]
+	if !slices.Contains(last.Argv, "@openai/codex@1.1.0") || !slices.Contains(last.Argv, filepath.Join(f.root, "codex", "versions", "v2")) {
+		t.Fatalf("reinstall ran %v, want the managed release 1.1.0 into v2", last.Argv)
+	}
+	if target, _ := os.Readlink(filepath.Join(f.root, "codex", "current")); target != filepath.Join("versions", "v2") {
+		t.Fatalf("current after reinstall = %q", target)
+	}
+}

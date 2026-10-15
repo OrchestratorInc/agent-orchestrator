@@ -456,6 +456,33 @@ describe("harness updates while sessions run", () => {
 		expect(screen.getByRole("status")).toHaveTextContent("1 open session is using Claude Code.");
 	});
 
+	it("retries an update the daemon refused only because the harness was starting", async () => {
+		let starting = true;
+		installResponse = (agent) => starting
+			? { error: { error: "conflict", code: "HARNESS_ACTIVE", message: "starting", requestId: "r1", details: { count: 0, sessionIds: [], reviewerSessionIds: [], level: "blocked", starting: true } } }
+			: { data: { target: agent, status: "installing" } };
+		mountNotice();
+		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
+		await waitFor(() => expect(installs).toHaveLength(1));
+		starting = false;
+		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
+		await waitFor(() => expect(installs).toHaveLength(2));
+		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+
+	it("checks again after the sessions the daemon named have been seen", async () => {
+		installResponse = () => ({ error: { error: "conflict", code: "HARNESS_ACTIVE", message: "end active sessions", requestId: "r1", details: { count: 1, sessionIds: ["s1"], reviewerSessionIds: [], level: "blocked", starting: false } } });
+		mountNotice();
+		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
+		await userEvent.click(await screen.findByRole("button", { name: "View sessions (1)" }));
+		expect(await screen.findByRole("dialog")).toHaveTextContent("Sessions using Claude Code");
+		await userEvent.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		installResponse = (agent) => ({ data: { target: agent, status: "installing" } });
+		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
+		await waitFor(() => expect(installs).toHaveLength(2));
+	});
+
 	it("updates all without asking, skips harnesses whose sessions must end, and summarizes", async () => {
 		advisories = {
 			"claude-code": { ...claudeAdvisory, inUse: { liveSessions: 2, sessionIds: ["s1", "s2"], level: "warn" } },

@@ -274,7 +274,8 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 				const sessions = inUse[agentId] ?? advisoryInUse(advisory);
 				const requestAction = () => {
 					if (!needsLogin && method) {
-						if (sessions) { setSessionsView({ agentId, inUse: sessions }); return; }
+						// A harness that was only starting is retried, never shown as sessions.
+						if (sessions && !sessions.starting) { setSessionsView({ agentId, inUse: sessions }); return; }
 						void startUpdate(agentId, advisory, method.id);
 						return;
 					}
@@ -312,7 +313,14 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		<HarnessSessionsDialog
 			agentId={sessionsView?.agentId ?? null}
 			inUse={sessionsView?.inUse}
-			onOpenChange={(open) => { if (!open) setSessionsView(null); }}
+			onOpenChange={(open) => {
+				if (open || !sessionsView) return;
+				// The click-time answer is a snapshot: once its sessions are seen, the
+				// next click checks again instead of reopening the same list.
+				const { agentId } = sessionsView;
+				setInUse((current) => ({ ...current, [agentId]: undefined }));
+				setSessionsView(null);
+			}}
 		/>
 	</aside>, document.body);
 }

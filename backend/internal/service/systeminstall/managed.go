@@ -191,6 +191,12 @@ func nextManagedDir(versionsDir string) string {
 func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *installedBaseline, env []string, out io.Writer) error {
 	cli := managedCLIName(baseline)
 	if cli == "" {
+		// A reinstall has no baseline; it repairs the copy AO already manages.
+		if record, ok := s.readManagedRecord(plan.Target); ok {
+			cli = record.CLI
+		}
+	}
+	if cli == "" {
 		return errors.New("AO could not tell which executable sessions run, so it cannot install a managed copy")
 	}
 	targetDir := s.managedTargetDir(plan.Target)
@@ -211,8 +217,8 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 	}()
 
 	pkg := packageWithoutLatest(plan.Package)
-	pin := ""
-	if baseline != nil {
+	pin := plan.managedPin
+	if pin == "" && baseline != nil {
 		pin = baseline.expected
 		if pin == "" {
 			pin = baseline.latest
@@ -354,18 +360,25 @@ func (s *Service) RemoveUnusedManagedReleases(ctx context.Context) {
 			continue
 		}
 		target := Target(entry.Name())
-		record, ok := s.readManagedRecord(target)
-		if !ok {
-			continue
-		}
 		gate := s.harnessGate(domain.AgentHarness(target))
 		if !gate.TryLock() {
 			continue
 		}
-		// Read with launches held off, so none can start on a release between
-		// this check and its deletion.
+		// Read with launches and updates held off, so neither the current
+		// release nor what sessions run can change before the deletion.
+		record, ok := s.readManagedRecord(target)
+		if !ok {
+			gate.Unlock()
+			continue
+		}
 		inUse, err := s.releases.ListHarnessReleasesInUse(ctx, domain.AgentHarness(target))
 		if err != nil {
+			gate.Unlock()
+			continue
+		}
+		// Reviewers launch outside sessions, so no release row says which
+		// copy they run; keep every release until none is live.
+		if _, reviewers, err := s.harnessInUse(ctx, target); err != nil || len(reviewers) > 0 {
 			gate.Unlock()
 			continue
 		}

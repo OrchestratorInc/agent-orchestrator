@@ -632,6 +632,11 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	queuedBeforeFirstController := false
 	preserveUndispatchedQueue := false
 	waking := s.isWaking(cfg.SessionID)
+	// A session whose move to a new harness release failed kept its queued
+	// messages for this start, the way a wake does (see versionSwitchFailed).
+	if sessionFound && sessionRecord.StaleBinary != nil && sessionRecord.StaleBinary.SwitchFailedAt != nil {
+		waking = true
+	}
 	hadProviderHistory := false
 	if sessionFound && (sessionRecord.ProvisionState.IsProvisioning() || waking) {
 		hadProviderHistory = sessionRecord.Metadata.ProviderConversationID != ""

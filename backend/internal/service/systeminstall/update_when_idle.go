@@ -262,8 +262,10 @@ func (s *Service) CancelAgentOperation(ctx context.Context, target Target) (Job,
 		s.mu.Unlock()
 		return Job{}, ErrNotWaiting
 	}
-	s.mu.Unlock()
+	// Closed under the lock runIdleBatch checks it with, so an accepted cancel
+	// always wins over a batch about to stop sessions.
 	run.cancel.Do(func() { close(run.cancelled) })
+	s.mu.Unlock()
 	// Report the outcome the worker is about to record.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {

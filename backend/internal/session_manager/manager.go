@@ -3185,7 +3185,16 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 			return RestoreResult{}, fmt.Errorf("resume agent %s: hibernation state changed: %w", id, ErrResumeInProgress)
 		}
 	}
-	return m.resumeAgentRecordWithPolicy(ctx, "resume agent", rec, false)
+	result, err = m.resumeAgentRecordWithPolicy(ctx, "resume agent", rec, false)
+	if err == nil && m.chat != nil && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat &&
+		rec.StaleBinary != nil && rec.StaleBinary.SwitchFailedAt != nil {
+		// A failed move to a new release kept the user's queued messages for
+		// this start; deliver them now, as a wake would.
+		if drainErr := m.chat.DrainChatQueue(ctx, id); drainErr != nil {
+			m.logger.Warn("could not deliver messages queued before a failed version switch", "sessionID", id, "error", drainErr)
+		}
+	}
+	return result, err
 }
 
 func (m *Manager) resumeAgentRecordWithPolicy(
