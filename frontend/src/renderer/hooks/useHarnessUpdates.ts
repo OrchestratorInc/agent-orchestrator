@@ -149,12 +149,16 @@ export type HarnessInUse = {
 /** No job and no error: the click-time check found nothing left to install. */
 export type HarnessUpdateStart = { job?: InstallJob; error?: string; inUse?: HarnessInUse };
 
-/** What the Update button does for the sessions the advisory saw: update right away, ask first, or list them. */
+/**
+ * What the Update button does for the sessions the advisory saw: update right
+ * away, ask first, or list them. A safe update keeps the running release on
+ * disk and open sessions move to the new one on their own, so it never asks.
+ */
 export type HarnessUpdateAction = "update" | "confirm" | "blocked";
 
 export function harnessUpdateAction(advisory?: Pick<AgentUpdateAdvisory, "inUse">): HarnessUpdateAction {
 	const inUse = advisory?.inUse;
-	if (!inUse || inUse.liveSessions <= 0) return "update";
+	if (!inUse || inUse.liveSessions <= 0 || inUse.level === "safe") return "update";
 	return inUse.level === "blocked" ? "blocked" : "confirm";
 }
 

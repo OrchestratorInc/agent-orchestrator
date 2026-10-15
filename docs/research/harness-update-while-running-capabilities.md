@@ -62,7 +62,7 @@ move it to warn if 0.5 shows otherwise.
 
 | Flag | Default | Effect |
 |---|---|---|
-| `AO_UPDATE_WHILE_RUNNING` | on | Safe/warn updates may run alongside sessions after confirmation |
+| `AO_UPDATE_WHILE_RUNNING` | on | Safe updates run alongside sessions without asking; warn updates after confirmation |
 | `AO_VERSION_REFRESH` | on | Kill switch for moving idle sessions to a new release (Settings toggle applies on top) |
 | `AO_VERSION_REFRESH_IDLE` | 10m | Quiet time before a session moves |
 | `AO_TUI_VERSION_REFRESH` | off | Also restart idle terminal sessions |

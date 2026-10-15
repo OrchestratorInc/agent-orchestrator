@@ -421,13 +421,21 @@ describe("harness updates while sessions run", () => {
 		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 
-	it("asks before updating a harness open sessions use, then sends that consent", async () => {
+	it("updates a harness open sessions use without asking when it keeps their release", async () => {
 		advisories["claude-code"] = { ...claudeAdvisory, inUse: { liveSessions: 2, sessionIds: ["s1", "s2"], level: "safe" } };
+		mountNotice();
+		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
+		await waitFor(() => expect(installs).toHaveLength(1));
+		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(installs[0].body).toEqual({ method: "official-installer", operation: "update", expectedVersion: "2.1.292" });
+	});
+
+	it("asks before an update that may disturb open sessions, then sends that consent", async () => {
+		advisories["claude-code"] = { ...claudeAdvisory, inUse: { liveSessions: 2, sessionIds: ["s1", "s2"], level: "warn" } };
 		mountNotice();
 		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
 		const dialog = await screen.findByRole("dialog");
 		expect(dialog).toHaveTextContent("Update Claude Code while it's in use?");
-		expect(dialog).toHaveTextContent("2 open sessions keep running the current version. New sessions start on v2.1.292");
 		expect(installs).toHaveLength(0);
 		await userEvent.click(within(dialog).getByRole("button", { name: "Update anyway" }));
 		await waitFor(() => expect(installs).toHaveLength(1));
@@ -462,7 +470,7 @@ describe("harness updates while sessions run", () => {
 	it("asks when the click-time check finds sessions the cached advisory missed", async () => {
 		installResponse = (_agent, body) => body.allowRunningSessions
 			? { data: { target: "claude-code", status: "installing" } }
-			: { error: { error: "conflict", code: "HARNESS_IN_USE_CONFIRM", message: "confirm", requestId: "r1", details: { count: 1, sessionIds: ["s1"], reviewerSessionIds: [], level: "safe", starting: false } } };
+			: { error: { error: "conflict", code: "HARNESS_IN_USE_CONFIRM", message: "confirm", requestId: "r1", details: { count: 1, sessionIds: ["s1"], reviewerSessionIds: [], level: "warn", starting: false } } };
 		mountNotice();
 		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
 		const dialog = await screen.findByRole("dialog");
@@ -472,7 +480,7 @@ describe("harness updates while sessions run", () => {
 
 	it("confirms Update all once, skips harnesses whose sessions must end, and summarizes", async () => {
 		advisories = {
-			"claude-code": { ...claudeAdvisory, inUse: { liveSessions: 2, sessionIds: ["s1", "s2"], level: "safe" } },
+			"claude-code": { ...claudeAdvisory, inUse: { liveSessions: 2, sessionIds: ["s1", "s2"], level: "warn" } },
 			codex: { ...claudeAdvisory, agentId: "codex", inUse: { liveSessions: 2, sessionIds: ["s3", "s4"], level: "blocked" } },
 			cursor: { ...claudeAdvisory, agentId: "cursor" },
 		};
@@ -492,14 +500,14 @@ describe("harness updates while sessions run", () => {
 
 	it("lists every harness one Update all confirmation covers", async () => {
 		advisories = {
-			"claude-code": { ...claudeAdvisory, inUse: { liveSessions: 2, sessionIds: ["s1", "s2"], level: "safe" } },
+			"claude-code": { ...claudeAdvisory, inUse: { liveSessions: 2, sessionIds: ["s1", "s2"], level: "idle" } },
 			codex: { ...claudeAdvisory, agentId: "codex", maintenanceMethod: "official-installer", inUse: { liveSessions: 1, sessionIds: ["s3"], level: "warn" } },
 		};
 		mountNotice();
 		await userEvent.click(await screen.findByRole("button", { name: "Update all" }));
 		const dialog = await screen.findByRole("dialog");
 		expect(dialog).toHaveTextContent("Update harnesses that are in use?");
-		expect(dialog).toHaveTextContent("2 sessions keep running");
+		expect(dialog).toHaveTextContent("2 sessions restart when idle");
 		expect(dialog).toHaveTextContent("1 session may be interrupted");
 		await userEvent.click(within(dialog).getByRole("button", { name: "Update anyway" }));
 		await waitFor(() => expect(installs.map((install) => install.body.allowRunningSessions)).toEqual([true, true]));

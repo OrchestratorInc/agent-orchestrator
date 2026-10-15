@@ -165,8 +165,10 @@ func uniqueSessionIDs(ids []domain.SessionID) []domain.SessionID {
 //
 //	live  level      consent  result
 //	0     any        any      run
-//	>0    safe/warn  no       HarnessActiveError{NeedsConsent}
-//	>0    safe/warn  yes      run
+//	>0    safe       any      run (the running release stays on disk)
+//	>0    warn/idle  no       HarnessActiveError{NeedsConsent}
+//	>0    warn       yes      run
+//	>0    idle       yes      wait for idle sessions (errUpdateWhenIdle)
 //	>0    blocked    any      HarnessActiveError
 func (s *Service) gateRunningSessions(ctx context.Context, target Target, operation AgentOperation, plan Plan, allowRunningSessions bool) (bool, error) {
 	sessions, reviewers, err := s.harnessInUse(ctx, target)
@@ -183,6 +185,11 @@ func (s *Service) gateRunningSessions(ctx context.Context, target Target, operat
 	active := &HarnessActiveError{Target: target, SessionIDs: sessions, ReviewerIDs: reviewers, Level: level}
 	if level == UpdateWhileRunningBlocked {
 		return false, active
+	}
+	if level == UpdateWhileRunningSafe {
+		// Nothing the open sessions run is touched, and they move to the new
+		// release on their own once idle, so there is nothing to ask.
+		return true, nil
 	}
 	if !allowRunningSessions {
 		active.NeedsConsent = true

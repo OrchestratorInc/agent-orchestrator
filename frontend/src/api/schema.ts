@@ -6219,7 +6219,7 @@ export interface components {
             terminalInput?: string;
         };
         StartAgentInstallRequest: {
-            /** @description For updates, the user's consent to update while sessions using this harness stay open. Without it, live sessions return 409 HARNESS_IN_USE_CONFIRM when the update method keeps them usable (level safe or warn), and 409 HARNESS_ACTIVE when they must end first (level blocked) or a session is starting. Both 409s carry details {count, sessionIds, reviewerSessionIds, level, starting}. Consent never unblocks a blocked update. */
+            /** @description For updates, the user's consent to update while sessions using this harness stay open. A safe update (the running release stays on disk) runs alongside live sessions without it. Without it, a warn update (the installer may disturb running sessions) or an idle update (waits for idle sessions, then restarts them) returns 409 HARNESS_IN_USE_CONFIRM, and a blocked update, or one meeting a session that is starting, returns 409 HARNESS_ACTIVE. Both 409s carry details {count, sessionIds, reviewerSessionIds, level, starting}. Consent never unblocks a blocked update. */
             allowRunningSessions?: boolean;
             /** @description For updates, the available version explicitly approved by the user. The update must reach it. It is installed only when it lies between the installed version and the latest release AO found; otherwise that latest release is installed. A version at or below the installed one, or one sent with another operation, is rejected with INVALID_UPDATE_VERSION. */
             expectedVersion?: string;

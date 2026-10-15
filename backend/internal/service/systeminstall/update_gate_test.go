@@ -137,7 +137,7 @@ func TestUpdateWhileRunningDecisionTable(t *testing.T) {
 		starting     bool
 	}{
 		{name: "no live sessions runs", sessions: nil, method: "homebrew", wantRun: true},
-		{name: "safe without consent asks", sessions: live, method: "homebrew", wantConsent: true, wantLevel: UpdateWhileRunningSafe},
+		{name: "safe runs without asking", sessions: live, method: "homebrew", wantRun: true},
 		{name: "safe with consent runs", sessions: live, method: "homebrew", consent: true, wantRun: true},
 		{name: "blocked ignores consent", sessions: live, method: "npm", consent: true, wantLevel: UpdateWhileRunningBlocked},
 		{name: "starting session refuses", sessions: nil, method: "homebrew", consent: true, starting: true, wantStarting: true, wantLevel: UpdateWhileRunningBlocked},
@@ -334,4 +334,18 @@ func TestLaunchesAreRefusedWhileUpdateWithSessionsRuns(t *testing.T) {
 	}
 	close(finish)
 	s.workers.Wait()
+}
+
+func TestWarnUpdateAsksBeforeRunningAlongsideSessions(t *testing.T) {
+	s := newTestService("darwin")
+	s.sessions = sessionListerStub{sessions: []domain.SessionRecord{{ID: "codex-1", Harness: domain.HarnessCodex}}}
+	plan := Plan{Target: TargetCodex, Method: "homebrew", PackageCask: true, UpdateWhileRunning: UpdateWhileRunningWarn}
+	_, err := s.gateRunningSessions(context.Background(), TargetCodex, AgentOperationUpdate, plan, false)
+	var active *HarnessActiveError
+	if !errors.As(err, &active) || !active.NeedsConsent || active.Level != UpdateWhileRunningWarn {
+		t.Fatalf("warn update without consent = %v, want a confirmation", err)
+	}
+	if withSessions, err := s.gateRunningSessions(context.Background(), TargetCodex, AgentOperationUpdate, plan, true); err != nil || !withSessions {
+		t.Fatalf("warn update with consent = %t, %v", withSessions, err)
+	}
 }

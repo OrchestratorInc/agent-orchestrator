@@ -187,7 +187,7 @@ function readyCatalog() {
 	return readiness;
 }
 
-function mockInstalledOperations(savedMethod?: string, readiness = readyCatalog(), codexInUse?: { liveSessions: number; sessionIds: string[]; level: "safe" | "warn" | "blocked" }) {
+function mockInstalledOperations(savedMethod?: string, readiness = readyCatalog(), codexInUse?: { liveSessions: number; sessionIds: string[]; level: "safe" | "warn" | "blocked" | "idle" }) {
 	const managedPlans = { agents: plans.agents.map((plan) => ({
 		...plan,
 		methods: plan.methods.map((method) => ({
@@ -1112,7 +1112,7 @@ describe("HarnessSettingsSection", () => {
 	});
 
 	it("asks before updating a harness that open sessions use and sends the consent", async () => {
-		mockInstalledOperations("npm", readyCatalog(), { liveSessions: 2, sessionIds: ["s1", "s2"], level: "safe" });
+		mockInstalledOperations("npm", readyCatalog(), { liveSessions: 2, sessionIds: ["s1", "s2"], level: "warn" });
 		renderSection();
 		const row = await findAgentRow("codex");
 		await userEvent.click(await within(row).findByRole("button", { name: "Update" }));
@@ -1123,6 +1123,18 @@ describe("HarnessSettingsSection", () => {
 			params: { path: { agent: "codex" } },
 			body: { method: "npm", operation: "update", expectedVersion: "1.3.0", allowRunningSessions: true },
 		}));
+	});
+
+	it("updates without asking when the installer keeps the running release", async () => {
+		mockInstalledOperations("npm", readyCatalog(), { liveSessions: 2, sessionIds: ["s1", "s2"], level: "safe" });
+		renderSection();
+		const row = await findAgentRow("codex");
+		await userEvent.click(await within(row).findByRole("button", { name: "Update" }));
+		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", {
+			params: { path: { agent: "codex" } },
+			body: { method: "npm", operation: "update", expectedVersion: "1.3.0" },
+		}));
+		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 
 	it("turns Update into View sessions when the sessions must end first", async () => {
