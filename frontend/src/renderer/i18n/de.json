@@ -1920,6 +1920,8 @@
 	"time.hoursAgo": "vor {{n}} Std.",
 	"time.justNow": "gerade eben",
 	"time.minutesAgo": "vor {{n}} Min.",
+	"time.monthsAgo": "vor {{n}} Mon.",
+	"time.yearsAgo": "vor {{n}} J.",
 	"timeline.changes_requested": "Änderungen angefordert",
 	"timeline.ci_failed": "CI fehlgeschlagen",
 	"timeline.commented": "Kommentiert",

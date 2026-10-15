@@ -1920,6 +1920,8 @@
 	"time.hoursAgo": "{{n}}時間前",
 	"time.justNow": "たった今",
 	"time.minutesAgo": "{{n}}分前",
+	"time.monthsAgo": "{{n}}か月前",
+	"time.yearsAgo": "{{n}}年前",
 	"timeline.changes_requested": "変更リクエストあり",
 	"timeline.ci_failed": "CI 失敗",
 	"timeline.commented": "コメント済み",

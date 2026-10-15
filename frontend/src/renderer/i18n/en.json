@@ -2211,6 +2211,8 @@
 	"time.hoursAgo": "{{n}}h ago",
 	"time.justNow": "just now",
 	"time.minutesAgo": "{{n}}m ago",
+	"time.monthsAgo": "{{n}}mo ago",
+	"time.yearsAgo": "{{n}}y ago",
 	"timeline.changes_requested": "Changes Requested",
 	"timeline.ci_failed": "CI Failed",
 	"timeline.commented": "Commented",

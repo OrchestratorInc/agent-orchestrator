@@ -1975,6 +1975,8 @@
 	"time.hoursAgo": "{{n}} 小时前",
 	"time.justNow": "刚刚",
 	"time.minutesAgo": "{{n}} 分钟前",
+	"time.monthsAgo": "{{n}} 个月前",
+	"time.yearsAgo": "{{n}} 年前",
 	"timeline.changes_requested": "请求修改",
 	"timeline.ci_failed": "CI 失败",
 	"timeline.commented": "已评论",

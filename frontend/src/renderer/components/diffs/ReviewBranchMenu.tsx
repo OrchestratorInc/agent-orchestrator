@@ -75,7 +75,7 @@ export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, on
 
 	const rowLabel = (row: ReviewBranchRow) => (row.detached ? t("files.branches.detached") : row.name || (row.prNumber ? `#${row.prNumber}` : ""));
 	const rowCaption = (row: ReviewBranchRow) => {
-		const time = row.updatedAt ? formatTimeCompact(row.updatedAt) : undefined;
+		const time = row.updatedAt ? formatTimeCompact(row.updatedAt, { longUnits: true }) : undefined;
 		if (row.checkedOut) return time ? t("files.branches.checkedOutUpdated", { time }) : t("files.branches.checkedOut");
 		if (!time) return undefined;
 		if (row.kind === "pull_request" && row.prNumber) return t("files.branches.pullRequest", { number: row.prNumber, time });

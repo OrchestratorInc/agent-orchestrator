@@ -1952,6 +1952,8 @@
 	"time.hoursAgo": "il y a {{n}}h",
 	"time.justNow": "à l'instant",
 	"time.minutesAgo": "il y a {{n}}min",
+	"time.monthsAgo": "il y a {{n}} mois",
+	"time.yearsAgo": "il y a {{n}} a",
 	"timeline.changes_requested": "Modifications demandées",
 	"timeline.ci_failed": "CI en échec",
 	"timeline.commented": "Commenté",
