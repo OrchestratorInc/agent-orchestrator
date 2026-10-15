@@ -15,5 +15,6 @@ describe("truncateMiddle", () => {
 
 	it("takes custom head and tail lengths", () => {
 		expect(truncateMiddle("abcdefghijklmnop", 3, 2)).toBe("abc…op");
+		expect(truncateMiddle("abcdefghijklmnop", 3, 0)).toBe("abc…");
 	});
 });

@@ -4753,6 +4753,62 @@ paths:
         session with its refreshed artifact list
       tags:
       - sessions
+    put:
+      operationId: updateSessionArtifactFile
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateArtifactFileRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArtifactFileResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Replace the text content of one file in a session's artifact directory
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/artifact-files/*:
     get:
       operationId: getSessionArtifactFile
@@ -11543,6 +11599,21 @@ components:
       - cpuPercent
       - cpuMeasured
       type: object
+    ArtifactFileResponse:
+      properties:
+        fileFingerprint:
+          description: Hex SHA-256 of the file's content.
+          type: string
+        path:
+          type: string
+        size:
+          format: int64
+          type: integer
+      required:
+      - path
+      - size
+      - fileFingerprint
+      type: object
     AttachmentInput:
       properties:
         data:
@@ -18117,6 +18188,23 @@ components:
       required:
       - token
       - deleted
+      type: object
+    UpdateArtifactFileRequest:
+      properties:
+        content:
+          description: The file's new UTF-8 text content.
+          type: string
+        expectedFileFingerprint:
+          description: Hex SHA-256 of the file content the edit started from.
+          type: string
+        path:
+          description: Artifact-directory-relative file path, as listed in the session's
+            artifactFiles.
+          type: string
+      required:
+      - path
+      - content
+      - expectedFileFingerprint
       type: object
     UpdateAutomationRequest:
       properties:

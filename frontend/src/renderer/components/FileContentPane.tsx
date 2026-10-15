@@ -6,15 +6,18 @@ import { Eye, FileCode2, GitCompareArrows, LoaderCircle, MessageSquarePlus, Penc
 import { Editor, type EditorFactory } from "@pierre/diffs/edit";
 import { EditProvider } from "@pierre/diffs/react";
 import {
+	sessionArtifactFileQueryOptions,
 	sessionWorkspaceFileQueryKey,
 	sessionSourceFileQueryOptions,
 	sessionSourceFileRevisionQueryOptions,
+	updateSessionArtifactFile,
 	updateSessionWorkspaceFile,
 	type WorkspaceDiffScope,
 	type WorkspaceFileDetail,
 	type FilesSource,
 } from "../hooks/useSessionWorkspaceFiles";
 import { usePierreFileHighlightReady } from "../hooks/usePierreFileHighlight";
+import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
 import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
@@ -116,6 +119,9 @@ export function FileContentPane({
 	const restoredMode = () =>
 		(rememberDisplayMode ? rememberedFileDisplayMode(useUiStore.getState(), uiSessionId, path, initialRequestKey) : undefined) ?? initialMode;
 	const [mode, setMode] = useState<FileViewMode>(restoredMode);
+	// An artifact has one view: its initial mode, which editing replaces until
+	// the edit is saved or cancelled. No display mode switch.
+	const singleView = source.kind === "artifact";
 	const [editing, setEditing] = useState(false);
 	const [draft, setDraft] = useState("");
 	const [saving, setSaving] = useState(false);
@@ -181,6 +187,27 @@ export function FileContentPane({
 		setSaving(true);
 		setSaveError("");
 		try {
+			if (source.kind === "artifact") {
+				const saved = await updateSessionArtifactFile({
+					content: draft,
+					expectedFileFingerprint: detail.fileFingerprint,
+					path,
+					sessionId,
+					hostId,
+				});
+				queryClient.setQueryData(sessionArtifactFileQueryOptions(sessionId, path, source.rawUrl).queryKey, {
+					...detail,
+					content: draft,
+					fileFingerprint: saved.fileFingerprint,
+					size: saved.size,
+				});
+				// The session's artifact list carries each file's modified time.
+				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
+				setEditing(false);
+				setDraft("");
+				setMode(initialMode);
+				return;
+			}
 			const saved = await updateSessionWorkspaceFile({
 				content: draft,
 				expectedFileFingerprint: detail.fileFingerprint,
@@ -208,7 +235,7 @@ export function FileContentPane({
 		} finally {
 			setSaving(false);
 		}
-	}, [commitSha, draft, path, query.data, queryClient, saving, scope, sessionId, hostId, t]);
+	}, [commitSha, draft, initialMode, path, query.data, queryClient, saving, scope, sessionId, source, hostId, t]);
 	useEffect(() => {
 		if (!editing) return;
 		const onSaveShortcut = (event: KeyboardEvent) => {
@@ -271,11 +298,11 @@ export function FileContentPane({
 
 	const detail = query.data;
 	const renderedAvailable = canRenderMarkdown(path, detail);
-	const hasDisplayModeChoice = detail.status !== "unmodified" || renderedAvailable;
+	const hasDisplayModeChoice = !singleView && (detail.status !== "unmodified" || renderedAvailable);
 	const fileName = path.split("/").pop() || path;
 	const newerLiveText = canReadLiveText && liveText.data?.exists && !liveText.data.binary && !liveText.data.truncated && liveText.dataUpdatedAt >= query.dataUpdatedAt && liveText.data.content !== detail.content;
 	const displayDetail = newerLiveText ? { ...detail, content: liveText.data!.content, size: liveText.data!.size, fileFingerprint: liveText.data!.revision } : detail;
-	const editable = !newerLiveText && detail.editable && Boolean(detail.fileFingerprint);
+	const editable = !newerLiveText && detail.editable && Boolean(detail.fileFingerprint) && !(source.kind === "artifact" && source.readOnly);
 	const effectiveMode =
 		(detail.status === "unmodified" && mode === "diff") || (mode === "rendered" && !renderedAvailable)
 			? "file"
@@ -308,6 +335,7 @@ export function FileContentPane({
 		setEditing(false);
 		setDraft("");
 		setSaveError("");
+		if (singleView) setMode(initialMode);
 	};
 	const unsavedIndicator = hasUnsavedChanges && !onDirtyChange ? (
 		<span
@@ -319,7 +347,8 @@ export function FileContentPane({
 	const wholeFileAnnotationTarget = annotation.targets.find((target) => target.surface !== "review"
 		&& target.path === detail.path
 		&& target.side === "file"
-		&& target.line == null);
+		&& target.line == null
+		&& target.quote == null);
 	const compactModeButton = (mode: FileViewMode, label: string, icon: React.ReactNode) => (
 		<Tooltip key={mode}>
 			<TooltipTrigger asChild>

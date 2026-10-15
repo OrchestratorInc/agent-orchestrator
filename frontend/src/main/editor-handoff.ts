@@ -1,19 +1,25 @@
+import { createHash } from "node:crypto";
 import { constants, statSync } from "node:fs";
 import path from "node:path";
 import {
 	isEditorId,
+	isTerminalId,
 	type EditorHandoffState,
+	type EditorHandoffStateOptions,
 	type EditorId,
 	type OpenSessionArtifactsInput,
 	type OpenSessionTargetInput,
 	type OpenSessionTargetResult,
 	type OpenTarget,
+	type TerminalId,
 } from "../shared/editor-handoff";
+import type { MacTerminalApp } from "./mac-terminal-apps";
 
 type Platform = NodeJS.Platform;
 
 type ResolvedCommand = {
 	command: string;
+	iconPath?: string;
 	argsForWorkspace: (workspacePath: string) => string[];
 };
 
@@ -88,13 +94,17 @@ export type EditorHandoffDeps = {
 	realPath: (candidatePath: string) => Promise<string>;
 	/** Puts text on the system clipboard. The workspace path never reaches the renderer. */
 	copyText?: (text: string) => void;
+	/** Reads a native app icon as a data URL; installation paths stay in main. */
+	readIcon?: (appPath: string) => Promise<string>;
+	/** Registered macOS shell apps that accept folder-open events. */
+	discoverTerminalApps?: () => Promise<MacTerminalApp[]>;
 	isExecutable?: (candidatePath: string) => boolean;
 	isDirectory?: (candidatePath: string) => boolean;
 	logError?: (message: string, error: unknown) => void;
 };
 
 export type EditorHandoff = {
-	getState(sessionId: string): Promise<EditorHandoffState>;
+	getState(sessionId: string, options?: EditorHandoffStateOptions): Promise<EditorHandoffState>;
 	open(input: OpenSessionTargetInput): Promise<OpenSessionTargetResult>;
 	openArtifacts(input: OpenSessionArtifactsInput): Promise<OpenSessionTargetResult>;
 	copyWorkspacePath(sessionId: string): Promise<void>;
@@ -323,6 +333,7 @@ function resolveTerminal(
 			target: { id: "terminal", name: "Terminal", kind: "terminal" },
 			command: {
 				command: "/usr/bin/open",
+				iconPath: "/System/Applications/Utilities/Terminal.app",
 				argsForWorkspace: (workspacePath) => ["-a", "Terminal", workspacePath],
 			},
 		};
@@ -348,6 +359,81 @@ function resolveTerminal(
 	return undefined;
 }
 
+// Keep per-terminal directory arguments explicit: a GUI terminal may reuse an
+// existing process, in which case the launcher's cwd alone is not enough.
+const TERMINAL_CANDIDATES: {
+	id: TerminalId;
+	name: string;
+	command: string;
+	macApp?: string;
+	platforms: Platform[];
+	args: (directory: string) => string[];
+}[] = [
+	{ id: "ghostty", name: "Ghostty", command: "ghostty", macApp: "Ghostty", platforms: ["darwin", "linux"], args: (dir) => [`--working-directory=${dir}`] },
+	{ id: "iterm2", name: "iTerm2", command: "", macApp: "iTerm", platforms: ["darwin"], args: (dir) => [dir] },
+	{ id: "wezterm", name: "WezTerm", command: "wezterm", macApp: "WezTerm", platforms: ["darwin", "linux", "win32"], args: (dir) => ["start", "--cwd", dir] },
+	{ id: "kitty", name: "kitty", command: "kitty", macApp: "kitty", platforms: ["darwin", "linux"], args: (dir) => ["--directory", dir] },
+	{ id: "alacritty", name: "Alacritty", command: "alacritty", macApp: "Alacritty", platforms: ["darwin", "linux", "win32"], args: (dir) => ["--working-directory", dir] },
+	{ id: "gnome-terminal", name: "GNOME Terminal", command: "gnome-terminal", platforms: ["linux"], args: (dir) => [`--working-directory=${dir}`] },
+	{ id: "konsole", name: "Konsole", command: "konsole", platforms: ["linux"], args: (dir) => ["--workdir", dir] },
+	{ id: "xfce4-terminal", name: "Xfce Terminal", command: "xfce4-terminal", platforms: ["linux"], args: (dir) => [`--working-directory=${dir}`] },
+	{ id: "windows-terminal", name: "Windows Terminal", command: "wt", platforms: ["win32"], args: (dir) => ["-d", dir] },
+];
+
+function resolveInstalledTerminals(
+	deps: EditorHandoffDeps,
+	isExecutable: (candidatePath: string) => boolean,
+	isDirectory: (candidatePath: string) => boolean,
+	macApps: MacTerminalApp[],
+): { target: OpenTarget; command: ResolvedCommand }[] {
+	const claimedApps = new Set<string>();
+	const known = TERMINAL_CANDIDATES.flatMap((candidate) => {
+		if (!candidate.platforms.includes(deps.platform)) return [];
+		const target: OpenTarget = { id: candidate.id, name: candidate.name, kind: "terminal" };
+		if (deps.platform === "darwin" && candidate.macApp) {
+			const registered = macApps.filter((app) => path.posix.basename(app.appPath) === `${candidate.macApp}.app`);
+			const appPaths = [
+				...registered.map((app) => app.appPath),
+				...["/Applications", path.posix.join(deps.homeDir, "Applications")].map((root) => path.posix.join(root, `${candidate.macApp}.app`)),
+			];
+			for (const appPath of appPaths) {
+				if (!isDirectory(appPath)) continue;
+				for (const app of registered) claimedApps.add(app.appPath);
+				claimedApps.add(appPath);
+				const iconDataUrl = registered.find((app) => app.appPath === appPath)?.iconDataUrl;
+				if (iconDataUrl) target.iconDataUrl = iconDataUrl;
+				return [{ target, command: {
+					command: "/usr/bin/open",
+					iconPath: appPath,
+					// Ghostty and iTerm set the surface directory from folder-open
+					// events, including when already running. Other apps use CLI flags.
+					argsForWorkspace: (dir: string) => candidate.id === "iterm2" || candidate.id === "ghostty"
+						? ["-a", appPath, dir]
+						: ["-n", "-a", appPath, "--args", ...candidate.args(dir)],
+				} }];
+			}
+			// Ghostty's native macOS app must launch through Launch Services.
+			if (candidate.id === "ghostty" || candidate.id === "iterm2") return [];
+		}
+		const command = candidate.command && resolveOnPath(candidate.command, deps.platform, deps.env, isExecutable);
+		return command ? [{ target, command: { command, argsForWorkspace: candidate.args } }] : [];
+	});
+	const claimedBundleIds = new Set(["com.apple.terminal"]);
+	const discovered = macApps.flatMap((app) => {
+		if (claimedBundleIds.has(app.bundleId.toLowerCase()) || claimedApps.has(app.appPath) || !isDirectory(app.appPath)) return [];
+		claimedApps.add(app.appPath);
+		claimedBundleIds.add(app.bundleId.toLowerCase());
+		// An opaque stable ID crosses IPC; installation paths remain in main.
+		const id: TerminalId = `terminal-app:${createHash("sha256").update(app.bundleId.toLowerCase()).digest("hex")}`;
+		return [{ target: { id, name: app.name, kind: "terminal" as const, ...(app.iconDataUrl ? { iconDataUrl: app.iconDataUrl } : {}) }, command: {
+			command: "/usr/bin/open",
+			iconPath: app.appPath,
+			argsForWorkspace: (dir: string) => ["-a", app.appPath, dir],
+		} }];
+	});
+	return [...known, ...discovered.sort((a, b) => a.target.name.localeCompare(b.target.name))];
+}
+
 export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 	const isExecutable = deps.isExecutable ?? ((candidatePath) => defaultIsExecutable(candidatePath, deps.platform));
 	const isDirectory = deps.isDirectory ?? defaultIsDirectory;
@@ -357,17 +443,41 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 		kind: "file_manager",
 	};
 
-	// Re-resolve editors and terminal on every call instead of freezing them at
-	// construction. Editor discovery reads deps.env each time, so an editor
-	// installed (or removed) after startup is picked up instead of being stale.
-	const resolveAll = () => {
-		const editors = EDITOR_CANDIDATES.flatMap((candidate) => {
-			const command = resolveEditor(candidate, deps, isExecutable, isDirectory);
-			return command ? [{ target: { id: candidate.id, name: candidate.name, kind: "editor" } as OpenTarget, command }] : [];
-		});
+	const icons = new Map<string, Promise<string | undefined>>();
+	const readIcon = (iconPath: string) => {
+		if (!deps.readIcon) return Promise.resolve(undefined);
+		let icon = icons.get(iconPath);
+		if (!icon) {
+			icon = deps.readIcon(iconPath).then((data) => /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(data) ? data : undefined).catch(() => {
+				icons.delete(iconPath);
+				return undefined;
+			});
+			icons.set(iconPath, icon);
+		}
+		return icon;
+	};
+
+	// Only an explicit menu refresh queries Launch Services and renders bundle
+	// icons. Readiness polling, CDC invalidations, and launches use this shared
+	// main-process snapshot; file existence is still checked at resolution time.
+	let macApps: MacTerminalApp[] = [];
+	let terminalRefresh: Promise<void> | undefined;
+	const refreshTerminals = () => {
+		if (deps.platform !== "darwin" || !deps.discoverTerminalApps) return Promise.resolve();
+		if (!terminalRefresh) {
+			terminalRefresh = deps.discoverTerminalApps().then((apps) => { macApps = apps; }).catch((error) => {
+				deps.logError?.("failed to discover terminal apps", error);
+			}).finally(() => { terminalRefresh = undefined; });
+		}
+		return terminalRefresh;
+	};
+	const resolveEditors = () => EDITOR_CANDIDATES.flatMap((candidate) => {
+		const command = resolveEditor(candidate, deps, isExecutable, isDirectory);
+		return command ? [{ target: { id: candidate.id, name: candidate.name, kind: "editor" } as OpenTarget, command }] : [];
+	});
+	const resolveTerminals = () => {
 		const terminal = resolveTerminal(deps, isExecutable);
-		const targets = [...editors.map(({ target }) => target), fileManager, ...(terminal ? [terminal.target] : [])];
-		return { editors, terminal, targets };
+		return [...(terminal ? [terminal] : []), ...resolveInstalledTerminals(deps, isExecutable, isDirectory, macApps)];
 	};
 
 	const openTarget = async (target: OpenTarget, resolved: ResolvedCommand | undefined, directory: string, revealPath?: string) => {
@@ -392,15 +502,32 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 	};
 
 	return {
-		async getState(sessionId) {
-			const { targets } = resolveAll();
+		async getState(sessionId, options) {
+			if (options?.refreshTerminals === true) await refreshTerminals();
+			const editors = resolveEditors();
+			const terminals = resolveTerminals();
+			// Linux's generic launcher may be the same binary (or an alternatives
+			// symlink) as a named terminal. Show it only as a fallback in the menu;
+			// the generic target remains available to existing shortcut/artifact callers.
+			const menuTerminals = deps.platform === "linux" && terminals.some(({ target }) => target.id !== "terminal")
+				? terminals.filter(({ target }) => target.id !== "terminal") : terminals;
+			const targets = [...editors.map(({ target }) => target), fileManager, ...menuTerminals.map(({ target }) => target)];
+			const targetsWithIcons = await Promise.all(targets.map(async (target) => {
+				if (target.iconDataUrl) return target;
+				const terminal = terminals.find((entry) => entry.target.id === target.id);
+				const iconPath = terminal
+					? terminal.command.iconPath ?? terminal.command.command
+					: target.kind === "file_manager" && deps.platform === "darwin" ? "/System/Library/CoreServices/Finder.app" : undefined;
+				const iconDataUrl = iconPath ? await readIcon(iconPath) : undefined;
+				return iconDataUrl ? { ...target, iconDataUrl } : target;
+			}));
 			const preferredEditorId = await deps.readPreference();
 			try {
 				await deps.resolveWorkspace(sessionId);
-				return { targets, preferredEditorId, workspaceAvailable: true };
+				return { targets: targetsWithIcons, preferredEditorId, workspaceAvailable: true };
 			} catch (error) {
 				return {
-					targets,
+					targets: targetsWithIcons,
 					preferredEditorId,
 					workspaceAvailable: false,
 					unavailableReason: workspaceUnavailable(error),
@@ -412,21 +539,20 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 		async open(input) {
 			const sessionId = input.sessionId.trim();
 			if (!sessionId) throw new Error("Session is required.");
-			const { editors, terminal, targets } = resolveAll();
 			const preferredEditorId = await deps.readPreference();
 			const targetId = input.targetId ?? preferredEditorId;
-			if (input.targetId && input.targetId !== "file-manager" && input.targetId !== "terminal" && !isEditorId(input.targetId)) {
+			if (input.targetId && input.targetId !== "file-manager" && !isTerminalId(input.targetId) && !isEditorId(input.targetId)) {
 				throw new Error("That open target is not supported.");
 			}
-			const target = targets.find((target) => target.id === targetId);
+			const entry = targetId === "file-manager" ? undefined
+				: (isTerminalId(targetId) ? resolveTerminals() : resolveEditors()).find(({ target }) => target.id === targetId);
+			const target = targetId === "file-manager" ? fileManager : entry?.target;
 			if (!target) {
 				if (isEditorId(targetId)) throw new Error("That editor is not installed. Choose another option.");
 				throw new Error("That open target is not available.");
 			}
 			const workspacePath = await deps.resolveWorkspace(sessionId);
-			const resolved = target.kind === "terminal"
-				? terminal?.command
-				: editors.find(({ target: editor }) => editor.id === target.id)?.command;
+			const resolved = entry?.command;
 			await openTarget(target, resolved, workspacePath);
 			if (target.kind === "editor") await deps.writePreference(target.id as EditorId);
 			return target;

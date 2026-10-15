@@ -1,7 +1,7 @@
 import { Check, Copy, LoaderCircle, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { truncateMiddle } from "../../../lib/utils";
 import { versionLabel } from "../../../hooks/useHarnessUpdates";
+import { MiddleTruncatedText } from "../../MiddleTruncatedText";
 import { Button } from "../../ui/button";
 import type { HarnessDetails } from "./describe-harness";
 import { detectedCredential } from "./harness-diagnostics";
@@ -54,12 +54,12 @@ export function HarnessHealthTab({ details, checking, authCheckFailed, copied, o
 		{hasDetails ? <HarnessDetailGroup title={t("settings.harness.health.details")}>
 			{/* One version row: the installed release with how it compares to the latest. */}
 			{isInstalled && details.currentVersion ? <HarnessDetailRow label={t(details.versionUnverified ? "settings.harness.lastObservedVersion" : "settings.harness.installedVersion")}>
-				<span className="break-all font-mono text-xs text-settings-label">{details.versionText}</span>
-				{details.updateAvailable ? <span className="whitespace-nowrap text-xs font-medium text-settings-accent" title={versionLabel(advisory!.latestVersion!)}>{t("settings.harness.versionAvailable", { version: truncateMiddle(versionLabel(advisory!.latestVersion!)) })}</span>
+				<MiddleTruncatedText className="whitespace-nowrap font-mono text-xs text-settings-label" text={details.versionText} />
+				{details.updateAvailable ? <MiddleTruncatedText className="whitespace-nowrap text-xs font-medium text-settings-accent" text={versionLabel(advisory!.latestVersion!)} format={(version) => t("settings.harness.versionAvailable", { version })} />
 					: advisory?.latestVersion && !details.updateUnknown ? <span className="text-xs text-settings-muted">{t(advisory.status === "ahead_of_latest" ? "settings.harness.aheadOfLatest" : "settings.harness.latest")}</span> : null}
 			</HarnessDetailRow> : null}
 			{advisory?.latestVersion && !(isInstalled && details.currentVersion) ? <HarnessDetailRow label={t("settings.harness.health.latestVersion")}>
-				<span className="break-all font-mono text-xs text-settings-label">{versionLabel(advisory.latestVersion)}</span>
+				<MiddleTruncatedText className="whitespace-nowrap font-mono text-xs text-settings-label" text={versionLabel(advisory.latestVersion)} />
 				{details.updateAvailable ? <span className="whitespace-nowrap text-xs font-medium text-settings-accent">{t("settings.harness.updateAvailable")}</span> : null}
 			</HarnessDetailRow> : null}
 			{details.maintenanceMethod ? <HarnessDetailRow label={t("settings.harness.installMethod")}>

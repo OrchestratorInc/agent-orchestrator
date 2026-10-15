@@ -135,6 +135,50 @@ describe("SessionArtifactsView", () => {
 		expect(screen.getByRole("button", { name: /notes\.md/ })).toBeInTheDocument();
 	});
 
+	it("shows the open artifact full screen, keeping the same viewer, until Escape", async () => {
+		renderView(<SessionArtifactsView session={session()} />);
+		await userEvent.click(screen.getByRole("button", { name: /notes\.md/ }));
+		const viewer = screen.getByTestId("artifact-view");
+
+		await userEvent.click(screen.getByRole("button", { name: "Full screen" }));
+
+		const overlay = screen.getByRole("dialog", { name: "notes.md" });
+		expect(overlay.parentElement).toBe(document.body);
+		expect(within(overlay).getByTestId("artifact-view")).toBe(viewer);
+		expect(overlay).toHaveFocus();
+		expect(within(overlay).getByRole("button", { name: "Exit full screen" })).toBeInTheDocument();
+
+		await userEvent.keyboard("{Escape}");
+
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		expect(screen.getByTestId("artifact-view")).toBe(viewer);
+		expect(screen.getByRole("button", { name: "Full screen" })).toBeInTheDocument();
+	});
+
+	it("covers the whole app window without taking the window itself full screen", async () => {
+		const action = vi.spyOn(aoBridge.menu, "action").mockResolvedValue(undefined);
+		renderView(<SessionArtifactsView session={session()} />);
+		await userEvent.click(screen.getByRole("button", { name: /notes\.md/ }));
+
+		await userEvent.click(screen.getByRole("button", { name: "Full screen" }));
+
+		expect(screen.getByRole("dialog", { name: "notes.md" })).toHaveClass("fixed", "inset-0");
+		await userEvent.click(screen.getByRole("button", { name: "Exit full screen" }));
+		expect(action).not.toHaveBeenCalled();
+		action.mockRestore();
+	});
+
+	it("leaves full screen when going back to the list", async () => {
+		renderView(<SessionArtifactsView session={session()} />);
+		await userEvent.click(screen.getByRole("button", { name: /notes\.md/ }));
+		await userEvent.click(screen.getByRole("button", { name: "Full screen" }));
+
+		await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Back to artifacts" }));
+
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		expect(screen.getByRole("list")).toBeInTheDocument();
+	});
+
 	it("names the open artifact once, as a menu that reveals it in the file manager and the terminal", async () => {
 		const openArtifacts = vi.spyOn(aoBridge.editorHandoff, "openArtifacts");
 		renderView(<SessionArtifactsView request={{ key: 1, path: "reports/plan.md" }} session={session()} />);

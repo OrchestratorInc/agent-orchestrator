@@ -1,5 +1,6 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
+import { ArtifactSelectionAsk } from "./ArtifactSelectionAsk";
 import { FileContentPane, type FileViewMode } from "./FileContentPane";
 
 // Mirrors FileContentPane's own canRenderMarkdown extension check: a markdown
@@ -18,11 +19,10 @@ function initialModeFor(path: string): FileViewMode {
  * the same path), rather than the workspace-diff machinery, since artifacts
  * live outside the git workspace and have no diff/status.
  *
- * Read-only for now: `WorkspaceFileDetail.editable`/`fileFingerprint` are
- * unset for the artifact source (see `fetchSessionArtifactFile`), which is
- * exactly the signal `FileContentPane` already uses to hide its edit
- * affordance for any source. Wiring up editing later is then a matter of
- * adding a write endpoint and setting those two fields — no new UI.
+ * One view, no display mode switch: a markdown artifact renders, any other
+ * text file shows as code. A complete text file can be edited (saved through
+ * the artifact write endpoint) unless `readOnly`. Text selected in the
+ * rendered markdown can be sent to the worker.
  */
 export function ArtifactFileView({
 	artifactName,
@@ -31,6 +31,7 @@ export function ArtifactFileView({
 	onFeedbackRequestConsumed,
 	path,
 	rawUrl,
+	readOnly = false,
 	sessionId,
 	toolbarHost,
 }: {
@@ -40,12 +41,15 @@ export function ArtifactFileView({
 	onFeedbackRequestConsumed?: (key: number) => void;
 	path: string;
 	rawUrl?: string;
+	/** Hides the edit action, as for a cloud session's artifacts. */
+	readOnly?: boolean;
 	sessionId: string;
 	/** The header the pane renders its mode and action buttons into. */
 	toolbarHost?: HTMLElement | null;
 }) {
 	const annotation = useFileAnnotation(sessionId, { hostId, source: artifactName });
-	const source = useMemo(() => ({ kind: "artifact" as const, rawUrl }), [rawUrl]);
+	const source = useMemo(() => ({ kind: "artifact" as const, rawUrl, readOnly }), [rawUrl, readOnly]);
+	const scrollRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
 		if (feedbackRequestKey === undefined) return;
@@ -58,9 +62,11 @@ export function ArtifactFileView({
 
 	return (
 		<div className="flex h-full min-h-0 flex-col bg-background">
-			<div className="board-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain">
+			{/* The app shell is unselectable; an artifact's text is meant to be selected. */}
+			<div className="board-scrollbar min-h-0 flex-1 select-text overflow-x-hidden overflow-y-auto overscroll-contain" ref={scrollRef}>
 				<FileContentPane annotation={annotation} initialMode={initialModeFor(path)} hostId={hostId} path={path} sessionId={sessionId} source={source} split={false} toolbarHost={toolbarHost} />
 			</div>
+			<ArtifactSelectionAsk annotation={annotation} containerRef={scrollRef} path={path} />
 		</div>
 	);
 }

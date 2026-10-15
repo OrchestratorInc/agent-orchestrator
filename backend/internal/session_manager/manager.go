@@ -127,6 +127,9 @@ var (
 	// older terminal generation and the currently visible TUI has not confirmed
 	// that it resumed the same provider conversation yet.
 	ErrNativeConversationUnverified = errors.New("session: native conversation id is not confirmed for the current terminal launch")
+	// ErrInterfaceWorkspaceUnavailable means the session's start failed before
+	// its workspace existed, so no controller can run there until it restarts.
+	ErrInterfaceWorkspaceUnavailable = errors.New("session: workspace was never set up")
 	// ErrInterfaceAlreadySelected makes a stale/double switch request an explicit
 	// conflict instead of leaking a generic 500 after the first switch commits.
 	ErrInterfaceAlreadySelected = errors.New("session: requested interface is already selected")
@@ -2474,10 +2477,15 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 	}
 
 	if err := m.beginAgentOperation(ctx, id, agentOperationKill); err != nil {
-		if errors.Is(err, errAgentOperationInProgress) {
-			err = ErrSwitchInProgress
+		if !errors.Is(err, errAgentOperationInProgress) {
+			return KillResult{}, fmt.Errorf("kill %s: %w", id, err)
 		}
-		return KillResult{}, fmt.Errorf("kill %s: %w", id, err)
+		// Only a switch parked on an unconfirmed source restore yields: nothing
+		// is running for it, and Kill is the way out. A switch still executing
+		// keeps the session busy.
+		if !m.sourceRestoreQuarantined(ctx, id) || !m.claimRetainedAgentSwitchForKill(id) {
+			return KillResult{}, fmt.Errorf("kill %s: %w", id, ErrSwitchInProgress)
+		}
 	}
 	releaseOperation := func() { m.endAgentOperation(id, agentOperationKill) }
 	defer func() {
@@ -2537,6 +2545,9 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 		if err := m.runtime.Destroy(ctx, handle); err != nil {
 			return KillResult{}, fmt.Errorf("kill %s: runtime: %w", id, err)
 		}
+	}
+	if err := m.settleSourceRestoreQuarantineOnKill(ctx, rec); err != nil {
+		return KillResult{}, fmt.Errorf("kill %s: agent switch: %w", id, err)
 	}
 	if err := m.terminateReviewer(ctx, id, "cancelled by worker session termination"); err != nil {
 		return KillResult{}, fmt.Errorf("kill %s: reviewer: %w", id, err)

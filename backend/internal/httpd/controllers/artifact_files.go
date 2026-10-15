@@ -1,6 +1,10 @@
 package controllers
 
 import (
+	"bytes"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -12,11 +16,14 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
@@ -174,4 +181,145 @@ func removeArtifactFile(dir, relPath string) error {
 		return fs.ErrNotExist
 	}
 	return root.Remove(name)
+}
+
+// artifactEditMu serialises artifact writes so two saves cannot both pass the
+// fingerprint check against the same content.
+var artifactEditMu sync.Mutex
+
+// updateArtifactFile replaces the content of one listed artifact file when
+// the file still holds the content the edit started from.
+func (c *SessionsController) updateArtifactFile(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, http.MethodPut, artifactFilesPath)
+		return
+	}
+	var in UpdateArtifactFileRequest
+	if err := decodeJSON(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	expected := strings.TrimSpace(in.ExpectedFileFingerprint)
+	if expected == "" {
+		envelope.WriteError(w, r, apierr.Invalid("ARTIFACT_FILE_FINGERPRINT_REQUIRED", "expectedFileFingerprint is required", nil))
+		return
+	}
+	if len(in.Content) > attachmentstore.MaxFileBytes {
+		envelope.WriteError(w, r, apierr.Invalid("ARTIFACT_FILE_TOO_LARGE", "File is too large to edit", map[string]any{"limitBytes": attachmentstore.MaxFileBytes}))
+		return
+	}
+	if !utf8.ValidString(in.Content) || strings.ContainsRune(in.Content, 0) {
+		envelope.WriteError(w, r, apierr.Invalid("ARTIFACT_FILE_BINARY", "Only UTF-8 text files can be edited", nil))
+		return
+	}
+	sess, err := c.Svc.Get(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	clean, ok := previewutil.CleanWorkspacePath(in.Path)
+	if !ok || !listsArtifactFile(sess.ArtifactFiles, clean) {
+		writeArtifactFileNotFound(w, r)
+		return
+	}
+	artifactEditMu.Lock()
+	defer artifactEditMu.Unlock()
+	if err := writeArtifactFile(sess.Metadata.ArtifactDir, clean, expected, []byte(in.Content)); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			writeArtifactFileNotFound(w, r)
+			return
+		}
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, ArtifactFileResponse{
+		Path:            clean,
+		Size:            int64(len(in.Content)),
+		FileFingerprint: artifactFingerprint([]byte(in.Content)),
+	})
+}
+
+// artifactFingerprint is the hex SHA-256 of an artifact's content.
+func artifactFingerprint(content []byte) string {
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:])
+}
+
+// writeArtifactFile replaces a regular file beneath dir with content when its
+// current content hashes to expected. The content goes to a temporary file
+// beside it that is then renamed over it, so a failed save leaves the
+// original intact. os.Root refuses ".." and symlinks that leave dir; a
+// symlink itself is never written.
+func writeArtifactFile(dir, relPath, expected string, content []byte) error {
+	if dir == "" {
+		return fs.ErrNotExist
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	name := filepath.FromSlash(relPath)
+	info, err := root.Lstat(name)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fs.ErrNotExist
+	}
+	current, err := readArtifactFile(root, name)
+	if err != nil {
+		return fmt.Errorf("read artifact file: %w", err)
+	}
+	if artifactFingerprint(current) != expected {
+		return apierr.Conflict("ARTIFACT_FILE_STALE", "File changed while it was being edited", map[string]any{"fileFingerprint": artifactFingerprint(current)})
+	}
+	if bytes.Equal(current, content) {
+		return nil
+	}
+	temp, err := writeArtifactTemp(root, name, info.Mode().Perm(), content)
+	if err != nil {
+		return fmt.Errorf("write artifact file: %w", err)
+	}
+	if err := root.Rename(temp, name); err != nil {
+		_ = root.Remove(temp)
+		return fmt.Errorf("write artifact file: %w", err)
+	}
+	return nil
+}
+
+func readArtifactFile(root *os.Root, name string) ([]byte, error) {
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	return io.ReadAll(io.LimitReader(file, attachmentstore.MaxFileBytes+1))
+}
+
+// writeArtifactTemp writes content to a new hidden file beside name, with
+// name's permissions, and returns its root-relative path. The file is
+// removed again if the write fails.
+func writeArtifactTemp(root *os.Root, name string, perm fs.FileMode, content []byte) (string, error) {
+	suffix := make([]byte, 8)
+	if _, err := rand.Read(suffix); err != nil {
+		return "", err
+	}
+	temp := filepath.Join(filepath.Dir(name), "."+filepath.Base(name)+".ao-save-"+hex.EncodeToString(suffix))
+	file, err := root.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return "", err
+	}
+	_, err = file.Write(content)
+	if err == nil {
+		err = file.Sync()
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = root.Remove(temp)
+		return "", err
+	}
+	return temp, nil
 }

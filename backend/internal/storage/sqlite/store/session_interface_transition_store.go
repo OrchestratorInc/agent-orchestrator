@@ -321,6 +321,18 @@ func (s *Store) commitSessionControllerEpoch(
 		if err != nil {
 			return false, fmt.Errorf("release untouched Chat provider for %s: %w", id, err)
 		}
+		if released == 0 {
+			// A Chat whose controller never started (its start failed, or it
+			// was never opened) has no conversation row: the freshness proof
+			// accepts that, and there is no reservation to release.
+			_, lookupErr := q.SelectConversationBySession(ctx, &id)
+			switch {
+			case errors.Is(lookupErr, sql.ErrNoRows):
+				released = 1
+			case lookupErr != nil:
+				return false, fmt.Errorf("release untouched Chat provider for %s: %w", id, lookupErr)
+			}
+		}
 		if released != 1 {
 			return false, fmt.Errorf("release untouched Chat provider for %s: empty root proof changed", id)
 		}

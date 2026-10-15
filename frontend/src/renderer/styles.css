@@ -6155,6 +6155,12 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	color: inherit;
 }
 
+/* Text selected in an artifact preview while its ask bar has focus. */
+::highlight(artifact-selection) {
+	background-color: var(--color-term-selection-light);
+	color: inherit;
+}
+
 .chat-annotation-target {
 	background-color: #6b72801f;
 	outline: 2px solid #6b7280;

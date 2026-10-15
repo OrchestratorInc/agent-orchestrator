@@ -1371,6 +1371,9 @@ func mapSessionError(err error) error {
 	case errors.Is(err, sessionmanager.ErrNativeConversationUnverified):
 		return apierr.Conflict("NATIVE_SESSION_UNVERIFIED",
 			"The current terminal launch has not confirmed that it owns the stored native conversation yet", nil)
+	case errors.Is(err, sessionmanager.ErrInterfaceWorkspaceUnavailable):
+		return apierr.Conflict("WORKSPACE_UNAVAILABLE",
+			"The session's workspace was never set up; retry its start before switching interfaces", nil)
 	case errors.Is(err, sessionmanager.ErrInterfaceTransitionNotCancellable):
 		return apierr.Conflict("INTERFACE_TRANSITION_NOT_CANCELLABLE",
 			"The source controller has already stopped; AO must finish or recover the switch", nil)

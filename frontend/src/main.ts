@@ -49,6 +49,7 @@ import { readUpdateSettings, type UpdateSettings, type UpdateStatus } from "./ma
 import { readKeybindingOverrides, writeKeybindingOverrides } from "./main/keybinding-settings";
 import { readEditorSettings, writeEditorPreference } from "./main/editor-settings";
 import { createEditorHandoff } from "./main/editor-handoff";
+import { discoverMacTerminalApps } from "./main/mac-terminal-apps";
 import { registerCliLinkIpc } from "./main/cli-link-ipc";
 import { launchCommand } from "./main/launch-command";
 import { blocksRenderFrameNavigation } from "./main/render-frame-guard";
@@ -1215,6 +1216,8 @@ const editorHandoff = createEditorHandoff({
 	},
 	realPath: (candidatePath) => realpath(candidatePath),
 	copyText: (text) => clipboard.writeText(text),
+	discoverTerminalApps: discoverMacTerminalApps,
+	readIcon: async (appPath) => (await app.getFileIcon(appPath, { size: "normal" })).toDataURL(),
 	logError: (message, error) => console.error(message, error),
 });
 
@@ -2314,9 +2317,9 @@ ipcMain.handle("sideChats:capture", async (event, closedSideId?: string, cancelC
 	return captureSideChatState(closedSideId, cancelClose);
 });
 
-ipcMain.handle("editorHandoff:getState", (event, sessionId: string) => {
+ipcMain.handle("editorHandoff:getState", (event, sessionId: string, options) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
-	return editorHandoff.getState(typeof sessionId === "string" ? sessionId : "");
+	return editorHandoff.getState(typeof sessionId === "string" ? sessionId : "", { refreshTerminals: options?.refreshTerminals === true });
 });
 ipcMain.handle("editorHandoff:open", (event, input) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");

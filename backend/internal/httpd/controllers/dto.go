@@ -245,6 +245,21 @@ type ArtifactFileQuery struct {
 	Path string `query:"path" description:"Artifact-directory-relative file path, as listed in the session's artifactFiles."`
 }
 
+// UpdateArtifactFileRequest replaces one listed artifact file after verifying
+// that the viewer's loaded copy is still current.
+type UpdateArtifactFileRequest struct {
+	Path                    string `json:"path" description:"Artifact-directory-relative file path, as listed in the session's artifactFiles."`
+	Content                 string `json:"content" description:"The file's new UTF-8 text content."`
+	ExpectedFileFingerprint string `json:"expectedFileFingerprint" description:"Hex SHA-256 of the file content the edit started from."`
+}
+
+// ArtifactFileResponse describes an artifact file after a write.
+type ArtifactFileResponse struct {
+	Path            string `json:"path"`
+	Size            int64  `json:"size"`
+	FileFingerprint string `json:"fileFingerprint" description:"Hex SHA-256 of the file's content."`
+}
+
 // WorkspaceFileQuery is the query string accepted by GET /api/v1/sessions/{sessionId}/workspace/file.
 type WorkspaceFileQuery struct {
 	Path string `query:"path" description:"Session-worktree-relative file path."`

@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, ChevronLeft, Copy, FileText, FolderOpen, Globe, SquareTerminal, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronLeft, Copy, FileText, FolderOpen, Globe, Maximize2, Minimize2, SquareTerminal, Trash2 } from "lucide-react";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { useOpenArtifactPreview } from "../hooks/useOpenArtifactPreview";
@@ -11,6 +12,7 @@ import { aoBridge } from "../lib/bridge";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import { formatTimeTerse } from "../lib/format-time";
 import { sessionUiKey } from "../lib/hosts";
+import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -191,10 +193,81 @@ function ArtifactMenu({ artifact, hostId, session }: { artifact: SessionArtifact
 	);
 }
 
+// Full screen covers the whole app window. A wide markdown body keeps
+// GitHub's reading width, centred on the app's own background; the `!`
+// overrides github-markdown-css, which sets both outside Tailwind's layers.
+const FULLSCREEN_FRAME_CLASS =
+	"fixed inset-0 z-overlay flex flex-col bg-background outline-none [&_.markdown-body]:mx-auto! [&_.markdown-body]:max-w-[980px] [&_.markdown-body]:bg-transparent!";
+// The window's macOS traffic lights sit over the overlay's header unless the
+// window itself is full screen.
+const FULLSCREEN_MAC_HEADER_CLASS = "pl-(--size-titlebar-cluster-left) [html:has(.native-fullscreen)_&]:pl-1";
+const INLINE_FRAME_CLASS = "flex h-full min-h-0 flex-col outline-none";
+
+/**
+ * The open artifact's viewer, in the inspector or full screen. It renders
+ * into one node that moves between its inspector slot and a window overlay,
+ * so an edit in progress survives the switch. Escape leaves full screen.
+ */
+function ArtifactViewerFrame({
+	children,
+	fullscreen,
+	label,
+	onExitFullscreen,
+}: {
+	children: ReactNode;
+	fullscreen: boolean;
+	label: string;
+	onExitFullscreen: () => void;
+}) {
+	const [frame] = useState(() => {
+		const element = document.createElement("div");
+		element.tabIndex = -1;
+		return element;
+	});
+	const slotRef = useRef<HTMLDivElement>(null);
+	const switchedRef = useRef(false);
+	useLayoutEffect(() => () => frame.remove(), [frame]);
+	useLayoutEffect(() => {
+		frame.className = fullscreen ? FULLSCREEN_FRAME_CLASS : INLINE_FRAME_CLASS;
+		if (fullscreen) {
+			// A dialog role also hides the native Browser view and gives the
+			// overlay solid surfaces in a translucent window.
+			frame.setAttribute("role", "dialog");
+			frame.setAttribute("aria-modal", "true");
+			frame.setAttribute("aria-label", label);
+			frame.dataset.state = "open";
+			document.body.append(frame);
+		} else {
+			for (const name of ["role", "aria-modal", "aria-label", "data-state"]) frame.removeAttribute(name);
+			slotRef.current?.append(frame);
+		}
+		// Moving the node drops focus; after a switch it lands on the frame.
+		if (switchedRef.current || fullscreen) frame.focus({ preventScroll: true });
+		switchedRef.current = true;
+	}, [frame, fullscreen, label]);
+	useEffect(() => {
+		if (!fullscreen) return;
+		// Escape from a menu or dialog opened over the artifact is theirs.
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.key !== "Escape" || event.defaultPrevented || !frame.contains(event.target as Node)) return;
+			event.preventDefault();
+			onExitFullscreen();
+		};
+		document.addEventListener("keydown", onKeyDown);
+		return () => document.removeEventListener("keydown", onKeyDown);
+	}, [frame, fullscreen, onExitFullscreen]);
+	return (
+		<div className="h-full min-h-0" ref={slotRef} role="tabpanel">
+			{createPortal(children, frame)}
+		</div>
+	);
+}
+
 /**
  * The inspector's Artifacts view (its own inspector tab): every file in
  * the session's artifact directory. HTML artifacts open in the Browser panel;
- * markdown and other files open in a viewer in place of the list.
+ * markdown and other files open in a viewer in place of the list, which can
+ * go full screen.
  */
 export function SessionArtifactsView({
 	hostId,
@@ -211,20 +284,27 @@ export function SessionArtifactsView({
 	const artifacts = useMemo(() => sortedArtifacts(session.artifactFiles ?? []), [session.artifactFiles]);
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
 	const [toolbarHost, setToolbarHost] = useState<HTMLElement | null>(null);
+	const [fullscreen, setFullscreen] = useState(false);
 	const openArtifactPreview = useOpenArtifactPreview(session.id, hostId);
 	const uiKey = sessionUiKey(session.id, hostId);
 
 	useEffect(() => setSelectedPath(null), [uiKey]);
+	const exitFullscreen = useMemo(() => () => setFullscreen(false), []);
 	useEffect(() => {
 		if (request) setSelectedPath(request.path);
 	}, [request]);
 
 	const selected = artifacts.find((artifact) => artifact.path === selectedPath);
+	useEffect(() => {
+		if (!selected) setFullscreen(false);
+	}, [selected]);
 	if (selected) {
+		const fullscreenLabel = t(fullscreen ? "artifacts.exitFullscreen" : "artifacts.fullscreen");
+		const FullscreenIcon = fullscreen ? Minimize2 : Maximize2;
 		return (
-			<div className="flex h-full min-h-0 flex-col" role="tabpanel">
-				{/* One header row: back, the file's menu, and the viewer's mode and action buttons. */}
-				<div className="flex min-h-9 shrink-0 items-center gap-1 border-b border-border bg-background px-1">
+			<ArtifactViewerFrame fullscreen={fullscreen} label={selected.name} onExitFullscreen={exitFullscreen}>
+				{/* One header row: back, the file's menu, the viewer's action buttons, and full screen. */}
+				<div className={cn("flex min-h-9 shrink-0 items-center gap-1 border-b border-border bg-background px-1", fullscreen && isMacPlatform() && FULLSCREEN_MAC_HEADER_CLASS)}>
 					<Button
 						aria-label={t("artifacts.back")}
 						onClick={() => setSelectedPath(null)}
@@ -236,6 +316,22 @@ export function SessionArtifactsView({
 					</Button>
 					<ArtifactMenu artifact={selected} hostId={hostId} key={selected.path} session={session} />
 					<div className="ml-auto flex shrink-0 items-center" ref={setToolbarHost} />
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								aria-label={fullscreenLabel}
+								aria-pressed={fullscreen}
+								className="text-muted-foreground hover:text-foreground"
+								onClick={() => setFullscreen((current) => !current)}
+								size="icon-sm"
+								type="button"
+								variant="ghost"
+							>
+								<FullscreenIcon aria-hidden="true" className="size-icon-sm" />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent side="bottom">{fullscreenLabel}</TooltipContent>
+					</Tooltip>
 				</div>
 				<div className="min-h-0 flex-1">
 					<ArtifactFileView
@@ -245,11 +341,12 @@ export function SessionArtifactsView({
 						onFeedbackRequestConsumed={onRequestConsumed}
 						path={selected.path}
 						rawUrl={selected.rawUrl}
+						readOnly={Boolean(session.cloud)}
 						sessionId={session.id}
 						toolbarHost={toolbarHost}
 					/>
 				</div>
-			</div>
+			</ArtifactViewerFrame>
 		);
 	}
 
