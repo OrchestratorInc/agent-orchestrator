@@ -229,6 +229,8 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 				// A job this notice started that failed stays explained here.
 				const failed = startedJobs.current.has(agentId) && isFailedInstallJob(job);
 				const error = errors[agentId] ?? (failed ? job?.error || t("settings.harness.updateJobFailed") : undefined);
+				// A start error means this attempt made no job; any retained job is an older one.
+				const failedJobStartedAt = errors[agentId] === undefined && failed ? job?.startedAt ?? undefined : undefined;
 				const requestAction = () => {
 					if (!needsLogin && method) {
 						void startUpdate(agentId, advisory, method.id);
@@ -256,7 +258,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 					{/* One click to the Harness page with this failure's diagnostics open, ready to copy. */}
 					{error && !busy ? <div className="mt-1 flex flex-col items-start gap-1">
 						<p role="alert" className="break-words text-caption text-error">{error}</p>
-						<Button type="button" size="sm" variant="outline" className="h-6 px-2 text-[length:var(--font-size-caption)]" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, showDiagnostics: true })}>{t("settings.harness.showDiagnostics")}</Button>
+						<Button type="button" size="sm" variant="outline" className="h-6 px-2 text-[length:var(--font-size-caption)]" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, showDiagnostics: { jobStartedAt: failedJobStartedAt, error } })}>{t("settings.harness.showDiagnostics")}</Button>
 					</div> : null}
 				</article>;
 			})}

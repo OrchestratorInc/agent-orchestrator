@@ -1,6 +1,6 @@
 import { Fragment, Suspense } from "react";
 import { useTranslation } from "react-i18next";
-import { type GlobalSettingsSection as GlobalSettingsPage, useUiStore } from "../stores/ui-store";
+import { type GlobalSettingsSection as GlobalSettingsPage, type HarnessDiagnosticsRequest, useUiStore } from "../stores/ui-store";
 import { globalSettingsItemsFor } from "./settings/settingsCatalog";
 
 export type GlobalSettingsSection = GlobalSettingsPage | "all";
@@ -25,7 +25,7 @@ export function GlobalSettingsForm({
 	hostId?: string;
 	harnessView?: "local" | "cloud";
 	startLogin?: boolean;
-	showDiagnostics?: boolean;
+	showDiagnostics?: HarnessDiagnosticsRequest;
 	section?: GlobalSettingsSection;
 }) {
 	const { t } = useTranslation();

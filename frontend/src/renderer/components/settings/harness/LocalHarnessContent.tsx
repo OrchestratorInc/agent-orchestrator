@@ -36,6 +36,7 @@ import { apiErrorMessage } from "../../../lib/api-client";
 import { aoBridge } from "../../../lib/bridge";
 import { clientForSessionHost, labelForHost } from "../../../lib/host-clients";
 import { LOCAL_HOST } from "../../../lib/hosts";
+import type { HarnessDiagnosticsRequest } from "../../../stores/ui-store";
 import { cn } from "../../../lib/utils";
 import { AgentAvatar } from "../../AgentAvatar";
 import { ConfirmDialog } from "../../ConfirmDialog";
@@ -72,7 +73,7 @@ const INSTALL_STATE_RANK = {
 	not_installed: 2,
 } as const;
 
-export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, startLogin = false, showDiagnostics = false }: { focusAgentId?: string; hostId?: string; search: string; startLogin?: boolean; showDiagnostics?: boolean; onDetailChange?: (open: boolean) => void }) {
+export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, startLogin = false, showDiagnostics }: { focusAgentId?: string; hostId?: string; search: string; startLogin?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; onDetailChange?: (open: boolean) => void }) {
 	const { i18n, t } = useTranslation();
 	const queryClient = useQueryClient();
 	const client = clientForSessionHost(hostId);
@@ -110,6 +111,8 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const focusHandledRef = useRef(false);
 	const focusPrimaryActionRef = useRef(false);
 	const focusDiagnosticsRef = useRef(false);
+	// The failure a notice shortcut reported, kept for the Health report.
+	const [noticeError, setNoticeError] = useState<{ agentId: AgentId; error: string } | null>(null);
 	const highlightTimerRef = useRef<number | null>(null);
 	const [highlightedAgentId, setHighlightedAgentId] = useState<AgentId | null>(null);
 	// The list opens one harness at a time; its page has Account, Models and Health tabs.
@@ -260,14 +263,17 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		if (focusHandledRef.current || !targetAgentId) return;
 		if (agents.isPending || installers.isPending || jobs.isPending || authPlans.isPending) return;
 		focusHandledRef.current = true;
-		// A failed update notice lands here: open the job's diagnostics ready to
-		// copy, or the Health report when the failure never produced a job.
-		if (showDiagnostics && describe(targetAgentId).hasDiagnostics) {
+		// A failed update notice lands here: open that attempt's job diagnostics
+		// ready to copy. A failure with no job of its own, or one whose job has
+		// since been replaced, opens the Health report with the error it showed.
+		const targetJob = jobMap.get(targetAgentId);
+		if (showDiagnostics?.jobStartedAt && targetJob?.startedAt === showDiagnostics.jobStartedAt && describe(targetAgentId).hasDiagnostics) {
 			focusDiagnosticsRef.current = true;
 			setExpandedDiagnostics((current) => ({ ...current, [targetAgentId]: true }));
 			openDetail(targetAgentId);
 		} else {
 			focusPrimaryActionRef.current = true;
+			if (showDiagnostics?.error) setNoticeError({ agentId: targetAgentId, error: showDiagnostics.error });
 			openDetail(targetAgentId, showDiagnostics ? "health" : "account");
 		}
 		setHighlightedAgentId(targetAgentId);
@@ -828,11 +834,13 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 									details={selectedDetails}
 									checking={checkingAuth.includes(selectedDetails.agentId) || agents.isFetching || Boolean(selectedDetails.advisoryQuery?.isFetching)}
 									authCheckFailed={Boolean(authCheckErrors[selectedDetails.agentId])}
+									updateError={noticeError?.agentId === selectedDetails.agentId ? noticeError.error : undefined}
 									copied={copiedAgent === selectedDetails.agentId}
 									onCheckAgain={() => refreshInstalledAgent(selectedDetails.agentId)}
 									onCopyReport={() => void (async () => {
 										const machine = await machineText(queryClient, hostId ? client : undefined);
-										await copyText(selectedDetails.agentId, [healthReport(selectedDetails), machine].filter(Boolean).join("\n\n"));
+										const updateError = noticeError?.agentId === selectedDetails.agentId ? `Update error: ${noticeError.error}` : "";
+										await copyText(selectedDetails.agentId, [updateError, healthReport(selectedDetails), machine].filter(Boolean).join("\n\n"));
 									})()}
 								/>
 							</TabsContent>
