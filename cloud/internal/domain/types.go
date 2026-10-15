@@ -190,8 +190,10 @@ type CreateSession struct {
 	// CoderCapability: the caller's organization holds the coder capability
 	// (WorkOS metadata capabilities=coder), so its Coder sessions are not
 	// billed. Set by the HTTP layer, which owns the capability rule; a worker
-	// an orchestrator spawns inherits its parent's billing instead.
-	CoderCapability bool
+	// an orchestrator spawns inherits its parent's billing instead. It is read
+	// from a cache, so it stays out of the create's idempotency payload: a
+	// retry after the cache changed still replays the first create.
+	CoderCapability bool `json:"-"`
 }
 
 // RepoRef is one additional repository (beyond the project's primary repo) to

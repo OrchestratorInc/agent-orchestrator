@@ -75,6 +75,28 @@ func TestCoderSessionsAreBilledWithoutTheCoderCapability(t *testing.T) {
 	}
 }
 
+// The coder capability is read from a cache that can change between a create
+// and its retry; the retry must still replay the first create.
+func TestCreateSessionRetryIgnoresAChangedCoderCapability(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	input := domain.CreateSession{
+		ProjectID: fixture.projectID, Kind: "worker", Harness: "codex", DisplayName: "retry",
+		Provider: "coder", CoderCapability: true,
+	}
+	key := "retry-" + uuid.NewString()
+	first, err := store.CreateSession(ctx, principal, fixture.orgID, key, 10, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.CoderCapability = false
+	retried, err := store.CreateSession(ctx, principal, fixture.orgID, key, 10, input)
+	if err != nil || retried.ID != first.ID {
+		t.Fatalf("retry = %s, %v; want the first session %s", retried.ID, err, first.ID)
+	}
+}
+
 // A worker an orchestrator spawns inherits the orchestrator's billing, since
 // the spawn has no signed-in user to read the coder capability from.
 func TestSpawnedCoderWorkerInheritsItsParentsBilling(t *testing.T) {
