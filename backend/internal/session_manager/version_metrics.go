@@ -45,4 +45,7 @@ func (m *Manager) ObserveChatVersionSwitch(id domain.SessionID, _ string, result
 		rec = domain.SessionRecord{ID: id}
 	}
 	m.emitVersionSwitch(rec, "chat", result)
+	if result == "failed" {
+		m.versionRetries.note(id)
+	}
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
 
 // versionRefreshSweepTick paces moves to a newly installed harness release.
@@ -38,16 +39,19 @@ func runVersionRefreshSweep(ctx context.Context, cfg config.Config, settings ver
 		case <-ticker.C:
 		}
 		gauge.observe(ctx, sessions)
-		if cfg.VersionRefresh && settings.VersionRefreshEnabled(ctx) {
-			wake := !settings.ChatHibernationEnabled()
-			if err := sessions.RefreshStaleChats(ctx, cfg.VersionRefreshIdle, wake); err != nil && ctx.Err() == nil {
+		policy := versionRefreshPolicy(ctx, cfg, settings)
+		if policy.Chats {
+			if err := sessions.RefreshStaleChats(ctx, policy.MinIdle, policy.WakeChats); err != nil && ctx.Err() == nil {
 				log.Warn("moving idle chats to the installed harness release failed", "err", err)
 			}
-			if cfg.TUIVersionRefresh {
-				if err := sessions.RefreshStaleTerminals(ctx, cfg.VersionRefreshIdle); err != nil && ctx.Err() == nil {
-					log.Warn("restarting idle terminals on the installed harness release failed", "err", err)
-				}
+		}
+		if policy.Terminals {
+			if err := sessions.RefreshStaleTerminals(ctx, policy.MinIdle); err != nil && ctx.Err() == nil {
+				log.Warn("restarting idle terminals on the installed harness release failed", "err", err)
 			}
+		}
+		if err := sessions.RetryVersionMoves(ctx); err != nil && ctx.Err() == nil {
+			log.Warn("resuming sessions after a failed version move failed", "err", err)
 		}
 		if installs != nil {
 			installs.RunDeferredCleanups(ctx)
@@ -90,4 +94,15 @@ func (g *staleSessionsGauge) observe(ctx context.Context, sessions sessionLifecy
 		})
 	}
 	g.last = counts
+}
+
+// versionRefreshPolicy combines the kill switches with the user's setting.
+func versionRefreshPolicy(ctx context.Context, cfg config.Config, settings versionRefreshSettings) sessionmanager.VersionRefreshPolicy {
+	enabled := cfg.VersionRefresh && settings.VersionRefreshEnabled(ctx)
+	return sessionmanager.VersionRefreshPolicy{
+		Chats:     enabled,
+		Terminals: enabled && cfg.TUIVersionRefresh,
+		MinIdle:   cfg.VersionRefreshIdle,
+		WakeChats: !settings.ChatHibernationEnabled(),
+	}
 }

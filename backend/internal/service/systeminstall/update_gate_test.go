@@ -15,6 +15,16 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// harnessHeld probes the launch gate without waiting the way a launch does.
+func harnessHeld(s *Service, harness domain.AgentHarness) bool {
+	gate := s.harnessGate(harness)
+	if gate.TryRLock() {
+		gate.RUnlock()
+		return false
+	}
+	return true
+}
+
 type installCommandRunnerFunc func(context.Context, ports.InstallCommand, io.Writer, io.Writer) error
 
 func (f installCommandRunnerFunc) RunInstall(ctx context.Context, command ports.InstallCommand, stdout, stderr io.Writer) error {
@@ -62,10 +72,10 @@ func TestUpdateWhileRunningLevelMatrix(t *testing.T) {
 		{"darwin", TargetOMP, "homebrew", false, UpdateWhileRunningSafe},
 		{"darwin", TargetCodex, "homebrew", true, UpdateWhileRunningWarn},
 		{"darwin", TargetClaudeCode, "homebrew", true, UpdateWhileRunningWarn},
-		{"darwin", TargetAuggie, "npm", false, UpdateWhileRunningBlocked},
-		{"darwin", TargetOMP, "bun", false, UpdateWhileRunningBlocked},
-		{"linux", TargetAider, "uv", false, UpdateWhileRunningBlocked},
-		{"linux", TargetAider, "pipx", false, UpdateWhileRunningBlocked},
+		{"darwin", TargetAuggie, "npm", false, UpdateWhileRunningWarn},
+		{"darwin", TargetOMP, "bun", false, UpdateWhileRunningWarn},
+		{"linux", TargetAider, "uv", false, UpdateWhileRunningWarn},
+		{"linux", TargetAider, "pipx", false, UpdateWhileRunningWarn},
 		{"windows", TargetClaudeCode, "official-installer", false, UpdateWhileRunningBlocked},
 		{"windows", TargetCodex, "winget", false, UpdateWhileRunningBlocked},
 		{"windows", TargetCodex, "npm", false, UpdateWhileRunningBlocked},
@@ -87,8 +97,8 @@ func TestUpdatePlansCarryTheirLevel(t *testing.T) {
 	for _, plan := range planner.agentMethodPlans(TargetCodex, AgentOperationUpdate) {
 		levels[plan.Method] = plan.UpdateWhileRunning
 	}
-	if levels["homebrew"] != UpdateWhileRunningWarn || levels["npm"] != UpdateWhileRunningBlocked {
-		t.Fatalf("codex update levels = %v, want cask warn and npm blocked", levels)
+	if levels["homebrew"] != UpdateWhileRunningWarn || levels["npm"] != UpdateWhileRunningWarn {
+		t.Fatalf("codex update levels = %v, want cask and npm warn", levels)
 	}
 	for _, plan := range planner.agentMethodPlans(TargetCodex, AgentOperationInstall) {
 		if plan.UpdateWhileRunning != "" {
@@ -139,7 +149,7 @@ func TestUpdateWhileRunningDecisionTable(t *testing.T) {
 		{name: "no live sessions runs", sessions: nil, method: "homebrew", wantRun: true},
 		{name: "safe runs without asking", sessions: live, method: "homebrew", wantRun: true},
 		{name: "safe with consent runs", sessions: live, method: "homebrew", consent: true, wantRun: true},
-		{name: "blocked ignores consent", sessions: live, method: "npm", consent: true, wantLevel: UpdateWhileRunningBlocked},
+		{name: "npm runs too, like T3", sessions: live, method: "npm", wantRun: true},
 		{name: "starting session refuses", sessions: nil, method: "homebrew", consent: true, starting: true, wantStarting: true, wantLevel: UpdateWhileRunningBlocked},
 		{name: "kill switch blocks", sessions: live, method: "homebrew", consent: true, disabled: true, wantLevel: UpdateWhileRunningBlocked},
 	} {
@@ -309,7 +319,7 @@ func TestLaunchDropsAdvisoryForBinaryReplacedOutsideAO(t *testing.T) {
 	}
 }
 
-func TestLaunchesAreRefusedWhileUpdateWithSessionsRuns(t *testing.T) {
+func TestLaunchesWaitForAnUpdateInsteadOfFailing(t *testing.T) {
 	s, _ := updateWhileRunningService(t, []domain.SessionRecord{{ID: "kimi-1", Harness: domain.AgentHarness(TargetKimi)}})
 	started := make(chan struct{})
 	finish := make(chan struct{})
@@ -324,28 +334,45 @@ func TestLaunchesAreRefusedWhileUpdateWithSessionsRuns(t *testing.T) {
 		}
 		return nil
 	})
-	if _, err := s.StartAgentOperationWithSessions(context.Background(), TargetKimi, "homebrew", AgentOperationUpdate, "", true); err != nil {
+	if _, err := s.StartAgentOperation(context.Background(), TargetKimi, "homebrew", AgentOperationUpdate, ""); err != nil {
 		t.Fatal(err)
 	}
 	<-started
-	if release, ok := s.TryBeginHarnessUse(domain.AgentHarness(TargetKimi)); ok {
-		release()
-		t.Fatal("a launch acquired the harness during its update")
+	if !harnessHeld(s, domain.AgentHarness(TargetKimi)) {
+		t.Fatal("a launch could start on a binary being replaced")
+	}
+	launched := make(chan bool, 1)
+	go func() {
+		release, ok := s.TryBeginHarnessUse(domain.AgentHarness(TargetKimi))
+		if ok {
+			release()
+		}
+		launched <- ok
+	}()
+	select {
+	case <-launched:
+		t.Fatal("a launch started during the update")
+	case <-time.After(100 * time.Millisecond):
 	}
 	close(finish)
+	select {
+	case ok := <-launched:
+		if !ok {
+			t.Fatal("the launch failed instead of starting once the update ended")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the launch never started after the update")
+	}
 	s.workers.Wait()
 }
 
-func TestWarnUpdateAsksBeforeRunningAlongsideSessions(t *testing.T) {
+func TestUpdatesRunAlongsideSessionsWithoutAsking(t *testing.T) {
 	s := newTestService("darwin")
 	s.sessions = sessionListerStub{sessions: []domain.SessionRecord{{ID: "codex-1", Harness: domain.HarnessCodex}}}
-	plan := Plan{Target: TargetCodex, Method: "homebrew", PackageCask: true, UpdateWhileRunning: UpdateWhileRunningWarn}
-	_, err := s.gateRunningSessions(context.Background(), TargetCodex, AgentOperationUpdate, plan, false)
-	var active *HarnessActiveError
-	if !errors.As(err, &active) || !active.NeedsConsent || active.Level != UpdateWhileRunningWarn {
-		t.Fatalf("warn update without consent = %v, want a confirmation", err)
-	}
-	if withSessions, err := s.gateRunningSessions(context.Background(), TargetCodex, AgentOperationUpdate, plan, true); err != nil || !withSessions {
-		t.Fatalf("warn update with consent = %t, %v", withSessions, err)
+	for _, level := range []UpdateWhileRunning{UpdateWhileRunningSafe, UpdateWhileRunningWarn} {
+		plan := Plan{Target: TargetCodex, Method: "homebrew", PackageCask: true, UpdateWhileRunning: level}
+		if withSessions, err := s.gateRunningSessions(context.Background(), TargetCodex, AgentOperationUpdate, plan, false); err != nil || !withSessions {
+			t.Fatalf("%s update without consent = %t, %v; want it to run", level, withSessions, err)
+		}
 	}
 }

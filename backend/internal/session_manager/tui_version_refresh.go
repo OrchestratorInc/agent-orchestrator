@@ -25,9 +25,9 @@ type staleTerminalStore interface {
 	SetSessionVersionSwitchFailed(ctx context.Context, id domain.SessionID, version string, at time.Time) error
 }
 
-// terminalViewers counts clients attached to a terminal.
+// terminalViewers reports whether a client shows a terminal.
 type terminalViewers interface {
-	AttachedClients(terminalID string) int
+	TerminalOnScreen(terminalID string) bool
 }
 
 // RefreshStaleTerminals restarts idle terminal sessions that still run a
@@ -35,7 +35,7 @@ type terminalViewers interface {
 // action run in place: the agent process is replaced and its conversation
 // resumed natively, while the session, worktree, reviewer, shells and browser
 // stay as they are. A session is left alone while anyone is attached to its
-// terminal, while it has been active within minIdle, while its terminal has
+// terminal on screen, while it has been active within minIdle, while its terminal has
 // input newer than its idle report, while its agent runs any shell command,
 // or when its conversation cannot be resumed natively.
 func (m *Manager) RefreshStaleTerminals(ctx context.Context, minIdle time.Duration) error {
@@ -47,13 +47,12 @@ func (m *Manager) RefreshStaleTerminals(ctx context.Context, minIdle time.Durati
 	if err != nil {
 		return err
 	}
-	var errs []error
-	for _, id := range ids {
+	return m.forEachVersionMove(ctx, ids, func(ctx context.Context, id domain.SessionID) error {
 		if err := m.refreshStaleTerminal(ctx, store, id, minIdle); err != nil {
-			errs = append(errs, fmt.Errorf("restart terminal %s on the installed release: %w", id, err))
+			return fmt.Errorf("restart terminal %s on the installed release: %w", id, err)
 		}
-	}
-	return errors.Join(errs...)
+		return nil
+	})
 }
 
 func (m *Manager) refreshStaleTerminal(ctx context.Context, store staleTerminalStore, id domain.SessionID, minIdle time.Duration) error {
@@ -116,6 +115,7 @@ func (m *Manager) refreshStaleTerminal(ctx context.Context, store staleTerminalS
 		m.logger.Warn("version_switch_failed: terminal session could not restart on the new harness release",
 			"sessionID", id, "harness", current.Harness, "version", version, "error", err)
 		m.emitVersionSwitch(current, "tui", "failed")
+		m.versionRetries.note(id)
 		if recordErr := store.SetSessionVersionSwitchFailed(context.WithoutCancel(ctx), id, version, m.clock()); recordErr != nil {
 			return errors.Join(err, recordErr)
 		}
@@ -142,6 +142,6 @@ func (m *Manager) terminalRestartEligible(rec domain.SessionRecord, minIdle time
 	gate := m.terminalInputGate
 	m.terminalInputGateMu.Unlock()
 	viewers, ok := gate.(terminalViewers)
-	// Without a way to count viewers, assume someone may be watching.
-	return ok && viewers.AttachedClients(handle.ID) == 0
+	// Without a way to tell, assume someone may be watching.
+	return ok && !viewers.TerminalOnScreen(handle.ID)
 }

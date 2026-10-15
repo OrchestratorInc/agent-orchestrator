@@ -21,13 +21,21 @@ release in its own path leaves the running release on disk after an update.
 | OpenCode | vendor installer | `~/.opencode/bin/opencode` (single file) | No: replaced in place |
 | Auggie | npm | `<nvm prefix>/lib/node_modules/@augmentcode/auggie/` | No: npm rewrites the package tree |
 
-## Levels shipped behind `AO_UPDATE_WHILE_RUNNING`
+## How an update meets running sessions
 
-| Level | Methods | Why |
+Like T3 Code, AO installs the update while sessions run and never touches a
+running process: each keeps the release it loaded. Sessions still on the old
+release are marked, and restart on the new one once idle (chats and
+terminals, at most four at a time, the way Account Manager moves sessions in
+#6274). While the installer runs, no session of that harness starts: a launch
+waits for the update (up to 45s) instead of failing.
+
+| Level | Methods | Running sessions during the update |
 |---|---|---|
-| safe | Claude Code, Cursor, Grok vendor installers; Homebrew formulas | The running release stays on disk (formulas: cleanup deferred while sessions run) |
-| warn | Homebrew casks; other vendor self-updaters | The running release is removed or overwritten; a session may fail on its next lazy load |
-| blocked | npm, Bun, uv, pipx, winget; every method on Windows | Shared trees are rewritten, and Windows cannot replace a running executable |
+| safe | Claude Code, Cursor, Grok vendor installs; Homebrew formulas | Unaffected: the running release stays on disk (formulas: cleanup deferred) |
+| warn | Homebrew casks; other self-updaters; npm, Bun, uv, pipx | May fail on their next lazy load until they restart; they restart once idle |
+| idle | Every method on Windows | The update waits until they are idle, stops them, installs and resumes them |
+| blocked | Only with `AO_UPDATE_WHILE_RUNNING=off` (or Windows with update-when-idle off) | The update waits for them to end |
 
 Grok is listed as safe on the assumption that `grok update` keeps `grok-<v>`;
 move it to warn if 0.5 shows otherwise.
@@ -50,20 +58,20 @@ move it to warn if 0.5 shows otherwise.
   native-resume path, so it relies on the same resume capability idle
   hibernation already uses. 0.2 (new version resumes an old conversation) is
   the remaining risk; `AO_VERSION_REFRESH=off` turns it off.
-- **Terminal (Phase 3A, `AO_TUI_VERSION_REFRESH`, off by default)** restarts
+- **Terminal (Phase 3A, `AO_TUI_VERSION_REFRESH`)** restarts
   only harnesses listed in `tuiVersionRefreshHarnesses`
   (`backend/internal/session_manager/tui_version_refresh.go`): Claude Code and
   Codex for now. Add a harness only after 0.1 and 0.2 pass for it.
-- **Windows (Phase 3B, `AO_WINDOWS_UPDATE_WHEN_IDLE`, off by default)** waits
-  for idle sessions, stops them, updates and resumes them. Needs 0.7 and a
-  Windows QA pass before the default changes.
+- **Windows (Phase 3B, `AO_WINDOWS_UPDATE_WHEN_IDLE`)** waits for idle
+  sessions, stops them, updates and resumes them. 0.7 and a Windows QA pass
+  are still owed.
 
 ## Flags
 
 | Flag | Default | Effect |
 |---|---|---|
-| `AO_UPDATE_WHILE_RUNNING` | on | Safe updates run alongside sessions without asking; warn updates after confirmation |
+| `AO_UPDATE_WHILE_RUNNING` | on | Updates install while sessions run, without asking |
 | `AO_VERSION_REFRESH` | on | Kill switch for moving idle sessions to a new release (Settings toggle applies on top) |
 | `AO_VERSION_REFRESH_IDLE` | 10m | Quiet time before a session moves |
-| `AO_TUI_VERSION_REFRESH` | off | Also restart idle terminal sessions |
-| `AO_WINDOWS_UPDATE_WHEN_IDLE` | off | Windows updates wait for idle sessions instead of refusing |
+| `AO_TUI_VERSION_REFRESH` | on | Also restart idle terminal sessions |
+| `AO_WINDOWS_UPDATE_WHEN_IDLE` | on | Windows updates wait for idle sessions instead of refusing |

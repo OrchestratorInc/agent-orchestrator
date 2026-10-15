@@ -176,13 +176,12 @@ type Config struct {
 	// so a warm prompt cache is not thrown away (AO_VERSION_REFRESH_IDLE).
 	VersionRefreshIdle time.Duration
 	// TUIVersionRefresh also restarts idle terminal sessions on a newly
-	// installed release (AO_TUI_VERSION_REFRESH). Off by default until the
-	// per-harness resume checks pass.
+	// installed release (AO_TUI_VERSION_REFRESH=off disables it).
 	TUIVersionRefresh bool
 	// WindowsUpdateWhenIdle lets a Windows harness update wait until the
 	// harness's sessions are idle, then stop them, update and resume them,
-	// instead of refusing while they run (AO_WINDOWS_UPDATE_WHEN_IDLE). Off by
-	// default until Windows QA passes.
+	// instead of refusing while they run (AO_WINDOWS_UPDATE_WHEN_IDLE=off
+	// disables it).
 	WindowsUpdateWhenIdle bool
 	// StartupWorkingDirectory is the daemon process cwd before startup
 	// normalizes it. The desktop uses this to identify dev daemons after the
@@ -265,6 +264,8 @@ func Load() (Config, error) {
 		UpdateWhileRunning:    true,
 		VersionRefresh:        true,
 		VersionRefreshIdle:    DefaultVersionRefreshIdle,
+		TUIVersionRefresh:     true,
+		WindowsUpdateWhenIdle: true,
 	}
 
 	if raw := os.Getenv("AO_PORT"); raw != "" {

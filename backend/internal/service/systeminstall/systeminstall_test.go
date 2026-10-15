@@ -1288,9 +1288,8 @@ func TestHarnessMaintenanceGateBlocksCodexLaunchThroughWorkerLifetime(t *testing
 	case <-time.After(2 * time.Second):
 		t.Fatal("maintenance worker did not start")
 	}
-	if release, ok := s.TryBeginHarnessUse(domain.HarnessCodex); ok {
-		release()
-		t.Fatal("Codex launch acquired the gate while maintenance worker was running")
+	if !harnessHeld(s, domain.HarnessCodex) {
+		t.Fatal("Codex launch could acquire the gate while maintenance worker was running")
 	}
 	unblock()
 	s.workers.Wait()
@@ -1304,6 +1303,8 @@ func TestHarnessMaintenanceGateBlocksCodexLaunchThroughWorkerLifetime(t *testing
 
 func TestHarnessMaintenanceSeesSessionCreatedBeforeLaunchGateRelease(t *testing.T) {
 	s := newTestService("darwin", "npm")
+	// With AO_UPDATE_WHILE_RUNNING off, the update must see the new session.
+	s.updateWhileRunningDisabled = true
 	// Sessions are checked once the update proves which method owns the copy.
 	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
 	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
@@ -1791,6 +1792,9 @@ func TestHarnessUpdateIsBlockedWhileItsReviewerRuns(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := newTestService("darwin", "npm")
+			// Updates run alongside live work unless AO_UPDATE_WHILE_RUNNING is off;
+			// with it off a reviewer still counts as live work.
+			s.updateWhileRunningDisabled = true
 			// The worker runs Claude Code; only its reviewer uses Codex.
 			s.sessions = sessionListerStub{sessions: []domain.SessionRecord{{ID: "claude-worker", Harness: domain.HarnessClaudeCode}}}
 			s.reviewers = reviewers

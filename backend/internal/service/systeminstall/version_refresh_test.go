@@ -39,13 +39,7 @@ func (o *updateObserverStub) CountStaleBinarySessions(context.Context) (map[doma
 func TestSuccessfulUpdateMarksSessionsWhileHoldingTheHarness(t *testing.T) {
 	s, _ := updateWhileRunningService(t, []domain.SessionRecord{{ID: "kimi-1", Harness: domain.AgentHarness(TargetKimi)}})
 	observer := &updateObserverStub{}
-	observer.gateHeld = func() bool {
-		release, ok := s.TryBeginHarnessUse(domain.AgentHarness(TargetKimi))
-		if ok {
-			release()
-		}
-		return !ok
-	}
+	observer.gateHeld = func() bool { return harnessHeld(s, domain.AgentHarness(TargetKimi)) }
 	s.SetHarnessUpdateObserver(observer)
 	if _, err := s.StartAgentOperationWithSessions(context.Background(), TargetKimi, "homebrew", AgentOperationUpdate, "", true); err != nil {
 		t.Fatal(err)

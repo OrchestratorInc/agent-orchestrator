@@ -545,6 +545,12 @@ type Manager struct {
 	terminalInputGate   TerminalInputGate
 	// updateStops holds input gates of terminals stopped for an update.
 	updateStops updateStops
+	// versionRetries are sessions a version move could not start again.
+	versionRetries versionRetries
+	// versionPolicy says whether and when sessions move to a new release;
+	// nil means they do not (see SetVersionRefreshPolicy).
+	versionPolicyMu sync.Mutex
+	versionPolicy   func() VersionRefreshPolicy
 	// versionTelemetry receives version-move events; nil drops them.
 	versionTelemetryMu sync.Mutex
 	versionTelemetry   ports.EventSink

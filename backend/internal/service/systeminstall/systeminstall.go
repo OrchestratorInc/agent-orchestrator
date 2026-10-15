@@ -406,6 +406,9 @@ type Service struct {
 	updateWhileRunningDisabled bool
 	// windowsUpdateWhenIdle turns Windows' blocked level into update-when-idle.
 	windowsUpdateWhenIdle bool
+	// changing marks harnesses whose installation is being changed, so a
+	// launch waits for the change instead of failing.
+	changing map[Target]bool
 	// idleUpdates are the waiting or running update-when-idle runs.
 	idleUpdates map[Target]*idleUpdateRun
 	// idleCoordinator stops and resumes a harness's sessions around such a run.
@@ -715,7 +718,11 @@ func (s *Service) StartAgentOperationWithSessions(ctx context.Context, target Ta
 		if !gate.TryLock() {
 			return Job{}, &HarnessActiveError{Target: target, Starting: true, Level: UpdateWhileRunningBlocked}
 		}
-		releaseHarness = gate.Unlock
+		s.setHarnessChanging(target, true)
+		releaseHarness = func() {
+			s.setHarnessChanging(target, false)
+			gate.Unlock()
+		}
 		defer func() {
 			if releaseHarness != nil {
 				releaseHarness()
@@ -928,7 +935,7 @@ func (s *Service) harnessGate(harness domain.AgentHarness) *sync.RWMutex {
 // update advisory.
 func (s *Service) TryBeginHarnessUse(harness domain.AgentHarness) (func(), bool) {
 	gate := s.harnessGate(harness)
-	if !gate.TryRLock() && !s.waitForIdleBatch(Target(harness), gate) {
+	if !gate.TryRLock() && !s.waitForHarnessChange(Target(harness), gate) {
 		return nil, false
 	}
 	if IsAgentTarget(Target(harness)) {

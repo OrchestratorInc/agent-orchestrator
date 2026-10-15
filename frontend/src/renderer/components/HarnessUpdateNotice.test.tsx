@@ -430,23 +430,13 @@ describe("harness updates while sessions run", () => {
 		expect(installs[0].body).toEqual({ method: "official-installer", operation: "update", expectedVersion: "2.1.292" });
 	});
 
-	it("asks before an update that may disturb open sessions, then sends that consent", async () => {
-		advisories["claude-code"] = { ...claudeAdvisory, inUse: { liveSessions: 2, sessionIds: ["s1", "s2"], level: "warn" } };
-		mountNotice();
-		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
-		const dialog = await screen.findByRole("dialog");
-		expect(dialog).toHaveTextContent("Update Claude Code while it's in use?");
-		expect(installs).toHaveLength(0);
-		await userEvent.click(within(dialog).getByRole("button", { name: "Update anyway" }));
-		await waitFor(() => expect(installs).toHaveLength(1));
-		expect(installs[0].body).toEqual({ method: "official-installer", operation: "update", expectedVersion: "2.1.292", allowRunningSessions: true });
-	});
-
-	it("warns that a replacing installer may interrupt open sessions", async () => {
+	it("updates even when the installer replaces the release open sessions run", async () => {
 		advisories["claude-code"] = { ...claudeAdvisory, inUse: { liveSessions: 1, sessionIds: ["s1"], level: "warn" } };
 		mountNotice();
 		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
-		expect(await screen.findByRole("dialog")).toHaveTextContent("Claude Code's installer replaces the version 1 open session is running. It may stop working until it restarts");
+		await waitFor(() => expect(installs).toHaveLength(1));
+		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(installs[0].body).toEqual({ method: "official-installer", operation: "update", expectedVersion: "2.1.292" });
 	});
 
 	it("offers the sessions to end instead of an update that cannot run alongside them", async () => {
@@ -478,40 +468,17 @@ describe("harness updates while sessions run", () => {
 		await waitFor(() => expect(installs.map((install) => install.body.allowRunningSessions)).toEqual([undefined, true]));
 	});
 
-	it("confirms Update all once, skips harnesses whose sessions must end, and summarizes", async () => {
+	it("updates all without asking, skips harnesses whose sessions must end, and summarizes", async () => {
 		advisories = {
 			"claude-code": { ...claudeAdvisory, inUse: { liveSessions: 2, sessionIds: ["s1", "s2"], level: "warn" } },
 			codex: { ...claudeAdvisory, agentId: "codex", inUse: { liveSessions: 2, sessionIds: ["s3", "s4"], level: "blocked" } },
-			cursor: { ...claudeAdvisory, agentId: "cursor" },
+			cursor: { ...claudeAdvisory, agentId: "cursor", inUse: { liveSessions: 1, sessionIds: ["s5"], level: "idle" } },
 		};
 		mountNotice();
 		await userEvent.click(await screen.findByRole("button", { name: "Update all" }));
-		// One harness needs consent, so the one confirmation names it.
-		const dialog = await screen.findByRole("dialog");
-		expect(dialog).toHaveTextContent("Update Claude Code while it's in use?");
-		expect(dialog).not.toHaveTextContent("Codex");
-		expect(installs).toHaveLength(0);
-		await userEvent.click(within(dialog).getByRole("button", { name: "Update anyway" }));
 		await waitFor(() => expect(installs.map((install) => install.agent).sort()).toEqual(["claude-code", "cursor"]));
-		expect(installs.find((install) => install.agent === "claude-code")?.body.allowRunningSessions).toBe(true);
-		expect(installs.find((install) => install.agent === "cursor")?.body).not.toHaveProperty("allowRunningSessions");
-		expect(await screen.findByText("Updating 2 · Skipped Codex (2)")).toBeInTheDocument();
-	});
-
-	it("lists every harness one Update all confirmation covers", async () => {
-		advisories = {
-			"claude-code": { ...claudeAdvisory, inUse: { liveSessions: 2, sessionIds: ["s1", "s2"], level: "idle" } },
-			codex: { ...claudeAdvisory, agentId: "codex", maintenanceMethod: "official-installer", inUse: { liveSessions: 1, sessionIds: ["s3"], level: "warn" } },
-		};
-		mountNotice();
-		await userEvent.click(await screen.findByRole("button", { name: "Update all" }));
-		const dialog = await screen.findByRole("dialog");
-		expect(dialog).toHaveTextContent("Update harnesses that are in use?");
-		expect(dialog).toHaveTextContent("2 sessions restart when idle");
-		expect(dialog).toHaveTextContent("1 session may be interrupted");
-		await userEvent.click(within(dialog).getByRole("button", { name: "Update anyway" }));
-		await waitFor(() => expect(installs.map((install) => install.body.allowRunningSessions)).toEqual([true, true]));
 		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(await screen.findByText("Updating 2 · Skipped Codex (2)")).toBeInTheDocument();
 	});
 
 	it("explains a Windows update waiting for idle sessions and lets the user cancel it", async () => {
@@ -532,13 +499,11 @@ describe("harness updates while sessions run", () => {
 		expect(await screen.findByRole("dialog", { name: "Sessions using Claude Code" })).toBeInTheDocument();
 	});
 
-	it("words the confirmation for an update that waits for idle sessions", async () => {
+	it("starts a Windows update that waits for idle sessions without asking", async () => {
 		advisories["claude-code"] = { ...claudeAdvisory, inUse: { liveSessions: 1, sessionIds: ["s1"], level: "idle" } };
 		mountNotice();
 		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
-		const dialog = await screen.findByRole("dialog");
-		expect(dialog).toHaveTextContent("AO will wait until the 1 open session is idle");
-		await userEvent.click(within(dialog).getByRole("button", { name: "Update when idle" }));
-		await waitFor(() => expect(installs[0]?.body.allowRunningSessions).toBe(true));
+		await waitFor(() => expect(installs).toHaveLength(1));
+		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 });

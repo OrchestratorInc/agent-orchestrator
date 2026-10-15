@@ -72,9 +72,11 @@ func liveSession(session domain.SessionRecord) bool {
 // updateWhileRunningLevel classifies an update method by what its installer
 // does to the version open sessions run. Vendor installers that keep each
 // release in its own directory, and Homebrew formulas with cleanup deferred,
-// leave the running release in place. Casks and other self-updaters replace
-// it. Package managers that rewrite a shared tree, and every Windows
-// installer, which cannot replace a running executable, require sessions to end.
+// leave the running release in place (safe). Casks, other self-updaters and
+// package managers that rewrite a shared tree replace it (warn): the update
+// still runs, and the sessions on the old release restart on the new one once
+// idle. Windows cannot replace a running executable at all, so its updates
+// wait for idle sessions and restart them around the install.
 func updateWhileRunningLevel(goos string, target Target, method string, cask bool) UpdateWhileRunning {
 	if goos == "windows" {
 		return UpdateWhileRunningBlocked
@@ -89,6 +91,8 @@ func updateWhileRunningLevel(goos string, target Target, method string, cask boo
 		if versionedVendorInstalls[target] {
 			return UpdateWhileRunningSafe
 		}
+		return UpdateWhileRunningWarn
+	case "npm", "bun", "uv", "pipx":
 		return UpdateWhileRunningWarn
 	default:
 		return UpdateWhileRunningBlocked
@@ -163,13 +167,14 @@ func uniqueSessionIDs(ids []domain.SessionID) []domain.SessionID {
 // returns whether the operation proceeds with live sessions, which callers use
 // to keep the previous release on disk where the installer allows it.
 //
-//	live  level      consent  result
-//	0     any        any      run
-//	>0    safe       any      run (the running release stays on disk)
-//	>0    warn/idle  no       HarnessActiveError{NeedsConsent}
-//	>0    warn       yes      run
-//	>0    idle       yes      wait for idle sessions (errUpdateWhenIdle)
-//	>0    blocked    any      HarnessActiveError
+//	live  level      result
+//	0     any        run
+//	>0    safe/warn  run; sessions on the old release restart on the new one once idle
+//	>0    idle       wait for idle sessions, then stop, update, resume (errUpdateWhenIdle)
+//	>0    blocked    HarnessActiveError (AO_UPDATE_WHILE_RUNNING=off, a reinstall,
+//	                 or Windows without update-when-idle)
+//
+// allowRunningSessions is kept for older clients; no level needs it any more.
 func (s *Service) gateRunningSessions(ctx context.Context, target Target, operation AgentOperation, plan Plan, allowRunningSessions bool) (bool, error) {
 	sessions, reviewers, err := s.harnessInUse(ctx, target)
 	if err != nil {
@@ -186,18 +191,12 @@ func (s *Service) gateRunningSessions(ctx context.Context, target Target, operat
 	if level == UpdateWhileRunningBlocked {
 		return false, active
 	}
-	if level == UpdateWhileRunningSafe {
-		// Nothing the open sessions run is touched, and they move to the new
-		// release on their own once idle, so there is nothing to ask.
-		return true, nil
-	}
-	if !allowRunningSessions {
-		active.NeedsConsent = true
-		return false, active
-	}
 	if level == UpdateWhileRunningIdle {
 		return false, errUpdateWhenIdle
 	}
+	// Like T3 Code, install now and leave running processes alone: they keep
+	// the release they loaded and restart on the new one once idle.
+	_ = allowRunningSessions
 	return true, nil
 }
 

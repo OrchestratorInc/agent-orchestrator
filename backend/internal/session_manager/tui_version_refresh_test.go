@@ -8,11 +8,11 @@ import (
 )
 
 type viewerGate struct {
-	viewers int
+	onScreen bool
 }
 
 func (g *viewerGate) BeginInputDrain(string) (time.Time, func()) { return time.Time{}, func() {} }
-func (g *viewerGate) AttachedClients(string) int                 { return g.viewers }
+func (g *viewerGate) TerminalOnScreen(string) bool               { return g.onScreen }
 
 func TestTerminalRestartWaitsForEveryBlocker(t *testing.T) {
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
@@ -50,8 +50,8 @@ func TestTerminalRestartWaitsForEveryBlocker(t *testing.T) {
 			t.Fatalf("%s: restart was allowed", name)
 		}
 	}
-	gate.viewers = 1
+	gate.onScreen = true
 	if mgr.terminalRestartEligible(base, 10*time.Minute) {
-		t.Fatal("restarted a terminal someone is watching")
+		t.Fatal("restarted a terminal shown on screen")
 	}
 }

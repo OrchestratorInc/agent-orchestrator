@@ -17702,14 +17702,14 @@ components:
     StartAgentInstallRequest:
       properties:
         allowRunningSessions:
-          description: For updates, the user's consent to update while sessions using
-            this harness stay open. A safe update (the running release stays on disk)
-            runs alongside live sessions without it. Without it, a warn update (the
-            installer may disturb running sessions) or an idle update (waits for idle
-            sessions, then restarts them) returns 409 HARNESS_IN_USE_CONFIRM, and
-            a blocked update, or one meeting a session that is starting, returns 409
-            HARNESS_ACTIVE. Both 409s carry details {count, sessionIds, reviewerSessionIds,
-            level, starting}. Consent never unblocks a blocked update.
+          description: 'For updates, the user''s consent to update while sessions
+            using this harness stay open. Accepted for older clients and no longer
+            required: an update runs alongside live sessions, which restart on the
+            new release once idle, and on Windows it waits for them to be idle (202
+            waiting_for_idle). 409 HARNESS_ACTIVE remains for AO_UPDATE_WHILE_RUNNING=off,
+            a reinstall, or a session that is starting. Both 409s carry details {count,
+            sessionIds, reviewerSessionIds, level, starting}. Consent never unblocks
+            a blocked update.'
           type: boolean
         expectedVersion:
           description: For updates, the available version explicitly approved by the

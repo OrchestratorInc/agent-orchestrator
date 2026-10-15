@@ -151,15 +151,17 @@ export type HarnessUpdateStart = { job?: InstallJob; error?: string; inUse?: Har
 
 /**
  * What the Update button does for the sessions the advisory saw: update right
- * away, ask first, or list them. A safe update keeps the running release on
- * disk and open sessions move to the new one on their own, so it never asks.
+ * away, or list the sessions that must end first. Like T3 Code, an update
+ * installs while sessions run; they restart on the new release once idle (on
+ * Windows the daemon waits for them first). Only "blocked" (update-while-running
+ * turned off, or an older daemon) still lists them. A daemon that still asks
+ * for consent answers HARNESS_IN_USE_CONFIRM, which opens the confirmation.
  */
 export type HarnessUpdateAction = "update" | "confirm" | "blocked";
 
 export function harnessUpdateAction(advisory?: Pick<AgentUpdateAdvisory, "inUse">): HarnessUpdateAction {
 	const inUse = advisory?.inUse;
-	if (!inUse || inUse.liveSessions <= 0 || inUse.level === "safe") return "update";
-	return inUse.level === "blocked" ? "blocked" : "confirm";
+	return inUse && inUse.liveSessions > 0 && inUse.level === "blocked" ? "blocked" : "update";
 }
 
 /** The advisory's view of the sessions in use, in the shape a refused update reports. */

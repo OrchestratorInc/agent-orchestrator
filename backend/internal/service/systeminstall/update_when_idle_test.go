@@ -110,17 +110,13 @@ func waitForJob(t *testing.T, s *Service, target Target, done func(Job) bool) Jo
 	return job
 }
 
-func TestWindowsUpdateAsksThenWaitsForIdleSessions(t *testing.T) {
+func TestWindowsUpdateWaitsForIdleSessions(t *testing.T) {
 	s, coordinator, ran := windowsIdleService(t, false)
 	coordinator.busy = []domain.SessionWait{{SessionID: "auggie-1", Reason: domain.SessionWaitCommand}}
-	_, err := s.StartAgentOperation(context.Background(), TargetAuggie, "npm", AgentOperationUpdate, "")
-	var active *HarnessActiveError
-	if !errors.As(err, &active) || !active.NeedsConsent || active.Level != UpdateWhileRunningIdle {
-		t.Fatalf("update without consent = %v, want a confirmation for level idle", err)
-	}
-	job, err := s.StartAgentOperationWithSessions(context.Background(), TargetAuggie, "npm", AgentOperationUpdate, "", true)
+	// No confirmation: the update just waits for the sessions.
+	job, err := s.StartAgentOperation(context.Background(), TargetAuggie, "npm", AgentOperationUpdate, "")
 	if err != nil || job.Status != StatusWaitingForIdle {
-		t.Fatalf("update with consent = %+v, %v; want waiting_for_idle", job, err)
+		t.Fatalf("update = %+v, %v; want waiting_for_idle", job, err)
 	}
 	// While a session runs a command, nothing is stopped and npm never runs.
 	waiting := waitForJob(t, s, TargetAuggie, func(job Job) bool { return len(job.WaitingOn) == 1 })
@@ -209,13 +205,14 @@ func TestIdleUpdateNeverRunsNPMWhileASessionStillRuns(t *testing.T) {
 	s.workers.Wait()
 }
 
-func TestLaunchWaitsForAnIdleUpdateBatchInsteadOfFailing(t *testing.T) {
+func TestLaunchWaitsForAHarnessChangeInsteadOfFailing(t *testing.T) {
 	s := newTestService("windows")
 	gate := s.harnessGate(domain.AgentHarness(TargetAuggie))
 	gate.Lock()
-	s.idleUpdates = map[Target]*idleUpdateRun{TargetAuggie: {cancelled: make(chan struct{}), running: true}}
+	s.setHarnessChanging(TargetAuggie, true)
 	go func() {
 		time.Sleep(300 * time.Millisecond)
+		s.setHarnessChanging(TargetAuggie, false)
 		gate.Unlock()
 	}()
 	started := time.Now()

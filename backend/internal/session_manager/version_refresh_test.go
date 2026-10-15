@@ -2,6 +2,8 @@ package sessionmanager
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -77,5 +79,41 @@ func TestRefreshStaleChatsSkipsSessionsInAnotherOperation(t *testing.T) {
 	}
 	if want := before.Add(-10 * time.Minute); stale.idleBefore.Before(want.Add(-time.Second)) || stale.idleBefore.After(want.Add(time.Second)) {
 		t.Fatalf("idle cutoff = %s, want about %s", stale.idleBefore, want)
+	}
+}
+
+func TestForEachVersionMoveRunsAtMostFourAtOnce(t *testing.T) {
+	mgr, _, _ := newChatManager(&recordingLauncher{})
+	ids := make([]domain.SessionID, 10)
+	for i := range ids {
+		ids[i] = domain.SessionID(fmt.Sprintf("s%d", i))
+	}
+	var running, peak atomic.Int32
+	err := mgr.forEachVersionMove(context.Background(), ids, func(context.Context, domain.SessionID) error {
+		now := running.Add(1)
+		for {
+			old := peak.Load()
+			if now <= old || peak.CompareAndSwap(old, now) {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+		running.Add(-1)
+		return nil
+	})
+	if err != nil || peak.Load() > maxConcurrentVersionMoves || peak.Load() < 2 {
+		t.Fatalf("peak = %d, err = %v; want 2..%d", peak.Load(), err, maxConcurrentVersionMoves)
+	}
+}
+
+func TestRetryVersionMovesForgetsSessionsThatAreBack(t *testing.T) {
+	mgr, store, _ := newChatManager(&recordingLauncher{})
+	seedChatResumeSession(store, domain.ActivityIdle)
+	mgr.versionRetries.note("mer-1")
+	if err := mgr.RetryVersionMoves(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if pending := mgr.versionRetries.pending(); len(pending) != 0 {
+		t.Fatalf("pending = %v; a running session needs no retry", pending)
 	}
 }

@@ -171,17 +171,19 @@ func (m *Manager) BeginInputDrain(terminalID string) (lastInputAt time.Time, rel
 	}
 }
 
-// AttachedClients counts the clients (desktop, mobile or remote) currently
-// attached to terminalID. A closed tab or dropped connection leaves on its
-// own, and a dead connection is reaped by the heartbeat, so this works as a
-// view lease without a separate expiry.
-func (m *Manager) AttachedClients(terminalID string) int {
+// TerminalOnScreen reports whether a client is showing the terminal. A client
+// without a grid keeps it parked off screen: it attached without one, or gave
+// it up with a 0x0 resize when its pane or window was hidden. (Same signal as
+// Account Manager's session moves, #6274.)
+func (m *Manager) TerminalOnScreen(terminalID string) bool {
 	m.sharedMu.Lock()
 	defer m.sharedMu.Unlock()
-	if s := m.shared[terminalID]; s != nil {
-		return len(s.members)
+	s := m.shared[terminalID]
+	if s == nil {
+		return false
 	}
-	return 0
+	cols, rows := largestGrid(s.members)
+	return cols > 0 && rows > 0
 }
 
 func (m *Manager) writeInput(terminalID string, a *attachment, raw []byte, release func()) {

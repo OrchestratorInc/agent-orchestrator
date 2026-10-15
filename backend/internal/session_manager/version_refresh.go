@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -68,13 +69,12 @@ func (m *Manager) RefreshStaleChats(ctx context.Context, minIdle time.Duration, 
 	if err != nil {
 		return err
 	}
-	var errs []error
-	for _, id := range ids {
+	return m.forEachVersionMove(ctx, ids, func(ctx context.Context, id domain.SessionID) error {
 		if err := m.refreshStaleChat(ctx, refresher, id, minIdle, wake); err != nil {
-			errs = append(errs, fmt.Errorf("move chat %s to the installed release: %w", id, err))
+			return fmt.Errorf("move chat %s to the installed release: %w", id, err)
 		}
-	}
-	return errors.Join(errs...)
+		return nil
+	})
 }
 
 func (m *Manager) refreshStaleChat(ctx context.Context, refresher versionRefresher, id domain.SessionID, minIdle time.Duration, wake bool) error {
@@ -96,4 +96,114 @@ func (m *Manager) refreshStaleChat(ctx context.Context, refresher versionRefresh
 	// The wake, if any, runs in the background and waits for this claim.
 	_, err = refresher.SwitchToInstalledRelease(operationCtx, id, minIdle, wake)
 	return err
+}
+
+// maxConcurrentVersionMoves bounds sessions restarted at once, as Account
+// Manager's session moves do (#6274): each restart starts a provider process.
+const maxConcurrentVersionMoves = 4
+
+// forEachVersionMove runs move for each session, at most four at a time.
+func (m *Manager) forEachVersionMove(ctx context.Context, ids []domain.SessionID, move func(context.Context, domain.SessionID) error) error {
+	slots := make(chan struct{}, maxConcurrentVersionMoves)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var errs []error
+	for _, id := range ids {
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+			wg.Wait()
+			return errors.Join(append(errs, ctx.Err())...)
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-slots }()
+			if err := move(ctx, id); err != nil {
+				mu.Lock()
+				errs = append(errs, err)
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	return errors.Join(errs...)
+}
+
+// versionRetries remembers sessions a version move stopped but could not
+// start again, so every sweep tries to resume them, as #6274 does for its
+// moves, instead of leaving them stopped until the user notices.
+type versionRetries struct {
+	mu       sync.Mutex
+	attempts map[domain.SessionID]int
+}
+
+// maxVersionResumeAttempts gives up on a session whose resume keeps failing;
+// its switchFailedAt notice then asks the user to resume it.
+const maxVersionResumeAttempts = 10
+
+func (r *versionRetries) note(id domain.SessionID) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.attempts == nil {
+		r.attempts = make(map[domain.SessionID]int)
+	}
+	if _, ok := r.attempts[id]; !ok {
+		r.attempts[id] = 0
+	}
+}
+
+func (r *versionRetries) pending() []domain.SessionID {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ids := make([]domain.SessionID, 0, len(r.attempts))
+	for id := range r.attempts {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// attempt counts one try and reports whether another is allowed.
+func (r *versionRetries) attempt(id domain.SessionID) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.attempts[id]++
+	if r.attempts[id] > maxVersionResumeAttempts {
+		delete(r.attempts, id)
+		return false
+	}
+	return true
+}
+
+func (r *versionRetries) done(id domain.SessionID) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.attempts, id)
+}
+
+// RetryVersionMoves resumes sessions a version move stopped but could not
+// start again. A session that came back on its own, was resumed by the user,
+// or was ended no longer needs it.
+func (m *Manager) RetryVersionMoves(ctx context.Context) error {
+	var errs []error
+	for _, id := range m.versionRetries.pending() {
+		rec, err := m.getRecord(ctx, id)
+		if err != nil || rec.IsTerminated || rec.Activity.State != domain.ActivityExited {
+			m.versionRetries.done(id)
+			continue
+		}
+		if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat && m.chat != nil && m.chat.HasLiveChatController(id) {
+			m.versionRetries.done(id)
+			continue
+		}
+		if !m.versionRetries.attempt(id) {
+			continue
+		}
+		if _, err := m.ResumeAgentWithMode(ctx, id); err != nil {
+			errs = append(errs, fmt.Errorf("resume %s after a failed version move: %w", id, err))
+			continue
+		}
+		m.versionRetries.done(id)
+	}
+	return errors.Join(errs...)
 }

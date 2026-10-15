@@ -38,9 +38,10 @@ const (
 	idleUpdatePoll = 10 * time.Second
 	// idleUpdateMaxWait gives up on sessions that never become idle.
 	idleUpdateMaxWait = 12 * time.Hour
-	// harnessUseWait is how long a launch waits for an update-when-idle run
-	// to finish instead of failing.
-	harnessUseWait = 90 * time.Second
+	// harnessUseWait is how long a launch waits for an install, update or
+	// update-when-idle run to finish instead of failing. It stays under the
+	// API request timeout, so a spawn request answers either way.
+	harnessUseWait = 45 * time.Second
 )
 
 type idleUpdateRun struct {
@@ -177,10 +178,12 @@ func (s *Service) runIdleBatch(ctx context.Context, coordinator IdleUpdateCoordi
 	}
 	run.running = true
 	s.mu.Unlock()
+	s.setHarnessChanging(target, true)
 	release := func() {
 		s.mu.Lock()
 		run.running = false
 		s.mu.Unlock()
+		s.setHarnessChanging(target, false)
 		gate.Unlock()
 	}
 	stopped, err := coordinator.StopHarnessSessions(ctx, domain.AgentHarness(target))
@@ -277,12 +280,26 @@ func (s *Service) CancelAgentOperation(ctx context.Context, target Target) (Job,
 	return *job, nil
 }
 
-// waitForIdleBatch lets a launch that found the harness held by an
-// update-when-idle run wait for it, up to harnessUseWait, instead of failing.
-func (s *Service) waitForIdleBatch(target Target, gate *sync.RWMutex) bool {
+func (s *Service) setHarnessChanging(target Target, changing bool) {
 	s.mu.Lock()
-	run := s.idleUpdates[target]
-	waiting := run != nil && run.running
+	defer s.mu.Unlock()
+	if s.changing == nil {
+		s.changing = make(map[Target]bool)
+	}
+	if changing {
+		s.changing[target] = true
+	} else {
+		delete(s.changing, target)
+	}
+}
+
+// waitForHarnessChange lets a launch that found the harness held by an
+// install, update or update-when-idle run wait for it, up to harnessUseWait,
+// instead of failing: no session starts on a binary being replaced, and none
+// is refused just because an update happened to be running.
+func (s *Service) waitForHarnessChange(target Target, gate *sync.RWMutex) bool {
+	s.mu.Lock()
+	waiting := s.changing[target]
 	s.mu.Unlock()
 	if !waiting {
 		return false

@@ -1111,18 +1111,16 @@ describe("HarnessSettingsSection", () => {
 		for (const [, options] of requests) expect(options).toMatchObject({ body: { method: "npm", operation: "update" } });
 	});
 
-	it("asks before updating a harness that open sessions use and sends the consent", async () => {
+	it("updates without asking when the installer replaces the running release", async () => {
 		mockInstalledOperations("npm", readyCatalog(), { liveSessions: 2, sessionIds: ["s1", "s2"], level: "warn" });
 		renderSection();
 		const row = await findAgentRow("codex");
 		await userEvent.click(await within(row).findByRole("button", { name: "Update" }));
-		const dialog = await screen.findByRole("dialog", { name: "Update Codex while it's in use?" });
-		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
-		await userEvent.click(within(dialog).getByRole("button", { name: "Update anyway" }));
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", {
 			params: { path: { agent: "codex" } },
-			body: { method: "npm", operation: "update", expectedVersion: "1.3.0", allowRunningSessions: true },
+			body: { method: "npm", operation: "update", expectedVersion: "1.3.0" },
 		}));
+		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 
 	it("updates without asking when the installer keeps the running release", async () => {
