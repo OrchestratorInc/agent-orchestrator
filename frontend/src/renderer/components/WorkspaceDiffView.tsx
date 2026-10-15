@@ -61,7 +61,7 @@ export function cancelFileAnnotations(annotation: FileAnnotationModel, match: (t
 }
 
 export function fileAnnotationKey(target: ActiveFileAnnotationTarget): string {
-	return [target.surface ?? "", target.scope ?? "", target.side, target.line ?? "", target.path].join("\u0000");
+	return [target.surface ?? "", target.scope ?? "", target.side, target.line ?? "", target.path, target.quote ?? ""].join("\u0000");
 }
 
 // Split (old | new) view only means something when both sides have content to
@@ -737,7 +737,9 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 	}, [fitHeight, target]);
 	const side = target.side === "file" ? "" : t(target.side === "old" ? "files.oldSide" : "files.newSide");
 	const targetLabel =
-		target.side === "file"
+		target.quote != null
+			? t("files.selectionFeedbackTarget", { file: target.path })
+			: target.side === "file"
 			? t("files.fileFeedbackTarget", { file: target.path })
 			: t("files.lineFeedbackTarget", { file: target.path, line: target.line, side });
 	const status = annotation.statusFor(target);

@@ -81,6 +81,23 @@ func (m *Manager) RunBackgroundTask(
 	if !ok {
 		return "", ports.ErrChatUnsupported
 	}
+	return m.runBackgroundTask(ctx, id, systemPrompt, prompt, runner.RunBackgroundTask)
+}
+
+// RunPromptSuggestionTask preserves the requested turn's native context when available.
+func (m *Manager) RunPromptSuggestionTask(ctx context.Context, id domain.SessionID, turnID, systemPrompt, prompt string) (string, error) {
+	runner, ok := m.chat.(interface {
+		RunPromptSuggestionTask(context.Context, domain.SessionID, string, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)
+	})
+	if !ok {
+		return m.RunBackgroundTask(ctx, id, systemPrompt, prompt)
+	}
+	return m.runBackgroundTask(ctx, id, systemPrompt, prompt, func(ctx context.Context, harness domain.AgentHarness, cfg ports.ChatStartConfig, prompt string) (string, error) {
+		return runner.RunPromptSuggestionTask(ctx, id, turnID, harness, cfg, prompt)
+	})
+}
+
+func (m *Manager) runBackgroundTask(ctx context.Context, id domain.SessionID, systemPrompt, prompt string, run func(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)) (string, error) {
 	rec, err := m.getRecord(ctx, id)
 	if err != nil {
 		return "", err
@@ -110,7 +127,7 @@ func (m *Manager) RunBackgroundTask(
 	defer func() { _ = os.RemoveAll(workspace) }()
 
 	config := ports.AgentConfig{
-		Model: rec.Metadata.Model, Effort: rec.Metadata.Effort, Permissions: backgroundTaskPermissions(rec.Harness),
+		Model: rec.Metadata.Model, Permissions: backgroundTaskPermissions(rec.Harness),
 	}
 	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, nil)
 	if m.agents != nil {
@@ -123,7 +140,7 @@ func (m *Manager) RunBackgroundTask(
 	deleteProtectedEnv(env, EnvSessionID, envKeysCaseInsensitive)
 	pinRuntimePermissionEnv(env, config.Permissions)
 
-	return runner.RunBackgroundTask(ctx, rec.Harness, ports.ChatStartConfig{
+	return run(ctx, rec.Harness, ports.ChatStartConfig{
 		DataDir:       m.dataDir,
 		WorkspacePath: workspace,
 		Env:           env,

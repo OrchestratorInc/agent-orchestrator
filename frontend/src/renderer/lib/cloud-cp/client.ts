@@ -234,6 +234,17 @@ export interface CloudCpClient {
 		templateId: string,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpCoderTemplateParametersResponse>;
+	/**
+	 * A Coder template's parameters with draft values applied, so a parameter
+	 * the template declares only for some value of another appears once it
+	 * applies. An older control plane without the route answers 404 or 405.
+	 */
+	evaluateCoderTemplateParameters(
+		orgId: string,
+		templateId: string,
+		values: Readonly<Record<string, string>>,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpCoderTemplateParametersResponse>;
 	/** Reads the org's bring-your-own-Coder connection (non-secret fields only; the API token is never returned). */
 	getOrgCoderConfig(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpOrgCoderConfigResponse>;
 	/** The org's plan, its limits, and usage against them. */
@@ -709,6 +720,11 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("GET", `/orgs/${seg(orgId)}/sandbox/coder/templates`, { signal: o?.signal }),
 		getCoderTemplateParameters: (orgId, templateId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/coder-templates/${seg(templateId)}/parameters`, { signal: o?.signal }),
+		evaluateCoderTemplateParameters: (orgId, templateId, values, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/coder-templates/${seg(templateId)}/parameters/evaluate`, {
+				body: { values },
+				signal: o?.signal,
+			}),
 		getOrgCoderConfig: (orgId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/coder-config`, { signal: o?.signal }),
 		getBilling: (orgId, o) => requestJson("GET", `/orgs/${seg(orgId)}/billing`, { signal: o?.signal }),

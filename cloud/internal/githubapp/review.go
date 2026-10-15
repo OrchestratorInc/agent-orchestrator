@@ -71,8 +71,8 @@ func (s *Service) CancelReviewRuns(ctx context.Context, orgID, sessionID string,
 
 func reviewPrompt(reviewRunID string, pr domain.PullRequest) string {
 	return fmt.Sprintf(
-		"You are AO's automated reviewer for one pull request: %s, #%d: %q, "+
-			"%s into %s. This is a fresh session with no prior context — you did not "+
+		"You are AO's native reviewer for one implementation pull request owned by an AO worker: %s, #%d: %q, "+
+			"%s into %s. This is a fresh session with no prior context; you did not "+
 			"write this change. Start by running `git diff %s...%s` (and `git log`, `git show` "+
 			"as needed) in the current workspace to see exactly what changed, then review it "+
 			"for correctness bugs, missing error handling, security issues, test coverage, and "+

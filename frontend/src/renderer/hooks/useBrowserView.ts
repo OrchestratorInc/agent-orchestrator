@@ -816,13 +816,14 @@ export function useBrowserView({
 				const state = await window.ao!.browser.selectTab({ viewId, tabId });
 				if (viewIdRef.current === state.viewId) setTabsState(state);
 			} catch {
-				// Fire-and-forget from the rail (`void onSelectTab(...)`) — without
-				// this the click just silently does nothing, with no way to tell a
-				// slow response from a dead button.
-				showTabNotice("Couldn't switch to that tab");
+				// The native view may already have switched before automation
+				// synchronization fails. Read the actual selection back instead of
+				// showing a misleading switch-failure notice in the toolbar.
+				const state = await window.ao!.browser.getTabs(viewId).catch(() => undefined);
+				if (state && viewIdRef.current === state.viewId) setTabsState(state);
 			}
 		},
-		[hasNativeBrowser, showTabNotice],
+		[hasNativeBrowser],
 	);
 
 	const closeTab = useCallback(

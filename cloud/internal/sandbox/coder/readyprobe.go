@@ -203,6 +203,15 @@ func (c *Client) runReadyProbe(ctx context.Context, ptyURL *url.URL) (readyProbe
 }
 
 func (c *Client) runReadyProbeOnce(ctx context.Context, ptyURL *url.URL) (readyProbeResult, error) {
+	result, _, err := c.runMarkedCommandOnce(ctx, ptyURL, readyProbeMarker, readyProbeAttemptWait)
+	return result, err
+}
+
+// runMarkedCommandOnce opens the agent PTY for a command that prints its
+// output and then a "<marker>:<status>" line, and returns the output before
+// the marker, the status parsed as an exit code (-1 when it is not a number),
+// and the raw status. It waits at most wait for the marker.
+func (c *Client) runMarkedCommandOnce(ctx context.Context, ptyURL *url.URL, marker string, wait time.Duration) (readyProbeResult, string, error) {
 	attemptURL := *ptyURL
 	query := attemptURL.Query()
 	query.Set("reconnect", uuid.NewString())
@@ -213,9 +222,9 @@ func (c *Client) runReadyProbeOnce(ctx context.Context, ptyURL *url.URL) (readyP
 	if err != nil {
 		if response != nil {
 			response.Body.Close()
-			return readyProbeResult{}, fmt.Errorf("%w: open workspace PTY returned %d", errTerminalNotReady, response.StatusCode)
+			return readyProbeResult{}, "", fmt.Errorf("%w: open workspace PTY returned %d", errTerminalNotReady, response.StatusCode)
 		}
-		return readyProbeResult{}, fmt.Errorf("%w: open workspace PTY: %v", errTerminalNotReady, err)
+		return readyProbeResult{}, "", fmt.Errorf("%w: open workspace PTY: %v", errTerminalNotReady, err)
 	}
 	streamCtx, stopStream := context.WithCancel(ctx)
 	netConn := websocket.NetConn(streamCtx, conn, websocket.MessageBinary)
@@ -225,26 +234,27 @@ func (c *Client) runReadyProbeOnce(ctx context.Context, ptyURL *url.URL) (readyP
 		_ = conn.CloseNow()
 		<-outputDone
 	}()
-	timer := time.NewTimer(readyProbeAttemptWait)
+	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	var collected strings.Builder
 	for {
 		select {
 		case <-ctx.Done():
-			return readyProbeResult{}, ctx.Err()
+			return readyProbeResult{}, "", ctx.Err()
 		case <-timer.C:
-			return readyProbeResult{}, fmt.Errorf("%w: workspace ready check did not report", errTerminalNotReady)
+			return readyProbeResult{}, "", fmt.Errorf("%w: workspace command did not report", errTerminalNotReady)
 		case line, ok := <-output:
 			if !ok {
-				return readyProbeResult{}, fmt.Errorf("%w: workspace PTY closed before the ready check reported", errTerminalNotReady)
+				return readyProbeResult{}, "", fmt.Errorf("%w: workspace PTY closed before the command reported", errTerminalNotReady)
 			}
-			if before, rest, found := strings.Cut(line.data, readyProbeMarker+":"); found {
+			if before, rest, found := strings.Cut(line.data, marker+":"); found {
 				collected.WriteString(before)
-				code, convErr := strconv.Atoi(strings.TrimSpace(rest))
+				status := strings.TrimSpace(rest)
+				code, convErr := strconv.Atoi(status)
 				if convErr != nil {
 					code = -1
 				}
-				return readyProbeResult{exitCode: code, output: boundedProbeOutput(collected.String())}, nil
+				return readyProbeResult{exitCode: code, output: boundedProbeOutput(collected.String())}, status, nil
 			}
 			collected.WriteString(line.data)
 			if collected.Len() > 4*readyProbeOutputLimit {
@@ -253,7 +263,7 @@ func (c *Client) runReadyProbeOnce(ctx context.Context, ptyURL *url.URL) (readyP
 				collected.WriteString(tail)
 			}
 			if line.err != nil {
-				return readyProbeResult{}, errors.Join(errTerminalNotReady, fmt.Errorf("read workspace ready check: %w", line.err))
+				return readyProbeResult{}, "", errors.Join(errTerminalNotReady, fmt.Errorf("read workspace command output: %w", line.err))
 			}
 		}
 	}

@@ -257,6 +257,9 @@ func (s *Server) createWorkerChild(w http.ResponseWriter, r *http.Request) {
 			s.writeCoderPlacementError(w, r, err)
 			return
 		}
+		if placement.override != nil {
+			placement.override.DefaultWorkspaceNamePrefix = domain.CoderWorkspaceNamePrefixFor(parent.ProjectName)
+		}
 		if placement.connectionID != "" {
 			request.SandboxProviderConnectionID = placement.connectionID
 		}

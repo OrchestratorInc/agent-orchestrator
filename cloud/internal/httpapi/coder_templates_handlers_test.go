@@ -280,10 +280,10 @@ func TestProjectCoderParameterValidationRefusesNonMembers(t *testing.T) {
 	store := &nonMemberCoderConnStore{fakeCoderConnStore: fakeCoderConnStore{err: postgres.ErrNotFound}}
 	srv := newCoderTemplatesServer(t, newTestCipher(t), store, &fakeDeploymentTemplateLister{})
 	req := coderConfigRequest(t, http.MethodPost, "", []string{sandbox.ProviderCoder})
-	if unknown := srv.unknownCoderTemplateParameters(
+	if problem := srv.coderTemplateParameterProblem(
 		req.Context(), coderCfgOrgID, coderCfgTemplate, map[string]string{"guess": "x"}, "req-1",
-	); len(unknown) != 0 {
-		t.Fatalf("unknown = %v, want none reported to a non-member", unknown)
+	); problem != "" {
+		t.Fatalf("problem = %q, want none reported to a non-member", problem)
 	}
 	if store.connectionRead {
 		t.Fatal("read the organization's Coder connection for a non-member")

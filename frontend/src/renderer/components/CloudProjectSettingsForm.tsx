@@ -7,14 +7,14 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCoderTemplates } from "../hooks/useCoderTemplates";
 import { useCoderTemplateParameters } from "../hooks/useCoderTemplateParameters";
-import { changedParameterOverrides, parameterOverridesPatch } from "../lib/coder-template-parameters";
+import { changedParameterOverrides, parameterOverridesUpdate } from "../lib/coder-template-parameters";
 import { CoderTemplateOptions } from "./CoderTemplateOptions";
 import { useOrgCoderConfig } from "../hooks/useOrgCoderConfig";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudProjectsQueryKey } from "../hooks/useWorkspaceQuery";
 import { CLOUD_AGENT_PROVIDERS, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
 import { agentLabel } from "../lib/agent-options";
-import { DEFAULT_CODER_WORKSPACE_NAME_PREFIX, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
+import { coderWorkspaceNamePrefixFor, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
 import { CODER_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
 import type { CloudCpProject, CloudCpProjectCoderConfig } from "../lib/cloud-cp";
 import { cloudProjectSettingsDraft, cloudProjectSettingsPatch, type CloudProjectRoleDraft, type CloudProjectSettingsDraft } from "../lib/cloud-project-settings";
@@ -134,9 +134,9 @@ export function CloudProjectCoderSettings({ project }: { project: CloudCpProject
 
 /**
  * The project's "Template options": its saved `coder.parameters` over the
- * template's defaults. Autosaves like the other inline fields, sending only the
- * keys that changed (a key reset to its default is sent at the default, since
- * the endpoint merges the map). Only new sessions pick the values up. Hidden
+ * template's defaults. Autosaves like the other inline fields, sending the whole
+ * map (the endpoint replaces it, so a key reset to its default or no longer
+ * declared is simply left out). Only new sessions pick the values up. Hidden
  * when the template has no parameters or the control plane predates the route.
  */
 function CoderTemplateParametersSettings({ project, templateId }: { project: CloudCpProject; templateId: string }) {
@@ -153,13 +153,13 @@ function CoderTemplateParametersSettings({ project, templateId }: { project: Clo
 		mutationFn: (patch: Record<string, string>) =>
 			client.updateProjectSettings(project.orgId, project.id, { config: { coder: { parameters: patch } } }),
 		onSuccess: (response, patch) => {
-			saved.current = coderConfigOf(response.project)?.parameters ?? { ...saved.current, ...patch };
+			saved.current = coderConfigOf(response.project)?.parameters ?? patch;
 			queryClient.setQueryData(cloudProjectSettingsQueryKey(baseUrl, project.orgId, project.id), response.project);
 			void queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
 		},
 	});
 	const { mutate, isPending, isError } = save;
-	const patch = draft === null ? undefined : parameterOverridesPatch(parameters, saved.current, draft);
+	const patch = draft === null ? undefined : parameterOverridesUpdate(parameters, saved.current, draft);
 	const patchKey = patch ? JSON.stringify(patch) : "";
 	const failedKey = isError && save.variables ? JSON.stringify(save.variables) : "";
 	useEffect(() => {
@@ -229,7 +229,7 @@ function CoderWorkspaceNamePrefixRow({ project }: { project: CloudCpProject }) {
 	return <>
 		<ProjectSettingsInputRow id="coderWorkspaceNamePrefix" label={label} editLabel={t("settings.field.edit", { label })}
 			editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />}
-			value={draft} placeholder={DEFAULT_CODER_WORKSPACE_NAME_PREFIX} onChange={setDraft} />
+			value={draft} placeholder={coderWorkspaceNamePrefixFor(project.displayName)} onChange={setDraft} />
 		{invalid ? (
 			<p className="-mt-1.5 pb-2 pl-3 text-xs text-error" role="alert">{t("coder.workspacePrefix.invalid")}</p>
 		) : save.isError ? (

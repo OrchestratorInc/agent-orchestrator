@@ -240,6 +240,26 @@ type CleanupSessionsQuery struct {
 	Project string `query:"project,omitempty" description:"Project id filter. When omitted, clean terminated sessions across all projects."`
 }
 
+// ArtifactFileQuery is the query string accepted by DELETE /api/v1/sessions/{sessionId}/artifact-files.
+type ArtifactFileQuery struct {
+	Path string `query:"path" description:"Artifact-directory-relative file path, as listed in the session's artifactFiles."`
+}
+
+// UpdateArtifactFileRequest replaces one listed artifact file after verifying
+// that the viewer's loaded copy is still current.
+type UpdateArtifactFileRequest struct {
+	Path                    string `json:"path" description:"Artifact-directory-relative file path, as listed in the session's artifactFiles."`
+	Content                 string `json:"content" description:"The file's new UTF-8 text content."`
+	ExpectedFileFingerprint string `json:"expectedFileFingerprint" description:"Hex SHA-256 of the file content the edit started from."`
+}
+
+// ArtifactFileResponse describes an artifact file after a write.
+type ArtifactFileResponse struct {
+	Path            string `json:"path"`
+	Size            int64  `json:"size"`
+	FileFingerprint string `json:"fileFingerprint" description:"Hex SHA-256 of the file's content."`
+}
+
 // WorkspaceFileQuery is the query string accepted by GET /api/v1/sessions/{sessionId}/workspace/file.
 type WorkspaceFileQuery struct {
 	Path string `query:"path" description:"Session-worktree-relative file path."`
@@ -307,6 +327,11 @@ type WorkspaceSearchQuery struct {
 	Query  string `query:"query" required:"true" description:"Case-insensitive path substring."`
 	Cursor string `query:"cursor,omitempty" description:"Opaque pagination cursor returned by the previous page."`
 	Limit  int    `query:"limit,omitempty" minimum:"1" maximum:"100" description:"Maximum results. Defaults to 50."`
+}
+
+// WorkspaceResolveQuery is the query string accepted by GET /api/v1/sessions/{sessionId}/workspace/resolve.
+type WorkspaceResolveQuery struct {
+	Path string `query:"path" required:"true" description:"Absolute or workspace-relative file path to classify."`
 }
 
 // WorkspaceTreeQuery is the query string accepted by GET /api/v1/sessions/{sessionId}/workspace/tree.
@@ -745,12 +770,29 @@ type WorkspaceFileSearchResponse struct {
 	Truncated  bool                                `json:"truncated"`
 }
 
+// WorkspacePathResolutionResponse is the body of GET /api/v1/sessions/{sessionId}/workspace/resolve.
+// Path is relative to the root named by Kind and empty when Kind is outside;
+// the response never carries a local absolute path.
+type WorkspacePathResolutionResponse struct {
+	SessionID domain.SessionID             `json:"sessionId"`
+	Kind      sessionsvc.WorkspacePathKind `json:"kind" enum:"workspace,artifact,outside"`
+	Path      string                       `json:"path"`
+}
+
 // DesktopWorkspaceLocationResponse is returned only by the LAN-blocked desktop
 // handoff route. Electron main consumes the absolute path and never exposes it
 // through the preload bridge.
 type DesktopWorkspaceLocationResponse struct {
 	SessionID     domain.SessionID `json:"sessionId"`
 	WorkspacePath string           `json:"workspacePath"`
+}
+
+// DesktopArtifactLocationResponse is returned only by the LAN-blocked desktop
+// artifact route. Electron main consumes the absolute path and never exposes it
+// through the preload bridge.
+type DesktopArtifactLocationResponse struct {
+	SessionID   domain.SessionID `json:"sessionId"`
+	ArtifactDir string           `json:"artifactDir"`
 }
 
 // SessionPreviewResponse is the body of GET /api/v1/sessions/{sessionId}/preview.
@@ -995,12 +1037,20 @@ type InterfaceTransitionNoticeAckResponse struct {
 	Transition SessionInterfaceTransitionView `json:"transition"`
 }
 
+// KillSessionRequest is the optional body of POST /api/v1/sessions/{sessionId}/kill.
+// DeleteArtifacts empties the session's artifact directory once it is
+// terminated. Only the archive dialog sets it; the CLI and the reaper never do.
+type KillSessionRequest struct {
+	DeleteArtifacts bool `json:"deleteArtifacts,omitempty"`
+}
+
 // KillSessionResponse is the body of POST /api/v1/sessions/{sessionId}/kill.
 type KillSessionResponse struct {
-	OK             bool             `json:"ok"`
-	SessionID      domain.SessionID `json:"sessionId"`
-	Freed          bool             `json:"freed,omitempty"`
-	CleanupPending bool             `json:"cleanupPending,omitempty"`
+	OK               bool             `json:"ok"`
+	SessionID        domain.SessionID `json:"sessionId"`
+	Freed            bool             `json:"freed,omitempty"`
+	CleanupPending   bool             `json:"cleanupPending,omitempty"`
+	ArtifactsDeleted bool             `json:"artifactsDeleted,omitempty"`
 }
 
 // RollbackSessionResponse is the body of POST /api/v1/sessions/{sessionId}/rollback.
@@ -1354,6 +1404,7 @@ type SetActivityRequest struct {
 	SubmissionID                 string                              `json:"submissionId,omitempty" maxLength:"36" description:"AO prompt-hook context correlation UUID, when supported."`
 	TranscriptPath               string                              `json:"transcriptPath,omitempty" maxLength:"4096" description:"Read-only provider-native transcript path exposed by the hook."`
 	LaunchID                     string                              `json:"launchId,omitempty" description:"AO process generation that produced the signal."`
+	Entrypoint                   string                              `json:"entrypoint,omitempty" description:"Provider process-kind marker (Claude's CLAUDE_CODE_ENTRYPOINT) of the process that fired the hook."`
 	Usage                        *UsageHookMetadata                  `json:"usage,omitempty" description:"Provider transcript metadata used by the local usage pipeline."`
 }
 
@@ -1678,14 +1729,16 @@ type AgentAuthenticationObservation = domain.AgentAuthenticationObservation
 // AgentModelsQuery scopes a model catalog to a project where providers may be
 // configured per workspace.
 type AgentModelsQuery struct {
-	ProjectID string `query:"projectId,omitempty" description:"Optional project identifier used as the model-catalog cache scope."`
+	CatalogOnly bool   `query:"catalogOnly,omitempty" description:"Return catalog facts without reading session history for model recency. Cached catalogs are served while discovery refreshes in the background."`
+	ProjectID   string `query:"projectId,omitempty" description:"Optional project identifier used as the model-catalog cache scope."`
 }
 
 // AgentModelsRefreshQuery controls forced refresh versus cheap background
 // revalidation for a project-scoped model catalog.
 type AgentModelsRefreshQuery struct {
-	ProjectID  string `query:"projectId,omitempty" description:"Optional project identifier used as the model-catalog cache scope."`
-	Revalidate bool   `query:"revalidate,omitempty" description:"When true, compare executable and config metadata before running discovery."`
+	CatalogOnly bool   `query:"catalogOnly,omitempty" description:"Refresh the Harness Settings browsing catalog without session-history enrichment; FX includes all connections in a separate cache."`
+	ProjectID   string `query:"projectId,omitempty" description:"Optional project identifier used as the model-catalog cache scope."`
+	Revalidate  bool   `query:"revalidate,omitempty" description:"When true, compare executable and config metadata before running discovery."`
 }
 
 // AgentModelsResponse is the normalized model picker for one agent.
@@ -2010,11 +2063,17 @@ type ListAutomationRunsResponse struct {
 // AgentInstallResponse is shared by the agent harness start and status routes.
 type AgentInstallResponse = systeminstall.Job
 
+// AgentUpdateAdvisoryQuery allows an explicit user action to bypass cached version evidence.
+type AgentUpdateAdvisoryQuery struct {
+	Refresh bool `query:"refresh,omitempty" description:"Re-probe the installed binary, ownership and latest release instead of reusing cached advisory evidence."`
+}
+
 // StartAgentInstallRequest selects one method returned by the installer
 // catalog. The daemon still owns the argv behind the method id.
 type StartAgentInstallRequest struct {
-	Method    string                       `json:"method,omitempty" description:"Server-issued installation method id. Omit to use the recommended viable method."`
-	Operation systeminstall.AgentOperation `json:"operation,omitempty" enum:"install,reinstall" description:"Requested operation. Defaults to install for older clients."`
+	Method          string                       `json:"method,omitempty" description:"Server-issued installation method id. Omit to use the recommended viable method for an install or reinstall, and the method that owns the installed copy for an update."`
+	Operation       systeminstall.AgentOperation `json:"operation,omitempty" enum:"install,reinstall,update" description:"Requested operation. Defaults to install for older clients."`
+	ExpectedVersion string                       `json:"expectedVersion,omitempty" description:"For updates, the available version explicitly approved by the user. The update must reach it. It is installed only when it lies between the installed version and the latest release AO found; otherwise that latest release is installed. A version at or below the installed one, or one sent with another operation, is rejected with INVALID_UPDATE_VERSION."`
 }
 
 // AgentInstallJobsResponse hydrates Settings with the latest durable job for
@@ -2429,6 +2488,18 @@ type UnregisterPushDeviceResponse struct {
 }
 
 /* ---- chat conversations ------------------------------------------------ */
+
+// ConversationPromptSuggestionRequest identifies the latest completed turn.
+type ConversationPromptSuggestionRequest struct {
+	TurnID string `json:"turnId"`
+}
+
+// ConversationPromptSuggestionResponse offers one optional next human message.
+type ConversationPromptSuggestionResponse struct {
+	TurnID string `json:"turnId"`
+	// Empty when there is no useful suggestion.
+	Prompt string `json:"prompt"`
+}
 
 // SetChatViewRequest renews or releases one renderer's Chat view lease.
 type SetChatViewRequest struct {
@@ -3176,6 +3247,8 @@ type SetConversationTitleResponse struct {
 
 // SettingsResponse is the daemon-owned preference set.
 type SettingsResponse struct {
+	// HarnessDefaults are per-harness picker preferences, keyed by harness id.
+	HarnessDefaults map[string]domain.HarnessDefault `json:"harnessDefaults,omitempty"`
 	// DefaultSessionMode applies to sessions created from now on. Changing it
 	// never alters an existing session; only an explicit interface transition can.
 	DefaultSessionMode string `json:"defaultSessionMode" enum:"chat,tui"`
@@ -3210,6 +3283,13 @@ type AgentInstallerCatalogResponse struct {
 // UpdateSessionInterfaceRequest changes the default interface for new sessions.
 type UpdateSessionInterfaceRequest struct {
 	DefaultSessionMode string `json:"defaultSessionMode" enum:"chat,tui"`
+}
+
+// UpdateHarnessDefaultRequest replaces one harness's picker preference.
+type UpdateHarnessDefaultRequest struct {
+	// DisabledModels lists the model ids (each up to 256 characters) clients
+	// should leave out of their pickers. An empty list offers every catalog model.
+	DisabledModels *[]string `json:"disabledModels" required:"true" maxItems:"20000"`
 }
 
 // UpdateCloudOfferingRequest flips the user's cloud toggle.

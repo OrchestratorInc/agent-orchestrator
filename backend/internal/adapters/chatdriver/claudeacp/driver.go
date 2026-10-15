@@ -53,6 +53,7 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 		OnAuthRejected:        claudeAuthRejected(onAuthRejected),
 		PromptResponseFailure: claudePromptResponseFailure,
 		CanHibernate:          claudeCanHibernate,
+		HistoryNotice:         claudeTranscriptNotice,
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityStreaming:    true,
 			ports.ChatCapabilityTools:        true,

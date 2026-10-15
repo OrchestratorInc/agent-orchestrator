@@ -42,6 +42,7 @@ type versionStore interface {
 	ListLatestSessionArtifactVersions(ctx context.Context, id domain.SessionID) ([]domain.SessionArtifactVersion, error)
 	AppendSessionArtifactVersion(ctx context.Context, v domain.SessionArtifactVersion, keep int) (domain.SessionArtifactVersion, []string, error)
 	CountSessionArtifactVersionsBySHA(ctx context.Context, id domain.SessionID, sha string) (int64, error)
+	DeleteSessionArtifactVersions(ctx context.Context, id domain.SessionID) error
 }
 
 // observation is a file's size and modification time as seen on one call.

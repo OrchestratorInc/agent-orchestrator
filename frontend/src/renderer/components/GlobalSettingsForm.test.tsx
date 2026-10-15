@@ -96,6 +96,12 @@ vi.mock("../lib/bridge", () => ({
 		clipboard: { writeText },
 		daemon: { getStatus: getDaemonStatus },
 		remotes: { list: vi.fn(async () => []) },
+		cliLink: {
+			setEnabled: vi.fn(async () => undefined),
+			inspect: vi.fn(async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" })),
+			link: vi.fn(async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" })),
+			unlink: vi.fn(async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" })),
+		},
 		updateSettings: {
 			get: getUpdate,
 			set: setUpdate,

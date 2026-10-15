@@ -67,6 +67,17 @@ if (typeof window !== "undefined") {
 		value: ResizeObserverStub,
 	});
 
+	// jsdom has no Web Animations API. Components that animate from a
+	// requestAnimationFrame callback (the file tree's expand slide) would
+	// otherwise throw after their test has already passed.
+	if (typeof HTMLElement.prototype.animate !== "function") {
+		Object.defineProperty(HTMLElement.prototype, "animate", {
+			configurable: true,
+			writable: true,
+			value: () => ({ cancel() {}, finish() {}, addEventListener() {}, removeEventListener() {}, finished: Promise.resolve() }),
+		});
+	}
+
 	Object.defineProperty(window, "matchMedia", {
 		configurable: true,
 		writable: true,
@@ -184,6 +195,9 @@ if (typeof window !== "undefined") {
 				if (targetId === "terminal") return { id: "terminal", name: "Terminal", kind: "terminal" };
 				return { id: targetId ?? "cursor", name: "Cursor", kind: "editor" };
 			},
+			openArtifacts: async ({ targetId }) => targetId === "terminal"
+				? { id: "terminal", name: "Terminal", kind: "terminal" }
+				: { id: "file-manager", name: "Finder", kind: "file_manager" },
 			copyWorkspacePath: async () => undefined,
 		},
 		telemetry: {
@@ -313,7 +327,7 @@ if (typeof window !== "undefined") {
 			onAnnotationState: () => () => undefined,
 		},
 		browserProfiles: {
-			list: async () => ({ profiles: [] }),
+			list: async () => ({ profiles: [], defaultProfileId: null }),
 			create: async (name: string) => {
 				const now = new Date().toISOString();
 				return { id: `test-${name}`, name, createdAt: now, updatedAt: now };
@@ -324,6 +338,7 @@ if (typeof window !== "undefined") {
 			},
 			clear: async () => undefined,
 			delete: async () => undefined,
+			setDefault: async () => undefined,
 			discoverImportSources: async () => ({ sources: [] }),
 			import: async () => ({ sourceName: "", entries: [] }),
 			onImportProgress: () => () => undefined,
@@ -343,6 +358,12 @@ if (typeof window !== "undefined") {
 		appState: {
 			getMigration: async () => ({ status: "pending" }),
 			setMigration: async () => undefined,
+		},
+		cliLink: {
+			setEnabled: async () => undefined,
+			inspect: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
+			link: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
+			unlink: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
 		},
 		updateSettings: {
 			get: async () => ({ enabled: false, channel: "latest", nightlyAck: false, feature: null, macDifferentialUpdates: false }),
