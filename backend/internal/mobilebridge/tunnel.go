@@ -431,12 +431,21 @@ func TunnelBackoff(attempt int) time.Duration {
 // self-update could swap the binary out from under that pinned format. The
 // metrics listener is what /ready is polled on, which is a far more reliable
 // readiness signal than the log alone.
+//
+// The protocol is pinned to HTTP/2. Left alone, cloudflared starts a quick
+// tunnel on QUIC and never falls back, so on a network that drops UDP to the
+// edge — a VPN or proxy in TUN mode, a restrictive firewall — it redials
+// forever and the tunnel never registers. Measured behind such a proxy: QUIC
+// had not registered after fifty seconds, with cloudflared's own precheck
+// suggesting http2, while HTTP/2 registered about a second after the hostname
+// was issued. HTTP/2 runs over TCP and connects on both kinds of network.
 func CloudflaredArgs(localPort, metricsPort int) []string {
 	return []string{
 		"tunnel",
 		"--url", fmt.Sprintf("http://127.0.0.1:%d", localPort),
 		"--metrics", fmt.Sprintf("127.0.0.1:%d", metricsPort),
 		"--no-autoupdate",
+		"--protocol", "http2",
 	}
 }
 
