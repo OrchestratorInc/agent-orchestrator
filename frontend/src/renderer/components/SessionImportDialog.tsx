@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, Loader2 } from "lucide-react";
+import { agentLabel } from "../lib/agent-options";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { Button } from "./ui/button";
@@ -73,7 +74,7 @@ export function SessionImportDialog({
 						(project === "standalone"
 							? !c.projectId
 							: c.projectId === project)) &&
-					`${c.title} ${c.harness}`
+					`${c.title} ${c.harness} ${agentLabel(c.harness)}`
 						.toLowerCase()
 						.includes(search.toLowerCase()),
 			),
@@ -125,7 +126,12 @@ export function SessionImportDialog({
 			setImporting(false);
 		}
 	};
-	const successful = results.filter((r) => r.status !== "failed").length;
+	const count = (status: ImportResult["status"]) => results.filter((r) => r.status === status).length;
+	const summary = [
+		[count("created"), "sessionImport.result"],
+		[count("already_imported"), "sessionImport.resultExisting"],
+		[count("failed"), "sessionImport.resultFailed"],
+	] as const;
 	return (
 		<Dialog
 			open={open}
@@ -235,8 +241,7 @@ export function SessionImportDialog({
 				</div>
 				{results.length ? (
 					<p role="status" className="text-sm">
-						{t("sessionImport.result", { count: successful })}{" "}
-						{t("sessionImport.resultFailed", { count: results.length - successful })}
+						{summary.filter(([n]) => n > 0).map(([n, key]) => t(key, { count: n })).join(" ")}
 					</p>
 				) : null}
 				<div className="flex items-center justify-between gap-3">
@@ -306,7 +311,7 @@ function ImportRow({
 			<span className="min-w-0 flex-1">
 				<span className="block truncate text-sm font-medium">{c.title}</span>
 				<span className="text-xs text-muted-foreground">
-					{projectName} · {c.harness} · {t("sessionImport.messages", { count: c.messageCount })} ·{" "}
+					{projectName} · {agentLabel(c.harness)} · {t("sessionImport.messages", { count: c.messageCount })} ·{" "}
 					{new Date(c.lastActivity).toLocaleDateString(i18n.resolvedLanguage)}
 				</span>
 				{imported ? (
