@@ -3206,9 +3206,10 @@
 	"sessionImport.selectAll_one": "Tout sélectionner · {{count}} conversation",
 	"sessionImport.selectAll_other": "Tout sélectionner · {{count}} conversations",
 	"sessionImport.empty": "Aucune conversation lisible ne correspond à cette sélection.",
-	"sessionImport.result_one": "{{count}} conversation importée ou déjà dans AO.",
-	"sessionImport.result_other": "{{count}} conversations importées ou déjà dans AO.",
+	"sessionImport.result_one": "{{count}} conversation importée.",
+	"sessionImport.result_other": "{{count}} conversations importées.",
 	"sessionImport.resultFailed": "{{count}} n’ont pas pu être importées.",
+	"sessionImport.resultExisting": "{{count}} déjà dans AO.",
 	"sessionImport.scanAgain": "Analyser à nouveau",
 	"sessionImport.importing": "Importation…",
 	"sessionImport.import_one": "Importer {{count}} conversation",
@@ -3220,7 +3221,7 @@
 	"sessionImport.alreadyImported": "Déjà dans AO",
 	"sessionImport.failed": "L’importation a échoué. Réessayez.",
 	"sessionImport.selectAll_many": "Tout sélectionner · {{count}} conversations",
-	"sessionImport.result_many": "{{count}} conversations importées ou déjà dans AO.",
+	"sessionImport.result_many": "{{count}} conversations importées.",
 	"sessionImport.import_many": "Importer {{count}} conversations",
 	"sessionImport.messages_many": "{{count}} messages"
 }
