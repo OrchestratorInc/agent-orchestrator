@@ -910,7 +910,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** @description The organization's bring-your-own Coder connection, without its token. 403 provider_forbidden when the organization is not entitled to Coder. */
+        /** @description The organization's bring-your-own Coder connection, without its token. 403 provider_forbidden when the organization may not run on Coder; an organization without the coder capability reads configured=false. */
         get: operations["getOrgCoderConfig"];
         /** @description Create or replace the organization's bring-your-own Coder connection (org admins). The token is required on first save and when baseUrl changes; otherwise an omitted token keeps the stored one. An omitted owner is derived from the token. */
         put: operations["putOrgCoderConfig"];

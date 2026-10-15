@@ -84,7 +84,16 @@ func (s *Server) getOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId must be a UUID.")
 		return
 	}
-	if !s.requireOrgCustomCoder(w, r, orgID) {
+	if !s.requireOrgCoder(w, r, orgID) {
+		return
+	}
+	// Every org that may run on Coder can read this, but only one with the coder
+	// capability has a connection to read. Desktop releases from before managed
+	// Coder opened to every org still load it for any org that runs on Coder
+	// (Create Project, project settings, the Coder page), so answer "none" rather
+	// than refusing; saving or clearing one stays capability-gated.
+	if !s.orgHasCustomCoder(principalFrom(r), orgID) {
+		writeJSON(w, http.StatusOK, orgCoderConfigResponse{Configured: false})
 		return
 	}
 	store, ok := s.store.(providerConnectionStore)

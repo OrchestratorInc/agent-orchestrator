@@ -204,7 +204,6 @@ func TestCoderOnlyEndpointsForbiddenWithoutCoder(t *testing.T) {
 	// Bring-your-own Coder needs the coder capability; the shared deployment's
 	// templates are open to every organization that may run on Coder.
 	customCoder := map[string]func(*Server, http.ResponseWriter, *http.Request){
-		"GET coder-config":    (*Server).getOrgCoderConfig,
 		"PUT coder-config":    (*Server).putOrgCoderConfig,
 		"DELETE coder-config": (*Server).deleteOrgCoderConfig,
 	}
@@ -221,8 +220,23 @@ func TestCoderOnlyEndpointsForbiddenWithoutCoder(t *testing.T) {
 			refused(t, rec)
 		})
 	}
+	// Desktop releases from before managed Coder opened to every org read the
+	// connection for any org that runs on Coder; it has none, not a refusal.
+	t.Run("org without the coder capability reads no connection", func(t *testing.T) {
+		server := gated()
+		server.store.(*coderConfigFakeStore).connections = []domain.ProviderConnection{{
+			Provider: sandbox.ProviderCoder, Label: defaultAgentConnectionLabel, Config: json.RawMessage(`{"baseUrl":"https://coder.example"}`),
+		}}
+		rec := httptest.NewRecorder()
+		server.getOrgCoderConfig(rec, coderConfigRequest(t, http.MethodGet, "", []string{sandbox.ProviderFreestyle}))
+		var body orgCoderConfigResponse
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &body) != nil || body.Configured || body.CoderConfig != nil {
+			t.Fatalf("status = %d, body = %s; want 200 with no connection", rec.Code, rec.Body.String())
+		}
+	})
 	endpoints := map[string]func(*Server, http.ResponseWriter, *http.Request){
 		"GET coder templates": (*Server).listCoderTemplates,
+		"GET coder-config":    (*Server).getOrgCoderConfig,
 	}
 	for name, handler := range customCoder {
 		endpoints[name] = handler
