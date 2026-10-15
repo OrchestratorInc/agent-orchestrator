@@ -879,7 +879,10 @@ func (s *Service) ExitAgent(ctx context.Context, id domain.SessionID) (ExitAgent
 func (s *Service) ResumeAgent(ctx context.Context, id domain.SessionID) (ResumeAgentOutcome, error) {
 	res, err := s.manager.ResumeAgentWithMode(ctx, id)
 	if err != nil {
-		if !errors.Is(err, sessionmanager.ErrSessionOpenElsewhere) {
+		// Known conditions (open elsewhere, resume in progress, terminated) keep
+		// their codes; any other failure of a pending import shows its cause.
+		var known *apierr.Error
+		if !errors.As(mapSessionError(err), &known) {
 			if rec, ok, readErr := s.store.GetSession(ctx, id); readErr == nil && ok && rec.NeedsImportResume() {
 				apiErr := apierr.Conflict("SESSION_IMPORT_RESUME_FAILED", err.Error(), nil)
 				s.emitRelaunchFailed(ctx, "resume_agent", id, err, apiErr)

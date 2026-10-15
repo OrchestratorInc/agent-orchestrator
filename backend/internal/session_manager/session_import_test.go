@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -422,5 +423,75 @@ func TestImportedWorkspaceAdoptsSeparateCloneWithUnpublishedCommit(t *testing.T)
 	}
 	if got := runManagerGit(t, target, "rev-parse", "--path-format=absolute", "--git-common-dir"); got != runManagerGit(t, child, "rev-parse", "--path-format=absolute", "--git-common-dir") {
 		t.Fatal("workspace no longer belongs to the registered repository")
+	}
+}
+
+type providerHomeAgent struct{ fakeAgent }
+
+func (providerHomeAgent) NativeSessionConfigDir(_ context.Context, env map[string]string) (string, error) {
+	return nativeconfig.Resolve(env, "CLAUDE_CONFIG_DIR", ".claude")
+}
+
+type providerHomeAgents struct{}
+
+func (providerHomeAgents) Agent(domain.AgentHarness) (ports.Agent, bool) {
+	return providerHomeAgent{}, true
+}
+
+// Claude Code keys its keychain login by CLAUDE_CONFIG_DIR: setting even the
+// default path makes a keychain user look signed out on the first follow-up.
+func TestImportedConfigEnvKeepsDefaultProviderLogin(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	m := &Manager{agents: providerHomeAgents{}}
+	rec := domain.SessionRecord{Harness: domain.HarnessClaudeCode}
+	rec.Metadata = domain.SessionMetadata{ProviderConversationID: "native", ImportSource: &domain.SessionImportSource{NativeID: "native", ConfigDir: filepath.Join(home, ".claude")}}
+	env := map[string]string{}
+	m.applyImportedConfigEnv(context.Background(), rec, env)
+	if value, set := env["CLAUDE_CONFIG_DIR"]; set {
+		t.Fatalf("default provider home was forced: %q", value)
+	}
+	rec.Metadata.ImportSource.ConfigDir = "/other-provider-home"
+	m.applyImportedConfigEnv(context.Background(), rec, env)
+	if env["CLAUDE_CONFIG_DIR"] != "/other-provider-home" {
+		t.Fatalf("env = %v", env)
+	}
+}
+
+// Startup health treats a ready row without a workspace as an interrupted
+// spawn and rolls it back; an idle import must survive every daemon restart.
+func TestStartupHealthKeepsIdleImportedHistory(t *testing.T) {
+	launcher := &recordingLauncher{}
+	m, st, _ := newChatManager(launcher)
+	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}, ProvisionState: domain.SessionProvisionReady}
+	rec.Metadata = domain.SessionMetadata{ProviderConversationID: "native", ImportSource: &domain.SessionImportSource{NativeID: "native", ConfigDir: "/provider-home"}}
+	st.sessions[rec.ID] = rec
+	m.reconcileLivePass(context.Background(), []domain.SessionRecord{rec})
+	got, ok := st.sessions[rec.ID]
+	if !ok || got.IsTerminated || !got.NeedsImportResume() || len(launcher.started) != 0 {
+		t.Fatalf("startup changed imported history: ok=%v %#v launches=%d", ok, got, len(launcher.started))
+	}
+}
+
+// Provider worktrees are often deleted once their branch merges; the imported
+// conversation still continues natively from the project checkout.
+func TestImportedSessionWhoseFolderIsGoneStartsFromProjectCheckout(t *testing.T) {
+	m, st, _, root := newGitTaskPreparationManager(t)
+	project := st.projects["mer"]
+	gone := filepath.Join(t.TempDir(), "removed-worktree", "pkg")
+	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}}
+	rec.Metadata = domain.SessionMetadata{ProviderConversationID: "thread-1", ImportSource: &domain.SessionImportSource{NativeID: "thread-1", ConfigDir: "/provider", CWD: gone}}
+	st.sessions[rec.ID] = rec
+	ready, err := m.prepareImportedWorkspace(context.Background(), rec, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := ready.Metadata.ImportSource
+	if !source.Transferred || source.WorkingSubdir != "" || ready.Metadata.WorkspacePath == "" {
+		t.Fatalf("import = %+v workspace=%q", source, ready.Metadata.WorkspacePath)
+	}
+	if got, want := runManagerGit(t, ready.Metadata.WorkspacePath, "rev-parse", "HEAD"), runManagerGit(t, root, "rev-parse", "HEAD"); got != want {
+		t.Fatalf("workspace HEAD = %s, want project HEAD %s", got, want)
 	}
 }

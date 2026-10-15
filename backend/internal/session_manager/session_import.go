@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,22 +25,98 @@ import (
 // ErrSessionOpenElsewhere requires the other writer to close; AO never takes it over.
 var ErrSessionOpenElsewhere = errors.New("this is open elsewhere; close it there to continue here")
 
-func applyImportedConfigEnv(rec domain.SessionRecord, env map[string]string) {
+// applyImportedConfigEnv points a launch at the provider home that owns the
+// imported conversation. It leaves a launch alone when it already resolves
+// there: Claude Code keys its keychain login by CLAUDE_CONFIG_DIR, so setting
+// even the default path logs a keychain user out.
+func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.SessionRecord, env map[string]string) {
 	source := rec.Metadata.ImportSource
 	if source == nil || rec.Metadata.ProviderConversationID != source.NativeID {
 		return
 	}
-	if rec.Harness == domain.HarnessClaudeCode {
-		env["CLAUDE_CONFIG_DIR"] = source.ConfigDir
+	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME"}[rec.Harness]
+	if key == "" {
+		return
 	}
-	if rec.Harness == domain.HarnessCodex {
-		env["CODEX_HOME"] = source.ConfigDir
+	if agent, ok := m.agents.Agent(rec.Harness); ok {
+		if provider, ok := agent.(ports.AgentNativeSessionConfigProvider); ok {
+			if current, err := provider.NativeSessionConfigDir(ctx, env); err == nil && sameDirectory(current, source.ConfigDir) {
+				return
+			}
+		}
 	}
+	env[key] = source.ConfigDir
 }
 
-// Positive evidence only: read-only descriptors are not ownership. Providers
-// without inspectable file handles still arbitrate ownership through native Resume.
-// ponytail: lsof misses owners without a writable handle; add provider lease probes when exposed.
+func sameDirectory(a, b string) bool {
+	if resolved, err := filepath.EvalSymlinks(a); err == nil {
+		a = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(b); err == nil {
+		b = resolved
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
+}
+
+// importOwnedElsewhere reports positive evidence that another provider process
+// holds the conversation: Codex keeps a writer lock per loaded thread, Claude
+// Code registers each live session, and older writers keep the transcript open.
+func importOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
+	source := rec.Metadata.ImportSource
+	switch rec.Harness {
+	case domain.HarnessCodex:
+		if providerLockHeld(filepath.Join(source.ConfigDir, "thread-writer-locks", source.NativeID+".lock")) {
+			return true
+		}
+	case domain.HarnessClaudeCode:
+		if claudeSessionLive(ctx, filepath.Join(source.ConfigDir, "sessions"), source.NativeID, rec.Metadata.WorkspacePath) {
+			return true
+		}
+	}
+	return writableTranscriptOwner(ctx, rec.Metadata.NativeTranscriptPath)
+}
+
+// claudeSessionLive reads Claude Code's live-session registry. A launch inside
+// this session's own AO workspace is an earlier AO attempt, not another owner.
+func claudeSessionLive(ctx context.Context, dir, nativeID, ownWorkspace string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		var live struct {
+			PID       int    `json:"pid"`
+			SessionID string `json:"sessionId"`
+			CWD       string `json:"cwd"`
+		}
+		if err != nil || json.Unmarshal(body, &live) != nil || live.SessionID != nativeID || live.PID <= 0 {
+			continue
+		}
+		if ownWorkspace != "" && pathWithin(ownWorkspace, live.CWD) {
+			continue
+		}
+		// Registry files outlive crashes, so require the PID to still be a Claude process.
+		if processAlive(live.PID) && processNamed(ctx, live.PID, "claude", "node") {
+			return true
+		}
+	}
+	return false
+}
+
+func processNamed(ctx context.Context, pid int, names ...string) bool {
+	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	out, err := process.CommandContext(probeCtx, "ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
+	command := strings.ToLower(filepath.Base(strings.TrimSpace(string(out))))
+	return err == nil && slices.ContainsFunc(names, func(name string) bool { return strings.Contains(command, name) })
+}
+
+// writableTranscriptOwner is the fallback for writers without a lock or registry.
+// Read-only descriptors are not ownership.
 func writableTranscriptOwner(ctx context.Context, path string) bool {
 	if path == "" {
 		return false
@@ -73,7 +151,7 @@ func importGit(ctx context.Context, path string, args ...string) ([]byte, error)
 }
 
 func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) (domain.SessionRecord, error) {
-	if writableTranscriptOwner(ctx, rec.Metadata.NativeTranscriptPath) {
+	if importOwnedElsewhere(ctx, rec) {
 		return rec, ErrSessionOpenElsewhere
 	}
 	agent, ok := m.agents.Agent(rec.Harness)
@@ -117,22 +195,35 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 		var workspaceProject *ports.WorkspaceProjectInfo
 		switch projectKindForSession(project, rec.ProjectID) {
 		case domain.ProjectKindSingleRepo:
-			top, err := importGit(ctx, copyFrom, "rev-parse", "--show-toplevel")
+			gitRoot := copyFrom
+			if _, err := os.Stat(copyFrom); errors.Is(err, os.ErrNotExist) {
+				// The conversation's folder is gone, for example a removed worktree:
+				// continue from the project checkout, with nothing left to copy.
+				m.logger.Info("imported session folder is gone; continuing from the project checkout", "sessionID", rec.ID)
+				gitRoot, copyFrom = project.Path, ""
+			}
+			top, err := importGit(ctx, gitRoot, "rev-parse", "--show-toplevel")
 			if err != nil {
 				return rec, err
 			}
-			copyFrom = strings.TrimSpace(string(top))
-			head, err := importGit(ctx, copyFrom, "rev-parse", "HEAD")
+			repoRoot := strings.TrimSpace(string(top))
+			if copyFrom != "" {
+				copyFrom = repoRoot
+			}
+			head, err := importGit(ctx, repoRoot, "rev-parse", "HEAD")
 			if err != nil {
 				return rec, err
 			}
 			if created {
-				ws, err = m.workspace.Create(ctx, ports.WorkspaceConfig{ProjectID: rec.ProjectID, SessionID: rec.ID, Kind: rec.Kind, SessionPrefix: sessionPrefix(project), Branch: branch, FreshBranch: true, BaseRef: strings.TrimSpace(string(head)), RepoPath: copyFrom})
+				ws, err = m.workspace.Create(ctx, ports.WorkspaceConfig{ProjectID: rec.ProjectID, SessionID: rec.ID, Kind: rec.Kind, SessionPrefix: sessionPrefix(project), Branch: branch, FreshBranch: true, BaseRef: strings.TrimSpace(string(head)), RepoPath: repoRoot})
 				if err != nil {
 					return rec, err
 				}
 			}
 		case domain.ProjectKindWorkspace:
+			if _, err := os.Stat(source.CWD); errors.Is(err, os.ErrNotExist) {
+				return rec, fmt.Errorf("the conversation's folder %s no longer exists; restore it to continue here", source.CWD)
+			}
 			copyFrom = project.Path
 			repos, err := m.store.ListWorkspaceRepos(ctx, project.ID)
 			if err != nil {
@@ -630,7 +721,7 @@ func providerRefusedImportOwnership(err error) bool {
 		return false
 	}
 	message := strings.ToLower(err.Error())
-	for _, refusal := range []string{"this is open in another app", "session is already in use", "thread is already in use", "session is locked by another process"} {
+	for _, refusal := range []string{"this is open in another app", "session is already in use", "thread is already in use", "already has an active writer", "session is locked by another process"} {
 		if strings.Contains(message, refusal) {
 			return true
 		}
