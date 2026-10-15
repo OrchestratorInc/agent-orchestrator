@@ -49,11 +49,13 @@ func sameStream(run, next ports.ChatEvent) bool {
 //
 // A run is written before any other event, when the stream ends, when a flush is
 // requested, when it reaches its size bounds, and no later than interval after
-// its first delta. Once nothing more is queued, a run is written at once if no
-// run was written in the last interval, so an idle writer adds no latency; while
-// the stream keeps going, runs are written at most once per interval. Deltas
-// that arrive while a write is running wait in the channel and join the next
-// run. It reports false when project stops consumption.
+// its first delta. Once nothing more is queued, a run is written at once if it
+// starts a different stream from the last run written or no run was written in
+// the last interval: an idle writer adds no latency, and a new item's first
+// delta, which creates its row and takes its timeline position, is not held
+// back. While one stream keeps going, its runs are written at most once per
+// interval. Deltas that arrive while a write is running wait in the channel and
+// join the next run. It reports false when project stops consumption.
 func pumpProviderEvents(
 	events <-chan ports.ChatEvent,
 	flushRequests <-chan chan struct{},
@@ -65,6 +67,7 @@ func pumpProviderEvents(
 		runBytes  int
 		runSince  time.Time
 		lastWrite time.Time
+		lastHead  ports.ChatEvent
 	)
 	timer := time.NewTimer(interval)
 	timer.Stop()
@@ -75,7 +78,7 @@ func pumpProviderEvents(
 		}
 		unit := run
 		run, runBytes = nil, 0
-		lastWrite = time.Now()
+		lastWrite, lastHead = time.Now(), unit[0]
 		return project(unit)
 	}
 	answer := func(done chan struct{}) bool {
@@ -102,7 +105,7 @@ func pumpProviderEvents(
 			}
 			continue
 		default:
-			if len(run) > 0 && time.Since(lastWrite) >= interval {
+			if len(run) > 0 && (time.Since(lastWrite) >= interval || !sameStream(lastHead, run[0])) {
 				if !flush() {
 					return false
 				}
@@ -151,8 +154,8 @@ func pumpProviderEvents(
 	}
 }
 
-// flushDeltas asks the projector to commit the run it is batching and waits
-// until it has, the controller stopped, or ctx ended.
+// flushDeltas asks the projector to write the run it is batching and waits until
+// that write has finished, the controller stopped, or ctx ended.
 func (c *Controller) flushDeltas(ctx context.Context) {
 	done := make(chan struct{})
 	select {

@@ -256,6 +256,39 @@ func TestPumpWritesAtMostOncePerInterval(t *testing.T) {
 	})
 }
 
+// A new item's first delta creates its row and takes its timeline position, so
+// it is written at once even right after another stream's write; only the same
+// stream continuing waits for the window.
+func TestPumpWritesTheFirstDeltaOfANewStreamAtOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		events := make(chan ports.ChatEvent)
+		units, _, end := startPump(t, events, nil, nil)
+		defer end()
+
+		events <- streamDelta(ports.ChatEventReasoningDelta, "rs", "think")
+		time.Sleep(10 * time.Millisecond)
+		events <- ports.ChatEvent{Kind: ports.ChatEventActivityCompleted, ProviderTurnID: "turn", ProviderItemID: "rs"}
+		time.Sleep(10 * time.Millisecond)
+		events <- messageDelta("msg", "Hello")
+		synctest.Wait()
+		assertWrites(t, drainUnits(units),
+			`reasoning.delta rs "think"`,
+			`activity.completed rs ""`,
+			`message.delta msg "Hello"`,
+		)
+
+		time.Sleep(10 * time.Millisecond)
+		events <- messageDelta("msg", " world")
+		synctest.Wait()
+		if got := drainUnits(units); len(got) != 0 {
+			t.Fatalf("wrote %q before the window closed", writes(got))
+		}
+		time.Sleep(40 * time.Millisecond)
+		synctest.Wait()
+		assertWrites(t, drainUnits(units), `message.delta msg " world"`)
+	})
+}
+
 // Closing the stream is controller shutdown: whatever is still batched is
 // written before the pump returns, without waiting for its window.
 func TestPumpFlushesPendingRunWhenTheStreamEnds(t *testing.T) {

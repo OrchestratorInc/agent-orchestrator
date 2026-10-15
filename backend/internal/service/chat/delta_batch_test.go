@@ -27,12 +27,14 @@ func isDeltaMethod(method string) bool {
 }
 
 // commitCountingStore counts the write transactions the projector opens for
-// streamed deltas. An archive call made inside another one shares its parent's
-// transaction and is not counted.
+// streamed deltas, and how many of them have returned without error. An archive
+// call made inside another one shares its parent's transaction and is not
+// counted.
 type commitCountingStore struct {
 	*sqlite.Store
-	depth        atomic.Int32
-	deltaCommits atomic.Int32
+	depth          atomic.Int32
+	deltaCommits   atomic.Int32
+	deltaCommitted atomic.Int32
 }
 
 func (s *commitCountingStore) ProjectProviderEvent(
@@ -40,12 +42,17 @@ func (s *commitCountingStore) ProjectProviderEvent(
 	generation, providerEventID, method, payloadJSON string, now time.Time,
 	project func(context.Context) error,
 ) (bool, error) {
-	if s.depth.Add(1) == 1 && isDeltaMethod(method) {
+	top := s.depth.Add(1) == 1 && isDeltaMethod(method)
+	defer s.depth.Add(-1)
+	if top {
 		s.deltaCommits.Add(1)
 	}
-	defer s.depth.Add(-1)
-	return s.Store.ProjectProviderEvent(ctx, conversationID, session, generation,
+	projected, err := s.Store.ProjectProviderEvent(ctx, conversationID, session, generation,
 		providerEventID, method, payloadJSON, now, project)
+	if top && err == nil {
+		s.deltaCommitted.Add(1)
+	}
+	return projected, err
 }
 
 // deltaScript is one turn with every streamed column: reasoning past the
@@ -275,23 +282,17 @@ func TestPersistentDeltaRunAcknowledgesEachEventAfterCommit(t *testing.T) {
 	defer restore()
 	const deltas = 50
 	var (
-		h         *harness
-		acked     []string
-		ackErr    error
-		reply     strings.Builder
-		durableAt = map[string]bool{}
+		counter *commitCountingStore
+		acked   []string
+		early   []string
+		reply   strings.Builder
 	)
 	conv := &receiptConversation{terminatingConversation: &terminatingConversation{fakeConversation: newFakeConversation()}}
 	conv.ack = func(id string) error {
-		// Runs on the projector goroutine right after the commit, so the text of
-		// an acknowledged delta must already be readable.
-		if strings.HasPrefix(id, "d-") && ackErr == nil {
-			snapshot, err := h.st.LoadConversationSnapshot(context.Background(), h.ctrl.ConversationID())
-			if err != nil {
-				ackErr = err
-			} else {
-				durableAt[id] = len(snapshot.Messages) == 1 && strings.Contains(snapshot.Messages[0].Text, id+"|")
-			}
+		// Runs on the projector goroutine. counter is set before Start launches
+		// it; a delta must not be acknowledged before its transaction returned.
+		if strings.HasPrefix(id, "d-") && counter.deltaCommitted.Load() == 0 {
+			early = append(early, id)
 		}
 		acked = append(acked, id)
 		return nil
@@ -310,8 +311,7 @@ func TestPersistentDeltaRunAcknowledgesEachEventAfterCommit(t *testing.T) {
 		TurnState: domain.TurnStateCompleted})
 	want = append(want, "done")
 
-	var counter *commitCountingStore
-	h = newHarnessWithConversationAndStore(t, conv, func(st *sqlite.Store) chatsvc.Store {
+	h := newHarnessWithConversationAndStore(t, conv, func(st *sqlite.Store) chatsvc.Store {
 		counter = &commitCountingStore{Store: st}
 		return counter
 	})
@@ -324,19 +324,15 @@ func TestPersistentDeltaRunAcknowledgesEachEventAfterCommit(t *testing.T) {
 	if got := counter.deltaCommits.Load(); got != 1 {
 		t.Fatalf("%d deltas took %d transactions, want one run", deltas, got)
 	}
+	// Stop waits for the projector, so its acknowledgements are complete.
 	if err := h.svc.Stop(context.Background(), testSession); err != nil {
 		t.Fatal(err)
-	}
-	if ackErr != nil {
-		t.Fatal(ackErr)
 	}
 	if !slices.Equal(acked, want) {
 		t.Fatalf("acknowledged %v, want %v", acked, want)
 	}
-	for id, durable := range durableAt {
-		if !durable {
-			t.Fatalf("acknowledged %s before its text was durable", id)
-		}
+	if len(early) != 0 {
+		t.Fatalf("acknowledged %v before their transaction returned", early)
 	}
 }
 

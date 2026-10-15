@@ -301,8 +301,9 @@ type Controller struct {
 	// older notification write from landing after an authoritative replacement.
 	mcpPersistMu sync.Mutex
 
-	// flushRequests asks the projector to commit the deltas it is batching; it
-	// closes the sent channel once they are durable.
+	// flushRequests asks the projector to write the deltas it is batching; it
+	// closes the sent channel once that write has finished, whether or not it
+	// succeeded.
 	flushRequests chan chan struct{}
 
 	stopped  chan struct{}
@@ -2400,9 +2401,6 @@ func (c *Controller) interruptForHandoff(ctx context.Context) error {
 //     "no active turn" would leave the user staring at a Working bar they cannot
 //     dismiss. Reconcile the durable row instead.
 func (c *Controller) Interrupt(ctx context.Context) error {
-	// Text the provider already streamed is committed before Stop can settle the
-	// turn, so a batched delta cannot land after the settle and reopen the reply.
-	c.flushDeltas(ctx)
 	c.mu.Lock()
 	c.interrupts++
 	if c.forkCancel != nil {
@@ -2410,6 +2408,9 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 	}
 	c.mu.Unlock()
 	defer func() { c.mu.Lock(); c.interrupts--; c.mu.Unlock() }()
+	// Text the provider already streamed is committed before Stop can settle the
+	// turn, so a batched delta cannot land after the settle and reopen the reply.
+	c.flushDeltas(ctx)
 	// Stop's linearization point is the dispatch lock. A Send that acquired the
 	// lock first is existing work Stop should cancel; a Send that arrives after
 	// this point waits and is therefore post-Stop work that must survive.
