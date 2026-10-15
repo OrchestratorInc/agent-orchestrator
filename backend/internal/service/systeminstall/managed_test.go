@@ -20,8 +20,48 @@ import (
 // managedCodexService updates Codex through npm into a managed root. The fake
 // npm install writes a codex binary into the --prefix directory, and that
 // binary reports the version it was installed at.
+// releaseStoreStub stands in for the database: the current release per
+// harness and the releases live sessions run.
+type releaseStoreStub struct {
+	mu      sync.Mutex
+	current map[domain.AgentHarness]string
+	inUse   map[domain.AgentHarness][]string
+	failUse bool
+}
+
+func (r *releaseStoreStub) SetManagedHarnessRelease(_ context.Context, harness domain.AgentHarness, release string, _ time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.current == nil {
+		r.current = map[domain.AgentHarness]string{}
+	}
+	r.current[harness] = release
+	return nil
+}
+
+func (r *releaseStoreStub) ListHarnessReleasesInUse(_ context.Context, harness domain.AgentHarness) ([]string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.failUse {
+		return nil, errors.New("database unavailable")
+	}
+	return slices.Clone(r.inUse[harness]), nil
+}
+
+func (r *releaseStoreStub) PruneSessionHarnessReleases(context.Context) error { return nil }
+
+func (r *releaseStoreStub) setInUse(harness domain.AgentHarness, releases ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.inUse == nil {
+		r.inUse = map[domain.AgentHarness][]string{}
+	}
+	r.inUse[harness] = releases
+}
+
 type managedCodexFixture struct {
 	s           *Service
+	releases    *releaseStoreStub
 	root        string
 	installs    []ports.InstallCommand
 	invalidated []Target
@@ -34,9 +74,10 @@ func newManagedCodexFixture(t *testing.T, sessions []domain.SessionRecord) *mana
 	if runtime.GOOS == "windows" {
 		t.Skip("managed launchers are symlinks on Unix; Windows uses a junction and a .cmd launcher")
 	}
-	f := &managedCodexFixture{root: t.TempDir()}
+	f := &managedCodexFixture{root: t.TempDir(), releases: &releaseStoreStub{}}
 	s := newTestService("darwin", "npm")
 	s.managedRoot = f.root
+	s.releases = f.releases
 	s.sessions = sessionListerStub{sessions: sessions}
 	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
 	s.SetBinaryInvalidator(func(target Target) {
@@ -127,6 +168,9 @@ func TestManagedUpdateInstallsSideBySideAndSwitches(t *testing.T) {
 	if !slices.Contains(f.invalidated, TargetCodex) {
 		t.Fatal("the adapter was not told to resolve the managed launcher")
 	}
+	if f.releases.current[domain.HarnessCodex] != "v1" {
+		t.Fatalf("current release recorded = %q, want v1", f.releases.current[domain.HarnessCodex])
+	}
 
 	// A second update gets a new directory; the first stays for the sessions
 	// that still run it.
@@ -178,26 +222,47 @@ func TestFailedManagedInstallLeavesTheCurrentReleaseAlone(t *testing.T) {
 	}
 }
 
-func TestUnusedManagedReleasesAreRemovedOnceSessionsMove(t *testing.T) {
+func TestReleasesAreDeletedOnlyOnceNoLiveSessionRunsThem(t *testing.T) {
 	f := newManagedCodexFixture(t, nil)
 	f.update(t, "1.1.0")
 	f.update(t, "1.2.0")
-	observer := &updateObserverStub{stale: map[domain.AgentHarness]int64{domain.HarnessCodex: 1}}
-	f.s.SetHarnessUpdateObserver(observer)
+	f.update(t, "1.3.0")
+	release := func(name string) bool {
+		_, err := os.Stat(filepath.Join(f.root, "codex", "versions", name))
+		return err == nil
+	}
 
+	// One session still runs v1 (for example a Chat that reconnected to its
+	// old process after a daemon restart); v2 is unused.
+	f.releases.setInUse(domain.HarnessCodex, "v1")
+	f.s.RemoveUnusedManagedReleases(context.Background())
+	if !release("v1") || release("v2") || !release("v3") {
+		t.Fatalf("v1=%t v2=%t v3=%t; want only the unused v2 removed", release("v1"), release("v2"), release("v3"))
+	}
+
+	// If the database cannot say what is in use, nothing is deleted.
+	f.releases.failUse = true
+	f.releases.setInUse(domain.HarnessCodex)
+	f.s.RemoveUnusedManagedReleases(context.Background())
+	if !release("v1") {
+		t.Fatal("deleted a release while sessions in use could not be read")
+	}
+
+	f.releases.failUse = false
+	f.s.RemoveUnusedManagedReleases(context.Background())
+	if release("v1") || !release("v3") {
+		t.Fatalf("v1=%t v3=%t; want v1 removed once no session runs it and the current kept", release("v1"), release("v3"))
+	}
+}
+
+func TestNoReleaseIsDeletedWithoutTheReleaseStore(t *testing.T) {
+	f := newManagedCodexFixture(t, nil)
+	f.update(t, "1.1.0")
+	f.update(t, "1.2.0")
+	f.s.releases = nil
 	f.s.RemoveUnusedManagedReleases(context.Background())
 	if _, err := os.Stat(filepath.Join(f.root, "codex", "versions", "v1")); err != nil {
-		t.Fatalf("removed a release a session still runs: %v", err)
-	}
-	observer.mu.Lock()
-	observer.stale = nil
-	observer.mu.Unlock()
-	f.s.RemoveUnusedManagedReleases(context.Background())
-	if _, err := os.Stat(filepath.Join(f.root, "codex", "versions", "v1")); !os.IsNotExist(err) {
-		t.Fatalf("an unused release was kept: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(f.root, "codex", "versions", "v2", "bin", "codex")); err != nil {
-		t.Fatalf("the current release was removed: %v", err)
+		t.Fatalf("deleted a release with no record of what sessions run: %v", err)
 	}
 }
 

@@ -88,7 +88,14 @@ way Claude Code's native installer keeps each release apart:
 3. Switch `current` (atomic rename on Unix; junction swap under the harness lock on Windows).
 4. Harness resolvers check `~/.ao/data/harnesses/bin` first, so new sessions start the new release.
 5. Sessions on the old release are marked stale and restart once idle.
-6. An old release is deleted once no live session of that harness is stale (retried while Windows holds it).
+6. An old release is deleted only once no live session runs it. Every launch
+   records the release it started from in the database (a trigger on new
+   controller generations and terminal launch ids, `session_harness_releases`),
+   and a live Chat reconnect after a daemon restart carries its old release
+   over before the new generation is written. Cleanup deletes a release only
+   when it is neither current nor recorded for a live session's current
+   launch, and deletes nothing when that cannot be read. Windows also refuses
+   to delete a release a process still holds; it is retried on the next sweep.
 
 These updates are `safe` on every platform, Windows included. The user's own
 global install (their terminal's `claude`) is left untouched; login and config

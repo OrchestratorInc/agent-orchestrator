@@ -397,6 +397,12 @@ type Cue struct {
 	UpdatedAt time.Time
 }
 
+type ManagedHarnessRelease struct {
+	Harness   string
+	Release   string
+	UpdatedAt time.Time
+}
+
 type ModelUsageEvent struct {
 	ID                    int64
 	BindingID             int64
@@ -718,6 +724,13 @@ type SessionCleanupFact struct {
 	LastAttemptAt        sql.NullTime
 	NextAttemptAt        sql.NullTime
 	FailureCode          string
+}
+
+type SessionHarnessRelease struct {
+	SessionID string
+	Launch    string
+	Harness   string
+	Release   string
 }
 
 type SessionInterfaceTransition struct {

@@ -36,6 +36,15 @@ import (
 // files of the release it started from until it moves and the old directory
 // is removed. The user's own install, on PATH for their terminal, is left alone.
 
+// ManagedReleaseStore records which managed release each session launch runs.
+// Launches record the harness's current release themselves (a database
+// trigger), so the store only needs the current release and the ones in use.
+type ManagedReleaseStore interface {
+	SetManagedHarnessRelease(ctx context.Context, harness domain.AgentHarness, release string, at time.Time) error
+	ListHarnessReleasesInUse(ctx context.Context, harness domain.AgentHarness) ([]string, error)
+	PruneSessionHarnessReleases(ctx context.Context) error
+}
+
 // managedMethods are the update methods AO installs side by side.
 var managedMethods = map[string]bool{"npm": true, "bun": true, "uv": true, "pipx": true}
 
@@ -239,6 +248,13 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 		return err
 	}
 	keep = true
+	if s.releases != nil {
+		// Still under the harness lock: every launch from here on records this
+		// release, and every earlier launch recorded the one it started from.
+		if err := s.releases.SetManagedHarnessRelease(ctx, domain.AgentHarness(plan.Target), name, time.Now().UTC()); err != nil {
+			return fmt.Errorf("record the new release: %w", err)
+		}
+	}
 	record := managedRecord{Method: plan.Method, Package: pkg, CLI: cli, Version: version, Dir: name, BinRel: binRel}
 	if err := s.ensureManagedLauncher(plan.Target, record); err != nil {
 		return err
@@ -318,28 +334,17 @@ func (s *Service) ensureManagedLauncher(target Target, record managedRecord) err
 	return os.Rename(tmp, launcher)
 }
 
-// RemoveUnusedManagedReleases deletes every release directory other than the
-// current one once no live session of its harness still runs an older
-// release. A directory a process still holds (Windows refuses the delete) is
-// left for the next call.
+// RemoveUnusedManagedReleases deletes every release directory that is neither
+// current nor run by a live session. What a session runs is recorded per
+// launch in the database, so a daemon restart, or a Chat that reconnected to
+// its old process, never lets a release in use be deleted. A directory a
+// process still holds (Windows refuses the delete) is left for the next call.
+// Without the release store nothing is deleted.
 func (s *Service) RemoveUnusedManagedReleases(ctx context.Context) {
-	if s.managedRoot == "" {
+	if s.managedRoot == "" || s.releases == nil {
 		return
 	}
-	s.mu.Lock()
-	observer := s.updateObserver
-	s.mu.Unlock()
-	var stale map[string]int64
-	if observer != nil {
-		counts, err := observer.CountStaleBinarySessions(ctx)
-		if err != nil {
-			return
-		}
-		stale = make(map[string]int64, len(counts))
-		for harness, count := range counts {
-			stale[string(harness)] = count
-		}
-	}
+	_ = s.releases.PruneSessionHarnessReleases(ctx)
 	entries, err := os.ReadDir(s.managedRoot)
 	if err != nil {
 		return
@@ -350,18 +355,29 @@ func (s *Service) RemoveUnusedManagedReleases(ctx context.Context) {
 		}
 		target := Target(entry.Name())
 		record, ok := s.readManagedRecord(target)
-		if !ok || stale[string(target)] > 0 {
+		if !ok {
 			continue
 		}
 		gate := s.harnessGate(domain.AgentHarness(target))
 		if !gate.TryLock() {
 			continue
 		}
+		// Read with launches held off, so none can start on a release between
+		// this check and its deletion.
+		inUse, err := s.releases.ListHarnessReleasesInUse(ctx, domain.AgentHarness(target))
+		if err != nil {
+			gate.Unlock()
+			continue
+		}
+		keep := map[string]bool{record.Dir: true}
+		for _, release := range inUse {
+			keep[release] = true
+		}
 		versionsDir := filepath.Join(s.managedTargetDir(target), "versions")
 		releases, _ := os.ReadDir(versionsDir)
 		names := make([]string, 0, len(releases))
 		for _, release := range releases {
-			if release.Name() != record.Dir {
+			if !keep[release.Name()] {
 				names = append(names, release.Name())
 			}
 		}

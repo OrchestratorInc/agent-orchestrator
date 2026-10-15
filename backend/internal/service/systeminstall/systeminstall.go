@@ -364,6 +364,9 @@ type Deps struct {
 	// ManagedRoot is where AO keeps versioned harness installs (under the AO
 	// data dir). Empty keeps every update in place.
 	ManagedRoot string
+	// Releases records which managed release each session launch runs, so a
+	// release is deleted only once no live session runs it.
+	Releases ManagedReleaseStore
 	// WindowsUpdateWhenIdle lets a Windows update wait for idle sessions, stop
 	// them, update and resume them, instead of refusing while they run
 	// (AO_WINDOWS_UPDATE_WHEN_IDLE).
@@ -412,6 +415,8 @@ type Service struct {
 	updateWhileRunningDisabled bool
 	// managedRoot holds AO's versioned harness installs; "" turns them off.
 	managedRoot string
+	// releases tracks the managed release each session launch runs.
+	releases ManagedReleaseStore
 	// invalidateBinary makes a harness adapter resolve its executable again.
 	invalidateBinary func(Target)
 	// windowsUpdateWhenIdle turns Windows' blocked level into update-when-idle.
@@ -501,6 +506,7 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 		updateWhileRunningDisabled: deps.DisableUpdateWhileRunning,
 		windowsUpdateWhenIdle:      deps.WindowsUpdateWhenIdle,
 		managedRoot:                deps.ManagedRoot,
+		releases:                   deps.Releases,
 		goos:                       runtime.GOOS,
 		installTimeout:             defaultInstallTimeout,
 		persistenceTimeout:         defaultPersistenceTimeout,

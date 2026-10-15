@@ -653,7 +653,19 @@ func (m *Manager) markChatControllerSpawned(
 		if providerBoundary != nil {
 			return domain.ConversationRecord{}, errors.New("live Chat reconnect cannot replace the provider boundary")
 		}
-		return conversation, m.lcm.MarkChatReconnected(ctx, id, metadata)
+		// The same provider process continues under a new generation: it still
+		// runs the release it started from, and keeps its stale mark.
+		previous, previousErr := m.getRecord(ctx, id)
+		if previousErr == nil {
+			m.carryHarnessRelease(ctx, id, previous.Metadata.ControllerGeneration, metadata.ControllerGeneration)
+		}
+		if err := m.lcm.MarkChatReconnected(ctx, id, metadata); err != nil {
+			return conversation, err
+		}
+		if previousErr == nil {
+			m.carryStaleBinary(ctx, id, previous.Metadata.ControllerGeneration, metadata.ControllerGeneration)
+		}
+		return conversation, nil
 	}
 	if handoff != nil && (providerBoundary == nil || commitProviderHistory == nil) {
 		return domain.ConversationRecord{}, errors.New("native Chat handoff requires atomic history publication")

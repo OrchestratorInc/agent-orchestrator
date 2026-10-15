@@ -689,6 +689,7 @@ func Run() error {
 		DisableUpdateWhileRunning: !cfg.UpdateWhileRunning,
 		WindowsUpdateWhenIdle:     cfg.WindowsUpdateWhenIdle,
 		ManagedRoot:               managedHarnessRoot(cfg),
+		Releases:                  store,
 		PrivateNPMPrefixes:        privateNPMPrefixes,
 	})
 	if err := systemInstall.Recover(ctx); err != nil {

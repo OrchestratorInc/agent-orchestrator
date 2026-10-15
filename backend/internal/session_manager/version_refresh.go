@@ -207,3 +207,31 @@ func (m *Manager) RetryVersionMoves(ctx context.Context) error {
 	}
 	return errors.Join(errs...)
 }
+
+// launchFactsCarrier keeps a session's release facts across a live reconnect.
+type launchFactsCarrier interface {
+	CarryHarnessRelease(ctx context.Context, id domain.SessionID, oldLaunch, newLaunch string) error
+	CarryStaleBinary(ctx context.Context, id domain.SessionID, oldLaunch, newLaunch string) error
+}
+
+// carryHarnessRelease runs before the reconnect writes its new generation, so
+// the launch trigger finds the old release already recorded and keeps it.
+func (m *Manager) carryHarnessRelease(ctx context.Context, id domain.SessionID, oldLaunch, newLaunch string) {
+	carrier, ok := m.store.(launchFactsCarrier)
+	if !ok {
+		return
+	}
+	if err := carrier.CarryHarnessRelease(context.WithoutCancel(ctx), id, oldLaunch, newLaunch); err != nil {
+		m.logger.Warn("could not carry the running release across a Chat reconnect", "sessionID", id, "error", err)
+	}
+}
+
+func (m *Manager) carryStaleBinary(ctx context.Context, id domain.SessionID, oldLaunch, newLaunch string) {
+	carrier, ok := m.store.(launchFactsCarrier)
+	if !ok {
+		return
+	}
+	if err := carrier.CarryStaleBinary(context.WithoutCancel(ctx), id, oldLaunch, newLaunch); err != nil {
+		m.logger.Warn("could not carry the stale release mark across a Chat reconnect", "sessionID", id, "error", err)
+	}
+}
