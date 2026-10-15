@@ -3,7 +3,8 @@ import { useTranslation } from "react-i18next";
 import { versionLabel, type InstallJob } from "../../../hooks/useHarnessUpdates";
 import type { TerminalSessionState } from "../../../hooks/useTerminalSession";
 import { aoBridge } from "../../../lib/bridge";
-import { cn, truncateMiddle } from "../../../lib/utils";
+import { cn } from "../../../lib/utils";
+import { MiddleTruncatedText } from "../../MiddleTruncatedText";
 import { Button } from "../../ui/button";
 import { SettingsOptionMenu } from "../SettingsOptionMenu";
 import type { HarnessDetails } from "./describe-harness";
@@ -83,8 +84,8 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 					: details.installationPending ? t("settings.harness.installationUnknown") : t("settings.harness.notInstalled")}
 				description={isInstalled ? (details.maintenanceMethod?.label ? t("settings.harness.installedWith", { method: details.maintenanceMethod.label }) : undefined) : details.installNote}
 			>
-				{isInstalled ? <span className="break-all font-mono text-xs text-settings-label">{details.versionText}{details.versionUnverified && details.currentVersion ? ` · ${t("settings.harness.unverified")}` : ""}</span> : null}
-				{isInstalled && details.updateAvailable ? <span className="whitespace-nowrap text-xs font-medium text-settings-accent" title={versionLabel(details.advisory!.latestVersion!)}>{t("settings.harness.versionAvailable", { version: truncateMiddle(versionLabel(details.advisory!.latestVersion!)) })}</span> : null}
+				{isInstalled ? <span className="break-all font-mono text-xs text-settings-label">{details.currentVersion ? <MiddleTruncatedText className="whitespace-nowrap" text={details.versionText} /> : details.versionText}{details.versionUnverified && details.currentVersion ? ` · ${t("settings.harness.unverified")}` : ""}</span> : null}
+				{isInstalled && details.updateAvailable ? <MiddleTruncatedText className="whitespace-nowrap text-xs font-medium text-settings-accent" text={versionLabel(details.advisory!.latestVersion!)} format={(version) => t("settings.harness.versionAvailable", { version })} /> : null}
 				{isInstalled && !details.updateUnknown && !details.updateAvailable && !details.busy ? <span className="text-xs text-settings-muted">{t(details.advisory?.status === "ahead_of_latest" ? "settings.harness.aheadOfLatest" : "settings.harness.latest")}</span> : null}
 				{installationAction}
 			</HarnessDetailRow>
