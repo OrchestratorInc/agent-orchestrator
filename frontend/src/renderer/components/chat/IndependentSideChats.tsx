@@ -1067,24 +1067,6 @@ export function useIndependentSideChats(
 	}, [sides.length, scrollToEnd]);
 	useEffect(() => {
 		const strip = tabStripRef.current;
-		if (!strip) return;
-		const wheel = (event: WheelEvent) => {
-			if (
-				event.ctrlKey ||
-				event.metaKey ||
-				Math.abs(event.deltaX) >= Math.abs(event.deltaY) ||
-				!event.deltaY ||
-				strip.scrollWidth <= strip.clientWidth
-			)
-				return;
-			event.preventDefault();
-			strip.scrollBy({ left: event.deltaY });
-		};
-		strip.addEventListener("wheel", wheel, { passive: false });
-		return () => strip.removeEventListener("wheel", wheel);
-	}, [tabStripRef, visible]);
-	useEffect(() => {
-		const strip = tabStripRef.current;
 		const selected = strip?.querySelector<HTMLElement>('[aria-selected="true"]');
 		if (!strip || !selected) return;
 		const bounds = strip.getBoundingClientRect(),

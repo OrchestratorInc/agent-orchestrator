@@ -155,6 +155,7 @@ type AppSetting struct {
 	DefaultSessionMode domain.SessionMode
 	UpdatedAt          time.Time
 	CloudOffering      bool
+	HarnessDefaults    string
 }
 
 type Automation struct {

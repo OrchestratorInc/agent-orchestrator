@@ -1622,6 +1622,33 @@ textarea,
 	background: transparent;
 }
 
+/* The harness list and the open harness own their scroll areas, so the page
+   itself does not scroll; the name and tabs stay in view. Other settings
+   pages, and a narrow harness list on its own, keep the normal page scroll. */
+.settings-thin-scrollbar:has([data-harness-detail]) {
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.settings-dialog-body:has([data-harness-detail]),
+.settings-dialog-body > div:has([data-harness-detail]),
+[data-section="harness"]:has([data-harness-detail]),
+[data-section="harness"]:has([data-harness-detail]) > div {
+	min-width: 0;
+	max-width: 100%;
+	min-height: 0;
+	flex: 1;
+}
+
+.settings-dialog-body:has([data-harness-detail]) {
+	padding-bottom: 18px;
+}
+
+[data-section="harness"]:has([data-harness-detail]) > div > :not([data-harness-detail]) {
+	flex-shrink: 0;
+}
+
 .settings-thin-scrollbar {
 	scrollbar-width: thin;
 	scrollbar-color: color-mix(in srgb, var(--color-scrollbar) 16%, transparent) transparent;
@@ -2290,6 +2317,36 @@ body.is-resizing-x [data-slot="inspector-container"] {
 	transition: none;
 }
 
+/* Inspector rail geometry is plain CSS so a session switch paints the
+ * destination's open state and width in its first frame. Only an open/close
+ * inside the current session (data-motion="animated") slides. */
+[data-slot="inspector-container"][data-state="collapsed"] {
+	transform: translateX(100%);
+}
+
+[data-slot="inspector-gap"][data-motion="animated"],
+[data-slot="inspector-container"][data-motion="animated"] {
+	transition:
+		width var(--session-inspector-motion-duration, 300ms)
+			var(--session-inspector-motion-easing, ease-out),
+		transform var(--session-inspector-motion-duration, 300ms)
+			var(--session-inspector-motion-easing, ease-out);
+}
+
+/* Opening a settled (display: none) rail has no before-change style. */
+@starting-style {
+	[data-slot="inspector-container"][data-motion="animated"][data-state="expanded"] {
+		transform: translateX(100%);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	[data-slot="inspector-gap"][data-motion="animated"],
+	[data-slot="inspector-container"][data-motion="animated"] {
+		transition: none;
+	}
+}
+
 /* Browser is an automatic co-work canvas, while Summary/Reviews/Files retain
  * the utility rail width. Interpolate the shared gap + panel boxes together;
  * direct pointer resizing remains immediate. */
@@ -2299,6 +2356,8 @@ body.is-resizing-x [data-slot="inspector-container"] {
 		width var(--session-inspector-motion-duration, 300ms)
 			var(--session-inspector-motion-easing, ease-out),
 		max-width var(--session-inspector-motion-duration, 300ms)
+			var(--session-inspector-motion-easing, ease-out),
+		transform var(--session-inspector-motion-duration, 300ms)
 			var(--session-inspector-motion-easing, ease-out);
 }
 
@@ -3359,6 +3418,14 @@ html.sidebar-reordering * {
 .session-pinned-actions-reserve[data-state="expanded"] {
 	width: calc(var(--size-topbar-control) + var(--size-topbar-control) + var(--space-2));
 	margin-left: 0;
+}
+
+/* Session switches restore the destination's topbar in its first frame; these
+ * transitions are only for changes inside a session (useSessionSwitchSnap). */
+:root[data-session-switching] .session-pinned-actions-reserve,
+:root[data-session-switching] .workspace-topbar-actions .topbar-control,
+:root[data-session-switching] .workspace-topbar-actions [data-compact-label] {
+	transition: none !important;
 }
 
 .session-pinned-actions {
@@ -6187,6 +6254,23 @@ html[data-window-translucent="true"] .app-shell-root::before {
 	z-index: -1;
 	pointer-events: none;
 	background-color: color-mix(in srgb, var(--sidebar) 70%, transparent);
+}
+
+/* The startup screen covers the window above (or before) the shell. It has
+ * only the mascot to show, so it skips the tint and shows the bare blur. */
+html[data-window-translucent="true"] .ao-startup-screen {
+	background-color: transparent;
+}
+
+/* A loader inside the running shell (remote host loading, missing
+ * dependency) would let the shell show through it. Hide the shell, tint
+ * included, and keep only the loader visible. */
+html[data-window-translucent="true"] .app-shell-root:has(.ao-startup-screen) {
+	visibility: hidden;
+}
+
+html[data-window-translucent="true"] .app-shell-root .ao-startup-screen {
+	visibility: visible;
 }
 
 /* The live page is a native view below the shell. Cut the tint out over its

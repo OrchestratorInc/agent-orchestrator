@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { agentSwitchesQueryKey } from "../../hooks/useAgentSwitches";
-import type { ChatConfigOption, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
+import type { ChatConfigOption, ChatModel, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
 import type { AgentSwitchSummary, WorkspaceSession } from "../../types/workspace";
 import { useUiStore } from "../../stores/ui-store";
 import { workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
@@ -96,6 +96,7 @@ const visibilityMocks = vi.hoisted(() => ({
 vi.mock("../../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: postMock },
 	getApiBaseUrl: () => "",
+	hasTrustedApiBaseUrl: () => true,
 	subscribeApiBaseUrl: () => () => {},
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
 }));
@@ -128,6 +129,7 @@ vi.mock("../../hooks/useAgentSwitchVisibility", () => ({
 
 vi.mock("./ChatWorkspace", async () => {
 	const { useState } = await vi.importActual<typeof import("react")>("react");
+	const { TurnSettingsBar } = await vi.importActual<typeof import("./TurnSettingsBar")>("./TurnSettingsBar");
 	return {
 		ChatWorkspace: ({
 			agentInputDisabled,
@@ -138,6 +140,8 @@ vi.mock("./ChatWorkspace", async () => {
 			onRememberPermissions,
 			onChooseSettings,
 			configOptionError,
+			configOptions,
+			models,
 			promptSuggestion,
 			snapshot,
 			shellTarget,
@@ -152,8 +156,10 @@ vi.mock("./ChatWorkspace", async () => {
 			onRememberPermissions?: unknown;
 			onChooseSettings?: unknown;
 			configOptionError?: string;
+			configOptions?: ChatConfigOption[];
+			models: ChatModel[];
 			promptSuggestion?: { id: string; text: string };
-			snapshot: { sessionId?: string };
+			snapshot: Pick<ConversationSnapshot, "sessionId" | "harness" | "settings">;
 			shellTarget?: { handleId: string };
 		}) => {
 			sideMocks.workspaceSend = onSend;
@@ -173,6 +179,12 @@ vi.mock("./ChatWorkspace", async () => {
 					<div data-testid="remember-available">{String(Boolean(onRememberPermissions))}</div>
 					<div data-testid="turn-settings-available">{String(Boolean(onChooseSettings))}</div>
 					<div data-testid="config-option-error">{configOptionError}</div>
+					{configOptions?.map((option) => (
+						<div key={option.id} data-testid={`config-option-${option.id}`}>
+							{option.choices.map((choice) => choice.value).join(",")}
+						</div>
+					))}
+					{snapshot.harness === "claude-code" && <TurnSettingsBar models={models} settings={snapshot.settings} harness={snapshot.harness} configOptions={configOptions} onChangeConfigOption={() => {}} />}
 					<div data-testid="prompt-suggestion">{promptSuggestion?.text}</div>
 					{headerActions}
 					{sessionTabAction}
@@ -349,6 +361,78 @@ describe("SessionChatSurface link routing", () => {
 		render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, provider: "opencode" }} /></Wrapper>);
 
 		expect(screen.getByTestId("turn-settings-available")).toHaveTextContent("true");
+	});
+
+	it("leaves switched-off models out of a provider's model option, keeping its current value", async () => {
+		conversationState.snapshot = { capabilities: ["config_options"], harness: "opencode" };
+		configState.loaded = true;
+		configState.options = [
+			{
+				id: "model", name: "Model", category: "model", type: "select", currentValue: "model-c",
+				choices: [{ value: "model-a", name: "A" }, { value: "model-b", name: "B" }, { value: "model-c", name: "C" }],
+			},
+			{
+				id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "build",
+				choices: [{ value: "build", name: "Build" }, { value: "plan", name: "Plan" }],
+			},
+		];
+		getMock.mockImplementation(async (path: string) => path === "/api/v1/settings"
+			? { data: { defaultSessionMode: "chat", chatHarnesses: [], harnessDefaults: { opencode: { disabledModels: ["model-b", "model-c"] } } }, error: undefined, response: { status: 200 } }
+			: { data: { switches: agentSwitchState.data }, error: undefined, response: { status: 200 } });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+
+		render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, provider: "opencode" }} /></Wrapper>);
+
+		await waitFor(() => expect(screen.getByTestId("config-option-model")).toHaveTextContent("model-a,model-c"));
+		expect(screen.getByTestId("config-option-mode")).toHaveTextContent("build,plan");
+	});
+
+	it("matches Claude's family aliases to the catalog models switched off in Settings", async () => {
+		conversationState.snapshot = { capabilities: ["config_options"], harness: "claude-code" };
+		configState.loaded = true;
+		configState.options = [{
+			id: "model", name: "Model", category: "model", type: "select", currentValue: "default",
+			choices: [{ value: "default", name: "Default" }, { value: "opus", name: "Opus" }, { value: "sonnet", name: "Sonnet" }, { value: "haiku", name: "Haiku" }],
+		}];
+		getMock.mockImplementation(async (path: string) => path === "/api/v1/settings"
+			? { data: { defaultSessionMode: "chat", chatHarnesses: [], harnessDefaults: { "claude-code": { disabledModels: ["claude-opus-5-5"] } } }, error: undefined, response: { status: 200 } }
+			: path === "/api/v1/agents/{agent}/models"
+				? { data: { agentId: "claude-code", models: [
+					{ id: "claude-opus-5-5", label: "Claude Opus 5.5" },
+					{ id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
+					{ id: "claude-haiku-5-5", label: "Claude Haiku 5.5" },
+				] }, error: undefined, response: { status: 200 } }
+				: { data: { switches: agentSwitchState.data }, error: undefined, response: { status: 200 } });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+
+		render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, provider: "claude-code" }} /></Wrapper>);
+
+		await waitFor(() => expect(screen.getByTestId("config-option-model")).toHaveTextContent("default,sonnet,haiku"));
+	});
+
+	it.each(["opus", undefined])("keeps the current Claude alias label when its concrete model is disabled (snapshot model %s)", async (snapshotModel) => {
+		conversationState.snapshot = { capabilities: ["config_options"], harness: "claude-code", settings: { model: snapshotModel } };
+		configState.loaded = true;
+		configState.options = [{
+			id: "model", name: "Model", category: "model", type: "select", currentValue: "opus",
+			choices: [{ value: "opus", name: "Opus" }, { value: "sonnet", name: "Sonnet" }],
+		}];
+		getMock.mockImplementation(async (path: string) => path === "/api/v1/settings"
+			? { data: { defaultSessionMode: "chat", chatHarnesses: [], harnessDefaults: { "claude-code": { disabledModels: ["claude-opus-5-5"] } } }, error: undefined, response: { status: 200 } }
+			: path === "/api/v1/agents/{agent}/models"
+				? { data: { agentId: "claude-code", models: [
+					{ id: "claude-opus-5-5", label: "Claude Opus 5.5" },
+					{ id: "claude-opus-4-9", label: "Claude Opus 4.9" },
+					{ id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
+				] }, error: undefined, response: { status: 200 } }
+				: { data: { switches: agentSwitchState.data }, error: undefined, response: { status: 200 } });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+
+		render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, provider: "claude-code" }} /></Wrapper>);
+
+		await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Opus 5.5"));
+		expect(screen.getByTestId("config-option-model")).toHaveTextContent("opus,sonnet");
 	});
 
 	it("does not report idle work before the conversation snapshot loads", () => {

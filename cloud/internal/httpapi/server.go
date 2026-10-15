@@ -78,6 +78,8 @@ type Store interface {
 	WorkerAgentSessionID(ctx context.Context, orgID, sessionID, workerID string, epoch int64) (string, error)
 	MarkWorkerSeen(ctx context.Context, orgID, sessionID, workerID, version string, epoch int64, capabilities []string) error
 	SetWorkerActivity(ctx context.Context, orgID, sessionID, workerID string, epoch int64, activity worker.ActivityEvent) error
+	RecordWorkspaceStartupError(ctx context.Context, orgID, sessionID, workerID string, epoch int64, code, message, detail string) error
+	ClearWorkspaceStartupError(ctx context.Context, orgID, sessionID, workerID string, epoch int64) error
 	AppendSessionEvent(ctx context.Context, orgID, sessionID, eventType string, payload json.RawMessage) (domain.ClientEvent, error)
 	AppendInteractiveConversationFacts(context.Context, string, string, string, string, string, string) error
 	RecordPullRequestOpened(ctx context.Context, orgID string, pr domain.PullRequest, deliveryID string) error
@@ -584,6 +586,7 @@ func New(options Options) *Server {
 			router.Post("/sessions", server.createSession)
 			router.Get("/sandbox/coder/templates", server.listCoderTemplates)
 			router.Get("/coder-templates/{templateId}/parameters", server.getCoderTemplateParameters)
+			router.Post("/coder-templates/{templateId}/parameters/evaluate", server.evaluateCoderTemplateParameters)
 			router.Get("/sessions/{sessionId}", server.getSession)
 			router.Patch("/sessions/{sessionId}/preferences", server.updateSessionPreferences)
 			router.Patch("/sessions/{sessionId}/auto-inject-ci", server.setCloudSessionAutoInjectCI)

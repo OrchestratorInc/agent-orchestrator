@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"regexp"
 	"strings"
@@ -54,6 +55,13 @@ type putOrgCoderConfigRequest struct {
 	// project repository; defaults to true with the workspace worker user and
 	// is always false with ao-worker.
 	ReuseExistingCheckout *bool `json:"reuseExistingCheckout"`
+	// WorkingDirectory is where sessions work, for example ~/work/{repo}; it
+	// requires the workspace worker user. Empty keeps AO's own checkout (or
+	// the ReuseExistingCheckout search).
+	WorkingDirectory string `json:"workingDirectory"`
+	// ProtectSecretFiles keeps Claude Code from reading or editing .env and
+	// .env.* files; defaults to true.
+	ProtectSecretFiles *bool `json:"protectSecretFiles"`
 }
 
 // orgCoderConfigResponse is the secret-dropping view of an organization's Coder
@@ -185,6 +193,8 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 		ReadyProbe:                request.ReadyProbe,
 		ReadyProbeTimeoutSeconds:  request.ReadyProbeTimeoutSeconds,
 		ReuseExistingCheckout:     request.ReuseExistingCheckout,
+		WorkingDirectory:          request.WorkingDirectory,
+		ProtectSecretFiles:        request.ProtectSecretFiles,
 	})
 	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "The Coder configuration could not be stored.")
@@ -237,7 +247,12 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := normalized.ValidateDevEnvironment(); err != nil {
 		validation.reason, validation.err = "invalid_config", err
-		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
+		code, message := "validation_error", err.Error()
+		if errors.Is(err, domain.ErrCoderSettingRequiresWorkspaceUser) {
+			code = "coder_setting_requires_workspace_user"
+			message = "The working directory needs AO to run as the workspace user. Set the worker user to \"workspace\" first."
+		}
+		writeError(w, r, http.StatusUnprocessableEntity, code, message)
 		return
 	}
 	// A template is optional at the org level — it is chosen per project now — but a
@@ -384,6 +399,12 @@ func keepStoredCoderSettings(config *domain.OrgCoderConfig, stored domain.OrgCod
 	}
 	if omitted("reuseExistingCheckout") {
 		config.ReuseExistingCheckout = stored.ReuseExistingCheckout
+	}
+	if omitted("workingDirectory") {
+		config.WorkingDirectory = stored.WorkingDirectory
+	}
+	if omitted("protectSecretFiles") {
+		config.ProtectSecretFiles = stored.ProtectSecretFiles
 	}
 }
 

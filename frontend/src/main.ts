@@ -1067,6 +1067,9 @@ async function createWindowInternal(): Promise<void> {
 		disposeBrowserRuntimeLink();
 		keybindingRecordingActive = false;
 		if (windowComposition === composition) windowComposition = null;
+		// Vibrancy belongs to the closed window. The shell of a recreated window
+		// (macOS Quit keeps the process, then Dock reopen) asks for it again.
+		windowTranslucent = false;
 		void disposeBrowserViewHost()
 			.finally(() => {
 				composition.dispose();
@@ -2359,7 +2362,9 @@ ipcMain.handle("theme:set-window-background", (_event, color: unknown) => {
 });
 
 ipcMain.handle("theme:set-window-translucent", (_event, enabled: unknown) => {
-	if (process.platform !== "darwin" || typeof enabled !== "boolean" || enabled === windowTranslucent) return;
+	// No early return when the value is unchanged: each new shell document asks
+	// again, and re-applying is cheap and recovers any native state that drifted.
+	if (process.platform !== "darwin" || typeof enabled !== "boolean") return;
 	if (!mainWindow || mainWindow.isDestroyed()) return;
 	windowTranslucent = enabled;
 	mainWindow.setVibrancy(enabled ? "under-window" : null);
