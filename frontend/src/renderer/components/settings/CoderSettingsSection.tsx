@@ -199,7 +199,7 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						value={token}
 						onChange={(event) => setToken(event.target.value)}
 					/>
-					<div className="mt-1 flex flex-col gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2.5">
+					{saveAllowed ? <div className="mt-1 flex flex-col gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2.5">
 						<p className="text-xs font-medium text-foreground">{t("settings.coder.tokenHowToTitle", { defaultValue: "Need a token?" })}</p>
 						<ol className="list-decimal space-y-1 pl-4 text-xs leading-relaxed text-muted-foreground">
 							<li>{t("settings.coder.tokenStep1", { defaultValue: "Open your Coder token page below. If you are not signed in to Coder, you will be asked to log in first, then land on the token page." })}</li>
@@ -220,7 +220,7 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						{baseUrl.trim() === "" ? (
 							<p className={onboardingFieldHintClass}>{t("settings.coder.tokenCreateNeedsUrl", { defaultValue: "Enter your Coder URL above first." })}</p>
 						) : null}
-					</div>
+					</div> : null}
 				</div>
 
 				{tokenStored ? (

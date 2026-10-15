@@ -420,6 +420,8 @@ describe("CoderSettingsSection removing the connection", () => {
 		expect(screen.getByLabelText("API token *")).toBeDisabled();
 		expect(screen.getByRole("switch", { name: "Run the agent as the workspace user" })).toBeDisabled();
 		expect(screen.queryByRole("button", { name: "Save and fetch templates" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Create a token in Coder" })).toBeNull();
+		expect(screen.queryByText("Need a token?")).toBeNull();
 		expect(screen.getByRole("button", { name: "Remove connection" })).toBeInTheDocument();
 	});
 });
