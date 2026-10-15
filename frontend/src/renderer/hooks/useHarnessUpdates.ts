@@ -149,7 +149,7 @@ export type HarnessUpdateStart = { job?: InstallJob; error?: string; inUse?: Har
 
 /**
  * The sessions an update must wait for, when the advisory says it cannot run
- * alongside them. Like T3 Code, an update otherwise installs while sessions
+ * alongside them. Otherwise an update installs while sessions
  * run, and they restart on the new release once idle; on Windows the daemon
  * waits for them itself.
  */

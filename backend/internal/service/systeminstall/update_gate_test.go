@@ -146,7 +146,7 @@ func TestUpdateWhileRunningDecisionTable(t *testing.T) {
 	}{
 		{name: "no live sessions runs", sessions: nil, method: "homebrew", wantRun: true},
 		{name: "safe runs without asking", sessions: live, method: "homebrew", wantRun: true},
-		{name: "npm runs too, like T3", sessions: live, method: "npm", wantRun: true},
+		{name: "npm runs too", sessions: live, method: "npm", wantRun: true},
 		{name: "starting session refuses", sessions: nil, method: "homebrew", starting: true, wantStarting: true, wantLevel: UpdateWhileRunningBlocked},
 		{name: "kill switch blocks", sessions: live, method: "homebrew", disabled: true, wantLevel: UpdateWhileRunningBlocked},
 	} {

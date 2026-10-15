@@ -187,7 +187,7 @@ func (s *Service) gateRunningSessions(ctx context.Context, target Target, operat
 	if level == UpdateWhileRunningIdle {
 		return false, errUpdateWhenIdle
 	}
-	// Like T3 Code, install now and leave running processes alone: they keep
+	// Install now and leave running processes alone: they keep
 	// the release they loaded and restart on the new one once idle.
 	return true, nil
 }
