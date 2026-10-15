@@ -289,7 +289,7 @@ func TestConfigureUsesNativeCursorACPWithoutStandingRule(t *testing.T) {
 	}
 }
 
-func TestSessionOptionsMapOnlyAdvertisedModel(t *testing.T) {
+func TestSessionOptionsPreserveCursorFamilyPreferences(t *testing.T) {
 	if got := sessionOptions(ports.ChatTurnSettings{}); got != nil {
 		t.Fatalf("empty settings = %#v", got)
 	}
@@ -299,9 +299,13 @@ func TestSessionOptionsMapOnlyAdvertisedModel(t *testing.T) {
 		Effort:   "high",
 	})
 	want := []acpdriver.SessionOption{{
-		ID: "model", Value: "gpt-5.5[context=272k,reasoning=medium,fast=false]",
+		ID: "model", Value: "gpt-5.5",
 	}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("options = %#v, want only provider-advertised model option %#v", got, want)
+	}
+	got = sessionOptions(ports.ChatTurnSettings{Model: "grok-4.7[context=256k,reasoning_effort=high,fast=true]"})
+	if len(got) != 1 || got[0].Value != "grok-4.7" {
+		t.Fatalf("legacy variant must select the family without replacing personal parameters: %#v", got)
 	}
 }

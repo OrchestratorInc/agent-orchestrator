@@ -26,6 +26,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	chatdriveracp "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/cursoracp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	chatdriverregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
@@ -503,26 +504,29 @@ func Run() error {
 			return codexModelDriver.DiscoverModels(listCtx, request.WorkingDir, request.Env)
 		},
 		ACPOptions: map[string]modelcatalog.ACPOptionListFunc{
+			"cursor": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+				return cursoracp.DiscoverConfigOptions(listCtx, request.Binary, request.WorkingDir, request.Env, log)
+			},
 			"cline": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
 				return chatdriveracp.DiscoverConfigOptions(listCtx, chatdriveracp.Launch{
 					Command: request.Binary,
 					Args:    []string{"--acp"},
 					Env:     request.Env,
-				}, request.WorkingDir, log)
+				}, request.WorkingDir, nil, log)
 			},
 			"deepseek-harness": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
 				return chatdriveracp.DiscoverConfigOptions(listCtx, chatdriveracp.Launch{
 					Command: request.Binary,
 					Args:    []string{"--profile", "acp"},
 					Env:     request.Env,
-				}, request.WorkingDir, log)
+				}, request.WorkingDir, nil, log)
 			},
 			"devin": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
 				return chatdriveracp.DiscoverConfigOptions(listCtx, chatdriveracp.Launch{
 					Command: request.Binary,
 					Args:    []string{"acp"},
 					Env:     request.Env,
-				}, request.WorkingDir, log)
+				}, request.WorkingDir, nil, log)
 			},
 		},
 		// Claude's model IDs are provider-specific — first-party aliases,

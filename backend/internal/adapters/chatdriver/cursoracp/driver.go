@@ -25,11 +25,12 @@ import (
 // session-scoped standing rule and resolves permissions through ACP.
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
-		Harness:          domain.HarnessCursor,
-		Configure:        configure,
-		SessionOptions:   sessionOptions,
-		PermissionPolicy: permissionPolicy,
-		ClientExtension:  handleExtension,
+		Harness:                domain.HarnessCursor,
+		ClientCapabilitiesMeta: clientCapabilitiesMeta(),
+		Configure:              configure,
+		SessionOptions:         sessionOptions,
+		PermissionPolicy:       permissionPolicy,
+		ClientExtension:        handleExtension,
 		ClientExtensionAliases: map[string]string{
 			askQuestionMethod: "_cursor/ask_question",
 			createPlanMethod:  "_cursor/create_plan",
@@ -37,6 +38,18 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 		ValidateTurnSettings: validateTurnSettings,
 		VersionProbe:         versionProbe,
 	}, log)
+}
+
+func clientCapabilitiesMeta() map[string]any {
+	return map[string]any{"parameterizedModelPicker": true}
+}
+
+// DiscoverConfigOptions uses the same model families and parameter controls as
+// managed Chat sessions, so task creation cannot reintroduce variant defaults.
+func DiscoverConfigOptions(ctx context.Context, binary, workingDir string, env map[string]string, log *slog.Logger) ([]ports.ChatConfigOption, error) {
+	return acpdriver.DiscoverConfigOptions(ctx, acpdriver.Launch{
+		Command: binary, Args: []string{"acp"}, Env: env,
+	}, workingDir, clientCapabilitiesMeta(), log)
 }
 
 func validateTurnSettings(initial ports.PermissionMode, settings ports.ChatTurnSettings) error {
@@ -160,5 +173,6 @@ func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	if settings.Model == "" {
 		return nil
 	}
-	return []acpdriver.SessionOption{{ID: "model", Value: settings.Model}}
+	model, _, _ := strings.Cut(settings.Model, "[")
+	return []acpdriver.SessionOption{{ID: "model", Value: model}}
 }

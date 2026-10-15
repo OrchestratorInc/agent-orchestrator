@@ -398,6 +398,9 @@ func applyClaudeConfiguredDefault(models []ports.AgentModelInfo, configured stri
 // cached catalog, since the binary alone does not change when settings do.
 func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentModelDiscoveryRequest) string {
 	fingerprint := CatalogFingerprint(ctx, request.AgentID, request.Binary, request.WorkingDir, request.Env)
+	if request.AgentID == "cursor" && d.ACPOptions[request.AgentID] != nil {
+		fingerprint += ":parameterized-model-picker-v1"
+	}
 	if request.AgentID == "fx" && request.CredentialType == "" {
 		return fingerprint + ":shared-providers-v1:" + fingerprintConfigPaths([]string{fxSettingsPath(request.Env)})
 	}
