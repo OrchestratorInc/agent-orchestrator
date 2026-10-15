@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -599,5 +600,21 @@ func TestDeleteOrgCoderConfigSurfacesNotFound(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404; body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A connection that live sessions still run on is kept: the store refuses the
+// delete and the handler says why with a 409, not a generic conflict.
+func TestDeleteOrgCoderConfigRefusesConnectionInUse(t *testing.T) {
+	t.Parallel()
+	store := &coderConfigFakeStore{deleteErr: fmt.Errorf("%w: 2 sandboxes still run on it", postgres.ErrProviderConnectionInUse)}
+	srv, _ := newCoderConfigServer(t, store, false)
+
+	rec := httptest.NewRecorder()
+	srv.deleteOrgCoderConfig(rec, coderConfigRequest(t, http.MethodDelete, "", nil))
+
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"connection_in_use"`) ||
+		!strings.Contains(rec.Body.String(), "Sessions still run on this Coder connection.") {
+		t.Fatalf("status = %d, body = %s; want 409 connection_in_use", rec.Code, rec.Body.String())
 	}
 }

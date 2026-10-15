@@ -8,7 +8,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Switch } from "../ui/switch";
-import type { CloudCpOrgCoderConfig, CloudCpPutOrgCoderConfigRequest } from "../../lib/cloud-cp";
+import { CloudCpError, type CloudCpOrgCoderConfig, type CloudCpPutOrgCoderConfigRequest } from "../../lib/cloud-cp";
 import { useCloudGate } from "../../hooks/useCloudGate";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import { useCloudOrg } from "../../hooks/useCloudOrg";
@@ -152,7 +152,12 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 				queryClient.invalidateQueries({ queryKey: cloudMeQueryKey }),
 			]);
 		} catch (caught) {
-			setRemoveError(caught instanceof Error ? caught.message : t("settings.coder.errorRemove"));
+			// The control plane keeps a connection that sessions still run on.
+			if (caught instanceof CloudCpError && caught.code === "connection_in_use") {
+				setRemoveError(t("settings.coder.removeInUse"));
+			} else {
+				setRemoveError(caught instanceof Error ? caught.message : t("settings.coder.errorRemove"));
+			}
 		} finally {
 			setRemoving(false);
 		}

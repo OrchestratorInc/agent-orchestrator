@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/coder"
 	"github.com/go-chi/chi/v5"
@@ -478,6 +479,11 @@ func (s *Server) deleteOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 		sandbox.ProviderCoder,
 		defaultAgentConnectionLabel,
 	); err != nil {
+		if errors.Is(err, postgres.ErrProviderConnectionInUse) {
+			writeError(w, r, http.StatusConflict, "connection_in_use",
+				"Sessions still run on this Coder connection. Remove their projects or sessions first.")
+			return
+		}
 		s.writeStoreError(w, r, err)
 		return
 	}

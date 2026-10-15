@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../../i18n";
+import { CloudCpError } from "../../lib/cloud-cp";
 import type { UseCoderTemplatesResult } from "../../hooks/useCoderTemplates";
 import { CoderSettingsSection } from "./CoderSettingsSection";
 
@@ -369,6 +370,24 @@ describe("CoderSettingsSection removing the connection", () => {
 		const dialog = await screen.findByRole("dialog");
 		await user.click(within(dialog).getByRole("button", { name: "Remove" }));
 		expect(await within(dialog).findByRole("alert")).toHaveTextContent("Only organization admins can do that.");
+	});
+
+	it("explains a connection that sessions still run on is kept", async () => {
+		mocks.config.data = currentConfig;
+		mocks.deleteOrgCoderConfig.mockRejectedValue(new CloudCpError(
+			"Sessions still run on this Coder connection. Remove their projects or sessions first.",
+			{ status: 409, code: "connection_in_use" },
+		));
+		const user = userEvent.setup();
+		renderSection();
+		await user.click(screen.getByRole("button", { name: "Remove connection" }));
+		const dialog = await screen.findByRole("dialog");
+		await user.click(within(dialog).getByRole("button", { name: "Remove" }));
+		expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+			"Sessions still run on this Coder connection. Remove their projects or sessions first.",
+		);
+		// The connection stays on the page.
+		expect(screen.getByLabelText("Coder URL or IP *")).toHaveValue("https://coder.test");
 	});
 
 	it("offers no removal without a stored connection", () => {

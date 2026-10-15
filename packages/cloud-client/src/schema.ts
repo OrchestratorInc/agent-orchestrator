@@ -4655,6 +4655,15 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description connection_in_use: sessions not yet fully deleted still run on the connection, so it is kept. Remove their projects or sessions first. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };

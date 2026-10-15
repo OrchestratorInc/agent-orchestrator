@@ -1282,6 +1282,14 @@ paths:
       responses:
         "204":
           description: The connection was removed.
+        "409":
+          description: >-
+            connection_in_use: sessions not yet fully deleted still run on the
+            connection, so it is kept. Remove their projects or sessions first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/coder-templates/{templateId}/parameters:
