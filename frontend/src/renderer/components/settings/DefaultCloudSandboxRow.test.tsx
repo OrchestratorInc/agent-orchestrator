@@ -102,6 +102,7 @@ describe("DefaultCloudSandboxRow", () => {
 		it.each([
 			["cloud is off", () => { mocks.cloudEnabled = false; }],
 			["the org has no cloud sandbox", () => { Object.assign(mocks.offering, { providers: [], offersProviderChoice: false }); }],
+			["the org runs on a single provider", () => { Object.assign(mocks.offering, { providers: ["coder"], offersProviderChoice: false }); }],
 			["the user is not signed in to an org", () => { mocks.offering.org = undefined; }],
 		])("leaves the whole section out when %s", (_case, arrange) => {
 			arrange();

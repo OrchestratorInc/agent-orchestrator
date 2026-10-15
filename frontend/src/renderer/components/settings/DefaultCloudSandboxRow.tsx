@@ -27,8 +27,9 @@ export function DefaultCloudSandboxRow() {
 
 /**
  * The row in its own Cloud section of General settings, for every signed-in
- * cloud user (not only Developer Mode), so admins can reach the choice. The
- * section is left out, heading included, whenever the row has nothing to show.
+ * cloud user (not only Developer Mode), so admins can reach the choice. It
+ * appears only when the org has a provider to choose: an org on a single
+ * provider (a Coder customer, say) sees no new section, heading included.
  */
 export function DefaultCloudSandboxSection() {
 	const { cloudEnabled } = useCloudGate();
@@ -39,7 +40,7 @@ export function DefaultCloudSandboxSection() {
 function DefaultCloudSandboxSectionInner() {
 	const { t } = useTranslation();
 	const offering = useCloudOffering();
-	if (offering.providers.length === 0 || !offering.org?.id) return null;
+	if (!offering.offersProviderChoice || !offering.org?.id) return null;
 	return (
 		<SettingsSection title={t("settings.cloud")} sectionId="cloudSandbox" grouped>
 			<DefaultCloudSandboxRowInner />
