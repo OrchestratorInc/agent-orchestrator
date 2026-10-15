@@ -105,6 +105,63 @@ func TestClaudeCodeFallsBackWhenTheUpgradeFails(t *testing.T) {
 	}
 }
 
+// With npm unreachable, a retry must not hold every Chat turn for the turn
+// wait again, and retries back off instead of running once a minute forever.
+func TestClaudeCodeRetriesAFailedUpgradeInTheBackgroundWithBackoff(t *testing.T) {
+	var installs atomic.Int32
+	release := make(chan struct{})
+	code := testClaudeCode(t.TempDir(),
+		map[string]string{"claude": "/usr/bin/claude", "npm": "/usr/bin/npm"},
+		map[string]string{"/usr/bin/claude": "2.1.228"},
+		func(context.Context, string, string) error {
+			if installs.Add(1) > 1 {
+				<-release
+			}
+			return errors.New("registry unreachable")
+		})
+	if path := code.ensure(context.Background()); path != "claude" {
+		t.Fatalf("first ensure = %q", path)
+	}
+	code.mu.Lock()
+	code.failedAt = time.Now().Add(-claudeCodeRetryAfter)
+	code.mu.Unlock()
+	returned := make(chan string, 1)
+	go func() { returned <- code.ensure(context.Background()) }()
+	select {
+	case path := <-returned:
+		if path != "claude" {
+			t.Fatalf("retry ensure = %q", path)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a turn waited on a retry of a failed upgrade")
+	}
+	close(release)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		code.mu.Lock()
+		failures, pending := code.failures, code.pending
+		code.mu.Unlock()
+		if failures == 2 && pending == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("retry did not settle: failures=%d", failures)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// Two failures: the next retry waits twice as long.
+	code.mu.Lock()
+	code.failedAt = time.Now().Add(-claudeCodeRetryAfter - time.Second)
+	code.mu.Unlock()
+	_ = code.ensure(context.Background())
+	if got := installs.Load(); got != 2 {
+		t.Fatalf("installs = %d, want no retry inside the doubled backoff", got)
+	}
+	if got := claudeCodeRetryBackoff(20); got != claudeCodeRetryMax {
+		t.Fatalf("backoff after 20 failures = %s, want the %s cap", got, claudeCodeRetryMax)
+	}
+}
+
 func TestClaudeCodeEnsureDoesNotOutwaitItsCaller(t *testing.T) {
 	release := make(chan struct{})
 	code := testClaudeCode(t.TempDir(),

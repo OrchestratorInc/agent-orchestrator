@@ -26,7 +26,10 @@ const (
 	claudeCodePackage        = "@anthropic-ai/claude-code"
 	claudeCodeInstallTimeout = 4 * time.Minute
 	claudeCodeVersionTimeout = 15 * time.Second
-	claudeCodeRetryAfter     = time.Minute
+	// A failed upgrade is retried after claudeCodeRetryAfter, doubling per
+	// consecutive failure up to claudeCodeRetryMax.
+	claudeCodeRetryAfter = time.Minute
+	claudeCodeRetryMax   = 30 * time.Minute
 	// claudeCodeTurnWait bounds how long a Chat turn waits for an upgrade in
 	// progress before running on the older install.
 	claudeCodeTurnWait = 90 * time.Second
@@ -46,6 +49,7 @@ type claudeCode struct {
 	mu       sync.Mutex
 	path     string
 	failedAt time.Time
+	failures int
 	pending  chan struct{}
 }
 
@@ -88,7 +92,7 @@ func (c *claudeCode) ensure(ctx context.Context) string {
 		return path
 	}
 	if c.pending == nil {
-		if !c.failedAt.IsZero() && time.Since(c.failedAt) < claudeCodeRetryAfter {
+		if c.failures > 0 && time.Since(c.failedAt) < claudeCodeRetryBackoff(c.failures) {
 			c.mu.Unlock()
 			return claudeCodeBinary
 		}
@@ -97,7 +101,14 @@ func (c *claudeCode) ensure(ctx context.Context) string {
 		go c.resolve(done)
 	}
 	pending := c.pending
+	retrying := c.failures > 0
 	c.mu.Unlock()
+	if retrying {
+		// Only the first upgrade is worth waiting for. Once one has failed
+		// (npm unreachable, say), turns run on the older install while the
+		// retry proceeds in the background.
+		return c.current()
+	}
 	select {
 	case <-pending:
 		return c.current()
@@ -114,13 +125,22 @@ func (c *claudeCode) resolve(done chan struct{}) {
 	path, ok := c.resolvePath(ctx)
 	c.mu.Lock()
 	if ok {
-		c.path, c.failedAt = path, time.Time{}
+		c.path, c.failedAt, c.failures = path, time.Time{}, 0
 	} else {
 		c.failedAt = time.Now()
+		c.failures++
 	}
 	c.pending = nil
 	c.mu.Unlock()
 	close(done)
+}
+
+func claudeCodeRetryBackoff(failures int) time.Duration {
+	backoff := claudeCodeRetryAfter
+	for i := 1; i < failures && backoff < claudeCodeRetryMax; i++ {
+		backoff *= 2
+	}
+	return min(backoff, claudeCodeRetryMax)
 }
 
 func (c *claudeCode) resolvePath(ctx context.Context) (string, bool) {
