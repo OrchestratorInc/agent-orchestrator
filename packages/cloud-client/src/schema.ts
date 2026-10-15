@@ -1545,7 +1545,7 @@ export interface components {
             kind: "b2b" | "b2c" | "both" | "none";
             /** @description Plan feature flags; empty when none apply. */
             features: string[];
-            /** @description The organization may connect its own Coder deployment: it holds the coder capability (WorkOS metadata capabilities=coder), or the deployment offers coder without gating it. Absent from older control planes. */
+            /** @description The organization may connect its own Coder deployment: it holds the coder capability (WorkOS metadata capabilities=coder), or the deployment offers coder without gating it. Also true while the organization still has a stored connection, so it can inspect or clear one. Absent from older control planes. */
             customCoder?: boolean;
         };
         /** @description Legacy provider selector data; the same values as offering.providers and offering.defaultProvider. */

@@ -229,7 +229,8 @@ type offeringResponse struct {
 	Kind            string   `json:"kind"`
 	Features        []string `json:"features"`
 	// CustomCoder: the organization may connect its own Coder deployment (it
-	// holds the coder capability); the desktop shows the Coder settings page.
+	// holds the coder capability), or still has a connection its sessions run
+	// on; the desktop shows the Coder settings page.
 	CustomCoder bool `json:"customCoder"`
 }
 
@@ -245,9 +246,31 @@ func (s *Server) offeringForOrg(ctx context.Context, principal domain.Principal,
 		BillingMode:     mode,
 		Kind:            domain.OfferingKind(providers),
 		// Plan feature flags arrive with the paywall; none are gated yet.
-		Features:    []string{},
-		CustomCoder: s.orgHasCustomCoder(principal, orgID),
+		Features: []string{},
+		CustomCoder: s.orgHasCustomCoder(principal, orgID) ||
+			(slices.Contains(providers, sandbox.ProviderCoder) && s.orgHasCoderConnection(ctx, principal, orgID)),
 	}, nil
+}
+
+// orgHasCoderConnection reports whether the organization has a stored
+// bring-your-own Coder connection. Its Coder sessions run there even after it
+// loses the coder capability, so the settings page stays reachable to inspect
+// or clear it. A failed read counts as none.
+func (s *Server) orgHasCoderConnection(ctx context.Context, principal domain.Principal, orgID string) bool {
+	store, ok := s.store.(providerConnectionStore)
+	if !ok || orgID == "" {
+		return false
+	}
+	connections, err := store.ListProviderConnections(ctx, principal, orgID)
+	if err != nil {
+		return false
+	}
+	for _, connection := range connections {
+		if connection.Provider == sandbox.ProviderCoder && connection.Label == defaultAgentConnectionLabel {
+			return true
+		}
+	}
+	return false
 }
 
 // orgMemberStore checks that a principal is an active member of an

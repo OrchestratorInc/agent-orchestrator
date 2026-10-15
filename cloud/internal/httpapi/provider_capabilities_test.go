@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -665,5 +666,38 @@ func TestPinProjectProvider(t *testing.T) {
 	pinned, err = single.pinProjectProvider(ctx, teamPrincipal(), offeringTeamOrgID, json.RawMessage(`{}`))
 	if err != nil || string(pinned) != `{}` {
 		t.Fatalf("pinned = %s, %v; want the config unchanged", pinned, err)
+	}
+}
+
+// offeringCoderConnectionStore is an organization that still has a stored
+// bring-your-own Coder connection.
+type offeringCoderConnectionStore struct {
+	*offeringStore
+}
+
+func (s offeringCoderConnectionStore) ListProviderConnections(context.Context, domain.Principal, string) ([]domain.ProviderConnection, error) {
+	return []domain.ProviderConnection{{Provider: sandbox.ProviderCoder, Label: defaultAgentConnectionLabel}}, nil
+}
+
+func (s offeringCoderConnectionStore) UpsertProviderConnection(
+	context.Context, domain.Principal, string, string, string, []byte, []byte, json.RawMessage,
+) (domain.ProviderConnection, error) {
+	return domain.ProviderConnection{}, fmt.Errorf("unexpected write")
+}
+
+func (s offeringCoderConnectionStore) DeleteProviderConnection(context.Context, domain.Principal, string, string, string) error {
+	return fmt.Errorf("unexpected delete")
+}
+
+// An organization without the coder capability still runs its Coder sessions
+// on a stored connection, so the Coder settings page stays reachable to clear it.
+func TestMeOfferingShowsCoderPageForALeftoverConnection(t *testing.T) {
+	store := &offeringStore{memberships: []domain.Membership{{OrgID: offeringTeamOrgID, Role: "member"}}}
+	if body := getMe(t, newOfferingServer(store), teamPrincipal("feature-x")); body.Offering.CustomCoder {
+		t.Fatalf("offering = %+v, want no Coder page without a connection", body.Offering)
+	}
+	body := getMe(t, newOfferingServer(offeringCoderConnectionStore{store}), teamPrincipal("feature-x"))
+	if !body.Offering.CustomCoder {
+		t.Fatalf("offering = %+v, want the Coder page while a connection exists", body.Offering)
 	}
 }

@@ -2578,8 +2578,9 @@ components:
           description: >-
             The organization may connect its own Coder deployment: it holds the
             coder capability (WorkOS metadata capabilities=coder), or the
-            deployment offers coder without gating it. Absent from older
-            control planes.
+            deployment offers coder without gating it. Also true while the
+            organization still has a stored connection, so it can inspect or
+            clear one. Absent from older control planes.
     SandboxProviders:
       type: object
       additionalProperties: false
