@@ -18,8 +18,8 @@ type staleBinaryStore interface {
 	CountStaleBinarySessions(ctx context.Context) (map[domain.AgentHarness]int64, error)
 }
 
-// versionRefresher is the Chat side of a move to a new harness release.
-type versionRefresher interface {
+// ChatVersionRefresher is the Chat side of a move to a new harness release.
+type ChatVersionRefresher interface {
 	SwitchToInstalledRelease(ctx context.Context, id domain.SessionID, minIdle time.Duration) (bool, error)
 }
 
@@ -62,7 +62,7 @@ func (m *Manager) RefreshStaleChats(ctx context.Context, minIdle time.Duration) 
 	if !ok {
 		return nil
 	}
-	refresher, ok := m.chat.(versionRefresher)
+	refresher, ok := m.chat.(ChatVersionRefresher)
 	if !ok {
 		return nil
 	}
@@ -78,7 +78,7 @@ func (m *Manager) RefreshStaleChats(ctx context.Context, minIdle time.Duration) 
 	})
 }
 
-func (m *Manager) refreshStaleChat(ctx context.Context, refresher versionRefresher, id domain.SessionID, minIdle time.Duration) error {
+func (m *Manager) refreshStaleChat(ctx context.Context, refresher ChatVersionRefresher, id domain.SessionID, minIdle time.Duration) error {
 	operationCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	// The same claim idle hibernation takes: a restore, kill or switch in

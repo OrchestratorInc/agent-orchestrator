@@ -62,7 +62,7 @@ func (m *Manager) SessionTurnEnded(rec domain.SessionRecord) {
 			return
 		}
 		if chat {
-			if refresher, ok := m.chat.(versionRefresher); ok && policy.Chats {
+			if refresher, ok := m.chat.(ChatVersionRefresher); ok && policy.Chats {
 				_ = m.refreshStaleChat(ctx, refresher, id, policy.MinIdle)
 			}
 			return

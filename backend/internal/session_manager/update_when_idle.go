@@ -10,9 +10,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// updateHibernator stops an idle Chat provider so an installer can replace
+// ChatUpdateHibernator stops an idle Chat provider so an installer can replace
 // its executable.
-type updateHibernator interface {
+type ChatUpdateHibernator interface {
 	HibernateChatForUpdate(ctx context.Context, id domain.SessionID) (bool, error)
 }
 
@@ -132,7 +132,7 @@ func (m *Manager) stopForUpdate(ctx context.Context, rec domain.SessionRecord) e
 		return errors.Join(err, ErrInterfaceTransitionInProgress)
 	}
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
-		hibernator, ok := m.chat.(updateHibernator)
+		hibernator, ok := m.chat.(ChatUpdateHibernator)
 		if !ok {
 			return ErrInterfaceHandoffUnsupported
 		}
