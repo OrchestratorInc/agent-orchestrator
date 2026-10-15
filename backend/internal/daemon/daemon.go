@@ -707,7 +707,7 @@ func Run() error {
 	binaryutil.SetManagedBinDir(systemInstall.ManagedBinDir())
 	systemInstall.SetBinaryInvalidator(func(target systeminstall.Target) {
 		if harness, ok := installedAgentHarness(target); ok {
-			agentSvc.InvalidateAgentInstallation(harness)
+			invalidateHarnessBinary(agents, agentSvc, harness)
 		}
 	})
 	systemInstall.SetTelemetry(telemetrySink)
@@ -721,7 +721,7 @@ func Run() error {
 		if !ok {
 			return
 		}
-		agentSvc.InvalidateAgentInstallation(harness)
+		invalidateHarnessBinary(agents, agentSvc, harness)
 		agentSvc.RecheckAgent(harness)
 	})
 
@@ -1274,6 +1274,19 @@ func installedAgentHarness(target systeminstall.Target) (string, bool) {
 		return string(target), true
 	}
 	return "", false
+}
+
+// invalidateHarnessBinary makes the harness's executable resolve again
+// everywhere. Launches and install verification use the daemon's adapters,
+// the agent service its own instances, and each caches the path it found:
+// clearing only one leaves the other on the binary from before the install.
+func invalidateHarnessBinary(agents ports.AgentResolver, readiness ports.AgentReadinessProvider, harness string) {
+	readiness.InvalidateAgentInstallation(harness)
+	if agent, ok := agents.Agent(domain.AgentHarness(harness)); ok {
+		if invalidator, ok := agent.(ports.AgentBinaryResolutionInvalidator); ok {
+			invalidator.InvalidateBinaryResolution()
+		}
+	}
 }
 
 func usagePipelineWatchRoots(roots usagesvc.SourceRoots) []string {

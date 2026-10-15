@@ -94,6 +94,45 @@ func TestInstalledAgentHarnessMapsManagedHarnessInstalls(t *testing.T) {
 	}
 }
 
+type cachedBinaryAgent struct {
+	ports.Agent
+	invalidated int
+}
+
+func (a *cachedBinaryAgent) InvalidateBinaryResolution() { a.invalidated++ }
+
+type cachedBinaryAgents map[domain.AgentHarness]ports.Agent
+
+func (a cachedBinaryAgents) Agent(harness domain.AgentHarness) (ports.Agent, bool) {
+	agent, ok := a[harness]
+	return agent, ok
+}
+
+type installationInvalidations struct {
+	wiringReadinessProvider
+	harnesses []string
+}
+
+func (p *installationInvalidations) InvalidateAgentInstallation(harness string) {
+	p.harnesses = append(p.harnesses, harness)
+}
+
+// Launches resolve through the daemon's adapters, not the agent service's: an
+// install that clears only the service's cache leaves sessions on the old binary.
+func TestInvalidateHarnessBinaryClearsLaunchAndServiceCaches(t *testing.T) {
+	launch := &cachedBinaryAgent{}
+	readiness := &installationInvalidations{}
+
+	invalidateHarnessBinary(cachedBinaryAgents{"pi": launch}, readiness, "pi")
+
+	if launch.invalidated != 1 {
+		t.Fatalf("launch adapter invalidations = %d, want 1", launch.invalidated)
+	}
+	if len(readiness.harnesses) != 1 || readiness.harnesses[0] != "pi" {
+		t.Fatalf("service invalidations = %v, want [pi]", readiness.harnesses)
+	}
+}
+
 // TestWiring_WriteFlowsToBroadcaster exercises the real boot path end to end:
 // a lifecycle write -> sqlite -> DB trigger -> change_log -> CDC poller ->
 // broadcaster, through the same cdc.Source implementation the daemon uses.
