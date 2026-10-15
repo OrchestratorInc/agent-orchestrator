@@ -55,6 +55,7 @@ type Config struct {
 	ClientExtension              acpdriver.ClientExtensionHandler
 	ClientExtensionAliases       map[string]string
 	ValidateTurnSettings         acpdriver.TurnSettingsValidator
+	PromptMessageFailure         func(string) error
 	EncodeProviderConversationID func(string) string
 	DecodeProviderConversationID func(string) (string, error)
 	// VersionProbe optionally gates admission on a minimum binary version.
@@ -148,6 +149,7 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		ClientExtension:              cfg.ClientExtension,
 		ClientExtensionAliases:       cfg.ClientExtensionAliases,
 		ValidateTurnSettings:         cfg.ValidateTurnSettings,
+		PromptMessageFailure:         cfg.PromptMessageFailure,
 		EncodeProviderConversationID: cfg.EncodeProviderConversationID,
 		DecodeProviderConversationID: cfg.DecodeProviderConversationID,
 	}

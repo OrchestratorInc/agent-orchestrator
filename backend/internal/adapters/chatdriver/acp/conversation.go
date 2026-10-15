@@ -132,6 +132,7 @@ type conversation struct {
 	// credential mid-turn. Nil when the binding does not supply one.
 	onAuthRejected        func()
 	promptResponseFailure func(acpsdk.PromptResponse) error
+	promptMessageFailure  func(string) error
 	hibernationCheck      func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 	historyNotice         func(string) bool
 	// preamble is standing context attached to the first prompt that actually
@@ -698,6 +699,17 @@ func (c *conversation) finishPrompt(
 				TotalsKnown: true,
 			}})
 		}
+	}
+	if state == domain.TurnStateCompleted && !interruptedLocally && c.promptMessageFailure != nil {
+		c.mu.Lock()
+		for _, message := range c.messages {
+			if failure := c.promptMessageFailure(message); failure != nil {
+				state = domain.TurnStateFailed
+				turnErr = failure
+				break
+			}
+		}
+		c.mu.Unlock()
 	}
 	if errors.Is(turnErr, ports.ErrChatAuthRequired) {
 		// The provider has just contradicted whatever the readiness cache holds.
