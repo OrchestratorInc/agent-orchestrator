@@ -1767,6 +1767,39 @@ describe("TaskComposer", () => {
 		expect(screen.getByText("Configure the model in opencode, then refresh.")).toBeInTheDocument();
 	});
 
+	it("accepts a model ID for Open Interpreter when it has no model catalog", async () => {
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agentId: "open-interpreter", selectionMode: "text", models: [], customModelEntry: "direct", allowCustom: true } }
+			: { data: { status: "ok", project: { agent: "open-interpreter", config: {} } } });
+		h.post.mockResolvedValue({ data: { workerId: "sess-1" } });
+
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await userEvent.click(picker);
+		const modelInput = screen.getByRole("searchbox");
+		expect(modelInput).toHaveAttribute("placeholder", "Enter model ID…");
+		await userEvent.type(modelInput, "openai/gpt-4o");
+		await userEvent.click(screen.getByRole("menuitem", { name: "Use “openai/gpt-4o” as a custom model" }));
+		expect(picker).toHaveTextContent("openai/gpt-4o");
+		fireEvent.change(task(), { target: { value: "Check this repo" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledOnce());
+		expect(h.post.mock.calls[0][1].body.model).toBe("openai/gpt-4o");
+	});
+
+	it("lists the Open Interpreter native catalog and keeps direct entry available", async () => {
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agentId: "open-interpreter", selectionMode: "catalog", models: [{ id: "gpt-6-sol", label: "GPT-6 Sol" }], customModelEntry: "direct", allowCustom: true } }
+			: { data: { status: "ok", project: { agent: "open-interpreter", config: {} } } });
+
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await userEvent.click(picker);
+		expect(screen.getByRole("menuitem", { name: "GPT-6 Sol" })).toBeInTheDocument();
+		await userEvent.type(screen.getByRole("searchbox"), "custom/model");
+		expect(screen.getByRole("menuitem", { name: "Use “custom/model” as a custom model" })).toBeInTheDocument();
+	});
+
 	it("uses the project worker model as the new task model default", async () => {
 		h.get.mockImplementation(async (path: string) => {
 			if (path.includes("/models")) {

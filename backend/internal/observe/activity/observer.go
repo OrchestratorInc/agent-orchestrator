@@ -2,6 +2,7 @@ package activity
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -133,7 +134,22 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 		session.Activity.State != domain.ActivityWaitingInput {
 		return
 	}
-	output, err := o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+	handle := ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}
+	var output string
+	var err error
+	usedStyled := false
+	if _, inspectsSurface := agent.(ports.TerminalSurfaceInspector); inspectsSurface {
+		if styled, supported := o.runtime.(ports.StyledTerminalOutputReader); supported {
+			output, err = styled.GetStyledOutput(ctx, handle, o.outputLines)
+			// Older detached hosts may lack rendered-screen support. Only that
+			// capability miss permits fallback; errors and partial screens must
+			// not turn stale output into an idle observation.
+			usedStyled = !errors.Is(err, ports.ErrStyledTerminalOutputUnavailable)
+		}
+	}
+	if !usedStyled {
+		output, err = o.runtime.GetOutput(ctx, handle, o.outputLines)
+	}
 	if err != nil {
 		o.logger.Debug("activity observer: terminal output unavailable", "session", session.ID, "err", err)
 		return

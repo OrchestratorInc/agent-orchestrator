@@ -929,6 +929,8 @@ function TaskModelPicker({
 	const selectCatalogModel = (nextModel: string) => {
 		onModelChange(nextModel);
 	};
+	const allowsDirectEntry = catalog?.customModelEntry === "direct" &&
+		(catalog.selectionMode === "text" || agentId === "open-interpreter");
 
 	return (
 		<AgentModelCombobox
@@ -936,8 +938,8 @@ function TaskModelPicker({
 			aria-label={t("newTask.model")}
 			value={value}
 			models={displayModels}
-			allowCustom={false}
-			customModelEntry={catalog?.customModelEntry === "configured" ? "configured" : "none"}
+			allowCustom={allowsDirectEntry}
+			customModelEntry={allowsDirectEntry ? "direct" : catalog?.customModelEntry === "configured" ? "configured" : "none"}
 			agentLabel={agentLabel}
 			onRefresh={onRefresh}
 			refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
@@ -946,6 +948,7 @@ function TaskModelPicker({
 			disabled={disabled || agentId === ""}
 			agentId={agentId}
 			onChange={selectCatalogModel}
+			onCustom={selectCatalogModel}
 			compact
 			recentScope={agentId}
 			triggerClassName="composer-chip composer-toolbar-option w-fit"

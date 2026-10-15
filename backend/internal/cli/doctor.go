@@ -21,6 +21,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
 )
 
@@ -63,12 +64,14 @@ type harnessProbe struct {
 	BinaryName            string
 	VersionArg            string
 	ExpectedVersionPrefix string
+	Resolver              ports.AgentBinaryResolver
 }
 
 type harnessProbeSpec struct {
 	BinaryName            string
 	VersionArg            string
 	ExpectedVersionPrefix string
+	UseAdapterResolver    bool
 }
 
 // harnessProbeSpecs overrides per-harness probe settings for agent harnesses whose
@@ -92,7 +95,8 @@ var harnessProbeSpecs = map[string]harnessProbeSpec{
 	"continue":    {BinaryName: "cn"},
 	// Command Code's binary is `cmd` on Unix and `cmdc` on Windows, where `cmd`
 	// is the built-in shell; the full name resolves on every platform.
-	"command-code": {BinaryName: "command-code", VersionArg: "--version"},
+	"command-code":     {BinaryName: "command-code", VersionArg: "--version"},
+	"open-interpreter": {BinaryName: "interpreter", UseAdapterResolver: true},
 }
 
 func newDoctorCommand(ctx *commandContext) *cobra.Command {
@@ -213,12 +217,16 @@ func (c *commandContext) runDoctor(ctx context.Context) []doctorCheck {
 		if binaryName == "" {
 			binaryName = id
 		}
-		checks = append(checks, c.checkHarness(ctx, harnessProbe{
+		probe := harnessProbe{
 			Name:                  id,
 			BinaryName:            binaryName,
 			VersionArg:            spec.VersionArg,
 			ExpectedVersionPrefix: spec.ExpectedVersionPrefix,
-		}))
+		}
+		if spec.UseAdapterResolver {
+			probe.Resolver, _ = ha.Agent.(ports.AgentBinaryResolver)
+		}
+		checks = append(checks, c.checkHarness(ctx, probe))
 	}
 	checks = append(checks, c.checkCodexLaunchFlags(ctx), c.checkGitHubToken(ctx), c.checkGitLabToken(ctx))
 	return checks
@@ -427,11 +435,21 @@ func checkHooksLog(dataDir string, now time.Time) doctorCheck {
 }
 
 func (c *commandContext) checkHarness(ctx context.Context, harness harnessProbe) doctorCheck {
-	path, err := c.deps.LookPath(harness.BinaryName)
+	var path string
+	var err error
+	if harness.Resolver != nil {
+		path, err = harness.Resolver.ResolveBinary(ctx)
+	} else {
+		path, err = c.deps.LookPath(harness.BinaryName)
+	}
 	if err != nil || path == "" {
+		message := fmt.Sprintf("%s not found in PATH", harness.BinaryName)
+		if harness.Resolver != nil {
+			message = fmt.Sprintf("%s not found in PATH or is incompatible", harness.BinaryName)
+		}
 		return doctorCheck{
 			Level: doctorWarn, Section: doctorSectionAgents, Name: harness.Name,
-			Message: fmt.Sprintf("%s not found in PATH", harness.BinaryName),
+			Message: message,
 		}
 	}
 	if harness.VersionArg == "" {

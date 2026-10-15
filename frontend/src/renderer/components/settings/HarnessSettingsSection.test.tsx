@@ -485,6 +485,25 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).getByRole("button", { name: "View documentation" })).toBeEnabled();
 	});
 
+	it("shows a configured Open Interpreter login without stale setup or install failure", async () => {
+		const interpreterCatalog = { agents: [agentReadiness("open-interpreter", "Open Interpreter", { authentication: "configured" })] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: interpreterCatalog } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "open-interpreter", action: "setup", launchMode: "terminal", available: true }] } } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [{ target: "open-interpreter", status: "failed", method: "official-installer", error: "old install failed" }] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockResolvedValue({ data: interpreterCatalog } as never);
+
+		renderSection();
+		const row = (await screen.findByText("Open Interpreter")).closest('[data-agent="open-interpreter"]') as HTMLElement;
+		const status = await within(row).findByText("Connected");
+		expect(status).not.toHaveClass("text-error");
+		expect(status).not.toHaveAttribute("title", "old install failed");
+		expect(within(row).queryByRole("button", { name: "Set up" })).not.toBeInTheDocument();
+	});
+
 	it("shows cached readiness while silently refreshing when the page opens", async () => {
 		const refreshed = catalogWithInstalled("claude-code", "codex");
 		let current = catalog;

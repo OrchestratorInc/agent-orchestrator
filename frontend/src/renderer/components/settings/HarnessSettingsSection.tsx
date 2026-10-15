@@ -705,12 +705,12 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 						const authState = authStates[agentId];
 						const authStatus = readinessAgent?.authentication.state;
 						const connectedCredential = authStatus === "authorized" || authStatus === "configured";
-						const showAuthAction = authStatus !== "authorized" && (authStatus !== "configured" || isSetupAction);
+						const showAuthAction = authStatus !== "authorized" && (authStatus !== "configured" || (isSetupAction && agentId !== "open-interpreter"));
 						const installationStatusLabel = t("settings.harness.installed");
 						const showInstallationStatus = connectedCredential
 							|| authStatus === "not_applicable"
 							|| (!authPlans.isPending && (!authPlan || authPlan.action === "instructions"));
-						const rowHasError = failed || Boolean(authState?.error);
+						const rowHasError = (!isInstalled && failed) || Boolean(authState?.error);
 						const rowAuthWorkflow = authWorkflow?.agentId === agentId ? authWorkflow : null;
 						const hasDiagnostics = Boolean(
 							job &&
@@ -721,9 +721,9 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 						const authSummary = authState?.error
 							? authState.error
 							: authStatus === "configured"
-								? (isSetupAction ? t("settings.harness.configured") : t("settings.harness.loggedIn"))
+								? (isSetupAction && agentId !== "open-interpreter" ? t("settings.harness.configured") : t("settings.harness.loggedIn"))
 								: authStatus === "authorized"
-								? (isSetupAction ? t("settings.harness.configured") : t("settings.harness.loggedIn"))
+								? (isSetupAction && agentId !== "open-interpreter" ? t("settings.harness.configured") : t("settings.harness.loggedIn"))
 								: authPlan && !authPlan.available
 									? (authPlan.reason ?? t("settings.harness.authFailed"))
 									: authStatus === "unauthorized"
@@ -829,7 +829,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 								<div className="flex items-center gap-1.5">
 									<p className="truncate text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</p>
 								</div>
-								<p className={cn("truncate text-xs text-settings-muted", rowHasError && "text-error")} title={authState?.error ?? actionError ?? job?.error ?? authPlan?.reason ?? plan?.reason}>
+								<p className={cn("truncate text-xs text-settings-muted", rowHasError && "text-error")} title={authState?.error ?? (isInstalled ? authPlan?.reason : actionError ?? job?.error ?? authPlan?.reason ?? plan?.reason)}>
 									{isInstalled ? authSummary : installationPending ? t("settings.harness.installationUnknown") : actionError ?? (job?.status === "interrupted" ? t("settings.harness.interrupted") : failed ? (job?.error ?? t("settings.harness.installFailed")) : (plan?.available ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : (plan?.reason ?? t("settings.harness.manualRequired"))))}
 								</p>
 							</div>

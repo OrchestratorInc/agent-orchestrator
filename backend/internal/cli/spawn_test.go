@@ -54,6 +54,16 @@ func TestSpawnHelpListsOpenCodeV2Harness(t *testing.T) {
 	}
 }
 
+func TestSpawnHelpListsOpenInterpreterHarness(t *testing.T) {
+	out, _, err := executeCLI(t, Deps{}, "spawn", "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "command-code, open-interpreter") {
+		t.Fatalf("spawn help does not list open-interpreter:\n%s", out)
+	}
+}
+
 // TestSpawnCommand_MissingProjectContext asserts `ao spawn` gives a project
 // setup hint when neither --project, AO_PROJECT_ID, nor cwd can resolve one.
 func TestSpawnCommand_MissingProjectContext(t *testing.T) {
