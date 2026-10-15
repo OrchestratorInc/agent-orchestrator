@@ -6,6 +6,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/devimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/legacyimport"
@@ -3485,4 +3487,14 @@ type SideChatLaunchState struct {
 // SideLabelRequest renames a side conversation.
 type SideLabelRequest struct {
 	Label string `json:"label"`
+}
+
+// SessionImportRequest carries opaque handles returned by the local preview.
+type SessionImportRequest struct {
+	IDs []string `json:"ids" minItems:"1" maxItems:"500"`
+}
+
+// SessionImportResponse retains an outcome for every selected history.
+type SessionImportResponse struct {
+	Results []sessionimport.Result `json:"results"`
 }
