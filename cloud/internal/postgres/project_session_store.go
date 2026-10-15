@@ -1090,8 +1090,10 @@ const sessionSelect = `
 		COALESCE(sandbox.startup_error_code, ''),
 		COALESCE(sandbox.startup_error_message, ''),
 		sandbox.startup_error_at,
-		-- Operator detail is shown only for an organization's own (BYO) compute.
+		-- Operator detail is shown only for an organization's own (BYO) compute,
+		-- or when it is the output of the project's own Setup commands.
 		CASE WHEN sandbox.provider_connection_id IS NOT NULL
+				OR sandbox.startup_error_code = '` + domain.WorkspaceStartupErrorProjectSetup + `'
 			THEN COALESCE(sandbox.startup_error_detail, '') ELSE '' END,
 		-- The workspace link is shown only for an organization's own (BYO)
 		-- Coder (customers have no login on AO's managed deployment). The

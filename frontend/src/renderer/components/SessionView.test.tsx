@@ -5428,6 +5428,19 @@ describe("SessionView", () => {
 		expect(inspectorOpen("sess-1")).toBe(false);
 	});
 
+	it("does not carry a maximized Files view into the next session", () => {
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
+		act(() => useUiStore.getState().setInspectorOpen("sess-2", true));
+		const view = render(<SessionView sessionId="sess-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+		fireEvent.click(within(screen.getByTestId("panel-inspector")).getByRole("button", { name: "files rail" }));
+		expect(document.querySelector(".files-popout-overlay")).not.toBeNull();
+
+		view.rerender(<SessionView sessionId="sess-2" />);
+
+		expect(document.querySelector(".files-popout-overlay")).toBeNull();
+	});
+
 	it("maximizes files over the whole app window and returns to the rail", () => {
 		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
 		render(<SessionView sessionId="sess-1" />);

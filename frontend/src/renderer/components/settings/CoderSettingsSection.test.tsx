@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 	config: { data: undefined as unknown },
 	templates: { value: { templates: [], isLoading: false, isError: false } as UseCoderTemplatesResult },
 	putOrgCoderConfig: vi.fn(),
+	org: { value: { id: "org-1" } as { id: string; role?: string } },
 }));
 
 vi.mock("../../hooks/useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled: true }) }));
@@ -20,14 +21,18 @@ vi.mock("../../lib/cloud-session", () => ({ useCloudSession: () => ({ status: "a
 vi.mock("../../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ client: { putOrgCoderConfig: mocks.putOrgCoderConfig }, ready: true, baseUrl: "https://cp.test" }),
 }));
-vi.mock("../../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: "org-1" } }) }));
+vi.mock("../../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: mocks.org.value }) }));
 vi.mock("../../hooks/useOrgCoderConfig", () => ({
 	orgCoderConfigQueryKey: ["cloud-org-coder-config"],
 	useOrgCoderConfig: () => mocks.config,
 }));
 vi.mock("../../hooks/useCoderTemplates", () => ({ useCoderTemplates: () => mocks.templates.value }));
 
+const INVALID_WORKING_DIRECTORY = "Enter a path that starts with /, ~/ or $HOME/ and names a folder below it, without . or .. segments. {repo} is the only placeholder.";
+
 const savedConfig = { baseUrl: "https://coder.test", owner: "me", defaultTemplateId: "t-1", tokenSet: true };
+// A control plane that knows every Workspace setup field reports protectSecretFiles.
+const currentConfig = { ...savedConfig, protectSecretFiles: true };
 
 function renderSection() {
 	render(
@@ -99,25 +104,133 @@ describe("CoderSettingsSection dev environment", () => {
 		await appI18n.changeLanguage("en");
 		mocks.templates.value = { templates: [], isLoading: false, isError: false };
 		mocks.putOrgCoderConfig.mockReset().mockResolvedValue({ coderConfig: null });
+		mocks.org.value = { id: "org-1" };
 	});
 
-	it("does not show the dev-environment controls (set during onboarding)", () => {
+	it("shows the workspace setup for a saved connection", () => {
 		mocks.config.data = {
-			...savedConfig, workerUser: "workspace", reuseExistingCheckout: true,
+			...currentConfig, workerUser: "workspace", reuseExistingCheckout: true, workingDirectory: "~/work/{repo}",
 			readyProbe: "grep -q '^Ready' ~/.bootstrap-status", readyProbeTimeoutSeconds: 600,
 		};
 		renderSection();
-		expect(screen.queryByRole("switch", { name: "Run the agent as the workspace user" })).toBeNull();
-		expect(screen.queryByRole("switch", { name: "Use the template's existing checkout" })).toBeNull();
-		expect(screen.queryByRole("textbox", { name: "Workspace ready check" })).toBeNull();
-		expect(screen.queryByText("Dev environment")).toBeNull();
-		// Nothing to change and no new token: nothing to save.
+		expect(screen.getByText("Workspace setup")).toBeInTheDocument();
+		expect(screen.getByRole("switch", { name: "Run the agent as the workspace user" })).toBeChecked();
+		expect(screen.getByRole("switch", { name: "Use the template's existing checkout" })).toBeChecked();
+		expect(screen.getByRole("switch", { name: "Keep the agent out of secret files (.env)" })).toBeChecked();
+		expect(screen.getByRole("textbox", { name: "Working directory" })).toHaveValue("~/work/{repo}");
+		expect(screen.getByRole("textbox", { name: "Workspace ready check" })).toHaveValue("grep -q '^Ready' ~/.bootstrap-status");
+		expect(screen.getByRole("textbox", { name: "Ready check timeout (seconds)" })).toHaveValue("600");
+		// Per-session commands are project settings, not connection settings.
+		expect(screen.queryByRole("textbox", { name: "Startup script" })).toBeNull();
+		expect(screen.getByText(/open the project's settings and choose Scripts/)).toBeInTheDocument();
+		// Nothing changed and no new token: nothing to save.
 		expect(screen.getByRole("button", { name: "Save and fetch templates" })).toBeDisabled();
+	});
+
+	it("hides the workspace setup until a connection is saved", () => {
+		mocks.config.data = { ...currentConfig, tokenSet: false };
+		renderSection();
+		expect(screen.queryByText("Workspace setup")).toBeNull();
+		expect(screen.queryByRole("switch", { name: "Run the agent as the workspace user" })).toBeNull();
+	});
+
+	it("enables checkout reuse and the working directory with the workspace user", async () => {
+		mocks.config.data = currentConfig;
+		const user = userEvent.setup();
+		renderSection();
+		const reuse = screen.getByRole("switch", { name: "Use the template's existing checkout" });
+		expect(reuse).toBeDisabled();
+		expect(reuse).not.toBeChecked();
+		// A working directory without the workspace user is refused, not silently dropped.
+		await user.type(screen.getByRole("textbox", { name: "Working directory" }), "~/work/{{repo}");
+		expect(screen.getByText('Turn on "Run the agent as the workspace user" to set a working directory.')).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Save and fetch templates" })).toBeDisabled();
+
+		await user.click(screen.getByRole("switch", { name: "Run the agent as the workspace user" }));
+		expect(reuse).toBeEnabled();
+		expect(reuse).toBeChecked();
+		expect(screen.queryByText('Turn on "Run the agent as the workspace user" to set a working directory.')).toBeNull();
+		await user.click(screen.getByRole("button", { name: "Save and fetch templates" }));
+		await waitFor(() => expect(mocks.putOrgCoderConfig).toHaveBeenCalledTimes(1));
+		expect(mocks.putOrgCoderConfig).toHaveBeenCalledWith("org-1", {
+			baseUrl: "https://coder.test",
+			token: undefined,
+			templateId: "t-1",
+			workerUser: "workspace",
+			reuseExistingCheckout: true,
+			workingDirectory: "~/work/{repo}",
+			protectSecretFiles: true,
+			readyProbe: "",
+			readyProbeTimeoutSeconds: 0,
+		});
+	});
+
+	it("validates the working directory and the ready check timeout", async () => {
+		mocks.config.data = { ...currentConfig, workerUser: "workspace" };
+		const user = userEvent.setup();
+		renderSection();
+		const save = screen.getByRole("button", { name: "Save and fetch templates" });
+
+		const workingDirectory = screen.getByRole("textbox", { name: "Working directory" });
+		await user.type(workingDirectory, "work/alice");
+		expect(screen.getByText(INVALID_WORKING_DIRECTORY)).toBeInTheDocument();
+		expect(save).toBeDisabled();
+		await user.clear(workingDirectory);
+		await user.type(workingDirectory, "~/work/../etc");
+		expect(screen.getByText(INVALID_WORKING_DIRECTORY)).toBeInTheDocument();
+		await user.clear(workingDirectory);
+		await user.type(workingDirectory, "~/work/{{name}");
+		expect(screen.getByText(INVALID_WORKING_DIRECTORY)).toBeInTheDocument();
+		await user.clear(workingDirectory);
+		await user.type(workingDirectory, "$HOME/work/alice");
+		expect(screen.queryByText(INVALID_WORKING_DIRECTORY)).toBeNull();
+
+		await user.type(screen.getByRole("textbox", { name: "Workspace ready check" }), "test -f ~/.ready");
+		await user.type(screen.getByRole("textbox", { name: "Ready check timeout (seconds)" }), "5");
+		expect(save).toBeDisabled();
+		await user.clear(screen.getByRole("textbox", { name: "Ready check timeout (seconds)" }));
+		await user.type(screen.getByRole("textbox", { name: "Ready check timeout (seconds)" }), "900");
+		expect(save).toBeEnabled();
+	});
+
+	it("saves new workspace setup fields and keeps the stored ones", async () => {
+		mocks.config.data = {
+			...currentConfig, templateId: "t-1", startupTimeoutSeconds: 1800,
+			workerUser: "workspace", reuseExistingCheckout: false, workingDirectory: "~/work/{repo}",
+			readyProbe: "test -f ~/.ready",
+		};
+		const user = userEvent.setup();
+		renderSection();
+		await user.type(screen.getByRole("textbox", { name: "Ready check timeout (seconds)" }), "60");
+		await user.click(screen.getByRole("switch", { name: "Keep the agent out of secret files (.env)" }));
+		await user.click(screen.getByRole("button", { name: "Save and fetch templates" }));
+		await waitFor(() => expect(mocks.putOrgCoderConfig).toHaveBeenCalledTimes(1));
+		expect(mocks.putOrgCoderConfig).toHaveBeenCalledWith("org-1", {
+			baseUrl: "https://coder.test",
+			token: undefined,
+			templateId: "t-1",
+			startupTimeoutSeconds: 1800,
+			workerUser: "workspace",
+			reuseExistingCheckout: false,
+			workingDirectory: "~/work/{repo}",
+			protectSecretFiles: false,
+			readyProbe: "test -f ~/.ready",
+			readyProbeTimeoutSeconds: 60,
+		});
+	});
+
+	it("keeps the controls read-only for an org member", () => {
+		mocks.org.value = { id: "org-1", role: "member" };
+		mocks.config.data = currentConfig;
+		renderSection();
+		expect(screen.getByText("Only organization owners and admins can change these settings.")).toBeInTheDocument();
+		expect(screen.getByRole("switch", { name: "Run the agent as the workspace user" })).toBeDisabled();
+		expect(screen.getByRole("textbox", { name: "Working directory" })).toBeDisabled();
 	});
 
 	it("keeps the stored dev-environment settings when a new token is saved", async () => {
 		mocks.config.data = {
-			...savedConfig, templateId: "t-1", parameters: { region: "eu" }, startupTimeoutSeconds: 1800,
+			...currentConfig, templateId: "t-1", parameters: { region: "eu" }, startupTimeoutSeconds: 1800,
 			workerUser: "workspace", reuseExistingCheckout: false,
 			readyProbe: "grep -q '^Ready' ~/.bootstrap-status", readyProbeTimeoutSeconds: 600,
 		};
@@ -132,11 +245,75 @@ describe("CoderSettingsSection dev environment", () => {
 			templateId: "t-1",
 			parameters: { region: "eu" },
 			startupTimeoutSeconds: 1800,
-			// Carried through unchanged: onboarding owns these, a token rotation must not reset them.
+			// Carried through unchanged: a token rotation must not reset the workspace setup.
 			workerUser: "workspace",
 			reuseExistingCheckout: false,
+			workingDirectory: "",
+			protectSecretFiles: true,
 			readyProbe: "grep -q '^Ready' ~/.bootstrap-status",
 			readyProbeTimeoutSeconds: 600,
+		});
+	});
+
+	it("clears a stored ready check and turns the workspace user off on a current control plane", async () => {
+		// A control plane that reports protectSecretFiles knows every field and keeps
+		// the stored value of any field left out, so the save sends them all.
+		mocks.config.data = {
+			...currentConfig, templateId: "t-1",
+			workerUser: "workspace", reuseExistingCheckout: false, workingDirectory: "~/work/{repo}",
+			readyProbe: "grep -q '^Ready' ~/.bootstrap-status", readyProbeTimeoutSeconds: 600,
+		};
+		const user = userEvent.setup();
+		renderSection();
+		await user.clear(screen.getByRole("textbox", { name: "Workspace ready check" }));
+		await user.click(screen.getByRole("button", { name: "Save and fetch templates" }));
+		await waitFor(() => expect(mocks.putOrgCoderConfig).toHaveBeenCalledTimes(1));
+		expect(mocks.putOrgCoderConfig).toHaveBeenLastCalledWith("org-1", {
+			baseUrl: "https://coder.test",
+			token: undefined,
+			templateId: "t-1",
+			workerUser: "workspace",
+			reuseExistingCheckout: false,
+			workingDirectory: "~/work/{repo}",
+			protectSecretFiles: true,
+			readyProbe: "",
+			readyProbeTimeoutSeconds: 0,
+		});
+
+		await user.clear(screen.getByRole("textbox", { name: "Working directory" }));
+		await user.click(screen.getByRole("switch", { name: "Run the agent as the workspace user" }));
+		await user.click(screen.getByRole("button", { name: "Save and fetch templates" }));
+		await waitFor(() => expect(mocks.putOrgCoderConfig).toHaveBeenCalledTimes(2));
+		expect(mocks.putOrgCoderConfig).toHaveBeenLastCalledWith("org-1", expect.objectContaining({
+			workerUser: "ao-worker",
+			reuseExistingCheckout: false,
+			workingDirectory: "",
+			readyProbe: "",
+		}));
+	});
+
+	it("hides the newer fields and still clears the older ones on an older control plane", async () => {
+		// An older control plane does not report protectSecretFiles and rejects
+		// workingDirectory and protectSecretFiles; it knows the other fields.
+		mocks.config.data = {
+			...savedConfig, workerUser: "workspace", reuseExistingCheckout: false,
+			readyProbe: "grep -q '^Ready' ~/.bootstrap-status", readyProbeTimeoutSeconds: 600,
+		};
+		const user = userEvent.setup();
+		renderSection();
+		expect(screen.queryByRole("textbox", { name: "Working directory" })).toBeNull();
+		expect(screen.queryByRole("switch", { name: "Keep the agent out of secret files (.env)" })).toBeNull();
+		await user.clear(screen.getByRole("textbox", { name: "Workspace ready check" }));
+		await user.click(screen.getByRole("button", { name: "Save and fetch templates" }));
+		await waitFor(() => expect(mocks.putOrgCoderConfig).toHaveBeenCalledTimes(1));
+		expect(mocks.putOrgCoderConfig).toHaveBeenCalledWith("org-1", {
+			baseUrl: "https://coder.test",
+			token: undefined,
+			templateId: "t-1",
+			workerUser: "workspace",
+			reuseExistingCheckout: false,
+			readyProbe: "",
+			readyProbeTimeoutSeconds: 0,
 		});
 	});
 

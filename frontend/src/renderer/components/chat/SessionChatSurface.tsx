@@ -24,6 +24,7 @@ import { useObservedAgentSwitchLifecycle } from "../../hooks/useObservedAgentSwi
 import { useAgentSwitchPresentationVisibility, useAgentSwitchRouteVisibility } from "../../hooks/useAgentSwitchVisibility";
 import { useQuery } from "@tanstack/react-query";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
+import { useOfferedModels } from "../../hooks/useOfferedModels";
 import { useSwitchAgentState } from "../../hooks/useSwitchAgent";
 import {
 	useConversation,
@@ -38,6 +39,7 @@ import { useAgentSwitchProviderCatalogs } from "../../hooks/useAgentSwitchProvid
 import { useConversationPromptSuggestion } from "../../hooks/useConversationPromptSuggestion";
 import { useRememberProjectPermissions } from "../../hooks/useRememberProjectPermissions";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
+import { claudeChoiceModel } from "../../lib/agent-model-choices";
 import { isWebLink, isWorkspaceHtmlLink } from "../../lib/external-link-policy";
 import { sessionUiKey } from "../../lib/hosts";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
@@ -373,7 +375,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// Claude's live list is family aliases; the new-task picker's catalog carries the versions.
 	const isClaude = snapshot?.harness === "claude-code";
 	const claudeCatalog = useQuery({ ...agentModelsQueryOptions("claude-code", "", hostId), enabled: isClaude }).data;
-	const models = useMemo(() => {
+	const catalogModels = useMemo(() => {
 		if (!isClaude || !claudeCatalog?.models.length) return controllerModels;
 		return claudeCatalog.models
 			.filter((model) => model.id.toLowerCase() !== "default")
@@ -383,6 +385,39 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				default: Boolean(model.isDefault),
 			}));
 	}, [isClaude, claudeCatalog, controllerModels]);
+	// A provider's own model option (ACP config) replaces the native list above,
+	// so the same setting narrows its choices; other options pass through as is.
+	const providerModelOption = configOptions.options?.find(
+		(option) => option.type === "select" && (option.category === "model" || option.id === "model"),
+	);
+	const providerModelChoices = useMemo(
+		() => providerModelOption?.choices.map((choice) => ({ id: choice.value })),
+		[providerModelOption],
+	);
+	// Resolve current Claude aliases before filtering so their labels cannot move
+	// to an older enabled model when the current concrete entry is switched off.
+	const resolveClaudeChoice = useMemo(
+		() => isClaude && claudeCatalog ? claudeChoiceModel(claudeCatalog.models) : undefined,
+		[isClaude, claudeCatalog],
+	);
+	const currentModels = [snapshot?.settings?.model, providerModelOption?.currentValue];
+	const { models } = useOfferedModels(snapshot?.harness, catalogModels, {
+		hostId,
+		keep: [...currentModels, ...currentModels.map((id) => id ? resolveClaudeChoice?.(id)?.id : undefined)],
+	});
+	// Claude's choices are family aliases ("sonnet"); Settings names catalog ids.
+	const claudeChoiceID = useMemo(
+		() => resolveClaudeChoice && ((choice: { id: string }) => resolveClaudeChoice(choice.id)?.id ?? choice.id),
+		[resolveClaudeChoice],
+	);
+	const { models: offeredProviderModels } = useOfferedModels(snapshot?.harness, providerModelChoices, { hostId, keep: [providerModelOption?.currentValue], modelID: claudeChoiceID });
+	const offeredConfigOptions = useMemo(() => {
+		if (!providerModelOption) return configOptions.options;
+		const offered = new Set(offeredProviderModels.map((choice) => choice.id));
+		return configOptions.options?.map((option) => option === providerModelOption
+			? { ...option, choices: option.choices.filter((choice) => offered.has(choice.value)) }
+			: option);
+	}, [configOptions.options, offeredProviderModels, providerModelOption]);
 	const { skills } = useConversationSkills(
 		session.id,
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot),
@@ -684,7 +719,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				rememberPermissionsPending={projectPermissions.pending}
 				rememberPermissionsError={projectPermissions.error}
 				rememberedPermissionMode={projectPermissions.savedMode}
-				configOptions={configOptions.options}
+				configOptions={offeredConfigOptions}
 				onChooseConfigOption={configOptions.setOption}
 				configOptionPending={configOptions.pending || commands.choosingSettings}
 				configOptionError={controllerCatalogsEnabled ? configOptions.error : undefined}

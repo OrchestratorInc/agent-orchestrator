@@ -527,8 +527,8 @@ func Run() error {
 		},
 		// Claude's model IDs are provider-specific — first-party aliases,
 		// Bedrock ARNs-in-miniature, Vertex @-versions — so the list has to come
-		// from whichever provider is configured. An error here is expected and
-		// harmless: discovery falls back to the static aliases.
+		// from whichever provider is configured. On failure, the service retains
+		// the matching persisted catalog instead of inventing model aliases.
 		ClaudeModels: func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
 			return claudecodeagent.ProviderModels(listCtx, request.Binary, request.WorkingDir, request.Env)
 		},
@@ -677,10 +677,12 @@ func Run() error {
 		privateNPMPrefixes[systeminstall.TargetOpencodeV2] = prefix
 	}
 	systemInstall := systeminstall.NewWithDeps(hostCommands, hostCommands, systeminstall.Deps{
-		JobStore:           store,
-		Verifier:           systeminstall.NewVerifier(agents, hostCommands),
-		Sessions:           store,
-		PrivateNPMPrefixes: privateNPMPrefixes,
+		JobStore:            store,
+		Verifier:            systeminstall.NewVerifier(agents, hostCommands),
+		Sessions:            store,
+		Reviewers:           store,
+		DisableUpdateChecks: !cfg.HarnessUpdateChecks,
+		PrivateNPMPrefixes:  privateNPMPrefixes,
 	})
 	if err := systemInstall.Recover(ctx); err != nil {
 		stop()
@@ -1056,7 +1058,12 @@ func Run() error {
 		// lazily Ensure on demand. Kick it here, after the listener is live, so its
 		// bounded subprocess probes no longer contend with the synchronous
 		// migration and fencing reconcile that gate the port bind.
-		agentSvc.WarmReadiness()
+		readinessDone := agentSvc.WarmReadiness()
+		if cfg.HarnessUpdateChecks {
+			go watchInstalledHarnessUpdates(ctx, readinessDone, cfg.HarnessUpdateInterval, agentSvc.EnsureInstallationReadiness, func(ctx context.Context, target systeminstall.Target, refresh bool) (systeminstall.UpdateAdvisory, error) {
+				return systemInstall.UpdateAdvisory(ctx, target, refresh)
+			}, log)
+		}
 		done := make(chan struct{})
 		startupReconcileDone = done
 		go func() {

@@ -37,6 +37,8 @@ type Action string
 const (
 	// ActionLogin opens an agent's native login flow.
 	ActionLogin Action = "login"
+	// ActionLogout opens an agent's native logout flow.
+	ActionLogout Action = "logout"
 	// ActionSetup opens an agent's native provider/setup flow.
 	ActionSetup Action = "setup"
 	// ActionInstructions points the user to agent-owned setup documentation.
@@ -57,14 +59,18 @@ const (
 // Plan is the display-safe authentication plan for one harness. Trusted
 // command and terminal details remain private to this package.
 type Plan struct {
-	AgentID          string     `json:"agentId"`
-	Action           Action     `json:"action"`
-	LaunchMode       LaunchMode `json:"launchMode" enum:"terminal,documentation"`
-	Available        bool       `json:"available"`
-	DisplayCommand   string     `json:"displayCommand,omitempty"`
-	Guidance         string     `json:"guidance,omitempty"`
-	DocumentationURL string     `json:"documentationUrl"`
-	Reason           string     `json:"reason,omitempty"`
+	AgentID    string     `json:"agentId"`
+	Action     Action     `json:"action"`
+	LaunchMode LaunchMode `json:"launchMode" enum:"terminal,documentation"`
+	Available  bool       `json:"available"`
+	// LogoutCommand is empty when native logout is unsupported. It is display
+	// text only; clients cannot supply or override the private command.
+	LogoutCommand    string `json:"logoutCommand,omitempty"`
+	logoutCommand    []string
+	DisplayCommand   string `json:"displayCommand,omitempty"`
+	Guidance         string `json:"guidance,omitempty"`
+	DocumentationURL string `json:"documentationUrl"`
+	Reason           string `json:"reason,omitempty"`
 	command          []string
 	title            string
 	terminalInput    string
@@ -153,6 +159,29 @@ func (s *Service) Start(ctx context.Context, agentID string) (StartResult, error
 	if !ok {
 		return StartResult{}, apierr.Invalid("AGENT_AUTH_TARGET_UNKNOWN", fmt.Sprintf("unknown agent authentication target %q", agentID), nil)
 	}
+	return s.start(ctx, plan)
+}
+
+// Logout opens the fixed native logout flow using the binary sessions launch.
+func (s *Service) Logout(ctx context.Context, agentID string) (StartResult, error) {
+	plan, ok := planByAgentID[agentID]
+	if !ok {
+		return StartResult{}, apierr.Invalid("AGENT_AUTH_TARGET_UNKNOWN", fmt.Sprintf("unknown agent authentication target %q", agentID), nil)
+	}
+	if len(plan.logoutCommand) == 0 {
+		return StartResult{}, apierr.Invalid("AGENT_LOGOUT_UNSUPPORTED", "This harness does not have a supported native logout command.", nil)
+	}
+	plan.command = plan.logoutCommand
+	plan.Action = ActionLogout
+	plan.title = strings.Replace(plan.title, "Log in to", "Log out of", 1)
+	plan.Guidance = "Complete the harness's native logout flow, then close the terminal to check authentication again."
+	plan.launcher, plan.terminalInput, plan.initialInput = "", "", ""
+	plan.launcherArgs, plan.initialInputReadyStates = nil, nil
+	plan.prepareWorkspace = nil
+	return s.start(ctx, plan)
+}
+
+func (s *Service) start(ctx context.Context, plan Plan) (StartResult, error) {
 	plan = s.resolve(ctx, plan)
 	if !plan.Available {
 		return StartResult{}, apierr.Invalid("AGENT_AUTH_UNAVAILABLE", plan.Reason, nil)

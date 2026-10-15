@@ -594,6 +594,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const [handoffDialogOpen, setHandoffDialogOpen] = useState(false);
 	const handoffDialogContainerRef = useRef<HTMLDivElement | null>(null);
 	const [handoffDialogContainer, setHandoffDialogContainer] = useState<HTMLDivElement | null>(null);
+	// One SessionView serves every local session, so session-scoped UI state must
+	// reset on a switch. Reset during render, not in an effect: children must never
+	// mount (or fetch) against the previous session's reviewer, popout, or dialog.
+	const [stateSessionId, setStateSessionId] = useState(sessionId);
+	if (stateSessionId !== sessionId) {
+		setStateSessionId(sessionId);
+		setTerminalTarget({ kind: "worker" });
+		setReviewerChatId(null);
+		setBrowserPopOutState({ sessionId, phase: "docked" });
+		setFilesPoppedOut(false);
+		setHandoffDialogOpen(false);
+	}
 	const bindHandoffDialogContainer = useCallback((node: HTMLDivElement | null) => {
 		handoffDialogContainerRef.current = node;
 		setHandoffDialogContainer(node);
@@ -1349,16 +1361,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		initializeInspectorSession(uiSessionId, hasBrowserContent, hasInspector);
 	}, [browserOnly, hasBrowserContent, hasInspector, session, uiSessionId, initializeInspectorSession, setInspectorOpenForSession, setInspectorViewForSession]);
 
-	useLayoutEffect(() => {
-		setTerminalTarget({ kind: "worker" });
-		setReviewerChatId(null);
-		setBrowserPopOutState({ sessionId, phase: "docked" });
-		setFilesPoppedOut(false);
-	}, [sessionId]);
-
-	// Route props change one render before the passive reset above. Reject the
-	// previous session's shell/reviewer synchronously so its handle can never be
-	// cached under the destination session.
+	// Keep rejecting another session's shell/reviewer handle here as well, so it
+	// can never be cached under the destination session.
 	const routedTerminalTarget = terminalTargetBelongsToSession(terminalTarget, sessionId)
 		? terminalTarget
 		: ({ kind: "worker" } satisfies TerminalTarget);

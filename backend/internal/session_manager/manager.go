@@ -581,6 +581,14 @@ func (m *Manager) SetHarnessUseGate(gate HarnessUseGate) {
 	m.harnessUseGate = gate
 }
 
+// TryBeginHarnessUse exposes the late-bound installer interlock to launchers
+// built alongside the manager, such as reviewers. Without an installer it
+// always succeeds.
+func (m *Manager) TryBeginHarnessUse(harness domain.AgentHarness) (func(), bool) {
+	release, err := m.beginHarnessUse(harness)
+	return release, err == nil
+}
+
 func (m *Manager) beginHarnessUse(harness domain.AgentHarness) (func(), error) {
 	if m.harnessUseGate == nil {
 		return func() {}, nil
@@ -1033,8 +1041,8 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			cfg.AgentConfigResolved = true
 		}
 	}
-	if mode == domain.SessionModeTUI && cfg.Harness == domain.HarnessClaudeCode {
-		resolved, err := m.resolveAgentConfig(ctx, cfg, project.Config)
+	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex) {
+		resolved, err := m.resolveTUIAgentConfig(ctx, cfg, project.Config, agentConfig)
 		if err != nil {
 			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
 		}
@@ -1507,6 +1515,23 @@ func replayClientRequest(rec domain.SessionRecord, hash string) (domain.SessionR
 		return domain.SessionRecord{}, ErrClientRequestIncomplete
 	}
 	return rec, nil
+}
+
+// resolveTUIAgentConfig validates a terminal launch against the model
+// catalog. Claude Code requires it. The Codex CLI validates its own model and
+// effort, so for Codex the catalog only refines the launch: when it is
+// unavailable, stale, lacks a custom model or lists other efforts, the session
+// launches with the unvalidated config, as it would without a catalog.
+func (m *Manager) resolveTUIAgentConfig(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig, unvalidated ports.AgentConfig) (ports.AgentConfig, error) {
+	resolved, err := m.resolveAgentConfig(ctx, cfg, project)
+	// Only the spawn's own cancellation stops the launch; a catalog lookup's
+	// internal timeout is one more way the catalog can be unavailable.
+	if err == nil || cfg.Harness != domain.HarnessCodex || ctx.Err() != nil {
+		return resolved, err
+	}
+	m.logger.Warn("spawn: Codex model catalog could not validate the launch; leaving it to the CLI",
+		"model", unvalidated.Model, "effort", unvalidated.Effort, "error", err)
+	return unvalidated, nil
 }
 
 func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig) (ports.AgentConfig, error) {
@@ -2239,17 +2264,8 @@ func resolvedModelForMetadata(harness domain.AgentHarness, effective, adapter po
 // static catalog. Dynamic catalogs and direct-entry agents defer authoritative
 // model validation to the selected agent at launch time.
 func validateSpawnModel(harness domain.AgentHarness, model string) error {
-	if strings.TrimSpace(model) == "" {
+	if modelcatalog.Accepts(string(harness), model) {
 		return nil
-	}
-	catalog := modelcatalog.Base(string(harness))
-	if catalog.AllowCustom || len(catalog.Models) == 0 {
-		return nil
-	}
-	for _, item := range catalog.Models {
-		if strings.EqualFold(item.ID, model) {
-			return nil
-		}
 	}
 	return fmt.Errorf("model %q is not supported by harness %q", model, harness)
 }

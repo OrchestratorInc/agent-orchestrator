@@ -22,6 +22,7 @@ import {
 } from "../hooks/useAgentReadinessQuery";
 import { type FileAttachmentPayload, useFileAttachments } from "../hooks/useFileAttachments";
 import { useSettings } from "../hooks/useSettings";
+import { useOfferedModels } from "../hooks/useOfferedModels";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useProviderConnections } from "../hooks/useProviderConnections";
@@ -448,11 +449,17 @@ export function TaskComposer({
 	// so there the notice is informational and never reads as blocking.
 	const modelAuthIssue = revalidationWarning === undefined ? modelCatalogAuthIssue(modelCatalogQuery.data) : undefined;
 	useModelCatalogAuthRecovery(selectedAgent, hostId, modelAuthIssue);
+	// Settings → Harness → Models picks the models this machine offers; cloud VMs keep their own catalog.
+	const { models: offeredModels } = useOfferedModels(selectedAgent, modelCatalogQuery.data?.models, {
+		hostId,
+		keep: [model, mode, projectModelForSelectedAgent, projectModeForSelectedAgent],
+		skip: isCloudProject,
+	});
 	const modelCatalog: TaskComposerModelCatalog | undefined = modelCatalogQuery.data
 		? {
 				allowCustom: modelCatalogQuery.data.allowCustom,
 				customModelEntry: modelCatalogQuery.data.customModelEntry,
-				models: modelCatalogQuery.data.models,
+				models: offeredModels,
 				refreshError: modelCatalogQuery.data.refreshError,
 				refreshState: modelCatalogQuery.data.refreshState,
 				retryAt: modelCatalogQuery.data.retryAt,
@@ -460,9 +467,12 @@ export function TaskComposer({
 			}
 		: undefined;
 	// An unmarked first row is not evidence of what the provider will run.
-	const catalogModels = modelCatalogQuery.data?.models?.filter((item) => isConcreteModelID(item.id)) ?? [];
+	const catalogModels = offeredModels.filter((item) => isConcreteModelID(item.id));
 	const catalogDefaultOption =
 		catalogModels.find((item) => item.isDefault)?.id ?? "";
+	const catalogDefaultHidden = Boolean(modelCatalogQuery.data?.models?.some(
+		(item) => item.isDefault && isConcreteModelID(item.id) && !catalogModels.some((offered) => offered.id === item.id),
+	));
 	const catalogUsesModes = modelCatalogQuery.data?.selectionMode === "mode";
 	// The model this user ran most recently.
 	const lastUsedOption =
@@ -490,7 +500,10 @@ export function TaskComposer({
 		(isConcreteModelID(projectModelForSelectedAgent) ? projectModelForSelectedAgent : "") ||
 		(!catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(catalogUsesModes ? "" : catalogDefaultOption) ||
-		claudeFallbackOption;
+		claudeFallbackOption ||
+		// Only replace a default the catalog identified and Settings hid. An
+		// unreported default must keep the native model/provider selection.
+		(!catalogUsesModes && catalogDefaultHidden ? catalogModels[0]?.id ?? "" : "");
 	const defaultModeForSelectedAgent =
 		(rememberedModeIsValid ? rememberedMode : "") ||
 		(isConcreteModelID(projectModeForSelectedAgent) ? projectModeForSelectedAgent : "") ||

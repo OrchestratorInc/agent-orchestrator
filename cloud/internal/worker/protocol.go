@@ -21,8 +21,11 @@ type BootstrapRequest struct {
 
 // LaunchContext is the durable session context handed to a bootstrapped worker.
 type LaunchContext struct {
-	SessionID      string `json:"sessionId"`
-	ProjectID      string `json:"projectId"`
+	SessionID string `json:"sessionId"`
+	ProjectID string `json:"projectId"`
+	// ProjectName is the project's display name, for the Setup and Cleanup
+	// commands' environment.
+	ProjectName    string `json:"projectName,omitempty"`
 	Kind           string `json:"kind"`
 	Harness        string `json:"harness"`
 	DisplayName    string `json:"displayName"`
@@ -49,6 +52,12 @@ type LaunchContext struct {
 	// SystemPrompt carries control-plane-authored project context and rules. It
 	// remains separate from Prompt, which is the user's visible task input.
 	SystemPrompt string `json:"systemPrompt"`
+	// PostCreate and PreRemove are the project's Setup and Cleanup commands
+	// (Project settings > Scripts), read from the project when the worker
+	// boots. Setup runs after the checkout and before the coding agent starts;
+	// Cleanup runs before the workspace is deleted.
+	PostCreate []string `json:"postCreate,omitempty"`
+	PreRemove  []string `json:"preRemove,omitempty"`
 }
 
 // RepoRef is one additional repository the worker clones beside the primary

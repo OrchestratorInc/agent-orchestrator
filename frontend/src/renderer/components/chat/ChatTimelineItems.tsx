@@ -1047,6 +1047,7 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 	else if (activity.activityKind === "error") content = <ErrorActivityRow activity={activity} />;
 	else if (activity.detail?.event === "model.rerouted") content = <RerouteRow activity={activity} />;
 	else if (activity.detail?.event === "auth.reauth_required") content = <ReauthRow activity={activity} />;
+	else if (activity.detail?.event === "workspace.setup") content = <ProjectSetupRow activity={activity} />;
 	else if (renderRef) content = <RenderFrame render={renderRef} />;
 	else if (artifactRef) content = <RenderFrame artifact={artifactRef} />;
 	else content = <GenericActivityRow activity={activity} />;
@@ -2325,6 +2326,64 @@ function parseJsonObjectSuffix(raw: string): Record<string, unknown> | undefined
  * when it happened, so a turn that failed for this reason is not left looking like an
  * ordinary failure.
  */
+/** Whole seconds for a short duration, minutes and seconds past a minute. */
+function setupDuration(durationMs: number): { minutes: number; seconds: number } {
+	const total = Math.max(0, Math.round(durationMs / 1000));
+	return { minutes: Math.floor(total / 60), seconds: total % 60 };
+}
+
+/**
+ * How the project's Setup commands (Project settings > Scripts) ended, before
+ * the agent started. Compact like the other system rows; the failed step's
+ * output (the tail the worker kept, already redacted) opens below it in
+ * monospace.
+ */
+function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
+	const { t } = useTranslation();
+	const [expanded, setExpanded] = useState(false);
+	const detail = activity.detail;
+	const status = detail?.setupStatus ?? (activity.status === "completed" ? "succeeded" : "failed");
+	const step = detail?.setupStep ?? 1;
+	const duration = typeof detail?.durationMs === "number" ? setupDuration(detail.durationMs) : undefined;
+	const durationText = duration
+		? duration.minutes > 0
+			? t("chat.projectSetup.durationMinutes", { minutes: duration.minutes, seconds: duration.seconds })
+			: t("chat.projectSetup.durationSeconds", { seconds: duration.seconds })
+		: undefined;
+	const headline = status === "succeeded"
+		? durationText ? t("chat.projectSetup.succeededIn", { duration: durationText }) : t("chat.projectSetup.succeeded")
+		: status === "timed_out"
+			? t("chat.projectSetup.timedOut", { step })
+			: typeof detail?.exitCode === "number" && detail.exitCode >= 0
+				? t("chat.projectSetup.failedWithCode", { step, code: detail.exitCode })
+				: t("chat.projectSetup.failed", { step });
+	const output = detail?.output?.trim() ? stripAnsi(detail.output) : undefined;
+	const failed = status !== "succeeded";
+	const Icon = failed ? CircleAlert : SquareTerminal;
+	return (
+		<div className={cn("flex flex-col gap-1.5 rounded-md border bg-surface/60 px-3 py-2", failed ? "border-destructive/40" : "border-border")} data-testid="project-setup-row">
+			<div className="flex items-center gap-2.5">
+				<Icon aria-hidden="true" className={cn("size-3.5 shrink-0", failed ? "text-destructive" : "text-muted-foreground")} />
+				<span className={cn("min-w-0 flex-1 text-xs", failed ? "text-destructive" : "text-foreground")}>{headline}</span>
+				{output ? (
+					<button
+						type="button"
+						aria-expanded={expanded}
+						className="inline-flex shrink-0 items-center gap-1 rounded text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						onClick={() => setExpanded((value) => !value)}
+					>
+						{expanded ? <ChevronDown aria-hidden="true" className="size-3.5" /> : <ChevronRight aria-hidden="true" className="size-3.5" />}
+						{expanded ? t("chat.projectSetup.hideOutput") : t("chat.projectSetup.showOutput")}
+					</button>
+				) : null}
+			</div>
+			{output && expanded ? (
+				<pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/60 px-2.5 py-2 font-mono text-[12px] leading-5 text-muted-foreground">{output}</pre>
+			) : null}
+		</div>
+	);
+}
+
 function ReauthRow({ activity }: { activity: ConversationActivity }) {
 	return (
 		<div className="flex items-start gap-2.5 rounded-md border border-destructive/40 bg-surface px-3 py-2">

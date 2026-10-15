@@ -28,6 +28,9 @@ type Command struct {
 	Env          map[string]string
 	SystemPrompt string
 	Cleanup      func()
+	// SecretFileGuard is the PreToolUse hook command a Codex Chat turn
+	// registers and trusts in its app-server (see trustCodexSecretFileGuard).
+	SecretFileGuard string
 }
 
 type CommandBuilder interface {
@@ -44,6 +47,14 @@ type HarnessBuilder struct {
 	Launch     worker.LaunchContext
 	Env        map[string]string
 	CodexLogin func(binary, home, credentialType, secret string) error
+	// ProtectSecretFiles adds Claude Code deny rules for secret environment
+	// files (see secretFileDenyRules). A bring-your-own Coder connection sets
+	// it through worker.ProtectSecretFilesEnv.
+	ProtectSecretFiles bool
+	// SecretFileGuard is the command that runs RunSecretFileGuard
+	// ("<ao-worker> secret-file-guard"). With ProtectSecretFiles it is
+	// registered as a PreToolUse hook on Claude's and Codex's shell tools.
+	SecretFileGuard string
 }
 
 // extraReposPromptNote describes the additional repositories the worker checked
@@ -140,6 +151,7 @@ func (b HarnessBuilder) BuildInteractive(
 		if launch.Kind != "reviewer" {
 			providerArgs = codexActivityHookArgs(hookHelperPath(b.DataDir))
 		}
+		providerArgs = append(providerArgs, codexSecretFileGuardArgs(b.secretFileGuard())...)
 		if launch.ReasoningEffort != "" {
 			providerArgs = append(providerArgs, "-c", "model_reasoning_effort="+strconv.Quote(launch.ReasoningEffort))
 		}
@@ -275,7 +287,7 @@ func (b HarnessBuilder) systemPrompt(launch worker.LaunchContext, workspace stri
 		systemPrompt = orchestratorSystemPrompt(skillDir)
 	}
 	if projectPrompt := strings.TrimSpace(launch.SystemPrompt); projectPrompt != "" {
-		systemPrompt += "\n\n" + projectPrompt
+		systemPrompt += "\n\n" + strings.ReplaceAll(projectPrompt, worker.WorkspacePathPlaceholder, workspace)
 	}
 	// Multi-repo dev kit: tell a worker about the additional repositories checked
 	// out beside its primary repo, and where to find them, so it can edit them
@@ -375,12 +387,24 @@ func (b HarnessBuilder) Build(
 		}
 		command.Env["CLAUDE_CONFIG_DIR"] = configDir
 		setClaudeNonEssentialTrafficDisabled(&command)
+		// A session can start in Chat before any terminal wrote the settings;
+		// the ACP adapter and the CLI both load them as user settings.
+		if b.ProtectSecretFiles {
+			if err := b.writeClaudeSecretFileProtection(configDir); err != nil {
+				return Command{}, fmt.Errorf("protect secret files in Claude settings: %w", err)
+			}
+		}
 		if !b.claudeConversationAvailable(turn.AgentSessionID) {
 			turn.AgentSessionID = ""
 		}
 		command.Args, err = claudeArgs(turn)
 	case "codex":
 		command.Args, err = codexArgs(turn)
+		if err == nil {
+			// Global options go before exec's own arguments and the prompt.
+			command.Args = slices.Insert(command.Args, 1, codexSecretFileGuardArgs(b.secretFileGuard())...)
+			command.SecretFileGuard = b.secretFileGuard()
+		}
 	case "cursor":
 		command.Args, err = cursorArgs(turn)
 	default:
@@ -487,6 +511,7 @@ func (b HarnessBuilder) prepareClaudeCloudExperience(command *Command, workspace
 	}); err != nil {
 		return fmt.Errorf("prepare Claude onboarding: %w", err)
 	}
+	var protectionErr error
 	if err := updateJSONFile(filepath.Join(configDir, "settings.json"), func(settings map[string]any) {
 		removeGlobalClaudeActivityHooks(settings)
 		settings["theme"] = "dark"
@@ -506,8 +531,13 @@ func (b HarnessBuilder) prepareClaudeCloudExperience(command *Command, workspace
 			mode = "bypassPermissions"
 		}
 		permissions["defaultMode"] = mode
+		protectionErr = applySecretFileProtection(settings, b.ProtectSecretFiles)
+		applySecretFileGuardHook(settings, b.secretFileGuard())
 	}); err != nil {
 		return fmt.Errorf("prepare Claude settings: %w", err)
+	}
+	if protectionErr != nil {
+		return fmt.Errorf("protect secret files in Claude settings: %w", protectionErr)
 	}
 	helperBinary := hookHelperPath(b.DataDir)
 	if b.ConfigRoot != "" {
@@ -519,6 +549,7 @@ func (b HarnessBuilder) prepareClaudeCloudExperience(command *Command, workspace
 	); err != nil {
 		return fmt.Errorf("install Claude activity hooks: %w", err)
 	}
+	excludeFromGit(workspace, ".claude/settings.local.json")
 	return nil
 }
 

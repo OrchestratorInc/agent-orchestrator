@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
+	activitylog "github.com/aoagents/agent-orchestrator/cloud/internal/activity"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/logctx"
@@ -84,6 +85,12 @@ var workerEventTypes = map[string]struct{}{
 	"worker.ready":         {},
 	"chat.assistant_delta": {},
 	"chat.activity":        {},
+	// workspace.setup reports the project's Setup commands' outcome so the
+	// session shows why its setup is missing.
+	worker.SetupEventType: {},
+	// workspace.startup reports whether the worker could prepare the
+	// session's workspace; a failure becomes the session's startup error.
+	worker.WorkspaceStartupEventType: {},
 }
 
 const (
@@ -132,7 +139,7 @@ func (s *Server) workerBootstrap(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	launchContext, err := launchContextFrom(launch)
+	launchContext, err := launchContextFrom(launch, slices.Contains(input.Capabilities, worker.CapabilityWorkspacePathPlaceholder))
 	if err != nil {
 		s.logger.Error("build worker launch context", "error", err, "project_id", launch.ProjectID, "request_id", requestID(r))
 		writeError(w, r, http.StatusInternalServerError, "BOOTSTRAP_FAILED", "The project's role instructions are invalid.")
@@ -224,7 +231,7 @@ func (s *Server) workerReconnect(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	launchContext, err := launchContextFrom(launch)
+	launchContext, err := launchContextFrom(launch, headerReportsCapability(r, worker.CapabilityWorkspacePathPlaceholder))
 	if err != nil {
 		s.logger.Error("build worker reconnect context", "error", err, "project_id", launch.ProjectID, "request_id", requestID(r))
 		writeError(w, r, http.StatusInternalServerError, "RECONNECT_FAILED", "The project's role instructions are invalid.")
@@ -239,9 +246,21 @@ func (s *Server) workerReconnect(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// headerReportsCapability reports whether a worker request's
+// worker.CapabilitiesHeader lists capability.
+func headerReportsCapability(r *http.Request, capability string) bool {
+	for _, reported := range strings.Split(r.Header.Get(worker.CapabilitiesHeader), ",") {
+		if strings.TrimSpace(reported) == capability {
+			return true
+		}
+	}
+	return false
+}
+
 // launchContextFrom projects a stored launch spec onto the wire type shared by
-// bootstrap and reconnect.
-func launchContextFrom(launch domain.WorkerLaunch) (worker.LaunchContext, error) {
+// bootstrap and reconnect. resolvesWorkspacePath is whether the worker
+// substitutes worker.WorkspacePathPlaceholder.
+func launchContextFrom(launch domain.WorkerLaunch, resolvesWorkspacePath bool) (worker.LaunchContext, error) {
 	var agentConfig domain.ProjectAgentConfig
 	if len(launch.AgentConfig) > 0 {
 		if err := json.Unmarshal(launch.AgentConfig, &agentConfig); err != nil {
@@ -252,6 +271,7 @@ func launchContextFrom(launch domain.WorkerLaunch) (worker.LaunchContext, error)
 	if err != nil {
 		return worker.LaunchContext{}, err
 	}
+	postCreate, preRemove := domain.ProjectScripts(launch.ProjectConfig)
 	// Extra repos are project-level (chosen at project setup, stored on the
 	// project config), so every session of the project clones the same set.
 	// Decoded before the prompt is built so both the project context (which
@@ -268,12 +288,16 @@ func launchContextFrom(launch domain.WorkerLaunch) (worker.LaunchContext, error)
 		}
 	}
 	systemPrompt := roleprompt.Build(roleprompt.Config{
-		Role:              launch.Kind,
-		ProjectID:         launch.ProjectID,
-		ProjectName:       launch.ProjectName,
-		RepositoryURL:     launch.RepositoryURL,
-		DefaultBranch:     launch.DefaultBranch,
-		WorkspacePath:     "/workspace/repository",
+		Role:          launch.Kind,
+		ProjectID:     launch.ProjectID,
+		ProjectName:   launch.ProjectName,
+		RepositoryURL: launch.RepositoryURL,
+		DefaultBranch: launch.DefaultBranch,
+		// The worker knows where the session actually works (it depends on the
+		// provider, the workspace user's home and a Coder connection's working
+		// directory) and substitutes it before launching the agent. An older
+		// worker shows the prompt as is, so it gets the path it always showed.
+		WorkspacePath:     workspacePathFor(resolvesWorkspacePath),
 		AgentRules:        agentRules,
 		OrchestratorRules: orchestratorRules,
 		ExtraRepos:        promptExtras,
@@ -281,6 +305,7 @@ func launchContextFrom(launch domain.WorkerLaunch) (worker.LaunchContext, error)
 	return worker.LaunchContext{
 		SessionID:       launch.SessionID,
 		ProjectID:       launch.ProjectID,
+		ProjectName:     launch.ProjectName,
 		Kind:            launch.Kind,
 		Harness:         launch.Harness,
 		DisplayName:     launch.DisplayName,
@@ -299,6 +324,8 @@ func launchContextFrom(launch domain.WorkerLaunch) (worker.LaunchContext, error)
 		DefaultBranch:   launch.DefaultBranch,
 		ExtraRepos:      extraRepos,
 		SystemPrompt:    systemPrompt,
+		PostCreate:      postCreate,
+		PreRemove:       preRemove,
 	}, nil
 }
 
@@ -1025,6 +1052,59 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 			s.writeWorkerStoreError(w, r, err)
 			return
 		}
+	case worker.SetupEventType:
+		var outcome worker.SetupEvent
+		if err := json.Unmarshal(input.Payload, &outcome); err != nil ||
+			(outcome.Status != worker.SetupSucceeded && outcome.Status != worker.SetupFailed &&
+				outcome.Status != worker.SetupTimedOut) || outcome.Step < 0 ||
+			len(input.Payload) > maxWorkerControlBody {
+			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The setup payload is invalid.")
+			return
+		}
+		outcome.Output = activitylog.Excerpt(outcome.Output, 2048)
+		logArgs := []any{
+			"org_id", claims.OrgID, "session_id", claims.SessionID, "status", outcome.Status,
+			"step", outcome.Step, "exit_code", outcome.ExitCode, "duration_ms", outcome.DurationMS,
+		}
+		if outcome.Status == worker.SetupSucceeded {
+			s.logger.Info("project setup finished", logArgs...)
+		} else {
+			s.logger.Warn("project setup did not succeed", append(logArgs, "output", outcome.Output)...)
+		}
+		payload, err := json.Marshal(outcome)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The setup payload is invalid.")
+			return
+		}
+		if _, err := s.store.AppendSessionEvent(r.Context(), claims.OrgID, claims.SessionID, input.Type, payload); err != nil {
+			s.writeWorkerStoreError(w, r, err)
+			return
+		}
+	case worker.WorkspaceStartupEventType:
+		var startup worker.WorkspaceStartupEvent
+		if err := json.Unmarshal(input.Payload, &startup); err != nil ||
+			len(input.Payload) > maxWorkerOutput+maxWorkerControlBody ||
+			(startup.Status == worker.WorkspaceStartupFailed &&
+				(!domain.IsWorkspaceStartupErrorCode(startup.Code) || strings.TrimSpace(startup.Message) == "")) ||
+			(startup.Status != worker.WorkspaceStartupFailed && startup.Status != worker.WorkspaceStartupReady) {
+			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The workspace startup payload is invalid.")
+			return
+		}
+		var err error
+		if startup.Status == worker.WorkspaceStartupReady {
+			err = s.store.ClearWorkspaceStartupError(r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch)
+		} else {
+			message := activitylog.Truncate(activitylog.Redact(strings.TrimSpace(startup.Message)), 1024)
+			detail := activitylog.Excerpt(startup.Detail, 4096)
+			s.logger.Warn("workspace startup failed in the worker",
+				"org_id", claims.OrgID, "session_id", claims.SessionID, "code", startup.Code, "message", message)
+			err = s.store.RecordWorkspaceStartupError(r.Context(), claims.OrgID, claims.SessionID,
+				claims.WorkerID, claims.Epoch, startup.Code, message, detail)
+		}
+		if err != nil {
+			s.writeWorkerStoreError(w, r, err)
+			return
+		}
 	case "chat.activity":
 		var output worker.OutputEvent
 		if err := json.Unmarshal(input.Payload, &output); err != nil ||
@@ -1299,4 +1379,11 @@ func (s *Server) workerTokenTTL() time.Duration {
 		return s.workerTokenLifetime
 	}
 	return worker.DefaultTokenTTL
+}
+
+func workspacePathFor(resolvesWorkspacePath bool) string {
+	if resolvesWorkspacePath {
+		return worker.WorkspacePathPlaceholder
+	}
+	return worker.LegacyWorkspacePath
 }

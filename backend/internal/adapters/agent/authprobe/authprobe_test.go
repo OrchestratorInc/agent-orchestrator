@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -49,12 +50,12 @@ func TestCLIStatus_Mocked(t *testing.T) {
 				return []byte(tt.mockOutput), tt.mockError
 			}
 
-			status, err := CLIStatus(context.Background(), "mockbinary", [][]string{{"auth", "status"}})
+			status, _, err := CLIStatusWithDiagnostics(context.Background(), "mockbinary", [][]string{{"auth", "status"}}, 50*time.Millisecond, nil)
 			if (err != nil) != tt.wantError {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if status != tt.wantStatus {
-				t.Errorf("CLIStatus() = %v, want %v", status, tt.wantStatus)
+				t.Errorf("CLIStatusWithDiagnostics() = %v, want %v", status, tt.wantStatus)
 			}
 		})
 	}
@@ -69,15 +70,15 @@ func TestCLIStatusRequiresExplicitCommands(t *testing.T) {
 		return []byte("authenticated"), nil
 	}
 
-	status, err := CLIStatus(context.Background(), "mockbinary", nil)
+	status, _, err := CLIStatusWithDiagnostics(context.Background(), "mockbinary", nil, time.Second, nil)
 	if err != nil {
-		t.Fatalf("CLIStatus: %v", err)
+		t.Fatalf("CLIStatusWithDiagnostics: %v", err)
 	}
 	if status != ports.AgentAuthStatusUnknown {
 		t.Fatalf("status = %q, want %q", status, ports.AgentAuthStatusUnknown)
 	}
 	if called {
-		t.Fatal("CLIStatus ran a command without explicit adapter commands")
+		t.Fatal("CLIStatusWithDiagnostics ran a command without explicit adapter commands")
 	}
 }
 
@@ -89,9 +90,9 @@ func TestCLIStatusTimeoutDegradesToUnknown(t *testing.T) {
 		return nil, ctx.Err()
 	}
 
-	status, err := CLIStatus(context.Background(), "mockbinary", [][]string{{"auth", "status"}})
+	status, _, err := CLIStatusWithDiagnostics(context.Background(), "mockbinary", [][]string{{"auth", "status"}}, 50*time.Millisecond, nil)
 	if err != nil {
-		t.Fatalf("CLIStatus: %v", err)
+		t.Fatalf("CLIStatusWithDiagnostics: %v", err)
 	}
 	if status != ports.AgentAuthStatusUnknown {
 		t.Fatalf("status = %q, want %q", status, ports.AgentAuthStatusUnknown)

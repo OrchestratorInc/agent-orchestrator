@@ -2,8 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import { Archive, CalendarClock, FileText, Folder, LayoutDashboard, Plus } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
-import { animate, LayoutGroup, motion, useMotionValue, useReducedMotion } from "motion/react";
+import { useState, type ReactNode } from "react";
 import { NotificationCenter } from "./NotificationCenter";
 import { ProjectBoardActions } from "./ProjectBoardActions";
 import { useBoardPresentation } from "../hooks/useBoardPresentation";
@@ -36,9 +35,9 @@ import { OrchestratorIcon } from "./icons";
 import { getAgentActivityView } from "../lib/session-presentation";
 import { isLinuxPlatform, isMacPlatform, usesBoardActionsInPanel } from "../lib/platform";
 import { cn } from "../lib/utils";
-import { SHELL_PANEL_SPRING } from "../lib/motion-spring";
 import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
 import { StatusPill } from "./StatusPill";
+import { CoderWorkspaceTopbarButton } from "./CoderWorkspaceLinkButton";
 import { TopbarActionError, TopbarButton, topbarHeaderClass, topbarProjectLabelClass } from "./TopbarButton";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
 import { TopbarOpenEditorButton } from "./TopbarOpenEditorButton";
@@ -79,31 +78,19 @@ const PADDING_CLEARANCE_FULLSCREEN = 112;
 // (92) + --size-titlebar-content-gap (12) - --size-center-panel-inline-inset (16).
 const PADDING_CLEARANCE_LINUX = 114;
 
-/** Left padding of the app topbar, animated as the sidebar toggles so the lead clears the window controls. */
+/** Left padding of the app topbar, widened while the sidebar is closed so the lead clears the window controls. */
 export function useTopbarPaddingLeft(embedded = false) {
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	const isFullScreen = useWindowFullScreen();
-	const prefersReducedMotion = useReducedMotion();
 	const mac = isMacPlatform();
 	const linux = isLinuxPlatform();
-	const targetPaddingLeft =
-		!embedded && !isSidebarOpen && mac
+	return !embedded && !isSidebarOpen && mac
 			? isFullScreen
 				? PADDING_CLEARANCE_FULLSCREEN
 				: PADDING_CLEARANCE
 			: !embedded && !isSidebarOpen && linux
 				? PADDING_CLEARANCE_LINUX
 				: PADDING_DEFAULT;
-	const paddingLeft = useMotionValue(targetPaddingLeft);
-	useEffect(() => {
-		const controls = animate(
-			paddingLeft,
-			targetPaddingLeft,
-			prefersReducedMotion ? { duration: 0 } : SHELL_PANEL_SPRING,
-		);
-		return controls.stop;
-	}, [targetPaddingLeft, paddingLeft, prefersReducedMotion]);
-	return paddingLeft;
 }
 
 export function ShellTopbar({
@@ -172,8 +159,7 @@ export function ShellTopbar({
 	const openBoard = () => void navigate(projectId ? projectNavigateTarget(projectId, hostId) : { to: "/" });
 
 	return (
-		<LayoutGroup id="shell-topbar">
-		<motion.header
+		<header
 			className={
 				embedded ? "contents" : cn(topbarHeaderClass, "workspace-topbar-container", isSessionRoute && "pr-2")
 			}
@@ -215,16 +201,11 @@ export function ShellTopbar({
 						{isStandaloneBoardRoute ? (
 							<StandaloneArchiveTopbarLabel />
 						) : (
-							<motion.span
-								layoutId="topbar-project-label"
-								layout="position"
-								className={cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5")}
-								transition={{ type: "spring", stiffness: 400, damping: 40 }}
-							>
+							<span className={cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5")}>
 								<LayoutDashboard aria-hidden="true" className="size-icon-md" />
 								{t("shell.board")}
 								{hostId ? <span className="truncate text-muted-foreground">· {labelForHost(hostId) ?? hostId}</span> : null}
-							</motion.span>
+							</span>
 						)}
 					</div>
 				)}
@@ -306,6 +287,15 @@ export function ShellTopbar({
 								projectId={session.workspaceId}
 								sessionCreatedAt={session.createdAt}
 								sessionTerminated={session.isTerminated}
+								style={noDragStyle}
+							/>
+						) : null}
+						{/* A bring-your-own Coder session names the workspace it runs in, so
+						    the customer can find it in their own Coder. */}
+						{session?.cloud?.coderWorkspaceUrl ? (
+							<CoderWorkspaceTopbarButton
+								key={`coder-workspace-${session.id}`}
+								url={session.cloud.coderWorkspaceUrl}
 								style={noDragStyle}
 							/>
 						) : null}
@@ -392,8 +382,7 @@ export function ShellTopbar({
 					</>
 				)}
 			</div>
-		</motion.header>
-	</LayoutGroup>
+		</header>
 	);
 }
 
