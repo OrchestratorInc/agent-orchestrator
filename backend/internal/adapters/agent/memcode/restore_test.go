@@ -120,6 +120,14 @@ func TestComposerRejectsHistoricalChrome(t *testing.T) {
 	if !emptyComposer("panic: from old transcript\n" + strings.Repeat("old output\n", 20) + readyTerminal) {
 		t.Fatal("historical panic text blocked current idle composer")
 	}
+	if !emptyComposer("panic: discussed in the immediately preceding response\n" + readyTerminal) {
+		t.Fatal("nearby historical panic text blocked current idle composer")
+	}
+	for _, output := range []string{readyTerminal + "\npanic: native crash", readyTerminal + "\n⠋ Thinking… (1s · esc to interrupt)"} {
+		if emptyComposer(output) {
+			t.Fatal("stale idle chrome overrode current crash or active turn")
+		}
+	}
 }
 func TestPermissionAndToolMappingsFailClosed(t *testing.T) {
 	for _, cfg := range []ports.LaunchConfig{{Permissions: ports.PermissionModeAcceptEdits}, {AllowedTools: []string{"read"}}, {DisallowedTools: []string{"bash"}}} {
