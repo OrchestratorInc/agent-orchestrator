@@ -260,7 +260,6 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		if (focusHandledRef.current || !targetAgentId) return;
 		if (agents.isPending || installers.isPending || jobs.isPending || authPlans.isPending) return;
 		focusHandledRef.current = true;
-		focusPrimaryActionRef.current = true;
 		// A failed update notice lands here: open the job's diagnostics ready to
 		// copy, or the Health report when the failure never produced a job.
 		if (showDiagnostics && describe(targetAgentId).hasDiagnostics) {
@@ -268,6 +267,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			setExpandedDiagnostics((current) => ({ ...current, [targetAgentId]: true }));
 			openDetail(targetAgentId);
 		} else {
+			focusPrimaryActionRef.current = true;
 			openDetail(targetAgentId, showDiagnostics ? "health" : "account");
 		}
 		setHighlightedAgentId(targetAgentId);
@@ -281,18 +281,31 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		focusPrimaryActionRef.current = false;
 		// No scrollIntoView: the open page always fills the dialog, whose body does not
 		// scroll, and scrolling it anyway shifts the page up with no way back.
-		const diagnostics = focusDiagnosticsRef.current ? detail.querySelector<HTMLElement>("[data-harness-diagnostics]") : null;
-		focusDiagnosticsRef.current = false;
-		if (diagnostics) {
-			// Scroll only the tab's own scroller to bring the diagnostics up.
-			const scroller = diagnostics.closest<HTMLElement>("[role=tabpanel]");
-			if (scroller) scroller.scrollTop += diagnostics.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-			diagnostics.querySelector<HTMLElement>("[data-harness-copy-diagnostics]")?.focus({ preventScroll: true });
-			return;
-		}
 		const primaryAction = detail.querySelector<HTMLElement>("[data-harness-primary-action]:not(:disabled)");
 		(primaryAction ?? detail.querySelector<HTMLElement>("[role=tab][data-state=active]"))?.focus({ preventScroll: true });
 	}, [selectedAgentId]);
+
+	// Keyed on the expansion too: a wide layout may already show this harness,
+	// so opening it again does not change the selection.
+	useEffect(() => {
+		if (!focusDiagnosticsRef.current) return;
+		const diagnostics = detailRef.current?.querySelector<HTMLElement>("[data-harness-diagnostics]");
+		if (!diagnostics) return;
+		focusDiagnosticsRef.current = false;
+		diagnostics.querySelector<HTMLElement>("[data-harness-copy-diagnostics]")?.focus({ preventScroll: true });
+		// Scroll only the tab's own scroller, for the same reason as above.
+		const scroller = diagnostics.closest<HTMLElement>("[role=tabpanel]");
+		if (!scroller) return;
+		const reveal = () => { scroller.scrollTop += diagnostics.getBoundingClientRect().top - scroller.getBoundingClientRect().top; };
+		reveal();
+		// The page can still switch to the side-by-side layout after this runs,
+		// which resizes the scroller and resets its position; keep revealing briefly.
+		if (typeof ResizeObserver === "undefined") return;
+		const observer = new ResizeObserver(reveal);
+		observer.observe(scroller);
+		const stop = window.setTimeout(() => observer.disconnect(), 1_000);
+		return () => { window.clearTimeout(stop); observer.disconnect(); };
+	}, [expandedDiagnostics, selectedAgentId]);
 
 	// Wide layouts keep the list beside the open harness; narrow ones swap between them.
 	const layoutRef = useRef<HTMLDivElement>(null);
