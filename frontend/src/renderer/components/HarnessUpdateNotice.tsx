@@ -93,18 +93,19 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	/** Resolves to the sessions that kept the update from starting, if any. */
 	const startUpdate = async (agentId: AgentId, advisory: AgentUpdateAdvisory, methodId: string): Promise<HarnessInUse | undefined> => {
 		if (startingRef.current.has(agentId) || isActiveInstallJob(queryClient.getQueryData<InstallJob[]>(installJobsQueryKey)?.find((job) => job.target === agentId))) return undefined;
-		const latestVersion = advisory.latestVersion!;
 		startedUpdates.current.set(agentId, advisory);
 		startingRef.current.add(agentId);
 		setStarting((current) => new Set([...current, agentId]));
 		setErrors((current) => ({ ...current, [agentId]: undefined }));
 		setInUse((current) => ({ ...current, [agentId]: undefined }));
 		try {
-			const result = await startHarnessUpdate({ agentId, latestVersion, methodId });
+			const result = await startHarnessUpdate({ agentId, methodId });
 			if (result.inUse) {
 				setInUse((current) => ({ ...current, [agentId]: result.inUse }));
 				return result.inUse;
 			}
+			// The click-time check may have moved the target to a newer release.
+			if (result.advisory) startedUpdates.current.set(agentId, result.advisory);
 			if (result.error) setErrors((current) => ({ ...current, [agentId]: result.error }));
 			if (!result.job) return undefined;
 			startedJobs.current.add(agentId);

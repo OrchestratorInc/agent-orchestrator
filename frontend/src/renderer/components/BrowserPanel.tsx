@@ -1852,18 +1852,16 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 					<span className="browser-panel__tab-title">{label.title}</span>
 				</button>
 			</BrowserControlTooltip>
-			{tab.url && tab.url !== "about:blank" ? (
-				<BrowserControlTooltip label={closeLabel}>
-					<button
-						aria-label={closeLabel}
-						className="browser-panel__tab-close"
-						onClick={() => onClose(tab.id)}
-						type="button"
-					>
-						<X aria-hidden="true" className="size-icon-base" />
-					</button>
-				</BrowserControlTooltip>
-			) : null}
+			<BrowserControlTooltip label={closeLabel}>
+				<button
+					aria-label={closeLabel}
+					className="browser-panel__tab-close"
+					onClick={() => onClose(tab.id)}
+					type="button"
+				>
+					<X aria-hidden="true" className="size-icon-base" />
+				</button>
+			</BrowserControlTooltip>
 		</div>
 	);
 });
@@ -1888,11 +1886,9 @@ export const BrowserTopTabDragOverlay = memo(function BrowserTopTabDragOverlay({
 				)}
 				<span className="browser-panel__tab-title">{label.title}</span>
 			</div>
-			{tab.url && tab.url !== "about:blank" ? (
-				<span className="browser-panel__tab-close">
-					<X aria-hidden="true" className="size-icon-base" />
-				</span>
-			) : null}
+			<span className="browser-panel__tab-close">
+				<X aria-hidden="true" className="size-icon-base" />
+			</span>
 		</div>
 	);
 });

@@ -12549,6 +12549,14 @@ components:
           type: boolean
         hasBattery:
           type: boolean
+        lidActive:
+          type: boolean
+        lidClosed:
+          type: boolean
+        lidReason:
+          type: string
+        lidSupported:
+          type: boolean
         supported:
           type: boolean
       required:
@@ -12894,6 +12902,10 @@ components:
       properties:
         enabled:
           type: boolean
+        lidClosed:
+          type:
+          - "null"
+          - boolean
       required:
       - enabled
       type: object
@@ -13200,6 +13212,8 @@ components:
           items:
             $ref: '#/components/schemas/ConversationContentSummaryResponse'
           type: array
+        continuation:
+          type: boolean
         createdAt:
           type: string
         editAvailable:
@@ -13432,6 +13446,8 @@ components:
           type:
           - "null"
           - string
+        continueTurnId:
+          type: string
         controller:
           enum:
           - connecting
@@ -13490,6 +13506,7 @@ components:
         usage:
           $ref: '#/components/schemas/ConversationUsagePayload'
       required:
+      - continueTurnId
       - conversationId
       - branchedFromEarlierMessage
       - sessionId
@@ -16083,6 +16100,8 @@ components:
           type: array
         clientMessageId:
           type: string
+        continuation:
+          type: boolean
         excerpts:
           items:
             $ref: '#/components/schemas/ConversationExcerptReferenceRequest'
@@ -16828,6 +16847,10 @@ components:
         coordinationId:
           description: Opaque identity of an AO-authored semantic prompt accepted
             by the native agent.
+          type: string
+        entrypoint:
+          description: Provider process-kind marker (Claude's CLAUDE_CODE_ENTRYPOINT)
+            of the process that fired the hook.
           type: string
         event:
           description: AO hook sub-command that produced this state (e.g. post-tool-use).

@@ -395,7 +395,6 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			if (operation === "update") {
 				const result = await startHarnessUpdate({
 					agentId,
-					latestVersion: queryClient.getQueryData<AgentUpdateAdvisory>(updateAdvisoryQueryKey(agentId, hostId))?.latestVersion,
 					methodId: method,
 					canStart: () => mountedRef.current,
 				});

@@ -35,6 +35,17 @@ jobs:
           node-version: 24
       - name: Test native helper build configuration
         run: node --test scripts/build-update-helper.node-test.mjs
+      - name: Test wake helper build configuration
+        run: node --test scripts/build-wake-helper.node-test.mjs
+      - name: Compile and test wake helper
+        run: |
+          node scripts/build-wake-helper.mjs --arch x64
+          lipo wake-helper/ao-wake -verify_arch x86_64
+          node scripts/build-wake-helper.mjs --arch arm64
+          lipo wake-helper/ao-wake -verify_arch arm64
+          mkdir -p "$HOME/.ao/build-cache/wake-helper/tests"
+          xcrun swiftc -module-cache-path "$HOME/.ao/build-cache/wake-helper/tests" native/wake-helper/WakePolicy.swift native/wake-helper/PolicyTests.swift -o "$HOME/.ao/build-cache/wake-helper/policy-tests"
+          "$HOME/.ao/build-cache/wake-helper/policy-tests"
       - name: Test repair installer packaging and guards
         run: node --test scripts/build-mac-repair-installer.node-test.mjs
       - name: Compile helper for both macOS architectures

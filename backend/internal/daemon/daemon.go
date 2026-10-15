@@ -970,7 +970,9 @@ func Run() error {
 		go dispatcher.Run(ctx)
 	}
 	if mobilebridge.KeepAwakeSupported() {
-		bs.KeepAwake = mobilebridge.NewKeepAwake(os.Getpid())
+		ka := mobilebridge.NewKeepAwake(os.Getpid())
+		ka.SetLidController(mobilebridge.NewLidAwake(os.Getpid(), os.Getenv("AO_WAKE_HELPER"), cfg.DataDir))
+		bs.KeepAwake = ka
 	}
 	var nativeSessions ports.AgentNativeSessionResolver
 	if codewhaleAgent, ok := agents.Agent(domain.HarnessCodewhale); ok {

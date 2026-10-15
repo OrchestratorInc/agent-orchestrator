@@ -14,7 +14,6 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/idlepause"
-	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/jackc/pgx/v5"
 )
@@ -471,10 +470,7 @@ func (s *Store) WakePausedSessions(
 	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
 		// Unbilled sandboxes wake together. Billed ones (only while billing is
 		// enforced) wake one at a time below, each within the plan.
-		billed := ""
-		if policy.enforced {
-			billed = sandbox.ProviderFreestyle
-		}
+		separateBilled := policy.enforced
 		wake := func(onlySessionID string) (int64, error) {
 			tag, err := tx.Exec(
 				ctx,
@@ -496,12 +492,12 @@ func (s *Store) WakePausedSessions(
 					AND session.created_by_user_id = $2
 					AND NOT session.is_terminated
 					AND sandbox.desired_state = 'paused'
-					AND CASE WHEN $5 = '' THEN sandbox.provider IS DISTINCT FROM NULLIF($4, '')
+					AND CASE WHEN $5 = '' THEN NOT ($4 AND (sandbox.provider = 'freestyle' OR sandbox.billed))
 						ELSE sandbox.session_id = NULLIF($5, '')::uuid END`,
 				orgID,
 				principal.UserID,
 				intervalString(interactiveSessionLease),
-				billed,
+				separateBilled,
 				onlySessionID,
 			)
 			if err != nil {
@@ -510,16 +506,16 @@ func (s *Store) WakePausedSessions(
 			return tag.RowsAffected(), nil
 		}
 		var err error
-		if woken, err = wake(""); err != nil || billed == "" {
+		if woken, err = wake(""); err != nil || !separateBilled {
 			return err
 		}
 		rows, err := tx.Query(ctx,
 			`SELECT sandbox.session_id::text FROM ao_sandboxes sandbox
 			JOIN ao_sessions session ON session.org_id = sandbox.org_id AND session.id = sandbox.session_id
 			WHERE sandbox.org_id = $1 AND session.created_by_user_id = $2 AND NOT session.is_terminated
-				AND sandbox.desired_state = 'paused' AND sandbox.provider = $3
+				AND sandbox.desired_state = 'paused' AND (sandbox.provider = 'freestyle' OR sandbox.billed)
 			ORDER BY sandbox.updated_at DESC, sandbox.session_id`,
-			orgID, principal.UserID, billed)
+			orgID, principal.UserID)
 		if err != nil {
 			return err
 		}
@@ -560,8 +556,8 @@ func (s *Store) RunningSandboxSessions(ctx context.Context) ([]idlepause.Sandbox
 	err := s.withService(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(
 			ctx,
-			`SELECT session_id, org_id, provider FROM ao_sandboxes
-			WHERE desired_state = 'running' AND observed_state = 'running'`,
+			`SELECT sb.session_id, sb.org_id, sb.provider, `+billedSandboxSQL+` FROM ao_sandboxes sb
+			WHERE sb.desired_state = 'running' AND sb.observed_state = 'running'`,
 		)
 		if err != nil {
 			return fmt.Errorf("list running sandbox sessions: %w", err)
@@ -569,7 +565,7 @@ func (s *Store) RunningSandboxSessions(ctx context.Context) ([]idlepause.Sandbox
 		defer rows.Close()
 		for rows.Next() {
 			var ref idlepause.SandboxRef
-			if err := rows.Scan(&ref.SessionID, &ref.OrgID, &ref.Provider); err != nil {
+			if err := rows.Scan(&ref.SessionID, &ref.OrgID, &ref.Provider, &ref.Billed); err != nil {
 				return err
 			}
 			refs = append(refs, ref)
@@ -665,8 +661,9 @@ func (s *Store) MarkSandboxBusy(ctx context.Context, orgID, sessionID string) er
 // TouchSessionPresence records that a person is looking at a running session
 // (its view is visible in the desktop app): it holds the short interaction
 // lease and counts as an interaction for idle pause. It never wakes a paused
-// session; opening the terminal does that. Only Freestyle sandboxes, which are
-// billed and idle-paused on a short threshold, are touched.
+// session; opening the terminal does that. Only billed sandboxes (Freestyle,
+// and Coder for an organization without the coder capability), which are
+// idle-paused on a short threshold, are touched.
 //
 // Only people who can work in the session (members and editors) keep it
 // awake: a viewer watching a shared session does not hold its owner's
@@ -685,7 +682,7 @@ func (s *Store) TouchSessionPresence(
 			`UPDATE ao_sandboxes SET
 				interactive_until = greatest(coalesce(interactive_until, now()), now() + $3::interval),
 				last_interaction_at = now()
-			WHERE org_id = $1 AND session_id = $2 AND desired_state = 'running' AND provider = 'freestyle'
+			WHERE org_id = $1 AND session_id = $2 AND desired_state = 'running' AND (provider = 'freestyle' OR billed)
 				AND (last_interaction_at IS NULL OR last_interaction_at <= now() - $4::interval)`,
 			orgID, sessionID, intervalString(interactiveSessionLease), intervalString(PresenceInterval))
 		return err

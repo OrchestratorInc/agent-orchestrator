@@ -507,7 +507,7 @@ export function useBrowserView({
 				viewIdRef.current = "";
 			};
 		}
-		window.ao?.browser.ensure(sessionId).then((state) => {
+		window.ao?.browser.ensure(sessionId, false).then((state) => {
 			if (disposed) return;
 			viewIdRef.current = state.viewId;
 			setViewId(state.viewId);
@@ -874,7 +874,7 @@ export function useBrowserView({
 			if (!hasNativeBrowser) return;
 			let viewId = viewIdRef.current;
 			if (!viewId) {
-				const ensured = await window.ao!.browser.ensure(sessionId);
+				const ensured = await window.ao!.browser.ensure(sessionId, false);
 				viewId = ensured.viewId;
 				viewIdRef.current = viewId;
 				setViewId(viewId);
@@ -890,7 +890,7 @@ export function useBrowserView({
 			if (!hasNativeBrowser) return;
 			let id = viewIdRef.current;
 			if (!id) {
-				const ensured = await window.ao!.browser.ensure(sessionId);
+				const ensured = await window.ao!.browser.ensure(sessionId, false);
 				id = ensured.viewId;
 				viewIdRef.current = id;
 				setViewId(id);

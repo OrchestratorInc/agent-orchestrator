@@ -349,6 +349,32 @@ func TestACPSteeringRequiresProviderAdvertisement(t *testing.T) {
 	}
 }
 
+// After a turn on the "fable" alias, Claude ACP lists that model as
+// "claude-fable-5-1". The next turn still names the alias and must not be
+// refused with "ACP session does not offer model".
+func TestACPModelAliasResolvesToTheListedModel(t *testing.T) {
+	describe := func(text string) *string { return &text }
+	choices := acp.SessionConfigSelectOptionsUngrouped{
+		{Value: "default", Name: "Sonnet", Description: describe("Sonnet")},
+		{Value: "sonnet", Name: "Sonnet", Description: describe("Sonnet 5.5 · Efficient for routine tasks")},
+		{Value: "claude-fable-5-1", Name: "Claude Fable 5.1", Description: describe("Fable 5.1 · Most capable for your hardest tasks")},
+		{Value: "opus", Name: "Opus", Description: describe("Opus 5.5 · Best for everyday, complex tasks")},
+		{Value: "claude-opus-5", Name: "Claude Opus 5", Description: describe("Newer version available · select Opus for Opus 5.5")},
+	}
+	options := []acp.SessionConfigOption{{Select: &acp.SessionConfigOptionSelect{
+		Id: "model", CurrentValue: "claude-fable-5-1", Options: acp.SessionConfigSelectOptions{Ungrouped: &choices},
+	}}}
+	for value, want := range map[string]string{
+		"fable": "claude-fable-5-1", "Fable": "claude-fable-5-1",
+		"opus": "opus", "sonnet": "sonnet", "claude-opus-5": "claude-opus-5",
+		"haiku": "haiku", "": "",
+	} {
+		if got := acpModelValue(options, value); got != want {
+			t.Errorf("acpModelValue(%q) = %q, want %q", value, got, want)
+		}
+	}
+}
+
 func TestACPSettingsUseAdvertisedChoices(t *testing.T) {
 	choices := acp.SessionConfigSelectOptionsUngrouped{{Value: "sonnet"}, {Value: "opus"}}
 	options := []acp.SessionConfigOption{{Select: &acp.SessionConfigOptionSelect{

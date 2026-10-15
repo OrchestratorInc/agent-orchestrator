@@ -216,6 +216,7 @@ func TestLANManagerBlocksLoopbackOnlyControlRoutes(t *testing.T) {
 		"/internal/agent-switch-observability/prepare-disable",
 		"/internal/agent-switch-observability/apply-policy",
 		"/api/v1/mobile/status",
+		"/api/v1/mobile/keep-awake",
 		"/api/v1/mobile/devices",
 		"/api/v1/mobile/devices/i1",
 		"/api/v1/dev/import-projects",

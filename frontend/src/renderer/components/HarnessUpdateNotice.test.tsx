@@ -188,6 +188,35 @@ describe("startup harness update notice", () => {
 		expect(screen.queryByRole("region")).toBeNull();
 	});
 
+	it("keeps a failed update on the newer release the click-time check chose", async () => {
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		let started = false;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/{agent}/update-advisory") {
+				if (started) return { data: { agentId: "claude-code", status: "current", currentVersion: "2.1.293", latestVersion: "2.1.293", maintenanceMethod: "official-installer" } } as never;
+				// A release published after the card was checked.
+				if ((options as { params?: { query?: { refresh?: boolean } } })?.params?.query?.refresh) return { data: { agentId: "claude-code", status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.293", maintenanceMethod: "official-installer" } } as never;
+			}
+			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path !== "/api/v1/agents/{agent}/install") return { data: { agents: [agentReadiness("claude-code", "Claude Code")] } } as never;
+			started = true;
+			return { data: { target: "claude-code", status: "installing" } } as never;
+		});
+		const { client } = mountNotice();
+		const notice = await screen.findByRole("region", { name: "Agent updates available" });
+		expect(within(notice).getByText("v2.1.292")).toBeInTheDocument();
+		await userEvent.click(within(notice).getByRole("button", { name: "Update" }));
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "claude-code" } }, body: { method: "official-installer", operation: "update", expectedVersion: "2.1.293" } });
+		await waitFor(() => expect(client.getQueryData(installJobsQueryKey)).toEqual([expect.objectContaining({ status: "installing" })]));
+		act(() => client.setQueryData(installJobsQueryKey, [{ target: "claude-code", status: "failed", error: "Updater failed" }]));
+		await waitFor(() => expect(client.getQueryData(updateAdvisoryQueryKey("claude-code"))).toMatchObject({ status: "current" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Updater failed");
+		expect(screen.getByText("v2.1.293")).toBeInTheDocument();
+		expect(screen.queryByText("v2.1.292")).toBeNull();
+	});
+
 	it("stays out of the way while Settings is open", async () => {
 		mountNotice();
 		await screen.findByRole("region", { name: "Agent updates available" });

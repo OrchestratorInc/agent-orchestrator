@@ -282,6 +282,11 @@ func run(logger *slog.Logger) error {
 			if err != nil {
 				return workerexec.Command{}, err
 			}
+			if launch.Harness == "claude-code" {
+				// A fresh workspace is still upgrading Claude Code; the older
+				// install it ships refuses current models.
+				workerexec.AwaitClaudeCodeUpgrade(buildCtx)
+			}
 			command, err := b.BuildInteractive(launch, credential, workspace)
 			credential.Secret = ""
 			if err != nil {
@@ -309,6 +314,7 @@ func run(logger *slog.Logger) error {
 		// Chat UI needs the Claude ACP adapter; a bring-your-own template may
 		// not ship it, so start installing it now rather than on first chat.
 		workerexec.WarmClaudeACPAdapter()
+		workerexec.WarmClaudeCode()
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -359,6 +365,9 @@ func run(logger *slog.Logger) error {
 		credential, err := client.reviewCredential(ctx, input.ReviewRunID)
 		if err != nil {
 			return workerexec.Command{}, fmt.Errorf("load reviewer credential: %w", err)
+		}
+		if launch.Harness == "claude-code" {
+			workerexec.AwaitClaudeCodeUpgrade(ctx)
 		}
 		command, err := (workerexec.HarnessBuilder{
 			DataDir: dataDir, ConfigRoot: filepath.Join(dataDir, "reviews", input.ReviewRunID),

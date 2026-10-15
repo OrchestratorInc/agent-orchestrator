@@ -882,6 +882,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sandbox-provider": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Set the organization's default sandbox provider: the one sessions get when neither the request nor the project picks one (org admins). Only an organization offered more than one provider may set it (409 no_provider_choice otherwise); a provider the deployment does not offer is 403 provider_forbidden. An empty defaultProvider clears the choice. */
+        put: operations["putOrgSandboxProvider"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/coder-config": {
         parameters: {
             query?: never;
@@ -891,7 +910,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** @description The organization's bring-your-own Coder connection, without its token. 403 provider_forbidden when the organization is not entitled to Coder. */
+        /** @description The organization's bring-your-own Coder connection, without its token. 403 provider_forbidden when the organization may not run on Coder; configured=false when it has no connection. */
         get: operations["getOrgCoderConfig"];
         /** @description Create or replace the organization's bring-your-own Coder connection (org admins). The token is required on first save and when baseUrl changes; otherwise an omitted token keeps the stored one. An omitted owner is derived from the token. */
         put: operations["putOrgCoderConfig"];
@@ -1504,14 +1523,18 @@ export interface components {
             role: components["schemas"]["OrganizationRole"];
             offering?: components["schemas"]["Offering"];
         };
+        PutOrgSandboxProviderInput: {
+            /** @description A provider from the organization's offering, or empty to clear the choice. */
+            defaultProvider: string;
+        };
         /** @description What an organization may use and how it is billed. The control plane is the source of truth; clients shape their UI from it and the server enforces the same rules on create. */
         Offering: {
-            /** @description Sandbox providers the organization may use: the deployment's providers filtered by the capability gate against the organization's effective capabilities. */
+            /** @description Sandbox providers the organization may use: coder and freestyle when the deployment offers them, and any other offered provider the capability gate allows. Freestyle sessions are billed; Coder sessions are billed unless the organization holds the coder capability. */
             providers: string[];
-            /** @description Provider a session gets when none is chosen: the deployment default when allowed, otherwise the first allowed provider, otherwise empty (no cloud sessions). */
+            /** @description Provider a session gets when none is chosen. With more than one provider, the organization's own choice (PUT /orgs/{orgId}/sandbox-provider) comes first. Then coder for an organization with the coder capability, freestyle for everyone else, then the deployment default when offered, then the first provider, then empty (no cloud sessions). A new project records this provider, so changing it later moves no existing project. */
             defaultProvider: string;
             /**
-             * @description off when the deployment has no Stripe configured; contract when the organization is billed under an agreement, runs on the internal plan, or is grandfathered; self_serve otherwise. Only self_serve organizations are subject to plan limits.
+             * @description off when the deployment has no Stripe configured or the organization is offered no billed provider; self_serve otherwise. Billed sandboxes need a plan for every organization, contract, internal and grandfathered ones included. contract is no longer sent and is kept for older clients.
              * @enum {string}
              */
             billingMode: "self_serve" | "contract" | "off";
@@ -1522,6 +1545,8 @@ export interface components {
             kind: "b2b" | "b2c" | "both" | "none";
             /** @description Plan feature flags; empty when none apply. */
             features: string[];
+            /** @description The organization may connect its own Coder deployment: it holds the coder capability (WorkOS metadata capabilities=coder), or the deployment offers coder without gating it. Also true while the organization still has a stored connection, so it can inspect or clear one. Absent from older control planes. */
+            customCoder?: boolean;
         };
         /** @description Legacy provider selector data; the same values as offering.providers and offering.defaultProvider. */
         SandboxProviders: {
@@ -1696,6 +1721,8 @@ export interface components {
         CoderWorkerUser: "ao-worker" | "workspace";
         OrgCoderConfigResponse: {
             configured: boolean;
+            /** @description The organization may save a connection (it holds the coder capability). False for an organization that may only read and clear a stored connection. Absent from older control planes, which only answer organizations that may save. */
+            editable?: boolean;
             coderConfig?: components["schemas"]["OrgCoderConfig"];
             validationState?: string;
             /** Format: date-time */
@@ -1820,6 +1847,11 @@ export interface components {
             status: components["schemas"]["GitHubInstallationStatus"];
             /** @enum {string} */
             repositorySelection: "all" | "selected";
+            /**
+             * @description installation: the installation's whole repository selection. user: only the repositories the connecting user can access on GitHub.
+             * @enum {string}
+             */
+            accessScope?: "installation" | "user";
             syncStatus: components["schemas"]["GitHubSyncStatus"];
             /** Format: date-time */
             lastSyncedAt?: string;
@@ -4533,6 +4565,33 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    putOrgSandboxProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutOrgSandboxProviderInput"];
+            };
+        };
+        responses: {
+            /** @description The organization's offering with its new default provider. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Offering"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getOrgCoderConfig: {
         parameters: {
             query?: never;
@@ -4600,6 +4659,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description connection_in_use: sessions not yet fully deleted still run on the connection, so it is kept. Remove their projects or sessions first. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
             };
             default: components["responses"]["Error"];
         };

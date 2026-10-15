@@ -3,17 +3,18 @@ import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
+import { ConfirmDialog } from "../ConfirmDialog";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Switch } from "../ui/switch";
-import type { CloudCpOrgCoderConfig, CloudCpPutOrgCoderConfigRequest } from "../../lib/cloud-cp";
+import { CloudCpError, type CloudCpOrgCoderConfig, type CloudCpPutOrgCoderConfigRequest } from "../../lib/cloud-cp";
 import { useCloudGate } from "../../hooks/useCloudGate";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import { useCloudOrg } from "../../hooks/useCloudOrg";
 import { useCoderTemplates } from "../../hooks/useCoderTemplates";
 import { orgCoderConfigQueryKey, useOrgCoderConfig } from "../../hooks/useOrgCoderConfig";
-import { canManageBilling } from "../../lib/cloud-offering";
+import { canManageBilling, cloudMeQueryKey } from "../../lib/cloud-offering";
 import { useCloudSession } from "../../lib/cloud-session";
 import {
 	onboardingFieldErrorClass,
@@ -55,6 +56,9 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	const [devEnv, setDevEnv] = useState<DevEnvDraft>(EMPTY_DEV_ENV);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const [confirmingRemove, setConfirmingRemove] = useState(false);
+	const [removing, setRemoving] = useState(false);
+	const [removeError, setRemoveError] = useState<string | null>(null);
 
 	// Hydrate the editable non-secret fields from the loaded config. The token is
 	// never returned by the control plane, so its field always starts empty.
@@ -97,8 +101,12 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	// The control plane lets only org owners and admins change the connection. A
 	// role the renderer does not know yet leaves the decision to the server.
 	const readOnly = org?.role !== undefined && !canManageBilling(org);
-	const canSave = !busy && !readOnly && orgId !== "" && baseUrl.trim() !== "" && !devEnvInvalid
+	// An org that lost the coder capability keeps the connection its sessions run
+	// on: it can read and remove it, but the control plane refuses a save.
+	const saveAllowed = loaded?.editable !== false;
+	const canSave = !busy && !readOnly && saveAllowed && orgId !== "" && baseUrl.trim() !== "" && !devEnvInvalid
 		&& (token.trim() !== "" || (tokenStored && devEnvDirty));
+	const canRemove = loaded != null && !readOnly && orgId !== "" && !busy;
 	const save = async () => {
 		if (!canSave) return;
 		setBusy(true);
@@ -126,10 +134,40 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 		}
 	};
 
+	const remove = async () => {
+		if (!canRemove) return;
+		setRemoving(true);
+		setRemoveError(null);
+		try {
+			await client.deleteOrgCoderConfig(orgId);
+			setConfirmingRemove(false);
+			setToken("");
+			setBaseUrl("");
+			setDevEnv(EMPTY_DEV_ENV);
+			// The org's offering (whether this page shows) and its templates follow
+			// the connection, so refresh them with the config.
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: orgCoderConfigQueryKey }),
+				queryClient.invalidateQueries({ queryKey: coderTemplatesQueryKey }),
+				queryClient.invalidateQueries({ queryKey: cloudMeQueryKey }),
+			]);
+		} catch (caught) {
+			// The control plane keeps a connection that sessions still run on.
+			if (caught instanceof CloudCpError && caught.code === "connection_in_use") {
+				setRemoveError(t("settings.coder.removeInUse"));
+			} else {
+				setRemoveError(caught instanceof Error ? caught.message : t("settings.coder.errorRemove"));
+			}
+		} finally {
+			setRemoving(false);
+		}
+	};
+
 	return (
 		<SettingsSection title={t("settings.coder.title")} sectionId="coder" titleHidden={titleHidden}>
 			<div className="flex w-full flex-col gap-4 px-3 py-1">
 				<p className="text-xs leading-relaxed text-muted-foreground">{t("settings.coder.description")}</p>
+				{saveAllowed ? null : <p className={onboardingFieldHintClass}>{t("settings.coder.capabilityLost")}</p>}
 
 				<div className="flex flex-col gap-1.5">
 					<Label htmlFor="coder-base-url" className={onboardingFormLabelClass}>{t("settings.coder.urlLabel")}</Label>
@@ -141,7 +179,7 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						spellCheck={false}
 						className="font-mono text-[13px]"
 						placeholder={t("settings.coder.urlPlaceholder")}
-						disabled={busy}
+						disabled={busy || !saveAllowed}
 						value={baseUrl}
 						onChange={(event) => setBaseUrl(event.target.value)}
 					/>
@@ -157,11 +195,11 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						spellCheck={false}
 						className="font-mono text-[13px]"
 						placeholder={tokenStored ? t("settings.coder.tokenStored") : t("settings.coder.tokenPlaceholder")}
-						disabled={busy}
+						disabled={busy || !saveAllowed}
 						value={token}
 						onChange={(event) => setToken(event.target.value)}
 					/>
-					<div className="mt-1 flex flex-col gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2.5">
+					{saveAllowed ? <div className="mt-1 flex flex-col gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2.5">
 						<p className="text-xs font-medium text-foreground">{t("settings.coder.tokenHowToTitle", { defaultValue: "Need a token?" })}</p>
 						<ol className="list-decimal space-y-1 pl-4 text-xs leading-relaxed text-muted-foreground">
 							<li>{t("settings.coder.tokenStep1", { defaultValue: "Open your Coder token page below. If you are not signed in to Coder, you will be asked to log in first, then land on the token page." })}</li>
@@ -182,14 +220,14 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						{baseUrl.trim() === "" ? (
 							<p className={onboardingFieldHintClass}>{t("settings.coder.tokenCreateNeedsUrl", { defaultValue: "Enter your Coder URL above first." })}</p>
 						) : null}
-					</div>
+					</div> : null}
 				</div>
 
 				{tokenStored ? (
 					<WorkspaceSetupFields
 						draft={devEnv}
 						errors={devEnvFieldErrors}
-						disabled={busy || readOnly}
+						disabled={busy || readOnly || !saveAllowed}
 						readOnly={readOnly}
 						currentControlPlane={currentControlPlane}
 						onChange={(patch) => setDevEnv((current) => ({ ...current, ...patch }))}
@@ -271,11 +309,29 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 				{error ? <p className={onboardingFieldErrorClass} role="alert">{error}</p> : null}
 
 				<div className="flex items-center justify-end gap-3">
-					<Button type="button" variant="outline" disabled={!canSave} onClick={() => void save()}>
-						{busy ? t("settings.coder.saving") : t("settings.coder.save")}
-					</Button>
+					{canRemove ? (
+						<Button type="button" variant="ghost" className="text-muted-foreground hover:text-foreground" onClick={() => { setRemoveError(null); setConfirmingRemove(true); }}>
+							{t("settings.coder.removeConnection")}
+						</Button>
+					) : null}
+					{saveAllowed ? (
+						<Button type="button" variant="outline" disabled={!canSave} onClick={() => void save()}>
+							{busy ? t("settings.coder.saving") : t("settings.coder.save")}
+						</Button>
+					) : null}
 				</div>
 			</div>
+			<ConfirmDialog
+				open={confirmingRemove}
+				title={t("settings.coder.removeTitle")}
+				description={t("settings.coder.removeDescription")}
+				confirmLabel={removing ? t("settings.coder.removing") : t("settings.coder.remove")}
+				destructive
+				busy={removing}
+				error={removeError}
+				onConfirm={() => void remove()}
+				onOpenChange={setConfirmingRemove}
+			/>
 		</SettingsSection>
 	);
 }

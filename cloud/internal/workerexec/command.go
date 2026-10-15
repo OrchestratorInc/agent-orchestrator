@@ -467,6 +467,11 @@ func (b HarnessBuilder) binary(harness string) string {
 	if binary := strings.TrimSpace(b.Binaries[harness]); binary != "" {
 		return binary
 	}
+	if harness == "claude-code" {
+		// The worker's own upgrade when the workspace's install is too old for
+		// current models; the bare name on PATH until that is ready.
+		return defaultClaudeCode.current()
+	}
 	if h, ok := harnessCredentialFor(harness); ok {
 		return h.defaultBinary()
 	}

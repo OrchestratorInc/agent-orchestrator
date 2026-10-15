@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../../i18n";
+import { CloudCpError } from "../../lib/cloud-cp";
 import type { UseCoderTemplatesResult } from "../../hooks/useCoderTemplates";
 import { CoderSettingsSection } from "./CoderSettingsSection";
 
@@ -13,13 +14,18 @@ const mocks = vi.hoisted(() => ({
 	config: { data: undefined as unknown },
 	templates: { value: { templates: [], isLoading: false, isError: false } as UseCoderTemplatesResult },
 	putOrgCoderConfig: vi.fn(),
+	deleteOrgCoderConfig: vi.fn(),
 	org: { value: { id: "org-1" } as { id: string; role?: string } },
 }));
 
 vi.mock("../../hooks/useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled: true }) }));
 vi.mock("../../lib/cloud-session", () => ({ useCloudSession: () => ({ status: "authenticated" }) }));
 vi.mock("../../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ client: { putOrgCoderConfig: mocks.putOrgCoderConfig }, ready: true, baseUrl: "https://cp.test" }),
+	useCloudCp: () => ({
+		client: { putOrgCoderConfig: mocks.putOrgCoderConfig, deleteOrgCoderConfig: mocks.deleteOrgCoderConfig },
+		ready: true,
+		baseUrl: "https://cp.test",
+	}),
 }));
 vi.mock("../../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: mocks.org.value }) }));
 vi.mock("../../hooks/useOrgCoderConfig", () => ({
@@ -34,9 +40,9 @@ const savedConfig = { baseUrl: "https://coder.test", owner: "me", defaultTemplat
 // A control plane that knows every Workspace setup field reports protectSecretFiles.
 const currentConfig = { ...savedConfig, protectSecretFiles: true };
 
-function renderSection() {
+function renderSection(queryClient = new QueryClient()) {
 	render(
-		<QueryClientProvider client={new QueryClient()}>
+		<QueryClientProvider client={queryClient}>
 			<CoderSettingsSection />
 		</QueryClientProvider>,
 	);
@@ -326,5 +332,96 @@ describe("CoderSettingsSection dev environment", () => {
 		await user.click(screen.getByRole("button", { name: "Save and fetch templates" }));
 		await waitFor(() => expect(mocks.putOrgCoderConfig).toHaveBeenCalledTimes(1));
 		expect(mocks.putOrgCoderConfig).toHaveBeenCalledWith("org-1", { baseUrl: "https://coder.test", token: "secret" });
+	});
+});
+
+describe("CoderSettingsSection removing the connection", () => {
+	beforeEach(async () => {
+		await appI18n.changeLanguage("en");
+		mocks.templates.value = { templates: [], isLoading: false, isError: false };
+		mocks.putOrgCoderConfig.mockReset().mockResolvedValue({ coderConfig: null });
+		mocks.deleteOrgCoderConfig.mockReset().mockResolvedValue(undefined);
+		mocks.org.value = { id: "org-1", role: "admin" };
+	});
+
+	it("removes a stored connection after confirming, then refreshes the config and the offering", async () => {
+		mocks.config.data = currentConfig;
+		const queryClient = new QueryClient();
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		const user = userEvent.setup();
+		renderSection(queryClient);
+		await user.click(screen.getByRole("button", { name: "Remove connection" }));
+		const dialog = await screen.findByRole("dialog");
+		expect(within(dialog).getByText(/New Coder sessions will run on AO's managed Coder/)).toBeInTheDocument();
+		expect(mocks.deleteOrgCoderConfig).not.toHaveBeenCalled();
+		await user.click(within(dialog).getByRole("button", { name: "Remove" }));
+		await waitFor(() => expect(mocks.deleteOrgCoderConfig).toHaveBeenCalledWith("org-1"));
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		const keys = invalidate.mock.calls.map(([filters]) => filters?.queryKey);
+		expect(keys).toEqual(expect.arrayContaining([["cloud-org-coder-config"], ["cloud-coder-templates"], ["cloud-me"]]));
+	});
+
+	it("keeps the dialog open with the reason when the control plane refuses", async () => {
+		mocks.config.data = currentConfig;
+		mocks.deleteOrgCoderConfig.mockRejectedValue(new Error("Only organization admins can do that."));
+		const user = userEvent.setup();
+		renderSection();
+		await user.click(screen.getByRole("button", { name: "Remove connection" }));
+		const dialog = await screen.findByRole("dialog");
+		await user.click(within(dialog).getByRole("button", { name: "Remove" }));
+		expect(await within(dialog).findByRole("alert")).toHaveTextContent("Only organization admins can do that.");
+	});
+
+	it("explains a connection that sessions still run on is kept", async () => {
+		mocks.config.data = currentConfig;
+		mocks.deleteOrgCoderConfig.mockRejectedValue(new CloudCpError(
+			"Sessions still run on this Coder connection. Remove their projects or sessions first.",
+			{ status: 409, code: "connection_in_use" },
+		));
+		const user = userEvent.setup();
+		renderSection();
+		await user.click(screen.getByRole("button", { name: "Remove connection" }));
+		const dialog = await screen.findByRole("dialog");
+		await user.click(within(dialog).getByRole("button", { name: "Remove" }));
+		expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+			"Sessions still run on this Coder connection. Remove their projects or sessions first.",
+		);
+		// The connection stays on the page.
+		expect(screen.getByLabelText("Coder URL or IP *")).toHaveValue("https://coder.test");
+	});
+
+	it("offers no removal without a stored connection", () => {
+		mocks.config.data = undefined;
+		renderSection();
+		expect(screen.queryByRole("button", { name: "Remove connection" })).toBeNull();
+	});
+
+	it("offers no removal to a member, who cannot change the connection", () => {
+		mocks.config.data = currentConfig;
+		mocks.org.value = { id: "org-1", role: "member" };
+		renderSection();
+		expect(screen.queryByRole("button", { name: "Remove connection" })).toBeNull();
+	});
+
+	it("keeps an org that may save on the editable page, with Remove beside Save", () => {
+		mocks.config.data = { ...currentConfig, editable: true };
+		renderSection();
+		expect(screen.queryByText(/can no longer connect its own Coder/)).toBeNull();
+		expect(screen.getByLabelText("Coder URL or IP *")).toBeEnabled();
+		expect(screen.getByRole("button", { name: "Save and fetch templates" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Remove connection" })).toBeInTheDocument();
+	});
+
+	it("shows an org that lost the coder capability its connection read-only, with only Remove", () => {
+		mocks.config.data = { ...currentConfig, editable: false, workerUser: "workspace" };
+		renderSection();
+		expect(screen.getByText("Your organization can no longer connect its own Coder. You can remove this connection.")).toBeInTheDocument();
+		expect(screen.getByLabelText("Coder URL or IP *")).toBeDisabled();
+		expect(screen.getByLabelText("API token *")).toBeDisabled();
+		expect(screen.getByRole("switch", { name: "Run the agent as the workspace user" })).toBeDisabled();
+		expect(screen.queryByRole("button", { name: "Save and fetch templates" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Create a token in Coder" })).toBeNull();
+		expect(screen.queryByText("Need a token?")).toBeNull();
+		expect(screen.getByRole("button", { name: "Remove connection" })).toBeInTheDocument();
 	});
 });

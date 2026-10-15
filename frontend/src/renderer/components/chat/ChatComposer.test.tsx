@@ -270,6 +270,54 @@ describe("send keys", () => {
 		expect(screen.getByRole("button", { name: "Queue message" })).toBeEnabled();
 	});
 
+	it("turns the empty send action into Continue after a stop, and back into Send once typed", async () => {
+		const onContinue = vi.fn();
+		const { onSend, field } = renderComposer({ onContinue });
+
+		const resume = screen.getByRole("button", { name: "Continue turn" });
+		expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
+		await userEvent.click(resume);
+		expect(onContinue).toHaveBeenCalledOnce();
+		expect(onSend).not.toHaveBeenCalled();
+
+		// Asking something else instead: a draft turns the same button into Send.
+		await typeInComposer(field, "a different question");
+		expect(screen.queryByRole("button", { name: "Continue turn" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		expect(onSend).toHaveBeenCalledWith("a different question");
+	});
+
+	it("keeps Stop while the agent is working, even when a stopped turn could be continued", () => {
+		renderComposer({ willQueue: true, onInterrupt: vi.fn(), onContinue: vi.fn() });
+		expect(screen.getByRole("button", { name: "Stop turn" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Continue turn" })).not.toBeInTheDocument();
+	});
+
+	it.each(["rejected promise", "synchronous throw"])("recovers from a Continue failure: %s", async (failure) => {
+		const error = new Error("Cannot continue now");
+		const onContinue = vi.fn(() => {
+			if (failure === "synchronous throw") throw error;
+			return Promise.reject(error);
+		});
+		renderComposer({ onContinue });
+		await userEvent.click(screen.getByRole("button", { name: "Continue turn" }));
+		expect(await screen.findByText(error.message)).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Continue turn" })).toBeEnabled();
+	});
+
+	it("disables Continue until the request settles and prevents duplicate clicks", async () => {
+		const request = deferred<void>();
+		const onContinue = vi.fn(() => request.promise);
+		renderComposer({ onContinue });
+		const button = screen.getByRole("button", { name: "Continue turn" });
+		await userEvent.click(button);
+		expect(button).toBeDisabled();
+		await userEvent.click(button);
+		expect(onContinue).toHaveBeenCalledOnce();
+		await act(async () => request.resolve());
+		expect(button).toBeEnabled();
+	});
+
 	it("sends on Enter", async () => {
 		const { onSend, field } = renderComposer();
 		await typeInComposer(field, "hello");

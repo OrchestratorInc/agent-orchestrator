@@ -339,6 +339,11 @@ export interface TurnOutcomeRetryControl {
 	disabled?: boolean;
 }
 
+/** Where the user continued a stopped turn: a marker in place of the continue message. */
+export function ContinuedMarker() {
+	return <TwoRowTimelineMarker message="Continued" />;
+}
+
 export function TurnOutcome({
 	state,
 	error,

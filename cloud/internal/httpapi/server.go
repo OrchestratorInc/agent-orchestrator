@@ -182,9 +182,6 @@ type Server struct {
 	// its own (AO_CLOUD_DEFAULT_ORG_CAPABILITIES): personal organizations, and
 	// WorkOS organizations whose metadata has no capabilities key.
 	defaultOrgCapabilities []string
-	// defaultOrgBilling is the billing arrangement of an organization whose
-	// WorkOS metadata sets none (AO_CLOUD_DEFAULT_ORG_BILLING).
-	defaultOrgBilling string
 	// coderTemplates lists the Coder templates a client may pick from. Nil when
 	// the deployment does not offer the coder provider.
 	coderTemplates   CoderTemplateLister
@@ -244,9 +241,6 @@ type Options struct {
 	// DefaultOrgCapabilities are the capabilities of an organization that has
 	// none of its own; see Server.defaultOrgCapabilities.
 	DefaultOrgCapabilities []string
-	// DefaultOrgBilling is domain.OrgBillingSelfServe (the default when blank)
-	// or domain.OrgBillingContract.
-	DefaultOrgBilling string
 	// CoderTemplates lists templates available from the configured Coder provider.
 	CoderTemplates CoderTemplateLister
 	// CoderTemplateIDs limits the configured Coder's templates the picker
@@ -353,10 +347,6 @@ func New(options Options) *Server {
 			defaultOrgCapabilities = append(defaultOrgCapabilities, capability)
 		}
 	}
-	defaultOrgBilling := domain.NormalizeOrgBilling(options.DefaultOrgBilling)
-	if defaultOrgBilling == "" {
-		defaultOrgBilling = domain.OrgBillingSelfServe
-	}
 	server := &Server{
 		store:                     options.Store,
 		transcripts:               options.Transcripts,
@@ -368,7 +358,6 @@ func New(options Options) *Server {
 		availableSandboxProviders: availableSandboxProviders,
 		capabilityGatedProviders:  capabilityGatedProviders,
 		defaultOrgCapabilities:    defaultOrgCapabilities,
-		defaultOrgBilling:         defaultOrgBilling,
 		coderTemplates:            options.CoderTemplates,
 		coderTemplateIDs:          options.CoderTemplateIDs,
 		provisioning:              options.Provisioning,
@@ -438,6 +427,7 @@ func New(options Options) *Server {
 	if server.github != nil {
 		router.Get("/api/cloud/v1/github/install/setup", server.githubSetupCallback)
 		router.Get("/api/cloud/v1/github/oauth/callback", server.githubOAuthCallback)
+		router.Post("/api/cloud/v1/github/oauth/connect-others", server.githubConnectOthers)
 		router.Get("/api/cloud/v1/github/user/callback", server.githubUserCallback)
 		router.Post("/api/cloud/v1/github/webhooks", server.githubWebhook)
 		if server.brokerAuthToken != "" {
@@ -582,6 +572,7 @@ func New(options Options) *Server {
 			router.Get("/coder-config", server.getOrgCoderConfig)
 			router.Put("/coder-config", server.putOrgCoderConfig)
 			router.Delete("/coder-config", server.deleteOrgCoderConfig)
+			router.Put("/sandbox-provider", server.putOrgSandboxProvider)
 			router.Get("/sessions", server.listSessions)
 			router.Post("/sessions", server.createSession)
 			router.Get("/sandbox/coder/templates", server.listCoderTemplates)
