@@ -2028,10 +2028,35 @@ describe("TaskComposer", () => {
 		expect(JSON.parse(window.localStorage.getItem("ao.taskComposer.preferences.v1") ?? "{}")["proj-1"].agents.codex.model).toBe("");
 	});
 
+	it("sends the selected catalog default model with the chosen effort", async () => {
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agent: "codex", selectionMode: "catalog", models: [
+				{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol", isDefault: true, efforts: ["medium", "high"] },
+			], allowCustom: true } }
+			: { data: { status: "ok", project: { agent: "codex", config: {} } } });
+		h.post.mockResolvedValue({ data: { workerId: "sess-61" } });
+
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		const model = await screen.findByRole("button", { name: "Model" });
+		expect(model).toHaveTextContent("GPT-6.1 Sol");
+		await userEvent.click(model);
+		await userEvent.click(await screen.findByRole("menuitem", { name: "GPT-6.1 Sol" }));
+		const effort = await screen.findByRole("button", { name: "Effort" });
+		await userEvent.click(effort);
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
+		fireEvent.change(task(), { target: { value: "Use GPT-6.1 Sol" } });
+		fireEvent.click(startTask());
+
+		await waitFor(() => expect(h.post).toHaveBeenCalledOnce());
+		expect(h.post.mock.calls[0][1].body).toEqual(expect.objectContaining({
+			model: "gpt-6.1-sol", effort: "high",
+		}));
+	});
+
 	it.each([
-		{ selectionMode: "catalog", preferred: "GPT New", alternative: "GPT Old", preferenceField: "model" },
-		{ selectionMode: "mode", preferred: "Plan", alternative: "Fast", preferenceField: "mode" },
-	] as const)("returns $selectionMode to the provider's choice after a custom selection", async ({ selectionMode, preferred, alternative, preferenceField }) => {
+		{ selectionMode: "catalog", preferred: "GPT New", alternative: "GPT Old", preferenceField: "model", expectedModel: "preferred" },
+		{ selectionMode: "mode", preferred: "Plan", alternative: "Fast", preferenceField: "mode", expectedModel: undefined },
+	] as const)("resolves the $selectionMode default after a custom selection", async ({ selectionMode, preferred, alternative, preferenceField, expectedModel }) => {
 		h.get.mockImplementation(async (path: string) => path.includes("/models")
 			? { data: { agent: "codex", selectionMode, models: [
 				{ id: "preferred", label: preferred, isDefault: true },
@@ -2054,9 +2079,9 @@ describe("TaskComposer", () => {
 		expect(picker).toHaveTextContent(preferred);
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(2));
-		expect(h.post.mock.calls[1][1].body).not.toHaveProperty("model");
+		expect(h.post.mock.calls[1][1].body.model).toBe(expectedModel);
 		const saved = JSON.parse(window.localStorage.getItem("ao.taskComposer.preferences.v1") ?? "{}")["proj-1"].agents.codex;
-		expect(saved[preferenceField]).toBe("");
+		expect(saved[preferenceField]).toBe(expectedModel ?? "");
 	});
 
 	it("overrides an explicitly configured project model when choosing the provider's model", async () => {
