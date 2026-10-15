@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -322,7 +324,8 @@ func (s *Service) commitSelection(ctx context.Context, view resolvedWorkspaceVie
 	return selection, nil
 }
 
-// commitRun is a chain of ticked commits, each the first parent of the next.
+// commitRun is a chain of ticked commits, each the first parent of the next,
+// or ticked commits whose history makes them one range base..last.
 type commitRun struct {
 	first, last string
 	// base is first's first parent, empty for a root commit.
@@ -405,16 +408,20 @@ func selectionCommitRuns(ctx context.Context, view resolvedWorkspaceView, shas [
 		return nil, err
 	}
 	position := map[string]int{}
-	firstParent := map[string]string{}
+	parents := map[string][]string{}
 	for i, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) == 0 {
 			continue
 		}
 		position[fields[0]] = i
-		if len(fields) > 1 {
-			firstParent[fields[0]] = fields[1]
+		parents[fields[0]] = fields[1:]
+	}
+	firstParent := func(sha string) string {
+		if len(parents[sha]) == 0 {
+			return ""
 		}
+		return parents[sha][0]
 	}
 	ordered := slices.Clone(shas)
 	for _, sha := range ordered {
@@ -424,15 +431,106 @@ func selectionCommitRuns(ctx context.Context, view resolvedWorkspaceView, shas [
 	}
 	// rev-list lists newest first, so the highest position is the oldest.
 	slices.SortFunc(ordered, func(a, b string) int { return position[b] - position[a] })
-	runs := []commitRun{{first: ordered[0], last: ordered[0], base: firstParent[ordered[0]]}}
+	// A truncated listing hides ancestors, so only a complete one may stand
+	// in for the history between the ticked commits.
+	if len(position) < limit {
+		if run, ok := ancestryClosedRun(parents, view.rangeBefore, ordered); ok {
+			return []commitRun{run}, nil
+		}
+	}
+	runs := []commitRun{{first: ordered[0], last: ordered[0], base: firstParent(ordered[0])}}
 	for _, sha := range ordered[1:] {
-		if run := &runs[len(runs)-1]; firstParent[sha] == run.last {
+		if run := &runs[len(runs)-1]; firstParent(sha) == run.last {
 			run.last = sha
 			continue
 		}
-		runs = append(runs, commitRun{first: sha, last: sha, base: firstParent[sha]})
+		runs = append(runs, commitRun{first: sha, last: sha, base: firstParent(sha)})
 	}
 	return runs, nil
+}
+
+// ancestryClosedRun reads ticked commits (oldest first) as one range when the
+// history between them allows it, so a merged side branch ticked with its
+// merge is one diff rather than runs that each carry the side's changes. The
+// newest ticked commit n must reach every other one. The unticked listed
+// ancestors of n must then be nothing (the range rangeBefore..n) or exactly
+// the listed ancestors of one commit m (the range m..n). Either "before" must
+// descend from rangeBefore, as only then are the unlisted ancestors of n
+// already in it.
+func ancestryClosedRun(parents map[string][]string, rangeBefore string, ordered []string) (commitRun, bool) {
+	newest := ordered[len(ordered)-1]
+	reach := listedAncestors(parents, newest)
+	ticked := map[string]struct{}{}
+	for _, sha := range ordered {
+		if _, ok := reach[sha]; !ok {
+			return commitRun{}, false
+		}
+		ticked[sha] = struct{}{}
+	}
+	unticked := map[string]struct{}{}
+	for sha := range reach {
+		if _, ok := ticked[sha]; !ok {
+			unticked[sha] = struct{}{}
+		}
+	}
+	if len(unticked) == 0 {
+		return commitRun{first: ordered[0], last: newest, base: rangeBefore}, descendsFrom(parents, reach, rangeBefore)
+	}
+	// m is the one unticked commit no other unticked commit has as a parent.
+	heads := maps.Clone(unticked)
+	for sha := range unticked {
+		for _, parent := range parents[sha] {
+			delete(heads, parent)
+		}
+	}
+	if len(heads) != 1 {
+		return commitRun{}, false
+	}
+	var head string
+	for sha := range heads {
+		head = sha
+	}
+	below := listedAncestors(parents, head)
+	if len(below) != len(unticked) || !descendsFrom(parents, below, rangeBefore) {
+		return commitRun{}, false
+	}
+	for sha := range below {
+		if _, ok := unticked[sha]; !ok {
+			return commitRun{}, false
+		}
+	}
+	return commitRun{first: ordered[0], last: newest, base: head}, true
+}
+
+// listedAncestors is sha and its ancestors among the listed commits.
+func listedAncestors(parents map[string][]string, sha string) map[string]struct{} {
+	seen := map[string]struct{}{sha: {}}
+	stack := []string{sha}
+	for len(stack) > 0 {
+		next := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		for _, parent := range parents[next] {
+			if _, listed := parents[parent]; !listed {
+				continue
+			}
+			if _, ok := seen[parent]; !ok {
+				seen[parent] = struct{}{}
+				stack = append(stack, parent)
+			}
+		}
+	}
+	return seen
+}
+
+// descendsFrom reports whether one of commits has rangeBefore as a parent.
+// rangeBefore is never listed, so that is the only way commits reach it.
+func descendsFrom(parents map[string][]string, commits map[string]struct{}, rangeBefore string) bool {
+	for sha := range commits {
+		if slices.Contains(parents[sha], rangeBefore) {
+			return true
+		}
+	}
+	return false
 }
 
 // replayCommitRuns applies each later run's changes onto the first run's tree
@@ -445,16 +543,15 @@ func replayCommitRuns(ctx context.Context, root string, runs []commitRun) (strin
 			return "", &WorkspaceCommitSelectionConflict{CommitSHA: run.first, Paths: []string{}, Reason: WorkspaceCommitUnsupportedHistory}, nil
 		}
 	}
-	// Git creates the index itself: an existing empty file is not a valid
-	// index, so only the unique name is kept.
-	reserved, err := os.CreateTemp("", "ao-review-idx-*")
+	// Git creates the index (and its .lock) itself inside a private
+	// directory, which is removed whole even after a killed git leaves the
+	// lock behind.
+	dir, err := os.MkdirTemp("", "ao-review-idx-*")
 	if err != nil {
 		return "", nil, fmt.Errorf("reserve a scratch index: %w", err)
 	}
-	indexPath := reserved.Name()
-	_ = reserved.Close()
-	_ = os.Remove(indexPath)
-	defer func() { _ = os.Remove(indexPath) }()
+	defer func() { _ = os.RemoveAll(dir) }()
+	indexPath := filepath.Join(dir, "index")
 	// A split index would write its shared part into the repository.
 	env := []string{"GIT_INDEX_FILE=" + indexPath}
 	if _, err := gitWorkspaceOutputEnv(ctx, root, env, "-c", "core.splitIndex=false", "read-tree", runs[0].last); err != nil {
@@ -480,9 +577,10 @@ func replayCommitRuns(ctx context.Context, root string, runs []commitRun) (strin
 // returns the paths that did not apply, non-nil exactly when the patch was
 // rejected.
 func applyCommitRun(ctx context.Context, root string, env []string, run commitRun) ([]string, error) {
-	// Explicit prefixes and no color keep the patch in the shape git apply
-	// reads whatever diff configuration the repository carries.
-	diff := workspaceGitCommand(ctx, root, "diff", "--binary", "--full-index", "--find-renames", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", run.base, run.last, "--")
+	// Explicit prefixes, context, submodule format and no color keep the
+	// patch in the shape git apply reads whatever diff configuration the
+	// repository carries.
+	diff := workspaceGitCommand(ctx, root, "diff", "--binary", "--full-index", "--find-renames", "--no-ext-diff", "--no-textconv", "--no-color", "--unified=3", "--submodule=short", "--ignore-submodules=none", "--src-prefix=a/", "--dst-prefix=b/", run.base, run.last, "--")
 	diffStderr := &cappedWorkspaceOutput{limit: 64 * 1024}
 	diff.Stderr = diffStderr
 	patch, err := diff.StdoutPipe()

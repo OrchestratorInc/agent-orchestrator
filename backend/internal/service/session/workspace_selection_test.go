@@ -186,6 +186,95 @@ func TestCommitSelectionReportsConflict(t *testing.T) {
 	requireAPIError(t, err, apierr.KindConflict, "WORKSPACE_COMMITS_NOT_COMBINABLE")
 }
 
+func TestCommitSelectionReplayIgnoresDiffConfig(t *testing.T) {
+	repo := newWorkspaceRepo(t)
+	runGit(t, repo, "branch", "-M", "main")
+	// Settings a user may carry that would strip the patch's context or
+	// print submodule bumps as a log the replay cannot apply.
+	runGit(t, repo, "config", "diff.context", "0")
+	runGit(t, repo, "config", "diff.submodule", "log")
+	lines := make([]string, 100)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %d", i+1)
+	}
+	edit := func(n int) string {
+		lines[n-1] = fmt.Sprintf("edited %d", n)
+		return strings.Join(lines, "\n") + "\n"
+	}
+	oldLink, newLink := strings.Repeat("1", 40), strings.Repeat("2", 40)
+	writeWorkspaceFile(t, repo, "long.txt", strings.Join(lines, "\n")+"\n")
+	runGit(t, repo, "add", "long.txt")
+	runGit(t, repo, "update-index", "--add", "--cacheinfo", "160000,"+oldLink+",sub")
+	runGit(t, repo, "commit", "-m", "long file and submodule")
+	base := gitHead(t, repo)
+	runGit(t, repo, "switch", "-c", "session")
+	first := commitWorkspaceFile(t, repo, "long.txt", edit(10), "edit line 10")
+	commitWorkspaceFile(t, repo, "long.txt", edit(50), "edit line 50")
+	runGit(t, repo, "update-index", "--cacheinfo", "160000,"+newLink+",sub")
+	last := commitWorkspaceFile(t, repo, "long.txt", edit(90), "edit line 90 and bump sub")
+	svc := checkedOutSelectionService(repo, base)
+	ctx := context.Background()
+
+	selection, err := svc.GetWorkspaceCommitSelection(ctx, "ao-1", WorkspaceView{}, []string{first, last}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.Contiguous || !selection.Combinable || selection.Conflict != nil {
+		t.Fatalf("selection = %+v conflict = %+v, want distant hunks combined", selection, selection.Conflict)
+	}
+	after, err := svc.GetWorkspaceSelectionFileRevision(ctx, "ao-1", WorkspaceSelectionRevisionInput{Path: "long.txt", Side: WorkspaceBlobAfter, Scope: WorkspaceDiffCommitted, CommitSHAs: []string{first, last}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines[49] = "line 50"
+	if want := strings.Join(lines, "\n") + "\n"; after.Content != want {
+		t.Fatalf("combined long.txt = %q, want lines 10 and 90 edited and line 50 untouched", after.Content)
+	}
+	if got := strings.TrimSpace(runGit(t, repo, "rev-parse", selection.after+":sub")); got != newLink {
+		t.Fatalf("combined sub = %s, want the bumped gitlink %s", got, newLink)
+	}
+}
+
+func TestCommitSelectionMergedSideBranchIsOneRange(t *testing.T) {
+	repo := newWorkspaceRepo(t)
+	runGit(t, repo, "branch", "-M", "main")
+	base := gitHead(t, repo)
+	runGit(t, repo, "switch", "-c", "side")
+	s1 := commitWorkspaceFile(t, repo, "s1.txt", "s1\n", "side one")
+	s2 := commitWorkspaceFile(t, repo, "s2.txt", "s2\n", "side two")
+	runGit(t, repo, "switch", "-c", "feature", "main")
+	f1 := commitWorkspaceFile(t, repo, "f1.txt", "f1\n", "feature one")
+	f2 := commitWorkspaceFile(t, repo, "f2.txt", "f2\n", "feature two")
+	runGit(t, repo, "merge", "--no-ff", "-m", "merge side", "side")
+	merge := gitHead(t, repo)
+	commitWorkspaceFile(t, repo, "g.txt", "g\n", "after the merge")
+	runGit(t, repo, "switch", "-c", "session", "main")
+	svc := branchViewService(repo)
+	ctx := context.Background()
+	view := WorkspaceView{Branch: "feature"}
+
+	for _, tc := range []struct {
+		name   string
+		shas   []string
+		before string
+		paths  []string
+	}{
+		{"every commit but the tip", []string{merge, s2, s1, f2, f1}, base, []string{"f1.txt", "f2.txt", "s1.txt", "s2.txt"}},
+		{"middle to newest", []string{merge, s2, s1, f2}, f1, []string{"f2.txt", "s1.txt", "s2.txt"}},
+	} {
+		selection, err := svc.GetWorkspaceCommitSelection(ctx, "ao-1", view, tc.shas, "")
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if !selection.Contiguous || !selection.Combinable || selection.before != tc.before || selection.after != merge {
+			t.Fatalf("%s: selection = %+v conflict = %+v, want the range %s..%s", tc.name, selection, selection.Conflict, tc.before, merge)
+		}
+		if got := selectionPaths(selection); !slices.Equal(got, tc.paths) {
+			t.Fatalf("%s: paths = %v, want %v", tc.name, got, tc.paths)
+		}
+	}
+}
+
 func TestCommitSelectionRootCommitUsesEmptyTree(t *testing.T) {
 	repo := newWorkspaceRepo(t)
 	runGit(t, repo, "branch", "-M", "main")
@@ -300,7 +389,7 @@ func TestCommitShaAndCommitShasAreMutuallyExclusive(t *testing.T) {
 	requireAPIError(t, err, apierr.KindInvalid, "WORKSPACE_COMMIT_SCOPE_REQUIRED")
 
 	// The legacy single commitSha still reads that one commit.
-	after, err := svc.GetWorkspaceFileRevisionAtCommit(ctx, "ao-1", "b.txt", WorkspaceBlobAfter, "", "", commits[1])
+	after, err := svc.GetWorkspaceSelectionFileRevision(ctx, "ao-1", WorkspaceSelectionRevisionInput{Path: "b.txt", Side: WorkspaceBlobAfter, Scope: WorkspaceDiffCommitted, CommitSHA: commits[1]})
 	if err != nil {
 		t.Fatal(err)
 	}

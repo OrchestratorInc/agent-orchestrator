@@ -984,12 +984,7 @@ func gitCommitExists(ctx context.Context, root, rev string) bool {
 }
 
 func gitMergeBase(ctx context.Context, root, ref string) (string, bool) {
-	out, err := gitWorkspaceOutput(ctx, root, "merge-base", "HEAD", ref)
-	if err != nil {
-		return "", false
-	}
-	sha := strings.TrimSpace(out)
-	return sha, sha != ""
+	return gitMergeBaseOf(ctx, root, "HEAD", ref)
 }
 
 // gitMergeBaseOf is gitMergeBase for two arbitrary revisions rather than
@@ -1871,6 +1866,10 @@ func workspaceChangeMaps(ctx context.Context, root, base string) (workspaceChang
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) {
+		if base == "HEAD" {
+			// An unborn HEAD diffs against the empty tree instead of failing.
+			base = headRevOrEmptyTree(gctx, root)
+		}
 		diffStatuses, diffPrevious, counts, err = workspaceDiffStats(gctx, root, base)
 		return err
 	})

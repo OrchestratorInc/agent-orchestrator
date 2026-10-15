@@ -187,7 +187,7 @@ func TestCommitReviewUsesOnlyTheSelectedCommit(t *testing.T) {
 	if detail.Content != "first commit\n" || !strings.Contains(detail.Diff, "+first commit") || detail.Editable {
 		t.Fatalf("selected commit detail = %#v", detail)
 	}
-	after, err := svc.GetWorkspaceFileRevisionAtCommit(context.Background(), "ao-1", "README.md", WorkspaceBlobAfter, files.WorkspaceVersion, "", first)
+	after, err := svc.GetWorkspaceSelectionFileRevision(context.Background(), "ao-1", WorkspaceSelectionRevisionInput{Path: "README.md", Side: WorkspaceBlobAfter, Scope: WorkspaceDiffCommitted, CommitSHA: first, WorkspaceVersion: files.WorkspaceVersion})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,19 +479,16 @@ func TestUncommittedSectionOnUnbornHead(t *testing.T) {
 	runGit(t, repo, "add", "staged.txt")
 	writeWorkspaceFile(t, repo, "staged.txt", "one\ntwo\n")
 	writeWorkspaceFile(t, repo, "notes.txt", "new\n")
+	svc := workspaceReviewService(t, repo)
 
-	emptyTree := strings.TrimSpace(runGit(t, repo, "hash-object", "-t", "tree", os.DevNull))
-	if got := headRevOrEmptyTree(context.Background(), repo); got != emptyTree {
-		t.Fatalf("headRevOrEmptyTree = %q, want the empty tree %q", got, emptyTree)
-	}
-	sections, err := workspaceGitSections(context.Background(), repo, "HEAD")
+	manifest, err := svc.GetWorkspaceManifest(context.Background(), "ao-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := workspaceSummaryPaths(sections.Uncommitted); strings.Join(got, ",") != "notes.txt,staged.txt" {
+	if got := workspaceSummaryPaths(manifest.Sections.Uncommitted); strings.Join(got, ",") != "notes.txt,staged.txt" {
 		t.Fatalf("uncommitted = %v, want the staged new file and the untracked file", got)
 	}
-	for _, file := range sections.Uncommitted {
+	for _, file := range manifest.Sections.Uncommitted {
 		if file.Status != WorkspaceFileAdded {
 			t.Fatalf("uncommitted %s status = %q, want added against the empty tree", file.Path, file.Status)
 		}
@@ -500,13 +497,14 @@ func TestUncommittedSectionOnUnbornHead(t *testing.T) {
 		}
 	}
 
-	target := workspaceFileTarget{root: repo, rel: "staged.txt", changes: workspaceChangeSet{untracked: map[string]struct{}{"notes.txt": {}}}}
-	group, err := workspaceDiffGroup(context.Background(), &workspaceDiffTargetGroup{root: repo, targets: []workspaceFileTarget{target}}, WorkspaceDiffUncommitted, 3, false)
+	diffs, err := svc.GetWorkspaceDiffs(context.Background(), "ao-1", WorkspaceDiffInput{
+		Scope: WorkspaceDiffUncommitted, Paths: []string{"staged.txt"}, ContextLines: 3, WorkspaceVersion: manifest.WorkspaceVersion,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(group.Patch, "+one") || !strings.Contains(group.Patch, "+two") {
-		t.Fatalf("unborn HEAD uncommitted patch = %q, want the whole worktree file added", group.Patch)
+	if len(diffs.Groups) != 1 || !strings.Contains(diffs.Groups[0].Patch, "+one") || !strings.Contains(diffs.Groups[0].Patch, "+two") {
+		t.Fatalf("unborn HEAD uncommitted diffs = %+v, want the whole worktree file added", diffs)
 	}
 }
 

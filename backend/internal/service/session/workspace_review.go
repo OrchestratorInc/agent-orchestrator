@@ -409,14 +409,6 @@ func appendSyntheticAddedPatch(group *WorkspaceDiffGroup, patch *strings.Builder
 	return nil
 }
 
-// GetWorkspaceFileRevisionAtCommit returns one immutable side of a selected
-// commit. The SHA must belong to the session's current compare range.
-func (s *Service) GetWorkspaceFileRevisionAtCommit(ctx context.Context, id domain.SessionID, rawPath string, side WorkspaceFileBlobSide, workspaceVersion, expectedRevision, commitSHA string) (WorkspaceFileRevision, error) {
-	return s.GetWorkspaceSelectionFileRevision(ctx, id, WorkspaceSelectionRevisionInput{
-		Path: rawPath, Side: side, Scope: WorkspaceDiffCommitted, CommitSHA: commitSHA, WorkspaceVersion: workspaceVersion, ExpectedRevision: expectedRevision,
-	})
-}
-
 // GetWorkspaceFileRevision returns a comparison side for diff expansion and
 // complete-file viewing. Missing sides are represented explicitly.
 func (s *Service) GetWorkspaceFileRevision(ctx context.Context, id domain.SessionID, rawPath string, scope WorkspaceDiffScope, side WorkspaceFileBlobSide, workspaceVersion, expectedRevision string) (WorkspaceFileRevision, error) {
