@@ -560,13 +560,16 @@ func expiringConnection(t *testing.T, updatedAt time.Time) *domain.GitHubUserCon
 // read on) as another replica left it after refreshing first.
 type rotatingStore struct {
 	*userScopeStore
-	reads   int
-	rotated *domain.GitHubUserConnection
+	reads int
+	// rotatedAfter is how many reads pass before the other replica's write
+	// lands; zero means it is already there when this replica looks.
+	rotatedAfter int
+	rotated      *domain.GitHubUserConnection
 }
 
 func (s *rotatingStore) GitHubUserConnection(ctx context.Context, userID string) (domain.GitHubUserConnection, error) {
 	s.reads++
-	if s.reads > 1 && s.rotated != nil {
+	if s.reads > 1+s.rotatedAfter && s.rotated != nil {
 		return *s.rotated, nil
 	}
 	return s.userScopeStore.GitHubUserConnection(ctx, userID)
@@ -576,18 +579,25 @@ func (s *rotatingStore) GitHubUserConnection(ctx context.Context, userID string)
 // because another replica already used the refresh token adopts that
 // replica's tokens; only a refresh rejected outright discards it.
 func TestGitHubUserTokenRefreshFailures(t *testing.T) {
+	wait, poll := githubUserRotationWait, githubUserRotationPoll
+	githubUserRotationWait, githubUserRotationPoll = 200*time.Millisecond, 5*time.Millisecond
+	t.Cleanup(func() { githubUserRotationWait, githubUserRotationPoll = wait, poll })
 	read := time.Now().Add(-time.Hour)
 	for _, tc := range []struct {
-		name        string
-		answer      int
-		body        string
-		rotated     bool
-		wantErr     error
-		wantDeleted int
+		name         string
+		answer       int
+		body         string
+		rotated      bool
+		rotatedAfter int
+		wantErr      error
+		wantDeleted  int
 	}{
-		{"github unavailable", http.StatusBadGateway, `{"message":"bad gateway"}`, false, nil, 0},
-		{"rotated by another replica", http.StatusOK, `{"error":"bad_refresh_token"}`, true, nil, 0},
-		{"rejected", http.StatusOK, `{"error":"bad_refresh_token"}`, false, postgres.ErrNotFound, 1},
+		{"github unavailable", http.StatusBadGateway, `{"message":"bad gateway"}`, false, 0, nil, 0},
+		{"rotated by another replica", http.StatusOK, `{"error":"bad_refresh_token"}`, true, 0, nil, 0},
+		// The winning replica is still checking the account with GitHub when
+		// this one's refresh is rejected; its write lands a few polls later.
+		{"rotated by another replica, stored late", http.StatusOK, `{"error":"bad_refresh_token"}`, true, 3, nil, 0},
+		{"rejected", http.StatusOK, `{"error":"bad_refresh_token"}`, false, 0, postgres.ErrNotFound, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mux := http.NewServeMux()
@@ -599,7 +609,7 @@ func TestGitHubUserTokenRefreshFailures(t *testing.T) {
 			server := httptest.NewServer(mux)
 			defer server.Close()
 			base := &userScopeStore{connection: expiringConnection(t, read)}
-			store := &rotatingStore{userScopeStore: base}
+			store := &rotatingStore{userScopeStore: base, rotatedAfter: tc.rotatedAfter}
 			if tc.rotated {
 				rotated := *connectedUser(t)
 				rotated.UpdatedAt = time.Now()

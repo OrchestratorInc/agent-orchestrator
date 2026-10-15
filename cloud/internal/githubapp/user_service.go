@@ -17,6 +17,14 @@ import (
 
 const githubUserRefreshSkew = 5 * time.Minute
 
+// A replica that won a refresh checks the account with GitHub before it
+// stores the new tokens. A replica whose refresh was rejected waits this long
+// for that write before treating the authorization as revoked.
+var (
+	githubUserRotationWait = 5 * time.Second
+	githubUserRotationPoll = 200 * time.Millisecond
+)
+
 func (s *Service) StartUserAuthorization(
 	ctx context.Context,
 	principal domain.Principal,
@@ -393,8 +401,11 @@ func (s *Service) githubUserAccessToken(
 		// Refresh tokens are single use, so another control-plane replica
 		// that refreshed first makes this one fail. Use what it stored rather
 		// than discarding a working connection.
-		if current, token, ok := s.rotatedElsewhere(ctx, userID, connection); ok {
+		if current, token, ok := s.awaitRotatedElsewhere(ctx, userID, connection); ok {
 			return current, token, nil
+		}
+		if ctx.Err() != nil {
+			return domain.GitHubUserConnection{}, "", ctx.Err()
 		}
 		_ = s.store.DeleteGitHubUserConnection(ctx, userID)
 		return domain.GitHubUserConnection{}, "", postgres.ErrNotFound
@@ -423,6 +434,31 @@ func (s *Service) githubUserAccessToken(
 		return domain.GitHubUserConnection{}, "", err
 	}
 	return updated, rotated.Token(), nil
+}
+
+// awaitRotatedElsewhere polls rotatedElsewhere until the replica that won the
+// refresh has stored its tokens, or githubUserRotationWait passes.
+func (s *Service) awaitRotatedElsewhere(
+	ctx context.Context,
+	userID string,
+	connection domain.GitHubUserConnection,
+) (domain.GitHubUserConnection, string, bool) {
+	deadline := time.Now().Add(githubUserRotationWait)
+	for {
+		if current, token, ok := s.rotatedElsewhere(ctx, userID, connection); ok {
+			return current, token, true
+		}
+		if !time.Now().Before(deadline) {
+			return domain.GitHubUserConnection{}, "", false
+		}
+		timer := time.NewTimer(githubUserRotationPoll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return domain.GitHubUserConnection{}, "", false
+		case <-timer.C:
+		}
+	}
 }
 
 // rotatedElsewhere returns the user's connection when it was refreshed after
