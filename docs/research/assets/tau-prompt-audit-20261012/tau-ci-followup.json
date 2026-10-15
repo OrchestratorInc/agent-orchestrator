@@ -1,0 +1,18 @@
+{
+  "at": "2026-10-12T21:35:04.801507+00:00",
+  "failedHead": "e1ef49b12712b6c5fc17e595f931bc28296dd66f",
+  "failedGoRun": 38307549747,
+  "failures": {
+    "backend-core (1)": "TestNativeProbesUseSessionEnvironment fake profile lacked the now-required native index/history.",
+    "chat-race (1)": "Affected Tau adapter test package requires full-suite rerun after fixture correction.",
+    "lint": [
+      "QF1002 use tagged switch on home",
+      "goimports standard/project import groups"
+    ]
+  },
+  "fixHead": "2a58ba50bc0648b396315f86daf9daa9c1360b2b",
+  "changes": "Create native history in the session-specific fake profile; use a different global profile to retain environment isolation regression. Group imports and use equivalent tagged home switch.",
+  "runtimeEvidenceHead": "e1ef49b12712b6c5fc17e595f931bc28296dd66f",
+  "qualification": "Runtime binary remains labeled by actual source; later fixture/style changes are not silently relabeled. New exact-head CI is required.",
+  "localSuitesRun": false
+}

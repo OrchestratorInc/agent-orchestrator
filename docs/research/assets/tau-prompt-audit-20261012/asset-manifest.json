@@ -1,0 +1,251 @@
+{
+  "at": "2026-10-12T21:37:56.737468+00:00",
+  "assets": [
+    {
+      "path": "tau-focused-003/receipt.json",
+      "bytes": 3669,
+      "SHA256": "25f7c79f4d6386afb4b353bd315560ac249633ecb0544b0fd56f07f1f9eb3a31",
+      "utc": "2026-10-12T20:22:38.557786+00:00",
+      "scope": "Curated receipt; source scope retained"
+    },
+    {
+      "path": "tau-focused-003/restore-user-authored.json",
+      "bytes": 615,
+      "SHA256": "e6db5b36cc70bce86105457d5a12fb196d721ff6c7668edd0e8f7b8efe755bfc",
+      "utc": "2026-10-12T20:25:40.363513+00:00",
+      "scope": "Curated receipt; source scope retained"
+    },
+    {
+      "path": "tau-focused-003/restore-independent-second-task.json",
+      "bytes": 622,
+      "SHA256": "eac31d35652528e44b267748ca5fc407271b167aedf90f5b51a6e031d669f8ed",
+      "utc": "2026-10-12T20:23:14.622468+00:00",
+      "scope": "Curated receipt; source scope retained"
+    },
+    {
+      "path": "tau-focused-003/executing-cancel.json",
+      "bytes": 3632,
+      "SHA256": "a1ad9ecbae53b76e6b5be222c1f10eefe08b981fbd4255b1744a4c82f9660aeb",
+      "utc": "2026-10-12T20:23:49.831502+00:00",
+      "scope": "Curated receipt; source scope retained"
+    },
+    {
+      "path": "tau-focused-003/executing-cancel-user-authored.json",
+      "bytes": 3634,
+      "SHA256": "d52dd6443e7605e00e1b142fde7c63a5788b560b405a73b9bb32867b8c32b0da",
+      "utc": "2026-10-12T20:25:47.718085+00:00",
+      "scope": "Curated receipt; source scope retained"
+    },
+    {
+      "path": "tau-focused-003/missing-history.json",
+      "bytes": 1102,
+      "SHA256": "31a648748058af5cf74b9dd05cda27597dcbf5afa8f4827eb84b63669b5498a3",
+      "utc": "2026-10-12T20:32:39.607697+00:00",
+      "scope": "Curated receipt; source scope retained"
+    },
+    {
+      "path": "tau-focused-003/cancellation-user-no-witness.png",
+      "bytes": 140406,
+      "SHA256": "cd05bc0da1d6684942f77fe91bd7356d50679fcf5091ff3912700c155cef304d",
+      "utc": "2026-10-12T20:26:37.335329+00:00",
+      "scope": "Original actual AO viewport"
+    },
+    {
+      "path": "tau-focused-003/restored-current-render.png",
+      "bytes": 106035,
+      "SHA256": "be61d09ec7c9654056bd31534ee9e882f2aeebac1999149581413e1f640f9727",
+      "utc": "2026-10-12T20:19:20.047161+00:00",
+      "scope": "Original actual AO viewport"
+    },
+    {
+      "path": "tau-focused-003/restore-continuation-live.png",
+      "bytes": 122095,
+      "SHA256": "5b1860704fb1a3d0580de99b68416604bda3a212798e94a4504e97de54fdf84c",
+      "utc": "2026-10-12T20:20:26.130490+00:00",
+      "scope": "Original actual AO viewport"
+    },
+    {
+      "path": "tau-focused-004/receipt.json",
+      "bytes": 4296,
+      "SHA256": "7bc74a12e0367b1c60a56fe4aa03dd652c41aebed3fdc40e80b6c8e3de5b71e1",
+      "utc": "2026-10-12T20:45:04.491010+00:00",
+      "scope": "Curated receipt; source scope retained"
+    },
+    {
+      "path": "tau-focused-004/missing-history.json",
+      "bytes": 1929,
+      "SHA256": "82435047bdd685ccb88c60f0ad83e3492565442b1e0b3ec27778da4b1be78e2b",
+      "utc": "2026-10-12T20:45:36.513159+00:00",
+      "scope": "Curated receipt; source scope retained"
+    },
+    {
+      "path": "tau-focused-004/executing-cancel.json",
+      "bytes": 19049,
+      "SHA256": "ad46744b9b102576eae882822aa26a1bfaa47f32872b5a872b6c7f56c1ed9610",
+      "utc": "2026-10-12T20:44:18.416785+00:00",
+      "scope": "Curated receipt; source scope retained"
+    },
+    {
+      "path": "tau-focused-004/executing-kill.json",
+      "bytes": 805,
+      "SHA256": "a8eb10cefc6dc98f9b34c5142ba03828f4dc151632dcabad46a5ed5839e8e4bb",
+      "utc": "2026-10-12T20:45:21.420254+00:00",
+      "scope": "Curated receipt; source scope retained"
+    },
+    {
+      "path": "tau-focused-004/control-user-followup.json",
+      "bytes": 458,
+      "SHA256": "367f9d1372859ef226ccd2f096d878c6387e0116875977cd7c5865dc231b8f77",
+      "utc": "2026-10-12T20:54:08.614142+00:00",
+      "scope": "Curated receipt; source scope retained"
+    },
+    {
+      "path": "tau-focused-004/restored-native-empty-composer.png",
+      "bytes": 96715,
+      "SHA256": "3bfe8a8753804ccc3ae4ea7a2caad903ff4708c69c0d6176c224441b09505a7d",
+      "utc": "2026-10-12T20:41:38.653054+00:00",
+      "scope": "Original actual AO viewport"
+    },
+    {
+      "path": "tau-focused-004/executing-escape-cancel.png",
+      "bytes": 97891,
+      "SHA256": "548eb898eedc387b6ebd68ea26ab274a8a1b6ce662fb782400989f30d32521ce",
+      "utc": "2026-10-12T20:44:40.880891+00:00",
+      "scope": "Original actual AO viewport"
+    },
+    {
+      "path": "tau-focused-004/unrelated-control-alive.png",
+      "bytes": 82893,
+      "SHA256": "3a61e955cad72fd6305692c755a13ea6635ec44bb38d93aa6486ffab903e8c5b",
+      "utc": "2026-10-12T20:56:06.159673+00:00",
+      "scope": "Original actual AO viewport"
+    },
+    {
+      "path": "tau-focused-005/receipt.json",
+      "bytes": 2844,
+      "SHA256": "67c2be4140c22317dadab99cb9d15d6046c3506e8ecd9086e5b9a4221a698313",
+      "utc": "2026-10-12T21:10:24.487770+00:00",
+      "scope": "Curated receipt adds explicit assessment; original raw receipt retained locally and fingerprinted",
+      "originalReceiptSHA256": "db2d69c34b23b1f35c217401e01ce4a110063ce342ec82cdc91815e5b8e3ead1"
+    },
+    {
+      "path": "tau-focused-005/missing-history.json",
+      "bytes": 1224,
+      "SHA256": "3ab679e6b5682c84f44d8a55505f7f32f5a9ad1749f73436ac0b47034d00e0aa",
+      "utc": "2026-10-12T21:18:59.959702+00:00",
+      "scope": "Curated receipt; source scope retained"
+    },
+    {
+      "path": "tau-focused-005/fresh-real-resize.png",
+      "bytes": 96988,
+      "SHA256": "2f6a148e62b0b4d6cc5711d2c67416710e9c91fae02373b367aa2e0d842fc897",
+      "utc": "2026-10-12T21:11:41.320471+00:00",
+      "scope": "Original actual AO viewport"
+    },
+    {
+      "path": "tau-focused-005/fresh-new-main-private-missing.png",
+      "bytes": 37859,
+      "SHA256": "cf6939b797dea286b7bac2f2a8f18ced17c91a6fc9e78b288e65059c1443610f",
+      "utc": "2026-10-12T21:09:55.887918+00:00",
+      "scope": "FAILED_BLANK_CAPTURE_UNQUALIFYING; retained original pixels"
+    },
+    {
+      "path": "tau-focused-006/receipt.json",
+      "bytes": 3597,
+      "SHA256": "d42b65db32853e3ba35d6e5cbd19d67d1e27387170eecd43ee6857f383446889",
+      "utc": "2026-10-12T21:21:05.560533+00:00",
+      "scope": "Curated receipt; source scope retained"
+    },
+    {
+      "path": "tau-focused-006/restore-consumption-assessment.json",
+      "bytes": 734,
+      "SHA256": "65b2608ad3209e55a717c665eb80bc5e54eaeb7f180b92d59fef5cee49c9e3a0",
+      "utc": "2026-10-12T21:22:34.056086+00:00",
+      "scope": "Curated receipt; source scope retained"
+    },
+    {
+      "path": "tau-focused-006/restore-new-file-control.json",
+      "bytes": 1141,
+      "SHA256": "d402c7e9e305c7587901dc116bcc6cf42adeea0c447d6d42a1a2229ff440fa43",
+      "utc": "2026-10-12T21:23:23.264484+00:00",
+      "scope": "Curated receipt; source scope retained"
+    },
+    {
+      "path": "tau-focused-006/executing-cancel.json",
+      "bytes": 18409,
+      "SHA256": "dfd45930e133171dbeb8edab714737d5b449b2bb25816f646392969432039e20",
+      "utc": "2026-10-12T21:21:41.289475+00:00",
+      "scope": "Curated receipt; source scope retained"
+    },
+    {
+      "path": "tau-focused-006/executing-kill.json",
+      "bytes": 805,
+      "SHA256": "8aa9abcde1495b52700bfa7ffd474067d3d3a8d54a22eeb81cd4a5193721a1c5",
+      "utc": "2026-10-12T21:25:59.128326+00:00",
+      "scope": "Curated receipt; source scope retained"
+    },
+    {
+      "path": "tau-focused-006/control-user-followup.json",
+      "bytes": 555,
+      "SHA256": "a7865252a681818bda93e856219a6a2690879fb304972b8573a40a5cd7d3020e",
+      "utc": "2026-10-12T21:27:19.035259+00:00",
+      "scope": "Curated receipt; source scope retained"
+    },
+    {
+      "path": "tau-focused-006/serving-before.json",
+      "bytes": 1211,
+      "SHA256": "389b55e8ea1ac9dca699d7c76dc3adea6f8b3ad2e5665caf7e3c35b75f98cbe7",
+      "utc": "2026-10-12T21:15:45.232642+00:00",
+      "scope": "Curated receipt; source scope retained"
+    },
+    {
+      "path": "tau-focused-006/serving-after-and-session-cleanup.json",
+      "bytes": 1156,
+      "SHA256": "f0452af8a7ee6d67467069cfd65ce4b595395a9fd1b429bb46b913c1f7a08c65",
+      "utc": "2026-10-12T21:28:53.249750+00:00",
+      "scope": "Curated receipt; source scope retained"
+    },
+    {
+      "path": "tau-focused-006/fresh-private-project-user-controls.png",
+      "bytes": 107009,
+      "SHA256": "8334a6c7e42c07b46c4e074540167aa34f949546b62c7a15db9d0f06fd5daae3",
+      "utc": "2026-10-12T21:15:08.219507+00:00",
+      "scope": "Original actual AO viewport"
+    },
+    {
+      "path": "tau-focused-006/restored-ready-native-composer.png",
+      "bytes": 107122,
+      "SHA256": "9d162a32951c30f2c11a121f00e7090bb6d20a029a4a610fd6c4f250baed9221",
+      "utc": "2026-10-12T21:17:39.328249+00:00",
+      "scope": "Original actual AO viewport"
+    },
+    {
+      "path": "tau-focused-006/restore-and-executing-control.png",
+      "bytes": 116144,
+      "SHA256": "2ebe757e4b866c0fda872ebdc1212304054124ad4751cf75f8efdb68b161bcc0",
+      "utc": "2026-10-12T21:22:33.960737+00:00",
+      "scope": "Original actual AO viewport"
+    },
+    {
+      "path": "tau-focused-006/unrelated-control-after-primary-kill.png",
+      "bytes": 92254,
+      "SHA256": "f25d50cb85c05989cb60a9833d80c7c7ecea4f6d7a8655af0b370bf7792467fc",
+      "utc": "2026-10-12T21:27:49.610306+00:00",
+      "scope": "Original actual AO viewport"
+    },
+    {
+      "path": "tau-control-006/receipt.json",
+      "bytes": 1436,
+      "SHA256": "cb96edd5971272be9821aabd376b3db9d734044392e56f7c6dbf9bc86edca72c",
+      "utc": "2026-10-12T21:15:34.959231+00:00",
+      "scope": "Curated receipt; source scope retained"
+    },
+    {
+      "path": "tau-focused-005/receipt-original.json",
+      "bytes": 2318,
+      "SHA256": "db2d69c34b23b1f35c217401e01ce4a110063ce342ec82cdc91815e5b8e3ead1",
+      "scope": "Original structured receipt, byte-identical to retained local raw receipt"
+    }
+  ],
+  "qualification": "Original PNG bytes unchanged. Original structured receipt bytes retained; receipt005 adds a separately fingerprinted assessment and receipt-original.json preserves the original. No profiles, DBs, private state or complete raw logs published."
+}

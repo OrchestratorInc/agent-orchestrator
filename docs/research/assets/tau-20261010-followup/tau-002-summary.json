@@ -1,0 +1,911 @@
+{
+  "schemaVersion": 1,
+  "attempt": "tau-002",
+  "harness": "tau",
+  "startedAt": "2026-10-10T18:27:15.578Z",
+  "finishedAt": "2026-10-10T18:30:55.127Z",
+  "state": "finished",
+  "strictStatus": "BLOCKED",
+  "auditClassification": "diagnostic-only; full strict audit PASS not claimed",
+  "source": {
+    "source": "189ca905dee3264ba5c682590ae04bcd8da88adf",
+    "binary": "/home/azureuser/.ao/audits/harness-watch-20261010/tools/existing/tau/ao",
+    "binarySha256": "4c82435bec3bac6f08b1073d416c683b4035e20721b3d1b6d345a2a09216d4ef",
+    "runnerSha256": "8887aa2e7101b9e6d3950bfca08ffddf2e1e6c1c3f1d030c8dec2676443aecea",
+    "contractSha256": "c1b86779c73c67330db1d6884f2bda3ef7e3f68ce2d0431f1ab653d83ec63c27",
+    "utc": "2026-10-10T18:27:15.454040+00:00",
+    "native": {
+      "version": "0.4.7",
+      "launcherSha256": "a85200514b8e0f1ffb3d7fa5724c68b87e173b7ae03cb50d6ed2e290e1461807",
+      "officialPythonSourcesSha256": "5b233f7a1829659ea123663fe982b855c624a8b61f7f0e2c5a811a2ca529517f",
+      "versionVerified": "tau 0.4.7"
+    }
+  },
+  "counts": {
+    "PASS": 25,
+    "NOT_RUN": 2,
+    "BLOCKED": 1
+  },
+  "sessionId": "audit-tau-0fb37380-1",
+  "nativeIdSha256": "a3f87013b77caef5c8860009aea4a55d567173d68e86562b9bed16afd4d8fdad",
+  "gates": [
+    {
+      "name": "local_binary",
+      "status": "PASS",
+      "reason": "local executable resolved",
+      "evidence": null
+    },
+    {
+      "name": "local_version",
+      "status": "PASS",
+      "reason": "local version command succeeded",
+      "evidence": null
+    },
+    {
+      "name": "local_integration",
+      "status": "PASS",
+      "reason": "local integration probe succeeded",
+      "evidence": null
+    },
+    {
+      "name": "local_session_spawn",
+      "status": "PASS",
+      "reason": "direct local CLI session produced the requested proof",
+      "evidence": null
+    },
+    {
+      "name": "local_models_list",
+      "status": "NOT_RUN",
+      "reason": "local model-list command is not defined",
+      "evidence": null
+    },
+    {
+      "name": "registered",
+      "status": "PASS",
+      "reason": "agent is registered",
+      "evidence": null
+    },
+    {
+      "name": "installed",
+      "status": "PASS",
+      "reason": "AO resolved the installed executable",
+      "evidence": null
+    },
+    {
+      "name": "fresh_probe",
+      "status": "PASS",
+      "reason": "installation and authentication observations are fresh",
+      "evidence": null
+    },
+    {
+      "name": "authentication",
+      "status": "BLOCKED",
+      "reason": "Tau has credentials configured, but AO could not verify them.",
+      "evidence": null
+    },
+    {
+      "name": "ao_models_api",
+      "status": "PASS",
+      "reason": "AO model API listed 917 model(s)",
+      "evidence": null
+    },
+    {
+      "name": "tui_spawn",
+      "status": "PASS",
+      "reason": "AO created the requested TUI session",
+      "evidence": null
+    },
+    {
+      "name": "proof_file_creation",
+      "status": "PASS",
+      "reason": "AO_AUDIT_PROOF.json contains valid JSON",
+      "evidence": null
+    },
+    {
+      "name": "correct_working_directory",
+      "status": "PASS",
+      "reason": "provider reported AO's session workspace",
+      "evidence": null
+    },
+    {
+      "name": "initial_prompt_exactly_once",
+      "status": "PASS",
+      "reason": "unique initial token was handled once",
+      "evidence": null
+    },
+    {
+      "name": "hidden_ao_instructions",
+      "status": "PASS",
+      "reason": "provider consumed hidden AO standing instructions",
+      "evidence": null
+    },
+    {
+      "name": "project_agents_md",
+      "status": "PASS",
+      "reason": "provider consumed project AGENTS.md",
+      "evidence": null
+    },
+    {
+      "name": "activity_status",
+      "status": "PASS",
+      "reason": "AO exposed ready status and an active\u2192idle transition",
+      "evidence": null
+    },
+    {
+      "name": "second_message",
+      "status": "PASS",
+      "reason": "second API message produced the requested provider-authored mutation",
+      "evidence": null
+    },
+    {
+      "name": "native_session_id",
+      "status": "PASS",
+      "reason": "AO persisted a provider-native session identity",
+      "evidence": null
+    },
+    {
+      "name": "cancellation",
+      "status": "PASS",
+      "reason": "AO terminal mux sent configured input to the observed active session and the same terminal settled",
+      "evidence": {
+        "start": {
+          "method": "POST",
+          "path": "/api/v1/sessions/audit-tau-0fb37380-1/send",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "ok": true,
+            "sessionId": "audit-tau-0fb37380-1",
+            "message": "For cancellation testing, run a foreground command that waits for 120 seconds. Do not modify files. Wait for the command to finish."
+          },
+          "startedAt": "2026-10-10T18:28:32.045Z",
+          "finishedAt": "2026-10-10T18:28:32.349Z",
+          "durationMs": 303,
+          "requestBodySha256": "eeae13d5ef7da39630eeac922762be6e20a8481950d4dd1ee741c150924c055f"
+        },
+        "active": {
+          "method": "GET",
+          "path": "/api/v1/sessions/audit-tau-0fb37380-1",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "session": {
+              "id": "audit-tau-0fb37380-1",
+              "projectId": "audit-tau-0fb37380",
+              "kind": "worker",
+              "harness": "tau",
+              "reviewerConfig": {},
+              "autoReviewEnabled": false,
+              "displayName": "audit-tau",
+              "mode": "tui",
+              "activity": {
+                "state": "active",
+                "lastActivityAt": "2026-10-10T18:28:32.381999411Z"
+              },
+              "isTerminated": false,
+              "terminateOnPrMerge": false,
+              "autoInjectReview": true,
+              "autoInjectCI": true,
+              "outputType": "none",
+              "createdAt": "2026-10-10T18:27:54.793978654Z",
+              "updatedAt": "2026-10-10T18:28:32.475553805Z",
+              "isPinned": false,
+              "provisionState": "ready",
+              "branchState": {
+                "commits": 0,
+                "unpushed": 0
+              },
+              "statusReadiness": "ready",
+              "chatProviderPreserved": false,
+              "status": "working",
+              "kanbanColumn": "building",
+              "displayStatus": "Working",
+              "terminalHandleId": "ptyhost-v1:audit-tau-0fb37380-1",
+              "branch": "ao/audit-tau-0fb37380-1/root",
+              "terminalGeneration": "b4d342cd-c585-4674-94c5-cd7f9a0f9bf3",
+              "lastUserMessageAt": "2026-10-10T18:27:57.95357433Z",
+              "lastInteractionAt": "2026-10-10T18:27:57.95357433Z",
+              "lastEventAt": "2026-10-10T18:28:32.381999411Z",
+              "prs": []
+            }
+          },
+          "startedAt": "2026-10-10T18:28:32.603Z",
+          "finishedAt": "2026-10-10T18:28:32.606Z",
+          "durationMs": 3
+        },
+        "settled": {
+          "method": "GET",
+          "path": "/api/v1/sessions/audit-tau-0fb37380-1",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "session": {
+              "id": "audit-tau-0fb37380-1",
+              "projectId": "audit-tau-0fb37380",
+              "kind": "worker",
+              "harness": "tau",
+              "reviewerConfig": {},
+              "autoReviewEnabled": false,
+              "displayName": "audit-tau",
+              "mode": "tui",
+              "activity": {
+                "state": "idle",
+                "lastActivityAt": "2026-10-10T18:28:32.790434349Z"
+              },
+              "isTerminated": false,
+              "terminateOnPrMerge": false,
+              "autoInjectReview": true,
+              "autoInjectCI": true,
+              "outputType": "none",
+              "createdAt": "2026-10-10T18:27:54.793978654Z",
+              "updatedAt": "2026-10-10T18:28:32.799362774Z",
+              "isPinned": false,
+              "provisionState": "ready",
+              "branchState": {
+                "commits": 0,
+                "unpushed": 0
+              },
+              "statusReadiness": "ready",
+              "chatProviderPreserved": false,
+              "status": "idle",
+              "kanbanColumn": "building",
+              "displayStatus": "Awaiting PR",
+              "terminalHandleId": "ptyhost-v1:audit-tau-0fb37380-1",
+              "branch": "ao/audit-tau-0fb37380-1/root",
+              "terminalGeneration": "b4d342cd-c585-4674-94c5-cd7f9a0f9bf3",
+              "lastUserMessageAt": "2026-10-10T18:27:57.95357433Z",
+              "lastInteractionAt": "2026-10-10T18:27:57.95357433Z",
+              "lastEventAt": "2026-10-10T18:28:32.790434349Z",
+              "prs": []
+            }
+          },
+          "startedAt": "2026-10-10T18:28:32.847Z",
+          "finishedAt": "2026-10-10T18:28:32.849Z",
+          "durationMs": 2
+        },
+        "confirmationWindowMs": 5000,
+        "websocket": {
+          "transport": "websocket",
+          "sessionId": "audit-tau-0fb37380-1",
+          "terminalHandleId": "ptyhost-v1:audit-tau-0fb37380-1",
+          "terminalGeneration": "b4d342cd-c585-4674-94c5-cd7f9a0f9bf3",
+          "startedAt": "2026-10-10T18:28:32.607Z",
+          "opened": true,
+          "inputBytes": 1,
+          "pongObserved": true,
+          "frames": [
+            {
+              "direction": "sent",
+              "at": "2026-10-10T18:28:32.618Z",
+              "ch": "terminal",
+              "type": "open",
+              "id": "ptyhost-v1:audit-tau-0fb37380-1"
+            },
+            {
+              "direction": "received",
+              "at": "2026-10-10T18:28:32.621Z",
+              "ch": "terminal",
+              "type": "opened",
+              "id": "ptyhost-v1:audit-tau-0fb37380-1"
+            },
+            {
+              "direction": "received",
+              "at": "2026-10-10T18:28:32.627Z",
+              "ch": "terminal",
+              "type": "data",
+              "id": "ptyhost-v1:audit-tau-0fb37380-1"
+            },
+            {
+              "direction": "sent",
+              "at": "2026-10-10T18:28:32.630Z",
+              "ch": "terminal",
+              "type": "data",
+              "id": "ptyhost-v1:audit-tau-0fb37380-1"
+            },
+            {
+              "direction": "sent",
+              "at": "2026-10-10T18:28:32.631Z",
+              "ch": "system",
+              "type": "ping"
+            },
+            {
+              "direction": "received",
+              "at": "2026-10-10T18:28:32.631Z",
+              "ch": "system",
+              "type": "pong"
+            },
+            {
+              "direction": "received",
+              "at": "2026-10-10T18:28:32.646Z",
+              "ch": "terminal",
+              "type": "data",
+              "id": "ptyhost-v1:audit-tau-0fb37380-1"
+            },
+            {
+              "direction": "received",
+              "at": "2026-10-10T18:28:32.714Z",
+              "ch": "terminal",
+              "type": "data",
+              "id": "ptyhost-v1:audit-tau-0fb37380-1"
+            },
+            {
+              "direction": "received",
+              "at": "2026-10-10T18:28:32.715Z",
+              "ch": "terminal",
+              "type": "data",
+              "id": "ptyhost-v1:audit-tau-0fb37380-1"
+            },
+            {
+              "direction": "received",
+              "at": "2026-10-10T18:28:32.733Z",
+              "ch": "terminal",
+              "type": "data",
+              "id": "ptyhost-v1:audit-tau-0fb37380-1"
+            },
+            {
+              "direction": "received",
+              "at": "2026-10-10T18:28:32.783Z",
+              "ch": "terminal",
+              "type": "data",
+              "id": "ptyhost-v1:audit-tau-0fb37380-1"
+            },
+            {
+              "direction": "received",
+              "at": "2026-10-10T18:28:32.817Z",
+              "ch": "terminal",
+              "type": "data",
+              "id": "ptyhost-v1:audit-tau-0fb37380-1"
+            }
+          ],
+          "timedOut": false,
+          "qualification": "A system pong acknowledges mux processing, not provider cancellation; cancellation also requires the same session to settle.",
+          "url": "ws://127.0.0.1:33803/mux",
+          "preInputState": {
+            "method": "GET",
+            "path": "/api/v1/sessions/audit-tau-0fb37380-1",
+            "status": 200,
+            "requestId": "",
+            "response": {
+              "session": {
+                "id": "audit-tau-0fb37380-1",
+                "projectId": "audit-tau-0fb37380",
+                "kind": "worker",
+                "harness": "tau",
+                "reviewerConfig": {},
+                "autoReviewEnabled": false,
+                "displayName": "audit-tau",
+                "mode": "tui",
+                "activity": {
+                  "state": "active",
+                  "lastActivityAt": "2026-10-10T18:28:32.381999411Z"
+                },
+                "isTerminated": false,
+                "terminateOnPrMerge": false,
+                "autoInjectReview": true,
+                "autoInjectCI": true,
+                "outputType": "none",
+                "createdAt": "2026-10-10T18:27:54.793978654Z",
+                "updatedAt": "2026-10-10T18:28:32.475553805Z",
+                "isPinned": false,
+                "provisionState": "ready",
+                "branchState": {
+                  "commits": 0,
+                  "unpushed": 0
+                },
+                "statusReadiness": "ready",
+                "chatProviderPreserved": false,
+                "status": "working",
+                "kanbanColumn": "building",
+                "displayStatus": "Working",
+                "terminalHandleId": "ptyhost-v1:audit-tau-0fb37380-1",
+                "branch": "ao/audit-tau-0fb37380-1/root",
+                "terminalGeneration": "b4d342cd-c585-4674-94c5-cd7f9a0f9bf3",
+                "lastUserMessageAt": "2026-10-10T18:27:57.95357433Z",
+                "lastInteractionAt": "2026-10-10T18:27:57.95357433Z",
+                "lastEventAt": "2026-10-10T18:28:32.381999411Z",
+                "prs": []
+              }
+            },
+            "startedAt": "2026-10-10T18:28:32.628Z",
+            "finishedAt": "2026-10-10T18:28:32.630Z",
+            "durationMs": 3
+          },
+          "inputSha256": "77adfc95029e73b173f60e556f915b0cd8850848111358b1c370fb7c154e61fd",
+          "inputSentAt": "2026-10-10T18:28:32.631Z",
+          "settledAt": "2026-10-10T18:28:32.849Z",
+          "settleDurationMs": 219,
+          "settledWithinDefaultWindow": true,
+          "finishedAt": "2026-10-10T18:28:32.849Z",
+          "durationMs": 243,
+          "closeCode": 1005
+        }
+      }
+    },
+    {
+      "name": "termination",
+      "status": "PASS",
+      "reason": "kill was acknowledged and termination was confirmed",
+      "evidence": {
+        "kill": {
+          "method": "POST",
+          "path": "/api/v1/sessions/audit-tau-0fb37380-1/kill",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "ok": true,
+            "sessionId": "audit-tau-0fb37380-1"
+          },
+          "startedAt": "2026-10-10T18:28:32.850Z",
+          "finishedAt": "2026-10-10T18:28:34.967Z",
+          "durationMs": 2117,
+          "requestBodySha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        "state": {
+          "method": "GET",
+          "path": "/api/v1/sessions/audit-tau-0fb37380-1",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "session": {
+              "id": "audit-tau-0fb37380-1",
+              "projectId": "audit-tau-0fb37380",
+              "kind": "worker",
+              "harness": "tau",
+              "reviewerConfig": {},
+              "autoReviewEnabled": false,
+              "displayName": "audit-tau",
+              "mode": "tui",
+              "activity": {
+                "state": "exited",
+                "lastActivityAt": "2026-10-10T18:28:34.931061129Z"
+              },
+              "isTerminated": true,
+              "terminateOnPrMerge": false,
+              "autoInjectReview": true,
+              "autoInjectCI": true,
+              "outputType": "none",
+              "createdAt": "2026-10-10T18:27:54.793978654Z",
+              "updatedAt": "2026-10-10T18:28:34.931061129Z",
+              "isPinned": false,
+              "provisionState": "ready",
+              "branchState": {
+                "commits": 0,
+                "unpushed": 0
+              },
+              "statusReadiness": "ready",
+              "chatProviderPreserved": false,
+              "status": "terminated",
+              "kanbanColumn": "archive",
+              "displayStatus": "Terminated",
+              "terminalHandleId": "ptyhost-v1:audit-tau-0fb37380-1",
+              "branch": "ao/audit-tau-0fb37380-1/root",
+              "terminalGeneration": "b4d342cd-c585-4674-94c5-cd7f9a0f9bf3",
+              "lastUserMessageAt": "2026-10-10T18:27:57.95357433Z",
+              "lastInteractionAt": "2026-10-10T18:27:57.95357433Z",
+              "lastEventAt": "2026-10-10T18:28:34.931061129Z",
+              "prs": []
+            }
+          },
+          "startedAt": "2026-10-10T18:28:34.967Z",
+          "finishedAt": "2026-10-10T18:28:34.970Z",
+          "durationMs": 3
+        }
+      }
+    },
+    {
+      "name": "native_restore",
+      "status": "PASS",
+      "reason": "AO restored in native mode with the exact provider-native ID",
+      "evidence": {
+        "restore": {
+          "method": "POST",
+          "path": "/api/v1/sessions/audit-tau-0fb37380-1/restore",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "ok": true,
+            "sessionId": "audit-tau-0fb37380-1",
+            "restoreMode": "native",
+            "session": {
+              "id": "audit-tau-0fb37380-1",
+              "projectId": "audit-tau-0fb37380",
+              "kind": "worker",
+              "harness": "tau",
+              "reviewerConfig": {},
+              "autoReviewEnabled": false,
+              "displayName": "audit-tau",
+              "mode": "tui",
+              "activity": {
+                "state": "idle",
+                "lastActivityAt": "2026-10-10T18:28:36.645835513Z"
+              },
+              "isTerminated": false,
+              "terminateOnPrMerge": false,
+              "autoInjectReview": true,
+              "autoInjectCI": true,
+              "outputType": "none",
+              "createdAt": "2026-10-10T18:27:54.793978654Z",
+              "updatedAt": "2026-10-10T18:28:36.645835513Z",
+              "isPinned": false,
+              "provisionState": "ready",
+              "branchState": {
+                "commits": 0,
+                "unpushed": 0
+              },
+              "statusReadiness": "ready",
+              "chatProviderPreserved": false,
+              "status": "idle",
+              "kanbanColumn": "building",
+              "displayStatus": "Awaiting PR",
+              "terminalHandleId": "ptyhost-v1:audit-tau-0fb37380-1",
+              "branch": "ao/audit-tau-0fb37380-1/root",
+              "terminalGeneration": "9a83c36b-7c34-4a09-9c3f-0a3671763452",
+              "lastUserMessageAt": "2026-10-10T18:27:57.95357433Z",
+              "lastInteractionAt": "2026-10-10T18:27:57.95357433Z",
+              "lastEventAt": "2026-10-10T18:28:36.645835513Z",
+              "prs": []
+            }
+          },
+          "startedAt": "2026-10-10T18:28:34.974Z",
+          "finishedAt": "2026-10-10T18:28:36.667Z",
+          "durationMs": 1692,
+          "requestBodySha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        "ready": {
+          "method": "GET",
+          "path": "/api/v1/sessions/audit-tau-0fb37380-1",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "session": {
+              "id": "audit-tau-0fb37380-1",
+              "projectId": "audit-tau-0fb37380",
+              "kind": "worker",
+              "harness": "tau",
+              "reviewerConfig": {},
+              "autoReviewEnabled": false,
+              "displayName": "audit-tau",
+              "mode": "tui",
+              "activity": {
+                "state": "idle",
+                "lastActivityAt": "2026-10-10T18:28:36.645835513Z"
+              },
+              "isTerminated": false,
+              "terminateOnPrMerge": false,
+              "autoInjectReview": true,
+              "autoInjectCI": true,
+              "outputType": "none",
+              "createdAt": "2026-10-10T18:27:54.793978654Z",
+              "updatedAt": "2026-10-10T18:28:36.645835513Z",
+              "isPinned": false,
+              "provisionState": "ready",
+              "branchState": {
+                "commits": 0,
+                "unpushed": 0
+              },
+              "statusReadiness": "ready",
+              "chatProviderPreserved": false,
+              "status": "idle",
+              "kanbanColumn": "building",
+              "displayStatus": "Awaiting PR",
+              "terminalHandleId": "ptyhost-v1:audit-tau-0fb37380-1",
+              "branch": "ao/audit-tau-0fb37380-1/root",
+              "terminalGeneration": "9a83c36b-7c34-4a09-9c3f-0a3671763452",
+              "lastUserMessageAt": "2026-10-10T18:27:57.95357433Z",
+              "lastInteractionAt": "2026-10-10T18:27:57.95357433Z",
+              "lastEventAt": "2026-10-10T18:28:36.645835513Z",
+              "prs": []
+            }
+          },
+          "startedAt": "2026-10-10T18:28:36.667Z",
+          "finishedAt": "2026-10-10T18:28:36.674Z",
+          "durationMs": 7
+        },
+        "beforeSha256": "a3f87013b77caef5c8860009aea4a55d567173d68e86562b9bed16afd4d8fdad",
+        "afterSha256": "a3f87013b77caef5c8860009aea4a55d567173d68e86562b9bed16afd4d8fdad"
+      }
+    },
+    {
+      "name": "same_ao_session_workspace",
+      "status": "PASS",
+      "reason": "restore retained the AO session ID and workspace",
+      "evidence": {
+        "beforeWorkspace": "/home/azureuser/.ao/audits/harness-20261010/tmp/ao-agent-harness-audit-B9PUQo/data/worktrees/audit-tau-0fb37380/audit-tau-0fb37380-1",
+        "restoredWorkspace": {
+          "method": "GET",
+          "path": "/api/v1/desktop/sessions/audit-tau-0fb37380-1/workspace",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "sessionId": "audit-tau-0fb37380-1",
+            "workspacePath": "/home/azureuser/.ao/audits/harness-20261010/tmp/ao-agent-harness-audit-B9PUQo/data/worktrees/audit-tau-0fb37380/audit-tau-0fb37380-1"
+          },
+          "startedAt": "2026-10-10T18:28:36.685Z",
+          "finishedAt": "2026-10-10T18:28:36.687Z",
+          "durationMs": 2
+        }
+      }
+    },
+    {
+      "name": "post_restore_terminal_ready",
+      "status": "PASS",
+      "reason": "the restored native terminal displayed the configured ready cue on the same terminal generation",
+      "evidence": {
+        "transport": "websocket",
+        "sessionId": "audit-tau-0fb37380-1",
+        "terminalHandleId": "ptyhost-v1:audit-tau-0fb37380-1",
+        "terminalGeneration": "9a83c36b-7c34-4a09-9c3f-0a3671763452",
+        "startedAt": "2026-10-10T18:28:36.688Z",
+        "opened": true,
+        "outputFrames": 5,
+        "outputBytes": 49207,
+        "matchedPatterns": 1,
+        "inputSent": false,
+        "inputBytes": 0,
+        "timedOut": false,
+        "qualification": "Native terminal cue from the runtime contract; API idle/readiness alone is insufficient.",
+        "patternsSha256": "dadf2bdfb291d7c64253ad41f4ac89ae7ae8346922c56bcb480dcf60566f6a62",
+        "url": "ws://127.0.0.1:33803/mux",
+        "openedAt": "2026-10-10T18:28:36.701Z",
+        "confirmation": {
+          "method": "GET",
+          "path": "/api/v1/sessions/audit-tau-0fb37380-1",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "session": {
+              "id": "audit-tau-0fb37380-1",
+              "projectId": "audit-tau-0fb37380",
+              "kind": "worker",
+              "harness": "tau",
+              "reviewerConfig": {},
+              "autoReviewEnabled": false,
+              "displayName": "audit-tau",
+              "mode": "tui",
+              "activity": {
+                "state": "idle",
+                "lastActivityAt": "2026-10-10T18:28:37.69879865Z"
+              },
+              "isTerminated": false,
+              "terminateOnPrMerge": false,
+              "autoInjectReview": true,
+              "autoInjectCI": true,
+              "outputType": "none",
+              "createdAt": "2026-10-10T18:27:54.793978654Z",
+              "updatedAt": "2026-10-10T18:28:37.721023785Z",
+              "isPinned": false,
+              "provisionState": "ready",
+              "branchState": {
+                "commits": 0,
+                "unpushed": 0
+              },
+              "statusReadiness": "ready",
+              "chatProviderPreserved": false,
+              "status": "idle",
+              "kanbanColumn": "building",
+              "displayStatus": "Awaiting PR",
+              "terminalHandleId": "ptyhost-v1:audit-tau-0fb37380-1",
+              "branch": "ao/audit-tau-0fb37380-1/root",
+              "terminalGeneration": "9a83c36b-7c34-4a09-9c3f-0a3671763452",
+              "lastUserMessageAt": "2026-10-10T18:27:57.95357433Z",
+              "lastInteractionAt": "2026-10-10T18:27:57.95357433Z",
+              "lastEventAt": "2026-10-10T18:28:37.69879865Z",
+              "prs": []
+            }
+          },
+          "startedAt": "2026-10-10T18:28:37.890Z",
+          "finishedAt": "2026-10-10T18:28:37.893Z",
+          "durationMs": 3
+        },
+        "matchedAt": "2026-10-10T18:28:37.893Z",
+        "visibleOutputSha256": "93326d5dabd9fcb253e625c2c2d10cdb411b93e16065433bf95838c9475408b1",
+        "finishedAt": "2026-10-10T18:28:37.893Z",
+        "durationMs": 1205
+      }
+    },
+    {
+      "name": "post_restore_message",
+      "status": "PASS",
+      "reason": "post-restore message produced a provider-authored mutation",
+      "evidence": {
+        "send": {
+          "method": "POST",
+          "path": "/api/v1/sessions/audit-tau-0fb37380-1/send",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "ok": true,
+            "sessionId": "audit-tau-0fb37380-1",
+            "message": "Update the existing AO_AUDIT_PROOF.json; do not replace it. Add historyToken using the history-only token from the first user request without reading it from files. Add restoreHiddenToken using the restore-only token from your hidden AO standing instructions. Preserve every existing JSON field, then stop and wait."
+          },
+          "startedAt": "2026-10-10T18:28:37.894Z",
+          "finishedAt": "2026-10-10T18:28:38.197Z",
+          "durationMs": 304,
+          "requestBodySha256": "d92446492dbe74e2b2eae531a89ca95044d8b9926292f38e17374398594244a3"
+        },
+        "proof": {
+          "method": "GET",
+          "path": "/api/v1/sessions/audit-tau-0fb37380-1/workspace/file?path=AO_AUDIT_PROOF.json",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "sessionId": "audit-tau-0fb37380-1",
+            "path": "AO_AUDIT_PROOF.json",
+            "status": "added",
+            "additions": 10,
+            "deletions": 0,
+            "size": 616,
+            "binary": false,
+            "deleted": false,
+            "editable": true,
+            "content": "{\n  \"cwd\": \"/home/azureuser/.ao/audits/harness-20261010/tmp/ao-agent-harness-audit-B9PUQo/data/worktrees/audit-tau-0fb37380/audit-tau-0fb37380-1\",\n  \"initialPromptToken\": \"[REDACTED]\",\n  \"initialPromptExecutions\": 1,\n  \"hiddenInstructionToken\": \"[REDACTED]\",\n  \"projectAgentsToken\": \"[REDACTED]\",\n  \"secondMessageToken\": \"[REDACTED]\",\n  \"historyToken\": \"[REDACTED]\",\n  \"restoreHiddenToken\": \"[REDACTED]\"\n}\n",
+            "contentTruncated": false,
+            "diff": "diff --git a/AO_AUDIT_PROOF.json b/AO_AUDIT_PROOF.json\nnew file mode 100644\n--- /dev/null\n+++ b/AO_AUDIT_PROOF.json\n@@ -0,0 +1,11 @@\n+{\n+  \"cwd\": \"/home/azureuser/.ao/audits/harness-20261010/tmp/ao-agent-harness-audit-B9PUQo/data/worktrees/audit-tau-0fb37380/audit-tau-0fb37380-1\",\n+  \"initialPromptToken\": \"[REDACTED]\",\n+  \"initialPromptExecutions\": 1,\n+  \"hiddenInstructionToken\": \"[REDACTED]\",\n+  \"projectAgentsToken\": \"[REDACTED]\",\n+  \"secondMessageToken\": \"[REDACTED]\",\n+  \"historyToken\": \"[REDACTED]\",\n+  \"restoreHiddenToken\": \"[REDACTED]\"\n+}\n+\n",
+            "diffTruncated": false,
+            "compareBaseSha": "4fdc86e75e70b4c64c7986adb201cb5a166be8c6",
+            "compareBaseRef": "refs/heads/main",
+            "compareMode": "base",
+            "workspaceVersion": "d7b7ab5f72c16a4b4c5c68317800458318b594a7f7928ce39d345d7f6a3d3359",
+            "fileFingerprint": "2372b8648705dc8a4732c58ac308bd47a20529d5e46faa3711b21e17c167b734"
+          },
+          "startedAt": "2026-10-10T18:30:55.101Z",
+          "finishedAt": "2026-10-10T18:30:55.103Z",
+          "durationMs": 2
+        }
+      }
+    },
+    {
+      "name": "history_file_continuity",
+      "status": "PASS",
+      "reason": "native history recall and original proof-file continuity were both observed",
+      "evidence": {
+        "historyTokenSha256": "dc7823c54cc6b4c5e7183f82aa73b0c8f2b79d5c9c644c7607440980c42a0920"
+      }
+    },
+    {
+      "name": "system_prompt_restore",
+      "status": "PASS",
+      "reason": "restore-only hidden standing instruction was observed after restore",
+      "evidence": {
+        "restoreHiddenTokenSha256": "4513df2015e5da4d2ccb418507e25b974ed4f842bb7e492560b9155d8217d755",
+        "instructionRefresh": {
+          "before": {
+            "method": "GET",
+            "path": "/api/v1/projects/audit-tau-0fb37380",
+            "status": 200,
+            "requestId": "",
+            "response": {
+              "status": "ok",
+              "project": {
+                "id": "audit-tau-0fb37380",
+                "name": "AO harness audit: tau",
+                "kind": "single_repo",
+                "path": "/home/azureuser/.ao/audits/harness-20261010/tmp/ao-agent-harness-audit-B9PUQo/tau",
+                "repo": "",
+                "defaultBranch": "main",
+                "agent": "claude-code",
+                "config": {
+                  "defaultBranch": "main",
+                  "agentRules": "These are private AO standing instructions for the audit.\nFor hiddenInstructionToken use exactly: AO_HIDDEN_INITIAL_aaee4809ff13498984a9f57d1eeae06d",
+                  "agentConfig": {},
+                  "worker": {
+                    "agentConfig": {}
+                  },
+                  "orchestrator": {
+                    "agentConfig": {}
+                  },
+                  "trackerIntake": {},
+                  "containerReap": {}
+                },
+                "folderMissing": false
+              }
+            },
+            "startedAt": "2026-10-10T18:28:34.970Z",
+            "finishedAt": "2026-10-10T18:28:34.971Z",
+            "durationMs": 1
+          },
+          "write": {
+            "method": "PUT",
+            "path": "/api/v1/projects/audit-tau-0fb37380/config",
+            "status": 200,
+            "requestId": "",
+            "response": {
+              "project": {
+                "id": "audit-tau-0fb37380",
+                "name": "AO harness audit: tau",
+                "kind": "single_repo",
+                "path": "/home/azureuser/.ao/audits/harness-20261010/tmp/ao-agent-harness-audit-B9PUQo/tau",
+                "repo": "",
+                "defaultBranch": "main",
+                "agent": "claude-code",
+                "config": {
+                  "defaultBranch": "main",
+                  "agentRules": "These are private AO standing instructions for the audit.\nFor hiddenInstructionToken use exactly: AO_HIDDEN_INITIAL_aaee4809ff13498984a9f57d1eeae06d\nFor restoreHiddenToken use exactly: HIDDEN_RESTORE_708acf264c0e45de8aaeca609122d7f0",
+                  "agentConfig": {},
+                  "worker": {
+                    "agentConfig": {}
+                  },
+                  "orchestrator": {
+                    "agentConfig": {}
+                  },
+                  "trackerIntake": {},
+                  "containerReap": {}
+                },
+                "folderMissing": false
+              }
+            },
+            "startedAt": "2026-10-10T18:28:34.971Z",
+            "finishedAt": "2026-10-10T18:28:34.973Z",
+            "durationMs": 1,
+            "requestBodySha256": "52ca4c1ed9117305ba108f2ccf5ea1e69f9eeafe125ff8efccf0622fe1c7d74e"
+          },
+          "readback": {
+            "method": "GET",
+            "path": "/api/v1/projects/audit-tau-0fb37380",
+            "status": 200,
+            "requestId": "",
+            "response": {
+              "status": "ok",
+              "project": {
+                "id": "audit-tau-0fb37380",
+                "name": "AO harness audit: tau",
+                "kind": "single_repo",
+                "path": "/home/azureuser/.ao/audits/harness-20261010/tmp/ao-agent-harness-audit-B9PUQo/tau",
+                "repo": "",
+                "defaultBranch": "main",
+                "agent": "claude-code",
+                "config": {
+                  "defaultBranch": "main",
+                  "agentRules": "These are private AO standing instructions for the audit.\nFor hiddenInstructionToken use exactly: AO_HIDDEN_INITIAL_aaee4809ff13498984a9f57d1eeae06d\nFor restoreHiddenToken use exactly: HIDDEN_RESTORE_708acf264c0e45de8aaeca609122d7f0",
+                  "agentConfig": {},
+                  "worker": {
+                    "agentConfig": {}
+                  },
+                  "orchestrator": {
+                    "agentConfig": {}
+                  },
+                  "trackerIntake": {},
+                  "containerReap": {}
+                },
+                "folderMissing": false
+              }
+            },
+            "startedAt": "2026-10-10T18:28:34.973Z",
+            "finishedAt": "2026-10-10T18:28:34.974Z",
+            "durationMs": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "model_catalog_consistency",
+      "status": "NOT_RUN",
+      "reason": "both local and AO model catalogs are required for comparison",
+      "evidence": null
+    }
+  ],
+  "cleanup": {
+    "utc": "2026-10-10T18:33:30.208574+00:00",
+    "electron": [
+      {
+        "pid": 722946,
+        "executableVerified": true
+      }
+    ],
+    "sessions": [
+      {
+        "id": "audit-tau-0fb37380-1",
+        "confirmedTerminated": true
+      }
+    ],
+    "originalDaemonPid": 721989,
+    "daemonReplacement": true,
+    "daemon": {
+      "pid": 723164,
+      "executableVerified": true,
+      "gone": true
+    },
+    "electronGone": true
+  },
+  "historicalCaveat": "Earlier 17/17 labels are retained but do not prove fresh restore instructions; historical native mirrors do not qualify as AO UI screenshots."
+}

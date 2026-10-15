@@ -1,0 +1,11 @@
+{
+  "at": "2026-10-12T20:36:31.826818+00:00",
+  "pid": 1075125,
+  "executable": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/prompt-audit/tau-framed/bin/ao",
+  "executableSHA256": "af46afb7510533921dda9d83b64ccc15606d0f0be077707aee3a496a84ef3fa7",
+  "source": "3e80348c14cacb833de630563df6b0ab234e86a8",
+  "uiSource": "9a850b4d0607330a88f3718d4b763d23d1aa4b2f",
+  "electronPID": 1074891,
+  "runFilePath": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/tau-prompt-running.json",
+  "AODataDir": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/tau-prompt-data"
+}

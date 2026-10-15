@@ -154,15 +154,19 @@ func TestDoctorChecksHarnessVersions(t *testing.T) {
 		"claude": "/bin/claude",
 		"codex":  "/bin/codex",
 		"muse":   "/bin/muse",
+		"tau":    "/bin/tau",
 	}
 	c := doctorContext(t, cmdPath, func(_ context.Context, name string, args ...string) ([]byte, error) {
 		switch name {
 		case "/bin/git":
 			return []byte("git version 2.43.0\n"), nil
-		case "/bin/claude", "/bin/codex", "/bin/muse":
+		case "/bin/claude", "/bin/codex", "/bin/muse", "/bin/tau":
 			if len(args) == 1 && args[0] == "--version" {
 				if name == "/bin/muse" {
 					return []byte("Muse Code 0.1.0 (0.1.0-R708.1)\n"), nil
+				}
+				if name == "/bin/tau" {
+					return []byte("tau 0.4.7\n"), nil
 				}
 				return []byte(strings.TrimPrefix(name, "/bin/") + " 1.2.3\n"), nil
 			}
@@ -179,11 +183,34 @@ func TestDoctorChecksHarnessVersions(t *testing.T) {
 	})
 
 	checks := c.runDoctor(context.Background())
-	for _, name := range []string{"claude-code", "codex", "muse"} {
+	for _, name := range []string{"claude-code", "codex", "muse", "tau"} {
 		check := findDoctorCheck(t, checks, name)
 		if check.Level != doctorPass || !strings.Contains(check.Message, "resolves to") {
 			t.Fatalf("%s check = %+v, want PASS with path/version", name, check)
 		}
+	}
+}
+
+func TestDoctorWarnsOnIncompatibleTauVersion(t *testing.T) {
+	setConfigEnv(t)
+	c := doctorContext(t, map[string]string{"git": "/bin/git", "tau": "/bin/tau"}, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "/bin/git":
+			return []byte("git version 2.43.0\n"), nil
+		case "/bin/tau":
+			if len(args) != 1 || args[0] != "--version" {
+				t.Fatalf("unexpected tau command: %s %v", name, args)
+			}
+			return []byte("tau 0.4.8\n"), nil
+		default:
+			t.Fatalf("unexpected command: %s %v", name, args)
+			return nil, nil
+		}
+	})
+
+	check := findDoctorCheck(t, c.runDoctor(context.Background()), "tau")
+	if check.Level != doctorWarn || !strings.Contains(check.Message, `reports "tau 0.4.8"`) || !strings.Contains(check.Message, `requires exact version "tau 0.4.7"`) {
+		t.Fatalf("tau check = %+v, want WARN with found and required exact versions", check)
 	}
 }
 

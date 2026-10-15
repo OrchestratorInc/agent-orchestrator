@@ -1,0 +1,718 @@
+{
+  "at": "2026-10-12T21:06:08.296968+00:00",
+  "version": "tau-ai 0.4.7",
+  "officialWheelSHA256": "4899ca3cc1c965e27c175fefad8754a68b441d9af49838f6624cc0e1adb59ce9",
+  "sourceFiles": 118,
+  "allMatch": true,
+  "files": [
+    {
+      "path": "tau_agent/__init__.py",
+      "releasedSHA256": "e1a385d1bcca5c3c4737b8b9593615a6d93e3a848bbe5ce51ab42882bc77c8c6",
+      "installedSHA256": "e1a385d1bcca5c3c4737b8b9593615a6d93e3a848bbe5ce51ab42882bc77c8c6",
+      "matches": true
+    },
+    {
+      "path": "tau_agent/events.py",
+      "releasedSHA256": "47a969d6de1213cb02440cffd1bd82ec0dea5185eb19fd2d32bd7260326ea7e2",
+      "installedSHA256": "47a969d6de1213cb02440cffd1bd82ec0dea5185eb19fd2d32bd7260326ea7e2",
+      "matches": true
+    },
+    {
+      "path": "tau_agent/harness.py",
+      "releasedSHA256": "26507644e6afe3eba9250a28f14c7549f7533ad690fdfb39509bf4a4cd3cebdd",
+      "installedSHA256": "26507644e6afe3eba9250a28f14c7549f7533ad690fdfb39509bf4a4cd3cebdd",
+      "matches": true
+    },
+    {
+      "path": "tau_agent/loop.py",
+      "releasedSHA256": "e5421c41f5e80db3b1a305a7c9709c074a0e7e6cc9a27d95d7ec5fd918f365ce",
+      "installedSHA256": "e5421c41f5e80db3b1a305a7c9709c074a0e7e6cc9a27d95d7ec5fd918f365ce",
+      "matches": true
+    },
+    {
+      "path": "tau_agent/messages.py",
+      "releasedSHA256": "98e10eef54edf975b8305819832761d3d412689f85d8c8e1a7a966f51e67e8d4",
+      "installedSHA256": "98e10eef54edf975b8305819832761d3d412689f85d8c8e1a7a966f51e67e8d4",
+      "matches": true
+    },
+    {
+      "path": "tau_agent/provider.py",
+      "releasedSHA256": "3bca8e5b5c208971958b007aabb73b79ff2799ce9b2d8b7936dd470c9545f7b8",
+      "installedSHA256": "3bca8e5b5c208971958b007aabb73b79ff2799ce9b2d8b7936dd470c9545f7b8",
+      "matches": true
+    },
+    {
+      "path": "tau_agent/provider_events.py",
+      "releasedSHA256": "64e141724a102427388f75a84880fd96857027ca8da554102ab4fc68598e5510",
+      "installedSHA256": "64e141724a102427388f75a84880fd96857027ca8da554102ab4fc68598e5510",
+      "matches": true
+    },
+    {
+      "path": "tau_agent/tool_history.py",
+      "releasedSHA256": "75228046f9a47e649f114b8ea26a121192d232b6fceb5a39974b25acdfe9e92c",
+      "installedSHA256": "75228046f9a47e649f114b8ea26a121192d232b6fceb5a39974b25acdfe9e92c",
+      "matches": true
+    },
+    {
+      "path": "tau_agent/tools.py",
+      "releasedSHA256": "b62c0731c975c1aa62e71771bd2cc9bac92e65e67a0b04e6d8fbf87c5156c47c",
+      "installedSHA256": "b62c0731c975c1aa62e71771bd2cc9bac92e65e67a0b04e6d8fbf87c5156c47c",
+      "matches": true
+    },
+    {
+      "path": "tau_agent/types.py",
+      "releasedSHA256": "e5fca3aaf9bcdf05a1fd447762c99f041a32f9e36041663c73d8810961a1348e",
+      "installedSHA256": "e5fca3aaf9bcdf05a1fd447762c99f041a32f9e36041663c73d8810961a1348e",
+      "matches": true
+    },
+    {
+      "path": "tau_agent/session/__init__.py",
+      "releasedSHA256": "f640909d3a9074efd557a84199e0d60f222d6d8e93f7856612487f36e2d035ed",
+      "installedSHA256": "f640909d3a9074efd557a84199e0d60f222d6d8e93f7856612487f36e2d035ed",
+      "matches": true
+    },
+    {
+      "path": "tau_agent/session/entries.py",
+      "releasedSHA256": "a21beea5d9d9d8154353191b96feb1112fa49cc15e76a93910bd3397a21245e4",
+      "installedSHA256": "a21beea5d9d9d8154353191b96feb1112fa49cc15e76a93910bd3397a21245e4",
+      "matches": true
+    },
+    {
+      "path": "tau_agent/session/jsonl.py",
+      "releasedSHA256": "8998a0632c185efca8197098ee2470ff71758f72b5d4e6bafd2180939fa0debd",
+      "installedSHA256": "8998a0632c185efca8197098ee2470ff71758f72b5d4e6bafd2180939fa0debd",
+      "matches": true
+    },
+    {
+      "path": "tau_agent/session/memory.py",
+      "releasedSHA256": "892c8cf76ac743472514ee76d62cd1bfc0cea08d8022fdd6d6c08c5e4c17ddde",
+      "installedSHA256": "892c8cf76ac743472514ee76d62cd1bfc0cea08d8022fdd6d6c08c5e4c17ddde",
+      "matches": true
+    },
+    {
+      "path": "tau_agent/session/storage.py",
+      "releasedSHA256": "452d1226188288777728d07996fa7d060f0e967a372687244e77b294810f8dc1",
+      "installedSHA256": "452d1226188288777728d07996fa7d060f0e967a372687244e77b294810f8dc1",
+      "matches": true
+    },
+    {
+      "path": "tau_agent/session/tree.py",
+      "releasedSHA256": "550f8d1abf63993dde7dd7f5283600cd4a5a1d678b8184b4895dfb0da30351e6",
+      "installedSHA256": "550f8d1abf63993dde7dd7f5283600cd4a5a1d678b8184b4895dfb0da30351e6",
+      "matches": true
+    },
+    {
+      "path": "tau_ai/__init__.py",
+      "releasedSHA256": "8009dacd0bda118f5445f9f94ccea838acaf01b498ea6e1fd1b2ef7975a274cb",
+      "installedSHA256": "8009dacd0bda118f5445f9f94ccea838acaf01b498ea6e1fd1b2ef7975a274cb",
+      "matches": true
+    },
+    {
+      "path": "tau_ai/_provider_events.py",
+      "releasedSHA256": "b0d3766a3f1c44035952ae59e12278a255f291833e94f660fc7a37e1f0a08b23",
+      "installedSHA256": "b0d3766a3f1c44035952ae59e12278a255f291833e94f660fc7a37e1f0a08b23",
+      "matches": true
+    },
+    {
+      "path": "tau_ai/anthropic.py",
+      "releasedSHA256": "be32135f537df95f1d5a5fb2116ea86a7036d3dfa83ed890b8edcaea64bccdad",
+      "installedSHA256": "be32135f537df95f1d5a5fb2116ea86a7036d3dfa83ed890b8edcaea64bccdad",
+      "matches": true
+    },
+    {
+      "path": "tau_ai/content.py",
+      "releasedSHA256": "bf4622c6f1dcb69bb83240d7f3a515760443678901efd3fa33f94d98aae0b7f8",
+      "installedSHA256": "bf4622c6f1dcb69bb83240d7f3a515760443678901efd3fa33f94d98aae0b7f8",
+      "matches": true
+    },
+    {
+      "path": "tau_ai/env.py",
+      "releasedSHA256": "31518974fb101389cc0e6d48905cfb05d368bae6039fd0826c2d81ac1122a1b7",
+      "installedSHA256": "31518974fb101389cc0e6d48905cfb05d368bae6039fd0826c2d81ac1122a1b7",
+      "matches": true
+    },
+    {
+      "path": "tau_ai/events.py",
+      "releasedSHA256": "b90ed3b308f636ce1935f16408820ff2f6541746f32e14ef5ea613c1a81d0dd5",
+      "installedSHA256": "b90ed3b308f636ce1935f16408820ff2f6541746f32e14ef5ea613c1a81d0dd5",
+      "matches": true
+    },
+    {
+      "path": "tau_ai/fake.py",
+      "releasedSHA256": "094661a576ccc879c5398c51e600fd8b897a974daf99d2c086470d5e6db268a0",
+      "installedSHA256": "094661a576ccc879c5398c51e600fd8b897a974daf99d2c086470d5e6db268a0",
+      "matches": true
+    },
+    {
+      "path": "tau_ai/google.py",
+      "releasedSHA256": "eb28c54b9789a40eba93084194720418dba886dc7269c27523182a650fe2ae00",
+      "installedSHA256": "eb28c54b9789a40eba93084194720418dba886dc7269c27523182a650fe2ae00",
+      "matches": true
+    },
+    {
+      "path": "tau_ai/http.py",
+      "releasedSHA256": "5766c7cb047915e0fe77409c23044b2cd50ec19f0028d5d29de9a8332b7201ff",
+      "installedSHA256": "5766c7cb047915e0fe77409c23044b2cd50ec19f0028d5d29de9a8332b7201ff",
+      "matches": true
+    },
+    {
+      "path": "tau_ai/http_errors.py",
+      "releasedSHA256": "92e4861b09120a2f572d414702e476c633805c93c96cf99b7986a722227b23c6",
+      "installedSHA256": "92e4861b09120a2f572d414702e476c633805c93c96cf99b7986a722227b23c6",
+      "matches": true
+    },
+    {
+      "path": "tau_ai/mistral.py",
+      "releasedSHA256": "c1c92989b046a4660a47c2c87d312f564c2ec8eca1a53088ee130ce4f4d08a31",
+      "installedSHA256": "c1c92989b046a4660a47c2c87d312f564c2ec8eca1a53088ee130ce4f4d08a31",
+      "matches": true
+    },
+    {
+      "path": "tau_ai/model_catalog.py",
+      "releasedSHA256": "0b76d35f48f5756cd14b99d40abef0eda13b17c0e626b85ec475ad733d6b35ea",
+      "installedSHA256": "0b76d35f48f5756cd14b99d40abef0eda13b17c0e626b85ec475ad733d6b35ea",
+      "matches": true
+    },
+    {
+      "path": "tau_ai/model_limits.py",
+      "releasedSHA256": "cf10b809b03a96b3e1be66e4c7f7e9f209890923941330cbbe2cd8f9d359b559",
+      "installedSHA256": "cf10b809b03a96b3e1be66e4c7f7e9f209890923941330cbbe2cd8f9d359b559",
+      "matches": true
+    },
+    {
+      "path": "tau_ai/openai_cache.py",
+      "releasedSHA256": "8e9c8b7f68c99dd83739535d8095f4753b8e414e339aa225bfd8dd5d00729f31",
+      "installedSHA256": "8e9c8b7f68c99dd83739535d8095f4753b8e414e339aa225bfd8dd5d00729f31",
+      "matches": true
+    },
+    {
+      "path": "tau_ai/openai_codex.py",
+      "releasedSHA256": "ca2310a2a9b76a03e199dd55f6a450ef358b1ea887e669dcb679645c1454dedf",
+      "installedSHA256": "ca2310a2a9b76a03e199dd55f6a450ef358b1ea887e669dcb679645c1454dedf",
+      "matches": true
+    },
+    {
+      "path": "tau_ai/openai_compatible.py",
+      "releasedSHA256": "d6cf9a23c76817bada493d8058e8a5699dde47da918ce4efccdd967748c8be89",
+      "installedSHA256": "d6cf9a23c76817bada493d8058e8a5699dde47da918ce4efccdd967748c8be89",
+      "matches": true
+    },
+    {
+      "path": "tau_ai/provider.py",
+      "releasedSHA256": "717485dca85879b053bbc463b1c0c44ea1abc1b4627ad4abe40cc6b19bb11087",
+      "installedSHA256": "717485dca85879b053bbc463b1c0c44ea1abc1b4627ad4abe40cc6b19bb11087",
+      "matches": true
+    },
+    {
+      "path": "tau_ai/retry.py",
+      "releasedSHA256": "26259afd39c83c3b4b53b8d7fd27dd6b22bab28bb58d59d16488bc369c49b12e",
+      "installedSHA256": "26259afd39c83c3b4b53b8d7fd27dd6b22bab28bb58d59d16488bc369c49b12e",
+      "matches": true
+    },
+    {
+      "path": "tau_ai/stream.py",
+      "releasedSHA256": "9d989dc702fd5ab9e967e9fdc805a8c25036626cf91a83dd6474de8ed3ac2813",
+      "installedSHA256": "9d989dc702fd5ab9e967e9fdc805a8c25036626cf91a83dd6474de8ed3ac2813",
+      "matches": true
+    },
+    {
+      "path": "tau_ai/tool_call_ids.py",
+      "releasedSHA256": "37f78d38875b361d613643331d03bb3e33367330412562c8540eb91bde225f3b",
+      "installedSHA256": "37f78d38875b361d613643331d03bb3e33367330412562c8540eb91bde225f3b",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/__init__.py",
+      "releasedSHA256": "b650a10fd5fac6de99d88a966e36f12648faca7cfa26099f3d6d3014829572b4",
+      "installedSHA256": "b650a10fd5fac6de99d88a966e36f12648faca7cfa26099f3d6d3014829572b4",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/branch_summary.py",
+      "releasedSHA256": "c55bf2cafdb70ae5a6bf8d04f80705c551cee3e3d75482c74532725115f08b7c",
+      "installedSHA256": "c55bf2cafdb70ae5a6bf8d04f80705c551cee3e3d75482c74532725115f08b7c",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/built_in_extensions.py",
+      "releasedSHA256": "34465036d1ba5a7753610b6fa7fa94bd35c65120b28c5b1376ce8d0231c15524",
+      "installedSHA256": "34465036d1ba5a7753610b6fa7fa94bd35c65120b28c5b1376ce8d0231c15524",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/catalog_loader.py",
+      "releasedSHA256": "34bf0db70da90079a5ae4d71e33912b49bfb38e87e78c6a3bab4cf0b37ded37a",
+      "installedSHA256": "34bf0db70da90079a5ae4d71e33912b49bfb38e87e78c6a3bab4cf0b37ded37a",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/cli.py",
+      "releasedSHA256": "92d9c297fda694c0530ebc59c247d53301fa27d62b8725aceec4834c2dace18d",
+      "installedSHA256": "92d9c297fda694c0530ebc59c247d53301fa27d62b8725aceec4834c2dace18d",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/codex_model_store.py",
+      "releasedSHA256": "d4a26d6bc92f911de0f001fdabcc04ada1006d12cbb8c7387dfbdd792e9a762c",
+      "installedSHA256": "d4a26d6bc92f911de0f001fdabcc04ada1006d12cbb8c7387dfbdd792e9a762c",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/codex_version.py",
+      "releasedSHA256": "e73cd10aad3aab0cea4496f0fadf4e2d7b4f3008bc85107b5b9c45148aa9765f",
+      "installedSHA256": "e73cd10aad3aab0cea4496f0fadf4e2d7b4f3008bc85107b5b9c45148aa9765f",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/commands.py",
+      "releasedSHA256": "b7b8352889ca94e20803f76a2029d104290d5ac3f5a0a435cf594ce5dc572209",
+      "installedSHA256": "b7b8352889ca94e20803f76a2029d104290d5ac3f5a0a435cf594ce5dc572209",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/context.py",
+      "releasedSHA256": "c3f3b2a831439d4a5e4adc3945aa8e45a919a84e34251c96b22af415ca361310",
+      "installedSHA256": "c3f3b2a831439d4a5e4adc3945aa8e45a919a84e34251c96b22af415ca361310",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/context_window.py",
+      "releasedSHA256": "9065d14bf87ed6c015ca4d8fc702d203e23567351fe8fabba6096f63ff8e8262",
+      "installedSHA256": "9065d14bf87ed6c015ca4d8fc702d203e23567351fe8fabba6096f63ff8e8262",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/credentials.py",
+      "releasedSHA256": "a9af74f5969ccabef67968a79ea998fef04b738b965edd8ea335d02278bf2815",
+      "installedSHA256": "a9af74f5969ccabef67968a79ea998fef04b738b965edd8ea335d02278bf2815",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/diagnostics.py",
+      "releasedSHA256": "666f398bed749d068b61b88c019454730d26c3bab30a5a569b0eef378ee07d51",
+      "installedSHA256": "666f398bed749d068b61b88c019454730d26c3bab30a5a569b0eef378ee07d51",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/events.py",
+      "releasedSHA256": "18a2d6485c36acea2969895894b6fbad3485beda368eba1454d61d161643c297",
+      "installedSHA256": "18a2d6485c36acea2969895894b6fbad3485beda368eba1454d61d161643c297",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/extension_installer.py",
+      "releasedSHA256": "5d431170e0ae53f6942aae04d31fe5f28459e9765ddece11bb650086e207b74e",
+      "installedSHA256": "5d431170e0ae53f6942aae04d31fe5f28459e9765ddece11bb650086e207b74e",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/image_processing.py",
+      "releasedSHA256": "281b741e96a7e7e8f05d33a2aef795980350ec77afaa19b1a30561b506414032",
+      "installedSHA256": "281b741e96a7e7e8f05d33a2aef795980350ec77afaa19b1a30561b506414032",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/local_backends.py",
+      "releasedSHA256": "d337a5222627e7f88efebcdc2b562d7457b5a544bd10726ed1110eb48c373342",
+      "installedSHA256": "d337a5222627e7f88efebcdc2b562d7457b5a544bd10726ed1110eb48c373342",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/models_dev.py",
+      "releasedSHA256": "3487908331f3063325d7ad3e732b702fcb5393a7a3c3795999d2d3bc633d76cb",
+      "installedSHA256": "3487908331f3063325d7ad3e732b702fcb5393a7a3c3795999d2d3bc633d76cb",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/models_dev_store.py",
+      "releasedSHA256": "813bba9ac1ca9ee2b92a59921a87d5a0c9af8f03497a0c7fa995d6a4266643d8",
+      "installedSHA256": "813bba9ac1ca9ee2b92a59921a87d5a0c9af8f03497a0c7fa995d6a4266643d8",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/oauth.py",
+      "releasedSHA256": "d75d1ae740486117aa2fcc48cb7ab7e986848d40a1ac2b3e2c091b5db7b7300f",
+      "installedSHA256": "d75d1ae740486117aa2fcc48cb7ab7e986848d40a1ac2b3e2c091b5db7b7300f",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/oauth_anthropic.py",
+      "releasedSHA256": "f22e1bbfbd9910956149361d2a6f4da09ac0da5dec3c334e06301b0445f50ecc",
+      "installedSHA256": "f22e1bbfbd9910956149361d2a6f4da09ac0da5dec3c334e06301b0445f50ecc",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/oauth_device.py",
+      "releasedSHA256": "1ee523867c33ce3c20369df62f4fd42b31c8079d392b87f7ea442e0f75c479fd",
+      "installedSHA256": "1ee523867c33ce3c20369df62f4fd42b31c8079d392b87f7ea442e0f75c479fd",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/oauth_github_copilot.py",
+      "releasedSHA256": "40e2e2031801df57b8d2087a4e7aff3d0c7c59c1d419c616e404a260f371e8fe",
+      "installedSHA256": "40e2e2031801df57b8d2087a4e7aff3d0c7c59c1d419c616e404a260f371e8fe",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/oauth_registry.py",
+      "releasedSHA256": "08274df3ffd1e65b439815a506ed1e0e1463994258b7362ba8f3b75b9ecf0769",
+      "installedSHA256": "08274df3ffd1e65b439815a506ed1e0e1463994258b7362ba8f3b75b9ecf0769",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/oauth_types.py",
+      "releasedSHA256": "aa44297f8a24f48ac01a8002479d725a6d3681583fb2ad474234714150064b86",
+      "installedSHA256": "aa44297f8a24f48ac01a8002479d725a6d3681583fb2ad474234714150064b86",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/paths.py",
+      "releasedSHA256": "f0550b234bab89b5ba19a61447f23f005586b5160bda37d40abf651edb32839a",
+      "installedSHA256": "f0550b234bab89b5ba19a61447f23f005586b5160bda37d40abf651edb32839a",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/project_trust.py",
+      "releasedSHA256": "3ea8c37ae6fa1672c78c9f369c5b8493655f5d73b9ef6818ec7c4605a68729e7",
+      "installedSHA256": "3ea8c37ae6fa1672c78c9f369c5b8493655f5d73b9ef6818ec7c4605a68729e7",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/prompt_templates.py",
+      "releasedSHA256": "b68d37a78abbace19461a1e039779936ee11c94731c548f678fef3ec01b98011",
+      "installedSHA256": "b68d37a78abbace19461a1e039779936ee11c94731c548f678fef3ec01b98011",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/provider_catalog.py",
+      "releasedSHA256": "5fa7859ec48931c75e4b5655a7542c195d5da797ce7fc430bbcedcbf5cfe6546",
+      "installedSHA256": "5fa7859ec48931c75e4b5655a7542c195d5da797ce7fc430bbcedcbf5cfe6546",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/provider_config.py",
+      "releasedSHA256": "55a1c81d7adc5c6e0e4e7fc918227791dda57cfb14c301bd353d07e15d70ef37",
+      "installedSHA256": "55a1c81d7adc5c6e0e4e7fc918227791dda57cfb14c301bd353d07e15d70ef37",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/provider_runtime.py",
+      "releasedSHA256": "d2128c4a17262c33caa8fc7351043ebd103b73d5af09e1f1fbac5fd8018d1c42",
+      "installedSHA256": "d2128c4a17262c33caa8fc7351043ebd103b73d5af09e1f1fbac5fd8018d1c42",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/reload.py",
+      "releasedSHA256": "fb4f61b29788aa0f485678b14baf9fb4b8426dd69905df663c1351d617c3b774",
+      "installedSHA256": "fb4f61b29788aa0f485678b14baf9fb4b8426dd69905df663c1351d617c3b774",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/resources.py",
+      "releasedSHA256": "8abeebe155c14571771807ccf6f4136c71dda79578b2cff131cdc9c8ec07a111",
+      "installedSHA256": "8abeebe155c14571771807ccf6f4136c71dda79578b2cff131cdc9c8ec07a111",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/rpc.py",
+      "releasedSHA256": "63651af69cb3f20001caed5511c2cce8145d4bd4ab5db369f0b5f7eaf9ed4b8a",
+      "installedSHA256": "63651af69cb3f20001caed5511c2cce8145d4bd4ab5db369f0b5f7eaf9ed4b8a",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/self_docs.py",
+      "releasedSHA256": "66caf1032b5e3f9c630d2808077a9f04bef578a6c482f596d2884f8d43f8f31d",
+      "installedSHA256": "66caf1032b5e3f9c630d2808077a9f04bef578a6c482f596d2884f8d43f8f31d",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/session.py",
+      "releasedSHA256": "f8cef45cd5acb53ac3d7f2ac0c963fa29f3b683dafe748e0f94970fd080672e2",
+      "installedSHA256": "f8cef45cd5acb53ac3d7f2ac0c963fa29f3b683dafe748e0f94970fd080672e2",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/session_export.py",
+      "releasedSHA256": "b926bcdbd6b5b71f41c127959aeef2c643ef5c6770f322074f28829f036c8adb",
+      "installedSHA256": "b926bcdbd6b5b71f41c127959aeef2c643ef5c6770f322074f28829f036c8adb",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/session_manager.py",
+      "releasedSHA256": "cc2675f2b8c5737add5328a7379a565748c77c7494b4c4d9b87a87da525cd267",
+      "installedSHA256": "cc2675f2b8c5737add5328a7379a565748c77c7494b4c4d9b87a87da525cd267",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/session_preparation.py",
+      "releasedSHA256": "4b85882050964da2c440aebb594e288667258a128d0d6a2098e0dc0062655c7f",
+      "installedSHA256": "4b85882050964da2c440aebb594e288667258a128d0d6a2098e0dc0062655c7f",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/session_stats.py",
+      "releasedSHA256": "a88a0bef0dba307fb74f29a8684f09ab30c5216426b536dfe7edd42f87446e86",
+      "installedSHA256": "a88a0bef0dba307fb74f29a8684f09ab30c5216426b536dfe7edd42f87446e86",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/session_usage.py",
+      "releasedSHA256": "479b4cee9b3a445b6c3eb9d3ca0c01707e57feac90293134b1aa6d0fae66093c",
+      "installedSHA256": "479b4cee9b3a445b6c3eb9d3ca0c01707e57feac90293134b1aa6d0fae66093c",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/shell_config.py",
+      "releasedSHA256": "862311ac4aedf61b8a0afcd8f87cbab2aa863a31e025db258887c0c63a7cef68",
+      "installedSHA256": "862311ac4aedf61b8a0afcd8f87cbab2aa863a31e025db258887c0c63a7cef68",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/skills.py",
+      "releasedSHA256": "fce3870ddcfdca2f5df3f876edc021879bf26608b715f0e64ab030b18f0cbd87",
+      "installedSHA256": "fce3870ddcfdca2f5df3f876edc021879bf26608b715f0e64ab030b18f0cbd87",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/system_prompt.py",
+      "releasedSHA256": "8a34c8af4a792e1bcf55c33c34e71c5ee67c26c6eacd6ed502895961d74cb187",
+      "installedSHA256": "8a34c8af4a792e1bcf55c33c34e71c5ee67c26c6eacd6ed502895961d74cb187",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/thinking.py",
+      "releasedSHA256": "26c940f776aa93021f44803b6cd186340b9589a4d519e59d246958707011e9b9",
+      "installedSHA256": "26c940f776aa93021f44803b6cd186340b9589a4d519e59d246958707011e9b9",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/tools.py",
+      "releasedSHA256": "35625e62fb16f4c05966ff5cda4b844ff621b01033f4774346edfda36b684e6f",
+      "installedSHA256": "35625e62fb16f4c05966ff5cda4b844ff621b01033f4774346edfda36b684e6f",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/update_check.py",
+      "releasedSHA256": "8275509814e6cc15478c9f925667fd3b19a8d051d57b964e39975b3a7af448ae",
+      "installedSHA256": "8275509814e6cc15478c9f925667fd3b19a8d051d57b964e39975b3a7af448ae",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/updater.py",
+      "releasedSHA256": "90b24935b9336292cea216bde966a5a494bdd86eaa27dbbde5ef7a2c1d61d150",
+      "installedSHA256": "90b24935b9336292cea216bde966a5a494bdd86eaa27dbbde5ef7a2c1d61d150",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/version.py",
+      "releasedSHA256": "2c6dca447a385e41ebbca8b36152a097229c0cd785e0039f8bd8ad350b766b18",
+      "installedSHA256": "2c6dca447a385e41ebbca8b36152a097229c0cd785e0039f8bd8ad350b766b18",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/data/examples/extensions/ask_user_question.py",
+      "releasedSHA256": "2830d1c8e5355767cd1330cfcac41a125c2d52389e5ae435a5b1664456b751cb",
+      "installedSHA256": "2830d1c8e5355767cd1330cfcac41a125c2d52389e5ae435a5b1664456b751cb",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/data/examples/extensions/hello_tool.py",
+      "releasedSHA256": "0095189e88a7bc2b0f5ca2155f29fe6fea346a266ee19de566405a08c0292210",
+      "installedSHA256": "0095189e88a7bc2b0f5ca2155f29fe6fea346a266ee19de566405a08c0292210",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/data/examples/extensions/prompt_section.py",
+      "releasedSHA256": "f6a6ebbcdea9b130c3572b045c9f4484d3965329b80326bb2ff003b0f87b4f16",
+      "installedSHA256": "f6a6ebbcdea9b130c3572b045c9f4484d3965329b80326bb2ff003b0f87b4f16",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/data/examples/extensions/sidebar_status.py",
+      "releasedSHA256": "20b2c10294a967df061ad60be8759c206819a7f3cb3f33575cd818323e8d53d7",
+      "installedSHA256": "20b2c10294a967df061ad60be8759c206819a7f3cb3f33575cd818323e8d53d7",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/extensions/__init__.py",
+      "releasedSHA256": "7eaecc7c81ea2c15cd7a1e3fc411deb1da47b2ce9bc5e5379d083e60a3b5cd04",
+      "installedSHA256": "7eaecc7c81ea2c15cd7a1e3fc411deb1da47b2ce9bc5e5379d083e60a3b5cd04",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/extensions/api.py",
+      "releasedSHA256": "74a52fc0be28755204976257b6500d9263f4e280e476dddcd745f0bf7f17ffa6",
+      "installedSHA256": "74a52fc0be28755204976257b6500d9263f4e280e476dddcd745f0bf7f17ffa6",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/extensions/loader.py",
+      "releasedSHA256": "f2327ade535dbfb7a164b82e51de87f0a98952d81b53e2d511fa71b0b48911c8",
+      "installedSHA256": "f2327ade535dbfb7a164b82e51de87f0a98952d81b53e2d511fa71b0b48911c8",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/extensions/provider_registry.py",
+      "releasedSHA256": "e3b8927871d80f4ef950384691c33eeff0afebe28a97c9bae016ccd05b47df71",
+      "installedSHA256": "e3b8927871d80f4ef950384691c33eeff0afebe28a97c9bae016ccd05b47df71",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/extensions/providers.py",
+      "releasedSHA256": "d99e1441abbd20eeff0de3dd09cda19240c96a931ae263410c548cce4d4a3827",
+      "installedSHA256": "d99e1441abbd20eeff0de3dd09cda19240c96a931ae263410c548cce4d4a3827",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/extensions/runtime.py",
+      "releasedSHA256": "a43548b9ab4b4ceb7babd8c3fdf2eb152ccc987416e140903307e30d4c8f1fe5",
+      "installedSHA256": "a43548b9ab4b4ceb7babd8c3fdf2eb152ccc987416e140903307e30d4c8f1fe5",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/extensions/builtins/__init__.py",
+      "releasedSHA256": "f11c1a42c8c4e8852bf2a794c5a9a6fe8629fb1795f9375da78fcd727e014819",
+      "installedSHA256": "f11c1a42c8c4e8852bf2a794c5a9a6fe8629fb1795f9375da78fcd727e014819",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/extensions/builtins/llama_cpp/__init__.py",
+      "releasedSHA256": "a834253f1a6a37e913e7463619a842f509a3bbd754565edd238847162e4ee31b",
+      "installedSHA256": "a834253f1a6a37e913e7463619a842f509a3bbd754565edd238847162e4ee31b",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/extensions/builtins/llama_cpp/huggingface.py",
+      "releasedSHA256": "b8594e91b4fb8ba1b92f73ddceb6a384be0a39ac7847f1211235ebaf2b660016",
+      "installedSHA256": "b8594e91b4fb8ba1b92f73ddceb6a384be0a39ac7847f1211235ebaf2b660016",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/extensions/builtins/llama_cpp/router.py",
+      "releasedSHA256": "f1ec59ce08ca61d15be4269800d6d28b8502702e17c824f9f259e0880f663276",
+      "installedSHA256": "f1ec59ce08ca61d15be4269800d6d28b8502702e17c824f9f259e0880f663276",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/extensions/builtins/llama_cpp/service.py",
+      "releasedSHA256": "0764c4f8f56cff40655280681d987a0e22d736cbafe0b79ab5d5649c842b0d11",
+      "installedSHA256": "0764c4f8f56cff40655280681d987a0e22d736cbafe0b79ab5d5649c842b0d11",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/extensions/builtins/llama_cpp/state.py",
+      "releasedSHA256": "deb8de8ab185c57402db7475dd077f4ba14e2a775abd6b7b3658607d2665ac55",
+      "installedSHA256": "deb8de8ab185c57402db7475dd077f4ba14e2a775abd6b7b3658607d2665ac55",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/rendering/__init__.py",
+      "releasedSHA256": "faf4034dc0e4f4309ece74d73bc2178043cba296749db0fc3f06df413fd5db1e",
+      "installedSHA256": "faf4034dc0e4f4309ece74d73bc2178043cba296749db0fc3f06df413fd5db1e",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/rendering/base.py",
+      "releasedSHA256": "d107d846faff5e3a5da3ba6f135f0ab22ce54a2952e02d1418ff34c46da86f60",
+      "installedSHA256": "d107d846faff5e3a5da3ba6f135f0ab22ce54a2952e02d1418ff34c46da86f60",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/rendering/json.py",
+      "releasedSHA256": "5a06c69204c1746969fa06de2ca7294688187e00e271083fad3355abbaea2c64",
+      "installedSHA256": "5a06c69204c1746969fa06de2ca7294688187e00e271083fad3355abbaea2c64",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/rendering/plain.py",
+      "releasedSHA256": "6578f8a8577662daf5f2aa6dd0337d91de1f844391d6e33e0a55dc939cd34ae5",
+      "installedSHA256": "6578f8a8577662daf5f2aa6dd0337d91de1f844391d6e33e0a55dc939cd34ae5",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/rendering/transcript.py",
+      "releasedSHA256": "7e5f7af400e1ab31e06d3b4736b38097c65f0970cdc70778355061b2263e1f14",
+      "installedSHA256": "7e5f7af400e1ab31e06d3b4736b38097c65f0970cdc70778355061b2263e1f14",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/tui/__init__.py",
+      "releasedSHA256": "b8595b2a77b1ddfb21ec32a1a45acc59c660014d163a4f4b4dd1a3341addd6bf",
+      "installedSHA256": "b8595b2a77b1ddfb21ec32a1a45acc59c660014d163a4f4b4dd1a3341addd6bf",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/tui/adapter.py",
+      "releasedSHA256": "ddbb1d11e3165ffba2a541839b35a5d8f6cc6fa1d4572e8883b5d6180e2d9f08",
+      "installedSHA256": "ddbb1d11e3165ffba2a541839b35a5d8f6cc6fa1d4572e8883b5d6180e2d9f08",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/tui/app.py",
+      "releasedSHA256": "fb48fbb33c03e31b661ab814cd3f630794341c88fc7668fbbd9e3971b2f26837",
+      "installedSHA256": "fb48fbb33c03e31b661ab814cd3f630794341c88fc7668fbbd9e3971b2f26837",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/tui/autocomplete.py",
+      "releasedSHA256": "259a9c9e39f21406a5fdd19414ce688dc272cdcceaf0eab5da1ebf10c70b8bc7",
+      "installedSHA256": "259a9c9e39f21406a5fdd19414ce688dc272cdcceaf0eab5da1ebf10c70b8bc7",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/tui/config.py",
+      "releasedSHA256": "18b781c1a8d8342d4d44b0096372286876b1002e4f73f2d1cbe3d500c8076310",
+      "installedSHA256": "18b781c1a8d8342d4d44b0096372286876b1002e4f73f2d1cbe3d500c8076310",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/tui/file_drop.py",
+      "releasedSHA256": "87efe04a008200a1a62bd08f07e4f5f758af22d19e70333bf53f9fd9249a2a3e",
+      "installedSHA256": "87efe04a008200a1a62bd08f07e4f5f758af22d19e70333bf53f9fd9249a2a3e",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/tui/local_backends.py",
+      "releasedSHA256": "36c8867a79bb577fd7c92719423d9285e37601d0320ed143e754152c32a0fef3",
+      "installedSHA256": "36c8867a79bb577fd7c92719423d9285e37601d0320ed143e754152c32a0fef3",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/tui/project_trust.py",
+      "releasedSHA256": "b8c8beec3f358d5a9f2ecac9b3035023e9d3869a942235d6418e590a44627f91",
+      "installedSHA256": "b8c8beec3f358d5a9f2ecac9b3035023e9d3869a942235d6418e590a44627f91",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/tui/state.py",
+      "releasedSHA256": "5a2053258a692e3209ecbf41a705934da2848dc571867273e536cc9b6cf30e2b",
+      "installedSHA256": "5a2053258a692e3209ecbf41a705934da2848dc571867273e536cc9b6cf30e2b",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/tui/terminal_notification.py",
+      "releasedSHA256": "578448f8c602ad119dfdff1d01f3119e934b0caeba7e2f1024168110a006c6ac",
+      "installedSHA256": "578448f8c602ad119dfdff1d01f3119e934b0caeba7e2f1024168110a006c6ac",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/tui/terminal_title.py",
+      "releasedSHA256": "a05e6ff37875b9d08b2cab414b21a2b4405ccb87cb8ff34da3a9fe2dc94bcdaa",
+      "installedSHA256": "a05e6ff37875b9d08b2cab414b21a2b4405ccb87cb8ff34da3a9fe2dc94bcdaa",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/tui/widgets.py",
+      "releasedSHA256": "b6ba1aa9d2be92a9156ef2b95334cfbda3c653f3a63cf35dc1a8f3147e85b1ee",
+      "installedSHA256": "b6ba1aa9d2be92a9156ef2b95334cfbda3c653f3a63cf35dc1a8f3147e85b1ee",
+      "matches": true
+    },
+    {
+      "path": "tau_coding/tui/themes/__init__.py",
+      "releasedSHA256": "62d667a769f4452058c71f39dfc0b38788413f1407cd83f937d45d915431344e",
+      "installedSHA256": "62d667a769f4452058c71f39dfc0b38788413f1407cd83f937d45d915431344e",
+      "matches": true
+    }
+  ],
+  "scope": "Read-only runtime artifact fingerprint; not a routine suite, no native source edits. Supported owned profile extensions are separate."
+}

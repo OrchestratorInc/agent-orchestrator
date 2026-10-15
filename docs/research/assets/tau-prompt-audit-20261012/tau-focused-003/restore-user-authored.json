@@ -1,0 +1,19 @@
+{
+  "at": "2026-10-12T20:25:06.317420+00:00",
+  "ordinaryTask": "Please create continuation-3.json containing finished true, then finish and wait.",
+  "userAuthored": true,
+  "status": 200,
+  "response": {
+    "ok": true,
+    "sessionId": "prompt-tau-cdea343f-1",
+    "message": "Please create continuation-3.json containing finished true, then finish and wait."
+  },
+  "priorCoordinationReceiptsPreserved": true,
+  "consumption": "FAIL",
+  "observedAt": "2026-10-12T20:25:40.363279+00:00",
+  "checks": {
+    "ordinaryFileAction": true,
+    "newPrivateAction": false,
+    "oldPrivateActionStillPresent": true
+  }
+}

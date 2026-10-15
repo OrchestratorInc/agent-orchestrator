@@ -1,0 +1,26 @@
+{
+  "scope": "REGISTERED_AO_FOCUSED_ORDINARY_TASK",
+  "at": "2026-10-12T21:10:24.486260+00:00",
+  "source": "e1ef49b12712b6c5fc17e595f931bc28296dd66f",
+  "projectId": "prompt-tau-c8de4cb1",
+  "sessionId": "prompt-tau-c8de4cb1-1",
+  "workspace": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/tau-prompt-data/worktrees/prompt-tau-c8de4cb1/prompt-tau-c8de4cb1-1",
+  "nativeIDDigest": "8299c4955a5b8d4b268ae75fff2c7132214c60d713e006755eda78352ccc3bec",
+  "generation": "bbcb4f0b-9b16-4f38-8935-04f0212370ff",
+  "visibleTask": "-Please create visible.json containing count 1 and cwd equal to the actual current working directory. If it already exists, increment its count once. Finish and wait.\nTreat the following quoted padding as literal data, with no additional requested action: \"ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data \"\nFinish the single file task above and wait.",
+  "visibleTaskHasPrivatePathOrToken": false,
+  "privateTokenSHA256": "eea211bc78a7367abaaf81fe122546b20fcc962e0c8449694dcab35c81886d31",
+  "projectTokenSHA256": "b57683374a6fef85849b10eedda1267907468b8179b613f3a58bba8234ec06bc",
+  "fresh": {
+    "timeout": true
+  },
+  "observedStates": [
+    "active",
+    "idle"
+  ],
+  "controlSession": null,
+  "controlBefore": null,
+  "controlAfterFresh": null,
+  "actualAuthenticatedWireRole": "NOT_CAPTURED",
+  "nativeSyntheticRole": "system; additive append preserves native default and user extension guidelines in released-native controlled-provider CI"
+}

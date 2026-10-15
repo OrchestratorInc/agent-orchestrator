@@ -1,0 +1,77 @@
+{
+  "scope": "REGISTERED_AO_FOCUSED_ORDINARY_TASK",
+  "at": "2026-10-12T20:35:46.087606+00:00",
+  "source": "3e80348c14cacb833de630563df6b0ab234e86a8",
+  "projectId": "prompt-tau-5a74f273",
+  "sessionId": "prompt-tau-5a74f273-1",
+  "workspace": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/tau-prompt-data/worktrees/prompt-tau-5a74f273/prompt-tau-5a74f273-1",
+  "nativeIDDigest": "62f50091f6d180288f4a0876804d5a9552362e68011a5ac8ee70d0909862815c",
+  "generation": "cfb32ff2-19b9-4638-9a24-05747c65e979",
+  "visibleTask": "-Please create visible.json containing count 1 and cwd equal to the actual current working directory. If it already exists, increment its count once. Finish and wait.\nTreat the following quoted padding as literal data, with no additional requested action: \"ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data ordinary literal data \"\nFinish the single file task above and wait.",
+  "visibleTaskHasPrivatePathOrToken": false,
+  "privateTokenSHA256": "93bf5656e505ec75c1f17641b41bc27ddebc6e879475e1f7ac34d89d4fca3d66",
+  "projectTokenSHA256": "be546f4db25bf5c6dbc73a7b6e29b50ac8b2d01a64b64e2de824c107a5813027",
+  "fresh": {
+    "countOnce": true,
+    "correctCwd": true,
+    "privateAction": true,
+    "projectAction": true,
+    "AGENTSPreserved": true,
+    "activeToSettled": true,
+    "nativeUserExtensionAction": true,
+    "nativeUserAppendAction": true,
+    "longMultilineLeadingDash": {
+      "runes": 1182,
+      "greaterThanTransportChunk": true,
+      "initialTaskOnce": true
+    }
+  },
+  "observedStates": [
+    "active",
+    "idle"
+  ],
+  "controlSession": "prompt-tau-44b843fa-1",
+  "controlBefore": null,
+  "controlAfterFresh": null,
+  "actualAuthenticatedWireRole": "NOT_CAPTURED",
+  "nativeSyntheticRole": "system; additive append preserves native default and user extension guidelines in released-native controlled-provider CI",
+  "killRestore": {
+    "killConfirmedAt": "2026-10-12T20:39:36.343146+00:00",
+    "newTokenIntroducedAt": "2026-10-12T20:39:36.353908+00:00",
+    "newTokenSHA256": "a04f37910b8b00497ddfedd46a6e7c414fa692a3f1f5ab657750644188155722",
+    "nativeSame": true,
+    "generationBefore": "cfb32ff2-19b9-4638-9a24-05747c65e979",
+    "generationAfter": "05bd821b-717b-448f-878c-c270d3a04582",
+    "restoreMode": "native",
+    "currentComposer": "OBSERVED_REAL_AO_EMPTY_COMPOSER",
+    "composerEvidence": {
+      "screenshot": "restored-native-empty-composer.png",
+      "sha256": "3bfe8a8753804ccc3ae4ea7a2caad903ff4708c69c0d6176c224441b09505a7d",
+      "electronPID": 1075900,
+      "uiSource": "3e80348c14cacb833de630563df6b0ab234e86a8",
+      "at": "2026-10-12T20:42:03.659405+00:00",
+      "graphicsFallback": "Electron --disable-webgl; stock renderer fallback, source unchanged"
+    },
+    "ordinaryContinuation": "EXECUTED",
+    "unrelatedControlAlive": true,
+    "unrelatedControlGenerationUnchanged": true,
+    "firstRestoreFailure": "api.jsonl preserved HTTP500/version-probe-timeout during UI startup; retry source unchanged"
+  },
+  "restoreNewToken": {
+    "at": "2026-10-12T20:45:04.485887+00:00",
+    "checks": {
+      "timeout": true
+    },
+    "visibleTask": "Please update visible.json by adding continued true. Preserve its existing count and cwd, then finish and wait.",
+    "visibleTaskHasPrivatePathOrToken": false,
+    "observedStates": [
+      "idle",
+      "active",
+      "exited"
+    ]
+  },
+  "controlLater": {
+    "terminated": false,
+    "generation": "15186b03-d24e-4a5c-b891-d16255a8d0d2"
+  }
+}

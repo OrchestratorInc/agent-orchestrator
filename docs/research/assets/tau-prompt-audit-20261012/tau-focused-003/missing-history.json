@@ -1,0 +1,24 @@
+{
+  "at": "2026-10-12T20:32:13.915821+00:00",
+  "source": "96abd39e95a22d3a0f30878561b44326f388e758",
+  "killReply": {
+    "ok": true,
+    "sessionId": "prompt-tau-cdea343f-1"
+  },
+  "killConfirmedBeforeWithholding": true,
+  "nativeHistorySHA256": "70dffde851f6f77ae601d160bbccdd261ee7d3e4d2d599aa35936bf3c90b24f4",
+  "restoreHTTP": 400,
+  "restoreReply": {
+    "error": "bad_request",
+    "code": "AGENT_BINARY_NOT_FOUND",
+    "message": "restore prompt-tau-cdea343f-1: restore command: tau: agent: binary not found on PATH",
+    "requestId": "vps-linux/NMqvEzgtZg-002348",
+    "reporting_owner": "http"
+  },
+  "staysTerminated": true,
+  "status": "NOT_PROVEN_BINARY_LOOKUP_PRECEDED_HISTORY_CHECK",
+  "nativeIdentitySHA256": "d606dd1ba7e4656976cc7135b4f63939c983f52898766658aaea1ab9f853727e",
+  "ownedNativeHistoryRestoredByteIdentically": true,
+  "originalComputedAssessment": "PASS based only HTTP failure; inadequate",
+  "qualification": "Electron replacement daemon after owned UI restart lacked audit PATH/native profile environment. Failure envelope does not prove missing history rejection."
+}

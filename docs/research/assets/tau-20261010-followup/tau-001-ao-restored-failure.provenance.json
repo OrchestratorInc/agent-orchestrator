@@ -1,0 +1,19 @@
+{
+  "harness": "tau",
+  "interface": "TUI",
+  "provider": "Z.ai custom provider zai-audit",
+  "model": "glm-5.3-flash",
+  "nativeVersion": "0.4.7",
+  "aoSessionId": "audit-tau-4f1b6208-1",
+  "nativeIdSha256": "aac1e75b36b34a0f4b0fa47fd9aee3cba5357353628d2d57f9755b6f969037d9",
+  "sourceSha": "189ca905dee3264ba5c682590ae04bcd8da88adf",
+  "binarySha256": "4c82435bec3bac6f08b1073d416c683b4035e20721b3d1b6d345a2a09216d4ef",
+  "uiSourceSha": "189ca905dee3264ba5c682590ae04bcd8da88adf",
+  "capturedAt": "2026-10-10T18:26:18.392600Z",
+  "tool": "scrot via ao-ui-x11.py on owned Xvfb real Electron",
+  "pngSha256": "6ca864dc3d6fadb1e321f37245bc9d774f103c791826a4b1e8a4b5d4b05bfa56",
+  "surface": "Actual AO Electron, window.ao=true, selected exact project/session route",
+  "observedState": "Retained original failed audit: restored output and empty composer. Provider-authored proof malformed; visible success statements are not passing assertions. No secrets visible on inspection.",
+  "daemonCaptureNote": "Finalized runner stopped to release compute lock. Electron supervisor reopened same isolated data using exact audited executable; retained native session recovered. Original daemon PID719419; capture daemon721219, same executable hash.",
+  "originalFailureScreenshots": "second_message failure at gate time unavailable: no GUI then; later retained-session capture does not replace original missing screenshot."
+}

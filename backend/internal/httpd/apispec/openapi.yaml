@@ -13725,6 +13725,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - tau
           - fake
           type: string
         approvalMode:
@@ -14404,6 +14405,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - tau
           - cloudflared
           type: string
         updatedAt:
@@ -17533,6 +17535,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - tau
           type: string
         issueId:
           type: string

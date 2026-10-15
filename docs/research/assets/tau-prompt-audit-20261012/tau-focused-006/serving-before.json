@@ -1,0 +1,22 @@
+{
+  "at": "2026-10-12T21:15:45.097448+00:00",
+  "servingPID": 1081040,
+  "executable": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/prompt-audit/tau-history/bin/ao",
+  "executableSHA256": "e17dfc12723abae4343a65a86e9d6f765603dcaa39fe060204cbd5092a2d1083",
+  "backendSource": "e1ef49b12712b6c5fc17e595f931bc28296dd66f",
+  "UIcommit": "3e80348c14cacb833de630563df6b0ab234e86a8",
+  "electronPID": 1080817,
+  "runFilePath": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/tau-prompt-running.json",
+  "sessionId": "prompt-tau-ae035355-1",
+  "nativeIDDigest": "4e2a97a97b1410f8e7beba3d973b60db1c62b3ddc3ae6832dd28c9931dd33d48",
+  "generation": "dfc0b248-f675-4aa0-9763-8b04db7f1a22",
+  "model": "zai-audit/glm-4.7",
+  "nativeVersion": "tau-ai 0.4.7",
+  "nativeSourceFingerprint": "tau-native-provenance-complete.json, all118 released Python files match",
+  "screenshot": {
+    "path": "fresh-private-project-user-controls.png",
+    "utc": "2026-10-12T21:15:08.219507+00:00",
+    "SHA256": "8334a6c7e42c07b46c4e074540167aa34f949546b62c7a15db9d0f06fd5daae3"
+  },
+  "graphics": "Stock Electron --disable-webgl fallback with real X11 window resize to refresh the live surface; no DOM/pixel substitution"
+}

@@ -1,0 +1,25 @@
+{
+  "at": "2026-10-12T21:23:23.264243+00:00",
+  "source": "e1ef49b12712b6c5fc17e595f931bc28296dd66f",
+  "model": "zai-audit/glm-4.7",
+  "ordinaryTask": "Please create next.json containing count 1 and cwd equal to the actual current working directory, then finish and wait.",
+  "userAuthored": true,
+  "privatePathOrTokenInTask": false,
+  "status": "FAIL",
+  "checks": {
+    "visibleNewFile": true,
+    "correctCwd": true,
+    "newPrivateAction": false,
+    "initialCountUnchanged": true,
+    "AGENTSPreserved": true,
+    "projectActionPreserved": true,
+    "sameGeneration": true,
+    "activeToSettled": true,
+    "sameNativeIdentity": true
+  },
+  "nativeIDDigest": "4e2a97a97b1410f8e7beba3d973b60db1c62b3ddc3ae6832dd28c9931dd33d48",
+  "generation": "643344c9-bc53-4e13-8368-ecac603ab955",
+  "newTokenIntroducedAfterKill": "2026-10-12T21:16:02.629323+00:00",
+  "newTokenSHA256": "e2ceaf26dd740baf7e37b9fedd1f2c866b452ccadbb3e64851e1ae001d656a48",
+  "priorFailure": "restore-consumption-assessment.json retained; first update continuation did not consume NEW token. This is a separate new-file control in the same restored native history."
+}

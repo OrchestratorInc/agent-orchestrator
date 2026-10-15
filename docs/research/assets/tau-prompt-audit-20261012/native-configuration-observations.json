@@ -1,0 +1,159 @@
+{
+  "scope": "Public read-only native SDK configuration; not consumption or authenticated wire capture",
+  "events": [
+    {
+      "event": "agent_start",
+      "AOsessionId": "prompt-tau-5a74f273-1",
+      "nativeIDDigest": "62f50091f6d180288f4a0876804d5a9552362e68011a5ac8ee70d0909862815c",
+      "managedAppendPresent": true,
+      "managedAppendSHA256": "f19e13019a70601c823b47fe19d6f52275d5164a257e3852d4e41992a4c3231d",
+      "nativeDefaultPresent": true,
+      "userGuidelinePresent": true,
+      "userAppendPresent": true,
+      "qualification": "Official read-only public SDK configuration view; neither consumption nor provider wire capture. No full prompt retained."
+    },
+    {
+      "event": "agent_start",
+      "AOsessionId": "prompt-tau-44b843fa-1",
+      "nativeIDDigest": "64909b7979d28cab3611e5a29ff6da9b5518417d237cec7aabf8d4bead322bc3",
+      "managedAppendPresent": true,
+      "managedAppendSHA256": "7d763d391f634739d4a348063d136dd1e5a0099d06f96ad898b5be2e66d5e257",
+      "nativeDefaultPresent": true,
+      "userGuidelinePresent": true,
+      "userAppendPresent": true,
+      "qualification": "Official read-only public SDK configuration view; neither consumption nor provider wire capture. No full prompt retained."
+    },
+    {
+      "event": "agent_start",
+      "AOsessionId": "prompt-tau-5a74f273-1",
+      "nativeIDDigest": "62f50091f6d180288f4a0876804d5a9552362e68011a5ac8ee70d0909862815c",
+      "managedAppendPresent": true,
+      "managedAppendSHA256": "f54456713a73fb5196f344642f24088a2f30392817914c6b9072bc92a93b278c",
+      "nativeDefaultPresent": true,
+      "userGuidelinePresent": true,
+      "userAppendPresent": true,
+      "qualification": "Official read-only public SDK configuration view; neither consumption nor provider wire capture. No full prompt retained."
+    },
+    {
+      "event": "agent_start",
+      "AOsessionId": "prompt-tau-5a74f273-1",
+      "nativeIDDigest": "62f50091f6d180288f4a0876804d5a9552362e68011a5ac8ee70d0909862815c",
+      "managedAppendPresent": true,
+      "managedAppendSHA256": "f54456713a73fb5196f344642f24088a2f30392817914c6b9072bc92a93b278c",
+      "nativeDefaultPresent": true,
+      "userGuidelinePresent": true,
+      "userAppendPresent": true,
+      "qualification": "Official read-only public SDK configuration view; neither consumption nor provider wire capture. No full prompt retained."
+    },
+    {
+      "event": "agent_start",
+      "AOsessionId": "prompt-tau-5a74f273-1",
+      "nativeIDDigest": "62f50091f6d180288f4a0876804d5a9552362e68011a5ac8ee70d0909862815c",
+      "managedAppendPresent": true,
+      "managedAppendSHA256": "f54456713a73fb5196f344642f24088a2f30392817914c6b9072bc92a93b278c",
+      "nativeDefaultPresent": true,
+      "userGuidelinePresent": true,
+      "userAppendPresent": true,
+      "qualification": "Official read-only public SDK configuration view; neither consumption nor provider wire capture. No full prompt retained."
+    },
+    {
+      "event": "agent_start",
+      "AOsessionId": "prompt-tau-44b843fa-1",
+      "nativeIDDigest": "64909b7979d28cab3611e5a29ff6da9b5518417d237cec7aabf8d4bead322bc3",
+      "managedAppendPresent": true,
+      "managedAppendSHA256": "7d763d391f634739d4a348063d136dd1e5a0099d06f96ad898b5be2e66d5e257",
+      "nativeDefaultPresent": true,
+      "userGuidelinePresent": true,
+      "userAppendPresent": true,
+      "qualification": "Official read-only public SDK configuration view; neither consumption nor provider wire capture. No full prompt retained."
+    },
+    {
+      "event": "agent_start",
+      "AOsessionId": "prompt-tau-c8de4cb1-1",
+      "nativeIDDigest": "8299c4955a5b8d4b268ae75fff2c7132214c60d713e006755eda78352ccc3bec",
+      "managedAppendPresent": true,
+      "managedAppendSHA256": "fa245985a0cc01ac690323a9be4ca90f0bda0ec93de3dc5f477fa729e68c9899",
+      "nativeDefaultPresent": true,
+      "userGuidelinePresent": true,
+      "userAppendPresent": true,
+      "qualification": "Official read-only public SDK configuration view; neither consumption nor provider wire capture. No full prompt retained."
+    },
+    {
+      "event": "agent_start",
+      "AOsessionId": "prompt-tau-ae035355-1",
+      "nativeIDDigest": "4e2a97a97b1410f8e7beba3d973b60db1c62b3ddc3ae6832dd28c9931dd33d48",
+      "managedAppendPresent": true,
+      "managedAppendSHA256": "6d07c69033101c047064f3427cb2b92954957a218199d79224d71212def91b47",
+      "nativeDefaultPresent": true,
+      "userGuidelinePresent": true,
+      "userAppendPresent": true,
+      "qualification": "Official read-only public SDK configuration view; neither consumption nor provider wire capture. No full prompt retained."
+    },
+    {
+      "event": "agent_start",
+      "AOsessionId": "prompt-tau-5e2d3689-1",
+      "nativeIDDigest": "1bc08a37a7600c16634b958b49f7ba5950fb1958f2c4c760967f0885bc5b0df6",
+      "managedAppendPresent": true,
+      "managedAppendSHA256": "07c802eed395186748f770c16a2b4a2e39f6c50073b9e15b2e832929ced28305",
+      "nativeDefaultPresent": true,
+      "userGuidelinePresent": true,
+      "userAppendPresent": true,
+      "qualification": "Official read-only public SDK configuration view; neither consumption nor provider wire capture. No full prompt retained."
+    },
+    {
+      "event": "agent_start",
+      "AOsessionId": "prompt-tau-ae035355-1",
+      "nativeIDDigest": "4e2a97a97b1410f8e7beba3d973b60db1c62b3ddc3ae6832dd28c9931dd33d48",
+      "managedAppendPresent": true,
+      "managedAppendSHA256": "7f181ffe357f4bec7e8d0700062b82d4045f6a2cf228d41eccdf79370a630e9d",
+      "nativeDefaultPresent": true,
+      "userGuidelinePresent": true,
+      "userAppendPresent": true,
+      "qualification": "Official read-only public SDK configuration view; neither consumption nor provider wire capture. No full prompt retained."
+    },
+    {
+      "event": "agent_start",
+      "AOsessionId": "prompt-tau-ae035355-1",
+      "nativeIDDigest": "4e2a97a97b1410f8e7beba3d973b60db1c62b3ddc3ae6832dd28c9931dd33d48",
+      "managedAppendPresent": true,
+      "managedAppendSHA256": "7f181ffe357f4bec7e8d0700062b82d4045f6a2cf228d41eccdf79370a630e9d",
+      "nativeDefaultPresent": true,
+      "userGuidelinePresent": true,
+      "userAppendPresent": true,
+      "qualification": "Official read-only public SDK configuration view; neither consumption nor provider wire capture. No full prompt retained."
+    },
+    {
+      "event": "agent_start",
+      "AOsessionId": "prompt-tau-ae035355-1",
+      "nativeIDDigest": "4e2a97a97b1410f8e7beba3d973b60db1c62b3ddc3ae6832dd28c9931dd33d48",
+      "managedAppendPresent": true,
+      "managedAppendSHA256": "7f181ffe357f4bec7e8d0700062b82d4045f6a2cf228d41eccdf79370a630e9d",
+      "nativeDefaultPresent": true,
+      "userGuidelinePresent": true,
+      "userAppendPresent": true,
+      "qualification": "Official read-only public SDK configuration view; neither consumption nor provider wire capture. No full prompt retained."
+    },
+    {
+      "event": "agent_start",
+      "AOsessionId": "prompt-tau-ae035355-1",
+      "nativeIDDigest": "4e2a97a97b1410f8e7beba3d973b60db1c62b3ddc3ae6832dd28c9931dd33d48",
+      "managedAppendPresent": true,
+      "managedAppendSHA256": "7f181ffe357f4bec7e8d0700062b82d4045f6a2cf228d41eccdf79370a630e9d",
+      "nativeDefaultPresent": true,
+      "userGuidelinePresent": true,
+      "userAppendPresent": true,
+      "qualification": "Official read-only public SDK configuration view; neither consumption nor provider wire capture. No full prompt retained."
+    },
+    {
+      "event": "agent_start",
+      "AOsessionId": "prompt-tau-5e2d3689-1",
+      "nativeIDDigest": "1bc08a37a7600c16634b958b49f7ba5950fb1958f2c4c760967f0885bc5b0df6",
+      "managedAppendPresent": true,
+      "managedAppendSHA256": "07c802eed395186748f770c16a2b4a2e39f6c50073b9e15b2e832929ced28305",
+      "nativeDefaultPresent": true,
+      "userGuidelinePresent": true,
+      "userAppendPresent": true,
+      "qualification": "Official read-only public SDK configuration view; neither consumption nor provider wire capture. No full prompt retained."
+    }
+  ]
+}

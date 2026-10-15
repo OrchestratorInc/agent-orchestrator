@@ -1,0 +1,48 @@
+{
+  "at": "2026-10-12T20:33:21.935251+00:00",
+  "source": "96abd39e95a22d3a0f30878561b44326f388e758",
+  "sessions": [
+    {
+      "sessionId": "prompt-tau-7640baef-1",
+      "http": 200,
+      "reply": {
+        "ok": true,
+        "sessionId": "prompt-tau-7640baef-1"
+      },
+      "terminated": true,
+      "generation": "17427d04-77db-4ef7-b6d9-a57b661ba14b"
+    },
+    {
+      "sessionId": "prompt-tau-61a8ffe2-1",
+      "http": 200,
+      "reply": {
+        "ok": true,
+        "sessionId": "prompt-tau-61a8ffe2-1"
+      },
+      "terminated": true,
+      "generation": "19e7b604-47c7-4c62-bc75-c37ec7840eeb"
+    },
+    {
+      "sessionId": "prompt-tau-813f9d20-1",
+      "http": 200,
+      "reply": {
+        "ok": true,
+        "sessionId": "prompt-tau-813f9d20-1"
+      },
+      "terminated": true,
+      "generation": "905e175e-1077-48dc-87c1-634d5350f66c"
+    },
+    {
+      "sessionId": "prompt-tau-cdea343f-1",
+      "http": 200,
+      "reply": {
+        "ok": true,
+        "sessionId": "prompt-tau-cdea343f-1"
+      },
+      "terminated": true,
+      "generation": "3e9ce5e7-525c-4e7a-ae88-cfa34a2fa1c3"
+    }
+  ],
+  "profilesAndHistoryPreserved": true,
+  "productionPID625660Untouched": true
+}

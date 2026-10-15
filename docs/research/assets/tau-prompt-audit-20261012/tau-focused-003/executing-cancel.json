@@ -1,0 +1,101 @@
+{
+  "at": "2026-10-12T20:23:49.822Z",
+  "source": "96abd39e95a22d3a0f30878561b44326f388e758",
+  "runnerSHA256": "23dc1a2f39bd6c88fd95b47d041040a039d16c52ab71996a278f49e68f8bdcc5",
+  "witnessSpec": {
+    "startPath": ".cancel-start-184fb6613b0e44a493d3e4b1d571ce74.json",
+    "latePath": ".cancel-late-184fb6613b0e44a493d3e4b1d571ce74.json",
+    "lateSideEffectDelayMs": 12000,
+    "tokenSHA256": "26a994fa75691be66e89061e93988ccec0ad2dffb3909c2fbeec9b7f09f0b3e8"
+  },
+  "result": {
+    "passed": false,
+    "observedActive": true,
+    "reason": "the cancellation turn settled or timed out without a valid command-start witness",
+    "activeState": {
+      "ok": true,
+      "status": 200,
+      "requestId": "",
+      "method": "GET",
+      "path": "/api/v1/sessions/prompt-tau-cdea343f-1",
+      "response": {
+        "session": {
+          "id": "prompt-tau-cdea343f-1",
+          "projectId": "prompt-tau-cdea343f",
+          "kind": "worker",
+          "harness": "tau",
+          "reviewerConfig": {},
+          "autoReviewEnabled": false,
+          "displayName": "Tau private prompt control",
+          "mode": "tui",
+          "activity": {
+            "state": "idle",
+            "lastActivityAt": "2026-10-12T20:23:49.726903569Z"
+          },
+          "isTerminated": false,
+          "terminateOnPrMerge": false,
+          "autoInjectReview": true,
+          "autoInjectCI": true,
+          "outputType": "none",
+          "createdAt": "2026-10-12T19:40:26.449311335Z",
+          "updatedAt": "2026-10-12T20:23:49.754685467Z",
+          "isPinned": false,
+          "provisionState": "ready",
+          "branchState": {
+            "commits": 0,
+            "unpushed": 0
+          },
+          "statusReadiness": "ready",
+          "chatProviderPreserved": false,
+          "status": "idle",
+          "kanbanColumn": "building",
+          "displayStatus": "Awaiting PR",
+          "terminalHandleId": "ptyhost-v1:prompt-tau-cdea343f-1",
+          "branch": "ao/prompt-tau-cdea343f-1/root",
+          "terminalGeneration": "3e9ce5e7-525c-4e7a-ae88-cfa34a2fa1c3",
+          "lastUserMessageAt": "2026-10-12T19:40:29.013834633Z",
+          "lastInteractionAt": "2026-10-12T19:40:29.013834633Z",
+          "lastEventAt": "2026-10-12T20:23:49.726903569Z",
+          "prs": []
+        }
+      },
+      "startedAt": "2026-10-12T20:23:49.810Z",
+      "finishedAt": "2026-10-12T20:23:49.822Z",
+      "durationMs": 12
+    },
+    "witness": {
+      "start": {
+        "method": "GET",
+        "path": "/api/v1/sessions/prompt-tau-cdea343f-1/workspace/file?path=.cancel-start-184fb6613b0e44a493d3e4b1d571ce74.json",
+        "status": 404,
+        "requestId": "",
+        "response": {
+          "error": "not_found",
+          "code": "WORKSPACE_FILE_NOT_FOUND",
+          "message": "Workspace file not found",
+          "requestId": "vps-linux/NMqvEzgtZg-001089"
+        },
+        "startedAt": "2026-10-12T20:23:49.811Z",
+        "finishedAt": "2026-10-12T20:23:49.818Z",
+        "durationMs": 7
+      },
+      "late": {
+        "method": "GET",
+        "path": "/api/v1/sessions/prompt-tau-cdea343f-1/workspace/file?path=.cancel-late-184fb6613b0e44a493d3e4b1d571ce74.json",
+        "status": 404,
+        "requestId": "",
+        "response": {
+          "error": "not_found",
+          "code": "WORKSPACE_FILE_NOT_FOUND",
+          "message": "Workspace file not found",
+          "requestId": "vps-linux/NMqvEzgtZg-001088"
+        },
+        "startedAt": "2026-10-12T20:23:49.811Z",
+        "finishedAt": "2026-10-12T20:23:49.816Z",
+        "durationMs": 6
+      },
+      "command": null,
+      "process": null
+    }
+  }
+}

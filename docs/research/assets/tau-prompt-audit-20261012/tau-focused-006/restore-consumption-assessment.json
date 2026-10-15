@@ -1,0 +1,17 @@
+{
+  "at": "2026-10-12T21:22:34.054529+00:00",
+  "source": "e1ef49b12712b6c5fc17e595f931bc28296dd66f",
+  "model": "zai-audit/glm-4.7",
+  "status": "FAIL_NEW_PRIVATE_ACTION_OLD_TOKEN_REMAINS",
+  "ordinaryTaskCompleted": true,
+  "countStillOne": true,
+  "privateOld": true,
+  "privateNew": false,
+  "managedFileContainsNewOnly": true,
+  "SDKmanagedAppendPresent": true,
+  "nativeDefaultPresent": true,
+  "userGuidelinePresent": true,
+  "userAppendPresent": true,
+  "SDKdigestMatchesCurrentManaged": true,
+  "qualification": "Public native SDK configuration presence is not model consumption or authenticated provider wire capture. Prior Flash failures remain separate; positive GLM4.7 fresh shorter task does not identify sole cause."
+}

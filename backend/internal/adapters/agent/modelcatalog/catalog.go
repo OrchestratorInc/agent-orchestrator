@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/tau"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
@@ -116,6 +118,7 @@ var commandSpecs = map[string]commandSpec{
 	"agy":         {args: []string{"models"}, parser: parseAgyModels},
 	"kilocode":    {args: []string{"models"}, parser: parseProviderIDLines},
 	"pi":          {args: []string{"--list-models"}, parser: parsePiModels},
+	"tau":         {args: []string{"providers"}, parser: parseTauModels},
 	"kimchi":      {args: []string{"--list-models"}, parser: parsePiModels},
 	"prime-agent": {args: []string{"model", "list"}, parser: parsePiModels},
 	"kimi":        {args: []string{"provider", "list", "--json"}, parser: parseJSONModels},
@@ -214,7 +217,7 @@ func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	case "claude-code", "codex", "opencode", "opencode-v2", "grok", "cursor", "qwen", "gemini",
 		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin":
 		return ports.CustomModelEntryDirect
-	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
+	case "continue", "cline", "kilocode", "vibe", "pi", "tau", "kimchi", "prime-agent":
 		return ports.CustomModelEntryConfigured
 	default:
 		return ports.CustomModelEntryNone
@@ -835,6 +838,9 @@ func CatalogFingerprint(ctx context.Context, agentID, binary, workingDir string,
 // discoveryConfigInputs returns the configuration an agent's discovery consults,
 // or "" when the catalog depends on the binary alone.
 func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env map[string]string) string {
+	if agentID == "tau" {
+		return "config=" + fingerprintConfigPaths(tauConfigPaths(env))
+	}
 	if agentID == "unreal-agent" {
 		provider, selected := unrealConfiguredModel(env)
 		return "provider=" + provider + ";model=" + selected
@@ -1390,4 +1396,35 @@ func normalize(models []ports.AgentModelInfo) []ports.AgentModelInfo {
 		return out[i].ID < out[j].ID
 	})
 	return out
+}
+
+// parseTauModels consumes the released provider/model TSV, retaining exact
+// provider-qualified selection even when multiple providers expose one model.
+func parseTauModels(output []byte) ([]ports.AgentModelInfo, error) {
+	var models []ports.AgentModelInfo
+	for _, provider := range tau.ParseProviders(output) {
+		for _, id := range provider.Models {
+			models = append(models, ports.AgentModelInfo{ID: provider.Name + "/" + id, Label: id, Provider: provider.Name, IsDefault: provider.Default && id == provider.DefaultModel})
+		}
+	}
+	if len(models) == 0 {
+		return nil, fmt.Errorf("tau providers returned no configured models")
+	}
+	return models, nil
+}
+
+func tauConfigPaths(env map[string]string) []string {
+	home := envValue(env, "TAU_HOME")
+	if home == "" {
+		homeKey := "HOME"
+		if runtime.GOOS == "windows" {
+			homeKey = "USERPROFILE"
+		}
+		userHome := envValue(env, homeKey)
+		if userHome == "" {
+			userHome, _ = os.UserHomeDir()
+		}
+		home = filepath.Join(userHome, ".tau")
+	}
+	return []string{filepath.Join(home, "providers.json"), filepath.Join(home, "catalog.toml"), filepath.Join(home, "models-store.json"), filepath.Join(home, "codex-models-store.json")}
 }

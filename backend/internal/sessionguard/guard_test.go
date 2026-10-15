@@ -3,6 +3,7 @@ package sessionguard
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -524,6 +525,44 @@ func TestGuard_NudgeCoordinationEnforcesSteeringAtWriteBoundary(t *testing.T) {
 			}
 			if len(msg.sent) != wantSends {
 				t.Fatalf("sends = %d, want %d", len(msg.sent), wantSends)
+			}
+		})
+	}
+}
+
+func TestGuardTauPasteFraming(t *testing.T) {
+	task := "--ordinary-task\n" + strings.Repeat("literal data ", 100) + "\nfinal line"
+	for _, tc := range []struct {
+		name       string
+		message    string
+		state      domain.ActivityState
+		terminated bool
+		lease      bool
+		want       Outcome
+		sent       string
+	}{
+		{"long multiline", task, domain.ActivityIdle, false, true, Sent, "\x1b[200~" + task + "\x1b[201~"},
+		{"empty nudge", "", domain.ActivityIdle, false, true, Sent, ""},
+		{"permission pending", task, domain.ActivityBlocked, false, true, SuppressedAwaitingUser, ""},
+		{"terminated", task, domain.ActivityIdle, true, true, SuppressedTerminated, ""},
+		{"input admission closed", task, domain.ActivityIdle, false, false, SuppressedInputGated, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := record(tc.state, tc.terminated)
+			rec.Harness = domain.HarnessTau
+			messenger := &fakeMessenger{}
+			guard := New(&fakeStore{rec: rec, ok: true}, messenger, nil)
+			guard.SetInputLease(fixedInputLease(tc.lease))
+			outcome, err := guard.Deliver(context.Background(), "s1", tc.message)
+			if err != nil || outcome != tc.want {
+				t.Fatalf("delivery=(%v,%v), want %v", outcome, err, tc.want)
+			}
+			if tc.want == Sent {
+				if len(messenger.sent) != 1 || messenger.sent[0] != tc.sent {
+					t.Fatalf("message framing changed: %#v", messenger.sent)
+				}
+			} else if len(messenger.sent) != 0 {
+				t.Fatalf("suppressed task written: %#v", messenger.sent)
 			}
 		})
 	}

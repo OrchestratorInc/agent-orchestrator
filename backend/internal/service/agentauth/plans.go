@@ -27,6 +27,7 @@ var plans = []Plan{
 	plan("grok", ActionLogin, "Log in to Grok", []string{"grok", "login"}, "Native login; device-auth remains available inside the CLI", "https://docs.x.ai/build/overview"),
 	kimiLoginPlan(),
 	piLoginPlan(),
+	documentationPlan("tau", ActionSetup, "Set up Tau", "Run tau, then /login to configure a provider. AO requires explicit bypass permissions because Tau has no tool approval policy.", "https://twotimespi.dev/guides/providers-and-models/"),
 	plan("amp", ActionLogin, "Log in to Amp", []string{"amp", "login"}, "Native browser flow", "https://ampcode.com/manual"),
 	plan("auggie", ActionLogin, "Log in to Auggie", []string{"auggie", "login"}, "Native browser flow", "https://docs.augmentcode.com/cli/overview"),
 	terminalInputPlan("droid", ActionLogin, "Log in to Droid", []string{"droid"}, "/login\r", "Select Open login after Droid finishes starting", "https://docs.factory.ai/droid-cli/cli-reference"),
