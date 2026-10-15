@@ -2,8 +2,8 @@
 
 Untagged organizations can run sessions on AO's managed Coder and on
 Freestyle, both on Stripe plans. Tagging a person's WorkOS organization with
-`capabilities = coder` puts it on AO's managed Coder alone, free (no plans to
-buy), and lets it connect its own Coder deployment. Anyone with WorkOS
+`capabilities = coder` makes AO's managed Coder its default and free, and lets
+it connect its own Coder deployment. Freestyle stays on offer, on a plan. Anyone with WorkOS
 dashboard access can set the tag.
 
 ## Give an email free AO managed Coder
@@ -19,9 +19,9 @@ dashboard access can set the tag.
 5. Save. The change applies within 5 minutes. They only need to sign out
    and back in if you had to create the organization in step 2.
 
-That account now runs on AO's managed Coder only, free, with no Freestyle and
-no plans. Sessions run on AO's own Coder; there is nothing to set up in Coder
-itself.
+That account now starts on AO's managed Coder, free. It can still buy a plan to
+use Freestyle. Sessions run on AO's own Coder; there is nothing to set up in
+Coder itself.
 
 ## Take it away again
 
@@ -39,8 +39,7 @@ in Settings, General, Cloud.
 
 | `capabilities` on the organization | Starts on | Coder | Freestyle |
 | --- | --- | --- | --- |
-| `coder` | Coder | Free, plus its own Coder deployment | Not offered |
-| `coder,freestyle` | Coder | Free, plus its own Coder deployment | Stripe plans |
+| `coder` | Coder | Free, plus its own Coder deployment | Stripe plans |
 | not set (the default for everyone) | Freestyle | Stripe plans | Stripe plans |
 
 With both providers, an admin picks the default in Settings, General, Cloud.

@@ -30,18 +30,15 @@ func (s *Server) orgCapabilities(principal domain.Principal, orgID string) []str
 // orgAllowsProvider reports whether an organization may use the given sandbox
 // provider. Coder and Freestyle are open to every organization: each picks its
 // default in the desktop's settings (putOrgSandboxProvider), and plans meter
-// both (sandboxBilledTx). The exception is a Coder customer (coderOnlyCustomer),
-// for which a gated Freestyle keeps its gate. Any other provider keeps the
-// capability gate: when it is listed in AO_CLOUD_CAPABILITY_GATED_PROVIDERS, the
+// both (sandboxBilledTx). An organization with the coder capability starts on
+// Coder and runs it free, and may still buy Freestyle on a plan. Any other
+// provider keeps the capability gate: when it is listed in AO_CLOUD_CAPABILITY_GATED_PROVIDERS, the
 // organization must hold a capability of the same name (see orgCapabilities).
 // It does not check that the deployment offers the provider; providersForOrg
 // does both.
 func (s *Server) orgAllowsProvider(principal domain.Principal, orgID, provider string) bool {
-	if provider == sandbox.ProviderCoder {
+	if provider == sandbox.ProviderCoder || provider == sandbox.ProviderFreestyle {
 		return true
-	}
-	if provider == sandbox.ProviderFreestyle {
-		return !s.capabilityGatedProviders[provider] || !coderOnlyCustomer(principal, orgID)
 	}
 	if !s.capabilityGatedProviders[provider] {
 		return true
@@ -57,19 +54,6 @@ func (s *Server) orgAllowsProvider(principal domain.Principal, orgID, provider s
 // cannot make Coder free for everyone.
 func (s *Server) orgHasCoderCapability(principal domain.Principal, orgID string) bool {
 	return slices.Contains(s.orgCapabilities(principal, orgID), sandbox.ProviderCoder)
-}
-
-// coderOnlyCustomer reports whether the organization's own capabilities (its
-// WorkOS metadata, not the deployment defaults) name coder but not freestyle: a
-// customer set up on Coder alone. It keeps what it had before every
-// organization was offered both providers: Coder only, unbilled, and no plans
-// to buy. Tagging it capabilities=coder,freestyle opens Freestyle (on a plan).
-func coderOnlyCustomer(principal domain.Principal, orgID string) bool {
-	if orgID == "" || orgID != principal.TeamOrgID || len(principal.OrgCapabilities) == 0 {
-		return false
-	}
-	return slices.Contains(principal.OrgCapabilities, sandbox.ProviderCoder) &&
-		!slices.Contains(principal.OrgCapabilities, sandbox.ProviderFreestyle)
 }
 
 // orgHasCustomCoder reports whether the organization may connect its own Coder

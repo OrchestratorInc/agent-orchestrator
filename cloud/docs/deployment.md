@@ -503,9 +503,8 @@ referenced secret never starts, and the deploy rolls back. Register the producti
 
 ### 2. WorkOS organization metadata
 
-Coder and Freestyle are open to every organization except a Coder customer
-(its `capabilities` name `coder` but not `freestyle`), which keeps Coder alone
-when Freestyle is gated, exactly as before. Each organization with both picks
+Coder and Freestyle are open to every organization, Coder customers
+(`capabilities=coder`) included. Each organization picks
 its default in the desktop's Settings (General, Cloud; admins only), and a new project
 records that default (`config.sandboxProvider`), so changing it later moves no
 existing project. Any other provider listed in
@@ -527,9 +526,9 @@ Who pays, once billing is enabled:
 
 Metadata:
 
-- Organizations that use Coder: `capabilities=coder`. They run on Coder alone,
-  free, with no plans to buy, and see the bring-your-own Coder settings page.
-  `capabilities=coder,freestyle` also offers Freestyle, on a plan. `billing=contract`
+- Organizations that use Coder: `capabilities=coder`. They start on Coder, run
+  it free, and see the bring-your-own Coder settings page; Freestyle stays on
+  offer to them, on a plan, so they also see plans to buy. `billing=contract`
   no longer exempts anything from sandbox billing; it only keeps paywalled
   features without a plan.
 - B2C self-serve organizations need nothing: they start on Freestyle.
@@ -550,9 +549,9 @@ that before testing a change.
 ### 3. Rollout order
 
 1. Staging: set the internal organization's metadata in WorkOS, then
-   `deploy-staging.sh`. Verify a `capabilities=coder` organization is offered
-   Coder alone with billing off and sees the Coder settings page, an
-   organization without metadata defaults to Freestyle and is offered both
+   `deploy-staging.sh`. Verify a `capabilities=coder` organization defaults to
+   Coder, sees the Coder settings page and is still offered Freestyle on a plan,
+   an organization without metadata defaults to Freestyle and is offered both
    providers, and `/me` `offering` matches.
 2. Billing in staging: with `ao-cloud/staging/stripe` present, verify Checkout,
    the webhook, that Coder is free for a `capabilities=coder` organization, and

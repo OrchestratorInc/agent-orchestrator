@@ -21,12 +21,11 @@ func coderCustomerPrincipals() map[string]domain.Principal {
 	return map[string]domain.Principal{"capabilities=coder": teamPrincipal("coder"), "and billing=contract": contract}
 }
 
-// A Coder customer keeps what it had before every organization was offered
-// Coder and Freestyle, on a deployment that offers both, gated, with billing
-// on (production): Coder alone, its default, no plans to buy, its own Coder
-// settings page, and sessions that land on Coder unbilled. Freestyle stays
-// closed to it, and nothing pins its projects.
-func TestCoderCustomerKeepsCoderAlone(t *testing.T) {
+// A Coder customer, on a deployment that offers both providers, gated, with
+// billing on (production): Coder is its default and free, it keeps its own
+// Coder settings page, and sessions that nothing else places land on Coder
+// unbilled. Freestyle stays on offer, on a plan, so it sees plans to buy.
+func TestCoderCustomerGetsCoderFreeAndMayBuyFreestyle(t *testing.T) {
 	for name, principal := range coderCustomerPrincipals() {
 		t.Run(name, func(t *testing.T) {
 			t.Run("offering", func(t *testing.T) {
@@ -35,9 +34,10 @@ func TestCoderCustomerKeepsCoderAlone(t *testing.T) {
 				server.billingOptions = &BillingOptions{Stripe: &fakeStripe{}}
 				server.billingStore = newFakeBillingStore()
 				offering := getMe(t, server, principal).Offering
-				if !slices.Equal(offering.Providers, []string{sandbox.ProviderCoder}) || offering.DefaultProvider != sandbox.ProviderCoder ||
-					offering.BillingMode != domain.BillingModeOff || offering.Kind != domain.OfferingKindB2B || !offering.CustomCoder {
-					t.Fatalf("offering = %+v, want Coder alone, its default, billing off, b2b, and the custom Coder page", offering)
+				if !slices.Equal(offering.Providers, []string{sandbox.ProviderCoder, sandbox.ProviderFreestyle}) ||
+					offering.DefaultProvider != sandbox.ProviderCoder || offering.BillingMode != domain.BillingModeSelfServe ||
+					offering.Kind != domain.OfferingKindBoth || !offering.CustomCoder {
+					t.Fatalf("offering = %+v, want both providers, Coder by default, plans to buy, and the custom Coder page", offering)
 				}
 			})
 
@@ -60,20 +60,20 @@ func TestCoderCustomerKeepsCoderAlone(t *testing.T) {
 				})
 			}
 
-			t.Run("Freestyle stays closed", func(t *testing.T) {
+			t.Run("Freestyle is on offer", func(t *testing.T) {
 				store := &offeringStore{}
 				rec := httptest.NewRecorder()
 				newGenericOfferingServer(store).createSession(rec, offeringSessionRequest(t, principal, sandbox.ProviderFreestyle))
-				if rec.Code != http.StatusForbidden || store.created {
-					t.Fatalf("status = %d, body = %s; want Freestyle refused", rec.Code, rec.Body.String())
+				if rec.Code != http.StatusCreated || store.captured.Provider != sandbox.ProviderFreestyle {
+					t.Fatalf("status = %d, body = %s; want a Freestyle session (billed by its provider)", rec.Code, rec.Body.String())
 				}
 			})
 
-			t.Run("projects are not pinned", func(t *testing.T) {
+			t.Run("new projects are pinned to Coder", func(t *testing.T) {
 				pinned, err := newGenericOfferingServer(&offeringStore{}).pinProjectProvider(
 					context.Background(), principal, offeringTeamOrgID, json.RawMessage(`{"source":"scratch"}`))
-				if err != nil || string(pinned) != `{"source":"scratch"}` {
-					t.Fatalf("pinned = %s, %v; want the config unchanged", pinned, err)
+				if err != nil || string(pinned) != `{"sandboxProvider":"coder","source":"scratch"}` {
+					t.Fatalf("pinned = %s, %v; want the project pinned to its Coder default", pinned, err)
 				}
 			})
 
@@ -91,11 +91,11 @@ func TestCoderCustomerKeepsCoderAlone(t *testing.T) {
 				}
 			})
 
-			t.Run("no default to choose", func(t *testing.T) {
+			t.Run("may choose Freestyle as its default", func(t *testing.T) {
 				store := &sandboxPreferenceStore{chosen: map[string]string{}}
-				if rec := putSandboxProvider(sandboxPreferenceServer(store), principal, `{"defaultProvider":"freestyle"}`); rec.Code != http.StatusConflict ||
-					store.chosen[offeringTeamOrgID] != "" {
-					t.Fatalf("choose freestyle: %d %s, want 409 with nothing stored", rec.Code, rec.Body.String())
+				if rec := putSandboxProvider(sandboxPreferenceServer(store), principal, `{"defaultProvider":"freestyle"}`); rec.Code != http.StatusOK ||
+					store.chosen[offeringTeamOrgID] != sandbox.ProviderFreestyle {
+					t.Fatalf("choose freestyle: %d %s, want it stored", rec.Code, rec.Body.String())
 				}
 			})
 		})
