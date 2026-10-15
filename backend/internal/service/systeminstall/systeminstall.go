@@ -1252,8 +1252,13 @@ func lastOutputLine(output string) string {
 	output = terminalEscape.ReplaceAllString(strings.ReplaceAll(output, "\r\n", "\n"), "")
 	lines := strings.Split(output, "\n")
 	for index := len(lines) - 1; index >= 0; index-- {
+		// A terminal keeps the last carriage-return segment that printed text,
+		// including one followed by a trailing bare \r.
+		line := ""
 		segments := strings.Split(lines[index], "\r")
-		line := strings.TrimSpace(segments[len(segments)-1])
+		for segment := len(segments) - 1; segment >= 0 && line == ""; segment-- {
+			line = strings.TrimSpace(segments[segment])
+		}
 		if line == "" {
 			continue
 		}

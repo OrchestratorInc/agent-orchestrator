@@ -1732,6 +1732,31 @@ func TestKimiUpdateBindsOnlyKimiCodeDefaultInstall(t *testing.T) {
 	}
 }
 
+func TestKimiUpdateAdvisoryOffersUpdateOnlyForDefaultInstall(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	for binary, want := range map[string]string{
+		home + "/.kimi-code/bin/kimi": "official-installer",
+		// The legacy Python kimi-cli and a cargo build are not Kimi Code's install.
+		home + "/.local/bin/kimi": "",
+		home + "/.cargo/bin/kimi": "",
+	} {
+		s := newTestService("darwin", "bash")
+		s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+			return VerifyResult{ResolvedPath: binary, Output: "2.0.2"}, nil
+		})
+		s.officialVersion = func(context.Context, Target) (string, error) { return "2.2.0", nil }
+		advisory, err := s.UpdateAdvisory(t.Context(), TargetKimi, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if advisory.MaintenanceMethod != want {
+			t.Errorf("%s: maintenance method = %q, want %q (advisory %+v)", binary, advisory.MaintenanceMethod, want, advisory)
+		}
+	}
+}
+
 // The installer skips its legacy-shim migration, which renames or deletes
 // other kimi commands on PATH, only while its own bin directory is off PATH.
 func TestKimiUpdateKeepsItsBinDirectoryOffInstallerPath(t *testing.T) {
@@ -1756,6 +1781,7 @@ func TestLastOutputLineShowsWhatTheTerminalWouldShow(t *testing.T) {
 		"Checking...\nDroid is already up to date.\n\n": "Droid is already up to date.",
 		"\x1b[32m✓\x1b[0m Already up to date!\r\n":      "✓ Already up to date!",
 		"Downloading 10%\rDownloading 100%\rDone\n":     "Done",
+		"Checking...\nDownloading 50%\rDone\r":          "Done",
 		"\x1b]0;title\x07Updated to 2.2.0\n":            "Updated to 2.2.0",
 		long:                                            strings.Repeat("é", maxUpdaterReportRunes) + "…",
 	} {
