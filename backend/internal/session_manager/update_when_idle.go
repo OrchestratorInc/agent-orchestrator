@@ -147,7 +147,7 @@ func (m *Manager) stopForUpdate(ctx context.Context, rec domain.SessionRecord) e
 	}
 	lastInputAt, releaseInput := m.beginTerminalInputDrain(rec)
 	current, err := m.getRecord(ctx, rec.ID)
-	if err == nil && (current.Metadata.RuntimeLaunchID != rec.Metadata.RuntimeLaunchID || !tuiIdleAfterInput(current, lastInputAt)) {
+	if err == nil && (current.Metadata.RuntimeLaunchID != rec.Metadata.RuntimeLaunchID || !m.terminalIdleForRestart(ctx, current, lastInputAt)) {
 		err = errors.New("terminal received input")
 	}
 	if err == nil {
