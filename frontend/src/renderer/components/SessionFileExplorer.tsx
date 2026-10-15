@@ -272,18 +272,19 @@ export function SessionFileExplorer({
 	const maximizeButton = onToggleMaximized ? (
 		<Tooltip>
 			<TooltipTrigger asChild>
+				{/* Sized and toned like the pinned top-bar buttons beside it. */}
 				<Button
 					aria-label={isMaximized ? t("files.minimize") : t("files.maximize")}
-					className="shrink-0"
+					className="shrink-0 text-muted-foreground hover:text-foreground"
 					onClick={() => onToggleMaximized(!isMaximized)}
 					size="icon-sm"
 					type="button"
 					variant="ghost"
 				>
 					{isMaximized ? (
-						<Minimize2 className="size-icon-base" aria-hidden="true" />
+						<Minimize2 className="size-icon-md" aria-hidden="true" />
 					) : (
-						<Maximize2 className="size-icon-base" aria-hidden="true" />
+						<Maximize2 className="size-icon-md" aria-hidden="true" />
 					)}
 				</Button>
 			</TooltipTrigger>
