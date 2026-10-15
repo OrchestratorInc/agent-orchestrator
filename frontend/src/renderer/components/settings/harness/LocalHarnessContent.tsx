@@ -111,8 +111,11 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const focusHandledRef = useRef(false);
 	const focusPrimaryActionRef = useRef(false);
 	const focusDiagnosticsRef = useRef(false);
-	// The failure a notice shortcut reported, kept for the Health report.
-	const [noticeError, setNoticeError] = useState<{ agentId: AgentId; error: string } | null>(null);
+	// The failure a notice shortcut reported, kept for the Health report until
+	// a later attempt supersedes it: one started here, or a new job in the shared query.
+	const [noticeError, setNoticeError] = useState<{ agentId: AgentId; error: string; jobStartedAt?: string } | null>(null);
+	const currentNoticeError = (agentId: AgentId) => noticeError?.agentId === agentId
+		&& (jobMap.get(agentId)?.startedAt ?? undefined) === noticeError.jobStartedAt ? noticeError.error : undefined;
 	const highlightTimerRef = useRef<number | null>(null);
 	const [highlightedAgentId, setHighlightedAgentId] = useState<AgentId | null>(null);
 	// The list opens one harness at a time; its page has Account, Models and Health tabs.
@@ -273,7 +276,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			openDetail(targetAgentId);
 		} else {
 			focusPrimaryActionRef.current = true;
-			if (showDiagnostics?.error) setNoticeError({ agentId: targetAgentId, error: showDiagnostics.error });
+			if (showDiagnostics?.error) setNoticeError({ agentId: targetAgentId, error: showDiagnostics.error, jobStartedAt: targetJob?.startedAt ?? undefined });
 			openDetail(targetAgentId, showDiagnostics ? "health" : "account");
 		}
 		setHighlightedAgentId(targetAgentId);
@@ -406,6 +409,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		if (pendingActions.current.has(agentId)) return false;
 		pendingActions.current.add(agentId);
 		setPendingAgentIds(new Set(pendingActions.current));
+		setNoticeError((current) => current?.agentId === agentId ? null : current);
 		return true;
 	};
 
@@ -834,12 +838,13 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 									details={selectedDetails}
 									checking={checkingAuth.includes(selectedDetails.agentId) || agents.isFetching || Boolean(selectedDetails.advisoryQuery?.isFetching)}
 									authCheckFailed={Boolean(authCheckErrors[selectedDetails.agentId])}
-									updateError={noticeError?.agentId === selectedDetails.agentId ? noticeError.error : undefined}
+									updateError={currentNoticeError(selectedDetails.agentId)}
 									copied={copiedAgent === selectedDetails.agentId}
 									onCheckAgain={() => refreshInstalledAgent(selectedDetails.agentId)}
 									onCopyReport={() => void (async () => {
 										const machine = await machineText(queryClient, hostId ? client : undefined);
-										const updateError = noticeError?.agentId === selectedDetails.agentId ? `Update error: ${noticeError.error}` : "";
+										const noticeFailure = currentNoticeError(selectedDetails.agentId);
+										const updateError = noticeFailure ? `Update error: ${noticeFailure}` : "";
 										await copyText(selectedDetails.agentId, [updateError, healthReport(selectedDetails), machine].filter(Boolean).join("\n\n"));
 									})()}
 								/>
