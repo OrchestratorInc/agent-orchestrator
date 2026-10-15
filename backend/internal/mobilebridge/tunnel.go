@@ -24,25 +24,47 @@ import (
 var (
 	quickTunnelURLRe = regexp.MustCompile(`https://[a-z0-9-]+\.trycloudflare\.com`)
 	registeredRe     = regexp.MustCompile(`Registered tunnel connection`)
-	locationRe       = regexp.MustCompile(`location=([a-z0-9]+)`)
-	protocolRe       = regexp.MustCompile(`protocol=([a-z0-9]+)`)
+	// edgeDownRe matches what cloudflared prints when a registered edge
+	// connection drops. The connector process keeps running and re-registers on
+	// the same hostname, so these lines are the only sign the tunnel stopped
+	// carrying traffic. Per-request proxy errors also carry connIndex but never
+	// these phrases, so they do not count.
+	edgeDownRe   = regexp.MustCompile(`Lost connection with the edge|Serve tunnel error|Connection terminated|Unregistered tunnel connection|Retrying connection in`)
+	connIndexRe  = regexp.MustCompile(`connIndex=(\d+)`)
+	errorFieldRe = regexp.MustCompile(`error="([^"]*)"`)
+	locationRe   = regexp.MustCompile(`location=([a-z0-9]+)`)
+	protocolRe   = regexp.MustCompile(`protocol=([a-z0-9]+)`)
 )
 
 // TunnelLog accumulates the signals worth extracting from cloudflared's output.
 type TunnelLog struct {
 	// URL is the public hostname, once printed.
 	URL string
-	// Connections counts registered edge connections. Quick tunnels register
-	// one; named tunnels register several across colos.
+	// Connections counts edge registrations over the connector's life,
+	// including re-registrations after an edge connection dropped.
 	Connections int
 	// Location and Protocol are the edge the connector attached to. Diagnostic
 	// only — latency varies several-fold with this value.
 	Location string
 	Protocol string
+	// live holds the edge connections registered right now, by connIndex.
+	live map[string]bool
 }
 
-// Feed consumes one line of cloudflared output.
-func (t *TunnelLog) Feed(line string) {
+// EdgeChange is an edge connection coming up or going down.
+type EdgeChange struct {
+	Up        bool
+	ConnIndex string
+	Location  string
+	Protocol  string
+	// Reason is why a connection went down: cloudflared's error text when it
+	// printed one, otherwise the line's own description.
+	Reason string
+}
+
+// Feed consumes one line of cloudflared output and reports whether it changed
+// which edge connections are live.
+func (t *TunnelLog) Feed(line string) (EdgeChange, bool) {
 	if t.URL == "" {
 		if m := quickTunnelURLRe.FindString(line); m != "" {
 			t.URL = m
@@ -56,16 +78,52 @@ func (t *TunnelLog) Feed(line string) {
 		if m := protocolRe.FindStringSubmatch(line); m != nil {
 			t.Protocol = m[1]
 		}
+		idx := connIndexOf(line)
+		if t.live[idx] {
+			return EdgeChange{}, false
+		}
+		if t.live == nil {
+			t.live = make(map[string]bool)
+		}
+		t.live[idx] = true
+		return EdgeChange{Up: true, ConnIndex: idx, Location: t.Location, Protocol: t.Protocol}, true
 	}
+	if m := edgeDownRe.FindString(line); m != "" {
+		idx := connIndexOf(line)
+		if !t.live[idx] {
+			return EdgeChange{}, false // Already down: retries repeat these lines.
+		}
+		delete(t.live, idx)
+		reason := m
+		if e := errorFieldRe.FindStringSubmatch(line); e != nil {
+			reason = e[1]
+		}
+		return EdgeChange{ConnIndex: idx, Reason: reason}, true
+	}
+	return EdgeChange{}, false
+}
+
+// LiveConnections is how many edge connections are registered right now.
+func (t *TunnelLog) LiveConnections() int {
+	return len(t.live)
+}
+
+func connIndexOf(line string) string {
+	if m := connIndexRe.FindStringSubmatch(line); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 // Ready reports whether the tunnel can actually carry traffic.
 //
 // Both conditions are required. cloudflared prints the hostname several
 // seconds before it registers a connection, and an endpoint advertised during
-// that window answers HTTP 530.
+// that window answers HTTP 530. A connection that registered and then dropped
+// does not count either: the process outlives it, but until cloudflared
+// re-registers the hostname answers nothing.
 func (t *TunnelLog) Ready() bool {
-	return t.URL != "" && t.Connections > 0
+	return t.URL != "" && t.LiveConnections() > 0
 }
 
 // splitLines splits process output into lines, dropping a trailing empty one.
@@ -327,11 +385,12 @@ func (r *TunnelRuntime) Started() {
 	r.lastErr = ""
 }
 
-// Line feeds one line of connector output.
-func (r *TunnelRuntime) Line(line string) {
+// Line feeds one line of connector output and reports an edge connection
+// coming up or going down, for the runner to log.
+func (r *TunnelRuntime) Line(line string) (EdgeChange, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.log.Feed(line)
+	return r.log.Feed(line)
 }
 
 // Exited marks the connector gone, with the reason if there was one.
