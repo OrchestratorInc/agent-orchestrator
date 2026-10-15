@@ -1243,7 +1243,7 @@ const maxUpdaterReportRunes = 200
 
 // terminalEscape matches ANSI CSI and OSC sequences that colour or retitle
 // terminal output.
-var terminalEscape = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
+var terminalEscape = regexp.MustCompile(`\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
 
 // lastOutputLine is the last non-empty line a command printed, as a terminal
 // would show it: escape sequences removed and only the text after a line's
