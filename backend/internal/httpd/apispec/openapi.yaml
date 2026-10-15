@@ -9325,6 +9325,46 @@ paths:
       summary: Switch a logical AO session to another agent harness
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/workspace/branches:
+    get:
+      operationId: listSessionWorkspaceBranches
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceBranchesResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the local branches and pull requests a workspace review can read,
+        checked-out branch first
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/workspace/diffs:
     post:
       operationId: getSessionWorkspaceDiffs
@@ -18398,6 +18438,69 @@ components:
       - processedTokens
       - cacheReadTokens
       - estimatedCost
+      type: object
+    WorkspaceBranchResponse:
+      properties:
+        checkedOut:
+          type: boolean
+        detached:
+          type: boolean
+        isDefault:
+          type: boolean
+        kind:
+          description: local reads as a branch view (or the checked-out worktree);
+            pull_request reads as a pull request view.
+          enum:
+          - local
+          - pull_request
+          type: string
+        name:
+          description: Branch name, the pull request's source branch, or empty for
+            a detached HEAD.
+          type: string
+        prNumber:
+          type: integer
+        prTitle:
+          type: string
+        prUrl:
+          description: Pass as sourceUrl with prNumber to read a pull_request row.
+          type: string
+        tipSha:
+          type: string
+        updatedAt:
+          description: The tip's committer time, or the pull request's last update.
+          format: date-time
+          type:
+          - "null"
+          - string
+      required:
+      - kind
+      - name
+      - checkedOut
+      - isDefault
+      type: object
+    WorkspaceBranchesResponse:
+      properties:
+        branches:
+          description: The checked-out row first, then the rest newest first; at most
+            200 rows.
+          items:
+            $ref: '#/components/schemas/WorkspaceBranchResponse'
+          type: array
+        defaultBranch:
+          type: string
+        sessionId:
+          type: string
+        supported:
+          description: False for scratch sessions, which have no Git history.
+          type: boolean
+        truncated:
+          type: boolean
+      required:
+      - sessionId
+      - supported
+      - branches
+      - truncated
       type: object
     WorkspaceCommitConflictResponse:
       properties:

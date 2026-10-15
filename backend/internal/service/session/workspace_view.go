@@ -240,17 +240,11 @@ func resolveBranchView(ctx context.Context, root, name string, project domain.Pr
 // cached remote HEAD, or the branch AO recorded when it created the
 // repository), so this never contacts a remote.
 func viewDefaultBranch(ctx context.Context, root string, project domain.ProjectRecord, projectOK bool) (name, ref, sha string) {
-	name = workspaceDefaultBranch(defaultBranchForProject(project, projectOK))
-	var candidates []string
-	if name == "" {
-		resolution, err := gitdefault.New("git", nil).Inspect(ctx, root)
-		if err != nil {
-			return "", "", ""
-		}
-		name = resolution.Branch
-		candidates = append(candidates, resolution.Ref)
+	name, inspectedRef, ok := viewDefaultBranchName(ctx, root, project, projectOK)
+	if !ok {
+		return "", "", ""
 	}
-	candidates = append(candidates, workspaceBaseRefCandidates(name)...)
+	candidates := append([]string{inspectedRef}, workspaceBaseRefCandidates(name)...)
 	for _, candidate := range candidates {
 		if candidate == "" || strings.HasPrefix(candidate, "-") {
 			continue
@@ -260,6 +254,20 @@ func viewDefaultBranch(ctx context.Context, root string, project domain.ProjectR
 		}
 	}
 	return name, "", ""
+}
+
+// viewDefaultBranchName names the default branch without resolving its refs:
+// the project setting, or else the branch and ref git's local metadata
+// advertise. ok is false when neither names one.
+func viewDefaultBranchName(ctx context.Context, root string, project domain.ProjectRecord, projectOK bool) (name, inspectedRef string, ok bool) {
+	if name := workspaceDefaultBranch(defaultBranchForProject(project, projectOK)); name != "" {
+		return name, "", true
+	}
+	resolution, err := gitdefault.New("git", nil).Inspect(ctx, root)
+	if err != nil {
+		return "", "", false
+	}
+	return resolution.Branch, resolution.Ref, true
 }
 
 // recentRangeBefore is the "before" side of a recent-mode range: the first

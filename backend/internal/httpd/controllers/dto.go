@@ -648,6 +648,31 @@ type WorkspaceViewResponse struct {
 	RangeMode sessionsvc.WorkspaceRangeMode `json:"rangeMode" enum:"since_base,recent" description:"since_base lists the commits since baseSha; recent lists the newest 50 first-parent commits of a default branch, or of a branch with no default branch to measure from."`
 }
 
+// WorkspaceBranchesResponse lists the branches a session's review can read.
+type WorkspaceBranchesResponse struct {
+	SessionID     domain.SessionID          `json:"sessionId"`
+	Supported     bool                      `json:"supported" description:"False for scratch sessions, which have no Git history."`
+	DefaultBranch string                    `json:"defaultBranch,omitempty"`
+	Branches      []WorkspaceBranchResponse `json:"branches" description:"The checked-out row first, then the rest newest first; at most 200 rows."`
+	Truncated     bool                      `json:"truncated"`
+}
+
+// WorkspaceBranchResponse is one branch a review can read. A local branch
+// with a pull request is only annotated with it; a pull request whose source
+// branch is not local gets a row of its own.
+type WorkspaceBranchResponse struct {
+	Kind       sessionsvc.WorkspaceBranchKind `json:"kind" enum:"local,pull_request" description:"local reads as a branch view (or the checked-out worktree); pull_request reads as a pull request view."`
+	Name       string                         `json:"name" description:"Branch name, the pull request's source branch, or empty for a detached HEAD."`
+	TipSHA     string                         `json:"tipSha,omitempty"`
+	UpdatedAt  *time.Time                     `json:"updatedAt,omitempty" description:"The tip's committer time, or the pull request's last update."`
+	CheckedOut bool                           `json:"checkedOut"`
+	Detached   bool                           `json:"detached,omitempty"`
+	IsDefault  bool                           `json:"isDefault"`
+	PRNumber   int                            `json:"prNumber,omitempty"`
+	PRURL      string                         `json:"prUrl,omitempty" description:"Pass as sourceUrl with prNumber to read a pull_request row."`
+	PRTitle    string                         `json:"prTitle,omitempty"`
+}
+
 // ListPRFilesResponse is the exact base...head changed-file set for one PR.
 type ListPRFilesResponse struct {
 	SessionID domain.SessionID       `json:"sessionId"`

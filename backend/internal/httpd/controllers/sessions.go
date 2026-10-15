@@ -122,6 +122,7 @@ type SessionService interface {
 	RefreshWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error)
 	ReconcileWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error)
 	GetWorkspaceHistory(ctx context.Context, id domain.SessionID, view sessionsvc.WorkspaceView) (sessionsvc.WorkspaceHistory, error)
+	ListWorkspaceBranches(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceBranches, error)
 	ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceFiles, error)
 	GetWorkspaceFile(ctx context.Context, id domain.SessionID, path string, section sessionsvc.WorkspaceFileSection) (sessionsvc.WorkspaceFileDetail, error)
 	GetWorkspaceFileAtCommit(ctx context.Context, id domain.SessionID, path, commitSHA string) (sessionsvc.WorkspaceFileDetail, error)
@@ -223,6 +224,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Get("/sessions/{sessionId}/workspace/manifest", c.getWorkspaceManifest)
 	r.Get("/sessions/{sessionId}/workspace/history", c.getWorkspaceHistory)
 	r.Post("/sessions/{sessionId}/workspace/history/selection", c.getWorkspaceCommitSelection)
+	r.Get("/sessions/{sessionId}/workspace/branches", c.listWorkspaceBranches)
 	r.Get("/sessions/{sessionId}/workspace/files", c.listWorkspaceFiles)
 	r.Get("/sessions/{sessionId}/workspace/file", c.getWorkspaceFile)
 	r.Put("/sessions/{sessionId}/workspace/file", c.updateWorkspaceFile)
@@ -881,6 +883,19 @@ func (c *SessionsController) getWorkspaceCommitSelection(w http.ResponseWriter, 
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, workspaceCommitSelectionResponse(selection))
+}
+
+func (c *SessionsController) listWorkspaceBranches(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/branches")
+		return
+	}
+	branches, err := c.Svc.ListWorkspaceBranches(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, workspaceBranchesResponse(branches))
 }
 
 // workspaceView builds the view a JSON body selects. The service validates it.
@@ -2906,6 +2921,20 @@ func workspaceHistoryResponse(history sessionsvc.WorkspaceHistory) WorkspaceHist
 	return WorkspaceHistoryResponse{
 		SessionID: history.SessionID, View: WorkspaceViewResponse(history.View), Commits: workspaceCommitsResponse(history.Commits),
 		CommitsTruncated: history.CommitsTruncated, RangeSummary: rangeSummary, Ahead: history.Ahead, Behind: history.Behind,
+	}
+}
+
+func workspaceBranchesResponse(branches sessionsvc.WorkspaceBranches) WorkspaceBranchesResponse {
+	rows := make([]WorkspaceBranchResponse, 0, len(branches.Branches))
+	for _, branch := range branches.Branches {
+		rows = append(rows, WorkspaceBranchResponse{
+			Kind: branch.Kind, Name: branch.Name, TipSHA: branch.TipSHA, UpdatedAt: optionalTime(branch.UpdatedAt),
+			CheckedOut: branch.CheckedOut, Detached: branch.Detached, IsDefault: branch.IsDefault,
+			PRNumber: branch.PRNumber, PRURL: branch.PRURL, PRTitle: branch.PRTitle,
+		})
+	}
+	return WorkspaceBranchesResponse{
+		SessionID: branches.SessionID, Supported: branches.Supported, DefaultBranch: branches.DefaultBranch, Branches: rows, Truncated: branches.Truncated,
 	}
 }
 

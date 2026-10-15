@@ -3048,6 +3048,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/workspace/branches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the local branches and pull requests a workspace review can read, checked-out branch first */
+        get: operations["listSessionWorkspaceBranches"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/workspace/diffs": {
         parameters: {
             query?: never;
@@ -6431,6 +6448,37 @@ export interface components {
             processedTokens: null | number;
             /** @description Input not read from an existing provider cache. Includes cache writes. */
             uncachedInputTokens: null | number;
+        };
+        WorkspaceBranchResponse: {
+            checkedOut: boolean;
+            detached?: boolean;
+            isDefault: boolean;
+            /**
+             * @description local reads as a branch view (or the checked-out worktree); pull_request reads as a pull request view.
+             * @enum {string}
+             */
+            kind: "local" | "pull_request";
+            /** @description Branch name, the pull request's source branch, or empty for a detached HEAD. */
+            name: string;
+            prNumber?: number;
+            prTitle?: string;
+            /** @description Pass as sourceUrl with prNumber to read a pull_request row. */
+            prUrl?: string;
+            tipSha?: string;
+            /**
+             * Format: date-time
+             * @description The tip's committer time, or the pull request's last update.
+             */
+            updatedAt?: null | string;
+        };
+        WorkspaceBranchesResponse: {
+            /** @description The checked-out row first, then the rest newest first; at most 200 rows. */
+            branches: components["schemas"]["WorkspaceBranchResponse"][];
+            defaultBranch?: string;
+            sessionId: string;
+            /** @description False for scratch sessions, which have no Git history. */
+            supported: boolean;
+            truncated: boolean;
         };
         WorkspaceCommitConflictResponse: {
             /** @description The ticked commit whose changes did not apply. */
@@ -18189,6 +18237,56 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listSessionWorkspaceBranches: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceBranchesResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

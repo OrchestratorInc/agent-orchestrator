@@ -90,6 +90,7 @@ type fakeSessionService struct {
 	workspaceReconciles        int
 	workspaceHistoryView       sessionsvc.WorkspaceView
 	workspaceViewHistory       *sessionsvc.WorkspaceHistory
+	workspaceBranches          sessionsvc.WorkspaceBranches
 	spawnErr                   error
 	lastSpawn                  ports.SpawnConfig
 	orchestratorMode           domain.SessionMode
@@ -718,6 +719,18 @@ func (f *fakeSessionService) GetWorkspaceHistory(ctx context.Context, id domain.
 		SessionID: files.SessionID, Commits: files.Commits, CommitsTruncated: files.CommitsTruncated,
 		Ahead: files.Ahead, Behind: files.Behind,
 	}, nil
+}
+
+func (f *fakeSessionService) ListWorkspaceBranches(_ context.Context, id domain.SessionID) (sessionsvc.WorkspaceBranches, error) {
+	if f.workspaceErr != nil {
+		return sessionsvc.WorkspaceBranches{}, f.workspaceErr
+	}
+	if _, ok := f.sessions[id]; !ok {
+		return sessionsvc.WorkspaceBranches{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+	branches := f.workspaceBranches
+	branches.SessionID = id
+	return branches, nil
 }
 
 func (f *fakeSessionService) ListPRFiles(_ context.Context, id domain.SessionID, _ int, _ string) (sessionsvc.PRFiles, error) {
@@ -3588,6 +3601,50 @@ func TestSessionsAPI_GetWorkspaceHistoryForBranchView(t *testing.T) {
 		body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/history?"+tc.query, "")
 		assertErrorCode(t, body, status, http.StatusBadRequest, tc.code)
 	}
+}
+
+func TestSessionsAPI_ListWorkspaceBranches(t *testing.T) {
+	svc := newFakeSessionService()
+	updated := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	svc.workspaceBranches = sessionsvc.WorkspaceBranches{
+		Supported: true, DefaultBranch: "main", Truncated: true,
+		Branches: []sessionsvc.WorkspaceBranch{
+			{Kind: sessionsvc.WorkspaceBranchLocal, Name: "session", TipSHA: "tip-sha", UpdatedAt: updated, CheckedOut: true, PRNumber: 7, PRURL: "https://github.com/acme/repo/pull/7", PRTitle: "Add login"},
+			{Kind: sessionsvc.WorkspaceBranchLocal, Name: "main", TipSHA: "main-sha", IsDefault: true},
+			{Kind: sessionsvc.WorkspaceBranchPullRequest, Name: "fork-fix", TipSHA: "pr-sha", UpdatedAt: updated, PRNumber: 9, PRURL: "https://github.com/acme/repo/pull/9"},
+		},
+	}
+	srv := newSessionTestServer(t, svc)
+
+	body, status, headers := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/branches", "")
+	assertJSON(t, headers)
+	if status != http.StatusOK {
+		t.Fatalf("GET branches = %d, want 200; body=%s", status, body)
+	}
+	var got controllers.WorkspaceBranchesResponse
+	mustJSON(t, body, &got)
+	if got.SessionID != "ao-1" || !got.Supported || got.DefaultBranch != "main" || !got.Truncated || len(got.Branches) != 3 {
+		t.Fatalf("branches = %+v", got)
+	}
+	checkedOut := got.Branches[0]
+	if checkedOut.Kind != "local" || !checkedOut.CheckedOut || checkedOut.UpdatedAt == nil || !checkedOut.UpdatedAt.Equal(updated) || checkedOut.PRNumber != 7 || checkedOut.PRURL != "https://github.com/acme/repo/pull/7" || checkedOut.PRTitle != "Add login" {
+		t.Fatalf("checked-out row = %+v", checkedOut)
+	}
+	if main := got.Branches[1]; !main.IsDefault || main.UpdatedAt != nil || main.CheckedOut {
+		t.Fatalf("main row = %+v, want the default branch with no time", main)
+	}
+	if pr := got.Branches[2]; pr.Kind != "pull_request" || pr.Name != "fork-fix" || pr.PRNumber != 9 || pr.TipSHA != "pr-sha" {
+		t.Fatalf("pull request row = %+v", pr)
+	}
+
+	svc.workspaceBranches = sessionsvc.WorkspaceBranches{}
+	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/branches", "")
+	if status != http.StatusOK || !strings.Contains(string(body), `"branches":[]`) || !strings.Contains(string(body), `"supported":false`) {
+		t.Fatalf("GET unsupported branches = %d %s, want supported false and an empty array", status, body)
+	}
+
+	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/missing/workspace/branches", "")
+	assertErrorCode(t, body, status, http.StatusNotFound, "SESSION_NOT_FOUND")
 }
 
 func TestSessionsAPI_ListPRFiles(t *testing.T) {
