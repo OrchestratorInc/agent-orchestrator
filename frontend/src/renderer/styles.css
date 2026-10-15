@@ -1622,6 +1622,33 @@ textarea,
 	background: transparent;
 }
 
+/* The harness list and the open harness own their scroll areas, so the page
+   itself does not scroll; the name and tabs stay in view. Other settings
+   pages, and a narrow harness list on its own, keep the normal page scroll. */
+.settings-thin-scrollbar:has([data-harness-detail]) {
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.settings-dialog-body:has([data-harness-detail]),
+.settings-dialog-body > div:has([data-harness-detail]),
+[data-section="harness"]:has([data-harness-detail]),
+[data-section="harness"]:has([data-harness-detail]) > div {
+	min-width: 0;
+	max-width: 100%;
+	min-height: 0;
+	flex: 1;
+}
+
+.settings-dialog-body:has([data-harness-detail]) {
+	padding-bottom: 18px;
+}
+
+[data-section="harness"]:has([data-harness-detail]) > div > :not([data-harness-detail]) {
+	flex-shrink: 0;
+}
+
 .settings-thin-scrollbar {
 	scrollbar-width: thin;
 	scrollbar-color: color-mix(in srgb, var(--color-scrollbar) 16%, transparent) transparent;

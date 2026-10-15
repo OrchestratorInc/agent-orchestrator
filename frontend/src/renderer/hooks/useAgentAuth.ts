@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AgentCheckError } from "../lib/agent-check-error";
 import type { components } from "../../api/schema";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
@@ -16,19 +17,19 @@ async function fetchAgentAuthPlans(hostId?: string): Promise<AgentAuthPlan[]> {
 	return data.plans;
 }
 
-export function useAgentAuthPlans(hostId?: string) {
-	return useQuery({ queryKey: agentAuthPlansQueryKeyForHost(hostId), queryFn: () => fetchAgentAuthPlans(hostId), staleTime: 60_000 });
+export function useAgentAuthPlans(hostId?: string, enabled = true) {
+	return useQuery({ queryKey: agentAuthPlansQueryKeyForHost(hostId), queryFn: () => fetchAgentAuthPlans(hostId), staleTime: 60_000, enabled });
 }
 
-export function useStartAgentAuth(hostId?: string) {
+export function useStartAgentAuth(hostId?: string, action: "login" | "logout" = "login") {
 	const queryClient = useQueryClient();
 	const shellQueryKey = shellTerminalsQueryKeyForHost(hostId);
 	return useMutation({
 		mutationFn: async (agentId: string): Promise<StartAgentAuthResponse> => {
-			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/auth", {
+			const { data, error } = await clientForSessionHost(hostId).POST(action === "logout" ? "/api/v1/agents/{agent}/logout" : "/api/v1/agents/{agent}/auth", {
 				params: { path: { agent: agentId } },
 			});
-			if (error || !data) throw new Error(apiErrorMessage(error, "Could not start agent authentication."));
+			if (error || !data) throw new Error(apiErrorMessage(error, action === "logout" ? "Could not start agent logout." : "Could not start agent authentication."));
 			return data;
 		},
 		onSuccess: (result) => {
@@ -51,9 +52,9 @@ export function useStartAgentAuth(hostId?: string) {
 }
 
 export async function probeAgentAuth(agentId: string, hostId?: string) {
-	const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/probe", {
+	const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/probe", {
 		params: { path: { agent: agentId } },
 	});
-	if (error || !data) throw new Error(apiErrorMessage(error, "Could not check agent login."));
+	if (error || !data) throw new AgentCheckError("Authentication probe", error, response?.status);
 	return data;
 }

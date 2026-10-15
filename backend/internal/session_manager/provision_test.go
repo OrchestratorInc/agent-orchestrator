@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -454,6 +455,51 @@ func TestResolveClaudeModelWithoutEffortRejectsUnknownAndStaleCatalogs(t *testin
 	}}
 	if _, err := m.resolveAgentConfig(context.Background(), cfg, domain.ProjectConfig{}); !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) {
 		t.Fatalf("stale catalog error = %v, want ErrModelCapabilitiesUnavailable", err)
+	}
+}
+
+func TestResolveCodexTUIAgentConfigFallsBackWhenCatalogCannotValidate(t *testing.T) {
+	cfg := ports.SpawnConfig{ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
+		AgentConfig: domain.AgentConfig{Model: "gpt-custom", Effort: "xhigh"}}
+	unvalidated := domain.AgentConfig{Model: "gpt-custom", Effort: "xhigh"}
+	for name, catalog := range map[string]tuningCatalog{
+		"lookup failed":   {err: errors.New("not logged in")},
+		"stale":           {catalog: ports.AgentModelCatalog{Stale: true, Models: []ports.AgentModelInfo{{ID: "gpt-custom", Efforts: []string{"xhigh"}}}}},
+		"custom model":    {catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "gpt-5", Efforts: []string{"low"}}}}},
+		"unlisted effort": {catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "gpt-custom", Efforts: []string{"low"}}}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := &Manager{modelCatalog: catalog, logger: slog.New(slog.DiscardHandler)}
+			got, err := m.resolveTUIAgentConfig(context.Background(), cfg, domain.ProjectConfig{}, unvalidated)
+			if err != nil || got != unvalidated {
+				t.Fatalf("got %+v, %v; want unvalidated launch", got, err)
+			}
+		})
+	}
+}
+
+func TestResolveClaudeTUIAgentConfigStillRequiresCatalog(t *testing.T) {
+	m := &Manager{modelCatalog: tuningCatalog{err: errors.New("not logged in")}, logger: slog.New(slog.DiscardHandler)}
+	cfg := ports.SpawnConfig{ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		AgentConfig: domain.AgentConfig{Model: "opus", Effort: "high"}}
+	if _, err := m.resolveTUIAgentConfig(context.Background(), cfg, domain.ProjectConfig{}, cfg.AgentConfig); !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) {
+		t.Fatalf("err = %v, want ErrModelCapabilitiesUnavailable", err)
+	}
+}
+
+func TestResolveCodexTUIAgentConfigFallsBackWhenCatalogLookupTimesOut(t *testing.T) {
+	cfg := ports.SpawnConfig{ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
+		AgentConfig: domain.AgentConfig{Model: "gpt-custom", Effort: "xhigh"}}
+	m := &Manager{modelCatalog: tuningCatalog{err: fmt.Errorf("codex model/list: %w", context.DeadlineExceeded)}, logger: slog.New(slog.DiscardHandler)}
+	got, err := m.resolveTUIAgentConfig(context.Background(), cfg, domain.ProjectConfig{}, cfg.AgentConfig)
+	if err != nil || got != cfg.AgentConfig {
+		t.Fatalf("got %+v, %v; want unvalidated launch", got, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	m.modelCatalog = tuningCatalog{err: context.Canceled}
+	if _, err := m.resolveTUIAgentConfig(ctx, cfg, domain.ProjectConfig{}, cfg.AgentConfig); err == nil {
+		t.Fatal("cancelled spawn launched")
 	}
 }
 

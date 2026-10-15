@@ -455,6 +455,10 @@ func (c *lanFakeAgentCatalog) Models(_ context.Context, agentID, _ string, _ boo
 	return ports.AgentModelCatalog{AgentID: agentID}, nil
 }
 
+func (c *lanFakeAgentCatalog) ModelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
+	return c.Models(ctx, agentID, projectID, refresh)
+}
+
 func (c *lanFakeAgentCatalog) RevalidateModels(_ context.Context, agentID, _ string) (ports.AgentModelCatalog, error) {
 	c.calls++
 	return ports.AgentModelCatalog{AgentID: agentID}, nil

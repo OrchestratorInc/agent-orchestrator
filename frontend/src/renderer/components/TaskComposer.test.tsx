@@ -1818,6 +1818,109 @@ describe("TaskComposer", () => {
 		);
 	});
 
+	function mockDisabledModels(disabledModels: string[]) {
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/settings") {
+				return { data: { defaultSessionMode: "tui", chatHarnesses: [], harnessDefaults: { codex: { disabledModels } } } };
+			}
+			if (path.includes("/models")) {
+				return {
+					data: {
+						agent: "codex",
+						selectionMode: "catalog",
+						models: [
+							{ id: "gpt-default", label: "GPT Default", isDefault: true },
+							{ id: "gpt-other", label: "GPT Other" },
+						],
+						allowCustom: false,
+						refreshRecommended: false,
+					},
+				};
+			}
+			return { data: { status: "ok", project: { config: { worker: { agent: "codex" } } } } };
+		});
+	}
+
+	it("opens on an offered model when Settings hides the catalog default", async () => {
+		mockDisabledModels(["gpt-default"]);
+		h.post.mockResolvedValue({ data: { workerId: "sess-offered" } });
+
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		const model = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(model).toHaveTextContent("GPT Other"));
+		await userEvent.click(model);
+		expect(screen.queryByRole("menuitem", { name: "GPT Default" })).not.toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		fireEvent.change(task(), { target: { value: "Use an offered model" } });
+		fireEvent.click(screen.getByText("Start task"));
+		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(1));
+		expect(h.post.mock.calls[0][1].body).toMatchObject({ model: "gpt-other" });
+	});
+
+	it("keeps the composer usable when the catalog response has no model list", async () => {
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { status: "ok" } }
+			: { data: { status: "ok", project: { config: { worker: { agent: "codex" } } } } });
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(h.get).toHaveBeenCalledWith("/api/v1/agents/{agent}/models", expect.anything()));
+		expect(task()).toBeVisible();
+		fireEvent.change(task(), { target: { value: "Use the native model" } });
+		expect(task()).toHaveValue("Use the native model");
+	});
+
+	it.each([false, true])("keeps FX's native provider when no default is reported (unrelated model hidden: %s)", async (hideUnrelated) => {
+		h.agentCatalog = { agents: [agentReadiness("fx", "FX")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/settings") {
+				return { data: { defaultSessionMode: "tui", chatHarnesses: [], harnessDefaults: { fx: {
+					disabledModels: hideUnrelated ? ["fx:gateway:beta"] : [],
+				} } } };
+			}
+			if (path.includes("/models")) {
+				return { data: { agent: "fx", selectionMode: "catalog", allowCustom: true, refreshRecommended: false, models: [
+					{ id: "fx:codex:alpha", label: "Codex Alpha", provider: "codex" },
+					{ id: "fx:gateway:beta", label: "Gateway Beta", provider: "gateway" },
+					{ id: "fx:gateway:zeta", label: "Gateway Zeta", provider: "gateway" },
+				] } };
+			}
+			return { data: { status: "ok", project: { config: { worker: { agent: "fx" } } } } };
+		});
+		h.post.mockResolvedValue({ data: { workerId: "sess-fx-native" } });
+
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "fx"));
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await userEvent.click(picker);
+		expect(await screen.findByRole("menuitem", { name: "Gateway Zeta" })).toBeInTheDocument();
+		if (hideUnrelated) {
+			expect(screen.queryByRole("menuitem", { name: "Gateway Beta" })).not.toBeInTheDocument();
+		} else {
+			expect(screen.getByRole("menuitem", { name: "Gateway Beta" })).toBeInTheDocument();
+		}
+		await userEvent.keyboard("{Escape}");
+		expect(picker).toHaveTextContent("Select model");
+		fireEvent.change(task(), { target: { value: "Use FX native Gateway selection" } });
+		await waitForTaskReady();
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(1));
+		expect(h.post.mock.calls[0][1].body).toMatchObject({ agent: "fx" });
+		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("model");
+	});
+
+	it("keeps the catalog default when Settings switches off no model", async () => {
+		mockDisabledModels([]);
+		h.post.mockResolvedValue({ data: { workerId: "sess-all" } });
+
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		const model = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(model).toHaveTextContent("GPT Default"));
+		fireEvent.change(task(), { target: { value: "Use the default model" } });
+		fireEvent.click(screen.getByText("Start task"));
+		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(1));
+		// The daemon resolves its own default; the composer does not pin it.
+		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("model");
+	});
+
 	it("inherits worker effort visually but sends only explicit task overrides", async () => {
 		h.get.mockImplementation(async (path: string) => {
 			if (path.includes("/models")) {

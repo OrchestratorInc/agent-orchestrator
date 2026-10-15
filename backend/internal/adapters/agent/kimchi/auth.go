@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -28,13 +30,19 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		return ports.AgentAuthStatusUnknown, err
 	}
 
-	// Tier 1: KIMCHI_API_KEY env var (highest precedence in kimchi's config loading).
-	if key := strings.TrimSpace(os.Getenv("KIMCHI_API_KEY")); key != "" {
+	// Kimchi gives KIMCHI_API_KEY precedence over its global config at launch,
+	// so the check names the variable whenever it is set.
+	if strings.TrimSpace(os.Getenv("KIMCHI_API_KEY")) != "" {
+		authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, "KIMCHI_API_KEY")
 		return ports.AgentAuthStatusAuthorized, nil
 	}
-
-	// Tier 2: global ~/.config/kimchi/config.json apiKey field.
-	return kimchiConfigAuthStatus(ctx, kimchiGlobalConfigPath())
+	status, configErr := kimchiConfigAuthStatus(ctx, kimchiGlobalConfigPath())
+	if configErr == nil && status.HasCredential() {
+		return status, nil
+	}
+	// Records which variable was checked.
+	authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, "KIMCHI_API_KEY")
+	return status, configErr
 }
 
 // kimchiGlobalConfigPath returns the path to kimchi's global config file.
@@ -79,6 +87,7 @@ func kimchiConfigAuthStatus(ctx context.Context, configPath string) (ports.Agent
 	}
 
 	if key := kimchiExtractAPIKey(config); key != "" {
+		ports.RecordAuthEvidence(ctx, authprobe.FileSource(configPath).WithMethod(domain.AgentAccountMethodAPIKey))
 		return ports.AgentAuthStatusAuthorized, nil
 	}
 	return ports.AgentAuthStatusUnknown, nil
