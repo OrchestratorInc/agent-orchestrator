@@ -100,8 +100,44 @@ func (m *Manager) updateBlocker(ctx context.Context, rec domain.SessionRecord) (
 		if err != nil || commands > 0 {
 			return domain.SessionWaitCommand, true
 		}
+		// A stopped terminal comes back only by resuming its conversation.
+		if !m.terminalResumesNatively(ctx, rec) {
+			return domain.SessionWaitResume, true
+		}
 	}
 	return "", false
+}
+
+// terminalResumesNatively reports whether a terminal stopped for an update
+// could start again on its own conversation, as resumeAfterUpdate requires:
+// the adapter has a restore command and the conversation was persisted.
+func (m *Manager) terminalResumesNatively(ctx context.Context, rec domain.SessionRecord) bool {
+	agent, ok := m.agents.Agent(rec.Harness)
+	if !ok {
+		return false
+	}
+	project, err := m.loadProject(ctx, rec.ProjectID)
+	if err != nil {
+		return false
+	}
+	ref := ports.SessionRef{
+		ID:            string(rec.ID),
+		WorkspacePath: rec.Metadata.WorkspacePath,
+		Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID},
+	}
+	agentConfig := restoredAgentConfig(rec, project.Config)
+	_, ok, err = agent.GetRestoreCommand(ctx, ports.RestoreConfig{
+		Session: ref, Kind: rec.Kind, DataDir: m.dataDir, Config: agentConfig, Permissions: agentConfig.Permissions,
+	})
+	if err != nil || !ok {
+		return false
+	}
+	env, _, err := m.launchRuntimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
+	if err != nil {
+		return false
+	}
+	m.augmentAgentRuntimeEnv(agent, env)
+	return !nativeConversationMissing(ctx, agent, ref, rec.Metadata.AgentSessionID, env)
 }
 
 // StopHarnessSessions stops every live session of harness without ending it:

@@ -2329,6 +2329,7 @@
 	"settings.harness.waitReason.approval": "응답 대기 중",
 	"settings.harness.waitReason.starting": "시작 중",
 	"settings.harness.waitReason.reviewer": "리뷰 중",
+	"settings.harness.waitReason.resume": "업데이트 후 이어서 실행할 수 없음",
 	"settings.versionRefresh.label": "열린 세션을 새 버전으로 자동 전환",
 	"settings.versionRefresh.description": "에이전트 업데이트 후 유휴 세션은 직접 다시 시작할 때까지 기다리지 않고 새 버전으로 다시 시작됩니다.",
 	"chat.versionSwitch.pending": "{{version}}(으)로 전환 중…",

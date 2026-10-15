@@ -62,6 +62,7 @@ const WAIT_REASON_KEYS = {
 	approval: "settings.harness.waitReason.approval",
 	starting: "settings.harness.waitReason.starting",
 	reviewer: "settings.harness.waitReason.reviewer",
+	resume: "settings.harness.waitReason.resume",
 } as const satisfies Record<NonNullable<InstallJob["waitingOn"]>[number]["reason"], string>;
 
 /**

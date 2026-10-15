@@ -2366,6 +2366,7 @@
 	"settings.harness.waitReason.approval": "esperando tu respuesta",
 	"settings.harness.waitReason.starting": "iniciando",
 	"settings.harness.waitReason.reviewer": "revisando",
+	"settings.harness.waitReason.resume": "no se puede reanudar tras la actualización",
 	"settings.versionRefresh.label": "Pasar las sesiones abiertas a las nuevas versiones automáticamente",
 	"settings.versionRefresh.description": "Tras actualizar un agente, las sesiones inactivas se reinician con la nueva versión en lugar de esperar a que las reinicies.",
 	"chat.versionSwitch.pending": "Cambiando a {{version}}…",

@@ -361,12 +361,15 @@ const (
 	SessionWaitStarting SessionWaitReason = "starting"
 	// SessionWaitReviewer means a reviewer runs the harness.
 	SessionWaitReviewer SessionWaitReason = "reviewer"
+	// SessionWaitResume means a terminal could not be started again on its own
+	// conversation, so it is not stopped for the update; it waits until it ends.
+	SessionWaitResume SessionWaitReason = "resume"
 )
 
 // SessionWait is one session an update waits for.
 type SessionWait struct {
 	SessionID SessionID         `json:"sessionId"`
-	Reason    SessionWaitReason `json:"reason" enum:"working,command,approval,starting,reviewer"`
+	Reason    SessionWaitReason `json:"reason" enum:"working,command,approval,starting,reviewer,resume"`
 }
 
 // SessionBranchState is the session branch's commit and push facts.

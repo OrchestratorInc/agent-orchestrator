@@ -2395,6 +2395,7 @@
 	"settings.harness.waitReason.approval": "等待你的回复",
 	"settings.harness.waitReason.starting": "启动中",
 	"settings.harness.waitReason.reviewer": "正在审查",
+	"settings.harness.waitReason.resume": "更新后无法恢复",
 	"settings.versionRefresh.label": "自动将打开的会话切换到新版本",
 	"settings.versionRefresh.description": "代理更新后，空闲会话会在新版本上重启，无需等待你手动重启。",
 	"chat.versionSwitch.pending": "正在切换到 {{version}}…",

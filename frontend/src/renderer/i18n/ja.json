@@ -2329,6 +2329,7 @@
 	"settings.harness.waitReason.approval": "あなたの応答待ち",
 	"settings.harness.waitReason.starting": "起動中",
 	"settings.harness.waitReason.reviewer": "レビュー中",
+	"settings.harness.waitReason.resume": "更新後に再開できません",
 	"settings.versionRefresh.label": "開いているセッションを新しいバージョンへ自動で切り替える",
 	"settings.versionRefresh.description": "エージェントの更新後、待機中のセッションは再起動を待たずに新しいバージョンで再起動します。",
 	"chat.versionSwitch.pending": "{{version}} に切り替え中…",

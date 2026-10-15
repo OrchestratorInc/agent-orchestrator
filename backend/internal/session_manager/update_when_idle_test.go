@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func TestBusyHarnessSessionsNamesWhyEachMustWait(t *testing.T) {
@@ -49,5 +50,35 @@ func TestBusyHarnessSessionsNamesWhyEachMustWait(t *testing.T) {
 		if got[id] != reason {
 			t.Fatalf("busy = %v, want %v", got, want)
 		}
+	}
+}
+
+// idleWorkloadRuntime reports that no terminal runs a command.
+type idleWorkloadRuntime struct{ *fakeRuntime }
+
+func (idleWorkloadRuntime) RunningWorkloadCommands(context.Context, ports.RuntimeHandle, ports.SupervisedProcessRef) (int, error) {
+	return 0, nil
+}
+
+func TestBusyHarnessSessionsKeepsATerminalThatCannotResume(t *testing.T) {
+	mgr, store, rt := newChatManager(&recordingLauncher{})
+	mgr.runtime = idleWorkloadRuntime{rt}
+	terminal := func(id domain.SessionID, agentSessionID string) domain.SessionRecord {
+		return domain.SessionRecord{ID: id, ProjectID: chatTestProject, Kind: domain.KindWorker,
+			Harness: domain.HarnessCodex, Mode: domain.SessionModeTUI,
+			Activity: domain.Activity{State: domain.ActivityIdle},
+			Metadata: domain.SessionMetadata{WorkspacePath: "/ws/" + string(id), Branch: "ao/" + string(id),
+				RuntimeHandleID: "pane-" + string(id), AgentSessionID: agentSessionID}}
+	}
+	store.sessions["resumable"] = terminal("resumable", "native-1")
+	// No native conversation id: stopping it would leave nothing to resume.
+	store.sessions["fresh-only"] = terminal("fresh-only", "")
+
+	busy, err := mgr.BusyHarnessSessions(context.Background(), domain.HarnessCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(busy) != 1 || busy[0].SessionID != "fresh-only" || busy[0].Reason != domain.SessionWaitResume {
+		t.Fatalf("busy = %+v, want only fresh-only waiting to resume", busy)
 	}
 }

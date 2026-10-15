@@ -5849,7 +5849,7 @@ export interface components {
         };
         SessionWait: {
             /** @enum {string} */
-            reason: "working" | "command" | "approval" | "starting" | "reviewer";
+            reason: "working" | "command" | "approval" | "starting" | "reviewer" | "resume";
             sessionId: string;
         };
         SetActivityRequest: {

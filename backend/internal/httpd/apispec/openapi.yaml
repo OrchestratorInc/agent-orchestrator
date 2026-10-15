@@ -16826,6 +16826,7 @@ components:
           - approval
           - starting
           - reviewer
+          - resume
           type: string
         sessionId:
           type: string

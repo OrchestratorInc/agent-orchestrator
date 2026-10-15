@@ -2366,6 +2366,7 @@
 	"settings.harness.waitReason.approval": "aguardando você",
 	"settings.harness.waitReason.starting": "iniciando",
 	"settings.harness.waitReason.reviewer": "revisando",
+	"settings.harness.waitReason.resume": "não pode ser retomada após a atualização",
 	"settings.versionRefresh.label": "Mover sessões abertas para novas versões automaticamente",
 	"settings.versionRefresh.description": "Após atualizar um agente, sessões ociosas reiniciam na nova versão em vez de esperar que você as reinicie.",
 	"chat.versionSwitch.pending": "Mudando para {{version}}…",
