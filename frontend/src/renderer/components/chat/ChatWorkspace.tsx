@@ -3500,13 +3500,16 @@ export function Timeline({
 	// One slot carries the start-up row from the first frame: the opening turn's
 	// group, or before that turn exists, the brief's own live group. Drawing it
 	// anywhere else first would make it jump lines when the turn arrives.
-	const startupGroupKey = startup && showStartup
+	// A chat started from the new chat page reads as setting up from the send, before
+	// its session reports any steps, so the row keeps its label through the handoff
+	// and the steps fill in under it.
+	const openingSetup = !startup && openingPending && turn?.state !== "running"
+		? { failed: false, steps: [], agentName: agentLabel(snapshot.harness) }
+		: undefined;
+	const rowStartup = startup ?? openingSetup;
+	const startupGroupKey = rowStartup && (openingSetup || showStartup)
 		? groups.find((group) => (openingTurnId ? group.turnId === openingTurnId : group.live))?.key
 		: undefined;
-	// A chat started from the new chat page shows its setup as the composer's
-	// shimmer under a plain Working row. Other starts keep the checklist, which
-	// is what explains a long setup; a failure always names its steps.
-	const rowStartup = startup ? { ...startup, quiet: Boolean(openingStartedAt) && !startup.failed } : undefined;
 	// Read by syncScrollLayout (a stable callback) so the initial snap only latches
 	// once real conversation content exists (history can load after the chat opens).
 	const groupCountRef = useRef(groups.length);
@@ -4177,9 +4180,9 @@ export function Timeline({
 					</div>
 					{/* Normally drawn inside the opening turn's group; this covers a start
 					    whose brief is not in the timeline. */}
-					{rowStartup && showStartup && !startupGroupKey ? (
-						<LiveResponseStatus startupLabel={rowStartup.quiet ? undefined : t(rowStartup.failed ? "chat.startup.failed" : "chat.startup.running")} failed={rowStartup.failed}>
-							{rowStartup.quiet ? null : <SessionStartup {...rowStartup} />}
+					{rowStartup && (openingSetup || showStartup) && !startupGroupKey ? (
+						<LiveResponseStatus startupLabel={t(rowStartup.failed ? "chat.startup.failed" : "chat.startup.running")} failed={rowStartup.failed}>
+							{rowStartup.steps.length > 0 ? <SessionStartup {...rowStartup} /> : null}
 						</LiveResponseStatus>
 					) : turn?.state === "running" && !groups.some((group) => group.turnId === turn.id) ? (
 						<LiveResponseStatus startedAt={turn.startedAt ?? turn.requestedAt} />
@@ -4414,7 +4417,7 @@ const TurnGroup = memo(function TurnGroup({
 	queued: boolean;
 	newHumanMessageIds: ReadonlySet<string>;
 	/** The opening turn of a starting session: its setup checklist. */
-	startup?: ComponentProps<typeof SessionStartup> & { quiet?: boolean };
+	startup?: ComponentProps<typeof SessionStartup>;
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 	workerUpdates?: boolean;
 	tight?: boolean;
@@ -4566,11 +4569,10 @@ const TurnGroup = memo(function TurnGroup({
 				key="turn-working"
 				startedAt={group.liveStartedAt}
 				settling={!startup && !group.live}
-				// A quiet start reads as working from the send, with no label swap.
-				startupLabel={startup && !startup.quiet ? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : undefined}
+				startupLabel={startup ? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : undefined}
 				failed={startup?.failed}
 			>
-				{startup && !startup.quiet ? <SessionStartup {...startup} /> : null}
+				{startup && startup.steps.length > 0 ? <SessionStartup {...startup} /> : null}
 			</LiveResponseStatus>,
 		);
 	}
