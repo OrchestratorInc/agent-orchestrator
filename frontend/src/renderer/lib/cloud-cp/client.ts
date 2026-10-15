@@ -261,12 +261,12 @@ export interface CloudCpClient {
 	resetBillingUsage(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingSummary>;
 	/** Heartbeat while a session is on screen, so reading it keeps it awake. */
 	touchSessionPresence(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<void>;
-	/** Saves the org's bring-your-own-Coder connection. Omit the token to keep the stored one. */
 	/**
 	 * Set the org's default sandbox provider (org admins; only an org offered
 	 * more than one provider). "" clears it. Returns the org's updated offering.
 	 */
 	putOrgSandboxProvider(orgId: string, defaultProvider: string, options?: CloudCpRequestOptions): Promise<CloudCpOffering>;
+	/** Saves the org's bring-your-own-Coder connection. Omit the token to keep the stored one. */
 	putOrgCoderConfig(
 		orgId: string,
 		body: CloudCpPutOrgCoderConfigRequest,

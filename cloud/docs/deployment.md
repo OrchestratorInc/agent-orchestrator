@@ -472,7 +472,7 @@ referenced secret never starts, and the deploy rolls back. Register the producti
 ### 2. WorkOS organization metadata
 
 Coder and Freestyle are open to every organization; each picks its default in
-the desktop's Settings (General, under the Cloud toggle), and a new project
+the desktop's Settings (General, Cloud; admins only), and a new project
 records that default (`config.sandboxProvider`), so changing it later moves no
 existing project. Any other provider listed in
 `AO_CLOUD_CAPABILITY_GATED_PROVIDERS` still needs a WorkOS `capabilities` entry
@@ -538,7 +538,9 @@ that before testing a change.
    again. Before that, list organizations running Freestyle without a plan
    (contract, internal and grandfathered ones included): their running
    Freestyle sessions pause within a minute of billing going live, so comp
-   them a plan first if they should keep running.
+   them a plan first if they should keep running. When billing is already
+   live, the release that makes Freestyle paid for everyone is the moment
+   they pause: list and comp them before deploying it.
 
 Rollback: use `rollback-release.sh` for the previous task definition. Emptying
 `AO_CLOUD_CAPABILITY_GATED_PROVIDERS` only opens providers other than Coder and
