@@ -318,6 +318,12 @@ func (c *conversation) start(
 	c.permissionMode = c.initialPermission
 	c.validateSettings = validateSettings
 	c.legacyModel = models != nil
+	for _, option := range configOptions {
+		if option.Select != nil && option.Select.Id == "model" {
+			c.legacyModel = false
+			break
+		}
+	}
 	c.legacyMode = modes != nil
 	c.mu.Unlock()
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerReady})

@@ -39,6 +39,26 @@ func boolOption(id, name string, current bool) acpsdk.SessionConfigOption {
 	}
 }
 
+func TestSessionPrefersModernModelConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		options []acpsdk.SessionConfigOption
+		legacy  bool
+	}{
+		{"legacy models only", nil, true},
+		{"modern model with parameters", []acpsdk.SessionConfigOption{selectOption("model", "Model", "grok-4.7"), selectOption("context", "Context", "500k")}, false},
+		{"unrelated modern option", []acpsdk.SessionConfigOption{selectOption("context", "Context", "500k")}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conv := &conversation{events: make(chan ports.ChatEvent, 1)}
+			conv.start("session", make(ports.ChatCapabilities), nil, nil, nil, "", nil, tc.options, &legacySessionModelState{}, nil)
+			if conv.legacyModel != tc.legacy {
+				t.Fatalf("legacy model setter = %v, want %v", conv.legacyModel, tc.legacy)
+			}
+		})
+	}
+}
+
 // The session/update notification documents itself as a complete replacement
 // "including removing an option", so an empty catalog from that channel is a
 // real statement about the session and must apply verbatim. Swallowing it would

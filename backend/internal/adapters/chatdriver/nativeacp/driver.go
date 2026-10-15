@@ -54,6 +54,7 @@ type Config struct {
 	PermissionPolicy             acpdriver.PermissionPolicy
 	ClientExtension              acpdriver.ClientExtensionHandler
 	ClientExtensionAliases       map[string]string
+	ClientCapabilitiesMeta       map[string]any
 	ValidateTurnSettings         acpdriver.TurnSettingsValidator
 	EncodeProviderConversationID func(string) string
 	DecodeProviderConversationID func(string) (string, error)
@@ -147,6 +148,7 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		PermissionPolicy:             cfg.PermissionPolicy,
 		ClientExtension:              cfg.ClientExtension,
 		ClientExtensionAliases:       cfg.ClientExtensionAliases,
+		ClientCapabilitiesMeta:       cfg.ClientCapabilitiesMeta,
 		ValidateTurnSettings:         cfg.ValidateTurnSettings,
 		EncodeProviderConversationID: cfg.EncodeProviderConversationID,
 		DecodeProviderConversationID: cfg.DecodeProviderConversationID,

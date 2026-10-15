@@ -1333,3 +1333,21 @@ func TestParseAiderModelsGroupsByLiteLLMProvider(t *testing.T) {
 		}
 	}
 }
+
+func TestCursorCatalogFingerprintTracksParameterizedACPSource(t *testing.T) {
+	list := func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+		return nil, nil
+	}
+	cli := Discoverer{}
+	acp := Discoverer{ACPOptions: map[string]ACPOptionListFunc{"cursor": list, "codex": list}}
+	request := ports.AgentModelDiscoveryRequest{AgentID: "cursor"}
+	before := cli.CatalogFingerprint(context.Background(), request)
+	if got := acp.CatalogFingerprint(context.Background(), request); got == before {
+		t.Fatal("Cursor ACP discovery must invalidate the cached CLI model catalog")
+	}
+	request.AgentID = "codex"
+	before = cli.CatalogFingerprint(context.Background(), request)
+	if got := acp.CatalogFingerprint(context.Background(), request); got != before {
+		t.Fatalf("non-Cursor discovery fingerprint changed: got %q, want %q", got, before)
+	}
+}

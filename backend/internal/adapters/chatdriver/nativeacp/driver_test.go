@@ -38,7 +38,8 @@ func TestBindingLaunchesExactUserInstalledBinary(t *testing.T) {
 	type contextKey struct{}
 	launchCtx := context.WithValue(context.Background(), contextKey{}, "launch-context")
 	cfg := buildConfig(fakePlugin{binary: userBinary, status: ports.AgentAuthStatusAuthorized}, Config{
-		Harness: domain.HarnessOpenCode,
+		Harness:                domain.HarnessOpenCode,
+		ClientCapabilitiesMeta: map[string]any{"parameterizedModelPicker": true},
 		Configure: func(ctx context.Context, in acpdriver.LaunchConfig) ([]string, map[string]string, error) {
 			if ctx.Value(contextKey{}) != "launch-context" {
 				t.Fatal("Configure did not receive the launch context")
@@ -48,6 +49,9 @@ func TestBindingLaunchesExactUserInstalledBinary(t *testing.T) {
 		},
 	}, nil)
 
+	if cfg.ClientCapabilitiesMeta["parameterizedModelPicker"] != true {
+		t.Fatalf("client capabilities metadata = %#v", cfg.ClientCapabilitiesMeta)
+	}
 	if err := cfg.Probe(context.Background()); err != nil {
 		t.Fatalf("Probe: %v", err)
 	}

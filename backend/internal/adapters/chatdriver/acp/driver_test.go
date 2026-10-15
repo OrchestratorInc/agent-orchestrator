@@ -1533,6 +1533,9 @@ func TestACPDriverNegotiatesRichClientCapabilitiesAndNativePromptContent(t *test
 	}
 	driver := New(Config{
 		Harness: domain.HarnessClaudeCode,
+		ClientCapabilitiesMeta: map[string]any{
+			"parameterizedModelPicker": true,
+		},
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityStreaming: true,
 			ports.ChatCapabilityImages:    true,
@@ -1569,7 +1572,9 @@ func TestACPDriverNegotiatesRichClientCapabilitiesAndNativePromptContent(t *test
 		t.Fatalf("elicitation capabilities = %#v", initParams.ClientCapabilities.Elicitation)
 	}
 	if initParams.ClientCapabilities.Meta["subagent-transcript"] != true ||
-		initParams.ClientCapabilities.Meta["terminal_output"] != true {
+		initParams.ClientCapabilities.Meta["terminal_output"] != true ||
+		initParams.ClientCapabilities.Meta["parameterizedModelPicker"] != true ||
+		initParams.ClientCapabilities.Meta["jetbrains"] == nil {
 		t.Fatalf("client extension capabilities = %#v", initParams.ClientCapabilities.Meta)
 	}
 	if len(newParams.AdditionalDirectories) != 1 || newParams.AdditionalDirectories[0] != extra {

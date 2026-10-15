@@ -38,7 +38,7 @@ func TestLiveDeepSeekACPModelCatalog(t *testing.T) {
 	options, err := acpdriver.DiscoverConfigOptions(ctx, acpdriver.Launch{
 		Command: binary,
 		Args:    []string{"--profile", acpProfile},
-	}, workdir, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	}, workdir, nil, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	if err != nil {
 		t.Fatalf("discover DeepSeek Harness ACP options: %v", err)
 	}

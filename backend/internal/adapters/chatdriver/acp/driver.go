@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"path/filepath"
 	"time"
 
@@ -59,6 +60,8 @@ type Config struct {
 	// invoking an adapter-specific version flag, which many stdio agents do not
 	// implement and which can emit protocol bytes instead of a version string.
 	ValidateInitialize func(acpsdk.InitializeResponse) error
+	// ClientCapabilitiesMeta advertises provider-specific ACP client extensions.
+	ClientCapabilitiesMeta map[string]any
 	// SessionMeta carries adapter-defined ACP extensions whenever AO creates the
 	// provider-side session object: session/new, session/load, or
 	// session/resume. Standing context such as a system prompt is process input,
@@ -157,10 +160,12 @@ func DiscoverConfigOptions(
 	ctx context.Context,
 	launch Launch,
 	workingDir string,
+	clientCapabilitiesMeta map[string]any,
 	log *slog.Logger,
 ) ([]ports.ChatConfigOption, error) {
 	driver := New(Config{
-		Launch: func(context.Context, LaunchConfig) (Launch, error) { return launch, nil },
+		Launch:                 func(context.Context, LaunchConfig) (Launch, error) { return launch, nil },
+		ClientCapabilitiesMeta: clientCapabilitiesMeta,
 	}, log)
 	return driver.discoverConfigOptions(ctx, workingDir)
 }
@@ -605,6 +610,22 @@ func (d *Driver) initialize(
 
 	initCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
+	clientCapabilitiesMeta := map[string]any{
+		// These two Claude bridge extensions enrich the transcript. They do
+		// not grant the agent access to AO's terminal or filesystem APIs.
+		"subagent-transcript": true,
+		"terminal_output":     true,
+		// claude-agent-acp publishes retryable API/transport failures only
+		// when the client opts into this namespaced metadata extension. It is
+		// observational: AO receives status, but grants no new capability.
+		"jetbrains": map[string]any{
+			"air": map[string]any{
+				"version":      1,
+				"capabilities": []string{"sessionFailure"},
+			},
+		},
+	}
+	maps.Copy(clientCapabilitiesMeta, d.cfg.ClientCapabilitiesMeta)
 	init, err := conv.conn.Initialize(initCtx, acpsdk.InitializeRequest{
 		Meta: map[string]any{
 			persistenthost.ACPInitialPermissionsMetaKey: string(ports.NormalizePermissionMode(cfg.Permissions)),
@@ -616,21 +637,7 @@ func (d *Driver) initialize(
 			Version: "0.1.0",
 		},
 		ClientCapabilities: acpsdk.ClientCapabilities{
-			// These two Claude bridge extensions enrich the transcript. They do
-			// not grant the agent access to AO's terminal or filesystem APIs.
-			Meta: map[string]any{
-				"subagent-transcript": true,
-				"terminal_output":     true,
-				// claude-agent-acp publishes retryable API/transport failures only
-				// when the client opts into this namespaced metadata extension. It is
-				// observational: AO receives status, but grants no new capability.
-				"jetbrains": map[string]any{
-					"air": map[string]any{
-						"version":      1,
-						"capabilities": []string{"sessionFailure"},
-					},
-				},
-			},
+			Meta: clientCapabilitiesMeta,
 			Elicitation: &acpsdk.ElicitationCapabilities{
 				Form: &acpsdk.ElicitationFormCapabilities{},
 				Url:  &acpsdk.ElicitationUrlCapabilities{},
