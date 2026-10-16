@@ -50,9 +50,10 @@ profile survive restore, rather than being replaced by another global copy. Plat
 The process receives a bounded private 0600 file via
 `--append-system-prompt-file`; native defaults remain intact, and the context
 is never sent as a user transcript turn. Each new process receives a fresh file,
-including exact restore. **Fresh instruction delivery after native load remains
-a mandatory unproven gate**: the historical TUI append route failed that case.
-An initialize declaration cannot establish this property.
+including exact restore. **Fresh instruction delivery after native load is a
+mandatory contract**, tested independently from cancellation: the historical
+TUI append route failed that case. An initialize declaration cannot establish
+this property.
 
 ## Credential-free native conformance
 
@@ -95,23 +96,25 @@ register it solely from source review, initialize metadata, or green unit tests.
 
 ## Qualification blocker on 0.6.5
 
-Credential-free CI has demonstrated streaming and initial private context,
-effective default permission policy, offered allow/reject decisions with their
-side-effect boundaries, and termination of the exact executing tool process.
-The required immediate continuation after interrupted settlement fails with
+The native 0.6.5 cancellation path can return interrupted settlement before
+Runtime turn ownership is released. Immediate continuation then fails with
 native ACP `-32603`: `MiniMax Code Runtime failed: Session already has an active
 Turn. Use queue send to deliver the message after it.` This is a native readiness
 failure after the cancelled ACP prompt has returned and AO has acknowledged its
-terminal receipt. The binding remains unregistered, and the daemon/API overlay
-qualification is blocked by this failure.
+terminal receipt. Production registration requires usable immediate continuation;
+the binding remains unregistered while this required native contract fails.
+The daemon/API overlay gate requires both native conformance tests to pass.
 
 The release's [ACP prompt completion and cancellation handlers](https://github.com/MiniMax-AI/minimax-code/blob/309e28554ec091bb17b6c4f67111c8c01d688b94/packages/tui/src/acp/agent.ts#L1208)
 return `cancelled` and clear the ACP prompt attachment; `session/cancel` aborts
 that prompt controller and awaits the local coordinator. The
 [coordinator's cancellation settlement](https://github.com/MiniMax-AI/minimax-code/blob/309e28554ec091bb17b6c4f67111c8c01d688b94/packages/tui/src/application/run-coordinator.ts#L375)
 waits on its local run, which can settle on its aborted stream before the native
-Runtime releases the session's active turn. The ACP error path flattens the
-Runtime failure into a generic internal error. The advertised methods provide
+Runtime releases the session's active turn. Native
+[admission rejects an existing session lock](https://github.com/MiniMax-AI/minimax-code/blob/309e28554ec091bb17b6c4f67111c8c01d688b94/packages/local-runtime-v2/src/service/turn-system/persistence/turn.repository.ts#L781)
+and [maps that rejection to the busy error](https://github.com/MiniMax-AI/minimax-code/blob/309e28554ec091bb17b6c4f67111c8c01d688b94/packages/local-runtime-v2/src/application/conversation/session-stream-delivery.ts#L453).
+The [Runtime controller releases its active entry on completion](https://github.com/MiniMax-AI/minimax-code/blob/309e28554ec091bb17b6c4f67111c8c01d688b94/packages/local-runtime-v2/src/service/turn-system/execution/turn-controller/turn.controller.ts#L168).
+The ACP error path flattens the Runtime failure into a generic internal error. The advertised methods provide
 no authoritative idle fence for the root turn: session listing exposes identity,
 cwd, title and timestamp, while queue listing exposes queued messages. Queueing
 would change the dispatch and recovery contract. No sleep, text-matched retry,
