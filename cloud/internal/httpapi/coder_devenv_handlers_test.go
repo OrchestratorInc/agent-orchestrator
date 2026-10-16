@@ -269,16 +269,17 @@ func TestGetCoderTemplateParametersErrors(t *testing.T) {
 // for an organization that is not entitled to Coder.
 func TestGetCoderTemplateParametersForbiddenWithoutCoder(t *testing.T) {
 	t.Parallel()
+	// Template parameters are open to every organization that may run on Coder,
+	// so only a deployment without Coder refuses them.
 	srv := New(Options{
 		Store:                     &coderConfigFakeStore{},
 		SecretCipher:              newTestCipher(t),
-		SandboxProvider:           sandbox.ProviderCoder,
-		AvailableSandboxProviders: []string{sandbox.ProviderCoder, sandbox.ProviderFreestyle},
-		CapabilityGatedProviders:  []string{sandbox.ProviderCoder, sandbox.ProviderFreestyle},
+		SandboxProvider:           sandbox.ProviderFreestyle,
+		AvailableSandboxProviders: []string{sandbox.ProviderFreestyle},
 		Logger:                    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	rec := httptest.NewRecorder()
-	srv.getCoderTemplateParameters(rec, templateParametersRequest(t, coderCfgTemplate, []string{sandbox.ProviderFreestyle}))
+	srv.getCoderTemplateParameters(rec, templateParametersRequest(t, coderCfgTemplate, []string{sandbox.ProviderCoder}))
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "provider_forbidden") {
 		t.Fatalf("status = %d, body = %s; want 403 provider_forbidden", rec.Code, rec.Body.String())
 	}

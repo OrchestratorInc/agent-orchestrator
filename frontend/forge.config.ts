@@ -65,7 +65,7 @@ export function extraResourcesForPlatform(platform: NodeJS.Platform): string[] {
 		"daemon",
 		"agent-browser",
 		"resources/acp-runtime",
-		...(platform === "darwin" ? ["update-helper"] : []),
+		...(platform === "darwin" ? ["update-helper", "wake-helper"] : []),
 		...(platform === "darwin" || platform === "linux" ? ["tmux"] : []),
 		"assets/icon.png",
 		"assets/icon.ico",
@@ -173,6 +173,9 @@ const config: ForgeConfig = {
 				const helperBuild = spawnSync(process.execPath, [path.resolve("scripts/build-update-helper.mjs"), "--arch", arch], { stdio: "inherit" });
 				if (helperBuild.error) throw helperBuild.error;
 				if (helperBuild.status !== 0) throw new Error("macOS update helper build failed");
+                const wakeBuild = spawnSync(process.execPath, [path.resolve("scripts/build-wake-helper.mjs"), "--arch", arch], { stdio: "inherit" });
+                if (wakeBuild.error) throw wakeBuild.error;
+                if (wakeBuild.status !== 0) throw new Error("macOS wake helper build failed");
 			}
 			const { owner, name } = parseReleaseRepo(process.env.AO_RELEASE_REPO);
 			const yml = [
@@ -210,6 +213,7 @@ const config: ForgeConfig = {
 					resourcesPath = path.join(outputPath, appBundle, "Contents", "Resources");
 					const helper = path.join(resourcesPath, "update-helper", "ao-update-progress");
 					if (!existsSync(helper)) throw new Error(`packaged macOS update helper missing from ${helper}`);
+					if (!existsSync(path.join(resourcesPath, "wake-helper", "ao-wake"))) throw new Error(`packaged macOS wake helper missing from ${resourcesPath}`);
 				}
 				const binary = path.join(resourcesPath, "tmux", "bin", "tmux");
 				if (!existsSync(binary)) throw new Error(`packaged tmux missing from ${binary}`);
@@ -282,11 +286,16 @@ const config: ForgeConfig = {
 		new MakerNSIS(
 			{
 				appId: "dev.agent-orchestrator.desktop",
-				productName: "Agent Orchestrator",
+				// The name shown in the installer, the updater, the shortcuts, and
+				// Windows Apps. It matches the app's display name in main.ts.
+				productName: "Orchestrator.inc",
 				// Match the packaged binary name so the Start menu shortcut targets
 				// the real "agent-orchestrator.exe" (not "Agent Orchestrator.exe").
 				executableName: EXECUTABLE_NAME,
 				icon: "assets/icon.ico",
+				// Keep the installer filename unchanged. electron-builder names it
+				// after productName by default.
+				nsis: { artifactName: "Agent Orchestrator Setup ${version}.${ext}" },
 			},
 			["win32"],
 		),

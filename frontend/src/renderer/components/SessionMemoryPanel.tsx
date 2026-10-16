@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Check, ChevronDown, ChevronRight, ChevronUp, Copy, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, ChevronUp, Copy, Loader2, X } from "lucide-react";
 import {
 	chipTone,
 	largestSession,
@@ -50,6 +50,7 @@ import {
 	settingsDialogContentClass,
 	settingsDialogHeaderClass,
 } from "./ui/dialog";
+import { SettingsSection } from "./settings/SettingsSection";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 // Stable identity for the loading state: `data ?? []` would hand useMemo a
@@ -182,15 +183,19 @@ export function MachineSection({ action }: { action?: ReactNode }) {
 	const app = appMemory?.app;
 	const system = appMemory?.system;
 	return (
-		<section className="flex w-full flex-col items-stretch gap-(--size-settings-section-inner-gap)">
-			<div className="flex items-center justify-between gap-3">
-				<h2 className="text-xs font-medium leading-4 text-settings-muted">{t("shell.memorySectionMachine")}</h2>
-				{action}
-			</div>
-			<div className="settings-grouped-rows flex w-full flex-col">
-				{system && app ? <MachineBar appBytes={app.rssBytes} system={system} /> : null}
-			</div>
-		</section>
+		<SettingsSection title={t("shell.memorySectionMachine")} action={action} grouped>
+			{system && app ? (
+				<MachineBar appBytes={app.rssBytes} system={system} />
+			) : (
+				// Never an empty card: until the first sample lands, one row holds its place.
+				<p aria-busy="true" className="settings-row-bar text-sm text-settings-muted" data-testid="session-memory-loading">
+					<span className="inline-flex items-center gap-2">
+						<Loader2 aria-hidden="true" className="size-icon-sm animate-spin" />
+						{t("common.loading")}
+					</span>
+				</p>
+			)}
+		</SettingsSection>
 	);
 }
 
@@ -200,12 +205,12 @@ export function MachineSection({ action }: { action?: ReactNode }) {
  */
 const columnWidth = { type: "w-24", pid: "w-28", memory: "w-28", cpu: "w-16" } as const;
 const cell = {
-	name: "pl-4 pr-3 text-left",
-	process: "pl-11 pr-3 text-left",
+	name: "pl-(--settings-row-inset) pr-3 text-left",
+	process: "pl-12 pr-3 text-left",
 	type: "px-3 text-left",
 	pid: "px-3 text-right",
 	memory: "px-3 text-right",
-	cpu: "pl-3 pr-4 text-right",
+	cpu: "pl-3 pr-(--settings-row-inset) text-right",
 } as const;
 
 /** Every full-width row (group label, spacer, step heading) spans all five. */
@@ -250,7 +255,7 @@ function SortHeader({ active, ascending, className, label, onSort }: { active: b
 }
 
 /** Every live session and AO's own processes, largest first. */
-export function SessionsTable({ onRows, projectId }: { onRows?: (rows: ReportRow[]) => void; projectId?: string }) {
+export function SessionsTable({ onRows, projectId, underToolbar }: { onRows?: (rows: ReportRow[]) => void; projectId?: string; underToolbar?: boolean }) {
 	const { t } = useTranslation();
 	const workspaces = useWorkspaceQuery().data ?? EMPTY_WORKSPACES;
 	const readings = useSessionMemory(projectId).data;
@@ -305,9 +310,17 @@ export function SessionsTable({ onRows, projectId }: { onRows?: (rows: ReportRow
 			return next;
 		});
 	if (live.length === 0 && reviewers.length === 0 && !app?.own) {
-		return <p className="py-6 text-center text-xs text-settings-muted">{t("shell.memoryEmpty")}</p>;
+		return (
+			<SettingsSection title={t("shell.memoryGroupSessions")} grouped>
+				<p className="settings-row-bar text-sm text-settings-muted">{t("shell.memoryEmpty")}</p>
+			</SettingsSection>
+		);
 	}
 	return (
+		<SettingsSection title={t("shell.memoryGroupSessions")}>
+		{/* overflow-clip, not the card's overflow-hidden: hidden makes the card a
+		    scroll container, which would stop the header sticking to the page. */}
+		<div className="settings-grouped-rows overflow-clip!">
 		<table className="w-full table-fixed border-collapse text-xs" data-testid="session-memory-table">
 			<colgroup>
 				<col />
@@ -317,7 +330,9 @@ export function SessionsTable({ onRows, projectId }: { onRows?: (rows: ReportRow
 				<col className={columnWidth.cpu} />
 			</colgroup>
 			{/* The columns stay readable however far the list scrolls. */}
-			<thead className="sticky top-8 z-10 bg-popover">
+			{/* Below the pinned summary (h-8) and, on the settings page, the window's
+			    transparent toolbar strip. */}
+			<thead className={cn("sticky z-10 bg-popover", underToolbar ? "top-[calc(var(--spacing-toolbar)+--spacing(8))]" : "top-8")}>
 				<tr className="border-b border-(--color-border-settings-dialog-header) text-xs text-settings-muted">
 					<th className={cn("bg-popover pb-2 pt-3 font-medium", cell.name)} scope="col">{t("shell.memoryColumnName")}</th>
 					<th className={cn("bg-popover pb-2 pt-3 font-medium", cell.type)} scope="col">{t("shell.memoryColumnType")}</th>
@@ -370,6 +385,8 @@ export function SessionsTable({ onRows, projectId }: { onRows?: (rows: ReportRow
 				) : null}
 			</tbody>
 		</table>
+		</div>
+		</SettingsSection>
 	);
 }
 
@@ -391,7 +408,7 @@ export function CpuSection() {
  * list. The numbers stay reachable through the summary line, which only
  * appears once the graphs have scrolled away.
  */
-export function DiagnosticsBody({ projectId, scroller }: { projectId?: string; scroller?: RefObject<HTMLElement | null> }) {
+export function DiagnosticsBody({ projectId, scroller, underToolbar }: { projectId?: string; scroller?: RefObject<HTMLElement | null>; underToolbar?: boolean }) {
 	const { t } = useTranslation();
 	const appMemory = useAppMemory().data;
 	const workspaces = useWorkspaceQuery().data ?? EMPTY_WORKSPACES;
@@ -415,13 +432,17 @@ export function DiagnosticsBody({ projectId, scroller }: { projectId?: string; s
 				/>
 				<CpuSection />
 			</div>
+			{/* One block with the sessions, so the zero-height bar adds no section gap. */}
+			<div className="flex w-full flex-col">
 			{/* Zero height, so nothing shifts when the bar appears: the bar itself
-			    floats over the rows it is pinned above. */}
-			<div className="sticky top-0 z-20 h-0 overflow-visible">
+			    floats over the rows it is pinned above. On the settings page it pins
+			    below the window's transparent toolbar strip. */}
+			<div className={cn("sticky z-20 h-0 overflow-visible", underToolbar ? "top-toolbar" : "top-0")}>
 				<div
 					aria-hidden={!scrolledPast}
 					className={cn(
-						"absolute inset-x-0 top-0 flex h-8 items-center gap-4 border-b border-(--color-border-settings-dialog-header) bg-popover font-mono text-xs tabular-nums text-settings-muted transition-opacity",
+						"absolute inset-x-0 top-0 flex h-8 items-center gap-4 border-b border-(--color-border-settings-dialog-header) px-(--settings-row-inset) font-mono text-xs tabular-nums text-settings-muted transition-opacity",
+						underToolbar ? "bg-(--color-bg-primary)" : "bg-popover",
 						scrolledPast ? "opacity-100" : "pointer-events-none opacity-0",
 					)}
 					data-testid="session-memory-pinned"
@@ -439,7 +460,8 @@ export function DiagnosticsBody({ projectId, scroller }: { projectId?: string; s
 					) : null}
 				</div>
 			</div>
-			<SessionsTable onRows={setRows} projectId={projectId} />
+			<SessionsTable onRows={setRows} projectId={projectId} underToolbar={underToolbar} />
+			</div>
 		</>
 	);
 }
@@ -468,7 +490,7 @@ export function MemoryDiagnostics() {
 	useFastMemorySampling();
 	return (
 		<div className="settings-dialog-body flex w-full flex-col gap-(--size-settings-section-gap,1.5rem)" data-testid="memory-diagnostics">
-			<DiagnosticsBody />
+			<DiagnosticsBody underToolbar />
 		</div>
 	);
 }
@@ -767,7 +789,7 @@ function RecentSteps({ steps }: { steps: SessionStepReading[] }) {
 	return (
 		<>
 			<tr>
-				<td className="pb-1 pl-11 pt-2 text-xs font-medium text-settings-muted" colSpan={columnCount}>{t("shell.memoryRecent")}</td>
+				<td className="pb-1 pl-12 pt-2 text-xs font-medium text-settings-muted" colSpan={columnCount}>{t("shell.memoryRecent")}</td>
 			</tr>
 			{steps.map((step) => {
 				const started = new Date(step.startedAt);
@@ -1036,46 +1058,45 @@ function CpuGraph({ current, history, system }: { current: CPUSample; history: C
 	const { t } = useTranslation();
 	const now = current;
 	return (
-		<section className="flex w-full flex-col items-stretch gap-(--size-settings-section-inner-gap)" data-testid="session-cpu-graph">
-			<div className="flex items-center justify-between">
-				<h2 className="text-xs font-medium leading-4 text-settings-muted">{t("shell.cpuBarTitle", { cores: system.cpuCount })}</h2>
-				{/* A negative load average is Windows' "not applicable" sentinel: the platform has no such concept, and printing 0.00 would read as an idle machine rather than a missing number. */}
-				{system.load1 >= 0 ? (
-					<span className="font-mono text-xs tabular-nums text-settings-muted">{t("shell.cpuBarLoad", { load: system.load1.toFixed(2) })}</span>
-				) : null}
-			</div>
-			<div className="settings-grouped-rows flex w-full flex-col">
-				<div className="settings-row-bar h-auto flex-col items-stretch gap-2 py-3">
-					<svg aria-hidden="true" className="h-14 w-full" preserveAspectRatio="none" viewBox={`0 0 ${graphWidth} ${graphHeight}`}>
-						{[25, 50, 75].map((line) => (
-							<line
-								className="stroke-foreground/[0.06]"
-								key={line}
-								strokeWidth={1}
-								x1={0}
-								x2={graphWidth}
-								y1={graphHeight - (line / 100) * graphHeight}
-								y2={graphHeight - (line / 100) * graphHeight}
-							/>
-						))}
-						<path className="fill-none stroke-warning/80" d={linePath(history.map((s) => s.host))} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
-						<path className="fill-none stroke-accent-strong" d={linePath(history.map((s) => s.ao))} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
-					</svg>
-					{/* A line's colour means nothing without a key: name each one,
-					    the same way the memory bar names its parts. */}
-					<div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs tabular-nums text-settings-muted">
-						{[
-							{ key: "machine", className: "bg-warning/80", label: t("shell.cpuLegendMachine"), value: now.host },
-							{ key: "ao", className: "bg-accent-strong", label: t("shell.memoryLegendAO"), value: now.ao },
-						].map((part) => (
-							<span className="inline-flex items-center gap-1.5" key={part.key}>
-								<span aria-hidden="true" className={cn("size-1.5 rounded-full", part.className)} />
-								{part.label} <span className="text-settings-label">{formatCPU(part.value)}</span>
-							</span>
-						))}
-					</div>
+		<SettingsSection
+			title={t("shell.cpuBarTitle", { cores: system.cpuCount })}
+			testId="session-cpu-graph"
+			grouped
+			// A negative load average is Windows' "not applicable" sentinel: the platform has no such concept, and printing 0.00 would read as an idle machine rather than a missing number.
+			action={system.load1 >= 0 ? (
+				<span className="font-mono text-xs tabular-nums text-settings-muted">{t("shell.cpuBarLoad", { load: system.load1.toFixed(2) })}</span>
+			) : undefined}
+		>
+			<div className="settings-row-bar h-auto flex-col items-stretch gap-2 py-3">
+				<svg aria-hidden="true" className="h-14 w-full" preserveAspectRatio="none" viewBox={`0 0 ${graphWidth} ${graphHeight}`}>
+					{[25, 50, 75].map((line) => (
+						<line
+							className="stroke-foreground/[0.06]"
+							key={line}
+							strokeWidth={1}
+							x1={0}
+							x2={graphWidth}
+							y1={graphHeight - (line / 100) * graphHeight}
+							y2={graphHeight - (line / 100) * graphHeight}
+						/>
+					))}
+					<path className="fill-none stroke-warning/80" d={linePath(history.map((s) => s.host))} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+					<path className="fill-none stroke-accent-strong" d={linePath(history.map((s) => s.ao))} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+				</svg>
+				{/* A line's colour means nothing without a key: name each one,
+				    the same way the memory bar names its parts. */}
+				<div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs tabular-nums text-settings-muted">
+					{[
+						{ key: "machine", className: "bg-warning/80", label: t("shell.cpuLegendMachine"), value: now.host },
+						{ key: "ao", className: "bg-accent-strong", label: t("shell.memoryLegendAO"), value: now.ao },
+					].map((part) => (
+						<span className="inline-flex items-center gap-1.5" key={part.key}>
+							<span aria-hidden="true" className={cn("size-1.5 rounded-full", part.className)} />
+							{part.label} <span className="text-settings-label">{formatCPU(part.value)}</span>
+						</span>
+					))}
 				</div>
 			</div>
-		</section>
+		</SettingsSection>
 	);
 }

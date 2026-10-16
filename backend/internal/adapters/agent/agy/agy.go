@@ -5,13 +5,23 @@ package agy
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+
+	// Registers the "sqlite" driver used to read Antigravity conversation databases.
+	_ "modernc.org/sqlite"
 )
 
 const adapterID = "agy"
@@ -45,6 +55,10 @@ func New() *Plugin {
 
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
+var _ ports.AgentInterfaceHandoff = (*Plugin)(nil)
+var _ ports.AgentInterfaceHandoffHistoryProbe = (*Plugin)(nil)
+var _ ports.AgentInterfaceHandoffStorageBridge = (*Plugin)(nil)
+var _ ports.TerminalSurfaceInspector = (*Plugin)(nil)
 var _ ports.SubmitActivitySignaler = (*Plugin)(nil)
 var _ ports.BlockedActivitySignaler = (*Plugin)(nil)
 
@@ -147,6 +161,109 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 
 	cmd = append(cmd, "--conversation", agentSessionID)
 	return cmd, true, nil
+}
+
+// NativeConversationExists reports whether Antigravity has a persisted
+// conversation database in the source interface's storage root.
+func (p *Plugin) NativeConversationExists(
+	ctx context.Context,
+	session ports.SessionRef,
+	nativeConversationID string,
+	env map[string]string,
+) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	id := strings.TrimSpace(nativeConversationID)
+	if !validConversationID(id) {
+		return false, nil
+	}
+	home, err := GeminiHome(env)
+	if err != nil {
+		return false, err
+	}
+	modeDirs := []string{ACPStorageDir, CLIStorageDir}
+	if rawMode := session.Metadata[ports.MetadataKeySessionMode]; rawMode != "" {
+		if mode := domain.NormalizeSessionMode(domain.SessionMode(rawMode)); mode == domain.SessionModeChat {
+			modeDirs = []string{ACPStorageDir}
+		} else if mode == domain.SessionModeTUI {
+			modeDirs = []string{CLIStorageDir}
+		}
+	}
+	for _, modeDir := range modeDirs {
+		path := filepath.Join(home, modeDir, "conversations", id+".db")
+		info, statErr := os.Stat(path)
+		if statErr == nil && info.Mode().IsRegular() && info.Size() > 0 {
+			db, openErr := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?mode=ro")
+			if openErr != nil {
+				return false, openErr
+			}
+			db.SetMaxOpenConns(1)
+			probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			var one int
+			queryErr := db.QueryRowContext(probeCtx, "SELECT 1 FROM steps LIMIT 1").Scan(&one)
+			cancel()
+			_ = db.Close()
+			if errors.Is(queryErr, sql.ErrNoRows) {
+				continue
+			}
+			if queryErr != nil {
+				return false, fmt.Errorf("inspect Antigravity conversation database: %w", queryErr)
+			}
+			return true, nil
+		}
+		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return false, statErr
+		}
+	}
+	return false, nil
+}
+
+// PrepareInterfaceHandoffStorage bridges a stopped native conversation into
+// the target interface's storage root.
+func (p *Plugin) PrepareInterfaceHandoffStorage(
+	ctx context.Context,
+	_ ports.SessionRef,
+	from, to domain.SessionMode,
+	nativeConversationID string,
+	env map[string]string,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	home, err := GeminiHome(env)
+	if err != nil {
+		return err
+	}
+	switch {
+	case from == domain.SessionModeChat && to == domain.SessionModeTUI:
+		return BridgeConversationToCLI(home, nativeConversationID)
+	case from == domain.SessionModeTUI && to == domain.SessionModeChat:
+		return BridgeConversationToACP(home, nativeConversationID)
+	default:
+		return nil
+	}
+}
+
+// NativeConversationID returns Antigravity's shared native ID from the
+// identity reported by the interface currently owning the session. ACP and
+// the terminal CLI use the same UUID, though their separate storage
+// directories still require a bridge before the target can resume it.
+func (p *Plugin) NativeConversationID(
+	ctx context.Context,
+	session ports.SessionRef,
+	currentMode domain.SessionMode,
+	providerConversationID string,
+) (string, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
+	if currentMode == domain.SessionModeChat {
+		id := strings.TrimSpace(providerConversationID)
+		return id, id != "", nil
+	}
+	id := strings.TrimSpace(session.Metadata[ports.MetadataKeyAgentSessionID])
+	return id, id != "", nil
 }
 
 // SessionInfo surfaces Agy hook-derived metadata.

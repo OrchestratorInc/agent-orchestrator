@@ -22,6 +22,7 @@ import {
 } from "../hooks/useAgentReadinessQuery";
 import { type FileAttachmentPayload, useFileAttachments } from "../hooks/useFileAttachments";
 import { useSettings } from "../hooks/useSettings";
+import { useOfferedModels } from "../hooks/useOfferedModels";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useProviderConnections } from "../hooks/useProviderConnections";
@@ -448,11 +449,17 @@ export function TaskComposer({
 	// so there the notice is informational and never reads as blocking.
 	const modelAuthIssue = revalidationWarning === undefined ? modelCatalogAuthIssue(modelCatalogQuery.data) : undefined;
 	useModelCatalogAuthRecovery(selectedAgent, hostId, modelAuthIssue);
+	// Settings → Harness → Models picks the models this machine offers; cloud VMs keep their own catalog.
+	const { models: offeredModels } = useOfferedModels(selectedAgent, modelCatalogQuery.data?.models, {
+		hostId,
+		keep: [model, mode, projectModelForSelectedAgent, projectModeForSelectedAgent],
+		skip: isCloudProject,
+	});
 	const modelCatalog: TaskComposerModelCatalog | undefined = modelCatalogQuery.data
 		? {
 				allowCustom: modelCatalogQuery.data.allowCustom,
 				customModelEntry: modelCatalogQuery.data.customModelEntry,
-				models: modelCatalogQuery.data.models,
+				models: offeredModels,
 				refreshError: modelCatalogQuery.data.refreshError,
 				refreshState: modelCatalogQuery.data.refreshState,
 				retryAt: modelCatalogQuery.data.retryAt,
@@ -460,9 +467,12 @@ export function TaskComposer({
 			}
 		: undefined;
 	// An unmarked first row is not evidence of what the provider will run.
-	const catalogModels = modelCatalogQuery.data?.models?.filter((item) => isConcreteModelID(item.id)) ?? [];
+	const catalogModels = offeredModels.filter((item) => isConcreteModelID(item.id));
 	const catalogDefaultOption =
 		catalogModels.find((item) => item.isDefault)?.id ?? "";
+	const catalogDefaultHidden = Boolean(modelCatalogQuery.data?.models?.some(
+		(item) => item.isDefault && isConcreteModelID(item.id) && !catalogModels.some((offered) => offered.id === item.id),
+	));
 	const catalogUsesModes = modelCatalogQuery.data?.selectionMode === "mode";
 	// The model this user ran most recently.
 	const lastUsedOption =
@@ -490,7 +500,10 @@ export function TaskComposer({
 		(isConcreteModelID(projectModelForSelectedAgent) ? projectModelForSelectedAgent : "") ||
 		(!catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(catalogUsesModes ? "" : catalogDefaultOption) ||
-		claudeFallbackOption;
+		claudeFallbackOption ||
+		// Only replace a default the catalog identified and Settings hid. An
+		// unreported default must keep the native model/provider selection.
+		(!catalogUsesModes && catalogDefaultHidden ? catalogModels[0]?.id ?? "" : "");
 	const defaultModeForSelectedAgent =
 		(rememberedModeIsValid ? rememberedMode : "") ||
 		(isConcreteModelID(projectModeForSelectedAgent) ? projectModeForSelectedAgent : "") ||
@@ -500,9 +513,15 @@ export function TaskComposer({
 	const selectedMode = mode || (modelTouched ? (catalogUsesModes ? catalogDefaultOption : "") : defaultModeForSelectedAgent);
 	const selectedModelOrMode = (selectedModel || selectedMode).trim();
 	const projectModelOrMode = projectModelForSelectedAgent || projectModeForSelectedAgent;
-	const requestedModel = selectedModelOrMode && selectedModelOrMode !== projectModelOrMode && (
-		selectedModelOrMode !== catalogDefaultOption || isConcreteModelID(projectModelOrMode)
-	) ? selectedModelOrMode : undefined;
+	const requestedModel = isStandalone
+		// Standalone sessions have no project config to inherit. If the UI shows a
+		// concrete catalog default, send it explicitly; otherwise the native agent
+		// may launch with a different harness-owned default than the one displayed.
+		? (isConcreteModelID(selectedModelOrMode) ? selectedModelOrMode : undefined)
+		: selectedModelOrMode && selectedModelOrMode !== projectModelOrMode && (
+				selectedModelOrMode !== catalogDefaultOption || isConcreteModelID(projectModelOrMode) ||
+				(!catalogUsesModes && !projectModelOrMode)
+			) ? selectedModelOrMode : undefined;
 	const rememberedEffortIsExplicit = Boolean(
 		rememberedConfigForSelectedAgent &&
 			Object.prototype.hasOwnProperty.call(rememberedConfigForSelectedAgent, "effort"),
@@ -531,9 +550,16 @@ export function TaskComposer({
 	// With no provider default for the reported levels AO picks one, shows it as
 	// selected, and sends it, so the picker matches what the task runs with.
 	const aoDefaultEffort = requiresTuiFallback ? undefined : fallbackEffort(effortOptions, implicitEffort);
-	const effectiveEffort = effort && effort !== "default" ? effort : aoDefaultEffort ?? "";
+	const effectiveEffort = effort && effort !== "default"
+		? effort
+		: aoDefaultEffort ?? (isStandalone && effortOptions.includes(implicitEffort) ? implicitEffort : "");
 	const requestedEffort = isCloudProject
 		? effort || cloudDefaultEffort || undefined
+		: isStandalone
+		// Standalone sessions have no project role to inherit from. Send the
+		// concrete effort shown by the picker even when the UI is retrying in TUI
+		// mode, otherwise the native harness may use a different default.
+		? (effectiveEffort || undefined)
 		: effortTouched || rememberedEffortIsExplicit
 			? !effectiveEffort || effectiveEffort === implicitEffort ? undefined : effectiveEffort
 			: aoDefaultEffort;

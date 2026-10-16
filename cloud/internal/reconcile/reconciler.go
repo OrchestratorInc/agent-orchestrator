@@ -837,6 +837,15 @@ func (r *Reconciler) reconcileDeletion(
 			"provider_state", environment.State,
 			"deadline", r.options.DeletionDeadline,
 		)
+		// One last Delete without the project's Cleanup, so a Cleanup that
+		// outlived the deadline (a slow script, or a control plane restart
+		// that started it again) never leaves the workspace running.
+		if environment.State != sandbox.StateDeleting {
+			if err := provider.Delete(sandbox.WithoutCleanup(ctx), environment.ID); err != nil && !errors.Is(err, sandbox.ErrNotFound) {
+				r.log.WarnContext(ctx, "final sandbox delete before abandoning failed",
+					"session_id", record.SessionID, "provider_id", record.ProviderEnvironmentID, "err", err)
+			}
+		}
 		return r.store.CompleteSandboxDeletion(ctx, r.owner, record.OrgID, record.SessionID)
 	}
 
@@ -860,7 +869,7 @@ func (r *Reconciler) reconcileDeletion(
 			"provider_id", record.ProviderEnvironmentID,
 		)
 	}
-	if err := provider.Delete(ctx, environment.ID); err != nil && !errors.Is(err, sandbox.ErrNotFound) {
+	if err := provider.Delete(r.withCleanupCommands(ctx, record), environment.ID); err != nil && !errors.Is(err, sandbox.ErrNotFound) {
 		return r.fail(ctx, record, err)
 	}
 	// DELETE acceptance is not deletion confirmation. Keep the provider id and
@@ -873,6 +882,30 @@ func (r *Reconciler) reconcileDeletion(
 		"",
 		2*time.Second,
 	)
+}
+
+// cleanupCommandsStore is the optional Store capability that reads a
+// session's current project Cleanup commands.
+type cleanupCommandsStore interface {
+	ProjectCleanupCommands(ctx context.Context, orgID, sessionID string) ([]string, error)
+}
+
+// withCleanupCommands gives Provider.Delete the project's current Cleanup
+// commands, so Cleanup follows the project's config at removal time as a
+// local project's does. When they can't be read the provider runs the
+// commands the worker installed.
+func (r *Reconciler) withCleanupCommands(ctx context.Context, record domain.Sandbox) context.Context {
+	lookup, ok := r.store.(cleanupCommandsStore)
+	if !ok {
+		return ctx
+	}
+	commands, err := lookup.ProjectCleanupCommands(ctx, record.OrgID, record.SessionID)
+	if err != nil {
+		r.log.WarnContext(ctx, "read the project's current Cleanup; using the commands from the session's start",
+			"session_id", record.SessionID, "err", err)
+		return ctx
+	}
+	return sandbox.WithCleanupCommands(ctx, commands)
 }
 
 func (r *Reconciler) restore(
