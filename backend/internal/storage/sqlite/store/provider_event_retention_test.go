@@ -19,6 +19,7 @@ import (
 const (
 	retentionDay    = 24 * time.Hour
 	retentionWindow = 2000
+	retentionGrace  = retentionDay // chat.DefaultArchiveRetentionGrace
 )
 
 // retentionFixture is conversationFixture on a known data dir, so a test can
@@ -115,7 +116,7 @@ func archivedRows(t *testing.T, s *sqlite.Store, conversation string) []archived
 
 func pruneStep(t *testing.T, s *sqlite.Store, settledBefore time.Time, window, limit int64) (int64, bool) {
 	t.Helper()
-	deleted, caughtUp, _, err := s.PruneSettledProviderDeltas(context.Background(), settledBefore, window, limit)
+	deleted, caughtUp, _, err := s.PruneSettledProviderDeltas(context.Background(), settledBefore, retentionGrace, window, limit)
 	if err != nil {
 		t.Fatalf("prune settled deltas: %v", err)
 	}
@@ -159,9 +160,10 @@ func TestPruneSettledProviderDeltasDeletesOnlyAnonymousMessageDeltas(t *testing.
 	archiveEvent(t, s, conversation, session, "", "message.completed", "provider-old", "answer", "Hello", step())
 	archiveEvent(t, s, conversation, session, "turn-done", "turn.completed", "provider-old", "", "", step())
 
-	// Requested and streamed before the cutoff, settled yesterday: older than the
-	// window by arrival, but its turn has not been settled for the whole window.
-	recent := settledBefore.Add(-retentionDay)
+	// A turn longer than the grace: requested and streamed well before the cutoff,
+	// settled yesterday. The cursor visits its delta while the turn is still inside
+	// the window and passes it.
+	recent := settledBefore.Add(-3 * retentionDay)
 	openRetentionTurn(t, s, conversation, session, "recent", recent)
 	archiveEvent(t, s, conversation, session, "", "message.delta", "provider-recent", "late", "new", recent.Add(time.Second))
 	archiveEvent(t, s, conversation, session, "", "turn.completed", "provider-recent", "", "", now.Add(-retentionDay))
@@ -238,29 +240,58 @@ func TestPruneSettledProviderDeltasKeepsADeltaPassedWhileItsTurnWasOpen(t *testi
 	}
 }
 
-// The cursor stops at the first delta younger than the window and resumes there
-// once it ages, so nothing behind it is skipped.
-func TestPruneSettledProviderDeltasStopsAtTheFirstYoungDeltaAndResumes(t *testing.T) {
+// The cursor stops at the first delta received within the grace before the
+// cutoff, and resumes there once the cutoff has moved on, so nothing behind it
+// is skipped.
+func TestPruneSettledProviderDeltasStopsAtTheGraceBoundaryAndResumes(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	settledBefore := histClock.Add(26 * retentionDay)
 	openRetentionTurn(t, s, conversation, session, "turn", histClock)
 	archiveEvent(t, s, conversation, session, "", "message.delta", "provider-turn", "answer", "old", histClock.Add(time.Second))
 	archiveEvent(t, s, conversation, session, "", "turn.completed", "provider-turn", "", "", histClock.Add(2*time.Second))
-	archiveEvent(t, s, conversation, session, "", "message.delta", "provider-turn", "answer", " late", settledBefore.Add(time.Second))
-	archiveEvent(t, s, conversation, session, "", "message.delta", "provider-turn", "answer", " later", settledBefore.Add(2*time.Second))
+	archiveEvent(t, s, conversation, session, "", "message.delta", "provider-turn", "answer", " in grace", settledBefore.Add(-12*time.Hour))
+	archiveEvent(t, s, conversation, session, "", "message.delta", "provider-turn", "answer", " young", settledBefore.Add(time.Second))
 
 	deleted, caughtUp := pruneStep(t, s, settledBefore, retentionWindow, 100)
 	if deleted != 1 || !caughtUp {
-		t.Fatalf("first step = (%d, %v), want (1, true): stop at the first young delta", deleted, caughtUp)
+		t.Fatalf("first step = (%d, %v), want (1, true): stop at the delta inside the grace", deleted, caughtUp)
 	}
 	if got := pruneAll(t, s, settledBefore); got != 0 {
-		t.Fatalf("deleted %d young rows", got)
+		t.Fatalf("deleted %d rows inside the grace", got)
 	}
-	if got := pruneAll(t, s, settledBefore.Add(retentionDay)); got != 2 {
-		t.Fatalf("deleted %d once the young deltas aged, want 2", got)
+	if got := pruneAll(t, s, settledBefore.Add(13*time.Hour)); got != 1 {
+		t.Fatalf("deleted %d once the grace passed the first delta, want 1", got)
+	}
+	if got := pruneAll(t, s, settledBefore.Add(2*retentionDay)); got != 1 {
+		t.Fatalf("deleted %d once the grace passed the young delta, want 1", got)
 	}
 	if got := archivedRows(t, s, conversation); !reflect.DeepEqual(got, []archivedRow{{"turn.completed", ""}}) {
 		t.Fatalf("archive = %v", got)
+	}
+}
+
+// Steady state: a pass every 15 minutes with the cutoff 14 days back. A turn
+// that settles 30 minutes after its deltas must still have them pruned once the
+// deltas and the settlement are both past the cutoff; a turn that never settles
+// keeps its delta.
+func TestPruneSettledProviderDeltasSteadyStatePrunesATurnThatSettlesAfterItsDeltas(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	openRetentionTurn(t, s, conversation, session, "slow", histClock)
+	for i := 1; i <= 3; i++ {
+		archiveEvent(t, s, conversation, session, "", "message.delta", "provider-slow", "slow-answer", "x",
+			histClock.Add(time.Duration(i)*time.Minute))
+	}
+	archiveEvent(t, s, conversation, session, "", "turn.completed", "provider-slow", "", "", histClock.Add(30*time.Minute))
+	openAt := histClock.Add(time.Hour)
+	openRetentionTurn(t, s, conversation, session, "open", openAt)
+	archiveEvent(t, s, conversation, session, "", "message.delta", "provider-open", "open-answer", "y", openAt.Add(time.Minute))
+
+	for now := histClock; !now.After(histClock.Add(16 * retentionDay)); now = now.Add(15 * time.Minute) {
+		pruneAll(t, s, now.Add(-14*retentionDay))
+	}
+	want := []archivedRow{{"turn.completed", ""}, {"message.delta", ""}}
+	if got := archivedRows(t, s, conversation); !reflect.DeepEqual(got, want) {
+		t.Fatalf("archive after 16 days of passes = %v, want the slow turn's deltas pruned and the open turn's delta kept: %v", got, want)
 	}
 }
 

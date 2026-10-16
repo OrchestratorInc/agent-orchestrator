@@ -12,6 +12,12 @@ const (
 	// once the turn has settled; they are kept only as evidence while someone may
 	// still be looking into a projection bug in a recent conversation.
 	DefaultArchiveDeltaRetention = 14 * 24 * time.Hour
+	// DefaultArchiveRetentionGrace is how long after the cutoff the cursor waits
+	// before visiting a delta. The delete needs the delta's turn settled before the
+	// cutoff, and in steady state the cursor would otherwise reach a delta within
+	// one pass of it crossing the cutoff, before a turn that settles minutes after
+	// its deltas had settled. A turn open for longer than the grace keeps them.
+	DefaultArchiveRetentionGrace = 24 * time.Hour
 	// DefaultArchiveRetentionFirstDelay leaves the writer to boot-time work
 	// (chat resumes, host adoption, native history imports) before the first pass.
 	DefaultArchiveRetentionFirstDelay = 5 * time.Minute
@@ -35,13 +41,14 @@ const (
 
 // ArchiveRetentionStore is the storage surface the archive janitor needs.
 type ArchiveRetentionStore interface {
-	PruneSettledProviderDeltas(ctx context.Context, settledBefore time.Time, window, limit int64) (deleted int64, caughtUp bool, writerHold time.Duration, err error)
+	PruneSettledProviderDeltas(ctx context.Context, settledBefore time.Time, grace time.Duration, window, limit int64) (deleted int64, caughtUp bool, writerHold time.Duration, err error)
 }
 
 // ArchiveRetentionConfig customizes archive cleanup. Zero values use the
 // production defaults.
 type ArchiveRetentionConfig struct {
 	Retention  time.Duration
+	Grace      time.Duration
 	FirstDelay time.Duration
 	Interval   time.Duration
 	Pause      time.Duration
@@ -59,6 +66,7 @@ type ArchiveRetentionConfig struct {
 type ArchiveRetention struct {
 	store      ArchiveRetentionStore
 	retention  time.Duration
+	grace      time.Duration
 	firstDelay time.Duration
 	interval   time.Duration
 	pause      time.Duration
@@ -74,6 +82,7 @@ func NewArchiveRetention(store ArchiveRetentionStore, cfg ArchiveRetentionConfig
 	j := &ArchiveRetention{
 		store:      store,
 		retention:  cfg.Retention,
+		grace:      cfg.Grace,
 		firstDelay: cfg.FirstDelay,
 		interval:   cfg.Interval,
 		pause:      cfg.Pause,
@@ -85,6 +94,9 @@ func NewArchiveRetention(store ArchiveRetentionStore, cfg ArchiveRetentionConfig
 	}
 	if j.retention <= 0 {
 		j.retention = DefaultArchiveDeltaRetention
+	}
+	if j.grace <= 0 {
+		j.grace = DefaultArchiveRetentionGrace
 	}
 	if j.firstDelay <= 0 {
 		j.firstDelay = DefaultArchiveRetentionFirstDelay
@@ -148,7 +160,7 @@ func (j *ArchiveRetention) RunOnce(ctx context.Context) error {
 	var maxHold time.Duration
 	steps := 0
 	for steps < j.maxSteps {
-		deleted, caughtUp, hold, err := j.store.PruneSettledProviderDeltas(ctx, settledBefore, j.window, j.batch)
+		deleted, caughtUp, hold, err := j.store.PruneSettledProviderDeltas(ctx, settledBefore, j.grace, j.window, j.batch)
 		steps++
 		if err != nil {
 			return err

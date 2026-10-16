@@ -22,14 +22,16 @@ type fakeArchiveRetentionStore struct {
 	repeat  *pruneResult
 	err     error
 	cutoffs []time.Time
+	graces  []time.Duration
 	windows []int64
 	limits  []int64
 }
 
-func (s *fakeArchiveRetentionStore) PruneSettledProviderDeltas(_ context.Context, settledBefore time.Time, window, limit int64) (int64, bool, time.Duration, error) {
+func (s *fakeArchiveRetentionStore) PruneSettledProviderDeltas(_ context.Context, settledBefore time.Time, grace time.Duration, window, limit int64) (int64, bool, time.Duration, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cutoffs = append(s.cutoffs, settledBefore)
+	s.graces = append(s.graces, grace)
 	s.windows = append(s.windows, window)
 	s.limits = append(s.limits, limit)
 	if s.err != nil {
@@ -62,7 +64,7 @@ func quietArchiveRetention(store ArchiveRetentionStore, cfg ArchiveRetentionConf
 
 func TestArchiveRetentionRunOnceStopsWhenCaughtUp(t *testing.T) {
 	store := &fakeArchiveRetentionStore{results: []pruneResult{{100, false}, {100, false}, {7, true}, {100, false}}}
-	j := quietArchiveRetention(store, ArchiveRetentionConfig{Retention: 14 * 24 * time.Hour, Window: 500, Batch: 100, Pause: time.Nanosecond})
+	j := quietArchiveRetention(store, ArchiveRetentionConfig{Retention: 14 * 24 * time.Hour, Grace: 6 * time.Hour, Window: 500, Batch: 100, Pause: time.Nanosecond})
 
 	if err := j.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
@@ -72,8 +74,8 @@ func TestArchiveRetentionRunOnceStopsWhenCaughtUp(t *testing.T) {
 	}
 	want := archiveRetentionNow.Add(-14 * 24 * time.Hour)
 	for i, cutoff := range store.cutoffs {
-		if !cutoff.Equal(want) || store.windows[i] != 500 || store.limits[i] != 100 {
-			t.Fatalf("step %d = (%v, %d, %d), want (%v, 500, 100)", i, cutoff, store.windows[i], store.limits[i], want)
+		if !cutoff.Equal(want) || store.graces[i] != 6*time.Hour || store.windows[i] != 500 || store.limits[i] != 100 {
+			t.Fatalf("step %d = (%v, %v, %d, %d), want (%v, 6h, 500, 100)", i, cutoff, store.graces[i], store.windows[i], store.limits[i], want)
 		}
 	}
 }
@@ -138,6 +140,9 @@ func TestArchiveRetentionDefaults(t *testing.T) {
 	}
 	if DefaultArchiveDeltaRetention != 14*24*time.Hour {
 		t.Fatalf("default retention = %v, want 14 days", DefaultArchiveDeltaRetention)
+	}
+	if store.graces[0] != DefaultArchiveRetentionGrace || DefaultArchiveRetentionGrace != 24*time.Hour {
+		t.Fatalf("grace = %v (default %v), want one day", store.graces[0], DefaultArchiveRetentionGrace)
 	}
 	if store.windows[0] != DefaultArchiveRetentionWindow || store.limits[0] != DefaultArchiveRetentionBatch {
 		t.Fatalf("window/batch = %d/%d, want %d/%d", store.windows[0], store.limits[0],

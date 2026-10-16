@@ -4213,19 +4213,25 @@ func (s *Store) ProviderEventsSince(
 // PruneSettledProviderDeltas takes one step of the archive retention walk. On the
 // reader it seeks at most window archive ids past the persisted cursor for
 // message deltas without a provider event id, keeping at most limit of them and
-// stopping at the first one received at or after settledBefore. In one writer
-// transaction it deletes those whose turn settled before settledBefore and moves
-// the cursor past what it visited. A delta whose turn was still open when the
-// cursor passed it is kept for good.
+// stopping at the first one received at or after settledBefore minus grace. In
+// one writer transaction it deletes those whose turn settled before settledBefore
+// and moves the cursor past what it visited.
+//
+// The grace is what lets a turn settle after its deltas: in steady state the
+// cursor reaches a delta a grace after the delta crossed the cutoff, so a turn
+// that settles within the grace has its deltas pruned. A delta whose turn was
+// still open when the cursor passed it is kept for good.
 //
 // caughtUp reports that the cursor reached the newest archive row or a delta too
-// young to prune, so a pass can stop. writerHold is how long the transaction ran.
+// young to visit, so a pass can stop. writerHold is how long the transaction ran.
 func (s *Store) PruneSettledProviderDeltas(
 	ctx context.Context,
 	settledBefore time.Time,
+	grace time.Duration,
 	window, limit int64,
 ) (deleted int64, caughtUp bool, writerHold time.Duration, err error) {
 	settledBefore = settledBefore.UTC()
+	visitBefore := settledBefore.Add(-grace)
 	after, err := s.qr.SelectProviderEventRetentionCursor(ctx)
 	if err != nil {
 		return 0, false, 0, fmt.Errorf("read provider event retention cursor: %w", err)
@@ -4246,7 +4252,7 @@ func (s *Store) PruneSettledProviderDeltas(
 	}
 	ids := make([]int64, 0, len(rows))
 	for _, row := range rows {
-		if !row.ReceivedAt.Before(settledBefore) {
+		if !row.ReceivedAt.Before(visitBefore) {
 			through, caughtUp = row.ID-1, true
 			break
 		}
