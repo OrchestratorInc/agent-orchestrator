@@ -122,6 +122,10 @@ export function OnboardingPage() {
 	// already knowing its state; polling only runs while the page is showing.
 	const githubSetup = useGitHubSetup({ poll: step === "github" });
 	const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+	// Null means the worker follows the orchestrator agent chosen above.
+	const [workerAgentChoice, setWorkerAgentChoice] = useState<string | null>(null);
+	const [standalone, setStandalone] = useState(false);
+	const workerAgent = workerAgentChoice ?? selectedAgent;
 	const [hoveredAgent, setHoveredAgent] = useState<string | null>(null);
 	const [preparedProject, setPreparedProject] = useState<PreparedProjectInput | null>(null);
 	const [agentCheckIndicatorTimedOut, setAgentCheckIndicatorTimedOut] = useState(false);
@@ -208,13 +212,16 @@ export function OnboardingPage() {
 		if (onboardingFinishError.nonce !== onboardingFinishRequest.nonce) return;
 		if (restoredFailureRef.current === onboardingFinishError.nonce) return;
 		restoredFailureRef.current = onboardingFinishError.nonce;
-		setPreparedProject({
+		setStandalone(Boolean(onboardingFinishRequest.standalone));
+		setPreparedProject(onboardingFinishRequest.standalone ? null : {
 			asWorkspace: onboardingFinishRequest.asWorkspace,
 			clonePreparationId: onboardingFinishRequest.clonePreparationId,
 			defaultBranch: onboardingFinishRequest.defaultBranch,
 			path: onboardingFinishRequest.path,
 		});
-		setSelectedAgent(onboardingFinishRequest.orchestratorAgent || onboardingFinishRequest.workerAgent);
+		const restoredOrchestrator = onboardingFinishRequest.orchestratorAgent || onboardingFinishRequest.workerAgent;
+		setSelectedAgent(restoredOrchestrator);
+		setWorkerAgentChoice(onboardingFinishRequest.workerAgent && onboardingFinishRequest.workerAgent !== restoredOrchestrator ? onboardingFinishRequest.workerAgent : null);
 		setStep("agents");
 	}, [onboardingFinishError, onboardingFinishRequest]);
 
@@ -224,15 +231,15 @@ export function OnboardingPage() {
 
 	const next = useCallback(() => {
 		if (step === "agents") {
-			if (!preparedProject || !selectedAgent) return;
+			if ((!preparedProject && !standalone) || !selectedAgent) return;
 			// Completion is recorded by the handoff itself, once the project is
 			// actually registered. Marking it here stranded anyone whose project
 			// failed to create on an empty board with onboarding already spent.
-			requestOnboardingFinish({
-				...preparedProject,
-				orchestratorAgent: selectedAgent,
-				workerAgent: selectedAgent,
-			});
+			requestOnboardingFinish(
+				standalone || !preparedProject
+					? { path: "", standalone: true, orchestratorAgent: selectedAgent, workerAgent: selectedAgent }
+					: { ...preparedProject, orchestratorAgent: selectedAgent, workerAgent: workerAgent ?? selectedAgent },
+			);
 			void navigate({ to: "/" });
 			return;
 		}
@@ -241,7 +248,7 @@ export function OnboardingPage() {
 			return;
 		}
 		goToStep(stepIndex + 1);
-	}, [agentSetupEntry, goToStep, hasReadyAgent, navigate, preparedProject, requestOnboardingFinish, selectedAgent, step, stepIndex]);
+	}, [agentSetupEntry, goToStep, hasReadyAgent, navigate, preparedProject, requestOnboardingFinish, selectedAgent, standalone, step, stepIndex, workerAgent]);
 
 	const back = useCallback(() => {
 		// Required setup belongs between project selection and the picker. Optional
@@ -306,13 +313,7 @@ export function OnboardingPage() {
 
 			<div className="mx-auto grid h-full w-full max-w-[1240px] grid-rows-[80px_minmax(0,1fr)_104px] px-8 max-[1040px]:px-6">
 				<header className="flex items-end justify-between pb-3" aria-label={t("onboarding.progressLabel")}>
-					{isFeatureStep ? (
-						// The mark moves above the headline on these two pages. The spacer
-						// keeps the progress bars where they were.
-						<span aria-hidden="true" className="h-6 w-7" />
-					) : (
-						<img src={aoLogo} alt={t("onboarding.logoAlt")} className="h-6 w-7 object-contain" />
-					)}
+					<span aria-hidden="true" className="h-6 w-7" />
 					<div
 						className="flex gap-1.5"
 						aria-label={t("onboarding.stepOf", {
@@ -405,7 +406,7 @@ export function OnboardingPage() {
 								<div className="w-full max-w-[440px] text-left">
 									<RequiredAgentField
 										id="onboardingAgent"
-										label={t("newTask.agent")}
+										label={standalone ? t("newTask.agent") : t("createProject.orchestratorAgent")}
 										placeholder={t("newTask.selectAgent")}
 										variant="onboarding"
 										agents={agentCatalog ? agentOptions : undefined}
@@ -414,6 +415,20 @@ export function OnboardingPage() {
 										managementActionLabel={t("onboarding.installAnotherAgent")}
 										onManagementAction={handleInstallAnotherAgent}
 									/>
+									{selectedAgent && !standalone ? (
+										<div className="mt-4">
+											<RequiredAgentField
+												id="onboardingWorkerAgent"
+												label={t("createProject.workerAgent")}
+												placeholder={t("createProject.selectWorker")}
+												variant="onboarding"
+												agents={agentCatalog ? agentOptions : undefined}
+												value={workerAgent ?? ""}
+												onChange={setWorkerAgentChoice}
+											/>
+											<p className="mt-2 text-caption leading-snug text-muted-foreground">{t("onboarding.workerAgentHint")}</p>
+										</div>
+									) : null}
 								</div>
 							)}
 							{step === "github" && <OnboardingGitHubStep setup={githubSetup} />}
@@ -421,8 +436,15 @@ export function OnboardingPage() {
 								<div className="flex w-full flex-col items-center gap-4">
 									<OnboardingProjectSetup
 										cloudAvailable={false}
+										onStandalone={() => {
+											setStandalone(true);
+											setPreparedProject(null);
+											setAgentSetupEntry("required");
+											setStep(hasReadyAgent ? "agents" : "agent-setup");
+										}}
 										onPrepared={(project) => {
 											setPreparedProject(project);
+											setStandalone(false);
 											if (project) {
 												setAgentSetupEntry("required");
 												setStep(hasReadyAgent ? "agents" : "agent-setup");
@@ -476,7 +498,7 @@ export function OnboardingPage() {
 								/>
 							</div>
 						) : (
-							<AgentTopologyPreview orchestratorAgent={selectedAgent} workerAgent={selectedAgent} />
+							<AgentTopologyPreview orchestratorAgent={selectedAgent} workerAgent={workerAgent} />
 						)
 					) : step === "welcome" ? (
 						<PreviewStage />

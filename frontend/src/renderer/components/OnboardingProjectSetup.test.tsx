@@ -33,12 +33,13 @@ vi.mock("../lib/cloud-session", () => ({
 
 import { OnboardingProjectSetup } from "./OnboardingProjectSetup";
 
-function renderStep(cloudAvailable?: boolean) {
+function renderStep(cloudAvailable?: boolean, onStandalone = vi.fn(), onPrepared = vi.fn()) {
 	render(
 		<OnboardingProjectSetup
 			cloudAvailable={cloudAvailable}
 			onCloudProjectCreated={vi.fn()}
-			onPrepared={vi.fn()}
+			onPrepared={onPrepared}
+			onStandalone={onStandalone}
 		/>,
 	);
 }
@@ -97,4 +98,16 @@ it("goes straight to the cloud project form when the account is signed in", asyn
 
 	await userEvent.click(screen.getByRole("button", { name: "Create a cloud project" }));
 	expect(await screen.findByTestId("cloud-project-card")).toBeInTheDocument();
+});
+
+it("offers a standalone agent that skips the project and clears any prepared one", async () => {
+	const onStandalone = vi.fn();
+	const onPrepared = vi.fn();
+	renderStep(undefined, onStandalone, onPrepared);
+
+	await userEvent.click(screen.getByRole("button", { name: "Start a standalone agent" }));
+
+	expect(onPrepared).toHaveBeenCalledWith(null);
+	expect(onStandalone).toHaveBeenCalledTimes(1);
+	expect(flowMocks.triggers.at(-1)).toBeUndefined();
 });

@@ -1,4 +1,6 @@
+import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import type { OnboardingFinishRequest } from "../stores/ui-store";
+import { rememberTaskComposerPreference } from "./task-composer-preferences";
 
 export const ONBOARDING_COMPLETE_STORAGE_KEY = "ao.onboarding.completed";
 
@@ -29,7 +31,7 @@ export type OnboardingFinishDeps = {
 	}) => Promise<unknown>;
 };
 
-export type OnboardingFinishOutcome = { ok: true } | { ok: false; message: string };
+export type OnboardingFinishOutcome = { ok: true; standalone?: boolean } | { ok: false; message: string };
 
 /**
  * Runs the last onboarding step: register the chosen project and start its
@@ -41,6 +43,13 @@ export async function runOnboardingFinish(
 	request: OnboardingFinishRequest,
 	deps: OnboardingFinishDeps,
 ): Promise<OnboardingFinishOutcome> {
+	if (request.standalone) {
+		// No project to register. The Scratchpad composer opens on the agent they
+		// picked, since it preselects the last agent used in that context.
+		rememberTaskComposerPreference(STANDALONE_WORKSPACE_ID, request.orchestratorAgent, { mode: "", model: "" });
+		markOnboardingComplete();
+		return { ok: true, standalone: true };
+	}
 	try {
 		await deps.createProject({
 			asWorkspace: request.asWorkspace,

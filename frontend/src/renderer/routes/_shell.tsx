@@ -1390,6 +1390,16 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		setActiveShellTerminal,
 	]);
 
+	// A standalone onboarding ends on the Scratchpad composer. The new-task
+	// dialog only reacts to requests raised after it mounts, so wait until the
+	// shell is showing before asking for it.
+	const [openScratchpadComposer, setOpenScratchpadComposer] = useState(false);
+	useEffect(() => {
+		if (!openScratchpadComposer || onboardingFinishRequest || isStartupLoading) return;
+		setOpenScratchpadComposer(false);
+		requestNewTask(STANDALONE_WORKSPACE_ID);
+	}, [isStartupLoading, onboardingFinishRequest, openScratchpadComposer, requestNewTask]);
+
 	useEffect(() => {
 		if (!onboardingFinishRequest) return;
 		if (handledOnboardingFinishNonceRef.current === onboardingFinishRequest.nonce) return;
@@ -1402,6 +1412,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			if (outcome.ok) {
 				clearOnboardingFinishError();
 				clearOnboardingFinishRequest(onboardingFinishRequest.nonce);
+				if (outcome.standalone) setOpenScratchpadComposer(true);
 				return;
 			}
 			// Hand the failure back to onboarding instead of quitting it: the user

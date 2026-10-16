@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { hasCompletedOnboarding, markOnboardingComplete, runOnboardingFinish } from "./onboarding-finish";
+import { readTaskComposerPreferences } from "./task-composer-preferences";
 import type { OnboardingFinishRequest } from "../stores/ui-store";
 
 const request: OnboardingFinishRequest = {
@@ -29,6 +30,16 @@ describe("runOnboardingFinish", () => {
 			workerAgent: "codex",
 		});
 		expect(hasCompletedOnboarding()).toBe(true);
+	});
+
+	it("registers no project for a standalone agent and points the Scratchpad composer at it", async () => {
+		const createProject = vi.fn();
+		const outcome = await runOnboardingFinish({ nonce: 2, orchestratorAgent: "codex", path: "", standalone: true, workerAgent: "codex" }, { createProject });
+
+		expect(outcome).toEqual({ ok: true, standalone: true });
+		expect(createProject).not.toHaveBeenCalled();
+		expect(hasCompletedOnboarding()).toBe(true);
+		expect(readTaskComposerPreferences("__standalone__")?.lastAgent).toBe("codex");
 	});
 
 	it("leaves onboarding incomplete and reports the reason when the project fails", async () => {

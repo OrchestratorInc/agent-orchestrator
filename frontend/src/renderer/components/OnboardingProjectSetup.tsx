@@ -1,4 +1,4 @@
-import { Cloud, FolderOpen, GitFork } from "lucide-react";
+import { Cloud, FolderOpen, GitFork, StickyNote } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
@@ -11,10 +11,13 @@ type ProjectMode = "folder" | "git";
 
 export function OnboardingProjectSetup({
 	onPrepared,
+	onStandalone,
 	onCloudProjectCreated,
 	cloudAvailable,
 }: {
 	onPrepared: (input: PreparedProjectInput | null) => void;
+	/** Skip the project: start an agent on its own, in Scratchpad. */
+	onStandalone: () => void;
 	onCloudProjectCreated: () => void;
 	cloudAvailable?: boolean;
 }) {
@@ -32,6 +35,11 @@ export function OnboardingProjectSetup({
 		resetPrepared();
 		setShowCloud(true);
 	}, [resetPrepared]);
+
+	const startStandalone = useCallback(() => {
+		resetPrepared();
+		onStandalone();
+	}, [onStandalone, resetPrepared]);
 
 	// Both rows hand off to the create project flow. It owns the folder picker,
 	// the validator, and the git preparation a folder may still need, so nothing
@@ -64,6 +72,13 @@ export function OnboardingProjectSetup({
 					label={t("createProject.openLocal")}
 					description={t("createProject.openLocalDesc")}
 					onClick={() => startImport("folder")}
+				/>
+				<SetupRow
+					variant="action"
+					icon={<StickyNote aria-hidden="true" />}
+					label={t("home.newStandaloneAgent")}
+					description={t("createProject.standaloneDesc")}
+					onClick={startStandalone}
 				/>
 				{showCloudOption ? (
 					<SetupRow
