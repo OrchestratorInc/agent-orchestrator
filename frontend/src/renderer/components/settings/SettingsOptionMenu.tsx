@@ -199,7 +199,7 @@ export function SettingsOptionMenu<T extends string>({
 				{action && (
 					<div data-slot="settings-option-menu-action" className="shrink-0">
 						<DropdownMenuSeparator />
-						<DropdownMenuItem onSelect={action.onSelect} className={cn(SETTINGS_MENU_ITEM, action.icon && "gap-2!")}>
+						<DropdownMenuItem onSelect={action.onSelect} className={cn(SETTINGS_MENU_ITEM, action.icon && "gap-2! [&_svg]:text-current!")}>
 							{action.icon}
 							{action.label}
 						</DropdownMenuItem>
