@@ -35,6 +35,7 @@ import {
 	isUpdateRestartRequested,
 	setUpdateRestartFailureHandler,
 	getUpdateStatus,
+	recordUpdateDiagnostic,
 	setUpdateSettings,
 	setMacDifferentialUpdates,
 	returnToHome,
@@ -3131,6 +3132,7 @@ ipcMain.handle("updates:install", (_event, confirmedVersion?: string) => quitAnd
 // in-process, so restart AO like a manual quit-and-reopen. install-on-quit is
 // already off on the failed path, so quitting can't apply a half-prepared build.
 ipcMain.handle("updates:relaunch", () => {
+	recordUpdateDiagnostic("retry-relaunch-requested");
 	app.relaunch();
 	desktopQuit.quitCompletely();
 });
@@ -3521,6 +3523,8 @@ async function writeAppStateOnLaunch(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+	powerMonitor.on("suspend", () => recordUpdateDiagnostic("power-suspend"));
+	powerMonitor.on("resume", () => recordUpdateDiagnostic("power-resume"));
 	if (app.isPackaged) {
 		const { checkDesktopVersionFloor } = await import("./main/desktop-version-floor");
 		await checkDesktopVersionFloor().catch((err) =>
