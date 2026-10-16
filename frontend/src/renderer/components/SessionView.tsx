@@ -1461,7 +1461,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const sessionTabActions = useMemo(() => interfaceUi.unsupported ? null : (
 		<SessionActionsMenu inlineStatus={interfaceUi.inlineStatus}>
 			{interfaceUi.menuItem}
-			{session && !session.cloud && !hostId ? <SessionProviderAccountMenuItem sessionId={session.id} /> : null}
+			{session && !session.cloud && !hostId ? <SessionProviderAccountMenuItem sessionId={session.id} agentId={session.provider} /> : null}
 			{handoffMenuItem}
 		</SessionActionsMenu>
 	), [handoffMenuItem, hostId, interfaceUi.inlineStatus, interfaceUi.menuItem, interfaceUi.unsupported, session]);

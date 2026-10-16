@@ -25,15 +25,17 @@ export const MULTI_PROVIDER_HARNESSES = new Set<string>([
 ]);
 
 /** The harness catalog, browsed by provider. */
-export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAccount }: {
+export function HarnessModelsPanel({ agentId, hostId, catalogScope = "", installed, needsLogin, onOpenAccount }: {
 	agentId: AgentId;
 	hostId?: string;
+	/** Whose catalogue to list: one managed account's, or the agent's own when empty. */
+	catalogScope?: string;
 	installed: boolean;
 	needsLogin: boolean;
 	onOpenAccount: () => void;
 }) {
 	const { i18n, t } = useTranslation();
-	const options = agentModelsQueryOptions(agentId, "", hostId, true);
+	const options = agentModelsQueryOptions(agentId, catalogScope, hostId, true);
 	const loginBlocksCatalog = needsLogin && !MULTI_PROVIDER_HARNESSES.has(agentId);
 	const catalog = useQuery({ ...options, enabled: installed && !loginBlocksCatalog });
 	const [page, setPage] = useState(0);
@@ -186,8 +188,9 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 							{model.contextWindow ? <span>{t("settings.harness.models.context")}: {new Intl.NumberFormat(i18n.resolvedLanguage).format(model.contextWindow)}</span> : null}
 						</span> : null}
 					</span>
-					{model.efforts?.length ? <span className="shrink-0 text-right text-xs text-settings-muted">
-						{t("settings.harness.models.efforts", { levels: model.efforts.join(" · ") })}
+					{model.efforts?.length ? <span className="flex shrink-0 flex-wrap justify-end gap-1">
+						<span className="sr-only">{t("settings.harness.models.efforts", { levels: model.efforts.join(" · ") })}</span>
+						{model.efforts.map((effort) => <span key={effort} aria-hidden="true" className="rounded-sm bg-(--color-bg-settings-input) px-1.5 py-0.5 text-caption text-settings-muted">{effort}</span>)}
 					</span> : null}
 					{isConcreteModelID(model.id) ? <Switch
 						aria-label={t("settings.harness.models.toggleModel", { model: agentModelDisplayLabel(agentId, model.label) })}

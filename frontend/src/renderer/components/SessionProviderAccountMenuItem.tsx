@@ -6,7 +6,7 @@ import { AccountMenuItems } from "./AccountMenu";
 import { DropdownMenuItem, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger } from "./ui/dropdown-menu";
 
 // The account a session runs on, in the session menu; choosing another one moves the session.
-export function SessionProviderAccountMenuItem({ sessionId }: { sessionId: string }) {
+export function SessionProviderAccountMenuItem({ sessionId, agentId }: { sessionId: string; agentId?: string }) {
 	const { t } = useTranslation();
 	// Mounted only while the session menu is open, so usage is read just then.
 	const accounts = useProviderAccounts(true, true).data?.accounts ?? [];
@@ -31,7 +31,7 @@ export function SessionProviderAccountMenuItem({ sessionId }: { sessionId: strin
 				{current ? <span className="ml-auto max-w-28 truncate text-2xs text-passive">{current.displayName}</span> : null}
 			</DropdownMenuSubTrigger>
 			<DropdownMenuSubContent className="min-w-64 text-xs">
-				<AccountMenuItems accounts={choices} selectedId={route.accountId} disabled={(account) => move.isPending || account.id === route.accountId} onSelect={(account) => move.mutate(account.id)} manage>
+				<AccountMenuItems accounts={choices} selectedId={route.accountId} disabled={(account) => move.isPending || account.id === route.accountId} onSelect={(account) => move.mutate(account.id)} agentId={agentId} manage>
 					{current ? null : <DropdownMenuItem disabled>{t("providerAccounts.loginRequired")}</DropdownMenuItem>}
 				</AccountMenuItems>
 			</DropdownMenuSubContent>

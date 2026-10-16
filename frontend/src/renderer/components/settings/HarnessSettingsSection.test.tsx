@@ -10,11 +10,11 @@ import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { agentReadiness } from "../../test/agent-readiness-fixtures";
 import { TooltipProvider } from "../ui/tooltip";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
-import { useUiStore } from "../../stores/ui-store";
+import type { ProviderAccount } from "../../hooks/useProviderAccounts";
 
 // Accounts are off by default here, so these tests keep exercising an agent's
 // own login. The managed-agent tests at the end switch them on.
-const managed = vi.hoisted(() => ({ on: false, accounts: [] as Array<{ id: string; provider: string; displayName: string; signedIn: boolean; primary: boolean }>, isPending: false, isError: false }));
+const managed = vi.hoisted(() => ({ on: false, accounts: [] as ProviderAccount[], isPending: false, isError: false }));
 vi.mock("../../hooks/useProviderAccounts", async (original) => {
 	const actual = await original<typeof import("../../hooks/useProviderAccounts")>();
 	return {
@@ -177,6 +177,23 @@ async function findAgentRow(agentId: string): Promise<HTMLElement> {
 	});
 }
 
+/** Opens the harness's Details sheet from its page and returns the sheet. */
+async function openDetails(page: HTMLElement): Promise<HTMLElement> {
+	await userEvent.click(within(page).getByRole("button", { name: "Details" }));
+	return screen.findByRole("dialog");
+}
+
+/** Expands an install job's diagnostics in the Details sheet and returns their panel. */
+async function showDiagnostics(sheet: HTMLElement): Promise<HTMLElement> {
+	await userEvent.click(await within(sheet).findByRole("button", { name: "Show diagnostics" }));
+	return within(sheet).getByRole("button", { name: "Hide diagnostics" }).parentElement!;
+}
+
+/** The one-line status under the harness name. */
+function statusStrip(page: HTMLElement): HTMLElement {
+	return within(page).getByTestId("harness-status-strip");
+}
+
 /** Returns from a harness page to the list. */
 function backToList() {
 	fireEvent.click(screen.getByRole("button", { name: "All harnesses" }));
@@ -286,12 +303,17 @@ describe("HarnessSettingsSection", () => {
 		const page = await findAgentRow("codex");
 		expect(screen.queryByRole("textbox", { name: "Search harnesses" })).toBeNull();
 		expect(within(page).getByRole("tab", { name: "Account" })).toHaveAttribute("aria-selected", "true");
-		expect(within(page).getByRole("button", { name: "Update" })).toBeEnabled();
-		expect(within(page).getByText("Installed version")).toBeInTheDocument();
-		// A historical install/check date is not a verified update date.
-		expect(within(page).queryByText("Last updated")).toBeNull();
+		expect(within(statusStrip(page)).getByRole("button", { name: "Update" })).toBeEnabled();
 		expect(within(page).queryByRole("combobox")).toBeNull();
 		expect(within(page).queryByRole("button", { name: "Refresh login" })).toBeNull();
+		const sheet = await openDetails(page);
+		expect(within(sheet).getByRole("button", { name: "Update" })).toBeEnabled();
+		expect(within(sheet).getAllByText("Installed version").length).toBeGreaterThan(0);
+		// A historical install/check date is not a verified update date.
+		expect(within(sheet).queryByText("Last updated")).toBeNull();
+		expect(within(sheet).queryByRole("combobox")).toBeNull();
+		await userEvent.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 		backToList();
 		expect(await findListRow("claude-code")).toBeInTheDocument();
 		expect(screen.getByRole("textbox", { name: "Search harnesses" })).toBeInTheDocument();
@@ -606,25 +628,26 @@ describe("HarnessSettingsSection", () => {
 		mockInstalledOperations("npm");
 		renderSection();
 		const page = await findAgentRow("codex");
-		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
-		expect(await within(page).findByText("v1.2.3")).toBeInTheDocument();
+		const sheet = await openDetails(page);
+		expect((await within(sheet).findAllByText("v1.2.3")).length).toBeGreaterThan(0);
 		// One version row: the installed release with the newer one beside it.
-		expect(within(page).getAllByText("v1.3.0 available").length).toBeGreaterThan(0);
-		expect(within(page).queryByText("Latest version")).toBeNull();
-		expect(within(page).getByText("npm")).toBeInTheDocument();
-		expect(within(page).getByText("Authentication")).toBeInTheDocument();
-		expect(within(page).getByText("Executable")).toBeInTheDocument();
-		expect(within(page).getByText("~/.local/bin/codex")).toBeInTheDocument();
-		// Health never changes the harness: no install, update or login here.
-		for (const name of ["Install", "Update", "Login"]) expect(within(page).queryByRole("button", { name })).toBeNull();
-		await userEvent.click(within(page).getByRole("button", { name: "Check again" }));
+		expect(within(sheet).getAllByText("v1.3.0 available").length).toBeGreaterThan(0);
+		expect(within(sheet).queryByText("Latest version")).toBeNull();
+		expect(within(sheet).getByText("npm")).toBeInTheDocument();
+		expect(within(sheet).getByText("Authentication")).toBeInTheDocument();
+		expect(within(sheet).getByText("Executable")).toBeInTheDocument();
+		expect(within(sheet).getByText("~/.local/bin/codex")).toBeInTheDocument();
+		// Details never logs in; its one Update is the installation's.
+		for (const name of ["Install", "Login"]) expect(within(sheet).queryByRole("button", { name })).toBeNull();
+		expect(within(sheet).getAllByRole("button", { name: "Update" })).toHaveLength(1);
+		await userEvent.click(within(sheet).getByRole("button", { name: "Check again" }));
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/probe", { params: { path: { agent: "codex" } } });
-		await userEvent.click(within(page).getByRole("button", { name: "Copy diagnostics" }));
+		await userEvent.click(within(sheet).getByRole("button", { name: "Copy diagnostics" }));
 		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("Codex health\nHost: local\nInstallation: installed")));
 		expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("Latest version: 1.3.0"));
 	});
 
-	it("keeps auth attempt details in the report instead of the Health UI", async () => {
+	it("keeps auth attempt details in the report instead of the Details UI", async () => {
 		const readiness = readyCatalog();
 		Object.assign(readiness.agents[1].authentication, {
 			state: "authorized", freshness: "stale", reasonCode: "auth_check_timeout",
@@ -634,12 +657,12 @@ describe("HarnessSettingsSection", () => {
 		mockInstalledOperations("npm", readiness);
 		renderSection();
 		const page = await findAgentRow("codex");
-		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
-		expect(within(page).queryByText("Authentication check timed out.")).toBeNull();
-		expect(within(page).queryByText("Last completed auth check")).toBeNull();
-		expect(within(page).queryByText("Latest auth attempt")).toBeNull();
-		expect(within(page).queryByText("Update checked")).toBeNull();
-		await userEvent.click(within(page).getByRole("button", { name: "Copy diagnostics" }));
+		const sheet = await openDetails(page);
+		expect(within(sheet).queryByText("Authentication check timed out.")).toBeNull();
+		expect(within(sheet).queryByText("Last completed auth check")).toBeNull();
+		expect(within(sheet).queryByText("Latest auth attempt")).toBeNull();
+		expect(within(sheet).queryByText("Update checked")).toBeNull();
+		await userEvent.click(within(sheet).getByRole("button", { name: "Copy diagnostics" }));
 		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
 		const report = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0];
 		expect(report).toContain("Authentication reason code: auth_check_timeout");
@@ -658,18 +681,18 @@ describe("HarnessSettingsSection", () => {
 		mockInstalledOperations("npm", readiness);
 		renderSection();
 		const page = await findAgentRow("codex");
-		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
-		expect(within(page).getByText("Connected · token renews on next run")).toBeInTheDocument();
-		expect(within(page).queryByText("Credentials not verified")).toBeNull();
-		expect(within(page).getByText("Detected credential")).toBeInTheDocument();
-		expect(within(page).getByText("keychain")).toBeInTheDocument();
-		expect(within(page).queryByText("The stored token needs renewal.")).toBeNull();
-		await userEvent.click(within(page).getByRole("button", { name: "Copy diagnostics" }));
+		const sheet = await openDetails(page);
+		expect(within(sheet).getByText("Connected · token renews on next run")).toBeInTheDocument();
+		expect(within(sheet).queryByText("Credentials not verified")).toBeNull();
+		expect(within(sheet).getByText("Detected credential")).toBeInTheDocument();
+		expect(within(sheet).getByText("keychain")).toBeInTheDocument();
+		expect(within(sheet).queryByText("The stored token needs renewal.")).toBeNull();
+		await userEvent.click(within(sheet).getByRole("button", { name: "Copy diagnostics" }));
 		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
 		const report = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0];
 		expect(report).toContain("Source: keychain");
 		expect(report).toContain("Checks use AO's process environment on the selected host.");
-		expect(within(page).queryByText(/An inconclusive check does not mean you are signed out/)).toBeNull();
+		expect(within(sheet).queryByText(/An inconclusive check does not mean you are signed out/)).toBeNull();
 		expect(report).toContain("Auth check: provider_validation (token_renewal_pending)");
 		expect(report).not.toContain("Next step:");
 	});
@@ -684,9 +707,9 @@ describe("HarnessSettingsSection", () => {
 		mockInstalledOperations("npm", readiness);
 		renderSection();
 		const page = await findAgentRow("codex");
-		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
-		expect(within(page).getByText("Detected credential")).toBeInTheDocument();
-		expect(within(page).getByText("OPENAI_API_KEY")).toBeInTheDocument();
+		const sheet = await openDetails(page);
+		expect(within(sheet).getByText("Detected credential")).toBeInTheDocument();
+		expect(within(sheet).getByText("OPENAI_API_KEY")).toBeInTheDocument();
 	});
 
 	it.each([
@@ -704,12 +727,12 @@ describe("HarnessSettingsSection", () => {
 		mockInstalledOperations("npm", readiness);
 		renderSection();
 		const page = await findAgentRow("codex");
-		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
-		if (expected) expect(within(page).getByText(expected)).toBeInTheDocument();
-		else expect(within(page).queryByText("Detected credential")).toBeNull();
-		expect(within(page).queryByText("~/.missing/auth.json")).toBeNull();
-		expect(within(page).queryByText("codex login status")).toBeNull();
-		await userEvent.click(within(page).getByRole("button", { name: "Copy diagnostics" }));
+		const sheet = await openDetails(page);
+		if (expected) expect(within(sheet).getByText(expected)).toBeInTheDocument();
+		else expect(within(sheet).queryByText("Detected credential")).toBeNull();
+		expect(within(sheet).queryByText("~/.missing/auth.json")).toBeNull();
+		expect(within(sheet).queryByText("codex login status")).toBeNull();
+		await userEvent.click(within(sheet).getByRole("button", { name: "Copy diagnostics" }));
 		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("Source: ~/.missing/auth.json")));
 	});
 
@@ -717,15 +740,15 @@ describe("HarnessSettingsSection", () => {
 		mockInstalledOperations("npm");
 		renderSection();
 		const page = await findAgentRow("codex");
-		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
+		const sheet = await openDetails(page);
 		const post = vi.mocked(apiClient.POST).getMockImplementation()!;
 		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/probe"
 			? { error: { code: "AGENT_CHECK_FAILED", requestId: "request-123", message: "secret-token" }, response: { status: 503 } } as never
 			: (post as (path: string, options: unknown) => Promise<never>)(path, options));
-		await userEvent.click(within(page).getByRole("button", { name: "Check again" }));
-		expect(await within(page).findByRole("alert")).toHaveTextContent("Could not complete the check.");
-		expect(within(page).queryByText(/AGENT_CHECK_FAILED/)).toBeNull();
-		await userEvent.click(within(page).getByRole("button", { name: "Copy diagnostics" }));
+		await userEvent.click(within(sheet).getByRole("button", { name: "Check again" }));
+		expect(await within(sheet).findByRole("alert")).toHaveTextContent("Could not complete the check.");
+		expect(within(sheet).queryByText(/AGENT_CHECK_FAILED/)).toBeNull();
+		await userEvent.click(within(sheet).getByRole("button", { name: "Copy diagnostics" }));
 		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
 		const report = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0];
 		expect(report).toContain("HTTP 503");
@@ -964,10 +987,14 @@ describe("HarnessSettingsSection", () => {
 		}); });
 		await waitFor(() => expect(within(listRow).queryByRole("img")).toBeNull());
 		const row = await findAgentRow("codex");
-		expect(within(row).getByText("2025.09.25")).toBeInTheDocument();
+		expect(within(statusStrip(row)).getByText("2025.09.25")).toBeInTheDocument();
 		expect(within(row).queryByText(/available$/)).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
-		expect(within(row).getByText("Update availability could not be verified.")).toBeInTheDocument();
+		const sheet = await openDetails(row);
+		expect(within(sheet).getAllByText("2025.09.25").length).toBeGreaterThan(0);
+		expect(within(sheet).queryByText(/available$/)).toBeNull();
+		expect(within(sheet).queryByRole("button", { name: "Update" })).toBeNull();
+		expect(within(sheet).getByText("Update availability could not be verified.")).toBeInTheDocument();
 	});
 
 	it("uses the detected manager rather than a stale saved method", async () => {
@@ -1032,8 +1059,11 @@ describe("HarnessSettingsSection", () => {
 		});
 		renderSection();
 		const row = await findAgentRow("codex");
-		expect(await within(row).findByRole("button", { name: "Update manually" })).toBeEnabled();
+		await waitFor(() => expect(within(row).getByText("v1.3.0 available")).toBeInTheDocument());
 		expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
+		const sheet = await openDetails(row);
+		expect(within(sheet).getByRole("button", { name: "Update manually" })).toBeEnabled();
+		expect(within(sheet).queryByRole("button", { name: "Update" })).toBeNull();
 	});
 
 	it("shows update progress on the page and in the list while it runs", async () => {
@@ -1042,9 +1072,12 @@ describe("HarnessSettingsSection", () => {
 		const row = await findAgentRow("codex");
 		await userEvent.click(await within(row).findByRole("button", { name: "Update" }));
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: "npm", operation: "update", expectedVersion: "1.3.0" } });
-		expect(within(row).getByRole("status")).toHaveTextContent("Updating");
-		expect(within(row).getByRole("button", { name: "Updating…" })).toBeDisabled();
-		expect(within(row).queryByRole("button", { name: "Show diagnostics" })).toBeNull();
+		expect(within(statusStrip(row)).getByRole("status")).toHaveTextContent("Updating");
+		const sheet = await openDetails(row);
+		expect(within(sheet).getByRole("button", { name: "Updating…" })).toBeDisabled();
+		expect(within(sheet).queryByRole("button", { name: "Show diagnostics" })).toBeNull();
+		await userEvent.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 		backToList();
 		expect(within(await findListRow("codex")).getByRole("status")).toHaveTextContent("Updating…");
 	});
@@ -1067,10 +1100,10 @@ describe("HarnessSettingsSection", () => {
 		});
 		vi.mocked(apiClient.POST).mockResolvedValue({ data: readiness } as never);
 		renderSection();
-		const row = await findAgentRow("goose");
-		expect(within(row).getAllByText(reason).length).toBeGreaterThan(0);
-		expect(within(row).queryByText("Installation method could not be verified. Manage this CLI using its original installer.")).toBeNull();
-		expect(within(row).queryByText("Update availability could not be verified.")).toBeNull();
+		const sheet = await openDetails(await findAgentRow("goose"));
+		expect(within(sheet).getAllByText(reason).length).toBeGreaterThan(0);
+		expect(within(sheet).queryByText("Installation method could not be verified. Manage this CLI using its original installer.")).toBeNull();
+		expect(within(sheet).queryByText("Update availability could not be verified.")).toBeNull();
 	});
 
 	it("does not guess ownership or offer a method picker for a manual installation", async () => {
@@ -1078,12 +1111,14 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const row = await findAgentRow("codex");
 		expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
+		const sheet = await openDetails(row);
 		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
-		await userEvent.click(within(row).getByRole("button", { name: "Update manually" }));
+		await userEvent.click(within(sheet).getByRole("button", { name: "Update manually" }));
 		expect(openExternal).toHaveBeenCalledWith("https://github.com/openai/codex");
-		expect(within(row).getByText("Installation method could not be verified. Manage this CLI using its original installer.")).toBeInTheDocument();
-		expect(screen.queryByRole("dialog")).toBeNull();
-		expect(within(row).queryByRole("combobox")).toBeNull();
+		expect(within(sheet).getByText("Installation method could not be verified. Manage this CLI using its original installer.")).toBeInTheDocument();
+		// Only the Details sheet is open: no instructions dialog.
+		expect(screen.getAllByRole("dialog")).toHaveLength(1);
+		expect(within(sheet).queryByRole("combobox")).toBeNull();
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
 	});
 
@@ -1092,7 +1127,9 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const row = await findAgentRow("codex");
 		expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
-		expect(within(row).getByRole("button", { name: "Update manually" })).toBeEnabled();
+		const sheet = await openDetails(row);
+		expect(within(sheet).queryByRole("button", { name: "Update" })).toBeNull();
+		expect(within(sheet).getByRole("button", { name: "Update manually" })).toBeEnabled();
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
 	});
 
@@ -1119,7 +1156,9 @@ describe("HarnessSettingsSection", () => {
 		await userEvent.click(await within(row).findByRole("button", { name: "Update" }));
 		expect(await within(row).findByRole("alert")).toHaveTextContent("End the active Codex session before updating.");
 		expect(within(row).getByRole("tab", { name: "Account" })).toHaveAttribute("aria-selected", "true");
-		await userEvent.click(within(row).getByRole("button", { name: "Retry update" }));
+		const sheet = await openDetails(row);
+		expect(within(sheet).getByRole("alert")).toHaveTextContent("End the active Codex session before updating.");
+		await userEvent.click(within(sheet).getByRole("button", { name: "Retry update" }));
 		const requests = (vi.mocked(apiClient.POST).mock.calls as unknown[][]).filter(([path]) => path === "/api/v1/agents/{agent}/install");
 		expect(requests).toHaveLength(2);
 		for (const [, options] of requests) expect(options).toMatchObject({ body: { method: "npm", operation: "update" } });
@@ -1193,8 +1232,9 @@ describe("HarnessSettingsSection", () => {
 		const previous = get.getMockImplementation()!;
 		get.mockImplementation(async (path, options) => path === "/api/v1/agents/install-jobs" ? { data: { jobs: [completed] } } as never : (previous as (path: string, options: unknown) => Promise<never>)(path, options));
 		act(() => { client.setQueryData(["agent-install-jobs"], [completed]); });
-		await waitFor(() => expect(row.querySelector("time")).toHaveAttribute("datetime", "2026-10-07T12:00:00Z"));
-		expect(within(row).queryByRole("button", { name: "Show diagnostics" })).toBeNull();
+		const sheet = await openDetails(row);
+		await waitFor(() => expect(sheet.querySelector("time")).toHaveAttribute("datetime", "2026-10-07T12:00:00Z"));
+		expect(within(sheet).queryByRole("button", { name: "Show diagnostics" })).toBeNull();
 	});
 
 	it("keeps updates and displayed versions scoped to the selected host", async () => {
@@ -1523,8 +1563,8 @@ describe("HarnessSettingsSection", () => {
 	it("opens the installation guide for a manual-only harness", async () => {
 		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
 		renderSection();
-		const row = await findAgentRow("codewhale");
-		await userEvent.click(await within(row).findByRole("button", { name: "Open installation guide" }));
+		const sheet = await openDetails(await findAgentRow("codewhale"));
+		await userEvent.click(await within(sheet).findByRole("button", { name: "Open installation guide" }));
 
 		expect(openExternal).toHaveBeenCalledWith("https://github.com/Hmbown/Codewhale");
 	});
@@ -1546,7 +1586,7 @@ describe("HarnessSettingsSection", () => {
 
 		renderSection();
 		const row = await findAgentRow("unreal-agent");
-		expect(await within(row).findByText("Not set up")).toBeInTheDocument();
+		expect(await within(statusStrip(row)).findByText("Not set up")).toBeInTheDocument();
 		const documentation = within(row).getByRole("button", { name: "View documentation" });
 		await userEvent.click(documentation);
 		expect(openExternal).toHaveBeenCalledWith(documentationUrl);
@@ -1600,7 +1640,7 @@ describe("HarnessSettingsSection", () => {
 			resolveRefresh({ data: refreshed });
 		});
 		await waitFor(() => {
-			expect(within(row).getByText("Installed")).toBeInTheDocument();
+			expect(within(statusStrip(row)).getByText("Installed")).toBeInTheDocument();
 			expect(within(row).queryByRole("button", { name: "Install" })).toBeNull();
 		});
 	});
@@ -2047,9 +2087,10 @@ describe("HarnessSettingsSection", () => {
 		const codexRow = await findAgentRow("codex");
 		await user.click(await within(codexRow).findByRole("button", { name: "Install" }));
 		await waitFor(() => expect(codexRow).toHaveTextContent("npm failed"));
-		await user.click(within(codexRow).getByRole("button", { name: "Installation method" }));
+		const sheet = await openDetails(codexRow);
+		await user.click(within(sheet).getByRole("button", { name: "Installation method" }));
 		await user.click(await screen.findByRole("menuitem", { name: "npm" }));
-		await user.click(within(codexRow).getByRole("button", { name: "Retry install" }));
+		await user.click(within(sheet).getByRole("button", { name: "Retry install" }));
 		await waitFor(() => expect(apiClient.POST).toHaveBeenLastCalledWith("/api/v1/agents/{agent}/install", {
 			params: { path: { agent: "codex" } },
 			body: { method: "npm", operation: "install" },
@@ -2372,9 +2413,11 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const row = await findAgentRow("codex");
 		await waitFor(() => expect(row).toHaveTextContent("Interrupted"));
-		await user.click(within(row).getByRole("button", { name: "Verify again" }));
+		const sheet = await openDetails(row);
+		await user.click(within(sheet).getByRole("button", { name: "Verify again" }));
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/verify", { params: { path: { agent: "codex" } } });
-		await waitFor(() => expect(row).toHaveTextContent("Verifying…"));
+		await waitFor(() => expect(sheet).toHaveTextContent("Verifying…"));
+		expect(row).toHaveTextContent("Verifying…");
 	});
 
 	it("shows Autohand component repair after verified CLI success", async () => {
@@ -2387,12 +2430,12 @@ describe("HarnessSettingsSection", () => {
 		});
 		const user = userEvent.setup();
 		renderSection();
-		const row = await findAgentRow("autohand");
-		expect(await within(row).findByRole("status")).toHaveTextContent(warning);
-		expect(within(row).queryByRole("button", { name: "Verify again" })).not.toBeInTheDocument();
-		await user.click(within(row).getByRole("button", { name: "Show diagnostics" }));
-		expect(within(row).getByRole("button", { name: "Copy diagnostics" })).toBeInTheDocument();
-		expect(row).toHaveTextContent("0.9.8");
+		const sheet = await openDetails(await findAgentRow("autohand"));
+		expect(await within(sheet).findByRole("status")).toHaveTextContent(warning);
+		expect(within(sheet).queryByRole("button", { name: "Verify again" })).not.toBeInTheDocument();
+		const diagnostics = await showDiagnostics(sheet);
+		expect(within(diagnostics).getByRole("button", { name: "Copy diagnostics" })).toBeInTheDocument();
+		expect(sheet).toHaveTextContent("0.9.8");
 	});
 
 	it("shows and copies daemon diagnostics", async () => {
@@ -2411,11 +2454,10 @@ describe("HarnessSettingsSection", () => {
 		});
 		const user = userEvent.setup();
 		renderSection();
-		const row = await findAgentRow("codex");
-		await user.click(await within(row).findByRole("button", { name: "Show diagnostics" }));
-		expect(row).toHaveTextContent("permission denied");
-		expect(row).toHaveTextContent("/Users/test/.npm/bin/codex");
-		await user.click(within(row).getByRole("button", { name: "Copy diagnostics" }));
+		const diagnostics = await showDiagnostics(await openDetails(await findAgentRow("codex")));
+		expect(diagnostics).toHaveTextContent("permission denied");
+		expect(diagnostics).toHaveTextContent("/Users/test/.npm/bin/codex");
+		await user.click(within(diagnostics).getByRole("button", { name: "Copy diagnostics" }));
 		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
 		const copied = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0] as string;
 		// The machine the install died on is part of the report.
@@ -2455,9 +2497,8 @@ describe("HarnessSettingsSection", () => {
 					</TooltipProvider>
 				</QueryClientProvider>,
 			);
-			const row = await findAgentRow("codex");
-			await user.click(await within(row).findByRole("button", { name: "Show diagnostics" }));
-			await user.click(within(row).getByRole("button", { name: "Copy diagnostics" }));
+			const diagnostics = await showDiagnostics(await openDetails(await findAgentRow("codex")));
+			await user.click(within(diagnostics).getByRole("button", { name: "Copy diagnostics" }));
 			await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
 			const copied = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0] as string;
 			expect(copied).toContain("remote failure");
@@ -2488,9 +2529,8 @@ describe("HarnessSettingsSection", () => {
 		});
 		const user = userEvent.setup();
 		renderSection();
-		const row = await findAgentRow("codex");
-		await user.click(await within(row).findByRole("button", { name: "Show diagnostics" }));
-		await user.click(within(row).getByRole("button", { name: "Copy diagnostics" }));
+		const diagnostics = await showDiagnostics(await openDetails(await findAgentRow("codex")));
+		await user.click(within(diagnostics).getByRole("button", { name: "Copy diagnostics" }));
 		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
 		const copied = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0] as string;
 		expect(copied).toContain("CPU: 30% of 8 cores");
@@ -2507,9 +2547,8 @@ describe("HarnessSettingsSection", () => {
 		});
 		const user = userEvent.setup();
 		renderSection();
-		const row = await findAgentRow("codex");
-		await user.click(await within(row).findByRole("button", { name: "Show diagnostics" }));
-		await user.click(within(row).getByRole("button", { name: "Copy diagnostics" }));
+		const diagnostics = await showDiagnostics(await openDetails(await findAgentRow("codex")));
+		await user.click(within(diagnostics).getByRole("button", { name: "Copy diagnostics" }));
 		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
 		const copied = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0] as string;
 		expect(copied).toContain("permission denied");
@@ -2543,19 +2582,17 @@ describe("HarnessSettingsSection", () => {
 			});
 			Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
 		});
-		it("shows its accounts and the way to the Accounts page instead of its own login", async () => {
-			managed.accounts = [
-				{ id: "a", provider: "codex", displayName: "Cedar Codex", signedIn: true, primary: false },
-				{ id: "b", provider: "codex", displayName: "Maple Codex", signedIn: true, primary: true },
-				{ id: "c", provider: "codex", displayName: "Aspen Codex", signedIn: false, primary: false },
-			];
+		const account = (id: string, displayName: string, signedIn: boolean, primary: boolean): ProviderAccount => ({ id, provider: "codex", kind: "oauth", displayName, email: `${id}@example.test`, signedIn, primary, sessions: [] });
+		it("nests its accounts under it in the list and opens on its default account instead of its own login", async () => {
+			managed.accounts = [account("a", "Cedar Codex", true, false), account("b", "Maple Codex", true, true), account("c", "Aspen Codex", false, false)];
 			renderSection();
 			await waitFor(async () => expect(await findListRow("codex")).toHaveAccessibleDescription("Maple Codex · 2 accounts"));
+			const accounts = await screen.findByTestId("provider-section-codex");
+			for (const id of ["a", "b", "c"]) expect(within(accounts).getByTestId(`provider-account-${id}`)).toBeInTheDocument();
+			expect(within(accounts).getByRole("button", { name: "New Codex account" })).toBeInTheDocument();
 			const page = await findAgentRow("codex");
-			expect(within(page).getByText("Maple Codex · 2 accounts")).toBeInTheDocument();
+			expect(await within(page).findByRole("heading", { name: "Maple Codex" })).toBeInTheDocument();
 			expect(within(page).queryByRole("button", { name: /^(Login|Log in again|Log out)$/ })).toBeNull();
-			await userEvent.click(within(page).getByRole("button", { name: "Accounts" }));
-			expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({ scope: "global", section: "accountManager" }));
 		});
 		it("keeps its own login while AO holds no account for it", async () => {
 			const signedOut = catalogWithInstalled("codex");
@@ -2568,13 +2605,14 @@ describe("HarnessSettingsSection", () => {
 			expect(within(page).queryByText("Managed sessions need you to sign in again.")).toBeNull();
 			expect(within(page).queryByRole("button", { name: "Open sign-in" })).toBeNull();
 		});
-		it("offers sign-in when no account is signed in, focused from a login shortcut without starting the agent's own login", async () => {
-			managed.accounts = [{ id: "c", provider: "codex", displayName: "Aspen Codex", signedIn: false, primary: false }];
+		it("offers the account's sign-in when no account is signed in, focused from a login shortcut without starting the agent's own login", async () => {
+			managed.accounts = [account("c", "Aspen Codex", false, false)];
 			const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 			render(<QueryClientProvider client={client}><TooltipProvider><HarnessSettingsSection focusAgentId="codex" startLogin /></TooltipProvider></QueryClientProvider>);
 			const page = await findAgentRow("codex");
-			expect(await within(page).findByText("Managed sessions need you to sign in again.")).toBeInTheDocument();
-			const signIn = within(page).getByRole("button", { name: "Open sign-in" });
+			expect(await within(page).findByRole("heading", { name: "Aspen Codex" })).toBeInTheDocument();
+			expect(within(page).getByText("This account is signed out")).toBeInTheDocument();
+			const signIn = within(page).getByRole("button", { name: "Sign in again" });
 			await waitFor(() => expect(document.activeElement).toBe(signIn));
 			expect(within(page).queryByTestId("inline-terminal-body")).toBeNull();
 		});

@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, CircleArrowUp, LoaderCircle, TriangleAlert } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../../api/schema";
 import { agentAuthPlansQueryKeyForHost, probeAgentAuth, useAgentAuthPlans, useStartAgentAuth } from "../../../hooks/useAgentAuth";
@@ -37,11 +37,11 @@ import { aoBridge } from "../../../lib/bridge";
 import { clientForSessionHost, labelForHost } from "../../../lib/host-clients";
 import { LOCAL_HOST } from "../../../lib/hosts";
 import { cn } from "../../../lib/utils";
-import { accountProvider, providerAccountsKey, useProviderAccounts } from "../../../hooks/useProviderAccounts";
-import { useUiStore } from "../../../stores/ui-store";
+import { accountModelScope, accountProvider, providerAccountsKey, useProviderAccounts, type ProviderAccount } from "../../../hooks/useProviderAccounts";
 import { AgentAvatar } from "../../AgentAvatar";
 import { ConfirmDialog } from "../../ConfirmDialog";
 import { Button } from "../../ui/button";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../../ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { describeHarness, supportsUpdate, type AgentAuthState, type AgentOperation, type HarnessDetails, type OperationAttempt } from "./describe-harness";
@@ -51,6 +51,9 @@ import { diagnosticsText, healthText, machineText } from "./harness-diagnostics"
 import { HarnessHealthTab } from "./HarnessHealthTab";
 import { FOCUS_HIGHLIGHT_MS, HARNESS_TAB_CLASS, HARNESS_TABS_CLASS, HarnessStatusDot, useWideLayout, type HarnessDetailTab } from "./harness-ui";
 import { HarnessModelsPanel, MULTI_PROVIDER_HARNESSES } from "./HarnessModelsPanel";
+import { HarnessStatusStrip } from "./HarnessStatusStrip";
+import type { AccountTab } from "../ProviderAccountDetail";
+import { AgentAccountPane, AgentAccountRows, selectedAccount, useAccountsPage } from "../ProviderAccountsSection";
 
 const AUTH_TERMINAL_LIFETIME_MS = 15 * 60_000;
 // The first check right after a login terminal exits can fail transiently (the
@@ -97,7 +100,11 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		const unknown = providerAccounts.isPending || providerAccounts.isError; // shown as managed, with the reason
 		return provider && (unknown || providerAccounts.data?.accounts?.some((account) => account.provider === provider)) ? provider : "";
 	};
-	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	// Claude Code and Codex list their accounts under them; the open account fills the page below the agent's line.
+	const accountsPage = useAccountsPage();
+	const accountsFor = (agentId: string) => (hostId ? "" : accountProvider(agentId)) as ProviderAccount["provider"] | "";
+	const [accountView, setAccountView] = useState<AccountTab>("account");
+	const [detailsSheet, setDetailsSheet] = useState(false);
 	const [logoutRequest, setLogoutRequest] = useState<AgentId | null>(null);
 	const [authStates, setAuthStates] = useState<AgentAuthStates>({});
 	const [checkingAuth, setCheckingAuth] = useState<AgentId[]>([]);
@@ -129,6 +136,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	// Opening a page refreshes its models once readiness says it is installed.
 	const modelsRefreshPending = useRef<AgentId | null>(null);
 	const openDetail = (agentId: AgentId, tab: HarnessDetailTab = "account") => {
+		if (selectedAgentRef.current !== agentId) accountsPage.show(""); // an agent opens on its default account
 		selectedAgentRef.current = agentId;
 		setSelectedAgentId(agentId);
 		setDetailTab(tab);
@@ -667,9 +675,10 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	});
 	const healthReport = (details: HarnessDetails) => healthText(details, { hostId, authCheckError: authCheckErrors[details.agentId], t });
 
-	const accountTab = (details: HarnessDetails) => {
+	const accountTab = (details: HarnessDetails, part: "install" | "login") => {
 		const { agentId, rowAuthWorkflow } = details;
 		return <HarnessAccountTab
+			part={part}
 			details={details}
 			hostId={hostId}
 			authWorkflowActive={Boolean(authWorkflow)}
@@ -683,7 +692,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			onUpdate={() => requestUpdate(agentId)}
 			onLogin={() => void startAuth(agentId)}
 			onLogout={() => setLogoutRequest(agentId)}
-			onOpenAccounts={() => openGlobalSettings("accountManager")}
+			onOpenAccounts={() => { const provider = accountsFor(agentId); if (provider) accountsPage.show(null, provider); }}
 			onVerify={() => void verifyInstall(agentId)}
 			onCloseAuth={() => { if (rowAuthWorkflow) void closeAuth(rowAuthWorkflow); }}
 			onRetryAuth={() => {
@@ -732,7 +741,8 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 							const details = describe(agentId);
 							const selected = split && selectedAgentId === agentId;
 							const statusId = `harness-list-status-${agentId}`;
-							return <Tooltip key={agentId}><TooltipTrigger asChild><button
+							const provider = accountsFor(agentId);
+							return <Fragment key={agentId}><Tooltip><TooltipTrigger asChild><button
 								type="button"
 								aria-label={t("settings.harness.openDetails", { agent: agentLabel(agentId) })}
 								// The status mark is visual only; its words reach screen readers here.
@@ -764,7 +774,9 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 									/>
 									: details.listTone === "error" ? <HarnessStatusDot tone="error" /> : null}
 								{split ? null : <ChevronRight className="size-4 shrink-0 text-settings-muted" aria-hidden="true" />}
-							</button></TooltipTrigger>{details.statusLabel ? <TooltipContent side="right">{details.statusLabel}</TooltipContent> : null}</Tooltip>;
+							</button></TooltipTrigger>{details.statusLabel ? <TooltipContent side="right">{details.statusLabel}</TooltipContent> : null}</Tooltip>
+								{provider ? <AgentAccountRows provider={provider} page={accountsPage} selectedId={selectedAgentId === agentId ? selectedAccount(accountsPage, provider)?.id ?? null : null} onOpen={() => openDetail(agentId)} /> : null}
+							</Fragment>;
 						})}
 						{rows.length === 0 ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.noResults")}</p> : null}
 					</div>
@@ -788,39 +800,52 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 							{/* Pane title: one step above row labels (15px), below the page heading. */}
 							<span className="min-w-0 flex-1 text-subtitle font-semibold leading-6 text-settings-label" id={`harness-agent-${selectedDetails.agentId}`}>{agentLabel(selectedDetails.agentId)}</span>
 						</div>
-						<Tabs className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" value={detailTab} onValueChange={(value) => setDetailTab(value as HarnessDetailTab)}>
-							<TabsList className={HARNESS_TABS_CLASS} aria-label={t("settings.harness.detailTabs", { agent: agentLabel(selectedDetails.agentId) })}>
-								<TabsTrigger className={HARNESS_TAB_CLASS} value="account">{t("settings.harness.tabAccount")}</TabsTrigger>
-								<TabsTrigger className={HARNESS_TAB_CLASS} value="models">{t("settings.harness.tabModels")}</TabsTrigger>
-								<TabsTrigger className={HARNESS_TAB_CLASS} value="health">{t("settings.harness.tabHealth")}</TabsTrigger>
-							</TabsList>
-							<TabsContent value="account" className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-4">{accountTab(selectedDetails)}</TabsContent>
-							<TabsContent value="models" className="min-h-0 min-w-0 overflow-hidden pt-4 data-[state=active]:flex data-[state=active]:flex-col">
-								<HarnessModelsPanel
-									agentId={selectedDetails.agentId}
-									hostId={hostId}
-									installed={selectedDetails.isInstalled}
-									needsLogin={needsAuthentication(selectedDetails.agentId)}
-									onOpenAccount={() => setDetailTab("account")}
-								/>
-							</TabsContent>
-							<TabsContent value="health" className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-4">
-								<HarnessHealthTab
-									details={selectedDetails}
-									checking={checkingAuth.includes(selectedDetails.agentId) || agents.isFetching || Boolean(selectedDetails.advisoryQuery?.isFetching)}
-									authCheckFailed={Boolean(authCheckErrors[selectedDetails.agentId])}
-									copied={copiedAgent === selectedDetails.agentId}
-									onCheckAgain={() => refreshInstalledAgent(selectedDetails.agentId)}
-									onCopyReport={() => void (async () => {
-										const machine = await machineText(queryClient, hostId ? client : undefined);
-										await copyText(selectedDetails.agentId, [healthReport(selectedDetails), machine].filter(Boolean).join("\n\n"));
-									})()}
-								/>
-							</TabsContent>
-						</Tabs>
+						<HarnessStatusStrip
+							details={selectedDetails}
+							onInstall={(methodId) => void startAgentOperation(selectedDetails.agentId, methodId, "install")}
+							onUpdate={() => requestUpdate(selectedDetails.agentId)}
+							onDetails={() => setDetailsSheet(true)}
+						/>
+						{(() => {
+							const { agentId } = selectedDetails;
+							const provider = accountsFor(agentId);
+							const shown = provider ? selectedAccount(accountsPage, provider) : null;
+							const models = (catalogScope: string, onOpenAccount: () => void) => <HarnessModelsPanel agentId={agentId} hostId={hostId} catalogScope={catalogScope} installed={selectedDetails.isInstalled} needsLogin={needsAuthentication(agentId)} onOpenAccount={onOpenAccount} />;
+							// An agent with accounts in AO shows the open account: its Account, Usage and Models change as another is picked.
+							if (provider && (shown || accountsPage.adding === provider)) return <div className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain">
+								<AgentAccountPane provider={provider} page={accountsPage} tab={accountView} onTab={setAccountView} models={shown ? models(accountModelScope(shown.id), () => setAccountView("account")) : null} />
+							</div>;
+							return <Tabs className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" value={detailTab === "health" ? "account" : detailTab} onValueChange={(value) => setDetailTab(value as HarnessDetailTab)}>
+								<TabsList className={HARNESS_TABS_CLASS} aria-label={t("settings.harness.detailTabs", { agent: agentLabel(agentId) })}>
+									<TabsTrigger className={HARNESS_TAB_CLASS} value="account">{t("settings.harness.tabAccount")}</TabsTrigger>
+									<TabsTrigger className={HARNESS_TAB_CLASS} value="models">{t("settings.harness.tabModels")}</TabsTrigger>
+								</TabsList>
+								<TabsContent value="account" className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-4">{accountTab(selectedDetails, "login")}</TabsContent>
+								<TabsContent value="models" className="min-h-0 min-w-0 overflow-hidden pt-4 data-[state=active]:flex data-[state=active]:flex-col">{models("", () => setDetailTab("account"))}</TabsContent>
+							</Tabs>;
+						})()}
 					</div>
 				) : null}
 			</div>
+			<Sheet open={detailsSheet && selectedDetails !== null} onOpenChange={setDetailsSheet}>
+				<SheetContent className="settings-thin-scrollbar w-[440px] overflow-y-auto sm:max-w-[440px]">
+					<SheetHeader><SheetTitle>{selectedDetails ? agentLabel(selectedDetails.agentId) : ""}</SheetTitle></SheetHeader>
+					{selectedDetails ? <div className="flex flex-col gap-6 px-4 pb-6">
+						{accountTab(selectedDetails, "install")}
+						<HarnessHealthTab
+							details={selectedDetails}
+							checking={checkingAuth.includes(selectedDetails.agentId) || agents.isFetching || Boolean(selectedDetails.advisoryQuery?.isFetching)}
+							authCheckFailed={Boolean(authCheckErrors[selectedDetails.agentId])}
+							copied={copiedAgent === selectedDetails.agentId}
+							onCheckAgain={() => refreshInstalledAgent(selectedDetails.agentId)}
+							onCopyReport={() => void (async () => {
+								const machine = await machineText(queryClient, hostId ? client : undefined);
+								await copyText(selectedDetails.agentId, [healthReport(selectedDetails), machine].filter(Boolean).join("\n\n"));
+							})()}
+						/>
+					</div> : null}
+				</SheetContent>
+			</Sheet>
 			<ConfirmDialog
 				open={logoutRequest !== null}
 				title={t("settings.harness.logoutConfirmTitle", { agent: logoutRequest ? agentLabel(logoutRequest) : "" })}

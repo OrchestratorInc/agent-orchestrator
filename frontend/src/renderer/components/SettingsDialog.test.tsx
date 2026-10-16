@@ -291,7 +291,7 @@ describe("SettingsDialog", () => {
 		expect(form).toHaveTextContent("harness");
 		expect(form).toHaveAttribute("data-focus-agent", "claude-code");
 		expect(screen.getByRole("button", { name: "Harness" })).toHaveAttribute("data-active", "true");
-		expect(screen.getByRole("button", { name: "Accounts" })).not.toHaveAttribute("data-active", "true");
+		expect(screen.queryByRole("button", { name: "Accounts" })).not.toBeInTheDocument();
 	});
 
 	it("forwards the remote host from a Manage agents action to Harness", async () => {
@@ -393,18 +393,6 @@ describe("SettingsDialog", () => {
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
 		expect(screen.queryByRole("button", { name: "Coder" })).not.toBeInTheDocument();
-	});
-
-	it("opens Accounts, which reads its accounts itself, and closes without any account request", async () => {
-		useUiStore.getState().openGlobalSettings("accountManager");
-		renderSettingsDialog();
-
-		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("accountManager");
-		expect(screen.getByRole("button", { name: "General" })).toBeEnabled();
-		await userEvent.click(screen.getByRole("button", { name: "Back" }));
-
-		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
-		expect(postMock).not.toHaveBeenCalled();
 	});
 
 	it("renders inside the page and closes from Escape or Back", async () => {

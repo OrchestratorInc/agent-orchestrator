@@ -1,15 +1,15 @@
 import { Check, SlidersHorizontal } from "lucide-react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { accountHeadroom, type ProviderAccount } from "../hooks/useProviderAccounts";
+import { accountHeadroom, PROVIDERS, type ProviderAccount } from "../hooks/useProviderAccounts";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
-type MenuItems = { accounts: ProviderAccount[]; selectedId?: string; markDefault?: boolean; disabled?: (account: ProviderAccount) => boolean; onSelect: (account: ProviderAccount) => void; manage?: boolean };
+type MenuItems = { accounts: ProviderAccount[]; selectedId?: string; markDefault?: boolean; disabled?: (account: ProviderAccount) => boolean; onSelect: (account: ProviderAccount) => void; manage?: boolean; agentId?: string };
 // The rows of every account menu: name, Default mark, room left. selectedId adds the tick column; manage adds the
-// empty row, the caller's own rows and the way to the Accounts page.
-export function AccountMenuItems({ accounts, selectedId, markDefault = true, disabled, onSelect, manage, children }: MenuItems & { children?: ReactNode }) {
+// empty row, the caller's own rows and the way to the agent's accounts on the Agents page.
+export function AccountMenuItems({ accounts, selectedId, markDefault = true, disabled, onSelect, manage, agentId, children }: MenuItems & { children?: ReactNode }) {
 	const { t } = useTranslation();
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	return (
@@ -33,7 +33,7 @@ export function AccountMenuItems({ accounts, selectedId, markDefault = true, dis
 			{children}
 			{manage ? <DropdownMenuSeparator /> : null}
 			{manage ? (
-				<DropdownMenuItem onSelect={() => openGlobalSettings("accountManager")}>
+				<DropdownMenuItem onSelect={() => openGlobalSettings("harness", { focusAgentId: agentId ?? PROVIDERS.find((provider) => provider.id === accounts[0]?.provider)?.agent })}>
 					<SlidersHorizontal aria-hidden="true" className="size-3.5 text-muted-foreground" />
 					<span>{t("providerAccounts.manageAccounts")}</span>
 				</DropdownMenuItem>

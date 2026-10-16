@@ -15,7 +15,9 @@ const ACTION_CLASS = "h-8 min-w-20 px-3 focus-visible:ring-2 focus-visible:ring-
 
 /** Install, update and login each own one row. While a job or login runs,
 	* the row that started it shows progress instead. */
-export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied, diagnosticsExpanded, onToggleDiagnostics, onCopyDiagnostics, onInstall, onSelectMethod, onCopyCommand, onUpdate, onLogin, onLogout, onOpenAccounts, onVerify, onCloseAuth, onRetryAuth, onTerminalState }: {
+export function HarnessAccountTab({ part, details, hostId, authWorkflowActive, copied, diagnosticsExpanded, onToggleDiagnostics, onCopyDiagnostics, onInstall, onSelectMethod, onCopyCommand, onUpdate, onLogin, onLogout, onOpenAccounts, onVerify, onCloseAuth, onRetryAuth, onTerminalState }: {
+	/** The installation, shown in the agent's details, or the agent's own login, shown as its Login tab. */
+	part: "install" | "login";
 	details: HarnessDetails;
 	hostId?: string;
 	/** A login or logout terminal is open for any harness. */
@@ -85,6 +87,7 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 			{t(details.isDocumentationAction ? "settings.harness.viewDocumentation" : details.isSetupAction ? "settings.harness.openSetup" : "settings.harness.loginAgain")}
 		</Button> : null;
 	return <div className="flex flex-col gap-6">
+		{part === "install" ? <>
 		<HarnessDetailGroup title={t("settings.harness.installation")}>
 			<HarnessDetailRow
 				label={isInstalled ? t(details.versionUnverified ? "settings.harness.lastObservedVersion" : "settings.harness.installedVersion")
@@ -104,8 +107,9 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 		{isInstalled && details.updateUnknown && !details.advisoryQuery?.isPending && !details.manualOnly ? <p className="-mt-3 text-xs text-settings-muted">{t("settings.harness.updateCheckUnavailable")}</p> : null}
 		{/* A harness with no installable method explains how it is maintained instead. */}
 		{isInstalled && details.manualOnly && plan?.reason && !(details.showUpdate && !details.canUpdate) ? <p className="-mt-3 text-xs text-settings-muted">{plan.reason}</p> : null}
+		</> : null}
 
-		{isInstalled || rowAuthWorkflow ? <HarnessDetailGroup title={t("settings.harness.account")}>
+		{part === "login" && (isInstalled || rowAuthWorkflow) ? <HarnessDetailGroup title={t("settings.harness.account")}>
 			<HarnessDetailRow
 				label={authBusy && rowAuthWorkflow ? t(rowAuthWorkflow.action === "logout" ? "settings.harness.logoutInProgress" : "settings.harness.loginInProgress") : details.authSummary}
 				description={authBusy ? undefined : details.accountDescription}
@@ -114,8 +118,8 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 				{isInstalled && !managed && authPlan?.logoutCommand && authPlan.available && details.authStatus !== "unauthorized" ? <Button type="button" size="sm" variant="outline" disabled={details.busy || authWorkflowActive} onClick={onLogout}><LogOut aria-hidden="true" />{t("settings.harness.logout")}</Button> : null}
 			</HarnessDetailRow>
 		</HarnessDetailGroup> : null}
-		{authPlan?.action === "instructions" && authPlan.documentationUrl ? <div><Button type="button" size="sm" variant="outline" onClick={() => void aoBridge.app.openExternal(authPlan.documentationUrl)}><BookOpen aria-hidden="true" />{t("settings.harness.instructions")}</Button></div> : null}
-		{rowAuthWorkflow ? <HarnessAuthTerminalPanel
+		{part === "login" && authPlan?.action === "instructions" && authPlan.documentationUrl ? <div><Button type="button" size="sm" variant="outline" onClick={() => void aoBridge.app.openExternal(authPlan.documentationUrl)}><BookOpen aria-hidden="true" />{t("settings.harness.instructions")}</Button></div> : null}
+		{part === "login" && rowAuthWorkflow ? <HarnessAuthTerminalPanel
 			workflow={rowAuthWorkflow}
 			hostId={hostId}
 			onClose={onCloseAuth}
@@ -124,9 +128,9 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 		/> : null}
 
 		{details.rowError ? <p role="alert" className="text-xs text-error">{details.rowError}</p> : null}
-		{details.installWarning ? <p role="status" className="text-xs text-settings-label">{details.installWarning}</p> : null}
-		{details.jobFailed && !authBusy ? <div><Button type="button" size="sm" variant="outline" disabled={details.busy} onClick={onVerify}>{t("settings.harness.verifyAgain")}</Button></div> : null}
-		{details.hasDiagnostics ? <div className="space-y-2">
+		{part === "install" && details.installWarning ? <p role="status" className="text-xs text-settings-label">{details.installWarning}</p> : null}
+		{part === "install" && details.jobFailed && !authBusy ? <div><Button type="button" size="sm" variant="outline" disabled={details.busy} onClick={onVerify}>{t("settings.harness.verifyAgain")}</Button></div> : null}
+		{part === "install" && details.hasDiagnostics ? <div className="space-y-2">
 			<Button type="button" aria-expanded={diagnosticsExpanded} size="sm" variant="ghost" onClick={onToggleDiagnostics}>
 				{t(diagnosticsExpanded ? "settings.harness.hideDiagnostics" : "settings.harness.showDiagnostics")}
 			</Button>

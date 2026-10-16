@@ -16,7 +16,7 @@ const SESSION = "/api/v1/provider-accounts/sessions/{sessionId}";
 // Opens the session menu and the account submenu inside it.
 async function openAccounts() {
 	const user = userEvent.setup();
-	render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><SessionActionsMenu><SessionProviderAccountMenuItem sessionId="session-1" /></SessionActionsMenu></QueryClientProvider>);
+	render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><SessionActionsMenu><SessionProviderAccountMenuItem sessionId="session-1" agentId="codex" /></SessionActionsMenu></QueryClientProvider>);
 	await user.click(await screen.findByRole("button", { name: "Session actions" }));
 	const item = await screen.findByRole("menuitem", { name: /^Account/ });
 	await user.hover(item);
@@ -64,7 +64,7 @@ it("asks for a sign-in when the session waits for one, and is absent for an unma
 	expect(await screen.findByRole("menuitem", { name: "No signed-in accounts" })).toBeInTheDocument();
 	expect(screen.getByRole("menuitem", { name: "Please sign in again" })).toBeInTheDocument();
 	fireEvent.click(screen.getByRole("menuitem", { name: "Manage accounts" }));
-	expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({ section: "accountManager" }));
+	expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({ section: "harness", focusAgentId: "codex" }));
 	// Outside a menu the item would throw if it rendered, so an unmanaged session renders nothing.
 	route = { managed: false, accountId: "" };
 	render(<QueryClientProvider client={new QueryClient()}><SessionProviderAccountMenuItem sessionId="session-2" /></QueryClientProvider>);

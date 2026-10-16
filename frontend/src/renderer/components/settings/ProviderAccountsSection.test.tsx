@@ -2,8 +2,10 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ProviderAccountsSection } from "./ProviderAccountsSection";
-import type { AccountAction, ProviderAccount } from "../../hooks/useProviderAccounts";
+import { useState } from "react";
+import { AgentAccountPane, AgentAccountRows, selectedAccount, useAccountsPage } from "./ProviderAccountsSection";
+import type { AccountTab } from "./ProviderAccountDetail";
+import { PROVIDERS, type AccountAction, type ProviderAccount } from "../../hooks/useProviderAccounts";
 import { useUiStore } from "../../stores/ui-store";
 
 const mock = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), remove: vi.fn(), open: vi.fn(), clipboard: vi.fn(), navigate: vi.fn(), workspaceQuery: vi.fn(), workspaces: [] as unknown[], costs: new Map<string, unknown>() }));
@@ -62,15 +64,28 @@ beforeEach(() => {
 afterEach(cleanup);
 
 type User = ReturnType<typeof userEvent.setup>;
+// The accounts as the Agents page lays them out: each provider's rows, and the pane of the one opened last.
+function AgentsPage() {
+	const page = useAccountsPage();
+	const [provider, setProvider] = useState<ProviderAccount["provider"]>(page.adding ?? PROVIDERS[0].id);
+	const [tab, setTab] = useState<AccountTab>("account");
+	return (
+		<>
+			{PROVIDERS.map(({ id }) => <AgentAccountRows key={id} provider={id} page={page} selectedId={id === provider ? selectedAccount(page, id)?.id ?? null : null} onOpen={() => setProvider(id)} />)}
+			<AgentAccountPane provider={provider} page={page} tab={tab} onTab={setTab} models={<div data-testid="account-models" />} />
+		</>
+	);
+}
 function renderAccounts(cache = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })) {
-	const view = render(<QueryClientProvider client={cache}><ProviderAccountsSection /></QueryClientProvider>);
+	const view = render(<QueryClientProvider client={cache}><AgentsPage /></QueryClientProvider>);
 	return { cache, view };
 }
 const listItem = (account: ProviderAccount) => screen.getByTestId(`provider-account-${account.id}`);
 const detail = () => screen.getByTestId("provider-account-detail");
 const status = () => screen.findByRole("status");
 // One per provider, always the last row of its list.
-const addButtons = () => screen.getAllByRole("button", { name: /^New \w+ account/ }) as HTMLButtonElement[];
+// It reads "Signing in" while a new sign-in of its provider waits.
+const addButtons = () => PROVIDERS.map(({ id }) => within(screen.getByTestId(`provider-section-${id}`)).getAllByRole("button").at(-1) as HTMLButtonElement);
 const actions = (action: string) => mock.post.mock.calls.filter(([path, options]) => path === ACTIONS && options.body.action === action).map(([, options]) => [options.params.path.accountId, options.body]);
 async function start() {
 	const user = userEvent.setup();
@@ -86,6 +101,7 @@ async function askRemoval(user: User, action: "Sign out" | "Remove") {
 	await user.click(within(detail()).getByRole("button", { name: action }));
 	return screen.getByRole("group", { name: "Confirm account change" });
 }
+const showTab = (user: User, name: "Account" | "Usage" | "Models") => user.click(within(detail()).getByRole("tab", { name }));
 const confirmButton = (group: HTMLElement) => within(group).getByRole("button", { name: /^(Sign out|Remove)$/ });
 async function startAdding(user: User, index = 0, method?: string) {
 	await user.click(addButtons()[index]);
@@ -95,15 +111,17 @@ async function startAdding(user: User, index = 0, method?: string) {
 
 describe("accounts list and detail", () => {
 	it("lists every account by provider and shows the one that is clicked", async () => {
+		// Only sessions the app lists are counted.
+		mock.workspaces = [{ id: "project-1", sessions: [{ id: "session-a", title: "Fix login", status: "idle", provider: "codex" }] }];
 		const user = await start();
-		expect(within(screen.getByTestId("provider-section-codex")).getByRole("heading", { name: "Codex" })).toBeInTheDocument();
-		expect(within(screen.getByTestId("provider-section-claude")).getByRole("heading", { name: "Claude" })).toBeInTheDocument();
+		expect(within(screen.getByTestId("provider-section-codex")).getAllByRole("button").map(row => row.dataset.testid)).toEqual(["provider-account-a", "provider-account-b", undefined]);
+		expect(within(screen.getByTestId("provider-section-claude")).getAllByRole("button").map(row => row.dataset.testid)).toEqual(["provider-account-c", undefined]);
 		expect(listItem(alice)).toHaveTextContent(/^Cedar CodexDefault$/);
 		expect(listItem(bob)).toHaveTextContent(/^Maple Codex$/);
 		expect(listItem(clara)).toHaveTextContent("Willow ClaudeDefault");
 		expect(listItem(alice)).toHaveAttribute("aria-current", "true");
 		expect(detail()).toHaveTextContent("New Codex sessionsStart on this account.");
-		expect(detail()).toHaveTextContent("1 session is using this account.");
+		expect(detail()).toHaveTextContent("Running sessions1 active");
 		expect(within(detail()).getByText(alice.email)).toHaveClass("blur-sm");
 		expect(within(detail()).getByText(alice.email)).toHaveAttribute("tabindex", "0");
 		await open(user, bob);
@@ -141,8 +159,8 @@ describe("accounts list and detail", () => {
 	it("ends each provider's list with its New account row, the only way to add one", async () => {
 		await start();
 		const rows = (provider: string) => within(screen.getByTestId(`provider-section-${provider}`)).getAllByRole("button").map(row => row.textContent);
-		expect(rows("codex")).toEqual(["Cedar CodexDefault", "Maple Codex", "New Codex accountChoose how to sign in."]);
-		expect(rows("claude")).toEqual(["Willow ClaudeDefault", "New Claude accountChoose how to sign in."]);
+		expect(rows("codex")).toEqual(["Cedar CodexDefault", "Maple Codex", "New Codex account"]);
+		expect(rows("claude")).toEqual(["Willow ClaudeDefault", "New Claude account"]);
 		expect(screen.queryByRole("button", { name: /^Add/ })).toBeNull();
 		expect(screen.queryByText(/^Check(ed| again)/)).toBeNull();
 	});
@@ -168,17 +186,19 @@ describe("accounts list and detail", () => {
 	it("says how to start when a provider has no account", async () => {
 		inventory.accounts = [];
 		renderAccounts();
-		expect(await screen.findByText("No accounts yet")).toBeInTheDocument();
+		// Each provider offers only its New account row, and nothing is on show.
+		await waitFor(() => expect(mock.get).toHaveBeenCalledWith(LIST, { params: { query: { includeUsage: false, refresh: false } } }));
+		await waitFor(() => expect(screen.queryByText("Loading accounts…")).toBeNull());
+		for (const provider of ["codex", "claude"]) expect(within(screen.getByTestId(`provider-section-${provider}`)).getAllByRole("button").map(row => row.textContent)).toEqual([expect.stringMatching(/^New \w+ account$/)]);
+		expect(screen.queryByTestId("provider-account-detail")).toBeNull();
 		// A provider without accounts is not managed, so no session waits for a sign-in.
-		expect(screen.queryByText(/No signed-in/)).toBeNull();
 		expect(screen.queryByText("Managed sessions need you to sign in again.")).toBeNull();
 	});
 	it("asks for a sign-in when every account of a provider is signed out", async () => {
 		inventory.accounts = [{ ...structuredClone(alice), signedIn: false }, { ...structuredClone(bob), signedIn: false }, structuredClone(clara)];
 		renderAccounts();
-		expect(await screen.findByText("No signed-in Codex account.")).toBeInTheDocument();
+		expect(await within(await screen.findByTestId("provider-section-codex")).findByText("Managed sessions need you to sign in again.")).toBeInTheDocument();
 		expect(screen.getAllByText("Managed sessions need you to sign in again.")).toHaveLength(1);
-		expect(screen.queryByText("No signed-in Claude account.")).toBeNull();
 	});
 	it("renames an account from its display name field", async () => {
 		const user = await start();
@@ -669,21 +689,28 @@ describe("plan and activity", () => {
 		await open(user, clara);
 		await user.click(within(detail()).getByRole("button", { name: "Manage plan" }));
 		expect(mock.open).toHaveBeenLastCalledWith("https://claude.ai/settings/usage");
-		for (const fact of ["PlanTeam", "RenewsNov 14, 2030", "OrganizationAcme", "AddedSep 3, 2030", "RequestsLast 3 hours163 failed"]) expect(aside()).toHaveTextContent(fact);
-		// The models it can use: six by name, the rest counted and named on pointing.
+		for (const fact of ["PlanTeam", "RenewsNov 14, 2030", "OrganizationAcme", "AddedSep 3, 2030"]) expect(aside()).toHaveTextContent(fact);
+		// The models it can use: six by name, the rest counted; they open the Models tab.
 		expect(aside()).toHaveTextContent("Modelsopussonnethaikuopus-4sonnet-4haiku-4+2");
-		expect(within(aside()).getByText("+2")).toHaveAttribute("title", "opus-3, haiku-3");
+		expect(within(aside()).getByRole("button", { name: "Open models" })).toHaveTextContent("+2");
 		// Renewing the sign-in is a row among the account's own, which says what it does and when it last happened.
 		expect(detail()).toHaveTextContent(/AccountDisplay name.*Signed in as.*Renew sign-inGets a fresh login from Claude\. Last renewed 12 minutes ago\.RenewSign out/);
 		await user.click(within(detail()).getByRole("button", { name: "Renew" }));
 		expect(await screen.findByText("Sign-in renewed.")).toBeInTheDocument();
 		expect(actions("refresh-sign-in")).toEqual([["c", { action: "refresh-sign-in" }]]);
+		// Its recent requests are on the Usage tab, which the running sessions row opens.
+		await user.click(within(detail()).getByRole("button", { name: "Open usage" }));
+		expect(within(detail()).getByRole("tab", { name: "Usage" })).toHaveAttribute("aria-selected", "true");
+		expect(aside()).toHaveTextContent("RequestsLast 3 hours163 failed");
+		expect(aside()).not.toHaveTextContent("Plan");
 		// An API key has no limits and no sign-in to renew, but its activity is known.
+		await showTab(user, "Account");
 		await open(user, bob);
 		expect(aside()).toHaveTextContent("AddedSep 28, 2030");
-		expect(aside()).toHaveTextContent("RequestsLast 3 hours3None failed");
 		expect(within(detail()).queryByRole("button", { name: "Renew" })).toBeNull();
 		expect(within(detail()).queryByRole("button", { name: "Manage plan" })).toBeNull();
+		await showTab(user, "Usage");
+		expect(aside()).toHaveTextContent("RequestsLast 3 hours3None failed");
 	});
 	it("shows the plan and what the helper counted even while the limits are unavailable", async () => {
 		inventory.accounts[0].usage = { status: "unavailable", plan: "pro", activity: {
@@ -697,6 +724,7 @@ describe("plan and activity", () => {
 		expect(screen.getByTestId("provider-account-usage-a")).toHaveTextContent("Usage unavailable");
 		expect(detail()).toHaveTextContent("Codex·Pro");
 		expect(aside()).toHaveTextContent("PlanPro");
+		await showTab(user, "Usage");
 		// A bar a day, the busiest the tallest and today's the last, then the totals and what its sessions cost.
 		const bars = within(aside()).getByRole("img", { name: "Tokens per day" });
 		expect(Array.from(bars.querySelectorAll<HTMLElement>("[title]"), bar => [bar.title, bar.style.height])).toEqual([["Feb 1 · 600", "50%"], ["Feb 2 · 0", "0%"], ["Feb 3 · 1.2K", "100%"]]);
@@ -715,15 +743,17 @@ describe("plan and activity", () => {
 		inventory.accounts[0].usage = { status: "available", plan: "pro", windows: [], requests: Array.from({ length: 20 }, () => ({ succeeded: 0, failed: 0 })), tokens: { latestDay: today, latestDayTokens: 1_240_000, lifetime: 482_000_000, peakDaily: 9_400_000, longestTurnSeconds: 4_320, currentStreakDays: 6, longestStreakDays: 23 } };
 		inventory.accounts[1].usage = { status: "available", windows: [], tokens: { latestDay: "2030-01-05", latestDayTokens: 3_800, lifetime: 96_000_000 } };
 		const user = await start();
-		// A quiet account says so in figures, and renewing stays in reach when its last time is not known.
-		for (const fact of ["RequestsLast 3 hours0None failed", "Tokens today1.2M", "Lifetime tokens482M", "Peak day9.4M", "Longest turn1 hr 12 min", "Current streak6 days", "Longest streak23 days"]) expect(aside()).toHaveTextContent(fact);
+		// Renewing stays in reach when its last time is not known, and a quiet account says so in figures.
 		expect(within(detail()).getByRole("button", { name: "Renew" })).toBeEnabled();
 		expect(detail()).not.toHaveTextContent("Last renewed");
+		await showTab(user, "Usage");
+		for (const fact of ["RequestsLast 3 hours0None failed", "Tokens today1.2M", "Lifetime tokens482M", "Peak day9.4M", "Longest turn1 hr 12 min", "Current streak6 days", "Longest streak23 days"]) expect(aside()).toHaveTextContent(fact);
 		// A tally whose latest day is not today names the day; with nothing from the helper there is no sign-in row.
 		await open(user, bob);
 		expect(aside()).toHaveTextContent("Tokens on Jan 5, 20303.8K");
 		expect(aside()).toHaveTextContent("Lifetime tokens96M");
 		expect(aside()).not.toHaveTextContent(/Peak day|Requests/);
+		await showTab(user, "Account");
 		expect(within(detail()).queryByRole("button", { name: "Renew" })).toBeNull();
 	});
 });
@@ -732,12 +762,13 @@ describe("account health", () => {
 		inventory.accounts[0].usage = { status: "unavailable", health: { lastFailure: { kind: "sign-in", at: "2030-03-04T12:00:00Z" }, failures: { limit: 3, signIn: 1, server: 0 }, firstWordMs: 1840 } };
 		inventory.accounts[1].usage = { status: "available", windows: [], health: { firstWordMs: 900 } };
 		const user = await start();
-		expect(detail()).toHaveTextContent(/HealthLast failureSign-in refused · Mar 4, 2030, \d+:\d\d.*M3 limit reached1 sign-in refusedTime to first wordTypical, last hour1\.8 s/);
+		await showTab(user, "Usage");
+		expect(detail()).toHaveTextContent(/RequestsLast failureSign-in refused · Mar 4, 2030, \d+:\d\d.*M3 limit reached1 sign-in refusedTime to first wordTypical, last hour1\.8 s/);
 		await open(user, bob);
-		expect(detail()).toHaveTextContent("HealthTime to first wordTypical, last hour0.9 s");
+		expect(detail()).toHaveTextContent("RequestsTime to first wordTypical, last hour0.9 s");
 		expect(detail()).not.toHaveTextContent("Last failure");
 		await open(user, clara);
-		expect(detail()).not.toHaveTextContent("Health");
+		expect(detail()).not.toHaveTextContent(/Requests|Time to first word/);
 	});
 });
 describe("the sessions on an account", () => {
@@ -752,6 +783,17 @@ describe("the sessions on an account", () => {
 		inventory.accounts[0].sessions = ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "gone"];
 		inventory.accounts[0].usage = { status: "available", windows: [], activity: { today: 49_200, week: 49_200, total: 49_200, sessions: { s7: 48_000, s2: 1_200 } } };
 	});
+	it("counts only the active sessions", async () => {
+		mock.workspaces = [{ id: "project-1", sessions: [
+			{ ...session("s1", "Fix login", "working"), provider: "codex" },
+			{ ...session("s2", "Parked"), provider: "codex", kanbanColumn: "archive" },
+			{ ...session("s3", "Also parked"), provider: "codex", kanbanColumn: "archive" },
+		] }];
+		inventory.accounts[0].sessions = ["s1", "s2", "s3"];
+		await start();
+		expect(detail()).toHaveTextContent("Running sessions1 active");
+		expect(detail()).not.toHaveTextContent("archived");
+	});
 	it("counts and moves only the sessions the account serves now", async () => {
 		// An ended session keeps its route for a restore, and one now on Claude keeps its Codex route for a switch back.
 		mock.workspaces = [{ id: "project-1", sessions: [
@@ -761,10 +803,12 @@ describe("the sessions on an account", () => {
 		] }];
 		inventory.accounts[0].sessions = ["s1", "s2", "s3"];
 		const user = await start();
-		expect(detail()).toHaveTextContent("1 session is using this account.");
+		expect(detail()).toHaveTextContent("Running sessions1 active");
+		await showTab(user, "Usage");
 		expect(detail()).toHaveTextContent("1 session on this account");
 		expect(list()).not.toHaveTextContent("Ended");
 		expect(list()).not.toHaveTextContent("On Claude now");
+		await showTab(user, "Account");
 		await user.click(within(detail()).getByRole("button", { name: "Move sessions" }));
 		await user.click(await screen.findByRole("menuitem", { name: /Maple Codex/ }));
 		expect(await status()).toHaveTextContent("1 session moved to Maple Codex.");
@@ -772,6 +816,7 @@ describe("the sessions on an account", () => {
 	});
 	it("names them, the busiest today first and five at a time", async () => {
 		const user = await start();
+		await showTab(user, "Usage");
 		expect(mock.workspaceQuery).toHaveBeenCalledWith({ includeCloud: false });
 		// A session AO no longer knows is left out of the list and of its count.
 		expect(detail()).toHaveTextContent("7 sessions on this account");
@@ -786,13 +831,14 @@ describe("the sessions on an account", () => {
 	});
 	it("moves one to another account, or opens it and leaves settings", async () => {
 		const user = await start();
+		await showTab(user, "Usage");
 		await user.click(row("Scratch").getByRole("button", { name: "Move to another account" }));
 		expect((await screen.findAllByRole("menuitem")).map(option => option.textContent)).toEqual(["Maple Codex"]);
 		await user.click(screen.getByRole("menuitem", { name: "Maple Codex" }));
 		expect(await status()).toHaveTextContent("Session moved to Maple Codex.");
 		expect(actions("assign-session")).toEqual([["b", { action: "assign-session", sessionId: "s7" }]]);
 		await waitFor(() => expect(detail()).toHaveTextContent("6 sessions on this account"));
-		useUiStore.getState().openGlobalSettings("accountManager");
+		useUiStore.getState().openGlobalSettings("harness");
 		await user.click(row("Fix login").getByRole("button", { name: "Open session" }));
 		expect(mock.navigate).toHaveBeenLastCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "project-1", sessionId: "s1" } });
 		expect(useUiStore.getState().settingsModal).toBeNull();

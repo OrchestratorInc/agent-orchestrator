@@ -609,8 +609,8 @@ export function TaskComposer({
 	}, [hostId, modelsProjectId, queryClient, selectedAgent]);
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	const startAgentLogin = useCallback(() => {
-		// An agent whose accounts AO manages signs in on the Accounts page.
-		if (showAccountControl) return openGlobalSettings("accountManager");
+		// An agent whose accounts AO manages signs in under it on the Agents page.
+		if (showAccountControl) return openGlobalSettings("harness", { focusAgentId: selectedAgent });
 		openGlobalSettings("harness", {
 			focusAgentId: selectedAgent,
 			...(hostId ? { hostId } : {}),
@@ -854,7 +854,7 @@ export function TaskComposer({
 		{needsAccountSignIn ? (
 			<div className="flex items-center justify-between gap-3 px-1 pt-2.5 text-sm text-muted-foreground" role="status">
 				<span className="flex min-w-0 items-center gap-2"><AlertCircle aria-hidden="true" className="size-4 shrink-0 text-status-needs-you" />{t("providerAccounts.emptyAccounts", { provider: accountProviderName })}</span>
-				<Button type="button" size="sm" variant="secondary" onClick={() => openGlobalSettings("accountManager")}>{t("shell.signIn")}</Button>
+				<Button type="button" size="sm" variant="secondary" onClick={() => openGlobalSettings("harness", { focusAgentId: selectedAgent })}>{t("shell.signIn")}</Button>
 			</div>
 		) : null}
 		</>

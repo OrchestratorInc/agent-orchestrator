@@ -28,7 +28,8 @@ function SheetOverlay({ className, ...props }: React.ComponentProps<typeof Sheet
 		<SheetPrimitive.Overlay
 			data-slot="sheet-overlay"
 			className={cn(
-				"dialog-overlay data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
+				// A light scrim with no blur: the page stays readable beside the sheet.
+				"fixed inset-0 z-overlay bg-[color-mix(in_srgb,var(--color-scrim)_45%,transparent)] ease-(--ease-out) data-[state=closed]:ease-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:duration-200 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:duration-300",
 				className,
 			)}
 			{...props}
@@ -53,7 +54,7 @@ function SheetContent({
 			<SheetPrimitive.Content
 				data-slot="sheet-content"
 				className={cn(
-					"fixed z-overlay flex flex-col gap-4 bg-background shadow-lg transition data-[state=closed]:animate-out data-[state=closed]:duration-200 data-[state=open]:animate-in data-[state=open]:duration-280",
+					"fixed z-overlay flex flex-col gap-4 border-border bg-background shadow-lg ease-(--ease-out) data-[state=closed]:ease-in will-change-transform data-[state=closed]:animate-out data-[state=closed]:duration-200 data-[state=open]:animate-in data-[state=open]:duration-300",
 					side === "right" &&
 						"inset-y-0 right-0 h-full w-3/4 border-l data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-sm",
 					side === "left" &&

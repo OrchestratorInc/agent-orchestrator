@@ -556,3 +556,21 @@ func TestSettingsReserveAnAccountNameWhereItsSessionsGoAndSayWhenToWarn(t *testi
 		t.Fatalf("a removed account is still named: alice=%q carol=%q err=%v", h.view(alice).OnLimit, h.view(out).OnLimit, err)
 	}
 }
+
+func TestKeepSessionsDropsTheRoutesOfSessionsThatAreGone(t *testing.T) {
+	h := setup(t)
+	alice := h.signIn("codex", "alice@example.com")
+	h.assign("s1", domain.HarnessCodex, alice)
+	h.assign("s2", domain.HarnessCodex, alice)
+	if err := h.svc.KeepSessions(h.ctx, []domain.SessionID{"s2"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, managed, _ := h.svc.SessionAccount(h.ctx, "s1"); managed {
+		t.Fatal("the gone session's route was kept")
+	}
+	h.route("s2", alice)
+	applies := h.helper.applies
+	if err := h.svc.KeepSessions(h.ctx, []domain.SessionID{"s2"}); err != nil || h.helper.applies != applies {
+		t.Fatalf("nothing to drop: err=%v pushes=%d", err, h.helper.applies-applies)
+	}
+}

@@ -1,12 +1,13 @@
 import { useState, type ComponentProps, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertCircle, Check, ChevronDown, ChevronRight, CirclePause, Copy, ExternalLink, Laptop, Link2, LoaderCircle, X, type LucideIcon } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, ChevronRight, CirclePause, Copy, ExternalLink, Laptop, Link2, LoaderCircle, SquareArrowOutUpRight, X, type LucideIcon } from "lucide-react";
 import { accountProvider, canMoveSessions, PROVIDERS, percentLeft, type ProviderAccount, type ProviderLogin } from "../../hooks/useProviderAccounts";
 import { useSessionUsageSummaries } from "../../hooks/useSessionUsageSummaries";
 import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
 import { aoBridge } from "../../lib/bridge";
 import { findSession } from "../../lib/command-palette";
 import { formatCostNanos } from "../../lib/format-cost";
+import { isArchivedSession } from "../../lib/standalone-archive";
 import { useNavigateToSession } from "../../lib/navigate-to-session";
 import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
@@ -15,6 +16,8 @@ import { AgentAvatar } from "../AgentAvatar";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { Switch } from "../ui/switch";
+import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
+import { HARNESS_TAB_CLASS, HARNESS_TABS_CLASS } from "./harness/harness-ui";
 import type { AccountsPage } from "./ProviderAccountsSection";
 
 const DAY = 24 * 60 * 60;
@@ -238,8 +241,10 @@ function AccountThroughput({ account, language }: { account: ProviderAccount; la
 		</>
 	);
 }
+export type AccountTab = "account" | "usage" | "models";
 // The selected account: each action is a row with one control, beside (when signed in) a column that is only read.
-export function AccountDetail({ account, page }: { account: ProviderAccount; page: AccountsPage }) {
+// Account holds its limits, rules and sign-in; Usage what passed through it; Models what it can run.
+export function AccountDetail({ account, page, tab, onTab, models }: { account: ProviderAccount; page: AccountsPage; tab: AccountTab; onTab: (tab: AccountTab) => void; models: ReactNode }) {
 	const { t, i18n: { language } } = useTranslation();
 	const [removing, setRemoving] = useState(false);
 	const [resetting, setResetting] = useState(false);
@@ -250,6 +255,8 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 	const workspaces = useWorkspaceQuery({ includeCloud: false }).data ?? [];
 	const sessions = served(account, workspaces);
 	const count = sessions.length;
+	// Only sessions at work that the app lists are counted; an id it does not list may be gone.
+	const active = sessions.filter((id) => { const session = findSession(workspaces, id)?.session; return session && !isArchivedSession(session); }).length;
 	// An API key has no limits to report, but the helper still knows its activity.
 	const usage = account.usage?.status === "available" || apiKey ? account.usage : undefined;
 	const known = account.usage; // The plan is shown whenever it is known, even while the limits are not.
@@ -315,10 +322,11 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 		[t("providerAccounts.factOrganization"), usage?.organization ? <span className="max-w-36 truncate" title={usage.organization}>{usage.organization}</span> : null],
 		[t("providerAccounts.factAdded"), usage?.addedAt ? formatWhen(usage.addedAt, "day") : null],
 		[t("providerAccounts.factModels"), usage?.models?.length ? (
-			<span className="flex max-w-44 flex-wrap justify-end gap-1">
+			<button type="button" aria-label={t("providerAccounts.openModels")} title={t("providerAccounts.openModels")} onClick={() => onTab("models")}
+				className="-m-1 flex max-w-44 cursor-pointer flex-wrap justify-end gap-1 rounded-md p-1 hover:bg-(--color-bg-secondary) focus-visible:outline-2 focus-visible:outline-ring">
 				{usage.models.slice(0, 6).map((model) => <span key={model} className="rounded-[5px] bg-muted px-1.5 py-px text-2xs">{model}</span>)}
-				{usage.models.length > 6 ? <span title={usage.models.slice(6).join(", ")} className="rounded-[5px] bg-muted px-1.5 py-px text-2xs text-muted-foreground">+{usage.models.length - 6}</span> : null}
-			</span>
+				{usage.models.length > 6 ? <span className="rounded-[5px] bg-muted px-1.5 py-px text-2xs text-muted-foreground">+{usage.models.length - 6}</span> : null}
+			</button>
 		) : null],
 	]);
 	const tokenFacts = tokens ? facts([
@@ -333,12 +341,12 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 	const activity = requests.length > 0 || tokenFacts.length > 0 || Boolean(account.usage?.activity);
 	const signInHint = !signedIn ? (count ? t("providerAccounts.sessionsWaitingFor", { count }) : t("providerAccounts.signInToUse"))
 		: account.usage?.signInEndsAt ? t("providerAccounts.signInEndsAt", { time: formatWhen(account.usage.signInEndsAt, "soon") }) : t("providerAccounts.signInEndsSoon");
-	const twoColumns = signedIn && (planFacts.length > 0 || activity);
+	const health = account.usage?.health;
+	const models_ = account.usage?.activity?.models ?? [];
+	const modelTokens = models_.reduce((sum, model) => sum + model.tokens, 0);
+	const twoColumns = signedIn && (tab === "account" ? planFacts.length > 0 : tab === "usage" && (activity || modelTokens > 0));
 	// A sign-in the helper holds can be replaced by a fresh one from its provider.
 	const renewable = signedIn && !apiKey && Boolean(usage?.refreshedAt || usage?.addedAt || usage?.requests);
-	const health = account.usage?.health;
-	const models = account.usage?.activity?.models ?? [];
-	const modelTokens = models.reduce((sum, model) => sum + model.tokens, 0);
 	const share = (model: { tokens: number }) => Math.round((model.tokens / modelTokens) * 100);
 	return (
 		<div data-testid="provider-account-detail">
@@ -358,19 +366,25 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 				{signedIn && !apiKey ? <Button type="button" variant="ghost" size="sm" className="gap-1.5 text-muted-foreground" onClick={() => void page.run(() => aoBridge.app.openExternal(PLAN_PAGES[account.provider]), false)}>{t("providerAccounts.managePlan")}<ExternalLink aria-hidden="true" className="size-3.5" /></Button> : null}
 				{account.primary && signedIn ? <span className="shrink-0 rounded-full bg-interactive-active px-2.5 py-0.5 text-xs text-muted-foreground">{t("providerAccounts.default")}</span> : null}
 			</div>
-			<div className={cn("grid items-start gap-x-7", twoColumns ? "grid-cols-[minmax(0,1fr)_288px] @max-5xl:grid-cols-1" : "")}>
+			<Tabs value={tab} onValueChange={(value) => onTab(value as AccountTab)} className="mt-4">
+				<TabsList className={HARNESS_TABS_CLASS} aria-label={t("providerAccounts.accountTabs", { name })}>
+					{(["account", "usage", "models"] as const).map((id) => <TabsTrigger key={id} className={HARNESS_TAB_CLASS} value={id}>{t(`providerAccounts.tab.${id}`)}</TabsTrigger>)}
+				</TabsList>
+			</Tabs>
+			{tab === "models" ? <div className="pt-4">{models}</div> : null}
+			<div hidden={tab === "models"} className={cn("grid items-start gap-x-7", twoColumns ? "grid-cols-[minmax(0,1fr)_288px] @max-5xl:grid-cols-1" : "")}>
 				<div className="min-w-0">
 					{/* Signed out, or a sign-in that still works but has stopped renewing: the way back in comes first. */}
 					{!signedIn || account.usage?.signInEnding || signingIn ? (
 						<Rows title={signedIn ? undefined : t("shell.signIn")} data-testid={signedIn ? `provider-account-sign-in-ending-${account.id}` : undefined} className={signedIn ? "mt-4" : undefined}>
 							{signingIn ? <div className="px-4 py-3.5"><LoginProgress login={signingIn} page={page} /></div> : (
 								<Row icon={signedIn ? <AlertCircle aria-hidden="true" className="size-4 shrink-0 text-warning" /> : undefined} title={t(signedIn ? "providerAccounts.signInEnding" : "providerAccounts.signedOutTitle")} hint={signInHint}>
-									<Button type="button" variant={signedIn ? "secondary" : "primary"} disabled={page.pending || page.signIn.waiting} onClick={() => void page.run(() => page.signIn.start({ provider: account.provider, accountId: account.id }))}>{t("providerAccounts.signInAgain")}</Button>
+									<Button type="button" data-harness-primary-action="" variant={signedIn ? "secondary" : "primary"} disabled={page.pending || page.signIn.waiting} onClick={() => void page.run(() => page.signIn.start({ provider: account.provider, accountId: account.id }))}>{t("providerAccounts.signInAgain")}</Button>
 								</Row>
 							)}
 						</Rows>
 					) : null}
-					{signedIn ? (
+					{signedIn && tab === "account" ? (
 						<>
 							<Rows title={t("providerAccounts.limitsHeading")}>
 								{paused ? (
@@ -436,7 +450,8 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 										<IconAction name={t("providerAccounts.leaveSessions", { count: offered.length })} icon={X} disabled={page.pending} onClick={() => page.setMoveOffer(null)} />
 									</Row>
 								) : null}
-								<Row title={t("providerAccounts.runningSessions")} hint={count ? t("providerAccounts.sessionsUsing", { count }) : t("providerAccounts.noSessionsUsing")}>
+								<Row title={t("providerAccounts.runningSessions")} hint={active ? t("providerAccounts.sessionsActive", { count: active }) : t("providerAccounts.noSessionsUsing")}>
+									<IconAction name={t("providerAccounts.openUsage")} icon={SquareArrowOutUpRight} onClick={() => onTab("usage")} />
 									{count && others.length ? (
 										<AccountMenu accounts={others} onSelect={(target) => void page.moveSessions(sessions, target, t("providerAccounts.sessionsMoved", { count, name: target.displayName }))}>
 											<Button type="button" variant="secondary" className="gap-1.5" disabled={page.pending}>{t("providerAccounts.moveSessions")}<ChevronDown aria-hidden="true" className="size-3.5 text-muted-foreground" /></Button>
@@ -461,6 +476,10 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 									</Choice>
 								</Row>
 							</Rows>
+						</>
+					) : null}
+					{signedIn && tab === "usage" ? (
+						<>
 							<AccountSessions account={account} page={page} others={others} language={language} />
 							{/* How the account's recent requests went, as the helper saw them. */}
 							{health?.lastFailure || health?.firstWordMs ? (
@@ -481,7 +500,7 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 							) : null}
 						</>
 					) : null}
-					<Rows title={t("providerAccounts.account")}>
+					{tab === "account" ? <Rows title={t("providerAccounts.account")}>
 						<Row title={t("cloudLocalAuth.displayName")} hint={t("providerAccounts.displayNameHint")}>
 							{/* Keyed by the saved name, so a refused rename shows it again. Escape belongs to this field, not to the settings page. */}
 							<input key={name} data-settings-inline-edit="" className="h-8 w-[280px] max-w-full rounded-md border border-input bg-background px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={t("providerAccounts.accountName")} defaultValue={name} disabled={page.pending} onBlur={(event) => rename(event.target.value)} onKeyDown={nameKey} />
@@ -510,12 +529,12 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 								<Button type="button" variant="ghost" className={danger} disabled={page.pending} onClick={() => setRemoving(true)}>{t(signedIn ? "shell.signOut" : "shell.remove")}</Button>
 							</Row>
 						)}
-					</Rows>
+					</Rows> : null}
 				</div>
 				{twoColumns ? (
 					<aside className="min-w-0">
-						{planFacts.length ? <Rows title={t(apiKey ? "providerAccounts.apiKeyLabel" : "providerAccounts.planHeading")}>{planFacts}</Rows> : null}
-						{activity ? (
+						{planFacts.length && tab === "account" ? <Rows title={t(apiKey ? "providerAccounts.apiKeyLabel" : "providerAccounts.planHeading")}>{planFacts}</Rows> : null}
+						{activity && tab === "usage" ? (
 							<Rows title={t("providerAccounts.activityHeading")}>
 								<AccountThroughput account={account} language={language} />
 								{requests.length ? (
@@ -529,10 +548,10 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 								{tokenFacts}
 							</Rows>
 						) : null}
-						{modelTokens ? (
+						{modelTokens && tab === "usage" ? (
 							<Rows title={t("providerAccounts.byModel")}>
 								<div className="grid gap-2 px-4 py-3">
-									{models.map((model) => (
+									{models_.map((model) => (
 										<div key={model.model} className="grid grid-cols-[minmax(0,1fr)_72px_36px] items-center gap-2.5 text-[13px]">
 											<span className="truncate text-foreground" title={model.model}>{model.model}</span>
 											<span className="h-1.5 overflow-hidden rounded-full bg-muted"><span className="block h-full rounded-full bg-muted-foreground" style={{ width: `${share(model)}%` }} /></span>

@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, ChevronDown, ChevronRight, Eye, EyeOff, FileUp, KeyRound, LogIn, MonitorSmartphone, Plus, X } from "lucide-react";
@@ -6,10 +6,8 @@ import { accountAction, accountHeadroom, cancelProviderLogin, fetchProviderAccou
 import { apiErrorMessage } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
-import { AgentAvatar } from "../AgentAvatar";
 import { Button } from "../ui/button";
-import { AccountDetail, DeviceTag, Dot, IconAction, LoginProgress, Rows, upcoming } from "./ProviderAccountDetail";
-import { SettingsSection } from "./SettingsSection";
+import { AccountDetail, DeviceTag, Dot, IconAction, LoginProgress, Rows, upcoming, type AccountTab } from "./ProviderAccountDetail";
 
 type Provider = ProviderAccount["provider"];
 export type AccountsPage = ReturnType<typeof useAccountsPage>;
@@ -51,7 +49,7 @@ function useProviderLogin(onSettled: (login: ProviderLogin, unreachable: boolean
 	return { login, waiting, start, cancel };
 }
 // Everything the page's views share: the accounts, what is on show, and the actions, which report in one status line.
-function useAccountsPage() {
+export function useAccountsPage() {
 	const { t } = useTranslation();
 	const cache = useQueryClient();
 	const query = useProviderAccounts(true, false);
@@ -92,8 +90,9 @@ function useAccountsPage() {
 			if (hold) setPending(false);
 		}
 	}
+	// An empty id goes back to the provider's default account.
 	function show(accountId: string | null, provider: Provider | null = null) {
-		if (accountId) setSelectedId(accountId);
+		if (accountId !== null) setSelectedId(accountId);
 		setAdding(provider);
 		setMessage("");
 	}
@@ -236,8 +235,7 @@ function AccountListItem({ account, current, onSelect }: { account: ProviderAcco
 					: <span className={cn("tabular-nums", headroom <= 20 ? "text-warning" : "")}>{t("providerAccounts.usageRemaining", { percent: headroom })}</span>,
 	] : [<span className="text-status-needs-you">{t("settings.harness.notLoggedIn")}</span>]).filter(Boolean);
 	return (
-		<button type="button" data-testid={`provider-account-${account.id}`} aria-current={current ? "true" : undefined} className={cn("flex w-full items-center gap-3 rounded-[10px] px-3 py-2.5 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring", current ? "bg-interactive-active" : "hover:bg-interactive-hover")} onClick={onSelect}>
-			<AgentAvatar className="size-7 shrink-0" decorative provider={PROVIDERS.find((provider) => provider.id === account.provider)!.agent} />
+		<button type="button" data-testid={`provider-account-${account.id}`} aria-current={current ? "true" : undefined} className={cn("flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring", current ? "bg-interactive-active" : "hover:bg-interactive-hover")} onClick={onSelect}>
 			<span className="min-w-0 flex-1">
 				<span className="flex items-center gap-2">
 					<span className="truncate text-sm font-medium text-foreground">{account.displayName}</span>
@@ -251,62 +249,44 @@ function AccountListItem({ account, current, onSelect }: { account: ProviderAcco
 		</button>
 	);
 }
-// Accounts is a list and a detail: every account on the left, and the selected one on the right with its actions.
-export function ProviderAccountsSection({ titleHidden }: { titleHidden?: boolean }) {
+// The accounts of one agent, nested under its row on the Agents page, and the row that adds one.
+export function AgentAccountRows({ provider, page, selectedId, onOpen }: { provider: Provider; page: AccountsPage; selectedId: string | null; onOpen: () => void }) {
 	const { t } = useTranslation();
-	const page = useAccountsPage();
-	const { query, accounts, adding, signIn } = page;
+	const { accounts, adding, signIn, query } = page;
 	const busy = page.pending || signIn.waiting;
-	const selected = adding ? null : accounts.find((account) => account.id === page.selectedId) ?? accounts[0] ?? null;
+	const name = PROVIDERS.find((entry) => entry.id === provider)!.name;
+	const own = accounts.filter((account) => account.provider === provider);
 	// A new sign-in that is still waiting keeps its place in the list, even while another account is on show.
-	const newLoginProvider = signIn.waiting && !signIn.login?.accountId ? signIn.login?.provider : null;
+	const signingIn = signIn.waiting && !signIn.login?.accountId && signIn.login?.provider === provider;
 	return (
-		<SettingsSection title={t("providerAccounts.title")} sectionId="accountManager" titleHidden={titleHidden}>
-			{/* The list and the detail sit on the page itself, one hairline between them; each scrolls on its own. */}
-			<div className="@container h-full overflow-y-auto">
-				<div className="grid h-full min-h-0 grid-cols-[288px_minmax(0,1fr)] @max-3xl:h-auto @max-3xl:grid-cols-1">
-					<nav aria-label={t("providerAccounts.title")} className="settings-thin-scrollbar min-h-0 overflow-y-auto border-r border-border px-2 pb-3 pt-1 @max-3xl:overflow-visible @max-3xl:border-b @max-3xl:border-r-0">
-						{PROVIDERS.map(({ id: provider, name }) => (
-							<section key={provider} data-testid={`provider-section-${provider}`}>
-								<h4 className="px-3 pb-1.5 pt-3 text-xs font-normal text-muted-foreground">{name}</h4>
-								<div className="flex flex-col gap-0.5">
-									{accounts.filter((account) => account.provider === provider).map((account) => <AccountListItem key={account.id} account={account} current={selected?.id === account.id} onSelect={() => page.show(account.id)} />)}
-									{/* Adding an account is always the last row of its provider; a sign-in under way keeps its own row open. */}
-									<button type="button" aria-current={adding === provider ? "true" : undefined} disabled={busy && adding !== provider && newLoginProvider !== provider} className={cn("flex w-full items-center gap-3 rounded-[10px] px-3 py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50", adding === provider ? "bg-interactive-active" : "enabled:hover:bg-interactive-hover")} onClick={() => page.show(null, provider)}>
-										<span aria-hidden="true" className="grid size-7 shrink-0 place-items-center rounded-lg border border-dashed border-border text-muted-foreground"><Plus className="size-3.5" /></span>
-										<span className="min-w-0 flex-1">
-											<span className="block truncate text-sm font-medium text-foreground">{t("providerAccounts.newAccount", { provider: name })}</span>
-											<span className="mt-px block text-xs text-muted-foreground">{newLoginProvider === provider ? t("providerAccounts.signingIn") : t("providerAccounts.chooseSignIn")}</span>
-										</span>
-									</button>
-								</div>
-								{/* A provider without accounts is not managed: its agents keep this computer's own login. */}
-								{query.data && accounts.some((account) => account.provider === provider) && !accounts.some((account) => account.provider === provider && account.signedIn) ? (
-									<div className="px-3 pb-2 pt-1.5">
-										<p className="text-xs text-foreground">{t("providerAccounts.emptyAccounts", { provider: name })}</p>
-										<p className="mt-0.5 text-xs text-muted-foreground">{t("providerAccounts.managedNeedsLogin")}</p>
-									</div>
-								) : null}
-							</section>
-						))}
-					</nav>
-					<div className="settings-thin-scrollbar min-h-0 min-w-0 overflow-y-auto px-7 pb-8 pt-5 @max-3xl:overflow-visible @max-3xl:px-4">
-						<div className="max-w-[1040px]">
-						{query.isLoading ? <p className="mb-3 text-xs text-muted-foreground">{t("providerAccounts.loading")}</p> : null}
-						{query.error ? <p role="alert" className="mb-3 flex items-center gap-2 text-xs text-destructive"><AlertCircle aria-hidden="true" className="size-3.5 shrink-0" />{query.error.message}</p> : null}
-						{adding ? <AddAccountView key={adding} provider={adding} page={page} /> : null}
-						{selected ? <AccountDetail key={selected.id} account={selected} page={page} /> : null}
-						{!adding && !selected && query.data ? (
-							<div className="grid min-h-[420px] place-content-center gap-1.5 text-center">
-								<p className="text-[15px] font-medium text-foreground">{t("providerAccounts.noAccountsYet")}</p>
-								<p className="text-sm text-muted-foreground">{t("providerAccounts.addHint")}</p>
-							</div>
-						) : null}
-						{page.message ? <p role="status" className="mt-3.5 text-xs text-muted-foreground">{page.message}</p> : null}
-						</div>
-					</div>
-				</div>
-			</div>
-		</SettingsSection>
+		<section data-testid={`provider-section-${provider}`} className="flex flex-col gap-0.5 py-1 pl-7 pr-1">
+			{own.map((account) => <AccountListItem key={account.id} account={account} current={adding !== provider && selectedId === account.id} onSelect={() => { onOpen(); page.show(account.id); }} />)}
+			<button type="button" aria-current={adding === provider ? "true" : undefined} disabled={busy && adding !== provider && !signingIn} className={cn("flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50", adding === provider ? "bg-interactive-active text-foreground" : "enabled:hover:bg-interactive-hover")} onClick={() => { onOpen(); page.show(null, provider); }}>
+				<Plus aria-hidden="true" className="size-3.5 shrink-0" />
+				<span className="min-w-0 flex-1 truncate">{signingIn ? t("providerAccounts.signingIn") : t("providerAccounts.newAccount", { provider: name })}</span>
+			</button>
+			{/* Accounts that are all signed out still route the agent's sessions, so say what that means. */}
+			{query.data && own.length && !own.some((account) => account.signedIn) ? <p className="px-3 pb-1 pt-1 text-xs text-muted-foreground">{t("providerAccounts.managedNeedsLogin")}</p> : null}
+		</section>
 	);
+}
+// The open account of one agent, or its sign-in methods while one is being added, then the page's status line.
+export function AgentAccountPane({ provider, page, tab, onTab, models }: { provider: Provider; page: AccountsPage; tab: AccountTab; onTab: (tab: AccountTab) => void; models: ReactNode }) {
+	const { t } = useTranslation();
+	const { query, adding } = page;
+	const selected = adding === provider ? null : selectedAccount(page, provider);
+	return (
+		<div className="@container max-w-[1040px]">
+			{query.isLoading ? <p className="mb-3 text-xs text-muted-foreground">{t("providerAccounts.loading")}</p> : null}
+			{query.error ? <p role="alert" className="mb-3 flex items-center gap-2 text-xs text-destructive"><AlertCircle aria-hidden="true" className="size-3.5 shrink-0" />{query.error.message}</p> : null}
+			{adding === provider ? <AddAccountView key={adding} provider={provider} page={page} /> : null}
+			{selected ? <AccountDetail key={selected.id} account={selected} page={page} tab={tab} onTab={onTab} models={models} /> : null}
+			{page.message ? <p role="status" className="mt-3.5 text-xs text-muted-foreground">{page.message}</p> : null}
+		</div>
+	);
+}
+/** The account on show for a provider: the one picked, else its default, else its first. */
+export function selectedAccount(page: AccountsPage, provider: Provider): ProviderAccount | null {
+	const own = page.accounts.filter((account) => account.provider === provider);
+	return own.find((account) => account.id === page.selectedId) ?? own.find((account) => account.primary) ?? own[0] ?? null;
 }

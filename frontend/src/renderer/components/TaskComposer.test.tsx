@@ -2251,10 +2251,10 @@ describe("TaskComposer", () => {
 			await userEvent.click(screen.getByRole("button", { name: "Details" }));
 			expect(screen.getByText(expiredDetail)).toBeInTheDocument();
 
-			// Claude Code's accounts are managed by AO, so logging in means the Accounts page.
+			// Claude Code's accounts are managed by AO, so logging in means its accounts on the Agents page.
 			await userEvent.click(screen.getByRole("button", { name: "Log in" }));
 			expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({
-				scope: "global", section: "accountManager",
+				scope: "global", section: "harness", focusAgentId: "claude-code",
 			}));
 
 			await userEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -2458,7 +2458,7 @@ describe("new task provider account selection", () => {
 		expect(accountDot()).toHaveClass("bg-status-needs-you");
 		expect(startTask()).toBeDisabled();
 		fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
-		expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({ section: "accountManager" }));
+		expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({ section: "harness", focusAgentId: "codex" }));
 		act(() => cache.setQueryData(["provider-accounts", "catalogue"], managedInventory()));
 		await waitForTaskReady();
 		expect(screen.queryByText("No signed-in Codex account.")).toBeNull();

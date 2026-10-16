@@ -625,6 +625,15 @@ func Run() error {
 	lcStack.LCM.SetSessionInputLease(sessMgr)
 	lcStack.LCM.SetSessionOperationGate(sessMgr)
 	termMgr.SetSessionInputLease(sessMgr)
+	if all, err := store.ListAllSessions(ctx); err == nil {
+		ids := make([]domain.SessionID, len(all))
+		for i, rec := range all {
+			ids[i] = rec.ID
+		}
+		if err := accounts.KeepSessions(ctx, ids); err != nil {
+			log.Warn("dropping account routes of deleted sessions", "error", err)
+		}
+	}
 	if err := accounts.Sync(ctx); err != nil { // sessions restored below need their routes in the helper
 		log.Warn("managed account helper requires attention", "error", err)
 	}

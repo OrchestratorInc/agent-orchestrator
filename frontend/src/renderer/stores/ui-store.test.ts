@@ -65,9 +65,6 @@ describe("global settings deep links", () => {
 			section: "harness",
 			focusAgentId: "codex",
 		});
-
-		useUiStore.getState().openGlobalSettings("accountManager");
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "accountManager" });
 	});
 
 	it("preserves project settings only for explicit recovery navigation", () => {

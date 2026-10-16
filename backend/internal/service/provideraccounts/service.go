@@ -478,6 +478,22 @@ func (s *Service) ForgetAccount(ctx context.Context, id domain.SessionID) error 
 	})
 }
 
+// KeepSessions drops the routes of sessions that are gone without a delete,
+// such as ones removed while the daemon was down.
+func (s *Service) KeepSessions(ctx context.Context, ids []domain.SessionID) error {
+	kept := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		kept[string(id)] = true
+	}
+	return s.change(ctx, func(st *domain.ProviderAccountState) (string, error) {
+		st.Routes = slices.DeleteFunc(st.Routes, func(r domain.ProviderSessionRoute) bool {
+			session, _, _ := strings.Cut(string(r.SessionID), "/")
+			return !kept[session]
+		})
+		return "", nil
+	})
+}
+
 // AdoptSession routes an older session to its provider's default; with no default it keeps its own setup.
 func (s *Service) AdoptSession(ctx context.Context, id domain.SessionID, harness domain.AgentHarness) (bool, error) {
 	provider, adopted := domain.AccountProvider(harness), false
