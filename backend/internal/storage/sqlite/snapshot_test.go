@@ -3,6 +3,7 @@ package sqlite
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -432,6 +433,74 @@ func TestSnapshotIsRetakenForAHoleAfterTheUpgradeFinished(t *testing.T) {
 	}
 	if got := projectIDs(t, fresh); !slices.Equal(got, []string{"after-the-upgrade", "before-the-upgrade"}) {
 		t.Errorf("snapshot projects = %v, want the current contents", got)
+	}
+}
+
+// A full copy reads ao.db for seconds. If another process checkpointed into the
+// file meanwhile, the copy would be torn and, being the newest, would replace a
+// good older snapshot. takeSnapshot therefore holds a read transaction while it
+// copies: a second connection (standing in for another process) can still write
+// to the WAL but cannot checkpoint it into ao.db until the reader is gone.
+func TestSnapshotCopyKeepsAReaderSoNoOtherCheckpointCanTearIt(t *testing.T) {
+	latest := latestMigration(t)
+	dir := t.TempDir()
+	db := oldDatabase(t, dir, latest-1, "before")
+	dbFile := filepath.Join(dir, "ao.db")
+	other, err := sql.Open("sqlite", databaseURI(dir)+pragmas)
+	if err != nil {
+		t.Fatalf("open second connection: %v", err)
+	}
+	other.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = other.Close() })
+	mustExec(t, other, `PRAGMA busy_timeout = 0`)
+	digest := func() [32]byte {
+		data, err := os.ReadFile(dbFile)
+		if err != nil {
+			t.Fatalf("read ao.db: %v", err)
+		}
+		return sha256.Sum256(data)
+	}
+	// blocked reports whether the other connection's TRUNCATE checkpoint could not finish.
+	blocked := func() bool {
+		var busy, frames, moved int
+		if err := other.QueryRow(`PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &frames, &moved); err != nil {
+			return true
+		}
+		return busy != 0
+	}
+
+	// The space probe runs inside the section where the copy is made, so it is
+	// where the "other process" acts.
+	var checkpointBlocked, fileUntouched bool
+	probe := func(string) (uint64, error) {
+		before := digest()
+		addProject(t, other, "written-during-the-copy")
+		checkpointBlocked = blocked()
+		fileUntouched = digest() == before
+		return 1 << 60, nil
+	}
+	noClone := func(string, string) error { return errors.ErrUnsupported }
+	if err := takeSnapshot(context.Background(), dir, db, noClone, probe); err != nil {
+		t.Fatalf("takeSnapshot: %v", err)
+	}
+
+	if !checkpointBlocked || !fileUntouched {
+		t.Errorf("while the snapshot was copied: other checkpoint blocked = %v, ao.db unchanged = %v; want both true", checkpointBlocked, fileUntouched)
+	}
+	if got := projectIDs(t, snapshotFileFor(dir, latest-1, latest)); !slices.Equal(got, []string{"before"}) {
+		t.Errorf("snapshot projects = %v, want the state before the concurrent write", got)
+	}
+	// The reader is gone afterwards: the same checkpoint now goes through (so the
+	// block above was the reader's doing), and the writer still migrates.
+	before := digest()
+	if blocked() || digest() == before {
+		t.Error("the other connection's checkpoint is still blocked after takeSnapshot returned")
+	}
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate after the snapshot: %v", err)
+	}
+	if got := scalar(t, db, `SELECT COALESCE(MAX(version_id), 0) FROM goose_db_version WHERE is_applied = 1`); got != latest {
+		t.Errorf("database is at migration %d after migrate, want %d", got, latest)
 	}
 }
 

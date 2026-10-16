@@ -107,7 +107,7 @@ func takeSnapshot(
 	name := fmt.Sprintf("ao-pre-%04d-to-%04d.db", from, to)
 	final := filepath.Join(backups, name)
 	tmp := final + ".tmp"
-	method, err := writeSnapshot(dbPath, tmp, info.Size(), clone, freeSpace)
+	method, err := writeSnapshot(ctx, db, dbPath, tmp, info.Size(), clone, freeSpace)
 	if err == nil {
 		err = os.Rename(tmp, final)
 	}
@@ -124,7 +124,13 @@ func takeSnapshot(
 // writeSnapshot puts a copy of src at dst: a copy-on-write clone when the volume
 // can make one, else a full copy if the volume has room for the size-byte file,
 // its 10% slack, and snapshotHeadroom. It reports which it made.
+//
+// A clone is atomic. A copy is not: it reads src for as long as it takes, and a
+// checkpoint by another process into src meanwhile would tear it. So the copy
+// runs with a read transaction open on db (see pinReader).
 func writeSnapshot(
+	ctx context.Context,
+	db *sql.DB,
 	src, dst string,
 	size int64,
 	clone func(src, dst string) error,
@@ -138,6 +144,11 @@ func writeSnapshot(
 	_ = os.Remove(dst)
 	n := uint64(size) //nolint:gosec // a regular file's size is never negative
 	need := n + n/10 + snapshotHeadroom
+	release, err := pinReader(ctx, db)
+	if err != nil {
+		return "", fmt.Errorf("no copy-on-write clone (%w) and could not pin ao.db for a copy: %w", cloneErr, err)
+	}
+	defer release()
 	free, err := freeSpace(filepath.Dir(dst))
 	if err != nil {
 		return "", fmt.Errorf("no copy-on-write clone (%w) and free space unknown: %w", cloneErr, err)
@@ -150,6 +161,29 @@ func writeSnapshot(
 		return "", fmt.Errorf("copy ao.db: %w", err)
 	}
 	return "copy", nil
+}
+
+// pinReader opens a read transaction on the writer connection and returns the
+// function that ends it. takeSnapshot has just emptied the WAL, so ao.db is the
+// whole database. While a reader is open, no other process can checkpoint new
+// WAL frames into ao.db (SQLite will not backfill past an active reader), so ao.db
+// does not change under a copy. It only holds back checkpoints: other processes
+// can still write. The data-dir lock makes a second writer impossible; this
+// covers the period before it. A checkpoint that was already mid-backfill when
+// the reader started could still overlap the copy, a window of the time between
+// the TRUNCATE above and this call. The single writer connection is busy until
+// release, so the caller must not use db meanwhile.
+func pinReader(ctx context.Context, db *sql.DB) (release func(), err error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	var objects int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master`).Scan(&objects); err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	return func() { _ = tx.Rollback() }, nil
 }
 
 // pendingMigrations reports the highest migration the database has applied
