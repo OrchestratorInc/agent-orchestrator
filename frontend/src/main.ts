@@ -2720,7 +2720,7 @@ ipcMain.handle("clipboard:writeText", async (_event, text: string) => {
 ipcMain.handle("clipboard:readText", () => clipboard.readText());
 registerChatImageIpc({
 	ipcMain,
-	clipboard,
+	clipboard: { writeImage: writeClipboardImage },
 	createImage: (bytes) => nativeImage.createFromBuffer(bytes),
 	dialog,
 	downloadsDirectory: () => app.getPath("downloads"),

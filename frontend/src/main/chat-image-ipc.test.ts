@@ -62,8 +62,14 @@ describe("registerChatImageIpc", () => {
 		await ok.registered.get("clipboard:writeImage")?.({}, new Uint8Array([1]));
 		expect(ok.clipboard.writeImage).toHaveBeenCalledExactlyOnceWith(ok.image);
 		const bad = setup({ canceled: true }, true);
-		expect(() => bad.registered.get("clipboard:writeImage")?.({}, new Uint8Array([1]))).toThrow("Unsupported image format");
+		await expect(bad.registered.get("clipboard:writeImage")?.({}, new Uint8Array([1]))).rejects.toThrow("Unsupported image format");
 		expect(bad.clipboard.writeImage).not.toHaveBeenCalled();
+	});
+
+	it("surfaces a failed async clipboard write", async () => {
+		const failing = setup({ canceled: true });
+		failing.clipboard.writeImage.mockRejectedValueOnce(new Error("clipboard busy"));
+		await expect(failing.registered.get("clipboard:writeImage")?.({}, new Uint8Array([1]))).rejects.toThrow("clipboard busy");
 	});
 
 	it("saves where the user chooses, defaulting to Downloads", async () => {

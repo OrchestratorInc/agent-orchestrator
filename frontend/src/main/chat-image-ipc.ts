@@ -10,7 +10,7 @@
 
 import path from "node:path";
 import { writeFile } from "node:fs/promises";
-import type { Clipboard, Dialog, IpcMain, NativeImage, SaveDialogOptions, Session } from "electron";
+import type { Dialog, IpcMain, NativeImage, SaveDialogOptions, Session } from "electron";
 
 /** A chat image larger than this is not a screenshot; refuse rather than buffer it. */
 export const MAX_CHAT_IMAGE_BYTES = 64 * 1024 * 1024;
@@ -19,7 +19,8 @@ export type ChatImageBytes = { bytes: Uint8Array; mimeType: string };
 
 export type ChatImageIpcDeps = {
 	ipcMain: Pick<IpcMain, "handle">;
-	clipboard: Pick<Clipboard, "writeImage">;
+	/** Electron 44 removed clipboard.writeImage; main.ts adapts ClipboardItem to it. */
+	clipboard: { writeImage(image: NativeImage): void | Promise<void> };
 	createImage: (bytes: Buffer) => NativeImage;
 	dialog: Pick<Dialog, "showSaveDialog">;
 	downloadsDirectory: () => string;
@@ -58,10 +59,10 @@ export function registerChatImageIpc(deps: ChatImageIpcDeps): void {
 
 	deps.ipcMain.handle("chatImage:fetch", (event, url: string) => fetchChatImage(event.sender.session, String(url)));
 
-	deps.ipcMain.handle("clipboard:writeImage", (_event, bytes: Uint8Array) => {
+	deps.ipcMain.handle("clipboard:writeImage", async (_event, bytes: Uint8Array) => {
 		const image = deps.createImage(Buffer.from(bytes));
 		if (image.isEmpty()) throw new Error("Unsupported image format");
-		deps.clipboard.writeImage(image);
+		await deps.clipboard.writeImage(image);
 	});
 
 	deps.ipcMain.handle("chatImage:save", async (_event, input: { name: string; bytes: Uint8Array }) => {
