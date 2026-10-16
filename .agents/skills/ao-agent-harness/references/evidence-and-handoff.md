@@ -204,6 +204,13 @@ Maintain a per-harness, per-attempt checkpoint index in its PR evidence comment:
 | `install-run/result` | AO-page install → actual observed outcome | `PASS` / `FAIL` / `BLOCKED` / `NOT_RUN` / justified `N/A` | Captured and attached, or `unavailable` with reason | Linked real image(s), install-job/log receipt, or blocker and next action |
 
 Include all checklist rows, failed attempts, skipped branches and planned features.
+Cover the capability plan as well as worker lifecycle: supported TUI, Chat and
+reviewer, AO login/account setup, both model lists, model on/off and applicable
+provider operations each need their own action/result evidence. A successful
+worker or catalog response cannot qualify omitted reviewer/account/model controls.
+Every PASS and non-pass step needs its real screenshots and functional proof;
+if no safe real capture exists, keep an explicit unavailable reason and relevant
+logs/receipts without upgrading the missing UI evidence.
 If a required UI feature does not exist, use functional `NOT_RUN` and reason
 `NOT_IMPLEMENTED`, with a real capture of the available surface when possible;
 it is not `N/A` or proof of the missing feature. Only explicit upstream limits or

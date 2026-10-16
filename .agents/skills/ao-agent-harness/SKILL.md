@@ -25,6 +25,21 @@ Before an integration handoff, complete the
 These are contributor review gates, not checks enforced by the runner. A runner
 PASS does not establish complete product wiring or current-head runtime proof.
 
+## Expected integration outcome
+
+For a full harness request, first read AO/upstream docs and search existing PRs,
+then assess **TUI, Chat, reviewer, AO install/login/setup, models and provider
+management** independently. Implement supported paths using existing AO surfaces;
+track genuinely independent slices in linked PRs. Record unsupported native
+capabilities with proof, and distinguish them from unfinished AO wiring.
+
+Verify Agent Harness and New Task model lists, model on/off persistence and
+picker effects, provider/account configuration and effective native selection.
+The [integration path](references/integration-path.md) defines these gates.
+Publish each step's PASS/FAIL/BLOCKED/NOT_RUN, real screenshots and functional
+proof in PR comments/attachments; a partial adapter or green CI is not a complete
+integration. Missing safe screenshots need an explicit unavailable reason.
+
 ## Run
 
 Use Node 24 or newer, Git, SQLite CLI, installed native agents, and the Go version
@@ -96,7 +111,8 @@ ordinary-task delivery require the reference's independent instruction controls.
 For every harness, complete the [step-by-step screenshot checklist](references/audit-journeys.md#mandatory-step-by-step-screenshots):
 Agent Harness discovery, install, login/configuration, both model surfaces, New
 Task selection, running task, Kill/archive, exact restore and return to Kanban;
-include Chat when supported. Capture each action and result in the actual AO UI
+include model/provider controls and supported Chat/reviewer journeys. Capture
+each action and result in the actual AO UI
 with functional evidence and provenance. A single running screenshot does not
 cover the journey. Missing steps or planned UI remain explicit non-pass rows;
 a runner PASS cannot fill missing `AO UI evidence: BLOCKED`.

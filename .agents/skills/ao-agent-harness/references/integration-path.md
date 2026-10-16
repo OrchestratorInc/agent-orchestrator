@@ -1,7 +1,10 @@
 # Agent harness integration path
 
-Use this checklist as a routing guide. Apply only the sections required by the
-requested capability, but do not register a capability before its gate passes.
+For a full harness integration, evaluate every area below: TUI, Chat, reviewer,
+AO installation/login/configuration, readiness, models/providers, branding and
+lifecycle. Implement each supported capability; do not stop after the first
+working interface. A narrower explicit user request scopes implementation, not
+truthful reporting. Do not register a capability before its gate passes.
 
 ## 0. Triage intake and existing work
 
@@ -14,6 +17,15 @@ raise a second adapter PR for work already in flight.
 
 Classify each candidate as already supported, existing PR to complete,
 suitable new integration, blocked by upstream capability, or out of scope.
+Before editing, prepare a capability plan: **Area | Native support/source |
+Existing AO support/gap | Implementation/linked PR | Verification**. Publish it
+in the evidence comment once the integration PR exists and publication is
+authorized.
+Keep separate rows for TUI, Chat, reviewer, install, login/setup, model discovery,
+model visibility controls and provider management. Unsupported upstream behavior
+needs pinned proof; an absent AO control for a supported behavior is unfinished
+integration work, not an upstream limitation. Carry every row into the final
+completion matrix, including non-pass and explicitly excluded scope.
 Evaluate the requested interface independently: a Chat-only provider need not
 invent a TUI command. Missing private instruction input, exact native restore,
 or another required capability needs a documented blocker. A deliberately
@@ -34,7 +46,7 @@ Pin an actual released version and executable fingerprint. Record:
 | --- | --- |
 | Binary | Executable names, version command, supported operating systems |
 | Install | Official installation path and whether AO can offer a safe installer |
-| Authentication | Local status probe and the distinction between configured and verified |
+| Authentication | Native login/setup/status/logout capabilities, safe AO entry point and configured versus verified authorization |
 | Initial task | Interactive, race-free prompt delivery |
 | Argv safety | A task beginning with `-` reaches the provider as data, never as an option |
 | Standing instructions | Per-process hidden system/instruction input that preserves provider defaults |
@@ -43,7 +55,9 @@ Pin an actual released version and executable fingerprint. Record:
 | Identity | Stable provider-native session/conversation ID |
 | Restore | Explicit restore by that ID; never "latest" or best-match selection |
 | Cancellation | Bounded turn cancellation and process/session termination behavior |
-| Models | Catalog, mode list, or truthful free-form model input |
+| Models | Catalog/configured/mode/free-form/default-only behavior, stable IDs and effective selection |
+| Providers | Explicit provider metadata, account/configuration ownership and supported add/change/remove flows |
+| Reviewer | Native one-shot review or qualified prompt-driven review, target/head identity, result/submission and cancellation |
 | Chat | Structured protocol, session load, replay, permissions, and cancellation |
 
 Prefer an executable live-conformance test behind an explicit environment
@@ -66,7 +80,12 @@ Use separate issues and PRs when the scopes are independently shippable:
 3. Structured Chat driver after independent protocol conformance.
 4. Interface handoff only after both interfaces prove shared native identity and
    history.
-5. Reviewer support or nested-agent visibility only under separate designs.
+5. Qualified reviewer adapter/registration and actual AO review journey.
+6. Nested-agent visibility only when separately supported and requested.
+
+Separate delivery slices must remain linked in the capability plan. A separate
+reviewer PR is not permission to silently omit reviewer evaluation or call an
+unfinished full integration complete.
 
 An unproven adapter may exist in an unregistered package for development. It must
 not appear in `domain.AllHarnesses`, the production registry, SQLite constraints,
@@ -173,6 +192,43 @@ Add installation metadata under `backend/internal/service/systeminstall/` only
 for official, supportable installation methods. Never silently execute a remote
 shell script merely because the vendor documentation presents one.
 
+### AO login, model controls and providers
+
+Wire native authentication through the actual `service/agentauth` plan and Agent
+Harness Account UI. Where native login/setup exists, users must be able to start
+it from AO, complete its terminal/browser/configuration flow and return to a
+freshly checked account state. Check the actual action for unknown, unauthorized,
+configured and authorized states; an unknown state must not hide the supported
+setup action. Verify retry/error handling and supported account changes/logout
+in isolated profiles. A guide or an external terminal login alone does not prove
+AO-initiated login. Native manual-only limitations remain explicitly scoped;
+unimplemented AO wiring is a gap to fix. Never log credentials or bypass the
+existing credential boundary to build a new secret-storage scheme.
+
+For models, trace discovery/configuration through the daemon catalog and both
+Agent Harness Models and New Task. Reuse the checkout's shared catalog/provider
+and picker-preference paths (for example `HarnessModelsPanel`, `useOfferedModels`
+and daemon `harnessDefaults.disabledModels`); inspect current source names first.
+Verify model on/off, bulk controls where offered, save/readback, reload and error
+states, host/harness isolation, and effects in New Task/project/Chat/reviewer
+pickers where applicable. Preserve the existing last-enabled-model and
+already-selected-model rules. These are picker visibility preferences, not a
+provider permission boundary or a promise that direct API launch is forbidden.
+A default-only/free-form provider needs its truthful supported control; it must
+not acquire a fabricated catalog or meaningless switches.
+
+Trace explicit provider metadata and configured-account state through the native
+config/catalog, daemon and shared AO UI; model namespace text is not proof of a
+provider. Verify browsing/switching providers, corresponding models and effective
+native routing. Assess supported add/edit/remove/account configuration and expose
+it through AO's existing setup/configuration path where applicable, preserving
+other providers and profiles. A configured badge or provider dropdown alone does
+not establish provider login or configuration management. Record each operation
+as implemented/verified, unsupported with native proof, or an AO gap; absence of
+an existing generic provider editor does not make a supported required operation
+`N/A`. Recheck affected auth/catalog/cache state after changes and retain secrets
+only in the established credential/configuration boundary.
+
 ## 5. Register the proven TUI harness
 
 After conformance and adapter tests pass:
@@ -183,7 +239,8 @@ After conformance and adapter tests pass:
    current `sessions.harness` CHECK constraint, with a tested inverse migration.
 4. Update the burned-migration ledger and migration tests.
 5. Update every relevant worker/orchestrator/session/delegation enum in
-   `backend/internal/httpd/controllers/dto.go` without touching reviewer enums.
+   `backend/internal/httpd/controllers/dto.go`; widen reviewer enums only through
+   the separately qualified reviewer path below.
 6. Run `npm run api` and commit both generated artifacts.
 7. Add the identity and label to `packages/product-ui/src/agents.ts`.
 8. Add a licensed upstream brand asset and renderer avatar mapping when available.
@@ -230,6 +287,30 @@ registered AO cases. Enable production registration only after those cases pass.
 `ports.AgentInterfaceHandoff` until TUI and Chat are proven to share identity,
 history, permission state, and cancellation semantics. Chat qualification uses
 actual registered daemon Chat sessions and controller states, not the TUI runner.
+
+### Reviewer integration when supported
+
+Assess reviewer suitability independently of TUI/Chat. Follow
+`ports/reviewer.go`, `adapters/reviewer/<harness>/`,
+`adapters/reviewer/registry.go`, `domain/reviewerharness.go` and the current
+`internal/review` service, reviewer DTOs and shared `ReviewerSelect`/review pane.
+Implement `ports.Reviewer` with real target/head/workspace identity, correct
+instructions/configuration, result submission and explicit failure behavior.
+Register in the reviewer vocabulary/registry and relevant API enums only after
+qualification; regenerate contracts when changed. Worker registration does not
+register a reviewer. Use optional Chat, cancellation, restoration and reuse
+interfaces only when their actual semantics are supported and verified.
+
+Exercise the AO reviewer picker and review trigger against a disposable target:
+selected harness/model/permissions, actual review start, reviewer pane output,
+result/verdict submitted to the correct run/head once, cancellation/error and
+rerun behavior. Verify worker isolation and no unintended checkout changes;
+reviewer IDs are distinct from the worker session ID. A worker asked to review
+in a normal task does not prove the AO reviewer integration. Publish an external
+GitHub review only within existing authorization for that target/action. Keep
+reviewer scope, screenshots and functional receipts separate from worker/Chat
+proof. Unsupported review remains explicit with pinned capability evidence;
+supported but unfinished reviewer wiring keeps full integration incomplete.
 
 ## 7. Verification
 
@@ -286,7 +367,7 @@ For UI changes, use `ao preview` from the session or the isolated real-Electron
 desktop lab described in `AGENTS.md`. Never use the invoking checkout with real AO
 data for desktop-lab verification.
 
-Before handoff, audit the diff for accidental reviewer changes, generated drift,
+Before handoff, audit the diff for unqualified reviewer registration, generated drift,
 edits to old migrations, provider-profile writes, credentials, temporary data,
 and unsupported capability claims.
 
@@ -334,11 +415,13 @@ Keep every row; scope an excluded interface explicitly rather than deleting it.
 | Area | Required disposition |
 | --- | --- |
 | Registration and UI | Trace adapter/driver, registry, API/generated contracts and claimed task/settings surfaces |
-| Models | Catalog/configured/text/default-only mode; separate Agent Harness and New Task captures plus effective native selection; planned/absent panel explicitly incomplete; in-session options separately |
-| Setup | Official installer or manual guide, actual Settings plan/prerequisites; screenshots of install and login/configuration actions/results or explicit unexercised branches |
+| Models | Catalog/configured/text/default-only mode; both model surfaces; on/off/bulk persistence and applicable picker effects; effective native selection; explicit unimplemented controls |
+| Providers | Native provider/account support, explicit metadata/grouping, configured versus verified state, AO setup/configuration operations and effective routing; unsupported operations versus unfinished AO wiring |
+| Setup | Official installation and AO-initiated login/setup with Account action/error/retry/readback; supported logout/account changes; manual-only limits and unexercised branches explicit |
 | Readiness | Advertised OS, binary, required config, safe auth state and actionable pre-launch failures |
 | Identity and logo | Product label, licensed asset/source and avatar, or explicit fallback reason |
 | TUI and Chat | Each interface's supported scope and functional/UI evidence; reject excluded surfaces truthfully |
+| Reviewer | Native suitability, reviewer adapter/vocabulary/picker, actual AO review run/result/cancel/rerun and its own screenshots/receipts; unsupported versus unfinished scope explicit |
 | Permissions and instructions | Effective supported modes and private instruction delivery/consumption scope |
 | Lifecycle | Active-turn cancel, Kill, archived entry, exact restore and same card back in Kanban with continuation; action/result captures and functional proof; reconnect/restart and cleanup as claimed |
 | Evidence | Tested source/binaries, complete screenshot checkpoint index with action/result and failure logs, distinct attempts and reproduction receipt |
