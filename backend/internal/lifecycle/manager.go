@@ -267,6 +267,13 @@ type Manager struct {
 	// flights tracks, per session, the in-flight tool executions and the
 	// pending permission dialog's identity (see toolFlight). Guarded by mu.
 	flights map[domain.SessionID]*toolFlight
+	// suppressPermissionNotify drops stale Copilot permission_prompt /
+	// elicitation_dialog notifications after the prompt was answered or the
+	// turn ended. Copilot's notification hook is async and can arrive after
+	// the clear path (or agentStop); without this, waiting_input re-enters
+	// with nothing left to clear it. Cleared on the next user-prompt-submit
+	// while not already needing input (fresh user turn). Guarded by mu.
+	suppressPermissionNotify map[domain.SessionID]struct{}
 	// steps is each session's recent tool calls for the memory window, from
 	// tool-use hooks (see steps.go). Guarded by mu.
 	steps map[domain.SessionID][]domain.SessionStep
@@ -303,6 +310,7 @@ func New(store sessionStore, messenger ports.AgentMessenger, opts ...Option) *Ma
 		clock:                       clock,
 		react:                       newReactionState(),
 		flights:                     map[domain.SessionID]*toolFlight{},
+		suppressPermissionNotify:    map[domain.SessionID]struct{}{},
 		steps:                       map[domain.SessionID][]domain.SessionStep{},
 		pendingLaunches:             map[domain.SessionID]pendingLaunch{},
 		steerActive:                 func(domain.AgentHarness) bool { return false },
@@ -959,6 +967,7 @@ retryProjection:
 		(s.TranscriptPath != "" && rec.Metadata.NativeTranscriptPath != s.TranscriptPath) ||
 		checkpointChanged || subagentFacts != storedSubagentFacts
 	toolFlightBeforeProjection := cloneToolFlight(m.flights[id])
+	_, hadSuppressBeforeProjection := m.suppressPermissionNotify[id]
 	if s.Valid {
 		s = m.applyToolPrecedenceLocked(id, rec.Activity.State, s)
 	}
@@ -977,6 +986,7 @@ retryProjection:
 			return applied, false, err
 		}
 		m.restoreToolFlightLocked(id, toolFlightBeforeProjection)
+		m.restoreSuppressPermissionNotifyLocked(id, hadSuppressBeforeProjection)
 		m.restoreStepsLocked(id, stepsBeforeProjection)
 		if err != nil {
 			return false, false, err
@@ -1217,6 +1227,12 @@ type toolFlight struct {
 	// after-execution event can clear only its own key, and the session remains
 	// blocked until every observed dialog has completed.
 	cursorPending map[string]int
+	// copilotPermissionPrompt is set when a Copilot notification entered
+	// waiting_input for a permission_prompt / elicitation_dialog. The next
+	// pre-tool-use may then clear sticky waiting_input (gated tool starting
+	// after the user answered). Ordinary waiting_input without this flag
+	// still ignores tool-use traffic.
+	copilotPermissionPrompt bool
 }
 
 func cloneToolFlight(flight *toolFlight) *toolFlight {
@@ -1224,9 +1240,10 @@ func cloneToolFlight(flight *toolFlight) *toolFlight {
 		return nil
 	}
 	clone := &toolFlight{
-		inflight:         make(map[string]string, len(flight.inflight)),
-		blockedCandidate: flight.blockedCandidate,
-		cursorPending:    make(map[string]int, len(flight.cursorPending)),
+		inflight:                make(map[string]string, len(flight.inflight)),
+		blockedCandidate:        flight.blockedCandidate,
+		cursorPending:           make(map[string]int, len(flight.cursorPending)),
+		copilotPermissionPrompt: flight.copilotPermissionPrompt,
 	}
 	for id, name := range flight.inflight {
 		clone.inflight[id] = name
@@ -1342,6 +1359,15 @@ func (m *Manager) applyToolPrecedenceLocked(id domain.SessionID, cur domain.Acti
 		}
 	}
 
+	// Copilot notification hooks are async: a permission_prompt /
+	// elicitation_dialog can arrive after the prompt was answered or the turn
+	// ended. Drop those so waiting_input does not re-enter with no clear path.
+	if s.Event == "notification" && s.State.NeedsInput() {
+		if _, ok := m.suppressPermissionNotify[id]; ok {
+			return suppressed
+		}
+	}
+
 	switch {
 	case s.State == domain.ActivityBlocked:
 		if key, ok := cursorBeforeExecutionKey(s); ok {
@@ -1406,6 +1432,7 @@ func (m *Manager) applyToolPrecedenceLocked(id domain.SessionID, cur domain.Acti
 		switch {
 		case isTurnBoundaryEvent(s.Event):
 			delete(m.flights, id)
+			m.notePermissionNotifySuppressLocked(id, cur, s.Event)
 			return s
 		default:
 			if fl != nil {
@@ -1436,16 +1463,60 @@ func (m *Manager) applyToolPrecedenceLocked(id domain.SessionID, cur domain.Acti
 			return suppressed
 		}
 
+	case cur == domain.ActivityWaitingInput && s.Event == "pre-tool-use" && fl != nil && fl.copilotPermissionPrompt:
+		// Copilot: a notification opened waiting_input; the gated tool is now
+		// starting, so the user answered. Ordinary waiting_input without this
+		// flag still ignores tool-use traffic below.
+		fl.copilotPermissionPrompt = false
+		m.markSuppressPermissionNotifyLocked(id)
+		return s
+
 	case cur.IsSticky() && isToolUseEvent(s.Event):
 		// waiting_input: background tool traffic must not clear the "waiting
 		// on the user" marker; only an explicit user/turn signal does.
 		return suppressed
 
 	default:
+		if s.Event == "notification" && s.State == domain.ActivityWaitingInput {
+			ensure().copilotPermissionPrompt = true
+		}
 		if isTurnBoundaryEvent(s.Event) {
 			delete(m.flights, id)
+			m.notePermissionNotifySuppressLocked(id, cur, s.Event)
 		}
 		return s
+	}
+}
+
+func (m *Manager) markSuppressPermissionNotifyLocked(id domain.SessionID) {
+	if m.suppressPermissionNotify == nil {
+		m.suppressPermissionNotify = map[domain.SessionID]struct{}{}
+	}
+	m.suppressPermissionNotify[id] = struct{}{}
+}
+
+func (m *Manager) restoreSuppressPermissionNotifyLocked(id domain.SessionID, had bool) {
+	if had {
+		m.markSuppressPermissionNotifyLocked(id)
+		return
+	}
+	delete(m.suppressPermissionNotify, id)
+}
+
+// notePermissionNotifySuppressLocked updates stale-notification suppression at
+// turn boundaries. Stop/end always suppress; user-prompt-submit suppresses when
+// it clears a needs-input pause and otherwise opens a fresh turn that accepts
+// new permission notifications again.
+func (m *Manager) notePermissionNotifySuppressLocked(id domain.SessionID, cur domain.ActivityState, event string) {
+	switch event {
+	case "stop", "session-end", "process-exited", "chat.controller.stopped", "permission-resolved":
+		m.markSuppressPermissionNotifyLocked(id)
+	case "user-prompt-submit":
+		if cur.NeedsInput() {
+			m.markSuppressPermissionNotifyLocked(id)
+			return
+		}
+		delete(m.suppressPermissionNotify, id)
 	}
 }
 
