@@ -1182,6 +1182,9 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 			}
 		}
 	} else {
+		if plan.Method == "official-installer" {
+			env = append(env, vendorUpdateEnv[plan.Target]...)
+		}
 		runCommand := func(argv []string) error {
 			if s.installCommands != nil {
 				return s.installCommands.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: env}, out, out)

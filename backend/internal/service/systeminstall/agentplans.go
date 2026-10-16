@@ -455,6 +455,15 @@ var vendorUpdateCommands = map[Target][]string{
 	TargetPrimeAgent: {"prime-agent", "update"},
 }
 
+// vendorUpdateEnv turns a vendor's own auto-update switch back on for an
+// update the user asked for. `droid update` exits 0 without updating, and
+// prints "Auto-update is not available for npm installations", whenever
+// FACTORY_DROID_AUTO_UPDATE_ENABLED is false or its build (npm's) turns
+// auto-update off, even for the copy at the official installer's location.
+var vendorUpdateEnv = map[Target][]string{
+	TargetDroid: {"FACTORY_DROID_AUTO_UPDATE_ENABLED=true"},
+}
+
 // installerUpdateTargets update by re-running the vendor installer, pinned to
 // the approved release and bound to the confirmed install directory. Kimi's
 // `kimi upgrade` exits 0 without replacing the binary: it reports "already up
