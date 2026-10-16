@@ -39,7 +39,9 @@ Do these steps in order:
 
     printf '%%s' '{ "reviews": [ { "runId": "<run-id>", "verdict": "<approved|changes_requested>", "githubReviewId": "<id-from-step-1-or-empty>", "body": "<your full review markdown>" } ] }' | ao review submit --session %s --reviews -
 
-Only if step 1 genuinely fails on the provider for a PR, still include that run in step 2 with an empty githubReviewId so the result is recorded.`,
+Only if step 1 genuinely fails on the provider for a PR, still include that run in step 2 with an empty githubReviewId so the result is recorded.
+
+If the step 2 command exits non-zero, AO has not recorded the result: rerun it once with the same JSON, and if it fails again, quote its error in your final message. Never report the bookkeeping as submitted unless the command succeeded.`,
 		spec.WorkerID, queueText, spec.WorkerID)
 	return prompt, systemPrompt
 }
