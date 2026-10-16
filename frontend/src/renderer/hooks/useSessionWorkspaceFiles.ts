@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient, UseQueryOptions } from "@tanstack/react-query";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import type { components } from "../../api/schema";
-import { apiErrorMessage } from "../lib/api-client";
+import { apiErrorMessage, getApiBaseUrl } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { isRasterImagePath } from "../lib/image-files";
@@ -148,13 +148,25 @@ async function fetchSessionPRFile(sessionId: string, number: number, sourceUrl: 
 
 // Artifact files live in the session's artifact directory, outside the git
 // workspace, so they have no diff/status and aren't reachable through the
-// workspace-files endpoint. rawUrl (from the artifact list response) fetches
-// raw bytes on the artifact preview origin, a distinct host from the
-// workspace preview origin — unlike the legacy __ao_artifacts__/ path-prefix
-// form, a workspace-relative path of the same name can never resolve there.
+// workspace-files endpoint. Local preview hostnames can resolve to ::1, where
+// another app may own the daemon's port. Read through the trusted daemon API
+// instead, explicitly selecting the artifact root. Remote proxy and cloud URLs
+// already identify their content endpoint and must keep their original routing.
 async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl: string | undefined, errorMessage: string): Promise<WorkspaceFileDetail> {
 	if (!rawUrl) throw new Error(errorMessage);
-	const response = await fetch(rawUrl);
+	let contentUrl = rawUrl;
+	const { hostname } = new URL(rawUrl);
+	if (hostname.startsWith("ao-preview-artifact.") && hostname.endsWith(".localhost")) {
+		const baseUrl = getApiBaseUrl();
+		// Reject dot segments before URL normalization could move the request out
+		// of the artifact route. The daemon still enforces filesystem confinement.
+		if (!baseUrl || !path || path.startsWith("/") || path.includes("\\") || path.split("/").some((part) => part === "." || part === "..")) {
+			throw new Error(errorMessage);
+		}
+		const escapedPath = path.split("/").map(encodeURIComponent).join("/");
+		contentUrl = `${baseUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/preview/files/${escapedPath}?source=artifact&raw=true`;
+	}
+	const response = await fetch(contentUrl);
 	if (!response.ok) throw new Error(errorMessage);
 	// An image renders from rawUrl in an <img>, so its bytes aren't read here.
 	if (isRasterImagePath(path)) {

@@ -67,7 +67,7 @@ describe("ArtifactFileView", () => {
 
 	const RAW_URL = "http://ao-preview-artifact.abc123.localhost:3001/notes.txt?raw=true";
 
-	it("fetches a .txt artifact through its rawUrl and renders its content", async () => {
+	it("fetches a local artifact through the explicit loopback artifact API and renders its content", async () => {
 		fetchMock.mockResolvedValue(new Response("hello world", { status: 200 }));
 
 		renderWithQuery(<ArtifactFileView artifactName="notes.txt" path="notes.txt" rawUrl={RAW_URL} sessionId="sess-1" />);
@@ -75,7 +75,7 @@ describe("ArtifactFileView", () => {
 		await waitFor(() => expect(screen.getByText("hello world")).toBeInTheDocument());
 		expect(scrollContainer()).toHaveClass("overflow-y-auto", "min-h-0", "select-text");
 
-		expect(fetchMock).toHaveBeenCalledWith(RAW_URL);
+		expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:3001/api/v1/sessions/sess-1/preview/files/notes.txt?source=artifact&raw=true");
 	});
 
 	it("opens a .md artifact already rendered, not as raw markdown source", async () => {
@@ -85,19 +85,35 @@ describe("ArtifactFileView", () => {
 		renderWithQuery(<ArtifactFileView artifactName="notes.md" path="notes.md" rawUrl={rawUrl} sessionId="sess-1" />);
 
 		await waitFor(() => expect(screen.getByRole("heading", { name: "Notes" })).toBeInTheDocument());
-		expect(fetchMock).toHaveBeenCalledWith(rawUrl);
+		expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:3001/api/v1/sessions/sess-1/preview/files/notes.md?source=artifact&raw=true");
 		expect(screen.getByText("hello")).toBeInTheDocument();
 		expect(screen.queryByText(/^# Notes/)).not.toBeInTheDocument();
 	});
 
-	it("fetches whatever rawUrl the session provided, unmodified", async () => {
+	it("encodes nested artifact paths without treating their characters as URL delimiters", async () => {
 		fetchMock.mockResolvedValue(new Response("content", { status: 200 }));
 		const rawUrl = "http://ao-preview-artifact.abc123.localhost:3001/sub%20dir/report.txt?raw=true";
 
-		renderWithQuery(<ArtifactFileView artifactName="report.txt" path="sub dir/report.txt" rawUrl={rawUrl} sessionId="sess-1" />);
+		renderWithQuery(<ArtifactFileView artifactName="report #1?.txt" path="sub dir/report #1?.txt" rawUrl={rawUrl} sessionId="sess-1" />);
 
 		await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+		expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:3001/api/v1/sessions/sess-1/preview/files/sub%20dir/report%20%231%3F.txt?source=artifact&raw=true");
+	});
+
+	it.each([
+		"http://127.0.0.1:4200/remote/capability/notes.txt?raw=true",
+		"https://artifacts.example.test/signed/notes.txt?signature=example",
+	])("preserves a remote or cloud content URL: %s", async (rawUrl) => {
+		fetchMock.mockResolvedValue(new Response("remote content", { status: 200 }));
+		renderWithQuery(<ArtifactFileView artifactName="notes.txt" path="notes.txt" rawUrl={rawUrl} sessionId="sess-1" />);
+		await screen.findByText("remote content");
 		expect(fetchMock).toHaveBeenCalledWith(rawUrl);
+	});
+
+	it.each(["../secret.txt", "sub/../../secret.txt", "/secret.txt", "sub\\secret.txt"])("rejects an invalid local artifact path before making a request: %s", async (path) => {
+		renderWithQuery(<ArtifactFileView artifactName="secret.txt" path={path} rawUrl={RAW_URL} sessionId="sess-1" />);
+		await screen.findByRole("button", { name: "Retry" });
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
 	it("marks binary artifacts as binary instead of decoding them as text", async () => {
