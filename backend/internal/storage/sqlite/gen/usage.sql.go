@@ -923,16 +923,19 @@ func (q *Queries) ListLegacyUsageEvents(ctx context.Context, usageSourceID int64
 }
 
 const listLegacyUsageSourceIDs = `-- name: ListLegacyUsageSourceIDs :many
-SELECT DISTINCT us.id
-FROM usage_sources us
-JOIN model_usage_events mue ON mue.usage_source_id = us.id
+SELECT DISTINCT mue.usage_source_id
+FROM model_usage_events mue
 WHERE mue.billing_provider_id IS NULL
    OR mue.billing_provider_source = 'inferred'
-ORDER BY us.id
+ORDER BY mue.usage_source_id
 `
 
 // Open attribution: never attributed, or attributed only by inference and so
-// still replaceable by an observation.
+// still replaceable by an observation. This is exactly what the partial index
+// idx_model_usage_events_open_attribution holds, so the sources are read from
+// that index alone. Every event's usage_source_id references usage_sources, so
+// no join is needed; with the join the planner left the partial index for the
+// full usage_source index once sqlite_stat1 existed.
 func (q *Queries) ListLegacyUsageSourceIDs(ctx context.Context) ([]int64, error) {
 	rows, err := q.db.QueryContext(ctx, listLegacyUsageSourceIDs)
 	if err != nil {
@@ -941,11 +944,11 @@ func (q *Queries) ListLegacyUsageSourceIDs(ctx context.Context) ([]int64, error)
 	defer rows.Close()
 	items := []int64{}
 	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var usage_source_id int64
+		if err := rows.Scan(&usage_source_id); err != nil {
 			return nil, err
 		}
-		items = append(items, id)
+		items = append(items, usage_source_id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
