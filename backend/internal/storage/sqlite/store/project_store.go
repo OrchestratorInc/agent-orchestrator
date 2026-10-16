@@ -18,7 +18,9 @@ func (s *Store) UpsertProject(ctx context.Context, r domain.ProjectRecord) error
 	if err != nil {
 		return err
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	return upsertProject(ctx, s.qw, r, config)
 }
@@ -48,7 +50,9 @@ func (s *Store) ImportWorkspaceProject(ctx context.Context, r domain.ProjectReco
 }
 
 func (s *Store) writeWorkspaceProject(ctx context.Context, label string, r domain.ProjectRecord, repos []domain.WorkspaceRepoRecord, writeProject func(*gen.Queries) error) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, label, func(q *gen.Queries) error {
 		if err := writeProject(q); err != nil {
@@ -207,7 +211,9 @@ func (s *Store) UpdateProjectSettings(ctx context.Context, id, displayName strin
 	if err != nil {
 		return false, err
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.UpdateProjectSettings(ctx, gen.UpdateProjectSettingsParams{
 		ID:          domain.ProjectID(id),
@@ -233,7 +239,9 @@ func (s *Store) CountProjectsIncludingArchived(ctx context.Context) (int, error)
 
 // ArchiveProject soft-deletes a project and reports whether a row was affected.
 func (s *Store) ArchiveProject(ctx context.Context, id string, at time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	n, err := s.qw.ArchiveProject(ctx, gen.ArchiveProjectParams{
 		ArchivedAt: nullTime(at),
@@ -300,7 +308,9 @@ func nullTime(t time.Time) sql.NullTime {
 
 // SetProjectPermissions serializes a focused read-modify-write with other writes.
 func (s *Store) SetProjectPermissions(ctx context.Context, id string, permissions domain.PermissionMode) (domain.ProjectRecord, bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.ProjectRecord{}, false, err
+	}
 	defer s.writeMu.Unlock()
 	var row domain.ProjectRecord
 	var updated bool

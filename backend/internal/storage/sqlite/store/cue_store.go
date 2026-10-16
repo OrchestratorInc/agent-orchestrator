@@ -16,7 +16,9 @@ import (
 // InsertCue persists a user-managed cue. A duplicate (project_id, name) pair
 // reports domain.ErrCueNameExists.
 func (s *Store) InsertCue(ctx context.Context, cue domain.Cue) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -76,7 +78,9 @@ func (s *Store) SelectCuesByProject(ctx context.Context, projectID domain.Projec
 // existed and domain.ErrCueNameExists when a renamed cue collides with an
 // existing name in the same project.
 func (s *Store) UpdateCue(ctx context.Context, cue domain.Cue) (domain.Cue, bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.Cue{}, false, err
+	}
 	defer s.writeMu.Unlock()
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -117,7 +121,9 @@ func (s *Store) UpdateCue(ctx context.Context, cue domain.Cue) (domain.Cue, bool
 // DeleteCueByID forgets one cue, reporting whether a row actually existed so
 // the caller can answer 404 for an unknown cue id.
 func (s *Store) DeleteCueByID(ctx context.Context, cueID domain.CueID) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	affected, err := s.qw.DeleteCueByID(ctx, cueID)
 	if err != nil {

@@ -32,7 +32,9 @@ func (s *Store) ListAgentAccounts(ctx context.Context) ([]domain.AgentAccount, e
 
 // CreateAgentAccount saves a signed-in account folder.
 func (s *Store) CreateAgentAccount(ctx context.Context, a domain.AgentAccount) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	if err := s.qw.CreateAgentAccount(ctx, gen.CreateAgentAccountParams{
 		ID: a.ID, Provider: string(a.Provider), Home: a.Home, Email: a.Email, Plan: a.Plan, CreatedAt: a.CreatedAt.UTC(),
@@ -46,7 +48,9 @@ func (s *Store) CreateAgentAccount(ctx context.Context, a domain.AgentAccount) e
 // bindings stay for usage history; a session bound to a removed account falls
 // back to the provider's default at its next launch.
 func (s *Store) DeleteAgentAccount(ctx context.Context, id string) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "delete agent account", func(q *gen.Queries) error {
 		if err := q.DeleteAgentAccountDefaultFor(ctx, id); err != nil {
@@ -70,7 +74,9 @@ func (s *Store) GetAgentAccountDefault(ctx context.Context, p domain.AgentAccoun
 
 // SetAgentAccountDefault makes accountID the provider's account for new sessions.
 func (s *Store) SetAgentAccountDefault(ctx context.Context, p domain.AgentAccountProvider, accountID string) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	if err := s.qw.SetAgentAccountDefault(ctx, gen.SetAgentAccountDefaultParams{Provider: string(p), AccountID: accountID}); err != nil {
 		return fmt.Errorf("set %s account default: %w", p, err)
@@ -80,7 +86,9 @@ func (s *Store) SetAgentAccountDefault(ctx context.Context, p domain.AgentAccoun
 
 // BindSessionAgentAccount records the account a session uses from at on.
 func (s *Store) BindSessionAgentAccount(ctx context.Context, id domain.SessionID, p domain.AgentAccountProvider, accountID string, at time.Time) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, fmt.Sprintf("bind session %s to %s account", id, p), func(q *gen.Queries) error {
 		binding := gen.GetSessionAgentAccountParams{SessionID: string(id), Provider: string(p)}
