@@ -135,17 +135,15 @@ func checkLegacyDatabasePath(dataDir string) error {
 // Open refuses a database a newer AO already migrated (ErrSchemaNewer) instead
 // of running this build against a schema it does not know.
 func Open(dataDir string) (*Store, error) {
-	return open(dataDir, false)
+	return OpenWithSchemaPolicy(dataDir, false)
 }
 
-// OpenAllowNewerSchema is Open without the newer-schema refusal. It is the
+// OpenWithSchemaPolicy is Open with the newer-schema refusal switchable. With
+// allowNewerSchema set (config.Config.AllowNewerSchema, from the
 // AO_ALLOW_NEWER_SCHEMA escape hatch for developers who switch branches on a
-// shared data dir; this build may then misread the newer schema.
-func OpenAllowNewerSchema(dataDir string) (*Store, error) {
-	return open(dataDir, true)
-}
-
-func open(dataDir string, allowNewerSchema bool) (*Store, error) {
+// shared data dir) a database a newer AO migrated opens anyway, and this build
+// may misread its schema.
+func OpenWithSchemaPolicy(dataDir string, allowNewerSchema bool) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}

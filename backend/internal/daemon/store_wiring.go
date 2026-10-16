@@ -14,12 +14,10 @@ import (
 // off for developers who switch branches on a shared data dir; the override is
 // announced on every start so it cannot stay on unnoticed.
 func openStore(cfg config.Config, log *slog.Logger) (*sqlite.Store, error) {
-	open := sqlite.Open
 	if cfg.AllowNewerSchema {
 		log.Warn("AO_ALLOW_NEWER_SCHEMA is set: opening the database even if a newer AO migrated it; this build may misread or corrupt the newer schema")
-		open = sqlite.OpenAllowNewerSchema
 	}
-	store, err := open(cfg.DataDir)
+	store, err := sqlite.OpenWithSchemaPolicy(cfg.DataDir, cfg.AllowNewerSchema)
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
 	}

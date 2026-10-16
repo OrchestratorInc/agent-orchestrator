@@ -14,6 +14,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	"github.com/aoagents/agent-orchestrator/backend/internal/legacyimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 func writeLegacyProject(t *testing.T) string {
@@ -48,6 +50,32 @@ func TestImportCommand_ImportsProjectJSON(t *testing.T) {
 	out, _, err := executeCLI(t, Deps{}, "import", "--from", root, "--yes", "--json")
 	if err != nil {
 		t.Fatalf("import: %v", err)
+	}
+	var rep legacyimport.Report
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatalf("parse report %q: %v", out, err)
+	}
+	if rep.ProjectsImported != 1 {
+		t.Fatalf("projectsImported = %d, want 1", rep.ProjectsImported)
+	}
+}
+
+// ao import opens the database itself, so it must treat a database a newer AO
+// migrated like the daemon does: refuse it, unless AO_ALLOW_NEWER_SCHEMA is on.
+func TestImportCommand_NewerSchemaDatabase(t *testing.T) {
+	cfg := setConfigEnv(t)
+	sqlitetest.MustCreateNewerSchemaAt(t, cfg.dataDir)
+	root := writeLegacyProject(t)
+
+	_, _, err := executeCLI(t, Deps{}, "import", "--from", root, "--yes", "--json")
+	if !errors.Is(err, sqlite.ErrSchemaNewer) || !strings.HasPrefix(err.Error(), "open store: ") {
+		t.Fatalf("err = %v, want an open-store refusal wrapping sqlite.ErrSchemaNewer", err)
+	}
+
+	t.Setenv("AO_ALLOW_NEWER_SCHEMA", "1")
+	out, _, err := executeCLI(t, Deps{}, "import", "--from", root, "--yes", "--json")
+	if err != nil {
+		t.Fatalf("import with AO_ALLOW_NEWER_SCHEMA=1: %v", err)
 	}
 	var rep legacyimport.Report
 	if err := json.Unmarshal([]byte(out), &rep); err != nil {

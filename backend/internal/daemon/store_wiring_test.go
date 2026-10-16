@@ -2,10 +2,8 @@ package daemon
 
 import (
 	"bytes"
-	"database/sql"
 	"errors"
 	"log/slog"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -14,31 +12,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// newerSchemaDataDir returns a data dir whose ao.db records a migration far
-// beyond any this build embeds, as if a newer AO had migrated it.
-func newerSchemaDataDir(t *testing.T) string {
-	t.Helper()
-	dataDir := t.TempDir()
-	store, err := sqlitetest.Open(dataDir)
-	if err != nil {
-		t.Fatalf("create migrated database: %v", err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatalf("close migrated database: %v", err)
-	}
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(dataDir, "ao.db"))
-	if err != nil {
-		t.Fatalf("open database to mark it newer: %v", err)
-	}
-	defer func() { _ = db.Close() }()
-	if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (99999, 1)`); err != nil {
-		t.Fatalf("record newer migration: %v", err)
-	}
-	return dataDir
-}
-
 func TestOpenStoreRefusesDatabaseMigratedByNewerAO(t *testing.T) {
-	cfg := config.Config{DataDir: newerSchemaDataDir(t)}
+	cfg := config.Config{DataDir: t.TempDir()}
+	sqlitetest.MustCreateNewerSchemaAt(t, cfg.DataDir)
 
 	store, err := openStore(cfg, slog.New(slog.DiscardHandler))
 	if err == nil {
@@ -57,7 +33,8 @@ func TestOpenStoreRefusesDatabaseMigratedByNewerAO(t *testing.T) {
 
 func TestOpenStoreAllowNewerSchemaOpensAndWarns(t *testing.T) {
 	var logs bytes.Buffer
-	cfg := config.Config{DataDir: newerSchemaDataDir(t), AllowNewerSchema: true}
+	cfg := config.Config{DataDir: t.TempDir(), AllowNewerSchema: true}
+	sqlitetest.MustCreateNewerSchemaAt(t, cfg.DataDir)
 
 	store, err := openStore(cfg, slog.New(slog.NewTextHandler(&logs, nil)))
 	if err != nil {

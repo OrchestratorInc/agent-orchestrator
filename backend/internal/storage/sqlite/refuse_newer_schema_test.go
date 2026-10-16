@@ -300,13 +300,13 @@ func TestOpenIgnoresRolledBackNewerVersion(t *testing.T) {
 	closeStore(t, store)
 }
 
-func TestOpenAllowNewerSchemaOpensANewerDatabase(t *testing.T) {
+func TestOpenWithSchemaPolicyAllowsANewerDatabase(t *testing.T) {
 	head := embeddedHead(t)
 	dataDir := ledgerDataDir(t, head, head+1)
 
-	store, err := OpenAllowNewerSchema(dataDir)
+	store, err := OpenWithSchemaPolicy(dataDir, true)
 	if err != nil {
-		t.Fatalf("OpenAllowNewerSchema on a newer database: %v", err)
+		t.Fatalf("OpenWithSchemaPolicy(allowNewerSchema) on a newer database: %v", err)
 	}
 	closeStore(t, store)
 	if !appliedVersions(t, dataDir)[head+1] {
