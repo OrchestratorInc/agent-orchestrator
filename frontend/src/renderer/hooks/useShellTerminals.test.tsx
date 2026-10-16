@@ -168,6 +168,7 @@ describe("host-scoped shell terminals", () => {
 		await act(async () => close.result.current.mutateAsync(shells[0].handleId));
 		expect(remoteA.DELETE).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
 			params: { path: { handleId: shells[0].handleId } },
+			signal: expect.any(AbortSignal),
 		});
 		expect(patchMock).not.toHaveBeenCalled();
 		expect(deleteMock).not.toHaveBeenCalled();
@@ -306,6 +307,69 @@ describe("useRenameShellTerminal", () => {
 });
 
 describe("useCloseShellTerminal", () => {
+	it.each([undefined, "host-a"])("bounds a hung DELETE and allows retry on host %s", async (hostId) => {
+		vi.useFakeTimers();
+		const queryClient = queryClientWithShells();
+		const queryKey = shellTerminalsQueryKeyForHost(hostId);
+		queryClient.setQueryData(queryKey, shells);
+		const clientDelete = hostId ? remoteA.DELETE : deleteMock;
+		clientDelete.mockImplementationOnce((_path, { signal }: { signal: AbortSignal }) =>
+			new Promise((_resolve, reject) => {
+				signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+			}),
+		);
+		const { result, unmount } = renderHook(() => useCloseShellTerminal(hostId), { wrapper: wrapper(queryClient) });
+		try {
+			let close!: Promise<unknown>;
+			await act(async () => { close = result.current.mutateAsync(shells[0].handleId).catch((error) => error); });
+			expect(queryClient.getQueryData(queryKey)).toEqual([shells[1]]);
+			await act(async () => { await vi.advanceTimersByTimeAsync(9_999); });
+			expect(queryClient.getQueryData(queryKey)).toEqual([shells[1]]);
+			await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+			expect(await close).toMatchObject({ name: "TimeoutError" });
+			expect(queryClient.getQueryData(queryKey)).toEqual(shells);
+			// A subsequent list must include the tab: settlement cleared its marker.
+			(hostId ? remoteA.GET : getMock).mockResolvedValue({ data: { shellTerminals: shells } });
+			const list = renderHook(() => useShellTerminals(hostId), { wrapper: wrapper(queryClient) });
+			await act(async () => { await list.result.current.refetch(); });
+			expect(queryClient.getQueryData<ShellTerminal[]>(queryKey)?.map((shell) => shell.handleId)).toEqual(shells.map((shell) => shell.handleId));
+			clientDelete.mockResolvedValueOnce({});
+			await act(async () => { await result.current.mutateAsync(shells[0].handleId); });
+			expect(clientDelete).toHaveBeenCalledTimes(2);
+			if (hostId) expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual(shells);
+			list.unmount();
+		} finally {
+			unmount();
+			queryClient.clear();
+			vi.useRealTimers();
+		}
+	});
+
+	it.each([false, true])("restores only the failed tab in its original position when its sibling is closed: %s", async (siblingSettled) => {
+		const before = { ...shells[0], handleId: "before" };
+		const after = { ...shells[0], handleId: "after" };
+		const queryClient = queryClientWithShells();
+		queryClient.setQueryData(shellTerminalsQueryKey, [before, ...shells, after]);
+		const finishes = new Map<string, (response: { error?: unknown }) => void>();
+		deleteMock.mockImplementation((_path, { params }: { params: { path: { handleId: string } } }) =>
+			new Promise((resolve) => finishes.set(params.path.handleId, resolve)),
+		);
+		const { result } = renderHook(() => useCloseShellTerminal(), { wrapper: wrapper(queryClient) });
+		let first!: Promise<unknown>;
+		let second!: Promise<void>;
+		await act(async () => { first = result.current.mutateAsync(shells[0].handleId).catch((error) => error); });
+		await act(async () => { second = result.current.mutateAsync(shells[1].handleId); });
+		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual([before, after]);
+		if (siblingSettled) await act(async () => { finishes.get(shells[1].handleId)!({}); await second; });
+		await act(async () => {
+			finishes.get(shells[0].handleId)!({ error: { code: "SHELL_TERMINAL_STILL_RUNNING" } });
+			await first;
+		});
+		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual([before, shells[0], after]);
+		if (!siblingSettled) await act(async () => { finishes.get(shells[1].handleId)!({}); await second; });
+		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual([before, shells[0], after]);
+	});
+
 	it("removes the terminal tab before an in-flight list request finishes cancelling", async () => {
 		let finishCancel!: () => void;
 		let finishDelete!: (result: { error?: unknown }) => void;
@@ -467,6 +531,7 @@ describe("tabs opened while their shell is being created", () => {
 		act(() => finishPost(created));
 		await waitFor(() => expect(deleteMock).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
 			params: { path: { handleId: created.handleId } },
+			signal: expect.any(AbortSignal),
 		}));
 		// A refetch while the shell is being destroyed does not show it.
 		await act(async () => queryClient.refetchQueries({ queryKey: shellTerminalsQueryKey }));
