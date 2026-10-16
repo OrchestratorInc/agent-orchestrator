@@ -23,9 +23,12 @@ import { MENU_TRIGGER_CHROME } from "../ui/option-menu";
 export const SETTINGS_MENU_SURFACE =
 	"settings-menu-surface min-w-[length:var(--size-settings-menu-min-width)] rounded-(--radius-settings-panel) border-settings-menu bg-settings-menu";
 
-/** An entry whose whole content is one label, as on the settings rows. */
+/**
+ * An entry whose whole content is one label, as on the settings rows. A hovered
+ * row takes the selected row's inset border too, so every pill is the same height.
+ */
 export const SETTINGS_MENU_ITEM =
-	"settings-menu-item min-w-0 cursor-default outline-none focus:bg-settings-menu-selected focus:text-settings-title data-highlighted:bg-settings-menu-selected data-highlighted:text-settings-title";
+	"settings-menu-item min-w-0 cursor-default outline-none focus:border-settings-menu focus:bg-settings-menu-selected focus:text-settings-title data-highlighted:border-settings-menu data-highlighted:bg-settings-menu-selected data-highlighted:text-settings-title";
 
 /**
  * The same box for entries that carry their own layout — a name over a hint, a

@@ -304,16 +304,17 @@ function NewChatProjectPicker({ projectId, hostId, onChange }: { projectId: stri
 			menuClassName="w-48 max-h-72"
 			triggerClassName={cn(TRIGGER_CLASS, "w-fit shrink-0")}
 			showCaret={false}
-			menuItemClassName="gap-2!"
+			// Icon and label share the row's colour, so hover changes both together.
+			menuItemClassName="gap-2! [&_svg]:text-current!"
 			// Adding a project opens the local Add Project flow, so remote hosts skip it.
 			action={hostId ? undefined : {
 				label: t("newTask.createNew"),
-				icon: <Plus aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />,
+				icon: <Plus aria-hidden="true" className="size-icon-sm shrink-0" />,
 				onSelect: requestCreateProject,
 			}}
 			renderTrigger={() => (
 				<span className="inline-flex min-w-0 items-center gap-1.5">
-					<ProjectIcon projectId={projectId} className="size-3.5" />
+					<ProjectIcon projectId={projectId} className="size-3.5 text-muted-foreground" />
 					<span className="min-w-0 truncate">{selectedProjectName}</span>
 					{hostLabel ? <span className="shrink-0 text-muted-foreground">· {hostLabel}</span> : null}
 				</span>
@@ -321,7 +322,7 @@ function NewChatProjectPicker({ projectId, hostId, onChange }: { projectId: stri
 			renderMenuItem={(option) => (
 				<>
 					<ProjectIcon projectId={option.value} className="size-icon-sm" />
-					<span className="min-w-0 truncate text-settings-label">{option.label}</span>
+					<span className="min-w-0 truncate">{option.label}</span>
 				</>
 			)}
 		/>
@@ -330,7 +331,7 @@ function NewChatProjectPicker({ projectId, hostId, onChange }: { projectId: stri
 
 function ProjectIcon({ projectId, className }: { projectId: string; className: string }) {
 	const Icon = projectId === STANDALONE_WORKSPACE_ID ? StickyNote : Folder;
-	return <Icon aria-hidden="true" className={cn("shrink-0 text-muted-foreground", className)} />;
+	return <Icon aria-hidden="true" className={cn("shrink-0", className)} />;
 }
 
 /** Shown while a paired phone has the app open, so a task started here can be followed there. */
