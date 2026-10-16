@@ -189,7 +189,7 @@ func (s *Store) SendOrchestratorChildMessage(
 		if err != nil {
 			return err
 		}
-		return annotateAutomationMessageTx(ctx, tx, orgID, &event, "Orchestrator", text)
+		return annotateAutomationMessageTx(ctx, tx, orgID, &event, orchestratorSessionID, "Orchestrator", text)
 	})
 	return event, err
 }
@@ -241,7 +241,7 @@ func (s *Store) ReportToOrchestrator(
 		if err != nil {
 			return err
 		}
-		return annotateAutomationMessageTx(ctx, tx, orgID, &event, "Worker · "+childName, text)
+		return annotateAutomationMessageTx(ctx, tx, orgID, &event, childSessionID, "Worker · "+childName, text)
 	})
 	return event, err
 }
@@ -249,9 +249,9 @@ func (s *Store) ReportToOrchestrator(
 // Keep the prompt sent to the agent intact while giving transcript clients
 // durable authorship and readable display text. Idempotent retries update the
 // same event with the same metadata.
-func annotateAutomationMessageTx(ctx context.Context, tx pgx.Tx, orgID string, event *domain.ClientEvent, senderLabel, displayText string) error {
+func annotateAutomationMessageTx(ctx context.Context, tx pgx.Tx, orgID string, event *domain.ClientEvent, senderSessionID, senderLabel, displayText string) error {
 	metadata, err := json.Marshal(map[string]string{
-		"origin": "automation", "senderLabel": senderLabel, "displayText": displayText,
+		"origin": "automation", "senderSessionId": senderSessionID, "senderLabel": senderLabel, "displayText": displayText,
 	})
 	if err != nil {
 		return err
