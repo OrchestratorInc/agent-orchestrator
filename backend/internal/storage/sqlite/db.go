@@ -29,8 +29,9 @@ import (
 // Store is the SQLite-backed persistence layer.
 type Store = sqlitestore.Store
 
-// ErrSchemaNewer is returned (wrapped) by Open when ao.db records a migration
-// newer than any this build embeds: a newer AO already migrated it.
+// ErrSchemaNewer is returned (wrapped) by OpenWithSchemaPolicy, and so by Open,
+// when ao.db records a migration newer than any this build embeds (a newer AO
+// already migrated it) and the caller has not allowed a newer schema.
 var ErrSchemaNewer = errors.New("database schema is newer than this AO build")
 
 //go:embed migrations/*.sql
@@ -318,8 +319,8 @@ func OpenPreMigrated(dataDir string) (*Store, error) {
 // refuseNewerSchema fails with ErrSchemaNewer when the goose ledger records a
 // migration above the highest one this build embeds. goose.Up returns nil for
 // such a database, so an older build would otherwise run silently against a
-// schema it does not know (#4503). It only reads, and Open calls it before any
-// repair, so a refused database is left exactly as found.
+// schema it does not know (#4503). It only reads, and OpenWithSchemaPolicy calls
+// it before any repair, so a refused database is left exactly as found.
 //
 // Only versions above the embedded head count. Real ledgers also hold versions
 // at or below it that this build lacks: 22 (shipped, then reverted), 45, 46, 50

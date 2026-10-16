@@ -63,6 +63,9 @@ func TestImportCommand_ImportsProjectJSON(t *testing.T) {
 // ao import opens the database itself, so it must treat a database a newer AO
 // migrated like the daemon does: refuse it, unless AO_ALLOW_NEWER_SCHEMA is on.
 func TestImportCommand_NewerSchemaDatabase(t *testing.T) {
+	// setConfigEnv leaves this variable alone, and a developer may export it.
+	// Blank counts as unset, so the refusal half below always starts refusing.
+	t.Setenv("AO_ALLOW_NEWER_SCHEMA", "")
 	cfg := setConfigEnv(t)
 	sqlitetest.MustCreateNewerSchemaAt(t, cfg.dataDir)
 	root := writeLegacyProject(t)
