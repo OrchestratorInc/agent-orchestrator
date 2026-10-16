@@ -110,6 +110,59 @@ func TestDelegateTaskClientRequestReplaysAndConflictsBeforeSpawn(t *testing.T) {
 	}
 }
 
+func TestDelegateTaskEmitsSpawnTelemetryOnce(t *testing.T) {
+	st := newFakeStore()
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", ProjectID: "ao", Kind: domain.KindWorker, ClientRequestID: "draft-1", ClientRequestHash: "v1", ClientRequestCommitted: true}
+	sink := &fakeTelemetrySink{}
+	cmd := &fakeCommander{}
+	cmd.spawnFunc = func(cfg ports.SpawnConfig) domain.SessionRecord {
+		return domain.SessionRecord{ID: "ao-2", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: domain.HarnessCodex}
+	}
+	svc := NewWithDeps(Deps{Manager: cmd, Store: st, Telemetry: sink})
+
+	if _, err := svc.DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", ClientRequestID: "draft-1", ClientRequestHash: "v1"}); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if len(sink.events) != 0 {
+		t.Fatalf("replay events = %#v, want none", sink.events)
+	}
+	if _, err := svc.DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", TaskPreparation: "prep-token"}); err != nil {
+		t.Fatalf("DelegateTask: %v", err)
+	}
+	if len(sink.events) != 1 {
+		t.Fatalf("events = %#v, want one spawned", sink.events)
+	}
+	ev := sink.events[0]
+	if ev.Name != "ao.session.spawned" || ev.SessionID == nil || *ev.SessionID != "ao-2" || ev.Payload["kind"] != "worker" || ev.Payload["harness"] != "codex" {
+		t.Fatalf("spawned event = %#v", ev)
+	}
+
+	sink.events = nil
+	cmd.spawnErr = errors.New("boom")
+	if _, err := svc.DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", RequestedAgent: domain.HarnessCodex}); err == nil {
+		t.Fatal("DelegateTask should fail")
+	}
+	if len(sink.events) != 1 || sink.events[0].Name != "ao.session.spawn_failed" || sink.events[0].Payload["harness"] != "codex" {
+		t.Fatalf("events = %#v, want one spawn_failed", sink.events)
+	}
+}
+
+func TestDelegateTaskEmitsFirstSessionOnboarding(t *testing.T) {
+	st := newFakeStore()
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", ProjectID: "ao", Kind: domain.KindWorker, IsTaskPreparation: true}
+	sink := &fakeTelemetrySink{}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: st, Telemetry: sink})
+
+	if _, err := svc.DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", TaskPreparation: "ao-1"}); err != nil {
+		t.Fatalf("DelegateTask: %v", err)
+	}
+	if len(sink.events) != 2 || sink.events[0].Name != "ao.session.spawned" || sink.events[1].Name != "ao.onboarding.first_session_spawned" {
+		t.Fatalf("events = %#v, want spawned + first_session", sink.events)
+	}
+}
+
 func TestDelegatedTaskTitles(t *testing.T) {
 	for _, tt := range []struct {
 		name string

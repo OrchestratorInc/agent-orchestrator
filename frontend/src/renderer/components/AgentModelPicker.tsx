@@ -10,6 +10,7 @@ import {
 	revalidateAgentModels,
 	type AgentModelCatalog,
 } from "../hooks/useAgentModelsQuery";
+import { useOfferedModels } from "../hooks/useOfferedModels";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 
@@ -42,6 +43,7 @@ export function AgentModelPicker({
 	const queryClient = useQueryClient();
 	const query = useQuery(agentModelsQueryOptions(agentId, projectId, hostId));
 	const catalog: AgentModelCatalog | undefined = query.data;
+	const { models: offeredModels } = useOfferedModels(agentId, catalog?.models, { hostId, keep: [value, mode] });
 	const revalidationQuery = useQuery({
 		queryKey: hostId
 			? ["agent-model-revalidation", hostId, agentId, projectId, catalog?.validatedAt ?? ""]
@@ -90,12 +92,12 @@ export function AgentModelPicker({
 	}
 
 	if (catalog?.selectionMode === "mode") {
-		const options = (catalog.models ?? []).filter((item) => isConcreteModelID(item.id)).map((item) => ({
+		const options = offeredModels.filter((item) => isConcreteModelID(item.id)).map((item) => ({
 			value: item.id,
 			label: modelChoiceLabel(item),
 		}));
 		const explicitMode = isConcreteModelID(mode) ? mode : "";
-		const defaultMode = catalog.models?.find((item) => item.isDefault && isConcreteModelID(item.id))?.id || "";
+		const defaultMode = offeredModels.find((item) => item.isDefault && isConcreteModelID(item.id))?.id || "";
 		const effectiveMode = explicitMode || defaultMode;
 		const visibleModeLabel = options.find((option) => option.value === effectiveMode)?.label ?? (explicitMode || t("settings.models.modeNotReported"));
 		return (
@@ -118,7 +120,7 @@ export function AgentModelPicker({
 	}
 
 	const customModelEntry = catalog?.customModelEntry ?? (catalog?.allowCustom ? "direct" : "none");
-	const displayModels = (catalog?.models ?? []).map((item) =>
+	const displayModels = offeredModels.map((item) =>
 		item.id === "auto" ? { ...item, label: t("settings.models.autoRouteLabel") } : item,
 	);
 	const selectCatalogModel = (nextModel: string) => {

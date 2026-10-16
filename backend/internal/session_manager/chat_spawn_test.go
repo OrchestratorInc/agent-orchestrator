@@ -261,7 +261,7 @@ func TestRunBackgroundTaskUsesResolvedWorkerHarnessAndConfig(t *testing.T) {
 		Metadata: domain.SessionMetadata{
 			WorkspacePath: "/ws/mer-1",
 			Model:         "selected-model",
-			Effort:        "low",
+			Effort:        "xhigh",
 			Permissions:   ports.PermissionModeAcceptEdits,
 		},
 	}
@@ -276,7 +276,7 @@ func TestRunBackgroundTaskUsesResolvedWorkerHarnessAndConfig(t *testing.T) {
 	}
 	task := launcher.background[0]
 	if launcher.backgroundHarnesses[0] != rec.Harness || task.WorkspacePath == rec.Metadata.WorkspacePath ||
-		task.Model != rec.Metadata.Model || task.Effort != rec.Metadata.Effort || task.Permissions != ports.PermissionModeAcceptEdits {
+		task.Model != rec.Metadata.Model || task.Effort != "" || task.Permissions != ports.PermissionModeAcceptEdits {
 		t.Fatalf("background task = %#v", task)
 	}
 	if _, err := os.Stat(task.WorkspacePath); !errors.Is(err, os.ErrNotExist) {
@@ -291,6 +291,9 @@ func TestRunBackgroundTaskUsesResolvedWorkerHarnessAndConfig(t *testing.T) {
 	if _, ok := task.Env[EnvSessionID]; ok {
 		t.Fatalf("background task inherited %s: %#v", EnvSessionID, task.Env)
 	}
+	if worker := st.sessions[rec.ID]; worker.Metadata.Model != rec.Metadata.Model || worker.Metadata.Effort != rec.Metadata.Effort {
+		t.Fatalf("background task changed worker model/effort: %#v", worker.Metadata)
+	}
 }
 
 func TestBackgroundTaskPermissionsKeepKimiCompatible(t *testing.T) {
@@ -302,7 +305,7 @@ func TestBackgroundTaskPermissionsKeepKimiCompatible(t *testing.T) {
 	}
 }
 
-func TestChatSpawnPersistsResolvedEffortForBackgroundTasks(t *testing.T) {
+func TestChatSpawnPersistsResolvedEffort(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
 		override bool
@@ -1978,5 +1981,37 @@ func TestChatSpawnWritesCommandCodeSessionStartHook(t *testing.T) {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("settings.json missing %q; standing instructions have no delivery hook:\n%s", want, raw)
 		}
+	}
+}
+
+type suggestionRecordingLauncher struct {
+	*recordingLauncher
+	source domain.SessionID
+	turn   string
+}
+
+func (l *suggestionRecordingLauncher) RunPromptSuggestionTask(ctx context.Context, id domain.SessionID, turn string, harness domain.AgentHarness, cfg ports.ChatStartConfig, prompt string) (string, error) {
+	l.source, l.turn = id, turn
+	return l.RunBackgroundTask(ctx, harness, cfg, prompt)
+}
+func TestRunPromptSuggestionTaskPassesForkSourceWithScratchPolicy(t *testing.T) {
+	launcher := &suggestionRecordingLauncher{recordingLauncher: &recordingLauncher{}}
+	m, st, _ := newChatManager(launcher)
+	m.dataDir = t.TempDir()
+	rec := domain.SessionRecord{ID: "mer-1", ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Metadata: domain.SessionMetadata{WorkspacePath: "/foreground", Model: "selected-model", Permissions: ports.PermissionModeAuto}}
+	st.sessions[rec.ID] = rec
+	got, err := m.RunPromptSuggestionTask(t.Context(), rec.ID, "completed-turn", "suggestion only", "Suggest next message")
+	if err != nil || got != "Generated title" || launcher.source != rec.ID || launcher.turn != "completed-turn" || len(launcher.background) != 1 {
+		t.Fatalf("source=%q turn=%q result=%q err=%v", launcher.source, launcher.turn, got, err)
+	}
+	cfg := launcher.background[0]
+	if launcher.backgroundHarnesses[0] != rec.Harness || cfg.WorkspacePath == rec.Metadata.WorkspacePath || cfg.Model != rec.Metadata.Model || cfg.Permissions != ports.PermissionModeAcceptEdits || cfg.SystemPrompt != "suggestion only" {
+		t.Fatalf("suggestion config=%+v", cfg)
+	}
+	if _, ok := cfg.Env[EnvSessionID]; ok {
+		t.Fatal("suggestion inherited foreground hook identity")
+	}
+	if _, err := os.Stat(cfg.WorkspacePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("scratch workspace survived suggestion")
 	}
 }

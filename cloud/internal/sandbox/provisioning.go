@@ -171,6 +171,20 @@ type CoderSessionProfile struct {
 	// session repository the template already cloned. Only meaningful with
 	// the workspace worker user.
 	ReuseExistingCheckout bool `json:"reuseExistingCheckout,omitempty"`
+	// WorkingDirectory is the connection's working directory template (see
+	// domain.OrgCoderConfig). Only meaningful with the workspace worker user;
+	// empty on rows written before the field existed.
+	WorkingDirectory string `json:"workingDirectory,omitempty"`
+	// ProtectSecretFiles keeps the coding agent out of secret environment
+	// files. Nil on rows written before the field existed, which keeps the
+	// historical behavior (no protection).
+	ProtectSecretFiles *bool `json:"protectSecretFiles,omitempty"`
+}
+
+// ProtectsSecretFiles reports whether the session's coding agent must not
+// read or edit secret environment files.
+func (p CoderSessionProfile) ProtectsSecretFiles() bool {
+	return p.ProtectSecretFiles != nil && *p.ProtectSecretFiles
 }
 
 // CoderWorkerUserWorkspace is the CoderSessionProfile.WorkerUser value that
@@ -241,6 +255,17 @@ type CoderDeploymentOverride struct {
 	ReadyProbe               string
 	ReadyProbeTimeoutSeconds int
 	ReuseExistingCheckout    bool
+	// WorkingDirectory is stamped the same way; it applies only with the
+	// workspace worker user.
+	WorkingDirectory string
+	// ProtectSecretFiles keeps Claude Code out of .env files (any worker user).
+	ProtectSecretFiles bool
+	// DefaultWorkspaceNamePrefix names the session's workspace when the
+	// project sets no prefix of its own, so a bring-your-own Coder shows
+	// <project>-<id> rather than ao-<hash>. Must pass
+	// domain.ValidateCoderWorkspaceNamePrefix; see
+	// domain.CoderWorkspaceNamePrefixFor.
+	DefaultWorkspaceNamePrefix string
 }
 
 // readyProbeStartupMargin is the startup budget a session keeps after its
@@ -382,6 +407,11 @@ func DecodeCoderSessionProfile(raw json.RawMessage) (CoderSessionProfile, error)
 	}
 	if !profile.RunsAsWorkspaceUser() {
 		profile.ReuseExistingCheckout = false
+		profile.WorkingDirectory = ""
+	}
+	profile.WorkingDirectory = strings.TrimSpace(profile.WorkingDirectory)
+	if err := domain.ValidateCoderWorkingDirectory(profile.WorkingDirectory); err != nil {
+		return CoderSessionProfile{}, err
 	}
 	return profile, nil
 }
@@ -628,6 +658,9 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 		if coder != nil {
 			workspaceNamePrefix = strings.TrimSpace(coder.WorkspaceNamePrefix)
 		}
+		if workspaceNamePrefix == "" && override != nil {
+			workspaceNamePrefix = strings.TrimSpace(override.DefaultWorkspaceNamePrefix)
+		}
 		if err := domain.ValidateCoderWorkspaceNamePrefix(workspaceNamePrefix); err != nil {
 			return Plan{}, err
 		}
@@ -736,6 +769,15 @@ func addCoderDevEnvironment(coderProfile map[string]any, override *CoderDeployme
 		}
 		coderProfile["readyProbe"] = probe
 		coderProfile["readyProbeTimeoutSeconds"] = timeout
+	}
+	if override.ProtectSecretFiles {
+		coderProfile["protectSecretFiles"] = true
+	}
+	if strings.ToLower(strings.TrimSpace(override.WorkerUser)) != CoderWorkerUserWorkspace {
+		return
+	}
+	if directory := strings.TrimSpace(override.WorkingDirectory); directory != "" {
+		coderProfile["workingDirectory"] = directory
 	}
 }
 

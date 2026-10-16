@@ -1,10 +1,12 @@
 # AO managed Coder access
 
-Anyone with WorkOS dashboard access can put an email on AO's managed Coder by
-tagging that person's WorkOS organization with `capabilities = coder`.
-Untagged accounts get Freestyle, like every other user.
+Untagged organizations can run sessions on AO's managed Coder and on
+Freestyle, both on Stripe plans. Tagging a person's WorkOS organization with
+`capabilities = coder` makes AO's managed Coder its default and free, and lets
+it connect its own Coder deployment. Freestyle stays on offer, on a plan. Anyone with WorkOS
+dashboard access can set the tag.
 
-## Give an email AO managed Coder
+## Give an email free AO managed Coder
 
 1. Open the WorkOS dashboard, then **Users**, and search for the email.
 2. Open the user and find their **Organization** under memberships.
@@ -14,30 +16,34 @@ Untagged accounts get Freestyle, like every other user.
 3. Open that organization and find **Metadata**.
 4. Add the key `capabilities` with the value `coder`. Leave every other key
    alone.
-5. Save. The person gets Coder within 5 minutes. They only need to sign out
+5. Save. The change applies within 5 minutes. They only need to sign out
    and back in if you had to create the organization in step 2.
 
-That account now sees AO managed Coder and no Freestyle. Sessions run on AO's
-own Coder; there is nothing to set up in Coder itself.
+That account now starts on AO's managed Coder, free. It can still buy a plan to
+use Freestyle. Sessions run on AO's own Coder; there is nothing to set up in
+Coder itself.
 
 ## Take it away again
 
 1. In WorkOS, open the same organization and its **Metadata**.
 2. Delete the `capabilities` key, then save.
 
-Within 5 minutes the account is back to Freestyle, like any new user. Coder
-sessions it already has keep running, but it cannot start new Coder sessions.
+Within 5 minutes the account is like any new user: it is offered Freestyle as
+well, and new Coder sessions need a plan, the same as Freestyle. Coder
+sessions it already has keep running and stay free, since a session's billing
+is fixed when it starts. Projects keep the sandbox they were created on; the
+organization's default only applies to new projects, and an admin changes it
+in Settings, General, Cloud.
 
 ## What each setting gives
 
-| `capabilities` on the organization | Sessions run on | Billing |
-| --- | --- | --- |
-| `coder` | AO managed Coder only | None |
-| not set (the default for everyone) | Freestyle only | Stripe plans (Free, Starter, Pro) |
-| `coder,freestyle` | Both, picked per project | Stripe plans for Freestyle |
+| `capabilities` on the organization | Starts on | Coder | Freestyle |
+| --- | --- | --- | --- |
+| `coder` | Coder | Free, plus its own Coder deployment | Stripe plans |
+| not set (the default for everyone) | Freestyle | Stripe plans | Stripe plans |
 
-Use `coder` for internal people. Only use `coder,freestyle` if someone needs
-both on one account.
+With both providers, an admin picks the default in Settings, General, Cloud.
+Use `coder` for internal people and Coder customers.
 
 ## Good to know
 
@@ -49,9 +55,9 @@ both on one account.
 - **Staging and production share one WorkOS.** A tag set once applies to both.
 - **Do not edit other metadata keys** (such as `billing` or
   `sandbox_provider`) unless asked.
-- **Internal people on Freestyle** (their other emails) are billed like anyone
-  else unless their organization is on the `internal` plan, which an operator
-  sets in the control plane database (`ao_organizations.plan = 'internal'`).
+- **Freestyle needs a plan for everyone**, internal people and organizations
+  on the `internal` plan or `billing=contract` included. Those only keep
+  paywalled features without a plan.
 - **Using your own Coder** (a customer bringing their own) is a different
   setup, done in AO's Settings, Coder page. This runbook only covers AO's
   managed Coder.

@@ -65,6 +65,12 @@ export interface CloudCpOffering {
 	kind: CloudCpOfferingKind;
 	/** Plan feature flags; empty when none. */
 	features: string[];
+	/**
+	 * The org holds the coder capability (WorkOS metadata capabilities=coder):
+	 * it may connect its own Coder deployment, and its Coder sessions are not
+	 * billed. Absent from older control planes.
+	 */
+	customCoder?: boolean;
 }
 
 /** GET /me */
@@ -351,9 +357,18 @@ export interface CloudCpCoderTemplateParameterOption {
 	description?: string;
 }
 
+/** A problem Coder found with a parameter's value. */
+export interface CloudCpCoderTemplateParameterDiagnostic {
+	/** "error" or "warning". */
+	severity: string;
+	summary: string;
+	detail?: string;
+}
+
 /**
  * One rich parameter of a Coder template's active version
- * (GET /orgs/{orgId}/coder-templates/{templateId}/parameters).
+ * (GET /orgs/{orgId}/coder-templates/{templateId}/parameters, or POST
+ * .../parameters/evaluate with draft values).
  */
 export interface CloudCpCoderTemplateParameter {
 	name: string;
@@ -369,6 +384,8 @@ export interface CloudCpCoderTemplateParameter {
 	defaultValue?: string;
 	options?: CloudCpCoderTemplateParameterOption[];
 	order?: number;
+	/** Coder's problems with the value; only set when evaluated against draft values. */
+	diagnostics?: CloudCpCoderTemplateParameterDiagnostic[];
 }
 
 export interface CloudCpCoderTemplateParametersResponse {
@@ -424,13 +441,28 @@ export interface CloudCpOrgCoderConfig {
 	readyProbeTimeoutSeconds?: number;
 	/** Reuse a matching checkout under ~/work; absent means true with the workspace user. */
 	reuseExistingCheckout?: boolean;
+	/**
+	 * Where the session works: absolute, or starting with `~/` or `$HOME/`, and may
+	 * name the repository as `{repo}`. Requires the workspace user.
+	 */
+	workingDirectory?: string;
+	/** Keep the agent from reading or editing secret env files (.env, .env.*); absent means true. */
+	protectSecretFiles?: boolean;
 	/** True when an API token is stored. The token itself is never returned. */
 	tokenSet: boolean;
+	/**
+	 * False when the org may no longer save a connection (it lacks the coder
+	 * capability) but still has this one, which it can read and remove.
+	 * Absent means true.
+	 */
+	editable?: boolean;
 }
 
 export interface CloudCpOrgCoderConfigResponse {
 	/** The stored config, or null when the org has none configured yet. */
 	coderConfig: CloudCpOrgCoderConfig | null;
+	/** The org may save a connection; absent from older control planes (true). */
+	editable?: boolean;
 }
 
 /**
@@ -468,6 +500,10 @@ export interface CloudCpPutOrgCoderConfigRequest {
 	/** 30..3600; omit for the default 900. */
 	readyProbeTimeoutSeconds?: number;
 	reuseExistingCheckout?: boolean;
+	/** Only with workerUser "workspace". */
+	workingDirectory?: string;
+	/** Omit for the default true. */
+	protectSecretFiles?: boolean;
 }
 
 export interface CloudCpSession {

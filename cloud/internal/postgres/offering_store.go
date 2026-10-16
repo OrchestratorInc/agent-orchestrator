@@ -28,13 +28,13 @@ func (s *Store) OrchestratorPlacement(
 			ctx,
 			`SELECT sandbox.provider,
 				COALESCE(sandbox.provider_connection_id::text, ''),
-				project.config
+				project.config, project.display_name
 			FROM ao_sandboxes sandbox
 			JOIN ao_projects project
 			  ON project.org_id = sandbox.org_id AND project.id = $3
 			WHERE sandbox.org_id = $1 AND sandbox.session_id = $2`,
 			orgID, orchestratorSessionID, projectID,
-		).Scan(&placement.Provider, &placement.ConnectionID, &placement.ProjectConfig); err != nil {
+		).Scan(&placement.Provider, &placement.ConnectionID, &placement.ProjectConfig, &placement.ProjectName); err != nil {
 			return err
 		}
 		rows, err := tx.Query(
@@ -70,27 +70,4 @@ func (s *Store) OrchestratorPlacement(
 		return rows.Err()
 	})
 	return placement, err
-}
-
-// OrgBillingStanding returns the organization's plan and whether the billing
-// policy grandfathers it (created before billing was turned on and never
-// subscribed). It is a read-only view for computing domain.BillingMode; plan
-// enforcement itself stays in the billing store.
-func (s *Store) OrgBillingStanding(
-	ctx context.Context,
-	principal domain.Principal,
-	orgID string,
-) (string, bool, error) {
-	var plan string
-	var grandfathered bool
-	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
-		billing, err := orgBillingTx(ctx, tx, orgID)
-		if err != nil {
-			return err
-		}
-		plan = billing.Plan
-		grandfathered = !billing.Exempt() && s.billing.exempt(billing)
-		return nil
-	})
-	return plan, grandfathered, err
 }

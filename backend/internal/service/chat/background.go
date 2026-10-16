@@ -28,6 +28,10 @@ func (s *Service) RunBackgroundTask(ctx context.Context, harness domain.AgentHar
 	cfg.ProviderScopeID = s.newID()
 	cfg.ProviderIDsScoped = true
 	cfg.Ephemeral = true
+	cfg.Effort = ""
+	// shortcut: ACP ignores ReadOnly and DisableNetwork; enforce tool restrictions when those providers support them.
+	cfg.ReadOnly = true
+	cfg.DisableNetwork = true
 	conversation, err := driver.Start(ctx, cfg)
 	if err != nil {
 		return "", fmt.Errorf("start background %s task: %w", harness, err)
@@ -38,9 +42,18 @@ func (s *Service) RunBackgroundTask(ctx context.Context, harness domain.AgentHar
 		}
 	}()
 
+	return runBackgroundTurn(ctx, harness, conversation, prompt)
+}
+
+func runBackgroundTurn(ctx context.Context, harness domain.AgentHarness, conversation ports.ChatConversation, prompt string) (string, error) {
+	settings, err := backgroundTaskSettings(ctx, conversation)
+	if err != nil {
+		return "", fmt.Errorf("configure background %s task: %w", harness, err)
+	}
 	turn, err := conversation.SendTurn(ctx, ports.ChatUserMessage{
-		Text:   prompt,
-		Origin: domain.MessageOriginAutomation,
+		Text:     prompt,
+		Origin:   domain.MessageOriginAutomation,
+		Settings: settings,
 	})
 	if err != nil {
 		return "", fmt.Errorf("send background %s task: %w", harness, err)
@@ -86,4 +99,73 @@ func (s *Service) RunBackgroundTask(ctx context.Context, harness domain.AgentHar
 			}
 		}
 	}
+}
+
+// The provider's live catalog keeps this text-only call from inheriting an
+// expensive reasoning setting or choosing a level its model cannot use.
+func backgroundTaskSettings(ctx context.Context, conversation ports.ChatConversation) (ports.ChatTurnSettings, error) {
+	switch provider := conversation.(type) {
+	case ports.ChatConfigOptionController:
+		catalog, err := provider.ListConfigOptions(ctx)
+		if err != nil {
+			return ports.ChatTurnSettings{}, err
+		}
+		for _, option := range catalog {
+			if option.Category != "thought_level" || option.Type != ports.ChatConfigOptionSelect {
+				continue
+			}
+			values := make([]string, 0, len(option.Choices))
+			for _, choice := range option.Choices {
+				values = append(values, choice.Value)
+			}
+			if effort := lowestBackgroundEffort(values); effort != "" && effort != option.Current.Select {
+				if _, err := provider.SetConfigOption(ctx, option.ID, ports.ChatConfigOptionValue{Select: effort}); err != nil {
+					return ports.ChatTurnSettings{}, err
+				}
+			}
+		}
+	case ports.ChatModelLister:
+		catalog, err := provider.ListModels(ctx)
+		if err != nil {
+			return ports.ChatTurnSettings{}, err
+		}
+		for _, model := range catalog {
+			if model.Default {
+				return ports.ChatTurnSettings{Effort: lowestBackgroundEffort(model.Efforts)}, nil
+			}
+		}
+	}
+	return ports.ChatTurnSettings{}, nil
+}
+
+func lowestBackgroundEffort(values []string) string {
+	var best string
+	bestRank := 8
+	for _, value := range values {
+		var rank int
+		switch strings.ToLower(value) {
+		case "none", "off":
+			rank = 0
+		case "minimal":
+			rank = 1
+		case "low":
+			rank = 2
+		case "medium":
+			rank = 3
+		case "high":
+			rank = 4
+		case "xhigh":
+			rank = 5
+		case "max":
+			rank = 6
+		case "ultra":
+			rank = 7
+		default:
+			continue
+		}
+		if rank < bestRank {
+			best, bestRank = value, rank
+		}
+	}
+	return best
 }
