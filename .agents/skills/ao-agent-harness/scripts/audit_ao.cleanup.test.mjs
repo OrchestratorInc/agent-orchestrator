@@ -1,11 +1,22 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { runCommand } from "./audit_ao.mjs";
 
-test("command timeout kills a same-group descendant after its leader exits on SIGTERM", { skip: process.platform !== "linux" }, async () => {
+// Portable across Linux and macOS: `ps` reports nothing for a reaped process and
+// a state starting with Z for an unreaped zombie.
+function processState(pid) {
+  try {
+    return execFileSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+test("command timeout kills a same-group descendant after its leader exits on SIGTERM", { skip: process.platform === "win32" }, async () => {
   const root = await mkdtemp(join(tmpdir(), "ao-timeout-descendant-"));
   const grandchildPath = join(root, "grandchild.mjs");
   const leaderPath = join(root, "leader.mjs");
@@ -33,10 +44,8 @@ setInterval(() => {}, 1000);
     assert.match(result.stdout, /ready/, "fixture descendant initialized before timeout");
     descendantPid = Number(await readFile(childPidPath, "utf8"));
     await new Promise(resolve => setTimeout(resolve, 200));
-    let state;
-    try { state = (await readFile(`/proc/${descendantPid}/stat`, "utf8")).match(/^\d+ \(.*\) ([A-Z])/)[1]; }
-    catch (error) { if (error.code !== "ENOENT") throw error; }
-    assert.ok(state === undefined || state === "Z", `descendant remains alive in state ${state}`);
+    const state = processState(descendantPid);
+    assert.ok(state === undefined || state.startsWith("Z"), `descendant remains alive in state ${state}`);
   } finally {
     // Keep even the red regression self-cleaning. Kill only recorded fixture PIDs.
     for (const [filename, processGroup] of [[childPidPath, false], [leaderPidPath, true]]) {

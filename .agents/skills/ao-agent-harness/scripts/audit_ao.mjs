@@ -95,7 +95,14 @@ export function overallStatus(results) {
   return statuses.length > 0 && statuses.every((status) => status === "PASS") ? "PASS" : "NOT_RUN";
 }
 
+// Set once the runner receives SIGINT/SIGTERM/SIGHUP. Lifecycle work still in
+// flight must not create, message or restore sessions while cleanup runs.
+let auditInterrupted = false;
+
 async function request({ baseURL, method = "GET", path, body, timeoutMs = 30_000 }) {
+  if (auditInterrupted && method !== "GET" && !/^sessions\/[^/]+\/kill$/.test(path.replace(/^\//, ""))) {
+    throw new Error(`audit interrupted; refused ${method} ${path}`);
+  }
   const startedAt = now();
   const started = performance.now();
   const controller = new AbortController();
@@ -896,6 +903,16 @@ async function normalizedPath(path) {
   }
 }
 
+// Kill functions for command process groups that are still running. Detached
+// groups do not receive a terminal's SIGINT, so interruption signals them here.
+const activeCommands = new Set();
+
+export function terminateActiveCommands(signal = "SIGTERM") {
+  const count = activeCommands.size;
+  for (const kill of activeCommands) kill(signal);
+  return count;
+}
+
 export function runCommand(command, args, options = {}) {
   return new Promise((done) => {
     const startedAt = now();
@@ -962,6 +979,8 @@ export function runCommand(command, args, options = {}) {
       finish(null, error instanceof Error ? error.message : String(error));
       return;
     }
+    activeCommands.add(kill);
+    child.once("close", () => activeCommands.delete(kill));
     timer = setTimeout(() => {
       timedOut = true;
       kill("SIGTERM");
@@ -1286,6 +1305,8 @@ export async function startManagedDaemon({
   readinessCheck = defaultReadinessCheck,
   timeoutMs = 30_000,
   onStartupFailure,
+  onSpawn,
+  signal,
 }) {
   const dataDir = join(root, "data");
   const runFile = join(root, "running.json");
@@ -1325,9 +1346,12 @@ export async function startManagedDaemon({
     AO_TELEMETRY_METRICS: "off",
     AO_TELEMETRY_REMOTE: "off",
   };
+  // Detached on POSIX so a terminal Ctrl-C reaches only the runner; the runner
+  // then kills its sessions through this daemon before stopping it.
   const child = spawn(command[0], [...command.slice(1), "daemon"], {
     cwd: resolve(repoRoot),
     env: environment,
+    detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
   });
   let logs = "";
@@ -1349,21 +1373,6 @@ export async function startManagedDaemon({
     });
   });
 
-  const ready = await waitUntil(async () => {
-    if (exit) return { done: true, failed: true };
-    try {
-      const info = JSON.parse(await readFile(runFile, "utf8"));
-      if (info.pid !== child.pid || info.port !== selectedPort) return { done: false };
-      const observed = await readinessCheck(baseURL);
-      readiness = typeof observed === "boolean"
-        ? { ok: observed, status: observed ? 200 : 0, checkedAt: now() }
-        : observed;
-      return { done: readiness.ok === true, info };
-    } catch {
-      return { done: false };
-    }
-  }, timeoutMs, 100);
-
   const stop = async () => {
     if (exit) return exit;
     child.kill("SIGTERM");
@@ -1379,8 +1388,27 @@ export async function startManagedDaemon({
     child.kill("SIGKILL");
     return exited;
   };
+  onSpawn?.({ pid: child.pid, stop });
+
+  const ready = await waitUntil(async () => {
+    if (exit || signal?.aborted) return { done: true, failed: true };
+    try {
+      const info = JSON.parse(await readFile(runFile, "utf8"));
+      if (info.pid !== child.pid || info.port !== selectedPort) return { done: false };
+      const observed = await readinessCheck(baseURL);
+      readiness = typeof observed === "boolean"
+        ? { ok: observed, status: observed ? 200 : 0, checkedAt: now() }
+        : observed;
+      return { done: readiness.ok === true, info };
+    } catch {
+      return { done: false };
+    }
+  }, timeoutMs, 100);
+
   if (!ready.done || ready.failed) {
-    const error = new Error(`AO daemon did not become ready${exit ? ` (exit ${exit.code ?? exit.error})` : ""}: ${logs.trim() || "no daemon output"}`);
+    const error = new Error(signal?.aborted
+      ? "AO daemon startup was interrupted"
+      : `AO daemon did not become ready${exit ? ` (exit ${exit.code ?? exit.error})` : ""}: ${logs.trim() || "no daemon output"}`);
     error.evidence = { command, baseURL, pid: child.pid, readiness, exit, daemonLogs: redactOutput(logs), build: build ? commandEvidence(build) : null };
     try { await onStartupFailure?.(error); }
     finally { error.evidence.cleanupExit = await stop(); }
@@ -2146,8 +2174,14 @@ Options:
   --diagnostic-after-native-proof  collect later lifecycle evidence after native proof; preserve strict failures
   --no-live                run API preflight only; lifecycle gates are NOT_RUN
   --keep-daemon            leave the isolated daemon and restored sessions running
-  -h, --help               show this help`);
+  -h, --help               show this help
+
+SIGINT/SIGTERM/SIGHUP stop owned commands, kill created sessions, stop the
+daemon and finalize the report (exit 130/143/129); a second signal exits
+immediately.`);
 }
+
+const SIGNAL_EXIT_CODES = Object.freeze({ SIGHUP: 129, SIGINT: 130, SIGTERM: 143 });
 
 export function parseArgs(argv) {
   const options = {
@@ -2244,7 +2278,11 @@ async function main(argv = process.argv.slice(2)) {
       }
     }
   };
-  const save = async () => {
+  // After an interruption, lifecycle work may still settle in the background;
+  // only the final save may write once finalization starts.
+  let finalizing = false;
+  const save = async ({ final = false } = {}) => {
+    if (finalizing && !final) return;
     const counts = status => results.filter(result => result.status === status).length;
     report.summary = {
       status: overallStatus([...results, ...runErrors.map(() => ({ status: "FAIL" })),
@@ -2255,7 +2293,28 @@ async function main(argv = process.argv.slice(2)) {
     report.results = results.map(sanitizeEvidence);
     return writeReports(report, base, root);
   };
-  try {
+  const startupAbort = new AbortController();
+  let pendingDaemon = null;
+  let interruption = null;
+  let rejectInterrupted;
+  const interrupted = new Promise((_, reject) => { rejectInterrupted = reject; });
+  interrupted.catch(() => {});
+  const handledSignals = Object.keys(SIGNAL_EXIT_CODES);
+  const onSignal = (signalName) => {
+    if (interruption) {
+      console.error(`${signalName} received again: exiting without further cleanup. Inspect owned daemon PID ${daemon?.pid ?? pendingDaemon?.pid ?? "none"} and ${base}.json before retrying.`);
+      process.exit(SIGNAL_EXIT_CODES[signalName]);
+    }
+    interruption = { signal: signalName, stage, at: now() };
+    report.interrupted = interruption;
+    auditInterrupted = true;
+    console.error(`${signalName} received during ${stage}: stopping owned commands, killing created sessions, stopping the daemon and finalizing the report. Send ${signalName} again to exit immediately.`);
+    startupAbort.abort();
+    terminateActiveCommands("SIGTERM");
+    rejectInterrupted(new Error(`audit interrupted by ${signalName} during ${stage}`));
+  };
+  for (const name of handledSignals) process.on(name, onSignal);
+  const run = async () => {
     await save();
     let localContracts;
     try { localContracts = await loadLocalContracts(options.localContract); }
@@ -2267,7 +2326,14 @@ async function main(argv = process.argv.slice(2)) {
       root, repoRoot: resolve(expandHome(options.repoRoot)), aoPath: options.aoPath,
       port: options.port || undefined, timeoutMs: options.startupTimeoutSeconds * 1_000,
       onStartupFailure: error => recordIssue({ gate: gate("startup", "FAIL", error.message, error.evidence) }),
+      onSpawn: handle => { pendingDaemon = handle; },
+      signal: startupAbort.signal,
     });
+    if (interruption) {
+      // The race already finalized without this daemon; release it here.
+      await daemon.stop();
+      return;
+    }
     Object.assign(report, { baseURL: daemon.baseURL, dataDir: daemon.dataDir, runFile: daemon.runFile });
     Object.assign(report.daemon, {
       started: true, pid: daemon.pid, port: daemon.port, command: daemon.command,
@@ -2288,6 +2354,7 @@ async function main(argv = process.argv.slice(2)) {
     if (!selected.length) throw new Error("AO returned no supported agents");
     report.selectedAgents = selected;
     for (let index = 0; index < selected.length; index += 1) {
+      if (interruption) return;
       const agent = selected[index];
       const localContract = localContracts[agent] || null;
       let local;
@@ -2346,8 +2413,12 @@ async function main(argv = process.argv.slice(2)) {
         await save();
       }
     }
+  };
+  try {
+    await Promise.race([run(), interrupted]);
   } catch (error) {
-    runErrors.push({ stage, message: redactOutput(error.message), evidence: sanitizeEvidence(error.evidence) });
+    if (interruption) error.evidence ??= { interrupted: interruption };
+    runErrors.push({ stage: interruption ? "interrupted" : stage, message: redactOutput(error.message), evidence: sanitizeEvidence(error.evidence) });
     if (!evidence.issues.some(issue => issue.agent === null && issue.gate === stage)) {
       try { await recordIssue({ gate: gate(stage, "FAIL", error.message, error.evidence) }); }
       catch (writeError) {
@@ -2356,6 +2427,12 @@ async function main(argv = process.argv.slice(2)) {
       }
     }
   } finally {
+    finalizing = true;
+    if (!daemon && pendingDaemon) {
+      // Interrupted before readiness: the spawned daemon is unusable, stop it.
+      try { report.daemon.exit = await pendingDaemon.stop(); report.daemon.stopped = true; }
+      catch (error) { runErrors.push({ stage: "startup_cleanup", message: redactOutput(error.message) }); }
+    }
     if (daemon && !options.keepDaemon) {
       stage = "cleanup";
       try {
@@ -2396,11 +2473,12 @@ async function main(argv = process.argv.slice(2)) {
     }
     report.state = "finished";
     report.finishedAt = now();
-    try { await save(); }
+    try { await save({ final: true }); }
     catch (error) {
       reportWriteFailed = true;
       console.error(`Could not finalize report: ${redactOutput(error.message)}. Retained issue artifacts: ${evidence.paths.directory}`);
     }
+    for (const name of handledSignals) process.off(name, onSignal);
   }
   console.log(markdownReport(report));
   try { await evidence.log(`JSON report: ${base}.json; Markdown report: ${base}.md`); }
@@ -2408,8 +2486,14 @@ async function main(argv = process.argv.slice(2)) {
     console.error(`Runner log write failed: ${redactOutput(error.message)}. Report basename: ${base}`);
     return 2;
   }
+  if (interruption) return SIGNAL_EXIT_CODES[interruption.signal];
   return invalidInput || reportWriteFailed ? 2 : report.summary.status === "PASS" ? 0 : 1;
 }
 
 const invokedAsScript = process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
-if (invokedAsScript) process.exitCode = await main();
+if (invokedAsScript) {
+  const code = await main();
+  process.exitCode = code;
+  // Interrupted lifecycle waits may still hold timers; do not linger after finalization.
+  if (Object.values(SIGNAL_EXIT_CODES).includes(code)) process.exit(code);
+}
