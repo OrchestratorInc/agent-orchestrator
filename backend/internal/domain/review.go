@@ -124,6 +124,11 @@ const (
 	ReviewRunCancelled = contract.AOReviewRunCancelled
 )
 
+// ReviewRunUnsubmittedBody explains a run that failed because its reviewer
+// Chat turn ended without submitting a result. The storage query that settles
+// such runs writes this exact text.
+const ReviewRunUnsubmittedBody = "reviewer Chat turn ended without submitting a result"
+
 // ReviewVerdict is the outcome a reviewer reports. The empty verdict marks a
 // run that has not produced an outcome yet.
 type ReviewVerdict = contract.AOReviewVerdict
