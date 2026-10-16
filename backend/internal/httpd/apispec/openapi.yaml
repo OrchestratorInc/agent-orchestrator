@@ -15741,6 +15741,10 @@ components:
           additionalProperties:
             type: string
           type: object
+        envRemove:
+          items:
+            type: string
+          type: array
         orchestrator:
           $ref: '#/components/schemas/RoleOverride'
         orchestratorRules:
