@@ -20,7 +20,7 @@ const (
 	// through the archive, so each costs about 0.1 ms of page I/O (measured on a
 	// 3.9 GB database), and 250 keep a batch to tens of milliseconds.
 	DefaultArchiveRetentionBatch         int64 = 250
-	defaultArchiveRetentionBatchesPerRun       = 40
+	defaultArchiveRetentionBatchesPerRun int   = 40
 )
 
 // ArchiveRetentionStore is the storage surface the archive janitor needs.

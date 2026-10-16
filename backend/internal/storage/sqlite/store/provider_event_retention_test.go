@@ -240,10 +240,17 @@ type execPlanRecorder struct {
 
 func (r *execPlanRecorder) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	r.t.Helper()
+	r.explain(ctx, query, args)
+	return r.DBTX.ExecContext(ctx, query, args...)
+}
+
+func (r *execPlanRecorder) explain(ctx context.Context, query string, args []any) {
+	r.t.Helper()
 	rows, err := r.QueryContext(ctx, "EXPLAIN QUERY PLAN "+query, args...)
 	if err != nil {
 		r.t.Fatalf("explain query plan: %v", err)
 	}
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var id, parent, unused int
 		var detail string
@@ -252,10 +259,9 @@ func (r *execPlanRecorder) ExecContext(ctx context.Context, query string, args .
 		}
 		r.plans = append(r.plans, detail)
 	}
-	if err := rows.Close(); err != nil {
+	if err := rows.Err(); err != nil {
 		r.t.Fatalf("read query plan: %v", err)
 	}
-	return r.DBTX.ExecContext(ctx, query, args...)
 }
 
 // Each batch holds the single writer, so finding its rows must not read the
