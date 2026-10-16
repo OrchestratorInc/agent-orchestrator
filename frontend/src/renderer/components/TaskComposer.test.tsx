@@ -2609,10 +2609,10 @@ describe("TaskComposer", () => {
 			serveClaude(() => claudeCatalog({ warning: "the saved Claude Code login token expired", warningCode: "auth_expired" }));
 			render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
 			await waitFor(() => expect(h.get).toHaveBeenCalledWith(expect.stringContaining("/models"), expect.anything()));
-			// Let the catalog response render before asserting nothing was shown.
-			await act(async () => {
-				await new Promise((resolve) => setTimeout(resolve, 50));
-			});
+			// The catalog has rendered once its models are listed; only then is
+			// the absence of the notice meaningful.
+			await userEvent.click(await screen.findByRole("button", { name: "Model" }));
+			expect(await screen.findByText("Sonnet 5.5")).toBeInTheDocument();
 			expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument();
 			expect(screen.queryByText("the saved Claude Code login token expired")).not.toBeInTheDocument();
 		});

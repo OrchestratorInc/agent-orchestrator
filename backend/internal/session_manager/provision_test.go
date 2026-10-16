@@ -617,6 +617,26 @@ func TestResolveClaudeModelAllowsCatalogStaleFromExpiredLogin(t *testing.T) {
 	if err != nil || resolved.Model != "claude-opus-5-5" || resolved.Effort != "high" {
 		t.Fatalf("unlisted model = %#v, %v; want launch left to the CLI", resolved, err)
 	}
+	resolved, err = spawn("claude-opus-5-5", "")
+	if err != nil || resolved.Model != "claude-opus-5-5" || resolved.Effort != "" {
+		t.Fatalf("unlisted model without effort = %#v, %v; want launch left to the CLI", resolved, err)
+	}
+
+	// Against the account's own last-known list, an unlisted ID is not passed
+	// through: it is more likely a typo than a newly released model.
+	succeeded := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	accountScoped := expired
+	accountScoped.LastSuccessAt = &succeeded
+	m.modelCatalog = tuningCatalog{catalog: accountScoped}
+	if _, err := spawn("claude-opus-5-5", "high"); !errors.Is(err, ErrUnsupportedModel) {
+		t.Fatalf("unlisted model on account-scoped catalog error = %v, want ErrUnsupportedModel", err)
+	}
+	if _, err := spawn("claude-opus-5-5", ""); !errors.Is(err, ErrUnsupportedModel) {
+		t.Fatalf("unlisted model without effort on account-scoped catalog error = %v, want ErrUnsupportedModel", err)
+	}
+	if resolved, err := spawn("claude-sonnet-5-5", "medium"); err != nil || resolved.Effort != "medium" {
+		t.Fatalf("listed model on account-scoped catalog = %#v, %v; want launch", resolved, err)
+	}
 
 	expired.WarningCode = ports.ModelCatalogWarningAuthRequired
 	m.modelCatalog = tuningCatalog{catalog: expired}

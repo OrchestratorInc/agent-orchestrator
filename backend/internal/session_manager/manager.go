@@ -1703,9 +1703,12 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	// A catalog left stale only because the stored login's access token expired
 	// (its refresh token still in date) must not block the launch: Claude Code
 	// renews the token when it starts. The stale list still validates what it
-	// knows; anything it lacks is left to the CLI.
+	// knows. Models it lacks are left to the CLI only when there is no
+	// account-scoped list (the built-in fallback); against the account's own
+	// last-known list an unlisted ID is more likely a typo than a new release.
 	renewableLogin := catalog.Stale && catalog.WarningCode == ports.ModelCatalogWarningAuthExpired &&
 		cfg.Harness == domain.HarnessClaudeCode
+	unlistedToCLI := renewableLogin && catalog.LastSuccessAt == nil
 	if catalog.Stale && validateClaudeModel && !renewableLogin {
 		return ports.AgentConfig{}, fmt.Errorf("%w for model %q: catalog is stale", ports.ErrModelCapabilitiesUnavailable, modelID)
 	}
@@ -1716,7 +1719,7 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 			break
 		}
 	}
-	if validateClaudeModel && selected == nil && !renewableLogin {
+	if validateClaudeModel && selected == nil && !unlistedToCLI {
 		return ports.AgentConfig{}, fmt.Errorf("%w: model %q is not in the active provider catalog", ErrUnsupportedModel, modelID)
 	}
 	if selected != nil && selected.RequiresVersion != "" {
@@ -1738,7 +1741,7 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 			resolved.Effort = ""
 		}
 	}
-	if resolved.Effort == "" || (renewableLogin && selected == nil) {
+	if resolved.Effort == "" || (unlistedToCLI && selected == nil) {
 		return resolved, nil
 	}
 	if (catalog.Stale && !renewableLogin) || selected == nil {
