@@ -23,6 +23,16 @@ type ChatVersionRefresher interface {
 	SwitchToInstalledRelease(ctx context.Context, id domain.SessionID, minIdle time.Duration) (bool, error)
 }
 
+// ChatWakeWaiter waits for the provider start a version move set off, so the
+// move keeps its permit until the new process is up.
+type ChatWakeWaiter interface {
+	WaitForWake(ctx context.Context, id domain.SessionID) error
+}
+
+// versionMoveWakeTimeout bounds how long a move waits for its provider to
+// start: the wake's own limit plus delivering what queued meanwhile.
+const versionMoveWakeTimeout = 2 * time.Minute
+
 // MarkHarnessUpdated records that an update to version replaced the release
 // every live launch of harness started from. The installer calls it while it
 // still holds the harness, so no launch on the new release is marked.
@@ -79,47 +89,85 @@ func (m *Manager) RefreshStaleChats(ctx context.Context, minIdle time.Duration) 
 }
 
 func (m *Manager) refreshStaleChat(ctx context.Context, refresher ChatVersionRefresher, id domain.SessionID, minIdle time.Duration) error {
+	stopped, err := m.stopStaleChat(ctx, refresher, id, minIdle)
+	if err != nil || !stopped {
+		return err
+	}
+	// The provider starts in the background once the claim above is released.
+	// Wait for it here, still holding the caller's permit, so no more than
+	// maxConcurrentVersionMoves providers start at once.
+	waiter, ok := m.chat.(ChatWakeWaiter)
+	if !ok {
+		return nil
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, versionMoveWakeTimeout)
+	defer cancel()
+	if err := waiter.WaitForWake(waitCtx, id); err != nil {
+		return fmt.Errorf("wait for the provider to start: %w", err)
+	}
+	return nil
+}
+
+// stopStaleChat stops the provider under the hibernation claim and sets off
+// its start on the installed release. It reports whether it stopped it.
+func (m *Manager) stopStaleChat(ctx context.Context, refresher ChatVersionRefresher, id domain.SessionID, minIdle time.Duration) (bool, error) {
 	operationCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	// The same claim idle hibernation takes: a restore, kill or switch in
 	// progress keeps the session as it is until the next sweep.
 	if err := m.beginAgentOperation(operationCtx, id, agentOperationHibernate); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
-			return nil
+			return false, nil
 		}
-		return err
+		return false, err
 	}
 	defer m.endAgentOperation(id, agentOperationHibernate)
 	active, err := m.hasActiveInterfaceTransition(operationCtx, id)
 	if err != nil || active {
-		return err
+		return false, err
 	}
 	// The wake runs in the background and waits for this claim.
-	_, err = refresher.SwitchToInstalledRelease(operationCtx, id, minIdle)
-	return err
+	return refresher.SwitchToInstalledRelease(operationCtx, id, minIdle)
 }
 
 // maxConcurrentVersionMoves bounds sessions restarted at once, as Account
 // Manager's session moves do (#6274): each restart starts a provider process.
 const maxConcurrentVersionMoves = 4
 
-// forEachVersionMove runs move for each session, at most four at a time.
+// versionMoveSlots is the permit every move to a new release holds, from a
+// sweep or a turn end alike, until the session's new process has started.
+type versionMoveSlots struct {
+	once  sync.Once
+	slots chan struct{}
+}
+
+// acquire takes a permit, waiting while maxConcurrentVersionMoves are held.
+func (v *versionMoveSlots) acquire(ctx context.Context) (func(), error) {
+	v.once.Do(func() { v.slots = make(chan struct{}, maxConcurrentVersionMoves) })
+	select {
+	case v.slots <- struct{}{}:
+		return func() { <-v.slots }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// forEachVersionMove runs move for each session, at most four at a time
+// across every move in flight.
 func (m *Manager) forEachVersionMove(ctx context.Context, ids []domain.SessionID, move func(context.Context, domain.SessionID) error) error {
-	slots := make(chan struct{}, maxConcurrentVersionMoves)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var errs []error
 	for _, id := range ids {
-		select {
-		case slots <- struct{}{}:
-		case <-ctx.Done():
+		release, err := m.versionMoves.acquire(ctx)
+		if err != nil {
 			wg.Wait()
-			return errors.Join(append(errs, ctx.Err())...)
+			return errors.Join(append(errs, err)...)
 		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			defer func() { <-slots }()
+			defer release()
 			if err := move(ctx, id); err != nil {
 				mu.Lock()
 				errs = append(errs, err)
@@ -200,6 +248,12 @@ func (m *Manager) RetryVersionMoves(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("resume %s after a failed version move: %w", id, err))
 			continue
 		}
+		if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat && m.chat != nil {
+			// Messages sent while it was stopped stayed queued for this start.
+			if err := m.chat.DrainChatQueue(ctx, id); err != nil {
+				m.logger.Warn("could not deliver messages queued while the session was stopped", "sessionID", id, "error", err)
+			}
+		}
 		m.versionRetries.done(id)
 	}
 	return errors.Join(errs...)
@@ -214,32 +268,4 @@ func versionMoveStopped(rec domain.SessionRecord, chat ChatLauncher) bool {
 		return rec.Activity.State == domain.ActivityExited
 	}
 	return chat != nil && !chat.HasLiveChatController(rec.ID)
-}
-
-// launchFactsCarrier keeps a session's release facts across a live reconnect.
-type launchFactsCarrier interface {
-	CarryHarnessRelease(ctx context.Context, id domain.SessionID, oldLaunch, newLaunch string) error
-	CarryStaleBinary(ctx context.Context, id domain.SessionID, oldLaunch, newLaunch string) error
-}
-
-// carryHarnessRelease runs before the reconnect writes its new generation, so
-// the launch trigger finds the old release already recorded and keeps it.
-func (m *Manager) carryHarnessRelease(ctx context.Context, id domain.SessionID, oldLaunch, newLaunch string) {
-	carrier, ok := m.store.(launchFactsCarrier)
-	if !ok {
-		return
-	}
-	if err := carrier.CarryHarnessRelease(context.WithoutCancel(ctx), id, oldLaunch, newLaunch); err != nil {
-		m.logger.Warn("could not carry the running release across a Chat reconnect", "sessionID", id, "error", err)
-	}
-}
-
-func (m *Manager) carryStaleBinary(ctx context.Context, id domain.SessionID, oldLaunch, newLaunch string) {
-	carrier, ok := m.store.(launchFactsCarrier)
-	if !ok {
-		return
-	}
-	if err := carrier.CarryStaleBinary(context.WithoutCancel(ctx), id, oldLaunch, newLaunch); err != nil {
-		m.logger.Warn("could not carry the stale release mark across a Chat reconnect", "sessionID", id, "error", err)
-	}
 }

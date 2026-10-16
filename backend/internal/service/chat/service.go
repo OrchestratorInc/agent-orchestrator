@@ -95,6 +95,9 @@ type Service struct {
 	waking                map[domain.SessionID]int
 	wakeRuns              map[domain.SessionID]*wakeRun
 	backgroundWakes       map[domain.SessionID]bool
+	// updateStops are sessions stopped so an update could replace their
+	// executable; the update starts them again, so their queue is kept.
+	updateStops map[domain.SessionID]bool
 
 	runPromptSuggestion   func(context.Context, domain.SessionID, string, string, string) (string, error)
 	promptSuggestionSlots chan struct{}
@@ -254,9 +257,26 @@ func providerHostID(cfg StartConfig) domain.SessionID {
 // StartConfig opens a controller for a session.
 type StartConfig = ports.ChatControllerStart
 
+// liveControllerClaimer claims a generation for a Chat that reconnected to its
+// still-running provider and, in the same write, keeps the harness release and
+// stale-release mark the replaced generation recorded for that process.
+type liveControllerClaimer interface {
+	ClaimLiveChatControllerGeneration(ctx context.Context, session domain.SessionID, generation string) error
+}
+
 type reviewerConversationStore interface {
 	ConversationForReview(context.Context, string) (domain.ConversationRecord, error)
 	GetReviewByID(context.Context, string) (domain.Review, bool, error)
+}
+
+// claimChatController claims generation for the session. A live reconnect
+// keeps the old provider process, so it carries what that process runs in the
+// same write as the claim.
+func (s *Service) claimChatController(ctx context.Context, id domain.SessionID, generation string, liveReconnect bool) error {
+	if claimer, ok := s.store.(liveControllerClaimer); ok && liveReconnect {
+		return claimer.ClaimLiveChatControllerGeneration(ctx, id, generation)
+	}
+	return s.store.ClaimChatControllerGeneration(ctx, id, generation)
 }
 
 // ControllerCommit is the conversation state committed by ControllerReady.
@@ -855,7 +875,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 				}
 				return nil, errors.New("reviewer chat controller ownership changed")
 			}
-		} else if err := s.store.ClaimChatControllerGeneration(ctx, cfg.SessionID, generation); err != nil {
+		} else if err := s.claimChatController(ctx, cfg.SessionID, generation, liveReconnect); err != nil {
 			_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
 			return nil, fmt.Errorf("claim chat controller: %w", err)
 		}

@@ -226,26 +226,119 @@ func TestFailedManagedInstallLeavesTheCurrentReleaseAlone(t *testing.T) {
 	}
 }
 
-func TestCleanupKeepsTheReleaseCurrentPointsAtAfterAFailedRecord(t *testing.T) {
+func TestFailedRecordSwitchesBackToThePreviousRelease(t *testing.T) {
 	f := newManagedCodexFixture(t, nil)
 	if job := f.update(t, "1.1.0"); job.Status != StatusSucceeded {
 		t.Fatalf("first update = %+v", job)
 	}
-	// The switch to v2 happens, then recording it fails: managed.json still
-	// names v1 while current already points at v2.
+	// The switch to v2 happens, then recording it fails: launches would run
+	// v2 while recording v1, so the update switches back.
 	f.releases.failSet = true
 	if job := f.update(t, "1.2.0"); job.Status != StatusFailed {
 		t.Fatalf("update with a failed record = %+v", job)
 	}
-	if target, _ := os.Readlink(filepath.Join(f.root, "codex", "current")); target != filepath.Join("versions", "v2") {
-		t.Fatalf("current = %q, want the switched-to v2", target)
+	if target, _ := os.Readlink(filepath.Join(f.root, "codex", "current")); target != filepath.Join("versions", "v1") {
+		t.Fatalf("current = %q, want v1 back", target)
 	}
+	if _, err := os.Stat(filepath.Join(f.root, "codex", "versions", "v2")); !os.IsNotExist(err) {
+		t.Fatalf("the unrecorded release was kept: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.root, "codex", unsettledMarker)); !os.IsNotExist(err) {
+		t.Fatalf("a switch that was undone left the target unsettled: %v", err)
+	}
+}
+
+func TestUnsettledSwitchKeepsEveryReleaseWhileSessionsRun(t *testing.T) {
+	live := []domain.SessionRecord{{ID: "codex-1", Harness: domain.HarnessCodex}}
+	f := newManagedCodexFixture(t, live)
+	if job := f.update(t, "1.1.0"); job.Status != StatusSucceeded {
+		t.Fatalf("first update = %+v", job)
+	}
+	// Recording the switch to v2 fails, and so does switching back (a
+	// directory blocks the temporary link the switch needs).
+	if err := os.MkdirAll(filepath.Join(f.root, "codex", ".current-v1", "blocked"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.releases.failSet = true
+	if job := f.update(t, "1.2.0"); job.Status != StatusFailed {
+		t.Fatalf("update with a failed record and rollback = %+v", job)
+	}
+	if target, _ := os.Readlink(filepath.Join(f.root, "codex", "current")); target != filepath.Join("versions", "v2") {
+		t.Fatalf("current = %q, want v2 after the failed rollback", target)
+	}
+	if _, err := os.Stat(filepath.Join(f.root, "codex", unsettledMarker)); err != nil {
+		t.Fatalf("the unsettled switch was not marked: %v", err)
+	}
+
+	// A session launched meanwhile runs v2 but recorded v1. A later update
+	// succeeds, and cleanup must still keep v2 for it.
 	f.releases.failSet = false
+	if job := f.update(t, "1.3.0"); job.Status != StatusSucceeded {
+		t.Fatalf("later update = %+v", job)
+	}
+	f.releases.setInUse(domain.HarnessCodex, "v1")
 	f.s.RemoveUnusedManagedReleases(context.Background())
-	for _, name := range []string{"v1", "v2"} {
+	for _, name := range []string{"v1", "v2", "v3"} {
 		if _, err := os.Stat(filepath.Join(f.root, "codex", "versions", name)); err != nil {
-			t.Fatalf("cleanup deleted %s, which managed.json or current names: %v", name, err)
+			t.Fatalf("cleanup deleted %s while a session of the unsettled target ran: %v", name, err)
 		}
+	}
+
+	// Once no session is left, the old releases go and the target settles.
+	f.s.sessions = sessionListerStub{}
+	f.releases.setInUse(domain.HarnessCodex)
+	f.s.RemoveUnusedManagedReleases(context.Background())
+	for name, want := range map[string]bool{"v1": false, "v2": false, "v3": true} {
+		if _, err := os.Stat(filepath.Join(f.root, "codex", "versions", name)); (err == nil) != want {
+			t.Fatalf("%s present = %t, want %t", name, err == nil, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(f.root, "codex", unsettledMarker)); !os.IsNotExist(err) {
+		t.Fatalf("the target stayed unsettled with no session left: %v", err)
+	}
+}
+
+func TestFailedWindowsSwitchRestoresThePreviousJunction(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fixture stands in for the junction with a symlink")
+	}
+	for _, tt := range []struct {
+		name   string
+		cancel bool
+	}{{name: "mklink fails"}, {name: "update cancelled", cancel: true}} {
+		t.Run(tt.name, func(t *testing.T) {
+			targetDir := t.TempDir()
+			previous := filepath.Join(targetDir, "versions", "v1")
+			if err := os.MkdirAll(previous, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(previous, filepath.Join(targetDir, "current")); err != nil {
+				t.Fatal(err)
+			}
+			var links []string
+			s := newTestService("windows")
+			s.commands = commandRunnerFunc(func(ctx context.Context, argv []string, _, _ io.Writer) error {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				links = append(links, argv[len(argv)-1])
+				if strings.HasSuffix(argv[len(argv)-1], "v2") {
+					return errors.New("mklink failed")
+				}
+				return nil
+			})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tt.cancel {
+				cancel()
+			}
+			if err := s.switchManagedCurrent(ctx, targetDir, "v2"); err == nil {
+				t.Fatal("a failed switch reported success")
+			}
+			if len(links) == 0 || links[len(links)-1] != previous {
+				t.Fatalf("junctions created = %v, want the last to restore %s", links, previous)
+			}
+		})
 	}
 }
 

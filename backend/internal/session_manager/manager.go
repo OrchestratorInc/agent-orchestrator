@@ -550,6 +550,8 @@ type Manager struct {
 	updateStops updateStops
 	// versionRetries are sessions a version move could not start again.
 	versionRetries versionRetries
+	// versionMoves bounds the version moves restarting sessions at once.
+	versionMoves versionMoveSlots
 	// versionPolicy says whether and when sessions move to a new release;
 	// nil means they do not (see SetVersionRefreshPolicy).
 	versionPolicyMu sync.Mutex

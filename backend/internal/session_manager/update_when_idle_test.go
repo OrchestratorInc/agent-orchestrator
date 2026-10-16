@@ -2,6 +2,7 @@ package sessionmanager
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -80,5 +81,48 @@ func TestBusyHarnessSessionsKeepsATerminalThatCannotResume(t *testing.T) {
 	}
 	if len(busy) != 1 || busy[0].SessionID != "fresh-only" || busy[0].Reason != domain.SessionWaitResume {
 		t.Fatalf("busy = %+v, want only fresh-only waiting to resume", busy)
+	}
+}
+
+func TestResumeAfterUpdateDeliversWhatQueuedWhileStopped(t *testing.T) {
+	launcher := &recordingLauncher{}
+	mgr, store, _ := newChatManager(launcher)
+	seedChatResumeSession(store, domain.ActivityIdle)
+	rec := store.sessions["mer-1"]
+	at := time.Now().UTC()
+	rec.HibernatedAt = &at
+	store.sessions[rec.ID] = rec
+
+	if err := mgr.ResumeHarnessSessions(context.Background(), []domain.SessionID{rec.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if len(launcher.started) != 1 || len(launcher.drained) != 1 || launcher.drained[0] != rec.ID {
+		t.Fatalf("started=%d drained=%v, want one start and its queue delivered", len(launcher.started), launcher.drained)
+	}
+}
+
+func TestFailedResumeAfterUpdateIsRetriedWithoutTheUser(t *testing.T) {
+	providerErr := errors.New("provider failed to start")
+	launcher := &recordingLauncher{startErr: providerErr}
+	mgr, store, _ := newChatManager(launcher)
+	seedChatResumeSession(store, domain.ActivityIdle)
+	rec := store.sessions["mer-1"]
+	at := time.Now().UTC()
+	rec.HibernatedAt = &at
+	store.sessions[rec.ID] = rec
+
+	if err := mgr.ResumeHarnessSessions(context.Background(), []domain.SessionID{rec.ID}); !errors.Is(err, providerErr) {
+		t.Fatalf("resume error = %v, want the provider failure", err)
+	}
+	if pending := mgr.versionRetries.pending(); len(pending) != 1 || pending[0] != rec.ID {
+		t.Fatalf("retries = %v, want the session enrolled", pending)
+	}
+	// The provider recovers; the retry sweep starts it again.
+	launcher.startErr = nil
+	if err := mgr.RetryVersionMoves(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(launcher.started) != 2 || len(mgr.versionRetries.pending()) != 0 {
+		t.Fatalf("starts=%d retries=%v, want a second start and nothing left to retry", len(launcher.started), mgr.versionRetries.pending())
 	}
 }

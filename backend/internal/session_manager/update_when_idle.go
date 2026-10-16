@@ -212,6 +212,10 @@ func (m *Manager) ResumeHarnessSessions(ctx context.Context, ids []domain.Sessio
 	var errs []error
 	for _, id := range ids {
 		if err := m.resumeAfterUpdate(ctx, id); err != nil {
+			// The sweep that retries failed version moves starts it later, so
+			// a transient failure does not leave the session stopped.
+			m.versionRetries.note(id)
+			m.logger.Warn("could not resume a session after a harness update; retrying", "sessionID", id, "error", err)
 			errs = append(errs, fmt.Errorf("resume %s after update: %w", id, err))
 		}
 	}
@@ -228,10 +232,17 @@ func (m *Manager) resumeAfterUpdate(ctx context.Context, id domain.SessionID) er
 		return nil
 	}
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
-		if rec.HibernatedAt == nil {
+		// A wake that failed during the install cleared the hibernation mark
+		// but started nothing, so only a live provider is already resumed.
+		if rec.HibernatedAt == nil && m.chat != nil && m.chat.HasLiveChatController(id) {
 			return nil
 		}
-		return m.WakeHibernatedChat(ctx, id)
+		if err := m.WakeHibernatedChat(ctx, id); err != nil {
+			return err
+		}
+		// Messages sent while it was stopped stayed queued; deliver them now,
+		// as a wake does. A wake that already delivered them leaves none.
+		return m.chat.DrainChatQueue(ctx, id)
 	}
 	if err := m.beginAgentOperation(ctx, id, agentOperationResume); err != nil {
 		return err

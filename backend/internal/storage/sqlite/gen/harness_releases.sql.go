@@ -52,6 +52,20 @@ func (q *Queries) CarryStaleBinaryToLaunch(ctx context.Context, arg CarryStaleBi
 	return result.RowsAffected()
 }
 
+const getChatControllerGeneration = `-- name: GetChatControllerGeneration :one
+SELECT controller_generation FROM sessions
+WHERE id = ?1 AND session_mode = 'chat'
+`
+
+// The generation a live reconnect replaces, read in the transaction that claims
+// its successor.
+func (q *Queries) GetChatControllerGeneration(ctx context.Context, id domain.SessionID) (string, error) {
+	row := q.db.QueryRowContext(ctx, getChatControllerGeneration, id)
+	var controller_generation string
+	err := row.Scan(&controller_generation)
+	return controller_generation, err
+}
+
 const listHarnessReleasesInUse = `-- name: ListHarnessReleasesInUse :many
 SELECT DISTINCT r.release FROM session_harness_releases r
 JOIN sessions s ON s.id = r.session_id

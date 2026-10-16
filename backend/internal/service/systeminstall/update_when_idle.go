@@ -44,6 +44,10 @@ const (
 	harnessUseWait = 45 * time.Second
 )
 
+// EventHarnessResumeFailed records sessions an update stopped but could not
+// start again right away.
+const EventHarnessResumeFailed = "ao.harness.update_resume_failed"
+
 type idleUpdateRun struct {
 	cancelled chan struct{}
 	cancel    sync.Once
@@ -117,7 +121,7 @@ func (s *Service) runIdleUpdate(ctx context.Context, plan Plan, baseline *instal
 	for {
 		if ready := s.idleUpdateReady(ctx, coordinator, harness, job); ready {
 			if stopped, ok := s.runIdleBatch(ctx, coordinator, plan, baseline, job, run); ok {
-				s.resumeAfterIdleBatch(coordinator, stopped)
+				s.resumeAfterIdleBatch(target, coordinator, stopped)
 				return
 			}
 		}
@@ -195,12 +199,12 @@ func (s *Service) runIdleBatch(ctx context.Context, coordinator IdleUpdateCoordi
 	}
 	if err != nil {
 		release()
-		s.resumeAfterIdleBatch(coordinator, stopped)
+		s.resumeAfterIdleBatch(target, coordinator, stopped)
 		return nil, false
 	}
 	if transitionErr := s.transitionAgentJob(job, StatusInstalling, "", "", ""); transitionErr != nil {
 		release()
-		s.resumeAfterIdleBatch(coordinator, stopped)
+		s.resumeAfterIdleBatch(target, coordinator, stopped)
 		s.finishIdleUpdate(job, run, StatusFailed, fmt.Sprintf("persist installing state: %v", transitionErr))
 		return nil, true
 	}
@@ -225,13 +229,17 @@ func (s *Service) runIdleBatch(ctx context.Context, coordinator IdleUpdateCoordi
 	return stopped, true
 }
 
-func (s *Service) resumeAfterIdleBatch(coordinator IdleUpdateCoordinator, stopped []domain.SessionID) {
+func (s *Service) resumeAfterIdleBatch(target Target, coordinator IdleUpdateCoordinator, stopped []domain.SessionID) {
 	if len(stopped) == 0 {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(s.backgroundContext), 5*time.Minute)
 	defer cancel()
-	_ = coordinator.ResumeHarnessSessions(ctx, stopped)
+	// The coordinator retries a session it could not start again; report the
+	// failure rather than letting it pass unseen.
+	if err := coordinator.ResumeHarnessSessions(ctx, stopped); err != nil {
+		s.emit(EventHarnessResumeFailed, map[string]any{"harness": string(target), "sessions": len(stopped), "error": err.Error()})
+	}
 }
 
 func (s *Service) finishIdleUpdate(job *Job, run *idleUpdateRun, status Status, message string) {

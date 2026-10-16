@@ -36,3 +36,9 @@ WHERE NOT EXISTS (
         AND session_harness_releases.launch =
             (CASE WHEN s.session_mode = 'chat' THEN s.controller_generation ELSE s.runtime_launch_id END)
 );
+
+-- name: GetChatControllerGeneration :one
+-- The generation a live reconnect replaces, read in the transaction that claims
+-- its successor.
+SELECT controller_generation FROM sessions
+WHERE id = sqlc.arg(id) AND session_mode = 'chat';

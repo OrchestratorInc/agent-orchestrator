@@ -61,6 +61,12 @@ func (m *Manager) SessionTurnEnded(rec domain.SessionRecord) {
 		if !ok {
 			return
 		}
+		// The same permit sweeps take, so turn ends cannot start more.
+		release, err := m.versionMoves.acquire(ctx)
+		if err != nil {
+			return
+		}
+		defer release()
 		if chat {
 			if refresher, ok := m.chat.(ChatVersionRefresher); ok && policy.Chats {
 				_ = m.refreshStaleChat(ctx, refresher, id, policy.MinIdle)

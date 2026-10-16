@@ -121,3 +121,35 @@ func TestUpdateWithoutSessionsDefersNoCleanup(t *testing.T) {
 		t.Fatalf("ran %v without a kept keg", (*ran)[before:])
 	}
 }
+
+// gatedObserverStub reports a session on the kept keg only when counted under
+// the harness gate: an update finished between an earlier read and the gate.
+type gatedObserverStub struct {
+	updateObserverStub
+	held func() bool
+}
+
+func (o *gatedObserverStub) CountStaleBinarySessions(context.Context) (map[domain.AgentHarness]int64, error) {
+	if o.held() {
+		return map[domain.AgentHarness]int64{domain.AgentHarness(TargetKimi): 1}, nil
+	}
+	return nil, nil
+}
+
+func TestKeptKegCleanupCountsSessionsUnderTheHarnessGate(t *testing.T) {
+	s, ran := updateWhileRunningService(t, []domain.SessionRecord{{ID: "kimi-1", Harness: domain.AgentHarness(TargetKimi)}})
+	s.SetHarnessUpdateObserver(&updateObserverStub{stale: map[domain.AgentHarness]int64{domain.AgentHarness(TargetKimi): 1}})
+	if _, err := s.StartAgentOperation(context.Background(), TargetKimi, "homebrew", AgentOperationUpdate, ""); err != nil {
+		t.Fatal(err)
+	}
+	s.workers.Wait()
+	waitForStatus(t, s, TargetKimi, StatusSucceeded)
+
+	s.SetHarnessUpdateObserver(&gatedObserverStub{held: func() bool { return harnessHeld(s, domain.AgentHarness(TargetKimi)) }})
+	s.RunDeferredCleanups(context.Background())
+	for _, command := range *ran {
+		if len(command.Argv) == 3 && command.Argv[1] == "cleanup" {
+			t.Fatalf("ran %v on a count read before the harness gate", command.Argv)
+		}
+	}
+}

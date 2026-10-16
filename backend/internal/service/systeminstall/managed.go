@@ -260,17 +260,30 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 			return fmt.Errorf("the new copy reports %s, not %s", version, pin)
 		}
 	}
+	previous := s.currentManagedRelease(targetDir)
 	if err := s.switchManagedCurrent(ctx, targetDir, name); err != nil {
 		return err
 	}
-	keep = true
 	if s.releases != nil {
 		// Still under the harness lock: every launch from here on records this
 		// release, and every earlier launch recorded the one it started from.
-		if err := s.releases.SetManagedHarnessRelease(ctx, domain.AgentHarness(plan.Target), name, time.Now().UTC()); err != nil {
-			return fmt.Errorf("record the new release: %w", err)
+		// Recorded even if the update is cancelled now, so current and the
+		// database never disagree because of the cancel.
+		if err := s.releases.SetManagedHarnessRelease(context.WithoutCancel(ctx), domain.AgentHarness(plan.Target), name, time.Now().UTC()); err != nil {
+			recordErr := fmt.Errorf("record the new release: %w", err)
+			// Launches would run the new files while recording the old
+			// release, so switch back before anything launches.
+			if rollbackErr := s.restoreManagedCurrent(context.WithoutCancel(ctx), targetDir, previous); rollbackErr != nil {
+				// current and the database disagree: keep every release until
+				// no session that may have launched meanwhile is left.
+				keep = true
+				_ = os.WriteFile(filepath.Join(targetDir, unsettledMarker), nil, 0o600)
+				return errors.Join(recordErr, fmt.Errorf("restore the previous release: %w", rollbackErr))
+			}
+			return recordErr
 		}
 	}
+	keep = true
 	record := managedRecord{Method: plan.Method, Package: pkg, CLI: cli, Version: version, Dir: name, BinRel: binRel}
 	if err := s.ensureManagedLauncher(plan.Target, record); err != nil {
 		return err
@@ -303,6 +316,35 @@ func (s *Service) probeManagedVersion(ctx context.Context, target Target, binary
 	return version.display, nil
 }
 
+// unsettledMarker, in a target's directory, says an update switched current
+// but could neither record the switch nor undo it, so the releases sessions
+// recorded may not be the ones they run. Cleanup keeps every release of that
+// target until none of its sessions is left.
+const unsettledMarker = ".unsettled"
+
+// currentManagedRelease names the release <targetDir>/current points at, or
+// "" when there is none yet.
+func (s *Service) currentManagedRelease(targetDir string) string {
+	current, err := os.Readlink(filepath.Join(targetDir, "current"))
+	if err != nil {
+		return ""
+	}
+	return filepath.Base(current)
+}
+
+// restoreManagedCurrent points current back at previous after a switch that
+// could not be recorded. With no previous release it removes current: nothing
+// launched from it, since the launcher is written only after the record.
+func (s *Service) restoreManagedCurrent(ctx context.Context, targetDir, previous string) error {
+	if previous == "" {
+		if err := os.Remove(filepath.Join(targetDir, "current")); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return s.switchManagedCurrent(ctx, targetDir, previous)
+}
+
 // switchManagedCurrent points <targetDir>/current at versions/<name>. It runs
 // while the update holds the harness, so no session starts mid-switch.
 func (s *Service) switchManagedCurrent(ctx context.Context, targetDir, name string) error {
@@ -310,8 +352,18 @@ func (s *Service) switchManagedCurrent(ctx context.Context, targetDir, name stri
 	if s.goos == "windows" {
 		// Symlinks need a privilege on Windows; a junction does not. Replacing
 		// it is not atomic, which the harness lock makes harmless.
+		previous, _ := os.Readlink(current)
 		_ = os.Remove(current)
-		return s.commands.Run(ctx, []string{"cmd", "/c", "mklink", "/J", current, filepath.Join(targetDir, "versions", name)}, io.Discard, io.Discard)
+		err := s.commands.Run(ctx, []string{"cmd", "/c", "mklink", "/J", current, filepath.Join(targetDir, "versions", name)}, io.Discard, io.Discard)
+		if err != nil && previous != "" {
+			// A failed or cancelled switch must not leave the launcher
+			// pointing through a missing current: put the old junction back.
+			_ = os.Remove(current)
+			if restoreErr := s.commands.Run(context.WithoutCancel(ctx), []string{"cmd", "/c", "mklink", "/J", current, previous}, io.Discard, io.Discard); restoreErr != nil {
+				err = errors.Join(err, fmt.Errorf("restore the previous release: %w", restoreErr))
+			}
+		}
+		return err
 	}
 	tmp := filepath.Join(targetDir, ".current-"+name)
 	_ = os.Remove(tmp)
@@ -388,13 +440,25 @@ func (s *Service) RemoveUnusedManagedReleases(ctx context.Context) {
 		}
 		// Reviewers launch outside sessions, so no release row says which
 		// copy they run; keep every release until none is live.
-		if _, reviewers, err := s.harnessInUse(ctx, target); err != nil || len(reviewers) > 0 {
+		sessions, reviewers, err := s.harnessInUse(ctx, target)
+		if err != nil || len(reviewers) > 0 {
 			gate.Unlock()
 			continue
 		}
-		// current can be ahead of the record when an update switched it but
-		// failed or stopped before recording the switch; it is what launches
-		// run, so it is kept too. Without it, nothing is known to be safe.
+		// After a switch that was neither recorded nor undone, the release
+		// rows of launches since then cannot be trusted; wait for those
+		// sessions to end.
+		marker := filepath.Join(s.managedTargetDir(target), unsettledMarker)
+		if _, err := os.Stat(marker); err == nil {
+			if len(sessions) > 0 {
+				gate.Unlock()
+				continue
+			}
+			_ = os.Remove(marker)
+		}
+		// current can be ahead of managed.json when an update switched it but
+		// failed before writing the file; it is what launches run, so it is
+		// kept too. Without it, nothing is known to be safe.
 		current, err := os.Readlink(filepath.Join(s.managedTargetDir(target), "current"))
 		if err != nil {
 			gate.Unlock()

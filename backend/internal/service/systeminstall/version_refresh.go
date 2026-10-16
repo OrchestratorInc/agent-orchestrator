@@ -68,16 +68,19 @@ func (s *Service) RunDeferredCleanups(ctx context.Context) {
 	if len(pending) == 0 || observer == nil {
 		return
 	}
-	stale, err := observer.CountStaleBinarySessions(ctx)
-	if err != nil {
-		return
-	}
 	for target, formula := range pending {
-		if stale[domain.AgentHarness(target)] > 0 || ctx.Err() != nil {
+		if ctx.Err() != nil {
 			continue
 		}
 		gate := s.harnessGate(domain.AgentHarness(target))
 		if !gate.TryLock() {
+			continue
+		}
+		// Counted under the gate: an update that finished just before it
+		// may have left new sessions on the keg this cleanup removes.
+		stale, err := observer.CountStaleBinarySessions(ctx)
+		if err != nil || stale[domain.AgentHarness(target)] > 0 {
+			gate.Unlock()
 			continue
 		}
 		// Reviewers are not sessions, so the stale count above misses them.

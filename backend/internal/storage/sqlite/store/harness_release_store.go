@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -42,37 +44,45 @@ func (s *Store) PruneSessionHarnessReleases(ctx context.Context) error {
 	return nil
 }
 
-// CarryHarnessRelease records that newLaunch runs the release oldLaunch ran.
-// A live Chat reconnect calls it before the new controller generation is
-// written: the provider process is the same one, so the trigger that records
-// the current release for a new launch must not claim it moved.
-func (s *Store) CarryHarnessRelease(ctx context.Context, id domain.SessionID, oldLaunch, newLaunch string) error {
-	if oldLaunch == "" || newLaunch == "" || oldLaunch == newLaunch {
-		return nil
-	}
+// ClaimLiveChatControllerGeneration claims generation for a Chat that
+// reconnected to its still-running provider. In the same transaction it
+// carries the release the replaced generation ran, and its stale-release
+// mark, to the new one: the provider process is the same, and no cleanup can
+// prune the old generation's row between the claim and the carry.
+func (s *Store) ClaimLiveChatControllerGeneration(ctx context.Context, id domain.SessionID, generation string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if err := s.qw.CarryHarnessReleaseToLaunch(ctx, gen.CarryHarnessReleaseToLaunchParams{
-		NewLaunch: newLaunch, SessionID: string(id), OldLaunch: oldLaunch,
-	}); err != nil {
-		return fmt.Errorf("carry release of %s: %w", id, err)
-	}
-	return nil
-}
-
-// CarryStaleBinary moves a session's stale-release mark from oldLaunch to
-// newLaunch after a live Chat reconnect, so the reconnected process still
-// moves to the installed release once idle.
-func (s *Store) CarryStaleBinary(ctx context.Context, id domain.SessionID, oldLaunch, newLaunch string) error {
-	if oldLaunch == "" || newLaunch == "" || oldLaunch == newLaunch {
+	return s.inTx(ctx, fmt.Sprintf("claim live chat controller generation for %s", id), func(q *gen.Queries) error {
+		previous, err := q.GetChatControllerGeneration(ctx, id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("chat session not found")
+		}
+		if err != nil {
+			return err
+		}
+		rows, err := q.ClaimChatControllerGeneration(ctx, gen.ClaimChatControllerGenerationParams{
+			ControllerGeneration: generation,
+			ID:                   id,
+		})
+		if err != nil {
+			return err
+		}
+		if rows == 0 {
+			return errors.New("chat session not found")
+		}
+		if previous == "" || previous == generation {
+			return nil
+		}
+		if err := q.CarryHarnessReleaseToLaunch(ctx, gen.CarryHarnessReleaseToLaunchParams{
+			NewLaunch: generation, SessionID: string(id), OldLaunch: previous,
+		}); err != nil {
+			return fmt.Errorf("carry release: %w", err)
+		}
+		if _, err := q.CarryStaleBinaryToLaunch(ctx, gen.CarryStaleBinaryToLaunchParams{
+			NewLaunch: generation, SessionID: id, OldLaunch: previous,
+		}); err != nil {
+			return fmt.Errorf("carry stale release mark: %w", err)
+		}
 		return nil
-	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	if _, err := s.qw.CarryStaleBinaryToLaunch(ctx, gen.CarryStaleBinaryToLaunchParams{
-		NewLaunch: newLaunch, SessionID: id, OldLaunch: oldLaunch,
-	}); err != nil {
-		return fmt.Errorf("carry stale release mark of %s: %w", id, err)
-	}
-	return nil
+	})
 }

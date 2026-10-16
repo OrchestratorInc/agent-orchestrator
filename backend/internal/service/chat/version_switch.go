@@ -25,6 +25,28 @@ func (s *Service) SwitchToInstalledRelease(ctx context.Context, id domain.Sessio
 	return true, nil
 }
 
+// WaitForWake returns once no wake of id is in flight: the provider has
+// started on the installed release and taken what queued meanwhile, or failed
+// to. A move to a new release waits for it so it holds its concurrency permit
+// through the provider's start, not only its stop.
+func (s *Service) WaitForWake(ctx context.Context, id domain.SessionID) error {
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		s.wakeMu.Lock()
+		waking := s.backgroundWakes[id] || s.wakeRuns[id] != nil
+		s.wakeMu.Unlock()
+		if !waking {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
 // switchBeforeSend moves a session still on a replaced release to the
 // installed one before it takes the user's next message, when it has been
 // quiet long enough that its prompt cache is gone. Any work in flight, queued

@@ -55,17 +55,12 @@ func TestLaunchesRecordTheManagedReleaseTheyRun(t *testing.T) {
 	}
 
 	// An update switches to v2. The chat reconnects live to its old process:
-	// the release carries over before the new generation is written, so the
-	// launch trigger keeps it on v1 instead of claiming v2.
+	// its claim of the new generation carries the release over, so the launch
+	// trigger keeps it on v1 instead of claiming v2.
 	if err := s.SetManagedHarnessRelease(ctx, domain.HarnessCodex, "v2", now); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CarryHarnessRelease(ctx, chat.ID, "gen-1", "gen-2"); err != nil {
-		t.Fatal(err)
-	}
-	current, _, _ = s.GetSession(ctx, chat.ID)
-	current.Metadata.ControllerGeneration = "gen-2"
-	if err := s.UpdateSession(ctx, current); err != nil {
+	if err := s.ClaimLiveChatControllerGeneration(ctx, chat.ID, "gen-2"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.PruneSessionHarnessReleases(ctx); err != nil {
@@ -95,28 +90,48 @@ func TestLaunchesRecordTheManagedReleaseTheyRun(t *testing.T) {
 	}
 }
 
-func TestStaleMarkCarriesAcrossALiveReconnect(t *testing.T) {
+// A live reconnect claims its generation and keeps its process's release in
+// one write, so a cleanup prune right after the claim still sees v1 in use.
+func TestLiveClaimKeepsTheOldReleaseThroughAPrune(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
 	seedProject(t, s, "mer")
+	now := time.Now().UTC()
+	if err := s.SetManagedHarnessRelease(ctx, domain.HarnessCodex, "v1", now); err != nil {
+		t.Fatal(err)
+	}
 	rec := sampleRecord("mer")
 	rec.Harness, rec.Mode, rec.Metadata.ControllerGeneration = domain.HarnessCodex, domain.SessionModeChat, "gen-1"
 	chat, err := s.CreateSession(ctx, rec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.MarkHarnessSessionsStale(ctx, domain.HarnessCodex, "2.0.0", time.Now().UTC()); err != nil {
+	if err := s.SetManagedHarnessRelease(ctx, domain.HarnessCodex, "v2", now); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := s.MarkHarnessSessionsStale(ctx, domain.HarnessCodex, "2.0.0", now); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.ClaimLiveChatControllerGeneration(ctx, chat.ID, "gen-2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PruneSessionHarnessReleases(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.ListHarnessReleasesInUse(ctx, domain.HarnessCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []string{"v1"}) {
+		t.Fatalf("in use after a live claim and prune = %v, want [v1]", got)
 	}
 	current, _, _ := s.GetSession(ctx, chat.ID)
-	current.Metadata.ControllerGeneration = "gen-2"
-	if err := s.UpdateSession(ctx, current); err != nil {
-		t.Fatal(err)
+	if current.Metadata.ControllerGeneration != "gen-2" {
+		t.Fatalf("generation = %q, want gen-2", current.Metadata.ControllerGeneration)
 	}
-	if err := s.CarryStaleBinary(ctx, chat.ID, "gen-1", "gen-2"); err != nil {
-		t.Fatal(err)
-	}
-	if got, _, _ := s.GetSession(ctx, chat.ID); got.StaleBinary == nil || got.StaleBinary.Version != "2.0.0" {
-		t.Fatalf("stale mark after a live reconnect = %+v", got.StaleBinary)
+	if current.StaleBinary == nil || current.StaleBinary.Version != "2.0.0" {
+		t.Fatalf("stale mark after a live claim = %+v, want it kept on gen-2", current.StaleBinary)
 	}
 }

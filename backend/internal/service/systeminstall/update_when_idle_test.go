@@ -15,12 +15,13 @@ import (
 // idleCoordinatorStub stands in for Session Manager. Stopping a session puts
 // it to sleep, so the installer no longer sees it as live.
 type idleCoordinatorStub struct {
-	mu       sync.Mutex
-	sessions *[]domain.SessionRecord
-	busy     []domain.SessionWait
-	stops    int
-	resumed  [][]domain.SessionID
-	stopErr  error
+	mu        sync.Mutex
+	sessions  *[]domain.SessionRecord
+	busy      []domain.SessionWait
+	stops     int
+	resumed   [][]domain.SessionID
+	stopErr   error
+	resumeErr error
 }
 
 func (c *idleCoordinatorStub) BusyHarnessSessions(context.Context, domain.AgentHarness) ([]domain.SessionWait, error) {
@@ -49,7 +50,7 @@ func (c *idleCoordinatorStub) ResumeHarnessSessions(_ context.Context, ids []dom
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.resumed = append(c.resumed, ids)
-	return nil
+	return c.resumeErr
 }
 
 type mutableSessionLister struct {
@@ -224,4 +225,38 @@ func TestLaunchWaitsForAHarnessChangeInsteadOfFailing(t *testing.T) {
 	if time.Since(started) < 250*time.Millisecond {
 		t.Fatal("launch did not wait for the batch")
 	}
+}
+
+// eventRecorder keeps the telemetry events a test emitted.
+type eventRecorder struct {
+	mu     sync.Mutex
+	events []ports.TelemetryEvent
+}
+
+func (r *eventRecorder) Emit(_ context.Context, ev ports.TelemetryEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, ev)
+}
+
+func (*eventRecorder) Close(context.Context) error { return nil }
+
+func TestIdleUpdateReportsSessionsItCouldNotResume(t *testing.T) {
+	s, coordinator, _ := windowsIdleService(t, false)
+	coordinator.resumeErr = errors.New("provider did not start")
+	events := &eventRecorder{}
+	s.SetTelemetry(events)
+	if _, err := s.StartAgentOperation(context.Background(), TargetAuggie, "npm", AgentOperationUpdate, ""); err != nil {
+		t.Fatal(err)
+	}
+	waitForJob(t, s, TargetAuggie, func(job Job) bool { return job.Status == StatusSucceeded || job.Status == StatusFailed })
+	s.workers.Wait()
+	events.mu.Lock()
+	defer events.mu.Unlock()
+	for _, ev := range events.events {
+		if ev.Name == EventHarnessResumeFailed && ev.Payload["harness"] == string(TargetAuggie) && ev.Payload["error"] == "provider did not start" {
+			return
+		}
+	}
+	t.Fatalf("no resume failure was reported: %+v", events.events)
 }
