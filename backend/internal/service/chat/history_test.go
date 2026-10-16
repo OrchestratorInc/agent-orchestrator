@@ -724,10 +724,11 @@ func newEditHarnessWithOptions(
 	})
 	svc := chatsvc.New(chatsvc.Options{
 		Store: wrapStore(st), Sessions: st,
-		Reader:   wrapReader(reader),
-		Drivers:  fakeRegistry{driver: driver},
-		Log:      slog.New(slog.DiscardHandler),
-		Activity: activity,
+		Reader:     wrapReader(reader),
+		PageReader: boundedSnapshotReader(st),
+		Drivers:    fakeRegistry{driver: driver},
+		Log:        slog.New(slog.DiscardHandler),
+		Activity:   activity,
 		NewID: func() string {
 			idMu.Lock()
 			defer idMu.Unlock()

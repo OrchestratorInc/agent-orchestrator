@@ -2,6 +2,7 @@ export const MAX_FILE_ANNOTATION_MESSAGE_LENGTH = 4096;
 
 const MAX_FEEDBACK_LENGTH = 1800;
 const MAX_LINE_TEXT_LENGTH = 700;
+const MAX_QUOTE_LENGTH = 1200;
 // A chat reference is appended to a Chat turn rather than sent through the
 // 4096-character relay, but it still bounds what one chip can pull in.
 const MAX_CHAT_REFERENCE_CODE_LENGTH = 8000;
@@ -16,6 +17,8 @@ export type FileAnnotationTarget = {
 	newLine?: number;
 	lineKind?: "context" | "add" | "del";
 	lineText?: string;
+	/** Text selected in a rendered view (an artifact preview), the comment's subject. */
+	quote?: string;
 	scope?: string;
 	workspaceVersion?: string;
 	fileFingerprint?: string;
@@ -77,7 +80,9 @@ export function formatFileAnnotationMessages(comments: FileAnnotationComment[]):
 
 function commentLines(target: FileAnnotationTarget, feedback: string): string[] {
 	const location =
-		target.side === "file"
+		target.quote != null
+			? "Selected text"
+			: target.side === "file"
 			? "Entire file"
 			: `${target.side === "old" ? "Old" : "New"} side, line ${target.line ?? "unknown"}`;
 	return [
@@ -93,6 +98,7 @@ function commentLines(target: FileAnnotationTarget, feedback: string): string[] 
 		target.newLine != null ? `- New line: ${target.newLine}` : null,
 		target.lineKind ? `- Diff line type: ${target.lineKind}` : null,
 		target.lineText != null ? `- Code: ${compactText(target.lineText, MAX_LINE_TEXT_LENGTH) || "(blank line)"}` : null,
+		target.quote != null ? `- Selected text: ${compactText(target.quote, MAX_QUOTE_LENGTH)}` : null,
 		target.scope ? `- Comparison scope: ${compactText(target.scope, 40)}` : null,
 		target.workspaceVersion ? `- Workspace version: ${compactText(target.workspaceVersion, 160)}` : null,
 		target.fileFingerprint ? `- File fingerprint: ${compactText(target.fileFingerprint, 160)}` : null,

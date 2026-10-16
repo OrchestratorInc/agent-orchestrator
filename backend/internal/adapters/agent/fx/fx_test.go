@@ -46,6 +46,9 @@ func TestGetLaunchCommandMapsEnvironmentOverrides(t *testing.T) {
 	}{
 		{name: "empty defaults omitted", want: []string{"fx"}},
 		{name: "default permissions omitted", permissions: ports.PermissionModeDefault, want: []string{"fx"}},
+		{name: "qualified native model preserved exactly", model: "fx:codex:  native/model  ", want: []string{"env", "FX_PROVIDER=codex", "FX_MODEL=  native/model  ", "fx"}},
+		{name: "catalog provider selection", model: "fx:codex:openai/shared", want: []string{"env", "FX_PROVIDER=codex", "FX_MODEL=openai/shared", "fx"}},
+		{name: "catalog custom connection", model: "fx:local:org/model:latest", want: []string{"env", "FX_PROVIDER=local", "FX_MODEL=org/model:latest", "fx"}},
 		{name: "model preserved exactly", model: "  anthropic/claude-sonnet-4-6  ", want: []string{"env", "FX_MODEL=  anthropic/claude-sonnet-4-6  ", "fx"}},
 		{name: "accept edits", permissions: ports.PermissionModeAcceptEdits, want: []string{"env", "FX_PERMISSION_MODE=ask", "fx"}},
 		{name: "auto", permissions: ports.PermissionModeAuto, want: []string{"env", "FX_PERMISSION_MODE=auto", "fx"}},
@@ -227,5 +230,16 @@ func TestAdapterMethodsHonorCanceledContext(t *testing.T) {
 	}
 	if _, _, err := plugin.SessionInfo(ctx, ports.SessionRef{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("SessionInfo error = %v, want context.Canceled", err)
+	}
+}
+
+func TestRestorePreservesCatalogProviderSelection(t *testing.T) {
+	got, ok, err := (&Plugin{resolvedBinary: "fx"}).GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		Config:  ports.AgentConfig{Model: "fx:codex:openai/shared"},
+		Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "native-session"}},
+	})
+	want := []string{"env", "FX_PROVIDER=codex", "FX_MODEL=openai/shared", "fx", "resume", "native-session"}
+	if err != nil || !ok || !reflect.DeepEqual(got, want) {
+		t.Fatalf("restore = %v, %v, %v; want %v", got, ok, err, want)
 	}
 }
