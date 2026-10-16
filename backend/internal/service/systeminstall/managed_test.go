@@ -298,6 +298,57 @@ func TestUnsettledSwitchKeepsEveryReleaseWhileSessionsRun(t *testing.T) {
 	}
 }
 
+// A daemon that dies after switching current and before recording the
+// switch leaves its mark; startup records the release current points at, and
+// cleanup keeps every release while a session that launched may still run it.
+func TestStartupReconcilesASwitchTheDaemonDiedIn(t *testing.T) {
+	live := []domain.SessionRecord{{ID: "codex-1", Harness: domain.HarnessCodex}}
+	f := newManagedCodexFixture(t, live)
+	if job := f.update(t, "1.1.0"); job.Status != StatusSucceeded {
+		t.Fatalf("first update = %+v", job)
+	}
+	targetDir := filepath.Join(f.root, "codex")
+	if _, err := os.Stat(filepath.Join(targetDir, unsettledMarker)); !os.IsNotExist(err) {
+		t.Fatalf("a recorded switch stayed marked: %v", err)
+	}
+	// The crash: v2 installed, marked, current switched, nothing recorded.
+	if err := os.CopyFS(filepath.Join(targetDir, "versions", "v2"), os.DirFS(filepath.Join(targetDir, "versions", "v1"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, unsettledMarker), []byte("v2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.switchManagedCurrent(context.Background(), targetDir, "v2"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.s.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.releases.mu.Lock()
+	recorded := f.releases.current[domain.HarnessCodex]
+	f.releases.mu.Unlock()
+	if recorded != "v2" {
+		t.Fatalf("release new launches record after startup = %q, want v2 (what current runs)", recorded)
+	}
+
+	// A launch before the crash recorded v1; one after startup records v2.
+	// The next update succeeds and its cleanup keeps both while they run.
+	f.releases.setInUse(domain.HarnessCodex, "v1", "v2")
+	if job := f.update(t, "1.3.0"); job.Status != StatusSucceeded {
+		t.Fatalf("next update = %+v", job)
+	}
+	f.s.RemoveUnusedManagedReleases(context.Background())
+	for _, name := range []string{"v1", "v2", "v3"} {
+		if _, err := os.Stat(filepath.Join(targetDir, "versions", name)); err != nil {
+			t.Fatalf("cleanup deleted %s after an interrupted switch while a session ran: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(targetDir, unsettledMarker)); err != nil {
+		t.Fatalf("the interrupted switch lost its mark on the next update: %v", err)
+	}
+}
+
 func TestFailedWindowsSwitchRestoresThePreviousJunction(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the fixture stands in for the junction with a symlink")

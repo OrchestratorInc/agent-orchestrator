@@ -261,7 +261,24 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 		}
 	}
 	previous := s.currentManagedRelease(targetDir)
+	// The switch is marked unsettled before current moves, so a daemon that
+	// dies before recording it leaves the mark for startup to reconcile.
+	marker := filepath.Join(targetDir, unsettledMarker)
+	_, statErr := os.Stat(marker)
+	wasUnsettled := statErr == nil
+	settle := func() {
+		// An earlier unsettled switch keeps its mark until its sessions end.
+		if !wasUnsettled {
+			_ = os.Remove(marker)
+		}
+	}
+	if s.releases != nil && !wasUnsettled {
+		if err := writeFileAtomic(marker, []byte(name)); err != nil {
+			return fmt.Errorf("prepare release switch: %w", err)
+		}
+	}
 	if err := s.switchManagedCurrent(ctx, targetDir, name); err != nil {
+		settle()
 		return err
 	}
 	if s.releases != nil {
@@ -274,14 +291,16 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 			// Launches would run the new files while recording the old
 			// release, so switch back before anything launches.
 			if rollbackErr := s.restoreManagedCurrent(context.WithoutCancel(ctx), targetDir, previous); rollbackErr != nil {
-				// current and the database disagree: keep every release until
-				// no session that may have launched meanwhile is left.
+				// current and the database disagree: the mark stays, and
+				// every release is kept until no session that may have
+				// launched meanwhile is left.
 				keep = true
-				_ = os.WriteFile(filepath.Join(targetDir, unsettledMarker), nil, 0o600)
 				return errors.Join(recordErr, fmt.Errorf("restore the previous release: %w", rollbackErr))
 			}
+			settle()
 			return recordErr
 		}
+		settle()
 	}
 	keep = true
 	record := managedRecord{Method: plan.Method, Package: pkg, CLI: cli, Version: version, Dir: name, BinRel: binRel}
@@ -316,11 +335,38 @@ func (s *Service) probeManagedVersion(ctx context.Context, target Target, binary
 	return version.display, nil
 }
 
-// unsettledMarker, in a target's directory, says an update switched current
-// but could neither record the switch nor undo it, so the releases sessions
-// recorded may not be the ones they run. Cleanup keeps every release of that
-// target until none of its sessions is left.
+// unsettledMarker, in a target's directory, says an update is switching
+// current, or switched it but could neither record the switch nor undo it
+// (or the daemon died first), so the releases sessions recorded may not be
+// the ones they run. Cleanup keeps every release of that target until none of
+// its sessions is left.
 const unsettledMarker = ".unsettled"
+
+// ReconcileManagedReleases runs at daemon start, before any launch. A switch
+// the daemon died in the middle of left its mark: the release new launches
+// record is set to the one current points at, the files they run. The mark
+// stays, so launches recorded before this keep every release alive.
+func (s *Service) ReconcileManagedReleases(ctx context.Context) {
+	if s.managedRoot == "" || s.releases == nil {
+		return
+	}
+	entries, err := os.ReadDir(s.managedRoot)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Name() == "bin" {
+			continue
+		}
+		targetDir := s.managedTargetDir(Target(entry.Name()))
+		if _, err := os.Stat(filepath.Join(targetDir, unsettledMarker)); err != nil {
+			continue
+		}
+		if current := s.currentManagedRelease(targetDir); current != "" {
+			_ = s.releases.SetManagedHarnessRelease(ctx, domain.AgentHarness(entry.Name()), current, time.Now().UTC())
+		}
+	}
+}
 
 // currentManagedRelease names the release <targetDir>/current points at, or
 // "" when there is none yet.

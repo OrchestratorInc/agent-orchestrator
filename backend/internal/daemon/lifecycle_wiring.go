@@ -739,6 +739,20 @@ func (c chatLauncher) HibernateChatForUpdate(ctx context.Context, id domain.Sess
 	return c.svc.HibernateChatForUpdate(ctx, id)
 }
 
+// WaitForWake lets a version move hold its restart permit until the provider
+// it stopped has started again; without it the manager skips the wait.
+func (c chatLauncher) WaitForWake(ctx context.Context, id domain.SessionID) error {
+	return c.svc.WaitForWake(ctx, id)
+}
+
+// The manager discovers these optional capabilities by type assertion, so a
+// method the wrapper forgets to forward is lost silently.
+var (
+	_ sessionmanager.ChatWakeWaiter       = chatLauncher{}
+	_ sessionmanager.ChatVersionRefresher = chatLauncher{}
+	_ sessionmanager.ChatUpdateHibernator = chatLauncher{}
+)
+
 // ArmChatHandoff closes Chat intake and dispatch synchronously at transition
 // acceptance. PrepareChatHandoff then settles interrupt work or waits for drain
 // work before Session Manager stops the source. These methods intentionally live
