@@ -11,13 +11,13 @@ import (
 )
 
 var secretDiagnostic = regexp.MustCompile(`(?i)((?:api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|password|secret)["' :=]+)[^\s,"'}]+`)
-var bearerDiagnostic = regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9._~+/-]+`)
+var bearerDiagnostic = regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9._~+/=-]+`)
 
 // SafeDiagnostic bounds and redacts text from an isolated synthetic run. It
 // must not be used as authorization to read a real provider account's logs.
 func SafeDiagnostic(text string, limit int) string {
-	text = secretDiagnostic.ReplaceAllString(text, "${1}[redacted]")
 	text = bearerDiagnostic.ReplaceAllString(text, "Bearer [redacted]")
+	text = secretDiagnostic.ReplaceAllString(text, "${1}[redacted]")
 	text = strings.ReplaceAll(text, "ao-fixture-key", "[fixture-key]")
 	if len(text) > limit {
 		text = text[:limit] + "..."
@@ -38,7 +38,10 @@ func CaptureFailureLogs(t *testing.T, roots ...string) {
 		for _, root := range roots {
 			var files []string
 			_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-				if err != nil || entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+				if err != nil {
+					return err
+				}
+				if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 					return nil
 				}
 				if strings.HasSuffix(path, ".log") || strings.Contains(filepath.ToSlash(path), "/logs/") {

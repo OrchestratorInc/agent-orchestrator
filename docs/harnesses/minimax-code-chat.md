@@ -70,8 +70,18 @@ approval/rejection and side effects, executing-tool PID/kernel-start cancellatio
 with no delayed artifact, same-ID replacement-process load and native replay,
 fresh private context in the actual post-load model request, and missing-ID/cwd
 refusal. Default unit tests do not execute the native binary or contact a provider.
-The dedicated CI workflow runs this native test; ordinary backend CI owns unit
-and service regression suites.
+The [scoped CI workflow](../../.github/workflows/minimax-acp-conformance.yml)
+runs this native test, then qualifies candidate registration through an actual
+AO daemon if native conformance passes. It creates an explicit Go source overlay
+adding only the MiniMax constructor to the candidate registry and logs its source
+hash. The shipping registry is unchanged, with no runtime opt-in flag. The
+gated `TestNativeMiniMaxRegisteredChatAPI` checks settings, persisted Chat mode,
+streamed native work, idempotent send, offered approvals, executing-tool
+cancellation, daemon replacement, archive and exact restore with fresh context.
+Only the model endpoint is scripted; daemon HTTP, SQLite, worktree, detached host
+and released native CLI are real. Ordinary backend CI owns unit and service
+regression suites. Controlled API proof still does not establish actual UI or
+authenticated-provider coverage.
 
 A passing controlled endpoint test establishes those native/protocol cases only.
 Real account authorization, independent model instruction consumption, registered

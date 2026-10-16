@@ -77,7 +77,7 @@ func TestNativeMiniMaxRegisteredChatAPI(t *testing.T) {
 		t.Fatal("Chat did not persist a native identity and isolated workspace")
 	}
 	var location struct {
-		SessionID string `json:"sessionId"`
+		SessionID     string `json:"sessionId"`
 		WorkspacePath string `json:"workspacePath"`
 	}
 	d.mustCall("GET", "/desktop/sessions/"+session+"/workspace", http.StatusOK, nil, &location)
@@ -88,8 +88,8 @@ func TestNativeMiniMaxRegisteredChatAPI(t *testing.T) {
 
 	turnID, _ := send(t, d, session, "ao-edit", "minimax-edit-once")
 	var retry struct {
-		TurnID string `json:"turnId"`
-		Duplicate bool `json:"duplicate"`
+		TurnID    string `json:"turnId"`
+		Duplicate bool   `json:"duplicate"`
 	}
 	d.mustCall("POST", "/sessions/"+session+"/conversation/messages", http.StatusAccepted,
 		map[string]any{"text": "ao-edit", "clientMessageId": "minimax-edit-once"}, &retry)
@@ -241,7 +241,7 @@ func TestNativeMiniMaxRegisteredChatAPI(t *testing.T) {
 func setMiniMaxProjectRules(d *daemon, project, rules string) {
 	d.mustCall("PUT", "/projects/"+project+"/config", http.StatusOK, map[string]any{
 		"config": map[string]any{
-			"agentRules": rules,
+			"agentRules":  rules,
 			"agentConfig": map[string]any{"model": "custom_provider:ao/native-test", "permissions": "default"},
 		},
 	}, nil)
@@ -266,7 +266,7 @@ func miniMaxDecision(t *testing.T, approval activity, kind string) string {
 	t.Helper()
 	var detail struct {
 		Decisions []struct {
-			ID string `json:"id"`
+			ID   string `json:"id"`
 			Kind string `json:"kind"`
 		} `json:"decisions"`
 	}
@@ -283,7 +283,7 @@ func miniMaxDecision(t *testing.T, approval activity, kind string) string {
 }
 
 type miniMaxWitness struct {
-	PID int `json:"pid"`
+	PID   int    `json:"pid"`
 	Start string `json:"start"`
 }
 
@@ -356,13 +356,13 @@ func assertMiniMaxFile(t *testing.T, path, want string) {
 
 func assertMiniMaxDaemonOwnership(t *testing.T, d *daemon) {
 	t.Helper()
-	response, err := httpClient.Get(strings.TrimSuffix(d.baseURL, "/api/v1")+"/readyz")
+	response, err := httpClient.Get(strings.TrimSuffix(d.baseURL, "/api/v1") + "/readyz")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
 	var ready struct {
-		PID int `json:"pid"`
+		PID            int    `json:"pid"`
 		ExecutablePath string `json:"executablePath"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&ready); err != nil {

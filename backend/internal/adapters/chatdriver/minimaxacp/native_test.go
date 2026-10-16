@@ -288,6 +288,7 @@ func nativeTurn(ctx context.Context, t *testing.T, conv ports.ChatConversation, 
 func nativeWait(ctx context.Context, t *testing.T, conv ports.ChatConversation, ref ports.ChatTurnRef, handle func(ports.ChatEvent), completed bool) {
 	t.Helper()
 	deltas := 0
+	terminalSeen := false
 	var tail []string
 	defer func() {
 		if t.Failed() {
@@ -317,9 +318,25 @@ func nativeWait(ctx context.Context, t *testing.T, conv ports.ChatConversation, 
 				deltas++
 			}
 			if event.Kind == ports.ChatEventTurnCompleted {
-				if completed && (event.TurnState != domain.TurnStateCompleted || deltas < 2) {
+				if completed && (event.TurnState != domain.TurnStateCompleted || deltas < 2) || !completed && event.TurnState != domain.TurnStateInterrupted {
 					t.Fatalf("native stream/settlement failed: state=%s, partial chunks=%d, error=%s", event.TurnState, deltas, testfixture.SafeDiagnostic(fmt.Sprint(event.Err), 1600))
 				}
+				// The standalone consumer must acknowledge the exact terminal
+				// receipt just as the daemon does after committing it. Without
+				// this, AO's host correctly refuses the next prompt; that is a
+				// fixture error, not a native permission or follow-up failure.
+				acknowledger, ok := conv.(ports.ChatProviderEventAcknowledger)
+				if !ok || event.ProviderEventID == "" {
+					t.Fatal("native persistent-host completion has no acknowledgeable receipt")
+				}
+				if err := acknowledger.AcknowledgeProviderEvent(ctx, event.ProviderEventID); err != nil {
+					t.Fatalf("acknowledge observed native terminal receipt: %v", err)
+				}
+				terminalSeen = true
+			}
+			// Ready follows release of the in-memory active turn. A terminal
+			// event alone is not permission to race a fresh SendTurn call.
+			if terminalSeen && event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerReady {
 				return
 			}
 		case <-ctx.Done():
