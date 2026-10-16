@@ -826,10 +826,12 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		});
 	}, [hostId, isCloudProject, openGlobalSettings, selectedAgent]);
 	// An expired login whose refresh token is still in date needs nothing from
-	// the user: the task starts and the agent renews the token as it launches.
+	// the user on this computer: its daemon lets the task start and the agent
+	// renews the token as it launches. A remote host may run an older daemon
+	// that still rejects the spawn for a stale catalog, so keep the notice there.
 	const modelWarning = isCloudProject
 		? cloudModelWarning ?? (localCatalogForCloud ? modelWarningText : undefined)
-		: modelAuthIssue === "expired" ? undefined : modelAuthIssue ? (
+		: modelAuthIssue === "expired" && !hostId ? undefined : modelAuthIssue ? (
 		<ModelCatalogNotice
 			agentLabel={selectedAgentLabel}
 			detail={modelWarningText}

@@ -2617,6 +2617,24 @@ describe("TaskComposer", () => {
 			expect(screen.queryByText("the saved Claude Code login token expired")).not.toBeInTheDocument();
 		});
 
+		// A remote host may run an older daemon that still refuses the spawn for a
+		// stale catalog, so it keeps the notice and its Log in shortcut.
+		it("keeps the expired-login notice for a remote host", async () => {
+			const claude = agentReadiness("claude-code", "Claude Code", { authentication: "configured" });
+			h.agentCatalog = { agents: [claude] };
+			h.remoteGet.mockImplementation(async (path: string) => {
+				if (path.includes("/models")) return { data: claudeCatalog({ warning: "the saved Claude Code login token expired", warningCode: "auth_expired" }) };
+				if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: [] } };
+				return { data: { status: "ok", project: { id: "project-a", config: { worker: { agent: "claude-code" } } } } };
+			});
+			h.remotePost.mockImplementation(async (path: string) => path === "/api/v1/agents/readiness/ensure"
+				? { data: { agents: [claude] } }
+				: { data: {} });
+			render(<Wrap><TaskComposer hostId="box-a" projectId="project-a" onCreated={vi.fn()} /></Wrap>);
+			expect(await screen.findByTestId("model-catalog-notice")).toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "Log in" })).toBeInTheDocument();
+		});
+
 		it("recognizes a login error from a daemon that predates warning codes", async () => {
 			serveClaude(() => claudeCatalog({ warning: expiredDetail }));
 			render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
