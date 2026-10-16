@@ -4210,6 +4210,21 @@ func (s *Store) ProviderEventsSince(
 	return rows, nil
 }
 
+// PruneSettledProviderDeltas deletes at most limit archived message and
+// reasoning deltas that carry no provider event id and whose turn completed
+// before settledBefore, oldest first, in one statement on the writer. Rows with
+// an id, command output, and every settled event stay; see the query for why.
+func (s *Store) PruneSettledProviderDeltas(ctx context.Context, settledBefore time.Time, limit int64) (int64, error) {
+	n, err := s.qw.PruneSettledProviderEventDeltas(ctx, gen.PruneSettledProviderEventDeltasParams{
+		SettledBefore: sql.NullTime{Time: settledBefore.UTC(), Valid: true},
+		BatchLimit:    limit,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("prune settled provider deltas before %s: %w", settledBefore.UTC().Format(time.RFC3339), err)
+	}
+	return n, nil
+}
+
 // RetryPrompt returns the durable human prompt of a failed turn, for
 // re-dispatching it as a new turn. The content is loaded from AO's own rows
 // rather than from a client request that could be stale or substituted.

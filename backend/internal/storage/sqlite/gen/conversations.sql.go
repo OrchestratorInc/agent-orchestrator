@@ -1710,6 +1710,52 @@ func (q *Queries) PostponeConversationTurnAutoResume(ctx context.Context, arg Po
 	return result.RowsAffected()
 }
 
+const pruneSettledProviderEventDeltas = `-- name: PruneSettledProviderEventDeltas :execrows
+DELETE FROM conversation_provider_events
+WHERE id IN (
+    SELECT delta.id
+    FROM conversation_provider_events AS delta
+    LEFT JOIN (
+        SELECT turn.conversation_id, MIN(turn.requested_at) AS since
+        FROM conversation_turns AS turn
+        WHERE turn.completed_at IS NULL OR turn.completed_at >= ?1
+        GROUP BY turn.conversation_id
+    ) AS unsettled ON unsettled.conversation_id = delta.conversation_id
+    WHERE delta.provider_event_id = ''
+      AND delta.method IN ('message.delta', 'reasoning.delta')
+      AND delta.received_at < ?1
+      AND (unsettled.since IS NULL OR delta.received_at < unsettled.since)
+    ORDER BY delta.received_at
+    LIMIT ?2
+)
+`
+
+type PruneSettledProviderEventDeltasParams struct {
+	SettledBefore sql.NullTime
+	BatchLimit    int64
+}
+
+// Retention for the archive above, the one delete it allows besides cascades. It
+// removes only streamed message and reasoning deltas that carry no provider event
+// id:
+//   - a row with an id is what deduplicates a replay of that event (a persistent
+//     host replaying an unacknowledged prompt, a native history import run
+//     again), so deleting it would apply the replayed text twice;
+//   - a row without one is never deduplicated, and once its turn settled the
+//     projection holds its text (message.completed / the reasoning settle);
+//   - command output is kept: past the projection's cap only the deltas hold it.
+//
+// A row is eligible once it arrived before settled_before and every turn its
+// conversation requested by then had completed before settled_before, which
+// covers the turn it belongs to. Oldest first, at most batch_limit rows.
+func (q *Queries) PruneSettledProviderEventDeltas(ctx context.Context, arg PruneSettledProviderEventDeltasParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, pruneSettledProviderEventDeltas, arg.SettledBefore, arg.BatchLimit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const recomputeConversationCompactedAt = `-- name: RecomputeConversationCompactedAt :exec
 UPDATE conversations
 SET compacted_at = (

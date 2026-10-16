@@ -1586,6 +1586,37 @@ INSERT OR IGNORE INTO conversation_provider_events (
     COALESCE((SELECT active_branch_id FROM conversations WHERE id = sqlc.arg(conversation_id)), '')
 );
 
+-- Retention for the archive above, the one delete it allows besides cascades. It
+-- removes only streamed message and reasoning deltas that carry no provider event
+-- id:
+--   * a row with an id is what deduplicates a replay of that event (a persistent
+--     host replaying an unacknowledged prompt, a native history import run
+--     again), so deleting it would apply the replayed text twice;
+--   * a row without one is never deduplicated, and once its turn settled the
+--     projection holds its text (message.completed / the reasoning settle);
+--   * command output is kept: past the projection's cap only the deltas hold it.
+-- A row is eligible once it arrived before settled_before and every turn its
+-- conversation requested by then had completed before settled_before, which
+-- covers the turn it belongs to. Oldest first, at most batch_limit rows.
+-- name: PruneSettledProviderEventDeltas :execrows
+DELETE FROM conversation_provider_events
+WHERE id IN (
+    SELECT delta.id
+    FROM conversation_provider_events AS delta
+    LEFT JOIN (
+        SELECT turn.conversation_id, MIN(turn.requested_at) AS since
+        FROM conversation_turns AS turn
+        WHERE turn.completed_at IS NULL OR turn.completed_at >= sqlc.arg(settled_before)
+        GROUP BY turn.conversation_id
+    ) AS unsettled ON unsettled.conversation_id = delta.conversation_id
+    WHERE delta.provider_event_id = ''
+      AND delta.method IN ('message.delta', 'reasoning.delta')
+      AND delta.received_at < sqlc.arg(settled_before)
+      AND (unsettled.since IS NULL OR delta.received_at < unsettled.since)
+    ORDER BY delta.received_at
+    LIMIT sqlc.arg(batch_limit)
+);
+
 -- name: SelectConversationProviderEvents :many
 WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
