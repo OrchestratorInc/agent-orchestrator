@@ -57,6 +57,13 @@ custom_provider:
 	if err := os.WriteFile(filepath.Join(p.SourceDir, "config.yaml"), []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Native Ask permits many safe commands. A supported explicit user rule
+	// creates a deterministic approval control, without weakening the native
+	// policy or relying on guesses about printf or temporary directory paths.
+	policy := []byte(`{"version":2,"ask":[{"tool_name":"bash","matcher":{"kind":"tool"}}]}`)
+	if err := os.WriteFile(filepath.Join(p.SourceDir, "permission.json"), policy, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	return p
 }
 
@@ -69,8 +76,8 @@ func (e *Provider) Env() map[string]string {
 	}
 }
 
-// ProtectedPath names a controlled target outside the native workspace so
-// MiniMax's default permission policy has to ask before writing it.
+// ProtectedPath keeps controlled approval side effects separate from native
+// workspace edits. The explicit native user rule, not the path, requires Ask.
 func (e *Provider) ProtectedPath(name string) string {
 	return filepath.Join(e.protected, name)
 }

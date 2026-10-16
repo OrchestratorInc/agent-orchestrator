@@ -20,6 +20,8 @@ func TestChatProfileRefreshPreservesNativeHistoryAndSource(t *testing.T) {
 	}
 	write(filepath.Join(source, "config.yaml"), "defaultModel: p/first\npermissionMode: auto\n")
 	write(filepath.Join(source, "auth", "token"), "first-credential")
+	globalPolicy := `{"version":2,"ask":[{"tool_name":"bash","matcher":{"kind":"tool"}}]}`
+	write(filepath.Join(source, "permission.json"), globalPolicy)
 	plugin := New()
 	env := map[string]string{"MINIMAX_DATA_DIR": source}
 	profile, err := plugin.PrepareChatProfile(context.Background(), data, "chat-1", env)
@@ -29,6 +31,12 @@ func TestChatProfileRefreshPreservesNativeHistoryAndSource(t *testing.T) {
 	if profile == filepath.Join(data, "agents", adapterID, "chat-1") {
 		t.Fatal("Chat adopted TUI history")
 	}
+	policy, err := os.ReadFile(filepath.Join(profile, "permission.json"))
+	if err != nil || string(policy) != globalPolicy {
+		t.Fatal("Chat omitted native global permission policy")
+	}
+	privatePolicy := `{"version":2,"ask":[{"tool_name":"bash","matcher":{"kind":"tool"}}],"allow":[{"tool_name":"read","matcher":{"kind":"tool"}}]}`
+	write(filepath.Join(profile, "permission.json"), privatePolicy)
 	write(filepath.Join(profile, "v2", "history-proof"), "retained-native-history")
 	write(filepath.Join(source, "config.yaml"), "defaultModel: p/second\n")
 	write(filepath.Join(source, "auth", "token"), "rotated-credential")
@@ -39,6 +47,8 @@ func TestChatProfileRefreshPreservesNativeHistoryAndSource(t *testing.T) {
 		{filepath.Join(profile, "config.yaml"), "defaultModel: p/second\n"},
 		{filepath.Join(profile, "auth", "token"), "rotated-credential"},
 		{filepath.Join(profile, "v2", "history-proof"), "retained-native-history"},
+		{filepath.Join(profile, "permission.json"), privatePolicy},
+		{filepath.Join(source, "permission.json"), globalPolicy},
 		{filepath.Join(source, "config.yaml"), "defaultModel: p/second\n"},
 	} {
 		b, err := os.ReadFile(tc.path)
@@ -65,5 +75,19 @@ func TestChatProfileRejectsUnownedAndSymlinkedCredentials(t *testing.T) {
 	}
 	if _, err := New().PrepareChatProfile(context.Background(), data, "chat-2", env); err == nil {
 		t.Fatal("adopted unowned profile")
+	}
+}
+
+func TestChatProfileRejectsSymlinkedGlobalPermissionPolicy(t *testing.T) {
+	source, data := t.TempDir(), t.TempDir()
+	policy := filepath.Join(t.TempDir(), "permission.json")
+	if err := os.WriteFile(policy, []byte(`{"deny":["bash"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(policy, filepath.Join(source, "permission.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New().PrepareChatProfile(context.Background(), data, "chat-policy", map[string]string{"MINIMAX_DATA_DIR": source}); err == nil {
+		t.Fatal("Chat accepted a symlinked global permission policy")
 	}
 }

@@ -38,10 +38,13 @@ and bundled executable agree on these wire contracts:
 
 Chat owns a separate profile under
 `AO_DATA_DIR/agents/minimax-code/chat/<session-id>`. It snapshots bounded native
-configuration, auth, global instructions and custom resources without importing
+configuration, auth, global instructions, native global `permission.json` rules
+and custom resources without importing
 TUI history or AO terminal hooks. Each replacement process refreshes source auth
 and provider configuration while retaining its native history. The source is
-read only; unowned profiles and symlinked resources fail explicitly. Platform
+read only; unowned profiles and symlinked resources fail explicitly. Global
+permission rules are an initial snapshot: subsequent native grants in the private
+profile survive restore, rather than being replaced by another global copy. Platform
 `TMPDIR`/`TMP`/`TEMP` remain unchanged to avoid long Unix socket paths.
 
 The process receives a bounded private 0600 file via
@@ -66,7 +69,8 @@ AO_NATIVE_MINIMAX_ACP=1 go test -count=1 -v -timeout=8m \
 The opt-in test launches the actual native executable and AO detached host with
 isolated profile/workspace/data. Only the model endpoint is scripted loopback
 Anthropic SSE; no provider credentials are needed. It checks streaming, offered
-approval/rejection and side effects, executing-tool PID/kernel-start cancellation
+approval/rejection and side effects under an explicit native Bash Ask rule,
+effective default permission-mode selection, executing-tool PID/kernel-start cancellation
 with no delayed artifact, same-ID replacement-process load and native replay,
 fresh private context in the actual post-load model request, and missing-ID/cwd
 refusal. Default unit tests do not execute the native binary or contact a provider.

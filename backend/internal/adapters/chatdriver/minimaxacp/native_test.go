@@ -66,6 +66,23 @@ func TestNativeMiniMaxACPConformance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	configurer, ok := conv.(ports.ChatConfigOptionController)
+	if !ok {
+		t.Fatal("native session did not expose its effective permission policy")
+	}
+	controls, err := configurer.ListConfigOptions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultSelected := false
+	for _, control := range controls {
+		if control.ID == "permissionMode" && control.Current.Select == "default" {
+			defaultSelected = true
+		}
+	}
+	if !defaultSelected {
+		t.Fatal("AO default did not select the native default permission policy")
+	}
 	nativeID := conv.ProviderConversationID()
 	if !strings.HasPrefix(nativeID, "mvs_") {
 		t.Fatalf("missing native identity: %q", nativeID)
@@ -73,8 +90,8 @@ func TestNativeMiniMaxACPConformance(t *testing.T) {
 	nativeTurn(ctx, t, conv, "ao-seed", nil)
 	endpoint.AssertRequestContains(t, "ao-seed", "--AO_FIRST_CONTEXT_7061")
 	t.Log("PASS native streaming and initial private context delivery")
-	// Native default permits workspace writes. Use an owned scratch target
-	// outside the authorized workspace to exercise an actual pending request.
+	// The isolated source profile contains a supported explicit Bash Ask rule.
+	// Keep approval side effects separate from normal workspace mutation proof.
 	for _, tc := range []struct {
 		prompt, file string
 		decision     ports.ChatDecisionKind

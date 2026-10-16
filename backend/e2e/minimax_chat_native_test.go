@@ -70,7 +70,7 @@ func TestNativeMiniMaxRegisteredChatAPI(t *testing.T) {
 	if spawned.Session.Mode != "chat" {
 		t.Fatalf("explicit Chat request became %q", spawned.Session.Mode)
 	}
-	initial := awaitMiniMaxTurn(t, d, session, "")
+	initial := awaitMiniMaxTurn(t, d, session, "", false)
 	provider.AssertRequestContains(t, "ao-seed", "--AO_E2E_INITIAL_CONTEXT_4831")
 	identity := readMiniMaxIdentity(t, data, session)
 	if !strings.HasPrefix(identity.NativeID, "mvs_") || identity.Workspace == source {
@@ -96,7 +96,7 @@ func TestNativeMiniMaxRegisteredChatAPI(t *testing.T) {
 	if !retry.Duplicate || retry.TurnID != turnID {
 		t.Fatal("retry did not preserve the accepted Chat turn")
 	}
-	awaitMiniMaxTurn(t, d, session, turnID)
+	awaitMiniMaxTurn(t, d, session, turnID, true)
 	proof := filepath.Join(identity.Workspace, "ao-native-proof.txt")
 	assertMiniMaxFile(t, proof, "native-proof")
 	if provider.RequestCount("ao-edit") != 1 {
@@ -122,7 +122,7 @@ func TestNativeMiniMaxRegisteredChatAPI(t *testing.T) {
 		decision := miniMaxDecision(t, approval, tc.decision)
 		d.mustCall("POST", "/sessions/"+session+"/conversation/approvals/"+approval.RequestID+"/resolve",
 			http.StatusNoContent, map[string]any{"decisionId": decision}, nil)
-		awaitMiniMaxTurn(t, d, session, turnID)
+		awaitMiniMaxTurn(t, d, session, turnID, false)
 		_, statErr := os.Stat(provider.ProtectedPath(tc.file))
 		if tc.decision == "allow_once" && statErr != nil {
 			t.Fatal("approved native operation did not execute")
@@ -155,7 +155,7 @@ func TestNativeMiniMaxRegisteredChatAPI(t *testing.T) {
 		t.Fatalf("API cancellation settlement disagreed: %s", describe(cancelled))
 	}
 	followup, _ := send(t, d, session, "ao-after-cancel", "minimax-after-cancel")
-	awaitMiniMaxTurn(t, d, session, followup)
+	awaitMiniMaxTurn(t, d, session, followup, false)
 	t.Log("PASS active native tool API cancellation and usable same-session continuation")
 
 	recoveryTurn, _ := send(t, d, session, "ao-recovery", "minimax-recovery")
@@ -173,7 +173,7 @@ func TestNativeMiniMaxRegisteredChatAPI(t *testing.T) {
 	restarted := startDaemon(t, data)
 	assertMiniMaxDaemonOwnership(t, restarted)
 	restarted.awaitLiveController(session, time.Minute)
-	recovered := awaitMiniMaxTurn(t, restarted, session, recoveryTurn)
+	recovered := awaitMiniMaxTurn(t, restarted, session, recoveryTurn, true)
 	if persistentHostPID(t, data, session) != host || !testfixture.SameLinuxProcess(host, hostStart) {
 		t.Fatal("daemon replacement failed to adopt the exact surviving native host")
 	}
@@ -208,7 +208,7 @@ func TestNativeMiniMaxRegisteredChatAPI(t *testing.T) {
 		t.Fatal("restore changed native/AO conversation identity or workspace")
 	}
 	restoredTurn, _ := send(t, restarted, session, "ao-after-restore", "minimax-after-restore")
-	final := awaitMiniMaxTurn(t, restarted, session, restoredTurn)
+	final := awaitMiniMaxTurn(t, restarted, session, restoredTurn, true)
 	provider.AssertRequestContains(t, "ao-after-restore", "--AO_E2E_FRESH_RESTORE_CONTEXT_9457")
 	provider.AssertRequestContains(t, "ao-after-restore", "ao-seed")
 	assertMiniMaxFile(t, proof, "native-proofrestored")
@@ -247,11 +247,23 @@ func setMiniMaxProjectRules(d *daemon, project, rules string) {
 	}, nil)
 }
 
-func awaitMiniMaxTurn(t *testing.T, d *daemon, session, turnID string) snapshot {
+func awaitMiniMaxTurn(t *testing.T, d *daemon, session, turnID string, approveFixtureTool bool) snapshot {
 	t.Helper()
+	answered := map[string]bool{}
 	snap := d.awaitConversation(session, time.Minute, "MiniMax native turn settlement", func(s snapshot) bool {
 		if len(s.Turns) == 0 {
 			return false
+		}
+		// Only the explicitly authorized fixture worktree mutations use this
+		// branch. The separate approval/reject cases never auto-answer here.
+		if approval, pending := s.pendingApproval(); approveFixtureTool && pending && !answered[approval.RequestID] {
+			if approval.TurnID != turnID {
+				t.Fatal("fixture approval belongs to a different Chat turn")
+			}
+			decision := miniMaxDecision(t, approval, "allow_once")
+			d.mustCall("POST", "/sessions/"+session+"/conversation/approvals/"+approval.RequestID+"/resolve",
+				http.StatusNoContent, map[string]any{"decisionId": decision}, nil)
+			answered[approval.RequestID] = true
 		}
 		last := s.Turns[len(s.Turns)-1]
 		return (turnID == "" || last.ID == turnID) && terminal(last.State) && s.Controller == "ready"
