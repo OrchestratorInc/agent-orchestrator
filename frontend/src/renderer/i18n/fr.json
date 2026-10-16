@@ -2800,6 +2800,7 @@
 		"Configurez la journalisation structurée avec des identifiants de corrélation sur tous les services"
 	],
 	"newTask.model": "Model",
+	"newTask.createNew": "Créer",
 	"newTask.modelCheckUnavailable": "Impossible de confirmer les modèles de {{agent}} pour le moment. Réessayez dans un instant.",
 	"newTask.phoneConnected_one": "Téléphone connecté",
 	"newTask.phoneConnected_many": "{{count}} téléphones connectés",

@@ -2800,6 +2800,7 @@
 		"Configure o registro de logs estruturado com IDs de correlação em todos os serviços"
 	],
 	"newTask.model": "Model",
+	"newTask.createNew": "Criar novo",
 	"newTask.modelCheckUnavailable": "Não foi possível confirmar os modelos de {{agent}} agora. Tente novamente em instantes.",
 	"newTask.phoneConnected_one": "Celular conectado",
 	"newTask.phoneConnected_many": "{{count}} celulares conectados",

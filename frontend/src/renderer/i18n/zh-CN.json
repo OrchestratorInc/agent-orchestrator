@@ -2735,6 +2735,7 @@
 		"在所有服务中设置带有关联 ID 的结构化日志"
 	],
 	"newTask.model": "Model",
+	"newTask.createNew": "新建",
 	"newTask.modelCheckUnavailable": "暂时无法确认 {{agent}} 的模型。请稍后再试。",
 	"newTask.phoneConnected_one": "手机已连接",
 	"newTask.phoneConnected_other": "已连接 {{count}} 部手机",

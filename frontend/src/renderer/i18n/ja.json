@@ -2753,6 +2753,7 @@
 		"すべてのサービスで相関 ID を使用した構造化ロギングを設定してください"
 	],
 	"newTask.model": "Model",
+	"newTask.createNew": "新規作成",
 	"newTask.modelCheckUnavailable": "{{agent}} のモデルを今は確認できませんでした。少し待ってからもう一度お試しください。",
 	"newTask.phoneConnected_one": "スマートフォン接続中",
 	"newTask.phoneConnected_other": "{{count}} 台のスマートフォンが接続中",

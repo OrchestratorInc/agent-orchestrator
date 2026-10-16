@@ -2800,6 +2800,7 @@
 		"Configura el registro estructurado con ID de correlación en todos los servicios"
 	],
 	"newTask.model": "Model",
+	"newTask.createNew": "Crear nuevo",
 	"newTask.modelCheckUnavailable": "No se pudieron confirmar los modelos de {{agent}} en este momento. Inténtalo de nuevo en un momento.",
 	"newTask.phoneConnected_one": "Teléfono conectado",
 	"newTask.phoneConnected_many": "{{count}} teléfonos conectados",

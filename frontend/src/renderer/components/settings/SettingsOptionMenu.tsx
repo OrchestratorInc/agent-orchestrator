@@ -56,7 +56,8 @@ export function SettingsOptionMenu<T extends string>({
 	menuAlign?: "start" | "center" | "end";
 	searchable?: boolean;
 	searchPlaceholder?: string;
-	action?: { label: string; onSelect: () => void };
+	/** An extra row under the options, such as "Manage…". */
+	action?: { label: string; onSelect: () => void; icon?: ReactNode };
 	emptyLabel?: string;
 	triggerRef?: Ref<HTMLButtonElement>;
 	onCloseAutoFocus?: (event: Event) => void;
@@ -198,7 +199,10 @@ export function SettingsOptionMenu<T extends string>({
 				{action && (
 					<div data-slot="settings-option-menu-action" className="shrink-0">
 						<DropdownMenuSeparator />
-						<DropdownMenuItem onSelect={action.onSelect} className={SETTINGS_MENU_ITEM}>{action.label}</DropdownMenuItem>
+						<DropdownMenuItem onSelect={action.onSelect} className={cn(SETTINGS_MENU_ITEM, action.icon && "gap-2!")}>
+							{action.icon}
+							{action.label}
+						</DropdownMenuItem>
 					</div>
 				)}
 			</DropdownMenuContent>

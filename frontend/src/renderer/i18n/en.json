@@ -2762,6 +2762,7 @@
 		"Set up structured logging with correlation IDs across all services"
 	],
 	"newTask.model": "Model",
+	"newTask.createNew": "Create new",
 	"newTask.modelCheckUnavailable": "Couldn't confirm {{agent}}'s models right now. Try again in a moment.",
 	"newTask.phoneConnected_one": "Phone connected",
 	"newTask.phoneConnected_other": "{{count}} phones connected",

@@ -2753,6 +2753,7 @@
 		"Richte strukturiertes Logging mit Korrelations-IDs über alle Dienste hinweg ein"
 	],
 	"newTask.model": "Model",
+	"newTask.createNew": "Neu erstellen",
 	"newTask.modelCheckUnavailable": "Die Modelle von {{agent}} konnten gerade nicht bestätigt werden. Versuche es gleich noch einmal.",
 	"newTask.phoneConnected_one": "Telefon verbunden",
 	"newTask.phoneConnected_other": "{{count}} Telefone verbunden",
