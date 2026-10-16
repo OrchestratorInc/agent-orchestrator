@@ -8,7 +8,11 @@ import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { SessionArtifactsView } from "./SessionArtifactsView";
 import { TooltipProvider } from "./ui/tooltip";
 
-const { deleteArtifactMock, openPreviewMock } = vi.hoisted(() => ({ deleteArtifactMock: vi.fn(), openPreviewMock: vi.fn() }));
+const { cloudAccessMock, deleteArtifactMock, openPreviewMock } = vi.hoisted(() => ({
+	cloudAccessMock: vi.fn(),
+	deleteArtifactMock: vi.fn(),
+	openPreviewMock: vi.fn(),
+}));
 
 vi.mock("../hooks/useOpenArtifactPreview", () => ({ useOpenArtifactPreview: () => openPreviewMock }));
 vi.mock("../hooks/useSessionWorkspaceFiles", () => ({
@@ -19,9 +23,17 @@ vi.mock("../hooks/useSessionWorkspaceFiles", () => ({
 	}),
 }));
 vi.mock("./ArtifactFileView", () => ({
-	ArtifactFileView: ({ feedbackRequestKey, path }: { feedbackRequestKey?: number; path: string }) => (
-		<div data-feedback-key={feedbackRequestKey ?? ""} data-testid="artifact-view">{`viewer:${path}`}</div>
+	ArtifactFileView: ({ cloud, feedbackRequestKey, path, rawUrl }: { cloud?: boolean; feedbackRequestKey?: number; path: string; rawUrl?: string }) => (
+		<div data-cloud={cloud ? "true" : ""} data-feedback-key={feedbackRequestKey ?? ""} data-raw-url={rawUrl ?? ""} data-testid="artifact-view">{`viewer:${path}`}</div>
 	),
+}));
+vi.mock("./CloudArtifactFrame", () => ({
+	CloudArtifactFrame: ({ url }: { url: string }) => <div data-testid="cloud-frame">{url}</div>,
+}));
+vi.mock("../hooks/useCloudArtifacts", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../hooks/useCloudArtifacts")>()),
+	useCloudArtifactAccess: cloudAccessMock,
+	useCloudArtifactChanges: () => undefined,
 }));
 
 const artifacts: SessionArtifact[] = [
@@ -36,15 +48,82 @@ function session(artifactFiles: SessionArtifact[] = artifacts): WorkspaceSession
 
 function renderView(ui: ReactNode) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	return render(
+	const wrap = (node: ReactNode) => (
 		<QueryClientProvider client={client}>
-			<TooltipProvider>{ui}</TooltipProvider>
-		</QueryClientProvider>,
+			<TooltipProvider>{node}</TooltipProvider>
+		</QueryClientProvider>
 	);
+	const view = render(wrap(ui));
+	return { ...view, rerender: (next: ReactNode) => view.rerender(wrap(next)) };
 }
+
+const CLOUD_ROOT = "https://cp.test/api/cloud/v1/artifact-files/token/";
+
+function cloudSession(): WorkspaceSession {
+	return {
+		id: "cloud-1",
+		cloud: { orgId: "org-1" },
+		artifactFiles: [
+			{ kind: "html", name: "report.html", path: "report.html", size: 20, updatedAt: "2026-09-23T00:00:00Z" },
+			{ kind: "markdown", name: "notes.md", path: "docs/notes.md", size: 12, updatedAt: "2026-09-22T00:00:00Z" },
+		],
+	} as WorkspaceSession;
+}
+
+describe("SessionArtifactsView for a cloud session", () => {
+	beforeEach(() => {
+		openPreviewMock.mockReset();
+		cloudAccessMock.mockReset().mockReturnValue({ data: CLOUD_ROOT, isError: false });
+	});
+
+	it("frames an html artifact from its access URL instead of the Browser panel", async () => {
+		renderView(<SessionArtifactsView session={cloudSession()} />);
+		await userEvent.click(screen.getByRole("button", { name: /report\.html/ }));
+
+		expect(screen.getByTestId("cloud-frame")).toHaveTextContent(`${CLOUD_ROOT}report.html?v=2026-09-23T00%3A00%3A00Z`);
+		expect(openPreviewMock).not.toHaveBeenCalled();
+	});
+
+	it("reloads an open html artifact when the file changes", async () => {
+		const { rerender } = renderView(<SessionArtifactsView session={cloudSession()} />);
+		await userEvent.click(screen.getByRole("button", { name: /report\.html/ }));
+
+		const changed = cloudSession();
+		changed.artifactFiles = changed.artifactFiles!.map((file) => (file.path === "report.html" ? { ...file, updatedAt: "2026-09-24T00:00:00Z" } : file));
+		rerender(<SessionArtifactsView session={changed} />);
+
+		expect(screen.getByTestId("cloud-frame")).toHaveTextContent(`${CLOUD_ROOT}report.html?v=2026-09-24T00%3A00%3A00Z`);
+	});
+
+	it("opens a markdown artifact in the viewer through the cloud fetch", async () => {
+		renderView(<SessionArtifactsView session={cloudSession()} />);
+		await userEvent.click(screen.getByRole("button", { name: /notes\.md/ }));
+
+		const viewer = screen.getByTestId("artifact-view");
+		expect(viewer).toHaveAttribute("data-cloud", "true");
+		expect(viewer).toHaveAttribute("data-raw-url", `${CLOUD_ROOT}docs/notes.md?v=2026-09-22T00%3A00%3A00Z`);
+	});
+
+	it("says when the files cannot be reached", async () => {
+		cloudAccessMock.mockReturnValue({ data: undefined, isError: true });
+		renderView(<SessionArtifactsView session={cloudSession()} />);
+		await userEvent.click(screen.getByRole("button", { name: /report\.html/ }));
+
+		expect(screen.getByText("Couldn’t load this session’s artifacts. Try again.")).toBeInTheDocument();
+	});
+
+	it("offers no local folder or delete actions", async () => {
+		renderView(<SessionArtifactsView session={cloudSession()} />);
+		expect(screen.queryAllByRole("button", { name: /^Open in / })).toHaveLength(0);
+		await userEvent.click(screen.getByRole("button", { name: /notes\.md/ }));
+		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
+		expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
+	});
+});
 
 describe("SessionArtifactsView", () => {
 	beforeEach(() => {
+		cloudAccessMock.mockReset().mockReturnValue({ data: undefined, isError: false });
 		openPreviewMock.mockReset();
 		deleteArtifactMock.mockReset().mockResolvedValue(undefined);
 	});

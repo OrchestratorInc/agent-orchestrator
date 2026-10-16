@@ -73,6 +73,8 @@ creates new task-definition revisions; it never mutates an older image tag.
 - CloudWatch log group: `/ao-cloud/staging/control-plane` (30-day retention)
 - ECR repositories: `ao-cloud-control-plane` and `ao-cloud-worker` (immutable
   tags, 30-image retention)
+- tenant artifact bucket: `ao-cloud-staging-tenant-artifacts` (see
+  [Session artifacts](#session-artifacts))
 
 The ALB probes `/readyz`, which checks both draining state and database
 connectivity. Deployment scripts set one desired task and, by default,
@@ -124,6 +126,58 @@ by the Freestyle secret, the task that ran before the deploy, the task now
 running, or any task definition the staging or production service is running
 or rolling to. If any of those cannot be read it deletes nothing, and a failed
 prune never fails the deploy.
+
+## Session artifacts
+
+Session artifacts (`AO_CLOUD_ARTIFACTS`, see
+[control-plane.md](control-plane.md#session-artifacts)) need one private,
+versioned bucket per environment: `ao-cloud-staging-tenant-artifacts` and
+`ao-cloud-production-tenant-artifacts`. They hold customer files and are
+separate from the `ao-cloud-<environment>-artifacts` buckets of worker
+binaries; the deploy validation rejects those names.
+
+Create a bucket in the service's region with public access blocked,
+versioning enabled, and a lifecycle rule that expires noncurrent versions (the
+history window, 30 days by default) and aborts incomplete multipart uploads
+after a day:
+
+```bash
+B=ao-cloud-staging-tenant-artifacts
+R=eu-north-1
+aws s3api create-bucket --bucket $B --region $R \
+  --create-bucket-configuration LocationConstraint=$R
+aws s3api put-public-access-block --bucket $B \
+  --public-access-block-configuration \
+  BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+aws s3api put-bucket-versioning --bucket $B \
+  --versioning-configuration Status=Enabled
+aws s3api put-bucket-lifecycle-configuration --bucket $B \
+  --lifecycle-configuration '{"Rules":[{"ID":"expire-old-versions","Status":"Enabled","Filter":{},
+  "NoncurrentVersionExpiration":{"NoncurrentDays":30},
+  "AbortIncompleteMultipartUpload":{"DaysAfterInitiation":1}}]}'
+```
+
+Give the control plane's ECS **task role** (not the execution role) access to
+that bucket only: `s3:GetObject`, `s3:GetObjectVersion`, `s3:PutObject`,
+`s3:DeleteObject`, `s3:DeleteObjectVersion`, and `s3:AbortMultipartUpload` on
+`arn:aws:s3:::<bucket>/*`, and `s3:ListBucket`, `s3:ListBucketVersions`, and
+`s3:ListBucketMultipartUploads` on `arn:aws:s3:::<bucket>`. Credentials come from
+the task role; nothing is stored in a secret.
+
+The offering files set the deploy values: `AO_CLOUD_ARTIFACTS` (`0` or `1`),
+`AO_CLOUD_ARTIFACT_BUCKET`, and `AO_CLOUD_ARTIFACT_REGION`.
+`AO_CLOUD_ARTIFACT_ENDPOINT` is for a local S3-compatible server and is
+rejected in a hosted task. With the flag on, the control plane refuses to start
+without the bucket, the region, or `AO_CLOUD_PROVIDER_SECRET_KEY` (artifact
+links are signed with a key derived from it). Migration 00084 runs with the
+flag off.
+
+Rollout: deploy with `AO_CLOUD_ARTIFACTS=0`, deploy the worker and desktop
+releases, then set `1` in staging and check that an artifact session's HTML
+file and the image it references open, that an edit adds a version, and that
+the files still open after the session is archived. Repeat for production.
+Locally, `npm run cloud:local` runs MinIO with the bucket
+`ao-cloud-local-tenant-artifacts`; start it with `AO_CLOUD_ARTIFACTS=1`.
 
 ## Monitoring
 

@@ -1628,6 +1628,8 @@
 	"shell.openArtifactNamed": "アーティファクト {{name}} を開く",
 	"shell.moreArtifacts": "他 {{count}} 件",
 	"artifacts.sessionEmpty": "このセッションにはまだアーティファクトがありません。",
+	"artifacts.unavailable": "このファイルは利用できなくなりました。",
+	"artifacts.accessError": "このセッションのアーティファクトを読み込めませんでした。もう一度お試しください。",
 	"artifacts.back": "アーティファクトに戻る",
 	"artifacts.showIn": "{{name}}で表示",
 	"artifacts.copyMarkdown": "Markdownとしてコピー",

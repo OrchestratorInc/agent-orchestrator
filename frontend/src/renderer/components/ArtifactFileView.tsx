@@ -32,6 +32,8 @@ export function ArtifactFileView({
 	path,
 	rawUrl,
 	readOnly = false,
+	cloud = false,
+	artifactRoot,
 	sessionId,
 	toolbarHost,
 }: {
@@ -43,12 +45,16 @@ export function ArtifactFileView({
 	rawUrl?: string;
 	/** Hides the edit action, as for a cloud session's artifacts. */
 	readOnly?: boolean;
+	/** Fetches rawUrl through the cloud control-plane bridge. */
+	cloud?: boolean;
+	/** The URL the file's relative links resolve against. */
+	artifactRoot?: string;
 	sessionId: string;
 	/** The header the pane renders its mode and action buttons into. */
 	toolbarHost?: HTMLElement | null;
 }) {
 	const annotation = useFileAnnotation(sessionId, { hostId, source: artifactName });
-	const source = useMemo(() => ({ kind: "artifact" as const, rawUrl, readOnly }), [rawUrl, readOnly]);
+	const source = useMemo(() => ({ kind: "artifact" as const, rawUrl, readOnly, cloud, artifactRoot }), [rawUrl, readOnly, cloud, artifactRoot]);
 	const scrollRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {

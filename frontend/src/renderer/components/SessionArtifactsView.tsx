@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronLeft, Copy, FileText, FolderOpen, Globe, Maximize2, Minimize2, SquareTerminal, Trash2 } from "lucide-react";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
+import { cloudArtifactFileUrl, useCloudArtifactAccess, useCloudArtifactChanges } from "../hooks/useCloudArtifacts";
 import { useOpenArtifactPreview } from "../hooks/useOpenArtifactPreview";
 import { deleteSessionArtifactFile, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -15,6 +16,7 @@ import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { ArtifactFileView } from "./ArtifactFileView";
+import { CloudArtifactFrame } from "./CloudArtifactFrame";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Button } from "./ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
@@ -112,7 +114,7 @@ function ArtifactMenu({ artifact, hostId, session }: { artifact: SessionArtifact
 		open.reset();
 		setCopyError("");
 		try {
-			const detail = await queryClient.fetchQuery(sessionArtifactFileQueryOptions(session.id, artifact.path, artifact.rawUrl, t("files.error.loadArtifact")));
+			const detail = await queryClient.fetchQuery(sessionArtifactFileQueryOptions(session.id, artifact.path, artifact.rawUrl, t("files.error.loadArtifact"), Boolean(session.cloud)));
 			await aoBridge.clipboard.writeText(detail.content);
 		} catch (error) {
 			setCopyError(error instanceof Error ? error.message : String(error));
@@ -281,7 +283,18 @@ export function SessionArtifactsView({
 	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
-	const artifacts = useMemo(() => sortedArtifacts(session.artifactFiles ?? []), [session.artifactFiles]);
+	const cloud = Boolean(session.cloud);
+	const cloudAccess = useCloudArtifactAccess(session, cloud && (session.artifactFiles?.length ?? 0) > 0);
+	useCloudArtifactChanges(session, cloud);
+	const cloudRoot = cloudAccess.data;
+	// A cloud file's URL comes from the session's short-lived access prefix.
+	const artifacts = useMemo(
+		() =>
+			sortedArtifacts(session.artifactFiles ?? []).map((artifact) =>
+				cloud && cloudRoot ? { ...artifact, rawUrl: cloudArtifactFileUrl(cloudRoot, artifact.path, artifact.updatedAt) } : artifact,
+			),
+		[cloud, cloudRoot, session.artifactFiles],
+	);
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
 	const [toolbarHost, setToolbarHost] = useState<HTMLElement | null>(null);
 	const [fullscreen, setFullscreen] = useState(false);
@@ -334,17 +347,25 @@ export function SessionArtifactsView({
 					</Tooltip>
 				</div>
 				<div className="min-h-0 flex-1">
-					<ArtifactFileView
-						artifactName={selected.name}
-						feedbackRequestKey={request?.feedback && request.path === selected.path ? request.key : undefined}
-						hostId={hostId}
-						onFeedbackRequestConsumed={onRequestConsumed}
-						path={selected.path}
-						rawUrl={selected.rawUrl}
-						readOnly={Boolean(session.cloud)}
-						sessionId={session.id}
-						toolbarHost={toolbarHost}
-					/>
+					{cloud && !selected.rawUrl ? (
+						<PanelMessage>{cloudAccess.isError ? t("artifacts.accessError") : t("files.loading")}</PanelMessage>
+					) : cloud && selected.kind === "html" ? (
+						<CloudArtifactFrame title={selected.name} url={selected.rawUrl!} />
+					) : (
+						<ArtifactFileView
+							artifactName={selected.name}
+							artifactRoot={cloud ? cloudRoot : undefined}
+							cloud={cloud}
+							feedbackRequestKey={request?.feedback && request.path === selected.path ? request.key : undefined}
+							hostId={hostId}
+							onFeedbackRequestConsumed={onRequestConsumed}
+							path={selected.path}
+							rawUrl={selected.rawUrl}
+							readOnly={cloud}
+							sessionId={session.id}
+							toolbarHost={toolbarHost}
+						/>
+					)}
 				</div>
 			</ArtifactViewerFrame>
 		);
@@ -362,8 +383,9 @@ export function SessionArtifactsView({
 			) : (
 				<ul className="board-scrollbar flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-3 pb-3 pt-1">
 					{artifacts.map((artifact) => {
-						const html = artifact.kind === "html" && Boolean(artifact.previewUrl);
-						const Icon = html ? Globe : FileText;
+						// A local HTML artifact opens in the Browser panel; a cloud one in this viewer.
+						const html = !cloud && artifact.kind === "html" && Boolean(artifact.previewUrl);
+						const Icon = artifact.kind === "html" && (html || cloud) ? Globe : FileText;
 						return (
 							<li key={artifact.path}>
 								<button

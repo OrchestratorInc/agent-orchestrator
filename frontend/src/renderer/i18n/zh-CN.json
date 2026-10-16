@@ -1612,6 +1612,8 @@
 	"shell.openArtifactNamed": "打开产物 {{name}}",
 	"shell.moreArtifacts": "另外 {{count}} 个",
 	"artifacts.sessionEmpty": "此会话还没有产物。",
+	"artifacts.unavailable": "此文件已不可用。",
+	"artifacts.accessError": "无法加载此会话的产物，请重试。",
 	"artifacts.back": "返回产物",
 	"artifacts.showIn": "在 {{name}} 中显示",
 	"artifacts.copyMarkdown": "复制为 Markdown",

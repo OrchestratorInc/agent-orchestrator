@@ -8,7 +8,8 @@ import { useNavigateToSession } from "../lib/navigate-to-session";
 import { captureRendererEvent } from "../lib/telemetry";
 import { useUiStore } from "../stores/ui-store";
 import { useAgentReadinessQuery } from "./useAgentReadinessQuery";
-import { workspaceQueryKey } from "./useWorkspaceQuery";
+import { useCloudCp } from "./useCloudCp";
+import { cloudSessionsQueryKey, workspaceQueryKey } from "./useWorkspaceQuery";
 
 type Harness = components["schemas"]["SpawnSessionRequest"]["harness"];
 type ProjectAgents = { agent?: string; config?: { worker?: { agent?: string } } };
@@ -16,11 +17,14 @@ type ProjectAgents = { agent?: string; config?: { worker?: { agent?: string } } 
 /**
  * Starts a worker session whose output kind is artifact, in a project or the
  * Scratchpad (no projectId), and opens it. The agent is the project's worker
- * agent, then the daemon-wide default, then the first ready agent.
+ * agent, then the daemon-wide default, then the first ready agent. A cloud
+ * project (cloudOrgId set) starts the session on the control plane with the
+ * project's worker agent, else Claude Code.
  */
 export function useCreateArtifactSession() {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
+	const { client: cloudClient } = useCloudCp();
 	const navigateToSession = useNavigateToSession();
 	const agentsQuery = useAgentReadinessQuery();
 	const [pending, setPending] = useState(false);
@@ -35,11 +39,26 @@ export function useCreateArtifactSession() {
 	);
 
 	const create = useCallback(
-		async (projectId?: string) => {
-			const scope = projectId ? "project" : "standalone";
+		async (projectId?: string, cloudOrgId?: string) => {
+			const scope = cloudOrgId ? "cloud" : projectId ? "project" : "standalone";
 			setPending(true);
 			void captureRendererEvent("ao.renderer.artifact_create_requested", { scope });
 			try {
+				if (cloudOrgId && projectId) {
+					const { project } = await cloudClient.getProject(cloudOrgId, projectId);
+					const { session } = await cloudClient.createSession(cloudOrgId, {
+						projectId,
+						kind: "worker",
+						harness: project.config?.worker?.agent || "claude-code",
+						displayName: t("artifacts.newSessionName"),
+						prompt: "",
+						requestedOutput: "artifact",
+					});
+					void captureRendererEvent("ao.renderer.artifact_create_succeeded", { scope });
+					await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
+					navigateToSession(projectId, session.id);
+					return;
+				}
 				const harness = projectId ? (await projectWorkerAgent(queryClient, projectId)) || readyAgent : readyAgent;
 				const { data, error } = await apiClient.POST("/api/v1/sessions", {
 					body: {
@@ -64,7 +83,7 @@ export function useCreateArtifactSession() {
 				setPending(false);
 			}
 		},
-		[navigateToSession, queryClient, readyAgent, t],
+		[cloudClient, navigateToSession, queryClient, readyAgent, t],
 	);
 
 	return {

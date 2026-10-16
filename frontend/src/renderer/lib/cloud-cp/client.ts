@@ -64,6 +64,7 @@ import type {
 	CloudCpRestoreSessionResponse,
 	CloudCpRetrySessionStartupResponse,
 	CloudCpSessionResponse,
+	CloudCpArtifactAccessResponse,
 	CloudCpAcknowledgeInterfaceTransitionNoticeResponse,
 	CloudCpCancelInterfaceTransitionResponse,
 	CloudCpInterfaceTransitionStatusResponse,
@@ -186,6 +187,11 @@ export interface CloudCpClient {
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpSessionResponse>;
 	getSession(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpSessionResponse>;
+	createSessionArtifactAccess(
+		orgId: string,
+		sessionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpArtifactAccessResponse>;
 	updateSessionPreferences(
 		orgId: string,
 		sessionId: string,
@@ -690,6 +696,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 		getSession: (orgId, sessionId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}`, { signal: o?.signal }),
+		createSessionArtifactAccess: (orgId, sessionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts/access`, { signal: o?.signal }),
 		getInterfaceTransition: (orgId, sessionId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/interface-transition`, { signal: o?.signal }),
 		startInterfaceTransition: (orgId, sessionId, body, o) =>

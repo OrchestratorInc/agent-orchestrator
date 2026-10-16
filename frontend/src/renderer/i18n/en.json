@@ -1847,6 +1847,8 @@
 	"shell.openArtifactNamed": "Open artifact {{name}}",
 	"shell.moreArtifacts": "+{{count}} more",
 	"artifacts.sessionEmpty": "No artifacts in this session yet.",
+	"artifacts.unavailable": "This file is no longer available.",
+	"artifacts.accessError": "Couldn’t load this session’s artifacts. Try again.",
 	"artifacts.back": "Back to artifacts",
 	"artifacts.showIn": "Show in {{name}}",
 	"artifacts.copyMarkdown": "Copy as Markdown",

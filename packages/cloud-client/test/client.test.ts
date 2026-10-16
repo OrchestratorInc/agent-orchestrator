@@ -354,6 +354,30 @@ describe("CloudClient", () => {
     );
   });
 
+  it("lists artifacts and requests an access prefix", async () => {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, _init?: RequestInit) =>
+        String(input).endsWith("/access")
+          ? jsonResponse({ filesPrefix: "/api/cloud/v1/artifact-files/t/", expiresAt: "2026-10-16T00:30:00Z" })
+          : jsonResponse({ artifacts: [] }),
+    );
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(client.listArtifacts("org", "session one")).resolves.toEqual({ artifacts: [] });
+    await expect(client.getArtifactAccess("org", "session one")).resolves.toMatchObject({
+      filesPrefix: "/api/cloud/v1/artifact-files/t/",
+    });
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+      "https://cloud.example.com/api/cloud/v1/orgs/org/sessions/session%20one/artifacts",
+      "https://cloud.example.com/api/cloud/v1/orgs/org/sessions/session%20one/artifacts/access",
+    ]);
+    expect(fetchMock.mock.calls[1]?.[1]?.method).toBe("POST");
+  });
+
   it("writes a workspace file through the typed client", async () => {
     const file = { path: "src/main.ts", content: "export {};\n", size: 11 };
     const fetchMock = vi.fn(

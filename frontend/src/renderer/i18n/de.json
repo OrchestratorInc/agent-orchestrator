@@ -1628,6 +1628,8 @@
 	"shell.openArtifactNamed": "Artefakt {{name}} öffnen",
 	"shell.moreArtifacts": "+{{count}} weitere",
 	"artifacts.sessionEmpty": "Diese Sitzung hat noch keine Artefakte.",
+	"artifacts.unavailable": "Diese Datei ist nicht mehr verfügbar.",
+	"artifacts.accessError": "Die Artefakte dieser Sitzung konnten nicht geladen werden. Versuche es erneut.",
 	"artifacts.back": "Zurück zu den Artefakten",
 	"artifacts.showIn": "In {{name}} anzeigen",
 	"artifacts.copyMarkdown": "Als Markdown kopieren",

@@ -146,6 +146,51 @@ terminal input. The desktop connects to these public API endpoints; terminal
 support in the optional private web app must be checked in that app's source
 and deployment.
 
+## Session artifacts
+
+With `AO_CLOUD_ARTIFACTS=1`, a session's deliverable files are kept outside
+its sandbox, so they can be listed and opened while the sandbox is paused,
+replaced, or archived. The flag applies to every organization; with it off the
+artifact routes are not registered, `requestedOutput: "artifact"` is refused,
+and no S3 client is built.
+
+- **Worker.** When the launch context sets `artifacts`, the worker creates
+  `<AO_DATA_DIR>/artifacts/<sessionId>` outside the checkout, passes it to the
+  agent as `AO_ARTIFACTS_DIR`, and names it in the agent prompt. It walks the
+  directory through Go's rooted filesystem API, skipping symlinks, any
+  `.versions` directory, and files over the limits, and uploads a file once two
+  scans see the same size and modification time. The agent's Stop hook, a 30 s
+  rescan, a 2 s rescan after a change, and a final flush at shutdown trigger a
+  sync. It reports a deletion only for files the same worker process synced.
+- **Storage.** The worker sends a manifest of `(path, size, sha256)`; the
+  control plane answers with the paths whose committed row differs. Each
+  changed file is relayed to the versioned tenant artifact bucket at
+  `orgs/{orgId}/sessions/{sessionId}/{path}` with S3 verifying its SHA-256, so a
+  mismatched body creates no version. Sandboxes hold no AWS credentials.
+- **Commit.** The commit checks every uploaded `(path, versionId)` with
+  `HeadObject`, then upserts and deletes `ao_session_artifacts` rows,
+  recomputes the session's `output_type`, and appends an `artifact.changed`
+  event in one transaction, under the session row lock. A commit over 200 files
+  or 500 MiB per session (25 MiB per file) changes nothing. A deleted path gets
+  an S3 delete marker, so its versions expire with the bucket's noncurrent
+  version rule.
+- **Reads.** `GET /sessions/{id}/artifacts` reads PostgreSQL only and never
+  wakes the sandbox. `POST /sessions/{id}/artifacts/access` returns a 30-minute
+  path prefix signed for one organization and session (an iframe cannot send a
+  bearer header). `GET /artifact-files/{token}/{path}` reads the row and streams
+  the row's `version_id`, never the newest S3 version, with a sandbox
+  Content-Security-Policy without `allow-same-origin`, `connect-src 'none'`,
+  `nosniff`, and an ETag of the SHA-256. A row whose object is gone returns
+  404 `artifact_unavailable`.
+
+Every key comes from a worker's claims or from a row read under the caller's
+organization; a client never supplies one. Paths are NFC-normalized and must be
+relative, without `.` or `..` segments, backslashes, drive letters, or control
+characters, with the whole key at most 1024 bytes.
+
+Archiving a session keeps its artifacts. Cloud has no hard delete of a session
+today, so no job removes a session's object versions.
+
 ## Replica lifecycle
 
 - `/healthz` reports process liveness.

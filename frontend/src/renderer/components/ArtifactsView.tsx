@@ -1,7 +1,8 @@
-import { ChevronDown, File, FileText, Folder, Globe, Loader2, Plus, Search } from "lucide-react";
+import { ChevronDown, Cloud, File, FileText, Folder, Globe, Loader2, Plus, Search } from "lucide-react";
 import { ScrollArea } from "radix-ui";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCreateArtifactSession } from "../hooks/useCreateArtifactSession";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import {
@@ -33,11 +34,15 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const ALL_PROJECTS = "all";
 
-/** Every artifact agents have written on this machine, grouped by project. */
+/**
+ * Every artifact agents have written, grouped by project: on this machine, and
+ * in cloud sessions when the control plane keeps artifacts.
+ */
 export function ArtifactsView() {
 	const { t } = useTranslation();
 	const showPageTitle = hidesShellTopbar();
-	const workspaceQuery = useWorkspaceQuery({ includeCloud: false });
+	const cloudArtifacts = useCloudOffering().artifacts;
+	const workspaceQuery = useWorkspaceQuery({ includeCloud: cloudArtifacts });
 	const workspaces = workspaceQuery.data;
 	const groups = useMemo(() => groupArtifactsByProject(workspaces ?? []), [workspaces]);
 	const [query, setQuery] = useState("");
@@ -238,7 +243,7 @@ function CreateArtifactMenu({
 	disabledReason,
 }: {
 	workspaces: readonly WorkspaceSummary[];
-	create: (projectId?: string) => Promise<void>;
+	create: (projectId?: string, cloudOrgId?: string) => Promise<void>;
 	pending: boolean;
 	label?: "create" | "new";
 	align: "center" | "end";
@@ -246,8 +251,12 @@ function CreateArtifactMenu({
 	disabledReason?: string;
 }) {
 	const { t } = useTranslation();
+	// Cloud workspaces are listed only when the control plane keeps artifacts.
 	const projects = workspaces.filter(
-		(workspace) => workspace.id !== STANDALONE_WORKSPACE_ID && workspace.kind !== CLOUD_PROJECT_KIND && !workspace.hostId,
+		(workspace) =>
+			workspace.id !== STANDALONE_WORKSPACE_ID &&
+			!workspace.hostId &&
+			(workspace.kind !== CLOUD_PROJECT_KIND || Boolean(workspace.cloudOrgId)),
 	);
 	const disabled = pending || Boolean(disabledReason);
 	const trigger =
@@ -295,8 +304,12 @@ function CreateArtifactMenu({
 				</DropdownMenuItem>
 				{projects.length > 0 ? <DropdownMenuSeparator /> : null}
 				{projects.map((project) => (
-					<DropdownMenuItem key={project.id} onSelect={() => void create(project.id)}>
-						<Folder aria-hidden="true" className="size-icon-sm" />
+					<DropdownMenuItem key={project.id} onSelect={() => void create(project.id, project.kind === CLOUD_PROJECT_KIND ? project.cloudOrgId : undefined)}>
+						{project.kind === CLOUD_PROJECT_KIND ? (
+							<Cloud aria-hidden="true" className="size-icon-sm" />
+						) : (
+							<Folder aria-hidden="true" className="size-icon-sm" />
+						)}
 						<span className="truncate">{project.name}</span>
 					</DropdownMenuItem>
 				))}

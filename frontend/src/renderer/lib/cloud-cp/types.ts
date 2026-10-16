@@ -71,6 +71,11 @@ export interface CloudCpOffering {
 	 * billed. Absent from older control planes.
 	 */
 	customCoder?: boolean;
+	/**
+	 * Cloud sessions keep artifact files. When false or absent the artifact
+	 * routes do not exist and requestedOutput "artifact" is refused.
+	 */
+	artifacts?: boolean;
 }
 
 /** GET /me */
@@ -324,6 +329,8 @@ export interface CloudCpCreateSessionRequest {
 	 * from `/me`.
 	 */
 	provider?: string;
+	/** "artifact" asks the agent for a file deliverable; needs offering.artifacts. */
+	requestedOutput?: "artifact";
 }
 
 export interface CloudCpSessionRepo {
@@ -553,8 +560,32 @@ export interface CloudCpSession {
 	 * worker has connected yet.
 	 */
 	workerEpoch?: number;
+	/** The deliverable the session was created for. */
+	requestedOutput?: "artifact";
+	/** What the session owns. Absent from older control planes. */
+	outputType?: "none" | "pr" | "artifact" | "pr_artifact";
+	/** Committed artifact files, while the deployment keeps artifacts. */
+	artifactFiles?: CloudCpSessionArtifact[];
 	createdAt: string;
 	updatedAt: string;
+}
+
+/** One committed artifact file of a cloud session. */
+export interface CloudCpSessionArtifact {
+	path: string;
+	name: string;
+	kind: "html" | "markdown" | "file";
+	contentType: string;
+	size: number;
+	sha256: string;
+	updatedAt: string;
+}
+
+/** POST /orgs/{orgId}/sessions/{sessionId}/artifacts/access */
+export interface CloudCpArtifactAccessResponse {
+	/** Control-plane path ending in "/"; append a file's escaped path. */
+	filesPrefix: string;
+	expiresAt: string;
 }
 
 /**

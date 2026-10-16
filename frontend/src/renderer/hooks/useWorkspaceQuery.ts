@@ -491,6 +491,17 @@ export function toCloudWorkspaceSession(
 			startupError: session.startupError,
 			coderWorkspaceUrl: session.coderWorkspaceUrl,
 		},
+		outputType: session.outputType,
+		requestedOutput: session.requestedOutput,
+		// File URLs come from a short-lived access prefix when a file is opened
+		// (useCloudArtifactAccess), not from the list.
+		artifactFiles: session.artifactFiles?.map((file) => ({
+			kind: file.kind,
+			name: file.name,
+			path: file.path,
+			size: file.size,
+			updatedAt: file.updatedAt,
+		})),
 	};
 }
 

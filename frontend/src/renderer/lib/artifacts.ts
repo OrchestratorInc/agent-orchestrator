@@ -1,6 +1,5 @@
 import { isAgentActivityWorking } from "@aoagents/product-ui";
 import {
-	CLOUD_PROJECT_KIND,
 	sessionArtifacts,
 	STANDALONE_WORKSPACE_ID,
 	workerSessions,
@@ -35,14 +34,14 @@ export type ArtifactGroup = {
 };
 
 /**
- * Groups every artifact from live local worker sessions by project. Archived
- * sessions and projects without artifacts are left out; rows sort newest
- * first and groups by their newest row.
+ * Groups every artifact from live local and cloud worker sessions by project.
+ * Remote-host projects, archived sessions and projects without artifacts are
+ * left out; rows sort newest first and groups by their newest row.
  */
 export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[]): ArtifactGroup[] {
 	const groups: ArtifactGroup[] = [];
 	for (const workspace of workspaces) {
-		if (workspace.kind === CLOUD_PROJECT_KIND || workspace.hostId) continue;
+		if (workspace.hostId) continue;
 		const isScratchpad = workspace.id === STANDALONE_WORKSPACE_ID;
 		const rows = workerSessions(workspace.sessions)
 			.filter((session) => !isArchivedSession(session))

@@ -36,6 +36,8 @@ export interface ResolvedCloudOffering {
 	 * list stands in.
 	 */
 	customCoder: boolean;
+	/** Cloud sessions keep artifact files; false for a control plane that does not say. */
+	artifacts: boolean;
 	/** "server" when `/me` carried an offering, "fallback" when it was derived. */
 	source: "server" | "fallback";
 }
@@ -107,6 +109,7 @@ export function resolveCloudOffering(
 			billingMode: offering.billingMode ?? billingModeFromSummary(billing) ?? (billingFailed ? "off" : undefined),
 			features: offering.features ?? [],
 			customCoder: offering.customCoder ?? providers.includes(CODER_PROVIDER),
+			artifacts: offering.artifacts ?? false,
 			source: "server",
 		};
 	}
@@ -121,6 +124,7 @@ export function resolveCloudOffering(
 		billingMode: billingModeFromSummary(billing) ?? (billingFailed ? "off" : undefined),
 		features: [],
 		customCoder: providers.includes(CODER_PROVIDER),
+		artifacts: false,
 		source: "fallback",
 	};
 }

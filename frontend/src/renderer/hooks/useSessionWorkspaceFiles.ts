@@ -2,7 +2,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient, UseQueryOptions } from "@tanstack/react-query";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import type { components } from "../../api/schema";
+import { appI18n } from "../i18n";
 import { apiErrorMessage } from "../lib/api-client";
+import { cloudCpFetch } from "../lib/cloud-cp/renderer-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { WORKSPACE_REVIEW_BATCH_SIZE } from "../lib/workspace-review";
@@ -52,8 +54,12 @@ export type WorkspaceFileSearchResponse = components["schemas"]["WorkspaceFileSe
 export type FilesSource =
 	| { kind: "workspace" }
 	| { kind: "pull_request"; number: number; url: string; label: string; snapshot?: string }
-	/** `readOnly` hides the edit action, as for a cloud session's artifacts. */
-	| { kind: "artifact"; rawUrl?: string; readOnly?: boolean };
+	/**
+	 * `readOnly` hides the edit action, as for a cloud session's artifacts.
+	 * `cloud` fetches rawUrl through the cloud control-plane bridge;
+	 * `artifactRoot` is the URL relative links resolve against.
+	 */
+	| { kind: "artifact"; rawUrl?: string; readOnly?: boolean; cloud?: boolean; artifactRoot?: string };
 
 export const sessionWorkspaceFilesQueryKey = (sessionId: string, hostId?: string) =>
 	hostId ? ["session-workspace-files", hostId, sessionId] as const : ["session-workspace-files", sessionId] as const;
@@ -151,13 +157,16 @@ async function fetchSessionPRFile(sessionId: string, number: number, sourceUrl: 
 // raw bytes on the artifact preview origin, a distinct host from the
 // workspace preview origin — unlike the legacy __ao_artifacts__/ path-prefix
 // form, a workspace-relative path of the same name can never resolve there.
-async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl: string | undefined, errorMessage: string): Promise<WorkspaceFileDetail> {
+async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl: string | undefined, errorMessage: string, cloud = false): Promise<WorkspaceFileDetail> {
 	if (!rawUrl) throw new Error(errorMessage);
-	const response = await fetch(rawUrl);
+	const response = cloud ? await cloudCpFetch(rawUrl) : await fetch(rawUrl);
+	if (cloud && response.status === 404 && (await response.text()).includes("artifact_unavailable")) {
+		throw new Error(appI18n.t("artifacts.unavailable"));
+	}
 	if (!response.ok) throw new Error(errorMessage);
 	const { binary, bytes, content, size, truncated } = await readArtifactTextResponse(response);
-	// Only a complete text file can be edited: the save sends it back whole.
-	const editable = !binary && !truncated;
+	// Only a complete local text file can be edited: the save sends it back whole.
+	const editable = !cloud && !binary && !truncated;
 	return {
 		additions: 0,
 		binary,
@@ -247,10 +256,10 @@ function decodeArtifactText(bytes: Uint8Array, truncated: boolean): { binary: bo
 	}
 }
 
-export function sessionArtifactFileQueryOptions(sessionId: string, path: string, rawUrl: string | undefined, errorMessage = "Unable to load artifact"): UseQueryOptions<WorkspaceFileDetail> {
+export function sessionArtifactFileQueryOptions(sessionId: string, path: string, rawUrl: string | undefined, errorMessage = "Unable to load artifact", cloud = false): UseQueryOptions<WorkspaceFileDetail> {
 	return {
 		queryKey: ["session-artifact-file", rawUrl ?? "", sessionId, path],
-		queryFn: () => fetchSessionArtifactFile(sessionId, path, rawUrl, errorMessage),
+		queryFn: () => fetchSessionArtifactFile(sessionId, path, rawUrl, errorMessage, cloud),
 	};
 }
 
@@ -266,7 +275,7 @@ export function sessionWorkspaceFileQueryOptions(sessionId: string, path: string
 
 export function sessionSourceFileQueryOptions(sessionId: string, source: FilesSource, path: string, errorMessage = "Unable to load file", scope: WorkspaceDiffScope = "combined", commitSha?: string, previousPath = "", hostId?: string): UseQueryOptions<WorkspaceFileDetail> {
 	if (source.kind === "workspace") return sessionWorkspaceFileQueryOptions(sessionId, path, errorMessage, scope, commitSha, hostId);
-	if (source.kind === "artifact") return sessionArtifactFileQueryOptions(sessionId, path, source.rawUrl, errorMessage);
+	if (source.kind === "artifact") return sessionArtifactFileQueryOptions(sessionId, path, source.rawUrl, errorMessage, source.cloud);
 	return { queryKey: hostId ? ["session-source-file", hostId, sessionId, "pull_request", source.url, source.snapshot ?? "", commitSha ?? "", path] : ["session-source-file", sessionId, "pull_request", source.url, source.snapshot ?? "", commitSha ?? "", path], queryFn: () => fetchSessionPRFile(sessionId, source.number, source.url, path, previousPath, errorMessage, commitSha, hostId) };
 }
 
