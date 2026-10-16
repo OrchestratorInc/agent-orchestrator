@@ -3,9 +3,6 @@ package cursoracp
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -43,63 +40,22 @@ func (f *fakeExtensionBridge) RequestApproval(
 
 func (f *fakeExtensionBridge) UpdatePlan(plan *domain.ConversationPlan) { f.plan = plan }
 
-func TestConfigureWritesManagedStandingRuleForStartAndResume(t *testing.T) {
-	dataDir := t.TempDir()
-	cfg := acpdriver.LaunchConfig{
-		SessionID: "worker-1", DataDir: dataDir,
-		SystemPrompt: "AO standing instructions for start",
+func TestStandingInstructionsLeadTheFirstPromptAsText(t *testing.T) {
+	if got := sessionPreamble(acpdriver.LaunchConfig{}); got != nil {
+		t.Fatalf("preamble without instructions = %#v, want none", got)
 	}
-	args, env, err := configure(context.Background(), cfg)
+	cfg := acpdriver.LaunchConfig{SystemPrompt: "AO standing instructions\n<ao-handoff-request>note</ao-handoff-request>"}
+	args, _, err := configure(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("configure start: %v", err)
+		t.Fatalf("configure: %v", err)
 	}
-	if len(args) != 3 || args[0] != "--plugin-dir" || args[2] != "acp" || !filepath.IsAbs(args[1]) {
-		t.Fatalf("args = %#v, want --plugin-dir <absolute-path> acp", args)
+	if len(args) != 1 || args[0] != "acp" {
+		t.Fatalf("args = %#v, want only acp: Cursor's chat ignores --plugin-dir rules", args)
 	}
-	if env != nil {
-		t.Fatalf("env = %#v, want nil", env)
-	}
-	rulePath := filepath.Join(args[1], "rules", "ao-standing.mdc")
-	rule, err := os.ReadFile(rulePath)
-	if err != nil {
-		t.Fatalf("read managed rule: %v", err)
-	}
-	if !strings.Contains(string(rule), "alwaysApply: true") || !strings.Contains(string(rule), cfg.SystemPrompt) {
-		t.Fatalf("managed rule = %q", rule)
-	}
-	if _, err := os.Stat(filepath.Join(args[1], ".cursor-plugin", "plugin.json")); err != nil {
-		t.Fatalf("managed plugin manifest: %v", err)
-	}
-
-	// Resume re-runs Configure for the same AO session. It must replace the
-	// standing rule with the newly generated role instead of retaining launch
-	// context from the previous process.
-	cfg.SystemPrompt = "AO standing instructions recomputed for resume"
-	resumeArgs, _, err := configure(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("configure resume: %v", err)
-	}
-	if !reflect.DeepEqual(resumeArgs, args) {
-		t.Fatalf("resume args = %#v, want stable plugin path %#v", resumeArgs, args)
-	}
-	rule, err = os.ReadFile(rulePath)
-	if err != nil {
-		t.Fatalf("read resumed rule: %v", err)
-	}
-	if !strings.Contains(string(rule), cfg.SystemPrompt) || strings.Contains(string(rule), "instructions for start") {
-		t.Fatalf("resumed managed rule = %q", rule)
-	}
-}
-
-func TestConfigureStopsStandingRuleWriteWhenContextCancelled(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	dataDir := t.TempDir()
-	_, _, err := configure(ctx, acpdriver.LaunchConfig{
-		SessionID: "cancelled", DataDir: dataDir, SystemPrompt: "must not be written",
-	})
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("configure error = %v, want context.Canceled", err)
+	got := sessionPreamble(cfg)
+	if len(got) != 1 || got[0].Text == nil || !strings.Contains(got[0].Text.Text, cfg.SystemPrompt) ||
+		!strings.HasPrefix(got[0].Text.Text, "<ao-standing-instructions>") {
+		t.Fatalf("preamble = %#v, want the instructions as one wrapped text block", got)
 	}
 }
 
@@ -289,19 +245,51 @@ func TestConfigureUsesNativeCursorACPWithoutStandingRule(t *testing.T) {
 	}
 }
 
-func TestSessionOptionsMapOnlyAdvertisedModel(t *testing.T) {
+func TestSessionOptionsSplitAModelIDIntoCursorSettings(t *testing.T) {
 	if got := sessionOptions(ports.ChatTurnSettings{}); got != nil {
 		t.Fatalf("empty settings = %#v", got)
 	}
-	got := sessionOptions(ports.ChatTurnSettings{
-		Model:    "gpt-5.5[context=272k,reasoning=medium,fast=false]",
-		Approval: ports.PermissionModeBypassPermissions,
-		Effort:   "high",
-	})
-	want := []acpdriver.SessionOption{{
-		ID: "model", Value: "gpt-5.5[context=272k,reasoning=medium,fast=false]",
-	}}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("options = %#v, want only provider-advertised model option %#v", got, want)
+	opt := func(id, value string) acpdriver.SessionOption {
+		return acpdriver.SessionOption{ID: id, Value: value, Optional: id != "model"}
+	}
+	effort := func(value, reasoning string) []acpdriver.SessionOption {
+		return []acpdriver.SessionOption{opt("effort", value), opt("reasoning_effort", value), opt("reasoning", reasoning)}
+	}
+	tests := []struct {
+		name     string
+		settings ports.ChatTurnSettings
+		want     []acpdriver.SessionOption
+	}{
+		{"plain id keeps Cursor's saved settings", ports.ChatTurnSettings{Model: "claude-opus-4-8"},
+			[]acpdriver.SessionOption{opt("model", "claude-opus-4-8")}},
+		{"auto is Cursor's default", ports.ChatTurnSettings{Model: "auto"},
+			[]acpdriver.SessionOption{opt("model", "default")}},
+		{"command-line id with every setting", ports.ChatTurnSettings{Model: "claude-opus-4-8-thinking-high-fast"},
+			append([]acpdriver.SessionOption{opt("model", "claude-opus-4-8"), opt("thinking", "true"), opt("fast", "true")}, effort("high", "high")...)},
+		{"a setting the id leaves out is off", ports.ChatTurnSettings{Model: "claude-opus-4-8-low"},
+			append([]acpdriver.SessionOption{opt("model", "claude-opus-4-8"), opt("thinking", "false"), opt("fast", "false")}, effort("low", "low")...)},
+		{"effort before thinking", ports.ChatTurnSettings{Model: "claude-4.6-opus-high-thinking"},
+			append([]acpdriver.SessionOption{opt("model", "claude-opus-4-6"), opt("thinking", "true"), opt("fast", "false")}, effort("high", "high")...)},
+		{"an older Claude is named family first", ports.ChatTurnSettings{Model: "claude-4.6-opus-max-thinking"},
+			append([]acpdriver.SessionOption{opt("model", "claude-opus-4-6"), opt("thinking", "true"), opt("fast", "false")}, effort("max", "max")...)},
+		{"an older Claude with no settings in its id", ports.ChatTurnSettings{Model: "claude-4-sonnet-thinking"},
+			[]acpdriver.SessionOption{opt("model", "claude-sonnet-4"), opt("thinking", "true"), opt("fast", "false")}},
+		{"extra high is an effort", ports.ChatTurnSettings{Model: "gpt-5.5-extra-high-fast"},
+			append([]acpdriver.SessionOption{opt("model", "gpt-5.5"), opt("thinking", "false"), opt("fast", "true")}, effort("xhigh", "extra-high")...)},
+		{"grok drops the command-line prefix", ports.ChatTurnSettings{Model: "cursor-grok-4.6-high"},
+			append([]acpdriver.SessionOption{opt("model", "grok-4.6"), opt("thinking", "false"), opt("fast", "false")}, effort("high", "high")...)},
+		{"an older session's bracket id", ports.ChatTurnSettings{Model: "gpt-5.5[context=272k,reasoning=medium,fast=false]"},
+			append([]acpdriver.SessionOption{opt("model", "gpt-5.5"), opt("fast", "false")}, effort("medium", "medium")...)},
+		{"a chosen effort wins", ports.ChatTurnSettings{Model: "gpt-5.5[reasoning=medium]", Effort: "high"},
+			append([]acpdriver.SessionOption{opt("model", "gpt-5.5")}, effort("high", "high")...)},
+		{"a model whose name ends in a number", ports.ChatTurnSettings{Model: "gpt-5-mini"},
+			[]acpdriver.SessionOption{opt("model", "gpt-5-mini")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sessionOptions(tt.settings); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("options = %#v, want %#v", got, tt.want)
+			}
+		})
 	}
 }

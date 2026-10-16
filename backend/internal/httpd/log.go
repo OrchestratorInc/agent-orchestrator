@@ -11,7 +11,6 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
-	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
@@ -112,7 +111,7 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 					}
 					// Capture genuine faults to Sentry with the real error/stack.
 					// 503 (transient contention) is excluded by ShouldCaptureStatus.
-					if sentryobs.ShouldCaptureStatus(ww.Status()) && captured.ReportingOwner != ownership.OwnerAgentSwitchSaga {
+					if sentryobs.ShouldCaptureStatus(ww.Status()) {
 						err := capErr
 						if err == nil {
 							err = fmt.Errorf("HTTP %d %s %s", ww.Status(), r.Method, path)

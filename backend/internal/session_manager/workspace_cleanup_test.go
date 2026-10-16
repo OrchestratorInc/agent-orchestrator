@@ -304,7 +304,7 @@ func TestRequestKillReturnsBeforeCleanupAndShutdownPreservesWorkspace(t *testing
 	if err != nil || !ok || facts.WorkspaceDisposition != domain.DispositionPending {
 		t.Fatalf("pending cleanup not recorded: %+v %v", facts, err)
 	}
-	if _, err := m.RestoreWithMode(context.Background(), rec.ID); !errors.Is(err, ErrSwitchInProgress) {
+	if _, err := m.RestoreWithMode(context.Background(), rec.ID); !errors.Is(err, ErrOperationInProgress) {
 		t.Fatalf("restore must not overlap cleanup: %v", err)
 	}
 	retry, err := m.Cleanup(context.Background(), rec.ProjectID)

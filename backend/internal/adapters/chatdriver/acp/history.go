@@ -520,9 +520,24 @@ func optionalMessageID(id *string) string {
 	return strings.TrimSpace(*id)
 }
 
+const (
+	standingOpen  = "<ao-standing-instructions>"
+	standingClose = "</ao-standing-instructions>"
+)
+
+// StandingInstructionsBlock carries AO's standing instructions as prompt text,
+// for an agent that reads them no other way. An agent may replay it joined to
+// the user's first message; history drops it again.
+func StandingInstructionsBlock(text string) acpsdk.ContentBlock {
+	return acpsdk.TextBlock(standingOpen + "\n" + strings.ReplaceAll(text, standingClose, "") + "\n" + standingClose)
+}
+
 func historicalUserContent(content acpsdk.ContentBlock) string {
 	switch {
 	case content.Text != nil:
+		if _, rest, ok := strings.Cut(content.Text.Text, standingClose); ok && strings.HasPrefix(content.Text.Text, standingOpen) {
+			return strings.TrimLeft(rest, "\n")
+		}
 		return content.Text.Text
 	case content.Image != nil:
 		return "[Image]"

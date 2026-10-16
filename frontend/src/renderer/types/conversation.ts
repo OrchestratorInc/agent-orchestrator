@@ -435,6 +435,7 @@ export interface SystemEventDetail {
 		| "plan"
 		| "context.reset"
 		| "context.boundary"
+		| "provider_switch"
 		| "render"
 		| "artifact"
 		| "workspace.setup";
@@ -442,6 +443,14 @@ export interface SystemEventDetail {
 	setupStatus?: "succeeded" | "failed" | "timed_out";
 	/** workspace.setup: the 1-based Setup step that failed or timed out. */
 	setupStep?: number;
+	/** provider_switch */
+	sourceHarness?: string;
+	targetHarness?: string;
+	sourceModel?: string;
+	targetModel?: string;
+	targetEffort?: string;
+	/** The Claude Code compaction window the target started with, such as "200k". */
+	targetAutoCompactWindow?: string;
 	/** render */
 	render?: RenderRef;
 	/** artifact */
@@ -612,6 +621,12 @@ export interface TurnSettings {
 	model?: string;
 	reasoningEffort?: string;
 	approvalMode?: ApprovalMode;
+	/** Ask for the provider's faster tier, on models that offer one. */
+	fastMode?: boolean;
+	/** Ask the provider to plan rather than act, where AO sets that per turn. */
+	planMode?: boolean;
+	/** Where Claude Code compacts on its own. Unset leaves it to Claude Code. */
+	autoCompactWindow?: "200k" | "1m";
 }
 
 /** One model the provider offers for this session. */
@@ -624,6 +639,8 @@ export interface ChatModel {
 	/** Reasoning levels this model supports, in the provider's order. */
 	efforts?: string[];
 	defaultEffort?: string;
+	/** The model can run on the provider's faster tier. */
+	supportsFast?: boolean;
 }
 
 /** One provider-owned setting advertised for this live chat session. */

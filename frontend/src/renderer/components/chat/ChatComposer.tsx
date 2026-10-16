@@ -48,7 +48,9 @@ import {
 	type ReactNode,
 	type Ref,
 } from "react";
-import { ArrowUp, CornerUpRight, Loader2, Play, Plus, Square, X } from "lucide-react";
+import { ArrowUp, CornerUpRight, Loader2, Paperclip, Play, Plus, Square, X } from "lucide-react";
+import { OptionMenu, OptionMenuContent, OptionMenuLabel, OptionMenuTrigger } from "../ui/option-menu";
+import { ComposerMenuRow } from "./TurnSettingsBar";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { ChatAnnotationSummary } from "./ChatAnnotationSummary";
@@ -107,7 +109,10 @@ import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
 
 // These responses precede AppendUserMessage. Provider/transport errors can
 // follow durable acceptance and must keep the original delivery ID for recovery.
+/** The agent switch that runs before a send failed, so the message never left. */
+export const AGENT_SWITCH_FAILED = "AGENT_SWITCH_FAILED";
 const DEFINITIVE_SEND_REJECTIONS = new Set([
+	AGENT_SWITCH_FAILED,
 	// Cloud validation failures reject the request before durable acceptance.
 	"validation_error",
 	"INVALID_BODY",
@@ -185,6 +190,7 @@ export const ChatComposer = memo(function ChatComposer({
 	disabledPlaceholder,
 	starting,
 	settings,
+	addMenuItems,
 	approval,
 	elicitation,
 	skills = [],
@@ -239,6 +245,8 @@ export const ChatComposer = memo(function ChatComposer({
 		excerpts?: ChatDraftExcerptReference[],
 	) => void | Promise<unknown>;
 	settings?: ReactNode;
+	/** Mode rows for the add menu. With them the plus button opens a menu instead of the file picker. */
+	addMenuItems?: ReactNode;
 	/** A provider decision that temporarily replaces ordinary message entry. */
 	approval?: ReactNode;
 	/** A provider question, docked above the composer until it is answered. */
@@ -404,6 +412,8 @@ export const ChatComposer = memo(function ChatComposer({
 
 	const editor = useRef<ComposerEditorHandle>(null);
 	const filePicker = useRef<HTMLInputElement>(null);
+	const addMenuTrigger = useRef<HTMLButtonElement>(null);
+	const [addMenuBox, setAddMenuBox] = useState<{ lift: number; shift: number; width: number }>();
 	const submitInFlight = useRef<Promise<void> | null>(null);
 	// Disabling the active editor can move focus to the document body. Remember
 	// keyboard-origin submissions so focus can return once the editor is enabled.
@@ -1486,7 +1496,8 @@ export const ChatComposer = memo(function ChatComposer({
 				setDeliveryUncertain(false);
 				setDeliveryRecoveryNotice(null);
 				setTextDraftPersistenceError(cleared.ok ? null : "chat.draft.saveFailed");
-				setSendError(apiErrorMessage(error));
+				// A failed agent switch is reported in its own strip above the box.
+				setSendError(apiErrorCode(error) === AGENT_SWITCH_FAILED ? null : apiErrorMessage(error));
 				return;
 			}
 			setDeliveryUncertain(true);
@@ -1876,6 +1887,48 @@ export const ChatComposer = memo(function ChatComposer({
 										event.target.value = "";
 									}}
 								/>
+								{addMenuItems ? (
+									<OptionMenu
+										onOpenChange={(open) => {
+											// Measured on open: the panel sits on top of the chat box and is
+											// as wide as it, rather than hanging off the button.
+											const button = addMenuTrigger.current;
+											const box = button?.closest("form")?.getBoundingClientRect();
+											const origin = button?.getBoundingClientRect();
+											if (open && box && origin) setAddMenuBox({ lift: origin.top - box.top + 6, shift: box.left - origin.left, width: box.width });
+										}}
+									>
+										<OptionMenuTrigger
+											ref={addMenuTrigger}
+											showCaret={false}
+											disabled={controlsDisabled}
+											aria-label="Add"
+											title="Add files or change mode"
+											className="size-7 shrink-0 justify-center rounded-full bg-transparent p-0 text-muted-foreground hover:bg-interactive-active hover:text-foreground data-[state=open]:bg-interactive-active"
+										>
+											<Plus aria-hidden="true" className="size-3.5" />
+										</OptionMenuTrigger>
+										<OptionMenuContent
+											align="start"
+											side="top"
+											sideOffset={addMenuBox?.lift}
+											alignOffset={addMenuBox?.shift}
+											avoidCollisions={false}
+											style={addMenuBox ? { width: addMenuBox.width } : undefined}
+											className="chat-settings-menu max-w-none text-[12px]!"
+										>
+											<OptionMenuLabel className="px-3 pt-1.5 pb-1 text-[11px]!">Add</OptionMenuLabel>
+											<ComposerMenuRow
+												icon={Paperclip}
+												title="Files"
+												description="Attach files to this message"
+												disabled={queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
+												onSelect={() => filePicker.current?.click()}
+											/>
+											{addMenuItems}
+										</OptionMenuContent>
+									</OptionMenu>
+								) : (
 								<Tooltip>
 									<TooltipTrigger asChild>
 										<span className="inline-flex">
@@ -1894,6 +1947,7 @@ export const ChatComposer = memo(function ChatComposer({
 									</TooltipTrigger>
 									<TooltipContent side="bottom">Attach a file</TooltipContent>
 								</Tooltip>
+								)}
 							</>
 						) : null}
 						{settings}

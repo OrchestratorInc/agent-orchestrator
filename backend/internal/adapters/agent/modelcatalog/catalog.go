@@ -574,7 +574,8 @@ func discoverCodexCatalog(ctx context.Context, request ports.AgentModelDiscovery
 		normalized = append(normalized, ports.AgentModelInfo{
 			ID: id, Label: label, Provider: provider, IsDefault: item.Default,
 			Efforts: append([]string(nil), item.Efforts...), DefaultEffort: item.DefaultEffort,
-			Inputs: modelInputs(item.Inputs),
+			SupportsFast: item.FastTier != "",
+			Inputs:       modelInputs(item.Inputs),
 		})
 	}
 	if len(normalized) == 0 {

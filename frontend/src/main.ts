@@ -42,9 +42,7 @@ import {
 import { listFeatureBuilds, getActiveFeatureBuild } from "./main/feature-builds";
 import { initMainSentry, sanitizeRendererCapture } from "./main/sentry-main";
 import { TelemetryPolicyAuthority, resolveDesktopDataDir } from "./main/telemetry-policy-file";
-import { DaemonTelemetryPolicyClient } from "./main/daemon-telemetry-policy-client";
 import { DesktopTelemetryController } from "./main/desktop-telemetry-controller";
-import { AgentSwitchVisibilityController } from "./main/agent-switch-observability";
 import { readUpdateSettings, type UpdateSettings, type UpdateStatus } from "./main/update-settings";
 import { readKeybindingOverrides, writeKeybindingOverrides } from "./main/keybinding-settings";
 import { readEditorSettings, writeEditorPreference } from "./main/editor-settings";
@@ -187,7 +185,6 @@ import { registerRemotesIpc, remotesFilePath } from "./main/remotes-main";
 import { createLocalHostIdentity } from "./main/remote-request";
 import { RemoteRegistry } from "./main/remote-registry";
 import { startRemoteProxy } from "./main/remote-proxy";
-import { AGENT_SWITCH_VISIBILITY_IPC_CHANNEL } from "./shared/agent-switch-observability";
 
 // Globals injected at compile time by @electron-forge/plugin-vite.
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
@@ -264,7 +261,6 @@ app.setPath(
 const desktopLaunchWorkingDirectory = process.cwd();
 const desktopDataDir = resolveDesktopDataDir(process.env, os.homedir(), desktopLaunchWorkingDirectory, app.isPackaged);
 let telemetryPolicyController: DesktopTelemetryController | null = null;
-let agentSwitchVisibilityController: AgentSwitchVisibilityController | null = null;
 const trustedShellWebContents = new Map<number, WebContents>();
 const pendingRendererQueuePurges = new Map<string, {
 	senderId: number;
@@ -799,10 +795,8 @@ async function createWindowInternal(): Promise<void> {
 	const shellWebContents = getShellWebContents();
 	if (!shellWebContents) throw new Error("AO shell WebContents was not created");
 	trustedShellWebContents.set(shellWebContents.id, shellWebContents);
-	agentSwitchVisibilityController?.registerWindow(shellWebContents.id);
 	shellWebContents.once("destroyed", () => {
 		trustedShellWebContents.delete(shellWebContents.id);
-		agentSwitchVisibilityController?.destroyWindow(shellWebContents.id);
 	});
 
 	// On Windows the app paints its own title bar (WindowTitlebar), so the native
@@ -2532,12 +2526,6 @@ ipcMain.handle("telemetry:capture", (_event, request: RendererTelemetryCapture) 
 	if (!telemetryPolicyController || !sanitized) return false;
 	return telemetryPolicyController.capture(sanitized);
 });
-ipcMain.on(AGENT_SWITCH_VISIBILITY_IPC_CHANNEL, (event, request: unknown) => {
-	const trustedSender = trustedShellWebContents.get(event.sender.id);
-	if (trustedSender !== event.sender || trustedSender.isDestroyed()) return;
-	agentSwitchVisibilityController?.signal(event.sender.id, request);
-});
-
 function failClosedTelemetryPolicyView(): TelemetryPolicyView {
 	return { eventsEnabled: false, consentGeneration: "unavailable", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "cleanup_failed", environmentVeto: true, durabilitySupported: false, reason: "invalid_authority" };
 }
@@ -3157,20 +3145,11 @@ app.whenReady().then(async () => {
 		);
 	}
 	void refreshGitHubOwners();
-	const visibilityKillSwitched = (process.env.AO_TELEMETRY_DISABLED_EVENTS ?? "").split(",").some((name) => name.trim() === "ao.agent_switch.visibility_failure");
-	// The approved release gate is intentionally closed. Tests inject the
-	// dedicated no-cache sender; the shipping composition creates no visibility
-	// network transport until that gate is separately approved.
-	agentSwitchVisibilityController = new AgentSwitchVisibilityController({ send: async () => undefined, killSwitched: visibilityKillSwitched, diagnostic: (code) => console.warn("agent switch visibility diagnostic:", code) });
-	for (const shellContents of trustedShellWebContents.values()) agentSwitchVisibilityController.registerWindow(shellContents.id);
 	const authority = new TelemetryPolicyAuthority({ dataDir: desktopDataDir, packagedDefault: app.isPackaged, platform: process.platform });
-	const daemonPolicy = new DaemonTelemetryPolicyClient(() => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null, (url, init) => net.fetch(url, init));
 	const policyController = new DesktopTelemetryController({
 		authority,
-		daemon: daemonPolicy,
 		environmentAllowsEvents: rendererTelemetryEnabled(process.env, app.isPackaged),
 		transportFactory: () => initMainSentry(app.getVersion(), app.getPath("userData")),
-		visibility: agentSwitchVisibilityController,
 		clearRendererQueues: clearRendererTelemetryQueues,
 		broadcast: (view) => {
 			for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(TELEMETRY_POLICY_CHANGED_CHANNEL, view);

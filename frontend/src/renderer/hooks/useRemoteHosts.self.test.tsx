@@ -39,7 +39,6 @@ vi.mock("../lib/account-remote-hosts", () => ({ listAccountRemoteHosts: async ()
 vi.mock("./useCloudCp", () => ({ useCloudCp: () => ({ ready: false, client: {}, baseUrl: "" }) }));
 vi.mock("./useCloudOrg", () => ({ useCloudOrg: () => ({ ready: false, org: undefined }) }));
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
-vi.mock("../lib/agent-switch-visibility", () => ({ agentSwitchVisibility: { setQueryHealthy: vi.fn() } }));
 
 import { useRemoteHosts } from "./useRemoteHosts";
 import { useRemoteWorkspaces, useWorkspaceQuery } from "./useWorkspaceQuery";

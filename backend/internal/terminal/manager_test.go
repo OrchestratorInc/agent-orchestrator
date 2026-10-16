@@ -770,3 +770,16 @@ func TestLargestGridFallsBackToSecondaryWhenNoPrimaryHasASize(t *testing.T) {
 		t.Fatalf("largestGrid once the desktop measures = %dx%d, want 151x38", cols, rows)
 	}
 }
+
+func TestTerminalReportsAreNotInput(t *testing.T) {
+	for _, raw := range []string{"\x1b[I", "\x1b[O", "\x1b[?1;2c", "\x1b[12;40R", "\x1b]11;rgb:0000/0000/0000\x07", "\x1b[I\x1b[O"} {
+		if !terminalReports.MatchString(raw) {
+			t.Errorf("%q should be a terminal report", raw)
+		}
+	}
+	for _, raw := range []string{"a", "\r", "\x1b[A", "hello\x1b[I", "\x03"} {
+		if terminalReports.MatchString(raw) {
+			t.Errorf("%q should count as input", raw)
+		}
+	}
+}

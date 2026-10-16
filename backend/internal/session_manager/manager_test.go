@@ -65,9 +65,6 @@ type fakeStore struct {
 
 	createClientRequestErr error
 	promoteTaskErr         error
-	// agentSwitchStore is wired only by agent-switch tests so fakeLCM can model
-	// Lifecycle Manager's atomic ownership-boundary commands.
-	agentSwitchStore any
 	// worktrees maps session ID to its saved worktree rows (shutdown-saved marker).
 	worktrees map[domain.SessionID][]domain.SessionWorktreeRecord
 	// sharedLog, when non-nil, receives an ordered call entry for each
@@ -554,33 +551,6 @@ func (l *fakeLCM) changeControllerEpoch(
 	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()}
 	l.store.sessions[id] = rec
 	return true, nil
-}
-func (l *fakeLCM) ConfirmAgentSwitchSourceStopped(ctx context.Context, confirmation domain.AgentSwitchSourceStopConfirmation) (bool, error) {
-	store, ok := l.store.agentSwitchStore.(interface {
-		ConfirmAgentSwitchSourceStopped(context.Context, domain.AgentSwitchSourceStopConfirmation) (bool, error)
-	})
-	if !ok {
-		return false, errors.New("fake lifecycle: agent-switch source-stop persistence unavailable")
-	}
-	return store.ConfirmAgentSwitchSourceStopped(ctx, confirmation)
-}
-func (l *fakeLCM) ActivateAgentSwitchTarget(ctx context.Context, activation domain.AgentSwitchTargetActivation) (bool, error) {
-	store, ok := l.store.agentSwitchStore.(interface {
-		ActivateAgentSwitchTarget(context.Context, domain.AgentSwitchTargetActivation) (bool, error)
-	})
-	if !ok {
-		return false, errors.New("fake lifecycle: agent-switch target activation persistence unavailable")
-	}
-	return store.ActivateAgentSwitchTarget(ctx, activation)
-}
-func (l *fakeLCM) ActivateChatAgentSwitchTarget(ctx context.Context, activation domain.AgentSwitchChatTargetActivation) (bool, error) {
-	store, ok := l.store.agentSwitchStore.(interface {
-		ActivateChatAgentSwitchTarget(context.Context, domain.AgentSwitchChatTargetActivation) (bool, error)
-	})
-	if !ok {
-		return false, errors.New("fake lifecycle: Chat agent-switch target activation persistence unavailable")
-	}
-	return store.ActivateChatAgentSwitchTarget(ctx, activation)
 }
 
 // MarkTerminated mirrors the real lifecycle.Manager, which refuses to write on
@@ -2463,20 +2433,6 @@ func TestResumeAgent_RejectsConcurrentRequest(t *testing.T) {
 	close(runtime.release)
 	if err := <-firstDone; err != nil {
 		t.Fatalf("first resume: %v", err)
-	}
-}
-
-func TestResumeAgent_ReportsActiveAgentSwitch(t *testing.T) {
-	baseRuntime := &fakeRuntime{aliveByHandle: map[string]bool{"tmux-mer-1": true}}
-	agent := supervisedLaunchAgent{launchArgvAgent{argv: []string{"codex", "resume", "agent-x"}}}
-	m, _, _ := newExitedResumeManager(t, baseRuntime, agent)
-	if err := m.beginAgentSwitch(ctx, "mer-1"); err != nil {
-		t.Fatal(err)
-	}
-	defer m.endAgentSwitch("mer-1")
-
-	if _, err := m.ResumeAgentWithMode(ctx, "mer-1"); !errors.Is(err, ErrSwitchInProgress) {
-		t.Fatalf("resume during switch error = %v, want ErrSwitchInProgress", err)
 	}
 }
 
@@ -11276,7 +11232,7 @@ func TestHarnessNudgeSafe(t *testing.T) {
 }
 
 func TestSwitchTargetsOnlyRetryEnterWhenActivitySignalsMakeItSafe(t *testing.T) {
-	agents := switchTestAgents{
+	agents := testAgentRegistry{
 		domain.HarnessClaudeCode: claudecode.New(),
 		domain.HarnessCodex:      codex.New(),
 	}

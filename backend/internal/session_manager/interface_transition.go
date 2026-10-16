@@ -597,6 +597,19 @@ func (m *Manager) runInterfaceTransition(
 		fail(code, err)
 		return
 	}
+	if transition.SourceMode == domain.SessionModeTUI && transition.TargetMode == domain.SessionModeChat &&
+		transition.NativeConversationID != "" {
+		// Chat resumed this provider thread and imported its history into the
+		// conversation tables, so the terminal copy of those turns would now be a
+		// duplicate. Turns of other threads were not imported and stay.
+		if cleaner, ok := m.store.(interface {
+			DeleteTerminalTurnsForThread(context.Context, domain.SessionID, domain.AgentHarness, string) error
+		}); ok {
+			if err := cleaner.DeleteTerminalTurnsForThread(ctx, rec.ID, rec.Harness, transition.NativeConversationID); err != nil {
+				m.logger.Warn("delete imported terminal turns", "sessionID", rec.ID, "error", err)
+			}
+		}
+	}
 	if err := m.moveInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionActivating, "", ""); err != nil {
 		// The target is live. Do not tear it down merely because diagnostics failed
 		// to advance; mark recovery so a user is never left with no controller.
@@ -856,6 +869,7 @@ func (m *Manager) preflightInterfaceTarget(
 		return err
 	}
 	config := restoredAgentConfig(rec, project.Config)
+	config.Launch = m.sessionLaunchOptions(ctx, rec.ID)
 	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
 	pinRuntimePermissionEnv(env, config.Permissions)
 	m.augmentAgentRuntimeEnv(agent, env)
@@ -871,7 +885,7 @@ func (m *Manager) preflightInterfaceTarget(
 	var cmd []string
 	if transition.NativeConversationID == "" {
 		cmd, _, _, err = freshLaunchArgv(ctx, agent, rec.ID, rec.Metadata.WorkspacePath,
-			rec.Metadata, systemPrompt, "", config, rec.Kind, m.dataDir, true)
+			rec.Metadata, systemPrompt, "", config, rec.Kind, m.dataDir, true, "")
 	} else {
 		var resumable bool
 		cmd, resumable, err = agent.GetRestoreCommand(ctx, ports.RestoreConfig{

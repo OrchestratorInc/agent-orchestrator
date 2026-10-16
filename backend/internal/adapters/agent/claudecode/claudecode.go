@@ -191,6 +191,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		Binary:           binary,
 		SessionID:        cfg.SessionID,
 		NativeSessionID:  nativeSessionID,
+		ProviderArgs:     claudeLaunchSettingsArgs(cfg.Config.Launch),
 		Model:            cfg.Config.Model,
 		Effort:           cfg.Config.Effort,
 		Prompt:           cfg.Prompt,
@@ -200,6 +201,24 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		AllowedTools:     cfg.AllowedTools,
 		DisallowedTools:  cfg.DisallowedTools,
 	})
+}
+
+// claudeLaunchSettingsArgs passes a session's launch choices to Claude Code as
+// settings: Ultracode, and the token count at which it compacts on its own.
+func claudeLaunchSettingsArgs(options domain.AgentLaunchOptions) []string {
+	settings := map[string]any{}
+	if options.Ultracode {
+		settings["ultracode"] = true
+	}
+	if tokens := domain.AutoCompactTokens[options.AutoCompactWindow]; tokens > 0 {
+		settings["autoCompactEnabled"] = true
+		settings["autoCompactWindow"] = tokens
+	}
+	if len(settings) == 0 {
+		return nil
+	}
+	encoded, _ := json.Marshal(settings)
+	return []string{"--settings", string(encoded)}
 }
 
 // freshLaunchNativeSessionID keeps a fresh launch from adopting someone else's
@@ -278,6 +297,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		Binary:           binary,
 		SessionID:        cfg.Session.ID,
 		Metadata:         cfg.Session.Metadata,
+		ProviderArgs:     claudeLaunchSettingsArgs(cfg.Config.Launch),
 		Model:            cfg.Config.Model,
 		Effort:           cfg.Config.Effort,
 		Prompt:           cfg.Prompt,

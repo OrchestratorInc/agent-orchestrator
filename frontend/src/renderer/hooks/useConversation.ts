@@ -289,6 +289,7 @@ export function invalidateConversationProviderCatalogs(queryClient: QueryClient,
 const CONVERSATION_PAGE_SIZE = 200;
 const remoteConversationRefreshErrorKey = (sessionId: string, hostId: string) => ["remote-conversation-refresh-error", hostId, sessionId] as const;
 const CONFIG_OPTIONS_POLL_INTERVAL_MS = 5_000;
+const CONFIG_OPTION_WRITE_TIMEOUT_MS = 60_000;
 const SKILLS_POLL_INTERVAL_MS = 60_000;
 
 /**
@@ -424,6 +425,28 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 			void query.fetchNextPage();
 		},
 	};
+}
+
+/** Switches the session's agent, then drops what was cached from the outgoing one. */
+export function useProviderSwitchCommand(sessionId: string, hostId?: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: async (request: Omit<components["schemas"]["ProviderSwitchRequest"], "idempotencyKey">) => {
+			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/provider-switch", {
+				params: { path: { sessionId } },
+				body: { ...request, idempotencyKey: crypto.randomUUID() },
+			});
+			if (error) throw error;
+			return data;
+		},
+		onSuccess: async () => {
+			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
+			// Provider catalogs are keyed by the AO session id, so the outgoing provider's must go first.
+			clearConversationProviderCatalogs(queryClient, sessionId, hostId);
+			await queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
+			invalidateConversationProviderCatalogs(queryClient, sessionId, hostId);
+		},
+	});
 }
 
 /** Commands against a conversation. Each refetches the snapshot on success. */
@@ -1025,6 +1048,16 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		compact: () => compact.mutateAsync(),
 		choosingSettings: chooseSettings.isPending && chooseSettings.variables?.targetSessionId === sessionId,
 		chooseSettings: (settings: TurnSettings) => chooseSettings.mutate({ targetSessionId: sessionId as string, settings }),
+		/** Saves settings the agent only reads when it starts, then restarts it. The conversation is resumed, not replaced. */
+		chooseStartSettings: async (settings: TurnSettings) => {
+			await chooseSettings.mutateAsync({ targetSessionId: sessionId as string, settings });
+			const { error } = await clientForSessionHost(hostId).POST(
+				"/api/v1/sessions/{sessionId}/exit-agent",
+				{ params: { path: { sessionId: sessionId as string } } },
+			);
+			if (error) throw new Error(apiErrorMessage(error));
+			await resume.mutateAsync();
+		},
 		/** A compaction is in flight provider-side and takes seconds, so it reads as
 		 *  its own state rather than folding into the generic busy flag, which also
 		 *  gates the composer. */
@@ -1301,7 +1334,21 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 		// Held across the whole write, paired with the cancel below: `onMutate`
 		// runs before the request and `onSettled` after the result is committed,
 		// so no poll can start or land inside that window.
-		onMutate: () => setWriting(true),
+		// The picked value shows at once; the agent's reply, which can take seconds,
+		// brings the settings that depend on it.
+		onMutate: async ({ optionId, value }) => {
+			setWriting(true);
+			await queryClient.cancelQueries({ queryKey });
+			const previous = queryClient.getQueryData<ChatConfigOption[]>(queryKey);
+			queryClient.setQueryData<ChatConfigOption[]>(queryKey, previous?.map((option) => option.id !== optionId ? option
+				: "value" in value ? { ...option, currentValue: value.value } : { ...option, currentBoolean: value.enabled }));
+			return { previous, controllerEpoch: conversationProviderCatalogEpoch(queryClient, sessionUiKey(sessionId as string, hostId)) };
+		},
+		onError: (_error, _variables, context) => {
+			// A switch since the pick replaced the list; the old agent's must not come back.
+			if (!context?.previous || context.controllerEpoch !== conversationProviderCatalogEpoch(queryClient, sessionUiKey(sessionId as string, hostId))) return;
+			queryClient.setQueryData(queryKey, context.previous);
+		},
 		onSettled: () => setWriting(false),
 		mutationFn: async ({
 			optionId,
@@ -1325,6 +1372,8 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 						},
 					},
 					body: value,
+					// An agent that never answers must not hold the settings locked.
+					signal: AbortSignal.timeout(CONFIG_OPTION_WRITE_TIMEOUT_MS),
 				},
 			);
 			if (error) throw error;
@@ -1499,6 +1548,9 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			model: wire.settings?.model || undefined,
 			reasoningEffort: wire.settings?.reasoningEffort || undefined,
 			approvalMode: (wire.settings?.approvalMode as ApprovalMode | undefined) || undefined,
+			fastMode: wire.settings?.fastMode || undefined,
+			planMode: wire.settings?.planMode || undefined,
+			autoCompactWindow: wire.settings?.autoCompactWindow || undefined,
 		},
 		// Absent means the provider has not reported, which the meter renders as
 		// nothing rather than as an empty bar.

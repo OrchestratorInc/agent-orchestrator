@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"log/slog"
+	"regexp"
 	"sync"
 	"time"
 
@@ -178,9 +179,16 @@ func (m *Manager) writeInput(terminalID string, a *attachment, raw []byte, relea
 		release()
 		return
 	}
-	m.lastInputAt[terminalID] = time.Now()
+	if !terminalReports.Match(raw) {
+		m.lastInputAt[terminalID] = time.Now()
+	}
 	_ = a.writeLeased(raw, release)
 }
+
+// terminalReports matches bytes the terminal view sends on its own, not typed by
+// anyone: focus in and out, and replies to the agent's device, cursor and colour
+// queries. They are no reason to think the agent was given work.
+var terminalReports = regexp.MustCompile(`^(?:\x1b\[[IO]|\x1b\[[?>]?[0-9;]*[cRn]|\x1b\][0-9]+;[^\x07\x1b]*(?:\x07|\x1b\\))+$`)
 
 // Close tears down every live attachment and stops re-attach loops. Safe to
 // call once on daemon shutdown.

@@ -1,5 +1,6 @@
 import type { TFunction } from "i18next";
 import { Check } from "lucide-react";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { OptionMenu, OptionMenuContent, OptionMenuItem, OptionMenuTrigger } from "../ui/option-menu";
@@ -87,7 +88,7 @@ export function EffortMenuItems({ value, choices, onChange, defaultValue = "", d
 	</>;
 }
 
-export function EffortPicker(props: EffortMenuProps & { disabled?: boolean; label?: string; triggerClassName?: string; menuClassName?: string }) {
+export function EffortPicker(props: EffortMenuProps & { disabled?: boolean; label?: string; triggerClassName?: string; menuClassName?: string; footer?: ReactNode }) {
 	const { t } = useTranslation();
 	const following = props.value === (props.defaultValue ?? "") || (!props.value && props.defaultValue === "default");
 	const label = effortDisplayLabel({
@@ -102,6 +103,6 @@ export function EffortPicker(props: EffortMenuProps & { disabled?: boolean; labe
 		<OptionMenuTrigger disabled={props.disabled} aria-label={props.label || t("settings.models.effort")} className={props.triggerClassName}>
 			<span className="min-w-0 truncate">{label}</span>
 		</OptionMenuTrigger>
-		<OptionMenuContent align="end" className={cn("w-[min(16rem,calc(100vw-2rem))]! min-w-0! max-w-[calc(100vw-2rem)]!", props.menuClassName)}><EffortMenuItems {...props} /></OptionMenuContent>
+		<OptionMenuContent align="end" className={cn("w-[min(16rem,calc(100vw-2rem))]! min-w-0! max-w-[calc(100vw-2rem)]!", props.menuClassName)}><EffortMenuItems {...props} />{props.footer ? <div className="mt-1 border-t border-border pt-1">{props.footer}</div> : null}</OptionMenuContent>
 	</OptionMenu>;
 }

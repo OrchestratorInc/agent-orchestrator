@@ -99,8 +99,8 @@ describe("telemetryPolicyRetryable", () => {
 		expect(telemetryPolicyRetryable({ ...base, state: "applied", reason: "release_blocked" })).toBe(false);
 	});
 
-	it("retries transient daemon and cleanup failures", () => {
-		expect(telemetryPolicyRetryable({ ...base, state: "cleanup_pending", reason: "daemon_cleanup_pending" })).toBe(true);
+	it("retries pending and failed cleanup", () => {
+		expect(telemetryPolicyRetryable({ ...base, state: "cleanup_pending", reason: "cleanup_failed" })).toBe(true);
 		expect(telemetryPolicyRetryable({ ...base, state: "cleanup_failed", reason: "cleanup_failed" })).toBe(true);
 	});
 

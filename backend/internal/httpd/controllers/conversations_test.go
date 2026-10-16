@@ -35,6 +35,13 @@ func conversationTestServer(t *testing.T, service *fakeConversationService) *htt
 // JSON a client actually parses is what is checked.
 
 type fakeConversationService struct {
+	switchRequest     domain.ProviderSwitchRequest
+	switchErr         error
+	history           []domain.HandoffTurn
+	historyTotal      int
+	historyOffset     int
+	historyLimit      int
+	historyErr        error
 	viewID            string
 	viewActive        bool
 	viewSessionID     domain.SessionID
@@ -239,6 +246,16 @@ func (f *fakeConversationService) ReloadMCPServers(
 	domain.SessionID,
 ) ([]domain.ConversationMCPServer, error) {
 	return f.mcpServers, f.reloadErr
+}
+
+func (f *fakeConversationService) SwitchProvider(_ context.Context, _ domain.SessionID, request domain.ProviderSwitchRequest) error {
+	f.switchRequest = request
+	return f.switchErr
+}
+
+func (f *fakeConversationService) SessionHistory(_ context.Context, _ domain.SessionID, offset, limit int) ([]domain.HandoffTurn, int, error) {
+	f.historyOffset, f.historyLimit = offset, limit
+	return f.history, f.historyTotal, f.historyErr
 }
 
 func (f *fakeConversationService) Skills(context.Context, domain.SessionID) ([]ports.ChatSkill, error) {

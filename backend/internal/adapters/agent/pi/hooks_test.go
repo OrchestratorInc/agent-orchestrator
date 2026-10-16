@@ -113,7 +113,10 @@ await handlers.get("session_start")({}, ctx);
 process.env.PI_EVENT_SOURCE = "before_agent_start";
 await handlers.get("before_agent_start")({ prompt: "fix bug" }, ctx);
 process.env.PI_EVENT_SOURCE = "agent_end";
-await handlers.get("agent_end")({}, ctx);
+await handlers.get("agent_end")({ messages: [
+  { role: "user", content: "fix bug" },
+  { role: "assistant", content: [{ type: "thinking", text: "private reasoning" }, { type: "text", text: "Bug fixed." }] },
+] }, ctx);
 process.env.PI_EVENT_SOURCE = "agent_settled";
 await handlers.get("agent_settled")({}, ctx);
 process.env.PI_EVENT_SOURCE = "session_shutdown";
@@ -139,6 +142,11 @@ await handlers.get("session_shutdown")({ reason: "quit" }, ctx);
 			}
 			if !strings.Contains(text, `"source":"`+tc.wantStopFrom+`"`) {
 				t.Fatalf("stop hook did not come from %s:\n%s", tc.wantStopFrom, text)
+			}
+			// The run's final assistant text rides on the stop hook, whichever
+			// event fires it, and nothing but its text parts is taken.
+			if !strings.Contains(text, `last_assistant_message\":\"Bug fixed.\"`) || strings.Contains(text, "private reasoning") {
+				t.Fatalf("stop hook did not carry only the final assistant text:\n%s", text)
 			}
 			if !strings.Contains(text, `["hooks","pi","session-start"]`) || !strings.Contains(text, `["hooks","pi","user-prompt-submit"]`) || !strings.Contains(text, `["hooks","pi","session-end"]`) {
 				t.Fatalf("expected lifecycle hook calls missing:\n%s", text)

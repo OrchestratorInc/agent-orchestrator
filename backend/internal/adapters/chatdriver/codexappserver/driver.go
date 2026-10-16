@@ -128,6 +128,7 @@ func capabilities() ports.ChatCapabilities {
 		ports.ChatCapabilityUsage:       true,
 		ports.ChatCapabilityDiffs:       true,
 		ports.ChatCapabilityPlans:       true,
+		ports.ChatCapabilityPlanMode:    true,
 		ports.ChatCapabilityInteractive: true,
 		ports.ChatCapabilityModels:      true,
 		// The account's quota position is both pushed (account/rateLimits/updated)

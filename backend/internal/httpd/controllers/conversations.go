@@ -59,6 +59,8 @@ type ConversationService interface {
 	RetryTurn(ctx context.Context, session domain.SessionID, turnID string) (domain.ConversationTurn, error)
 	SetTitle(ctx context.Context, session domain.SessionID, title string) (string, error)
 	ReloadMCPServers(ctx context.Context, session domain.SessionID) ([]domain.ConversationMCPServer, error)
+	SwitchProvider(ctx context.Context, session domain.SessionID, request domain.ProviderSwitchRequest) error
+	SessionHistory(ctx context.Context, session domain.SessionID, offset, limit int) ([]domain.HandoffTurn, int, error)
 }
 
 type pagedConversationService interface {
@@ -139,6 +141,8 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/conversation/branches/{branchId}/activate", c.activateBranch)
 	r.Put("/sessions/{sessionId}/conversation/title", c.setTitle)
 	r.Post("/sessions/{sessionId}/conversation/mcp/reload", c.reloadMCPServers)
+	r.Post("/sessions/{sessionId}/provider-switch", c.switchProvider)
+	r.Get("/sessions/{sessionId}/history", c.sessionHistory)
 	r.Post("/sessions/{sessionId}/renders", c.publishRender)
 	r.Post("/sessions/{sessionId}/renders/check", c.checkRender)
 	r.Get("/sessions/{sessionId}/renders/{renderId}", c.renderFile)
@@ -695,6 +699,10 @@ func (c *ConversationsController) setSettings(w http.ResponseWriter, r *http.Req
 			Model:           req.Model,
 			ReasoningEffort: req.ReasoningEffort,
 			ApprovalMode:    approval,
+
+			FastMode:          req.FastMode,
+			PlanMode:          req.PlanMode,
+			AutoCompactWindow: req.AutoCompactWindow,
 		})
 	if err != nil {
 		writeConversationError(w, r, err)
@@ -719,6 +727,7 @@ func conversationModelsResponse(
 			Default:       model.Default,
 			Efforts:       model.Efforts,
 			DefaultEffort: model.DefaultEffort,
+			SupportsFast:  model.FastTier != "",
 		})
 	}
 	return out
@@ -759,6 +768,10 @@ func turnSettingsPayload(settings domain.ConversationSettings) ConversationTurnS
 		Model:           settings.Model,
 		ReasoningEffort: settings.ReasoningEffort,
 		ApprovalMode:    string(settings.ApprovalMode),
+
+		FastMode:          settings.FastMode,
+		PlanMode:          settings.PlanMode,
+		AutoCompactWindow: settings.AutoCompactWindow,
 	}
 }
 

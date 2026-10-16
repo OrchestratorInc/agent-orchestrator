@@ -59,9 +59,12 @@ const cloudSession: WorkspaceSession = {
 	cloud: { orgId: "org-1" },
 };
 
-function requestSwitch(menuItem: ReactElement<{ onClick: () => void }> | null) {
-	if (!menuItem) throw new Error("Switch action missing");
-	act(() => menuItem.props.onClick());
+type SwitchControl = ReactElement<{ children: ReactElement<{ onClick: () => void; transition?: unknown }> }> | null;
+
+// The control is the switch button inside a hover wrapper.
+function requestSwitch(control: SwitchControl) {
+	if (!control) throw new Error("Switch action missing");
+	act(() => control.props.children.props.onClick());
 }
 
 describe("useSessionInterfaceSwitch Cloud handoff", () => {
@@ -87,7 +90,7 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 		act(() => result.current.onConversationWorkChange({
 			controllerBusy: false, hasRunningTurn: false, queuedTurnCount: 0,
 		}));
-		requestSwitch(result.current.menuItem as ReactElement<{ onClick: () => void }> | null);
+		requestSwitch(result.current.switchControl as SwitchControl);
 		await waitFor(() => expect(mocks.start).toHaveBeenCalledWith({
 			targetMode: "tui", policy: "drain", historyPolicy: "strict",
 			model: "selected-model", reasoningEffort: "high",
@@ -122,7 +125,7 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 		mocks.start.mockRejectedValueOnce(new Error("handoff refused"));
 		const { cloud: _cloud, ...localSession } = cloudSession;
 		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...localSession, provider, mode: "tui", status: "idle" }));
-		requestSwitch(result.current.menuItem as ReactElement<{ onClick: () => void }> | null);
+		requestSwitch(result.current.switchControl as SwitchControl);
 		await waitFor(() => expect(mocks.start).toHaveBeenCalled());
 		await waitFor(() => expect(result.current.optimisticTarget).toBeUndefined());
 		expect(result.current.renderedMode).toBe("tui");
@@ -172,13 +175,14 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 		expect(result.current.cloudLoader).toBe(false);
 		expect(result.current.controllerTransitioning).toBe(false);
 		expect(result.current.newWorkDisabled).toBe(true);
-		expect(result.current.inlineStatus).not.toBeNull();
+		// While it waits, the control shows the running switch instead of the button.
+		expect((result.current.switchControl as SwitchControl)?.props.children.props.transition).toBeDefined();
 	});
 
 	it("checks fresh Cloud activity before automatically interrupting an idle terminal", async () => {
 		mocks.getSession.mockResolvedValue({ session: { activityState: "idle", status: "idle" } });
 		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", cloudSession, { orgId: "org-1" }));
-		requestSwitch(result.current.menuItem as ReactElement<{ onClick: () => void }> | null);
+		requestSwitch(result.current.switchControl as SwitchControl);
 		await waitFor(() => expect(mocks.start).toHaveBeenCalledWith({ targetMode: "chat", policy: "interrupt", historyPolicy: "strict" }));
 		expect(mocks.getSession).toHaveBeenCalledWith("org-1", "session-1");
 	});
@@ -186,7 +190,7 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 	it("asks before stopping when the fresh Cloud row reports work", async () => {
 		mocks.getSession.mockResolvedValue({ session: { activityState: "active", status: "working" } });
 		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", cloudSession, { orgId: "org-1" }));
-		requestSwitch(result.current.menuItem as ReactElement<{ onClick: () => void }> | null);
+		requestSwitch(result.current.switchControl as SwitchControl);
 		await waitFor(() => expect((result.current.dialogs as ReactElement<{ children: SwitchDialogElement[] }>).props.children[0].props.open).toBe(true));
 		expect(mocks.start).not.toHaveBeenCalled();
 	});
@@ -194,7 +198,7 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 	it("requires an explicit stop when Cloud activity cannot be checked", async () => {
 		mocks.getSession.mockRejectedValue(new Error("offline"));
 		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", cloudSession, { orgId: "org-1" }));
-		requestSwitch(result.current.menuItem as ReactElement<{ onClick: () => void }> | null);
+		requestSwitch(result.current.switchControl as SwitchControl);
 		await waitFor(() => expect((result.current.dialogs as ReactElement<{ children: SwitchDialogElement[] }>).props.children[0].props.requireExplicitTerminalStop).toBe(true));
 		expect(mocks.start).not.toHaveBeenCalled();
 	});

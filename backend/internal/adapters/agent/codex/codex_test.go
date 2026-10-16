@@ -451,6 +451,28 @@ func TestGetLaunchCommandAppendsConfiguredEffort(t *testing.T) {
 	}
 }
 
+func TestGetLaunchCommandSetsTheFastTierEitherWay(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "codex"}
+	for _, tt := range []struct {
+		launch domain.AgentLaunchOptions
+		want   string
+	}{
+		{domain.AgentLaunchOptions{FastMode: true}, "service_tier='priority'"},
+		{domain.AgentLaunchOptions{FastModeOff: true}, "service_tier='default'"},
+	} {
+		cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{Config: ports.AgentConfig{Launch: tt.launch}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !containsSubsequence(cmd, []string{"-c", tt.want}) {
+			t.Fatalf("command %#v missing %s", cmd, tt.want)
+		}
+	}
+	if cmd, _ := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{}); contains(cmd, "service_tier='default'") || contains(cmd, "service_tier='priority'") {
+		t.Fatalf("command %#v set a tier nobody chose", cmd)
+	}
+}
+
 func TestGetLaunchCommandOmitsBlankConfiguredModel(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "codex"}
 

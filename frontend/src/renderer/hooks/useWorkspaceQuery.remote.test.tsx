@@ -7,7 +7,6 @@ const { localGet, remoteConnect, remotePreviewUrl } = vi.hoisted(() => ({ localG
 vi.mock("../lib/api-client", () => ({ apiClient: { GET: localGet }, hasTrustedApiBaseUrl: () => true }));
 vi.mock("../lib/bridge", () => ({ aoBridge: { remotes: { connect: remoteConnect, previewUrl: remotePreviewUrl, disconnect: vi.fn() } } }));
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
-vi.mock("../lib/agent-switch-visibility", () => ({ agentSwitchVisibility: { setQueryHealthy: vi.fn() } }));
 vi.mock("./useCloudCp", () => ({ useCloudCp: () => ({ ready: false, baseUrl: "", client: {} }) }));
 vi.mock("./useCloudOrg", () => ({ useCloudOrg: () => ({ org: undefined, ready: false }) }));
 

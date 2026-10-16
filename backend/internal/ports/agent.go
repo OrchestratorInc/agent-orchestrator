@@ -350,6 +350,8 @@ type AgentModelInfo struct {
 	// must render no effort control at all rather than an empty one.
 	Efforts       []string `json:"efforts,omitempty"`
 	DefaultEffort string   `json:"defaultEffort,omitempty"`
+	// SupportsFast reports that the model can run on the provider's faster tier.
+	SupportsFast bool `json:"supportsFast,omitempty"`
 	// LastUsedAt is the latest activity of a session in scope whose current model
 	// is this model. It is derived from session history on every read, never
 	// stored on the cached catalog, and absent for a model no session ran.

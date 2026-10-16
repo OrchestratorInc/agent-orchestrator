@@ -86,16 +86,21 @@ export function splitClaudeModels<T extends { id: string; label: string }>(model
 
 /**
  * Claude's chat model option offers family aliases ("opus", "sonnet[1m]") and bare ids.
- * Maps a choice to its catalog entry: an id to itself, an alias to the newest model of
- * its family and context variant.
+ * Maps a choice to its catalog entry: an id to itself, an alias by the name Claude gives
+ * it, since an alias can name an older model ("haiku" is Haiku 4.5), and with no name to
+ * the newest model of its family and context variant.
  */
-export function claudeChoiceModel<T extends { id: string; label: string }>(catalog: T[]): ((value: string) => T | undefined) | undefined {
+export function claudeChoiceModel<T extends { id: string; label: string }>(catalog: T[]): ((value: string, name?: string) => T | undefined) | undefined {
 	if (catalog.length === 0) return undefined;
 	const newest = splitClaudeModels(catalog).current;
-	return (value: string) => {
+	return (value: string, name?: string) => {
 		const id = value.toLowerCase();
 		const exact = catalog.find((model) => model.id.toLowerCase() === id);
 		if (exact) return exact;
+		const named = name?.trim().toLowerCase();
+		if (named && /\d/.test(named)) {
+			return catalog.find((model) => agentModelDisplayLabel("claude-code", model.label).toLowerCase() === named);
+		}
 		const family = id.replace(/\[.*?\]$/, "");
 		const variant = claudeVariant({ id, label: "" });
 		return newest.find((model) => claudeVariant(model) === variant

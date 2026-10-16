@@ -82,7 +82,7 @@ type APIError struct {
 	Message        string          `json:"message"`
 	RequestID      string          `json:"requestId,omitempty"`
 	Details        map[string]any  `json:"details,omitempty"`
-	ReportingOwner ownership.Owner `json:"reporting_owner,omitempty" enum:"http,agent_switch_saga"`
+	ReportingOwner ownership.Owner `json:"reporting_owner,omitempty" enum:"http"`
 }
 
 // WriteJSON serialises v as JSON with the given status.

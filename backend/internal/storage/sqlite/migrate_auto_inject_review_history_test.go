@@ -30,18 +30,16 @@ SELECT COALESCE((
 		}
 	}
 
-	var agentSwitchTable, autoInjectCIColumn int
-	if err := db.QueryRow(
-		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'agent_switches'`,
-	).Scan(&agentSwitchTable); err != nil {
-		t.Fatalf("read agent-switch table: %v", err)
+	var removedSwitchTable, autoInjectCIColumn int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'agent_switches'`).Scan(&removedSwitchTable); err != nil {
+		t.Fatalf("read removed table: %v", err)
 	}
 	if err := db.QueryRow(
 		`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'auto_inject_ci'`,
 	).Scan(&autoInjectCIColumn); err != nil {
 		t.Fatalf("read auto-inject-CI column: %v", err)
 	}
-	if agentSwitchTable != 1 || autoInjectCIColumn != 1 {
-		t.Fatalf("later migrations not applied: agent_switches=%d auto_inject_ci=%d", agentSwitchTable, autoInjectCIColumn)
+	if removedSwitchTable != 0 || autoInjectCIColumn != 1 {
+		t.Fatalf("later migrations not applied: removed provider-switch table=%d auto_inject_ci=%d", removedSwitchTable, autoInjectCIColumn)
 	}
 }

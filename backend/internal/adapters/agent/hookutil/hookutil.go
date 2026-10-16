@@ -119,3 +119,20 @@ func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	}
 	return os.Rename(tmpName, path)
 }
+
+// FinalAssistantTextJS is shared by the JavaScript extensions AO installs for
+// agents whose run-end event carries the conversation.
+const FinalAssistantTextJS = `// The run's final assistant text. The event shape is the agent's, so anything
+// unexpected only means "no text".
+function finalAssistantText(event) {
+  try {
+    for (const message of [...(event?.messages ?? [])].reverse()) {
+      if (message?.role !== "assistant") continue;
+      const parts = typeof message.content === "string" ? [{ type: "text", text: message.content }] : message.content;
+      const text = (Array.isArray(parts) ? parts : []).filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n");
+      if (text.trim()) return text;
+    }
+  } catch {}
+  return "";
+}
+`

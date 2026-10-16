@@ -22,7 +22,7 @@ export type TelemetryPolicyView = TelemetryPolicySnapshot & {
 	state: TelemetryPolicyApplyState;
 	environmentVeto: boolean;
 	durabilitySupported: boolean;
-	reason?: "environment_veto" | "durability_unsupported" | "release_blocked" | "invalid_authority" | "daemon_cleanup_pending" | "cleanup_failed";
+	reason?: "environment_veto" | "durability_unsupported" | "release_blocked" | "invalid_authority" | "cleanup_failed";
 };
 
 export type RendererTelemetryCapture = {

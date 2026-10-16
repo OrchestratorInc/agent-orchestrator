@@ -883,8 +883,7 @@ it("requires remote Chat draft confirmation before posting an interface switch",
 	renderRemoteSession(new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }));
 	await screen.findByRole("combobox", { name: "Message the agent" });
 	act(() => setChatDraftBoundary(sessionUiKey("session-1", "box-a"), "queued-edit", "persistence-failed"));
-	await userEvent.click(await screen.findByRole("button", { name: "Session actions" }));
-	await userEvent.click(await screen.findByRole("menuitem", { name: "Switch to terminal UI" }));
+	await userEvent.click(await screen.findByRole("button", { name: "Switch to terminal UI" }));
 	await userEvent.click(await screen.findByRole("button", { name: /^Finish work, then switch/ }));
 	const confirm = await screen.findByRole("dialog", { name: "Discard unsafe Chat draft state?" });
 	expect(posts).toEqual([]);
@@ -908,5 +907,5 @@ it("hides Chat switching for a remote harness outside that host's Chat list", as
 	renderRemoteSession(queryClient);
 	await screen.findByTestId("remote-terminal-base");
 	await waitFor(() => expect(queryClient.getQueryData(["settings", "box-a"])).toMatchObject({ chatHarnesses: ["claude-code", "codex"] }));
-	expect(screen.queryByRole("button", { name: "Session actions" })).not.toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: "Switch to chat UI" })).not.toBeInTheDocument();
 });

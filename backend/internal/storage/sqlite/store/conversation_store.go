@@ -540,6 +540,7 @@ func insertConversationBranchTx(
 		ProviderScopeID:        branch.ProviderScopeID,
 		ProviderIdsScoped:      boolInt(branch.ProviderIDsScoped),
 		CreatedAt:              now,
+		HandoffNote:            branch.HandoffNote,
 	}); err != nil {
 		return fmt.Errorf("insert conversation branch %s: %w", branch.ID, err)
 	}
@@ -576,6 +577,40 @@ func (s *Store) CreateAndActivateConversationBranch(
 			return fmt.Errorf("move session controller: live chat session %s not found", sessionID)
 		}
 		return nil
+	})
+}
+
+// CommitProviderSwitch atomically publishes the fresh provider branch and the
+// target harness/controller metadata. Provider startup happens before this
+// method; until it commits, the old branch remains the durable owner.
+func (s *Store) CommitProviderSwitch(ctx context.Context, rec domain.SessionRecord, branch domain.ConversationBranch, generation string, activity domain.ConversationActivity) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "commit provider switch", func(q *gen.Queries) error {
+		if err := insertAndActivateConversationBranchTx(ctx, q, branch, rec.UpdatedAt); err != nil {
+			return err
+		}
+		sessionRows, err := q.ActivateConversationBranchSession(ctx, gen.ActivateConversationBranchSessionParams{
+			ProviderConversationID: branch.ProviderConversationID, ControllerGeneration: generation, UpdatedAt: rec.UpdatedAt, ID: rec.ID,
+		})
+		if err != nil {
+			return fmt.Errorf("move session controller: %w", err)
+		} else if sessionRows != 1 {
+			return fmt.Errorf("move session controller: live chat session %s not found", rec.ID)
+		}
+		if err := q.UpdateSession(ctx, recordToUpdate(rec)); err != nil {
+			return fmt.Errorf("update switched session: %w", err)
+		}
+		sequence, err := q.NextConversationSequence(ctx, gen.NextConversationSequenceParams{UpdatedAt: rec.UpdatedAt, ID: branch.ConversationID})
+		if err != nil {
+			return fmt.Errorf("allocate provider switch activity sequence: %w", err)
+		}
+		return q.InsertConversationActivity(ctx, gen.InsertConversationActivityParams{
+			ID: activity.ID, ConversationID: branch.ConversationID, Sequence: sequence,
+			Kind: activity.Kind, Status: activity.Status, Summary: activity.Summary,
+			DetailJson: string(activity.Detail), RequestID: activity.RequestID,
+			ProviderItemID: activity.ProviderItemID, CreatedAt: rec.UpdatedAt, UpdatedAt: rec.UpdatedAt,
+		})
 	})
 }
 
@@ -1822,6 +1857,8 @@ func (s *Store) SetConversationSettings(
 		OpencodeMode:    settings.OpenCodeMode,
 		UpdatedAt:       now,
 		ID:              conversationID,
+
+		AutoCompactWindow: settings.AutoCompactWindow,
 	}); err != nil {
 		return fmt.Errorf("set conversation settings for %s: %w", conversationID, err)
 	}
@@ -3666,6 +3703,8 @@ func conversationToDomain(row gen.Conversation) domain.ConversationRecord {
 			ReasoningEffort: row.ReasoningEffort.String,
 			ApprovalMode:    domain.PermissionMode(row.ApprovalMode.String),
 			OpenCodeMode:    row.OpencodeMode,
+
+			AutoCompactWindow: row.AutoCompactWindow,
 		},
 		ProviderTitle: row.ProviderTitle,
 		AppliedTitle:  row.AppliedTitle,
@@ -3715,6 +3754,7 @@ func conversationBranchToDomain(row gen.SelectConversationBranchRow) domain.Conv
 		ProviderIDsScoped:      row.ProviderIdsScoped != 0,
 		Active:                 row.Active,
 		CreatedAt:              row.CreatedAt,
+		HandoffNote:            row.HandoffNote,
 	}
 }
 
@@ -3737,6 +3777,7 @@ func conversationBranchListToDomain(row gen.SelectConversationBranchesRow) domai
 		ProviderIDsScoped:      row.ProviderIdsScoped != 0,
 		Active:                 row.Active,
 		CreatedAt:              row.CreatedAt,
+		HandoffNote:            row.HandoffNote,
 	}
 }
 

@@ -39,12 +39,18 @@ function createdSessionID(value: any): string | null {
   return typeof id === "string" && id.trim() ? id.trim() : null
 }
 
+// This turn's assistant message ids and the assistant text part updated last: the turn's final message.
+const assistantMessages = new Set<string>()
+let lastAssistantText = ""
+
 function switchSession(id: string) {
   if (currentSessionID === id) return false
   currentSessionID = id
   currentModel = null
   promptReports.clear()
   messageStore.clear()
+  assistantMessages.clear()
+  lastAssistantText = ""
   return true
 }
 
@@ -75,6 +81,7 @@ export default {
           const id = sessionID(message)
           if (id && switchSession(id)) callHook("session-start", { session_id: id })
           if (message.role === "assistant" && message.modelID) currentModel = message.modelID
+          if (message.role === "assistant" && message.id) assistantMessages.add(message.id)
           if (message.role === "user") {
             messageStore.set(message.id, message)
             const activeID = id ?? currentSessionID
@@ -89,13 +96,20 @@ export default {
             const id = sessionID(message) ?? currentSessionID
             if (id) reportPrompt(id, message.id, part.text ?? "")
             if (part.text) messageStore.delete(part.messageID)
+          } else if (part?.messageID && assistantMessages.has(part.messageID) && part.type === "text" && !part.synthetic && !part.ignored &&
+            typeof part.text === "string" && part.text.trim().length > 0) {
+            lastAssistantText = part.text
           }
           break
         }
         case "session.status": {
           if (event.properties?.status?.type !== "idle") break
           const id = event.properties?.sessionID ?? currentSessionID
-          if (id) callHook("stop", { session_id: id, model: currentModel ?? "" })
+          if (id) {
+            callHook("stop", { session_id: id, model: currentModel ?? "", last_assistant_message: lastAssistantText })
+            assistantMessages.clear()
+            lastAssistantText = ""
+          }
           break
         }
         case "permission.asked":

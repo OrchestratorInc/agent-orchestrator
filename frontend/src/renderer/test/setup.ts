@@ -207,7 +207,6 @@ if (typeof window !== "undefined") {
 			onPolicy: () => () => false,
 			onClearQueues: () => () => false,
 			capture: async () => false,
-			signalAgentSwitchVisibility: () => false,
 		},
 		browser: {
 			nativeCompositionEnabled: true,

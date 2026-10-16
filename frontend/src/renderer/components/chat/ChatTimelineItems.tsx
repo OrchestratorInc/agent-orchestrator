@@ -16,10 +16,19 @@ import {
 	QUIET_ACTION_PILL,
 } from "./action-pill";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
+import { agentLabel } from "../../lib/agent-options";
+import { agentModelDisplayLabel, splitClaudeModels } from "../../lib/agent-model-choices";
+import { collapseModelVariants, listsModelVariants } from "../../lib/model-variants";
+import { formatEffortLabel } from "../settings/EffortPicker";
+import { ProviderMark } from "./ProviderMark";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	AlertTriangle,
+	ArrowLeftRight,
+	ArrowRight,
 	Brain,
 	ChevronDown,
 	ChevronRight,
@@ -329,6 +338,53 @@ export function CompactionMarker({ activity }: { activity: ConversationActivity 
 			message="The conversation history was compacted"
 			detail={[detail, fullness].filter(Boolean).join(" · ") || undefined}
 		/>
+	);
+}
+
+/** A recorded model id by its name in the agent's list, however that agent's chat spells the id. */
+function handoffModelName(harness: string, model: string, models: Array<{ id: string; label: string }>): string {
+	const id = model.replace(/\[.*$/, "");
+	const label = models.find((entry) => entry.id === id)?.label
+		// Cursor's chat names a model once; its list has an entry per setting.
+		?? (listsModelVariants(harness) ? collapseModelVariants(models).find((family) => family.id === id)?.label : undefined)
+		// Claude Code's "opus" is the newest model of that family.
+		?? (harness === "claude-code" ? splitClaudeModels(models).current.find((entry) => entry.id.includes(`-${id}-`))?.label : undefined);
+	return agentModelDisplayLabel(harness, label ?? id);
+}
+
+/** One side of a handoff: the agent's mark, then its model by name when one was recorded. */
+function HandoffSide({ harness, model, effort, compactWindow, bright }: { harness: string; model?: string; effort?: string; compactWindow?: string; bright?: boolean }) {
+	const { t } = useTranslation();
+	// The marker stores the model id. Its name comes from the agent's catalog.
+	const catalog = useQuery({ ...agentModelsQueryOptions(harness, ""), enabled: Boolean(model) }).data;
+	const name = model ? handoffModelName(harness, model, catalog?.models ?? []) : agentLabel(harness);
+	return (
+		<span className={cn("flex min-w-0 items-center gap-1.5", bright ? "text-foreground" : undefined)}>
+			<ProviderMark provider={harness} />
+			<span className="truncate">{name.replace(/\s*\b1M\b/g, "")}</span>
+			{effort ? <span className="shrink-0 text-muted-foreground">{formatEffortLabel(effort, t)}</span> : null}
+			{compactWindow ? <span className="shrink-0 text-muted-foreground" title="Compacts on its own at this size">· {compactWindow.toUpperCase()}</span> : null}
+		</span>
+	);
+}
+
+/** Where one agent handed the conversation to another. */
+export function ProviderSwitchMarker({ activity }: { activity: ConversationActivity }) {
+	const detail = activity.detail;
+	return (
+		<div className="flex min-w-0 items-center gap-3 py-2 text-[11px] text-muted-foreground">
+			<span aria-hidden="true" className="h-px min-w-4 flex-1 bg-border" />
+			<ArrowLeftRight aria-hidden="true" className="size-3 shrink-0" />
+			<span className="shrink-0">Context handoff</span>
+			{detail?.sourceHarness && detail.targetHarness ? (
+				<>
+					<HandoffSide harness={detail.sourceHarness} model={detail.sourceModel} />
+					<ArrowRight aria-hidden="true" className="size-3 shrink-0" />
+					<HandoffSide harness={detail.targetHarness} model={detail.targetModel} effort={detail.targetEffort} compactWindow={detail.targetAutoCompactWindow} bright />
+				</>
+			) : null}
+			<span aria-hidden="true" className="h-px min-w-4 flex-1 bg-border" />
+		</div>
 	);
 }
 

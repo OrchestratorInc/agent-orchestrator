@@ -11,55 +11,43 @@ import { useSideChatsAvailable } from "../../lib/side-chats";
  * preview and live data here.
  */
 
-import { AlertTriangle, CheckCircle2, Loader2, X } from "lucide-react";
+import { AlertTriangle, Loader2 } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useTranslation } from "react-i18next";
-import {
-	findActiveAgentSwitch,
-	isTerminalAgentSwitch,
-	selectDurableAgentSwitch,
-	useAgentSwitches,
-} from "../../hooks/useAgentSwitches";
-import { useObservedAgentSwitchLifecycle } from "../../hooks/useObservedAgentSwitchLifecycle";
-import { useAgentSwitchPresentationVisibility, useAgentSwitchRouteVisibility } from "../../hooks/useAgentSwitchVisibility";
 import { useQuery } from "@tanstack/react-query";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
 import { useOfferedModels } from "../../hooks/useOfferedModels";
-import { useSwitchAgentState } from "../../hooks/useSwitchAgent";
 import {
 	useConversation,
 	useConversationCommands,
 	useConversationConfigOptions,
 	useConversationModels,
 	useConversationSkills,
+	useProviderSwitchCommand,
 	useStageAttachments,
 	useWorkspaceFilePaths,
 } from "../../hooks/useConversation";
-import { useAgentSwitchProviderCatalogs } from "../../hooks/useAgentSwitchProviderCatalogs";
 import { useConversationPromptSuggestion } from "../../hooks/useConversationPromptSuggestion";
 import { useRememberProjectPermissions } from "../../hooks/useRememberProjectPermissions";
+import { useLatestCallback } from "../../hooks/useStable";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
 import { claudeChoiceModel } from "../../lib/agent-model-choices";
 import { isWebLink, isWorkspaceHtmlLink } from "../../lib/external-link-policy";
 import { sessionUiKey } from "../../lib/hosts";
+import { listsModelVariants } from "../../lib/model-variants";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
-import {
-	deriveAgentSwitchPresentation,
-	agentSwitchVisibilityPresentationKind,
-	type AgentSwitchPresentation,
-} from "../../lib/agent-switch-presentation";
-import { cn } from "../../lib/utils";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { Theme } from "../../stores/ui-store";
 import { can } from "../../types/conversation";
-import type { ConversationSnapshot } from "../../types/conversation";
+import type { ConversationSnapshot, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
-import type { AgentSwitchSummary, WorkspaceSession } from "../../types/workspace";
-import { AgentSwitchProgressTrack } from "../AgentSwitchProgressTrack";
+import type { WorkspaceSession } from "../../types/workspace";
+import { ComposerErrorNotice, PendingAgentSwitchNotice, type PendingAgentSwitch } from "./AgentSwitchPicker";
+import { apiErrorMessage } from "../../lib/api-client";
+import { AGENT_SWITCH_FAILED } from "./ChatComposer";
 import { useUiStore } from "../../stores/ui-store";
 import { CONTINUE_STOPPED_TURN_PROMPT, ChatWorkspace, continuableTurnId } from "./ChatWorkspace";
 import { startingConversationSnapshot } from "./OrchestratorStartingChat";
-import { hasProviderPermissionMode } from "./TurnSettingsBar";
+import { hasProviderPermissionMode, withUltracode } from "./TurnSettingsBar";
 
 export interface ConversationWorkState {
 	controllerBusy: boolean;
@@ -128,20 +116,22 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	sessionTabAction,
 	sessionTabActionWide = false,
 	tabStripAction,
-	handoffDialogOpen = false,
 	workspaceTabs,
 	workspaceTabActions,
 	workspaceActiveTabKey,
-	workspaceFileActive,
 	auxiliaryTabOrder,
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
 	agentResuming,
+	workspaceFileActive,
 	controllerResumeError,
 	newWorkDisabled,
 	arriving,
 	onConversationWorkChange,
+	interfaceSwitch,
 }: {
+	/** The control that moves this session to the terminal view, and its error. */
+	interfaceSwitch?: { control: ReactNode; errorNotice?: ReactNode };
 	sideChatContainer?: HTMLDivElement | null;
 	session: WorkspaceSession;
 	/** Owning daemon for a remote session; omitted for the local daemon. */
@@ -177,12 +167,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	sessionTabAction?: ReactNode;
 	sessionTabActionWide?: boolean;
 	tabStripAction?: ReactNode;
-	handoffDialogOpen?: boolean;
 	workspaceTabs?: Array<{ key: string; content: ReactNode; onSelect: () => void }>;
 	workspaceTabActions?: ReactNode;
 	workspaceActiveTabKey?: string;
-	/** A file overlay hides the chat surface, so it must not acknowledge switch UI. */
-	workspaceFileActive?: boolean;
 	/** Session-owned order shared with the terminal UI surface. */
 	auxiliaryTabOrder?: string[];
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
@@ -190,6 +177,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	controllerTransitioning?: boolean;
 	/** A stopped agent is being resumed in the background after the chat opened. */
 	agentResuming?: boolean;
+	/** A file overlay hides the chat surface, so it must not offer a suggestion. */
+	workspaceFileActive?: boolean;
 	controllerResumeError?: string;
 	/** An interface handoff fences new agent work while current-turn decisions remain available. */
 	newWorkDisabled?: boolean;
@@ -231,6 +220,38 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		snapshot?.controller?.state === "busy" || commands.busy || acceptedLocalWorkPending;
 	const hasRunningTurn = Boolean(snapshot?.turns.some((turn) => turn.state === "running"));
 	const queuedTurnCount = snapshot?.turns.filter((turn) => turn.state === "queued").length ?? 0;
+	// Choosing another agent only records the choice. The switch runs with the
+	// next message, so the handoff note is written when it is needed.
+	const providerSwitch = useProviderSwitchCommand(session.id, hostId);
+	const [chosenSwitch, setChosenSwitch] = useState<PendingAgentSwitch>();
+	const currentHarness = snapshot?.harness;
+	const pendingSwitch = currentHarness && chosenSwitch?.harness !== currentHarness ? chosenSwitch : undefined;
+	// Ultracode is asked for in each message, so it is kept here, not on the agent.
+	const [ultracodeOn, setUltracodeOn] = useState(false);
+	const ultracode = useMemo(() => ({ on: ultracodeOn, onChange: setUltracodeOn }), [ultracodeOn]);
+	const autoCompactWindow = snapshot?.settings.autoCompactWindow;
+	const [applyingAutoCompact, setApplyingAutoCompact] = useState(false);
+	// Claude Code reads this when it starts, so saving it restarts the agent.
+	const saveAutoCompact = useLatestCallback((value: TurnSettings["autoCompactWindow"]) => {
+		if (!snapshot) return;
+		setApplyingAutoCompact(true);
+		void commands.chooseStartSettings({ ...snapshot.settings, autoCompactWindow: value })
+			.catch((error) => useUiStore.getState().showGlobalToast("Auto-compact change failed", apiErrorMessage(error), "error"))
+			.finally(() => setApplyingAutoCompact(false));
+	});
+	const agentBusy = controllerBusy || hasRunningTurn || queuedTurnCount > 0;
+	// The restart is only safe while the agent is not working.
+	const autoCompact = useMemo(
+		() => ({ value: autoCompactWindow, disabled: applyingAutoCompact || agentBusy, onChange: saveAutoCompact }),
+		[agentBusy, applyingAutoCompact, autoCompactWindow, saveAutoCompact],
+	);
+	const switchBlocked = agentBusy || providerSwitch.isPending;
+	const agentSwitch = useMemo(
+		() => currentHarness && !session.cloud && !newWorkDisabled
+			? { projectId: session.workspaceId, hostId, pending: pendingSwitch, onPendingChange: setChosenSwitch, disabled: switchBlocked, ultracode, autoCompact }
+			: undefined,
+		[autoCompact, currentHarness, hostId, newWorkDisabled, pendingSwitch, session.cloud, session.workspaceId, switchBlocked, ultracode],
+	);
 	useEffect(() => {
 		if (acceptedLocalTurnObserved && pendingAcceptedTurnId) {
 			acknowledgeAcceptedTurn(pendingAcceptedTurnId);
@@ -264,97 +285,14 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// can also outlive the source, so wait for the handoff's final snapshot refresh.
 	// A background resume keeps the last-known catalogs visible so the model
 	// picker doesn't blank out while the agent spins up.
+	// A sleeping, waking or reconnecting agent cannot report its settings yet. The
+	// bar shows the last known and saved ones, disabled, rather than nothing.
+	const waking = snapshot?.harness === session.provider &&
+		(snapshot.controller?.state === "hibernated" || snapshot.controller?.state === "connecting" || snapshot.controller?.state === "recovering");
 	const controllerCatalogsEnabled = (targetChatControllerReady || agentResuming) && !controllerTransitioning && !newWorkDisabled;
-	// Agent-switch presentation for the chat surface progress track and input locks.
-	const switchMutation = useSwitchAgentState(uiSessionId);
-	const agentSwitches = useAgentSwitches(session.id, hostId).data ?? [];
-	const activeHistorySwitch = findActiveAgentSwitch(agentSwitches);
-	const selectedDurableAgentSwitch = selectDurableAgentSwitch(
-		session.activeAgentSwitch,
-		agentSwitches,
-	);
-	const admissionAgentSwitch: AgentSwitchSummary | undefined =
-		switchMutation.isPending && switchMutation.input
-			? {
-				agentHandoffStatus: "not_attempted",
-				fromHarness: switchMutation.input.session.provider,
-				id: `admission:${switchMutation.input.idempotencyKey}`,
-				state: "preparing_handoff",
-				targetHarness: switchMutation.input.targetHarness,
-			}
-			: undefined;
-	const {
-		dismissFailure: dismissAgentSwitchFailure,
-		dismissedFailureSwitchId,
-		isObserved: isAgentSwitchObserved,
-		isRetired: isAgentSwitchRetired,
-		observedTerminalSwitch,
-		settle: settleAgentSwitch,
-		transientSuccessNotice,
-		transientSuccessSwitchId,
-	} = useObservedAgentSwitchLifecycle({
-		sessionId: uiSessionId,
-		agentSwitches,
-		nonterminalCandidates: [
-			session.activeAgentSwitch,
-			activeHistorySwitch,
-			selectedDurableAgentSwitch,
-			admissionAgentSwitch,
-		],
-	});
-	const durableAgentSwitch =
-		selectedDurableAgentSwitch && !isAgentSwitchRetired(selectedDurableAgentSwitch.id)
-			? selectedDurableAgentSwitch
-			: undefined;
-	const agentSwitch = durableAgentSwitch ?? admissionAgentSwitch ?? observedTerminalSwitch;
-	useAgentSwitchRouteVisibility(`session/${uiSessionId}`, agentSwitch && agentSwitch.state !== "completed" && agentSwitch.state !== "failed" ? "active" : "history", undefined, false);
-	const switchPresentation = agentSwitch
-		? deriveAgentSwitchPresentation({
-				agentSwitch,
-				activityState: session.activity?.state,
-				currentHarness: session.provider,
-				isTerminated: Boolean(session.isTerminated),
-				// The shared presentation uses a live terminal handle as its TUI
-				// takeover proof. Chat has no terminal runtime, so its equivalent is
-				// the structured controller reaching a dispatchable state.
-				terminalHandleId: targetChatControllerReady ? "chat-controller" : undefined,
-			})
-		: undefined;
-	const agentSwitching = Boolean(
-		switchMutation.isPending ||
-			(switchPresentation?.outcome === "in_progress" ||
-				switchPresentation?.outcome === "recovery"),
-	);
-	const observedSettledSwitchId =
-		agentSwitch &&
-		(switchPresentation?.outcome === "success" || switchPresentation?.outcome === "failure") &&
-		isAgentSwitchObserved(agentSwitch.id)
-			? agentSwitch.id
-			: undefined;
-	const latestTerminalSwitch = agentSwitches.find(isTerminalAgentSwitch);
-	const controllerOwnedTerminalSwitch =
-		targetChatControllerReady &&
-		latestTerminalSwitch &&
-		((latestTerminalSwitch.state === "completed" &&
-			latestTerminalSwitch.targetHarness === session.provider) ||
-			(latestTerminalSwitch.state === "failed" &&
-				latestTerminalSwitch.fromHarness === session.provider))
-			? latestTerminalSwitch
-			: undefined;
-	// Catalog ownership follows the live controller epoch, not whether this mount
-	// happened to observe the switch in progress. A sub-second switch can arrive
-	// first as terminal history and still needs its outgoing cache reconciled.
-	const providerCatalogSettledSwitchId =
-		observedSettledSwitchId ?? controllerOwnedTerminalSwitch?.id;
-	const catalogsEnabled = useAgentSwitchProviderCatalogs({
-		sessionId: session.id,
-		hostId,
-		agentSwitching,
-		settledSwitchId: providerCatalogSettledSwitchId,
-	});
 	const configOptions = useConversationConfigOptions(
 		session.id,
-		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot && can(snapshot, "config_options")),
+		Boolean(controllerCatalogsEnabled && snapshot && can(snapshot, "config_options")),
 		hostId,
 	);
 	// A provider config catalog may cover only model, only mode, or both.
@@ -369,7 +307,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// from the live controller, so there is nothing to fetch before then.
 	const { models: controllerModels } = useConversationModels(
 		session.id,
-		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot) && !hasProviderModel,
+		Boolean(controllerCatalogsEnabled && snapshot) && !hasProviderModel,
 		hostId,
 	);
 	// Claude's live list is family aliases; the new-task picker's catalog carries the versions.
@@ -391,7 +329,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		(option) => option.type === "select" && (option.category === "model" || option.id === "model"),
 	);
 	const providerModelChoices = useMemo(
-		() => providerModelOption?.choices.map((choice) => ({ id: choice.value })),
+		() => providerModelOption?.choices.map((choice) => ({ id: choice.value, name: choice.name })),
 		[providerModelOption],
 	);
 	// Resolve current Claude aliases before filtering so their labels cannot move
@@ -407,7 +345,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	});
 	// Claude's choices are family aliases ("sonnet"); Settings names catalog ids.
 	const claudeChoiceID = useMemo(
-		() => resolveClaudeChoice && ((choice: { id: string }) => resolveClaudeChoice(choice.id)?.id ?? choice.id),
+		() => resolveClaudeChoice && ((choice: { id: string; name?: string }) => resolveClaudeChoice(choice.id, choice.name)?.id ?? choice.id),
 		[resolveClaudeChoice],
 	);
 	const { models: offeredProviderModels } = useOfferedModels(snapshot?.harness, providerModelChoices, { hostId, keep: [providerModelOption?.currentValue], modelID: claudeChoiceID });
@@ -420,7 +358,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	}, [configOptions.options, offeredProviderModels, providerModelOption]);
 	const { skills } = useConversationSkills(
 		session.id,
-		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot),
+		Boolean(controllerCatalogsEnabled && snapshot),
 		hostId,
 	);
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot), hostId);
@@ -515,32 +453,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			}
 		}
 	}, [autoOpenLinkInBrowser, isLoading, paths, snapshot, uiSessionId]);
-	const observedSuccessfulSwitch = Boolean(
-		agentSwitch &&
-			observedSettledSwitchId === agentSwitch.id &&
-			switchPresentation?.outcome === "success",
-	);
-	useEffect(() => {
-		if (!observedSuccessfulSwitch || !agentSwitch || !switchPresentation) return;
-		settleAgentSwitch(agentSwitch, switchPresentation);
-	}, [agentSwitch, observedSuccessfulSwitch, settleAgentSwitch, switchPresentation]);
-	const shownSwitchPresentation =
-		switchPresentation?.outcome === "failure" && dismissedFailureSwitchId === agentSwitch?.id
-			? undefined
-			: switchPresentation?.outcome === "success"
-				? transientSuccessSwitchId === agentSwitch?.id
-					? transientSuccessNotice?.presentation
-					: undefined
-				: switchPresentation ?? transientSuccessNotice?.presentation;
-	const switchLocksChat = Boolean(
-		switchPresentation?.lockAgentTerminal && !switchPresentation.allowSourceInput,
-	);
 	const promptSuggestion = useConversationPromptSuggestion(snapshot, Boolean(
 		targetChatControllerReady && !controllerBusy && !localEchos.length &&
 		!commands.rollbackPending && !commands.editMessagePending && !commands.activateBranchPending && !commands.compacting &&
 		!session.isTerminated && session.provisionState !== "failed" && session.provisionState !== "provisioning" &&
 		!isLoading && !error && !refreshError && !unavailable &&
-		!agentSwitching && !switchLocksChat && !handoffDialogOpen &&
 		!controllerTransitioning && !agentResuming && !newWorkDisabled && !arriving &&
 		!workspaceFileActive && !workspaceActiveTabKey && !reviewerTarget && !reviewerChatSelected && !shellTarget,
 	), hostId);
@@ -560,6 +477,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		(renderShellFallback
 			? unavailableConversationSnapshot(session)
 			: undefined);
+	const settingsLoading = waking || Boolean(renderSnapshot && can(renderSnapshot, "config_options") && !configOptions.loaded && !configOptions.error);
 	const stoppedTurnId = renderSnapshot ? continuableTurnId(renderSnapshot) : "";
 	useEffect(() => {
 		// Keep an ambiguous request's identity until durable progress confirms
@@ -577,20 +495,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		if (session.provisionState !== "failed" && !targetChatControllerReady && !renderShellFallback && !error && !unavailable) return;
 		useUiStore.getState().setProjectProvisioning(session.workspaceId, false, hostId);
 	}, [error, hostId, isLoading, renderShellFallback, session.kind, session.provisionState, session.workspaceId, targetChatControllerReady, unavailable]);
-	const visibilityPresentationKind = agentSwitchVisibilityPresentationKind(shownSwitchPresentation);
-	useAgentSwitchPresentationVisibility({
-		localRouteKey: `session/${uiSessionId}`,
-		agentSwitch,
-		presentationKind: visibilityPresentationKind,
-		visible: Boolean(
-			shownSwitchPresentation &&
-				(!isLoading || renderShellFallback) &&
-				(!unavailable || renderShellFallback) &&
-				!error &&
-				renderSnapshot &&
-				!workspaceFileActive,
-		),
-	});
 
 	if (isLoading && !renderShellFallback && !optimisticChat) {
 		return (
@@ -644,7 +548,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				remoteHostId={hostId}
 				snapshot={renderSnapshot}
 				promptSuggestion={promptSuggestion}
-				agentInputDisabled={switchLocksChat || handoffDialogOpen}
 				newWorkDisabled={newWorkDisabled}
 				onLinkOpen={openLinkInBrowser}
 				onSessionLinkOpen={openSessionLink}
@@ -698,8 +601,22 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						}
 						return;
 					}
+					if (pendingSwitch) {
+						// Nothing was sent if the switch fails, so the draft must stay editable
+						// instead of being held as a delivery that might have gone through.
+						const { harness: targetHarness, model, fastMode, autoCompactWindow } = pendingSwitch;
+						// Match the displayed effort, as the terminal switch does. Cursor's
+						// variant model id already carries its effort.
+						const effort = pendingSwitch.effort ?? (listsModelVariants(targetHarness) ? undefined : pendingSwitch.shownEffort);
+						await providerSwitch.mutateAsync({ targetHarness, model, effort, fastMode, autoCompactWindow })
+							.catch((error) => { throw Object.assign(new Error(apiErrorMessage(error)), { code: AGENT_SWITCH_FAILED }); });
+						setChosenSwitch(undefined);
+						// Ultracode picked with the switch stays on for the messages after it.
+						ultracode.onChange(Boolean(pendingSwitch.ultracode));
+					}
+					const viaClaude = (pendingSwitch?.harness ?? currentHarness) === "claude-code";
 					return commands.send({
-						text,
+						text: viaClaude && (pendingSwitch ? pendingSwitch.ultracode : ultracode.on) ? withUltracode(text) : text,
 						attachments,
 						clientMessageId,
 						excerpts: excerpts?.map((excerpt) => ({
@@ -710,6 +627,17 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						})),
 					}); }}
 				commandError={commands.error}
+				agentSwitch={agentSwitch}
+				composerAction={interfaceSwitch?.control}
+				composerNotice={interfaceSwitch?.errorNotice ?? (providerSwitch.error ? (
+					<ComposerErrorNotice title="Couldn't switch agent" message={apiErrorMessage(providerSwitch.error)} onDismiss={providerSwitch.reset} />
+				) : pendingSwitch ? (
+					<PendingAgentSwitchNotice
+						pending={pendingSwitch}
+						switching={providerSwitch.isPending}
+						onCancel={() => setChosenSwitch(undefined)}
+					/>
+				) : undefined)}
 				onDecide={commands.resolve}
 				onResolveInput={commands.resolveInput}
 				onInterrupt={commands.interrupt}
@@ -732,7 +660,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onOpenShell={onOpenShell}
 				openingShell={openingShell}
 				shellError={shellError}
-				settingsReady={!optimisticChat && (targetChatControllerReady || agentResuming) && (!can(renderSnapshot, "config_options") || configOptions.loaded)}
+				// Until the agent's own settings arrive the bar shows the saved ones,
+				// disabled, rather than nothing: asleep, waking, or its list still loading.
+				// With none saved yet it waits, so defaults never pass for the chat's own.
+				settingsReady={!optimisticChat && (targetChatControllerReady || agentResuming || waking) &&
+					(!settingsLoading || Boolean(renderSnapshot.settings?.model || renderSnapshot.settings?.approvalMode))}
+				settingsLoading={settingsLoading}
 				models={models}
 				onChooseSettings={hasProviderMode ? undefined : commands.chooseSettings}
 				onRememberPermissions={can(renderSnapshot, "config_options") && !configOptions.loaded
@@ -785,98 +718,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				cancelQueuedTurnPendingTurnId={commands.cancelQueuedTurnPendingTurnId}
 				editQueuedTurnPendingTurnId={commands.editQueuedTurnPendingTurnId}
 			/>
-			{shownSwitchPresentation ? (
-				<ChatAgentSwitchStatus
-					auxiliaryActive={Boolean(reviewerTarget || shellTarget)}
-					onDismiss={
-						shownSwitchPresentation.outcome === "failure" && agentSwitch
-							? () => dismissAgentSwitchFailure(agentSwitch.id)
-							: undefined
-					}
-					presentation={shownSwitchPresentation}
-				/>
-			) : null}
 		</div>
 	);
 });
-
-function ChatAgentSwitchStatus({
-	auxiliaryActive,
-	onDismiss,
-	presentation,
-}: {
-	auxiliaryActive: boolean;
-	onDismiss?: () => void;
-	presentation: AgentSwitchPresentation;
-}) {
-	const { t } = useTranslation();
-	const fullOverlay = presentation.lockAgentTerminal && !presentation.allowSourceInput && !auxiliaryActive;
-	const warning = presentation.outcome === "failure" || presentation.outcome === "recovery";
-	const success = presentation.outcome === "success";
-	const inProgress = presentation.outcome === "in_progress";
-	return (
-		<div
-			aria-busy={inProgress && presentation.animate ? true : undefined}
-			aria-live="polite"
-			className={cn(
-				"pointer-events-none z-20 flex",
-				fullOverlay
-					? "absolute inset-0 items-center justify-center bg-background/75 backdrop-blur-[1px]"
-					: "absolute inset-x-3 top-3 justify-center",
-			)}
-			data-outcome={presentation.outcome}
-			data-testid="chat-agent-switch-status"
-			role="status"
-		>
-			<div
-				className={cn(
-					"pointer-events-auto relative flex w-full max-w-lg items-start gap-3 rounded-lg border bg-surface/95 px-4 py-3 text-left shadow-lg",
-					onDismiss && "pr-11",
-					success
-						? "border-success/40"
-						: warning
-							? presentation.tone === "danger"
-								? "border-danger/40"
-								: "border-warning/40"
-							: "border-border",
-				)}
-			>
-				{success ? (
-					<CheckCircle2 aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-success" />
-				) : warning ? (
-					<AlertTriangle
-						aria-hidden="true"
-						className={cn(
-							"mt-0.5 size-4 shrink-0",
-							presentation.tone === "danger" ? "text-danger" : "text-warning",
-						)}
-					/>
-				) : (
-					<Loader2 aria-hidden="true" className="mt-0.5 size-4 shrink-0 animate-spin text-status-working" />
-				)}
-				<div className="min-w-0 flex-1">
-					<strong className="block text-sm text-foreground">
-						{t(presentation.titleKey, presentation.values)}
-					</strong>
-					<p className="mt-0.5 text-pretty text-xs leading-relaxed text-muted-foreground">
-						{t(presentation.descriptionKey, presentation.values)}
-					</p>
-					{inProgress ? <AgentSwitchProgressTrack stage={presentation.stage} /> : null}
-				</div>
-				{onDismiss ? (
-					<button
-						aria-label={t("common.close")}
-						className="absolute right-2 top-2 grid size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/50"
-						onClick={onDismiss}
-						type="button"
-					>
-						<X aria-hidden="true" className="size-icon-sm" />
-					</button>
-				) : null}
-			</div>
-		</div>
-	);
-}
 
 function unavailableConversationSnapshot(session: WorkspaceSession): ConversationSnapshot {
 	return {

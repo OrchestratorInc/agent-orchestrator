@@ -64,7 +64,7 @@ const (
 	// safely steer an active turn (coordination writes only).
 	SuppressedBusy
 	// SuppressedInputGated means an exclusive session mutation (for example an
-	// agent switch, resume, restore, or kill) closed pane-input admission before
+	// exclusive session operation (for example resume, restore, or kill) closed pane-input admission before
 	// this write acquired a lease.
 	SuppressedInputGated
 	// SuppressedStartupPending means a TUI session has not yet received its
@@ -216,7 +216,7 @@ func (g *Guard) DeliverUnderMutation(ctx context.Context, id domain.SessionID, m
 }
 
 // DeliverUnderMutationChecked adds one caller-owned proof immediately before
-// an admitted mutation writes to the pane. Agent switching uses it to ensure
+// an admitted mutation writes to the pane. Callers use it to ensure
 // the target runtime generation still owns the terminal after readiness wait.
 func (g *Guard) DeliverUnderMutationChecked(
 	ctx context.Context,
@@ -248,7 +248,7 @@ func (g *Guard) CoordinationUnderMutation(
 
 // CoordinationUnderMutationChecked adds one caller-owned proof immediately
 // after the durable session/activity read and immediately before the runtime
-// write. Agent switching uses it to revalidate the exact runtime handle and
+// write. Callers use it to revalidate the exact runtime handle and
 // generation at the pane-write boundary. The runtime's safe exit sink remains
 // the final defense if the child exits during a chunked paste.
 func (g *Guard) CoordinationUnderMutationChecked(

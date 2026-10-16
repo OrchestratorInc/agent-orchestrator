@@ -157,7 +157,6 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onPolicy: () => () => false,
 					onClearQueues: () => () => false,
 					capture: async () => false,
-					signalAgentSwitchVisibility: () => false,
 				},
 				browser: {
 					reconnectRuntime: async () => undefined,
@@ -1023,7 +1022,6 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onPolicy: () => () => false,
 					onClearQueues: () => () => false,
 					capture: async () => false,
-					signalAgentSwitchVisibility: () => false,
 				},
 				browser: {
 					reconnectRuntime: async () => undefined,

@@ -101,7 +101,7 @@ func New(sink runtimeObservationSink, sessions sessionSource, runtime runtimePro
 		// String() form. A local-zone value keeps its monotonic reading and
 		// offset ("… +0700 +07 m=+995.1"), which no longer compares as a
 		// timestamp against the "… +0000 UTC" rows every other writer produces —
-		// and those comparisons gate the agent-switch source-stop predicate.
+		// and those comparisons gate runtime ownership predicates.
 		r.clock = func() time.Time { return time.Now().UTC() }
 	}
 	if r.logger == nil {

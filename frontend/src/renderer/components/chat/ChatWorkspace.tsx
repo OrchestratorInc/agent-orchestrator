@@ -114,6 +114,7 @@ import {
 	ApprovalCard,
 	AssistantMessage,
 	CompactionMarker,
+	ProviderSwitchMarker,
 	ContinuedMarker,
 	HumanMessage,
 	OriginMessage,
@@ -126,6 +127,7 @@ import {
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider, ChatOpeningRef } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
+import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import type { ComposerPromptSuggestion } from "./ComposerEditor";
 import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
@@ -135,7 +137,7 @@ import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
 import { TurnPlan } from "./TurnPlan";
-import { TurnSettingsBar } from "./TurnSettingsBar";
+import { ComposerModeItems, TurnSettingsBar } from "./TurnSettingsBar";
 import { ElicitationDock } from "./ElicitationDock";
 import { McpServerBanner, ReauthBanner, ThreadStateBanner } from "./ChatStatusBanners";
 import {
@@ -372,6 +374,8 @@ export interface ChatWorkspaceProps {
 	agentResuming?: boolean;
 	startingSteps?: readonly SessionProvisionStep[];
 	settingsReady?: boolean;
+	/** The agent's own settings have not arrived; the bar shows the saved ones, disabled. */
+	settingsLoading?: boolean;
 	/** Freeze agent-owned Chat controls while a durable session mutation owns input. */
 	agentInputDisabled?: boolean;
 	/** Fence new agent work without blocking decisions required by the current turn. */
@@ -425,6 +429,12 @@ export interface ChatWorkspaceProps {
 	busy?: boolean;
 	/** The provider's model catalog. Empty hides the model control. */
 	models?: ChatModel[];
+	/** Makes the model control one picker for agent, model and effort. */
+	agentSwitch?: AgentSwitchProps;
+	/** A line above the chat box, such as a switch waiting for the next message. */
+	composerNotice?: ReactNode;
+	/** A control after the permission picker, such as the switch to the terminal view. */
+	composerAction?: ReactNode;
 	/** The AO session this surface renders for. Used to attach the reviewer pane. */
 	session?: WorkspaceSession;
 	/** Refresh the owning workspace cache after the shared primary tab is renamed. */
@@ -639,6 +649,7 @@ function ChatWorkspaceContent({
 	agentResuming = false,
 	startingSteps,
 	settingsReady = true,
+	settingsLoading = false,
 	agentInputDisabled = false,
 	newWorkDisabled = false,
 	reviewerTerminal,
@@ -679,6 +690,9 @@ function ChatWorkspaceContent({
 	onSessionLinkOpen,
 	busy,
 	models,
+	agentSwitch,
+	composerNotice,
+	composerAction,
 	onChooseSettings,
 	onRememberPermissions,
 	showApprovalMode,
@@ -1334,6 +1348,9 @@ function ChatWorkspaceContent({
 		[snapshot.items, turn],
 	);
 	const stableSettings = useStableValue(snapshot.settings);
+	// Claude Code compacts at the window picked for it, well before its model's full context.
+	const compactsAt = snapshot.harness === "claude-code" ? snapshot.settings?.autoCompactWindow : undefined;
+	const stableUsage = useStableValue(snapshot.usage);
 	const stableModelReroute = useStableValue(snapshot.modelReroute);
 	const stablePendingApproval = useStableValue(pendingApproval);
 	const stablePendingUserInput = useStableValue(pendingUserInput);
@@ -1341,6 +1358,12 @@ function ChatWorkspaceContent({
 		() =>
 			settingsReady && (onChooseSettings || onChooseConfigOption) ? (
 				<TurnSettingsBar
+					agentSwitch={agentSwitch}
+					beforePicker={agentSwitch ? <ContextMeter usage={stableUsage} compactsAt={compactsAt} /> : undefined}
+					// Only while the agent is starting: a sleeping chat whose wake failed would
+					// otherwise read "Loading models" for good. It shows its saved model instead.
+					modelsLoading={settingsLoading && snapshot.controller.state !== "hibernated"}
+					afterPermissions={composerAction}
 					models={models ?? []}
 					settings={stableSettings}
 					onRememberPermissions={onRememberPermissions}
@@ -1364,6 +1387,7 @@ function ChatWorkspaceContent({
 								snapshot.controller.state === "connecting" ||
 								snapshot.controller.state === "stopped"
 							)) ||
+							settingsLoading ||
 							session?.provisionState === "provisioning" ||
 							controllerTransitioning || configOptionPending || newWorkDisabled
 						}
@@ -1371,11 +1395,15 @@ function ChatWorkspaceContent({
 			) : null,
 		[
 			settingsReady,
+			settingsLoading,
 			configOptionError,
 			configOptionPending,
 			configOptions,
 			controllerTransitioning,
 			models,
+			agentSwitch,
+			composerAction,
+			stableUsage,
 			newWorkDisabled,
 			session?.provisionState,
 			onChooseConfigOption,
@@ -1392,6 +1420,7 @@ function ChatWorkspaceContent({
 			turn,
 			stableModelReroute,
 			stableSettings,
+			compactsAt,
 		],
 	);
 	const composerApproval = useMemo(
@@ -1775,7 +1804,9 @@ function ChatWorkspaceContent({
 										placement={conversationEmpty ? "below" : "above"}
 										active={!workspaceActiveTabKey && !reviewerActive && !shellActive}
 									/>
+									{composerNotice}
 									<ChatComposer
+										attachedTop={Boolean(composerNotice)}
 										onSelectAnnotation={navigateToAnnotation}
 										focusRef={composerFocusRef}
 										key={`${draftScopeKey}:${draftPersistenceAvailable ? "saved" : "memory"}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
@@ -1804,7 +1835,18 @@ function ChatWorkspaceContent({
 										onInterrupt={turn && !newWorkDisabled ? stableInterrupt : undefined}
 										onContinue={canContinue && !queueEdit ? onContinueTurn : undefined}
 										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
-										settings={<><ContextMeter usage={snapshot.usage} />{composerSettings}</>}
+										settings={<>{agentSwitch ? null : <>{composerAction}<ContextMeter usage={snapshot.usage} compactsAt={compactsAt} /></>}{composerSettings}</>}
+										addMenuItems={agentSwitch ? (
+											<ComposerModeItems
+												configOptions={configOptions ?? []}
+												settings={stableSettings}
+												models={models}
+												nativePlan={can(snapshot, "plan_mode")}
+												onChange={newWorkDisabled ? undefined : onChooseSettings}
+												onChangeConfigOption={newWorkDisabled ? undefined : onChooseConfigOption}
+												disabled={configOptionPending || controllerTransitioning}
+											/>
+										) : undefined}
 										busy={busy}
 										willQueue={Boolean(turn) || (sessionRole !== "orchestrator" && session?.provisionState === "provisioning")}
 										queuePlaceholder={
@@ -3220,7 +3262,12 @@ export function Timeline({
 	const timelineItems = useStableList(
 		[
 			...items.filter(
-				(item) => !(item.kind === "message" && item.role === "user" && item.turnId && backgroundQueuedTurnIds.has(item.turnId)),
+				(item) => !(item.kind === "message" && item.role === "user" && (
+					(item.turnId && backgroundQueuedTurnIds.has(item.turnId)) ||
+					// A terminal switch hands the note to the agent as its first prompt, so a
+					// conversation read back from the terminal carries it. It is not the user's.
+					item.text.trimStart().startsWith("<ao-handoff-request")
+				)),
 			),
 			...localItems,
 		],
@@ -4533,6 +4580,9 @@ function TimelineItem({
 	if (item.activityKind === "user_input") return null;
 	if (isCompaction(item)) {
 		return <CompactionMarker activity={item} />;
+	}
+	if (item.detail?.event === "provider_switch") {
+		return <ProviderSwitchMarker activity={item} />;
 	}
 	// Read by the event, not the kind: a steer is stored as a `system` activity
 	// because that is AO's only durable write that can attach to a turn in flight,

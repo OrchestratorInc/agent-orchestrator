@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -118,14 +119,16 @@ type conversation struct {
 	optionsFor        func(ports.ChatTurnSettings) []SessionOption
 	// requireAdvertised refuses a config option the session did not advertise
 	// instead of sending it. See Config.RequireAdvertisedOptions.
-	requireAdvertised  bool
-	permissionMode     ports.PermissionMode
-	permissionFor      PermissionPolicy
-	initialPermission  ports.PermissionMode
-	validateSettings   TurnSettingsValidator
-	extensionFor       ClientExtensionHandler
-	extensionMethods   map[string]string
-	legacyModel        bool
+	requireAdvertised bool
+	permissionMode    ports.PermissionMode
+	permissionFor     PermissionPolicy
+	initialPermission ports.PermissionMode
+	validateSettings  TurnSettingsValidator
+	extensionFor      ClientExtensionHandler
+	extensionMethods  map[string]string
+	legacyModel       bool
+	// The agent lists model among its own config options, as well as the older model list.
+	modelConfigOption  bool
 	legacyMode         bool
 	liveState          *persistenthost.ACPState
 	hasDurableTurns    bool
@@ -322,6 +325,9 @@ func (c *conversation) start(
 	c.permissionMode = c.initialPermission
 	c.validateSettings = validateSettings
 	c.legacyModel = models != nil
+	c.modelConfigOption = slices.ContainsFunc(configOptions, func(option acpsdk.SessionConfigOption) bool {
+		return option.Select != nil && option.Select.Id == "model"
+	})
 	c.legacyMode = modes != nil
 	c.mu.Unlock()
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerReady})
@@ -498,8 +504,22 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 			return err
 		}
 	}
+	var options []SessionOption
+	if optionsFor != nil {
+		options = optionsFor(settings)
+	}
+	// Each setting the session already has is skipped: some agents take seconds
+	// per change, and a turn would otherwise wait on every one of them. After
+	// session/set_model the list is stale, so everything is sent.
+	catalogStale := false
 	if legacyModel && settings.Model != "" {
+		// A binding may name the model differently from the turn settings.
 		model := settings.Model
+		for _, option := range options {
+			if option.ID == "model" && option.Value != "" {
+				model = option.Value
+			}
+		}
 		modelOptionFound := false
 		for _, option := range configOptions {
 			if option.ID != "model" {
@@ -516,20 +536,35 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 		if !modelOptionFound {
 			return fmt.Errorf("%w: ACP session does not advertise a model option", ports.ErrChatConfigOptionInvalid)
 		}
-		if err := c.legacyWire.setModel(ctx, sessionID, model); err != nil {
-			if isACPMethodNotFound(err) {
-				return fmt.Errorf("%w: session/set_model %q", ErrACPSetterUnsupported, model)
+		if c.configOptionCurrent("model") != model {
+			if err := c.legacyWire.setModel(ctx, sessionID, model); err != nil {
+				if isACPMethodNotFound(err) {
+					return fmt.Errorf("%w: session/set_model %q", ErrACPSetterUnsupported, model)
+				}
+				return fmt.Errorf("set ACP session model %q: %w", model, err)
 			}
-			return fmt.Errorf("set ACP session model %q: %w", model, err)
+			catalogStale = true
 		}
 		c.applyAcceptedConfigOption("model", ports.ChatConfigOptionValue{Select: model})
 	}
-	var options []SessionOption
-	if optionsFor != nil {
-		options = optionsFor(settings)
-	}
 	applyOption := func(option SessionOption) error {
+		if option.ID == "" || option.Value == "" {
+			return nil
+		}
 		if (option.ID == "model" && legacyModel) || (option.ID == "mode" && legacyMode) {
+			return nil
+		}
+		if offered, known := c.configOptionOffers(option.ID, option.Value); known && !offered && option.Name != "" {
+			if value := c.configOptionValueNamed(option.ID, option.Name); value != "" {
+				option.Value = value
+			}
+		}
+		if !catalogStale && c.configOptionCurrent(option.ID) == option.Value {
+			return nil
+		}
+		// The models offered do not depend on the model chosen, so an optional one
+		// the session does not list is skipped before it is sent.
+		if offered, known := c.configOptionOffers(option.ID, option.Value); option.Optional && option.ID == "model" && known && !offered {
 			return nil
 		}
 		return c.setSessionOption(ctx, sessionID, option)
@@ -630,6 +665,11 @@ func (c *conversation) setSessionOption(ctx context.Context, sessionID string, o
 		},
 	})
 	if err != nil {
+		// An optional setting the chosen model lacks is skipped. The catalog cannot
+		// say in advance: session/set_model does not return the new model's options.
+		if option.Optional && isACPInvalidParams(err) {
+			return nil
+		}
 		if isACPMethodNotFound(err) {
 			return fmt.Errorf("%w: session/set_config_option %q", ErrACPSetterUnsupported, option.ID)
 		}

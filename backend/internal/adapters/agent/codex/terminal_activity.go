@@ -183,7 +183,18 @@ func codexComposerFrame(output string) string {
 		for prompt := footer - 1; prompt >= start; prompt-- {
 			plainPrompt := strings.TrimSpace(terminalui.PlainTerminalText(raw[prompt]))
 			if strings.HasPrefix(plainPrompt, "›") {
-				return strings.Join(raw[prompt:footer], "\n")
+				// Codex can draw two status rows under the composer: the model
+				// row, and a hint row that gains a " · " of its own when it shows
+				// a warnings badge. The composer ends at the first of them, or
+				// the model row would be read as non-dim draft text.
+				end := footer
+				for row := prompt + 1; row < footer; row++ {
+					if strings.Contains(terminalui.PlainTerminalText(raw[row]), " · ") {
+						end = row
+						break
+					}
+				}
+				return strings.Join(raw[prompt:end], "\n")
 			}
 		}
 	}

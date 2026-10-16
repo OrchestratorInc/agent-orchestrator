@@ -97,15 +97,6 @@ describe("preload telemetry generation bridge", () => {
 		expect(electronMocks.invoke).toHaveBeenNthCalledWith(2, "telemetry:capture", { kind: "message", message: "second", consentGeneration: "generation-on" });
 	});
 
-	it("attaches the latest policy generation to visibility signals without accepting renderer generation", () => {
-		telemetryPolicyBroadcastListener?.({}, { eventsEnabled: true, consentGeneration: "generation-a", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true });
-		expect(exposedBridge().telemetry.signalAgentSwitchVisibility({ kind: "focus", value: true })).toBe(true);
-		telemetryPolicyBroadcastListener?.({}, { eventsEnabled: true, consentGeneration: "generation-b", updatedAt: "2026-08-28T10:15:31.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true });
-		expect(exposedBridge().telemetry.signalAgentSwitchVisibility({ kind: "online", value: false })).toBe(true);
-		expect(electronMocks.send).toHaveBeenNthCalledWith(1, "agent-switch:visibility", { consentGeneration: "generation-a", signal: { kind: "focus", value: true } });
-		expect(electronMocks.send).toHaveBeenNthCalledWith(2, "agent-switch:visibility", { consentGeneration: "generation-b", signal: { kind: "online", value: false } });
-	});
-
 	it("acknowledges renderer queue purge only after every registered cleanup succeeds", async () => {
 		const first = vi.fn();
 		const second = vi.fn().mockResolvedValue(undefined);

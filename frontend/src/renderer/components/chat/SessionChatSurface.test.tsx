@@ -3,11 +3,11 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { agentSwitchesQueryKey } from "../../hooks/useAgentSwitches";
 import type { ChatConfigOption, ChatModel, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
-import type { AgentSwitchSummary, WorkspaceSession } from "../../types/workspace";
+import type { WorkspaceSession } from "../../types/workspace";
 import { useUiStore } from "../../stores/ui-store";
 import { workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
+import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import { useConversationConfigOptions, useConversationModels, useConversationSkills } from "../../hooks/useConversation";
 
 const LINK = "http://localhost:5173";
@@ -39,18 +39,18 @@ const {
 	getMock,
 	invalidateCatalogsMock,
 	postMock,
+	providerSwitchMock,
 	workspacePathsState,
 	conversationState,
 	conversationCommandState,
-	agentSwitchState,
 } = vi.hoisted(() => ({
 	catalogObserverState: { enabled: [] as boolean[] },
 	clearCatalogsMock: vi.fn(),
 	getMock: vi.fn(),
 	invalidateCatalogsMock: vi.fn(),
 	postMock: vi.fn(),
+	providerSwitchMock: vi.fn(),
 	workspacePathsState: { paths: [] as string[] },
-	agentSwitchState: { data: [] as AgentSwitchSummary[] },
 	conversationCommandState: {
 		busy: false,
 		send: vi.fn(),
@@ -81,17 +81,13 @@ const sideMocks = vi.hoisted(() => ({
 	show: vi.fn(),
 	addReference: vi.fn(),
 	sides: [] as { hasWork: boolean }[],
+	agentSwitch: undefined as AgentSwitchProps | undefined,
 	workspaceSend: undefined as
 		| undefined
 		| ((text: string, attachments: undefined, clientMessageId: string) => Promise<void>),
 }));
 vi.mock("./IndependentSideChats", () => ({
 	useIndependentSideChats: () => ({ ...sideMocks, panel: null, activeId: "existing-side" }),
-}));
-
-const visibilityMocks = vi.hoisted(() => ({
-	presentation: vi.fn(),
-	route: vi.fn(),
 }));
 
 vi.mock("../../lib/api-client", () => ({
@@ -113,6 +109,12 @@ vi.mock("../../hooks/useConversation", () => ({
 			: undefined,
 	}),
 	useConversationCommands: () => conversationCommandState,
+	useProviderSwitchCommand: () => ({
+		mutateAsync: providerSwitchMock,
+		isPending: false,
+		error: null,
+		reset: vi.fn(),
+	}),
 	useConversationConfigOptions: vi.fn((_sessionId: string, enabled: boolean) => {
 		catalogObserverState.enabled.push(enabled);
 		return configState;
@@ -123,11 +125,6 @@ vi.mock("../../hooks/useConversation", () => ({
 	useWorkspaceFilePaths: () => ({ paths: workspacePathsState.paths, truncated: false }),
 }));
 
-vi.mock("../../hooks/useAgentSwitchVisibility", () => ({
-	useAgentSwitchPresentationVisibility: visibilityMocks.presentation,
-	useAgentSwitchRouteVisibility: visibilityMocks.route,
-}));
-
 vi.mock("./ChatWorkspace", async () => {
 	const { useState } = await vi.importActual<typeof import("react")>("react");
 	const { TurnSettingsBar } = await vi.importActual<typeof import("./TurnSettingsBar")>("./TurnSettingsBar");
@@ -135,6 +132,7 @@ vi.mock("./ChatWorkspace", async () => {
 		CONTINUE_STOPPED_TURN_PROMPT: "Continue from where you stopped.",
 		continuableTurnId: (snapshot: ConversationSnapshot) => snapshot.continueTurnId ?? "",
 		ChatWorkspace: ({
+			agentSwitch,
 			agentInputDisabled,
 			headerActions,
 			sessionTabAction,
@@ -152,6 +150,7 @@ vi.mock("./ChatWorkspace", async () => {
 			onSend,
 		}: {
 			onSend: typeof sideMocks.workspaceSend;
+			agentSwitch?: AgentSwitchProps;
 			agentInputDisabled?: boolean;
 			headerActions?: ReactNode;
 			sessionTabAction?: ReactNode;
@@ -168,6 +167,7 @@ vi.mock("./ChatWorkspace", async () => {
 			shellTarget?: { handleId: string };
 		}) => {
 			sideMocks.workspaceSend = onSend;
+			sideMocks.agentSwitch = agentSwitch;
 			const [mountedSessionId] = useState(snapshot.sessionId);
 			return (
 				<div>
@@ -232,11 +232,13 @@ beforeEach(() => {
 	configState.loaded = false;
 	configState.error = undefined;
 	getMock.mockReset().mockImplementation(async () => ({
-		data: { switches: agentSwitchState.data },
+		data: {},
 		error: undefined,
 		response: { status: 200 },
 	}));
 	postMock.mockReset().mockResolvedValue({ data: {}, error: undefined });
+	providerSwitchMock.mockReset().mockResolvedValue({});
+	sideMocks.agentSwitch = undefined;
 	clearCatalogsMock.mockReset();
 	invalidateCatalogsMock.mockReset();
 	conversationState.snapshot = { capabilities: [] };
@@ -250,15 +252,30 @@ beforeEach(() => {
 	conversationCommandState.busy = false;
 	conversationCommandState.pendingAcceptedTurnId = undefined;
 	conversationCommandState.acknowledgeAcceptedTurn.mockReset();
-	agentSwitchState.data = [];
 	catalogObserverState.enabled = [];
-	visibilityMocks.presentation.mockReset();
-	visibilityMocks.route.mockReset();
 	useUiStore.setState({ inspectorSessions: {} });
 });
 
 afterEach(() => {
 	vi.useRealTimers();
+});
+
+describe("SessionChatSurface pending switch effort", () => {
+	it.each([
+		{ harness: "codex", effort: undefined, shownEffort: "low", expected: "low" },
+		{ harness: "codex", effort: "high", shownEffort: "low", expected: "high" },
+		{ harness: "cursor", effort: undefined, shownEffort: "high", expected: undefined },
+	])("sends $harness effort $expected from the pending picker", async ({ harness, effort, shownEffort, expected }) => {
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		await act(async () => {
+			sideMocks.agentSwitch?.onPendingChange({ harness, model: "chosen-model", effort, shownEffort });
+		});
+		await act(async () => {
+			await sideMocks.workspaceSend?.("Recall the code word.", undefined, "switch-message");
+		});
+		expect(providerSwitchMock).toHaveBeenCalledWith(expect.objectContaining({ targetHarness: harness, effort: expected }));
+	});
 });
 
 describe("SessionChatSurface prompt suggestions", () => {
@@ -312,7 +329,6 @@ describe("SessionChatSurface prompt suggestions", () => {
 		{ reviewerTarget: { kind: "reviewer" as const, handleId: "review-1", harness: "codex", sessionId: session.id } },
 		{ shellTarget: { kind: "shell" as const, handleId: "shell-1", generation: "generation-1", title: "Shell" } },
 		{ controllerTransitioning: true },
-		{ handoffDialogOpen: true },
 		{ agentResuming: true },
 	])("does not generate while the primary chat is inactive or blocked %#", (props) => {
 		settleConversation();
@@ -385,7 +401,7 @@ describe("SessionChatSurface link routing", () => {
 		];
 		getMock.mockImplementation(async (path: string) => path === "/api/v1/settings"
 			? { data: { defaultSessionMode: "chat", chatHarnesses: [], harnessDefaults: { opencode: { disabledModels: ["model-b", "model-c"] } } }, error: undefined, response: { status: 200 } }
-			: { data: { switches: agentSwitchState.data }, error: undefined, response: { status: 200 } });
+			: { data: {}, error: undefined, response: { status: 200 } });
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 
 		render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, provider: "opencode" }} /></Wrapper>);
@@ -409,7 +425,7 @@ describe("SessionChatSurface link routing", () => {
 					{ id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
 					{ id: "claude-haiku-5-5", label: "Claude Haiku 5.5" },
 				] }, error: undefined, response: { status: 200 } }
-				: { data: { switches: agentSwitchState.data }, error: undefined, response: { status: 200 } });
+				: { data: {}, error: undefined, response: { status: 200 } });
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 
 		render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, provider: "claude-code" }} /></Wrapper>);
@@ -432,7 +448,7 @@ describe("SessionChatSurface link routing", () => {
 					{ id: "claude-opus-4-9", label: "Claude Opus 4.9" },
 					{ id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
 				] }, error: undefined, response: { status: 200 } }
-				: { data: { switches: agentSwitchState.data }, error: undefined, response: { status: 200 } });
+				: { data: {}, error: undefined, response: { status: 200 } });
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 
 		render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, provider: "claude-code" }} /></Wrapper>);
@@ -833,7 +849,7 @@ describe("SessionChatSurface link routing", () => {
 		// page is previewed.
 		getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/workspace/resolve"
 			? { data: { sessionId: localSession.id, kind: "workspace", path: "test-ui.html" }, error: undefined }
-			: { data: { switches: agentSwitchState.data }, error: undefined, response: { status: 200 } });
+			: { data: {}, error: undefined, response: { status: 200 } });
 		const view = render(<Wrapper client={queryClient}><SessionChatSurface session={localSession} onOpenLinkInBrowser={openInBrowser} /></Wrapper>);
 		conversationState.snapshot = {
 			capabilities: [],
@@ -854,7 +870,7 @@ describe("SessionChatSurface link routing", () => {
 		const onOpenFile = vi.fn();
 		getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/workspace/resolve"
 			? { data: { sessionId: localSession.id, kind: "outside", path: "" }, error: undefined }
-			: { data: { switches: agentSwitchState.data }, error: undefined, response: { status: 200 } });
+			: { data: {}, error: undefined, response: { status: 200 } });
 		const view = render(<Wrapper client={queryClient}><SessionChatSurface session={localSession} onOpenFile={onOpenFile} onOpenLinkInBrowser={openInBrowser} /></Wrapper>);
 		conversationState.snapshot = {
 			capabilities: [],
@@ -888,8 +904,6 @@ describe("SessionChatSurface link routing", () => {
 		expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/preview", expect.anything());
 	});
 
-	// SessionView owns the switch-agent control on the primary session tab; the chat
-	// surface forwards it into ChatWorkspace.
 	it("forwards session tab actions into the chat workspace", () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -918,351 +932,6 @@ describe("SessionChatSurface link routing", () => {
 
 		expect(screen.getByTestId("chat-agent-input")).toHaveAttribute("data-disabled", "false");
 		expect(screen.getByTestId("chat-new-work")).toHaveAttribute("data-disabled", "true");
-	});
-
-	it.each([
-		["workspace file", { workspaceFileActive: true }, undefined],
-		["conversation error", {}, "Could not load conversation"],
-	] as const)("does not acknowledge a switch presentation hidden by a %s", (_name, props, error) => {
-		agentSwitchState.data = [{
-			agentHandoffStatus: "not_attempted",
-			fromHarness: "claude-code",
-			id: "switch-hidden",
-			state: "starting_target",
-			targetHarness: "codex",
-			updatedAt: "2026-08-28T00:00:00Z",
-		}];
-		conversationState.error = error;
-		const queryClient = new QueryClient({
-			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-		});
-
-		render(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface session={session} {...props} />
-			</Wrapper>,
-		);
-
-		expect(visibilityMocks.presentation).toHaveBeenLastCalledWith(expect.objectContaining({ visible: false }));
-	});
-
-	it.each([
-		[
-			"nonterminal progress",
-			{ id: "switch-progress", state: "starting_target" },
-			"in_progress",
-			true,
-		],
-		[
-			"restart recovery",
-			{ id: "switch-recovery", state: "starting_target", errorCode: "target_start_unconfirmed" },
-			"recovery",
-			false,
-		],
-	] as const)("restores durable %s presentation and locks Chat input after reload", async (_name, overrides, outcome, _buttonDisabled) => {
-		agentSwitchState.data = [
-			{
-				agentHandoffStatus: "not_attempted",
-				fromHarness: "claude-code",
-				targetHarness: "codex",
-				...overrides,
-			},
-		];
-		const queryClient = new QueryClient({
-			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-		});
-		render(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface session={session} />
-			</Wrapper>,
-		);
-
-		await waitFor(() => {
-			expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute("data-outcome", outcome);
-		});
-		expect(screen.getByTestId("chat-agent-input")).toHaveAttribute("data-disabled", "true");
-		expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute("data-outcome", outcome);
-		if (outcome === "in_progress") {
-			const progress = screen.getByRole("list", { name: "Switching…" });
-			expect(progress.querySelector('[aria-current="step"]')).toHaveTextContent("Starting target agent");
-		} else {
-			expect(screen.queryByRole("list", { name: "Switching…" })).not.toBeInTheDocument();
-		}
-	});
-
-	it("uses a ready Chat controller as the completed takeover proof", async () => {
-		const completedSwitch = {
-			agentHandoffStatus: "not_attempted",
-			fromHarness: "claude-code",
-			id: "switch-completed",
-			state: "completed",
-			targetHarness: "codex",
-		} satisfies AgentSwitchSummary;
-		agentSwitchState.data = [completedSwitch];
-		conversationState.snapshot = {
-			capabilities: [],
-			controller: { state: "ready" },
-			harness: "codex",
-		};
-		const queryClient = new QueryClient({
-			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-		});
-
-		render(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface
-					session={{
-						...session,
-						activeAgentSwitch: { ...completedSwitch, state: "target_ready" },
-					}}
-				/>
-			</Wrapper>,
-		);
-
-		await waitFor(() => {
-			expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute(
-				"data-outcome",
-				"success",
-			);
-		});
-		expect(screen.getByTestId("chat-agent-input")).toHaveAttribute("data-disabled", "false");
-		expect(screen.queryByRole("list", { name: "Switching…" })).not.toBeInTheDocument();
-	});
-
-	it("reconciles catalogs when the first fetched switch state is already completed", async () => {
-		const completedSwitch = {
-			agentHandoffStatus: "received",
-			fromHarness: "claude-code",
-			id: "switch-terminal-first",
-			state: "completed",
-			targetHarness: "codex",
-		} satisfies AgentSwitchSummary;
-		agentSwitchState.data = [completedSwitch];
-		conversationState.snapshot = {
-			capabilities: ["config_options"],
-			controller: { state: "ready" },
-			harness: "codex",
-		};
-		const queryClient = new QueryClient({
-			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-		});
-
-		render(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface session={session} />
-			</Wrapper>,
-		);
-
-		await waitFor(() => {
-			expect(clearCatalogsMock).toHaveBeenCalledWith(queryClient, session.id, undefined);
-			expect(invalidateCatalogsMock).toHaveBeenCalledWith(queryClient, session.id, undefined);
-		});
-		expect(catalogObserverState.enabled).toContain(false);
-		await waitFor(() => expect(catalogObserverState.enabled.at(-1)).toBe(true));
-		expect(screen.queryByTestId("chat-agent-switch-status")).not.toBeInTheDocument();
-	});
-
-	it("waits for a ready or busy controller owned by the target harness", async () => {
-		const completedSwitch = {
-			agentHandoffStatus: "received",
-			fromHarness: "claude-code",
-			id: "switch-target-controller-proof",
-			state: "completed",
-			targetHarness: "codex",
-		} satisfies AgentSwitchSummary;
-		agentSwitchState.data = [completedSwitch];
-		conversationState.snapshot = {
-			capabilities: ["config_options"],
-			controller: { state: "ready" },
-			harness: "claude-code",
-		};
-		const queryClient = new QueryClient({
-			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-		});
-		queryClient.setQueryData(agentSwitchesQueryKey(session.id), [completedSwitch]);
-		const targetSession = {
-			...session,
-			activeAgentSwitch: { ...completedSwitch, state: "target_ready" as const },
-		};
-		const view = render(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface session={targetSession} />
-			</Wrapper>,
-		);
-
-		await waitFor(() => {
-			expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute(
-				"data-outcome",
-				"in_progress",
-			);
-		});
-		expect(catalogObserverState.enabled.at(-1)).toBe(false);
-
-		conversationState.snapshot = {
-			capabilities: ["config_options"],
-			controller: { state: "busy" },
-			harness: "codex",
-		};
-		// SessionChatSurface is memoized; in the app the controller transition
-		// re-renders it through the useConversation subscription. Mimic that with a
-		// fresh session reference (same id) so the memo boundary re-reads state.
-		view.rerender(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface session={{ ...targetSession }} />
-			</Wrapper>,
-		);
-
-		await waitFor(() => {
-			expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute(
-				"data-outcome",
-				"success",
-			);
-		});
-		expect(catalogObserverState.enabled.at(-1)).toBe(true);
-	});
-
-	it("ignores completed switch history when a stopped Chat controller reloads", () => {
-		const historicalSwitch = {
-			agentHandoffStatus: "received",
-			fromHarness: "claude-code",
-			id: "switch-historical-completion",
-			state: "completed",
-			targetHarness: "codex",
-		} satisfies AgentSwitchSummary;
-		agentSwitchState.data = [historicalSwitch];
-		conversationState.snapshot = { capabilities: [], controller: { state: "stopped" } };
-		const queryClient = new QueryClient({
-			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-		});
-		queryClient.setQueryData(agentSwitchesQueryKey(session.id), [historicalSwitch]);
-
-		render(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface session={session} />
-			</Wrapper>,
-		);
-
-		expect(screen.queryByTestId("chat-agent-switch-status")).not.toBeInTheDocument();
-		expect(screen.getByTestId("chat-agent-input")).toHaveAttribute("data-disabled", "false");
-	});
-
-	it("keeps failure visible until a retry settles, then ignores a later controller stop", async () => {
-		const user = userEvent.setup();
-		const activeSwitch = {
-			agentHandoffStatus: "not_attempted",
-			fromHarness: "claude-code",
-			id: "switch-failed-after-admission",
-			state: "starting_target",
-			targetHarness: "codex",
-		} satisfies AgentSwitchSummary;
-		const failedSwitch = {
-			...activeSwitch,
-			errorCode: "target_binary_missing",
-			state: "failed",
-		} satisfies AgentSwitchSummary;
-		agentSwitchState.data = [activeSwitch];
-		const queryClient = new QueryClient({
-			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-		});
-		const view = render(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface session={{ ...session, activeAgentSwitch: activeSwitch }} />
-			</Wrapper>,
-		);
-
-		await waitFor(() => {
-			expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute(
-				"data-outcome",
-				"in_progress",
-			);
-		});
-
-		agentSwitchState.data = [failedSwitch];
-		act(() => {
-			queryClient.setQueryData(agentSwitchesQueryKey(session.id), [failedSwitch]);
-		});
-		view.rerender(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface session={session} />
-			</Wrapper>,
-		);
-
-		expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute(
-			"data-outcome",
-			"failure",
-		);
-		expect(screen.getByTestId("chat-agent-switch-status")).toHaveTextContent(
-			"Target agent is not installed",
-		);
-
-		await user.click(screen.getByRole("button", { name: "Close" }));
-		expect(screen.queryByTestId("chat-agent-switch-status")).not.toBeInTheDocument();
-
-		const retrySwitch = {
-			agentHandoffStatus: "not_attempted",
-			fromHarness: "codex",
-			id: "switch-successful-retry",
-			state: "starting_target",
-			targetHarness: "claude-code",
-		} satisfies AgentSwitchSummary;
-		agentSwitchState.data = [retrySwitch, failedSwitch];
-		act(() => {
-			queryClient.setQueryData(agentSwitchesQueryKey(session.id), [retrySwitch, failedSwitch]);
-		});
-		view.rerender(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface session={{ ...session, activeAgentSwitch: retrySwitch }} />
-			</Wrapper>,
-		);
-		expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute(
-			"data-outcome",
-			"in_progress",
-		);
-
-		const completedRetry = {
-			...retrySwitch,
-			state: "completed",
-		} satisfies AgentSwitchSummary;
-		vi.useFakeTimers();
-		conversationState.snapshot = {
-			capabilities: [],
-			controller: { state: "ready" },
-			harness: "claude-code",
-		};
-		agentSwitchState.data = [completedRetry, failedSwitch];
-		act(() => {
-			queryClient.setQueryData(agentSwitchesQueryKey(session.id), [completedRetry, failedSwitch]);
-		});
-		view.rerender(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface
-					session={{ ...session, activeAgentSwitch: completedRetry, provider: "claude-code" }}
-				/>
-			</Wrapper>,
-		);
-
-		expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute(
-			"data-outcome",
-			"success",
-		);
-
-		conversationState.snapshot = { capabilities: [], controller: { state: "stopped" } };
-		view.rerender(
-			<Wrapper client={queryClient}>
-				<SessionChatSurface
-					session={{ ...session, activeAgentSwitch: completedRetry, provider: "claude-code" }}
-				/>
-			</Wrapper>,
-		);
-		expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute(
-			"data-outcome",
-			"success",
-		);
-		expect(screen.getByTestId("chat-agent-input")).toHaveAttribute("data-disabled", "false");
-
-		act(() => vi.advanceTimersByTime(3_000));
-		expect(screen.queryByTestId("chat-agent-switch-status")).not.toBeInTheDocument();
-		expect(screen.getByTestId("chat-agent-input")).toHaveAttribute("data-disabled", "false");
 	});
 
 	it("keeps a selected shell renderable when the conversation is unavailable", () => {

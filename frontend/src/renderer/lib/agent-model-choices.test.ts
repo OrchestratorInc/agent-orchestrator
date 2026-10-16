@@ -95,6 +95,13 @@ describe("claudeChoiceModel", () => {
 		expect(choiceModel("default")).toBeUndefined();
 		expect(claudeChoiceModel([])).toBeUndefined();
 	});
+
+	it("maps an alias by the name Claude gives it, which can be an older model", () => {
+		const choiceModel = claudeChoiceModel([...catalog, model("Claude Haiku 5.5", "claude-haiku-5-5"), model("Claude Haiku 4.5", "claude-haiku-4-5-20251001")])!;
+		expect(choiceModel("haiku", "Haiku 4.5")?.id).toBe("claude-haiku-4-5-20251001");
+		expect(choiceModel("opus", "Opus 5.5")?.id).toBe("claude-opus-5-5");
+		expect(choiceModel("haiku", "Haiku 4.1")).toBeUndefined();
+	});
 });
 
 describe("Claude context variant selection", () => {

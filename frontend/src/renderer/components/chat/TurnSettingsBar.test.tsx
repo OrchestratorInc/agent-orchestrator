@@ -1213,7 +1213,7 @@ describe("Cursor Ask and Agent chat modes", () => {
 		expect(screen.getByRole("menuitemradio", { name: "Approve for me" })).toBeInTheDocument();
 	});
 
-	it("keeps the Plan/Agent switch and its Manual wire value unchanged", async () => {
+	it("keeps the Plan/Agent mode control and its Manual wire value unchanged", async () => {
 		const onChange = vi.fn();
 		const user = userEvent.setup();
 		render(
@@ -1233,7 +1233,7 @@ describe("Cursor Ask and Agent chat modes", () => {
 		expect(onChange).toHaveBeenCalledWith("mode", { value: "plan" });
 	});
 
-	it("does not confuse a provider-owned agent option with AO's Switch agent", async () => {
+	it("does not confuse a provider-owned agent option with AO's session controls", async () => {
 		const user = userEvent.setup();
 		render(
 			<TurnSettingsBar

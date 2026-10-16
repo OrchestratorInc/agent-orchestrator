@@ -398,6 +398,70 @@ func TestResolveCopilotBinaryFallbacks(t *testing.T) {
 	}
 }
 
+// VS Code's Copilot Chat extension installs a `copilot` launcher that only
+// forwards to a CLI found elsewhere on PATH, and asks to install one otherwise.
+func writeVSCodeCopilotLauncher(t *testing.T, home string) string {
+	t.Helper()
+	dir := filepath.Join(home, "Library", "Application Support", "Code", "User", "globalStorage", "github.copilot-chat", "copilotCli")
+	launcher := writeExecutable(t, filepath.Join(dir, "copilot"))
+	if err := os.WriteFile(filepath.Join(dir, vsCodeCopilotLauncherScript), []byte("// launcher\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return launcher
+}
+
+func TestResolveCopilotBinaryIgnoresVSCodeLauncher(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix launcher shape")
+	}
+	oldUnixPaths := copilotUnixPaths
+	copilotUnixPaths = nil
+	t.Cleanup(func() { copilotUnixPaths = oldUnixPaths })
+
+	setup := func(t *testing.T) (home, launcher string) {
+		home = t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("VOLTA_HOME", filepath.Join(home, ".volta"))
+		t.Setenv("FNM_DIR", "")
+		return home, writeVSCodeCopilotLauncher(t, home)
+	}
+
+	t.Run("launcher alone is not an install", func(t *testing.T) {
+		_, launcher := setup(t)
+		for _, path := range []string{t.TempDir(), filepath.Dir(launcher)} {
+			t.Setenv("PATH", path)
+			if got, err := ResolveCopilotBinary(context.Background()); !errors.Is(err, ports.ErrAgentBinaryNotFound) {
+				t.Fatalf("PATH=%s: ResolveCopilotBinary = %q, %v; want ErrAgentBinaryNotFound", path, got, err)
+			}
+		}
+	})
+
+	t.Run("the CLI behind the launcher on PATH is used", func(t *testing.T) {
+		_, launcher := setup(t)
+		want := writeExecutable(t, filepath.Join(t.TempDir(), "copilot"))
+		t.Setenv("PATH", filepath.Dir(launcher)+string(os.PathListSeparator)+filepath.Dir(want))
+		got, err := ResolveCopilotBinary(context.Background())
+		if err != nil || got != want {
+			t.Fatalf("ResolveCopilotBinary = %q, %v; want %q", got, err, want)
+		}
+	})
+
+	t.Run("a link to the launcher is still the launcher", func(t *testing.T) {
+		home, launcher := setup(t)
+		link := filepath.Join(home, ".local", "bin", "copilot")
+		if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(launcher, link); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", t.TempDir())
+		if got, err := ResolveCopilotBinary(context.Background()); !errors.Is(err, ports.ErrAgentBinaryNotFound) {
+			t.Fatalf("ResolveCopilotBinary = %q, %v; want ErrAgentBinaryNotFound", got, err)
+		}
+	})
+}
+
 func writeExecutable(t *testing.T, path string) string {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

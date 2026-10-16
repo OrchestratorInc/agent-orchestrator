@@ -51,6 +51,12 @@ describe("ContextMeter", () => {
 		expect(tooltip).not.toHaveTextContent("Provider-reported cost");
 	});
 
+	it("names the size the agent compacts at", async () => {
+		render(<ContextMeter usage={usage({ contextWindow: 1_000_000 })} compactsAt="200k" />);
+		await userEvent.hover(screen.getByRole("progressbar"));
+		expect(await screen.findByRole("tooltip")).toHaveTextContent("Compacts on its own at 200K");
+	});
+
 	it("encodes fullness in the circular stroke", () => {
 		render(<ContextMeter usage={usage({ contextUsed: 129200 })} />);
 		expect(fill()).toHaveAttribute("stroke-dasharray", "50 100");

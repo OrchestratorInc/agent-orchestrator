@@ -1201,3 +1201,13 @@ func TestGetLaunchCommandBypassesEvenAWorktreePolicy(t *testing.T) {
 		t.Fatalf("config permission = %#v, want the rule on the agent alone", config.Permission)
 	}
 }
+
+// The hook client reads the turn's final assistant text from this payload
+// field on stop. The plugin is the only thing that can supply it for opencode.
+func TestOpenCodePluginReportsFinalAssistantTextOnStop(t *testing.T) {
+	for _, want := range []string{"last_assistant_message: lastAssistantText", `callHookSync("stop"`} {
+		if !strings.Contains(opencodePluginSource, want) {
+			t.Fatalf("embedded plugin is missing %q", want)
+		}
+	}
+}

@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -203,5 +204,28 @@ func TestInspectTerminalSurfaceOnlyProvesAnUnstartedConversationOnInitialFrame(t
 				t.Fatalf("NativeConversationNotStarted = %v, want %v; observation=%+v", got.NativeConversationNotStarted, tt.want, got)
 			}
 		})
+	}
+}
+
+// Captured from Codex 0.161.0: with a warnings badge the hint row under the
+// model row carries a " · " of its own. The dim placeholder must still read as
+// an empty composer, or the session can never be switched away from Codex.
+func TestInspectTerminalSurfaceIgnoresWarningsBadgeBelowComposer(t *testing.T) {
+	screen := strings.Join([]string{
+		"• The second codeword is KIWI-42.",
+		"",
+		"\x1b[1m›\x1b[m \x1b[2mAsk Codex to do anything\x1b[m",
+		"",
+		"  \x1b[38;2;246;226;183mGPT-6.1-Sol xhigh\x1b[m · \x1b[38;2;171;223;167m/tmp/worktrees/handoff/handoff-2\x1b[m · \x1b[38;2;137;180;250mContinue claude source\x1b[m",
+		"  \x1b[1m?\x1b[m for shortcuts                    ⚠ \x1b[38;2;196;167;103m3 warnings\x1b[m · \x1b[1mf2\x1b[m to view",
+	}, "\n")
+	got := (&Plugin{}).InspectTerminalSurface(screen)
+	if got.Composer != ports.TerminalComposerEmpty || got.Work != ports.TerminalSurfaceWorkIdle {
+		t.Fatalf("observation = %+v, want an idle agent with an empty composer", got)
+	}
+
+	draft := strings.Replace(screen, "\x1b[2mAsk Codex to do anything\x1b[m", "fix the importer", 1)
+	if got := (&Plugin{}).InspectTerminalSurface(draft); got.Composer != ports.TerminalComposerDraft {
+		t.Fatalf("observation = %+v, want real composer text to remain a draft", got)
 	}
 }

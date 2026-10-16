@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/activitydispatch"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/copilot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -61,6 +62,9 @@ type setActivityAPIRequest struct {
 	AgentSessionID               string                              `json:"agentSessionId,omitempty"`
 	LatestUserPrompt             string                              `json:"latestUserPrompt,omitempty"`
 	LatestAssistantUpdate        string                              `json:"latestAssistantUpdate,omitempty"`
+	FinalAssistantMessage        string                              `json:"finalAssistantMessage,omitempty"`
+	TurnUserRequest              string                              `json:"turnUserRequest,omitempty"`
+	Harness                      string                              `json:"harness,omitempty"`
 	ConversationCheckpointOrigin domain.ConversationCheckpointOrigin `json:"conversationCheckpointOrigin,omitempty"`
 	CoordinationID               string                              `json:"coordinationId,omitempty"`
 	ProviderTurnID               string                              `json:"providerTurnId,omitempty"`
@@ -364,6 +368,8 @@ type hookConversationSnapshot struct {
 	ProviderTurnID        string
 	LatestUserPrompt      string
 	LatestAssistantUpdate string
+	FinalAssistantMessage string
+	TurnUserRequest       string
 	CheckpointOrigin      domain.ConversationCheckpointOrigin
 	CoordinationID        string
 	TranscriptPath        string
@@ -378,13 +384,16 @@ func hookConversationFacts(agent domain.AgentHarness, event string, payload []by
 		UserPrompt           string `json:"user_prompt"`
 		UserPromptCamel      string `json:"userPrompt"`
 		LastAssistantMessage string `json:"last_assistant_message"`
+		LastAssistantCamel   string `json:"lastAssistantMessage"`
+		PromptResponse       string `json:"prompt_response"`
+		PromptResponseCamel  string `json:"promptResponse"`
 		TranscriptPath       string `json:"transcript_path"`
 		TranscriptPathCamel  string `json:"transcriptPath"`
 		SubagentID           string `json:"agent_id"`
 	}
-	_ = json.Unmarshal(payload, &p)
+	decodeErr := json.Unmarshal(payload, &p)
 	observedPrompt := firstHookValue(p.Prompt, p.UserPrompt, p.UserPromptCamel)
-	var userPrompt, assistant, turnID string
+	var userPrompt, assistant, finalMessage, turnID string
 	origin := domain.ConversationCheckpointOriginUnknown
 	// Conversation checkpoints are trusted only at the main-turn boundaries that
 	// own each fact. Several Claude payloads repeat prompt/assistant aliases on
@@ -416,6 +425,7 @@ func hookConversationFacts(agent domain.AgentHarness, event string, payload []by
 			if agent == domain.HarnessClaudeCode || agent == domain.HarnessContinue {
 				assistant = p.LastAssistantMessage
 			}
+			finalMessage = firstHookValue(p.LastAssistantMessage, p.LastAssistantCamel, p.PromptResponse, p.PromptResponseCamel)
 		}
 	}
 	// AO's own handoff request and continuation kickoff are coordination turns,
@@ -424,15 +434,24 @@ func hookConversationFacts(agent domain.AgentHarness, event string, payload []by
 	if isAOCoordinationMessage(observedPrompt) {
 		userPrompt = ""
 		assistant = ""
+		finalMessage = ""
 		if event == "user-prompt-submit" || event == "stop" {
 			origin = domain.ConversationCheckpointOriginCoordination
 		}
+	}
+	// The terminal turn history takes a main turn's text from every agent, under
+	// whichever name its hook uses, but only from a payload that decoded cleanly.
+	turnRequest := userPrompt
+	if decodeErr != nil {
+		turnRequest, finalMessage = "", ""
 	}
 	coordinationID, _ := domain.CoordinationDeliveryID(observedPrompt)
 	return hookConversationSnapshot{
 		ProviderTurnID:        turnID,
 		LatestUserPrompt:      capHookText(userPrompt, maxHookInteractionLen),
 		LatestAssistantUpdate: capHookText(assistant, maxHookInteractionLen),
+		FinalAssistantMessage: capHookText(finalMessage, maxHookInteractionLen),
+		TurnUserRequest:       capHookText(turnRequest, maxHookInteractionLen),
 		CheckpointOrigin:      origin,
 		CoordinationID:        coordinationID,
 		TranscriptPath:        capHookText(firstHookValue(p.TranscriptPath, p.TranscriptPathCamel), maxHookTranscriptPath),
@@ -650,6 +669,13 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		domain.HarnessAmp, domain.HarnessPrimeAgent:
 		conversation = hookSemanticAcceptanceFacts(event, payload)
 	}
+	// Every agent's turn text feeds the terminal turn history. It never becomes a replay checkpoint.
+	history := hookConversationFacts(domain.AgentHarness(agent), event, payload)
+	conversation.TurnUserRequest, conversation.FinalAssistantMessage = history.TurnUserRequest, history.FinalAssistantMessage
+	if domain.AgentHarness(agent) == domain.HarnessCopilot && event == "stop" && conversation.FinalAssistantMessage == "" {
+		// Copilot's stop hook names its event log instead of carrying the answer.
+		conversation.FinalAssistantMessage = capHookText(copilot.FinalAssistantMessage(payload), maxHookInteractionLen)
+	}
 	path := "sessions/" + url.PathEscape(sessionID) + "/activity"
 	req := setActivityAPIRequest{
 		ObservedAt:                   observedAt,
@@ -661,6 +687,9 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		AgentSessionID:               agentSessionID,
 		LatestUserPrompt:             conversation.LatestUserPrompt,
 		LatestAssistantUpdate:        conversation.LatestAssistantUpdate,
+		FinalAssistantMessage:        conversation.FinalAssistantMessage,
+		TurnUserRequest:              conversation.TurnUserRequest,
+		Harness:                      agent,
 		ConversationCheckpointOrigin: conversation.CheckpointOrigin,
 		CoordinationID:               conversation.CoordinationID,
 		ProviderTurnID:               conversation.ProviderTurnID,
