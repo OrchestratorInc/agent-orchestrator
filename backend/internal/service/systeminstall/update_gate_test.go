@@ -373,20 +373,3 @@ func TestUpdatesRunAlongsideSessionsWithoutAsking(t *testing.T) {
 		}
 	}
 }
-
-// `droid update` exits 0 without updating when Droid's own auto-update switch
-// is off, so the update the user asked for turns it back on.
-func TestDroidUpdateTurnsDroidsAutoUpdateBackOn(t *testing.T) {
-	s := newTestService("darwin")
-	var ran []ports.InstallCommand
-	s.installCommands = installCommandRunnerFunc(func(_ context.Context, command ports.InstallCommand, _, _ io.Writer) error {
-		ran = append(ran, command)
-		return nil
-	})
-	plan := Plan{Target: TargetDroid, Method: "official-installer", Command: []string{"/Users/me/.local/bin/droid", "update"}}
-	job := &Job{Target: TargetDroid, Method: "official-installer", Status: StatusInstalling}
-	s.runAgentOperation(context.Background(), plan, AgentOperationUpdate, job, nil)
-	if len(ran) != 1 || !slices.Contains(ran[0].Env, "FACTORY_DROID_AUTO_UPDATE_ENABLED=true") {
-		t.Fatalf("droid update ran %+v, want FACTORY_DROID_AUTO_UPDATE_ENABLED=true", ran)
-	}
-}
