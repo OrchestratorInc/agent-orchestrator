@@ -61,6 +61,9 @@ type LaunchContext struct {
 	// RequestedOutput is "artifact" when the session asks the agent for a file
 	// deliverable; empty for the ordinary task flow.
 	RequestedOutput string `json:"requestedOutput,omitempty"`
+	// Artifacts asks the worker to sync the session's artifact directory to
+	// the control plane.
+	Artifacts bool `json:"artifacts,omitempty"`
 }
 
 // RepoRef is one additional repository the worker clones beside the primary

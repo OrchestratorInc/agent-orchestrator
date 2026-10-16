@@ -37,6 +37,7 @@ type Server struct {
 
 	mu       sync.Mutex
 	objects  map[string][]version
+	markers  map[string]int
 	puts     int
 	failPuts bool
 }
@@ -51,7 +52,7 @@ func New(t testing.TB) *Server {
 	t.Setenv("AWS_PROFILE", "")
 	t.Setenv("AWS_CONFIG_FILE", os.DevNull)
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", os.DevNull)
-	fake := &Server{objects: map[string][]version{}}
+	fake := &Server{objects: map[string][]version{}, markers: map[string]int{}}
 	fake.server = httptest.NewServer(http.HandlerFunc(fake.serve))
 	t.Cleanup(fake.server.Close)
 	return fake
@@ -67,6 +68,13 @@ func (f *Server) Versions(key string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.objects[key])
+}
+
+// DeleteMarkers returns how many delete markers key has.
+func (f *Server) DeleteMarkers(key string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.markers[key]
 }
 
 // Puts returns how many PutObject calls succeeded.
@@ -178,6 +186,13 @@ func (f *Server) get(w http.ResponseWriter, r *http.Request, key, versionID stri
 
 func (f *Server) delete(w http.ResponseWriter, key, versionID string) {
 	f.mu.Lock()
+	if versionID == "" {
+		f.markers[key]++
+		f.mu.Unlock()
+		w.Header().Set("x-amz-delete-marker", "true")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	versions := f.objects[key]
 	kept := versions[:0]
 	for _, stored := range versions {

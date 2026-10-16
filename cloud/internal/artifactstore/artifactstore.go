@@ -13,8 +13,6 @@ import (
 	"net/http"
 	"path"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
@@ -23,12 +21,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
-	"golang.org/x/text/unicode/norm"
-)
 
-// VersionsDir is the local artifact history directory. Paths inside it are
-// never stored.
-const VersionsDir = ".versions"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+)
 
 // maxKeyBytes is the S3 object key length limit.
 const maxKeyBytes = 1024
@@ -39,8 +34,6 @@ var (
 	// ErrChecksumMismatch reports that S3 rejected an upload whose body did not
 	// match its claimed SHA-256.
 	ErrChecksumMismatch = errors.New("artifact checksum mismatch")
-	// ErrInvalidPath reports an artifact path that cannot be stored.
-	ErrInvalidPath = errors.New("invalid artifact path")
 )
 
 // Kind values, matching the local session artifact kinds.
@@ -101,43 +94,13 @@ func Key(orgID, sessionID, cleanPath string) (string, error) {
 		return "", errors.New("artifact key requires an organization and session")
 	}
 	if cleanPath == "" {
-		return "", ErrInvalidPath
+		return "", domain.ErrInvalidArtifactPath
 	}
 	key := "orgs/" + orgID + "/sessions/" + sessionID + "/" + cleanPath
 	if len(key) > maxKeyBytes {
-		return "", fmt.Errorf("%w: path is too long", ErrInvalidPath)
+		return "", fmt.Errorf("%w: path is too long", domain.ErrInvalidArtifactPath)
 	}
 	return key, nil
-}
-
-// CleanPath validates a slash-separated path relative to the session's
-// artifact directory and returns it in Unicode NFC form.
-func CleanPath(raw string) (string, error) {
-	if raw == "" || !utf8.ValidString(raw) {
-		return "", ErrInvalidPath
-	}
-	cleaned := norm.NFC.String(raw)
-	if strings.HasPrefix(cleaned, "/") || strings.Contains(cleaned, "\\") {
-		return "", ErrInvalidPath
-	}
-	if len(cleaned) >= 2 && cleaned[1] == ':' {
-		return "", ErrInvalidPath
-	}
-	for _, r := range cleaned {
-		if unicode.IsControl(r) {
-			return "", ErrInvalidPath
-		}
-	}
-	segments := strings.Split(cleaned, "/")
-	for _, segment := range segments {
-		if segment == "" || segment == "." || segment == ".." {
-			return "", ErrInvalidPath
-		}
-	}
-	if segments[0] == VersionsDir {
-		return "", ErrInvalidPath
-	}
-	return cleaned, nil
 }
 
 // KindOf returns the artifact kind for a path.
@@ -260,6 +223,19 @@ func (s *Store) DeleteVersion(ctx context.Context, key, versionID string) error 
 	})
 	if err != nil && !notFound(err) {
 		return fmt.Errorf("delete artifact object version: %w", err)
+	}
+	return nil
+}
+
+// DeleteCurrent puts a delete marker on key, so every stored version becomes
+// noncurrent and the bucket's noncurrent-version expiration removes them.
+func (s *Store) DeleteCurrent(ctx context.Context, key string) error {
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return fmt.Errorf("delete artifact object: %w", err)
 	}
 	return nil
 }

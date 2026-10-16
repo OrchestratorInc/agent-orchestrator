@@ -1,6 +1,21 @@
 package domain
 
-import "time"
+import (
+	"errors"
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
+)
+
+// ArtifactVersionsDir is the artifact history directory inside a session's
+// artifact directory. Paths inside it are never stored.
+const ArtifactVersionsDir = ".versions"
+
+// ErrInvalidArtifactPath reports an artifact path that cannot be stored.
+var ErrInvalidArtifactPath = errors.New("invalid artifact path")
 
 // RequestedOutputArtifact asks a session to deliver a file in its artifact
 // directory instead of a pull request.
@@ -63,4 +78,34 @@ type ArtifactManifestEntry struct {
 	Path   string
 	Size   int64
 	SHA256 string
+}
+
+// CleanArtifactPath validates a slash-separated path relative to the session's
+// artifact directory and returns it in Unicode NFC form.
+func CleanArtifactPath(raw string) (string, error) {
+	if raw == "" || !utf8.ValidString(raw) {
+		return "", ErrInvalidArtifactPath
+	}
+	cleaned := norm.NFC.String(raw)
+	if strings.HasPrefix(cleaned, "/") || strings.Contains(cleaned, "\\") {
+		return "", ErrInvalidArtifactPath
+	}
+	if len(cleaned) >= 2 && cleaned[1] == ':' {
+		return "", ErrInvalidArtifactPath
+	}
+	for _, r := range cleaned {
+		if unicode.IsControl(r) {
+			return "", ErrInvalidArtifactPath
+		}
+	}
+	segments := strings.Split(cleaned, "/")
+	for _, segment := range segments {
+		if segment == "" || segment == "." || segment == ".." {
+			return "", ErrInvalidArtifactPath
+		}
+	}
+	if segments[0] == ArtifactVersionsDir {
+		return "", ErrInvalidArtifactPath
+	}
+	return cleaned, nil
 }

@@ -145,6 +145,7 @@ func (s *Server) workerBootstrap(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusInternalServerError, "BOOTSTRAP_FAILED", "The project's role instructions are invalid.")
 		return
 	}
+	launchContext.Artifacts = s.artifactsEnabled()
 
 	workerID := worker.NextWorkerID(ticket.SessionID, ticket.WorkerEpoch)
 	// Read the startup timing before the registration and first heartbeat
@@ -237,6 +238,7 @@ func (s *Server) workerReconnect(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusInternalServerError, "RECONNECT_FAILED", "The project's role instructions are invalid.")
 		return
 	}
+	launchContext.Artifacts = s.artifactsEnabled()
 	writeJSON(w, http.StatusOK, worker.BootstrapResponse{
 		WorkerID:  claims.WorkerID,
 		Epoch:     claims.Epoch,

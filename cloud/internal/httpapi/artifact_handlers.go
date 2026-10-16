@@ -34,10 +34,6 @@ type sessionArtifactStore interface {
 	SessionArtifact(ctx context.Context, orgID, sessionID, path string) (domain.SessionArtifact, error)
 }
 
-// ArtifactSHA256Header carries the lowercase hex SHA-256 of an uploaded
-// artifact blob.
-const ArtifactSHA256Header = "X-AO-Artifact-SHA256"
-
 // artifactAccessTTL is how long an artifact file access prefix stays valid.
 const artifactAccessTTL = 30 * time.Minute
 
@@ -104,38 +100,6 @@ func toSessionArtifactResponses(artifacts []domain.SessionArtifact) []sessionArt
 	return items
 }
 
-type workerArtifactManifestFile struct {
-	Path   string `json:"path"`
-	Size   int64  `json:"size"`
-	SHA256 string `json:"sha256"`
-}
-
-type workerArtifactManifestRequest struct {
-	Files []workerArtifactManifestFile `json:"files"`
-}
-
-type workerArtifactManifestResponse struct {
-	Changed []string `json:"changed"`
-}
-
-type workerArtifactBlobResponse struct {
-	Path      string `json:"path"`
-	VersionID string `json:"versionId"`
-}
-
-type workerArtifactCommitFile struct {
-	Path      string    `json:"path"`
-	VersionID string    `json:"versionId"`
-	Size      int64     `json:"size"`
-	SHA256    string    `json:"sha256"`
-	MTime     time.Time `json:"mtime"`
-}
-
-type workerArtifactCommitRequest struct {
-	Files   []workerArtifactCommitFile `json:"files"`
-	Deleted []string                   `json:"deleted"`
-}
-
 type artifactAccessResponse struct {
 	FilesPrefix string    `json:"filesPrefix"`
 	ExpiresAt   time.Time `json:"expiresAt"`
@@ -150,7 +114,7 @@ func (s *Server) workerArtifactManifest(w http.ResponseWriter, r *http.Request) 
 		writeError(w, r, http.StatusForbidden, "SCOPE_REQUIRED", "The worker:connect scope is required.")
 		return
 	}
-	var input workerArtifactManifestRequest
+	var input worker.ArtifactManifestRequest
 	if err := decodeJSONTolerant(w, r, &input); err != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "The request body is invalid.")
 		return
@@ -184,7 +148,7 @@ func (s *Server) workerArtifactManifest(w http.ResponseWriter, r *http.Request) 
 		s.writeStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, workerArtifactManifestResponse{Changed: changed})
+	writeJSON(w, http.StatusOK, worker.ArtifactManifestResponse{Changed: changed})
 }
 
 // workerPutArtifactBlob streams one artifact file to the bucket under the
@@ -205,11 +169,11 @@ func (s *Server) workerPutArtifactBlob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusLengthRequired, "length_required", "Content-Length is required.")
 		return
 	}
-	cleaned, ok := s.validArtifactFile(w, r, raw, r.ContentLength, r.Header.Get(ArtifactSHA256Header))
+	cleaned, ok := s.validArtifactFile(w, r, raw, r.ContentLength, r.Header.Get(worker.ArtifactSHA256Header))
 	if !ok {
 		return
 	}
-	sum, _ := hex.DecodeString(r.Header.Get(ArtifactSHA256Header))
+	sum, _ := hex.DecodeString(r.Header.Get(worker.ArtifactSHA256Header))
 	key, err := artifactstore.Key(claims.OrgID, claims.SessionID, cleaned)
 	if err != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_path", "The artifact path is invalid.")
@@ -226,7 +190,7 @@ func (s *Server) workerPutArtifactBlob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadGateway, "artifact_store_unavailable", "The artifact could not be stored.")
 		return
 	}
-	writeJSON(w, http.StatusOK, workerArtifactBlobResponse{Path: cleaned, VersionID: versionID})
+	writeJSON(w, http.StatusOK, worker.ArtifactBlobResponse{Path: cleaned, VersionID: versionID})
 }
 
 // workerCommitArtifacts verifies each uploaded object version and then
@@ -238,7 +202,7 @@ func (s *Server) workerCommitArtifacts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusForbidden, "SCOPE_REQUIRED", "The worker:connect scope is required.")
 		return
 	}
-	var input workerArtifactCommitRequest
+	var input worker.ArtifactCommitRequest
 	if err := decodeJSONTolerant(w, r, &input); err != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "The request body is invalid.")
 		return
@@ -287,7 +251,7 @@ func (s *Server) workerCommitArtifacts(w http.ResponseWriter, r *http.Request) {
 	}
 	deletes := make([]string, 0, len(input.Deleted))
 	for _, raw := range input.Deleted {
-		cleaned, err := artifactstore.CleanPath(raw)
+		cleaned, err := domain.CleanArtifactPath(raw)
 		if err != nil {
 			writeError(w, r, http.StatusBadRequest, "invalid_path", "An artifact path is invalid.")
 			return
@@ -316,6 +280,15 @@ func (s *Server) workerCommitArtifacts(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.writeStoreError(w, r, err)
 		return
+	}
+	for _, deleted := range deletes {
+		key, err := artifactstore.Key(claims.OrgID, claims.SessionID, deleted)
+		if err == nil {
+			err = s.artifacts.DeleteCurrent(r.Context(), key)
+		}
+		if err != nil {
+			s.logger.WarnContext(r.Context(), "mark deleted artifact noncurrent", "error", err, "path", deleted)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -357,7 +330,7 @@ func (s *Server) verifyArtifactVersions(ctx context.Context, upserts []domain.Se
 // validArtifactFile validates one reported artifact file and returns its
 // cleaned path, writing a 4xx and returning false when it is invalid.
 func (s *Server) validArtifactFile(w http.ResponseWriter, r *http.Request, rawPath string, size int64, sha string) (string, bool) {
-	cleaned, err := artifactstore.CleanPath(rawPath)
+	cleaned, err := domain.CleanArtifactPath(rawPath)
 	if err != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_path", "An artifact path is invalid.")
 		return "", false
@@ -451,7 +424,7 @@ func (s *Server) serveArtifactFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, "not_found", "The requested resource was not found.")
 		return
 	}
-	cleaned, err := artifactstore.CleanPath(raw)
+	cleaned, err := domain.CleanArtifactPath(raw)
 	if err != nil {
 		writeError(w, r, http.StatusNotFound, "not_found", "The requested resource was not found.")
 		return

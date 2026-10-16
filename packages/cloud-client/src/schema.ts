@@ -2119,6 +2119,8 @@ export interface components {
             repositoryUrl: string;
             defaultBranch: string;
             requestedOutput?: components["schemas"]["RequestedOutput"];
+            /** @description When true the worker syncs the session's artifact directory through the worker artifact routes and names that directory in the agent prompt and AO_ARTIFACTS_DIR. Workers that do not advertise the session.artifacts capability ignore it. */
+            artifacts?: boolean;
         };
         WorkerBootstrapResponse: {
             /**

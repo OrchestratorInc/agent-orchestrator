@@ -62,6 +62,7 @@ var workerCapabilities = []string{
 	"terminal.agent",
 	"notification.events",
 	worker.CapabilityWorkspacePathPlaceholder,
+	worker.CapabilityArtifacts,
 }
 
 func main() {
@@ -232,6 +233,15 @@ func run(logger *slog.Logger) error {
 		}
 	}()
 	var agentCommandFactory workertransport.AgentCommandFactory
+	var artifacts *artifactSyncer
+	if bootstrap.Launch.Artifacts {
+		artifactsDir := worker.ArtifactsDir(dataDir, bootstrap.SessionID)
+		if err := os.MkdirAll(artifactsDir, 0o700); err != nil {
+			logger.Warn("create artifact directory; artifacts are not synced", "error", err)
+		} else {
+			artifacts = newArtifactSyncer(client, artifactsDir, logger)
+		}
+	}
 	pullRequestSocketPath := filepath.Join(dataDir, "ao-pull-request.sock")
 	reviewSocketPath := filepath.Join(dataDir, "ao-review.sock")
 	checkpointSocketPath := filepath.Join(dataDir, "ao-checkpoint.sock")
@@ -268,6 +278,9 @@ func run(logger *slog.Logger) error {
 			`-X POST http://localhost/pull-request -H 'Content-Type: application/json' ` +
 			`-d '{"branch":"<pushed branch name>","title":"<PR title>","body":"<PR body>"}' ` +
 			"to push the current branch and open a pull request against the project's configured default branch."
+		if artifacts != nil {
+			b.Env[worker.ArtifactsDirEnv] = artifacts.dir
+		}
 		b.Env["AO_REVIEW_SOCKET"] = reviewSocketPath
 		b.Env["AO_REVIEW_HELP"] = "curl --unix-socket $AO_REVIEW_SOCKET " +
 			`-X POST http://localhost/review -H 'Content-Type: application/json' ` +
@@ -398,7 +411,7 @@ func run(logger *slog.Logger) error {
 	// perceived connection path independent from clone latency without letting
 	// a prompt run in an empty workspace.
 	transportSupervisor.HoldAgentInputUntilWorkspaceReady()
-	results := make(chan error, 5)
+	results := make(chan error, 6)
 	backgroundWorkers := 4
 	go func() { results <- client.heartbeatLoop(runCtx, logger) }()
 	go func() { results <- transportSupervisor.Run(runCtx) }()
@@ -408,6 +421,10 @@ func run(logger *slog.Logger) error {
 	go func() {
 		results <- runReviewBridge(runCtx, reviewSocketPath, client, logger)
 	}()
+	if artifacts != nil {
+		backgroundWorkers++
+		go func() { results <- artifacts.run(runCtx) }()
+	}
 	if outbox, err := notificationoutbox.Open(filepath.Join(dataDir, "notification-outbox.db")); err != nil {
 		logger.Warn("open notification outbox", "error", err)
 	} else {
@@ -543,7 +560,14 @@ func run(logger *slog.Logger) error {
 		// turn-completion (Stop) hook via this unix socket, not a timer. Bound to
 		// runCtx: it stops on shutdown.
 		cp := newCheckpointer(client, bootstrap, workspace, dataDir, logger)
-		if err := runCheckpointBridge(runCtx, checkpointSocketPath, cp.checkpoint, logger); err != nil &&
+		onCheckpoint := cp.checkpoint
+		if artifacts != nil {
+			onCheckpoint = func(ctx context.Context) {
+				artifacts.poke()
+				cp.checkpoint(ctx)
+			}
+		}
+		if err := runCheckpointBridge(runCtx, checkpointSocketPath, onCheckpoint, logger); err != nil &&
 			runCtx.Err() == nil {
 			logger.Warn("checkpoint bridge stopped", "error", err)
 		}

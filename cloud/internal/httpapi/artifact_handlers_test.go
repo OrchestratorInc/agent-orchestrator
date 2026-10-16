@@ -179,6 +179,10 @@ func (s *artifactRouterStore) GetSession(_ context.Context, _ domain.Principal, 
 	return domain.Session{ID: sessionID, OrgID: orgID, Kind: "worker", OutputType: domain.SessionOutputArtifact}, nil
 }
 
+func (s *artifactRouterStore) WorkerLaunchSpec(_ context.Context, orgID, sessionID string) (domain.WorkerLaunch, error) {
+	return domain.WorkerLaunch{OrgID: orgID, SessionID: sessionID, Kind: "worker", RequestedOutput: domain.RequestedOutputArtifact}, nil
+}
+
 func (s *artifactRouterStore) PRFactsBySession(context.Context, string, []string) (map[string][]contract.PRFacts, error) {
 	return nil, nil
 }
@@ -251,7 +255,7 @@ func (h *artifactHarness) workerJSON(method, target, authorization string, value
 func (h *artifactHarness) upload(authorization, path string, body []byte, sha string) *httptest.ResponseRecorder {
 	h.t.Helper()
 	return h.do(http.MethodPut, "/api/cloud/v1/worker/artifacts/blob/"+path, authorization, bytes.NewReader(body),
-		map[string]string{ArtifactSHA256Header: sha})
+		map[string]string{worker.ArtifactSHA256Header: sha})
 }
 
 func hexSHA(body []byte) string {
@@ -272,14 +276,14 @@ func decodeBody[T any](t *testing.T, rec *httptest.ResponseRecorder) T {
 func (h *artifactHarness) syncArtifacts(files map[string][]byte) {
 	h.t.Helper()
 	authorization := h.workerToken(artifactOrgA, artifactSessionA, artifactEpoch)
-	commit := workerArtifactCommitRequest{}
+	commit := worker.ArtifactCommitRequest{}
 	for path, body := range files {
 		rec := h.upload(authorization, path, body, hexSHA(body))
 		if rec.Code != http.StatusOK {
 			h.t.Fatalf("upload %s: %d %s", path, rec.Code, rec.Body.String())
 		}
-		blob := decodeBody[workerArtifactBlobResponse](h.t, rec)
-		commit.Files = append(commit.Files, workerArtifactCommitFile{
+		blob := decodeBody[worker.ArtifactBlobResponse](h.t, rec)
+		commit.Files = append(commit.Files, worker.ArtifactCommitFile{
 			Path: blob.Path, VersionID: blob.VersionID, Size: int64(len(body)), SHA256: hexSHA(body),
 			MTime: time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC),
 		})
@@ -304,13 +308,13 @@ func (h *artifactHarness) accessPrefix(token, orgID, sessionID string) string {
 
 func TestArtifactRoutesAreOffWithoutTheFlag(t *testing.T) {
 	h := newArtifactHarness(t, false)
-	worker := h.workerToken(artifactOrgA, artifactSessionA, artifactEpoch)
+	workerAuth := h.workerToken(artifactOrgA, artifactSessionA, artifactEpoch)
 	for _, rec := range []*httptest.ResponseRecorder{
 		h.do(http.MethodGet, "/api/cloud/v1/orgs/"+artifactOrgA+"/sessions/"+artifactSessionA+"/artifacts", "Bearer "+artifactTokenA, nil, nil),
 		h.do(http.MethodPost, "/api/cloud/v1/orgs/"+artifactOrgA+"/sessions/"+artifactSessionA+"/artifacts/access", "Bearer "+artifactTokenA, nil, nil),
-		h.workerJSON(http.MethodPost, "/api/cloud/v1/worker/artifacts/manifest", worker, workerArtifactManifestRequest{}),
-		h.upload(worker, "report.html", []byte("x"), hexSHA([]byte("x"))),
-		h.workerJSON(http.MethodPost, "/api/cloud/v1/worker/artifacts/commit", worker, workerArtifactCommitRequest{}),
+		h.workerJSON(http.MethodPost, "/api/cloud/v1/worker/artifacts/manifest", workerAuth, worker.ArtifactManifestRequest{}),
+		h.upload(workerAuth, "report.html", []byte("x"), hexSHA([]byte("x"))),
+		h.workerJSON(http.MethodPost, "/api/cloud/v1/worker/artifacts/commit", workerAuth, worker.ArtifactCommitRequest{}),
 		h.do(http.MethodGet, "/api/cloud/v1/artifact-files/token/report.html", "", nil, nil),
 	} {
 		if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
@@ -333,24 +337,24 @@ func TestArtifactSyncListAndServe(t *testing.T) {
 	h := newArtifactHarness(t, true)
 	html := []byte(`<html><img src="assets/chart.png"></html>`)
 	png := []byte("\x89PNG fake")
-	worker := h.workerToken(artifactOrgA, artifactSessionA, artifactEpoch)
+	workerAuth := h.workerToken(artifactOrgA, artifactSessionA, artifactEpoch)
 
-	manifest := h.workerJSON(http.MethodPost, "/api/cloud/v1/worker/artifacts/manifest", worker, workerArtifactManifestRequest{
-		Files: []workerArtifactManifestFile{{Path: "report.html", Size: int64(len(html)), SHA256: hexSHA(html)}},
+	manifest := h.workerJSON(http.MethodPost, "/api/cloud/v1/worker/artifacts/manifest", workerAuth, worker.ArtifactManifestRequest{
+		Files: []worker.ArtifactManifestFile{{Path: "report.html", Size: int64(len(html)), SHA256: hexSHA(html)}},
 	})
-	if manifest.Code != http.StatusOK || !slices.Equal(decodeBody[workerArtifactManifestResponse](t, manifest).Changed, []string{"report.html"}) {
+	if manifest.Code != http.StatusOK || !slices.Equal(decodeBody[worker.ArtifactManifestResponse](t, manifest).Changed, []string{"report.html"}) {
 		t.Fatalf("first manifest: %d %s", manifest.Code, manifest.Body.String())
 	}
 
 	h.syncArtifacts(map[string][]byte{"report.html": html, "assets/chart.png": png})
 
-	manifest = h.workerJSON(http.MethodPost, "/api/cloud/v1/worker/artifacts/manifest", worker, workerArtifactManifestRequest{
-		Files: []workerArtifactManifestFile{
+	manifest = h.workerJSON(http.MethodPost, "/api/cloud/v1/worker/artifacts/manifest", workerAuth, worker.ArtifactManifestRequest{
+		Files: []worker.ArtifactManifestFile{
 			{Path: "report.html", Size: int64(len(html)), SHA256: hexSHA(html)},
 			{Path: "assets/chart.png", Size: int64(len(png)), SHA256: hexSHA(png)},
 		},
 	})
-	if changed := decodeBody[workerArtifactManifestResponse](t, manifest).Changed; len(changed) != 0 {
+	if changed := decodeBody[worker.ArtifactManifestResponse](t, manifest).Changed; len(changed) != 0 {
 		t.Fatalf("unchanged files reported as changed: %v", changed)
 	}
 
@@ -410,10 +414,10 @@ func TestArtifactSyncListAndServe(t *testing.T) {
 func TestArtifactFileServesCommittedVersionOnly(t *testing.T) {
 	h := newArtifactHarness(t, true)
 	h.syncArtifacts(map[string][]byte{"report.html": []byte("committed")})
-	worker := h.workerToken(artifactOrgA, artifactSessionA, artifactEpoch)
+	workerAuth := h.workerToken(artifactOrgA, artifactSessionA, artifactEpoch)
 	// A newer upload that is never committed becomes the latest S3 version.
 	uncommitted := []byte("uncommitted")
-	if rec := h.upload(worker, "report.html", uncommitted, hexSHA(uncommitted)); rec.Code != http.StatusOK {
+	if rec := h.upload(workerAuth, "report.html", uncommitted, hexSHA(uncommitted)); rec.Code != http.StatusOK {
 		t.Fatalf("upload: %d %s", rec.Code, rec.Body.String())
 	}
 	prefix := h.accessPrefix(artifactTokenA, artifactOrgA, artifactSessionA)
@@ -502,12 +506,12 @@ func TestWorkerArtifactAuthAndValidation(t *testing.T) {
 		!strings.Contains(rec.Body.String(), "STALE_WORKER_TOKEN") {
 		t.Fatalf("stale epoch: %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := h.workerJSON(http.MethodPost, "/api/cloud/v1/worker/artifacts/commit", stale, workerArtifactCommitRequest{}); rec.Code != http.StatusUnauthorized {
+	if rec := h.workerJSON(http.MethodPost, "/api/cloud/v1/worker/artifacts/commit", stale, worker.ArtifactCommitRequest{}); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("stale epoch commit: %d", rec.Code)
 	}
 
-	worker := h.workerToken(artifactOrgA, artifactSessionA, artifactEpoch)
-	if rec := h.upload(worker, "report.html", body, hexSHA([]byte("other"))); rec.Code != http.StatusUnprocessableEntity ||
+	workerAuth := h.workerToken(artifactOrgA, artifactSessionA, artifactEpoch)
+	if rec := h.upload(workerAuth, "report.html", body, hexSHA([]byte("other"))); rec.Code != http.StatusUnprocessableEntity ||
 		!strings.Contains(rec.Body.String(), "checksum_mismatch") {
 		t.Fatalf("checksum mismatch: %d %s", rec.Code, rec.Body.String())
 	}
@@ -515,18 +519,18 @@ func TestWorkerArtifactAuthAndValidation(t *testing.T) {
 		t.Fatal("a mismatched body created a version")
 	}
 	for _, path := range []string{"..%2Fescape.html", "%2Fabs.html", ".versions/a.html", "a%5Cb.html"} {
-		if rec := h.upload(worker, path, body, hexSHA(body)); rec.Code != http.StatusBadRequest {
+		if rec := h.upload(workerAuth, path, body, hexSHA(body)); rec.Code != http.StatusBadRequest {
 			t.Fatalf("path %q: %d %s", path, rec.Code, rec.Body.String())
 		}
 	}
-	if rec := h.upload(worker, "report.html", body, "NOT-HEX"); rec.Code != http.StatusBadRequest {
+	if rec := h.upload(workerAuth, "report.html", body, "NOT-HEX"); rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad sha header: %d", rec.Code)
 	}
 
 	big := httptest.NewRequest(http.MethodPut, "/api/cloud/v1/worker/artifacts/blob/big.bin", strings.NewReader(""))
 	big.ContentLength = domain.MaxArtifactFileBytes + 1
-	big.Header.Set("Authorization", worker)
-	big.Header.Set(ArtifactSHA256Header, hexSHA(body))
+	big.Header.Set("Authorization", workerAuth)
+	big.Header.Set(worker.ArtifactSHA256Header, hexSHA(body))
 	rec := httptest.NewRecorder()
 	h.server.Handler().ServeHTTP(rec, big)
 	if rec.Code != http.StatusRequestEntityTooLarge {
@@ -535,37 +539,37 @@ func TestWorkerArtifactAuthAndValidation(t *testing.T) {
 
 	chunked := httptest.NewRequest(http.MethodPut, "/api/cloud/v1/worker/artifacts/blob/report.html", bytes.NewReader(body))
 	chunked.ContentLength = -1
-	chunked.Header.Set("Authorization", worker)
-	chunked.Header.Set(ArtifactSHA256Header, hexSHA(body))
+	chunked.Header.Set("Authorization", workerAuth)
+	chunked.Header.Set(worker.ArtifactSHA256Header, hexSHA(body))
 	rec = httptest.NewRecorder()
 	h.server.Handler().ServeHTTP(rec, chunked)
 	if rec.Code != http.StatusLengthRequired {
 		t.Fatalf("unknown length: %d %s", rec.Code, rec.Body.String())
 	}
 
-	tooMany := workerArtifactManifestRequest{}
+	tooMany := worker.ArtifactManifestRequest{}
 	for index := range domain.MaxSessionArtifactFiles + 1 {
-		tooMany.Files = append(tooMany.Files, workerArtifactManifestFile{Path: "f" + strconv.Itoa(index), Size: 1, SHA256: hexSHA(body)})
+		tooMany.Files = append(tooMany.Files, worker.ArtifactManifestFile{Path: "f" + strconv.Itoa(index), Size: 1, SHA256: hexSHA(body)})
 	}
-	if rec := h.workerJSON(http.MethodPost, "/api/cloud/v1/worker/artifacts/manifest", worker, tooMany); rec.Code != http.StatusRequestEntityTooLarge {
+	if rec := h.workerJSON(http.MethodPost, "/api/cloud/v1/worker/artifacts/manifest", workerAuth, tooMany); rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("over file count: %d", rec.Code)
 	}
 }
 
 func TestWorkerArtifactCommitVerifiesVersions(t *testing.T) {
 	h := newArtifactHarness(t, true)
-	worker := h.workerToken(artifactOrgA, artifactSessionA, artifactEpoch)
+	workerAuth := h.workerToken(artifactOrgA, artifactSessionA, artifactEpoch)
 	body := []byte("report")
-	upload := decodeBody[workerArtifactBlobResponse](t, h.upload(worker, "report.html", body, hexSHA(body)))
+	upload := decodeBody[worker.ArtifactBlobResponse](t, h.upload(workerAuth, "report.html", body, hexSHA(body)))
 
-	missing := h.workerJSON(http.MethodPost, "/api/cloud/v1/worker/artifacts/commit", worker, workerArtifactCommitRequest{
-		Files: []workerArtifactCommitFile{{Path: "report.html", VersionID: "no-such-version", Size: int64(len(body)), SHA256: hexSHA(body)}},
+	missing := h.workerJSON(http.MethodPost, "/api/cloud/v1/worker/artifacts/commit", workerAuth, worker.ArtifactCommitRequest{
+		Files: []worker.ArtifactCommitFile{{Path: "report.html", VersionID: "no-such-version", Size: int64(len(body)), SHA256: hexSHA(body)}},
 	})
 	if missing.Code != http.StatusConflict || !strings.Contains(missing.Body.String(), "artifact_version_missing") {
 		t.Fatalf("missing version: %d %s", missing.Code, missing.Body.String())
 	}
-	mismatch := h.workerJSON(http.MethodPost, "/api/cloud/v1/worker/artifacts/commit", worker, workerArtifactCommitRequest{
-		Files: []workerArtifactCommitFile{{Path: "report.html", VersionID: upload.VersionID, Size: int64(len(body)), SHA256: hexSHA([]byte("other"))}},
+	mismatch := h.workerJSON(http.MethodPost, "/api/cloud/v1/worker/artifacts/commit", workerAuth, worker.ArtifactCommitRequest{
+		Files: []worker.ArtifactCommitFile{{Path: "report.html", VersionID: upload.VersionID, Size: int64(len(body)), SHA256: hexSHA([]byte("other"))}},
 	})
 	if mismatch.Code != http.StatusConflict || !strings.Contains(mismatch.Body.String(), "artifact_version_mismatch") {
 		t.Fatalf("mismatched version: %d %s", mismatch.Code, mismatch.Body.String())
@@ -573,15 +577,20 @@ func TestWorkerArtifactCommitVerifiesVersions(t *testing.T) {
 	if h.store.commits != 0 {
 		t.Fatal("a rejected commit reached the store")
 	}
-	ok := h.workerJSON(http.MethodPost, "/api/cloud/v1/worker/artifacts/commit", worker, workerArtifactCommitRequest{
-		Files: []workerArtifactCommitFile{{Path: "report.html", VersionID: upload.VersionID, Size: int64(len(body)), SHA256: hexSHA(body)}},
+	ok := h.workerJSON(http.MethodPost, "/api/cloud/v1/worker/artifacts/commit", workerAuth, worker.ArtifactCommitRequest{
+		Files: []worker.ArtifactCommitFile{{Path: "report.html", VersionID: upload.VersionID, Size: int64(len(body)), SHA256: hexSHA(body)}},
 	})
 	if ok.Code != http.StatusNoContent || h.store.commits != 1 {
 		t.Fatalf("commit: %d %s", ok.Code, ok.Body.String())
 	}
-	deleted := h.workerJSON(http.MethodPost, "/api/cloud/v1/worker/artifacts/commit", worker, workerArtifactCommitRequest{Deleted: []string{"report.html"}})
+	deleted := h.workerJSON(http.MethodPost, "/api/cloud/v1/worker/artifacts/commit", workerAuth, worker.ArtifactCommitRequest{Deleted: []string{"report.html"}})
 	if deleted.Code != http.StatusNoContent || len(h.store.rows[artifactSessionA]) != 0 {
 		t.Fatalf("delete: %d %s", deleted.Code, deleted.Body.String())
+	}
+	key := "orgs/" + artifactOrgA + "/sessions/" + artifactSessionA + "/report.html"
+	if h.fake.DeleteMarkers(key) != 1 || h.fake.Versions(key) != 1 {
+		t.Fatalf("deleted path: markers=%d versions=%d, want a delete marker over the kept version",
+			h.fake.DeleteMarkers(key), h.fake.Versions(key))
 	}
 }
 
@@ -647,6 +656,20 @@ func TestSessionOutputTypeCountsLaterPullRequests(t *testing.T) {
 	for _, tc := range cases {
 		if got := sessionOutputType(domain.Session{OutputType: tc.stored}, tc.prs); got != tc.want {
 			t.Errorf("stored %q prs %d = %q, want %q", tc.stored, len(tc.prs), got, tc.want)
+		}
+	}
+}
+
+func TestWorkerReconnectReportsArtifacts(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		h := newArtifactHarness(t, enabled)
+		rec := h.do(http.MethodGet, "/api/cloud/v1/worker/reconnect", h.workerToken(artifactOrgA, artifactSessionA, artifactEpoch), nil, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("reconnect: %d %s", rec.Code, rec.Body.String())
+		}
+		launch := decodeBody[worker.BootstrapResponse](t, rec).Launch
+		if launch.Artifacts != enabled || launch.RequestedOutput != domain.RequestedOutputArtifact {
+			t.Fatalf("enabled=%v: launch artifacts=%v requestedOutput=%q", enabled, launch.Artifacts, launch.RequestedOutput)
 		}
 	}
 }

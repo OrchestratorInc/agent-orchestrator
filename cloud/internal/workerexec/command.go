@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentruntime"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/skillassets"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
@@ -298,6 +299,12 @@ func (b HarnessBuilder) systemPrompt(launch worker.LaunchContext, workspace stri
 	if launch.Kind != "orchestrator" && launch.Kind != "reviewer" {
 		if note := extraReposPromptNote(workspace, launch.ExtraRepos); note != "" {
 			systemPrompt += "\n\n" + note
+		}
+	}
+	if launch.Artifacts && launch.Kind != "reviewer" {
+		systemPrompt += "\n\n" + artifactsPrompt(worker.ArtifactsDir(b.DataDir, launch.SessionID))
+		if launch.Kind == "worker" && launch.RequestedOutput == domain.RequestedOutputArtifact {
+			systemPrompt += "\n\n" + artifactOutputPrompt
 		}
 	}
 	return systemPrompt

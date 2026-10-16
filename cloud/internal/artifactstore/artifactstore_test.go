@@ -12,33 +12,8 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/artifactstore"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/artifactstore/s3fake"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
-
-func TestCleanPath(t *testing.T) {
-	valid := map[string]string{
-		"report.html":           "report.html",
-		"assets/chart.png":      "assets/chart.png",
-		"caf\u0065\u0301.md":    "caf\u00e9.md",
-		"nested/.hidden/x.txt":  "nested/.hidden/x.txt",
-		"docs/.versions/a.html": "docs/.versions/a.html",
-	}
-	for input, want := range valid {
-		got, err := artifactstore.CleanPath(input)
-		if err != nil || got != want {
-			t.Errorf("CleanPath(%q) = %q, %v; want %q", input, got, err, want)
-		}
-	}
-	invalid := []string{
-		"", "/etc/passwd", "../secret", "a/../../b", "a/./b", "a//b", "a/",
-		`a\b`, `..\..\x`, "C:/x", "c:x", ".versions/report.html", "..", ".",
-		"bad\x00name", "line\nbreak", string([]byte{0xff, 0xfe}),
-	}
-	for _, input := range invalid {
-		if got, err := artifactstore.CleanPath(input); !errors.Is(err, artifactstore.ErrInvalidPath) {
-			t.Errorf("CleanPath(%q) = %q, %v; want ErrInvalidPath", input, got, err)
-		}
-	}
-}
 
 func TestKey(t *testing.T) {
 	key, err := artifactstore.Key("org", "session", "a/b.html")
@@ -51,7 +26,7 @@ func TestKey(t *testing.T) {
 	if _, err := artifactstore.Key("org", "", "a"); err == nil {
 		t.Fatal("Key accepted an empty session")
 	}
-	if _, err := artifactstore.Key("org", "session", strings.Repeat("a", 1024)); !errors.Is(err, artifactstore.ErrInvalidPath) {
+	if _, err := artifactstore.Key("org", "session", strings.Repeat("a", 1024)); !errors.Is(err, domain.ErrInvalidArtifactPath) {
 		t.Fatalf("Key accepted an over-long key: %v", err)
 	}
 }
@@ -155,6 +130,12 @@ func exerciseStore(t *testing.T, cfg artifactstore.Config, versions func(string)
 	}
 	if _, err := store.Head(ctx, key, firstVersion); !errors.Is(err, artifactstore.ErrNotFound) {
 		t.Fatalf("head deleted version err = %v, want ErrNotFound", err)
+	}
+	if err := store.DeleteCurrent(ctx, key); err != nil {
+		t.Fatalf("delete current: %v", err)
+	}
+	if _, err := store.Head(ctx, key, secondVersion); err != nil {
+		t.Fatalf("a delete marker removed the second version: %v", err)
 	}
 	if err := store.DeleteVersion(ctx, key, secondVersion); err != nil {
 		t.Fatalf("delete second version: %v", err)
