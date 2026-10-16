@@ -15,6 +15,7 @@ import {
 	Pencil,
 } from "lucide-react";
 import { sessionWorkspaceFilesQueryOptions, type WorkspaceFileSummary } from "../hooks/useSessionWorkspaceFiles";
+import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
@@ -50,6 +51,7 @@ export function SessionBranchSummary({
 	hostId,
 	onOpenFiles,
 	openPRNumber,
+	pullRequest,
 	pullRequests,
 	session,
 	title,
@@ -58,6 +60,7 @@ export function SessionBranchSummary({
 	onOpenFiles: () => void;
 	/** The open or draft PR that new commits would update. */
 	openPRNumber?: number;
+	pullRequest?: Pick<SessionPRSummary, "sourceBranch" | "targetBranch">;
 	pullRequests: ReactNode;
 	session: WorkspaceSession;
 	title: string;
@@ -126,7 +129,9 @@ export function SessionBranchSummary({
 
 	const commitsRow = commitsRowView(facts, t);
 	const hasWork = facts.uncommitted.length > 0 || commitsRow !== null;
-	if (!session.branch && !pullRequests && !hasWork) return null;
+	const branch = pullRequest?.sourceBranch || session.branch;
+	const base = pullRequest ? pullRequest.targetBranch || undefined : facts.base;
+	if (!branch && !pullRequests && !hasWork) return null;
 
 	const sendError = send.error instanceof Error ? send.error.message : null;
 	let action: ReactNode = null;
@@ -151,7 +156,7 @@ export function SessionBranchSummary({
 	return (
 		<InspectorSection surface={false} title={title}>
 			<section aria-label={t("inspector.branch")} className="flex flex-col" data-testid="inspector-branch">
-				{session.branch ? <BranchLine base={facts.base} branch={session.branch} /> : null}
+				{branch ? <BranchLine base={base} branch={branch} /> : null}
 				{cards}
 				{facts.uncommitted.length > 0 ? (
 					<GitStatusRow
