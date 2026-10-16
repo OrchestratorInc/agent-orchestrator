@@ -18,7 +18,7 @@ import (
 
 type stubPlugin struct {
 	profile string
-	calls *int
+	calls   *int
 }
 
 func (stubPlugin) ResolveBinary(context.Context) (string, error) { return "mcode", nil }
@@ -103,7 +103,7 @@ func TestModelMappingPreservesNativeChoicesAndEscapesCatalogIDs(t *testing.T) {
 		}
 	}
 	got := sessionOptions(ports.ChatTurnSettings{Model: "p/m", Effort: "high", Approval: ports.PermissionModeAuto})
-	want := []acpdriver.SessionOption{{ID: "model", Value: "m:p:m:u"}, {ID: "thinkingEffort", Value: "high"}, {ID: "permissionMode", Value: "auto"}}
+	want := []acpdriver.SessionOption{{ID: "model", Value: "p/m"}, {ID: "thinkingEffort", Value: "high"}, {ID: "permissionMode", Value: "auto"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("options = %v, want %v", got, want)
 	}
@@ -111,8 +111,8 @@ func TestModelMappingPreservesNativeChoicesAndEscapesCatalogIDs(t *testing.T) {
 
 func TestInitializeRejectsUnqualifiedDistributionAndMissingLoad(t *testing.T) {
 	valid := acpsdk.InitializeResponse{
-		ProtocolVersion: acpsdk.ProtocolVersionNumber,
-		AgentInfo: &acpsdk.Implementation{Name: "minimax-code", Version: "0.6.5"},
+		ProtocolVersion:   acpsdk.ProtocolVersionNumber,
+		AgentInfo:         &acpsdk.Implementation{Name: "minimax-code", Version: "0.6.5"},
 		AgentCapabilities: acpsdk.AgentCapabilities{LoadSession: true},
 	}
 	if err := validateInitialize(valid); err != nil {
@@ -120,7 +120,9 @@ func TestInitializeRejectsUnqualifiedDistributionAndMissingLoad(t *testing.T) {
 	}
 	for _, mutate := range []func(*acpsdk.InitializeResponse){
 		func(r *acpsdk.InitializeResponse) { r.AgentInfo = nil },
-		func(r *acpsdk.InitializeResponse) { r.AgentInfo = &acpsdk.Implementation{Name: "minimax-code", Version: "0.6.9"} },
+		func(r *acpsdk.InitializeResponse) {
+			r.AgentInfo = &acpsdk.Implementation{Name: "minimax-code", Version: "0.6.9"}
+		},
 		func(r *acpsdk.InitializeResponse) { r.AgentCapabilities.LoadSession = false },
 	} {
 		candidate := valid
@@ -152,5 +154,33 @@ func TestRestoreIdentityCannotSelectLatestOrAnotherMode(t *testing.T) {
 		if _, err := decodeNativeID(invalid); err == nil {
 			t.Fatalf("accepted non-native identity %q", invalid)
 		}
+	}
+}
+
+func TestCanonicalModelResolvesOnlyAgainstNativeVariantCatalog(t *testing.T) {
+	const base = "m:custom_provider%3Aao:native-test:"
+	catalog := func(current string, values ...string) []ports.ChatConfigOption {
+		choices := make([]ports.ChatConfigOptionChoice, 0, len(values))
+		for _, value := range values {
+			choices = append(choices, ports.ChatConfigOptionChoice{Value: value})
+		}
+		return []ports.ChatConfigOption{{ID: "model", Current: ports.ChatConfigOptionValue{Select: current}, Choices: choices}}
+	}
+	for _, tc := range []struct { name, input, current string; choices []string; want string; invalid bool }{
+		{"preserve empty default", "custom_provider:ao/native-test", base+"v:", []string{base+"v:", base+"v:thinking"}, base+"v:", false},
+		{"preserve thinking default", "custom_provider:ao/native-test", base+"v:thinking", []string{base+"v:", base+"v:thinking"}, base+"v:thinking", false},
+		{"unique undefined variant", "custom_provider:ao/native-test", "m:other:model:u", []string{base+"u"}, base+"u", false},
+		{"ambiguous variant refused", "custom_provider:ao/native-test", "m:other:model:u", []string{base+"v:", base+"v:thinking"}, "", true},
+		{"unknown model refused", "custom_provider:ao/other", base+"v:", []string{base+"v:"}, "", true},
+		{"explicit native unchanged", base+"v:thinking", base+"v:", []string{base+"v:", base+"v:thinking"}, base+"v:thinking", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveSessionOption(acpdriver.SessionOption{ID: "model", Value: tc.input}, catalog(tc.current, tc.choices...))
+			if tc.invalid {
+				if !errors.Is(err, ports.ErrChatConfigOptionInvalid) { t.Fatalf("unqualified model accepted: %v", err) }
+			} else if err != nil || got.Value != tc.want {
+				t.Fatalf("resolved = %q, %v; want %q", got.Value, err, tc.want)
+			}
+		})
 	}
 }

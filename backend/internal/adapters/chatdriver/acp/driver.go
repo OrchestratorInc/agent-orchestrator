@@ -86,6 +86,12 @@ type Config struct {
 	SessionMode func(ports.PermissionMode) string
 	// SessionOptions maps AO's per-turn choices onto ACP config option ids.
 	SessionOptions func(ports.ChatTurnSettings) []SessionOption
+	// ResolveSessionOption optionally maps a provider-neutral selection against
+	// a snapshot of the live advertised catalog before sending it. Bindings use
+	// this when an initial model ID omits provider-owned variants. The result
+	// still passes RequireAdvertisedOptions; resolution never grants a choice
+	// the provider did not offer. Nil preserves the existing wire value.
+	ResolveSessionOption func(SessionOption, []ports.ChatConfigOption) (SessionOption, error)
 	// LaunchSessionOptions returns config options whose value is fixed for the
 	// whole session and known only from the launch, such as a persona the agent
 	// lets AO select by id but not by launch flag. They are set once after
@@ -622,6 +628,7 @@ func (d *Driver) initialize(
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
 	conv.requireAdvertised = d.cfg.RequireAdvertisedOptions
+	conv.resolveOption = d.cfg.ResolveSessionOption
 	if proc.reconnected {
 		state := proc.acpState
 		if state == nil || len(state.InitializeResult) == 0 || len(state.SessionResult) == 0 || state.SessionID == "" {

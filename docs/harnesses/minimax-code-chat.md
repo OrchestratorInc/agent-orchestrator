@@ -26,8 +26,11 @@ and bundled executable agree on these wire contracts:
   `auto` and `bypassPermissions`. AO rejects accept-edits and unknown policies;
   native offered allow/reject decisions reach the shared approval UI unchanged.
 - **`model`** options use `m:<encoded-provider>:<encoded-model>:u` or a native
-  variant suffix. Prelaunch `provider/model` IDs are converted with JavaScript's
-  `encodeURIComponent` semantics; native advertised selections remain opaque.
+  variant suffix. Prelaunch `provider/model` IDs resolve against the live
+  advertised catalog with JavaScript's `encodeURIComponent` semantics. The
+  matching current native variant is preserved, including an explicit empty
+  variant (`:v:`); otherwise the model must offer a unique choice. Ambiguous
+  variants require an explicit native selection. Native selections remain opaque.
   **`thinkingEffort`** is the native effort option. AO requires an advertised
   option/value before sending it; it invents no models or effort levels.
 - Images and embedded resources are unsupported. Steering, compaction and

@@ -32,14 +32,15 @@ type Plugin interface {
 // release gate; constructing a driver alone does not establish native support.
 func New(plugin Plugin, log *slog.Logger) ports.ChatDriver {
 	return &driver{ChatDriver: nativeacp.New(plugin, nativeacp.Config{
-		Harness:                  domain.HarnessMiniMaxCode,
-		Configure:                configure(plugin),
-		ValidateInitialize:       validateInitialize,
+		Harness:                      domain.HarnessMiniMaxCode,
+		Configure:                    configure(plugin),
+		ValidateInitialize:           validateInitialize,
 		DecodeProviderConversationID: decodeNativeID,
-		RequireAdvertisedOptions: true,
-		LaunchSessionOptions:     launchOptions,
-		SessionOptions:           sessionOptions,
-		ValidateTurnSettings:     validateTurnSettings,
+		RequireAdvertisedOptions:     true,
+		LaunchSessionOptions:         launchOptions,
+		SessionOptions:               sessionOptions,
+		ResolveSessionOption:         resolveSessionOption,
+		ValidateTurnSettings:         validateTurnSettings,
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityImages:          false,
 			ports.ChatCapabilityEmbeddedContext: false,
@@ -52,7 +53,7 @@ func New(plugin Plugin, log *slog.Logger) ports.ChatDriver {
 
 // Keep exact restore strict even when a generic caller permits a fresh session
 // for an unstarted conversation. MiniMax's native identity must never change.
-type driver struct { ports.ChatDriver }
+type driver struct{ ports.ChatDriver }
 
 func (d *driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
 	cfg.FreshIfMissing = false
@@ -120,8 +121,7 @@ func launchOptions(cfg acpdriver.LaunchConfig) []acpdriver.SessionOption {
 func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	var out []acpdriver.SessionOption
 	if model := strings.TrimSpace(settings.Model); model != "" {
-		value, _ := modelValue(model) // validated before launch/turn dispatch
-		out = append(out, acpdriver.SessionOption{ID: "model", Value: value})
+		out = append(out, acpdriver.SessionOption{ID: "model", Value: model})
 	}
 	if effort := strings.TrimSpace(settings.Effort); effort != "" {
 		out = append(out, acpdriver.SessionOption{ID: "thinkingEffort", Value: effort})
@@ -130,6 +130,48 @@ func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 		out = append(out, acpdriver.SessionOption{ID: "permissionMode", Value: string(ports.NormalizePermissionMode(settings.Approval))})
 	}
 	return out
+}
+
+// A catalog provider/model ID intentionally omits thinking variants. MiniMax
+// distinguishes an undefined variant (:u) from its explicit empty variant
+// (:v:), which is the normal custom-provider default. Resolve from the provider's
+// actual choices rather than inventing one. Preserve the matching current
+// selection; a different model must offer exactly one choice or the caller must
+// select an explicit native ID from the live picker.
+func resolveSessionOption(option acpdriver.SessionOption, catalog []ports.ChatConfigOption) (acpdriver.SessionOption, error) {
+	if option.ID != "model" || strings.HasPrefix(option.Value, "m:") {
+		return option, nil
+	}
+	key, err := modelValue(option.Value)
+	if err != nil {
+		return option, fmt.Errorf("%w: %w", ports.ErrChatConfigOptionInvalid, err)
+	}
+	prefix := strings.TrimSuffix(key, "u")
+	for _, control := range catalog {
+		if control.ID != "model" {
+			continue
+		}
+		var matches []string
+		for _, choice := range control.Choices {
+			if !strings.HasPrefix(choice.Value, prefix) {
+				continue
+			}
+			if _, err := modelValue(choice.Value); err != nil {
+				continue
+			}
+			if choice.Value == control.Current.Select {
+				option.Value = choice.Value
+				return option, nil
+			}
+			matches = append(matches, choice.Value)
+		}
+		if len(matches) == 1 {
+			option.Value = matches[0]
+			return option, nil
+		}
+		return option, fmt.Errorf("%w: MiniMax model %q has %d matching native choices %q (current %q); select an explicit advertised model ID", ports.ErrChatConfigOptionInvalid, option.Value, len(matches), matches, control.Current.Select)
+	}
+	return option, fmt.Errorf("%w: MiniMax session does not advertise model choices", ports.ErrChatConfigOptionInvalid)
 }
 
 func validateTurnSettings(initial ports.PermissionMode, settings ports.ChatTurnSettings) error {

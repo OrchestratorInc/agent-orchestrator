@@ -119,6 +119,7 @@ type conversation struct {
 	// requireAdvertised refuses a config option the session did not advertise
 	// instead of sending it. See Config.RequireAdvertisedOptions.
 	requireAdvertised  bool
+	resolveOption     func(SessionOption, []ports.ChatConfigOption) (SessionOption, error)
 	permissionMode     ports.PermissionMode
 	permissionFor      PermissionPolicy
 	initialPermission  ports.PermissionMode
@@ -609,7 +610,19 @@ func (c *conversation) setSessionOption(ctx context.Context, sessionID string, o
 	}
 	c.mu.Lock()
 	requireAdvertised := c.requireAdvertised
+	resolver := c.resolveOption
+	var catalog []ports.ChatConfigOption
+	if resolver != nil {
+		catalog = cloneConfigOptions(c.configOptions)
+	}
 	c.mu.Unlock()
+	if resolver != nil {
+		resolved, err := resolver(option, catalog)
+		if err != nil {
+			return fmt.Errorf("resolve ACP session option %q: %w", option.ID, err)
+		}
+		option = resolved
+	}
 	if requireAdvertised {
 		// An agent that acknowledges an option it never offered may simply drop
 		// it, which would leave the user believing a choice took effect.
