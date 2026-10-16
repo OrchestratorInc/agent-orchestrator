@@ -1563,6 +1563,165 @@ describe("useBrowserView", () => {
 		expect(browser.navigate).not.toHaveBeenCalledWith(expect.objectContaining({ url: "http://localhost:5173/" }));
 	});
 
+	describe("agent browser tab", () => {
+		const viewId = "42:remote:box-a:ao-1";
+		const agentUrl = "https://ao-preview-11112222333344445555666677778888.localhost:47663/v/cdp?embed=1&sq=70&ss=1";
+		const appPreview = "https://ao-preview-0123456789abcdef0123456789abcdef.localhost:47663/";
+		const remote = { sessionId: "remote:box-a:ao-1", origin: { hostId: "box-a", sessionId: "ao-1", proxyBase: "http://127.0.0.1:4000/token" }, active: true, poppedOut: false };
+
+		it("asks main to show a remote session's agent browser", async () => {
+			const browser = setupBridge();
+			vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockResolvedValue(agentUrl);
+			renderHook(() => useBrowserView(remote));
+			await waitFor(() => expect(browser.openTab).toHaveBeenCalledWith({ viewId, url: agentUrl }));
+			expect(browser.navigate).not.toHaveBeenCalled();
+		});
+
+		it("asks main to show a cloud session's agent browser, backing off until it is up", async () => {
+			vi.useFakeTimers();
+			try {
+				const browser = setupBridge();
+				const remoteLookup = vi.spyOn(aoBridge.remotes, "agentBrowserUrl");
+				const lookup = vi.spyOn(aoBridge.cloudCp, "agentBrowserUrl").mockResolvedValueOnce("").mockResolvedValue(agentUrl);
+				renderHook(() => useBrowserView({ sessionId: "ses-1", cloudAgentBrowser: { baseUrl: "https://cp.example", orgId: "org-1", sessionId: "ses-1" }, active: true, poppedOut: false }));
+				await act(() => vi.advanceTimersByTimeAsync(0));
+				expect(lookup).toHaveBeenCalledWith("https://cp.example", "org-1", "ses-1");
+				await act(() => vi.advanceTimersByTimeAsync(2_000));
+				expect(lookup).toHaveBeenCalledTimes(2);
+				expect(browser.openTab).toHaveBeenCalledWith({ viewId: "42:ses-1", url: agentUrl });
+				expect(remoteLookup).not.toHaveBeenCalled();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("opens a preview beside the agent tab, never over it", async () => {
+			const browser = setupBridge();
+			vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockResolvedValue("");
+			vi.spyOn(aoBridge.remotes, "previewUrl").mockResolvedValue(appPreview);
+			// Before its viewer reports, an agent tab is still empty.
+			const agentTab = { id: "t1", url: "", title: "", active: true, remote: { tabId: "" } };
+			browser.getTabs.mockResolvedValue({ viewId, activeTabId: "t1", tabs: [agentTab] });
+			renderHook(() => useBrowserView({ ...remote, previewUrl: "http://localhost:5173/", previewRevision: 1 }));
+			await waitFor(() => expect(browser.openTab).toHaveBeenCalledWith({ viewId, url: appPreview }));
+			expect(browser.navigate).not.toHaveBeenCalled();
+		});
+
+		it("updates the preview tab rather than the agent tab the person is on", async () => {
+			const browser = setupBridge();
+			vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockResolvedValue("");
+			vi.spyOn(aoBridge.remotes, "previewUrl").mockResolvedValue(appPreview);
+			const agentTab = { id: "a1", url: "https://en.wikipedia.org/wiki/Starfish", title: "Starfish", active: true, remote: { tabId: "R1" } };
+			const previewTab = { id: "t1", url: "https://ao-preview-ffffffffffffffffffffffffffffffff.localhost:47663/", title: "Daybook", active: false };
+			browser.getTabs.mockResolvedValue({ viewId, activeTabId: "a1", tabs: [previewTab, agentTab] });
+			renderHook(() => useBrowserView({ ...remote, previewUrl: "http://localhost:5173/", previewRevision: 1 }));
+			await waitFor(() => expect(browser.navigate).toHaveBeenCalledWith({ viewId, url: appPreview }));
+			expect(browser.selectTab).toHaveBeenCalledWith({ viewId, tabId: "t1" });
+			expect(browser.openTab).not.toHaveBeenCalled();
+		});
+
+		it("leaves the panel alone when the host has no agent browser", async () => {
+			const browser = setupBridge();
+			const lookup = vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockResolvedValue("");
+			renderHook(() => useBrowserView(remote));
+			await waitFor(() => expect(lookup).toHaveBeenCalledWith("box-a", "ao-1"));
+			expect(browser.navigate).not.toHaveBeenCalled();
+			expect(browser.openTab).not.toHaveBeenCalled();
+		});
+
+		it("asks again, backing off, for an agent browser that is not up yet", async () => {
+			vi.useFakeTimers();
+			try {
+				const browser = setupBridge();
+				// Redeploying, then up.
+				const lookup = vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockResolvedValueOnce("").mockResolvedValueOnce("").mockResolvedValue(agentUrl);
+				renderHook(() => useBrowserView(remote));
+				await act(() => vi.advanceTimersByTimeAsync(0));
+				expect(lookup).toHaveBeenCalledTimes(1);
+				await act(() => vi.advanceTimersByTimeAsync(2_000));
+				expect(lookup).toHaveBeenCalledTimes(2);
+				await act(() => vi.advanceTimersByTimeAsync(3_999));
+				expect(lookup).toHaveBeenCalledTimes(2);
+				await act(() => vi.advanceTimersByTimeAsync(1));
+				expect(lookup).toHaveBeenCalledTimes(3);
+				expect(browser.openTab).toHaveBeenCalledWith({ viewId, url: agentUrl });
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("keeps asking for the agent browser while the view stays, every 15 s at most, and stops as soon as it goes", async () => {
+			vi.useFakeTimers();
+			try {
+				setupBridge();
+				const lookup = vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockResolvedValue("");
+				const view = renderHook(() => useBrowserView(remote));
+				await act(() => vi.advanceTimersByTimeAsync(0));
+				await act(() => vi.advanceTimersByTimeAsync(10 * 60_000));
+				// At 0, 2, 6 and 14 s, then every 15 s: an agent may first use its
+				// browser long after the view opened.
+				expect(lookup).toHaveBeenCalledTimes(43);
+				view.unmount();
+				lookup.mockClear();
+				await act(() => vi.advanceTimersByTimeAsync(60 * 60_000));
+				expect(lookup).not.toHaveBeenCalled();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("asks again after a failed lookup", async () => {
+			vi.useFakeTimers();
+			vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			try {
+				const browser = setupBridge();
+				const lookup = vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockRejectedValueOnce(new Error("proxy failed")).mockResolvedValue(agentUrl);
+				renderHook(() => useBrowserView(remote));
+				await act(() => vi.advanceTimersByTimeAsync(0));
+				expect(lookup).toHaveBeenCalledTimes(1);
+				await act(() => vi.advanceTimersByTimeAsync(2_000));
+				expect(lookup).toHaveBeenCalledTimes(2);
+				expect(browser.openTab).toHaveBeenCalledWith(expect.objectContaining({ url: agentUrl }));
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("opens a link in the person's own tab, never in an agent tab", async () => {
+			const browser = setupBridge();
+			vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockResolvedValue("");
+			// An agent tab on about:blank reports no URL, and another is already on the link.
+			const blankAgent = { id: "a1", url: "", title: "", active: true, remote: { tabId: "R1" } };
+			const sameAgent = { id: "a2", url: "https://example.com/", title: "Example", active: false, remote: { tabId: "R2" } };
+			browser.getTabs.mockResolvedValue({ viewId, activeTabId: "a1", tabs: [blankAgent, sameAgent] });
+			const { result } = renderHook(() => useBrowserView(remote));
+			await waitFor(() => expect(browser.getTabs).toHaveBeenCalled());
+			await act(() => result.current.openLink("https://example.com/"));
+			expect(browser.openTab).toHaveBeenCalledWith({ viewId, url: "https://example.com/" });
+			expect(browser.navigate).not.toHaveBeenCalled();
+			expect(browser.selectTab).not.toHaveBeenCalled();
+		});
+
+		it("keeps a closed agent tab out of Recently Closed", async () => {
+			const browser = setupBridge();
+			vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockResolvedValue("");
+			const { result } = renderHook(() => useBrowserView(remote));
+			await waitFor(() => expect(result.current.tabs.length).toBeGreaterThan(0));
+			act(() => browser.emitTabs({
+				viewId,
+				activeTabId: "a1",
+				tabs: [
+					{ id: "t1", url: "https://example.org/", title: "Mine", active: false },
+					{ id: "a1", url: "http://localhost:5173/", title: "Agent's app", active: true, remote: { tabId: "R1" } },
+				],
+				change: { kind: "popup", tabId: "a1" },
+			}));
+			browser.closeTab.mockResolvedValue({ viewId, activeTabId: "t1", tabs: [{ id: "t1", url: "https://example.org/", title: "Mine", active: true }] });
+			await act(() => result.current.closeTab("a1"));
+			expect(result.current.closedTabs).toEqual([]);
+		});
+	});
+
 	it("keeps the user's manual navigation on session switch-back and only re-navigates on a new preview", async () => {
 		// Regression for #3536: the native view survives a session switch in the
 		// main process with the user's last URL (e.g. google.com), but the preview

@@ -353,6 +353,7 @@ type Store interface {
 	CommitClientRequestSession(ctx context.Context, id domain.SessionID) error
 	UpdateSession(ctx context.Context, rec domain.SessionRecord) error
 	UpdateSessionModel(ctx context.Context, id domain.SessionID, model string) (bool, error)
+	RenameSessionIfDisplayName(ctx context.Context, id domain.SessionID, currentDisplayName, displayName string, updatedAt time.Time) (bool, error)
 	// UpdateSessionArtifactOutput is the only write that changes artifact_dir
 	// and session_output_type on an existing row; UpdateSession leaves them
 	// untouched so a stale full-row write cannot revert a reconcile.
@@ -386,6 +387,7 @@ type Store interface {
 	SetSessionProvisionState(ctx context.Context, id domain.SessionID, state domain.SessionProvisionState, message string, now time.Time) (bool, error)
 	SetSessionProvisionSteps(ctx context.Context, id domain.SessionID, steps []domain.SessionProvisionStep, now time.Time) error
 	SetSessionProvisionedWorkspace(ctx context.Context, id domain.SessionID, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error)
+	SetSessionNamedWorkspace(ctx context.Context, id domain.SessionID, expectedPath, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error)
 	SetTaskPreparationBase(ctx context.Context, id domain.SessionID, baseSHA, baseRef string) (bool, error)
 	PromoteTaskPreparation(ctx context.Context, id domain.SessionID, rec domain.SessionRecord) (bool, error)
 	DeleteTaskPreparation(ctx context.Context, id domain.SessionID) (bool, error)
@@ -440,6 +442,7 @@ type Manager struct {
 	defaultBranchRefreshTimeout time.Duration
 	taskPreparationsMu          sync.Mutex
 	taskPreparations            map[domain.TaskPreparationToken]*taskPreparation
+	taskNamingSlots             chan struct{}
 	taskPreparationTTL          time.Duration
 	// Snapshot before the listener binds; background cleanup must never reclaim
 	// a preparation opened in this daemon after the listener is live.
@@ -852,6 +855,7 @@ func New(d Deps) *Manager {
 		reconcileWorkers:               d.ReconcileWorkers,
 		defaultBranchRefreshTimeout:    defaultBranchRefreshTimeout,
 		taskPreparations:               make(map[domain.TaskPreparationToken]*taskPreparation),
+		taskNamingSlots:                make(chan struct{}, 4),
 		asyncChatSpawns:                make(map[domain.SessionID]*asyncChatSpawnRun),
 		taskPreparationTTL:             defaultTaskPreparationTTL,
 		openTranscriptFile:             os.Open,
@@ -1201,7 +1205,15 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// for it above without holding the gate, then serialize the remaining
 	// synchronous workspace lifecycle as before. Async Chat acquires it in its
 	// background half so the API response never waits on Git.
+	var taskName func() generatedTaskName
+	var namingProgress *provisionProgress
 	if !asyncChat {
+		if cfg.NameFromPrompt && cfg.Branch == "" && cfg.Kind == domain.KindWorker && strings.TrimSpace(cfg.Prompt) != "" {
+			namingProgress = m.startProvisionProgress(ctx, id, []domain.SessionProvisionStepID{domain.SessionProvisionStepWorktree})
+		}
+		var cancelNaming context.CancelFunc
+		taskName, cancelNaming = m.startTaskNaming(ctx, cfg, rec, project.Config)
+		defer cancelNaming()
 		releaseWorkspaceGate := sync.OnceFunc(m.acquireWorkspaceGate(cfg.ProjectID))
 		ctx = context.WithValue(ctx, spawnWorkspaceGateKey{}, releaseWorkspaceGate)
 		defer releaseWorkspaceGate()
@@ -1272,11 +1284,41 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
 	}
+	// A synchronous request is unacknowledged until launch. Record that setup
+	// has not completed before naming publishes its workspace path.
+	trackSetup := taskName != nil && cfg.ClientRequestID != ""
+	if trackSetup {
+		namingProgress.steps = append(namingProgress.steps, domain.SessionProvisionStep{ID: domain.SessionProvisionStepSetup, Status: domain.SessionProvisionStepRunning})
+		if err := m.store.SetSessionProvisionSteps(ctx, id, namingProgress.steps, m.clock()); err != nil {
+			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
+			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
+		}
+	}
+	if taskName != nil {
+		ws, workspaceProject, err = m.nameTaskWorkspace(ctx, rec, ws, workspaceProject, taskName())
+		if err != nil {
+			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
+			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
+		}
+	}
+	if namingProgress != nil {
+		namingProgress.complete(ctx, domain.SessionProvisionStepWorktree)
+	}
 	// Per-project workspace provisioning: symlink shared files, then run any
 	// post-create commands (e.g. `pnpm install`) before the agent launches.
 	if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
+	}
+
+	if namingProgress != nil {
+		namingProgress.complete(ctx, domain.SessionProvisionStepSetup)
+	}
+	if trackSetup {
+		if err := m.store.SetSessionProvisionSteps(ctx, id, namingProgress.steps, m.clock()); err != nil {
+			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
+			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
+		}
 	}
 
 	// CLI agents receive the prompt as text and cannot consume inline binary
@@ -2058,6 +2100,9 @@ func (m *Manager) destroySpawnWorkspace(ctx context.Context, ws ports.WorkspaceI
 		return false
 	}
 	_ = m.store.DeleteSessionWorktrees(ctx, ws.SessionID)
+	if err := m.completeTaskNaming(ctx, ports.WorkspaceProjectInfo{Root: ws}); err != nil {
+		m.logger.Warn("spawn rollback: clear task naming journal", "sessionID", ws.SessionID, "error", err)
+	}
 	return true
 }
 
@@ -2121,6 +2166,14 @@ func (m *Manager) rollbackSeedSpawnWorkspace(ctx context.Context, rec domain.Ses
 		if published {
 			m.clearProvisionedWorkspace(ctx, rec.ID, ws.Path)
 		} else {
+			cleanupCtx, cancel = spawnRollbackContext(ctx)
+			cleared, err := m.store.SetSessionNamedWorkspace(cleanupCtx, rec.ID, ws.Path, "", "", "", m.clock())
+			cancel()
+			if err != nil || !cleared {
+				m.logger.Warn("spawn rollback: retain session after workspace clear failed", "sessionID", rec.ID, "error", err)
+				m.markSpawnFailedTerminatedAfterFailure(ctx, rec.ID, false)
+				return
+			}
 			m.rollbackSpawnSeedRowAfterFailure(ctx, rec.ID)
 			m.cleanupArtifactDir(rec.ID)
 		}
@@ -3954,6 +4007,29 @@ func (m *Manager) ReconcileBackground(ctx context.Context) (resultErr error) {
 	recs, err := m.store.ListAllSessions(ctx)
 	if err != nil {
 		return fmt.Errorf("reconcile: list sessions: %w", err)
+	}
+	for i, rec := range recs {
+		if rec.IsTerminated || rec.IsTaskPreparation || rec.Metadata.RuntimeHandleID != "" || rec.Metadata.ProviderConversationID != "" {
+			continue
+		}
+		// Fence controller launches before taking the project gate, matching resume.
+		if err := m.beginAgentResume(ctx, rec.ID); err != nil {
+			continue
+		}
+		release := m.acquireWorkspaceGate(rec.ProjectID)
+		current, ok, readErr := m.store.GetSession(ctx, rec.ID)
+		if readErr == nil && ok && current.CreatedAt.Equal(rec.CreatedAt) {
+			_, recovered, recoveryErr := m.recoverTaskNaming(ctx, current)
+			if recoveryErr != nil {
+				m.logger.Warn("reconcile: task naming recovery failed", "sessionID", rec.ID, "error", recoveryErr)
+			} else if recovered {
+				if updated, ok, err := m.store.GetSession(ctx, rec.ID); err == nil && ok {
+					recs[i] = updated
+				}
+			}
+		}
+		release()
+		m.endAgentResume(rec.ID)
 	}
 	m.reconcileLivePass(ctx, recs)
 	for _, rec := range recs {

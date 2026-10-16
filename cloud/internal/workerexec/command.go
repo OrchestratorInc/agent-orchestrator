@@ -300,6 +300,11 @@ func (b HarnessBuilder) systemPrompt(launch worker.LaunchContext, workspace stri
 			systemPrompt += "\n\n" + note
 		}
 	}
+	// Set only when the sandbox has a browser (agentbrowser.Service).
+	if b.Env["AO_BROWSER_SOCKET"] != "" {
+		systemPrompt += "\n\nA browser is available: run `ao browser <command>` with agent-browser commands " +
+			"(open, snapshot, click, fill, screenshot, ...). The person sees and can use the same pages in AO's Browser panel."
+	}
 	return systemPrompt
 }
 

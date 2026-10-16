@@ -9,6 +9,10 @@ import { cn } from "@/lib/utils";
  * One switch for the whole app. Size is deliberately not a prop: the control
  * reads as the same affordance in a settings row and in a dense menu row, so a
  * per-call-site size only lets those surfaces drift apart.
+ *
+ * The thumb sits 1px inside the track (the transparent 1px border) on every
+ * side, and nothing on the control casts a shadow; the only box-shadow is the
+ * focus-visible ring.
  */
 function Switch({ className, ...props }: React.ComponentProps<typeof SwitchPrimitive.Root>) {
 	return (
@@ -22,7 +26,7 @@ function Switch({ className, ...props }: React.ComponentProps<typeof SwitchPrimi
 		>
 			<SwitchPrimitive.Thumb
 				data-slot="switch-thumb"
-				className="pointer-events-none block size-3 rounded-full bg-background shadow-sm ring-0 transition-transform duration-fast ease-out data-[state=unchecked]:translate-x-0.5 data-[state=checked]:translate-x-4 dark:data-[state=checked]:bg-primary-foreground dark:data-[state=unchecked]:bg-foreground"
+				className="pointer-events-none block size-3.5 rounded-full bg-background shadow-none transition-transform duration-fast ease-out data-[state=unchecked]:translate-x-0 data-[state=checked]:translate-x-4 dark:data-[state=checked]:bg-primary-foreground dark:data-[state=unchecked]:bg-foreground"
 			/>
 		</SwitchPrimitive.Root>
 	);

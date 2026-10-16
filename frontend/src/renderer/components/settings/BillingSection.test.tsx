@@ -83,7 +83,8 @@ describe("BillingSection", () => {
 		expect(within(card("free")).getByText("Current")).toBeInTheDocument();
 		expect(within(card("starter")).getByText("Recommended")).toBeInTheDocument();
 		expect(within(card("starter")).queryByText("Current")).not.toBeInTheDocument();
-		expect(within(card("starter")).getByText("$20 / month")).toBeInTheDocument();
+		expect(within(card("starter")).getByText("$20")).toBeInTheDocument();
+		expect(within(card("starter")).getByText("/ month")).toBeInTheDocument();
 		expect(within(card("starter")).getByText("2 sessions at once")).toBeInTheDocument();
 		expect(within(card("pro")).getByText("16 sessions in total")).toBeInTheDocument();
 		expect(within(card("pro")).getByText("16 session hours every 6 h")).toBeInTheDocument();
@@ -153,8 +154,10 @@ describe("BillingSection", () => {
 		renderSection();
 		expect(await screen.findByText(/^Your Starter plan ends on .+\. You'll move to Free then\.$/)).toBeInTheDocument();
 		expect(within(card("starter")).getByText("Current")).toBeInTheDocument();
-		const starts = within(card("free")).getByRole("button", { name: /^Starts / });
-		expect(starts).toBeDisabled();
+		// When Free starts is a status, so it is plain text in the Free row, not a
+		// disabled button.
+		expect(within(card("free")).getByText(/^Starts /)).toBeInTheDocument();
+		expect(within(card("free")).queryByRole("button", { name: /^Starts / })).not.toBeInTheDocument();
 		expect(within(card("free")).queryByRole("button", { name: "Downgrade" })).not.toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Keep Starter" }));
 		await waitFor(() => expect(mocks.client.createBillingPortal).toHaveBeenCalledWith("org-1"));

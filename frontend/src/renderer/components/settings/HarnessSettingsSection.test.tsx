@@ -1224,7 +1224,7 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 
 		const claudeRow = await findListRow("claude-code");
-		expect(screen.getByRole("tab", { name: "Local" })).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByRole("radio", { name: "Local" })).toHaveAttribute("aria-checked", "true");
 		expect(screen.queryByRole("button", { name: "Login" })).toBeNull();
 		expect(within(claudeRow).queryByText(/Cloud/)).toBeNull();
 		expect(screen.getByText("Goose")).toBeInTheDocument();
@@ -1238,7 +1238,7 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		await screen.findByText("Goose");
 
-		await user.click(screen.getByRole("tab", { name: "Cloud" }));
+		await user.click(screen.getByRole("radio", { name: "Cloud" }));
 		// Only cloud-supported harnesses, with no local install or login controls.
 		expect(screen.queryByText("Goose")).toBeNull();
 		const claudeRow = screen.getByText("Claude Code").closest('[data-agent="claude-code"]') as HTMLElement;
@@ -1284,7 +1284,7 @@ describe("HarnessSettingsSection", () => {
 		cloudMocks.org = { id: "org-1" };
 		renderSection(undefined, undefined, "cloud");
 
-		expect(await screen.findByRole("tab", { name: "Cloud" })).toHaveAttribute("aria-selected", "true");
+		expect(await screen.findByRole("radio", { name: "Cloud" })).toHaveAttribute("aria-checked", "true");
 		expect((await screen.findAllByRole("button", { name: "Login" })).length).toBeGreaterThan(0);
 		expect(screen.queryByText("Goose")).toBeNull();
 	});
@@ -1305,7 +1305,7 @@ describe("HarnessSettingsSection", () => {
 		renderSection(undefined, undefined, "cloud");
 
 		const claudeRow = await findListRow("claude-code");
-		expect(screen.queryByRole("tab", { name: "Cloud" })).toBeNull();
+		expect(screen.queryByRole("radio", { name: "Cloud" })).toBeNull();
 		expect(within(claudeRow).queryByRole("button", { name: "Login" })).toBeNull();
 		expect(screen.getByText("Goose")).toBeInTheDocument();
 	});

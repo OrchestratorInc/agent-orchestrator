@@ -42,7 +42,6 @@ import { AgentAvatar } from "../../AgentAvatar";
 import { ConfirmDialog } from "../../ConfirmDialog";
 import { Button } from "../../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { describeHarness, supportsUpdate, type AgentAuthState, type AgentOperation, type HarnessDetails, type OperationAttempt } from "./describe-harness";
 import { HarnessAccountTab } from "./HarnessAccountTab";
 import { closeAuthTerminal, type AuthTerminalWorkflow } from "./HarnessAuthTerminalPanel";
@@ -755,13 +754,13 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			<div ref={layoutRef} data-harness-detail="" className={cn("relative flex w-full min-w-0 max-w-full min-h-0 flex-1 flex-col overflow-hidden", split && "grid-rows-[minmax(0,1fr)]", split && "grid grid-cols-[minmax(14rem,16rem)_minmax(0,1fr)] items-stretch overflow-clip rounded-xl border border-border bg-(--color-bg-primary)")}>
 				{split || !selectedDetails ? (
 					<div className={cn("flex w-full flex-col", split
-						? "relative h-full min-h-0 max-h-full divide-y divide-border overflow-y-auto overscroll-contain bg-(--color-bg-secondary)"
-						: "relative min-h-0 flex-1 divide-y divide-border overflow-y-auto overscroll-contain rounded-lg border border-border")}>
+						? "relative h-full min-h-0 max-h-full harness-list-scrollbar divide-y divide-border overflow-y-auto overscroll-contain bg-(--color-bg-secondary)"
+						: "relative min-h-0 flex-1 harness-list-scrollbar divide-y divide-border overflow-y-auto overscroll-contain rounded-lg border border-border")}>
 						{rows.map((agentId) => {
 							const details = describe(agentId);
 							const selected = split && selectedAgentId === agentId;
 							const statusId = `harness-list-status-${agentId}`;
-							return <Tooltip key={agentId}><TooltipTrigger asChild><button
+							return <button key={agentId}
 								type="button"
 								aria-label={t("settings.harness.openDetails", { agent: agentLabel(agentId) })}
 								// The status mark is visual only; its words reach screen readers here.
@@ -793,7 +792,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 									/>
 									: details.listTone === "error" ? <HarnessStatusDot tone="error" /> : null}
 								{split ? null : <ChevronRight className="size-4 shrink-0 text-settings-muted" aria-hidden="true" />}
-							</button></TooltipTrigger>{details.statusLabel ? <TooltipContent side="right">{details.statusLabel}</TooltipContent> : null}</Tooltip>;
+							</button>;
 						})}
 						{rows.length === 0 ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.noResults")}</p> : null}
 					</div>

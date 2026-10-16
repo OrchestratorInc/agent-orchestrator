@@ -398,6 +398,12 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 // every created session emits ao.session.spawned or ao.session.spawn_failed
 // exactly once. Client-request replays return before reaching it.
 func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectRecord) (domain.SessionRecord, int, int, error) {
+	// CLI and orchestrator workers use this same naming policy as desktop tasks.
+	if !cfg.NameFromPrompt && cfg.Kind == domain.KindWorker && project.ID != "" &&
+		project.Kind.WithDefault() != domain.ProjectKindScratch && strings.TrimSpace(cfg.Branch) == "" && strings.TrimSpace(cfg.Prompt) != "" {
+		cfg.NameFromPrompt = true
+		cfg.KeepDisplayName = cfg.DisplayName != ""
+	}
 	start := s.now()
 	firstSession, err := s.isFirstSession(ctx)
 	if err != nil {
@@ -1219,6 +1225,21 @@ func matchesSessionFilter(rec domain.SessionRecord, filter ListFilter) bool {
 		return false
 	}
 	return true
+}
+
+// GetRecord reads a session's stored row without the read model Get builds on
+// top (PR facts, review runs, artifact listing, agent switch). It serves hot
+// paths that need only stored fields, such as the preview proxy, which runs
+// once for every module a dev server serves.
+func (s *Service) GetRecord(ctx context.Context, id domain.SessionID) (domain.SessionRecord, error) {
+	rec, ok, err := s.store.GetSession(ctx, id)
+	if err != nil {
+		return domain.SessionRecord{}, fmt.Errorf("get %s: %w", id, err)
+	}
+	if !ok || rec.IsTaskPreparation {
+		return domain.SessionRecord{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+	return rec, nil
 }
 
 // Get returns one session as an enriched display model, or an apierr.NotFound

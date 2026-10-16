@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -31,6 +32,8 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/aoagents/agent-orchestrator/cloud/internal/agentbrowser"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/agentbrowser/host"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/notificationoutbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/skillassets"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
@@ -65,6 +68,11 @@ var workerCapabilities = []string{
 }
 
 func main() {
+	// The worker runs itself as the agent browser's service (agentbrowser.Service).
+	if len(os.Args) > 1 && os.Args[1] == agentbrowser.HostCommand {
+		host.Main(os.Args[2:])
+		return
+	}
 	// The coding agent runs this binary as its PreToolUse hook (see
 	// workerexec.RunSecretFileGuard); answer it before any worker setup.
 	if len(os.Args) == 2 && os.Args[1] == workerexec.SecretFileGuardArg {
@@ -231,6 +239,12 @@ func run(logger *slog.Logger) error {
 			logger.Warn("persist renewed worker token", "error", err)
 		}
 	}()
+	// The agent's browser, which the person watches and uses in AO's Browser
+	// panel. Its profile and files stay beside the worker's, out of the checkout.
+	browser, err := agentbrowser.New(filepath.Join(dataDir, "agent-browser"), filepath.Join(dataDir, "ao-browser.sock"), logger)
+	if err != nil {
+		logger.Info("agent browser off", "reason", err)
+	}
 	var agentCommandFactory workertransport.AgentCommandFactory
 	pullRequestSocketPath := filepath.Join(dataDir, "ao-pull-request.sock")
 	reviewSocketPath := filepath.Join(dataDir, "ao-review.sock")
@@ -273,6 +287,9 @@ func run(logger *slog.Logger) error {
 			`-X POST http://localhost/review -H 'Content-Type: application/json' ` +
 			`-d '{"reviewRunId":"<review run id from the prompt>","verdict":"approved|changes_requested","body":"<your findings>"}' ` +
 			"to submit an AO-triggered review verdict."
+		if browser != nil {
+			maps.Copy(b.Env, browser.Env())
+		}
 		agentCommandFactory = func(buildCtx context.Context, nativeConversationID, selectedModel, selectedEffort string) (workerexec.Command, error) {
 			credential, err := client.Credential(buildCtx)
 			if err != nil {
@@ -398,7 +415,7 @@ func run(logger *slog.Logger) error {
 	// perceived connection path independent from clone latency without letting
 	// a prompt run in an empty workspace.
 	transportSupervisor.HoldAgentInputUntilWorkspaceReady()
-	results := make(chan error, 5)
+	results := make(chan error, 6)
 	backgroundWorkers := 4
 	go func() { results <- client.heartbeatLoop(runCtx, logger) }()
 	go func() { results <- transportSupervisor.Run(runCtx) }()
@@ -426,6 +443,16 @@ func run(logger *slog.Logger) error {
 					return client.publishNotification(deliveryCtx, event)
 				},
 			}).Run(runCtx)
+		}()
+	}
+	if browser != nil {
+		// Run returns once runCtx ends and the browser has stopped.
+		backgroundWorkers++
+		go func() {
+			browser.Run(runCtx, agentbrowser.ControlPlane{
+				URL: client.baseURL + "/worker/agent-browser", Token: client.currentToken, HTTP: client.http,
+			})
+			results <- nil
 		}()
 	}
 	if err := <-started; err != nil {

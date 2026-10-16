@@ -49,6 +49,7 @@ import {
 	useVirtualizer,
 } from "@tanstack/react-virtual";
 import { cn } from "../../lib/utils";
+import { sessionBranchPresentation } from "../../lib/session-branch";
 import { annotationBody, annotationTextMatches, annotationTextRange, highlightChatAnnotation } from "../../lib/chat-annotation-navigation";
 import {
 	acknowledgeChatInlineEditMutation,
@@ -116,6 +117,7 @@ import {
 	CompactionMarker,
 	ContinuedMarker,
 	HumanMessage,
+	humanVisibleText,
 	OriginMessage,
 	SteerMessage,
 	TurnChangedFiles,
@@ -765,7 +767,7 @@ function ChatWorkspaceContent({
 		? snapshot.turns[0]?.id
 		: undefined;
 	const provisionError = session?.provisionError;
-	const sessionBranch = session?.branch;
+	const { branch: sessionBranch, naming: namingBranch } = sessionBranchPresentation(session);
 	const startup = useMemo(
 		() =>
 			hasStartup
@@ -775,6 +777,7 @@ function ChatWorkspaceContent({
 						error: provisionError,
 						agentName: agentLabel(snapshot.harness),
 						branch: sessionBranch,
+						namingBranch,
 						openingTurnId,
 						onRetry: newWorkDisabled ? undefined : onResumeAgent,
 						retrying: resumingAgent,
@@ -783,6 +786,7 @@ function ChatWorkspaceContent({
 				: undefined,
 		[
 			hasStartup,
+			namingBranch,
 			newWorkDisabled,
 			onResumeAgent,
 			openingTurnId,
@@ -1453,6 +1457,12 @@ function ChatWorkspaceContent({
 		() => (queueEdit ? { id: `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}`, text: queueEdit.text, attachments: queueEdit.attachments, stagedAttachments: queueEdit.stagedAttachments } : undefined),
 		[queueEdit],
 	);
+	const sentMessageList = useMemo(
+		() => sentMessageHistory(snapshot, localEchos ?? [], openingTurnId, backgroundWakeQueuedTurnIds),
+		[backgroundWakeQueuedTurnIds, localEchos, openingTurnId, snapshot],
+	);
+	// Stable across streaming deltas, so the memoized composer only renders for a new prompt.
+	const sentMessages = useStableValue(sentMessageList);
 	// Empty chats center the prompt; once a turn or item exists the composer docks
 	// at the bottom and stays there for the rest of the session.
 	const orchestratorStarting = sessionRole === "orchestrator" && startupState !== "failed" && (
@@ -1783,6 +1793,8 @@ function ChatWorkspaceContent({
 										approval={composerApproval}
 										elicitation={composerElicitation}
 										onSend={handleComposerSend}
+										sentMessages={sentMessages}
+										sentMessagesScope={`${snapshot.conversationId}:${snapshot.activeBranchId ?? ""}`}
 										draftSeed={composerDraftSeed}
 										promptSuggestion={!queueEdit && !composerApproval && !composerElicitation && !turn &&
 											!busy && !sendPending && !steerPending && !agentInputDisabled && !newWorkDisabled &&
@@ -4576,6 +4588,48 @@ function echoMatchesItem(
 	// Rows from a sender that supplied no key fall back to the turn id, then to text and time.
 	if (echo.turnId) return item.turnId === echo.turnId;
 	return item.text === echo.text && item.createdAt >= echo.createdAt;
+}
+
+/** Guidance the user typed into a running turn, not a steer from another AO session. */
+function isHumanSteer(item: ConversationItem): item is ConversationActivity {
+	return item.kind === "activity" && isSteer(item) && !item.detail?.senderSessionId &&
+		(item.detail?.origin ?? "human") === "human";
+}
+
+/**
+ * The messages Up and Down recall into the composer, oldest first: the human prompts
+ * and steers the timeline shows as sent, then local echoes the daemon has not
+ * returned yet. The daemon already leaves other branches out; rolled-back turns and
+ * queued prompts, which the dock edits, are skipped here. A repeat of the message
+ * before it is one stop, not two.
+ */
+function sentMessageHistory(
+	snapshot: ConversationSnapshot,
+	localEchos: readonly ConversationLocalEcho[],
+	openingTurnId: string | undefined,
+	backgroundQueuedTurnIds: ReadonlySet<string>,
+): string[] {
+	const skipped = hiddenTimelineTurnIds(snapshot);
+	if (openingTurnId) skipped.delete(openingTurnId);
+	for (const turn of snapshot.turns) if (turn.rolledBack) skipped.add(turn.id);
+	const human = snapshot.items.filter(
+		(item): item is ConversationMessage => item.kind === "message" && item.role === "user" && item.origin === "human",
+	);
+	const sent = [...human, ...snapshot.items.filter(isHumanSteer)]
+		.filter((item) => !item.turnId || !skipped.has(item.turnId))
+		.sort((a, b) => a.sequence - b.sequence);
+	const texts = [
+		...sent.map((item) => item.kind === "message" ? item.text : item.detail?.text ?? item.summary),
+		...localEchos
+			.filter((echo) => !echo.queued && !human.some((item) => echoMatchesItem(echo, item, backgroundQueuedTurnIds)))
+			.map((echo) => echo.text),
+	];
+	return texts.reduce<string[]>((history, text) => {
+		// The body the bubble shows; AO's attachment and report footers are not the user's words.
+		const body = stagedAttachmentParts(humanVisibleText(text)).body;
+		if (body.trim() && body !== history.at(-1)) history.push(body);
+		return history;
+	}, []);
 }
 const groupKey = (group: TimelineGroup): string => group.key;
 

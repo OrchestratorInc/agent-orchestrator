@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -22,6 +23,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -91,6 +93,7 @@ type SessionService interface {
 	Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error)
 	SpawnOrchestrator(ctx context.Context, projectID domain.ProjectID, clean bool, requestedMode domain.SessionMode, approval domain.PermissionMode) (domain.Session, error)
 	Get(ctx context.Context, id domain.SessionID) (domain.Session, error)
+	GetRecord(ctx context.Context, id domain.SessionID) (domain.SessionRecord, error)
 	Restore(ctx context.Context, id domain.SessionID) (sessionsvc.RestoreOutcome, error)
 	ExitAgent(ctx context.Context, id domain.SessionID) (sessionsvc.ExitAgentOutcome, error)
 	ResumeAgent(ctx context.Context, id domain.SessionID) (sessionsvc.ResumeAgentOutcome, error)
@@ -196,6 +199,10 @@ type SessionsController struct {
 	PreviewServer            ManagedPreviewServer
 	Capabilities             SessionCapabilityValidator
 	ShellPreviewCapabilities ShellPreviewCapabilityValidator
+	// AgentBrowser is the host's agent browser and its credential
+	// (config.AgentBrowserURL); nil when the host has none.
+	AgentBrowser      *url.URL
+	AgentBrowserToken string
 	// ArtifactVersions serves artifact version history; nil leaves those routes unimplemented.
 	ArtifactVersions ArtifactVersionService
 }
@@ -222,6 +229,9 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/artifact-versions/sync", c.syncArtifactVersions)
 	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
 		r.Method(method, "/sessions/{sessionId}/preview/app/*", http.HandlerFunc(c.previewApp))
+	}
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost} {
+		r.Method(method, "/sessions/{sessionId}/agent-browser/*", http.HandlerFunc(c.agentBrowser))
 	}
 	r.Post("/sessions/{sessionId}/attachments", c.stageAttachments)
 	r.Get("/sessions/{sessionId}/workspace/manifest", c.getWorkspaceManifest)
@@ -519,7 +529,11 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 		envelope.WriteError(w, r, err)
 		return
 	}
-	assetPath := chi.URLParam(r, "*")
+	assetPath, _, err := wildcardPath(r)
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_NOT_FOUND", "Preview not found", nil)
+		return
+	}
 	if r.URL.Query().Get("source") == "artifact" {
 		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, assetPath)
 		return
@@ -546,6 +560,97 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 	c.serveRootedPreviewFile(w, r, sess.Metadata.WorkspacePath, assetPath)
 }
 
+// previewGzipWriters reuses compressors: each holds about 800 KB of state, and
+// a preview's first load compresses hundreds of modules at once.
+var previewGzipWriters = sync.Pool{New: func() any {
+	gz, _ := gzip.NewWriterLevel(nil, gzip.BestSpeed)
+	return gz
+}}
+
+// previewGzipMaxBytes bounds the bodies compressPreviewResponse compresses: it
+// holds each whole while compressing it, and its gzip until the client has it.
+// At 4 MiB that gzip is about 1 MB, one compressor's worth, and the bound still
+// takes in a Vite dev server's pre-bundled dependencies (react-dom and
+// lucide-react are about 1 MB). A larger body passes as sent.
+const previewGzipMaxBytes = 4 << 20
+
+// compressPreviewResponse gzips a dev server's uncompressed code and text
+// before it crosses the network to the desktop. Dev servers rarely compress,
+// and their unminified modules shrink several times. Only a body whose length
+// the dev server announced, 1 KiB to 4 MiB, is compressed, and it is
+// compressed whole before any of it is sent: a compressor is busy only while
+// it runs, never while a slow link drains its output. A streamed body (SSR,
+// RSC payloads, event and token streams) announces no length and must reach
+// the client as written. A range is left as sent: its offsets count the
+// uncompressed bytes.
+func compressPreviewResponse(res *http.Response) {
+	contentType := strings.ToLower(res.Header.Get("Content-Type"))
+	compressible := strings.HasPrefix(contentType, "text/") || strings.Contains(contentType, "javascript") ||
+		strings.Contains(contentType, "json") || strings.Contains(contentType, "svg") || strings.Contains(contentType, "wasm")
+	// A 204 or 304 has ContentLength 0; a HEAD carries the GET's length.
+	if !compressible || strings.Contains(contentType, "event-stream") || res.ContentLength < 1024 || res.ContentLength > previewGzipMaxBytes ||
+		res.StatusCode == http.StatusPartialContent || res.Header.Get("Content-Encoding") != "" || res.Request == nil ||
+		res.Request.Method == http.MethodHead || res.Request.Header.Get("Range") != "" || !acceptsGzip(res.Request.Header.Get("Accept-Encoding")) {
+		return
+	}
+	body := make([]byte, res.ContentLength)
+	_, err := io.ReadFull(res.Body, body)
+	_ = res.Body.Close()
+	if err != nil {
+		// The dev server cut the body short, and nothing is sent yet: abort,
+		// so the browser cannot take a shorter module for the whole one.
+		panic(http.ErrAbortHandler)
+	}
+	var compressed bytes.Buffer
+	gz, _ := previewGzipWriters.Get().(*gzip.Writer) // New makes nothing else
+	gz.Reset(&compressed)
+	_, _ = gz.Write(body) // into memory: cannot fail
+	_ = gz.Close()
+	gz.Reset(nil) // the pool keeps the compressor, not the response it wrote
+	previewGzipWriters.Put(gz)
+	// With a length, ReverseProxy copies in 32 KiB writes and never flushes.
+	res.Body = io.NopCloser(&compressed)
+	res.ContentLength = int64(compressed.Len())
+	res.Header.Set("Content-Length", strconv.Itoa(compressed.Len()))
+	res.Header.Set("Content-Encoding", "gzip")
+	res.Header.Add("Vary", "Accept-Encoding")
+	// The bytes differ now, so a strong validator would be a lie.
+	if etag := res.Header.Get("ETag"); strings.HasPrefix(etag, `"`) {
+		res.Header.Set("ETag", "W/"+etag)
+	}
+}
+
+func acceptsGzip(acceptEncoding string) bool {
+	for _, part := range strings.Split(acceptEncoding, ",") {
+		coding, params, _ := strings.Cut(part, ";")
+		if !strings.EqualFold(strings.TrimSpace(coding), "gzip") {
+			continue
+		}
+		// A weight of 0 refuses gzip, however it is written: q=0, Q=0.000.
+		for _, param := range strings.Split(params, ";") {
+			if name, weight, _ := strings.Cut(param, "="); strings.EqualFold(strings.TrimSpace(name), "q") {
+				q, err := strconv.ParseFloat(strings.TrimSpace(weight), 64)
+				return err == nil && q > 0
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// previewTransport carries the desktop's previews and agent browser to this
+// host's loopback servers. A desktop's HTTP/2 fan-in sends a preview's
+// requests up to 100 at once, and DefaultTransport keeps only 2 idle
+// connections per host: it would dial the rest again every burst.
+var previewTransport = func() *http.Transport {
+	transport := &http.Transport{}
+	if defaultTransport, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = defaultTransport.Clone()
+	}
+	transport.MaxIdleConnsPerHost = 100
+	return transport
+}()
+
 // previewApp reaches only the running, session-owned managed preview process.
 // The selected URL comes from the manager, never from a caller-supplied port.
 func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) {
@@ -553,7 +658,9 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_NOT_FOUND", "Preview not found", nil)
 		return
 	}
-	sess, err := c.Svc.Get(r.Context(), sessionID(r))
+	// Every module a dev server serves passes through here: read the stored
+	// row only, not the full session read model.
+	sess, err := c.Svc.GetRecord(r.Context(), sessionID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -568,14 +675,24 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "PREVIEW_MANAGED_REQUIRED", "Run ao preview start in this session to open a remote live preview", nil)
 		return
 	}
+	tail, escaped, err := wildcardPath(r)
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_NOT_FOUND", "Preview not found", nil)
+		return
+	}
 	proxy := &httputil.ReverseProxy{
+		Transport: previewTransport,
 		Rewrite: func(req *httputil.ProxyRequest) {
 			appAuthorization := req.Out.Header.Get("X-AO-Preview-App-Authorization")
 			hadPreviewOrigin := req.Out.Header.Get("X-AO-Preview-App-Origin") != ""
 			req.SetURL(target)
 			req.Out.Host = target.Host
-			req.Out.URL.Path = "/" + strings.TrimPrefix(chi.URLParam(r, "*"), "/")
+			// Forward the client's escapes once: "%40" stays "%40", not "%2540".
+			req.Out.URL.Path = "/" + strings.TrimPrefix(tail, "/")
 			req.Out.URL.RawPath = ""
+			if escaped != "" {
+				req.Out.URL.RawPath = "/" + strings.TrimPrefix(escaped, "/")
+			}
 			req.Out.URL.RawQuery = req.In.URL.RawQuery
 			// AO credentials authenticate the tunnel, not the agent-run web app.
 			req.Out.Header.Del("Authorization")
@@ -607,6 +724,7 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 					res.Header.Set("Location", redirect.RequestURI())
 				}
 			}
+			compressPreviewResponse(res)
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {

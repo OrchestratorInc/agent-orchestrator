@@ -59,14 +59,16 @@ vi.mock("../lib/api-client", () => ({
 
 import {
 	ConnectMobileContent,
+	mobileStatusQueryKey,
 	mobileStatusRefetchInterval,
 	pairingPayload,
 	qrIsReady,
 	qrValueFor,
 } from "./settings/ConnectMobileContent";
 
-function renderMobileSettings() {
-	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function renderMobileSettings(
+	client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+) {
 	return render(
 		<QueryClientProvider client={client}>
 			<TooltipProvider>
@@ -95,7 +97,10 @@ async function selectConnectionMethod(mode: "LAN" | "Tailscale") {
 }
 
 beforeEach(() => {
+	// Keep awake's last-known state is remembered across mounts; start clean.
+	window.localStorage.clear();
 	mobileStatus.enabled = true;
+	mobileStatus.password = "fake-password-for-testing";
 	mobileStatus.noPublicTunnel = false;
 	mobileStatus.host = "192.168.1.42";
 	mobileStatus.hostId = "h_fixture";
@@ -198,11 +203,16 @@ test("withholds the QR when tunnel startup fails without advertising an endpoint
 test("vertically aligns the regenerate control with the password row", async () => {
 	renderMobileSettings();
 
+	// The password value and its icon actions share one centred flex row.
 	const regenerate = await screen.findByRole("button", { name: "Regenerate password" });
-	expect(regenerate.parentElement).toHaveClass("align-middle");
+	const row = regenerate.closest("dd");
+	expect(row).toHaveClass("flex", "items-center");
+	expect(row).toHaveTextContent("fake-password-for-testing");
 });
 
-test("shows a quiet preparing state instead of a blurred QR while startup is incomplete", async () => {
+// The blurred placeholder stays behind the spinner, so the code that arrives
+// resolves in place; what matters is that nothing scannable shows yet.
+test("shows a quiet preparing state while startup is incomplete", async () => {
 	mobileStatus.endpoints = [];
 	mobileStatus.tunnel = {
 		supported: true,
@@ -218,6 +228,7 @@ test("shows a quiet preparing state instead of a blurred QR while startup is inc
 	expect(await screen.findByTestId("mobile-pairing-preparing")).toBeInTheDocument();
 	expect(screen.queryByText(/Preparing remote access/i)).not.toBeInTheDocument();
 	expect(screen.queryByRole("button", { name: "Generate" })).not.toBeInTheDocument();
+	expect(qrPayload()).toBeNull();
 });
 
 test("can turn off the generated mobile connection", async () => {
@@ -293,7 +304,7 @@ test("does not tell LAN users to join the same Wi-Fi", async () => {
 	await waitFor(() => expect(qrPayload()).not.toBeNull());
 
 	expect(screen.queryByText(/same Wi-Fi/i)).not.toBeInTheDocument();
-	expect(screen.getByText("Generate and scan the QR from the AO app")).toBeInTheDocument();
+	expect(screen.getByText("Scan with the AO mobile app")).toBeInTheDocument();
 });
 
 // Both stores are listed in step one now. The platform dropdown that used to
@@ -319,7 +330,7 @@ test("shows a QR-only App Store tooltip", async () => {
 
 	const tooltip = await screen.findByTestId("ios-store-qr");
 	expect(tooltip).not.toHaveTextContent("App Store");
-	expect(tooltip.querySelector("svg")).toBeInTheDocument();
+	expect(tooltip.querySelector("canvas")).toBeInTheDocument();
 });
 
 // v1 encoded one chosen address, so switching mode had to re-encode the code.
@@ -897,4 +908,47 @@ test("enabling idle wake never restores an unchecked legacy lid choice", async (
 	expect(mainToggle).toBeChecked();
 	expect(lidToggle).not.toBeChecked();
 	expect(screen.queryByText("Closed-lid keep awake is armed.")).not.toBeInTheDocument();
+});
+
+// Settings prefetches the status, so opening the page reads it from the cache:
+// Keep awake and the code are in their final state in the very first render.
+test("renders cached state on first paint, with no transition on the code", async () => {
+	mobileStatus.keepAwake = { supported: true, enabled: true, active: true, hasBattery: false };
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	client.setQueryData(mobileStatusQueryKey, structuredClone(mobileStatus));
+	renderMobileSettings(client);
+
+	const toggle = screen.getByRole("switch", { name: "Keep this Mac awake" });
+	expect(toggle).toBeChecked();
+	expect(toggle).toBeEnabled();
+	expect(screen.getByTestId("mobile-pairing-address")).toHaveTextContent("192.168.1.42:3011");
+	expect(document.querySelector("[data-qr-value]")?.parentElement).toHaveClass("opacity-100", "transition-none");
+
+	// Regenerating is the user's doing, so that change crossfades in: the new
+	// code ends up fully shown on its own, and the old one is cleared.
+	const before = qrPayload();
+	vi.mocked(apiClient.POST).mockImplementationOnce(async () => {
+		mobileStatus.password = "regenerated-password";
+		return { data: {}, error: undefined } as never;
+	});
+	await userEvent.click(screen.getByRole("button", { name: "Regenerate password" }));
+	await waitFor(() => expect(qrPayload()).not.toBe(before));
+	await waitFor(() => {
+		expect(document.querySelector("[data-qr-value]")?.parentElement).toHaveClass("opacity-100");
+		expect(document.querySelectorAll("[data-qr-value]")).toHaveLength(1);
+	});
+});
+
+// A cold open (nothing cached yet) keeps the row in its last-known state,
+// disabled until the daemon answers, instead of popping it in afterwards.
+test("holds Keep awake at its last-known state while the status loads", async () => {
+	mobileStatus.keepAwake = { supported: true, enabled: true, active: true, hasBattery: false };
+	window.localStorage.setItem("ao.mobile.keepAwake", JSON.stringify({ supported: true, enabled: true, hasBattery: false }));
+	renderMobileSettings();
+
+	const pending = screen.getByRole("switch", { name: "Keep this Mac awake" });
+	expect(pending).toBeChecked();
+	expect(pending).toBeDisabled();
+	await waitFor(() => expect(screen.getByRole("switch", { name: "Keep this Mac awake" })).toBeEnabled());
+	expect(screen.getByRole("switch", { name: "Keep this Mac awake" })).toBeChecked();
 });

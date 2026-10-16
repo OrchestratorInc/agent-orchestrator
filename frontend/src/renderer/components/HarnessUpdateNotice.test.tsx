@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HarnessUpdateNotice } from "./HarnessUpdateNotice";
+import { HarnessUpdateNotice, noticePlacement } from "./HarnessUpdateNotice";
 import { apiClient } from "../lib/api-client";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { appI18n } from "../i18n";
@@ -69,6 +69,12 @@ describe("startup harness update notice", () => {
 		vi.spyOn(apiClient, "POST").mockResolvedValue({ data: readiness } as never);
 	});
 	afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+	it("never raises the native shell, which would block the live browser page", async () => {
+		mountNotice();
+		const notice = await screen.findByRole("region", { name: "Agent updates available" });
+		expect(notice).not.toHaveAttribute("data-browser-native-overlay");
+	});
 
 	it("finds updates without mounting Harness settings and starts no installation automatically", async () => {
 		mountNotice();
@@ -398,5 +404,28 @@ describe("startup harness update notice", () => {
 		await screen.findByRole("region");
 		act(() => client.setQueryData(updateAdvisoryQueryKey("claude-code"), { agentId: "claude-code", status, currentVersion: "2.1.291", latestVersion: "2.1.292" }));
 		await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
+	});
+});
+
+describe("noticePlacement", () => {
+	// 1280px window, notice 300px wide starting 72px down and 200px tall.
+	const place = (browser: Parameters<typeof noticePlacement>[0]) => noticePlacement(browser, 72, 200, 1280);
+
+	it("keeps the default corner without a live browser page", () => {
+		expect(place(null)).toEqual({ right: 16 });
+	});
+
+	it("keeps the default corner when the page is elsewhere", () => {
+		expect(place({ left: 200, top: 60, right: 700, bottom: 800 })).toEqual({ right: 16 });
+		expect(place({ left: 800, top: 400, right: 1280, bottom: 800 })).toEqual({ right: 16 });
+	});
+
+	it("moves beside a docked page it would cover", () => {
+		expect(place({ left: 820, top: 100, right: 1270, bottom: 800 })).toEqual({ right: 1280 - 808 });
+	});
+
+	it("steps aside while the page leaves no room beside it", () => {
+		expect(place({ left: 0, top: 40, right: 1280, bottom: 800 })).toBe("hidden");
+		expect(place({ left: 300, top: 40, right: 1280, bottom: 800 })).toBe("hidden");
 	});
 });

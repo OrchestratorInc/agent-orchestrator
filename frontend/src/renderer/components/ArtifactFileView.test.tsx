@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { aoBridge } from "../lib/bridge";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -200,6 +201,43 @@ describe("ArtifactFileView", () => {
 		expect(message).toContain("- Location: Selected text");
 		expect(message).toContain("- Selected text: Cache the session list.");
 		expect(message).toContain("- Path: plan.md");
+	});
+
+	it("copies text selected in the rendered artifact with the copy shortcut while the composer has focus", async () => {
+		fetchMock.mockResolvedValue(new Response("# Plan\n\nCache the session list.", { status: 200 }));
+		vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(40, 200, 120, 16));
+		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+
+		renderWithQuery(<ArtifactFileView artifactName="plan.md" path="plan.md" rawUrl={RAW_URL} sessionId="sess-1" />);
+
+		const paragraph = await screen.findByText("Cache the session list.");
+		const range = document.createRange();
+		range.selectNodeContents(paragraph);
+		window.getSelection()?.removeAllRanges();
+		window.getSelection()?.addRange(range);
+		fireEvent.pointerUp(paragraph);
+		const textbox = await screen.findByRole("textbox", { name: "Feedback for plan.md · selected text" });
+
+		const setData = vi.fn();
+		fireEvent.copy(textbox, { clipboardData: { setData } });
+		expect(setData).toHaveBeenCalledWith("text/plain", "Cache the session list.");
+
+		expect(screen.queryByRole("button", { name: /copy/i })).not.toBeInTheDocument();
+		fireEvent.keyDown(textbox, { key: "c", metaKey: true });
+		expect(writeText).toHaveBeenCalledWith("Cache the session list.");
+		writeText.mockClear();
+		fireEvent.keyDown(textbox, { key: "c", ctrlKey: true });
+		expect(writeText).toHaveBeenCalledWith("Cache the session list.");
+	});
+
+	it("copies a fenced code block in a rendered markdown artifact", async () => {
+		fetchMock.mockResolvedValue(new Response("# Setup\n\n```sh\nnpm install\n```", { status: 200 }));
+		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+
+		renderWithQuery(<ArtifactFileView artifactName="setup.md" path="setup.md" rawUrl={RAW_URL} sessionId="sess-1" />);
+
+		fireEvent.click(await screen.findByRole("button", { name: "Copy code" }));
+		expect(writeText).toHaveBeenCalledWith("npm install");
 	});
 
 	it("closes an empty selection composer on a click elsewhere", async () => {

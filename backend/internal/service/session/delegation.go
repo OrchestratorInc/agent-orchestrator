@@ -64,8 +64,8 @@ func (s *Service) CancelTaskPreparation(ctx context.Context, token string) error
 }
 
 // DelegateTask spawns the worker directly, matching `ao spawn`, with a
-// provisional display name derived from the task brief. AO then best-effort
-// refines that title through a short-lived call to the worker's resolved harness.
+// provisional display name derived from the task brief. Git tasks finalize
+// title and workspace names during provisioning; Scratch titles refine after spawn.
 func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (DelegateTaskOutcome, error) {
 	if rec, found, err := s.replayClientRequest(ctx, in.ClientRequestID, in.ClientRequestHash); err != nil {
 		return DelegateTaskOutcome{}, err
@@ -96,6 +96,7 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 		Harness:           in.RequestedAgent,
 		Prompt:            prompt,
 		DisplayName:       delegatedTaskDisplayName(in.Brief),
+		NameFromPrompt:    prompt != "" && project.Kind.WithDefault() != domain.ProjectKindScratch,
 		AgentConfig: ports.AgentConfig{
 			Model:       strings.TrimSpace(in.Model),
 			Effort:      effort,
@@ -117,7 +118,7 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 	// The worker spawn is the commit point. Background title
 	// generation must never hold the new-task response open. A promptless worker
 	// stays idle with its provisional title until the user supplies instructions.
-	if prompt != "" && !worker.ClientRequestCommitted {
+	if prompt != "" && project.Kind.WithDefault() == domain.ProjectKindScratch && !worker.ClientRequestCommitted {
 		s.refineDelegatedTaskTitleInBackground(worker.ID, in)
 	}
 	return DelegateTaskOutcome{WorkerID: worker.ID}, nil

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ProjectSettingsInputRow, ProjectSettingsRow, ProjectSettingsSection as SettingsGroup, ProjectSettingsValueRow } from "@aoagents/product-ui";
-import { Pencil, TriangleAlert } from "lucide-react";
+import { ProjectSettingsRow, ProjectSettingsSection as SettingsGroup, ProjectSettingsValueRow } from "@aoagents/product-ui";
+import { TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -23,6 +23,7 @@ import type { ProjectSettingsSaveState, ProjectSettingsSection as SettingsSectio
 import { ProjectSettingsEditor, type ProjectAgentPickerProps, type ProjectSettingsDraft } from "./ProjectSettingsEditor";
 import { AgentSelectMenuItem } from "./settings/AgentSelectMenuItem";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
+import { SettingsInlineInput, SettingsRow } from "./settings/SettingsRow";
 
 export const cloudProjectSettingsQueryKey = (baseUrl: string, orgId: string, projectId: string) => ["cloud-project-settings", baseUrl, orgId, projectId] as const;
 
@@ -43,8 +44,8 @@ export function CloudProjectSettingsAdapter({ projectId, cloudOrgId, section = "
 	useEffect(() => {
 		if (loadError) onSaveState?.({ phase: "failed", error: loadError, retry: ready ? () => { void query.refetch({ cancelRefetch: false }); } : undefined });
 	}, [loadError, onSaveState, ready, query.refetch]);
-	if (loadError) return <p className="text-sm text-error" role="alert">{loadError}</p>;
-	if (!query.data) return <p className="text-sm text-settings-muted">{t("settings.project.loading")}</p>;
+	if (loadError) return <p className="px-(--settings-row-inset) text-sm text-error" role="alert">{loadError}</p>;
+	if (!query.data) return <p className="px-(--settings-row-inset) text-sm text-settings-muted">{t("settings.project.loading")}</p>;
 	return <CloudSettingsAdapter key={`${cloudOrgId}/${projectId}`} project={query.data} section={section} onSaveState={onSaveState} />;
 }
 
@@ -171,7 +172,7 @@ function CoderTemplateParametersSettings({ project, templateId }: { project: Clo
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [patchKey, failedKey, isPending, mutate]);
 	return (
-		<div className="px-3 pb-3 pt-1">
+		<div className="settings-content-row">
 			<CoderTemplateOptions
 				orgId={project.orgId}
 				templateId={templateId}
@@ -226,20 +227,17 @@ function CoderWorkspaceNamePrefixRow({ project }: { project: CloudCpProject }) {
 		return () => window.clearTimeout(timeout);
 	}, [failedValue, invalid, isError, isPending, mutate, reset, trimmed]);
 	const label = t("coder.workspacePrefix.label");
-	return <>
-		<ProjectSettingsInputRow id="coderWorkspaceNamePrefix" label={label} editLabel={t("settings.field.edit", { label })}
-			editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />}
-			value={draft} placeholder={coderWorkspaceNamePrefixFor(project.displayName)} onChange={setDraft} />
-		{invalid ? (
-			<p className="-mt-1.5 pb-2 pl-3 text-xs text-error" role="alert">{t("coder.workspacePrefix.invalid")}</p>
-		) : save.isError ? (
-			<p className="-mt-1.5 pb-2 pl-3 text-xs text-error" role="alert">
-				{save.error instanceof Error ? save.error.message : t("settings.project.saveFailed")}
-			</p>
-		) : (
-			<p className="-mt-1.5 pb-2 pl-3 text-xs text-settings-muted">{t("coder.workspacePrefix.settingsHint")}</p>
-		)}
-	</>;
+	// The hint, or the reason the value cannot be saved, is the row's description.
+	const description = invalid ? (
+		<span className="text-error" role="alert">{t("coder.workspacePrefix.invalid")}</span>
+	) : save.isError ? (
+		<span className="text-error" role="alert">
+			{save.error instanceof Error ? save.error.message : t("settings.project.saveFailed")}
+		</span>
+	) : t("coder.workspacePrefix.settingsHint");
+	return <SettingsRow label={label} description={description}>
+		<SettingsInlineInput id="coderWorkspaceNamePrefix" label={label} value={draft} placeholder={coderWorkspaceNamePrefixFor(project.displayName)} onChange={setDraft} />
+	</SettingsRow>;
 }
 
 function CloudAgentPicker({ role, draft, value, disabled, onChange }: ProjectAgentPickerProps) {

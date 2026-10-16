@@ -4504,6 +4504,92 @@ paths:
       summary: Record a Codewhale lifecycle outbox event
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/agent-browser/*:
+    get:
+      operationId: getSessionAgentBrowser
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            text/html:
+              schema:
+                type: string
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "502":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Bad Gateway
+      summary: Proxy the host's agent browser stream viewer (page, stream socket,
+        downloads)
+      tags:
+      - sessions
+    head:
+      operationId: headSessionAgentBrowser
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          description: OK
+        "404":
+          description: Not Found
+        "502":
+          description: Bad Gateway
+      summary: Read headers from the host's agent browser stream viewer
+      tags:
+      - sessions
+    post:
+      operationId: postSessionAgentBrowser
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: string
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "502":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Bad Gateway
+      summary: Upload a file into the host's agent browser
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/agent-switches:
     get:
       operationId: listSessionAgentSwitches

@@ -14,6 +14,8 @@ import { reportUpgradeViewed } from "../../lib/cloud-telemetry";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog";
+import { useResolvedTheme, useUiStore } from "../../stores/ui-store";
+import { BayerVortex } from "./BayerVortex";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 
@@ -49,6 +51,11 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	// control plane refuses them for anyone else.
 	const manage = offering.canManageBilling;
 	const [pending, setPending] = useState<string | null>(null);
+	// Which plan card opened the billing portal, so only that card shows the spinner.
+	const [portalFor, setPortalFor] = useState("");
+	useEffect(() => {
+		if (pending === null) setPortalFor("");
+	}, [pending]);
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [confirmReset, setConfirmReset] = useState(false);
 	// The Upgrade page is the paywall's landing: count each visit once mounted.
@@ -67,8 +74,8 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	}
 	if (!offering.isError && (!offering.loaded || billing.isPending)) {
 		return (
-			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden}>
-				<p className="flex items-center gap-2 px-3 text-xs text-muted-foreground">
+			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden} grouped>
+				<p className="settings-row-bar justify-start gap-2 text-sm text-settings-muted">
 					<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
 					{t("settings.billing.loading")}
 				</p>
@@ -77,10 +84,10 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	}
 	if (billing.isError || !billing.data) {
 		return (
-			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden}>
-				<div className="flex items-center gap-2 px-3 text-xs text-destructive">
-					{t("settings.billing.loadFailed")}
-					<Button variant="ghost" size="sm" onClick={() => void billing.refetch()}>{t("settings.billing.retry")}</Button>
+			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden} grouped>
+				<div className="settings-row-bar">
+					<p className="text-xs text-error">{t("settings.billing.loadFailed")}</p>
+					<Button variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" onClick={() => void billing.refetch()}>{t("settings.billing.retry")}</Button>
 				</div>
 			</SettingsSection>
 		);
@@ -131,42 +138,45 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	return (
 		<>
 			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden}>
-				{summary.exempt ? <p className="px-1 text-xs text-muted-foreground">{t("settings.billing.exempt")}</p> : null}
+				{summary.exempt ? <p className="settings-row-bar text-sm text-settings-muted">{t("settings.billing.exempt")}</p> : null}
 				{endsAt ? (
-					<p className="flex items-center justify-between gap-3 px-1 text-xs text-settings-muted">
-						{t("settings.billing.cancelNotice", { plan: planName(currentPlan), date: endsAt })}
+					<div className="settings-row-bar">
+						<p className="min-w-0 text-pretty text-xs text-settings-muted">
+							{t("settings.billing.cancelNotice", { plan: planName(currentPlan), date: endsAt })}
+						</p>
 						{manage ? (
-							<Button size="sm" variant="secondary" disabled={pending !== null} onClick={() => void openPortal()}>
+							<Button size="sm" variant="ghost" className={ghostAction} disabled={pending !== null} onClick={() => void openPortal()}>
 								{pending === "portal" ? spinner : <ExternalLink className="size-icon-sm" aria-hidden="true" />}
 								{t("settings.billing.keepPlan", { plan: planName(currentPlan) })}
 							</Button>
 						) : null}
-					</p>
+					</div>
 				) : null}
 				{lapsed && manage ? (
-					<p role="alert" className="flex items-center justify-between gap-3 px-1 text-xs text-destructive">
-						{t("settings.billing.paymentFailed")}
+					<div role="alert" className="settings-row-bar">
+						<p className="min-w-0 text-pretty text-xs text-error">{t("settings.billing.paymentFailed")}</p>
 						<Button size="sm" disabled={pending !== null} onClick={() => void openPortal()}>
 							{pending === "portal" ? spinner : <ExternalLink className="size-icon-sm" aria-hidden="true" />}
 							{t("settings.billing.updatePayment")}
 						</Button>
-					</p>
+					</div>
 				) : null}
-				<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+				<div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
 					<PlanCard
+						plan="free"
 						name={t("settings.billing.planFree")}
-						price={t("settings.billing.freePrice")}
+						amount="$0"
+						interval={t("settings.billing.intervalMonth")}
 						features={[
 							t("settings.billing.freeLocal"),
 							t("settings.billing.freeAgents"),
 							t("settings.billing.freeOrchestrator"),
 							t("settings.billing.freeNoCloud"),
+							t("settings.billing.freeHosts"),
 						]}
 						current={currentPlan === "free"}
 						action={endsAt ? (
-							<Button size="sm" variant="secondary" className="w-full" disabled>
-								{t("settings.billing.freeStarts", { date: endsAt })}
-							</Button>
+							<span className="text-control text-settings-muted">{t("settings.billing.freeStarts", { date: endsAt })}</span>
 						) : subscribed && manage ? (
 							<Button size="sm" variant="secondary" className="w-full" disabled={pending !== null} onClick={() => void openCancel()}>
 								{pending === "portal:cancel" ? spinner : null}
@@ -177,27 +187,32 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 					/>
 					{offers.map((offer) => {
 						const isCurrent = currentPlan === offer.name;
-						const busy = pending === `checkout:${offer.name}` || (pending === "portal" && subscribed);
+						const recommended = !subscribed && offer.name === RECOMMENDED_PLAN;
+						const busy = pending === `checkout:${offer.name}` || (pending === "portal" && portalFor === offer.name);
+						const openPlanPortal = () => {
+							setPortalFor(offer.name);
+							void openPortal();
+						};
 						let label = t("settings.billing.upgrade");
-						let onClick = () => void openCheckout(offer.name);
+						let onClick: () => void = () => void openCheckout(offer.name);
 						if (isCurrent) {
 							label = t("settings.billing.manage");
-							onClick = () => void openPortal();
+							onClick = openPlanPortal;
 						} else if (subscribed) {
 							label = t("settings.billing.switchPlan");
-							onClick = () => void openPortal();
+							onClick = openPlanPortal;
 						}
 						return (
 							<PlanCard
 								key={offer.name}
+								plan={offer.name}
 								name={planName(offer.name)}
-								price={offerPrice(offer, t)}
-								features={offer.limits ? planFeatures(offer.name, offer.limits, t) : []}
+								{...offerPrice(offer, t)}
+								{...(offer.limits ? planFeatures(offer.name, offer.limits, t) : { features: [] })}
 								current={isCurrent}
-								recommended={!subscribed && offer.name === RECOMMENDED_PLAN}
-								highlighted={subscribed ? isCurrent : offer.name === RECOMMENDED_PLAN}
+								recommended={recommended}
 								action={manage ? (
-									<Button size="sm" variant={offer.name === RECOMMENDED_PLAN && !isCurrent ? "primary" : "secondary"}
+									<Button size="sm" variant={recommended ? "primary" : "secondary"}
 										className="w-full" disabled={pending !== null} onClick={onClick}>
 										{busy ? spinner : isCurrent ? <ExternalLink className="size-icon-sm" aria-hidden="true" /> : null}
 										{label}
@@ -208,8 +223,9 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						);
 					})}
 					<PlanCard
+						plan="enterprise"
 						name={t("settings.billing.planEnterprise")}
-						price={t("settings.billing.enterprisePrice")}
+						amount={t("settings.billing.enterprisePrice")}
 						features={[
 							t("settings.billing.enterpriseSessions"),
 							t("settings.billing.enterpriseOrchestrators"),
@@ -229,48 +245,46 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 					/>
 				</div>
 				{manage ? null : <p className="px-1 text-xs text-muted-foreground">{t("settings.billing.adminOnly")}</p>}
-				{actionError ? <p role="alert" className="px-1 text-xs text-destructive">{actionError}</p> : null}
+				{actionError && !confirmReset ? <p role="alert" className="px-1 text-xs text-destructive">{actionError}</p> : null}
 			</SettingsSection>
 			{subscribed && limits && usage ? (
-				<>
-				<SettingsSection title={t("settings.billing.usage")} grouped>
-					<UsageRow
-						label={t("settings.billing.windowUsage", { hours: usage.windowHours })}
-						used={usage.windowUsedMinutes}
-						limit={usage.windowLimitMinutes}
-						resetsAt={usage.windowResetsAt}
-						t={t}
-					/>
-					<UsageRow
-						label={t("settings.billing.weeklyUsage")}
-						used={usage.weeklyUsedMinutes}
-						limit={usage.weeklyLimitMinutes}
-						resetsAt={usage.weeklyResetsAt}
-						absoluteReset
-						t={t}
-					/>
-					<SettingsRow label={t("settings.billing.runningSessions")} description={t("settings.billing.runningDetail", {
-						orchestrators: usage.runningOrchestrators, orchestratorSlots: limits.orchestratorSlots,
-						workers: usage.runningWorkers, workerSlots: runningSlots(limits) - limits.orchestratorSlots,
-					})}>
-						<Count used={usage.runningOrchestrators + usage.runningWorkers} limit={runningSlots(limits)} />
-					</SettingsRow>
-					<SettingsRow label={t("settings.billing.totalSessions")} description={t("settings.billing.totalDetail")}>
-						<Count used={usage.activeOrchestrators + usage.activeWorkers} limit={limits.maxActiveSandboxes} />
-					</SettingsRow>
-					{manage ? <SettingsRow
-						label={t("settings.billing.reset")}
-						description={resetsLeft > 0
-							? t("settings.billing.resetDetail", { left: resetsLeft, allowed: usage.manualResetsAllowed })
-							: t("settings.billing.resetNoneLeft", { date: formatDate(usage.manualResetsRenewAt) })}
-					>
-						<Button size="sm" variant="secondary" disabled={resetsLeft === 0 || pending !== null} onClick={() => setConfirmReset(true)}>
-							{t("settings.billing.resetNow")}
-						</Button>
-					</SettingsRow> : null}
-				</SettingsSection>
-				<p className="-mt-2 px-1 text-xs text-settings-muted">{t("settings.billing.usageNote")}</p>
-				</>
+					<SettingsSection title={t("settings.billing.usage")} grouped>
+						<UsageRow
+							label={t("settings.billing.windowUsage", { hours: usage.windowHours })}
+							used={usage.windowUsedMinutes}
+							limit={usage.windowLimitMinutes}
+							resetsAt={usage.windowResetsAt}
+							t={t}
+						/>
+						<UsageRow
+							label={t("settings.billing.weeklyUsage")}
+							used={usage.weeklyUsedMinutes}
+							limit={usage.weeklyLimitMinutes}
+							resetsAt={usage.weeklyResetsAt}
+							absoluteReset
+							t={t}
+						/>
+						<SettingsRow label={t("settings.billing.runningSessions")} description={t("settings.billing.runningDetail", {
+							orchestrators: usage.runningOrchestrators, orchestratorSlots: limits.orchestratorSlots,
+							workers: usage.runningWorkers, workerSlots: runningSlots(limits) - limits.orchestratorSlots,
+						})}>
+							<Count used={usage.runningOrchestrators + usage.runningWorkers} limit={runningSlots(limits)} />
+						</SettingsRow>
+						<SettingsRow label={t("settings.billing.totalSessions")} description={t("settings.billing.totalDetail")}>
+							<Count used={usage.activeOrchestrators + usage.activeWorkers} limit={limits.maxActiveSandboxes} />
+						</SettingsRow>
+						{manage ? <SettingsRow
+							label={t("settings.billing.reset")}
+							description={resetsLeft > 0
+								? t("settings.billing.resetDetail", { left: resetsLeft, allowed: usage.manualResetsAllowed })
+								: t("settings.billing.resetNoneLeft", { date: formatDate(usage.manualResetsRenewAt) })}
+						>
+							<Button size="sm" variant="ghost" className={ghostAction} disabled={resetsLeft === 0 || pending !== null} onClick={() => setConfirmReset(true)}>
+								{t("settings.billing.resetNow")}
+							</Button>
+						</SettingsRow> : null}
+						<p className="settings-content-row text-pretty text-control leading-4 text-settings-muted">{t("settings.billing.usageNote")}</p>
+					</SettingsSection>
 			) : null}
 			<Dialog open={confirmReset} onOpenChange={(open) => { if (pending !== "reset") setConfirmReset(open); }}>
 				<DialogContent>
@@ -294,54 +308,166 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 
 function Notice({ title, titleHidden, text }: { title: string; titleHidden?: boolean; text: string }) {
 	return (
-		<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden}>
-			<p className="px-3 text-xs leading-relaxed text-muted-foreground">{text}</p>
+		<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden} grouped>
+			<p className="settings-row-bar text-sm text-settings-muted">{text}</p>
 		</SettingsSection>
 	);
 }
 
-function PlanCard({ name, price, features, current, recommended, highlighted, action, t }: {
+/** Muted ghost row action, the settings default for every non-primary action. */
+const ghostAction = "text-settings-muted hover:text-settings-label";
+
+/** A theme token as a hex string, resolved from the live document so every theme style is followed. */
+function tokenHex(name: string): string | null {
+	try {
+		const probe = document.createElement("span");
+		probe.style.color = `var(${name})`;
+		document.body.appendChild(probe);
+		const computed = getComputedStyle(probe).color;
+		probe.remove();
+		if (!computed) return null;
+		const channels = (rgb: number[]) => `#${rgb.map((channel) => Math.round(channel).toString(16).padStart(2, "0")).join("")}`;
+		// Computed colors are rgb() for sRGB tokens; anything else (color-mix, oklch) goes through a canvas.
+		const direct = /^rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(computed);
+		if (direct) return channels([Number(direct[1]), Number(direct[2]), Number(direct[3])]);
+		const canvas = document.createElement("canvas");
+		canvas.width = 1;
+		canvas.height = 1;
+		const ctx = canvas.getContext("2d", { willReadFrequently: true });
+		if (!ctx) return null;
+		ctx.fillStyle = computed;
+		ctx.fillRect(0, 0, 1, 1);
+		const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+		return channels([r, g, b]);
+	} catch {
+		// A decorative effect must never break the page: no color, no glow.
+		return null;
+	}
+}
+
+/** The brand logo blue with its hue kept and its saturation raised: the logo token is a muted tone meant for text. */
+function saturatedBrand(): string | null {
+	const hex = tokenHex("--color-brand-logo");
+	if (!hex) return null;
+	const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+	const max = Math.max(r, g, b);
+	const min = Math.min(r, g, b);
+	const d = max - min;
+	let h = 210;
+	if (d > 0) {
+		if (max === r) h = ((g - b) / d) % 6;
+		else if (max === g) h = (b - r) / d + 2;
+		else h = (r - g) / d + 4;
+		h *= 60;
+		if (h < 0) h += 360;
+	}
+	const l = 0.36;
+	const sat = 0.9;
+	const c = (1 - Math.abs(2 * l - 1)) * sat;
+	const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+	const m = l - c / 2;
+	const [r1, g1, b1] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+	return `#${[r1, g1, b1].map((v) => Math.round((v + m) * 255).toString(16).padStart(2, "0")).join("")}`;
+}
+
+
+function usePrefersReducedMotion(): boolean {
+	const [reduced, setReduced] = useState(() => typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+	useEffect(() => {
+		if (typeof window.matchMedia !== "function") return;
+		const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+		const onChange = () => setReduced(query.matches);
+		query.addEventListener("change", onChange);
+		return () => query.removeEventListener("change", onChange);
+	}, []);
+	return reduced;
+}
+
+/**
+ * The recommended plan's highlight: a slow dithered vortex across the top half
+ * of the card that fades into the surface: saturated brand-blue dither on a
+ * transparent ground, so the card shows through. The color resolves on the first render, so it is there with the card and never
+ * pops in. Held still for reduced motion.
+ */
+function PlanGlow() {
+	const resolvedTheme = useResolvedTheme();
+	const themeStyle = useUiStore((state) => state.themeStyle);
+	const [color, setColor] = useState(saturatedBrand);
+	useEffect(() => {
+		// The theme class lands on the document after the store updates, so re-read a frame later.
+		const frame = requestAnimationFrame(() => {
+			const next = saturatedBrand();
+			setColor((current) => next ?? current);
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [resolvedTheme, themeStyle]);
+	const reducedMotion = usePrefersReducedMotion();
+	if (!color) return null;
+	return (
+		<div
+			aria-hidden="true"
+			className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-1/2 opacity-50 [mask-image:linear-gradient(to_bottom,black,transparent)]"
+		>
+			<BayerVortex key={color} color={color} pixel={12} arms={10} speed={reducedMotion ? 0 : 3} center={[0.5, 0]} />
+		</div>
+	);
+}
+
+/**
+ * One plan as a column: name and status, a large price, the plan action, then
+ * what it adds over the plan below it. The current or recommended plan sits on
+ * the raised surface; the rest stay on the quiet one, with no outlines.
+ */
+function PlanCard({ plan, name, amount, interval, intro, features, current, recommended, action, t }: {
+	/** Stable id (not the translated name) for tests and hooks. */
+	plan: string;
 	name: string;
-	price: string;
+	amount: string;
+	interval?: string;
+	intro?: string;
 	features: string[];
 	current: boolean;
 	recommended?: boolean;
-	highlighted?: boolean;
 	action: React.ReactNode;
 	t: TFunction;
 }) {
 	return (
 		<div
 			data-testid="plan-card"
-			data-plan={name.toLowerCase()}
+			data-plan={plan}
+			aria-current={current ? "true" : undefined}
 			className={cn(
-				"relative flex flex-col gap-2 rounded-lg border bg-[var(--color-bg-settings-row)] p-3",
-				highlighted ? "border-[var(--color-status-working)]" : "border-[var(--color-border)]",
+				"flex flex-col gap-4 rounded-lg p-4",
+				current ? "bg-(--color-bg-tertiary)" : "bg-(--color-bg-secondary)",
+				// The recommended plan carries a dithered glow behind its header.
+				recommended && "relative isolate overflow-hidden",
 			)}
 		>
-			{current ? (
-				<span className="absolute right-2 top-2 rounded-full bg-[var(--color-status-working)] px-1.5 py-px text-[length:var(--font-size-xs)] font-medium leading-4 text-white">
-					{t("settings.billing.current")}
-				</span>
-			) : null}
-			<div className="flex flex-col gap-1">
-				{recommended ? (
-					<span className="w-fit rounded-full bg-[var(--color-status-working)] px-1.5 py-px text-[length:var(--font-size-xs)] font-medium leading-4 text-white">
-						{t("settings.billing.recommended")}
+			{recommended ? <PlanGlow /> : null}
+			{/* Fixed-height slots above the list keep the divider and the first
+			    feature on one line across every column, whatever a plan omits. */}
+			<div className="flex h-5 items-center justify-between gap-2">
+				<h3 className="text-control font-medium text-settings-label">{name}</h3>
+				{current || recommended ? (
+					<span className="text-xs font-medium text-settings-label">
+						{t(current ? "settings.billing.current" : "settings.billing.recommended")}
 					</span>
 				) : null}
-				<span className="text-sm font-semibold text-settings-label">{name}</span>
-				<span className="text-xs tabular-nums text-settings-muted">{price}</span>
 			</div>
-			<ul className="flex flex-1 flex-col gap-1">
+			<div className="flex h-9 items-baseline gap-1">
+				<span className={cn("font-semibold tracking-tight tabular-nums text-settings-title", interval ? "text-3xl leading-9" : "text-xl leading-9")}>{amount}</span>
+				{interval ? <span className="text-control text-settings-muted">/ {interval}</span> : null}
+			</div>
+			<div className="flex h-8 flex-col justify-center">{action}</div>
+			<p className="min-h-4 text-xs text-settings-muted">{intro}</p>
+			<ul className="flex flex-1 flex-col gap-2 border-t border-border pt-3">
 				{features.map((feature) => (
-					<li key={feature} className="flex items-start gap-1.5 text-xs leading-4 text-settings-muted">
-						<Check className="mt-px size-icon-sm shrink-0" aria-hidden="true" />
+					<li key={feature} className="flex items-start gap-2 text-control leading-5 text-settings-label">
+						<Check className="mt-0.5 size-icon-sm shrink-0 text-settings-muted" aria-hidden="true" />
 						{feature}
 					</li>
 				))}
 			</ul>
-			{action}
 		</div>
 	);
 }
@@ -401,11 +527,15 @@ function planName(plan: string): string {
  * What a paid plan includes: what cloud adds over local (Starter lists it, Pro
  * builds on Starter), then the limits from its Stripe product.
  */
-function planFeatures(plan: string, limits: CloudCpPlanLimits, t: TFunction): string[] {
-	const included = plan === RECOMMENDED_PLAN
-		? [t("settings.billing.cloudAway"), t("settings.billing.cloudSandboxes"), t("settings.billing.cloudGithub")]
-		: [t("settings.billing.everythingInStarter")];
-	return [
+function planFeatures(plan: string, limits: CloudCpPlanLimits, t: TFunction): { intro?: string; features: string[] } {
+	const starter = plan === RECOMMENDED_PLAN;
+	const pro = plan === "pro";
+	const included = starter
+		? [t("settings.billing.cloudAway"), t("settings.billing.cloudSandboxes"), t("settings.billing.cloudGithub"), t("settings.billing.starterHosts")]
+		: pro
+			? [t("settings.billing.proHosts")]
+			: [];
+	const features = [
 		...included,
 		t("settings.billing.featureRunning", { count: runningSlots(limits) }),
 		t("settings.billing.featureTotal", { count: limits.maxActiveSandboxes }),
@@ -414,14 +544,18 @@ function planFeatures(plan: string, limits: CloudCpPlanLimits, t: TFunction): st
 		t("settings.billing.featureWeekly", { hours: limits.weeklySessionHours }),
 		...(limits.manualResetsPerMonth > 0 ? [t("settings.billing.featureResets", { count: limits.manualResetsPerMonth })] : []),
 	];
+	return {
+		intro: starter ? t("settings.billing.everythingInFree") : pro ? t("settings.billing.everythingInStarter") : undefined,
+		features,
+	};
 }
 
-function offerPrice(offer: CloudCpPlanOffer, t: TFunction): string {
-	if (offer.unitAmount === undefined || !offer.currency) return "";
-	return t("settings.billing.price", {
-		price: formatMoney(offer.unitAmount, offer.currency),
+function offerPrice(offer: CloudCpPlanOffer, t: TFunction): { amount: string; interval: string } {
+	if (offer.unitAmount === undefined || !offer.currency) return { amount: "—", interval: "" };
+	return {
+		amount: formatMoney(offer.unitAmount, offer.currency),
 		interval: offer.interval === "year" ? t("settings.billing.intervalYear") : t("settings.billing.intervalMonth"),
-	});
+	};
 }
 
 function formatMoney(minorUnits: number, currency: string): string {

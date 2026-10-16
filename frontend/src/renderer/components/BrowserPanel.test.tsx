@@ -744,6 +744,66 @@ describe("BrowserPanel", () => {
 		expect(screen.queryByRole("button", { name: /open in system browser/i })).not.toBeInTheDocument();
 	});
 
+	it("opens and copies a remote preview at the address a browser outside AO can load", async () => {
+		const url = "https://ao-preview-0123456789abcdef0123456789abcdef.localhost:41000/dash?x=1#top";
+		const external = "http://ao-preview-0123456789abcdef0123456789abcdef.localhost:5000/dash?x=1#top";
+		hookState.navState = { ...hookState.navState, url };
+		const externalUrl = vi.spyOn(window.ao!.remotes, "externalUrl").mockResolvedValue(external);
+		const openExternal = vi.spyOn(window.ao!.app, "openExternal").mockResolvedValue(undefined);
+		const writeText = vi.spyOn(window.ao!.clipboard, "writeText").mockResolvedValue(undefined);
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={{ ...session, hostId: "h_workbox" }} />);
+
+		fireEvent.click(screen.getByRole("button", { name: /open in system browser/i }));
+		await waitFor(() => expect(openExternal).toHaveBeenCalledWith(external));
+		await userEvent.click(screen.getByRole("button", { name: "Copy URL" }));
+		expect(writeText).toHaveBeenCalledExactlyOnceWith(external);
+		expect(externalUrl).toHaveBeenCalledWith("h_workbox", url);
+		externalUrl.mockRestore();
+		openExternal.mockRestore();
+		writeText.mockRestore();
+	});
+
+	it.each([
+		["a page on the host's own localhost", "http://localhost:3000/settings", "R1"],
+		["its viewer, before the first report", "https://ao-preview-0123456789abcdef0123456789abcdef.localhost:41000/v/cdp?embed=1", ""],
+	])("disables Open in System Browser on an agent tab showing %s, and says why", async (_case, url, tabId) => {
+		hookState.navState = { ...hookState.navState, url };
+		const agentTab = { id: "a1", url, title: "", active: true, remote: { tabId } };
+		hookState.tabs = [agentTab];
+		const openExternal = vi.spyOn(window.ao!.app, "openExternal").mockResolvedValue(undefined);
+		const writeText = vi.spyOn(window.ao!.clipboard, "writeText").mockResolvedValue(undefined);
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={{ ...session, hostId: "h_workbox" }} />);
+
+		const open = screen.getByRole("button", { name: /open in system browser/i });
+		expect(open).toHaveAttribute("aria-disabled", "true");
+		fireEvent.click(open);
+		fireEvent.pointerMove(open, { pointerType: "mouse" });
+		await waitFor(() =>
+			expect(document.querySelector('[data-slot="tooltip-content"]')).toHaveTextContent("This page runs on the remote host"),
+		);
+		expect(openExternal).not.toHaveBeenCalled();
+		// Copy stays: it copies the address as shown.
+		await userEvent.click(screen.getByRole("button", { name: "Copy URL" }));
+		expect(writeText).toHaveBeenCalledExactlyOnceWith(url);
+		openExternal.mockRestore();
+		writeText.mockRestore();
+	});
+
+	it("opens an agent tab's public page in the system browser", async () => {
+		const url = "https://github.com/aoagents/ao";
+		hookState.navState = { ...hookState.navState, url };
+		const agentTab = { id: "a1", url, title: "", active: true, remote: { tabId: "R1" } };
+		hookState.tabs = [agentTab];
+		const openExternal = vi.spyOn(window.ao!.app, "openExternal").mockResolvedValue(undefined);
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={{ ...session, hostId: "h_workbox" }} />);
+
+		const open = screen.getByRole("button", { name: /open in system browser/i });
+		expect(open).not.toHaveAttribute("aria-disabled");
+		fireEvent.click(open);
+		await waitFor(() => expect(openExternal).toHaveBeenCalledWith(url));
+		openExternal.mockRestore();
+	});
+
 	it("keeps secondary browser controls compact until device presets are requested", async () => {
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 
@@ -1458,6 +1518,23 @@ describe("BrowserPanel", () => {
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 
 		expect(screen.getByRole("button", { name: /annotate/i })).toBeDisabled();
+	});
+
+	it("disables annotation mode on an agent tab, whose page is its viewer's picture", async () => {
+		hookState.navState = { ...hookState.navState, url: "https://en.wikipedia.org/wiki/Starfish" };
+		const agentTab = { id: "a1", url: "https://en.wikipedia.org/wiki/Starfish", title: "Starfish", active: true, remote: { tabId: "R1" } };
+		hookState.tabs = [agentTab];
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		const button = screen.getByRole("button", { name: /annotate/i });
+		expect(button).toBeDisabled();
+		// The tooltip says why.
+		fireEvent.pointerMove(button.closest('[data-slot="tooltip-trigger"]')!, { pointerType: "mouse" });
+		await waitFor(() =>
+			expect(document.querySelector('[data-slot="tooltip-content"]')).toHaveTextContent(
+				"Annotate works in your tabs, not the agent's",
+			),
+		);
 	});
 
 	it("adds an annotation control row below the tab row while keeping tabs visible", async () => {
