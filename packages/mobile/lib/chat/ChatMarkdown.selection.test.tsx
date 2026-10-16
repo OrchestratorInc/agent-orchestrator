@@ -5,7 +5,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST
 
 const { platform, theme } = vi.hoisted(() => ({
 	platform: { OS: "ios" },
-	theme: { accent: "#f4f5f7", accentBorder: "rgba(244,245,247,0.28)" },
+	theme: { accent: "#f4f5f7", accentBorder: "rgba(244,245,247,0.28)", highlight: "#79b0dc" },
 }));
 
 vi.mock("react-native", () => ({
@@ -148,7 +148,7 @@ it("lets readers select response prose in every rendered Markdown block", () => 
 		expect(rangeSelectableText, `${response} should support native range selection on iOS`).toContain(response);
 	}
 	for (const node of renderer.root.findAll((node) => node.props.uiTextView === true)) {
-		expect(node.props.selectionColor).toBe(theme.accent);
+		expect(node.props.selectionColor).toBe(theme.highlight);
 	}
 
 	act(() => renderer.unmount());

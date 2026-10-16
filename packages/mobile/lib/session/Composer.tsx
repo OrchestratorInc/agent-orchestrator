@@ -52,7 +52,7 @@ export function Composer({
 					placeholderTextColor={t.textFaint}
 					multiline
 					keyboardAppearance={scheme}
-					selectionColor={t.accent}
+					selectionColor={t.highlight}
 					// No autoFocus: the bar is always mounted now, so focusing on mount
 					// would pop the keyboard over the terminal every time the screen opens.
 				/>

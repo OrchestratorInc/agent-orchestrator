@@ -14,7 +14,7 @@ export function SpawnPromptInput({ value, onChangeText, height = 112 }: SpawnPro
 			onChangeText={onChangeText}
 			placeholder="What should this worker do?"
 			placeholderTextColor={t.textTertiary}
-			selectionColor={t.accent}
+			selectionColor={t.highlight}
 			keyboardAppearance={scheme}
 			multiline
 			scrollEnabled

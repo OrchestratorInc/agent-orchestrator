@@ -141,7 +141,7 @@ export function ManualConnectSheet({ onConnected, editingHost, editingEndpointIn
 						onChangeText={set("password")}
 						placeholder="Connection password"
 						placeholderTextColor={t.textFaint}
-						selectionColor={t.accent}
+						selectionColor={t.highlight}
 						autoCapitalize="none"
 						autoCorrect={false}
 						secureTextEntry={!showPassword}
@@ -236,7 +236,7 @@ function Field({ label, ...input }: { label: string } & React.ComponentProps<typ
 	return (
 		<View style={styles.field}>
 			<Text style={styles.fieldLabel}>{label}</Text>
-			<TextInput {...input} style={styles.input} placeholderTextColor={t.textFaint} selectionColor={t.accent} />
+			<TextInput {...input} style={styles.input} placeholderTextColor={t.textFaint} selectionColor={t.highlight} />
 		</View>
 	);
 }

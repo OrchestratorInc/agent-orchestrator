@@ -1,5 +1,14 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { DEFAULT_PREFERENCE, isThemePreference, THEME_KEY, type ThemePreference } from "./themePreference";
+import {
+	DEFAULT_PREFERENCE,
+	DEFAULT_THEME_STYLE,
+	isThemePreference,
+	isThemeStyle,
+	THEME_KEY,
+	THEME_STYLE_KEY,
+	type ThemePreference,
+	type ThemeStyle,
+} from "./themePreference";
 
 // Storage side of the theme preference. Split from themePreference.ts so the
 // decision logic there stays free of React Native imports and unit-testable —
@@ -23,5 +32,23 @@ export async function saveThemePreference(preference: ThemePreference): Promise<
 		await AsyncStorage.setItem(THEME_KEY, preference);
 	} catch {
 		/* a lost preference only means the picker resets next launch */
+	}
+}
+
+/** Never throws; an unknown or retired theme id reads as the default. */
+export async function loadThemeStyle(): Promise<ThemeStyle> {
+	try {
+		const raw = await AsyncStorage.getItem(THEME_STYLE_KEY);
+		return isThemeStyle(raw) ? raw : DEFAULT_THEME_STYLE;
+	} catch {
+		return DEFAULT_THEME_STYLE;
+	}
+}
+
+export async function saveThemeStyle(style: ThemeStyle): Promise<void> {
+	try {
+		await AsyncStorage.setItem(THEME_STYLE_KEY, style);
+	} catch {
+		/* a lost choice only means the picker resets next launch */
 	}
 }

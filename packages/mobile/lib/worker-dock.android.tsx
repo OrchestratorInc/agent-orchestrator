@@ -34,7 +34,7 @@ export function WorkerDock({
 						onChangeText={onQueryChange}
 						placeholder="Search workers"
 						placeholderTextColor={t.textTertiary}
-						selectionColor={t.accent}
+						selectionColor={t.highlight}
 						autoFocus
 						autoCapitalize="none"
 						autoCorrect={false}
