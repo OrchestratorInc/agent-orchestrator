@@ -8,11 +8,13 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// The daemon's background pipeline prunes the raw deltas of a long-settled turn
-// on its first pass and stops with the context, before the store would close.
+// The daemon's background pipeline prunes the raw message deltas of a
+// long-settled turn on its first pass and stops with the context, before the
+// store would close.
 func TestStartCDCPrunesSettledArchiveDeltas(t *testing.T) {
 	ctx := context.Background()
 	store := sqlitetest.MustOpen(t)
@@ -55,6 +57,9 @@ func TestStartCDCPrunesSettledArchiveDeltas(t *testing.T) {
 		}
 	}
 
+	saved := archiveRetentionConfig
+	archiveRetentionConfig = chatsvc.ArchiveRetentionConfig{FirstDelay: time.Millisecond}
+	t.Cleanup(func() { archiveRetentionConfig = saved })
 	runCtx, cancel := context.WithCancel(ctx)
 	pipe, err := startCDC(runCtx, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {

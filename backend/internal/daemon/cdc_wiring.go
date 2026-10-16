@@ -22,6 +22,10 @@ type cdcPipeline struct {
 	archiveRetentionDone <-chan struct{}
 }
 
+// archiveRetentionConfig is the archive janitor's configuration; production uses
+// the defaults, and tests shorten the first-pass delay.
+var archiveRetentionConfig chatsvc.ArchiveRetentionConfig
+
 // startCDC seeks the poller to the current head and starts its loop. It stops
 // when ctx is cancelled; Stop waits for it to drain.
 func startCDC(ctx context.Context, store *sqlite.Store, logger *slog.Logger) (*cdcPipeline, error) {
@@ -31,7 +35,9 @@ func startCDC(ctx context.Context, store *sqlite.Store, logger *slog.Logger) (*c
 		return nil, err
 	}
 	janitor := cdc.NewRetentionJanitor(store, cdc.RetentionConfig{Logger: logger})
-	archiveJanitor := chatsvc.NewArchiveRetention(store, chatsvc.ArchiveRetentionConfig{Logger: logger})
+	archiveConfig := archiveRetentionConfig
+	archiveConfig.Logger = logger
+	archiveJanitor := chatsvc.NewArchiveRetention(store, archiveConfig)
 	return &cdcPipeline{
 		Broadcaster:          bcast,
 		done:                 poller.Start(ctx),

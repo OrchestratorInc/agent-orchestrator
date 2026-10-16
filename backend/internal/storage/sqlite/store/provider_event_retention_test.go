@@ -16,7 +16,33 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-const retentionDay = 24 * time.Hour
+const (
+	retentionDay    = 24 * time.Hour
+	retentionWindow = 2000
+)
+
+// retentionFixture is conversationFixture on a known data dir, so a test can
+// open the same database again.
+func retentionFixture(t *testing.T, dir string) (*sqlite.Store, domain.SessionID, string) {
+	t.Helper()
+	s := sqlitetest.MustOpenAt(t, dir)
+	ctx := context.Background()
+	seedProject(t, s, "hist")
+	rec := sampleRecord("hist")
+	rec.Mode = domain.SessionModeChat
+	session, err := s.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	conversation, err := s.CreateConversation(ctx, "conv-1", domain.ConversationScopeSession, "hist", session.ID, histClock)
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	if err := s.ClaimChatControllerGeneration(ctx, session.ID, "gen-1"); err != nil {
+		t.Fatalf("claim controller generation: %v", err)
+	}
+	return s, session.ID, conversation.ID
+}
 
 // archiveEvent archives one provider event through the production path, with
 // the projection a controller would apply, so snapshots read as they do live.
@@ -87,20 +113,34 @@ func archivedRows(t *testing.T, s *sqlite.Store, conversation string) []archived
 	return rows
 }
 
-func pruneDeltas(t *testing.T, s *sqlite.Store, settledBefore time.Time, limit int64) int64 {
+func pruneStep(t *testing.T, s *sqlite.Store, settledBefore time.Time, window, limit int64) (int64, bool) {
 	t.Helper()
-	deleted, err := s.PruneSettledProviderDeltas(context.Background(), settledBefore, limit)
+	deleted, caughtUp, _, err := s.PruneSettledProviderDeltas(context.Background(), settledBefore, window, limit)
 	if err != nil {
 		t.Fatalf("prune settled deltas: %v", err)
 	}
-	return deleted
+	return deleted, caughtUp
 }
 
-// Only streamed message and reasoning text without a provider event id is
-// deleted. Every other row either deduplicates a provider replay (any row with
-// an id), carries output no settled event restates (command output), or is the
-// settled record itself.
-func TestPruneSettledProviderDeltasDeletesOnlyAnonymousTextDeltas(t *testing.T) {
+// pruneAll steps the cursor until it has caught up and returns the rows deleted.
+func pruneAll(t *testing.T, s *sqlite.Store, settledBefore time.Time) int64 {
+	t.Helper()
+	var total int64
+	for range 100 {
+		deleted, caughtUp := pruneStep(t, s, settledBefore, retentionWindow, 100)
+		total += deleted
+		if caughtUp {
+			return total
+		}
+	}
+	t.Fatal("prune never caught up")
+	return 0
+}
+
+// Only streamed message text without a provider event id is deleted. A row with
+// an id deduplicates a provider replay; reasoning and command output are not
+// fully restated by their settled events; every other row is the settled record.
+func TestPruneSettledProviderDeltasDeletesOnlyAnonymousMessageDeltas(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
 	now := histClock.Add(40 * retentionDay)
@@ -131,11 +171,12 @@ func TestPruneSettledProviderDeltasDeletesOnlyAnonymousTextDeltas(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	if deleted := pruneDeltas(t, s, settledBefore, 100); deleted != 3 {
-		t.Fatalf("deleted = %d, want the 3 anonymous message and reasoning deltas of the old turn", deleted)
+	if deleted := pruneAll(t, s, settledBefore); deleted != 2 {
+		t.Fatalf("deleted = %d, want the 2 anonymous message deltas of the old turn", deleted)
 	}
 	want := []archivedRow{
 		{"activity.started", ""},
+		{"reasoning.delta", ""},
 		{"message.delta", "acp-host:h:1"},
 		{"reasoning.delta", "acp-history:h"},
 		{"command.output.delta", ""},
@@ -154,15 +195,16 @@ func TestPruneSettledProviderDeltasDeletesOnlyAnonymousTextDeltas(t *testing.T) 
 	if !reflect.DeepEqual(before, after) {
 		t.Fatalf("snapshot changed by pruning:\nbefore %+v\nafter  %+v", before, after)
 	}
-	if deleted := pruneDeltas(t, s, settledBefore, 100); deleted != 0 {
+	if deleted := pruneAll(t, s, settledBefore); deleted != 0 {
 		t.Fatalf("second prune deleted %d rows, want 0", deleted)
 	}
 }
 
-// A turn's deltas stay until that turn, and every turn requested before them in
-// the conversation, has been settled for the whole window.
-func TestPruneSettledProviderDeltasWaitsForTheWholeWindowAfterSettlement(t *testing.T) {
-	s, session, conversation := conversationFixture(t)
+// A delta whose turn is still open when the cursor passes it stays for good,
+// across a restart and after the turn settles: the safe direction.
+func TestPruneSettledProviderDeltasKeepsADeltaPassedWhileItsTurnWasOpen(t *testing.T) {
+	dir := t.TempDir()
+	s, session, conversation := retentionFixture(t, dir)
 	settledBefore := histClock.Add(26 * retentionDay)
 
 	openRetentionTurn(t, s, conversation, session, "first", histClock)
@@ -173,45 +215,74 @@ func TestPruneSettledProviderDeltasWaitsForTheWholeWindowAfterSettlement(t *test
 	openRetentionTurn(t, s, conversation, session, "stuck", stuckAt)
 	archiveEvent(t, s, conversation, session, "", "message.delta", "provider-stuck", "stuck-answer", "b", stuckAt.Add(time.Second))
 
-	if deleted := pruneDeltas(t, s, settledBefore, 100); deleted != 1 {
+	if deleted := pruneAll(t, s, settledBefore); deleted != 1 {
 		t.Fatalf("deleted = %d, want only the settled turn's delta", deleted)
 	}
-	stuckDelta := []archivedRow{{"turn.completed", ""}, {"message.delta", ""}}
-	if got := archivedRows(t, s, conversation); !reflect.DeepEqual(got, stuckDelta) {
-		t.Fatalf("archive = %v, want the unsettled turn's delta kept: %v", got, stuckDelta)
+	kept := []archivedRow{{"turn.completed", ""}, {"message.delta", ""}}
+	if got := archivedRows(t, s, conversation); !reflect.DeepEqual(got, kept) {
+		t.Fatalf("archive = %v, want the open turn's delta kept: %v", got, kept)
 	}
 
-	// Settled one day inside the window: still kept.
 	archiveEvent(t, s, conversation, session, "", "turn.completed", "provider-stuck", "", "", settledBefore.Add(retentionDay))
-	if deleted := pruneDeltas(t, s, settledBefore, 100); deleted != 0 {
-		t.Fatalf("deleted %d rows of a turn settled inside the window", deleted)
+	reopened, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
 	}
-	// Once that settlement is older than the window, the delta goes.
-	if deleted := pruneDeltas(t, s, settledBefore.Add(2*retentionDay), 100); deleted != 1 {
-		t.Fatalf("deleted = %d after the window passed, want 1", deleted)
+	t.Cleanup(func() { _ = reopened.Close() })
+	if deleted := pruneAll(t, reopened, settledBefore.Add(30*retentionDay)); deleted != 0 {
+		t.Fatalf("deleted %d rows the persisted cursor had already passed", deleted)
+	}
+	kept = append(kept, archivedRow{"turn.completed", ""})
+	if got := archivedRows(t, reopened, conversation); !reflect.DeepEqual(got, kept) {
+		t.Fatalf("archive = %v, want %v", got, kept)
 	}
 }
 
-// Arrival time bounds the window too: a delta that arrived after the cutoff is
-// kept even when no turn is open around it.
-func TestPruneSettledProviderDeltasKeepsDeltasYoungerThanTheWindow(t *testing.T) {
+// The cursor stops at the first delta younger than the window and resumes there
+// once it ages, so nothing behind it is skipped.
+func TestPruneSettledProviderDeltasStopsAtTheFirstYoungDeltaAndResumes(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	settledBefore := histClock.Add(26 * retentionDay)
 	openRetentionTurn(t, s, conversation, session, "turn", histClock)
 	archiveEvent(t, s, conversation, session, "", "message.delta", "provider-turn", "answer", "old", histClock.Add(time.Second))
 	archiveEvent(t, s, conversation, session, "", "turn.completed", "provider-turn", "", "", histClock.Add(2*time.Second))
 	archiveEvent(t, s, conversation, session, "", "message.delta", "provider-turn", "answer", " late", settledBefore.Add(time.Second))
+	archiveEvent(t, s, conversation, session, "", "message.delta", "provider-turn", "answer", " later", settledBefore.Add(2*time.Second))
 
-	if deleted := pruneDeltas(t, s, settledBefore, 100); deleted != 1 {
-		t.Fatalf("deleted = %d, want only the delta older than the window", deleted)
+	deleted, caughtUp := pruneStep(t, s, settledBefore, retentionWindow, 100)
+	if deleted != 1 || !caughtUp {
+		t.Fatalf("first step = (%d, %v), want (1, true): stop at the first young delta", deleted, caughtUp)
 	}
-	want := []archivedRow{{"turn.completed", ""}, {"message.delta", ""}}
-	if got := archivedRows(t, s, conversation); !reflect.DeepEqual(got, want) {
-		t.Fatalf("archive = %v, want %v", got, want)
+	if got := pruneAll(t, s, settledBefore); got != 0 {
+		t.Fatalf("deleted %d young rows", got)
+	}
+	if got := pruneAll(t, s, settledBefore.Add(retentionDay)); got != 2 {
+		t.Fatalf("deleted %d once the young deltas aged, want 2", got)
+	}
+	if got := archivedRows(t, s, conversation); !reflect.DeepEqual(got, []archivedRow{{"turn.completed", ""}}) {
+		t.Fatalf("archive = %v", got)
 	}
 }
 
-func TestPruneSettledProviderDeltasDeletesAtMostLimitOldestFirst(t *testing.T) {
+// The cursor never moves past the newest archive row, so rows written after it
+// caught up are still visited.
+func TestPruneSettledProviderDeltasVisitsRowsAddedAfterItCaughtUp(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	settledBefore := histClock.Add(26 * retentionDay)
+	openRetentionTurn(t, s, conversation, session, "turn", histClock)
+	archiveEvent(t, s, conversation, session, "", "message.delta", "provider-turn", "answer", "a", histClock.Add(time.Second))
+	archiveEvent(t, s, conversation, session, "", "turn.completed", "provider-turn", "", "", histClock.Add(2*time.Second))
+	if got := pruneAll(t, s, settledBefore); got != 1 {
+		t.Fatalf("first prune deleted %d, want 1", got)
+	}
+	archiveEvent(t, s, conversation, session, "", "message.delta", "provider-turn", "answer", "b", histClock.Add(3*time.Second))
+	if got := pruneAll(t, s, settledBefore); got != 1 {
+		t.Fatalf("prune after new rows deleted %d, want 1", got)
+	}
+}
+
+// Each call deletes at most limit rows and visits at most window ids.
+func TestPruneSettledProviderDeltasBoundsEachStep(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	openRetentionTurn(t, s, conversation, session, "turn", histClock)
 	for i := range 5 {
@@ -221,32 +292,57 @@ func TestPruneSettledProviderDeltasDeletesAtMostLimitOldestFirst(t *testing.T) {
 	archiveEvent(t, s, conversation, session, "", "turn.completed", "provider-turn", "", "", histClock.Add(time.Minute))
 	settledBefore := histClock.Add(30 * retentionDay)
 
-	var batches []int64
-	for range 4 {
-		batches = append(batches, pruneDeltas(t, s, settledBefore, 2))
+	type step struct {
+		deleted  int64
+		caughtUp bool
 	}
-	if !slices.Equal(batches, []int64{2, 2, 1, 0}) {
-		t.Fatalf("batches = %v, want [2 2 1 0]", batches)
+	var byLimit []step
+	for range 3 {
+		deleted, caughtUp := pruneStep(t, s, settledBefore, retentionWindow, 2)
+		byLimit = append(byLimit, step{deleted, caughtUp})
+	}
+	if want := []step{{2, false}, {2, false}, {1, true}}; !slices.Equal(byLimit, want) {
+		t.Fatalf("steps with limit 2 = %v, want %v", byLimit, want)
+	}
+
+	s2, session2, conversation2 := conversationFixture(t)
+	openRetentionTurn(t, s2, conversation2, session2, "turn", histClock)
+	for i := range 5 {
+		archiveEvent(t, s2, conversation2, session2, "", "message.delta", "provider-turn", "answer",
+			strings.Repeat("x", i+1), histClock.Add(time.Duration(i+1)*time.Second))
+	}
+	archiveEvent(t, s2, conversation2, session2, "", "turn.completed", "provider-turn", "", "", histClock.Add(time.Minute))
+	var byWindow []step
+	for range 3 {
+		deleted, caughtUp := pruneStep(t, s2, settledBefore, 2, 100)
+		byWindow = append(byWindow, step{deleted, caughtUp})
+	}
+	if want := []step{{2, false}, {2, false}, {1, true}}; !slices.Equal(byWindow, want) {
+		t.Fatalf("steps with a 2-id window = %v, want %v", byWindow, want)
 	}
 }
 
-// execPlanRecorder explains each statement before running it, so the assertion
-// is on the statement sqlc compiled in rather than on a copy of its text.
-type execPlanRecorder struct {
+// planRecordingDB explains every statement before running it, so the assertion
+// is on the statements sqlc compiled in rather than on a copy of their text.
+type planRecordingDB struct {
 	gen.DBTX
 	t     *testing.T
 	plans []string
 }
 
-func (r *execPlanRecorder) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	r.t.Helper()
+func (r *planRecordingDB) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	r.explain(ctx, query, args)
+	return r.DBTX.QueryContext(ctx, query, args...)
+}
+
+func (r *planRecordingDB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	r.explain(ctx, query, args)
 	return r.DBTX.ExecContext(ctx, query, args...)
 }
 
-func (r *execPlanRecorder) explain(ctx context.Context, query string, args []any) {
+func (r *planRecordingDB) explain(ctx context.Context, query string, args []any) {
 	r.t.Helper()
-	rows, err := r.QueryContext(ctx, "EXPLAIN QUERY PLAN "+query, args...)
+	rows, err := r.DBTX.QueryContext(ctx, "EXPLAIN QUERY PLAN "+query, args...)
 	if err != nil {
 		r.t.Fatalf("explain query plan: %v", err)
 	}
@@ -264,9 +360,9 @@ func (r *execPlanRecorder) explain(ctx context.Context, query string, args []any
 	}
 }
 
-// Each batch holds the single writer, so finding its rows must not read the
-// rest of the archive: the candidates come from the partial index, oldest first.
-func TestPruneSettledProviderDeltasReadsOnlyTheDeltaIndex(t *testing.T) {
+// The reader seeks a bounded rowid range, and the writer deletes by rowid with
+// the turn check on the turns index: neither reads the rest of the archive.
+func TestPruneSettledProviderDeltasSeeksARowidRange(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
 	_ = sqlitetest.MustOpenAt(t, dataDir)
@@ -275,18 +371,29 @@ func TestPruneSettledProviderDeltasReadsOnlyTheDeltaIndex(t *testing.T) {
 		t.Fatalf("open raw sqlite: %v", err)
 	}
 	t.Cleanup(func() { _ = raw.Close() })
-	recorder := &execPlanRecorder{DBTX: raw, t: t}
-	if _, err := gen.New(recorder).PruneSettledProviderEventDeltas(ctx, gen.PruneSettledProviderEventDeltasParams{
-		SettledBefore: sql.NullTime{Time: histClock, Valid: true},
-		BatchLimit:    10,
+	recorder := &planRecordingDB{DBTX: raw, t: t}
+	q := gen.New(recorder)
+	if _, err := q.SelectProviderEventRetentionWindow(ctx, gen.SelectProviderEventRetentionWindowParams{
+		AfterID: 0, ThroughID: retentionWindow, RowLimit: 100,
 	}); err != nil {
-		t.Fatalf("prune: %v", err)
+		t.Fatalf("window: %v", err)
 	}
-	plan := strings.Join(recorder.plans, "\n")
-	if !strings.Contains(plan, "USING INDEX idx_conversation_provider_events_anonymous_deltas (received_at<?)") {
-		t.Errorf("prune does not search the anonymous-delta index:\n%s", plan)
+	window := strings.Join(recorder.plans, "\n")
+	recorder.plans = nil
+	if _, err := q.DeleteSettledProviderMessageDeltas(ctx, gen.DeleteSettledProviderMessageDeltasParams{
+		SettledBefore: histClock, Ids: []int64{1, 2},
+	}); err != nil {
+		t.Fatalf("delete: %v", err)
 	}
-	if strings.Contains(plan, "SCAN delta") || strings.Contains(plan, "USE TEMP B-TREE FOR ORDER BY") {
-		t.Errorf("prune scans or sorts the archive:\n%s", plan)
+	del := strings.Join(recorder.plans, "\n")
+	if !strings.Contains(window, "SEARCH conversation_provider_events USING INTEGER PRIMARY KEY (rowid>? AND rowid<?)") {
+		t.Errorf("window does not seek a rowid range:\n%s", window)
+	}
+	if !strings.Contains(del, "USING INTEGER PRIMARY KEY (rowid=?)") ||
+		!strings.Contains(del, "USING INDEX idx_conversation_turns_conversation (conversation_id=? AND requested_at<?)") {
+		t.Errorf("delete does not go by rowid with the turn check on its index:\n%s", del)
+	}
+	if strings.Contains(window+del, "SCAN conversation_provider_events") {
+		t.Errorf("prune scans the archive:\n%s\n%s", window, del)
 	}
 }

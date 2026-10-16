@@ -1587,35 +1587,54 @@ INSERT OR IGNORE INTO conversation_provider_events (
 );
 
 -- Retention for the archive above, the one delete it allows besides cascades. It
--- removes only streamed message and reasoning deltas that carry no provider event
--- id:
+-- removes only streamed message deltas that carry no provider event id:
 --   * a row with an id is what deduplicates a replay of that event (a persistent
 --     host replaying an unacknowledged prompt, a native history import run
 --     again), so deleting it would apply the replayed text twice;
 --   * a row without one is never deduplicated, and once its turn settled the
---     projection holds its text (message.completed / the reasoning settle);
---   * command output is kept: past the projection's cap only the deltas hold it.
--- A row is eligible once it arrived before settled_before and every turn its
+--     message row holds its text (message.completed replaces it with the
+--     settled text; deltas append uncapped and create the row on first sight);
+--   * reasoning and command output deltas are kept: their projections are capped
+--     and drop deltas that arrive before the item exists, so the deltas can hold
+--     text nothing else does.
+-- The pass walks the archive in id order behind a persisted cursor: the reader
+-- seeks a bounded rowid window, the writer deletes the eligible rows and moves
+-- the cursor in one transaction.
+
+-- name: SelectProviderEventRetentionCursor :one
+SELECT pruned_through_id FROM conversation_provider_event_retention WHERE id = 1;
+
+-- name: MaxConversationProviderEventID :one
+SELECT CAST(COALESCE(MAX(id), 0) AS INTEGER) AS id FROM conversation_provider_events;
+
+-- name: SelectProviderEventRetentionWindow :many
+SELECT id, received_at FROM conversation_provider_events
+WHERE id > sqlc.arg(after_id) AND id <= sqlc.arg(through_id)
+  AND provider_event_id = '' AND method = 'message.delta'
+ORDER BY id
+LIMIT sqlc.arg(row_limit);
+
+-- A row is deleted once it arrived before settled_before and every turn its
 -- conversation requested by then had completed before settled_before, which
--- covers the turn it belongs to. Oldest first, at most batch_limit rows.
--- name: PruneSettledProviderEventDeltas :execrows
+-- covers the turn it belongs to. The id list stays last: sqlc numbers named
+-- arguments, and a slice expanded ahead of them would take their numbers.
+-- name: DeleteSettledProviderMessageDeltas :execrows
 DELETE FROM conversation_provider_events
-WHERE id IN (
-    SELECT delta.id
-    FROM conversation_provider_events AS delta
-    LEFT JOIN (
-        SELECT turn.conversation_id, MIN(turn.requested_at) AS since
-        FROM conversation_turns AS turn
-        WHERE turn.completed_at IS NULL OR turn.completed_at >= sqlc.arg(settled_before)
-        GROUP BY turn.conversation_id
-    ) AS unsettled ON unsettled.conversation_id = delta.conversation_id
-    WHERE delta.provider_event_id = ''
-      AND delta.method IN ('message.delta', 'reasoning.delta')
-      AND delta.received_at < sqlc.arg(settled_before)
-      AND (unsettled.since IS NULL OR delta.received_at < unsettled.since)
-    ORDER BY delta.received_at
-    LIMIT sqlc.arg(batch_limit)
-);
+WHERE conversation_provider_events.received_at < sqlc.arg(settled_before)
+  AND NOT EXISTS (
+      SELECT 1 FROM conversation_turns AS turn
+      WHERE turn.conversation_id = conversation_provider_events.conversation_id
+        AND turn.requested_at <= conversation_provider_events.received_at
+        AND (turn.completed_at IS NULL OR turn.completed_at >= sqlc.arg(settled_before))
+  )
+  AND conversation_provider_events.provider_event_id = ''
+  AND conversation_provider_events.method = 'message.delta'
+  AND conversation_provider_events.id IN (sqlc.slice('ids'));
+
+-- name: AdvanceProviderEventRetentionCursor :execrows
+UPDATE conversation_provider_event_retention
+SET pruned_through_id = sqlc.arg(through_id)
+WHERE id = 1 AND pruned_through_id = sqlc.arg(after_id);
 
 -- name: SelectConversationProviderEvents :many
 WITH RECURSIVE active_path(branch_id, max_sequence) AS (

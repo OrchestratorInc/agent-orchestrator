@@ -5,36 +5,51 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
-type fakeArchiveRetentionStore struct {
-	results []int64
-	err     error
-	cutoffs []time.Time
-	limits  []int64
-	called  chan struct{}
+type pruneResult struct {
+	deleted  int64
+	caughtUp bool
 }
 
-func (s *fakeArchiveRetentionStore) PruneSettledProviderDeltas(_ context.Context, settledBefore time.Time, limit int64) (int64, error) {
+type fakeArchiveRetentionStore struct {
+	mu      sync.Mutex
+	results []pruneResult
+	repeat  *pruneResult
+	err     error
+	cutoffs []time.Time
+	windows []int64
+	limits  []int64
+}
+
+func (s *fakeArchiveRetentionStore) PruneSettledProviderDeltas(_ context.Context, settledBefore time.Time, window, limit int64) (int64, bool, time.Duration, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.cutoffs = append(s.cutoffs, settledBefore)
+	s.windows = append(s.windows, window)
 	s.limits = append(s.limits, limit)
-	if s.called != nil {
-		select {
-		case s.called <- struct{}{}:
-		default:
-		}
-	}
 	if s.err != nil {
-		return 0, s.err
+		return 0, false, 0, s.err
 	}
 	if len(s.results) == 0 {
-		return 0, nil
+		if s.repeat != nil {
+			return s.repeat.deleted, s.repeat.caughtUp, time.Millisecond, nil
+		}
+		return 0, true, 0, nil
 	}
-	n := s.results[0]
+	r := s.results[0]
 	s.results = s.results[1:]
-	return n, nil
+	return r.deleted, r.caughtUp, time.Millisecond, nil
+}
+
+func (s *fakeArchiveRetentionStore) calls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.cutoffs)
 }
 
 var archiveRetentionNow = time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
@@ -45,40 +60,67 @@ func quietArchiveRetention(store ArchiveRetentionStore, cfg ArchiveRetentionConf
 	return NewArchiveRetention(store, cfg)
 }
 
-func TestArchiveRetentionRunOnceStopsAtAShortBatch(t *testing.T) {
-	store := &fakeArchiveRetentionStore{results: []int64{50, 50, 7, 50}}
-	j := quietArchiveRetention(store, ArchiveRetentionConfig{Retention: 14 * 24 * time.Hour, Batch: 50})
+func TestArchiveRetentionRunOnceStopsWhenCaughtUp(t *testing.T) {
+	store := &fakeArchiveRetentionStore{results: []pruneResult{{100, false}, {100, false}, {7, true}, {100, false}}}
+	j := quietArchiveRetention(store, ArchiveRetentionConfig{Retention: 14 * 24 * time.Hour, Window: 500, Batch: 100, Pause: time.Nanosecond})
 
 	if err := j.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(store.cutoffs) != 3 {
-		t.Fatalf("batches = %d, want 3 (the third came back short)", len(store.cutoffs))
+	if store.calls() != 3 {
+		t.Fatalf("steps = %d, want 3 (the third caught up)", store.calls())
 	}
 	want := archiveRetentionNow.Add(-14 * 24 * time.Hour)
 	for i, cutoff := range store.cutoffs {
-		if !cutoff.Equal(want) || store.limits[i] != 50 {
-			t.Fatalf("batch %d = (%v, %d), want (%v, 50)", i, cutoff, store.limits[i], want)
+		if !cutoff.Equal(want) || store.windows[i] != 500 || store.limits[i] != 100 {
+			t.Fatalf("step %d = (%v, %d, %d), want (%v, 500, 100)", i, cutoff, store.windows[i], store.limits[i], want)
 		}
 	}
 }
 
-// A backlog is worked off over several passes; one pass never holds the writer
-// for more than its bounded number of batches.
-func TestArchiveRetentionRunOnceBoundsBatchesPerPass(t *testing.T) {
-	results := make([]int64, 100)
-	for i := range results {
-		results[i] = 10
-	}
-	store := &fakeArchiveRetentionStore{results: results}
-	j := quietArchiveRetention(store, ArchiveRetentionConfig{Batch: 10})
+// Streaming writes get the writer back between batches: the janitor waits after
+// every batch that deleted rows, and not after a window that had nothing to do.
+func TestArchiveRetentionRunOncePausesAfterEachDeletingBatch(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := &fakeArchiveRetentionStore{results: []pruneResult{{100, false}, {0, false}, {100, false}, {5, true}}}
+		j := quietArchiveRetention(store, ArchiveRetentionConfig{Pause: 150 * time.Millisecond})
+		start := time.Now()
+		if err := j.RunOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if elapsed := time.Since(start); elapsed != 300*time.Millisecond {
+			t.Fatalf("pass took %v, want two 150ms pauses", elapsed)
+		}
+	})
+}
 
-	if err := j.RunOnce(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(store.cutoffs) != defaultArchiveRetentionBatchesPerRun {
-		t.Fatalf("batches = %d, want %d", len(store.cutoffs), defaultArchiveRetentionBatchesPerRun)
-	}
+func TestArchiveRetentionRunOnceStopsWhenCancelledDuringAPause(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := &fakeArchiveRetentionStore{repeat: &pruneResult{100, false}}
+		j := quietArchiveRetention(store, ArchiveRetentionConfig{Pause: time.Second})
+		ctx, cancel := context.WithCancel(context.Background())
+		time.AfterFunc(1500*time.Millisecond, cancel)
+		if err := j.RunOnce(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v, want context.Canceled", err)
+		}
+		if store.calls() != 2 {
+			t.Fatalf("steps = %d, want 2", store.calls())
+		}
+	})
+}
+
+// A backlog is worked off over several passes; one pass is bounded.
+func TestArchiveRetentionRunOnceBoundsStepsPerPass(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := &fakeArchiveRetentionStore{repeat: &pruneResult{100, false}}
+		j := quietArchiveRetention(store, ArchiveRetentionConfig{})
+		if err := j.RunOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if store.calls() != defaultArchiveRetentionStepsPerRun {
+			t.Fatalf("steps = %d, want %d", store.calls(), defaultArchiveRetentionStepsPerRun)
+		}
+	})
 }
 
 func TestArchiveRetentionDefaults(t *testing.T) {
@@ -88,8 +130,8 @@ func TestArchiveRetentionDefaults(t *testing.T) {
 	if err := j.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(store.cutoffs) != 1 {
-		t.Fatalf("batches = %d, want 1", len(store.cutoffs))
+	if store.calls() != 1 {
+		t.Fatalf("steps = %d, want 1", store.calls())
 	}
 	if want := archiveRetentionNow.Add(-DefaultArchiveDeltaRetention); !store.cutoffs[0].Equal(want) {
 		t.Fatalf("cutoff = %v, want %v", store.cutoffs[0], want)
@@ -97,8 +139,9 @@ func TestArchiveRetentionDefaults(t *testing.T) {
 	if DefaultArchiveDeltaRetention != 14*24*time.Hour {
 		t.Fatalf("default retention = %v, want 14 days", DefaultArchiveDeltaRetention)
 	}
-	if store.limits[0] != DefaultArchiveRetentionBatch {
-		t.Fatalf("batch = %d, want %d", store.limits[0], DefaultArchiveRetentionBatch)
+	if store.windows[0] != DefaultArchiveRetentionWindow || store.limits[0] != DefaultArchiveRetentionBatch {
+		t.Fatalf("window/batch = %d/%d, want %d/%d", store.windows[0], store.limits[0],
+			DefaultArchiveRetentionWindow, DefaultArchiveRetentionBatch)
 	}
 }
 
@@ -110,21 +153,31 @@ func TestArchiveRetentionRunOnceReturnsStoreError(t *testing.T) {
 	}
 }
 
-func TestArchiveRetentionStartRunsAtOnceAndStopsWithContext(t *testing.T) {
-	store := &fakeArchiveRetentionStore{called: make(chan struct{}, 1)}
-	j := quietArchiveRetention(store, ArchiveRetentionConfig{Interval: time.Hour})
-	ctx, cancel := context.WithCancel(context.Background())
-	done := j.Start(ctx)
-	select {
-	case <-store.called:
-	case <-time.After(5 * time.Second):
+// The first pass waits for FirstDelay, leaving the writer to boot-time work such
+// as chat resumes and native history imports.
+func TestArchiveRetentionStartWaitsForTheFirstDelay(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := &fakeArchiveRetentionStore{}
+		j := quietArchiveRetention(store, ArchiveRetentionConfig{FirstDelay: 5 * time.Minute, Interval: time.Hour})
+		ctx, cancel := context.WithCancel(context.Background())
+		done := j.Start(ctx)
+
+		time.Sleep(5*time.Minute - time.Second)
+		synctest.Wait()
+		if store.calls() != 0 {
+			t.Fatalf("pass ran %d steps before the first delay", store.calls())
+		}
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		if store.calls() != 1 {
+			t.Fatalf("steps after the first delay = %d, want 1", store.calls())
+		}
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		if store.calls() != 2 {
+			t.Fatalf("steps after one interval = %d, want 2", store.calls())
+		}
 		cancel()
-		t.Fatal("first pass did not run at start")
-	}
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("janitor did not stop after cancellation")
-	}
+		<-done
+	})
 }

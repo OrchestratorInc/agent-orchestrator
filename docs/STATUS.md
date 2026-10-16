@@ -61,10 +61,10 @@ surface (`npm run sqlc`, `npm run api`).
   [the research/evidence note](research/persistent-acp-chat-hosts.md).
 - Durable Chat conversations with project-scoped orchestrator continuity,
   session-scoped worker history, bounded history pages, transactional raw-event
-  archive/projection (raw message and reasoning deltas without a provider event
-  id are pruned 14 days after their turn settles), controller-generation
-  fencing, turns, messages, activities, approvals, structured input, usage,
-  compaction, and rollback.
+  archive/projection (raw message deltas without a provider event id are pruned
+  14 days after their turn settles), controller-generation fencing, turns,
+  messages, activities, approvals, structured input, usage, compaction, and
+  rollback.
 - Chat drivers for the user's installed Codex (native app-server), Claude Code
   (claude-agent-acp), Cursor, OpenCode 1 and 2, Droid, Kimchi, Kimi, Pi, OMP, Qwen, DeepSeek Harness, GitHub Copilot, and
   the built-in Unreal Agent library. Unreal Agent Chat runs on macOS and Linux
