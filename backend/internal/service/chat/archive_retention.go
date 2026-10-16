@@ -22,10 +22,13 @@ const (
 	DefaultArchiveRetentionWindow int64 = 2000
 	// DefaultArchiveRetentionBatch bounds the rows one writer transaction
 	// deletes. Deleted deltas are scattered through the archive, so each costs
-	// page I/O while the transaction holds the single writer.
+	// page I/O while the transaction holds the single writer: on a 3.9 GB
+	// database a 100-row batch held it for a median 12 ms, p99 224 ms, on a
+	// heavily loaded machine.
 	DefaultArchiveRetentionBatch int64 = 100
 	// DefaultArchiveRetentionPause is the wait after a batch that deleted rows,
-	// so streaming writes queued behind it get the writer first.
+	// so streaming writes queued behind it get the writer first (measured: p99
+	// of a concurrent write fell from 203 ms with back-to-back batches to 108 ms).
 	DefaultArchiveRetentionPause           = 150 * time.Millisecond
 	defaultArchiveRetentionStepsPerRun int = 100
 )

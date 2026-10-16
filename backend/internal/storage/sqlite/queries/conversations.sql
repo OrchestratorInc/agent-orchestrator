@@ -1594,13 +1594,13 @@ INSERT OR IGNORE INTO conversation_provider_events (
 --   * a row without one is never deduplicated, and once its turn settled the
 --     message row holds its text (message.completed replaces it with the
 --     settled text; deltas append uncapped and create the row on first sight);
---   * reasoning and command output deltas are kept: their projections are capped
---     and drop deltas that arrive before the item exists, so the deltas can hold
---     text nothing else does.
+--   * reasoning and command output deltas are kept: their streams are capped,
+--     drop deltas that arrive before the item exists, take none once an activity
+--     is cancelled, and reasoning is replaced by a summary on settle or never
+--     settles when interrupted, so the deltas can hold text nothing else does.
 -- The pass walks the archive in id order behind a persisted cursor: the reader
 -- seeks a bounded rowid window, the writer deletes the eligible rows and moves
 -- the cursor in one transaction.
-
 -- name: SelectProviderEventRetentionCursor :one
 SELECT pruned_through_id FROM conversation_provider_event_retention WHERE id = 1;
 
