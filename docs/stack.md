@@ -60,7 +60,13 @@ PRAGMA journal_mode = WAL;
 PRAGMA busy_timeout = 5000;
 PRAGMA foreign_keys = ON;
 PRAGMA synchronous = NORMAL;
+PRAGMA journal_size_limit = 33554432; -- 32 MiB
 ```
+
+`journal_size_limit` is per connection: the writer cuts the `-wal` file back to
+that size when it resets the log. After migrations, `sqlite.Open` also runs
+`PRAGMA optimize=0x10012` on the writer to collect planner statistics; it
+analyzes only tables that lack statistics or changed size about 10x.
 
 ### Config model
 
