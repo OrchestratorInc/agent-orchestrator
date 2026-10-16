@@ -17,7 +17,7 @@ import { HarnessUpdateNotice } from "../components/HarnessUpdateNotice";
 import { TrayRuntime } from "../components/TrayRuntime";
 import { GlobalNewTaskDialog } from "../components/GlobalNewTaskDialog";
 import { GlobalToast } from "../components/GlobalToast";
-import { SettingsPane, SettingsProvider } from "../components/SettingsDialog";
+import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
 import { QuitConfirmDialog } from "../components/QuitConfirmDialog";
 import { ShellTopbar } from "../components/ShellTopbar";
@@ -29,7 +29,8 @@ import { Sidebar } from "../components/Sidebar";
 import type { CreateProjectInput } from "../components/CreateProjectFlow";
 import { useRemoteHosts } from "../hooks/useRemoteHosts";
 import { SidebarProvider } from "../components/ui/sidebar";
-import { TitlebarNav } from "../components/TitlebarNav";
+import { TitlebarNav, useCanGoForward } from "../components/TitlebarNav";
+import { SwipeNavigation } from "../components/SwipeNavigation";
 import { WindowTitlebar } from "../components/WindowTitlebar";
 import { preloadXtermTerminal, TerminalCacheProvider } from "../components/TerminalPane";
 import { scheduleIdle } from "../lib/idle";
@@ -290,6 +291,8 @@ function ShellLayout() {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const router = useRouter();
+	const canGoForward = useCanGoForward();
+	const settingsPage = useSettingsPage();
 	const matchRoute = useMatchRoute();
 	const queryClient = useQueryClient();
 	const { client: cloudClient } = useCloudCp();
@@ -324,6 +327,7 @@ function ShellLayout() {
 	const [workspaceStartupState, setWorkspaceStartupState] = useState<"loading" | "ready" | "error">("loading");
 	const workspaceStartupBaselineRef = useRef(0);
 	const sidebarDragStripRef = useRef<HTMLDivElement>(null);
+	const centerPaneRef = useRef<HTMLDivElement>(null);
 	const prefersReducedMotion = useReducedMotion();
 	const themePreference = useUiStore((state) => state.themePreference);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
@@ -1497,7 +1501,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 						remoteFailedHostIds={remoteFailedHostIds}
 					/>
 					<main className={cn("flex min-w-0 flex-1 flex-col overflow-x-hidden", !sidebarHasLayout && "sidebar-hidden")}>
-						<div className="relative min-h-0 flex-1 overflow-x-hidden">
+						<div className="relative min-h-0 flex-1 overflow-x-hidden" ref={centerPaneRef}>
 							{/* Board/session routes render inside the same inset box the welcome board and settings paint for themselves, so every screen sits within the app's outer boundary. */}
 							<ShellCenter
 								hideShellTopbar={hideShellTopbar}
@@ -1508,6 +1512,12 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 								startingSteps={startingSteps}
 								startingCoderWorkspaceUrl={startingOrchestratorSession?.cloud?.coderWorkspaceUrl}
 							/>
+							<SwipeNavigation containerRef={centerPaneRef} navigation={settingsPage?.navigation ?? {
+								canGoBack: !isHomeRoute && router.history.canGoBack(),
+								canGoForward,
+								back: () => router.history.back(),
+								forward: () => router.history.forward(),
+							}} />
 						</div>
 						</main>
 					</div>
