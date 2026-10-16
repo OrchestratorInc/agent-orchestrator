@@ -52,6 +52,7 @@ func TestNativeMiniMaxACPConformance(t *testing.T) {
 	defer cancel()
 	data, workspace := t.TempDir(), t.TempDir()
 	endpoint := testfixture.New(t)
+	testfixture.CaptureFailureLogs(t, data)
 	env := endpoint.Env()
 	plugin := minimaxcode.New()
 	binding := New(plugin, nil)
@@ -287,6 +288,12 @@ func nativeTurn(ctx context.Context, t *testing.T, conv ports.ChatConversation, 
 func nativeWait(ctx context.Context, t *testing.T, conv ports.ChatConversation, ref ports.ChatTurnRef, handle func(ports.ChatEvent), completed bool) {
 	t.Helper()
 	deltas := 0
+	var tail []string
+	defer func() {
+		if t.Failed() {
+			t.Logf("bounded native event tail: %s", strings.Join(tail, "\n"))
+		}
+	}()
 	for {
 		select {
 		case event, ok := <-conv.Events():
@@ -295,6 +302,10 @@ func nativeWait(ctx context.Context, t *testing.T, conv ports.ChatConversation, 
 			}
 			if event.ProviderTurnID != "" && event.ProviderTurnID != ref.ProviderTurnID {
 				continue
+			}
+			tail = append(tail, testfixture.SafeDiagnostic(fmt.Sprintf("kind=%s state=%s activity=%s/%s summary=%q text=%q detail=%s err=%v", event.Kind, event.TurnState, event.ActivityKind, event.ActivityStatus, event.Summary, event.Text, event.Detail, event.Err), 1200))
+			if len(tail) > 8 {
+				tail = tail[len(tail)-8:]
 			}
 			if handle != nil {
 				handle(event)
@@ -307,7 +318,7 @@ func nativeWait(ctx context.Context, t *testing.T, conv ports.ChatConversation, 
 			}
 			if event.Kind == ports.ChatEventTurnCompleted {
 				if completed && (event.TurnState != domain.TurnStateCompleted || deltas < 2) {
-					t.Fatalf("native stream/settlement failed: state=%s, partial chunks=%d", event.TurnState, deltas)
+					t.Fatalf("native stream/settlement failed: state=%s, partial chunks=%d, error=%s", event.TurnState, deltas, testfixture.SafeDiagnostic(fmt.Sprint(event.Err), 1600))
 				}
 				return
 			}

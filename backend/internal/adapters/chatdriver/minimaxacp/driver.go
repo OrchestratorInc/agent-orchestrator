@@ -62,7 +62,11 @@ func (d *driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 
 func (d *driver) Reconnect(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
 	cfg.FreshIfMissing = false
-	return d.ChatDriver.(ports.ChatDriverReconnector).Reconnect(ctx, cfg)
+	reconnector, ok := d.ChatDriver.(ports.ChatDriverReconnector)
+	if !ok {
+		return nil, fmt.Errorf("%w: MiniMax ACP reconnect is unavailable", ports.ErrChatResumeFailed)
+	}
+	return reconnector.Reconnect(ctx, cfg)
 }
 
 func configure(plugin Plugin) nativeacp.Configure {

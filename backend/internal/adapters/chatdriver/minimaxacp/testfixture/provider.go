@@ -18,6 +18,19 @@ import (
 	"time"
 )
 
+// Provider speaks only the Anthropic stream used by the explicitly
+// configured test model. Tool selection comes from the native request catalog.
+type Provider struct {
+	SourceDir string
+	URL       string
+	home      string
+	t         *testing.T
+	protected string
+	mu        sync.Mutex
+	requests  map[string][]byte
+	counts    map[string]int
+}
+
 // New starts an isolated scripted Anthropic endpoint and writes a native source
 // profile containing only a synthetic key. Cleanup belongs to the calling test.
 func New(t *testing.T) *Provider {
@@ -74,19 +87,6 @@ func SameLinuxProcess(pid int, start string) bool {
 	}
 	fields := strings.Fields(string(b)[end+1:])
 	return len(fields) > 19 && fields[0] != "Z" && fields[19] == start
-}
-
-// Provider speaks only the Anthropic stream used by the explicitly
-// configured test model. Tool selection comes from the native request catalog.
-type Provider struct {
-	SourceDir string
-	URL       string
-	home      string
-	t         *testing.T
-	protected string
-	mu        sync.Mutex
-	requests  map[string][]byte
-	counts    map[string]int
 }
 
 // AssertRequestContains checks the full actual native request for a synthetic marker.
@@ -165,8 +165,12 @@ func (e *Provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	e.requests[prompt] = append([]byte(nil), body...)
 	e.counts[prompt]++
 	e.mu.Unlock()
+	flush, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "native fixture requires a streaming response writer", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
-	flush := w.(http.Flusher)
 	emit := func(name string, data any) {
 		encoded, _ := json.Marshal(data)
 		_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, encoded)
@@ -202,7 +206,7 @@ func (e *Provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			e.t.Error("released native request did not advertise Bash")
 			return
 		}
-		input, _ := json.Marshal(map[string]any{"command": command, "timeout": 60000, "description": "AO controlled native conformance"})
+		input, _ := json.Marshal(map[string]any{"command": command, "timeout": 30, "description": "AO controlled native conformance"})
 		emit("content_block_start", map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "tool_use", "id": "tool-" + strings.TrimSpace(prompt), "name": tool, "input": map[string]any{}}})
 		emit("content_block_delta", map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "input_json_delta", "partial_json": string(input)}})
 		stop = "tool_use"

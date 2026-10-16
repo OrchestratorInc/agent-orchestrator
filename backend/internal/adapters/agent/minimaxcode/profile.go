@@ -287,7 +287,9 @@ func (p *Plugin) CleanupWorkspace(ctx context.Context, cfg ports.WorkspaceHookCo
 	if err != nil {
 		return err
 	}
-	profiles := []struct { path, marker string }{
+	profiles := []struct {
+		path, marker string
+	}{
 		{path, profileMarker},
 		{filepath.Join(cfg.DataDir, "agents", adapterID, "chat", cfg.SessionID), chatProfileMarker},
 	}
