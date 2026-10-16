@@ -70,6 +70,30 @@ describe("createTrayLifecycle openSession", () => {
 		lifecycle.handleRendererReady(eventFrom(window.webContents));
 		expect(window.webContents.send).toHaveBeenCalledWith(TRAY_OPEN_SESSION_CHANNEL, { projectId: "p1", sessionId: "s1" });
 	});
+
+	it("holds the target for the rebuilt shell when the current renderer has crashed", () => {
+		const crashed = { webContents: { isLoading: () => false, isCrashed: () => true, send: vi.fn() } };
+		const replacement = fakeWindow(true);
+		let currentWindow: { webContents: unknown } = crashed;
+		const { lifecycle } = setup({
+			getWindow: () => currentWindow as never,
+			// Focusing a crashed window rebuilds it.
+			focusWindow: () => {
+				currentWindow = replacement;
+			},
+		});
+		lifecycle.openSession({ projectId: "p1", sessionId: "s1" });
+		expect(crashed.webContents.send).not.toHaveBeenCalled();
+		lifecycle.handleRendererReady(eventFrom(replacement.webContents));
+		expect(replacement.webContents.send).toHaveBeenCalledWith(TRAY_OPEN_SESSION_CHANNEL, { projectId: "p1", sessionId: "s1" });
+	});
+
+	it("does not send to a crashed renderer that has not been replaced yet", () => {
+		const crashed = { webContents: { isLoading: () => false, isCrashed: () => true, send: vi.fn() } };
+		const { lifecycle } = setup({ getWindow: () => crashed as never });
+		lifecycle.openSession({ projectId: "p1", sessionId: "s1" });
+		expect(crashed.webContents.send).not.toHaveBeenCalled();
+	});
 });
 
 describe("createTrayLifecycle sender validation", () => {

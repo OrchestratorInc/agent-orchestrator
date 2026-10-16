@@ -10,7 +10,11 @@ export const TRAY_MESSAGE_KEYS = [
 	"tray.show",
 	"tray.quit",
 	"zone.merge",
-	"zone.action"
+	"zone.action",
+	"desktopRecovery.message",
+	"desktopRecovery.detail",
+	"desktopRecovery.reload",
+	"desktopRecovery.later"
 ] as const;
 
 export type TrayMessageKey = (typeof TRAY_MESSAGE_KEYS)[number];
@@ -25,7 +29,11 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"tray.show": "Show Agent Orchestrator",
 		"tray.quit": "Quit AO Completely",
 		"zone.merge": "Ready to merge",
-		"zone.action": "Needs you"
+		"zone.action": "Needs you",
+		"desktopRecovery.message": "The AO window keeps crashing",
+		"desktopRecovery.detail": "Its content process stopped several times in the last 10 minutes, so automatic recovery is paused. Your sessions are still running. Reload the window now, or reopen it later from the menu bar icon.",
+		"desktopRecovery.reload": "Reload Window",
+		"desktopRecovery.later": "Not Now"
 	},
 	"zh-CN": {
 		"tray.untitledSession": "未命名会话",
@@ -36,7 +44,11 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"tray.show": "显示 Agent Orchestrator",
 		"tray.quit": "完全退出 AO",
 		"zone.merge": "可合并",
-		"zone.action": "需要你处理"
+		"zone.action": "需要你处理",
+		"desktopRecovery.message": "AO 窗口反复崩溃",
+		"desktopRecovery.detail": "窗口内容进程在 10 分钟内多次退出，已暂停自动恢复。会话仍在后台运行。可以现在重新加载窗口，也可以稍后从菜单栏图标重新打开。",
+		"desktopRecovery.reload": "重新加载窗口",
+		"desktopRecovery.later": "暂不"
 	},
 	"ja": {
 		"tray.untitledSession": "無題のセッション",
@@ -47,7 +59,11 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"tray.show": "Agent Orchestrator を表示",
 		"tray.quit": "AO を完全に終了",
 		"zone.merge": "マージ準備完了",
-		"zone.action": "対応が必要"
+		"zone.action": "対応が必要",
+		"desktopRecovery.message": "AO ウィンドウのクラッシュが繰り返されています",
+		"desktopRecovery.detail": "ウィンドウのコンテンツプロセスが過去 10 分間に何度も停止したため、自動復旧を一時停止しました。セッションは引き続き実行中です。今すぐウィンドウを再読み込みするか、後でメニューバーのアイコンから開き直してください。",
+		"desktopRecovery.reload": "ウィンドウを再読み込み",
+		"desktopRecovery.later": "後で"
 	},
 	"ko": {
 		"tray.untitledSession": "제목 없는 세션",
@@ -58,7 +74,11 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"tray.show": "Agent Orchestrator 표시",
 		"tray.quit": "AO 완전히 종료",
 		"zone.merge": "병합 준비 완료",
-		"zone.action": "조치 필요"
+		"zone.action": "조치 필요",
+		"desktopRecovery.message": "AO 창이 계속 충돌합니다",
+		"desktopRecovery.detail": "지난 10분 동안 창의 콘텐츠 프로세스가 여러 번 중지되어 자동 복구를 일시 중지했습니다. 세션은 계속 실행 중입니다. 지금 창을 다시 불러오거나 나중에 메뉴 막대 아이콘에서 다시 여세요.",
+		"desktopRecovery.reload": "창 다시 불러오기",
+		"desktopRecovery.later": "나중에"
 	},
 	"es": {
 		"tray.untitledSession": "Sesión sin título",
@@ -69,7 +89,11 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"tray.show": "Mostrar Agent Orchestrator",
 		"tray.quit": "Salir completamente de AO",
 		"zone.merge": "Listo para fusionar",
-		"zone.action": "Te necesita"
+		"zone.action": "Te necesita",
+		"desktopRecovery.message": "La ventana de AO sigue fallando",
+		"desktopRecovery.detail": "Su proceso de contenido se detuvo varias veces en los últimos 10 minutos, así que la recuperación automática está en pausa. Las sesiones siguen en ejecución. Recarga la ventana ahora o vuelve a abrirla más tarde desde el icono de la barra de menús.",
+		"desktopRecovery.reload": "Recargar ventana",
+		"desktopRecovery.later": "Ahora no"
 	},
 	"fr": {
 		"tray.untitledSession": "Session sans titre",
@@ -80,7 +104,11 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"tray.show": "Afficher Agent Orchestrator",
 		"tray.quit": "Quitter complètement AO",
 		"zone.merge": "Prêt à fusionner",
-		"zone.action": "Action requise"
+		"zone.action": "Action requise",
+		"desktopRecovery.message": "La fenêtre d'AO plante à répétition",
+		"desktopRecovery.detail": "Son processus de contenu s'est arrêté plusieurs fois au cours des 10 dernières minutes ; la récupération automatique est donc suspendue. Les sessions continuent de s'exécuter. Rechargez la fenêtre maintenant ou rouvrez-la plus tard depuis l'icône de la barre des menus.",
+		"desktopRecovery.reload": "Recharger la fenêtre",
+		"desktopRecovery.later": "Plus tard"
 	},
 	"de": {
 		"tray.untitledSession": "Unbenannte Sitzung",
@@ -91,7 +119,11 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"tray.show": "Agent Orchestrator anzeigen",
 		"tray.quit": "AO vollständig beenden",
 		"zone.merge": "Bereit zum Mergen",
-		"zone.action": "Ihre Aktion nötig"
+		"zone.action": "Ihre Aktion nötig",
+		"desktopRecovery.message": "Das AO-Fenster stürzt wiederholt ab",
+		"desktopRecovery.detail": "Sein Inhaltsprozess wurde in den letzten 10 Minuten mehrmals beendet, daher ist die automatische Wiederherstellung pausiert. Die Sitzungen laufen weiter. Das Fenster kann jetzt neu geladen oder später über das Symbol in der Menüleiste geöffnet werden.",
+		"desktopRecovery.reload": "Fenster neu laden",
+		"desktopRecovery.later": "Später"
 	},
 	"pt-BR": {
 		"tray.untitledSession": "Sessão sem título",
@@ -102,6 +134,10 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"tray.show": "Mostrar Agent Orchestrator",
 		"tray.quit": "Sair completamente do AO",
 		"zone.merge": "Pronto para merge",
-		"zone.action": "Precisa de você"
+		"zone.action": "Precisa de você",
+		"desktopRecovery.message": "A janela do AO continua falhando",
+		"desktopRecovery.detail": "O processo de conteúdo dela parou várias vezes nos últimos 10 minutos, então a recuperação automática foi pausada. As sessões continuam em execução. Recarregue a janela agora ou reabra-a mais tarde pelo ícone na barra de menus.",
+		"desktopRecovery.reload": "Recarregar janela",
+		"desktopRecovery.later": "Agora não"
 	}
 };
