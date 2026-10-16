@@ -43,9 +43,9 @@ description: Common questions about the current Agent Orchestrator desktop produ
 	<Accordion title="Does Orchestrator upload my source code?">
 		Local sessions use worktrees on your computer. Your coding agents and source-control tools follow their own data policies. Cloud sessions run remotely and require sharing the project content needed for that work.
 
-		Production builds also send product telemetry to PostHog. It can include an installation ID, coarse usage and reliability data, GitHub repository-owner names when you add a project, and your GitHub username when a session starts. PostHog can associate events that share the installation ID with that username. It does not include source code or conversation content, and session recording is disabled.
+		Production builds also send product telemetry to PostHog. It can include an installation ID, coarse usage and reliability data, GitHub repository-owner names when you add a project, and your GitHub username. If you sign in to AO Cloud, it also includes your AO Cloud user ID and the email address of that account, which is set once as a PostHog person property and is never read from git config. PostHog links events from your desktop, daemon, and paired phone to that profile. It does not include source code or conversation content, and session recording is disabled.
 
-		Desktop and daemon telemetry settings, Event reporting consent, and mobile controls have different scopes. See the [telemetry reference](https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/telemetry.md#turn-desktop-and-daemon-telemetry-off).
+		To opt out, turn off Settings > General > Privacy > Share usage analytics. It stops PostHog analytics in the desktop app, the daemon, and a paired phone, and resets the PostHog identity. The separate Event reporting consent and the environment variables have different scopes. See the [telemetry reference](https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/telemetry.md#turn-desktop-and-daemon-telemetry-off).
 	</Accordion>
 
 	<Accordion title="Can I still install Orchestrator from npm?">

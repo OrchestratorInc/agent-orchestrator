@@ -15,14 +15,14 @@ import (
 )
 
 func TestNewTelemetrySink_DefaultsToNoopWhenDisabled(t *testing.T) {
-	sink := newTelemetrySink(config.Config{}, nil, slog.Default())
+	sink, _ := newTelemetrySink(config.Config{}, nil, slog.Default())
 	if _, ok := sink.(telemetryadapter.NoopSink); !ok {
 		t.Fatalf("sink type = %T, want telemetry.NoopSink", sink)
 	}
 }
 
 func TestNewTelemetrySink_MetricsOnlyDoesNotEnableEvents(t *testing.T) {
-	sink := newTelemetrySink(config.Config{Telemetry: config.TelemetryConfig{Metrics: true}}, nil, slog.Default())
+	sink, _ := newTelemetrySink(config.Config{Telemetry: config.TelemetryConfig{Metrics: true}}, nil, slog.Default())
 	if _, ok := sink.(telemetryadapter.NoopSink); !ok {
 		t.Fatalf("sink type = %T, want telemetry.NoopSink when only metrics are enabled", sink)
 	}
@@ -36,7 +36,7 @@ func TestNewTelemetrySink_UsesLocalSQLiteWhenEnabled(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	sink := newTelemetrySink(config.Config{Telemetry: config.TelemetryConfig{Events: true}, DataDir: dataDir}, store, slog.Default())
+	sink, _ := newTelemetrySink(config.Config{Telemetry: config.TelemetryConfig{Events: true}, DataDir: dataDir}, store, slog.Default())
 	local, ok := sink.(*telemetryadapter.LocalSQLiteSink)
 	if !ok {
 		t.Fatalf("sink type = %T, want *telemetry.LocalSQLiteSink", sink)
@@ -52,7 +52,7 @@ func TestNewTelemetrySink_FanoutIncludesPostHogWhenConfigured(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	sink := newTelemetrySink(config.Config{
+	sink, _ := newTelemetrySink(config.Config{
 		DataDir: dataDir,
 		Telemetry: config.TelemetryConfig{
 			Events:      true,

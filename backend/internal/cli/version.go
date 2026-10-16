@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 )
 
 // Build metadata. Release tooling can override these with -ldflags.
@@ -13,6 +15,12 @@ var (
 	Commit  = ""
 	Date    = ""
 )
+
+func init() {
+	if Version != "dev" {
+		config.BuildVersion = Version
+	}
+}
 
 // VersionString renders the build metadata as "<version> commit <c> built <d>",
 // omitting the commit/date parts when they are unset.
