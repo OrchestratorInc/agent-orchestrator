@@ -42,54 +42,12 @@ func TestMain(m *testing.M) {
 // protocol, native tools/history/cancellation and delivered context, not real
 // account authorization, model reasoning, or an actual AO UI journey.
 //
-// AO_NATIVE_MINIMAX_ACP=1 go test -count=1 -timeout=8m ./internal/adapters/chatdriver/minimaxacp -run '^TestNativeMiniMaxACPConformance$'
+// AO_NATIVE_MINIMAX_ACP=1 go test -count=1 -timeout=8m ./internal/adapters/chatdriver/minimaxacp -run '^TestNativeMiniMaxACP(Conformance|ExactRestoreConformance)$'
 // Requires official @minimax-ai/code@0.6.5, Node 24, and Python 3 on Linux.
 func TestNativeMiniMaxACPConformance(t *testing.T) {
-	if os.Getenv("AO_NATIVE_MINIMAX_ACP") != "1" {
-		t.Skip("set AO_NATIVE_MINIMAX_ACP=1 to qualify the released native binary against a controlled loopback endpoint")
-	}
-	ctx, cancel := context.WithTimeout(t.Context(), 6*time.Minute)
-	defer cancel()
-	data, workspace := t.TempDir(), t.TempDir()
-	endpoint := testfixture.New(t)
-	testfixture.CaptureFailureLogs(t, data)
-	env := endpoint.Env()
-	plugin := minimaxcode.New()
-	binding := New(plugin, nil)
-	const id = "native-minimax-acp"
-	t.Cleanup(func() { _ = persistenthost.Shutdown(context.Background(), data, id) })
-	conv, err := binding.Start(ctx, ports.ChatStartConfig{
-		SessionID: id, DataDir: data, WorkspacePath: workspace, Env: env,
-		Model: "custom_provider:ao/native-test", Permissions: ports.PermissionModeDefault,
-		SystemPrompt: "--AO_FIRST_CONTEXT_7061\nPreserve native defaults and project instructions.",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	configurer, ok := conv.(ports.ChatConfigOptionController)
-	if !ok {
-		t.Fatal("native session did not expose its effective permission policy")
-	}
-	controls, err := configurer.ListConfigOptions(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defaultSelected := false
-	for _, control := range controls {
-		if control.ID == "permissionMode" && control.Current.Select == "default" {
-			defaultSelected = true
-		}
-	}
-	if !defaultSelected {
-		t.Fatal("AO default did not select the native default permission policy")
-	}
-	nativeID := conv.ProviderConversationID()
-	if !strings.HasPrefix(nativeID, "mvs_") {
-		t.Fatalf("missing native identity: %q", nativeID)
-	}
-	nativeTurn(ctx, t, conv, "ao-seed", nil)
-	endpoint.AssertRequestContains(t, "ao-seed", "--AO_FIRST_CONTEXT_7061")
-	t.Log("PASS native streaming and initial private context delivery")
+	fixture := startNativeConformance(t, "native-minimax-acp")
+	ctx, conv, endpoint := fixture.ctx, fixture.conv, fixture.endpoint
+	workspace := fixture.resume.WorkspacePath
 	// The isolated source profile contains a supported explicit Bash Ask rule.
 	// Keep approval side effects separate from normal workspace mutation proof.
 	for _, tc := range []struct {
@@ -186,20 +144,40 @@ func TestNativeMiniMaxACPConformance(t *testing.T) {
 	if testfixture.SameLinuxProcess(witness.PID, witness.Start) {
 		t.Fatal("cancel left the exact tool process alive")
 	}
+	// Run this before provider cleanup even if the immediate continuation
+	// fails. The assertion must retain the strict continuation failure while
+	// independently proving that cancellation stopped delayed tool effects.
+	artifactDeadline := time.Now().Add(13 * time.Second)
+	defer func() {
+		if remaining := time.Until(artifactDeadline); remaining > 0 {
+			time.Sleep(remaining)
+		}
+		if _, err := os.Stat(filepath.Join(workspace, "late.txt")); !errors.Is(err, os.ErrNotExist) {
+			t.Error("cancelled native tool produced a delayed side effect")
+			return
+		}
+		t.Log("PASS no delayed side effect after native cancellation")
+	}()
 	nativeWait(ctx, t, conv, ref, nil, false)
+	t.Log("PASS exact active-tool process cancellation and interrupted settlement")
 	nativeTurn(ctx, t, conv, "ao-after-cancel", nil)
-	t.Log("PASS exact active-tool process cancellation and usable continuation")
+	t.Log("PASS usable immediate continuation after native cancellation")
+}
 
+// Restore is independent of cancellation readiness so a failure in one native
+// contract cannot prevent qualification of the other. Both remain required.
+func TestNativeMiniMaxACPExactRestoreConformance(t *testing.T) {
+	fixture := startNativeConformance(t, "native-minimax-acp-restore")
+	ctx, binding, conv, endpoint := fixture.ctx, fixture.binding, fixture.conv, fixture.endpoint
+	resume := fixture.resume
+	id, data, nativeID := resume.SessionID, resume.DataDir, resume.ProviderConversationID
+	var err error
+	nativeTurn(ctx, t, conv, "ao-history", nil)
 	// Replace the provider process, then exact-load the same native history.
 	if err := conv.(ports.ChatProviderHibernator).Hibernate(); err != nil {
 		t.Fatal(err)
 	}
-	resume := ports.ChatResumeConfig{
-		SessionID: id, ProviderConversationID: nativeID, DataDir: data,
-		WorkspacePath: workspace, Env: env, Model: "custom_provider:ao/native-test",
-		Permissions:  ports.PermissionModeDefault,
-		SystemPrompt: "--AO_FRESH_RESTORE_CONTEXT_8102\nPreserve native defaults and project instructions.",
-	}
+	resume.SystemPrompt = "--AO_FRESH_RESTORE_CONTEXT_8102\nPreserve native defaults and project instructions."
 	conv, err = binding.Resume(ctx, resume)
 	if err != nil {
 		t.Fatal(err)
@@ -237,7 +215,7 @@ func TestNativeMiniMaxACPConformance(t *testing.T) {
 			users = append(users, strings.TrimSpace(event.Text))
 		}
 	}
-	if len(users) < 5 || users[0] != "ao-seed" || users[len(users)-1] != "ao-after-cancel" {
+	if len(users) != 2 || users[0] != "ao-seed" || users[1] != "ao-history" {
 		t.Fatalf("native replay lost user order: %q", users)
 	}
 	again, err := conv.(ports.ChatHistoryReader).ReadHistory(ctx)
@@ -273,16 +251,73 @@ func TestNativeMiniMaxACPConformance(t *testing.T) {
 		if !errors.Is(err, ports.ErrChatResumeFailed) {
 			t.Fatalf("invalid exact restore was not refused: %v", err)
 		}
-		_ = persistenthost.Shutdown(ctx, data, id)
+		_ = persistenthost.Shutdown(ctx, data, string(id))
 	}
 	t.Log("PASS native missing-ID and mismatched-workspace restore refusal")
-	// The tool would write its late artifact at 12 seconds. Wait beyond that
-	// deadline to prove stopping the turn did not merely hide running work.
-	time.Sleep(13 * time.Second)
-	if _, err := os.Stat(filepath.Join(workspace, "late.txt")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("cancelled native tool produced a delayed side effect")
+}
+
+type nativeConformanceFixture struct {
+	ctx      context.Context
+	binding  ports.ChatDriver
+	conv     ports.ChatConversation
+	endpoint *testfixture.Provider
+	resume   ports.ChatResumeConfig
+}
+
+func startNativeConformance(t *testing.T, id domain.SessionID) nativeConformanceFixture {
+	t.Helper()
+	if os.Getenv("AO_NATIVE_MINIMAX_ACP") != "1" {
+		t.Skip("set AO_NATIVE_MINIMAX_ACP=1 to qualify the released native binary against a controlled loopback endpoint")
 	}
-	t.Log("PASS no delayed side effect after native cancellation")
+	ctx, cancel := context.WithTimeout(t.Context(), 6*time.Minute)
+	t.Cleanup(cancel)
+	data, workspace := t.TempDir(), t.TempDir()
+	endpoint := testfixture.New(t)
+	testfixture.CaptureFailureLogs(t, data)
+	env := endpoint.Env()
+	plugin := minimaxcode.New()
+	binding := New(plugin, nil)
+	t.Cleanup(func() { _ = persistenthost.Shutdown(context.Background(), data, string(id)) })
+	conv, err := binding.Start(ctx, ports.ChatStartConfig{
+		SessionID: id, DataDir: data, WorkspacePath: workspace, Env: env,
+		Model: "custom_provider:ao/native-test", Permissions: ports.PermissionModeDefault,
+		SystemPrompt: "--AO_FIRST_CONTEXT_7061\nPreserve native defaults and project instructions.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	configurer, ok := conv.(ports.ChatConfigOptionController)
+	if !ok {
+		t.Fatal("native session did not expose its effective permission policy")
+	}
+	controls, err := configurer.ListConfigOptions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultSelected := false
+	for _, control := range controls {
+		if control.ID == "permissionMode" && control.Current.Select == "default" {
+			defaultSelected = true
+		}
+	}
+	if !defaultSelected {
+		t.Fatal("AO default did not select the native default permission policy")
+	}
+	nativeID := conv.ProviderConversationID()
+	if !strings.HasPrefix(nativeID, "mvs_") {
+		t.Fatalf("missing native identity: %q", nativeID)
+	}
+	nativeTurn(ctx, t, conv, "ao-seed", nil)
+	endpoint.AssertRequestContains(t, "ao-seed", "--AO_FIRST_CONTEXT_7061")
+	t.Log("PASS native streaming and initial private context delivery")
+	return nativeConformanceFixture{
+		ctx: ctx, binding: binding, conv: conv, endpoint: endpoint,
+		resume: ports.ChatResumeConfig{
+			SessionID: id, ProviderConversationID: nativeID, DataDir: data,
+			WorkspacePath: workspace, Env: env, Model: "custom_provider:ao/native-test",
+			Permissions: ports.PermissionModeDefault,
+		},
+	}
 }
 
 func nativeSend(ctx context.Context, t *testing.T, conv ports.ChatConversation, prompt string) ports.ChatTurnRef {

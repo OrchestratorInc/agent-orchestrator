@@ -53,7 +53,7 @@ jobs:
         run: |
           set -o pipefail
           go test -race -count=1 -v -timeout=8m ./internal/adapters/chatdriver/minimaxacp \
-            -run '^TestNativeMiniMaxACPConformance$' | tee "$RUNNER_TEMP/minimax-acp-conformance.log"
+            -run '^TestNativeMiniMaxACP(Conformance|ExactRestoreConformance)$' | tee "$RUNNER_TEMP/minimax-acp-conformance.log"
       - name: Qualify candidate registration through the actual AO daemon
         working-directory: backend
         shell: bash

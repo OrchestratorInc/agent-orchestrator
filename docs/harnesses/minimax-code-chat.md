@@ -63,10 +63,10 @@ Install official `@minimax-ai/code@0.6.5` with its optional dependencies and Nod
 cd backend
 AO_NATIVE_MINIMAX_ACP=1 go test -count=1 -v -timeout=8m \
   ./internal/adapters/chatdriver/minimaxacp \
-  -run '^TestNativeMiniMaxACPConformance$'
+  -run '^TestNativeMiniMaxACP(Conformance|ExactRestoreConformance)$'
 ```
 
-The opt-in test launches the actual native executable and AO detached host with
+The independent opt-in tests launch the actual native executable and AO detached host with
 isolated profile/workspace/data. Only the model endpoint is scripted loopback
 Anthropic SSE; no provider credentials are needed. It checks streaming, offered
 approval/rejection and side effects under an explicit native Bash Ask rule,
@@ -75,7 +75,7 @@ with no delayed artifact, same-ID replacement-process load and native replay,
 fresh private context in the actual post-load model request, and missing-ID/cwd
 refusal. Default unit tests do not execute the native binary or contact a provider.
 The [scoped CI workflow](../../.github/workflows/minimax-acp-conformance.yml)
-runs this native test, then qualifies candidate registration through an actual
+runs both native tests, then qualifies candidate registration through an actual
 AO daemon if native conformance passes. It creates an explicit Go source overlay
 adding only the MiniMax constructor to the candidate registry and logs its source
 hash. The shipping registry is unchanged, with no runtime opt-in flag. The
@@ -92,3 +92,36 @@ Real account authorization, independent model instruction consumption, registere
 AO API lifecycle/recovery, actual shared Chat UI journeys and screenshots still
 need separate qualification. Do not describe Chat as production supported or
 register it solely from source review, initialize metadata, or green unit tests.
+
+## Qualification blocker on 0.6.5
+
+Credential-free CI has demonstrated streaming and initial private context,
+effective default permission policy, offered allow/reject decisions with their
+side-effect boundaries, and termination of the exact executing tool process.
+The required immediate continuation after interrupted settlement fails with
+native ACP `-32603`: `MiniMax Code Runtime failed: Session already has an active
+Turn. Use queue send to deliver the message after it.` This is a native readiness
+failure after the cancelled ACP prompt has returned and AO has acknowledged its
+terminal receipt. The binding remains unregistered, and the daemon/API overlay
+qualification is blocked by this failure.
+
+The release's [ACP prompt completion and cancellation handlers](https://github.com/MiniMax-AI/minimax-code/blob/309e28554ec091bb17b6c4f67111c8c01d688b94/packages/tui/src/acp/agent.ts#L1208)
+return `cancelled` and clear the ACP prompt attachment; `session/cancel` aborts
+that prompt controller and awaits the local coordinator. The
+[coordinator's cancellation settlement](https://github.com/MiniMax-AI/minimax-code/blob/309e28554ec091bb17b6c4f67111c8c01d688b94/packages/tui/src/application/run-coordinator.ts#L375)
+waits on its local run, which can settle on its aborted stream before the native
+Runtime releases the session's active turn. The ACP error path flattens the
+Runtime failure into a generic internal error. The advertised methods provide
+no authoritative idle fence for the root turn: session listing exposes identity,
+cwd, title and timestamp, while queue listing exposes queued messages. Queueing
+would change the dispatch and recovery contract. No sleep, text-matched retry,
+implicit requeue or premature AO readiness acknowledgement is added to conceal
+this failure.
+
+Exact replacement-process restore, stable ordered replay, fresh post-load
+private context and missing-ID/cwd refusal run in the separate
+`TestNativeMiniMaxACPExactRestoreConformance`, so cancellation failure cannot
+prevent collecting those results. The delayed-artifact assertion also runs
+before provider cleanup when immediate continuation fails. Both tests are
+required; passing independent restore cannot qualify the failing cancellation
+contract. Real provider authorization and actual Chat UI proof remain unqualified.
