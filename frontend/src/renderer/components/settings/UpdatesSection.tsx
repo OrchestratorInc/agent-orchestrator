@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, CheckCircle2, Clock3, Download, Info, Loader2, RefreshCw } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, Info, Loader2, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
@@ -9,7 +9,6 @@ import { useUiStore } from "../../stores/ui-store";
 import { useRequestUpdateInstall } from "../../hooks/useRequestUpdateInstall";
 import { useUpdateStatus, requestUpdateDownload } from "../../hooks/useUpdateStatus";
 import type { UpdateChannel, UpdateSettings, UpdateState, UpdateStatus } from "../../../main/update-settings";
-import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { ConfirmDialog } from "../ConfirmDialog";
@@ -31,6 +30,9 @@ const MIN_MANUAL_CHECK_VISIBLE_MS = 1_000;
 // on screen to explain it. Releasing the button is always safe: the main process
 // serializes updater operations, so a redundant check queues rather than racing.
 const MAX_MANUAL_CHECK_MS = 90_000;
+
+/** Row actions are quiet: ghost, muted until hovered. */
+const GHOST_ACTION = "text-settings-muted hover:text-settings-label";
 
 let updateRequestSequence = 0;
 
@@ -254,7 +256,7 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 
 	return (
 		<>
-			<SettingsSection title={t("settings.updates")} sectionId="updates" titleHidden={titleHidden} grouped>
+			<SettingsSection title={t("settings.updates.versionSection")} sectionId="updates" titleHidden={titleHidden} grouped>
 				<UpdateActions
 					status={manualCheckFailure ? { ...status, state: "error", message: manualCheckFailure } : status}
 					manualCheckRequestId={manualCheckRequestId}
@@ -264,24 +266,20 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 				/>
 
 				{featurePr != null && (
-					<div className="settings-row-bar h-auto min-h-(--size-settings-row) items-start gap-3 py-3">
-						<Badge className="mt-0.5" variant="accent">PR #{featurePr}</Badge>
-						<div className="min-w-0 flex-1">
-							<p className="text-sm leading-5 text-settings-label">
-								{activeBuild
-									? t("settings.updates.onFeatureBuild", { pr: featurePr })
-									: t("settings.updates.featurePinned", { pr: featurePr })}
-							</p>
-							<p className="mt-1 text-xs leading-4 text-settings-muted">
-								{t("settings.updates.featureTracking", { pr: featurePr })}
-							</p>
-						</div>
-						<Button type="button" variant="outline" size="sm" onClick={() => void handleReturnToHome()}>
+					<SettingsRow
+						label={activeBuild
+							? t("settings.updates.onFeatureBuild", { pr: featurePr })
+							: t("settings.updates.featurePinned", { pr: featurePr })}
+						description={t("settings.updates.featureTracking", { pr: featurePr })}
+					>
+						<Button type="button" variant="ghost" size="sm" className={GHOST_ACTION} onClick={() => void handleReturnToHome()}>
 							{form.channel === "nightly" ? t("settings.updates.returnToNightly") : t("settings.updates.returnToStable")}
 						</Button>
-					</div>
+					</SettingsRow>
 				)}
+			</SettingsSection>
 
+			<SettingsSection title={t("settings.updates.preferencesSection")} grouped>
 				<SettingsRow
 					label={t("settings.updates.automatic")}
 					description={t("settings.updates.automaticHelp")}
@@ -296,7 +294,21 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 
 				<SettingsRow
 					label={t("settings.updates.channel")}
-					description={t("settings.updates.channelHelp")}
+					description={
+						<>
+							{t("settings.updates.channelHelp")}
+							{primaryValue === "nightly" && (
+								// A standing property of the chosen channel, not an alert:
+								// --color-warning is one step from --destructive, and a
+								// permanent note in it read as a permanent failure. Red is
+								// kept for states that are actually broken and actionable.
+								<span className="nightly-warning mt-1 flex items-start gap-1.5">
+									<Info className="mt-0.5 size-icon-sm shrink-0" aria-hidden="true" />
+									<span className="min-w-0">{t("settings.updates.nightlyWarning")}</span>
+								</span>
+							)}
+						</>
+					}
 				>
 					<SettingsOptionMenu
 						aria-label={t("settings.updates.channel")}
@@ -314,21 +326,8 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 					/>
 				)}
 
-				{primaryValue === "nightly" && (
-					// Helper copy for the row above, not an alert. This is a standing
-					// property of the channel the user chose, not something wrong right
-					// now, and --color-warning is a red-orange one step from
-					// --destructive: rendered in it, a permanent note read as a permanent
-					// failure. Red is kept for states that are actually broken and
-					// actionable — failing checks, a stale network stack, update errors.
-					<p className="nightly-warning -mt-1 flex items-start gap-2 px-(--size-settings-row-padding) pb-(--size-settings-row-padding) text-xs leading-4 text-settings-muted">
-						<Info className="mt-px size-icon-sm shrink-0" aria-hidden="true" />
-						<span className="min-w-0">{t("settings.updates.nightlyWarning")}</span>
-					</p>
-				)}
-
 				{save.isError && (
-					<p className="mt-2 px-(--size-settings-row-padding) text-xs text-error">
+					<p role="alert" className="settings-content-row text-xs text-error">
 						{save.error instanceof Error ? save.error.message : t("settings.updates.saveFailed")}
 					</p>
 				)}
@@ -357,7 +356,7 @@ function FeatureBuildsSelect({
 	const builds = buildsQuery.data ?? [];
 
 	if (!buildsQuery.isLoading && builds.length === 0) {
-		return <p className="px-3 text-xs text-settings-muted">{t("settings.updates.noFeatureReleases")}</p>;
+		return <div className="settings-row-bar text-sm text-settings-muted">{t("settings.updates.noFeatureReleases")}</div>;
 	}
 
 	return (
@@ -394,7 +393,6 @@ function UpdateActions({
 	const locale = i18n.resolvedLanguage ?? i18n.language;
 	const version = useQuery({ queryKey: ["app-version"], queryFn: () => aoBridge.app.getVersion() });
 	const requestUpdateInstall = useRequestUpdateInstall();
-	const installedChannel = installedUpdateChannel(version.data);
 	const installed = parseNightlyVersion(version.data);
 
 	const manualCheckPending = manualCheckRequestId !== null;
@@ -449,51 +447,76 @@ function UpdateActions({
 		}
 	};
 
-	// Deliberately no border or accent fill on this block. --primary is
-	// The neutral primary in dark and near-black in light: both are effectively
-	// neutral, so tinting drew a grey frame that carried no meaning
-	// and competed with the row backgrounds around it. The primary button and
-	// the status line already carry the emphasis.
+	// One settings row: the version is the label, the live status line is its
+	// description, and the actions sit at the trailing edge. Only Update and
+	// Restart & install are primary; Check for updates is a quiet row action.
 	return (
-		<div className="settings-row-bar update-status-row h-auto flex-col items-stretch gap-4 py-4">
-			<div className="flex min-w-0 flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-				{/* Identity. The nightly stamp lives on its own monospace line: as one
-				    heading it wrapped mid-token and swallowed the row. */}
-				<div className="min-w-0 flex-1">
-					<p className="text-caption font-medium uppercase tracking-wide text-settings-muted">
-						{t("settings.updates.installedVersion")}
-					</p>
-					<div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-						<span
-							aria-label={t("settings.updates.currentVersion", { version: version.data ? `v${version.data}` : "…" })}
-							className="text-2xl font-semibold leading-none tracking-tight tabular-nums text-settings-label"
-							data-testid="app-version"
+		<>
+			<SettingsRow
+				label={
+					<span
+						aria-label={t("settings.updates.currentVersion", { version: version.data ? `v${version.data}` : "…" })}
+						className="tabular-nums"
+						data-testid="app-version"
+					>
+						{version.data ? `v${installed?.base ?? version.data}` : "…"}
+					</span>
+				}
+				description={
+					<div className="flex min-w-0 flex-col gap-1">
+						{installed && (
+							// Two spans, not one string: the version needs break-all so a long
+							// nightly stamp can never overflow, but break-all applied to the
+							// whole line also snapped the date mid-word ("20/26, 5:21 PM").
+							<p className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
+								<span className="min-w-0 break-all font-mono">{version.data}</span>
+								<span className="whitespace-nowrap">
+									{t("settings.updates.nightlyBuiltAt", {
+										date: new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(installed.builtAt),
+									})}
+								</span>
+							</p>
+						)}
+						{/* One status block, in normal flow. It used to be an absolutely
+						    positioned h-5 strip, so a two-line message overlapped the
+						    last-checked line and the cross-fade left it looking half-rendered. */}
+						<div
+							id="update-status-line"
+							data-testid="update-status-line"
+							role="status"
+							aria-live="polite"
+							aria-atomic="true"
+							aria-busy={checking}
+							// Keep one line while the button owns the checking feedback, so
+							// the notices below do not jump up.
+							className="flex min-h-4 min-w-0 flex-col gap-1"
 						>
-							{version.data ? `v${installed?.base ?? version.data}` : "…"}
-						</span>
-						<Badge data-testid="installed-update-channel" variant="neutral">
-							{installedChannel === "nightly" ? t("settings.updates.channel.nightlyShort") : t("settings.updates.channel.stable")}
-						</Badge>
+							{showStatusState && <UpdateStatusLine state={displayState} status={status} />}
+							{status.state === "downloading" && status.percent !== undefined && <progress aria-label={t("settings.updates.progress")} max={100} value={status.percent} className="h-1 w-full" />}
+							{status.transferred !== undefined && status.total !== undefined && <p className="tabular-nums">{t("settings.updates.bytes", { downloaded: (status.transferred / 1_000_000).toFixed(1), total: (status.total / 1_000_000).toFixed(1) })}</p>}
+							{channelSwitchMessage && <p>{channelSwitchMessage}</p>}
+							{checkedAt ? (
+								<p className="tabular-nums" data-testid="update-checked-at">
+									<span title={new Date(status.checkedAt!).toISOString()}>{now - status.checkedAt! < 60_000 ? t("settings.updates.checkedJustNow", { defaultValue: "Checked just now" }) : t("settings.updates.checkedMinutesAgo", { defaultValue: "Checked {{count}} minutes ago", count: Math.floor((now - status.checkedAt!) / 60_000) })} · {checkedAt}</span>
+								</p>
+							) : null}
+						</div>
+						{/* The primary error already explains the failed check. Keep a separate
+						    notice only when it adds information (for example beside a staged build). */}
+						{status.checkError && !(displayState === "error" && status.message === status.checkError) && (
+							<UpdateNotice tone="error" text={status.checkError} />
+						)}
+						{!status.checkError && !status.staleCheckNudge && status.checksFailing && (
+							<UpdateNotice tone="warning" text={t("settings.updates.checksFailing")} />
+						)}
+						{status.staleCheckNudge && <UpdateNotice tone="warning" text={t("settings.updates.networkStale")} />}
 					</div>
-					{installed && (
-						// Two spans, not one string: the version needs break-all so a long
-						// nightly stamp can never overflow, but break-all applied to the
-						// whole line also snapped the date mid-word ("20/26, 5:21 PM").
-						<p className="mt-1.5 flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-caption leading-4 text-settings-muted">
-							<span className="min-w-0 break-all font-mono">{version.data}</span>
-							<span className="whitespace-nowrap">
-								{t("settings.updates.nightlyBuiltAt", {
-									date: new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(installed.builtAt),
-								})}
-							</span>
-						</p>
-					)}
-				</div>
-
+				}
+			>
 				{/* Actions. Fixed to the right and never widened by a version string:
 				    the primary label used to carry the full nightly stamp and grew
-				    across the heading. The target build is named in the status line. */}
-				<div className="flex w-full shrink-0 flex-wrap items-center gap-2 sm:w-auto sm:justify-end [&>button]:flex-1 sm:[&>button]:flex-none">
+				    across the version. The target build is named in the status line. */}
+				<div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
 					{status.state === "available" && (
 						<Button
 							type="button"
@@ -523,8 +546,9 @@ function UpdateActions({
 						type="button"
 						aria-label={checking ? t("settings.updates.checking") : t("settings.updates.check")}
 						aria-describedby={showStatusState ? "update-status-line" : undefined}
-						variant="outline"
+						variant="ghost"
 						size="sm"
+						className={GHOST_ACTION}
 						onClick={() => void checkNow()}
 						disabled={busy}
 					>
@@ -536,77 +560,30 @@ function UpdateActions({
 						{checking ? t("settings.updates.checking") : t("settings.updates.check")}
 					</Button>
 				</div>
-			</div>
-
-			{/* One status block, in normal flow. It used to be an absolutely
-			    positioned h-5 strip, so a two-line message overlapped the
-			    last-checked line and the cross-fade left it looking half-rendered. */}
-			<div
-				id="update-status-line"
-				data-testid="update-status-line"
-				role="status"
-				aria-live="polite"
-				aria-atomic="true"
-				aria-busy={checking}
-				// Keep the status slot's height while the button owns the checking
-				// feedback, so notices and last-checked metadata below do not jump up.
-				className="flex min-h-5 min-w-0 flex-col gap-1"
-			>
-				{showStatusState && <UpdateStatusLine state={displayState} status={status} />}
-				{status.state === "downloading" && status.percent !== undefined && <progress aria-label={t("settings.updates.progress")} max={100} value={status.percent} className="h-1 w-full" />}
-				{status.transferred !== undefined && status.total !== undefined && <p className="text-xs tabular-nums text-settings-muted">{t("settings.updates.bytes", { downloaded: (status.transferred / 1_000_000).toFixed(1), total: (status.total / 1_000_000).toFixed(1) })}</p>}
-				{channelSwitchMessage && <p className="text-xs leading-4 text-settings-muted">{channelSwitchMessage}</p>}
-				{checkedAt ? (
-					<p className="flex min-w-0 items-start gap-2 text-xs leading-4 tabular-nums text-settings-muted" data-testid="update-checked-at">
-						<span className="flex h-4 shrink-0 items-center">
-							<Clock3 className="size-icon-sm shrink-0" aria-hidden="true" />
-						</span>
-						<span title={new Date(status.checkedAt!).toISOString()}>{now - status.checkedAt! < 60_000 ? t("settings.updates.checkedJustNow", { defaultValue: "Checked just now" }) : t("settings.updates.checkedMinutesAgo", { defaultValue: "Checked {{count}} minutes ago", count: Math.floor((now - status.checkedAt!) / 60_000) })} · {checkedAt}</span>
-					</p>
-				) : null}
-			</div>
+			</SettingsRow>
 
 			{/* Release notes used to live only in the restart confirmation, so
 			    skipping that dialog when nothing is at risk would have hidden them
-			    entirely. The panel has room the dialog never did. The shared renderer
-			    keeps contributor handles out while preserving linked PR numbers. */}
+			    entirely. The shared renderer keeps contributor handles out while
+			    preserving linked PR numbers. */}
 			{(status.state === "downloaded" || status.staged) && status.releaseNotes ? (
-				<div className="mt-3" data-testid="update-release-notes">
-					<p className="text-caption font-medium uppercase tracking-wide text-settings-muted">
-						{t("update.restart.whatsNew")}
-					</p>
+				<div className="settings-content-row flex flex-col gap-1.5" data-testid="update-release-notes">
+					<p className="text-sm font-medium text-settings-label">{t("update.restart.whatsNew")}</p>
 					<DesktopReleaseNotes
 						notes={status.releaseNotes}
-						textClassName="settings-thin-scrollbar mt-1.5 max-h-40 overflow-y-auto overscroll-contain text-pretty text-sm leading-5 text-settings-label"
+						textClassName="settings-thin-scrollbar max-h-40 overflow-y-auto overscroll-contain text-pretty text-sm leading-5 text-settings-label"
 					/>
 				</div>
 			) : null}
-
-			{/* The primary error already explains the failed check. Keep a separate
-			    notice only when it adds information (for example beside a staged build). */}
-			{status.checkError && !(displayState === "error" && status.message === status.checkError) && (
-				<UpdateNotice tone="error" text={status.checkError} />
-			)}
-
-			{!status.checkError && !status.staleCheckNudge && status.checksFailing && (
-				<UpdateNotice tone="warning" text={t("settings.updates.checksFailing")} />
-			)}
-
-			{status.staleCheckNudge && <UpdateNotice tone="warning" text={t("settings.updates.networkStale")} />}
-		</div>
+		</>
 	);
 }
 
-/** Contained caution/failure note. A bare coloured paragraph read as body copy. */
+/** Inline caution/failure note under the status line: tone and icon, no box. */
 function UpdateNotice({ tone, text }: { tone: "warning" | "error"; text: string }) {
 	return (
-		<p
-			className={cn(
-				"flex items-start gap-2 rounded-md border px-3 py-2 text-xs leading-5",
-				tone === "warning" ? "border-warning/30 bg-warning/8 text-warning" : "border-error/30 bg-error/8 text-error",
-			)}
-		>
-			<AlertTriangle className="mt-0.5 size-icon-sm shrink-0" aria-hidden="true" />
+		<p className={cn("flex items-start gap-1.5 text-xs leading-4", tone === "warning" ? "text-warning" : "text-error")}>
+			<AlertTriangle className="mt-px size-icon-sm shrink-0" aria-hidden="true" />
 			<span className="min-w-0">{text}</span>
 		</p>
 	);
@@ -622,10 +599,6 @@ function DownloadProgressIcon({ percent }: { percent: number }) {
 			</svg>
 		</span>
 	);
-}
-
-function installedUpdateChannel(version: string | undefined): UpdateChannel {
-	return /-nightly(?:[.+]|$)/.test(version ?? "") ? "nightly" : "latest";
 }
 
 /**
@@ -697,12 +670,12 @@ function UpdateStatusLine({
 	}
 
 	return (
-		<div className={cn("flex min-w-0 items-start gap-2", className)}>
-			{icon !== null && <span className="flex h-5 shrink-0 items-center">{icon}</span>}
+		<div className={cn("flex min-w-0 items-start gap-1.5", className)}>
+			{icon !== null && <span className="flex h-4 shrink-0 items-center">{icon}</span>}
 			<div className="min-w-0">
-				<p className="text-pretty text-sm font-medium leading-5">{label}</p>
+				<p className="text-pretty">{label}</p>
 				{detail !== null && (
-					<p className="mt-0.5 truncate text-xs leading-4 font-normal text-settings-muted">{detail}</p>
+					<p className="mt-0.5 truncate text-settings-muted">{detail}</p>
 				)}
 			</div>
 		</div>

@@ -19,10 +19,16 @@ type verifierAgent struct {
 	ports.Agent
 	path       string
 	resolveErr error
+	resolve    func(context.Context) (string, error)
 	authCalls  *atomic.Int32
 }
 
-func (a verifierAgent) ResolveBinary(context.Context) (string, error) { return a.path, a.resolveErr }
+func (a verifierAgent) ResolveBinary(ctx context.Context) (string, error) {
+	if a.resolve != nil {
+		return a.resolve(ctx)
+	}
+	return a.path, a.resolveErr
+}
 func (a verifierAgent) AuthStatus(context.Context) (ports.AgentAuthStatus, error) {
 	a.authCalls.Add(1)
 	return ports.AgentAuthStatusAuthorized, nil
@@ -115,6 +121,32 @@ func TestVerifierBoundsVersionProbe(t *testing.T) {
 	if strings.Contains(err.Error(), "signal: killed") {
 		t.Fatalf("Verify error = %q, want the timeout named instead of the kill signal", err)
 	}
+}
+
+func TestVerifierReportsIdentityResolutionTimeout(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		runner := &recordingCommandRunner{}
+		verifier := NewVerifier(verifierResolver{
+			domain.HarnessGoose: verifierAgent{resolve: func(ctx context.Context) (string, error) {
+				<-ctx.Done()
+				return "", ctx.Err()
+			}},
+		}, runner)
+		verifier.timeout = 20 * time.Millisecond
+		_, err := verifier.Verify(t.Context(), TargetGoose)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Verify error = %v, want deadline exceeded", err)
+		}
+		for _, want := range []string{"goose binary identity check", "timed out after 20ms", "Verify again"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("Verify error = %q, want %q", err, want)
+			}
+		}
+		if runner.argv != nil {
+			t.Fatal("version probe ran before identity was confirmed")
+		}
+	})
 }
 
 func TestVerifierKeepsNonTimeoutProbeFailure(t *testing.T) {

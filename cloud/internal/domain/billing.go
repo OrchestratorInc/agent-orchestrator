@@ -271,7 +271,9 @@ type BillingSummary struct {
 	Enabled bool `json:"enabled"`
 	// BillingMode is one of the BillingMode constants; the app shows plans
 	// only for BillingModeSelfServe.
-	BillingMode        string        `json:"billingMode"`
+	BillingMode string `json:"billingMode"`
+	// Exempt is always false since every organization pays for Freestyle.
+	// It is kept for desktop releases that hide plans when it is true.
 	Exempt             bool          `json:"exempt"`
 	Plan               string        `json:"plan"`
 	SubscriptionStatus string        `json:"subscriptionStatus,omitempty"`

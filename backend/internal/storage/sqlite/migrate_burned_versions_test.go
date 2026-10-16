@@ -200,6 +200,9 @@ var shippedMigrations = map[int64]string{
 	195: "0195_session_requested_output.sql",
 	196: "0196_session_artifact_versions.sql",
 	197: "0197_detach_split_orchestrator_conversations.sql",
+	198: "0198_harness_defaults.sql",
+	199: "0199_conversation_message_continuation.sql",
+	200: "0200_session_artifact_version_source.sql",
 	203: "0203_allow_hermes_harness.sql",
 }
 

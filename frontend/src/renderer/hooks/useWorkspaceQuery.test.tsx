@@ -123,6 +123,24 @@ describe("useWorkspaceQuery", () => {
 		expect(getMock).not.toHaveBeenCalled();
 	});
 
+	it("fetches as soon as the daemon is ready instead of waiting out a retry backoff", async () => {
+		hasTrustedApiBaseUrlMock.mockReturnValue(false);
+		respondWith({ projects: { data: { projects: [{ id: "p1", name: "Project", path: "/p" }] } } });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retryDelay: 60_000 } } });
+		const slowRetryWrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+
+		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper: slowRetryWrapper });
+		await waitFor(() => expect(result.current.failureCount).toBe(1));
+
+		hasTrustedApiBaseUrlMock.mockReturnValue(true);
+		void queryClient.invalidateQueries({ queryKey: workspaceQueryKey }, { cancelRefetch: false });
+
+		await waitFor(() => expect(result.current.isSuccess).toBe(true), { timeout: 1_000 });
+		expect(result.current.data?.[0]).toMatchObject({ id: "p1" });
+	});
+
 	it("maps projects and their sessions, applying provider/status/title fallbacks", async () => {
 		respondWith({
 			projects: {

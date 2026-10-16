@@ -20,6 +20,12 @@ vi.mock("./settings/HarnessSettingsSection", () => ({
 	},
 }));
 
+// The real section reads the cloud gate and /me; here it only marks where the
+// General page places it.
+vi.mock("./settings/DefaultCloudSandboxRow", () => ({
+	DefaultCloudSandboxSection: () => <div data-testid="default-cloud-sandbox-section" />,
+}));
+
 const {
 	getUpdate,
 	setUpdate,
@@ -222,7 +228,8 @@ describe("GlobalSettingsForm", () => {
 		renderForm("harness", "cursor");
 
 		expect(await screen.findByTestId("harness-settings-section")).toBeInTheDocument();
-		expect(harnessSettingsSectionMock).toHaveBeenCalledWith({ focusAgentId: "cursor", titleHidden: true });
+		// Headings that repeat the page title are now hidden by SettingsSection, not this flag.
+		expect(harnessSettingsSectionMock).toHaveBeenCalledWith({ focusAgentId: "cursor", titleHidden: false });
 	});
 
 	it("keeps Browser in its dedicated settings page", async () => {
@@ -245,7 +252,9 @@ describe("GlobalSettingsForm", () => {
 		expect(screen.getByText("Appearance")).toBeInTheDocument();
 		expect(screen.getByText("Language")).toBeInTheDocument();
 		// UpdatesSection is lazy-loaded and can take longer than the default async query timeout.
-		expect(await screen.findByText("Updates", {}, { timeout: 5_000 })).toBeInTheDocument();
+		// Its sections are "Version" and "Preferences" ("Updates" is the page title).
+		expect(await screen.findByRole("heading", { name: "Version" }, { timeout: 5_000 })).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: "Preferences" })).toBeInTheDocument();
 		expect(screen.getByText("Advanced")).toBeInTheDocument();
 		expect(screen.getByText("Report a problem")).toBeInTheDocument();
 		// Report form is inline — no dialog, fields directly present.
@@ -263,6 +272,14 @@ describe("GlobalSettingsForm", () => {
 		expect(setMacDifferentialUpdates).toHaveBeenCalledWith(true);
 		await user.click(await screen.findByLabelText("Updates channel", {}, { timeout: 5_000 }));
 		expect(await screen.findByRole("menuitem", { name: "Feature Releases" })).toBeInTheDocument();
+	});
+
+	// Admins pick the org's cloud sandbox without turning on Developer Mode or
+	// the preview Cloud toggle, which builds that force cloud leave off.
+	it("shows the default cloud sandbox outside Developer mode", async () => {
+		renderForm("general");
+		expect(await screen.findByRole("switch", { name: "Developer mode" })).toHaveAttribute("aria-checked", "false");
+		expect(screen.getByTestId("default-cloud-sandbox-section")).toBeInTheDocument();
 	});
 
 	it("reveals the Side chats toggle only in Developer mode and persists it", async () => {
@@ -460,7 +477,7 @@ describe("GlobalSettingsForm", () => {
 
 	it("auto-saves the updates channel while automatic updates are disabled", async () => {
 		renderForm();
-		await userEvent.click(await screen.findByRole("switch", { name: "Automatic Updates" }));
+		await userEvent.click(await screen.findByRole("switch", { name: "Automatic updates" }));
 		await waitFor(() =>
 			expect(setUpdate).toHaveBeenCalledWith(expect.objectContaining({ enabled: false, channel: "latest" })),
 		);
@@ -472,7 +489,9 @@ describe("GlobalSettingsForm", () => {
 				expect.objectContaining({ channel: "nightly", enabled: false, nightlyAck: true, feature: null }),
 			),
 		);
-		expect(screen.getByTestId("installed-update-channel")).toHaveTextContent("Stable");
+		// The installed build stays the stable one: no nightly stamp under the version.
+		expect(screen.getByTestId("app-version")).toHaveTextContent("v1.4.0");
+		expect(screen.queryByText(/^1\.4\.0-nightly/)).toBeNull();
 		expect(await screen.findByText(/Nightly updates daily and may be unstable or cause data loss/i)).toBeInTheDocument();
 	});
 
@@ -503,7 +522,7 @@ describe("GlobalSettingsForm", () => {
 
 	it("auto-saves when automatic updates are toggled", async () => {
 		renderForm();
-		await userEvent.click(await screen.findByRole("switch", { name: "Automatic Updates" }));
+		await userEvent.click(await screen.findByRole("switch", { name: "Automatic updates" }));
 		await waitFor(() =>
 			expect(setUpdate).toHaveBeenCalledWith(expect.objectContaining({ enabled: false, channel: "latest" })),
 		);
@@ -512,22 +531,22 @@ describe("GlobalSettingsForm", () => {
 
 	it("hides the nightly warning on the stable channel", async () => {
 		renderForm();
-		await screen.findByText("Updates");
+		await screen.findByRole("heading", { name: "Version" });
 		expect(screen.queryByText(/Nightly updates daily and may be unstable or cause data loss/i)).not.toBeInTheDocument();
 	});
 
 	it("shows the current app version", async () => {
 		renderForm();
 		await waitFor(() => expect(screen.getByTestId("app-version")).toHaveTextContent("v1.4.0"));
-		await waitFor(() => expect(screen.getByTestId("installed-update-channel")).toHaveTextContent("Stable"));
 	});
 
-	it("shows the installed Nightly channel separately from the selected update feed", async () => {
+	it("shows the installed Nightly build separately from the selected update feed", async () => {
 		getVersion.mockResolvedValue("1.4.0-nightly.202608271030");
 		renderForm();
-		// The badge labels which channel is installed, so it uses the short name;
-		// "(Pre-release)" belongs in the picker where the choice is made.
-		await waitFor(() => expect(screen.getByTestId("installed-update-channel")).toHaveTextContent("Nightly"));
+		// The channel badge is gone (it repeated the channel picker); an installed
+		// nightly is identified by its full stamp under the base version.
+		await waitFor(() => expect(screen.getByTestId("app-version")).toHaveTextContent("v1.4.0"));
+		expect(await screen.findByText("1.4.0-nightly.202608271030")).toBeInTheDocument();
 	});
 
 	it("shows a repeated timeout once and keeps manual retry available", async () => {
@@ -584,7 +603,8 @@ describe("GlobalSettingsForm", () => {
 		const statusLine = screen.getByTestId("update-status-line");
 		expect(statusLine).not.toHaveTextContent("Checking for updates…");
 		expect(statusLine.querySelector("svg")).toBeNull();
-		expect(statusLine).toHaveClass("min-h-5");
+		// The slot keeps one description line while the button owns the feedback.
+		expect(statusLine).toHaveClass("min-h-4");
 
 		act(() => finishCheck());
 		await waitFor(() => expect(button).toBeEnabled(), { timeout: 1_500 });

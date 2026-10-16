@@ -37,11 +37,11 @@ import {
 	type MouseEvent as ReactMouseEvent,
 	type ReactNode,
 } from "react";
-import Markdown, { defaultUrlTransform, type Components } from "react-markdown";
+import Markdown, { defaultUrlTransform, type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { WrapText } from "lucide-react";
 import { cn } from "../../lib/utils";
-import { isLoopbackHostname } from "../../lib/loopback";
+import { isHostLocalWebLink } from "../../lib/loopback";
 import { canonicalLanguage } from "../../lib/code-highlight";
 import { fenceOf } from "../../lib/markdown-fence";
 import { EMOJI_GRAPHEME, rehypeStreamFade } from "../../lib/rehype-stream-fade";
@@ -84,7 +84,6 @@ export const ActivityTitle = memo(function ActivityTitle({ text }: { text: strin
 
 /** GitHub-flavoured markdown: tables, strikethrough, task lists, autolinks. */
 const PLUGINS = [remarkGfm, remarkSessionLinks];
-const STREAMING_REHYPE = [rehypeStreamFade];
 // Reduced motion gets plain text, not a span per character that never animates.
 const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 // How long a settled reply keeps its fade spans, so the last characters (and the final
@@ -139,18 +138,6 @@ export function ChatLinkProvider({
 	return <OpenChatLink.Provider value={value}>{children}</OpenChatLink.Provider>;
 }
 
-function isHostLocalWebLink(href: string): boolean {
-	try {
-		// react-markdown percent-encodes IPv6 brackets in href/src attributes.
-		const url = new URL(href.replace(/%5B|%5D/gi, (bracket) => decodeURIComponent(bracket)));
-		if (url.protocol !== "http:" && url.protocol !== "https:") return false;
-		const host = url.hostname.replace(/\.$/, "");
-		return isLoopbackHostname(host) || /^127\.(?:\d{1,3}\.){2}\d{1,3}$/.test(host) || host === "0.0.0.0" || host === "[::]";
-	} catch {
-		return false;
-	}
-}
-
 function chatUrlTransform(url: string, key: string): string | undefined {
 	// react-markdown correctly strips unknown schemes, but a Windows absolute
 	// path resembles one (C:). Preserve only hrefs that look like local paths;
@@ -159,6 +146,12 @@ function chatUrlTransform(url: string, key: string): string | undefined {
 	if (key === "href" && isPotentialWorkspaceFileLink(url)) return url;
 	return defaultUrlTransform(url);
 }
+
+/**
+ * True while the surrounding chat is rendering its first commit. A stable ref,
+ * not a value, so ending the opening never re-renders every reply.
+ */
+export const ChatOpeningRef = createContext<{ readonly current: boolean }>({ current: false });
 
 export const ChatMarkdown = memo(function ChatMarkdown({
 	text,
@@ -182,6 +175,12 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	// beat past the end of the stream.
 	const [fading, setFading] = useState(streaming);
 	if (streaming && !fading) setFading(true);
+	// A reply already on screen when its chat opens (switching to a chat
+	// mid-stream) is not new; only characters that arrive afterwards fade in. A
+	// reply that arrives later fades from its first character.
+	const chatOpening = useContext(ChatOpeningRef);
+	const [settledOffset] = useState(() => (chatOpening.current ? text.length : 0));
+	const streamingRehype = useMemo<Options["rehypePlugins"]>(() => [[rehypeStreamFade, { settledOffset }]], [settledOffset]);
 	useEffect(() => {
 		if (streaming) return;
 		const timer = setTimeout(() => setFading(false), FADE_SHED_MS);
@@ -200,7 +199,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 			>
 				<Markdown
 					remarkPlugins={PLUGINS}
-					rehypePlugins={fading && !prefersReducedMotion() ? STREAMING_REHYPE : undefined}
+					rehypePlugins={fading && !prefersReducedMotion() ? streamingRehype : undefined}
 					components={COMPONENTS}
 					urlTransform={chatUrlTransform}
 				>

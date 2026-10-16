@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
@@ -576,6 +577,37 @@ func TestOfficialGooseBinaryRequiresPositiveBlockHelpSignature(t *testing.T) {
 			if got := isOfficialGooseBinary(context.Background(), testGooseBinaryPath()); got != tt.want {
 				t.Fatalf("isOfficialGooseBinary() = %v, want %v", got, tt.want)
 			}
+		})
+	}
+}
+
+func TestOfficialGooseBinaryAllowsSlowFirstLaunchWithinCallerDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		timeout time.Duration
+		want    bool
+	}{
+		{name: "post-install verification", timeout: time.Minute, want: true},
+		{name: "short readiness check", timeout: 2 * time.Second, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				previous := gooseIdentityCommand
+				gooseIdentityCommand = func(ctx context.Context, _ string, _ ...string) ([]byte, error) {
+					select {
+					case <-time.After(12 * time.Second):
+						return []byte("Commands:\n  session\n  recipe\n"), nil
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+				}
+				defer func() { gooseIdentityCommand = previous }()
+				ctx, cancel := context.WithTimeout(t.Context(), tc.timeout)
+				defer cancel()
+				if got := isOfficialGooseBinary(ctx, testGooseBinaryPath()); got != tc.want {
+					t.Fatalf("slow official binary accepted = %v, want %v", got, tc.want)
+				}
+			})
 		})
 	}
 }

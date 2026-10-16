@@ -282,7 +282,7 @@ func TestKiroDiscoveryRunsOnlyAfterAConfirmedSignIn(t *testing.T) {
 				return []byte(tc.output), tc.err
 			}
 
-			_, err := Discover(ctx, "kiro", missingBinary, "", tc.env)
+			_, err := (Discoverer{}).Discover(ctx, ports.AgentModelDiscoveryRequest{AgentID: "kiro", Binary: missingBinary, Env: tc.env})
 			if err == nil {
 				t.Fatal("Discover succeeded against a missing binary")
 			}
@@ -324,7 +324,7 @@ func TestDiscoveryWithoutASignInCheckNeverProbes(t *testing.T) {
 		if spec.signIn != nil {
 			continue
 		}
-		if _, err := Discover(context.Background(), agentID, "ao-test-missing-binary", "", nil); errors.Is(err, ports.ErrAgentModelDiscoverySignInRequired) {
+		if _, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: agentID, Binary: "ao-test-missing-binary"}); errors.Is(err, ports.ErrAgentModelDiscoverySignInRequired) {
 			t.Fatalf("%s discovery was skipped for sign-in", agentID)
 		}
 	}
@@ -374,7 +374,7 @@ func TestParseMiMoModelsAcceptsInlineDetails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0].ID != "mimo/mimo-auto" || got[1].ID != "xiaomi/mimo-v2.5" {
+	if len(got) != 2 || got[0].ID != "mimo/mimo-auto" || got[1].ID != "xiaomi/mimo-v2.5" || got[0].Provider != "mimo" || got[1].Provider != "xiaomi" {
 		t.Fatalf("models = %#v", got)
 	}
 }
@@ -575,33 +575,16 @@ func TestUnrealCatalogShowsEffectiveModelAndAllowsOverride(t *testing.T) {
 	}
 }
 
-func TestClaudeReturnsStaticCatalogWithConfiguredFallback(t *testing.T) {
-	claudeRequest(t)
-	t.Setenv("ANTHROPIC_MODEL", "")
-	t.Setenv("HOME", t.TempDir())
-	got, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{
-		AgentID: "claude-code",
-		Binary:  "/missing/claude",
-		Env:     map[string]string{"ANTHROPIC_MODEL": "claude-opus-4-5-20251101"},
-	})
-	if err != nil {
-		t.Fatal(err)
+func TestClaudeWithoutDiscoveryDoesNotInventModels(t *testing.T) {
+	request := claudeRequest(t)
+	request.Binary = "/missing/claude"
+	request.Env["ANTHROPIC_MODEL"] = "claude-opus-4-5-20251101"
+	got, err := (Discoverer{}).Discover(context.Background(), request)
+	if err == nil {
+		t.Fatal("missing provider discovery was reported as success")
 	}
-	wantLabels := map[string]string{
-		"sonnet": "Sonnet", "fable": "Fable 5.1", "opus": "Opus",
-		"haiku": "Haiku", "opus[1m]": "Opus (1M context)",
-		"claude-opus-4-5-20251101": "claude-opus-4-5-20251101",
-	}
-	if got.Source != "catalog" || len(got.Models) != len(wantLabels) {
-		t.Fatalf("catalog = %#v", got)
-	}
-	for _, item := range got.Models {
-		if wantLabels[item.ID] != item.Label {
-			t.Fatalf("unexpected model %#v", item)
-		}
-		if item.IsDefault != (item.ID == "claude-opus-4-5-20251101") {
-			t.Fatalf("default marker = %#v", item)
-		}
+	if len(got.Models) != 0 || !got.AllowCustom {
+		t.Fatalf("catalog = %#v, want no invented choices with manual entry allowed", got)
 	}
 }
 
@@ -685,8 +668,8 @@ openai     gpt-5.6-sol           400K     128K     yes       yes
 		t.Fatal(err)
 	}
 	want := []ports.AgentModelInfo{
-		{ID: "anthropic/claude-opus-4-8", Label: "claude-opus-4-8", Provider: "anthropic"},
-		{ID: "openai/gpt-5.6-sol", Label: "gpt-5.6-sol", Provider: "openai"},
+		{ID: "anthropic/claude-opus-4-8", Label: "claude-opus-4-8", Provider: "anthropic", ContextWindow: 200_000},
+		{ID: "openai/gpt-5.6-sol", Label: "gpt-5.6-sol", Provider: "openai", ContextWindow: 400_000},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("models = %#v, want %#v", got, want)
@@ -770,9 +753,11 @@ func TestClineDiscoveryUsesACPModelOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// ACP groups name the model vendors; the shared catalog identifies Cline
+	// as the serving connection while preserving native IDs and the default.
 	want := []ports.AgentModelInfo{
-		{ID: "anthropic/claude-sonnet-4-6", Label: "Claude Sonnet 4.6", Provider: "anthropic", IsDefault: true},
-		{ID: "openai/gpt-5.4", Label: "GPT-5.4", Provider: "openai"},
+		{ID: "anthropic/claude-sonnet-4-6", Label: "Claude Sonnet 4.6", Provider: "cline", IsDefault: true},
+		{ID: "openai/gpt-5.4", Label: "GPT-5.4", Provider: "cline"},
 	}
 	if !reflect.DeepEqual(got.Models, want) || got.Source != "acp" {
 		t.Fatalf("catalog = %#v, want models %#v from ACP", got, want)
@@ -813,10 +798,7 @@ func TestDevinDiscoveryUsesACPModelOptions(t *testing.T) {
 }
 
 func TestParseIDLinesAcceptsOnlyWholeModelIDs(t *testing.T) {
-	got, err := parseIDLines([]byte("\x1b[32mModels\x1b[0m\nanthropic/claude-sonnet\nopenai/gpt-5.4\nTip: use --model <id>\nopenai/gpt-5.4 duplicate\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := parseIDLines([]byte("\x1b[32mModels\x1b[0m\nanthropic/claude-sonnet\nopenai/gpt-5.4\nTip: use --model <id>\nopenai/gpt-5.4 duplicate\n"))
 	if len(got) != 2 || got[0].ID != "anthropic/claude-sonnet" || got[1].ID != "openai/gpt-5.4" {
 		t.Fatalf("models = %#v", got)
 	}
@@ -866,9 +848,9 @@ Docs:  https://commandcode.ai/docs/models
 		t.Fatal(err)
 	}
 	want := []ports.AgentModelInfo{
-		{ID: "claude-opus-5-5", Label: "claude-opus-5-5"},
-		{ID: "claude-sonnet-5-5", Label: "claude-sonnet-5-5"},
-		{ID: "gpt-6.1-sol", Label: "gpt-6.1-sol"},
+		{ID: "claude-opus-5-5", Label: "claude-opus-5-5", Provider: "anthropic"},
+		{ID: "claude-sonnet-5-5", Label: "claude-sonnet-5-5", Provider: "anthropic"},
+		{ID: "gpt-6.1-sol", Label: "gpt-6.1-sol", Provider: "openai"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("models = %#v, want %#v", got, want)
@@ -959,6 +941,19 @@ openai     gpt-5.5                     272K     128K     yes       yes
 		t.Fatal(err)
 	}
 	if len(got) != 2 || got[0].ID != "anthropic/claude-sonnet-4-6" || got[1].ID != "openai/gpt-5.5" {
+		t.Fatalf("models = %#v", got)
+	}
+}
+
+func TestParsePiModelsSkipsKimchiNotices(t *testing.T) {
+	got, err := parsePiModels([]byte(`[model-roles] Warning: explorer model "kimchi-dev/deepseek-v4-flash" is not available.
+provider    model                context  max-out  thinking  images
+kimchi-dev  deepseek-v4.1-flash  1.0M     512K     yes       yes
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "kimchi-dev/deepseek-v4.1-flash" {
 		t.Fatalf("models = %#v", got)
 	}
 }
@@ -1206,7 +1201,9 @@ func TestClaudeCatalogDefaultUsesResolvedSettingsEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("ANTHROPIC_MODEL", "daemon-model")
-	catalog, err := discoverClaudeCatalog(context.Background(), request, nil)
+	catalog, err := discoverClaudeCatalog(context.Background(), request, func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
+		return []ports.AgentModelInfo{{ID: "kimi-k2", Label: "Kimi K2"}}, nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1311,5 +1308,28 @@ func TestCatalogFingerprintTracksTheDeepSeekProfile(t *testing.T) {
 	}
 	if second := CatalogFingerprint(context.Background(), "deepseek-harness", "", "", env); second == first {
 		t.Fatalf("fingerprint unchanged (%q) after the profile's model route changed", second)
+	}
+}
+
+func TestParseAiderModelsGroupsByLiteLLMProvider(t *testing.T) {
+	got, err := parseAiderModels([]byte("Models which match \".\":\n- openrouter/anthropic/claude-3.5-sonnet\n- gemini/gemini-2.5-pro\n- anthropic.claude-3-5-haiku-20241022-v1:0\n- us.amazon.nova-pro-v1:0\n- gpt-4o\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][2]string{
+		"openrouter/anthropic/claude-3.5-sonnet":   {"openrouter", "anthropic/claude-3.5-sonnet"},
+		"gemini/gemini-2.5-pro":                    {"gemini", "gemini-2.5-pro"},
+		"anthropic.claude-3-5-haiku-20241022-v1:0": {"bedrock", "anthropic.claude-3-5-haiku-20241022-v1:0"},
+		"us.amazon.nova-pro-v1:0":                  {"bedrock", "us.amazon.nova-pro-v1:0"},
+		"gpt-4o":                                   {"", "gpt-4o"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("models = %+v", got)
+	}
+	for _, model := range got {
+		expected, ok := want[model.ID]
+		if !ok || model.Provider != expected[0] || model.Label != expected[1] {
+			t.Fatalf("model %q = provider %q label %q, want %v", model.ID, model.Provider, model.Label, expected)
+		}
 	}
 }

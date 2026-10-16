@@ -10,15 +10,18 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-func TestKilocodeLocalAuthStatusAuthorizedWithProviderEnv(t *testing.T) {
+func TestKilocodeAuthStatusAuthorizedWithProviderEnv(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("KILO_DATA_DIR", filepath.Join(dir, "missing-kilo-data"))
 	t.Setenv("OPENAI_API_KEY", "openai-key")
 
-	status, ok, err := kilocodeLocalAuthStatus(context.Background())
+	// A kilo that cannot start leaves only the environment to answer.
+	status, err := (&Plugin{resolvedBinary: filepath.Join(dir, "kilo")}).AuthStatus(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if status != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("status = %q, want %q", status, ports.AgentAuthStatusAuthorized)
 	}
 }
 
@@ -51,7 +54,7 @@ func TestKilocodeAuthJSONStatusAuthorizedWithProviderKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	authorized, known, err := kilocodeAuthJSONStatus(path)
+	authorized, known, _, err := kilocodeAuthJSONStatus(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +69,7 @@ func TestKilocodeAuthJSONStatusUnknownWhenEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	authorized, known, err := kilocodeAuthJSONStatus(path)
+	authorized, known, _, err := kilocodeAuthJSONStatus(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
