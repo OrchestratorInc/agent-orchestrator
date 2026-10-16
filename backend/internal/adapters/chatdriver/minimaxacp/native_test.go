@@ -5,22 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/minimaxcode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/minimaxacp/testfixture"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
 
 func TestMain(m *testing.M) {
@@ -55,33 +50,9 @@ func TestNativeMiniMaxACPConformance(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 6*time.Minute)
 	defer cancel()
-	source, data, workspace, home, protected := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
-	endpoint := &nativeEndpoint{t: t, protected: protected}
-	server := httptest.NewServer(endpoint)
-	defer server.Close()
-	config := fmt.Sprintf(`defaultModel: custom_provider:ao/native-test
-permissionMode: default
-custom_provider:
-  ao:
-    enabled: true
-    api: anthropic-messages
-    options:
-      baseURL: %q
-      apiKey: ao-fixture-key
-    models:
-      native-test:
-        name: AO native conformance
-        context_window: 65536
-        max_output_tokens: 4096
-`, server.URL)
-	if err := os.WriteFile(filepath.Join(source, "config.yaml"), []byte(config), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	env := map[string]string{
-		"MINIMAX_DATA_DIR": source, "MAVIS_DATA_DIR": source,
-		"HOME": home, "USERPROFILE": home, "XDG_CONFIG_HOME": home,
-		"MCODE_LLM_FIRST_EVENT_TIMEOUT_MS": "10000", "MCODE_LLM_STREAM_IDLE_TIMEOUT_MS": "10000",
-	}
+	data, workspace := t.TempDir(), t.TempDir()
+	endpoint := testfixture.New(t)
+	env := endpoint.Env()
 	plugin := minimaxcode.New()
 	binding := New(plugin, nil)
 	const id = "native-minimax-acp"
@@ -99,7 +70,7 @@ custom_provider:
 		t.Fatalf("missing native identity: %q", nativeID)
 	}
 	nativeTurn(ctx, t, conv, "ao-seed", nil)
-	endpoint.assertRequestContains(t, "ao-seed", "--AO_FIRST_CONTEXT_7061")
+	endpoint.AssertRequestContains(t, "ao-seed", "--AO_FIRST_CONTEXT_7061")
 	t.Log("PASS native streaming and initial private context delivery")
 	// Native default permits workspace writes. Use an owned scratch target
 	// outside the authorized workspace to exercise an actual pending request.
@@ -116,7 +87,7 @@ custom_provider:
 				return
 			}
 			seen = true
-			if _, err := os.Stat(filepath.Join(protected, tc.file)); !errors.Is(err, os.ErrNotExist) {
+			if _, err := os.Stat(endpoint.ProtectedPath(tc.file)); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("protected side effect occurred before approval: %v", err)
 			}
 			decision := ""
@@ -135,7 +106,7 @@ custom_provider:
 		if !seen {
 			t.Fatalf("%s never requested native permission", tc.prompt)
 		}
-		_, statErr := os.Stat(filepath.Join(protected, tc.file))
+		_, statErr := os.Stat(endpoint.ProtectedPath(tc.file))
 		if tc.decision == ports.ChatDecisionAllowOnce && statErr != nil {
 			t.Fatal("approved operation did not execute")
 		}
@@ -184,17 +155,17 @@ custom_provider:
 			t.Fatal(ctx.Err())
 		}
 	}
-	if !sameLinuxProcess(witness.PID, witness.Start) {
+	if !testfixture.SameLinuxProcess(witness.PID, witness.Start) {
 		t.Fatal("tool witness did not identify a running process")
 	}
 	if err := conv.Interrupt(ctx, ref.ProviderTurnID); err != nil {
 		t.Fatal(err)
 	}
 	stopDeadline := time.Now().Add(5 * time.Second)
-	for sameLinuxProcess(witness.PID, witness.Start) && time.Now().Before(stopDeadline) {
+	for testfixture.SameLinuxProcess(witness.PID, witness.Start) && time.Now().Before(stopDeadline) {
 		time.Sleep(25 * time.Millisecond)
 	}
-	if sameLinuxProcess(witness.PID, witness.Start) {
+	if testfixture.SameLinuxProcess(witness.PID, witness.Start) {
 		t.Fatal("cancel left the exact tool process alive")
 	}
 	nativeWait(ctx, t, conv, ref, nil, false)
@@ -262,8 +233,8 @@ custom_provider:
 	}
 	t.Log("PASS replacement-process exact native load and stable ordered history replay")
 	nativeTurn(ctx, t, conv, "ao-resume", nil)
-	endpoint.assertRequestContains(t, "ao-resume", "--AO_FRESH_RESTORE_CONTEXT_8102")
-	endpoint.assertRequestContains(t, "ao-resume", "ao-seed")
+	endpoint.AssertRequestContains(t, "ao-resume", "--AO_FRESH_RESTORE_CONTEXT_8102")
+	endpoint.AssertRequestContains(t, "ao-resume", "ao-seed")
 	t.Log("PASS fresh private context delivered after exact native load")
 	if err := conv.(ports.ChatProviderHibernator).Hibernate(); err != nil {
 		t.Fatal(err)
@@ -294,22 +265,6 @@ custom_provider:
 		t.Fatal("cancelled native tool produced a delayed side effect")
 	}
 	t.Log("PASS no delayed side effect after native cancellation")
-}
-
-func sameLinuxProcess(pid int, start string) bool {
-	if !processalive.Alive(pid) {
-		return false
-	}
-	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if err != nil {
-		return false
-	}
-	end := strings.LastIndexByte(string(b), ')')
-	if end < 0 {
-		return false
-	}
-	fields := strings.Fields(string(b)[end+1:])
-	return len(fields) > 19 && fields[0] != "Z" && fields[19] == start
 }
 
 func nativeSend(ctx context.Context, t *testing.T, conv ports.ChatConversation, prompt string) ports.ChatTurnRef {
@@ -360,125 +315,4 @@ func nativeWait(ctx context.Context, t *testing.T, conv ports.ChatConversation, 
 			t.Fatal(ctx.Err())
 		}
 	}
-}
-
-// nativeEndpoint speaks only the Anthropic stream used by the explicitly
-// configured test model. Tool selection comes from the native request catalog.
-type nativeEndpoint struct {
-	t         *testing.T
-	protected string
-	mu        sync.Mutex
-	requests  map[string][]byte
-}
-
-func (e *nativeEndpoint) assertRequestContains(t *testing.T, prompt, text string) {
-	t.Helper()
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if !strings.Contains(string(e.requests[prompt]), text) {
-		keys := make([]string, 0, len(e.requests))
-		for key := range e.requests {
-			if len(key) > 160 {
-				key = key[:160] + "..."
-			}
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		t.Fatalf("native request for %q missing synthetic marker %q; captured prompt keys=%q; matching request bytes=%d", prompt, text, keys, len(e.requests[prompt]))
-	}
-}
-
-func (e *nativeEndpoint) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/messages") {
-		http.Error(w, "unexpected native endpoint", http.StatusNotFound)
-		return
-	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
-	if err != nil {
-		http.Error(w, "read request", http.StatusBadRequest)
-		return
-	}
-	var request struct {
-		Messages []struct {
-			Role    string          `json:"role"`
-			Content json.RawMessage `json:"content"`
-		} `json:"messages"`
-		Tools []struct {
-			Name string `json:"name"`
-		} `json:"tools"`
-	}
-	if json.Unmarshal(body, &request) != nil || len(request.Messages) == 0 {
-		http.Error(w, "invalid request", http.StatusBadRequest)
-		return
-	}
-	latest := request.Messages[len(request.Messages)-1].Content
-	var blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	_ = json.Unmarshal(latest, &blocks)
-	prompt := ""
-	toolResult := false
-	for _, block := range blocks {
-		if block.Type == "text" {
-			prompt += block.Text
-		}
-		if block.Type == "tool_result" {
-			toolResult = true
-		}
-	}
-	if prompt == "" {
-		_ = json.Unmarshal(latest, &prompt)
-	}
-	e.mu.Lock()
-	if e.requests == nil {
-		e.requests = map[string][]byte{}
-	}
-	e.requests[prompt] = append([]byte(nil), body...)
-	e.mu.Unlock()
-	w.Header().Set("Content-Type", "text/event-stream")
-	flush := w.(http.Flusher)
-	emit := func(name string, data any) {
-		encoded, _ := json.Marshal(data)
-		_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, encoded)
-		flush.Flush()
-	}
-	emit("message_start", map[string]any{"type": "message_start", "message": map[string]any{"id": "native-fixture", "type": "message", "role": "assistant", "model": "native-test", "content": []any{}, "usage": map[string]int{"input_tokens": 10, "output_tokens": 0}}})
-	command := ""
-	if !toolResult {
-		switch strings.TrimSpace(prompt) {
-		case "ao-approve":
-			command = fmt.Sprintf("printf approved > %q", filepath.Join(e.protected, "approved.txt"))
-		case "ao-reject":
-			command = fmt.Sprintf("printf rejected > %q", filepath.Join(e.protected, "rejected.txt"))
-		case "ao-cancel":
-			command = `python3 -c 'import os,json,time; s=open("/proc/self/stat").read().rsplit(")",1)[1].split()[19]; open("started.json","w").write(json.dumps({"pid":os.getpid(),"start":s})); time.sleep(12); open("late.txt","w").write("late")'`
-		}
-	}
-	stop := "end_turn"
-	if command != "" {
-		tool := ""
-		for _, candidate := range request.Tools {
-			if strings.EqualFold(candidate.Name, "bash") {
-				tool = candidate.Name
-			}
-		}
-		if tool == "" {
-			e.t.Error("released native request did not advertise Bash")
-			return
-		}
-		input, _ := json.Marshal(map[string]any{"command": command, "timeout": 60000, "description": "AO controlled native conformance"})
-		emit("content_block_start", map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "tool_use", "id": "tool-" + strings.TrimSpace(prompt), "name": tool, "input": map[string]any{}}})
-		emit("content_block_delta", map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "input_json_delta", "partial_json": string(input)}})
-		stop = "tool_use"
-	} else {
-		emit("content_block_start", map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "text", "text": ""}})
-		for _, delta := range []string{"native streamed ", "answer"} {
-			emit("content_block_delta", map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "text_delta", "text": delta}})
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-	emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
-	emit("message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stop, "stop_sequence": nil}, "usage": map[string]int{"output_tokens": 10}})
-	emit("message_stop", map[string]any{"type": "message_stop"})
 }

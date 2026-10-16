@@ -166,18 +166,25 @@ func TestCanonicalModelResolvesOnlyAgainstNativeVariantCatalog(t *testing.T) {
 		}
 		return []ports.ChatConfigOption{{ID: "model", Current: ports.ChatConfigOptionValue{Select: current}, Choices: choices}}
 	}
-	for _, tc := range []struct { name, input, current string; choices []string; want string; invalid bool }{
-		{"preserve empty default", "custom_provider:ao/native-test", base+"v:", []string{base+"v:", base+"v:thinking"}, base+"v:", false},
-		{"preserve thinking default", "custom_provider:ao/native-test", base+"v:thinking", []string{base+"v:", base+"v:thinking"}, base+"v:thinking", false},
-		{"unique undefined variant", "custom_provider:ao/native-test", "m:other:model:u", []string{base+"u"}, base+"u", false},
-		{"ambiguous variant refused", "custom_provider:ao/native-test", "m:other:model:u", []string{base+"v:", base+"v:thinking"}, "", true},
-		{"unknown model refused", "custom_provider:ao/other", base+"v:", []string{base+"v:"}, "", true},
-		{"explicit native unchanged", base+"v:thinking", base+"v:", []string{base+"v:", base+"v:thinking"}, base+"v:thinking", false},
+	for _, tc := range []struct {
+		name, input, current string
+		choices              []string
+		want                 string
+		invalid              bool
+	}{
+		{"preserve empty default", "custom_provider:ao/native-test", base + "v:", []string{base + "v:", base + "v:thinking"}, base + "v:", false},
+		{"preserve thinking default", "custom_provider:ao/native-test", base + "v:thinking", []string{base + "v:", base + "v:thinking"}, base + "v:thinking", false},
+		{"unique undefined variant", "custom_provider:ao/native-test", "m:other:model:u", []string{base + "u"}, base + "u", false},
+		{"ambiguous variant refused", "custom_provider:ao/native-test", "m:other:model:u", []string{base + "v:", base + "v:thinking"}, "", true},
+		{"unknown model refused", "custom_provider:ao/other", base + "v:", []string{base + "v:"}, "", true},
+		{"explicit native unchanged", base + "v:thinking", base + "v:", []string{base + "v:", base + "v:thinking"}, base + "v:thinking", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := resolveSessionOption(acpdriver.SessionOption{ID: "model", Value: tc.input}, catalog(tc.current, tc.choices...))
 			if tc.invalid {
-				if !errors.Is(err, ports.ErrChatConfigOptionInvalid) { t.Fatalf("unqualified model accepted: %v", err) }
+				if !errors.Is(err, ports.ErrChatConfigOptionInvalid) {
+					t.Fatalf("unqualified model accepted: %v", err)
+				}
 			} else if err != nil || got.Value != tc.want {
 				t.Fatalf("resolved = %q, %v; want %q", got.Value, err, tc.want)
 			}

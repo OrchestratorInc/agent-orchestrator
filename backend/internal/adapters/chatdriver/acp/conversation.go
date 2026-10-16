@@ -119,7 +119,7 @@ type conversation struct {
 	// requireAdvertised refuses a config option the session did not advertise
 	// instead of sending it. See Config.RequireAdvertisedOptions.
 	requireAdvertised  bool
-	resolveOption     func(SessionOption, []ports.ChatConfigOption) (SessionOption, error)
+	resolveOption      func(SessionOption, []ports.ChatConfigOption) (SessionOption, error)
 	permissionMode     ports.PermissionMode
 	permissionFor      PermissionPolicy
 	initialPermission  ports.PermissionMode

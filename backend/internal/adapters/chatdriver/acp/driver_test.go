@@ -5144,8 +5144,8 @@ func TestACPDriverSessionOptionResolverKeepsAdvertisedGate(t *testing.T) {
 		selectConfigOption("model", "Model", "", native, native, "m:p:m:v:thinking"),
 	}
 	for _, tc := range []struct {
-		name string
-		resolve func(SessionOption, []ports.ChatConfigOption) (SessionOption, error)
+		name        string
+		resolve     func(SessionOption, []ports.ChatConfigOption) (SessionOption, error)
 		wantInvalid bool
 	}{
 		{name: "nil keeps exact wire value", wantInvalid: true},
@@ -5164,14 +5164,14 @@ func TestACPDriverSessionOptionResolverKeepsAdvertisedGate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			agent := &fakeAgent{newConfig: catalog}
 			driver := New(Config{
-				Harness: domain.HarnessMiniMaxCode,
+				Harness:      domain.HarnessMiniMaxCode,
 				Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
-				Probe: func(context.Context) error { return nil },
-				Launch: func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+				Probe:        func(context.Context) error { return nil },
+				Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
 				SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
 					return []SessionOption{{ID: "model", Value: settings.Model}}
 				},
-				ResolveSessionOption: tc.resolve,
+				ResolveSessionOption:     tc.resolve,
 				RequireAdvertisedOptions: true,
 			}, nil)
 			driver.useTestProcess(fakeSpawn(agent))

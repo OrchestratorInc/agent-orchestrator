@@ -54,6 +54,7 @@ jobs:
           go test -race -count=1 -v -timeout=8m ./internal/adapters/chatdriver/minimaxacp \
             -run '^TestNativeMiniMaxACPConformance$' | tee "$RUNNER_TEMP/minimax-acp-conformance.log"
       - name: Preserve Go formatting diagnostics
+        continue-on-error: true
         if: always()
         shell: bash
         run: |
