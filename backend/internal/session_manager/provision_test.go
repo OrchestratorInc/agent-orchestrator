@@ -617,6 +617,9 @@ func TestResolveClaudeModelAllowsCatalogStaleFromExpiredLogin(t *testing.T) {
 	if err != nil || resolved.Model != "claude-opus-5-5" || resolved.Effort != "high" {
 		t.Fatalf("unlisted model = %#v, %v; want launch left to the CLI", resolved, err)
 	}
+	if _, err := spawn("claude-opus-5-5", "ultra"); !errors.Is(err, ports.ErrUnsupportedEffort) {
+		t.Fatalf("unknown effort on unlisted model error = %v, want ErrUnsupportedEffort", err)
+	}
 	resolved, err = spawn("claude-opus-5-5", "")
 	if err != nil || resolved.Model != "claude-opus-5-5" || resolved.Effort != "" {
 		t.Fatalf("unlisted model without effort = %#v, %v; want launch left to the CLI", resolved, err)
