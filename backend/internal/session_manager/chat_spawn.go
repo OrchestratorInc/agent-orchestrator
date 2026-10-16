@@ -81,6 +81,23 @@ func (m *Manager) RunBackgroundTask(
 	if !ok {
 		return "", ports.ErrChatUnsupported
 	}
+	return m.runBackgroundTask(ctx, id, systemPrompt, prompt, runner.RunBackgroundTask)
+}
+
+// RunPromptSuggestionTask preserves the requested turn's native context when available.
+func (m *Manager) RunPromptSuggestionTask(ctx context.Context, id domain.SessionID, turnID, systemPrompt, prompt string) (string, error) {
+	runner, ok := m.chat.(interface {
+		RunPromptSuggestionTask(context.Context, domain.SessionID, string, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)
+	})
+	if !ok {
+		return m.RunBackgroundTask(ctx, id, systemPrompt, prompt)
+	}
+	return m.runBackgroundTask(ctx, id, systemPrompt, prompt, func(ctx context.Context, harness domain.AgentHarness, cfg ports.ChatStartConfig, prompt string) (string, error) {
+		return runner.RunPromptSuggestionTask(ctx, id, turnID, harness, cfg, prompt)
+	})
+}
+
+func (m *Manager) runBackgroundTask(ctx context.Context, id domain.SessionID, systemPrompt, prompt string, run func(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)) (string, error) {
 	rec, err := m.getRecord(ctx, id)
 	if err != nil {
 		return "", err
@@ -88,6 +105,12 @@ func (m *Manager) RunBackgroundTask(
 	if rec.IsTerminated {
 		return "", fmt.Errorf("session %s is terminated", id)
 	}
+	// Existing background titles and suggestions use the provider's default effort.
+	rec.Metadata.Effort = ""
+	return m.runRecordBackgroundTask(ctx, rec, systemPrompt, prompt, run)
+}
+
+func (m *Manager) runRecordBackgroundTask(ctx context.Context, rec domain.SessionRecord, systemPrompt, prompt string, run func(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)) (string, error) {
 	releaseHarness, err := m.beginHarnessUse(rec.Harness)
 	if err != nil {
 		return "", err
@@ -123,7 +146,7 @@ func (m *Manager) RunBackgroundTask(
 	deleteProtectedEnv(env, EnvSessionID, envKeysCaseInsensitive)
 	pinRuntimePermissionEnv(env, config.Permissions)
 
-	return runner.RunBackgroundTask(ctx, rec.Harness, ports.ChatStartConfig{
+	return run(ctx, rec.Harness, ports.ChatStartConfig{
 		DataDir:       m.dataDir,
 		WorkspacePath: workspace,
 		Env:           env,

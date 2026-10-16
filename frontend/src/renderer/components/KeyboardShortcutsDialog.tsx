@@ -6,7 +6,7 @@ import {
 	type AppShortcutId,
 	type ShortcutCategory,
 } from "../../shared/shortcuts";
-import { Fragment } from "react";
+import { Fragment, memo } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { shortcutCategoryLabelKeys, shortcutLabelKeys } from "../i18n/key-maps";
@@ -104,7 +104,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 	);
 }
 
-export function KeyboardShortcutsDialog({
+export const KeyboardShortcutsDialog = memo(function KeyboardShortcutsDialog({
 	open,
 	onOpenChange,
 	onCustomize,
@@ -176,4 +176,4 @@ export function KeyboardShortcutsDialog({
 			</DialogContent>
 		</Dialog>
 	);
-}
+});

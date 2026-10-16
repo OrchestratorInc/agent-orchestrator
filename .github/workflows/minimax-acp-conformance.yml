@@ -1,0 +1,69 @@
+name: MiniMax ACP conformance
+
+on:
+  pull_request:
+    paths:
+      - "backend/internal/adapters/agent/minimaxcode/**"
+      - "backend/internal/adapters/chatdriver/minimaxacp/**"
+      - "backend/internal/adapters/chatdriver/acp/**"
+      - "backend/internal/adapters/chatdriver/nativeacp/**"
+      - "backend/internal/adapters/chatdriver/persistenthost/**"
+      - "backend/internal/adapters/chatdriver/registry/**"
+      - "backend/go.mod"
+      - "backend/go.sum"
+      - ".github/workflows/minimax-acp-conformance.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minimax-acp-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  native-protocol:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GOMAXPROCS: "2"
+      GOFLAGS: "-p=2"
+      MINIMAX_DATA_DIR: ${{ runner.temp }}/minimax-acp-bootstrap
+      MAVIS_DATA_DIR: ${{ runner.temp }}/minimax-acp-bootstrap
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.21.0"
+      - name: Install the pinned official native CLI
+        shell: bash
+        run: |
+          npm install --prefix "$RUNNER_TEMP/minimax-native" --include=optional --no-audit --no-fund @minimax-ai/code@0.6.5
+          echo "$RUNNER_TEMP/minimax-native/node_modules/.bin" >> "$GITHUB_PATH"
+          npm list --prefix "$RUNNER_TEMP/minimax-native" --depth=0
+      - name: Qualify native ACP against a controlled loopback provider
+        working-directory: backend
+        shell: bash
+        env:
+          AO_NATIVE_MINIMAX_ACP: "1"
+        run: |
+          set -o pipefail
+          go test -race -count=1 -v -timeout=8m ./internal/adapters/chatdriver/minimaxacp \
+            -run '^TestNativeMiniMaxACPConformance$' | tee "$RUNNER_TEMP/minimax-acp-conformance.log"
+      - name: Preserve Go formatting diagnostics
+        if: always()
+        shell: bash
+        run: |
+          gofmt -d backend/internal/adapters/chatdriver/minimaxacp backend/internal/adapters/agent/minimaxcode/chat.go backend/internal/adapters/agent/minimaxcode/chat_test.go > "$RUNNER_TEMP/minimax-format.patch"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: minimax-acp-conformance-log
+          path: |
+            ${{ runner.temp }}/minimax-acp-conformance.log
+            ${{ runner.temp }}/minimax-format.patch
+          if-no-files-found: warn
+          retention-days: 14

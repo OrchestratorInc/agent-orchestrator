@@ -49,6 +49,7 @@ import {
 	useVirtualizer,
 } from "@tanstack/react-virtual";
 import { cn } from "../../lib/utils";
+import { sessionBranchPresentation } from "../../lib/session-branch";
 import { annotationBody, annotationTextMatches, annotationTextRange, highlightChatAnnotation } from "../../lib/chat-annotation-navigation";
 import {
 	acknowledgeChatInlineEditMutation,
@@ -114,7 +115,9 @@ import {
 	ApprovalCard,
 	AssistantMessage,
 	CompactionMarker,
+	ContinuedMarker,
 	HumanMessage,
+	humanVisibleText,
 	OriginMessage,
 	SteerMessage,
 	TurnChangedFiles,
@@ -123,8 +126,9 @@ import {
 	type TurnOutcomeRetryControl,
 } from "./ChatTimelineItems";
 import { HumanMessageEditor } from "./HumanMessageEditor";
-import { ChatLinkProvider } from "./ChatMarkdown";
+import { ChatLinkProvider, ChatOpeningRef } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
+import type { ComposerPromptSuggestion } from "./ComposerEditor";
 import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
@@ -201,6 +205,16 @@ const CHAT_FONT_SIZE_DEFAULT = 14;
 const WHEEL_ZOOM_THRESHOLD = 80;
 const WHEEL_ZOOM_RESET_MS = 250;
 
+// The daemon enriches this request with the interrupted task and response tail.
+// Continue starts another turn in the existing conversation; it is not an exact
+// execution checkpoint.
+export const CONTINUE_STOPPED_TURN_PROMPT = "Continue from where you stopped.";
+
+/** The latest turn that still counts is one the user stopped. */
+export function continuableTurnId(snapshot: ConversationSnapshot): string {
+	return snapshot.continueTurnId ?? "";
+}
+
 export interface ChatRetryControl {
 	retry: (turnId: string) => void | Promise<unknown>;
 	pending?: boolean;
@@ -231,6 +245,9 @@ function DraggableChatTab({ children, value }: { children: ReactNode; value: str
 				if ((event.target as HTMLElement).closest("[data-terminal-tab-action],input,a")) return;
 				dragControls.start(event);
 			}}
+			// Reorder needs layout measurement, but tabs should snap into place
+			// when a sibling opens or closes rather than slide.
+			transition={{ layout: { duration: 0 } }}
 			value={value}
 		>
 			{children}
@@ -318,6 +335,7 @@ export interface ChatWorkspaceProps {
 	onAddToSideChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
 	annotationNavigationRequest?: { id: string; text: string; messageId?: string; revision?: number };
 	snapshot: ConversationSnapshot;
+	promptSuggestion?: ComposerPromptSuggestion;
 	/** Renderer-owned state identity; the snapshot's sessionId remains the daemon wire ID. */
 	uiSessionId?: string;
 	/** Durable draft owner for a conversation that is not a worker session. */
@@ -389,6 +407,12 @@ export interface ChatWorkspaceProps {
 		content?: Record<string, unknown>,
 	) => Promise<unknown> | void;
 	onInterrupt?: () => void;
+	/**
+	 * Continues the latest turn after the user stopped it, sending
+	 * CONTINUE_STOPPED_TURN_PROMPT as a continuation. Offered on the composer's
+	 * button while that turn is the latest and nothing is running.
+	 */
+	onContinueTurn?: () => Promise<unknown> | void;
 	commandError?: string;
 	onResumeAgent?: () => void | Promise<unknown>;
 	resumingAgent?: boolean;
@@ -598,6 +622,7 @@ function ChatWorkspaceContent({
 	onAddToSideChat,
 	annotationNavigationRequest,
 	snapshot,
+	promptSuggestion,
 	sessionTitle,
 	sessionRole = "worker",
 	assetBaseUrl,
@@ -644,6 +669,7 @@ function ChatWorkspaceContent({
 	onDecide,
 	onResolveInput,
 	onInterrupt,
+	onContinueTurn,
 	commandError,
 	onResumeAgent,
 	resumingAgent,
@@ -715,6 +741,7 @@ function ChatWorkspaceContent({
 		[assetBaseUrl],
 	);
 	const turn = activeTurn(snapshot);
+	const canContinue = Boolean(onContinueTurn) && !turn && !newWorkDisabled && Boolean(continuableTurnId(snapshot));
 	// The primary Chat view wakes a sleeping provider in the background. Its
 	// marker clears before the new controller is ready, so an intermediate
 	// "stopped" snapshot is still part of that wake, not a crashed agent.
@@ -740,7 +767,7 @@ function ChatWorkspaceContent({
 		? snapshot.turns[0]?.id
 		: undefined;
 	const provisionError = session?.provisionError;
-	const sessionBranch = session?.branch;
+	const { branch: sessionBranch, naming: namingBranch } = sessionBranchPresentation(session);
 	const startup = useMemo(
 		() =>
 			hasStartup
@@ -750,6 +777,7 @@ function ChatWorkspaceContent({
 						error: provisionError,
 						agentName: agentLabel(snapshot.harness),
 						branch: sessionBranch,
+						namingBranch,
 						openingTurnId,
 						onRetry: newWorkDisabled ? undefined : onResumeAgent,
 						retrying: resumingAgent,
@@ -758,6 +786,7 @@ function ChatWorkspaceContent({
 				: undefined,
 		[
 			hasStartup,
+			namingBranch,
 			newWorkDisabled,
 			onResumeAgent,
 			openingTurnId,
@@ -917,6 +946,7 @@ function ChatWorkspaceContent({
 					role: "user",
 					origin: "human",
 					text: echo.text,
+				continuation: echo.continuation,
 					streaming: false,
 					delivery: "queued",
 					clientMessageId: echo.clientMessageId,
@@ -1427,6 +1457,12 @@ function ChatWorkspaceContent({
 		() => (queueEdit ? { id: `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}`, text: queueEdit.text, attachments: queueEdit.attachments, stagedAttachments: queueEdit.stagedAttachments } : undefined),
 		[queueEdit],
 	);
+	const sentMessageList = useMemo(
+		() => sentMessageHistory(snapshot, localEchos ?? [], openingTurnId, backgroundWakeQueuedTurnIds),
+		[backgroundWakeQueuedTurnIds, localEchos, openingTurnId, snapshot],
+	);
+	// Stable across streaming deltas, so the memoized composer only renders for a new prompt.
+	const sentMessages = useStableValue(sentMessageList);
 	// Empty chats center the prompt; once a turn or item exists the composer docks
 	// at the bottom and stays there for the rest of the session.
 	const orchestratorStarting = sessionRole === "orchestrator" && startupState !== "failed" && (
@@ -1727,6 +1763,11 @@ function ChatWorkspaceContent({
 										{t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
 									</h1>
 								) : null}
+								<WelcomePromptSuggestions
+									open={conversationEmpty && !newWorkDisabled && composerEmpty}
+									artifact={artifactSession}
+									onPick={(text) => composerFocusRef.current?.setDraft(text)}
+								/>
 								<div ref={composerBoxRef} className="relative">
 									{welcomeLeaving ? (
 										<h1
@@ -1752,7 +1793,14 @@ function ChatWorkspaceContent({
 										approval={composerApproval}
 										elicitation={composerElicitation}
 										onSend={handleComposerSend}
+										sentMessages={sentMessages}
+										sentMessagesScope={`${snapshot.conversationId}:${snapshot.activeBranchId ?? ""}`}
 										draftSeed={composerDraftSeed}
+										promptSuggestion={!queueEdit && !composerApproval && !composerElicitation && !turn &&
+											!busy && !sendPending && !steerPending && !agentInputDisabled && !newWorkDisabled &&
+											!controllerTransitioning && !loadingQuietly && !agentResuming &&
+											!workspaceActiveTabKey && !reviewerActive && !shellActive && snapshot.controller.state === "ready"
+											? promptSuggestion : undefined}
 										editingQueuedTurnId={queueEdit?.turnId}
 										queuedEditRecovery={Boolean(queueEdit?.clientMessageId)}
 										savingQueuedEditPending={Boolean(
@@ -1766,6 +1814,7 @@ function ChatWorkspaceContent({
 										onQueuedAttachmentsChange={changeQueuedStagedAttachments}
 										onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
 										onInterrupt={turn && !newWorkDisabled ? stableInterrupt : undefined}
+										onContinue={canContinue && !queueEdit ? onContinueTurn : undefined}
 										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
 										settings={<><ContextMeter usage={snapshot.usage} />{composerSettings}</>}
 										busy={busy}
@@ -1820,11 +1869,6 @@ function ChatWorkspaceContent({
 										acceptedClientMessageIds={acceptedClientMessageIds}
 									/>
 								</div>
-								<WelcomePromptSuggestions
-									open={conversationEmpty && !newWorkDisabled && composerEmpty}
-									artifact={artifactSession}
-									onPick={(text) => composerFocusRef.current?.setDraft(text)}
-								/>
 								{compactStartup ? <OrchestratorStartupStatus {...compactStartup} /> : null}
 							</div>
 						</div>
@@ -2127,7 +2171,7 @@ function ChatHeader({
 							</button>
 						)}
 						<div className="relative min-w-0 flex-1 self-stretch overflow-hidden">
-							<div ref={tabsOverflowRef} className="scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto">
+							<motion.div ref={tabsOverflowRef} className="scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto" layoutScroll>
 								<div className="flex w-max items-stretch">
 								<Reorder.Group
 									as="div"
@@ -2176,7 +2220,7 @@ function ChatHeader({
 								</Reorder.Group>
 								{workspaceTabActions}
 								</div>
-							</div>
+							</motion.div>
 							{showLeftFade ? <div aria-hidden="true" className="session-tab-scroll-fade session-tab-scroll-fade--left" /> : null}
 							{showRightFade ? <div aria-hidden="true" className="session-tab-scroll-fade" /> : null}
 						</div>
@@ -2459,6 +2503,7 @@ export function Timeline({
 	const initialLayoutDone = useRef(false);
 	const initialLayoutAt = useRef(0);
 	const lastScrollTop = useRef(0);
+	const skipRelatchFollow = useRef(false);
 	const setPinnedNow = useCallback((next: boolean) => {
 		pinnedRef.current = next;
 		setPinned(next);
@@ -2686,6 +2731,21 @@ export function Timeline({
 	// widens chat; shorter histories (common on non-Codex harnesses) often
 	// stop overflowing and used to lose the minimap exactly then.
 	const minimapEnabled = scrollbar.markers.length > 0;
+	// Replies rendered with the chat's first commit were already on screen
+	// before the switch; streamed text in them must not fade in again.
+	const chatOpening = useRef(true);
+	useEffect(() => {
+		chatOpening.current = false;
+	}, []);
+	// The minimap appears once the opened chat is measured. That first reveal is
+	// part of opening the chat, so it is instant; only later changes (the inspector
+	// covering it) fade.
+	const [minimapRevealed, setMinimapRevealed] = useState(false);
+	useEffect(() => {
+		if (!minimapEnabled || minimapRevealed) return;
+		const frame = window.requestAnimationFrame(() => setMinimapRevealed(true));
+		return () => window.cancelAnimationFrame(frame);
+	}, [minimapEnabled, minimapRevealed]);
 	const { t } = useTranslation();
 	const openingTurnId = startup?.openingTurnId;
 	// The checklist holds the working slot until the agent is up and its first
@@ -3147,6 +3207,7 @@ export function Timeline({
 				role: "user",
 				origin: "human",
 				text: echo.text,
+				continuation: echo.continuation,
 				content: echo.excerpts?.map((excerpt) => ({
 					type: "excerpt",
 					text: excerpt.text,
@@ -3494,7 +3555,9 @@ export function Timeline({
 		anchorGeometry.current = null;
 		syncPromptSpacer();
 		const node = scroller.current;
-		if (node && pinnedRef.current) {
+		const relatched = skipRelatchFollow.current;
+		skipRelatchFollow.current = false;
+		if (node && pinnedRef.current && !(relatched && !glideRequested.current)) {
 			if (glideRequested.current) {
 				glideRequested.current = false;
 				glideToEnd();
@@ -3593,6 +3656,9 @@ export function Timeline({
 		} else if (distance >= 64 || (movedUp && distance > 2)) {
 			if (pinnedRef.current) releaseFollow();
 		} else if (!pinnedRef.current && !movedUp) {
+			// The reader is already here: the follow layout this re-pin triggers must not
+			// snap the last few pixels under their scroll, which reads as a jitter.
+			skipRelatchFollow.current = true;
 			setPinnedNow(true);
 		}
 		updateScrollbar();
@@ -3732,6 +3798,7 @@ export function Timeline({
 	}
 
 	return (
+		<ChatOpeningRef.Provider value={chatOpening}>
 		<div
 			className="relative min-h-0 flex-1"
 			data-testid="chat-timeline"
@@ -3944,7 +4011,8 @@ export function Timeline({
 				onBlur={() => setHoveredMarker(null)}
 				onPointerLeave={() => setHoveredMarker(null)}
 					className={cn(
-						"group/scroll absolute inset-y-3 right-1 z-10 w-6 touch-none rounded-full outline-none transition-opacity focus-visible:ring-1 focus-visible:ring-logo-accent/60",
+						"group/scroll absolute inset-y-3 right-1 z-10 w-6 touch-none rounded-full outline-none focus-visible:ring-1 focus-visible:ring-logo-accent/60",
+						minimapRevealed && "transition-opacity",
 						minimapEnabled && !inspectorOpenRef.current
 							? "cursor-pointer opacity-100"
 							: "pointer-events-none opacity-0",
@@ -4021,6 +4089,7 @@ export function Timeline({
 				</Button>
 			) : null}
 		</div>
+		</ChatOpeningRef.Provider>
 	);
 }
 
@@ -4425,6 +4494,9 @@ function TimelineItem({
 				/>
 			);
 		}
+		// A continue after a stop reaches the agent as a message, but the user did
+		// not write it: mark where the turn picked back up instead of a bubble.
+		if (item.origin === "human" && item.continuation) return <ContinuedMarker />;
 		// A user-role message that did not come from this human is an automation or
 		// worker relay, and is attributed differently.
 		if (item.origin === "human") {
@@ -4516,6 +4588,48 @@ function echoMatchesItem(
 	// Rows from a sender that supplied no key fall back to the turn id, then to text and time.
 	if (echo.turnId) return item.turnId === echo.turnId;
 	return item.text === echo.text && item.createdAt >= echo.createdAt;
+}
+
+/** Guidance the user typed into a running turn, not a steer from another AO session. */
+function isHumanSteer(item: ConversationItem): item is ConversationActivity {
+	return item.kind === "activity" && isSteer(item) && !item.detail?.senderSessionId &&
+		(item.detail?.origin ?? "human") === "human";
+}
+
+/**
+ * The messages Up and Down recall into the composer, oldest first: the human prompts
+ * and steers the timeline shows as sent, then local echoes the daemon has not
+ * returned yet. The daemon already leaves other branches out; rolled-back turns and
+ * queued prompts, which the dock edits, are skipped here. A repeat of the message
+ * before it is one stop, not two.
+ */
+function sentMessageHistory(
+	snapshot: ConversationSnapshot,
+	localEchos: readonly ConversationLocalEcho[],
+	openingTurnId: string | undefined,
+	backgroundQueuedTurnIds: ReadonlySet<string>,
+): string[] {
+	const skipped = hiddenTimelineTurnIds(snapshot);
+	if (openingTurnId) skipped.delete(openingTurnId);
+	for (const turn of snapshot.turns) if (turn.rolledBack) skipped.add(turn.id);
+	const human = snapshot.items.filter(
+		(item): item is ConversationMessage => item.kind === "message" && item.role === "user" && item.origin === "human",
+	);
+	const sent = [...human, ...snapshot.items.filter(isHumanSteer)]
+		.filter((item) => !item.turnId || !skipped.has(item.turnId))
+		.sort((a, b) => a.sequence - b.sequence);
+	const texts = [
+		...sent.map((item) => item.kind === "message" ? item.text : item.detail?.text ?? item.summary),
+		...localEchos
+			.filter((echo) => !echo.queued && !human.some((item) => echoMatchesItem(echo, item, backgroundQueuedTurnIds)))
+			.map((echo) => echo.text),
+	];
+	return texts.reduce<string[]>((history, text) => {
+		// The body the bubble shows; AO's attachment and report footers are not the user's words.
+		const body = stagedAttachmentParts(humanVisibleText(text)).body;
+		if (body.trim() && body !== history.at(-1)) history.push(body);
+		return history;
+	}, []);
 }
 const groupKey = (group: TimelineGroup): string => group.key;
 
@@ -4823,8 +4937,8 @@ const CHAT_PROMPT_KEYS = [
 ] as const;
 
 /**
- * Sample requests under an empty chat's composer; picking one fills the composer.
- * The list collapses its height, and the gap above it, on the way in and out so the
+ * Sample requests above an empty chat's composer; picking one fills the composer.
+ * The list collapses its height, and the gap below it, on the way in and out so the
  * centered composer glides instead of jumping.
  */
 function WelcomePromptSuggestions({ open, artifact, onPick }: { open: boolean; artifact: boolean; onPick: (text: string) => void }) {
@@ -4841,9 +4955,9 @@ function WelcomePromptSuggestions({ open, artifact, onPick }: { open: boolean; a
 					exit={{ height: 0, opacity: 0, transition: { duration: reducedMotion ? 0 : 0.16, ease: [0.4, 0, 1, 1] } }}
 					// The dock's gap-2 sits outside this box. Cancel it and put the space back as
 					// padding inside, so it collapses with the height instead of snapping.
-					className="-mt-2 overflow-hidden"
+					className="-mb-2 overflow-hidden"
 				>
-					<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-col divide-y divide-border pt-3">
+					<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-col divide-y divide-border pb-3">
 						{keys.map((key) => (
 							<li key={key} className="py-0.5">
 								<button

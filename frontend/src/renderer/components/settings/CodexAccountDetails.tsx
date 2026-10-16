@@ -9,7 +9,7 @@ export function CodexAccountDetails({ account, resetCreditSupported, mutationDis
 	const { t, i18n } = useTranslation();
 	if (account.status === "signed_out") return null;
 	if (account.authentication.state === "unauthorized") {
-		return <div className="ml-9 mt-4 space-y-5 pb-1 text-xs"><CapacityNotice reason={t(codexAccountReasonKey(account.authentication.reasonCode))} tone="warning" /></div>;
+		return <div className="space-y-5 text-xs"><CapacityNotice reason={t(codexAccountReasonKey(account.authentication.reasonCode))} tone="warning" /></div>;
 	}
 	const plan = formatPlanLabel(account.capacity.plan, t);
 	const hasOverall = Boolean(account.capacity.overall?.primary || account.capacity.overall?.secondary);
@@ -21,7 +21,7 @@ export function CodexAccountDetails({ account, resetCreditSupported, mutationDis
 	const capacityNotice = capacityNoticeFor(account, t, i18n.language);
 	const usageUnavailable = !hasCapacityDetails && account.capacity.freshness !== "checking";
 	return (
-		<div className="ml-9 mt-4 space-y-5 pb-1 text-xs">
+		<div className="space-y-5 text-xs">
 			{capacityNotice ? <CapacityNotice {...capacityNotice} /> : null}
 			{plan || resetCredits ? <PlanCard plan={plan} resetCredits={resetCredits} resetEnabled={resetCreditSupported && !mutationDisabled} resetBusy={resetBusy} locale={i18n.language} onUseReset={onUseReset} /> : null}
 			{hasUsage ? <AccountActivity usage={usage} locale={i18n.language} /> : null}
@@ -29,7 +29,7 @@ export function CodexAccountDetails({ account, resetCreditSupported, mutationDis
 			{additionalBuckets.map((bucket, index) => (
 				<CapacityBucketGroup key={`${bucket.displayName ?? "additional"}-${index}`} bucket={bucket} title={bucket.displayName ? t("settings.codexAccounts.namedUsageLimits", { name: bucket.displayName }) : t("settings.codexAccounts.additionalUsageLimits")} locale={i18n.language} />
 			))}
-			{usageUnavailable ? <div className="flex items-center gap-2"><p className="text-muted-foreground">{t("settings.codexAccounts.usageDetailsUnavailable")}</p><Button type="button" size="sm" variant="outline" disabled={mutationDisabled || retryBusy} onClick={onRetry}>{retryBusy ? <LoaderCircle className="animate-spin" aria-label={t("settings.codexAccounts.checking")} /> : null}{t("settings.codexAccounts.tryAgain")}</Button></div> : null}
+			{usageUnavailable ? <div className="flex items-center gap-2"><p className="text-settings-muted">{t("settings.codexAccounts.usageDetailsUnavailable")}</p><Button type="button" size="sm" variant="ghost" className="text-settings-muted hover:text-settings-label" disabled={mutationDisabled || retryBusy} onClick={onRetry}>{retryBusy ? <LoaderCircle className="animate-spin" aria-label={t("settings.codexAccounts.checking")} /> : null}{t("settings.codexAccounts.tryAgain")}</Button></div> : null}
 		</div>
 	);
 }
@@ -42,7 +42,7 @@ type ResetCreditsValue = NonNullable<CodexAccount["capacity"]["resetCredits"]>;
 function CapacityBucketGroup({ bucket, title, locale }: { bucket: CapacityBucketValue; title: string; locale: string }) {
 	const { t } = useTranslation();
 	const windows = [bucket.primary, bucket.secondary].filter((window): window is CapacityWindowValue => Boolean(window));
-	return <section><h4 className="mb-2 font-medium text-foreground">{title}</h4><div className="divide-y divide-border/70 overflow-hidden rounded-md border border-border/70 bg-muted/15">{windows.map((window, index) => <CapacityWindowRow key={`${index}-${window.windowDurationMinutes ?? "unknown"}-${window.resetsAt ?? "never"}`} window={window} label={capacityWindowLabel(window.windowDurationMinutes, index, windows.length, t)} reached={bucket.reached === "reached"} locale={locale} />)}</div></section>;
+	return <section><h4 className="mb-1 font-medium text-settings-label">{title}</h4><div className="flex flex-col">{windows.map((window, index) => <CapacityWindowRow key={`${index}-${window.windowDurationMinutes ?? "unknown"}-${window.resetsAt ?? "never"}`} window={window} label={capacityWindowLabel(window.windowDurationMinutes, index, windows.length, t)} reached={bucket.reached === "reached"} locale={locale} />)}</div></section>;
 }
 
 function CapacityWindowRow({ window, label, reached, locale }: { window: CapacityWindowValue; label: string; reached: boolean; locale: string }) {
@@ -53,13 +53,13 @@ function CapacityWindowRow({ window, label, reached, locale }: { window: Capacit
 	const tone = reached || remaining <= 0 ? "exhausted" : remaining <= 25 ? "near" : "available";
 	const fillClass = tone === "exhausted" ? "bg-error" : tone === "near" ? "bg-warning" : "bg-foreground/80";
 	const valueClass = tone === "exhausted" ? "text-error" : tone === "near" ? "text-warning" : "text-muted-foreground";
-	return <div className="grid gap-2 px-3.5 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(8rem,11rem)_auto] sm:items-center sm:gap-4"><div className="min-w-0"><p className="font-medium text-foreground">{label}</p>{reset ? <p className="mt-0.5 text-muted-foreground" title={reset.full}>{t("settings.codexAccounts.capacityResets", { value: reset.visible })}</p> : null}</div><div role="progressbar" aria-label={t("settings.codexAccounts.remainingForLimit", { label, value: percentage })} aria-valuemin={0} aria-valuemax={100} aria-valuenow={remaining} className="h-1.5 w-full overflow-hidden rounded-full bg-muted"><div className={`h-full rounded-full transition-[width] ${fillClass}`} style={{ width: `${remaining}%` }} /></div><p className={`whitespace-nowrap text-right tabular-nums ${valueClass}`}>{t("settings.codexAccounts.percentLeft", { value: percentage })}</p></div>;
+	return <div className="grid gap-2 py-2 sm:grid-cols-[minmax(0,1fr)_minmax(8rem,11rem)_auto] sm:items-center sm:gap-4"><div className="min-w-0"><p className="font-medium text-foreground">{label}</p>{reset ? <p className="mt-0.5 text-muted-foreground" title={reset.full}>{t("settings.codexAccounts.capacityResets", { value: reset.visible })}</p> : null}</div><div role="progressbar" aria-label={t("settings.codexAccounts.remainingForLimit", { label, value: percentage })} aria-valuemin={0} aria-valuemax={100} aria-valuenow={remaining} className="h-1.5 w-full overflow-hidden rounded-full bg-muted"><div className={`h-full rounded-full transition-[width] ${fillClass}`} style={{ width: `${remaining}%` }} /></div><p className={`whitespace-nowrap text-right tabular-nums ${valueClass}`}>{t("settings.codexAccounts.percentLeft", { value: percentage })}</p></div>;
 }
 
 function PlanCard({ plan, resetCredits, resetEnabled, resetBusy, locale, onUseReset }: { plan: string | null; resetCredits: ResetCreditsValue | null | undefined; resetEnabled: boolean; resetBusy: boolean; locale: string; onUseReset: () => void }) {
 	const { t } = useTranslation();
 	const expiry = formatResetTime(resetCredits?.nearestExpiresAt, locale);
-	return <section aria-labelledby="codex-account-plan-heading"><h4 id="codex-account-plan-heading" className="mb-2 font-medium text-foreground">{t("settings.codexAccounts.yourPlan")}</h4><div className="flex flex-wrap items-center justify-between gap-4 rounded-md border border-border/70 bg-muted/15 px-3.5 py-3">{plan ? <p className="text-sm font-medium text-foreground">{plan}</p> : <span />}{resetCredits ? <div className="flex items-center gap-3"><div className="text-right"><p className="font-medium text-foreground">{resetCredits.availableCount > 0 ? t("settings.codexAccounts.resetCount", { count: resetCredits.availableCount }) : t("settings.codexAccounts.noResetsAvailable")}</p>{expiry ? <p className="mt-0.5 text-muted-foreground" title={expiry.full}>{t("settings.codexAccounts.resetExpires", { value: expiry.visible })}</p> : null}</div>{resetCredits.availableCount > 0 && resetEnabled ? <Button type="button" size="sm" variant="outline" disabled={resetBusy} onClick={onUseReset}>{resetBusy ? <LoaderCircle className="animate-spin" aria-label={t("settings.codexAccounts.resetting")} /> : <RotateCcw aria-hidden="true" />}{t("settings.codexAccounts.useReset")}</Button> : null}</div> : null}</div></section>;
+	return <section aria-labelledby="codex-account-plan-heading"><h4 id="codex-account-plan-heading" className="mb-1 font-medium text-settings-label">{t("settings.codexAccounts.yourPlan")}</h4><div className="flex flex-wrap items-center justify-between gap-4">{plan ? <p className="text-sm font-medium text-foreground">{plan}</p> : <span />}{resetCredits ? <div className="flex items-center gap-3"><div className="text-right"><p className="font-medium text-foreground">{resetCredits.availableCount > 0 ? t("settings.codexAccounts.resetCount", { count: resetCredits.availableCount }) : t("settings.codexAccounts.noResetsAvailable")}</p>{expiry ? <p className="mt-0.5 text-muted-foreground" title={expiry.full}>{t("settings.codexAccounts.resetExpires", { value: expiry.visible })}</p> : null}</div>{resetCredits.availableCount > 0 && resetEnabled ? <Button type="button" size="sm" variant="ghost" className="text-settings-muted hover:text-settings-label" disabled={resetBusy} onClick={onUseReset}>{resetBusy ? <LoaderCircle className="animate-spin" aria-label={t("settings.codexAccounts.resetting")} /> : <RotateCcw aria-hidden="true" />}{t("settings.codexAccounts.useReset")}</Button> : null}</div> : null}</div></section>;
 }
 
 function AccountActivity({ usage, locale }: { usage: UsageSummaryValue | null | undefined; locale: string }) {
@@ -72,13 +72,15 @@ function AccountActivity({ usage, locale }: { usage: UsageSummaryValue | null | 
 		usage?.longestStreakDays == null ? null : { label: t("settings.codexAccounts.longestStreak"), value: t("settings.codexAccounts.dayCount", { count: usage.longestStreakDays }) },
 	].filter((metric): metric is { label: string; value: string } => Boolean(metric));
 	if (metrics.length === 0) return null;
-	return <section aria-labelledby="codex-account-activity-heading"><h4 id="codex-account-activity-heading" className="mb-2 font-medium text-foreground">{t("settings.codexAccounts.activity")}</h4><div className="rounded-md border border-border/70 bg-muted/15"><div data-testid="codex-account-activity-metrics" className="grid divide-x divide-border/70" style={{ gridTemplateColumns: `repeat(${metrics.length}, minmax(0, 1fr))` }}>{metrics.map((metric) => <div key={metric.label} className="min-w-0 px-2 py-2.5 text-center"><p className="truncate text-[13px] font-semibold leading-5 tabular-nums text-foreground" title={metric.value}>{metric.value}</p><p className="mt-0.5 text-[10px] leading-tight text-muted-foreground">{metric.label}</p></div>)}</div></div></section>;
+	return <section aria-labelledby="codex-account-activity-heading"><h4 id="codex-account-activity-heading" className="mb-1 font-medium text-settings-label">{t("settings.codexAccounts.activity")}</h4><div><div data-testid="codex-account-activity-metrics" className="grid gap-3" style={{ gridTemplateColumns: `repeat(${metrics.length}, minmax(0, 1fr))` }}>{metrics.map((metric) => <div key={metric.label} className="min-w-0 py-1"><p className="truncate text-[13px] font-semibold leading-5 tabular-nums text-foreground" title={metric.value}>{metric.value}</p><p className="mt-0.5 text-[10px] leading-tight text-settings-muted">{metric.label}</p></div>)}</div></div></section>;
 }
 
 function CapacityNotice({ reason, tone, checking }: { reason: string; tone: "warning" | "error" | "muted"; checking?: boolean }) {
 	const { t } = useTranslation();
-	const color = tone === "error" ? "border-error/30 bg-error/8 text-error" : tone === "warning" ? "border-warning/30 bg-warning/10 text-warning" : "border-border bg-muted/20 text-muted-foreground";
-	return <p className={`flex items-start gap-2 rounded-md border px-3 py-2.5 leading-5 ${color}`} role={tone === "error" ? "alert" : "status"}>{checking ? <LoaderCircle className="mt-0.5 size-3.5 shrink-0 animate-spin" aria-label={t("settings.codexAccounts.checking")} /> : <CircleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />}<span>{reason}</span></p>;
+	// Only a broken account (tone "error") blocks use, so only it keeps a box;
+	// warnings and checking notices are inline text (settings contract 6).
+	const color = tone === "error" ? "rounded-md border border-error/30 bg-error/8 px-3 py-2.5 text-error" : tone === "warning" ? "text-warning" : "text-settings-muted";
+	return <p className={`flex items-start gap-2 leading-5 ${color}`} role={tone === "error" ? "alert" : "status"}>{checking ? <LoaderCircle className="mt-0.5 size-3.5 shrink-0 animate-spin" aria-label={t("settings.codexAccounts.checking")} /> : <CircleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />}<span>{reason}</span></p>;
 }
 
 function capacityNoticeFor(account: CodexAccount, t: TFunction, locale: string): { reason: string; tone: "warning" | "error" | "muted"; checking?: boolean } | null {

@@ -1,0 +1,156 @@
+package minimaxacp
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	acpsdk "github.com/coder/acp-go-sdk"
+
+	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+)
+
+type stubPlugin struct {
+	profile string
+	calls *int
+}
+
+func (stubPlugin) ResolveBinary(context.Context) (string, error) { return "mcode", nil }
+func (stubPlugin) AuthStatus(context.Context) (ports.AgentAuthStatus, error) {
+	return ports.AgentAuthStatusConfigured, nil
+}
+func (p stubPlugin) PrepareChatProfile(context.Context, string, string, map[string]string) (string, error) {
+	if p.calls != nil {
+		*p.calls++
+	}
+	return p.profile, nil
+}
+
+func TestConfigureUsesPrivateAdditiveContextOnEveryLaunch(t *testing.T) {
+	profile := t.TempDir()
+	var previous string
+	for _, contextText := range []string{"--leading-dash\nprivate first", "--fresh restore instructions"} {
+		args, env, err := configure(stubPlugin{profile: profile})(context.Background(), acpdriver.LaunchConfig{
+			SystemPrompt: contextText, Permissions: ports.PermissionModeDefault,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(args) != 3 || args[0] != "acp" || args[1] != "--append-system-prompt-file" {
+			t.Fatalf("unexpected argv: %v", args)
+		}
+		if filepath.Dir(args[2]) != profile || args[2] == previous {
+			t.Fatal("context file must be private and fresh per process")
+		}
+		previous = args[2]
+		data, err := os.ReadFile(args[2])
+		if err != nil || string(data) != contextText {
+			t.Fatalf("context round trip: %v", err)
+		}
+		info, err := os.Stat(args[2])
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("context mode: %v", err)
+		}
+		for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
+			if _, overridden := env[key]; overridden {
+				t.Fatalf("Chat must preserve platform temp path: %s", key)
+			}
+		}
+		if env["MINIMAX_DATA_DIR"] != profile || env["MAVIS_DATA_DIR"] != profile {
+			t.Fatalf("private environment mismatch: %v", env)
+		}
+	}
+}
+
+func TestNativePermissionPolicyUsesConfigNotPlanMode(t *testing.T) {
+	for _, mode := range []ports.PermissionMode{"", ports.PermissionModeDefault, ports.PermissionModeAuto, ports.PermissionModeBypassPermissions} {
+		cfg := acpdriver.LaunchConfig{Permissions: mode}
+		if err := validateTurnSettings(mode, ports.ChatTurnSettings{Approval: mode}); err != nil {
+			t.Fatal(err)
+		}
+		want := []acpdriver.SessionOption{{ID: "permissionMode", Value: string(ports.NormalizePermissionMode(mode))}}
+		if got := launchOptions(cfg); !reflect.DeepEqual(got, want) {
+			t.Fatalf("launch options = %v, want %v", got, want)
+		}
+	}
+	for _, mode := range []ports.PermissionMode{ports.PermissionModeAcceptEdits, "unknown"} {
+		if err := validateTurnSettings(mode, ports.ChatTurnSettings{}); !errors.Is(err, ports.ErrChatConfigOptionInvalid) {
+			t.Fatalf("unsupported mode %q: %v", mode, err)
+		}
+	}
+}
+
+func TestModelMappingPreservesNativeChoicesAndEscapesCatalogIDs(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{"custom_provider:work/vendor/model", "m:custom_provider%3Awork:vendor%2Fmodel:u"},
+		{"provider+ /m?é!*'()", "m:provider%2B%20:m%3F%C3%A9!*'():u"},
+		{"m:custom_provider%3Awork:vendor%2Fmodel:v:fast%2B", "m:custom_provider%3Awork:vendor%2Fmodel:v:fast%2B"},
+	} {
+		got, err := modelValue(tc.input)
+		if err != nil || got != tc.want {
+			t.Fatalf("modelValue(%q) = %q, %v; want %q", tc.input, got, err, tc.want)
+		}
+	}
+	for _, invalid := range []string{"bare-model", "/model", "provider/", "m:p::u", "m:p:m:u:extra", "m:p:%broken:u"} {
+		if _, err := modelValue(invalid); err == nil {
+			t.Fatalf("accepted invalid model %q", invalid)
+		}
+	}
+	got := sessionOptions(ports.ChatTurnSettings{Model: "p/m", Effort: "high", Approval: ports.PermissionModeAuto})
+	want := []acpdriver.SessionOption{{ID: "model", Value: "m:p:m:u"}, {ID: "thinkingEffort", Value: "high"}, {ID: "permissionMode", Value: "auto"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("options = %v, want %v", got, want)
+	}
+}
+
+func TestInitializeRejectsUnqualifiedDistributionAndMissingLoad(t *testing.T) {
+	valid := acpsdk.InitializeResponse{
+		ProtocolVersion: acpsdk.ProtocolVersionNumber,
+		AgentInfo: &acpsdk.Implementation{Name: "minimax-code", Version: "0.6.5"},
+		AgentCapabilities: acpsdk.AgentCapabilities{LoadSession: true},
+	}
+	if err := validateInitialize(valid); err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(*acpsdk.InitializeResponse){
+		func(r *acpsdk.InitializeResponse) { r.AgentInfo = nil },
+		func(r *acpsdk.InitializeResponse) { r.AgentInfo = &acpsdk.Implementation{Name: "minimax-code", Version: "0.6.9"} },
+		func(r *acpsdk.InitializeResponse) { r.AgentCapabilities.LoadSession = false },
+	} {
+		candidate := valid
+		mutate(&candidate)
+		if err := validateInitialize(candidate); err == nil {
+			t.Fatal("accepted incompatible initialize")
+		}
+	}
+	driver := New(stubPlugin{}, nil)
+	if driver.Harness() != domain.HarnessMiniMaxCode {
+		t.Fatal("wrong harness identity")
+	}
+}
+
+func TestContextValidationFailsBeforeLaunch(t *testing.T) {
+	for _, text := range []string{" \n\t", strings.Repeat("x", (512<<10)+1)} {
+		calls := 0
+		if _, _, err := configure(stubPlugin{profile: t.TempDir(), calls: &calls})(context.Background(), acpdriver.LaunchConfig{SystemPrompt: text}); err == nil {
+			t.Fatal("accepted invalid standing context")
+		}
+		if calls != 0 {
+			t.Fatal("invalid context copied credential resources before validation")
+		}
+	}
+}
+
+func TestRestoreIdentityCannotSelectLatestOrAnotherMode(t *testing.T) {
+	for _, invalid := range []string{"", "latest", "ao-session-id", "mvs_short"} {
+		if _, err := decodeNativeID(invalid); err == nil {
+			t.Fatalf("accepted non-native identity %q", invalid)
+		}
+	}
+}

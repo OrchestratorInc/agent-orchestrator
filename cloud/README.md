@@ -283,6 +283,7 @@ All resource routes use `/api/cloud/v1`. Project and session creation require an
 | `PUT` | `/orgs/{orgId}/sessions/{sessionId}/workspace/review/file` | Write an editable file when its expected fingerprint still matches |
 | `POST` | `/orgs/{orgId}/sessions/{sessionId}/terminal-ticket` | Create a short-lived workspace-terminal ticket |
 | `GET` | `/terminal` | Upgrade a single-use ticket to the durable terminal WebSocket |
+| `GET/POST` | `/orgs/{orgId}/sessions/{sessionId}/agent-browser/*` | Relay the sandbox's agent browser (viewer, stream socket, file transfers) to the desktop |
 
 WorkOS access tokens and local development tokens both use
 `Authorization: Bearer <token>`.

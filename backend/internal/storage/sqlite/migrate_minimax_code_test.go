@@ -5,11 +5,11 @@ import (
 	"testing"
 )
 
-// TestMigration0200AllowsMiniMaxCodeAndReversesBothHistoricalSchemas mirrors the
+// TestMigration0201AllowsMiniMaxCodeAndReversesBothHistoricalSchemas mirrors the
 // fx and DeepSeek coverage: the new harness must be insertable on a current and a
 // legacy-qm schema, an unknown harness must still be rejected, and the down
 // migration must restore the exact prior constraint.
-func TestMigration0200AllowsMiniMaxCodeAndReversesBothHistoricalSchemas(t *testing.T) {
+func TestMigration0201AllowsMiniMaxCodeAndReversesBothHistoricalSchemas(t *testing.T) {
 	for _, legacyQM := range []bool{false, true} {
 		name := "current"
 		if legacyQM {
@@ -19,7 +19,7 @@ func TestMigration0200AllowsMiniMaxCodeAndReversesBothHistoricalSchemas(t *testi
 			db := openMigratedDatabaseCopy(t, 194)
 			if legacyQM {
 				// The retained legacy 'qm' fixture harness sits before
-				// 'codewhale' in every variant 0200 rewrites, so anchor
+				// 'codewhale' in every variant 0201 rewrites, so anchor
 				// there to produce a schema the migration still recognizes.
 				mustExec(t, db, `PRAGMA writable_schema = ON`)
 				mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''openhands'', ''codewhale''', '''openhands'', ''qm'', ''codewhale''') WHERE type = 'table' AND name = 'sessions'`)
@@ -36,13 +36,13 @@ func TestMigration0200AllowsMiniMaxCodeAndReversesBothHistoricalSchemas(t *testi
 			if legacyQM {
 				mustExec(t, db, insert, "existing-qm", 2, "qm")
 			}
-			upTo(t, db, 200)
+			upTo(t, db, 201)
 			if _, err := db.Exec(insert, "cc-session", 3, "minimax-code"); err != nil {
 				t.Fatalf("insert minimax-code session after migration: %v", err)
 			}
 			var version int
-			if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 200 {
-				t.Fatalf("migration version = %d, err = %v; want 200", version, err)
+			if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 201 {
+				t.Fatalf("migration version = %d, err = %v; want 201", version, err)
 			}
 			if _, err := db.Exec(insert, "unknown", 4, "unknown-agent"); err == nil {
 				t.Fatal("unknown harness bypassed the CHECK constraint")

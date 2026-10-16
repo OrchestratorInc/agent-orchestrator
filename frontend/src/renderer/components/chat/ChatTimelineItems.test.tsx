@@ -342,6 +342,33 @@ describe("ActivityRow", () => {
 		expect(screen.getByRole("button").textContent).not.toContain("`");
 	});
 
+	it("shows a finished project setup with its duration and expandable output", () => {
+		render(
+			<ActivityRow activity={{
+				kind: "activity", id: "startup", sequence: 1, revision: 1, createdAt: "2026-10-13T00:00:00Z",
+				activityKind: "system", status: "completed", summary: "Setup finished",
+				detail: { event: "workspace.setup", setupStatus: "succeeded", exitCode: 0, durationMs: 12_400, output: "compose up\nready" },
+			}} />,
+		);
+		expect(screen.getByText("Setup finished in 12s")).toBeInTheDocument();
+		expect(screen.queryByText(/compose up/)).toBeNull();
+		act(() => screen.getByRole("button", { name: "Show output" }).click());
+		expect(screen.getByRole("button", { name: "Hide output" })).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByText(/compose up/)).toBeInTheDocument();
+	});
+
+	it("shows the failed setup step with its exit code", () => {
+		render(
+			<ActivityRow activity={{
+				kind: "activity", id: "startup", sequence: 1, revision: 1, createdAt: "2026-10-13T00:00:00Z",
+				activityKind: "system", status: "failed", summary: "Setup failed",
+				detail: { event: "workspace.setup", setupStatus: "failed", setupStep: 2, exitCode: 2, durationMs: 65_000 },
+			}} />,
+		);
+		expect(screen.getByText("Setup step 2 failed (exit 2)")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Show output" })).toBeNull();
+	});
+
 	it("does not present a recovered historical activity as failed", () => {
 		render(
 			<ActivityRow

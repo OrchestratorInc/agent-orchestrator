@@ -71,6 +71,20 @@ and the configured run file/data directory (`AO_RUN_FILE` / `AO_DATA_DIR` when s
 The primary daemon normally uses loopback port 3001; port alone does not establish
 which version or installation is affected. Consult the installed CLI help for commands.
 
+For local-daemon evidence, use the affected binary's `--version` and `status --json`;
+status reads existing state without starting the daemon. For a known affected session,
+use `session get <id> --json` and keep only fields relevant to the symptom. If the
+daemon is unavailable, record its status or error and mark session evidence unavailable.
+
+Record app and CLI versions separately from daemon identity. Health probes provide no
+daemon release version; `dev` alone or missing build metadata does not identify the
+source. Label source findings approximate when the affected build cannot be matched.
+
+Do not run `doctor` or `agent ls` as routine evidence collectors: doctor writes files
+and checks remote authentication; agent listing triggers readiness checks.
+`remote-host status` can print the pairing password. Desktop status refresh may start
+a replacement daemon; prefer the CLI status check or already available evidence.
+
 Collect only what helps explain this symptom:
 
 | Symptom | Potential evidence |
@@ -80,13 +94,21 @@ Collect only what helps explain this symptom:
 | Daemon or CLI failure | Version/status, exact command and error, relevant daemon logs |
 | Persisted state mismatch | Relevant rows and schema from a read-only SQLite query |
 
+Locate logs for the affected process rather than assuming `~/.ao/daemon.log` is current.
+Daemon output goes to stderr and may not persist; that file mostly covers keep-alive
+launches. Record missing evidence instead of enabling logging just to create it.
+
 Use the daemon API/CLI for state first. If database evidence is needed, discover the
 actual database location and schema, open it read-only, and select only relevant rows
-and columns. Never attach an entire database or broad log dump. Redact tokens,
+and columns. Never attach an entire database, broad log dump, or Electron profile
+folder, which also holds browser cookies and storage. Redact tokens,
 credentials, private prompts, and unrelated personal or repository data from every
 artifact, including screenshots. Keep diagnostic artifacts under `~/.ao` and out of
 Git commits. Preserve evidentiary content when redacting, and verify that unrelated
 content did not change. Share a useful excerpt rather than a wall of output.
+
+The report form's sanitizer masks known patterns only; review the exact draft and
+artifacts before sharing.
 
 Try a safe reproduction when practical, recording the build actually tested. Failure
 to reproduce does not invalidate the human report. Code tracing or dependency research
@@ -94,18 +116,29 @@ is optional when it can add concrete evidence. Keep findings in the separate evi
 
 ## Check for duplicates
 
-Search open and closed issues and related PRs using the symptom or exact error:
+Resolve AO's canonical repository name before searching. GitHub issue and PR searches
+can return empty results for a former owner even when repository API requests redirect.
+Use the resolved name, not the reporter's project repository. Search open and closed
+issues and related PRs using the symptom or exact error:
 
 ```bash
-gh issue list --repo Untrivial-ai/agent-orchestrator --state all --search '<symptom or error>'
-gh pr list --repo Untrivial-ai/agent-orchestrator --state all --search '<symptom or error>'
+if ao_triage_repo=$(gh api repos/OrchestratorInc/agent-orchestrator --jq .full_name) && [ -n "$ao_triage_repo" ]; then
+  gh issue list --repo "$ao_triage_repo" --state all --search '<symptom or error>' --limit 100
+  gh pr list --repo "$ao_triage_repo" --state all --search '<symptom or error>' --limit 100
+else
+  printf '%s\n' 'Repository lookup failed; duplicate search skipped.' >&2
+fi
 ```
+
+Include the searched repository and candidates considered in the separate evidence.
+Try useful symptom synonyms or a shorter error fragment when needed.
 
 Read likely matches before calling a report a duplicate. If one matches, give the
 reporter its link and draft only their new observation for a comment, with evidence
 attached separately. If a closed issue appears to have regressed, explain that to the
-reporter rather than silently treating it as resolved. If search is unavailable,
-state that briefly; it does not block preparing the report.
+reporter rather than silently treating it as resolved. If repository lookup or either
+search fails or is unavailable, say which part could not be checked. Empty, truncated,
+or failed searches do not prove there is no duplicate; continue preparing the report.
 
 ## Preserve attribution and submission scope
 
@@ -126,3 +159,5 @@ Finish with the concise draft (or issue link if submitted), any duplicate link, 
 attachment paths/links. Do not automatically file an issue, implement a fix, push a
 PR, or spawn a worker. Follow the user's requested scope and the repository's normal
 contribution workflow if they separately ask for implementation.
+
+The bundled `scripts/push_fix_to_github.py` is a legacy fix publisher, not a triage step.

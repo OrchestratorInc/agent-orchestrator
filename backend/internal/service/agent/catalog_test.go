@@ -392,6 +392,74 @@ func TestChangedInputsStartANewRetrySequence(t *testing.T) {
 	}
 }
 
+func TestEmptyModelDiscoveryPreservesRetrySequence(t *testing.T) {
+	for _, reset := range []string{"manual refresh", "changed inputs"} {
+		t.Run(reset, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			now := time.Now().UTC()
+			cache := &fakeModelCache{}
+			discoverer := &fakeModelDiscoverer{version: "v1", err: errors.New("offline")}
+			svc := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, cache, nil, discoverer)
+			svc.ctx = ctx
+			svc.now = func() time.Time { return now }
+
+			for attempt, delay := range []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, 0} {
+				got, err := svc.RevalidateModels(ctx, "claude-code", "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(got.Models) != 0 || got.RefreshState != "error" || got.Warning != "offline" {
+					t.Fatalf("failed empty discovery = %#v", got)
+				}
+				record, ok, err := cache.GetAgentModelCatalog(ctx, "claude-code", "")
+				if err != nil || !ok {
+					t.Fatalf("cached failure = (%#v, %v, %v)", record, ok, err)
+				}
+				if record.RetryCount != int64(attempt+1) || discoverer.discoverCalls.Load() != int32(attempt+1) {
+					t.Fatalf("attempt %d: retry count = %d, discoveries = %d", attempt+1, record.RetryCount, discoverer.discoverCalls.Load())
+				}
+				if delay == 0 {
+					if !record.RetryAt.IsZero() || got.RetryAt != nil || got.RefreshRecommended {
+						t.Fatalf("exhausted discovery still recommends retry: %#v", got)
+					}
+				} else {
+					wantRetryAt := now.Add(delay)
+					if !record.RetryAt.Equal(wantRetryAt) || got.RetryAt == nil || !got.RetryAt.Equal(wantRetryAt) || !got.RefreshRecommended {
+						t.Fatalf("attempt %d: retryAt = %v, want %s", attempt+1, got.RetryAt, wantRetryAt)
+					}
+				}
+				// Automatic reads must respect both the backoff and the stop limit.
+				if _, err := svc.RevalidateModels(ctx, "claude-code", ""); err != nil {
+					t.Fatal(err)
+				}
+				if discoverer.discoverCalls.Load() != int32(attempt+1) {
+					t.Fatal("automatic revalidation ignored retry backoff or exhaustion")
+				}
+				now = now.Add(delay)
+			}
+
+			var err error
+			if reset == "manual refresh" {
+				_, err = svc.Models(ctx, "claude-code", "", true)
+			} else {
+				discoverer.version = "v2"
+				_, err = svc.RevalidateModels(ctx, "claude-code", "")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			record, ok, err := cache.GetAgentModelCatalog(ctx, "claude-code", "")
+			if err != nil || !ok {
+				t.Fatalf("reset cache = (%#v, %v, %v)", record, ok, err)
+			}
+			if record.RetryCount != 1 || !record.RetryAt.Equal(now.Add(time.Minute)) || record.InputFingerprint != discoverer.version || discoverer.discoverCalls.Load() != 5 {
+				t.Fatalf("%s did not restart the retry sequence: %#v", reset, record)
+			}
+		})
+	}
+}
+
 func TestOnlyManualModelRefreshPersistsLoadingState(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -1829,7 +1897,7 @@ func TestClaudeModelsUsesMatchingProviderCache(t *testing.T) {
 		version: "same-fingerprint",
 		catalog: ports.AgentModelCatalog{
 			AgentID: "claude-code", SelectionMode: ports.ModelSelectionCatalog,
-			Models: []ports.AgentModelInfo{{ID: "sonnet"}, {ID: "opus"}}, Source: "catalog",
+			Models: []ports.AgentModelInfo{}, Source: "manual",
 		},
 		err: errors.New("provider unavailable"),
 	}
@@ -1872,7 +1940,7 @@ func TestClaudeModelsRevalidationKeepsMatchingProviderCacheOnFailure(t *testing.
 		version: "same-fingerprint",
 		catalog: ports.AgentModelCatalog{
 			AgentID: "claude-code", SelectionMode: ports.ModelSelectionCatalog,
-			Models: []ports.AgentModelInfo{{ID: "sonnet"}, {ID: "opus"}}, Source: "catalog",
+			Models: []ports.AgentModelInfo{}, Source: "manual",
 		},
 		err: errors.New("provider unavailable"),
 	}
@@ -1908,18 +1976,54 @@ func TestClaudeModelsRejectProviderCacheWhenCredentialFingerprintChanges(t *test
 		version: "credential-b",
 		catalog: ports.AgentModelCatalog{
 			AgentID: "claude-code", SelectionMode: ports.ModelSelectionCatalog,
-			Models: []ports.AgentModelInfo{{ID: "sonnet"}, {ID: "opus"}}, Source: "catalog",
+			Models: []ports.AgentModelInfo{}, Source: "manual",
 		},
 		err: errors.New("provider unavailable"),
 	}
 	svc := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, cache, nil, discoverer)
 
+	// The cache is served at once while the credential inputs are checked in
+	// the background; it reports itself refreshing so open views re-read it.
 	got, err := svc.Models(context.Background(), "claude-code", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Models) != 2 || got.Models[0].ID != "sonnet" || got.Models[1].ID != "opus" || got.Source != "catalog" || !got.Stale {
-		t.Fatalf("catalog = %#v, want current-credential fallback", got)
+	if len(got.Models) != 1 || got.Models[0].ID != "us.anthropic.claude-opus-v1" || got.RefreshState != "refreshing" {
+		t.Fatalf("first read = %#v, want the cached catalog marked refreshing", got)
+	}
+	// A later read returns the catalog rediscovered for the current credential.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got, err = svc.Models(context.Background(), "claude-code", "", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Models) == 0 && got.Source == "manual" && got.Stale {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("catalog = %#v, want current-credential fallback after the background check", got)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestGlobalModelsNeverBorrowAnotherScopesCatalog(t *testing.T) {
+	project := cachedModelRecord(t, "cursor", "project-a", time.Now().Add(-time.Hour), false)
+	project.ProjectID = "project-a"
+	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{"cursor\x00project-a": project}}
+	discoverer := &fakeModelDiscoverer{
+		catalog: ports.AgentModelCatalog{AgentID: "cursor", SelectionMode: ports.ModelSelectionCatalog, Models: []ports.AgentModelInfo{{ID: "cursor/global"}}, Source: "catalog"},
+	}
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("cursor", "Cursor", nil)}, cache, nil, discoverer)
+	// A project's catalog can reflect that project's own credentials, so the
+	// device-global scope discovers its own instead of showing it.
+	got, err := svc.Models(context.Background(), "cursor", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Models) != 1 || got.Models[0].ID != "cursor/global" {
+		t.Fatalf("global read = %#v, want its own discovery", got)
 	}
 }
 
@@ -2328,7 +2432,7 @@ func cachedModelRecord(t *testing.T, agentID, _ string, validatedAt time.Time, s
 	return ports.CachedAgentModelCatalog{AgentID: agentID, CatalogJSON: string(data), FetchedAt: validatedAt}
 }
 
-func TestWarmModelCatalogsRevalidatesOnlyCachedClaudeAndMuseCatalogsSequentially(t *testing.T) {
+func TestPrefetchModelCatalogsRefreshesAllHarnessesWithBoundedConcurrency(t *testing.T) {
 	old := time.Now().Add(-24 * time.Hour)
 	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{
 		"claude-code\x00": cachedModelRecord(t, "claude-code", "", old, false),
@@ -2344,26 +2448,29 @@ func TestWarmModelCatalogsRevalidatesOnlyCachedClaudeAndMuseCatalogsSequentially
 		harnessAgent("codex", "Codex", nil),
 	}, cache, nil, discoverer)
 
-	svc.warmModelCatalogs(context.Background())
-	if got := discoverer.discoverCalls.Load(); got != 2 {
-		t.Fatalf("discovery calls = %d, want cached Claude and Muse catalogs only", got)
+	svc.prefetchModelCatalogs(context.Background(), false)
+	if got := discoverer.discoverCalls.Load(); got != 3 {
+		t.Fatalf("discovery calls = %d, want Claude, Muse and Codex refreshed", got)
 	}
-	if discoverer.overlap.Load() {
-		t.Fatal("startup model discoveries overlapped")
+	if got := discoverer.maxActive.Load(); got > 2 {
+		t.Fatalf("concurrent discoveries = %d, want at most two", got)
 	}
 }
 
-func TestWarmModelCatalogsSuppressesRecentSuccessfulValidation(t *testing.T) {
-	recent := time.Now().Add(-time.Minute)
+func TestPrefetchModelCatalogsSuppressesRecentSuccessfulValidation(t *testing.T) {
+	recent := time.Now()
+	record := cachedModelRecord(t, "claude-code", "", recent, false)
+	record.LastSuccessAt = recent
+	record.RefreshState = "idle"
 	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{
-		"claude-code\x00": cachedModelRecord(t, "claude-code", "", recent, false),
+		"claude-code\x00": record,
 	}}
 	discoverer := &fakeModelDiscoverer{catalog: ports.AgentModelCatalog{
 		SelectionMode: ports.ModelSelectionCatalog, Models: []ports.AgentModelInfo{{ID: "fresh-model"}}, Source: "cli",
 	}}
 	svc := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, cache, nil, discoverer)
 
-	svc.warmModelCatalogs(context.Background())
+	svc.prefetchModelCatalogs(context.Background(), false)
 	if got := discoverer.discoverCalls.Load(); got != 0 {
 		t.Fatalf("discovery calls = %d, want recent global catalog preserved", got)
 	}
@@ -2396,5 +2503,144 @@ func TestWarmModelCatalogsStartsAsynchronously(t *testing.T) {
 	}
 	if discoverer.active.Load() != 0 {
 		t.Fatal("background warm did not finish")
+	}
+}
+
+// Catalog browsing must not wait on recency hints used only by task pickers.
+type forbiddenCatalogSessionLookup struct{}
+
+func (forbiddenCatalogSessionLookup) ListAllSessions(context.Context) ([]domain.SessionRecord, error) {
+	panic("catalog-only read scanned session history")
+}
+
+func TestModelCatalogServesPersistedModelsDuringBlockedRefresh(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{
+		"fx\x00": cachedModelRecord(t, "fx", "", time.Now(), false),
+	}}
+	discoverer := &blockingSubsequentModelDiscoverer{
+		fakeModelDiscoverer: successfulModelDiscoverer(),
+		started:             make(chan struct{}), release: make(chan struct{}),
+	}
+	// The persisted catalog came from an earlier daemon process.
+	discoverer.discoverCalls.Store(1)
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("fx", "FX", nil)}, cache, nil, discoverer)
+	svc.ctx = ctx
+	svc.sessions = forbiddenCatalogSessionLookup{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = svc.ModelCatalog(ctx, "fx", "", true)
+	}()
+	defer func() { close(discoverer.release); <-done }()
+	select {
+	case <-discoverer.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresh did not start")
+	}
+	readCtx, stopRead := context.WithTimeout(ctx, time.Second)
+	defer stopRead()
+	got, err := svc.ModelCatalog(readCtx, "fx", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Models) != 1 || got.Models[0].ID != "cached-model" {
+		t.Fatalf("catalog = %#v, want persisted models before refresh completes", got)
+	}
+}
+
+func TestSettingsAndTaskModelsSharePersistentCatalog(t *testing.T) {
+	for _, agentID := range []string{"fx", "opencode", "qwen"} {
+		t.Run(agentID, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			cache := &fakeModelCache{}
+			discoverer := successfulModelDiscoverer()
+			svc := newService([]agentregistry.HarnessAgent{harnessAgent(agentID, agentID, nil)}, cache, nil, discoverer)
+			svc.ctx = ctx
+			if _, err := svc.Models(ctx, agentID, "", true); err != nil {
+				t.Fatal(err)
+			}
+			// Settings must read the task catalog saved by a previous daemon,
+			// even when no Settings-specific catalog has ever been discovered.
+			restarted := newService(svc.agents, cache, nil, discoverer)
+			restarted.ctx = ctx
+			restarted.sessions = forbiddenCatalogSessionLookup{}
+			got, err := restarted.ModelCatalog(ctx, agentID, "", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Models) != 1 || got.Models[0].ID != "model-one" {
+				t.Fatalf("Settings models = %#v", got.Models)
+			}
+			if calls := discoverer.discoverCalls.Load(); calls != 1 {
+				t.Fatalf("discoveries = %d, want the persisted task catalog reused", calls)
+			}
+			discoverer.mu.Lock()
+			discoverer.catalog.Models = []ports.AgentModelInfo{{ID: "refreshed-model"}}
+			discoverer.mu.Unlock()
+			if _, err := restarted.ModelCatalog(ctx, agentID, "", true); err != nil {
+				t.Fatal(err)
+			}
+			got, err = svc.Models(ctx, agentID, "", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Models) != 1 || got.Models[0].ID != "refreshed-model" {
+				t.Fatalf("task models after Settings refresh = %#v", got.Models)
+			}
+			if _, ok, _ := cache.GetAgentModelCatalog(ctx, agentID, "@browse:all"); ok {
+				t.Fatal("Settings created a separate browsing catalog")
+			}
+		})
+	}
+}
+
+func TestSharedCatalogRefreshRetainsOnlyFailedProviderModels(t *testing.T) {
+	cache := &fakeModelCache{}
+	discoverer := successfulModelDiscoverer()
+	discoverer.catalog = ports.AgentModelCatalog{AgentID: "fx", Models: []ports.AgentModelInfo{
+		{ID: "old", Provider: "gateway"}, {ID: "cached", Provider: "codex"},
+	}}
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("fx", "FX", nil)}, cache, nil, discoverer)
+	if _, err := svc.ModelCatalog(context.Background(), "fx", "", true); err != nil {
+		t.Fatal(err)
+	}
+	discoverer.mu.Lock()
+	discoverer.catalog = ports.AgentModelCatalog{AgentID: "fx", Models: []ports.AgentModelInfo{{ID: "new", Provider: "gateway"}},
+		Metadata: map[string]string{"unavailableProviders": "codex"}, Warning: "Codex unavailable"}
+	discoverer.mu.Unlock()
+	for range 2 {
+		got, err := svc.ModelCatalog(context.Background(), "fx", "", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Models) != 2 || got.Models[0].ID != "new" || got.Models[1].ID != "cached" {
+			t.Fatalf("models = %#v", got.Models)
+		}
+		if got.Warning == "" {
+			t.Fatal("missing partial refresh explanation")
+		}
+	}
+}
+
+func TestStartupPrefetchIgnoresRetiredSettingsCatalog(t *testing.T) {
+	old := time.Now().Add(-48 * time.Hour)
+	retired := cachedModelRecord(t, "fx", "", old, false)
+	retired.ProjectID = "@browse:all"
+	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{
+		"fx\x00@browse:all": retired,
+	}}
+	discoverer := successfulModelDiscoverer()
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("fx", "FX", nil)}, cache, nil, discoverer)
+
+	svc.prefetchModelCatalogs(context.Background(), true)
+
+	if calls := discoverer.discoverCalls.Load(); calls != 1 {
+		t.Fatalf("discoveries = %d, want only the shared global catalog warmed", calls)
+	}
+	if _, ok, _ := cache.GetAgentModelCatalog(context.Background(), "fx", ""); !ok {
+		t.Fatal("missing shared catalog")
 	}
 }

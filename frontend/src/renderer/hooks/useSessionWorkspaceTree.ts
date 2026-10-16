@@ -26,6 +26,7 @@ export function sessionWorkspaceTreeQueryOptions(sessionId: string, dir: string,
 	return {
 		queryKey: sessionWorkspaceTreeQueryKey(sessionId, dir, hostId),
 		queryFn: () => fetchSessionWorkspaceTree(sessionId, dir, errorMessage, hostId),
+		staleTime: 5_000,
 	};
 }
 
