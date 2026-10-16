@@ -47,6 +47,8 @@ export function UsageLimitNotice({
 	const resetAt = Number.isFinite(parsedReset) ? parsedReset : undefined;
 	const ready = resetAt === undefined || now >= resetAt;
 	const actionError = error ?? usageLimit.resumeError;
+	const scheduled = resetAt !== undefined && usageLimit.autoResume;
+	const showResume = onResume && !scheduled;
 	const showAutoResume = resetAt !== undefined && onAutoResumeChange && (!ready || usageLimit.autoResume);
 
 	useEffect(() => {
@@ -71,65 +73,68 @@ export function UsageLimitNotice({
 			data-testid="usage-limit-notice"
 			aria-busy={pending || undefined}
 			className={cn(
-				"flex min-w-0 items-start gap-2.5",
-				compact ? "py-1" : "rounded-md border border-warning/20 bg-warning/10 px-3 py-2.5",
+				"flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2",
+				compact ? "py-1" : "px-2 py-2.5",
 			)}
 		>
-			<Gauge aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-warning" />
-			<div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1.5">
-				<strong className="text-balance text-xs font-medium text-warning">{t("chat.usageLimit.title")}</strong>
-				{!compact ? (
-					<>
-						<span className="text-pretty text-xs text-muted-foreground">
-							{resetAt === undefined ? t("chat.usageLimit.unknownReset") : (
+			<div className={cn("flex min-w-0 flex-1 items-start gap-2.5", !compact && "basis-64")}>
+				<Gauge aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-warning" />
+				<div className="min-w-0 flex-1">
+					<div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+						<strong className="text-balance text-xs font-medium text-foreground">{t("chat.usageLimit.title")}</strong>
+						{!compact && resetAt !== undefined && (!ready || !scheduled) ? (
+							<span className="text-pretty text-xs text-muted-foreground">
+								{ready ? <span role="status">{t("chat.usageLimit.ready")}</span> : (
+									<Trans
+										t={t} i18nKey="chat.usageLimit.availableIn"
+										values={{ duration: remainingTime(resetAt - now, t) }}
+										components={{ duration: <span className="font-medium tabular-nums text-foreground" /> }}
+									/>
+								)}
+							</span>
+						) : null}
+					</div>
+					{!compact ? (
+						<p className="mt-1 text-pretty text-xs leading-5 text-muted-foreground">
+							{scheduled ? <span role="status" className="mr-2 text-foreground">{t("chat.usageLimit.scheduled")}</span> : null}
+							{resetAt === undefined ? <span>{t("chat.usageLimit.unknownReset")}</span> : (
 								<Trans
 									t={t} i18nKey="chat.usageLimit.resetsAt"
 									values={{ time: resetTimeFormatter.format(resetAt) }}
-									components={{ time: <time dateTime={usageLimit.resetsAt} /> }}
+									components={{ time: <time className="tabular-nums" dateTime={usageLimit.resetsAt} /> }}
 								/>
 							)}
-						</span>
-						<span className="text-pretty text-xs text-muted-foreground">
-							{resetAt === undefined ? t("chat.usageLimit.manualResumeHint") : ready ? (
-								<span role="status">{t("chat.usageLimit.ready")}</span>
-							) : (
-								<Trans
-									t={t} i18nKey="chat.usageLimit.availableIn"
-									values={{ duration: remainingTime(resetAt - now, t) }}
-									components={{ duration: <span className="tabular-nums" /> }}
-								/>
-							)}
-							{resetAt !== undefined && usageLimit.autoResume ? ` ${t("chat.usageLimit.scheduled")}` : null}
-						</span>
-						{onResume || showAutoResume ? (
-							<div className="ml-auto flex flex-wrap items-center gap-2">
-								{onResume ? (
-									<Button
-										type="button" size="sm" variant="outline" onClick={onResume}
-										disabled={pending || disabled || !ready}
-										title={!ready ? t("chat.usageLimit.resumeHint") : undefined}
-										className="focus-visible:ring-2 focus-visible:ring-ring"
-									>
-										{pending ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" /> : <Play aria-hidden="true" className="size-3.5" />}
-										{t("chat.usageLimit.resume")}
-									</Button>
-								) : null}
-								{showAutoResume ? (
-									<Button
-										type="button" size="sm" variant="ghost"
-										onClick={() => onAutoResumeChange?.(!usageLimit.autoResume)}
-										disabled={pending || disabled}
-										className="focus-visible:ring-2 focus-visible:ring-ring"
-									>
-										{t(usageLimit.autoResume ? "chat.usageLimit.cancelAutoResume" : "chat.usageLimit.autoResume")}
-									</Button>
-								) : null}
-							</div>
-						) : null}
-					</>
-				) : null}
-				{actionError ? <p role="alert" className="w-full whitespace-pre-wrap wrap-anywhere text-pretty text-xs text-destructive">{actionError}</p> : null}
+							{resetAt === undefined ? <> <span>{t("chat.usageLimit.manualResumeHint")}</span></> : null}
+						</p>
+					) : null}
+					{actionError ? <p role="alert" className="mt-1 whitespace-pre-wrap wrap-anywhere text-pretty text-xs text-destructive">{actionError}</p> : null}
+				</div>
 			</div>
+			{!compact && (showResume || showAutoResume) ? (
+				<div className="ml-auto flex flex-wrap items-center gap-1">
+					{showResume ? (
+						<Button
+							type="button" size="sm" variant={ready ? "primary" : "ghost"} onClick={onResume}
+							disabled={pending || disabled || !ready}
+							title={!ready ? t("chat.usageLimit.resumeHint") : undefined}
+							className="focus-visible:ring-2 focus-visible:ring-ring"
+						>
+							{pending ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" /> : <Play aria-hidden="true" className="size-3.5" />}
+							{t("chat.usageLimit.resume")}
+						</Button>
+					) : null}
+					{showAutoResume ? (
+						<Button
+							type="button" size="sm" variant={scheduled ? "ghost" : "secondary"}
+							onClick={() => onAutoResumeChange?.(!usageLimit.autoResume)}
+							disabled={pending || disabled}
+							className="focus-visible:ring-2 focus-visible:ring-ring"
+						>
+							{t(usageLimit.autoResume ? "chat.usageLimit.cancelAutoResume" : "chat.usageLimit.autoResume")}
+						</Button>
+					) : null}
+				</div>
+			) : null}
 		</div>
 	);
 }

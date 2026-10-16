@@ -78,7 +78,7 @@ describe("TurnOutcome", () => {
 		expect(screen.getByText("Provider error")).toBeInTheDocument();
 	});
 
-	it("presents a usage limit as an amber historical notice without retry controls", () => {
+	it("presents a usage limit as a historical notice without retry controls", () => {
 		render(
 			<TurnOutcome
 				state="failed"
@@ -88,7 +88,7 @@ describe("TurnOutcome", () => {
 			/>,
 		);
 
-		expect(screen.getByText("Usage limit reached")).toHaveClass("text-warning");
+		expect(screen.getByText("Usage limit reached")).toBeInTheDocument();
 		expect(screen.queryByText("The agent ran into a problem")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button")).not.toBeInTheDocument();
 		expect(screen.getByRole("link", { name: "https://example.com/billing" })).toHaveAttribute("href", "https://example.com/billing");
