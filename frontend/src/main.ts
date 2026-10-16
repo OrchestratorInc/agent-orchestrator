@@ -19,6 +19,7 @@ import {
 	protocol,
 	shell,
 	session,
+	utilityProcess,
 	WebContentsView,
 	webContents,
 	type WebContents,
@@ -157,7 +158,7 @@ import {
 import { createBrowserProfileStore } from "./main/browser-profile-store";
 import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
-import { BrowserProfileImportService } from "./main/browser-profile-import";
+import { BrowserProfileImportService, processSourceReader } from "./main/browser-profile-import";
 import {
 	registerBrowserProfileIpc,
 	type BrowserProfileIpc,
@@ -518,6 +519,10 @@ function annotatePreloadPath(): string {
 	return path.join(__dirname, "annotate-preload.js");
 }
 
+function browserProfileImportWorkerPath(): string {
+	return path.join(__dirname, "browser-profile-import-worker.js");
+}
+
 // Runtime window/taskbar icon for Linux and Windows. macOS ignores this and
 // uses the .app bundle's .icns instead. Packaged: shipped via extraResource to
 // resources/icon.png.
@@ -745,6 +750,10 @@ async function createWindowInternal(): Promise<void> {
 		profileStore: browserProfileStore,
 		historyStore: browserHistoryStore,
 		fromPartition: (partition) => session.fromPartition(partition),
+		// Browser databases can be hundreds of MB; read them in a utility process
+		// so the main process (and every window) stays responsive.
+		readSource: processSourceReader(() =>
+			utilityProcess.fork(browserProfileImportWorkerPath(), [], { serviceName: "AO browser import" })),
 	});
 	await profileImporter.initialize();
 	const windowOptions: Electron.BaseWindowConstructorOptions = {

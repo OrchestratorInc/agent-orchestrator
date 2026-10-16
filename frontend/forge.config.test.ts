@@ -324,4 +324,15 @@ describe("packaged native dependencies", () => {
 		expect(ignore("/src/main.ts")).toBe(true);
 		expect(config.hooks?.prePackage).toBeTypeOf("function");
 	});
+
+	it("builds the browser-import reader that main.ts forks as a utility process", () => {
+		// main.ts forks .vite/build/browser-profile-import-worker.js; without this
+		// entry the import fails only when a user starts one.
+		const vite = config.plugins?.find((plugin) => (plugin as { name?: string }).name === "vite") as
+			| { config: { build: Array<{ entry: unknown; target?: string }> } }
+			| undefined;
+		expect(vite?.config.build).toContainEqual(
+			expect.objectContaining({ entry: "src/main/browser-profile-import-worker.ts", target: "main" }),
+		);
+	});
 });

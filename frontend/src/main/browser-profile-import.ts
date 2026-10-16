@@ -98,6 +98,21 @@ type ReadProfileData = {
 	history: BrowserHistoryEntry[];
 	warnings: BrowserImportWarning[];
 	skippedCookies: number;
+	budgetUsed: number;
+};
+
+// Everything here crosses a worker boundary by structured clone: plain data
+// only, so a decryptor arrives as { platform, key } with key as a Uint8Array.
+type ReadProfileRequest = {
+	family: BrowserFamily;
+	browserName: string;
+	profile: InternalSourceProfile;
+	includeCookies: boolean;
+	includeHistory: boolean;
+	staging: string;
+	budgetUsed: number;
+	decryptor: { platform: NodeJS.Platform; key: Uint8Array | null } | null;
+	now: Date;
 };
 
 type ImportSession = {
@@ -116,10 +131,13 @@ export type BrowserProfileImportOptions = {
 	env?: NodeJS.ProcessEnv;
 	now?: () => Date;
 	sourceLstat?: typeof lstat;
+	// Runs the reads that open browser databases. Defaults to this thread; the
+	// desktop app passes processSourceReader so they run in a utility process.
+	readSource?: SourceReader;
 };
 
 class SourceBudget {
-	private used = 0;
+	constructor(public used = 0) {}
 
 	consume(bytes: number): void {
 		if (!Number.isSafeInteger(bytes) || bytes < 0 || this.used + bytes > IMPORT_TOTAL_MAX_BYTES) {
@@ -129,8 +147,10 @@ class SourceBudget {
 	}
 }
 
+const IMPORT_CANCELED_MESSAGE = "Browser import was canceled because the app is closing.";
+
 function throwIfImportAborted(signal: AbortSignal): void {
-	if (signal.aborted) throw new Error("Browser import was canceled because the app is closing.");
+	if (signal.aborted) throw new Error(IMPORT_CANCELED_MESSAGE);
 }
 
 const DESCRIPTORS: BrowserDescriptor[] = [
@@ -450,7 +470,13 @@ const SAFARI_DEFAULT_COOKIES = [
 ];
 const SAFARI_PROFILE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-async function discoverSafariProfiles(descriptor: BrowserDescriptor, root: string, stagingRoot: string, sourceLstat = lstat): Promise<InternalSourceProfile[]> {
+async function discoverSafariProfiles(
+	descriptor: BrowserDescriptor,
+	root: string,
+	stagingRoot: string,
+	readSource: SourceReader,
+	sourceLstat = lstat,
+): Promise<InternalSourceProfile[]> {
 	const containerSafari = path.join("Containers", "com.apple.Safari", "Data", "Library", "Safari");
 	const profileParentRelative = path.join(containerSafari, "Profiles");
 	let profileParent: string | null;
@@ -459,7 +485,12 @@ async function discoverSafariProfiles(descriptor: BrowserDescriptor, root: strin
 	} catch {
 		throw safariAccessError();
 	}
-	const names = await readSafariProfileNames(root, path.join(containerSafari, "SafariTabs.db"), stagingRoot);
+	// Names are optional: readSafariProfileNames already falls back to an empty
+	// map, so a failed worker does the same.
+	const names = await readSource({
+		name: "readSafariProfileNames",
+		args: [root, path.join(containerSafari, "SafariTabs.db"), stagingRoot],
+	}).then((value) => value as Map<string, string>, () => new Map<string, string>());
 	const profiles: InternalSourceProfile[] = [];
 	const defaultProfile: InternalSourceProfile = {
 		id: opaqueSourceId(`${descriptor.id}:profile`, "DefaultProfile"),
@@ -565,6 +596,7 @@ function cookieCapability(
 export class BrowserProfileImportService {
 	private readonly context: DiscoveryContext;
 	private readonly now: () => Date;
+	private readonly readSource: SourceReader;
 	private readonly stagingInstanceId = randomUUID();
 	private activeImport: Promise<BrowserImportResult> | null = null;
 	private activeController: AbortController | null = null;
@@ -578,6 +610,7 @@ export class BrowserProfileImportService {
 			env: options.env ?? process.env,
 		};
 		this.now = options.now ?? (() => new Date());
+		this.readSource = options.readSource ?? readSourceInProcess;
 	}
 
 	async initialize(): Promise<void> {
@@ -655,7 +688,7 @@ export class BrowserProfileImportService {
 						? await discoverChromiumProfiles(descriptor, root)
 						: descriptor.family === "firefox"
 							? await discoverFirefoxProfiles(descriptor, root)
-							: await discoverSafariProfiles(descriptor, root, this.stagingRoot(), this.options.sourceLstat);
+							: await discoverSafariProfiles(descriptor, root, this.stagingRoot(), this.readSource, this.options.sourceLstat);
 				} catch (error) {
 					if (descriptor.family !== "safari" || !isAccessDenied(error)) throw error;
 					warnings.push("safari-access-denied");
@@ -724,7 +757,7 @@ export class BrowserProfileImportService {
 			const selected = request.profileIds.map((id) => source.profiles.find((profile) => profile.id === id)!);
 			onProgress({ requestId: request.requestId, phase: "preparing", completed: 0, total: selected.length });
 			await mkdir(staging, { recursive: true, mode: 0o700 });
-			const budget = new SourceBudget();
+			let budgetUsed = 0;
 			if (request.includeCookies && source.descriptor.family === "chromium" && this.context.platform === "darwin") {
 				onProgress({ requestId: request.requestId, phase: "permission", completed: 0, total: selected.length });
 			}
@@ -735,7 +768,22 @@ export class BrowserProfileImportService {
 			for (const [index, profile] of selected.entries()) {
 				throwIfImportAborted(signal);
 				onProgress({ requestId: request.requestId, phase: "reading", completed: index, total: selected.length });
-				readData.push(await readProfileData(source, profile, request, staging, budget, decryptor, this.now()));
+				const data = await this.readSource({
+					name: "readProfileData",
+					args: [{
+						family: source.descriptor.family,
+						browserName: source.public.name,
+						profile,
+						includeCookies: request.includeCookies,
+						includeHistory: request.includeHistory,
+						staging,
+						budgetUsed,
+						decryptor,
+						now: this.now(),
+					}],
+				}, signal) as ReadProfileData;
+				budgetUsed = data.budgetUsed;
+				readData.push(data);
 				throwIfImportAborted(signal);
 				onProgress({ requestId: request.requestId, phase: "reading", completed: index + 1, total: selected.length });
 			}
@@ -900,32 +948,37 @@ function validateRequest(
 	return request;
 }
 
-async function readProfileData(
-	source: InternalSource,
-	profile: InternalSourceProfile,
-	request: BrowserImportRequest,
-	staging: string,
-	budget: SourceBudget,
-	decryptor: ChromiumCookieDecryptor | null,
-	now: Date,
-): Promise<ReadProfileData> {
+async function readProfileData({
+	family,
+	browserName,
+	profile,
+	includeCookies,
+	includeHistory,
+	staging,
+	budgetUsed,
+	decryptor: decryptorKey,
+	now,
+}: ReadProfileRequest): Promise<ReadProfileData> {
+	const budget = new SourceBudget(budgetUsed);
+	const decryptor = decryptorKey
+		&& new ChromiumCookieDecryptor(decryptorKey.platform, decryptorKey.key && Buffer.from(decryptorKey.key));
 	const warnings: BrowserImportWarning[] = [];
 	let cookies: ImportedCookie[] = [];
 	let history: BrowserHistoryEntry[] = [];
 	let skippedCookies = 0;
-	if (request.includeCookies) {
+	if (includeCookies) {
 		const cookieDatabase = await findDatabase(profile.root, profile.cookieRelatives ?? (
-			source.descriptor.family === "chromium"
+			family === "chromium"
 				? [path.join("Network", "Cookies"), "Cookies"]
 				: ["cookies.sqlite"]
-		), source.descriptor.family === "safari");
+		), family === "safari");
 		if (!cookieDatabase) {
 			warnings.push({ code: "cookie-database-missing" });
 		} else {
-			const outcome = source.descriptor.family === "safari"
+			const outcome = family === "safari"
 				? readSafariCookies(await readFile(await snapshotFile(cookieDatabase, profile.root, staging, budget)), now)
-				: source.descriptor.family === "chromium"
-					? readChromiumCookies(await snapshotSQLite(cookieDatabase, profile.root, staging, budget, source.public.name), decryptor, now)
+				: family === "chromium"
+					? readChromiumCookies(await snapshotSQLite(cookieDatabase, profile.root, staging, budget, browserName), decryptor, now)
 					: readFirefoxCookies(await snapshotSQLite(cookieDatabase, profile.root, staging, budget), now);
 			if (!outcome) {
 				warnings.push({ code: "cookie-database-missing" });
@@ -936,10 +989,10 @@ async function readProfileData(
 			}
 		}
 	}
-	if (request.includeHistory) {
+	if (includeHistory) {
 		const historyDatabase = await findDatabase(profile.root, profile.historyRelatives ?? (
-			source.descriptor.family === "chromium" ? ["History"] : ["places.sqlite"]
-		), source.descriptor.family === "safari");
+			family === "chromium" ? ["History"] : ["places.sqlite"]
+		), family === "safari");
 		if (!historyDatabase) {
 			warnings.push({ code: "history-database-missing" });
 		} else {
@@ -948,18 +1001,18 @@ async function readProfileData(
 				profile.root,
 				staging,
 				budget,
-				source.descriptor.family === "chromium" ? source.public.name : undefined,
+				family === "chromium" ? browserName : undefined,
 			);
-			const outcome = source.descriptor.family === "chromium"
+			const outcome = family === "chromium"
 				? readChromiumHistory(snapshot)
-				: source.descriptor.family === "firefox"
+				: family === "firefox"
 					? readFirefoxHistory(snapshot)
 					: readSafariHistory(snapshot);
 			history = outcome.history;
 			warnings.push(...outcome.warnings);
 		}
 	}
-	return { profile, cookies, history, warnings: mergeWarnings(warnings), skippedCookies };
+	return { profile, cookies, history, warnings: mergeWarnings(warnings), skippedCookies, budgetUsed: budget.used };
 }
 
 async function snapshotFile(
@@ -1565,9 +1618,9 @@ function mergeWarnings(warnings: BrowserImportWarning[]): BrowserImportWarning[]
 }
 
 class ChromiumCookieDecryptor {
-	private constructor(
-		private readonly platform: NodeJS.Platform,
-		private readonly key: Buffer | null,
+	constructor(
+		readonly platform: NodeJS.Platform,
+		readonly key: Buffer | null,
 	) {}
 
 	static async create(source: InternalSource, platform: NodeJS.Platform, signal: AbortSignal): Promise<ChromiumCookieDecryptor> {
@@ -1702,4 +1755,76 @@ async function windowsDPAPIUnprotect(input: Buffer): Promise<Buffer | null> {
 		});
 		child.stdin.end(input.toString("base64"));
 	});
+}
+
+// Reads that open browser SQLite databases or parse large source files. They
+// take and return only structured-clone-safe data so the desktop app can run
+// them in a utility process (browser-profile-import-worker.ts) instead of
+// blocking the Electron main process.
+const SOURCE_READS = { readProfileData, readSafariProfileNames };
+type SourceReads = typeof SOURCE_READS;
+type SourceReadName = keyof SourceReads;
+export type SourceReadRequest<Name extends SourceReadName = SourceReadName> = {
+	[N in Name]: { name: N; args: Parameters<SourceReads[N]> };
+}[Name];
+export type SourceReadResponse = { ok: true; value: unknown } | { ok: false; message: string; code?: string };
+// Resolves with the named read's result; it crosses a process boundary, so
+// callers cast it back to that read's return type.
+export type SourceReader = (request: SourceReadRequest, signal?: AbortSignal) => Promise<unknown>;
+
+export const readSourceInProcess: SourceReader = async (request) =>
+	(SOURCE_READS[request.name] as (...args: unknown[]) => Promise<unknown>)(...request.args);
+
+export async function answerSourceReadRequest(request: SourceReadRequest): Promise<SourceReadResponse> {
+	try {
+		return { ok: true, value: await readSourceInProcess(request) };
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException | undefined)?.code;
+		return {
+			ok: false,
+			message: error instanceof Error ? error.message : "Browser data could not be imported.",
+			...(typeof code === "string" ? { code } : {}),
+		};
+	}
+}
+
+// The parts of Electron's UtilityProcess that processSourceReader uses.
+export type SourceReadProcess = {
+	postMessage(message: SourceReadRequest): void;
+	kill(): boolean;
+	once(event: "spawn", listener: () => void): unknown;
+	once(event: "message", listener: (response: SourceReadResponse) => void): unknown;
+	once(event: "exit", listener: (code: number) => void): unknown;
+};
+
+// One process per read keeps no state between reads and lets a canceled import
+// stop a read mid-query. The process has exited before the promise settles, so
+// the caller can remove staging without racing its writes.
+export function processSourceReader(spawn: () => SourceReadProcess): SourceReader {
+	return async (request, signal) => {
+		if (signal?.aborted) throw new Error(IMPORT_CANCELED_MESSAGE);
+		const child = spawn();
+		const spawned = new Promise<void>((resolve) => child.once("spawn", resolve));
+		const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+		let onAbort: () => void = () => undefined;
+		try {
+			return await new Promise<unknown>((resolve, reject) => {
+				onAbort = () => reject(new Error(IMPORT_CANCELED_MESSAGE));
+				signal?.addEventListener("abort", onAbort, { once: true });
+				if (signal?.aborted) onAbort();
+				child.once("message", (response) => {
+					if (response.ok) resolve(response.value);
+					else reject(Object.assign(new Error(response.message), response.code ? { code: response.code } : {}));
+				});
+				void exited.then(() => reject(new Error("The browser import reader stopped before it finished. Retry the import.")));
+				child.postMessage(request);
+			});
+		} finally {
+			signal?.removeEventListener("abort", onAbort);
+			// kill() does nothing until the process has spawned.
+			await Promise.race([spawned, exited]);
+			child.kill();
+			await exited;
+		}
+	};
 }
