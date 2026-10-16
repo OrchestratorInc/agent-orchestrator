@@ -1,0 +1,181 @@
+{
+  "nativeFixPR": "https://github.com/stakpak/agent/pull/767",
+  "nativeSource": "62bd8833600b0f906ff841930433264ece36dbab",
+  "nativeExecutableSHA256": "882e7dce06ce64afe76249befff732a5f17b86c5594291526b5302a323965ac2",
+  "nativeReportedVersion": "0.3.88; unreleased source62bd883",
+  "model": "zai/glm-5.3-flash (rendered GLM-5.3-Flash, provider Zai)",
+  "aoSource": "fb60bd4097ebd4109bbe7ee68e908f722e6ee03f",
+  "uiSource": "fb60bd4097ebd4109bbe7ee68e908f722e6ee03f",
+  "aoExecutableSHA256": "b30f2dfa7b1f1c796c5772cb96d7d5c32b4bfb53c39f2c4ff7ca669f2cca8ded",
+  "servingPIDBefore": 979004,
+  "servingPIDAfter": 979004,
+  "runFile": "/home/azureuser/.ao/audits/native-harness-fixes-20261012/reports/stakpak/ao-shell-001/running.json",
+  "nativeIDDigest": "8082f814ca93f1963292a78cc9d01f18f4ed3fc1fce8ec7b7f8fe7d8fa20d198",
+  "runtime": {
+    "handle": "ptyhost-v1:shellterm-8968a375bddfe0aa",
+    "hostPID": 985380,
+    "hostKernelStart": "82945904",
+    "hostSHA256": "b30f2dfa7b1f1c796c5772cb96d7d5c32b4bfb53c39f2c4ff7ca669f2cca8ded",
+    "registeredAt": "2026-10-12T05:41:46Z",
+    "launchID": null,
+    "managedAgentGeneration": "not applicable: standalone shell",
+    "nativeSID": 985501
+  },
+  "agentSessionID": null,
+  "registeredHarness": false,
+  "gates": {
+    "correctWorkspace": true,
+    "standingConsumed": true,
+    "projectConsumed": true,
+    "initialOnce": true,
+    "leadingDashWithoutOSC": true,
+    "initialActiveToSettled": true,
+    "secondMessage": true,
+    "secondPreservesInstructions": true,
+    "secondActiveToSettled": true,
+    "childGoneAfterCancel": true,
+    "sameNativeAfterCancel": true,
+    "noLateSideEffect": true,
+    "controlAliveAfterDeadline": true,
+    "controlHeartbeatContinues": true,
+    "AGENTSUnchanged": true,
+    "survivingComposerThirdTurn": true,
+    "sameNativeAfterThird": true,
+    "noLateAfterThird": true,
+    "artifactUnchanged": true,
+    "servingBuildUnchanged": true,
+    "thirdActiveToSettled": true,
+    "cancelSettledComposer": true
+  },
+  "initialUserMessageCount": 1,
+  "ownedCommandBeforeEscape": [
+    {
+      "pid": 988201,
+      "kernelStart": "83037087",
+      "state": "S",
+      "sid": 985501,
+      "pgid": 988200,
+      "ppid": 988200
+    },
+    {
+      "pid": 988202,
+      "kernelStart": "83037087",
+      "state": "S",
+      "sid": 985501,
+      "pgid": 988200,
+      "ppid": 988201
+    }
+  ],
+  "immediateOwnedAfterEscape": [
+    null,
+    null
+  ],
+  "beforeCancelUTC": "2026-10-12T05:56:59.323082+00:00",
+  "afterEscapeUTC": "2026-10-12T05:57:22.022594+00:00",
+  "afterDeadlineUTC": "2026-10-12T05:58:23.017419+00:00",
+  "nativeToolTimeoutSeconds": 35,
+  "controlPIDAndStart": {
+    "pid": 979655,
+    "kernelStart": "82711695",
+    "state": "S",
+    "sid": 979655,
+    "pgid": 979655,
+    "ppid": 979318
+  },
+  "proofCounts": [
+    1,
+    2,
+    3
+  ],
+  "screenshots": [
+    {
+      "file": "current-settled.png",
+      "sha256": "1b1880c93d8362429d087751db7020c4e3c121404a733c81a29ded869b78cfd4",
+      "utc": "2026-10-12T05:55:19Z",
+      "capture": "scrot on real AO Electron under owned Xvfb display",
+      "scope": "supplementary standalone shell, not registered harness",
+      "nativeSource": "62bd8833600b0f906ff841930433264ece36dbab"
+    },
+    {
+      "file": "current-executing.png",
+      "sha256": "01432b5596ea1d7c7700d454386279154d0d13fcf82a029668c18fee54497786",
+      "utc": "2026-10-12T05:56:59Z",
+      "capture": "scrot on real AO Electron under owned Xvfb display",
+      "scope": "supplementary standalone shell, not registered harness",
+      "nativeSource": "62bd8833600b0f906ff841930433264ece36dbab"
+    },
+    {
+      "file": "current-after-cancel-third.png",
+      "sha256": "526ccf4f6a99cf97bbf45b362b2080fda640c93123083b21005cbf760e54da10",
+      "utc": "2026-10-12T06:03:07Z",
+      "capture": "scrot on real AO Electron under owned Xvfb display",
+      "scope": "supplementary standalone shell, not registered harness",
+      "nativeSource": "62bd8833600b0f906ff841930433264ece36dbab"
+    },
+    {
+      "file": "retained-osc-reload-failure.png",
+      "sha256": "17fec7ab24e4acf6253a7d0b81669eb7ac122e01106b5e2d3511895120173948",
+      "utc": "2026-10-12T05:17:23Z",
+      "capture": "scrot on real AO Electron under owned Xvfb display",
+      "scope": "supplementary standalone shell, not registered harness",
+      "nativeSource": "16e63ed35a3eb32fdadd7407c8bb55d6754195e3"
+    }
+  ],
+  "ci": {
+    "url": "https://github.com/nikhilachale/agent/actions/runs/38207103576",
+    "linuxQualification": "SUCCESS:9/9 real executor/lifetime regressions, compiled stock negative control, affected lint, release build",
+    "fullUpstream": "CANCELLED/NOT_VERIFIED: repeated hosted workspace runs exceeded20min step and45min job bounds; current run eventually cancelled, full job logs unavailable. Linux qualification succeeded separately."
+  },
+  "cleanup": {
+    "receipts": [
+      {
+        "path": "/api/v1/shell-terminals/ptyhost-v1%3Ashellterm-8968a375bddfe0aa",
+        "method": "DELETE",
+        "status": 204
+      },
+      {
+        "path": "/api/v1/shell-terminals/ptyhost-v1%3Ashellterm-c8c0c407b6cf3162",
+        "method": "DELETE",
+        "status": 204
+      },
+      {
+        "path": "/api/v1/shell-terminals",
+        "method": "GET",
+        "status": 200
+      },
+      {
+        "path": "/shutdown",
+        "method": "POST",
+        "status": 202
+      }
+    ],
+    "shellListEmpty": true,
+    "runtimeHostsBefore": [
+      979318,
+      985380
+    ],
+    "runtimeHostsAbsentAfter": true,
+    "nativeSIDLeaderAbsent": true,
+    "controlPIDAbsent": true,
+    "electronMain": [
+      {
+        "pid": 978778,
+        "kernelStart": "82669193",
+        "executable": "/home/azureuser/.ao/audits/harness-watch-20261010/checkouts/ui-lab/frontend/node_modules/electron/dist/electron"
+      }
+    ],
+    "ownedUINoLiveAfter": true,
+    "servingPID": 979004,
+    "daemonAbsentAfter": true,
+    "protectedPID625660Untouched": true,
+    "profilesSourceEvidencePreserved": true,
+    "muxHelpersStopped": true
+  },
+  "limitations": [
+    "unreleased source build; stock0.3.88 remains failed",
+    "standalone-shell proof does not establish registered agent-manager/Kill/restore/auth/catalog conformance",
+    "fresh-only; native restore instruction duplication and ACP replay remain unrepaired",
+    "Unix group cleanup only; Windows tree behavior and deliberate group/session escapes unqualified",
+    "earlier forced-renderer-reload OSC11 composer corruption retained as FAIL; clean fresh launch passes and does not erase it"
+  ]
+}
