@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
-import { Folder, Smartphone, StickyNote } from "lucide-react";
+import { Folder, Plus, Smartphone, StickyNote } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -293,6 +293,7 @@ function NewChatProjectPicker({ projectId, hostId, onChange }: { projectId: stri
 	];
 	const selectedProjectName = projects.find((project) => project.id === projectId)?.name ?? t("standalone.workspaceName");
 	const hostLabel = hostId ? labelForHost(hostId) ?? hostId : undefined;
+	const requestCreateProject = useUiStore((state) => state.requestCreateProject);
 	return (
 		<SettingsOptionMenu
 			aria-label={`${t("newTask.project")}: ${selectedProjectName}`}
@@ -304,6 +305,12 @@ function NewChatProjectPicker({ projectId, hostId, onChange }: { projectId: stri
 			triggerClassName={cn(TRIGGER_CLASS, "w-fit shrink-0")}
 			showCaret={false}
 			menuItemClassName="gap-2!"
+			// Adding a project opens the local Add Project flow, so remote hosts skip it.
+			action={hostId ? undefined : {
+				label: t("newTask.createNew"),
+				icon: <Plus aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />,
+				onSelect: requestCreateProject,
+			}}
 			renderTrigger={() => (
 				<span className="inline-flex min-w-0 items-center gap-1.5">
 					<ProjectIcon projectId={projectId} className="size-3.5" />
