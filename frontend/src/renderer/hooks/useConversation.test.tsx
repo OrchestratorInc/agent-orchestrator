@@ -848,6 +848,7 @@ describe("useConversation snapshot mapping", () => {
 		const usageLimit = { resetsAt: "2026-10-14T16:50:00Z", autoResume: true, resumeError: "Could not wake the agent" };
 		const snapshot = toSnapshot({
 			conversationId: "conv-1", sessionId: "ao-1", mode: "chat", controller: "ready", latestSequence: 1,
+			continueTurnId: "",
 			branchedFromEarlierMessage: false, hasMoreBefore: false, nativeForkAvailableAfterSequence: 0,
 			settings: {}, messages: [], activities: [],
 			turns: [{ id: "limited", requestedAt: "2026-10-14T16:00:00Z", state: "failed", usageLimit }],
