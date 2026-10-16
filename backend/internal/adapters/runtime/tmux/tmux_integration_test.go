@@ -617,3 +617,61 @@ func waitForOutput(t *testing.T, r *Runtime, h ports.RuntimeHandle, want string,
 	}
 	return out
 }
+
+// TestSendMessageUsesBracketedPasteIntegration reproduces issue #3626. Codex
+// (like most TUIs) enables bracketed paste, and every `ao send` is multiline
+// (the <ao-session-delivery> envelope). Typed as plain keystrokes, codex's
+// paste-burst heuristic treated the trailing Enter as part of the burst and
+// left the prompt unsubmitted. Delivered as a bracketed paste, the TUI knows
+// exactly where the pasted text ends, so the Enter after it submits.
+func TestSendMessageUsesBracketedPasteIntegration(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux unavailable")
+	}
+	ctx := context.Background()
+	id := strings.ReplaceAll(t.Name(), "/", "_")
+	r := New(Options{Timeout: 5 * time.Second, EnterDelay: 10 * time.Millisecond})
+	_ = r.Destroy(ctx, ports.RuntimeHandle{ID: id})
+	t.Cleanup(func() { _ = r.Destroy(context.Background(), ports.RuntimeHandle{ID: id}) })
+
+	dir := t.TempDir()
+	out := dir + "/received"
+	ready := dir + "/ready"
+	// A stand-in TUI: request bracketed paste like codex does, then record the
+	// raw bytes it receives.
+	script := `printf '\033[?2004h'; stty raw -echo; : > "$1"; cat > "$2"`
+	h, err := r.Create(ctx, ports.RuntimeConfig{
+		SessionID:     domain.SessionID(id),
+		WorkspacePath: dir,
+		Argv:          []string{"sh", "-c", script, "sh", ready, out},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	waitForFile(t, ready)
+
+	if err := r.SendMessage(ctx, h, "line one\nline two"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	want := "\x1b[200~line one\nline two\x1b[201~\r"
+	var got string
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		b, _ := os.ReadFile(out)
+		if got = string(b); strings.HasSuffix(got, "\r") {
+			break
+		}
+	}
+	if got != want {
+		t.Fatalf("pane received %q, want %q (bracketed paste, then Enter)", got, want)
+	}
+}
+
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+	}
+	t.Fatalf("%s never appeared", path)
+}

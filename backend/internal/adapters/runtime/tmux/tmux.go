@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -832,13 +833,16 @@ func (r *Runtime) supervisedProcessTree(ctx context.Context, handle ports.Runtim
 	return entries, panePID, nil
 }
 
-// SendMessage sends literal text to the session (chunked via send-keys -l) then
+// SendMessage pastes the text into the session as a bracketed paste, then
 // presses Enter to submit. An empty message presses Enter alone (the nudge
 // contract on ports.AgentMessenger).
 //
-// ponytail: send-keys -l chunked is simpler than load-buffer/paste-buffer; the
-// ceiling is very large messages may be slower, but chunk size defaults to 16 KB
-// which is ample for agent prompts.
+// The text is staged in a named tmux buffer (chunked, to stay under tmux's
+// command size limit) and delivered with one paste-buffer -p. Typing it with
+// send-keys -l instead made codex see a keystroke burst; its paste-burst
+// heuristic then swallowed the trailing Enter as a newline and the prompt sat
+// unsubmitted (issue #3626). Every `ao send` is multiline (the delivery
+// envelope), so this hit every codex send, not just large ones.
 func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, message string) error {
 	id, err := handleID(handle)
 	if err != nil {
@@ -846,38 +850,28 @@ func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, m
 	}
 	enterCtx := ctx
 	if message != "" {
-		messageChunks := chunks(message, r.chunkSize)
-		sendCtx := ctx
-		var finishCancel context.CancelFunc
-		for i, chunk := range messageChunks {
-			if _, err := r.runForSession(sendCtx, id, sendKeysLiteralArgs(id, chunk)...); err != nil {
-				if finishCancel != nil {
-					finishCancel()
-				}
+		buffer := fmt.Sprintf("ao-send-%s-%d", id, pasteBufferSeq.Add(1))
+		for i, chunk := range chunks(message, r.chunkSize) {
+			if _, err := r.runForSession(ctx, id, setBufferArgs(buffer, chunk, i > 0)...); err != nil {
+				// Nothing reached the pane yet, so aborting strands no draft.
+				_, _ = r.runForSession(context.WithoutCancel(ctx), id, deleteBufferArgs(buffer)...)
 				return fmt.Errorf("tmux runtime: send message %s: %w", id, err)
 			}
-			if i == 0 {
-				completionBudget := sendCompletionBudget(len(messageChunks), r.timeout, r.enterDelay)
-				enterCtx, finishCancel = context.WithTimeout(context.WithoutCancel(ctx), completionBudget)
-				sendCtx = enterCtx
-			}
 		}
-		if finishCancel != nil {
-			defer finishCancel()
-		}
-		// Give the target TUI a moment to accept the pasted text before the
-		// trailing Enter, mirroring conpty's ptyInputEnterDelay. Without it a
-		// large multiline paste can absorb the Enter and leave the prompt
-		// unsubmitted (issue #2342). Empty-message nudges skip this — there is
-		// no paste ahead of a catch-up Enter.
-		//
-		// From here on the chunks are already in the pane, so the pause and
-		// the Enter are detached from the caller's cancellation (bounded by
-		// their own timeout instead): abandoning mid-pause would strand an
+		// From the paste on, the text is in the pane, so the paste, the pause
+		// and the Enter are detached from the caller's cancellation (bounded by
+		// their own timeout instead): abandoning mid-way would strand an
 		// unsubmitted draft that a retried send would then double-paste.
-		// Errors reported by tmux after it accepts a chunk still return to the
-		// caller; they are not retried because AO cannot safely distinguish
-		// whether tmux applied the failed command.
+		var finishCancel context.CancelFunc
+		enterCtx, finishCancel = context.WithTimeout(context.WithoutCancel(ctx), 2*r.timeout+r.enterDelay)
+		defer finishCancel()
+		if _, err := r.runForSession(enterCtx, id, pasteBufferArgs(buffer, id)...); err != nil {
+			_, _ = r.runForSession(enterCtx, id, deleteBufferArgs(buffer)...)
+			return fmt.Errorf("tmux runtime: send message %s: %w", id, err)
+		}
+		// Give the target TUI a moment to accept the paste before the trailing
+		// Enter, mirroring conpty's ptyInputEnterDelay (issue #2342).
+		// Empty-message nudges skip this: there is no paste ahead of them.
 		if r.enterDelay > 0 {
 			select {
 			case <-enterCtx.Done():
@@ -892,9 +886,8 @@ func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, m
 	return nil
 }
 
-func sendCompletionBudget(chunkCount int, commandTimeout, enterDelay time.Duration) time.Duration {
-	return time.Duration(chunkCount)*commandTimeout + enterDelay
-}
+// pasteBufferSeq keeps concurrent sends from sharing a tmux paste buffer.
+var pasteBufferSeq atomic.Uint64
 
 // Interrupt sends Ctrl-C to the foreground process without destroying the tmux
 // session, keeping the terminal available for inspection and reuse.
