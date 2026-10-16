@@ -165,7 +165,7 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 	if info == nil {
 		return daemonUnavailableError{message: "AO daemon is not running — start it with `ao start`", cause: errDaemonNotRunning}
 	}
-	if !c.deps.ProcessAlive(info.PID) {
+	if !c.daemonAnswers(ctx, info) {
 		return daemonUnavailableError{message: fmt.Sprintf("AO daemon is not running (stale run-file at %s) — start it with `ao start`", cfg.RunFilePath), cause: errDaemonNotRunning}
 	}
 
@@ -255,4 +255,17 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 		return fmt.Errorf("decode response: %w", err)
 	}
 	return nil
+}
+
+// daemonAnswers reports whether the run-file's daemon is up. A failed PID probe
+// is not proof the daemon is dead: a sandbox with its own PID namespace (Codex
+// runs commands under bubblewrap on Linux) cannot see the daemon's PID even
+// though the loopback port answers. In that case a healthz probe that names the
+// run-file's PID confirms the daemon instead.
+func (c *commandContext) daemonAnswers(ctx context.Context, info *runfile.Info) bool {
+	if c.deps.ProcessAlive(info.PID) {
+		return true
+	}
+	health, err := c.readProbe(ctx, info.Port, "healthz")
+	return err == nil && verifyProbeOwner(health, info.PID, "healthz") == nil
 }
