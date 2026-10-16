@@ -8,10 +8,12 @@ import { detectedCredential } from "./harness-diagnostics";
 import { HarnessDetailGroup, HarnessDetailRow, HarnessStateText, HarnessTimestamp, hasValidTimestamp, type HarnessTone } from "./harness-ui";
 
 /** Read-only facts AO observed about one harness. */
-export function HarnessHealthTab({ details, checking, authCheckFailed, copied, onCheckAgain, onCopyReport }: {
+export function HarnessHealthTab({ details, checking, authCheckFailed, updateError, copied, onCheckAgain, onCopyReport }: {
 	details: HarnessDetails;
 	checking: boolean;
 	authCheckFailed: boolean;
+	/** The update failure a notice shortcut opened this tab for; also in the copied report. */
+	updateError?: string;
 	copied: boolean;
 	onCheckAgain: () => void;
 	onCopyReport: () => void;
@@ -34,6 +36,7 @@ export function HarnessHealthTab({ details, checking, authCheckFailed, copied, o
 	const executable = advisory?.binaryPath || details.job?.expectedDestination;
 	const hasDetails = Boolean((isInstalled && details.currentVersion) || advisory?.latestVersion || details.maintenanceMethod);
 	return <div className="flex flex-col gap-6">
+		{updateError ? <p role="alert" className="break-words text-xs text-error">{updateError}</p> : null}
 		<HarnessDetailGroup title={t("settings.harness.health.status")}>
 			<HarnessDetailRow label={t("settings.harness.installation")} description={installation?.state !== "installed" ? installation?.reason || undefined : undefined}>
 				<HarnessStateText tone={installState.tone}>{installState.label}</HarnessStateText>

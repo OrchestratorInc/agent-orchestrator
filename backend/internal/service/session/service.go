@@ -381,28 +381,38 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return domain.Session{}, 0, 0, apierr.Conflict("CODEX_ACCOUNT_AUTH_UNVERIFIED", "Add or sign in to a Codex account in Settings before starting a Codex session", nil)
 		}
 	}
-	start := s.now()
-	firstSession, err := s.isFirstSession(ctx)
-	if err != nil {
-		return domain.Session{}, 0, 0, fmt.Errorf("count sessions: %w", err)
-	}
 	cfg = s.withIssueContext(ctx, cfg, project)
-	rec, promptBytes, systemPromptBytes, err := s.manager.Spawn(ctx, cfg)
+	rec, promptBytes, systemPromptBytes, err := s.spawnWithTelemetry(ctx, cfg, project)
 	if err != nil {
 		s.invalidateAgentReadinessAfterLaunchFailure(cfg.Harness, err)
-		apiErr := toSpawnAPIError(err)
-		s.emitSpawnFailed(ctx, cfg, apiErr, s.now().Sub(start).Milliseconds())
-		return domain.Session{}, 0, 0, apiErr
-	}
-	s.emitSpawned(ctx, rec, s.now().Sub(start).Milliseconds())
-	if firstSession {
-		s.emitFirstSessionSpawned(ctx, rec, project)
+		return domain.Session{}, 0, 0, toSpawnAPIError(err)
 	}
 	sess, err := s.toSession(ctx, rec)
 	if err != nil {
 		return domain.Session{}, 0, 0, err
 	}
 	return sess, promptBytes, systemPromptBytes, nil
+}
+
+// spawnWithTelemetry is the only path from the service into manager.Spawn, so
+// every created session emits ao.session.spawned or ao.session.spawn_failed
+// exactly once. Client-request replays return before reaching it.
+func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectRecord) (domain.SessionRecord, int, int, error) {
+	start := s.now()
+	firstSession, err := s.isFirstSession(ctx)
+	if err != nil {
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("count sessions: %w", err)
+	}
+	rec, promptBytes, systemPromptBytes, err := s.manager.Spawn(ctx, cfg)
+	if err != nil {
+		s.emitSpawnFailed(ctx, cfg, err, s.now().Sub(start).Milliseconds())
+		return domain.SessionRecord{}, 0, 0, err
+	}
+	s.emitSpawned(ctx, rec, s.now().Sub(start).Milliseconds())
+	if firstSession {
+		s.emitFirstSessionSpawned(ctx, rec, project)
+	}
+	return rec, promptBytes, systemPromptBytes, nil
 }
 
 func (s *Service) invalidateAgentReadinessAfterLaunchFailure(harness domain.AgentHarness, err error) {

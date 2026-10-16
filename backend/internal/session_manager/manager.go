@@ -3501,7 +3501,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	// and transfers the required native history. Fresh and fallback launches
 	// still require current-generation identity proof from their hooks.
 	bindNativeIdentity := mode == RestoreModeNative &&
-		(rec.Harness == domain.HarnessCodex || rec.Harness == domain.HarnessClaudeCode)
+		(rec.Harness == domain.HarnessCodex || rec.Harness == domain.HarnessClaudeCode || rec.Harness == domain.HarnessAgy)
 	if (bindNativeIdentity || (requireNativeHistory && !forceFresh)) && strings.TrimSpace(metadata.AgentSessionID) != "" {
 		metadata.AgentSessionIDLaunchID = launchID
 	}
@@ -6397,7 +6397,10 @@ func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, wo
 	ref := ports.SessionRef{
 		ID:            string(id),
 		WorkspacePath: workspacePath,
-		Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: meta.AgentSessionID},
+		Metadata: map[string]string{
+			ports.MetadataKeyAgentSessionID: meta.AgentSessionID,
+			ports.MetadataKeySessionMode:    string(domain.SessionModeTUI),
+		},
 	}
 	cmd, ok, err := agent.GetRestoreCommand(ctx, ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions})
 	if err != nil {

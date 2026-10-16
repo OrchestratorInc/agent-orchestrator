@@ -27,6 +27,7 @@ type APIDeps struct {
 	CodexAccounts      controllers.CodexAccountService
 	Projects           projectsvc.Manager
 	Sessions           controllers.SessionService
+	ArtifactVersions   controllers.ArtifactVersionService
 	Automations        controllers.AutomationService
 	DesktopWorkspaces  controllers.DesktopWorkspaceService
 	Activity           controllers.ActivityRecorder
@@ -177,6 +178,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 			Attachments:              attachmentstore.New(cfg.DataDir),
 			PreviewServer:            deps.PreviewServer,
 			Capabilities:             deps.SessionCapabilities,
+			ArtifactVersions:         deps.ArtifactVersions,
 			ShellPreviewCapabilities: deps.ShellPreviewCapabilities,
 		},
 		automations:   &controllers.AutomationsController{Svc: deps.Automations},

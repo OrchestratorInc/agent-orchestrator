@@ -2056,9 +2056,7 @@ paths:
           content:
             application/json:
               schema:
-                additionalProperties:
-                  type: boolean
-                type: object
+                $ref: '#/components/schemas/GitHubStatusResponse'
           description: OK
         "500":
           content:
@@ -2066,7 +2064,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Internal Server Error
-      summary: Check whether a GitHub personal access token is stored locally
+      summary: Report whether a GitHub token is stored and the GitHub username AO
+        is signed in as
       tags:
       - github
   /api/v1/identity:
@@ -4859,6 +4858,222 @@ paths:
           description: Not Implemented
       summary: Serve a session artifact file sandboxed, an HTML page with the render
         theme bootstrap
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/artifact-versions:
+    get:
+      operationId: listSessionArtifactVersions
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Artifact-directory-relative file path, as listed in the session's
+          artifactFiles.
+        in: query
+        name: path
+        schema:
+          description: Artifact-directory-relative file path, as listed in the session's
+            artifactFiles.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListArtifactVersionsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the saved versions of one file in a session's artifact directory
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/artifact-versions/{version}:
+    get:
+      operationId: getSessionArtifactVersion
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Version number within the file's history.
+        in: path
+        name: version
+        required: true
+        schema:
+          description: Version number within the file's history.
+          format: int64
+          type: integer
+      - description: Artifact-directory-relative file path, as listed in the session's
+          artifactFiles.
+        in: query
+        name: path
+        schema:
+          description: Artifact-directory-relative file path, as listed in the session's
+            artifactFiles.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArtifactVersionResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read one saved version of an artifact file
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/artifact-versions/restore:
+    post:
+      operationId: restoreSessionArtifactVersion
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestoreArtifactVersionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArtifactFileResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Restore an artifact file to an earlier saved version
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/artifact-versions/sync:
+    post:
+      operationId: syncSessionArtifactVersions
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncArtifactVersionsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListArtifactVersionsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Record an artifact file's unrecorded edit, then list its saved versions
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/attachments:
@@ -11614,6 +11829,92 @@ components:
       - size
       - fileFingerprint
       type: object
+    ArtifactVersionResponse:
+      properties:
+        content:
+          description: The version's UTF-8 text content, cut short when truncated
+            is set.
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        fileFingerprint:
+          description: Hex SHA-256 of the version's content.
+          type: string
+        harness:
+          description: 'Best effort: the agent that was running the session when the
+            version was recorded, which after an agent switch can differ from the
+            agent that wrote it. Absent for older versions.'
+          type: string
+        path:
+          type: string
+        restoredFrom:
+          description: The version this one restored, when it is a restore.
+          format: int64
+          type: integer
+        size:
+          format: int64
+          type: integer
+        source:
+          description: 'Who wrote the version: the agent, or the user through a save
+            or restore.'
+          enum:
+          - agent
+          - user
+          type: string
+        truncated:
+          description: The content is only the first 256 KiB of the version. A restore
+            still writes the whole version.
+          type: boolean
+        version:
+          format: int64
+          type: integer
+      required:
+      - version
+      - size
+      - source
+      - fileFingerprint
+      - createdAt
+      - path
+      - content
+      type: object
+    ArtifactVersionSummary:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        fileFingerprint:
+          description: Hex SHA-256 of the version's content.
+          type: string
+        harness:
+          description: 'Best effort: the agent that was running the session when the
+            version was recorded, which after an agent switch can differ from the
+            agent that wrote it. Absent for older versions.'
+          type: string
+        restoredFrom:
+          description: The version this one restored, when it is a restore.
+          format: int64
+          type: integer
+        size:
+          format: int64
+          type: integer
+        source:
+          description: 'Who wrote the version: the agent, or the user through a save
+            or restore.'
+          enum:
+          - agent
+          - user
+          type: string
+        version:
+          format: int64
+          type: integer
+      required:
+      - version
+      - size
+      - source
+      - fileFingerprint
+      - createdAt
+      type: object
     AttachmentInput:
       properties:
         data:
@@ -14239,6 +14540,17 @@ components:
           - "null"
           - boolean
       type: object
+    GitHubStatusResponse:
+      properties:
+        connected:
+          type: boolean
+        login:
+          description: GitHub username AO is signed in as, from a stored token or
+            the gh CLI; absent when it could not be resolved.
+          type: string
+      required:
+      - connected
+      type: object
     GitPreparationEvent:
       properties:
         action:
@@ -14675,6 +14987,18 @@ components:
       - supported
       - installed
       - authorized
+      type: object
+    ListArtifactVersionsResponse:
+      properties:
+        path:
+          type: string
+        versions:
+          items:
+            $ref: '#/components/schemas/ArtifactVersionSummary'
+          type: array
+      required:
+      - path
+      - versions
       type: object
     ListAutomationRunsResponse:
       properties:
@@ -15896,6 +16220,20 @@ components:
           type: object
       required:
       - action
+      type: object
+    RestoreArtifactVersionRequest:
+      properties:
+        path:
+          description: Artifact-directory-relative file path, as listed in the session's
+            artifactFiles.
+          type: string
+        version:
+          description: The version whose content becomes the file's content.
+          format: int64
+          type: integer
+      required:
+      - path
+      - version
       type: object
     RestoreReviewResponse:
       properties:
@@ -17998,6 +18336,15 @@ components:
           type: string
       required:
       - targetHarness
+      type: object
+    SyncArtifactVersionsRequest:
+      properties:
+        path:
+          description: Artifact-directory-relative file path, as listed in the session's
+            artifactFiles.
+          type: string
+      required:
+      - path
       type: object
     SystemMemoryResponse:
       properties:

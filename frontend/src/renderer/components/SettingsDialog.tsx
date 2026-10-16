@@ -19,7 +19,7 @@ import { CuesSettings } from "./CuesDialog";
 import { topbarHeaderClass } from "./TopbarButton";
 import { topbarDragStyle, useTopbarPaddingLeft } from "./ShellTopbar";
 import { useAppShortcut } from "../hooks/useAppShortcut";
-import { type GlobalSettingsSection, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
+import { type GlobalSettingsSection, type HarnessDiagnosticsRequest, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
 import { DialogHeader, settingsDialogBodyClass, settingsDialogHeaderClass, settingsDialogSurfaceClass } from "./ui/dialog";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
@@ -112,6 +112,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const [focusAgentId, setFocusAgentId] = useState<string>();
 	const [harnessView, setHarnessView] = useState<"local" | "cloud">();
 	const [startLogin, setStartLogin] = useState(false);
+	const [showDiagnostics, setShowDiagnostics] = useState<HarnessDiagnosticsRequest | undefined>();
 	const [activeProjectSection, setActiveProjectSection] = useState<ProjectSettingsSection>("general");
 	const [pendingProjectSection, setPendingProjectSection] = useState<ProjectSettingsSection | null>(null);
 	const [projectSaveState, setProjectSaveState] = useState<ProjectSettingsSaveState>(initialProjectSaveState);
@@ -193,6 +194,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		setFocusAgentId(settingsModal?.scope === "global" ? settingsModal.focusAgentId : undefined);
 		setHarnessView(settingsModal?.scope === "global" ? settingsModal.harnessView : undefined);
 		setStartLogin(settingsModal?.scope === "global" && settingsModal.startLogin === true);
+		setShowDiagnostics(settingsModal?.scope === "global" ? settingsModal.showDiagnostics : undefined);
 	}, [settingsModal]);
 
 	useEffect(() => {
@@ -274,7 +276,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			if (displaySettings?.scope === "project") {
 				return <ProjectSettingsForm projectId={displaySettings.projectId} hostId={remoteHostId} cloudOrgId={cloudOrgId} section={activeProjectSection as ProjectFormSection} onSaveState={setProjectSaveState} />;
 			}
-			return <GlobalSettingsForm cloudEnabled={cloudEnabled} customCoder={customCoder} selfServeBilling={selfServeBilling} focusAgentId={focusAgentId} hostId={displaySettings?.scope === "global" ? displaySettings.hostId : undefined} harnessView={harnessView} startLogin={startLogin} section={activeSection} />;
+			return <GlobalSettingsForm cloudEnabled={cloudEnabled} customCoder={customCoder} selfServeBilling={selfServeBilling} focusAgentId={focusAgentId} hostId={displaySettings?.scope === "global" ? displaySettings.hostId : undefined} harnessView={harnessView} startLogin={startLogin} showDiagnostics={showDiagnostics} section={activeSection} />;
 		},
 	};
 }

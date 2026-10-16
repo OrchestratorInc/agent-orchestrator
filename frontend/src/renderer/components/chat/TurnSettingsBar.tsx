@@ -60,6 +60,12 @@ const APPROVAL_ORDER: ApprovalMode[] = [
 	"bypass-permissions",
 ];
 
+const AGY_APPROVAL_COPY: Record<ApprovalMode, { label: string }> = {
+	...APPROVAL_COPY,
+	default: { label: "Ask for approval" },
+	"bypass-permissions": { label: "Auto-approve" },
+};
+
 // Codex has three distinct permission profiles. Its default is already full
 // access in AO's isolated worktree posture, so expose it as that rather than a
 // fourth, ambiguous "default" option.
@@ -150,7 +156,7 @@ export function TurnSettingsBar({
 	);
 	const claudeLabels = useMemo(() => (harness === "claude-code" ? claudeChoiceLabels(displayModels) : undefined), [harness, displayModels]);
 	const displayConfigOptions = useMemo(
-		() => (configOptions ?? []).map((option) => isModelOption(option) ? {
+		() => (harness === "agy" ? agyComposerOptions(configOptions ?? []) : configOptions ?? []).map((option) => isModelOption(option) ? {
 			...option,
 			choices: option.choices.map((choice) => ({
 				...choice,
@@ -179,17 +185,20 @@ export function TurnSettingsBar({
 			? settings.reasoningEffort
 			: (selected ?? fallback)?.defaultEffort;
 	const effortLabel = selectedEffort === "default" ? undefined : selectedEffort;
-	const approvalCopy = harness === "codex" ? CODEX_APPROVAL_COPY : APPROVAL_COPY;
-	const approvalOrder = harness === "codex" ? CODEX_APPROVAL_ORDER : APPROVAL_ORDER;
+	const approvalCopy = harness === "codex" ? CODEX_APPROVAL_COPY : harness === "agy" ? AGY_APPROVAL_COPY : APPROVAL_COPY;
+	const approvalOrder = harness === "codex" ? CODEX_APPROVAL_ORDER : harness === "agy" ? APPROVAL_ORDER.filter((mode) => mode !== "bypass-permissions") : APPROVAL_ORDER;
 	const approvalLabel = approvalCopy[settings.approvalMode ?? "default"].label;
 	const modelGroupLabel = effortLabel
 		? `${modelLabel} ${formatEffortLabel(effortLabel, t)}`
 		: modelLabel;
-	const grouped = partitionConfigOptions(displayConfigOptions);
+	const grouped = partitionConfigOptions(displayConfigOptions, harness !== "agy");
 	const optionDisabled = Boolean(disabled || configPending || rememberPermissionsPending);
 	const applyOption = (optionId: string, value: ChatConfigOptionValue) => {
 		if (!onChangeConfigOption) return;
-		void Promise.resolve(onChangeConfigOption(optionId, value)).catch(() => {});
+		const providerId = harness === "agy" && optionId === AGY_MODEL_EFFORT
+			? configOptions?.find(isModelOption)?.id ?? "model"
+			: optionId;
+		void Promise.resolve(onChangeConfigOption(providerId, value)).catch(() => {});
 	};
 	const nativeModelMenu = Boolean(onChange && displayModels.length > 0 && grouped.model.length === 0);
 	// A model with effort levels but no provider default would otherwise show no
@@ -301,6 +310,7 @@ export function TurnSettingsBar({
 						{!planning && modeOption && onChangeConfigOption ? (
 							<ConfigOptionPicker
 								option={modeOption}
+								title={harness === "agy" ? "Approval policy for the next turn" : undefined}
 								disabled={optionDisabled}
 								onChange={(value) => applyOption(modeOption.id, value)}
 								footer={rememberAction}
@@ -352,6 +362,61 @@ export function TurnSettingsBar({
 			) : null}
 		</div>
 	);
+}
+
+const AGY_MODEL_EFFORT = "ao-agy-model-effort";
+
+// Antigravity encodes reasoning levels in model IDs. Present the same model /
+// effort menu as Codex while sending only the original, advertised model IDs.
+function agyComposerOptions(options: ChatConfigOption[]): ChatConfigOption[] {
+	const model = options.find(isModelOption);
+	const filtered = options.filter((option) =>
+		!isAgentOption(option) && (option.id === "mode" || (
+			!isModeOption(option) &&
+			!/^session[\s_-]*mode$/i.test(option.id) &&
+			!/^session mode$/i.test(option.name) &&
+			!/^agent(?:[\s_-]*mode)?$/i.test(option.name)
+		)),
+	).map((option) => option.id === "mode" ? {
+		...option,
+		choices: option.choices.filter((choice) => !executionChoiceValues(option.choices).has(choice.value)).map((choice) => ({
+			...choice,
+			name: choice.permissionMode ? AGY_APPROVAL_COPY[choice.permissionMode].label
+				: choice.value === "default" ? "Ask for approval" : choice.name,
+		})),
+	} : option);
+	if (!model || options.some(isEffortOption)) return filtered;
+	const variants = model.choices.map((choice) => {
+		const match = /^(.*)-(minimal|low|medium|high|xhigh)$/i.exec(choice.value);
+		return { choice, base: match?.[1] ?? choice.value, effort: match?.[2]?.toLowerCase() };
+	});
+	const selected = variants.find(({ choice }) => choice.value === model.currentValue);
+	if (!selected?.effort) return filtered;
+	const families = [...new Set(variants.map(({ base }) => base))];
+	const models = families.map((base) => {
+		const family = variants.filter((variant) => variant.base === base);
+		const representative = family.find((variant) => variant.effort === selected.effort) ?? family[0];
+		return {
+			...representative.choice,
+			name: representative.effort
+				? representative.choice.name.replace(/\s*\((?:minimal|low|medium|high|xhigh)\)\s*$/i, "")
+				: representative.choice.name,
+		};
+	});
+	return [
+		...filtered.map((option) => option === model ? { ...option, choices: models } : option),
+		{
+			id: AGY_MODEL_EFFORT,
+			name: "Reasoning effort",
+			category: "thought_level",
+			type: "select",
+			currentValue: model.currentValue,
+			choices: variants.filter(({ base }) => base === selected.base).map(({ choice, effort }) => ({
+				value: choice.value,
+				name: effort ? effort[0].toUpperCase() + effort.slice(1) : choice.name,
+			})),
+		},
+	];
 }
 
 /**
@@ -1070,7 +1135,7 @@ export function hasProviderPermissionMode(options: ChatConfigOption[]): boolean 
 	return Boolean(partitionConfigOptions(options).mode);
 }
 
-function partitionConfigOptions(options: ChatConfigOption[]): {
+function partitionConfigOptions(options: ChatConfigOption[], includeExecutionModes = true): {
 	model: ChatConfigOption[];
 	effort: ChatConfigOption[];
 	/** Provider plan/agent modes, placed with model selection rather than permissions. */
@@ -1113,10 +1178,10 @@ function partitionConfigOptions(options: ChatConfigOption[]): {
 			// Classify before synthesizing Claude's Agent choice so it cannot promote approval choices.
 			const executionValues = executionChoiceValues(option.choices);
 			const permissionChoices = option.choices.filter((choice) => !executionValues.has(choice.value));
-			const executionChoices = addAgentModeChoice(
+			const executionChoices = includeExecutionModes ? addAgentModeChoice(
 				option.choices.filter((choice) => executionValues.has(choice.value)),
 				permissionChoices,
-			);
+			) : [];
 			if (executionChoices.length > 0) {
 				executionMode = withChoices(option, executionChoices);
 				if (permissionChoices.length > 0) mode = withChoices(option, permissionChoices);

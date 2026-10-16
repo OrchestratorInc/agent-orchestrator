@@ -1,7 +1,7 @@
 import { Activity, BadgeCheck, Bot, CircleHelp, CreditCard, Globe2, Keyboard, RefreshCw, Server, Settings2, Smartphone, type LucideIcon } from "lucide-react";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
-import type { GlobalSettingsSection } from "../../stores/ui-store";
+import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
 import { BillingSection } from "./BillingSection";
 import { BrowserDownloadsSection } from "./BrowserDownloadsSection";
 import { BrowserProfilesSection } from "./BrowserProfilesSection";
@@ -41,6 +41,7 @@ type CatalogContext = {
 	hostId?: string;
 	harnessView?: "local" | "cloud";
 	startLogin?: boolean;
+	showDiagnostics?: HarnessDiagnosticsRequest;
 };
 
 export type SettingsCatalogItem = {
@@ -70,7 +71,7 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		id: "harness",
 		icon: Bot,
 		label: (t) => t("settings.harness"),
-		render: (_t, titleHidden, { focusAgentId, hostId, harnessView, startLogin }) => <HarnessSettingsSection focusAgentId={focusAgentId} {...(hostId ? { hostId } : {})} {...(harnessView ? { initialView: harnessView } : {})} {...(startLogin ? { startLogin } : {})} titleHidden={titleHidden} />,
+		render: (_t, titleHidden, { focusAgentId, hostId, harnessView, startLogin, showDiagnostics }) => <HarnessSettingsSection focusAgentId={focusAgentId} {...(hostId ? { hostId } : {})} {...(harnessView ? { initialView: harnessView } : {})} {...(startLogin ? { startLogin } : {})} {...(showDiagnostics ? { showDiagnostics } : {})} titleHidden={titleHidden} />,
 	},
 	{
 		id: "agents",

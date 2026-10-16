@@ -706,14 +706,17 @@ type Session struct {
 }
 
 type SessionArtifactVersion struct {
-	SessionID   domain.SessionID
-	Path        string
-	Version     int64
-	Sha256      string
-	Size        int64
-	ContentType string
-	Mtime       int64
-	CreatedAt   time.Time
+	SessionID    domain.SessionID
+	Path         string
+	Version      int64
+	Sha256       string
+	Size         int64
+	ContentType  string
+	Mtime        int64
+	CreatedAt    time.Time
+	Source       string
+	Harness      string
+	RestoredFrom int64
 }
 
 type SessionCleanupFact struct {

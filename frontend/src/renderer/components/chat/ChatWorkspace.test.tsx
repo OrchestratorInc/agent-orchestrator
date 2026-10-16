@@ -1554,6 +1554,40 @@ describe("ChatWorkspace timeline", () => {
 		expect(onDecide).toHaveBeenCalledWith("opaque-request", "option-a");
 	});
 
+	it("keeps each answer's own wording when a question offers several options of one kind", async () => {
+		const user = userEvent.setup();
+		const onDecide = vi.fn();
+		const snapshot = structuredClone(chatFixture);
+		snapshot.items.push({
+			kind: "activity",
+			id: "approval-question",
+			sequence: 102,
+			revision: 1,
+			turnId: "turn-2",
+			activityKind: "approval",
+			status: "pending",
+			summary: "What topic or content would you like the 10 lines written about?",
+			requestId: "question-request",
+			decisions: [
+				{ id: "1", label: "A 10-line bio for your portfolio", kind: "allow_once" },
+				{ id: "2", label: "10 lines of code", kind: "allow_once" },
+				{ id: "3", label: "A general 10-line poem", kind: "allow_once" },
+			],
+			detail: { subjectKind: "mcp_tool" },
+			createdAt: "2026-08-08T00:00:00Z",
+		});
+
+		render(<ChatWorkspace snapshot={snapshot} onDecide={onDecide} onInterrupt={vi.fn()} />);
+
+		const approval = screen.getByRole("group", { name: "Approval request question-request" });
+		expect(within(approval).queryByRole("button", { name: /Allow once/ })).not.toBeInTheDocument();
+		for (const label of [/A 10-line bio for your portfolio/, /10 lines of code/, /A general 10-line poem/]) {
+			expect(within(approval).getByRole("button", { name: label })).toBeInTheDocument();
+		}
+		await user.click(within(approval).getByRole("button", { name: /A general 10-line poem/ }));
+		expect(onDecide).toHaveBeenCalledWith("question-request", "3");
+	});
+
 	it("requires an explicit click for decisions without a semantic kind", () => {
 		const onDecide = vi.fn();
 		const snapshot = structuredClone(chatFixture);

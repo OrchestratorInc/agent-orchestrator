@@ -267,6 +267,8 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 				const error = errors[agentId] ?? (failed ? job?.error || t("settings.harness.updateJobFailed") : undefined);
 				// The click-time check outranks the cached advisory once it has answered.
 				const sessions = inUse[agentId] ?? advisoryInUse(advisory);
+				// A start error means this attempt made no job; any retained job is an older one.
+				const failedJobStartedAt = errors[agentId] === undefined && failed ? job?.startedAt ?? undefined : undefined;
 				const requestAction = () => {
 					if (!needsLogin && method) {
 						// A harness that was only starting is retried, never shown as sessions.
@@ -295,7 +297,11 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 						</Tooltip>
 						: <Button size="sm" variant="outline" className="h-7 shrink-0 px-2 text-xs" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true })}>{t("settings.harness.viewDetails")}</Button>}
 					</div>
-					{error && !busy ? <p role="alert" className="mt-1 break-words text-caption text-error">{error}</p> : null}
+					{/* One click to the Harness page with this failure's diagnostics open, ready to copy. */}
+					{error && !busy ? <div className="mt-1 flex flex-col items-start gap-1">
+						<p role="alert" className="break-words text-caption text-error">{error}</p>
+						<Button type="button" size="sm" variant="outline" className="h-6 px-2 text-[length:var(--font-size-caption)]" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, showDiagnostics: { jobStartedAt: failedJobStartedAt, error } })}>{t("settings.harness.showDiagnostics")}</Button>
+					</div> : null}
 					{job && isWaitingForIdleJob(job) ? <IdleUpdateStatus agentId={agentId} job={job} onViewSessions={(waiting) => setSessionsView({ agentId, inUse: waiting })} /> : null}
 					{!error && !busy && inUse[agentId] ? <p role="status" className="mt-1 break-words text-caption text-settings-muted">
 						{inUse[agentId]!.starting ? t("settings.harness.inUseStarting", { agent: agentLabel(agentId) }) : t("settings.harness.inUseBlocked", { count: inUse[agentId]!.count, agent: agentLabel(agentId) })}

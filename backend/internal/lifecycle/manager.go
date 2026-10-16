@@ -880,6 +880,16 @@ retryProjection:
 			checkpoint.LatestAssistantUpdateAt = timeOr(s.Timestamp, now)
 			checkpoint.ConversationCheckpointState = domain.ConversationCheckpointComplete
 		} else if ownerGeneration != "" && checkpointNativeID != "" {
+			if rec.Harness == domain.HarnessAgy && mode == domain.SessionModeTUI {
+				// Antigravity's documented PreInvocation and Stop hooks carry the
+				// conversation id but no user prompt or turn identity. Its Stop
+				// cannot prove a new AO checkpoint boundary, so retain the previous
+				// coherent checkpoint and let Agy's native ACP history replay prove
+				// the complete conversation at handoff. Marking this as an unresolved
+				// boundary would permanently reject every TUI-to-Chat resume.
+				s.LatestAssistantUpdate = ""
+				break
+			}
 			// A scoped Stop without its prompt boundary proves some completed turn
 			// exists, but neither text nor arrival order can identify it safely in a
 			// provider replay: repeated answers collide, and a delayed prior Stop may

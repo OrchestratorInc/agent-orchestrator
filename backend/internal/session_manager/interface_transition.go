@@ -527,6 +527,24 @@ func (m *Manager) runInterfaceTransition(
 		fail("TRANSITION_STATE_FAILED", err)
 		return
 	}
+	if bridge, ok := m.agents.Agent(rec.Harness); ok && transition.NativeConversationID != "" {
+		if storageBridge, supported := bridge.(ports.AgentInterfaceHandoffStorageBridge); supported {
+			project, projectErr := m.loadProject(ctx, rec.ProjectID)
+			if projectErr != nil {
+				fail("HANDOFF_STORAGE_BRIDGE_FAILED", projectErr)
+				return
+			}
+			env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
+			m.augmentAgentRuntimeEnv(bridge, env)
+			if bridgeErr := storageBridge.PrepareInterfaceHandoffStorage(ctx, ports.SessionRef{
+				ID: string(rec.ID), WorkspacePath: rec.Metadata.WorkspacePath,
+				Metadata: map[string]string{ports.MetadataKeyAgentSessionID: transition.NativeConversationID},
+			}, transition.SourceMode, transition.TargetMode, transition.NativeConversationID, env); bridgeErr != nil {
+				fail("HANDOFF_STORAGE_BRIDGE_FAILED", bridgeErr)
+				return
+			}
+		}
+	}
 	if m.lcm == nil {
 		fail("LIFECYCLE_UNAVAILABLE", fmt.Errorf("lifecycle manager is unavailable"))
 		return
@@ -793,6 +811,7 @@ func (m *Manager) persistedNativeConversationID(
 		WorkspacePath: rec.Metadata.WorkspacePath,
 		Metadata: map[string]string{
 			ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID,
+			ports.MetadataKeySessionMode:    string(rec.Mode),
 		},
 	}, id, env)
 	if err != nil {

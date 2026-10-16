@@ -140,7 +140,26 @@ type SessionArtifactVersion struct {
 	ContentType string
 	ModTime     time.Time
 	CreatedAt   time.Time
+	// Source is who wrote the version: the agent, or the user through an
+	// artifact save or restore.
+	Source ArtifactVersionSource
+	// Harness is the agent that was running the session when the version was
+	// recorded; empty for a version recorded before this was kept.
+	Harness AgentHarness
+	// RestoredFrom is the version number whose content a restore wrote back;
+	// zero for a version that is not a restore.
+	RestoredFrom int64
 }
+
+// ArtifactVersionSource names who wrote an artifact version.
+type ArtifactVersionSource string
+
+const (
+	// ArtifactVersionSourceAgent marks a version the session's agent wrote.
+	ArtifactVersionSourceAgent ArtifactVersionSource = "agent"
+	// ArtifactVersionSourceUser marks a version saved or restored in the app.
+	ArtifactVersionSourceUser ArtifactVersionSource = "user"
+)
 
 // SessionMetadata is the typed, off-status metadata for a session: operational
 // handles and seed inputs used by Session Manager and reaper.

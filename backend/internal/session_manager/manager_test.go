@@ -2204,6 +2204,35 @@ func TestRestore_RotatesSupervisedAgentGeneration(t *testing.T) {
 	}
 }
 
+func TestRestore_RotatesSupervisedAgentGeneration_Agy(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x", RuntimeLaunchID: "launch-old"})
+	rec := st.sessions["mer-1"]
+	rec.Harness = domain.HarnessAgy
+	st.sessions["mer-1"] = rec
+	rt := &fakeRuntime{}
+	agent := supervisedLaunchAgent{launchArgvAgent{argv: []string{"agy", "--conversation", "agent-x"}}}
+	m := New(Deps{
+		Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st},
+		LookPath:    func(string) (string, error) { return "/bin/true", nil },
+		Executable:  func() (string, error) { return "/opt/ao", nil },
+		NewLaunchID: func() string { return "launch-new" },
+	})
+
+	result, err := m.RestoreWithMode(ctx, "mer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Session.Metadata.RuntimeLaunchID != "launch-new" {
+		t.Fatalf("restored launch id = %q, want launch-new", result.Session.Metadata.RuntimeLaunchID)
+	}
+	if result.Session.Metadata.AgentSessionIDLaunchID != "launch-new" {
+		t.Fatalf("restored native identity launch = %q, want launch-new", result.Session.Metadata.AgentSessionIDLaunchID)
+	}
+}
+
 func TestExitAgentStopsOnlyControllerAndPreservesSessionIdentity(t *testing.T) {
 	m, st, runtime, _ := newManager()
 	st.sessions["mer-1"] = domain.SessionRecord{

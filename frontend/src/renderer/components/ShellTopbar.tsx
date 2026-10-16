@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
-import { Archive, CalendarClock, FileText, Folder, LayoutDashboard, Plus } from "lucide-react";
+import { Archive, CalendarClock, File, Folder, LayoutDashboard, Plus } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { NotificationCenter } from "./NotificationCenter";
 import { ProjectBoardActions } from "./ProjectBoardActions";
@@ -190,7 +190,7 @@ export function ShellTopbar({
 				) : isArtifactsRoute ? (
 					<div className="inline-flex min-w-0 items-center gap-1.5" data-testid="artifacts-topbar-label">
 						<span className={cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5")}>
-							<FileText aria-hidden="true" className="size-icon-md" />
+							<File aria-hidden="true" className="size-icon-md" />
 							{t("artifacts.title")}
 						</span>
 					</div>

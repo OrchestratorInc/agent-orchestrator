@@ -362,6 +362,10 @@ type ChatResumeConfig struct {
 	// SystemPrompt is recomputed by the session manager on restore and reapplied
 	// to the provider process. It is not persisted in the conversation transcript.
 	SystemPrompt string
+	// HasPriorTurns indicates whether the conversation already contains turns
+	// (durable or provider history), so reconnection/restore does not re-send
+	// standing instructions or session preamble intended only for the first turn.
+	HasPriorTurns bool
 	// ProviderScopeID identifies AO's provider ownership boundary. A fresh
 	// approximate branch must never inherit the parent's opaque-id scope.
 	ProviderScopeID       string

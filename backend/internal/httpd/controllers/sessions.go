@@ -196,6 +196,8 @@ type SessionsController struct {
 	PreviewServer            ManagedPreviewServer
 	Capabilities             SessionCapabilityValidator
 	ShellPreviewCapabilities ShellPreviewCapabilityValidator
+	// ArtifactVersions serves artifact version history; nil leaves those routes unimplemented.
+	ArtifactVersions ArtifactVersionService
 }
 
 // Register mounts the session routes on the supplied router.
@@ -214,6 +216,10 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Get("/sessions/{sessionId}/artifact-files/*", c.artifactFile)
 	r.Delete("/sessions/{sessionId}/artifact-files", c.deleteArtifactFile)
 	r.Put("/sessions/{sessionId}/artifact-files", c.updateArtifactFile)
+	r.Get("/sessions/{sessionId}/artifact-versions", c.listArtifactVersions)
+	r.Get("/sessions/{sessionId}/artifact-versions/{version}", c.getArtifactVersion)
+	r.Post("/sessions/{sessionId}/artifact-versions/restore", c.restoreArtifactVersion)
+	r.Post("/sessions/{sessionId}/artifact-versions/sync", c.syncArtifactVersions)
 	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
 		r.Method(method, "/sessions/{sessionId}/preview/app/*", http.HandlerFunc(c.previewApp))
 	}

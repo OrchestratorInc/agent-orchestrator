@@ -15,7 +15,7 @@ vi.mock("../hooks/useSessionWorkspaceFiles", () => ({
 	deleteSessionArtifactFile: deleteArtifactMock,
 	sessionArtifactFileQueryOptions: (sessionId: string, path: string) => ({
 		queryKey: ["artifact-file", sessionId, path],
-		queryFn: async () => ({ content: `contents of ${path}` }),
+		queryFn: async () => (path.endsWith(".png") ? { binary: true, content: "" } : { content: `contents of ${path}` }),
 	}),
 }));
 vi.mock("./ArtifactFileView", () => ({
@@ -133,6 +133,18 @@ describe("SessionArtifactsView", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
 		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /notes\.md/ })).toBeInTheDocument();
+	});
+
+	it("offers version history for a text file but not for a binary one", async () => {
+		const image: SessionArtifact = { kind: "file", name: "chart.png", path: "chart.png", size: 30, updatedAt: "2026-09-20T00:00:00Z" };
+		renderView(<SessionArtifactsView session={session([...artifacts, image])} />);
+
+		await userEvent.click(screen.getByRole("button", { name: /plan\.md/ }));
+		expect(await screen.findByRole("button", { name: "Version history" })).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
+		await userEvent.click(screen.getByRole("button", { name: /chart\.png/ }));
+		await vi.waitFor(() => expect(screen.queryByRole("button", { name: "Version history" })).not.toBeInTheDocument());
 	});
 
 	it("shows the open artifact full screen, keeping the same viewer, until Escape", async () => {

@@ -2573,6 +2573,15 @@ export function ApprovalCard({
 			decision !== allowOnceDecision &&
 			!alternateAllowDecisions.includes(decision),
 	);
+	// Some agents ask a question through a permission request, offering each
+	// answer as its own option of the same kind. A generic per-kind label would
+	// render identical buttons, so a kind offered more than once keeps the
+	// provider's own wording.
+	const repeatedKinds = repeatedDecisionKinds(decisions);
+	const decisionLabel = (decision: DecisionOption) =>
+		repeatedKinds.has(approvalDecisionKind(decision) ?? "") && decision.label.trim()
+			? decision.label
+			: approvalDecisionLabel(decision, subjectKind);
 	const requestId = activity.requestId ?? "";
 	const cardRef = useRef<HTMLDivElement>(null);
 
@@ -2630,7 +2639,7 @@ export function ApprovalCard({
 							disabled={busy}
 							onClick={() => onDecide?.(requestId, denyDecision.id)}
 						>
-							{approvalDecisionLabel(denyDecision, subjectKind)}
+							{decisionLabel(denyDecision)}
 							{denyDecision === rejectOnceDecision ? (
 								<kbd className="rounded-full bg-foreground/10 px-1.5 py-0.5 font-sans text-caption leading-none text-muted-foreground">
 									Esc
@@ -2647,7 +2656,7 @@ export function ApprovalCard({
 								disabled={busy}
 								onClick={() => onDecide?.(requestId, allowOnceDecision.id)}
 							>
-								Allow once
+								{decisionLabel(allowOnceDecision)}
 								<kbd className="rounded-full bg-logo-accent-foreground/15 p-0.5" aria-label="Press Return">
 									<CornerDownLeft aria-hidden="true" className="size-3" />
 								</kbd>
@@ -2677,7 +2686,7 @@ export function ApprovalCard({
 												disabled={busy}
 												onSelect={() => onDecide?.(activity.requestId ?? "", decision.id)}
 											>
-												{approvalDecisionLabel(decision, subjectKind)}
+												{decisionLabel(decision)}
 											</DropdownMenuItem>
 										))}
 									</DropdownMenuContent>
@@ -2693,7 +2702,7 @@ export function ApprovalCard({
 							disabled={busy}
 							onClick={() => onDecide?.(requestId, decision.id)}
 						>
-							{approvalDecisionLabel(decision, subjectKind)}
+							{decisionLabel(decision)}
 						</button>
 					))}
 					{decisions.length === 0 ? (
@@ -2754,6 +2763,18 @@ function approvalDecisionLabel(decision: DecisionOption, subjectKind?: ActivityK
 		default:
 			return decision.label;
 	}
+}
+
+function repeatedDecisionKinds(decisions: DecisionOption[]): Set<string> {
+	const seen = new Set<string>();
+	const repeated = new Set<string>();
+	for (const decision of decisions) {
+		const kind = approvalDecisionKind(decision);
+		if (!kind) continue;
+		if (seen.has(kind)) repeated.add(kind);
+		seen.add(kind);
+	}
+	return repeated;
 }
 
 function orderedApprovalDecisions(decisions: DecisionOption[]): DecisionOption[] {
