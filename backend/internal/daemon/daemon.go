@@ -226,9 +226,9 @@ func Run() error {
 	// Open the durable store and bring up the CDC substrate: DB triggers capture
 	// changes into change_log, the poller tails it, and the broadcaster fans
 	// events out to live transports.
-	store, err := sqlite.Open(cfg.DataDir)
+	store, err := openStore(cfg, log)
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return err
 	}
 	defer func() { _ = store.Close() }()
 	if _, err := store.RequeueClaimedReports(context.Background()); err != nil {

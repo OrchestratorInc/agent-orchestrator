@@ -139,6 +139,11 @@ type Config struct {
 	// AO_DATA_DIR is explicitly set, that override is also the state root so an
 	// isolated daemon never leaks account state into the default home.
 	StateDir string
+	// AllowNewerSchema lets the daemon and `ao import` open a database that a
+	// newer AO already migrated (AO_ALLOW_NEWER_SCHEMA). It is off by default:
+	// both refuse such a database rather than run against a schema they do not
+	// know. It exists for developers who switch branches on a shared dev data dir.
+	AllowNewerSchema bool
 	// Agent is the compatibility agent adapter id selected by AO_AGENT;
 	// startSession fails fast if no adapter with this id is registered.
 	Agent string
@@ -205,6 +210,8 @@ func (c Config) Addr() string {
 //	AO_SHUTDOWN_TIMEOUT  shutdown deadline   (Go duration > 0, default 10s)
 //	AO_RUN_FILE          running.json path   (default ~/.ao/running.json)
 //	AO_DATA_DIR          durable state dir   (default ~/.ao/data)
+//	AO_ALLOW_NEWER_SCHEMA open a database a newer AO migrated off|on (default off;
+//	                     developer escape hatch for switching branches)
 //	AO_AGENT             compatibility agent id (default claude-code)
 //	AO_APP_RUN_ID        desktop-app launch id, set by the Electron supervisor
 //	                     (default: a fresh id minted per daemon boot)
@@ -379,6 +386,14 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 		cfg.TrackerIntake = v
+	}
+
+	if raw, ok := os.LookupEnv("AO_ALLOW_NEWER_SCHEMA"); ok && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_ALLOW_NEWER_SCHEMA", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.AllowNewerSchema = v
 	}
 
 	if raw := os.Getenv("AO_CLIENT"); raw != "" {

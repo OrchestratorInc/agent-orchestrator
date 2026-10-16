@@ -106,7 +106,7 @@ func (c *commandContext) runImport(cmd *cobra.Command, opts importOptions) error
 // one-time bootstrap that must run with the daemon stopped (guarded by the
 // caller), so it cannot go through the daemon's loopback API.
 func (c *commandContext) executeImport(ctx context.Context, cfg config.Config, opts legacyimport.Options) (legacyimport.Report, error) {
-	store, err := sqlite.Open(cfg.DataDir)
+	store, err := sqlite.OpenWithSchemaPolicy(cfg.DataDir, cfg.AllowNewerSchema)
 	if err != nil {
 		return legacyimport.Report{}, fmt.Errorf("open store: %w", err)
 	}

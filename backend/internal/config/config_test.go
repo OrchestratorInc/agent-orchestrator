@@ -527,6 +527,42 @@ func TestLoadTrackerIntakeRejectsGarbage(t *testing.T) {
 	}
 }
 
+func TestLoadAllowNewerSchemaToggle(t *testing.T) {
+	// Off unless asked for. A blank-but-present value counts as unset because
+	// Load() feeds every ao command.
+	for _, raw := range []string{"", " ", "\t", "off", "false", "0", "no"} {
+		t.Run(fmt.Sprintf("off/%q", raw), func(t *testing.T) {
+			t.Setenv("AO_ALLOW_NEWER_SCHEMA", raw)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.AllowNewerSchema {
+				t.Errorf("AllowNewerSchema = true for %q, want false", raw)
+			}
+		})
+	}
+	for _, raw := range []string{"on", "true", "1", "yes"} {
+		t.Run("on/"+raw, func(t *testing.T) {
+			t.Setenv("AO_ALLOW_NEWER_SCHEMA", raw)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if !cfg.AllowNewerSchema {
+				t.Errorf("AllowNewerSchema = false for %q, want true", raw)
+			}
+		})
+	}
+}
+
+func TestLoadAllowNewerSchemaRejectsGarbage(t *testing.T) {
+	t.Setenv("AO_ALLOW_NEWER_SCHEMA", "maybe")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() = nil error, want error for malformed AO_ALLOW_NEWER_SCHEMA")
+	}
+}
+
 func TestLoadHarnessUpdateChecksToggle(t *testing.T) {
 	t.Setenv("AO_HARNESS_UPDATE_CHECKS", "")
 	cfg, err := Load()

@@ -29,6 +29,11 @@ import (
 // Store is the SQLite-backed persistence layer.
 type Store = sqlitestore.Store
 
+// ErrSchemaNewer is returned (wrapped) by OpenWithSchemaPolicy, and so by Open,
+// when ao.db records a migration newer than any this build embeds (a newer AO
+// already migrated it) and the caller has not allowed a newer schema.
+var ErrSchemaNewer = errors.New("database schema is newer than this AO build")
+
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
@@ -123,7 +128,19 @@ func checkLegacyDatabasePath(dataDir string) error {
 //     that hasn't caught up to the commit and read NULL.
 //   - a READER pool (readDB, MaxOpenConns=maxReaders): all reads scale across
 //     it; WAL readers see the latest committed snapshot.
+//
+// Open refuses a database a newer AO already migrated (ErrSchemaNewer) instead
+// of running this build against a schema it does not know.
 func Open(dataDir string) (*Store, error) {
+	return OpenWithSchemaPolicy(dataDir, false)
+}
+
+// OpenWithSchemaPolicy is Open with the newer-schema refusal switchable. With
+// allowNewerSchema set (config.Config.AllowNewerSchema, from the
+// AO_ALLOW_NEWER_SCHEMA escape hatch for developers who switch branches on a
+// shared data dir) a database a newer AO migrated opens anyway, and this build
+// may misread its schema.
+func OpenWithSchemaPolicy(dataDir string, allowNewerSchema bool) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
@@ -138,6 +155,12 @@ func Open(dataDir string) (*Store, error) {
 	}
 	writeDB.SetMaxOpenConns(1)
 	writeDB.SetMaxIdleConns(1)
+	if !allowNewerSchema {
+		if err := refuseNewerSchema(writeDB, filepath.Join(dataDir, "ao.db")); err != nil {
+			_ = writeDB.Close()
+			return nil, err
+		}
+	}
 	if err := migrate(writeDB); err != nil {
 		_ = writeDB.Close()
 		return nil, err
@@ -287,6 +310,53 @@ func OpenPreMigrated(dataDir string) (*Store, error) {
 	readDB.SetMaxIdleConns(maxReaders)
 
 	return sqlitestore.NewStore(writeDB, readDB), nil
+}
+
+// refuseNewerSchema fails with ErrSchemaNewer when the goose ledger records a
+// migration above the highest one this build embeds. goose.Up returns nil for
+// such a database, so an older build would otherwise run silently against a
+// schema it does not know (#4503). It only reads, and OpenWithSchemaPolicy calls
+// it before any repair, so a refused database is left exactly as found.
+//
+// Only versions above the embedded head count. Real ledgers also hold versions
+// at or below it that this build lacks: 22 (shipped, then reverted), 45, 46, 50
+// and 51 (a foreign build recorded 40-51), 55-65 and 182-184 (renumbered branch
+// migrations), and anything merged out of order. The repairs below and
+// goose.WithAllowMissing already handle those, and refusing them would strand
+// installs that start today. The cost: a newer AO whose only extra migration is
+// numbered below this build's head goes undetected.
+func refuseNewerSchema(db *sql.DB, dbPath string) error {
+	var gooseTable int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`,
+	).Scan(&gooseTable); err != nil {
+		return fmt.Errorf("inspect migration history: %w", err)
+	}
+	if gooseTable == 0 {
+		return nil
+	}
+	head, err := expectedMigrationVersion()
+	if err != nil {
+		return fmt.Errorf("determine expected migration version: %w", err)
+	}
+	// A version counts as applied when its latest ledger row says so, the same
+	// rule the repairs below use.
+	var applied int64
+	if err := db.QueryRow(`
+SELECT COALESCE(MAX(version_id), 0) FROM goose_db_version
+WHERE is_applied = 1
+  AND id IN (SELECT MAX(id) FROM goose_db_version GROUP BY version_id)`).Scan(&applied); err != nil {
+		return fmt.Errorf("read applied migration version: %w", err)
+	}
+	if applied <= head {
+		return nil
+	}
+	return fmt.Errorf(
+		"%w: %s has migration %04d applied, but this build only includes migrations up to %04d. "+
+			"A newer AO has already migrated this data directory: update AO, or point AO_DATA_DIR at a different directory. "+
+			"Developers switching branches can set AO_ALLOW_NEWER_SCHEMA=1 to open it anyway",
+		ErrSchemaNewer, dbPath, applied, head,
+	)
 }
 
 func migrate(db *sql.DB) error {
