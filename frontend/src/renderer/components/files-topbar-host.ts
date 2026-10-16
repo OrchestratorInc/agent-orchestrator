@@ -11,3 +11,14 @@ export const FilesTopbarHostContext = createContext<HTMLElement | null>(null);
 export function useFilesTopbarHost(): HTMLElement | null {
 	return useContext(FilesTopbarHostContext);
 }
+
+/**
+ * The top-bar slot for the Files maximize button: the inspector top bar's
+ * trailing edge, just before its pinned buttons. Without it the button follows
+ * the filter into its host, or stays in the panel's header.
+ */
+export const FilesActionsHostContext = createContext<HTMLElement | null>(null);
+
+export function useFilesActionsHost(): HTMLElement | null {
+	return useContext(FilesActionsHostContext);
+}

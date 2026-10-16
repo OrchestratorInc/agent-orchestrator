@@ -264,11 +264,12 @@ type ArtifactFileResponse struct {
 type WorkspaceFileQuery struct {
 	Path string `query:"path" description:"Session-worktree-relative file path."`
 	// Section scopes the diff to one git-state section (see WorkspaceFileSections):
-	// staged compares the index against HEAD, unstaged compares the worktree
-	// against the index. A file can carry independent changes in both. Omit (or
-	// pass committed/untracked) to diff the worktree against the compare base,
-	// as before this field existed.
-	Section   string `query:"section,omitempty" enum:"committed,staged,unstaged,untracked" description:"Git-state section the file was opened from (see WorkspaceFileSections). staged diffs the index against HEAD; unstaged diffs the worktree against the index; omitted/committed/untracked diff the worktree against the compare base."`
+	// uncommitted compares the worktree against HEAD, staged compares the index
+	// against HEAD, unstaged compares the worktree against the index. A file can
+	// carry independent changes in both staged and unstaged. Omit (or pass
+	// committed/untracked) to diff the worktree against the compare base, as
+	// before this field existed.
+	Section   string `query:"section,omitempty" enum:"uncommitted,committed,staged,unstaged,untracked" description:"Git-state section the file was opened from (see WorkspaceFileSections). uncommitted diffs the worktree against HEAD; staged diffs the index against HEAD; unstaged diffs the worktree against the index; omitted/committed/untracked diff the worktree against the compare base."`
 	CommitSHA string `query:"commitSha,omitempty" description:"Exact commit SHA to read as an immutable committed-scope snapshot."`
 }
 
@@ -293,11 +294,26 @@ type WorkspaceFileBlobQuery struct {
 // WorkspaceFileRevisionQuery selects one text-capable comparison side.
 type WorkspaceFileRevisionQuery struct {
 	Path             string `query:"path" required:"true" description:"Session-worktree-relative file path."`
-	Scope            string `query:"scope,omitempty" enum:"combined,committed,staged,unstaged,untracked" description:"Comparison scope. Defaults to combined."`
+	Scope            string `query:"scope,omitempty" enum:"combined,uncommitted,committed,staged,unstaged,untracked" description:"Comparison scope. Defaults to combined."`
 	Side             string `query:"side,omitempty" enum:"before,after" description:"Comparison side. Defaults to after."`
 	WorkspaceVersion string `query:"workspaceVersion,omitempty" description:"Opaque workspace snapshot token used for consistency checks."`
 	ExpectedRevision string `query:"expectedRevision,omitempty" description:"Opaque revision token used for optimistic consistency checks."`
-	CommitSHA        string `query:"commitSha,omitempty" description:"Exact commit SHA for a committed-scope comparison."`
+	CommitSHA        string `query:"commitSha,omitempty" description:"Exact commit SHA for a committed-scope comparison. Cannot be combined with commitShas."`
+	CommitSHAs       string `query:"commitShas,omitempty" description:"Comma-separated full SHAs (max 250) whose combined changes are compared. Requires the committed scope."`
+	Branch           string `query:"branch,omitempty" description:"Local branch to read instead of the checked-out worktree. Requires the committed scope."`
+	PRNumber         int    `query:"prNumber,omitempty" minimum:"1" description:"Associated pull request to read instead of the checked-out worktree. Requires the committed scope."`
+	SourceURL        string `query:"sourceUrl,omitempty" description:"Stable URL of the pull request, for PRs that share a number. Requires prNumber."`
+	ExpectedTipSHA   string `query:"expectedTipSha,omitempty" description:"The branch or pull request view's tipSha from its history. A moved tip fails with WORKSPACE_REF_MOVED."`
+	ExpectedBaseSHA  string `query:"expectedBaseSha,omitempty" description:"The branch or pull request view's baseSha from its history. A moved base fails with WORKSPACE_REF_MOVED."`
+}
+
+// WorkspaceHistoryQuery selects whose history GET
+// /api/v1/sessions/{sessionId}/workspace/history reads. With neither branch
+// nor prNumber it reads the checked-out worktree.
+type WorkspaceHistoryQuery struct {
+	Branch    string `query:"branch,omitempty" description:"Local branch to read instead of the checked-out worktree. Read from revisions only; nothing is checked out."`
+	PRNumber  int    `query:"prNumber,omitempty" minimum:"1" description:"Associated pull request to read instead of the checked-out worktree."`
+	SourceURL string `query:"sourceUrl,omitempty" description:"Stable URL of the pull request, for PRs that share a number. Requires prNumber."`
 }
 
 // PRFilesQuery selects the associated pull request when multiple providers or
@@ -614,10 +630,47 @@ type WorkspaceManifestResponse struct {
 // header. It is intentionally separate from the first-paint manifest.
 type WorkspaceHistoryResponse struct {
 	SessionID        domain.SessionID         `json:"sessionId"`
+	View             WorkspaceViewResponse    `json:"view"`
 	Commits          []WorkspaceCommitSummary `json:"commits"`
 	CommitsTruncated bool                     `json:"commitsTruncated,omitempty"`
-	Ahead            *int                     `json:"ahead,omitempty"`
-	Behind           *int                     `json:"behind,omitempty"`
+	RangeSummary     *WorkspaceSummary        `json:"rangeSummary,omitempty" description:"Totals for All commits. Views only."`
+	Ahead            *int                     `json:"ahead,omitempty" description:"Checked-out view only."`
+	Behind           *int                     `json:"behind,omitempty" description:"Checked-out view only."`
+}
+
+// WorkspaceViewResponse describes whose history a workspace read covers.
+type WorkspaceViewResponse struct {
+	Kind      sessionsvc.WorkspaceViewKind  `json:"kind" enum:"checked_out,branch,pull_request"`
+	Name      string                        `json:"name,omitempty" description:"Branch name, or the pull request's source branch."`
+	TipSHA    string                        `json:"tipSha,omitempty" description:"Fence a later view read with it as expectedTipSha."`
+	BaseSHA   string                        `json:"baseSha,omitempty" description:"Set only in since_base mode. Fence a later view read with it as expectedBaseSha."`
+	BaseRef   string                        `json:"baseRef,omitempty"`
+	RangeMode sessionsvc.WorkspaceRangeMode `json:"rangeMode" enum:"since_base,recent" description:"since_base lists the commits since baseSha; recent lists the newest 50 first-parent commits of a default branch, or of a branch with no default branch to measure from."`
+}
+
+// WorkspaceBranchesResponse lists the branches a session's review can read.
+type WorkspaceBranchesResponse struct {
+	SessionID     domain.SessionID          `json:"sessionId"`
+	Supported     bool                      `json:"supported" description:"False for scratch sessions, which have no Git history."`
+	DefaultBranch string                    `json:"defaultBranch,omitempty"`
+	Branches      []WorkspaceBranchResponse `json:"branches" description:"The checked-out row first, then the rest newest first; at most 200 rows."`
+	Truncated     bool                      `json:"truncated"`
+}
+
+// WorkspaceBranchResponse is one branch a review can read. A local branch
+// with a pull request is only annotated with it; a pull request whose source
+// branch is not local gets a row of its own.
+type WorkspaceBranchResponse struct {
+	Kind       sessionsvc.WorkspaceBranchKind `json:"kind" enum:"local,pull_request" description:"local reads as a branch view (or the checked-out worktree); pull_request reads as a pull request view."`
+	Name       string                         `json:"name" description:"Branch name, the pull request's source branch, or empty for a detached HEAD."`
+	TipSHA     string                         `json:"tipSha,omitempty"`
+	UpdatedAt  *time.Time                     `json:"updatedAt,omitempty" description:"The tip's committer time, or the pull request's last update."`
+	CheckedOut bool                           `json:"checkedOut"`
+	Detached   bool                           `json:"detached,omitempty"`
+	IsDefault  bool                           `json:"isDefault"`
+	PRNumber   int                            `json:"prNumber,omitempty"`
+	PRURL      string                         `json:"prUrl,omitempty" description:"Pass as sourceUrl with prNumber to read a pull_request row."`
+	PRTitle    string                         `json:"prTitle,omitempty"`
 }
 
 // ListPRFilesResponse is the exact base...head changed-file set for one PR.
@@ -633,14 +686,16 @@ type ListPRFilesResponse struct {
 }
 
 // WorkspaceFileSections groups a session workspace's changed files by git
-// state: staged (index vs HEAD), unstaged (worktree vs index), untracked, and
-// committed (HEAD vs the compare base). A partially staged file can appear in
-// both staged and unstaged.
+// state: uncommitted (worktree vs HEAD, untracked files included), staged
+// (index vs HEAD), unstaged (worktree vs index), untracked, and committed
+// (HEAD vs the compare base). A partially staged file can appear in both
+// staged and unstaged, but only once in uncommitted.
 type WorkspaceFileSections struct {
-	Staged    []WorkspaceFileSummary `json:"staged"`
-	Unstaged  []WorkspaceFileSummary `json:"unstaged"`
-	Untracked []WorkspaceFileSummary `json:"untracked"`
-	Committed []WorkspaceFileSummary `json:"committed"`
+	Uncommitted []WorkspaceFileSummary `json:"uncommitted" description:"Worktree vs HEAD, untracked files included. Always present; a response without it comes from an older daemon."`
+	Staged      []WorkspaceFileSummary `json:"staged"`
+	Unstaged    []WorkspaceFileSummary `json:"unstaged"`
+	Untracked   []WorkspaceFileSummary `json:"untracked"`
+	Committed   []WorkspaceFileSummary `json:"committed"`
 }
 
 // WorkspaceCommitSummary is one commit between the compare base and HEAD.
@@ -699,12 +754,52 @@ type WorkspaceFileResponse struct {
 
 // WorkspaceDiffRequest requests renderer-independent unified patches.
 type WorkspaceDiffRequest struct {
-	Scope            string   `json:"scope" enum:"combined,committed,staged,unstaged,untracked"`
+	Scope            string   `json:"scope" enum:"combined,uncommitted,committed,staged,unstaged,untracked"`
 	Paths            []string `json:"paths" minItems:"1" maxItems:"100"`
 	ContextLines     int      `json:"contextLines" minimum:"0" maximum:"20"`
 	IgnoreWhitespace bool     `json:"ignoreWhitespace"`
 	WorkspaceVersion string   `json:"workspaceVersion,omitempty"`
-	CommitSHA        string   `json:"commitSha,omitempty" description:"Exact commit SHA for a committed-scope comparison."`
+	CommitSHA        string   `json:"commitSha,omitempty" description:"Exact commit SHA for a committed-scope comparison. Cannot be combined with commitShas."`
+	CommitSHAs       []string `json:"commitShas,omitempty" maxItems:"250" description:"Full SHAs whose combined changes are compared. Requires the committed scope."`
+	Branch           string   `json:"branch,omitempty" description:"Local branch to read instead of the checked-out worktree. Requires the committed scope."`
+	PRNumber         int      `json:"prNumber,omitempty" minimum:"1" description:"Associated pull request to read instead of the checked-out worktree. Requires the committed scope."`
+	SourceURL        string   `json:"sourceUrl,omitempty" description:"Stable URL of the pull request, for PRs that share a number. Requires prNumber."`
+	ExpectedTipSHA   string   `json:"expectedTipSha,omitempty" description:"The view's tipSha from its history. A moved tip fails with WORKSPACE_REF_MOVED."`
+	ExpectedBaseSHA  string   `json:"expectedBaseSha,omitempty" description:"The view's baseSha from its history. A moved base fails with WORKSPACE_REF_MOVED."`
+}
+
+// WorkspaceCommitSelectionRequest asks for the combined changed files of
+// ticked commits in a view, or of its whole range.
+type WorkspaceCommitSelectionRequest struct {
+	Branch           string   `json:"branch,omitempty" description:"Local branch to read instead of the checked-out worktree."`
+	PRNumber         int      `json:"prNumber,omitempty" minimum:"1" description:"Associated pull request to read instead of the checked-out worktree."`
+	SourceURL        string   `json:"sourceUrl,omitempty" description:"Stable URL of the pull request, for PRs that share a number. Requires prNumber."`
+	ExpectedTipSHA   string   `json:"expectedTipSha,omitempty" description:"The view's tipSha from its history. A moved tip fails with WORKSPACE_REF_MOVED."`
+	ExpectedBaseSHA  string   `json:"expectedBaseSha,omitempty" description:"The view's baseSha from its history. A moved base fails with WORKSPACE_REF_MOVED."`
+	CommitSHAs       []string `json:"commitShas" maxItems:"250" description:"Full SHAs. Empty = the whole range (All commits)."`
+	WorkspaceVersion string   `json:"workspaceVersion,omitempty" description:"Fence for checked-out selections."`
+}
+
+// WorkspaceCommitSelectionResponse is the combined changed-file set of a
+// commit selection. Commits that cannot be combined are not an error: the
+// response has combinable false, no files, and a conflict.
+type WorkspaceCommitSelectionResponse struct {
+	SessionID  domain.SessionID                 `json:"sessionId"`
+	TipSHA     string                           `json:"tipSha"`
+	BaseSHA    string                           `json:"baseSha,omitempty"`
+	Contiguous bool                             `json:"contiguous" description:"True when the commits form one unbroken range."`
+	Combinable bool                             `json:"combinable"`
+	Conflict   *WorkspaceCommitConflictResponse `json:"conflict,omitempty"`
+	Files      []WorkspaceFileSummary           `json:"files"`
+	Summary    WorkspaceSummary                 `json:"summary"`
+	Truncated  bool                             `json:"truncated"`
+}
+
+// WorkspaceCommitConflictResponse names why ticked commits cannot be combined.
+type WorkspaceCommitConflictResponse struct {
+	CommitSHA string                                   `json:"commitSha" description:"The ticked commit whose changes did not apply."`
+	Paths     []string                                 `json:"paths" description:"Up to 20 paths that did not apply."`
+	Reason    sessionsvc.WorkspaceCommitConflictReason `json:"reason" enum:"conflict,unsupported_history"`
 }
 
 // WorkspaceDiffDeferredResponse describes a file omitted from an initial patch.

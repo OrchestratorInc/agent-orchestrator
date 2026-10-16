@@ -191,10 +191,11 @@ describe("subscribeWorkspaceFileChanges", () => {
 		expect(queryClient.invalidateQueries).not.toHaveBeenCalled();
 		vi.advanceTimersByTime(1);
 
-		expect(queryClient.invalidateQueries).toHaveBeenCalledTimes(9);
+		expect(queryClient.invalidateQueries).toHaveBeenCalledTimes(10);
 		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["workspace-file-paths", "sess-1"] });
 		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-files", "sess-1"] });
 		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-history", "sess-1"] });
+		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-branches", "sess-1"] });
 		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-file", "sess-1"] });
 		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-file-revision", "sess-1"] });
 		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-diffs", "sess-1"] });
@@ -212,7 +213,7 @@ describe("subscribeWorkspaceFileChanges", () => {
 
 		source.dispatch("workspace_changed", JSON.stringify({ kind: "dirty", refreshing: true }));
 		vi.advanceTimersByTime(INVALIDATE_TEST_WINDOW_MS);
-		expect(queryClient.invalidateQueries).toHaveBeenCalledTimes(5);
+		expect(queryClient.invalidateQueries).toHaveBeenCalledTimes(6);
 		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-diffs", "sess-version"] });
 		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["files-review-end-of-file", "sess-version"] });
 		expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-workspace-files", "sess-version"] });
@@ -221,12 +222,12 @@ describe("subscribeWorkspaceFileChanges", () => {
 		const completed = JSON.stringify({ kind: "version", workspaceVersion: "v2" });
 		source.dispatch("workspace_changed", completed);
 		vi.advanceTimersByTime(INVALIDATE_TEST_WINDOW_MS);
-		expect(queryClient.invalidateQueries).toHaveBeenCalledTimes(9);
+		expect(queryClient.invalidateQueries).toHaveBeenCalledTimes(10);
 
 		vi.mocked(queryClient.invalidateQueries).mockClear();
 		source.dispatch("workspace_changed", completed);
 		vi.advanceTimersByTime(INVALIDATE_TEST_WINDOW_MS);
-		expect(queryClient.invalidateQueries).toHaveBeenCalledTimes(5);
+		expect(queryClient.invalidateQueries).toHaveBeenCalledTimes(6);
 		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-file", "sess-version"] });
 		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-diffs", "sess-version"] });
 		expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-workspace-files", "sess-version"] });
@@ -240,7 +241,7 @@ describe("subscribeWorkspaceFileChanges", () => {
 		const unsubscribe = subscribeWorkspaceFileChanges("sess-current", queryClient);
 		EventSourceStub.instances[0].dispatch("workspace_changed", JSON.stringify({ kind: "version", workspaceVersion: "v2" }));
 		vi.advanceTimersByTime(INVALIDATE_TEST_WINDOW_MS);
-		expect(queryClient.invalidateQueries).toHaveBeenCalledTimes(5);
+		expect(queryClient.invalidateQueries).toHaveBeenCalledTimes(6);
 		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-file-revision", "sess-current"] });
 		expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-workspace-files", "sess-current"] });
 		unsubscribe();
@@ -257,7 +258,7 @@ describe("subscribeWorkspaceFileChanges", () => {
 		source.dispatch("workspace_changed");
 		vi.advanceTimersByTime(50);
 
-		expect(queryClient.invalidateQueries).toHaveBeenCalledTimes(9);
+		expect(queryClient.invalidateQueries).toHaveBeenCalledTimes(10);
 		unsubscribe();
 	});
 

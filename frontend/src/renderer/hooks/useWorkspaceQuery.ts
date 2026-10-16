@@ -736,6 +736,23 @@ export function useWorkspaceSession(sessionId: string, hostId?: string, localLoo
 	};
 }
 
+/**
+ * The kind of project a remote session belongs to. It reads the same host list
+ * as useWorkspaceSession, from the same moment, so it adds no request.
+ */
+export function useRemoteSessionProjectKind(sessionId: string, hostId?: string): WorkspaceSummary["kind"] {
+	const selectKind = useMemo(
+		() => (workspaces: WorkspaceSummary[]) => workspaces.find((workspace) => workspace.sessions.some((session) => session.id === sessionId))?.kind,
+		[sessionId],
+	);
+	return useQuery({
+		queryKey: remoteWorkspaceQueryKey(hostId ?? ""),
+		queryFn: () => fetchRemoteWorkspaces(hostId ?? ""),
+		select: selectKind,
+		enabled: Boolean(hostId && sessionId),
+	}).data;
+}
+
 export type WorkspaceScope = {
 	project?: Pick<WorkspaceSummary, "id" | "kind" | "name" | "orchestratorAgent">;
 	hasWorkerSessions: boolean;

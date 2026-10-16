@@ -1,4 +1,4 @@
-import { ChevronRight } from "lucide-react";
+import { Check, ChevronRight } from "lucide-react";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { cn } from "../../lib/utils";
 import { composeMenuCloseAutoFocus, useMenuReturnTarget } from "./menu-focus";
@@ -56,6 +56,57 @@ export function DropdownMenuItem({
 			)}
 			{...props}
 		/>
+	);
+}
+
+export const DropdownMenuRadioGroup = DropdownMenuPrimitive.RadioGroup;
+
+/**
+ * A single-choice row. The trailing check sits in a reserved slot so labels
+ * never shift when the selection moves; picking a row closes the menu.
+ */
+export function DropdownMenuRadioItem({
+	className,
+	children,
+	...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.RadioItem>) {
+	return (
+		<DropdownMenuPrimitive.RadioItem className={cn(actionMenuItemClass, className)} {...props}>
+			{children}
+			<span className="ml-auto flex size-4 shrink-0 items-center justify-center">
+				{/* ! because the row's [&_svg] colour outranks a plain utility. */}
+				<DropdownMenuPrimitive.ItemIndicator className="flex">
+					<Check aria-hidden="true" className="text-logo-accent!" />
+				</DropdownMenuPrimitive.ItemIndicator>
+			</span>
+		</DropdownMenuPrimitive.RadioItem>
+	);
+}
+
+/**
+ * A multi-choice row with a trailing box drawn like the review pane's viewed
+ * checkbox, in the same reserved column as a radio row's check. Radix closes
+ * the menu on select; callers that toggle several rows in one visit call
+ * `event.preventDefault()` in `onSelect`.
+ */
+export function DropdownMenuCheckboxItem({
+	className,
+	children,
+	...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.CheckboxItem>) {
+	return (
+		<DropdownMenuPrimitive.CheckboxItem className={cn(actionMenuItemClass, "group/checkbox-item", className)} {...props}>
+			{children}
+			{/* The row forces 15px icons; the check fits the 16px box at 12px. */}
+			<span
+				aria-hidden="true"
+				className="ml-auto flex size-4 shrink-0 items-center justify-center rounded-sm border border-muted-foreground/70 group-data-[state=checked]/checkbox-item:border-foreground group-data-[state=checked]/checkbox-item:bg-foreground [&_svg]:size-3! [&_svg]:text-background!"
+			>
+				<DropdownMenuPrimitive.ItemIndicator className="flex">
+					<Check />
+				</DropdownMenuPrimitive.ItemIndicator>
+			</span>
+		</DropdownMenuPrimitive.CheckboxItem>
 	);
 }
 

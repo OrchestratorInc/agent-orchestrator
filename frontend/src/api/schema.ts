@@ -3116,6 +3116,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/workspace/branches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the local branches and pull requests a workspace review can read, checked-out branch first */
+        get: operations["listSessionWorkspaceBranches"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/workspace/diffs": {
         parameters: {
             query?: never;
@@ -3230,6 +3247,23 @@ export interface paths {
         get: operations["getSessionWorkspaceHistory"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/workspace/history/selection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve ticked commits, or a view's whole range, to their combined changed files */
+        post: operations["getSessionWorkspaceCommitSelection"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6562,6 +6596,73 @@ export interface components {
             /** @description Input not read from an existing provider cache. Includes cache writes. */
             uncachedInputTokens: null | number;
         };
+        WorkspaceBranchResponse: {
+            checkedOut: boolean;
+            detached?: boolean;
+            isDefault: boolean;
+            /**
+             * @description local reads as a branch view (or the checked-out worktree); pull_request reads as a pull request view.
+             * @enum {string}
+             */
+            kind: "local" | "pull_request";
+            /** @description Branch name, the pull request's source branch, or empty for a detached HEAD. */
+            name: string;
+            prNumber?: number;
+            prTitle?: string;
+            /** @description Pass as sourceUrl with prNumber to read a pull_request row. */
+            prUrl?: string;
+            tipSha?: string;
+            /**
+             * Format: date-time
+             * @description The tip's committer time, or the pull request's last update.
+             */
+            updatedAt?: null | string;
+        };
+        WorkspaceBranchesResponse: {
+            /** @description The checked-out row first, then the rest newest first; at most 200 rows. */
+            branches: components["schemas"]["WorkspaceBranchResponse"][];
+            defaultBranch?: string;
+            sessionId: string;
+            /** @description False for scratch sessions, which have no Git history. */
+            supported: boolean;
+            truncated: boolean;
+        };
+        WorkspaceCommitConflictResponse: {
+            /** @description The ticked commit whose changes did not apply. */
+            commitSha: string;
+            /** @description Up to 20 paths that did not apply. */
+            paths: string[];
+            /** @enum {string} */
+            reason: "conflict" | "unsupported_history";
+        };
+        WorkspaceCommitSelectionRequest: {
+            /** @description Local branch to read instead of the checked-out worktree. */
+            branch?: string;
+            /** @description Full SHAs. Empty = the whole range (All commits). */
+            commitShas: string[];
+            /** @description The view's baseSha from its history. A moved base fails with WORKSPACE_REF_MOVED. */
+            expectedBaseSha?: string;
+            /** @description The view's tipSha from its history. A moved tip fails with WORKSPACE_REF_MOVED. */
+            expectedTipSha?: string;
+            /** @description Associated pull request to read instead of the checked-out worktree. */
+            prNumber?: number;
+            /** @description Stable URL of the pull request, for PRs that share a number. Requires prNumber. */
+            sourceUrl?: string;
+            /** @description Fence for checked-out selections. */
+            workspaceVersion?: string;
+        };
+        WorkspaceCommitSelectionResponse: {
+            baseSha?: string;
+            combinable: boolean;
+            conflict?: components["schemas"]["WorkspaceCommitConflictResponse"];
+            /** @description True when the commits form one unbroken range. */
+            contiguous: boolean;
+            files: components["schemas"]["WorkspaceFileSummary"][];
+            sessionId: string;
+            summary: components["schemas"]["WorkspaceSummary"];
+            tipSha: string;
+            truncated: boolean;
+        };
         WorkspaceCommitSummary: {
             author: string;
             files: components["schemas"]["WorkspaceFileSummary"][];
@@ -6588,13 +6689,25 @@ export interface components {
             truncated: boolean;
         };
         WorkspaceDiffRequest: {
-            /** @description Exact commit SHA for a committed-scope comparison. */
+            /** @description Local branch to read instead of the checked-out worktree. Requires the committed scope. */
+            branch?: string;
+            /** @description Exact commit SHA for a committed-scope comparison. Cannot be combined with commitShas. */
             commitSha?: string;
+            /** @description Full SHAs whose combined changes are compared. Requires the committed scope. */
+            commitShas?: string[];
             contextLines: number;
+            /** @description The view's baseSha from its history. A moved base fails with WORKSPACE_REF_MOVED. */
+            expectedBaseSha?: string;
+            /** @description The view's tipSha from its history. A moved tip fails with WORKSPACE_REF_MOVED. */
+            expectedTipSha?: string;
             ignoreWhitespace: boolean;
             paths: string[];
+            /** @description Associated pull request to read instead of the checked-out worktree. Requires the committed scope. */
+            prNumber?: number;
             /** @enum {string} */
-            scope: "combined" | "committed" | "staged" | "unstaged" | "untracked";
+            scope: "combined" | "uncommitted" | "committed" | "staged" | "unstaged" | "untracked";
+            /** @description Stable URL of the pull request, for PRs that share a number. Requires prNumber. */
+            sourceUrl?: string;
             workspaceVersion?: string;
         };
         WorkspaceDiffsResponse: {
@@ -6662,6 +6775,8 @@ export interface components {
         WorkspaceFileSections: {
             committed: components["schemas"]["WorkspaceFileSummary"][];
             staged: components["schemas"]["WorkspaceFileSummary"][];
+            /** @description Worktree vs HEAD, untracked files included. Always present; a response without it comes from an older daemon. */
+            uncommitted: components["schemas"]["WorkspaceFileSummary"][];
             unstaged: components["schemas"]["WorkspaceFileSummary"][];
             untracked: components["schemas"]["WorkspaceFileSummary"][];
         };
@@ -6679,11 +6794,16 @@ export interface components {
             status: "unmodified" | "modified" | "added" | "deleted" | "renamed";
         };
         WorkspaceHistoryResponse: {
+            /** @description Checked-out view only. */
             ahead?: null | number;
+            /** @description Checked-out view only. */
             behind?: null | number;
             commits: components["schemas"]["WorkspaceCommitSummary"][];
             commitsTruncated?: boolean;
+            /** @description Totals for All commits. Views only. */
+            rangeSummary?: components["schemas"]["WorkspaceSummary"];
             sessionId: string;
+            view: components["schemas"]["WorkspaceViewResponse"];
         };
         WorkspaceManifestResponse: {
             compareBaseRef?: string;
@@ -6729,6 +6849,22 @@ export interface components {
             status?: "unmodified" | "modified" | "added" | "deleted" | "renamed";
             /** @enum {string} */
             type: "file" | "dir";
+        };
+        WorkspaceViewResponse: {
+            baseRef?: string;
+            /** @description Set only in since_base mode. Fence a later view read with it as expectedBaseSha. */
+            baseSha?: string;
+            /** @enum {string} */
+            kind: "checked_out" | "branch" | "pull_request";
+            /** @description Branch name, or the pull request's source branch. */
+            name?: string;
+            /**
+             * @description since_base lists the commits since baseSha; recent lists the newest 50 first-parent commits of a default branch, or of a branch with no default branch to measure from.
+             * @enum {string}
+             */
+            rangeMode: "since_base" | "recent";
+            /** @description Fence a later view read with it as expectedTipSha. */
+            tipSha?: string;
         };
     };
     responses: never;
@@ -18525,6 +18661,56 @@ export interface operations {
             };
         };
     };
+    listSessionWorkspaceBranches: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceBranchesResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     getSessionWorkspaceDiffs: {
         parameters: {
             query?: never;
@@ -18652,8 +18838,8 @@ export interface operations {
             query?: {
                 /** @description Session-worktree-relative file path. */
                 path?: string;
-                /** @description Git-state section the file was opened from (see WorkspaceFileSections). staged diffs the index against HEAD; unstaged diffs the worktree against the index; omitted/committed/untracked diff the worktree against the compare base. */
-                section?: "committed" | "staged" | "unstaged" | "untracked";
+                /** @description Git-state section the file was opened from (see WorkspaceFileSections). uncommitted diffs the worktree against HEAD; staged diffs the index against HEAD; unstaged diffs the worktree against the index; omitted/committed/untracked diff the worktree against the compare base. */
+                section?: "uncommitted" | "committed" | "staged" | "unstaged" | "untracked";
                 /** @description Exact commit SHA to read as an immutable committed-scope snapshot. */
                 commitSha?: string;
             };
@@ -18857,15 +19043,27 @@ export interface operations {
                 /** @description Session-worktree-relative file path. */
                 path: string;
                 /** @description Comparison scope. Defaults to combined. */
-                scope?: "combined" | "committed" | "staged" | "unstaged" | "untracked";
+                scope?: "combined" | "uncommitted" | "committed" | "staged" | "unstaged" | "untracked";
                 /** @description Comparison side. Defaults to after. */
                 side?: "before" | "after";
                 /** @description Opaque workspace snapshot token used for consistency checks. */
                 workspaceVersion?: string;
                 /** @description Opaque revision token used for optimistic consistency checks. */
                 expectedRevision?: string;
-                /** @description Exact commit SHA for a committed-scope comparison. */
+                /** @description Exact commit SHA for a committed-scope comparison. Cannot be combined with commitShas. */
                 commitSha?: string;
+                /** @description Comma-separated full SHAs (max 250) whose combined changes are compared. Requires the committed scope. */
+                commitShas?: string;
+                /** @description Local branch to read instead of the checked-out worktree. Requires the committed scope. */
+                branch?: string;
+                /** @description Associated pull request to read instead of the checked-out worktree. Requires the committed scope. */
+                prNumber?: number;
+                /** @description Stable URL of the pull request, for PRs that share a number. Requires prNumber. */
+                sourceUrl?: string;
+                /** @description The branch or pull request view's tipSha from its history. A moved tip fails with WORKSPACE_REF_MOVED. */
+                expectedTipSha?: string;
+                /** @description The branch or pull request view's baseSha from its history. A moved base fails with WORKSPACE_REF_MOVED. */
+                expectedBaseSha?: string;
             };
             header?: never;
             path: {
@@ -18984,7 +19182,14 @@ export interface operations {
     };
     getSessionWorkspaceHistory: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Local branch to read instead of the checked-out worktree. Read from revisions only; nothing is checked out. */
+                branch?: string;
+                /** @description Associated pull request to read instead of the checked-out worktree. */
+                prNumber?: number;
+                /** @description Stable URL of the pull request, for PRs that share a number. Requires prNumber. */
+                sourceUrl?: string;
+            };
             header?: never;
             path: {
                 /** @description Session identifier, e.g. project-1. */
@@ -19003,8 +19208,89 @@ export interface operations {
                     "application/json": components["schemas"]["WorkspaceHistoryResponse"];
                 };
             };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionWorkspaceCommitSelection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceCommitSelectionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceCommitSelectionResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

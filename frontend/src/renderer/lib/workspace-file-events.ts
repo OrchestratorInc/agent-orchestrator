@@ -7,7 +7,9 @@ import { computeSseRetryDelayMs } from "./sse-backoff";
 
 const INVALIDATE_DEBOUNCE_MS = 150;
 const EVENTSOURCE_CLOSED = 2;
-const CONTENT_QUERY_NAMES = ["session-workspace-history", "session-workspace-file", "session-workspace-file-revision", "session-workspace-diffs", "files-review-end-of-file"] as const;
+// The commit selection is not here: its key (the SHAs, a view's fenced tip and base, or
+// the manifest version) names content that never changes.
+const CONTENT_QUERY_NAMES = ["session-workspace-history", "session-workspace-branches", "session-workspace-file", "session-workspace-file-revision", "session-workspace-diffs", "files-review-end-of-file"] as const;
 const INVENTORY_QUERY_NAMES = ["workspace-file-paths", "session-workspace-files", "session-workspace-search", "session-workspace-tree"] as const;
 const ALL_QUERY_NAMES = [...CONTENT_QUERY_NAMES, ...INVENTORY_QUERY_NAMES] as const;
 

@@ -9540,6 +9540,46 @@ paths:
       summary: Switch a logical AO session to another agent harness
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/workspace/branches:
+    get:
+      operationId: listSessionWorkspaceBranches
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceBranchesResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the local branches and pull requests a workspace review can read,
+        checked-out branch first
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/workspace/diffs:
     post:
       operationId: getSessionWorkspaceDiffs
@@ -9654,17 +9694,18 @@ paths:
           description: Session-worktree-relative file path.
           type: string
       - description: Git-state section the file was opened from (see WorkspaceFileSections).
-          staged diffs the index against HEAD; unstaged diffs the worktree against
-          the index; omitted/committed/untracked diff the worktree against the compare
-          base.
+          uncommitted diffs the worktree against HEAD; staged diffs the index against
+          HEAD; unstaged diffs the worktree against the index; omitted/committed/untracked
+          diff the worktree against the compare base.
         in: query
         name: section
         schema:
           description: Git-state section the file was opened from (see WorkspaceFileSections).
-            staged diffs the index against HEAD; unstaged diffs the worktree against
-            the index; omitted/committed/untracked diff the worktree against the compare
-            base.
+            uncommitted diffs the worktree against HEAD; staged diffs the index against
+            HEAD; unstaged diffs the worktree against the index; omitted/committed/untracked
+            diff the worktree against the compare base.
           enum:
+          - uncommitted
           - committed
           - staged
           - unstaged
@@ -9862,6 +9903,7 @@ paths:
           description: Comparison scope. Defaults to combined.
           enum:
           - combined
+          - uncommitted
           - committed
           - staged
           - unstaged
@@ -9888,11 +9930,62 @@ paths:
         schema:
           description: Opaque revision token used for optimistic consistency checks.
           type: string
-      - description: Exact commit SHA for a committed-scope comparison.
+      - description: Exact commit SHA for a committed-scope comparison. Cannot be
+          combined with commitShas.
         in: query
         name: commitSha
         schema:
-          description: Exact commit SHA for a committed-scope comparison.
+          description: Exact commit SHA for a committed-scope comparison. Cannot be
+            combined with commitShas.
+          type: string
+      - description: Comma-separated full SHAs (max 250) whose combined changes are
+          compared. Requires the committed scope.
+        in: query
+        name: commitShas
+        schema:
+          description: Comma-separated full SHAs (max 250) whose combined changes
+            are compared. Requires the committed scope.
+          type: string
+      - description: Local branch to read instead of the checked-out worktree. Requires
+          the committed scope.
+        in: query
+        name: branch
+        schema:
+          description: Local branch to read instead of the checked-out worktree. Requires
+            the committed scope.
+          type: string
+      - description: Associated pull request to read instead of the checked-out worktree.
+          Requires the committed scope.
+        in: query
+        name: prNumber
+        schema:
+          description: Associated pull request to read instead of the checked-out
+            worktree. Requires the committed scope.
+          minimum: 1
+          type: integer
+      - description: Stable URL of the pull request, for PRs that share a number.
+          Requires prNumber.
+        in: query
+        name: sourceUrl
+        schema:
+          description: Stable URL of the pull request, for PRs that share a number.
+            Requires prNumber.
+          type: string
+      - description: The branch or pull request view's tipSha from its history. A
+          moved tip fails with WORKSPACE_REF_MOVED.
+        in: query
+        name: expectedTipSha
+        schema:
+          description: The branch or pull request view's tipSha from its history.
+            A moved tip fails with WORKSPACE_REF_MOVED.
+          type: string
+      - description: The branch or pull request view's baseSha from its history. A
+          moved base fails with WORKSPACE_REF_MOVED.
+        in: query
+        name: expectedBaseSha
+        schema:
+          description: The branch or pull request view's baseSha from its history.
+            A moved base fails with WORKSPACE_REF_MOVED.
           type: string
       responses:
         "200":
@@ -9984,6 +10077,30 @@ paths:
         schema:
           description: Session identifier, e.g. project-1.
           type: string
+      - description: Local branch to read instead of the checked-out worktree. Read
+          from revisions only; nothing is checked out.
+        in: query
+        name: branch
+        schema:
+          description: Local branch to read instead of the checked-out worktree. Read
+            from revisions only; nothing is checked out.
+          type: string
+      - description: Associated pull request to read instead of the checked-out worktree.
+        in: query
+        name: prNumber
+        schema:
+          description: Associated pull request to read instead of the checked-out
+            worktree.
+          minimum: 1
+          type: integer
+      - description: Stable URL of the pull request, for PRs that share a number.
+          Requires prNumber.
+        in: query
+        name: sourceUrl
+        schema:
+          description: Stable URL of the pull request, for PRs that share a number.
+            Requires prNumber.
+          type: string
       responses:
         "200":
           content:
@@ -9991,6 +10108,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/WorkspaceHistoryResponse'
           description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
         "404":
           content:
             application/json:
@@ -10010,6 +10133,64 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Get lazy commit and upstream metadata for a workspace review
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/workspace/history/selection:
+    post:
+      operationId: getSessionWorkspaceCommitSelection
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceCommitSelectionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceCommitSelectionResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Resolve ticked commits, or a view's whole range, to their combined
+        changed files
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/workspace/manifest:
@@ -18624,6 +18805,155 @@ components:
       - cacheReadTokens
       - estimatedCost
       type: object
+    WorkspaceBranchResponse:
+      properties:
+        checkedOut:
+          type: boolean
+        detached:
+          type: boolean
+        isDefault:
+          type: boolean
+        kind:
+          description: local reads as a branch view (or the checked-out worktree);
+            pull_request reads as a pull request view.
+          enum:
+          - local
+          - pull_request
+          type: string
+        name:
+          description: Branch name, the pull request's source branch, or empty for
+            a detached HEAD.
+          type: string
+        prNumber:
+          type: integer
+        prTitle:
+          type: string
+        prUrl:
+          description: Pass as sourceUrl with prNumber to read a pull_request row.
+          type: string
+        tipSha:
+          type: string
+        updatedAt:
+          description: The tip's committer time, or the pull request's last update.
+          format: date-time
+          type:
+          - "null"
+          - string
+      required:
+      - kind
+      - name
+      - checkedOut
+      - isDefault
+      type: object
+    WorkspaceBranchesResponse:
+      properties:
+        branches:
+          description: The checked-out row first, then the rest newest first; at most
+            200 rows.
+          items:
+            $ref: '#/components/schemas/WorkspaceBranchResponse'
+          type: array
+        defaultBranch:
+          type: string
+        sessionId:
+          type: string
+        supported:
+          description: False for scratch sessions, which have no Git history.
+          type: boolean
+        truncated:
+          type: boolean
+      required:
+      - sessionId
+      - supported
+      - branches
+      - truncated
+      type: object
+    WorkspaceCommitConflictResponse:
+      properties:
+        commitSha:
+          description: The ticked commit whose changes did not apply.
+          type: string
+        paths:
+          description: Up to 20 paths that did not apply.
+          items:
+            type: string
+          type: array
+        reason:
+          enum:
+          - conflict
+          - unsupported_history
+          type: string
+      required:
+      - commitSha
+      - paths
+      - reason
+      type: object
+    WorkspaceCommitSelectionRequest:
+      properties:
+        branch:
+          description: Local branch to read instead of the checked-out worktree.
+          type: string
+        commitShas:
+          description: Full SHAs. Empty = the whole range (All commits).
+          items:
+            type: string
+          maxItems: 250
+          type: array
+        expectedBaseSha:
+          description: The view's baseSha from its history. A moved base fails with
+            WORKSPACE_REF_MOVED.
+          type: string
+        expectedTipSha:
+          description: The view's tipSha from its history. A moved tip fails with
+            WORKSPACE_REF_MOVED.
+          type: string
+        prNumber:
+          description: Associated pull request to read instead of the checked-out
+            worktree.
+          minimum: 1
+          type: integer
+        sourceUrl:
+          description: Stable URL of the pull request, for PRs that share a number.
+            Requires prNumber.
+          type: string
+        workspaceVersion:
+          description: Fence for checked-out selections.
+          type: string
+      required:
+      - commitShas
+      type: object
+    WorkspaceCommitSelectionResponse:
+      properties:
+        baseSha:
+          type: string
+        combinable:
+          type: boolean
+        conflict:
+          $ref: '#/components/schemas/WorkspaceCommitConflictResponse'
+        contiguous:
+          description: True when the commits form one unbroken range.
+          type: boolean
+        files:
+          items:
+            $ref: '#/components/schemas/WorkspaceFileSummary'
+          type: array
+        sessionId:
+          type: string
+        summary:
+          $ref: '#/components/schemas/WorkspaceSummary'
+        tipSha:
+          type: string
+        truncated:
+          type: boolean
+      required:
+      - sessionId
+      - tipSha
+      - contiguous
+      - combinable
+      - files
+      - summary
+      - truncated
+      type: object
     WorkspaceCommitSummary:
       properties:
         author:
@@ -18701,13 +19031,33 @@ components:
       type: object
     WorkspaceDiffRequest:
       properties:
-        commitSha:
-          description: Exact commit SHA for a committed-scope comparison.
+        branch:
+          description: Local branch to read instead of the checked-out worktree. Requires
+            the committed scope.
           type: string
+        commitSha:
+          description: Exact commit SHA for a committed-scope comparison. Cannot be
+            combined with commitShas.
+          type: string
+        commitShas:
+          description: Full SHAs whose combined changes are compared. Requires the
+            committed scope.
+          items:
+            type: string
+          maxItems: 250
+          type: array
         contextLines:
           maximum: 20
           minimum: 0
           type: integer
+        expectedBaseSha:
+          description: The view's baseSha from its history. A moved base fails with
+            WORKSPACE_REF_MOVED.
+          type: string
+        expectedTipSha:
+          description: The view's tipSha from its history. A moved tip fails with
+            WORKSPACE_REF_MOVED.
+          type: string
         ignoreWhitespace:
           type: boolean
         paths:
@@ -18716,13 +19066,23 @@ components:
           maxItems: 100
           minItems: 1
           type: array
+        prNumber:
+          description: Associated pull request to read instead of the checked-out
+            worktree. Requires the committed scope.
+          minimum: 1
+          type: integer
         scope:
           enum:
           - combined
+          - uncommitted
           - committed
           - staged
           - unstaged
           - untracked
+          type: string
+        sourceUrl:
+          description: Stable URL of the pull request, for PRs that share a number.
+            Requires prNumber.
           type: string
         workspaceVersion:
           type: string
@@ -18913,6 +19273,12 @@ components:
           items:
             $ref: '#/components/schemas/WorkspaceFileSummary'
           type: array
+        uncommitted:
+          description: Worktree vs HEAD, untracked files included. Always present;
+            a response without it comes from an older daemon.
+          items:
+            $ref: '#/components/schemas/WorkspaceFileSummary'
+          type: array
         unstaged:
           items:
             $ref: '#/components/schemas/WorkspaceFileSummary'
@@ -18922,6 +19288,7 @@ components:
             $ref: '#/components/schemas/WorkspaceFileSummary'
           type: array
       required:
+      - uncommitted
       - staged
       - unstaged
       - untracked
@@ -18967,10 +19334,12 @@ components:
     WorkspaceHistoryResponse:
       properties:
         ahead:
+          description: Checked-out view only.
           type:
           - "null"
           - integer
         behind:
+          description: Checked-out view only.
           type:
           - "null"
           - integer
@@ -18980,10 +19349,16 @@ components:
           type: array
         commitsTruncated:
           type: boolean
+        rangeSummary:
+          $ref: '#/components/schemas/WorkspaceSummary'
+          description: Totals for All commits. Views only.
         sessionId:
           type: string
+        view:
+          $ref: '#/components/schemas/WorkspaceViewResponse'
       required:
       - sessionId
+      - view
       - commits
       type: object
     WorkspaceManifestResponse:
@@ -19105,6 +19480,38 @@ components:
       - name
       - path
       - type
+      type: object
+    WorkspaceViewResponse:
+      properties:
+        baseRef:
+          type: string
+        baseSha:
+          description: Set only in since_base mode. Fence a later view read with it
+            as expectedBaseSha.
+          type: string
+        kind:
+          enum:
+          - checked_out
+          - branch
+          - pull_request
+          type: string
+        name:
+          description: Branch name, or the pull request's source branch.
+          type: string
+        rangeMode:
+          description: since_base lists the commits since baseSha; recent lists the
+            newest 50 first-parent commits of a default branch, or of a branch with
+            no default branch to measure from.
+          enum:
+          - since_base
+          - recent
+          type: string
+        tipSha:
+          description: Fence a later view read with it as expectedTipSha.
+          type: string
+      required:
+      - kind
+      - rangeMode
       type: object
 tags:
 - description: Supported and locally runnable agent adapters

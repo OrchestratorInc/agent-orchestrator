@@ -63,6 +63,7 @@ import type { CloudCpAOReviewRun, CloudCpSessionReviewState } from "../lib/cloud
 import {
 	toCloudWorkspaceSession,
 	useCloudSessionQuery,
+	useRemoteSessionProjectKind,
 	useWorkspaceQuery,
 	useWorkspaceSession,
 	workspaceQueryKeyForHost,
@@ -81,6 +82,7 @@ import { sessionUiKey } from "../lib/hosts";
 import { resolveSessionWorkspacePath, sessionWorkspaceFilesQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { isAbsoluteFileReference, matchWorkspaceFilePath, normalizeWorkspaceFileReference } from "../lib/workspace-file-path";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
+import { filesProjectKind } from "../lib/files-review-selection";
 import { aoBridge } from "../lib/bridge";
 import {
 	chatDraftDialogCopy,
@@ -416,6 +418,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		? undefined : fallbackSession;
 	const session = hostId ? (remoteBase && !remoteSessionQuery.isError && remoteSessionQuery.data?.workspaceId === (projectId ?? remoteSessionQuery.data?.workspaceId) ? remoteSessionQuery.data : undefined)
 		: ambiguousRoute ? undefined : listedSession ?? directCloudSession ?? scopedFallback;
+	// The Files review offers only what the session's kind of project has.
+	const remoteWorkspaceKind = useRemoteSessionProjectKind(sessionId, hostId);
+	const sessionWorkspaceKind = hostId ? remoteWorkspaceKind : workspaces.find((workspace) => workspace.id === session?.workspaceId)?.kind;
+	const filesKind = session ? filesProjectKind(session, sessionWorkspaceKind) : undefined;
 	const interfaceContext = hostId ?? (session ? session.cloud ?? null : cloudOrgId && projectId ? { orgId: cloudOrgId } : undefined);
 	const interfaceUi = useSessionInterfaceSwitch(sessionId, session, interfaceContext);
 	// Reading a cloud session counts as using it, so it is not idle-paused
@@ -463,7 +469,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const setInspectorViewForSession = useUiStore((state) => state.setInspectorView);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const setFilesChangedOnly = useUiStore((state) => state.setFilesChangedOnly);
-	const setFilesSource = useUiStore((state) => state.setFilesSource);
+	const resetFilesSelection = useUiStore((state) => state.resetFilesSelection);
 	const workspaceFileOpenRequest = useUiStore((state) => state.workspaceFileOpenRequest);
 	const clearWorkspaceFileOpenRequest = useUiStore((state) => state.clearWorkspaceFileOpenRequest);
 	const initializeInspectorSession = useUiStore((state) => state.initializeInspectorSession);
@@ -1565,10 +1571,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	const handleOpenFiles = useCallback(() => {
 		markFileViewerPerformance("files-click");
-		setFilesSource(uiSessionId, { kind: "workspace" });
+		// Opens on the checked-out branch's default review: its uncommitted
+		// changes, or its commits when the worktree is clean.
+		resetFilesSelection(uiSessionId);
 		prepareFilesInspector();
 		void fetchWorkspaceFiles();
-	}, [fetchWorkspaceFiles, prepareFilesInspector, setFilesSource, uiSessionId]);
+	}, [fetchWorkspaceFiles, prepareFilesInspector, resetFilesSelection, uiSessionId]);
 
 	const handleOpenReviewFile = useCallback(
 		(target: { line?: number; path: string }) => {
@@ -2067,7 +2075,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							initialRequestKey={activeCenterFileRequest?.key ?? 0}
 							onDirtyChange={setCenterFileDirty}
 							path={fileTabs.activePath}
-							scope={activeCenterFileRequest?.scope}
+							// Uncommitted is local-only; a cloud review's nearest scope is combined.
+							scope={activeCenterFileRequest?.scope === "uncommitted" ? "combined" : activeCenterFileRequest?.scope}
 							session={session}
 							split={filesSplit}
 						/>
@@ -2125,6 +2134,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 											onOpenFile={openCenterFile}
 											onSplitChange={setFilesSplit}
 											onToggleMaximized={handleToggleFilesPopOut}
+											projectKind={filesKind}
 											sessionId={session.id}
 											split={filesSplit}
 										/>
@@ -2223,6 +2233,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 										isMaximized
 										onSplitChange={setFilesSplit}
 										onToggleMaximized={handleToggleFilesPopOut}
+										projectKind={filesKind}
 										sessionId={session.id}
 										split={filesSplit}
 									/>

@@ -4,7 +4,7 @@ import { developerModeStorageKey, windowTranslucencyStorageKey } from "../lib/wi
 import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
-import type { FilesSource } from "../hooks/useSessionWorkspaceFiles";
+import type { FilesSelection } from "../hooks/useSessionWorkspaceFiles";
 import {
 	applyDocumentTheme,
 	applyDocumentThemeStyle,
@@ -82,8 +82,8 @@ export type InspectorSessionState = {
 	browserUnseen?: boolean;
 	/** Files tab: review changed files directly. Defaults to true; false shows the full tree. */
 	filesChangedOnly?: boolean;
-	/** Files tab: source shared by the docked and maximized explorers. */
-	filesSource?: FilesSource;
+	/** Files tab: the branch and changes under review, shared by the docked and maximized explorers. Unset follows the default. */
+	filesSelection?: FilesSelection;
 	/** Files: display mode picked per path in a centre tab, restored for the same open request after a remount. */
 	fileDisplayModes?: Record<string, RememberedFileDisplayMode>;
 	/** The session-entry defaulting (Summary tab, baseline browser reveal) has already run once for this session's lifetime. */
@@ -221,7 +221,9 @@ export type UiState = {
 	setBrowserContentRevealed: (sessionId: string, revealed: boolean) => void;
 	setBrowserUnseen: (sessionId: string, unseen: boolean) => void;
 	setFilesChangedOnly: (sessionId: string, changedOnly: boolean) => void;
-	setFilesSource: (sessionId: string, source: FilesSource) => void;
+	setFilesSelection: (sessionId: string, selection: FilesSelection) => void;
+	/** Back to the checked-out branch and the default changes. */
+	resetFilesSelection: (sessionId: string) => void;
 	setFileDisplayMode: (sessionId: string, path: string, mode: FileDisplayMode, requestKey: number) => void;
 	setCommandPaletteOpen: (open: boolean) => void;
 	setProjectRestarting: (projectId: string, restarting: boolean, hostId?: string) => void;
@@ -549,13 +551,25 @@ export const useUiStore = create<UiState>((set, get) => ({
 				},
 			};
 		}),
-	setFilesSource: (sessionId, filesSource) =>
+	setFilesSelection: (sessionId, filesSelection) =>
 		set((state) => {
 			const current = inspectorState(state.inspectorSessions, sessionId);
+			if (current.filesSelection === filesSelection) return state;
 			return {
 				inspectorSessions: {
 					...state.inspectorSessions,
-					[sessionId]: { ...current, filesSource },
+					[sessionId]: { ...current, filesSelection },
+				},
+			};
+		}),
+	resetFilesSelection: (sessionId) =>
+		set((state) => {
+			const current = state.inspectorSessions[sessionId];
+			if (!current?.filesSelection) return state;
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, filesSelection: undefined },
 				},
 			};
 		}),

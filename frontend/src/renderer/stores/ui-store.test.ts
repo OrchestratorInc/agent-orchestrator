@@ -205,6 +205,33 @@ describe("file display modes", () => {
 	});
 });
 
+describe("files review selection", () => {
+	beforeEach(() => {
+		useUiStore.setState({ inspectorSessions: {} });
+	});
+
+	it("shares one pick per session and resets it to the default", () => {
+		const selection = { branch: { kind: "branch", name: "main" }, changes: { kind: "commits", shas: ["a".repeat(40)] } } as const;
+		useUiStore.getState().setFilesChangedOnly("sess-1", false);
+		useUiStore.getState().setFilesSelection("sess-1", selection);
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.filesSelection).toBe(selection);
+		expect(useUiStore.getState().inspectorSessions["sess-2"]?.filesSelection).toBeUndefined();
+
+		useUiStore.getState().resetFilesSelection("sess-1");
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.filesSelection).toBeUndefined();
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.filesChangedOnly).toBe(false);
+	});
+
+	it("leaves the store untouched when nothing changes", () => {
+		const selection = { branch: { kind: "checked_out" }, changes: { kind: "staged" } } as const;
+		useUiStore.getState().setFilesSelection("sess-1", selection);
+		const before = useUiStore.getState().inspectorSessions;
+		useUiStore.getState().setFilesSelection("sess-1", selection);
+		useUiStore.getState().resetFilesSelection("sess-2");
+		expect(useUiStore.getState().inspectorSessions).toBe(before);
+	});
+});
+
 describe("workspace file open requests", () => {
 	beforeEach(() => {
 		useUiStore.setState({ workspaceFileOpenRequest: null });

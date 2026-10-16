@@ -204,7 +204,10 @@ type Service struct {
 	orchestratorLocks   map[domain.ProjectID]*sync.Mutex
 	workspaceCache      *workspaceCache
 	workspaceManifests  *workspaceManifestIndex
-	workspaceEditsMu    sync.Mutex
+	// commitSelections caches resolved commit selections. Their keys are
+	// immutable SHAs, so entries never go stale.
+	commitSelections *commitSelectionCache
+	workspaceEditsMu sync.Mutex
 	// workspaceGroup coalesces concurrent cache-miss compare/status lookups
 	// for the same (session, root): "Expand All" on many files fires that
 	// many GetWorkspaceFile calls at once, and without this each one would
@@ -305,6 +308,7 @@ func NewWithDeps(d Deps) *Service {
 	s.workspaceCache = newWorkspaceCache(workspaceCacheTTL, s.clock)
 	s.workspaceManifests = newWorkspaceManifestIndex()
 	s.workspaceManifests.now = s.clock
+	s.commitSelections = newCommitSelectionCache(commitSelectionCacheSize)
 	return s
 }
 
