@@ -290,32 +290,76 @@ func chatReviewFeedbackState(ctx context.Context, chat reviewNoticeChatStore, id
 // Caller holds react.mu. A queued Chat relay is an attempt, not delivery.
 // Its stable id lets another observation or a restart settle it without a
 // second paste. Only turns that never started retry within the attempt cap.
-func (m *Manager) sendChatReviewFeedbackLocked(ctx context.Context, chat reviewNoticeChatStore, id domain.SessionID, prURL, key, sig, msg string, maxAttempts int) (sendOnceOutcome, error) {
-	attempts := m.react.attempts[key]
-	if attempts > 0 {
-		delivered, queued, err := chatReviewFeedbackState(ctx, chat, id, key, sig, attempts-1)
+// The relay covers every item still due as one message; its id comes from the
+// first due item, so items sent together (and so sharing an attempt count)
+// settle together.
+func (m *Manager) sendChatReviewFeedbackLocked(ctx context.Context, chat reviewNoticeChatStore, id domain.SessionID, prURL string, items []nudgeItem, build func(due []bool) string, maxAttempts int) (sendOnceOutcome, error) {
+	var pending []int
+	for i, it := range items {
+		if m.react.seen[it.key] != it.sig {
+			pending = append(pending, i)
+		}
+	}
+	settled := map[int]bool{}
+	changed := false
+	for _, i := range pending {
+		attempts := m.react.attempts[items[i].key]
+		if attempts == 0 || settled[attempts] {
+			continue
+		}
+		settled[attempts] = true
+		delivered, queued, err := chatReviewFeedbackState(ctx, chat, id, items[i].key, items[i].sig, attempts-1)
 		if err != nil || queued {
 			return sendOnceSuppressed, err
 		}
 		if delivered {
-			if m.react.seen[key] == sig {
-				return sendOnceAccounted, nil
+			for _, j := range pending {
+				if m.react.attempts[items[j].key] == attempts {
+					m.react.seen[items[j].key] = items[j].sig
+					changed = true
+				}
 			}
-			m.react.seen[key] = sig
-			return sendOnceAccounted, m.persistPRSignaturesLocked(ctx, prURL)
 		}
 	}
-	if m.react.seen[key] == sig || (maxAttempts > 0 && attempts >= maxAttempts) {
+	due := make([]bool, len(items))
+	lead := -1
+	for _, i := range pending {
+		it := items[i]
+		if m.react.seen[it.key] == it.sig || (maxAttempts > 0 && m.react.attempts[it.key] >= maxAttempts) {
+			continue
+		}
+		due[i] = true
+		if lead < 0 {
+			lead = i
+		}
+	}
+	if lead < 0 {
+		if changed {
+			return sendOnceAccounted, m.persistPRSignaturesLocked(ctx, prURL)
+		}
 		return sendOnceAccounted, nil
 	}
-	outcome, sendErr := m.guard.Nudge(ports.WithClientMessageID(ctx, reviewFeedbackClientID(key, sig, attempts)), id, msg)
+	leadItem := items[lead]
+	attempts := m.react.attempts[leadItem.key]
+	outcome, sendErr := m.guard.Nudge(ports.WithClientMessageID(ctx, reviewFeedbackClientID(leadItem.key, leadItem.sig, attempts)), id, build(due))
 	if outcome != sessionguard.Sent {
+		if changed {
+			sendErr = errors.Join(sendErr, m.persistPRSignaturesLocked(ctx, prURL))
+		}
 		return sendOnceSuppressed, sendErr
 	}
-	m.react.attempts[key] = attempts + 1
-	delivered, _, readErr := chatReviewFeedbackState(ctx, chat, id, key, sig, attempts)
+	for i, it := range items {
+		if due[i] {
+			m.react.attempts[it.key]++
+		}
+	}
+	delivered, _, readErr := chatReviewFeedbackState(ctx, chat, id, leadItem.key, leadItem.sig, attempts)
 	if delivered && readErr == nil {
-		m.react.seen[key] = sig
+		for i, it := range items {
+			if due[i] {
+				m.react.seen[it.key] = it.sig
+			}
+		}
 	}
 	if err := errors.Join(sendErr, readErr, m.persistPRSignaturesLocked(ctx, prURL)); err != nil {
 		return sendOnceAccounted, err
