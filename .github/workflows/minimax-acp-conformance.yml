@@ -27,8 +27,6 @@ jobs:
     env:
       GOMAXPROCS: "2"
       GOFLAGS: "-p=2"
-      MINIMAX_DATA_DIR: ${{ runner.temp }}/minimax-acp-bootstrap
-      MAVIS_DATA_DIR: ${{ runner.temp }}/minimax-acp-bootstrap
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -41,6 +39,8 @@ jobs:
       - name: Install the pinned official native CLI
         shell: bash
         run: |
+          echo "MINIMAX_DATA_DIR=$RUNNER_TEMP/minimax-acp-bootstrap" >> "$GITHUB_ENV"
+          echo "MAVIS_DATA_DIR=$RUNNER_TEMP/minimax-acp-bootstrap" >> "$GITHUB_ENV"
           npm install --prefix "$RUNNER_TEMP/minimax-native" --include=optional --no-audit --no-fund @minimax-ai/code@0.6.5
           echo "$RUNNER_TEMP/minimax-native/node_modules/.bin" >> "$GITHUB_PATH"
           npm list --prefix "$RUNNER_TEMP/minimax-native" --depth=0
