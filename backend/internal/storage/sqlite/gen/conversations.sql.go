@@ -593,6 +593,25 @@ func (q *Queries) ConversationActivityExistsForProviderItem(ctx context.Context,
 	return exists, err
 }
 
+const conversationActivityRequestExists = `-- name: ConversationActivityRequestExists :one
+SELECT EXISTS (
+    SELECT 1 FROM conversation_activities
+    WHERE conversation_id = ? AND request_id = ?
+) AS found
+`
+
+type ConversationActivityRequestExistsParams struct {
+	ConversationID string
+	RequestID      string
+}
+
+func (q *Queries) ConversationActivityRequestExists(ctx context.Context, arg ConversationActivityRequestExistsParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, conversationActivityRequestExists, arg.ConversationID, arg.RequestID)
+	var found bool
+	err := row.Scan(&found)
+	return found, err
+}
+
 const detachSessionConversation = `-- name: DetachSessionConversation :exec
 UPDATE conversations SET current_session_id = NULL, updated_at = ?
 WHERE id = ? AND scope = 'session' AND current_session_id = ?

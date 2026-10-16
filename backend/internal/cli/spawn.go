@@ -36,6 +36,7 @@ type spawnOptions struct {
 	noTakeover      bool
 	skipAgentCheck  bool
 	trackerProvider string
+	account         string
 }
 
 // spawnRequest mirrors the daemon's SpawnSessionRequest body for
@@ -54,6 +55,7 @@ type spawnRequest struct {
 	Effort          string `json:"effort,omitempty"`
 	RequestedOutput string `json:"requestedOutput,omitempty"`
 	DisplayName     string `json:"displayName"`
+	AccountID       string `json:"providerAccountId,omitempty"`
 }
 
 type spawnResult struct {
@@ -177,6 +179,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				Effort:          strings.TrimSpace(opts.effort),
 				RequestedOutput: opts.output,
 				DisplayName:     name,
+				AccountID:       strings.TrimSpace(opts.account),
 			}
 			var res spawnResult
 			if err := ctx.postJSON(cmd.Context(), "sessions", req, &res); err != nil {
@@ -236,6 +239,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 	f.StringVar(&opts.mode, "mode", "", "Initial session interface: chat (structured agent connection) or tui (the agent's native terminal). Omitted uses the daemon default; compatible sessions can switch later.")
 	f.StringVar(&opts.branch, "branch", "", "Branch for git project sessions (default: ao/<session-id>/root; unsupported for standalone or Scratch sessions)")
 	f.StringVar(&opts.prompt, "prompt", "", "Initial prompt for the agent")
+	f.StringVar(&opts.account, "account", "", "Managed account for this session (defaults to the provider primary)")
 	f.StringVar(&opts.model, "model", "", "Agent model override for this session only (e.g. sonnet, gpt-5.6-sol); overrides project/role config without changing it")
 	f.StringVar(&opts.output, "output", "", "Deliverable for the session: artifact asks the agent to write a file in its artifact directory instead of opening a PR (default: ordinary task)")
 	f.StringVar(&opts.effort, "effort", "", "Reasoning effort override for this session only (e.g. low, medium, high); empty defers to the agent/model default")

@@ -137,7 +137,7 @@ func TestCommandCodeLoginNeverLaunchesBareCmd(t *testing.T) {
 func TestPlanMissingExecutableIsUnavailable(t *testing.T) {
 	t.Parallel()
 
-	plan, err := New(foundExecutables(nil), nil).Plan(context.Background(), "codex")
+	plan, err := New(foundExecutables(nil), nil).Plan(context.Background(), "cursor")
 	if err != nil {
 		t.Fatal(err)
 	}

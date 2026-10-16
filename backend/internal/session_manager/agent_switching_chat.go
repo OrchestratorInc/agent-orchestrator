@@ -367,11 +367,6 @@ func (m *Manager) executeChatAgentSwitch(
 	}
 	targetLaunchEnv := m.runtimeEnv(id, credentialRecord.ProjectID, credentialRecord.IssueID, project.Config.Env)
 	m.augmentAgentRuntimeEnv(targetAgent, targetLaunchEnv)
-	releaseCodexAdmission, admissionErr := m.acquireCodexControllerAdmission(ctx, cfg.TargetHarness)
-	if admissionErr != nil {
-		return result, fmt.Errorf("switch Chat agent %s: %w", id, admissionErr)
-	}
-	defer releaseCodexAdmission()
 
 	if resumable {
 		recorder.boundary(domain.AgentSwitchFailureChatProviderResume)
@@ -399,7 +394,7 @@ func (m *Manager) executeChatAgentSwitch(
 		ExpectedControllerOwner: credentialRecord.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
-				launchCtx, credentialRecord, project.Config.Env, expected,
+				launchCtx, credentialRecord, cfg.TargetHarness, project.Config.Env, expected,
 			)
 			if prepareErr != nil {
 				return nil, prepareErr

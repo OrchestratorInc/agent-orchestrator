@@ -425,7 +425,14 @@ function agyComposerOptions(options: ChatConfigOption[]): ChatConfigOption[] {
  */
 function claudeChoiceLabels(catalog: { id: string; displayName: string }[]) {
 	const choiceModel = claudeChoiceModel(catalog.map((model) => ({ id: model.id, label: model.displayName })));
-	return choiceModel && ((value: string) => choiceModel(value)?.label);
+	return choiceModel && ((value: string) => {
+		const label = choiceModel(value)?.label;
+		if (label || !/\[1m\]$/i.test(value)) return label;
+		// An account lists no larger-context variants. Such a row runs the model it
+		// names; without its mark it would read as a second copy of that model.
+		const base = choiceModel(value.replace(/\[1m\]$/i, ""))?.label;
+		return base && !/1m/i.test(base) ? `${base} (1M context)` : base;
+	});
 }
 
 function ModelEffortPicker({

@@ -859,7 +859,11 @@ func (m *Manager) preflightInterfaceTarget(
 	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
 	pinRuntimePermissionEnv(env, config.Permissions)
 	m.augmentAgentRuntimeEnv(agent, env)
-	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok {
+	managedAccount, err := m.sessionManaged(ctx, rec.ID)
+	if err != nil {
+		return err
+	}
+	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok && !managedAccount {
 		status, authErr := validator.ValidateLaunchAuth(ctx, rec.Metadata.WorkspacePath, env)
 		if authErr != nil {
 			m.logger.Debug("interface transition: launch authentication probe inconclusive; continuing",

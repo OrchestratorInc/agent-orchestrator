@@ -2729,6 +2729,20 @@ func (s *Store) UpsertActivity(
 			return fmt.Errorf("lookup activity %s: %w", activity.ProviderItemID, err)
 		}
 	}
+	// A provider host replays a request it still holds to a daemon that started
+	// again. It is recorded already; a second row would break the request's key.
+	if activity.RequestID != "" {
+		found, err := q.ConversationActivityRequestExists(ctx, gen.ConversationActivityRequestExistsParams{
+			ConversationID: conversationID,
+			RequestID:      activity.RequestID,
+		})
+		if err != nil {
+			return fmt.Errorf("lookup activity request %s: %w", activity.RequestID, err)
+		}
+		if found {
+			return nil
+		}
+	}
 
 	turnID := s.turnIDFor(ctx, conversationID, providerTurnID)
 	return s.inTx(ctx, "insert activity", func(q *gen.Queries) error {

@@ -399,6 +399,11 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	if cfg.Model != "" {
 		params["model"] = cfg.Model
 	}
+	// Codex resumes a thread on the provider it was created with, so a routed
+	// process names the account helper again.
+	if conv.modelProvider != "" {
+		params["modelProvider"] = conv.modelProvider
+	}
 	// thread/resume has no top-level effort field. Codex exposes persistent
 	// reasoning effort as a config override, so carry the durable AO choice into
 	// the resumed thread instead of silently falling back to the provider default.
@@ -484,6 +489,7 @@ func (d *Driver) connect(ctx context.Context, workdir string, env map[string]str
 	}
 
 	conv := newConversation(proc, d.log, providerScopeID)
+	conv.modelProvider = agentlaunch.CodexProxyProviderFor(env)
 	if err := d.initialize(ctx, conv); err != nil {
 		_ = conv.Close()
 		return nil, err
@@ -530,7 +536,7 @@ func (d *Driver) connectSession(
 		DataDir:       dataDir,
 		Workdir:       workdir,
 		Env:           envSlice(env),
-		Argv:          []string{bin, "app-server"},
+		Argv:          agentlaunch.CodexProxyArgv([]string{bin, "app-server"}, env),
 	}
 	if prepareEnv != nil {
 		hostConfig.Prepare = func(prepareCtx context.Context) (persistenthost.PreparedProvider, error) {
@@ -538,8 +544,9 @@ func (d *Driver) connectSession(
 			if prepareErr != nil {
 				return persistenthost.PreparedProvider{}, prepareErr
 			}
+			env = preparedEnv // what the provider is launched with
 			return persistenthost.PreparedProvider{
-				Env: envSlice(preparedEnv), Argv: []string{bin, "app-server"},
+				Env: envSlice(preparedEnv), Argv: agentlaunch.CodexProxyArgv([]string{bin, "app-server"}, preparedEnv),
 			}, nil
 		}
 	}
@@ -573,6 +580,7 @@ func (d *Driver) connectSession(
 	if transport.Reconnected {
 		return conv, true, nil
 	}
+	conv.modelProvider = agentlaunch.CodexProxyProviderFor(env)
 	if err := d.initialize(ctx, conv); err != nil {
 		_ = conv.Terminate()
 		return nil, false, err
@@ -772,6 +780,10 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 	params["excludeTurns"] = true
 	if cfg.Model != "" {
 		params["model"] = cfg.Model
+	}
+	// As for thread/resume: a routed process names the account helper for the fork too.
+	if conv.modelProvider != "" {
+		params["modelProvider"] = conv.modelProvider
 	}
 	// Same overrides as thread/start and thread/resume: without the MCP servers
 	// a fresh fork has no AO tools until a restart resumes it.

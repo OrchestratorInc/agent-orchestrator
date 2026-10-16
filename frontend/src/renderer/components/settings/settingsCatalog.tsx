@@ -6,7 +6,7 @@ import { BillingSection } from "./BillingSection";
 import { BrowserDownloadsSection } from "./BrowserDownloadsSection";
 import { BrowserProfilesSection } from "./BrowserProfilesSection";
 import { CoderSettingsSection } from "./CoderSettingsSection";
-import { CodexAccountsSection } from "./CodexAccountsSection";
+import { ProviderAccountsSection } from "./ProviderAccountsSection";
 import { ConnectMobileContent } from "./ConnectMobileContent";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
@@ -74,10 +74,10 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		render: (_t, titleHidden, { focusAgentId, hostId, harnessView, startLogin, showDiagnostics }) => <HarnessSettingsSection focusAgentId={focusAgentId} {...(hostId ? { hostId } : {})} {...(harnessView ? { initialView: harnessView } : {})} {...(startLogin ? { startLogin } : {})} {...(showDiagnostics ? { showDiagnostics } : {})} titleHidden={titleHidden} />,
 	},
 	{
-		id: "agents",
+		id: "accountManager",
 		icon: BadgeCheck,
-		label: (t) => t("settings.agents"),
-		render: (_t, titleHidden) => <CodexAccountsSection titleHidden={titleHidden} />,
+		label: (t) => t("providerAccounts.title"),
+		render: (_t, titleHidden) => <ProviderAccountsSection titleHidden={titleHidden} />,
 	},
 	{
 		id: "billing",

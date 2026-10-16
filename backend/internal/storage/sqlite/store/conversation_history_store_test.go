@@ -1659,6 +1659,28 @@ func TestCleanupOwnedControllerWorkOnlySettlesReboundSessionWork(t *testing.T) {
 	}
 }
 
+// A provider host replays a request it still holds to a daemon that started
+// again: the request is recorded once and the replay is not an error.
+func TestAReplayedRequestIsRecordedOnce(t *testing.T) {
+	s, _, conversation := conversationFixture(t)
+	ctx := context.Background()
+	for i := range 2 {
+		if err := s.UpsertActivity(ctx, conversation, "provider-turn-1", domain.ConversationActivity{
+			ID: fmt.Sprintf("question-%d", i), Kind: domain.ActivityKindUserInput, Status: domain.ActivityStatusPending,
+			Summary: "Which color do you prefer?", RequestID: "request-1",
+		}, histClock.Add(time.Duration(i)*time.Second)); err != nil {
+			t.Fatalf("delivery %d: %v", i, err)
+		}
+	}
+	snapshot, err := s.LoadConversationSnapshot(ctx, conversation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Activities) != 1 || snapshot.Activities[0].ID != "question-0" || snapshot.Activities[0].Status != domain.ActivityStatusPending {
+		t.Fatalf("activities = %+v, want the first delivery, still pending", snapshot.Activities)
+	}
+}
+
 func TestAppendUserMessagePersistsContinuation(t *testing.T) {
 	s, sessionID, conversationID := conversationFixture(t)
 	ctx := context.Background()

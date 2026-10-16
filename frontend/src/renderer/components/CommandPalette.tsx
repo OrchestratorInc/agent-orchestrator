@@ -80,6 +80,7 @@ export function CommandPalette() {
 	const workspaces = useWorkspaceQuery({ subscribed: isOpen }).data ?? [];
 
 	const [view, setView] = useState<PaletteView>({ mode: "root" });
+	const [accountSlot, setAccountSlot] = useState<HTMLElement | null>(null);
 	const [query, setQuery] = useState("");
 	const [debouncedQuery, setDebouncedQuery] = useState("");
 	const [selectedValue, setSelectedValue] = useState("");
@@ -739,6 +740,7 @@ export function CommandPalette() {
 						<span className="min-w-0 truncate rounded-md bg-surface px-2 py-0.5 text-2xs font-medium text-muted-foreground">
 							{contextLabel}
 						</span>
+						<div ref={setAccountSlot} className="ml-auto" />
 					</div>
 				)}
 
@@ -764,6 +766,7 @@ export function CommandPalette() {
 						<TaskComposer
 							projectId={view.projectId}
 							autoFocusTitle
+							accountControlContainer={accountSlot}
 							onDirtyChange={onComposerDirtyChange}
 							onSubmittingChange={onComposerSubmittingChange}
 							onCreated={(sessionId) => void handleTaskCreated(view.projectId, sessionId)}

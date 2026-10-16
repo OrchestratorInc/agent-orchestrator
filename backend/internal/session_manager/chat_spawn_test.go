@@ -296,6 +296,32 @@ func TestRunBackgroundTaskUsesResolvedWorkerHarnessAndConfig(t *testing.T) {
 	}
 }
 
+func TestRunBackgroundTaskRunsOnTheSessionsAccount(t *testing.T) {
+	ticket := map[string]string{"ANTHROPIC_BASE_URL": "http://127.0.0.1:4000", "ANTHROPIC_AUTH_TOKEN": "ticket"}
+	for name, accounts := range map[string]*accountRoutingFake{
+		"managed":       {managed: true, env: ticket},
+		"needs sign-in": {managed: true, err: ports.ErrProviderLoginRequired},
+		"not managed":   {env: ticket},
+	} {
+		launcher := &recordingLauncher{}
+		m, st, _ := newChatManager(launcher)
+		m.dataDir, m.accounts = t.TempDir(), accounts
+		rec := domain.SessionRecord{ID: "mer-1", ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode}
+		st.sessions[rec.ID] = rec
+		_, err := m.RunBackgroundTask(context.Background(), rec.ID, "title only", "Fix the renderer")
+		// A task that cannot use the session's account must not run on this computer's own login.
+		if !errors.Is(err, accounts.err) || (err == nil) != (len(launcher.background) == 1) {
+			t.Fatalf("%s: err=%v launches=%d", name, err, len(launcher.background))
+		}
+		if err == nil && (launcher.background[0].Env["ANTHROPIC_AUTH_TOKEN"] == "ticket") != accounts.managed {
+			t.Fatalf("%s: env=%v", name, launcher.background[0].Env)
+		}
+		if want := []string{"mer-1 " + string(rec.Harness) + " related"}; !reflect.DeepEqual(accounts.launched, want) {
+			t.Fatalf("%s: launched=%v, want %v", name, accounts.launched, want)
+		}
+	}
+}
+
 func TestBackgroundTaskPermissionsKeepKimiCompatible(t *testing.T) {
 	if got := backgroundTaskPermissions(domain.HarnessKimi); got != ports.PermissionModeDefault {
 		t.Fatalf("Kimi permissions = %q, want default", got)

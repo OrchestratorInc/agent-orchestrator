@@ -324,3 +324,75 @@ func TestSideRecoveryFailureRetryAndCloseFence(t *testing.T) {
 		})
 	}
 }
+
+// A side chat runs on its session's account: the main chat's base environment
+// has none, and the frozen side configuration must never hold the ticket.
+func TestASideChatStartsOnItsSessionsAccount(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	main := newFakeConversation()
+	caps := productionCaps()
+	caps[ports.ChatCapabilityFork] = true
+	main.setCapabilities(caps)
+	driver := &connectedSideForkDriver{}
+	driver.start = func(ports.ChatStartConfig) (ports.ChatConversation, error) { return main, nil }
+	var ids atomic.Int64
+	svc := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st, Reader: fullSnapshotReader(st), Drivers: fakeRegistry{driver: driver},
+		AppRunID: "side-account-test", Log: slog.New(slog.DiscardHandler),
+		NewID:            func() string { return fmt.Sprintf("side-account-%d", ids.Add(1)) },
+		StopProviderHost: func(context.Context, domain.SessionID) error { return nil },
+	})
+	t.Cleanup(func() { svc.StopAll(ctx) })
+	var asked []string
+	svc.SetAccountEnv(func(_ context.Context, id domain.SessionID, harness domain.AgentHarness, env map[string]string) error {
+		asked = append(asked, string(id)+" "+string(harness))
+		env["AO_PROXY_TICKET"] = "ticket-for-" + string(id)
+		return nil
+	})
+	ctrl, err := svc.Start(ctx, chatsvc.StartConfig{SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(), Env: map[string]string{"PATH": "/agent-bin"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.InitializeSideChats(ctx); err != nil {
+		t.Fatal(err)
+	}
+	turn, err := svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "main", ClientMessageID: "main", Origin: domain.MessageOriginHuman})
+	if err != nil {
+		t.Fatal(err)
+	}
+	main.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID, TurnState: domain.TurnStateCompleted})
+	h := &harness{st: st, svc: svc, ctrl: ctrl, conv: main}
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) > 0 && s.Turns[len(s.Turns)-1].State == domain.TurnStateCompleted
+	})
+	side, err := svc.CreateIndependentSideChat(ctx, testSession, chatsvc.SideCreateRequest{IdempotencyKey: "side"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg ports.ChatStartConfig
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		driver.mu.Lock()
+		if len(driver.configs) > 0 {
+			cfg = driver.configs[0]
+		}
+		driver.mu.Unlock()
+		if cfg.SessionID != "" {
+			break
+		}
+	}
+	if cfg.PrepareEnv == nil {
+		snapshot, _ := svc.SideSnapshot(ctx, testSession, side.ID, time.Time{}, 10)
+		t.Fatalf("the side chat's launch has no account step (side %s: %s)", snapshot.Side.State, snapshot.Side.ErrorMessage)
+	}
+	env, err := cfg.PrepareEnv(ctx)
+	if err != nil || env["AO_PROXY_TICKET"] != "ticket-for-"+string(testSession) || env["PATH"] != "/agent-bin" || len(asked) != 1 || asked[0] != string(testSession)+" codex" {
+		t.Fatalf("env=%v asked=%v err=%v", env, asked, err)
+	}
+	if cfg.Env["AO_PROXY_TICKET"] != "" {
+		t.Fatal("the side's base environment holds the ticket")
+	}
+	if len(side.LaunchConfig) == 0 || strings.Contains(string(side.LaunchConfig), "ticket-for-") {
+		t.Fatalf("the frozen side configuration holds the ticket: %s", side.LaunchConfig)
+	}
+}

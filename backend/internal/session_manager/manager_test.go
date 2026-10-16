@@ -407,6 +407,7 @@ type fakeLCM struct {
 	chatBoundaries []domain.ConversationBranch
 	// terminated counts MarkTerminated calls per session id.
 	terminated map[domain.SessionID]int
+	signals    []ports.ActivitySignal
 }
 
 func (l *fakeLCM) PrepareLaunch(id domain.SessionID, launchID string) error {
@@ -490,6 +491,7 @@ func (l *fakeLCM) ApplyActivitySignal(_ context.Context, id domain.SessionID, si
 	}
 	rec.Activity = domain.Activity{State: signal.State, LastActivityAt: time.Now()}
 	l.store.sessions[id] = rec
+	l.signals = append(l.signals, signal)
 	return nil
 }
 

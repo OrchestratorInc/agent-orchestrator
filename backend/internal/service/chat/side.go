@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -707,6 +708,7 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 				Permissions: cfg.Permissions, ReadOnly: cfg.ReadOnly, SystemPrompt: sideIdentityPrompt(cfg.SystemPrompt),
 				ProviderScopeID: side.ID, ProviderIDsScoped: true, RecordFork: recordFork,
 				AdditionalDirectories: cfg.AdditionalDirectories, MCPServers: cfg.MCPServers,
+				PrepareEnv: m.service.sidePrepareEnv(side, cfg),
 			}
 			if anchor == "" {
 				forkConfig.AcquireForkSource = func(ctx context.Context) (context.Context, func(), error) {
@@ -746,7 +748,7 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 	if conv == nil && providerID != "" {
 		conv, err = driver.Resume(ctx, ports.ChatResumeConfig{
 			SessionID: domain.SessionID(side.ProviderHostID), ProviderConversationID: providerID,
-			DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env,
+			DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, PrepareEnv: m.service.sidePrepareEnv(side, cfg),
 			Model: side.Model, Effort: side.Effort, Permissions: cfg.Permissions,
 			ReadOnly: cfg.ReadOnly, SystemPrompt: sideIdentityPrompt(cfg.SystemPrompt),
 			AdditionalDirectories: cfg.AdditionalDirectories, MCPServers: cfg.MCPServers,
@@ -754,7 +756,7 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 		})
 	} else if conv == nil {
 		conv, err = driver.Start(ctx, ports.ChatStartConfig{
-			SessionID: domain.SessionID(side.ProviderHostID), DataDir: cfg.DataDir,
+			SessionID: domain.SessionID(side.ProviderHostID), DataDir: cfg.DataDir, PrepareEnv: m.service.sidePrepareEnv(side, cfg),
 			WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Model: side.Model, Effort: side.Effort,
 			Permissions: cfg.Permissions, ReadOnly: cfg.ReadOnly,
 			SystemPrompt: sideIdentityPrompt(cfg.SystemPrompt), ProviderScopeID: side.ID, ProviderIDsScoped: true,
@@ -876,7 +878,7 @@ func (m *sideManager) restore(ctx context.Context, side domain.SideConversation)
 	}
 	conv, err := driver.Resume(ctx, ports.ChatResumeConfig{
 		SessionID: domain.SessionID(side.ProviderHostID), ProviderConversationID: side.ProviderForkID,
-		DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env,
+		DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, PrepareEnv: m.service.sidePrepareEnv(side, cfg),
 		Model: side.Model, Effort: side.Effort, Permissions: cfg.Permissions,
 		ReadOnly: cfg.ReadOnly, SystemPrompt: sideIdentityPrompt(cfg.SystemPrompt),
 		AdditionalDirectories: cfg.AdditionalDirectories, MCPServers: cfg.MCPServers,
@@ -1980,6 +1982,26 @@ type frozenSideConfig struct {
 	SystemPrompt          string
 	AdditionalDirectories []string
 	MCPServers            []ports.ChatMCPServerConfig
+}
+
+// SetAccountEnv sets how a launch gets its session's account; Account Manager supplies it.
+func (s *Service) SetAccountEnv(apply func(context.Context, domain.SessionID, domain.AgentHarness, map[string]string) error) {
+	s.accountEnv = apply
+}
+
+// sidePrepareEnv gives a side chat's process the account of its session. The
+// frozen launch configuration carries no ticket: it is stored and reaches the window.
+func (s *Service) sidePrepareEnv(side domain.SideConversation, cfg StartConfig) func(context.Context) (map[string]string, error) {
+	return func(ctx context.Context) (map[string]string, error) {
+		env := maps.Clone(cfg.Env)
+		if env == nil {
+			env = map[string]string{}
+		}
+		if s.accountEnv == nil {
+			return env, nil
+		}
+		return env, s.accountEnv(ctx, side.SessionID, side.Harness, env)
+	}
 }
 
 func (s *Service) sideLaunchConfig(side domain.SideConversation) (StartConfig, ports.ChatDriver, error) {

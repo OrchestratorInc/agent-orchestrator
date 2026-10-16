@@ -7,8 +7,9 @@ import {
 	type TaskComposerModelControl,
 } from "@aoagents/product-ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { Loader2 } from "lucide-react";
+import { AlertCircle, Loader2, UserRound } from "lucide-react";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
@@ -44,7 +45,9 @@ import {
 	revalidateAgentModels,
 } from "../hooks/useAgentModelsQuery";
 import { useModelCatalogAuthRecovery } from "../hooks/useModelCatalogAuthRecovery";
+import { accountModelScope, accountProvider, PROVIDERS, useProviderAccounts, type ProviderAccount } from "../hooks/useProviderAccounts";
 import { useUiStore } from "../stores/ui-store";
+import { AccountMenu } from "./AccountMenu";
 import { ModelCatalogNotice } from "./ModelCatalogNotice";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
@@ -56,6 +59,7 @@ import {
 	rememberTaskComposerPreference,
 	type TaskComposerAgentPreference,
 } from "../lib/task-composer-preferences";
+import { Button } from "./ui/button";
 
 type Project = components["schemas"]["Project"];
 type DelegateAgent = components["schemas"]["DelegateTaskRequest"]["agent"];
@@ -69,6 +73,7 @@ type CreateTaskInput = {
 	effort?: string;
 	mode?: "chat" | "tui";
 	approvalMode?: "bypass-permissions";
+	providerAccountId?: string;
 	attachments?: FileAttachmentPayload[];
 	taskPreparation?: string;
 };
@@ -118,6 +123,7 @@ export type TaskComposerProps = {
 	onDirtyChange?: (dirty: boolean) => void;
 	onSubmittingChange?: (submitting: boolean) => void;
 	autoFocusTitle?: boolean;
+	accountControlContainer?: HTMLElement | null;
 	createLabel?: string;
 };
 
@@ -128,6 +134,7 @@ export function TaskComposer({
 	onDirtyChange,
 	onSubmittingChange,
 	autoFocusTitle,
+	accountControlContainer,
 	createLabel,
 }: TaskComposerProps) {
 	const { t } = useTranslation();
@@ -222,6 +229,7 @@ export function TaskComposer({
 						...(input.model ? { model: input.model } : {}),
 						...(input.effort !== undefined ? { effort: input.effort } : {}),
 						...(input.mode ? { mode: input.mode } : {}),
+						...(input.providerAccountId ? { providerAccountId: input.providerAccountId } : {}),
 						...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
 						...(input.attachments && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
 						...(input.taskPreparation ? { taskPreparation: input.taskPreparation } : {}),
@@ -272,6 +280,7 @@ export function TaskComposer({
 					model: input.model,
 					...(input.effort ? { effort: input.effort } : {}),
 					...(input.mode ? { mode: input.mode } : {}),
+					...(input.providerAccountId ? { providerAccountId: input.providerAccountId } : {}),
 					...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
 					...(input.attachments && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
 				},
@@ -382,6 +391,10 @@ export function TaskComposer({
 	);
 	const defaultWorkerAgent = rememberedAgentIsAvailable ? rememberedAgent : configuredDefaultAgent;
 	const selectedAgent = agent || defaultWorkerAgent;
+	const [chosenAccount, setChosenAccount] = useState({ provider: "", id: "" });
+	// Accounts belong to this machine's daemon, so only a local task picks one.
+	const accountProviderId = isCloudProject || hostId ? "" : accountProvider(selectedAgent);
+	const chosenAccountId = chosenAccount.provider === accountProviderId ? chosenAccount.id : "";
 	// A cloud project is unknown to the local daemon, so its model catalog is
 	// queried agent-level (no project scope); otherwise the request 404s and the
 	// dropdown spins forever. opencode is the exception: its catalog depends on
@@ -389,13 +402,14 @@ export function TaskComposer({
 	// (credentialModelScope) to show the models the cloud VM will actually run.
 	// Local projects keep their real project scope.
 	const modelsProjectId = useMemo(() => {
+		if (chosenAccountId) return accountModelScope(chosenAccountId);
 		if (!isCloudProject && !isStandalone) return projectId ?? "";
 		if (isCloudProject && selectedAgent === "opencode") {
 			const credentialType = connectedCredentialType(cloudConnectionsQuery.data, "opencode");
 			if (credentialType !== "") return credentialModelScope(credentialType);
 		}
 		return "";
-	}, [isCloudProject, isStandalone, projectId, selectedAgent, cloudConnectionsQuery.data]);
+	}, [isCloudProject, isStandalone, projectId, selectedAgent, cloudConnectionsQuery.data, chosenAccountId]);
 	const defaultWorkerModel =
 		projectConfig?.worker?.agentConfig?.model ?? projectConfig?.agentConfig?.model ?? "";
 	const defaultWorkerMode = projectConfig?.worker?.agentConfig?.mode ?? projectConfig?.agentConfig?.mode ?? "";
@@ -547,6 +561,14 @@ export function TaskComposer({
 		selectedAgent !== "" &&
 		settings?.defaultSessionMode === "chat" &&
 		!settings.chatHarnesses.includes(selectedAgent);
+	const providerAccounts = useProviderAccounts(Boolean(accountProviderId), false);
+	const accountChoices = providerAccounts.data?.accounts?.filter((account) => account.provider === accountProviderId && account.signedIn && !account.reserved) ?? [];
+	// Until AO holds an account for the provider, the agent keeps this computer's own login.
+	const providerManaged = Boolean(accountProviderId) && Boolean(providerAccounts.data?.accounts?.some((account) => account.provider === accountProviderId));
+	// The default is left to the daemon, so it only has to exist; an explicit choice has to be usable still.
+	const managedAccountReady = !providerManaged || (!providerAccounts.isError && accountChoices.some((account) => (chosenAccountId ? account.id === chosenAccountId : account.primary)));
+	const showAccountControl = providerManaged;
+	const needsAccountSignIn = showAccountControl && accountChoices.length === 0;
 	// With no provider default for the reported levels AO picks one, shows it as
 	// selected, and sends it, so the picker matches what the task runs with.
 	const aoDefaultEffort = requiresTuiFallback ? undefined : fallbackEffort(effortOptions, implicitEffort);
@@ -573,6 +595,7 @@ export function TaskComposer({
 	const canSubmit =
 		hostConnected &&
 		Boolean(projectId) &&
+		managedAccountReady &&
 		(!isStandalone || selectedAgent !== "") &&
 		(!hostId || Boolean(agentCatalog?.agents.some((candidate) => candidate.id === selectedAgent && isLaunchableAgent(candidate)))) &&
 		(isCloudProject || isStandalone || projectQuery.data !== undefined) &&
@@ -586,6 +609,8 @@ export function TaskComposer({
 	}, [hostId, modelsProjectId, queryClient, selectedAgent]);
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	const startAgentLogin = useCallback(() => {
+		// An agent whose accounts AO manages signs in on the Accounts page.
+		if (showAccountControl) return openGlobalSettings("accountManager");
 		openGlobalSettings("harness", {
 			focusAgentId: selectedAgent,
 			...(hostId ? { hostId } : {}),
@@ -594,12 +619,13 @@ export function TaskComposer({
 			startLogin: true,
 			preserveProject: true,
 		});
-	}, [hostId, isCloudProject, openGlobalSettings, selectedAgent]);
+	}, [hostId, isCloudProject, openGlobalSettings, selectedAgent, showAccountControl]);
 	// The catalog is read through this computer's login, but a cloud task runs on
 	// the cloud connection: once that is connected, this computer's login state is
 	// irrelevant to the task and the notice only confuses.
 	const cloudHarnessReady = isCloudProject && isCloudHarnessConnected(cloudConnectionsQuery.data, selectedAgent);
-	const modelWarning = modelAuthIssue && cloudHarnessReady ? undefined : modelAuthIssue ? (
+	// With no account signed in, the notice below the composer already says why and offers the fix.
+	const modelWarning = needsAccountSignIn || (modelAuthIssue && cloudHarnessReady) ? undefined : modelAuthIssue ? (
 		<ModelCatalogNotice
 			agentLabel={selectedAgentLabel}
 			issue={modelAuthIssue}
@@ -664,6 +690,7 @@ export function TaskComposer({
 				brief,
 				agent: selectedAgent ? (selectedAgent as CreateTaskInput["agent"]) : undefined,
 				model: requestedModel,
+				providerAccountId: chosenAccountId || undefined,
 				// Only explicit Codex picks set this; agent changes reset it, and TUI retries preserve it.
 				effort: requestedEffort,
 				mode: interfaceMode,
@@ -715,7 +742,10 @@ export function TaskComposer({
 		}
 	};
 
+	const accountProviderName = PROVIDERS.find((provider) => provider.id === accountProviderId)?.name ?? "";
 	return (
+		<>
+		{showAccountControl && accountControlContainer ? createPortal(<TaskAccountPicker accounts={accountChoices} value={chosenAccountId} providerName={accountProviderName} disabled={isSubmitting} onChange={(id) => setChosenAccount({ provider: accountProviderId, id })} />, accountControlContainer) : null}
 		<TaskComposerView
 			autoFocusPrompt={autoFocusTitle}
 			canSubmit={canSubmit}
@@ -821,6 +851,13 @@ export function TaskComposer({
 				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />}
 			showEffort={!requiresTuiFallback && (effortOptions.length > 0 || Boolean(effort && effort !== "default"))}
 		/>
+		{needsAccountSignIn ? (
+			<div className="flex items-center justify-between gap-3 px-1 pt-2.5 text-sm text-muted-foreground" role="status">
+				<span className="flex min-w-0 items-center gap-2"><AlertCircle aria-hidden="true" className="size-4 shrink-0 text-status-needs-you" />{t("providerAccounts.emptyAccounts", { provider: accountProviderName })}</span>
+				<Button type="button" size="sm" variant="secondary" onClick={() => openGlobalSettings("accountManager")}>{t("shell.signIn")}</Button>
+			</div>
+		) : null}
+		</>
 	);
 }
 
@@ -848,6 +885,25 @@ function TaskEffortPicker({
 			triggerClassName="composer-chip composer-toolbar-option w-fit"
 			menuClassName={COMPOSER_MENU_WIDTH}
 		/>
+	);
+}
+
+// The account a new session runs on. The default account is the empty value, so the daemon keeps resolving it.
+function TaskAccountPicker({ accounts, value, providerName, disabled, onChange }: { accounts: ProviderAccount[]; value: string; providerName: string; disabled: boolean; onChange: (accountId: string) => void }) {
+	const { t } = useTranslation();
+	const usage = useProviderAccounts(true, true).data?.accounts;
+	const selected = accounts.find((account) => (value ? account.id === value : account.primary));
+	const name = selected
+		? t("providerAccounts.accountFor", { name: selected.displayName })
+		: accounts.length ? t("providerAccounts.chooseAccount") : t("providerAccounts.emptyAccounts", { provider: providerName });
+	const dot = !selected ? "bg-status-needs-you" : value ? "bg-foreground" : "";
+	return (
+		<AccountMenu className="min-w-64" accounts={accounts.map((account) => usage?.find((entry) => entry.id === account.id) ?? account)} selectedId={selected?.id ?? ""} onSelect={(account) => onChange(account.primary ? "" : account.id)} manage>
+			<Button type="button" size="icon-sm" variant="ghost" className="relative text-muted-foreground" aria-label={name} title={name} disabled={disabled}>
+				<UserRound aria-hidden="true" className="size-4" />
+				{dot ? <span aria-hidden="true" data-testid="task-account-dot" className={`absolute right-1 top-1 size-1.5 rounded-full ${dot}`} /> : null}
+			</Button>
+		</AccountMenu>
 	);
 }
 

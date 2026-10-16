@@ -36,8 +36,9 @@ import { apiErrorMessage } from "../../../lib/api-client";
 import { aoBridge } from "../../../lib/bridge";
 import { clientForSessionHost, labelForHost } from "../../../lib/host-clients";
 import { LOCAL_HOST } from "../../../lib/hosts";
-import type { HarnessDiagnosticsRequest } from "../../../stores/ui-store";
 import { cn } from "../../../lib/utils";
+import { accountProvider, providerAccountsKey, useProviderAccounts } from "../../../hooks/useProviderAccounts";
+import { type HarnessDiagnosticsRequest, useUiStore } from "../../../stores/ui-store";
 import { AgentAvatar } from "../../AgentAvatar";
 import { ConfirmDialog } from "../../ConfirmDialog";
 import { Button } from "../../ui/button";
@@ -89,6 +90,14 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const authPlans = useAgentAuthPlans(hostId);
 	const startAgentAuth = useStartAgentAuth(hostId);
 	const startAgentLogout = useStartAgentAuth(hostId, "logout");
+	const providerAccounts = useProviderAccounts(!hostId, false);
+	// An agent is managed once AO holds an account for it; until then it keeps its own login, as before Account Manager.
+	const managedProviderFor = (agentId: string) => {
+		const provider = hostId ? "" : accountProvider(agentId);
+		const unknown = providerAccounts.isPending || providerAccounts.isError; // shown as managed, with the reason
+		return provider && (unknown || providerAccounts.data?.accounts?.some((account) => account.provider === provider)) ? provider : "";
+	};
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	const [logoutRequest, setLogoutRequest] = useState<AgentId | null>(null);
 	const [authStates, setAuthStates] = useState<AgentAuthStates>({});
 	const [checkingAuth, setCheckingAuth] = useState<AgentId[]>([]);
@@ -226,6 +235,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		let retryTimer: ReturnType<typeof setTimeout> | undefined;
 		const invalidateHarnessQueries = () => Promise.all([
 			queryClient.invalidateQueries({ queryKey: readinessKey }),
+			queryClient.invalidateQueries({ queryKey: providerAccountsKey }),
 			queryClient.invalidateQueries({ queryKey: installerKey }),
 			queryClient.invalidateQueries({ queryKey: jobsKey }),
 			queryClient.invalidateQueries({ queryKey: authPlansKey }),
@@ -264,7 +274,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	}, [authPlansKey, client, hostId, installerKey, jobsKey, queryClient, readinessKey]);
 	useEffect(() => {
 		if (focusHandledRef.current || !targetAgentId) return;
-		if (agents.isPending || installers.isPending || jobs.isPending || authPlans.isPending) return;
+		if (agents.isPending || installers.isPending || jobs.isPending || authPlans.isPending || (managedProviderFor(targetAgentId) && providerAccounts.isPending)) return;
 		focusHandledRef.current = true;
 		// A failed update notice lands here: open that attempt's job diagnostics
 		// ready to copy. A failure with no job of its own, or one whose job has
@@ -281,7 +291,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		}
 		setHighlightedAgentId(targetAgentId);
 		highlightTimerRef.current = window.setTimeout(() => setHighlightedAgentId(null), FOCUS_HIGHLIGHT_MS);
-	}, [agents.isPending, authPlans.isPending, installers.isPending, jobs.isPending, showDiagnostics, targetAgentId]);
+	}, [agents.isPending, authPlans.isPending, installers.isPending, jobs.isPending, showDiagnostics, targetAgentId, hostId, providerAccounts.isPending]);
 
 	useEffect(() => {
 		if (!focusPrimaryActionRef.current || !selectedAgentId) return;
@@ -338,12 +348,14 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const autoLoginHandledRef = useRef(false);
 	useEffect(() => {
 		if (!startLogin || autoLoginHandledRef.current || !targetAgentId) return;
+		// A managed agent signs in on the Accounts page, not through its own login.
+		if (managedProviderFor(targetAgentId)) return;
 		if (agents.isPending || authPlans.isPending) return;
 		autoLoginHandledRef.current = true;
 		const plan = agentAuthPlans.get(targetAgentId);
 		if (!plan || !plan.available || plan.action === "instructions") return;
 		void startAuthRef.current(targetAgentId);
-	}, [agentAuthPlans, agents.isPending, authPlans.isPending, startLogin, targetAgentId]);
+	}, [agentAuthPlans, agents.isPending, authPlans.isPending, hostId, providerAccounts.data, providerAccounts.isPending, startLogin, targetAgentId]);
 
 	useEffect(() => {
 		for (const job of jobs.data ?? []) {
@@ -694,6 +706,11 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		authState: authStates[agentId],
 		authWorkflow: authWorkflow?.agentId === agentId ? authWorkflow : null,
 		updatedAt: lastUpdatedAt[agentId],
+		managed: managedProviderFor(agentId) ? {
+			pending: providerAccounts.isPending,
+			failed: providerAccounts.isError,
+			accounts: (providerAccounts.data?.accounts ?? []).filter((account) => account.provider === managedProviderFor(agentId) && account.signedIn),
+		} : undefined,
 	});
 	const healthReport = (details: HarnessDetails) => healthText(details, { hostId, authCheckError: authCheckErrors[details.agentId], t });
 
@@ -713,6 +730,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			onUpdate={() => requestUpdate(agentId)}
 			onLogin={() => void startAuth(agentId)}
 			onLogout={() => setLogoutRequest(agentId)}
+			onOpenAccounts={() => openGlobalSettings("accountManager")}
 			onVerify={() => void verifyInstall(agentId)}
 			onCloseAuth={() => { if (rowAuthWorkflow) void closeAuth(rowAuthWorkflow); }}
 			onRetryAuth={() => {
@@ -745,7 +763,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 
 	return (
 		<>
-			{installers.error || authPlans.error || agents.error || jobs.error ? (
+			{installers.error || authPlans.error || agents.error || jobs.error || providerAccounts.error ? (
 				<div className="flex items-center gap-2 rounded-md border border-error/30 bg-error/10 px-3 py-2 text-xs text-error">
 					<TriangleAlert className="size-4" aria-hidden="true" />
 					{jobs.error instanceof Error ? jobs.error.message : t("settings.harness.loadFailed")}

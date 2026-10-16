@@ -8,8 +8,6 @@ import { useTranslation } from "react-i18next";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
-import { ensureCodexAccounts } from "../hooks/useCodexAccountsQuery";
-import { writeCodexAccounts } from "../hooks/codex-accounts-state";
 import { GlobalSettingsForm } from "./GlobalSettingsForm";
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection as ProjectFormSection } from "./ProjectSettingsForm";
 import { CloudProjectScriptsSettings, ProjectScriptsSettings } from "./ProjectScriptsSettings";
@@ -26,6 +24,7 @@ import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight
 import { labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { globalSettingsItem, visibleGlobalSettings } from "./settings/settingsCatalog";
+import { fetchProviderAccounts, providerAccountsCatalogueKey, providerAccountsKey } from "../hooks/useProviderAccounts";
 
 function initialProjectSaveState(): ProjectSettingsSaveState {
 	return { phase: "idle" };
@@ -124,7 +123,6 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		}
 	}, [pendingProjectSection, projectSaveState]);
 	const closeWhenSavedRef = useRef(false);
-	const globalSettingsWasOpen = useRef(false);
 
 	const activeLabel = !settingsModal ? "" : isProjectSettings
 		? (projectSections.find((s) => s.id === activeProjectSection)?.label ?? t("settings.project.general"))
@@ -198,23 +196,12 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	}, [settingsModal]);
 
 	useEffect(() => {
-		const globalSettingsOpen = settingsModal?.scope === "global";
-		if (!globalSettingsOpen) {
-			globalSettingsWasOpen.current = false;
-			return;
-		}
-		if (globalSettingsWasOpen.current) return;
-		globalSettingsWasOpen.current = true;
+		if (settingsModal?.scope !== "global") return;
 		// Warm account management as soon as global Settings opens, regardless of
 		// which page is selected. By the time the user visits Accounts, external
 		// login/logout changes and saved-account observations are already current.
-		void ensureCodexAccounts([], {
-			includeUsage: true,
-			forceAuthentication: true,
-			forceDeviceReconciliation: true,
-		})
-			.then((next) => writeCodexAccounts(queryClient, next, "replace"))
-			.catch(() => undefined);
+		void queryClient.prefetchQuery({ queryKey: providerAccountsCatalogueKey, queryFn: () => fetchProviderAccounts(false), staleTime: 0 });
+		void queryClient.prefetchQuery({ queryKey: providerAccountsKey, queryFn: () => fetchProviderAccounts(true, true), staleTime: 0 });
 	}, [queryClient, settingsModal?.scope]);
 
 	const selectProjectSection = (id: ProjectSettingsSection) => {

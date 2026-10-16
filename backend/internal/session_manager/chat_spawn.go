@@ -110,11 +110,6 @@ func (m *Manager) runBackgroundTask(ctx context.Context, id domain.SessionID, sy
 		return "", err
 	}
 	defer releaseHarness()
-	releaseCodex, err := m.acquireCodexControllerAdmission(ctx, rec.Harness)
-	if err != nil {
-		return "", err
-	}
-	defer releaseCodex()
 
 	root := filepath.Join(m.dataDir, "background-tasks")
 	if err := os.MkdirAll(root, 0o700); err != nil {
@@ -134,6 +129,10 @@ func (m *Manager) runBackgroundTask(ctx context.Context, id domain.SessionID, sy
 		if agent, found := m.agents.Agent(rec.Harness); found {
 			m.augmentAgentRuntimeEnv(agent, env)
 		}
+	}
+	// Related work: a task that runs while the session switches agent must not move its route.
+	if err := m.RelatedAccountEnv(ctx, rec.ID, rec.Harness, env); err != nil {
+		return "", fmt.Errorf("background task account: %w", err)
 	}
 	// This provider call is not the worker session. Suppress session-scoped hooks
 	// so its prompt and response cannot be projected into the worker's history.
@@ -202,12 +201,6 @@ type chatSpawn struct {
 // first so no app-server process is left behind holding the worktree.
 func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domain.SessionRecord, error) {
 	id := in.record.ID
-	releaseCodexAdmission, err := m.acquireCodexControllerAdmission(ctx, in.cfg.Harness)
-	if err != nil {
-		m.rollbackSeedSpawnWorkspace(ctx, in.record, in.workspace, in.workspaceProject, false, in.promptQueued)
-		return domain.SessionRecord{}, wrapSpawnStage(id, ErrChatController, err)
-	}
-	defer releaseCodexAdmission()
 	agentConfig := in.cfg.AgentConfig
 	if !in.cfg.AgentConfigResolved {
 		agentConfig = applySpawnAgentConfig(effectiveAgentConfig(in.cfg.Harness, in.cfg.Kind, in.project.Config), in.cfg.AgentConfig)
@@ -238,7 +231,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		controllerCommitted bool
 		completionErr       error
 	)
-	_, err = m.chat.StartChat(ctx, ChatStart{
+	_, err := m.chat.StartChat(ctx, ChatStart{
 		SessionID:               id,
 		ProjectID:               in.cfg.ProjectID,
 		Kind:                    in.cfg.Kind,
@@ -255,7 +248,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		ExpectedControllerOwner: in.record.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
-				launchCtx, in.record, in.project.Config.Env, expected,
+				launchCtx, in.record, in.record.Harness, in.project.Config.Env, expected,
 			)
 			if prepareErr != nil {
 				return nil, fmt.Errorf("%w: %w", ErrSpawnBrowser, prepareErr)
@@ -462,11 +455,6 @@ func (m *Manager) resumeChatController(
 		return RestoreResult{}, fmt.Errorf("%s %s: %w: chat mode is not available in this build",
 			operation, rec.ID, ports.ErrChatUnsupported)
 	}
-	releaseCodexAdmission, err := m.acquireCodexControllerAdmission(ctx, rec.Harness)
-	if err != nil {
-		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
-	}
-	defer releaseCodexAdmission()
 
 	// Recomputed rather than persisted, matching the terminal path: a restored
 	// session keeps its standing instructions across the relaunch.
@@ -521,8 +509,9 @@ func (m *Manager) resumeChatController(
 		MCPServers:              m.aoMCPServers(rec.Harness, env),
 		ExpectedControllerOwner: rec.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
+			m.adoptLegacyChat(launchCtx, rec)
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
-				launchCtx, rec, project.Config.Env, expected,
+				launchCtx, rec, rec.Harness, project.Config.Env, expected,
 			)
 			if prepareErr != nil {
 				return nil, prepareErr

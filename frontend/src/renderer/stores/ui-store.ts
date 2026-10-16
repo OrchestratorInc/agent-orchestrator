@@ -27,7 +27,7 @@ export { readStoredThemePreference, readStoredThemeStyle, resolveTheme } from ".
 export type GlobalSettingsSection =
 	| "general"
 	| "harness"
-	| "agents"
+	| "accountManager"
 	| "billing"
 	| "remoteHosts"
 	| "coder"

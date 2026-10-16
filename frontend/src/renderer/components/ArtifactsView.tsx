@@ -209,7 +209,7 @@ function EmptyArtifacts({ workspaces }: { workspaces: readonly WorkspaceSummary[
 			<div className="flex flex-col items-center gap-1 py-24 text-center">
 				<h2 className="text-heading-sm font-semibold text-foreground">{t("artifacts.noAgent.title")}</h2>
 				<p className="max-w-72 text-xs text-muted-foreground">{t("artifacts.noAgent.description")}</p>
-				<Button variant="ghost" size="sm" className="mt-2" onClick={() => openGlobalSettings("agents")}>
+				<Button variant="ghost" size="sm" className="mt-2" onClick={() => openGlobalSettings("harness")}>
 					{t("artifacts.noAgent.action")}
 				</Button>
 			</div>

@@ -278,6 +278,6 @@ describe("ArtifactsView", () => {
 		expect(screen.getByRole("heading", { name: "No agent is ready" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Create artifact" })).not.toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Open agent settings" }));
-		expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "agents" });
+		expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "harness" });
 	});
 });

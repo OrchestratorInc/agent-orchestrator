@@ -770,3 +770,26 @@ func TestLargestGridFallsBackToSecondaryWhenNoPrimaryHasASize(t *testing.T) {
 		t.Fatalf("largestGrid once the desktop measures = %dx%d, want 151x38", cols, rows)
 	}
 }
+
+func TestOnlyInputThatCarriesTextCountsAsTyped(t *testing.T) {
+	for input, typed := range map[string]bool{
+		"a":                                true,
+		"é":                                true,
+		"\x1b[200~pasted\x1b[201~":         true, // bracketed paste
+		"\r":                               false,
+		"\x7f":                             false, // backspace
+		"\x03":                             false, // Ctrl+C
+		"\x1b[A":                           false, // arrow
+		"\x1bOA":                           false, // arrow, application mode
+		"\x1b[I":                           false, // focus report
+		"\x1b[?997;1n":                     false, // theme report
+		"\x1b[<0;10;5M":                    false, // mouse report
+		"\x1b]11;rgb:0000/0000/0000\x1b\\": false, // colour reply, ended by ESC \
+		"\x1b]11;rgb:0000/0000/0000\x07":   false, // colour reply, ended by BEL
+		"\x1b[I\x1b]11;rgb:0/0/0\x07x":     true,
+	} {
+		if got := typesText([]byte(input)); got != typed {
+			t.Errorf("typesText(%q) = %v, want %v", input, got, typed)
+		}
+	}
+}

@@ -70,6 +70,7 @@ type modelCatalogCall struct {
 type Service struct {
 	agents            []agentregistry.HarnessAgent
 	readiness         *readinessCoordinator
+	managed           ports.ManagedProvider
 	cache             ports.AgentModelCatalogCache
 	discoverer        ports.AgentModelDiscoverer
 	modelDiscoveryDir string
@@ -82,13 +83,11 @@ type Service struct {
 	discoverySlots    chan struct{}
 	// inputChecks tracks background credential-input checks for cached
 	// catalogs, so a cache read never waits on them.
-	inputCheckMu  sync.Mutex
-	inputChecks   map[string]catalogInputCheck
-	ctx           context.Context
-	now           func() time.Time
-	codexAccounts *codexAccountManager
-	codexSwitches *codexAccountSwitchCoordinator
-	logger        *slog.Logger
+	inputCheckMu sync.Mutex
+	inputChecks  map[string]catalogInputCheck
+	ctx          context.Context
+	now          func() time.Time
+	logger       *slog.Logger
 }
 
 // Deps contains optional durable dependencies for the agent catalog service.
@@ -100,14 +99,8 @@ type Deps struct {
 	Sessions               SessionUsageLookup
 	Context                context.Context
 	Logger                 *slog.Logger
-	CodexAccountRoot       string
-	CodexPendingRoot       string
-	CodexSwitchStagingRoot string
-	CodexGlobalHome        string
-	CodexAccounts          ports.CodexAccountClientFactory
-	CodexAccountSwitches   ports.CodexAccountSwitchStore
-	CodexOperationGate     ports.CodexOperationGate
-	// Clock overrides time.Now for deterministic account-bootstrap retry tests.
+	ManagedAccountProvider ports.ManagedProvider // Account Manager; nil leaves every agent native
+	// Clock overrides time.Now for deterministic catalog tests.
 	Clock func() time.Time
 }
 
@@ -134,34 +127,18 @@ func NewWithDeps(deps Deps) *Service {
 	agents := agentregistry.Harnessed()
 	svc := newService(agents, deps.Cache, deps.Projects, deps.Discoverer)
 	svc.modelDiscoveryDir = deps.ModelDiscoveryDir
+	svc.managed = deps.ManagedAccountProvider
 	if deps.Logger != nil {
 		svc.logger = deps.Logger
 	}
-	if deps.CodexAccountRoot != "" && deps.CodexGlobalHome != "" {
-		svc.codexAccounts = newCodexAccountManager(deps.Context, deps.CodexAccountRoot, deps.CodexPendingRoot, deps.CodexSwitchStagingRoot, deps.CodexGlobalHome, deps.CodexAccounts, deps.Logger, deps.CodexOperationGate)
-		if deps.Clock != nil {
-			svc.codexAccounts.now = deps.Clock
-		}
-	}
 	svc.readiness = newReadinessCoordinator(readinessCoordinatorConfig{
 		Agents: agents, Factory: agentregistry.Harnessed, Context: deps.Context, Logger: deps.Logger,
-		AuthenticationCheck: svc.codexAuthenticationWithAccount,
+		AuthenticationCheck: svc.managedAuthenticationCheck,
 		// A catalog built while the agent was signed out carries that failure
 		// (a rejected-credential warning or bare fallback aliases). A detected
 		// login must rediscover it without anyone pressing refresh.
 		OnAuthenticationRecovered: svc.InvalidateModelCatalogs,
 	})
-	if svc.codexAccounts != nil {
-		svc.codexAccounts.onAuthenticationChanged = func() {
-			svc.readiness.Invalidate(string(domain.HarnessCodex), readinessInvalidateAuthentication)
-		}
-	}
-	if svc.codexAccounts != nil && deps.CodexAccountSwitches != nil && deps.CodexOperationGate != nil {
-		svc.codexSwitches = newCodexAccountSwitchCoordinator(
-			deps.Context, svc, deps.CodexAccountSwitches, deps.CodexOperationGate,
-			deps.Clock, svc.PublishCodexAccounts,
-		)
-	}
 	svc.sessions = deps.Sessions
 	if deps.Context != nil {
 		svc.ctx = deps.Context
@@ -186,6 +163,13 @@ func newService(agents []agentregistry.HarnessAgent, cache ports.AgentModelCatal
 		resolverMu[string(item.Harness)] = &sync.Mutex{}
 	}
 	return &Service{agents: agents, readiness: newReadinessCoordinator(readinessCoordinatorConfig{Agents: agents}), cache: cache, discoverer: discoverer, projects: projects, resolverMu: resolverMu, modelCalls: map[string]*modelCatalogCall{}, modelGeneration: map[string]int64{}, discoverySlots: make(chan struct{}, 2), ctx: context.Background(), now: time.Now, logger: slog.Default()}
+}
+
+func (s *Service) managedAuthenticationCheck(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
+	if s.managed == nil {
+		return domain.AgentAuthenticationObservation{}, false
+	}
+	return s.managed.AuthenticationReadiness(ctx, domain.AgentHarness(agentID), purpose)
 }
 
 // WarmModelCatalogs starts the bounded cache scheduler. Readiness is never held
@@ -437,7 +421,23 @@ func (s *Service) revalidateChangedInputs(agentID, projectID, cachedFingerprint 
 	}
 }
 
+// managedFingerprint is the catalogue fingerprint of a scope Account Manager
+// owns. A failed read keeps the cached one, so an outage is not a change.
+func (s *Service) managedFingerprint(ctx context.Context, agentID, scope, cached string) (string, bool) {
+	if s.managed == nil {
+		return "", false
+	}
+	fingerprint, managed, err := s.managed.ModelsFingerprint(ctx, domain.AgentHarness(agentID), scope)
+	if err != nil {
+		return cached, managed
+	}
+	return fingerprint, managed
+}
+
 func (s *Service) modelCatalogInputsChanged(ctx context.Context, agentID, projectID, cachedFingerprint string) bool {
+	if fingerprint, managed := s.managedFingerprint(ctx, agentID, projectID, cachedFingerprint); managed {
+		return fingerprint != cachedFingerprint
+	}
 	item, ok := s.agent(agentID)
 	if !ok {
 		return false
@@ -483,6 +483,9 @@ func (s *Service) modelCatalogScope(ctx context.Context, projectID string) (stri
 	if _, ok := credentialTypeFromScope(projectID); ok {
 		return projectID, nil
 	}
+	if _, ok := ports.AccountFromModelCatalogScope(projectID); ok {
+		return projectID, nil
+	}
 	if strings.TrimSpace(projectID) == "" || s.projects == nil {
 		return "", nil
 	}
@@ -505,7 +508,7 @@ func (s *Service) modelDiscoveryRequest(ctx context.Context, agentID, projectID,
 		request.CredentialType = credentialType
 		return request, nil
 	}
-	if strings.TrimSpace(projectID) == "" || s.projects == nil {
+	if _, accountScope := ports.AccountFromModelCatalogScope(projectID); accountScope || strings.TrimSpace(projectID) == "" || s.projects == nil {
 		return s.globalModelDiscoveryRequest(request)
 	}
 	project, ok, err := s.projects.GetProject(ctx, projectID)
@@ -728,7 +731,10 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 	}
 	// Fingerprints the same inputs the discovery run would read, so a change to
 	// either the executable or the configuration behind it invalidates the cache.
-	version := s.discoverer.CatalogFingerprint(ctx, request)
+	version, managed := s.managedFingerprint(ctx, agentID, projectID, cached.BinaryVersion)
+	if !managed {
+		version = s.discoverer.CatalogFingerprint(ctx, request)
+	}
 	inputsChanged := hasCached && cached.BinaryVersion != version
 	explicitlyInvalidated := hasCached && (cached.RefreshState == "queued" || cached.RefreshState == "refreshing")
 	if hasCached && mode == modelLoadCached && cached.BinaryVersion == version {
@@ -764,7 +770,13 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 	if mode == modelLoadRefresh {
 		_ = s.persistCatalogState(ctx, cached, hasCached, "refreshing", "", time.Time{}, generation)
 	}
-	discovered, discoverErr := s.discoverer.Discover(ctx, request)
+	var discovered ports.AgentModelCatalog
+	var discoverErr error
+	if managed { // Account Manager owns this scope's catalogue too
+		discovered, _, discoverErr = s.managed.DiscoverModels(ctx, domain.AgentHarness(agentID), projectID)
+	} else {
+		discovered, discoverErr = s.discoverer.Discover(ctx, request)
+	}
 	discovered = applyCustomModelEntryPolicy(discovered, policy)
 	discovered.BinaryVersion = version
 	persistCtx := s.ctx
