@@ -28,6 +28,8 @@ import {
 import {
 	lexicalEditorText,
 	placeLexicalCaret,
+	placeLexicalCaretAtEnd,
+	placeLexicalCaretInLine,
 	typeAndPressInLexicalEditor,
 	typeInLexicalEditor,
 } from "../../test/lexical";
@@ -1059,6 +1061,327 @@ describe("queued message edit", () => {
 		await waitFor(() => expect(screen.getByLabelText("Message the agent")).toHaveTextContent("hi"));
 		await userEvent.keyboard("{Enter}");
 			await waitFor(() => expect(onSend).toHaveBeenCalledWith("hi", undefined, undefined, []));
+	});
+});
+
+describe("sent message recall", () => {
+	const SENT = ["first question", "second question", "latest question"];
+	/** Fires one arrow key; true means the composer claimed it rather than moving the caret. */
+	const press = (field: HTMLElement, key: "ArrowUp" | "ArrowDown", init: KeyboardEventInit = {}) =>
+		!fireEvent.keyDown(field, { key, ...init });
+
+	it("walks sent messages newest first from an empty composer and back to the empty draft", async () => {
+		const { field, onSend } = renderComposer({ sentMessages: SENT });
+		await typeInComposer(field, "");
+
+		expect(press(field, "ArrowUp")).toBe(true);
+		expect(composerWireText(field)).toBe("latest question");
+		press(field, "ArrowUp");
+		expect(composerWireText(field)).toBe("second question");
+		press(field, "ArrowUp");
+		expect(composerWireText(field)).toBe("first question");
+		// The oldest message is the end of the walk; the key falls through untouched.
+		expect(press(field, "ArrowUp")).toBe(false);
+		expect(composerWireText(field)).toBe("first question");
+
+		expect(press(field, "ArrowDown")).toBe(true);
+		expect(composerWireText(field)).toBe("second question");
+		press(field, "ArrowDown");
+		expect(composerWireText(field)).toBe("latest question");
+		press(field, "ArrowDown");
+		expect(composerWireText(field)).toBe("");
+		expect(press(field, "ArrowDown")).toBe(false);
+		expect(onSend).not.toHaveBeenCalled();
+	});
+
+	it("starts from a typed draft only at its start and brings the draft back", async () => {
+		const { field } = renderComposer({ sentMessages: SENT });
+		await typeInComposer(field, "my draft");
+
+		// Mid-text, Up is still caret movement.
+		expect(press(field, "ArrowUp")).toBe(false);
+		expect(composerWireText(field)).toBe("my draft");
+
+		await placeLexicalCaret(field, 0);
+		expect(press(field, "ArrowUp")).toBe(true);
+		expect(composerWireText(field)).toBe("latest question");
+		expect(press(field, "ArrowDown")).toBe(true);
+		expect(composerWireText(field)).toBe("my draft");
+		expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+	});
+
+	it("leaves the arrows to a text selection, even one starting at the very start", async () => {
+		const { field } = renderComposer({ sentMessages: SENT });
+		await typeInComposer(field, "my draft");
+		const text = field.querySelector("[data-lexical-text]")?.firstChild;
+		if (!text) throw new Error("Expected composer text");
+		window.getSelection()?.setBaseAndExtent(text, 0, text, 2);
+
+		expect(press(field, "ArrowUp")).toBe(false);
+		expect(composerWireText(field)).toBe("my draft");
+	});
+
+	it("reads the caret the browser shows before Lexical has caught up with it", async () => {
+		const { field } = renderComposer({ sentMessages: SENT });
+		await typeInComposer(field, "my draft");
+		// A native Up on the only line moves the caret to its start; Lexical adopts that
+		// on a later selectionchange, which the next key can beat.
+		const text = field.querySelector("[data-lexical-text]")?.firstChild;
+		if (!text) throw new Error("Expected composer text");
+		window.getSelection()?.collapse(text, 0);
+
+		expect(press(field, "ArrowUp")).toBe(true);
+		expect(composerWireText(field)).toBe("latest question");
+	});
+
+	it("keeps the arrows moving the caret inside multiline text", async () => {
+		const sessionId = "composer-history-multiline";
+		writeChatComposerText(sessionId, "line one\nline two");
+		const { field } = renderComposer({
+			draftSessionId: sessionId,
+			sentMessages: ["older\nmultiline ask", "newest ask"],
+		});
+
+		await placeLexicalCaretInLine(field, 1, 3);
+		expect(press(field, "ArrowUp")).toBe(false);
+		expect(press(field, "ArrowDown")).toBe(false);
+		await placeLexicalCaretAtEnd(field);
+		expect(press(field, "ArrowUp")).toBe(false);
+		expect(press(field, "ArrowDown")).toBe(false);
+		expect(composerWireText(field)).toBe("line one\nline two");
+
+		await placeLexicalCaret(field, 0);
+		press(field, "ArrowUp");
+		press(field, "ArrowUp");
+		expect(composerWireText(field)).toBe("older\nmultiline ask");
+		// Reading down a recalled message is caret movement; from its end, Down continues.
+		await placeLexicalCaretInLine(field, 1, 2);
+		expect(press(field, "ArrowDown")).toBe(false);
+		expect(press(field, "ArrowUp")).toBe(false);
+		await placeLexicalCaretAtEnd(field);
+		expect(press(field, "ArrowDown")).toBe(true);
+		expect(composerWireText(field)).toBe("newest ask");
+	});
+
+	it("leaves the arrows to an open completion menu", async () => {
+		const { field } = renderComposer({ skills: SKILLS, sentMessages: ["older", "ask /rev"] });
+		await typeInComposer(field, "");
+		press(field, "ArrowUp");
+		expect(composerWireText(field)).toBe("ask /rev");
+
+		await placeLexicalCaretAtEnd(field);
+		const listbox = await screen.findByRole("listbox");
+		const before = within(listbox).getAllByRole("option").findIndex((option) => option.getAttribute("aria-selected") === "true");
+		expect(press(field, "ArrowDown")).toBe(true);
+		expect(composerWireText(field)).toBe("ask /rev");
+		expect(within(listbox).getAllByRole("option").findIndex((option) => option.getAttribute("aria-selected") === "true")).toBe(before + 1);
+	});
+
+	it("ignores modified arrows and IME composition", async () => {
+		const { field } = renderComposer({ sentMessages: SENT });
+		await typeInComposer(field, "");
+
+		for (const modifier of ["shiftKey", "altKey", "metaKey", "ctrlKey"] as const) {
+			expect(press(field, "ArrowUp", { [modifier]: true })).toBe(false);
+		}
+		expect(press(field, "ArrowUp", { isComposing: true })).toBe(false);
+		fireEvent.compositionStart(field);
+		expect(press(field, "ArrowUp")).toBe(false);
+		fireEvent.compositionEnd(field);
+		expect(composerWireText(field)).toBe("");
+
+		expect(press(field, "ArrowUp")).toBe(true);
+		expect(composerWireText(field)).toBe("latest question");
+	});
+
+	it("keeps the saved draft while browsing and saves a recalled message once it is edited", async () => {
+		const sessionId = "composer-history-durable";
+		writeChatComposerText(sessionId, "saved draft");
+		const { field } = renderComposer({ draftSessionId: sessionId, sentMessages: SENT });
+
+		await placeLexicalCaret(field, 0);
+		press(field, "ArrowUp");
+		expect(composerWireText(field)).toBe("latest question");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("saved draft");
+
+		await typeInComposer(field, " again");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("latest question again");
+		// Edited, it is the draft now: the walk is over and Down at its end is a no-op.
+		expect(press(field, "ArrowDown")).toBe(false);
+		await placeLexicalCaret(field, 0);
+		expect(press(field, "ArrowDown")).toBe(false);
+		expect(composerWireText(field)).toBe("latest question again");
+	});
+
+	it("sends a recalled message only on Enter, then starts the next walk afresh", async () => {
+		const { field, onSend } = renderComposer({ sentMessages: SENT });
+		await typeInComposer(field, "");
+		press(field, "ArrowUp");
+		press(field, "ArrowUp");
+		expect(onSend).not.toHaveBeenCalled();
+
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith("second question"));
+		await waitFor(() => expect(composerWireText(field)).toBe(""));
+		expect(press(field, "ArrowDown")).toBe(false);
+		press(field, "ArrowUp");
+		expect(composerWireText(field)).toBe("latest question");
+	});
+
+	it("stays out of a queued message edit", async () => {
+		const { field } = renderComposer({
+			sentMessages: SENT,
+			editingQueuedTurnId: "turn-queued",
+			draftSeed: { id: "turn-queued:owner", text: "" },
+		});
+		await typeInComposer(field, "");
+		expect(press(field, "ArrowUp")).toBe(false);
+		expect(composerWireText(field)).toBe("");
+	});
+
+	it("stays out of a disabled composer", async () => {
+		const { field } = renderComposer({ sentMessages: SENT, disabled: true });
+		await typeInComposer(field, "");
+		expect(press(field, "ArrowUp")).toBe(false);
+		expect(composerWireText(field)).toBe("");
+	});
+
+	it("stays out of a delivery still settling", async () => {
+		const sessionId = "composer-history-delivery";
+		prepareChatComposerDelivery(sessionId, {
+			kind: "steer",
+			composerText: "still settling",
+			attachments: [],
+			requestText: "still settling",
+			clientMessageId: "composer-history-delivery-id",
+		});
+		const { field } = renderComposer({ draftSessionId: sessionId, sentMessages: SENT });
+		await placeLexicalCaret(field, 0);
+		expect(press(field, "ArrowUp")).toBe(false);
+		expect(composerWireText(field)).toBe("still settling");
+	});
+
+	it("never completes a recalled skill as the caret moves through it, so the saved draft stays", async () => {
+		const sessionId = "composer-history-skill";
+		writeChatComposerText(sessionId, "my saved draft");
+		const { field } = renderComposer({ draftSessionId: sessionId, skills: SKILLS, sentMessages: ["ask /review"] });
+		await placeLexicalCaret(field, 0);
+		press(field, "ArrowUp");
+		expect(composerWireText(field)).toBe("ask /review");
+
+		// The caret now sits after an exact `/review`, which typing would auto-complete.
+		await placeLexicalCaretAtEnd(field);
+		await screen.findByRole("listbox");
+		expect(field.querySelector('[data-composer-token="skill"]')).toBeNull();
+		expect(composerWireText(field)).toBe("ask /review");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("my saved draft");
+
+		// The open menu keeps the arrows; once dismissed, Down walks back to the draft.
+		fireEvent.keyDown(field, { key: "Escape" });
+		expect(press(field, "ArrowDown")).toBe(true);
+		expect(composerWireText(field)).toBe("my saved draft");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("my saved draft");
+	});
+
+	it("treats a completion the user accepts in a recalled message as an edit", async () => {
+		const sessionId = "composer-history-skill-accepted";
+		writeChatComposerText(sessionId, "my saved draft");
+		const { field } = renderComposer({ draftSessionId: sessionId, skills: SKILLS, sentMessages: ["ask /rev"] });
+		await placeLexicalCaret(field, 0);
+		press(field, "ArrowUp");
+		await placeLexicalCaretAtEnd(field);
+		await screen.findByRole("listbox");
+
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(field.querySelector('[data-composer-token="skill"]')).not.toBeNull());
+		expect(readChatSessionDraft(sessionId).composer.text).toBe(composerWireText(field));
+		expect(composerWireText(field)).not.toBe("my saved draft");
+	});
+
+	it("takes an image removed while browsing out of the saved draft as well", async () => {
+		const sessionId = "composer-history-removed-image";
+		const path = ".ao/attachments/attachment-history-removed.png";
+		const { field, onSend } = renderComposer({
+			draftSessionId: sessionId,
+			sentMessages: ["earlier ask"],
+			onStageAttachments: vi.fn().mockResolvedValue([path]),
+		});
+		await typeInComposer(field, "compare");
+		fireEvent.paste(field, { clipboardData: clipboardData([png("removed.png")]) });
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).not.toBeNull());
+		expect(readChatSessionDraft(sessionId).composer.text).toContain(path);
+
+		await placeLexicalCaret(field, 0);
+		press(field, "ArrowUp");
+		expect(composerWireText(field)).toBe("earlier ask");
+		await userEvent.click(screen.getByLabelText("Remove removed.png"));
+		await waitFor(() => expect(screen.queryByLabelText("Remove removed.png")).toBeNull());
+		// Still browsing, and leaving now would bring back a draft without the image.
+		expect(composerWireText(field)).toBe("earlier ask");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("compare ");
+
+		expect(press(field, "ArrowDown")).toBe(true);
+		expect(composerWireText(field)).toBe("compare ");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		expect(onSend.mock.calls[0]?.[0]).toBe("compare");
+		expect(onSend.mock.calls[0]?.[1]).toBeUndefined();
+	});
+
+	it("waits for a pasted image to finish staging before recalling, so its chip survives", async () => {
+		const path = ".ao/attachments/attachment-history-staging.png";
+		const staging = deferred<string[]>();
+		const { field } = renderComposer({ sentMessages: ["earlier ask"], onStageAttachments: vi.fn(() => staging.promise) });
+		await typeInComposer(field, "compare");
+		fireEvent.paste(field, { clipboardData: clipboardData([png("staging.png")]) });
+		expect(field.querySelector('[data-composer-token="image-pending"]')).not.toBeNull();
+
+		await placeLexicalCaret(field, 0);
+		expect(press(field, "ArrowUp")).toBe(false);
+		expect(field.querySelector('[data-composer-token="image-pending"]')).not.toBeNull();
+
+		await act(async () => staging.resolve([path]));
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).not.toBeNull());
+		await placeLexicalCaret(field, 0);
+		expect(press(field, "ArrowUp")).toBe(true);
+		expect(composerWireText(field)).toBe("earlier ask");
+		expect(press(field, "ArrowDown")).toBe(true);
+		expect(field.querySelector('[data-composer-token="image"]')).not.toBeNull();
+		expect(composerWireText(field)).toBe(`compare ${path} `);
+	});
+
+	it("recalls with Up while a Tab suggestion is offered, which dismisses it like any text", async () => {
+		const onDismiss = vi.fn();
+		const { field, onSend } = renderComposer({
+			sentMessages: SENT,
+			promptSuggestion: { id: "suggestion", text: "Run the tests", onDismiss },
+		});
+		await typeInComposer(field, "");
+		expect(press(field, "ArrowUp")).toBe(true);
+		expect(composerWireText(field)).toBe("latest question");
+		expect(onDismiss).toHaveBeenCalled();
+		expect(onSend).not.toHaveBeenCalled();
+	});
+
+	it("makes a recalled message the draft when an image is pasted into it", async () => {
+		const sessionId = "composer-history-pasted-into-recall";
+		const path = ".ao/attachments/attachment-history-pasted.png";
+		writeChatComposerText(sessionId, "my draft");
+		const { field } = renderComposer({
+			draftSessionId: sessionId,
+			sentMessages: ["earlier ask"],
+			onStageAttachments: vi.fn().mockResolvedValue([path]),
+		});
+		await placeLexicalCaret(field, 0);
+		press(field, "ArrowUp");
+		await placeLexicalCaretAtEnd(field);
+		fireEvent.paste(field, { clipboardData: clipboardData([png("pasted.png")]) });
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).not.toBeNull());
+
+		expect(composerWireText(field)).toBe(`earlier ask ${path} `);
+		expect(readChatSessionDraft(sessionId).composer.text).toBe(`earlier ask ${path} `);
+		// The walk ended with the edit, so Down at the end no longer replaces the text.
+		expect(press(field, "ArrowDown")).toBe(false);
 	});
 });
 

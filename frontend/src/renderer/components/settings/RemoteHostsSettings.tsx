@@ -19,6 +19,9 @@ import { SettingsSection } from "./SettingsSection";
 
 type SavedHost = { hostId: string; label: string; url: string };
 
+/** Row actions are quiet: ghost, muted until hovered. */
+const GHOST_ACTION = "text-settings-muted hover:text-settings-label";
+
 export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) {
 	const { t } = useTranslation();
 	const enabled = useUiStore((state) => state.remoteHosts);
@@ -127,9 +130,9 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 
 	if (status !== "authenticated") return (
 		<SettingsSection title={t("settings.remoteHosts")} sectionId="remoteHosts" titleHidden={titleHidden} grouped>
-			<SettingsRow label={t("shell.signInToAOCloud")}>{status === "unauthenticated" ? (
-				<Button onClick={() => localAuthAvailable ? openLocalSignIn() : signIn()} size="sm" type="button">
-					{t("shell.signInToAOCloud")}
+			<SettingsRow label={t("remote.aoCloud")} description={t("remote.signInDescription")}>{status === "unauthenticated" ? (
+				<Button className={GHOST_ACTION} onClick={() => localAuthAvailable ? openLocalSignIn() : signIn()} size="sm" type="button" variant="ghost">
+					{t("shell.signIn")}
 				</Button>
 			) : null}</SettingsRow>
 		</SettingsSection>
@@ -137,19 +140,36 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 
 	return <>
 		<SettingsSection title={t("settings.remoteHosts")} sectionId="remoteHosts" titleHidden={titleHidden} grouped>
-			<SettingsRow label={t("remote.enable")} description={t("remote.enableDescription")}>
+			<SettingsRow
+				label={t("remote.enable")}
+				description={
+					<>
+						{t("remote.enableDescription")}
+						<span className="mt-1 block">{t("remote.connectionDescription")}</span>
+					</>
+				}
+			>
 				<Switch aria-label={t("remote.enable")} checked={enabled} onCheckedChange={setEnabled} />
 			</SettingsRow>
-			<p className="px-3 text-pretty text-xs leading-relaxed text-settings-muted">{t("remote.connectionDescription")}</p>
 		</SettingsSection>
 
 		<SettingsSection title={t("remote.savedHosts")} grouped>
-			{loading && saved.length === 0 ? <p className="px-3 py-2 text-xs text-settings-muted" role="status">{t("remote.loadingHosts")}</p> : null}
-			{!loading && saved.length === 0 && !loadError ? <p className="px-3 py-2 text-pretty text-xs text-settings-muted">{t("remote.emptyHosts")}</p> : null}
-			{saved.map((host) => <div key={host.url}>
-				<SettingsRow icon={Server} label={host.label} description={host.url}>
+			{loading && saved.length === 0 ? <div className="settings-row-bar text-sm text-settings-muted" role="status">{t("remote.loadingHosts")}</div> : null}
+			{!loading && saved.length === 0 && !loadError ? <div className="settings-row-bar text-pretty text-sm text-settings-muted">{t("remote.emptyHosts")}</div> : null}
+			{saved.map((host) => (
+				<SettingsRow
+					key={host.url}
+					icon={Server}
+					label={host.label}
+					description={host.hostId ? host.url : (
+						<>
+							{host.url}
+							<span className="mt-0.5 block text-warning">{t("remote.repairRequired")}</span>
+						</>
+					)}
+				>
 					<div className="flex items-center gap-1">
-						<Button aria-label={t("remote.editHost", { label: host.label })} disabled={busy || removeBusy} onClick={() => {
+						<Button aria-label={t("remote.editHost", { label: host.label })} className={GHOST_ACTION} disabled={busy || removeBusy} onClick={() => {
 							setEditing(host);
 							setLabel(host.label);
 							setUrl(host.url);
@@ -157,30 +177,35 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 							setFormError("");
 							formRef.current?.scrollIntoView?.({ block: "nearest" });
 						}} size="icon-sm" type="button" variant="ghost"><Pencil aria-hidden="true" className="size-icon-base" /></Button>
-						<Button aria-label={t("remote.removeHost", { label: host.label })} disabled={busy || removeBusy} onClick={() => {
+						<Button aria-label={t("remote.removeHost", { label: host.label })} className={GHOST_ACTION} disabled={busy || removeBusy} onClick={() => {
 							setConfirmingRemoval(host);
 							setRemoveError("");
 						}} size="icon-sm" type="button" variant="ghost"><Trash2 aria-hidden="true" className="size-icon-base" /></Button>
 					</div>
 				</SettingsRow>
-				{!host.hostId ? <p className="px-3 py-1 text-xs text-settings-muted">{t("remote.repairRequired")}</p> : null}
-			</div>)}
-			{loadError ? <div className="flex items-center gap-2 px-3 py-2 text-xs text-error" role="alert">{loadError}<Button onClick={() => void load()} size="sm" type="button" variant="outline">{t("notify.retry")}</Button></div> : null}
+			))}
+			{loadError ? (
+				<SettingsRow label={t("remote.savedHosts")} description={<span className="text-error" role="alert">{loadError}</span>}>
+					<Button className={GHOST_ACTION} onClick={() => void load()} size="sm" type="button" variant="ghost">{t("notify.retry")}</Button>
+				</SettingsRow>
+			) : null}
 		</SettingsSection>
 
-		<SettingsSection title={editing ? t("remote.editHost", { label: editing.label }) : t("remote.addHost")} grouped>
-			<p className="px-3 text-pretty text-xs leading-relaxed text-settings-muted">{t("remote.setupHint")}</p>
-			<form className="flex flex-col gap-1.5" onSubmit={(event) => void save(event)} ref={formRef}>
-				<SettingsRow label={t("remote.name")}><Input aria-label={t("remote.name")} className="max-w-sm" disabled={busy} maxLength={64} onChange={(event) => setLabel(event.target.value)} required value={label} /></SettingsRow>
-				<SettingsRow label={t("mobile.address")}><Input aria-label={t("mobile.address")} className="max-w-sm" disabled={busy} inputMode="url" onChange={(event) => setUrl(event.target.value)} placeholder={t("remote.addressPlaceholder")} required value={url} /></SettingsRow>
-				<SettingsRow label={t("remote.connectionPassword")}><Input aria-label={t("remote.connectionPassword")} autoComplete="off" className="max-w-sm" disabled={busy} onChange={(event) => setPassword(event.target.value)} placeholder={editing?.hostId ? t("remote.keepPassword") : undefined} required={!editing?.hostId} type="password" value={password} /></SettingsRow>
-				{formError ? <p className="px-3 text-xs text-error" role="alert">{formError}</p> : null}
-				<div className="flex justify-end gap-2 px-3 pt-1">
-					{editing ? <Button disabled={busy} onClick={resetForm} size="sm" type="button" variant="outline">{t("confirm.cancel")}</Button> : null}
-					<Button disabled={busy || !label.trim() || !url.trim() || (!editing?.hostId && !password)} size="sm" type="submit">{busy ? t("remote.saving") : editing ? t("remote.saveHost") : t("remote.addHost")}</Button>
+		{/* The form wraps the whole section so its rows stay direct children of
+		    the grouped card and pick up the card's dividers. */}
+		<form className="flex w-full flex-col" onSubmit={(event) => void save(event)} ref={formRef}>
+			<SettingsSection title={editing ? t("remote.editHost", { label: editing.label }) : t("remote.addHost")} grouped>
+				<p className="settings-content-row text-pretty text-control leading-4 text-settings-muted">{t("remote.setupHint")}</p>
+				<SettingsRow label={t("remote.name")}><Input aria-label={t("remote.name")} className="w-80 max-w-full" disabled={busy} maxLength={64} onChange={(event) => setLabel(event.target.value)} required value={label} /></SettingsRow>
+				<SettingsRow label={t("mobile.address")}><Input aria-label={t("mobile.address")} className="w-80 max-w-full" disabled={busy} inputMode="url" onChange={(event) => setUrl(event.target.value)} placeholder={t("remote.addressPlaceholder")} required value={url} /></SettingsRow>
+				<SettingsRow label={t("remote.connectionPassword")}><Input aria-label={t("remote.connectionPassword")} autoComplete="off" className="w-80 max-w-full" disabled={busy} onChange={(event) => setPassword(event.target.value)} placeholder={editing?.hostId ? t("remote.keepPassword") : undefined} required={!editing?.hostId} type="password" value={password} /></SettingsRow>
+				<div className="settings-content-row flex items-center justify-end gap-2">
+					{formError ? <p className="mr-auto min-w-0 text-xs text-error" role="alert">{formError}</p> : null}
+					{editing ? <Button className={GHOST_ACTION} disabled={busy} onClick={resetForm} size="sm" type="button" variant="ghost">{t("confirm.cancel")}</Button> : null}
+					<Button className={GHOST_ACTION} disabled={busy || !label.trim() || !url.trim() || (!editing?.hostId && !password)} size="sm" type="submit" variant="ghost">{busy ? t("remote.saving") : editing ? t("remote.saveHost") : t("remote.addHost")}</Button>
 				</div>
-			</form>
-		</SettingsSection>
+			</SettingsSection>
+		</form>
 
 		<ConfirmDialog
 			busy={removeBusy}

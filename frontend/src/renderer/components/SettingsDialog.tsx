@@ -3,7 +3,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { aoBridge } from "../lib/bridge";
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudOffering } from "../hooks/useCloudOffering";
@@ -16,8 +16,7 @@ import { CloudProjectScriptsSettings, ProjectScriptsSettings } from "./ProjectSc
 import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { CuesSettings } from "./CuesDialog";
-import { topbarHeaderClass } from "./TopbarButton";
-import { topbarDragStyle, useTopbarPaddingLeft } from "./ShellTopbar";
+import { topbarDragStyle } from "./ShellTopbar";
 import { useAppShortcut } from "../hooks/useAppShortcut";
 import { type GlobalSettingsSection, type HarnessDiagnosticsRequest, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
@@ -26,6 +25,8 @@ import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight
 import { labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { globalSettingsItem, visibleGlobalSettings } from "./settings/settingsCatalog";
+import { fetchMobileStatus, mobileStatusQueryKey } from "./settings/ConnectMobileContent";
+import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
 
 function initialProjectSaveState(): ProjectSettingsSaveState {
 	return { phase: "idle" };
@@ -215,6 +216,10 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		})
 			.then((next) => writeCodexAccounts(queryClient, next, "replace"))
 			.catch(() => undefined);
+		// Same for Mobile: its pairing state and Keep awake are known before the
+		// page is first drawn, so nothing pops in or flips after it opens.
+		void queryClient.prefetchQuery({ queryKey: mobileStatusQueryKey, queryFn: fetchMobileStatus });
+		void queryClient.prefetchQuery({ queryKey: mobileDevicesQueryKey, queryFn: fetchDevices });
 	}, [queryClient, settingsModal?.scope]);
 
 	const selectProjectSection = (id: ProjectSettingsSection) => {
@@ -248,7 +253,6 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		cueBusy,
 		close: closeSettingsDialog,
 		title: activeLabel,
-		rootLabel: t("settings.title"),
 		isBodyReady,
 		bodyKey: displaySettings?.scope === "project" ? refKey({ host: displaySettings.hostId ?? LOCAL_HOST, id: displaySettings.projectId }) : "global",
 		body: () => {
@@ -380,36 +384,40 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
 /**
  * Settings page rendered inside the center panel, in place of the routed page:
- * the standard app topbar carrying a "Settings / <page>" breadcrumb above a
- * centered, scrolling content column on the normal page background.
+ * no top bar, just one centered, scrolling content column on the normal page
+ * background, headed by the page's sentence-case title.
  */
 export function SettingsPane() {
-	const { t } = useTranslation();
 	const page = useContext(SettingsPageContext);
-	const paddingLeft = useTopbarPaddingLeft();
 	if (!page) return null;
 	const layer = page.active;
 	return (
-		<div className="flex min-h-0 flex-1 flex-col" data-testid="settings-page">
-			<header className={cn(topbarHeaderClass, "workspace-topbar-container")} style={{ ...topbarDragStyle, paddingLeft }}>
-				<h1 className="text-brand flex min-w-0 items-center gap-2 font-medium leading-none tracking-tight">
-					<span className="text-muted-foreground">{layer.rootLabel}</span>
-					<span aria-hidden="true" className="text-muted-foreground/50">/</span>
-					<span className="min-w-0 truncate text-foreground">{layer.title}</span>
-					{layer.remoteHostId && <span className="truncate text-xs font-normal text-muted-foreground">· {labelForHost(layer.remoteHostId) ?? layer.remoteHostId}</span>}
-				</h1>
-				<button aria-label={t("settings.close")} className="settings-close-button ml-auto shrink-0" disabled={layer.cueBusy} onClick={layer.close} style={{ WebkitAppRegion: "no-drag" } as CSSProperties} type="button">
-					<X aria-hidden="true" className="size-4" />
-				</button>
-			</header>
+		<div className="relative flex min-h-0 flex-1 flex-col" data-testid="settings-page">
+			{/* Transparent toolbar-height strip laid over the scroller: keeps the macOS
+			  * window-drag region while content scrolls up under it to the panel edge.
+			  * The body's top padding clears it (and the fixed titlebar controls that
+			  * sit over the panel when the sidebar is closed) at rest. Controls that
+			  * scroll beneath it are no-drag (styles.css). The strip itself never takes
+			  * pointer events (the native drag region does not need them), so a click
+			  * there reaches the control under it, and it stops short of the scrollbar
+			  * so the top of the track can still be grabbed. */}
+			<div aria-hidden="true" className="pointer-events-none absolute left-0 right-2 top-0 z-10 h-toolbar" style={topbarDragStyle} />
 			{/* A covered project layer stays mounted so its draft survives recovery settings above it. */}
 			{page.layers.map((entry) => (
+				// `relative` makes the scroller the containing block for absolutely
+				// positioned content (sr-only labels, menu triggers). Without it they
+				// escape to the shell's overflow-x-hidden wrapper, which then scrolls
+				// the whole center panel away.
 				<div
 					aria-busy={!entry.isBodyReady}
-					className={cn("settings-thin-scrollbar min-h-0 flex-1 overflow-y-auto", entry !== layer && "hidden")}
+					className={cn("settings-thin-scrollbar relative min-h-0 flex-1 overflow-y-auto", entry !== layer && "hidden")}
 					key={entry.bodyKey}
 				>
-					<div className="settings-dialog-body flex w-full flex-col gap-4 px-[18px] pb-12 pt-[18px]">
+					<div className="settings-dialog-body mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 pb-12 pt-[calc(var(--spacing-toolbar)+--spacing(4))]">
+						<h1 className="mb-8 px-(--settings-row-inset) text-heading font-medium leading-7 text-foreground">
+							{entry.title}
+							{entry.remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(entry.remoteHostId) ?? entry.remoteHostId}</span>}
+						</h1>
 						{entry.body()}
 					</div>
 				</div>

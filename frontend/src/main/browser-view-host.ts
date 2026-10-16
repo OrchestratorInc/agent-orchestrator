@@ -1,5 +1,4 @@
 import type {
-  Clipboard,
   IpcMain,
   IpcMainEvent,
   IpcMainInvokeEvent,
@@ -49,6 +48,8 @@ import type { BrowserHistoryStore } from "./browser-history-store";
 import type { BrowserDownloadManager } from "./browser-download-manager";
 import type { BrowserDownloadActionInput } from "../shared/browser-downloads";
 import { matchInstruction } from "./browser-act-matcher";
+import { trustPreviewCertificate } from "./preview-certificate";
+import { REMOTE_TAB_REPORT, parseRemoteTabReport, type RemoteTabReport } from "../shared/remote-tab";
 import type { ActCandidate } from "./browser-act-matcher";
 
 function isValidAnnotationContext(
@@ -127,6 +128,9 @@ export type BrowserTabState = {
   title: string;
   active: boolean;
   favicon?: string;
+  // Set when the tab shows the agent's own browser: the agent browser tab it
+  // shows ("" until its viewer first reports).
+  remote?: { tabId: string };
 };
 
 export type BrowserTabsState = {
@@ -336,6 +340,7 @@ type BrowserWebContents = Pick<
   ) => void;
   closeDevTools?: () => void;
   close?: () => void;
+  isFocused?: () => boolean;
   session?: Pick<
     Session,
     | "on"
@@ -343,6 +348,7 @@ type BrowserWebContents = Pick<
     | "downloadURL"
     | "setPermissionCheckHandler"
     | "setPermissionRequestHandler"
+    | "setCertificateVerifyProc"
     | "webRequest"
   >;
 };
@@ -428,9 +434,19 @@ type ShellLike = {
 
 type WebContentsViewConstructor = new (options: {
   webPreferences: Electron.WebPreferences;
+  webContents?: WebContents;
 }) => BrowserViewLike;
 
+// Electron supplies this native guest to createWindow, but omits the internal
+// field from BrowserWindowConstructorOptions in its public type declaration.
+type BrowserPopupOptions = Electron.BrowserWindowConstructorOptions & {
+  webContents?: WebContents;
+};
+
 export type BrowserViewHostOptions = {
+  // Whether a tab's URL is AO's own agent-browser viewer (a connected remote
+  // host's): only those may report the remote page a tab shows.
+  isAgentBrowserUrl?: (url: string) => boolean;
   mainWindow: BrowserWindowLike;
   shellWebContents?: WebContents;
   ipcMain: Pick<IpcMain, "handle" | "on" | "removeHandler" | "off">;
@@ -449,7 +465,12 @@ export type BrowserViewHostOptions = {
   browserHistoryStore?: BrowserHistoryStore;
   browserDownloadManager?: BrowserDownloadManager;
   clearBrowserProfileData?: (partition: string) => Promise<void>;
-  clipboard?: Pick<Clipboard, "writeImage">;
+  // Electron 44 removed clipboard.writeImage; main.ts adapts the async
+  // ClipboardItem API to this narrow image-only writer.
+  clipboard?: { writeImage(image: Electron.NativeImage): void | Promise<void> };
+  // Called after a page view is appended to the window so the composition can
+  // keep a raised shell (open dialog/notice) above the new view.
+  onNativeViewAdded?: () => void;
 };
 
 export type BrowserViewHost = {
@@ -464,6 +485,10 @@ export type BrowserViewHost = {
   ) => Promise<unknown>;
   // webContents of the most recently focused browser panel (or null); the titlebar menu targets it for Edit/Reload/Zoom/DevTools.
   getLastFocusedPanelContents: () => WebContents | null;
+  // The app menu's Reload for an agent tab's viewer: reloads the agent's page,
+  // as the tab's toolbar Reload does. False for any other contents, which the
+  // caller reloads itself.
+  reloadAgentTab: (contents: Pick<WebContents, "id">) => boolean;
   /** Toggle Chromium DevTools for the last focused AO browser panel. */
   toggleDevToolsForLastFocused: () => Promise<BrowserDevToolsState | null>;
   // Drop the remembered panel; call when the shell gains focus for a real reason so a stale panel stops absorbing menu actions.
@@ -489,12 +514,49 @@ export type BrowserViewHost = {
   refreshLastFocusedPanelSurface: () => void;
 };
 
+type TabNavCommand = "back" | "forward" | "reload" | "stop";
+
+// The page a tab shows, as its address bar, its tab strip entry and
+// Back/Forward show it.
+type TabPage = Pick<BrowserNavState, "url" | "title" | "canGoBack" | "canGoForward" | "isLoading">;
+
+// How the panel reads and drives one tab (tabDriver).
+type TabDriver = {
+  page: () => TabPage;
+  // Back/Forward/Reload/Stop, from the toolbar, a shortcut or the app menu.
+  nav: (command: TabNavCommand) => void;
+  // An address for the tab, already checked (navigateEntry). Load options (a
+  // popup's referrer and POST body) apply to the person's own tabs.
+  navigate: (href: string, loadOptions?: Electron.LoadURLOptions) => Promise<BrowserNavState>;
+  // Whether the tab is the one the panel shows.
+  show: (shown: boolean) => void;
+  close: (signal?: AbortSignal) => Promise<BrowserTabsState>;
+};
+
 type BrowserEntry = {
   sessionId: string;
   tabId: string;
   view: BrowserViewLike;
+  // This tab's driver (tabDriver), picked on each call: a tab is bound to an
+  // agent page after it is made.
+  driver: () => TabDriver;
   ready: Promise<void>;
   state: BrowserNavState;
+  // Set on a tab that shows the agent's own browser: the agent browser tab it
+  // shows, for life ("" until its viewer first reports).
+  agentTab?: string;
+  // The agent browser page this tab shows, as its viewer last reported it.
+  remote?: RemoteTabReport;
+  // An agent tab not shown yet: the viewer it loads when first shown
+  // (openAgentTab). Until then it has no viewer, so no socket or CDP session
+  // on the agent's host.
+  viewer?: string;
+  // Its page as the viewers' tab lists show it: what the tab shows until its
+  // own viewer reports.
+  listed?: { title: string; url: string };
+  // A person is closing this agent tab (closeAgentTab): their close finishes
+  // it, not its page's own report of closing meanwhile.
+  closing?: boolean;
   // The newest renderer navigation that is still loading. A profile switch stops
   // in-flight loads and reloads each tab in the new profile. Until the server's
   // first response arrives, getURL() still returns the previous page, so the
@@ -550,6 +612,13 @@ type BrowserSessionEntry = {
   profileReplacing: boolean;
   profileSwitchTargetId: BrowserProfileId | null;
   nativeActiveTabId?: string;
+  // Agent browser pages whose tabs closed here: they are closing, so the
+  // agent tab sync must not bring them back meanwhile. A page a person closed
+  // (closePage) stays closed for as long as reports still list it.
+  agentTabsClosed?: Map<string, { at: number; closePage: boolean }>;
+  // Agent tabs are numbered apart (a1, a2, ...) and kept from agent-browser:
+  // it numbers the tabs it knows t1, t2, ... and AO relies on those matching.
+  agentTabNumber?: number;
   snapshotDeltaBaseline?: {
     tabId: string;
     interactive: boolean;
@@ -680,6 +749,9 @@ const TEMPORARY_BROWSER_PARTITION_PREFIX = "persist:ao-browser-temporary-";
 // up to 60s, so without a cap the switch would hang and block every other agent
 // command that long. After this, it fails with "still busy" and the user retries.
 const PROFILE_SWITCH_SETTLE_MS = 10_000;
+// A remote session's previews show on AO's own preview origins (remote-proxy.ts),
+// as the renderer's showPreview matches them.
+const REMOTE_PREVIEW_URL = /^https:\/\/ao-preview-[0-9a-f]{32}\.localhost(?::\d+)?\//;
 
 function temporaryBrowserPartition(): string {
   return `${TEMPORARY_BROWSER_PARTITION_PREFIX}${randomUUID()}`;
@@ -939,6 +1011,7 @@ export function createBrowserViewHost(
     activate: boolean,
     syncNativeOnActivate = false,
     preferredTabId?: string,
+    popupOptions?: BrowserPopupOptions,
   ): BrowserEntry => {
     const tabId = preferredTabId ?? `t${session.nextTabNumber++}`;
     if (session.tabs.has(tabId)) {
@@ -947,20 +1020,23 @@ export function createBrowserViewHost(
         `Browser tab ${tabId} already exists`,
       );
     }
+    const webPreferences: Electron.WebPreferences = {
+      contextIsolation: true,
+      nodeIntegration: false,
+      partition: session.profilePartition,
+      // Chromium's built-in PDF viewer is plugin-backed in Electron. Keep it
+      // enabled for AO's browser surface so HTTP(S) PDFs render in-panel.
+      plugins: true,
+      preload: options.annotatePreloadPath,
+      sandbox: true,
+    };
     const view = new options.WebContentsView({
-      webPreferences: {
-        contextIsolation: true,
-        nodeIntegration: false,
-        partition: session.profilePartition,
-        // Chromium's built-in PDF viewer is plugin-backed in Electron. Keep it
-        // enabled for AO's browser surface so HTTP(S) PDFs render in-panel.
-        plugins: true,
-        preload: options.annotatePreloadPath,
-        sandbox: true,
-      },
+      webPreferences,
+      ...(popupOptions?.webContents ? { webContents: popupOptions.webContents } : {}),
     });
     applyBrowserViewBounds(view, OFFSCREEN_BOUNDS, false);
     options.mainWindow.contentView.addChildView(view);
+    options.onNativeViewAdded?.();
     view.setBorderRadius?.(BROWSER_VIEW_BORDER_RADIUS);
     // Main-frame sites use this permission for actions such as "Copy link".
     // Keep embedded frames, clipboard reads, and every other permission denied.
@@ -984,6 +1060,10 @@ export function createBrowserViewHost(
           ),
         ),
     );
+    // Remote app previews are HTTPS on loopback with AO's own certificate,
+    // so Chromium speaks HTTP/2 to them (preview-certificate.ts).
+    const viewSession = view.webContents.session;
+    if (viewSession?.setCertificateVerifyProc) trustPreviewCertificate(viewSession);
     options.browserDownloadManager?.attach(view.webContents.session);
     let scrollbarStyleKey: string | undefined;
     let scrollbarStyleUpdate = Promise.resolve();
@@ -1008,6 +1088,7 @@ export function createBrowserViewHost(
       sessionId: session.sessionId,
       tabId,
       view,
+      driver: () => tabDriver(session, entry),
       ready: Promise.resolve(),
       state,
       findState: {
@@ -1046,7 +1127,7 @@ export function createBrowserViewHost(
         tabsByWebContentsId.delete(closedContents.id);
         return;
       }
-      closeTab(session, tabId, closedContents);
+      closeTab(session, tabId, undefined, true, closedContents);
     });
     view.webContents.on("found-in-page", (_event, result) => {
       if (
@@ -1079,9 +1160,12 @@ export function createBrowserViewHost(
     // Always-on: level 0-2 are verbose/info/warning, 3 is error. This is a
     // native WebContents event, not a CDP domain, so it never competes with
     // agent-browser's own debugger attachment for this tab.
+    // Set once the tab's entry exists (below): the agent-tab reports.
+    let onRemoteTabReport: ((message: string) => void) | undefined;
     view.webContents.on(
       "console-message",
       (_event, level, message, line, sourceId) => {
+        if (message.startsWith(REMOTE_TAB_REPORT)) return onRemoteTabReport?.(message);
         if (level < 3) return;
         const location = sourceId
           ? `${sanitizeBrowserURL(sourceId)}${typeof line === "number" ? `:${line}` : ""}`
@@ -1098,19 +1182,38 @@ export function createBrowserViewHost(
       view.webContents,
       options,
       entry,
-      isCurrentEntry,
-      (url) => {
-        // Deliberately not the setWindowOpenHandler createWindow path: Electron's
-        // openGuestWindow requires the returned webContents to be one IT created
-        // from the options it computed for this exact guest-window-open event.
-        // AO's tabs are WebContentsViews created through its own createTab/openTab,
-        // with no such linkage — returning one there throws "Invalid webContents.
-        // Created window should be connected to webContents passed with options
-        // object" and crashes the whole app on every link click. Deny the guest
-        // window outright and open (and navigate) our own tab instead; openTab
-        // already handles URL validation and the "popup" tabs-state
-        // event this used to push manually.
-        void openTab(session, url, true, "popup", true).catch(() => undefined);
+      () => isCurrentEntry() && !session.profileReplacing,
+      webPreferences,
+      (windowOptions, details) => {
+        // Adopt Electron's exact guest, rather than creating an unrelated
+        // WebContents. Chromium then preserves the WindowProxy and opener.
+        const popup = createTab(
+          session, false, false, undefined,
+          windowOptions.webContents ? windowOptions : undefined,
+        );
+        // OpenURLFromTab (e.g. a target=_blank link) may have no native guest.
+        // In that case the main process must perform the original navigation.
+        if (!windowOptions.webContents && details.url !== "about:blank") {
+          const postBody = details.postBody;
+          void navigateEntry(popup, details.url, {
+            httpReferrer: details.referrer,
+            ...(postBody
+              ? {
+                  postData: postBody.data,
+                  extraHeaders: `content-type: ${postBody.contentType}${postBody.boundary ? `; boundary=${postBody.boundary}` : ""}`,
+                }
+              : {}),
+          }).catch(() => undefined);
+        }
+        // The native guest is still being initialized inside createWindow.
+        // Defer queries/layout until Electron has returned from that callback.
+        setImmediate(() => {
+          if (!isCurrentEntry() || session.tabs.get(popup.tabId) !== popup) return;
+          activateTab(session, popup.tabId, false);
+          queueNativeActiveTabSync(session);
+          pushTabsState(options, session, { kind: "popup", tabId: popup.tabId });
+        });
+        return popup.view.webContents as WebContents;
       },
     );
     wireNavEvents(
@@ -1131,6 +1234,8 @@ export function createBrowserViewHost(
         const profileId = session.profileId;
         if (!isCurrentEntry() || !profileId || !options.browserHistoryStore)
           return;
+        // The agent's pages are not the person's history.
+        if (entry.agentTab !== undefined) return;
         void options.browserHistoryStore
           .record(profileId, url, title, incrementVisit)
           .catch(() => undefined);
@@ -1140,6 +1245,42 @@ export function createBrowserViewHost(
     wireFaviconEvents(view.webContents, entry, () => {
       if (isCurrentEntry()) pushTabsState(options, session);
     });
+    // A tab showing the agent's own browser: its viewer reports the remote
+    // page, which the tab then shows and drives as its own. Only AO's own
+    // agent-browser viewer is believed (any page can write to its console),
+    // and only in a tab opened as an agent tab: a person's tab on the
+    // viewer's address (typed, or reopened from Recently Closed) stays theirs.
+    onRemoteTabReport = (message: string) => {
+      if (!isCurrentEntry() || entry.agentTab === undefined || !options.isAgentBrowserUrl?.(view.webContents.getURL())) return;
+      const report = parseRemoteTabReport(message);
+      if (!report) return;
+      // A follow is news once: each report repeats the viewer's last one.
+      const followed = report.follow && report.follow !== entry.remote?.follow ? report.follow : "";
+      entry.remote = report;
+      entry.agentTab ||= report.tabId;
+      entry.driver().show(session.activeTabId === entry.tabId);
+      // The page's icon comes inline, as an image data URL (remote-tab.ts),
+      // and is shown as is: never fetched from here, where an address the
+      // remote page names would be fetched from the person's network. ""
+      // is a page without one.
+      entry.favicon = report.favicon || undefined;
+      // A report lists every agent page: a tab shows its page from the list
+      // until its own viewer reports.
+      for (const tab of session.tabs.values()) {
+        const page = tab.agentTab && report.tabs.find(({ id }) => id === tab.agentTab);
+        if (page) tab.listed = page;
+      }
+      pushTabsState(options, session);
+      if (session.activeTabId === entry.tabId) pushNavState(options, entry);
+      // Off this tab's own event: the sync may close it.
+      setTimeout(() => {
+        try {
+          if (isCurrentEntry()) syncAgentTabs(session, entry, followed);
+        } catch (error) {
+          console.warn("Unable to sync the agent browser's tabs", error);
+        }
+      }, 0);
+    };
     wireAutomationEvents(view.webContents, entry);
     // The preview is a separate WebContentsView, so renderer-window keydown
     // listeners never see keys typed here. Forward application shortcuts to the
@@ -1180,7 +1321,12 @@ export function createBrowserViewHost(
     // A newly-created WebContentsView reports about:blank before its renderer
     // has actually been initialized. CDP commands can hang until that initial
     // document has completed, so make readiness explicit for every tab.
-    entry.ready = view.webContents.loadURL("about:blank");
+    entry.ready = popupOptions
+      ? new Promise<void>((resolve) => {
+          view.webContents.on("dom-ready", () => resolve());
+          view.webContents.on("destroyed", () => resolve());
+        })
+      : view.webContents.loadURL("about:blank");
     // Keep an unobserved tab initialization failure from becoming an unhandled
     // rejection; callers that need the target still await the original promise.
     void entry.ready.catch(() => undefined);
@@ -1407,6 +1553,8 @@ export function createBrowserViewHost(
   const ensureNativeActiveTab = async (
     session: BrowserSessionEntry,
     signal?: AbortSignal,
+    // Opening, selecting or closing a tab by its ID: no page in front needed.
+    tabCommand = false,
   ): Promise<void> => {
     if (!options.agentBrowserRuntime) return;
     while (session.nativeActiveTabId !== session.activeTabId) {
@@ -1417,6 +1565,16 @@ export function createBrowserViewHost(
           "BROWSER_TARGET_UNAVAILABLE",
           "Active browser tab is unavailable",
         );
+      // agent-browser never sees agent tabs (agentBrowserTargets): with one in
+      // front it stays on the person's tab it was on. Only tab commands run
+      // then; anything else would act on a page the person is not looking at.
+      if (entry.agentTab !== undefined) {
+        if (tabCommand) return;
+        throw browserError(
+          "BROWSER_TARGET_MISMATCH",
+          `Browser automation could not target AO tab ${tabId}`,
+        );
+      }
       await entry.ready;
       // The human-facing BrowserView state is authoritative. Selecting through
       // agent-browser updates its independent active_page_index before another
@@ -1536,6 +1694,235 @@ export function createBrowserViewHost(
     });
   };
 
+  // Opens a tab bound to one agent browser tab. The binding is set before
+  // anything awaits, so the next report already finds the page shown.
+  // listed: the page as the reporting viewer lists it.
+  const openAgentTab = (
+    session: BrowserSessionEntry,
+    url: string,
+    agentTab: string,
+    activate: boolean,
+    listed?: { title: string; url: string },
+  ): Promise<void> =>
+    withBrowserOperation(session, async () => {
+      const id = `a${(session.agentTabNumber = (session.agentTabNumber ?? 0) + 1)}`;
+      // With no tab in use (the person closed them all), the agent's tab is
+      // the one in front: a panel with tabs always has an active one.
+      activate ||= !session.tabs.has(session.activeTabId);
+      const entry = createTab(session, activate, false, id);
+      entry.agentTab = agentTab;
+      entry.listed = listed;
+      // A viewer holds a socket and a CDP session on the agent's host, and
+      // every session showing the agent's browser has its own: a page not
+      // brought to the front gets its viewer when first shown (loadViewer).
+      // The first agent tab, bound to no page yet, loads its viewer at once:
+      // the agent's pages reach the panel through it.
+      if (agentTab && !activate) {
+        entry.viewer = url;
+        pushTabsState(options, session, { kind: "opened", tabId: entry.tabId });
+        return;
+      }
+      await entry.ready;
+      const navigation = navigateEntry(entry, url);
+      pushTabsState(options, session, { kind: "opened", tabId: entry.tabId });
+      await navigation;
+    });
+
+  // Loads an agent tab's viewer, pinned to its page, the first time the tab
+  // is shown, or once no other viewer is left to report the agent's pages.
+  // ponytail: a viewer stays loaded once shown, so a session holds one per
+  // agent tab it has shown; unload those left behind (back to `viewer`) if
+  // hosts still run short of sockets.
+  const loadViewer = (session: BrowserSessionEntry, entry: BrowserEntry): void => {
+    const viewer = entry.viewer;
+    if (!viewer) return;
+    entry.viewer = undefined;
+    void withBrowserOperation(session, () => navigateEntry(entry, viewer)).catch(() => undefined);
+  };
+
+  // The panel keeps one tab for each of the agent browser's tabs, as with a
+  // person's own tabs: a page the agent opens appears as a tab (in front when
+  // the agent opened it from the tab in use), and a page that closes takes
+  // its tab along, back to the tab that opened it. Main owns this, so each
+  // page gets exactly one tab however many viewers report at once.
+  const syncAgentTabs = (
+    session: BrowserSessionEntry,
+    from: BrowserEntry,
+    followed: string,
+  ): void => {
+    const report = from.remote;
+    if (!report || session.profileSwitching || session.profileReplacing) return;
+    const shown = new Map<string, BrowserEntry>();
+    for (const tab of session.tabs.values()) {
+      if (tab.agentTab && !shown.has(tab.agentTab)) shown.set(tab.agentTab, tab);
+    }
+    const closedHere = session.agentTabsClosed;
+    for (const [id, { at, closePage }] of closedHere ?? []) {
+      // Within 5 s its close is under way, and other viewers may not have heard.
+      if (Date.now() - at <= 5_000) continue;
+      // A page a person closed that is still listed never got the close (no
+      // viewer was connected then): it goes again, through this viewer.
+      if (closePage && report.tabs.some((tab) => tab.id === id)) void runInRemoteViewer(from, `close(${JSON.stringify(id)})`);
+      else closedHere!.delete(id);
+    }
+    const inUse = session.activeTabId === from.tabId;
+    // A tab the agent opened from the one in use comes to the front, as a
+    // link opening a new tab does (one opened below opens in front).
+    const follow = followed ? shown.get(followed) : undefined;
+    if (inUse && follow) activateTab(session, follow.tabId);
+    for (const page of report.tabs) {
+      const { id } = page;
+      if (shown.has(id) || closedHere?.has(id)) continue;
+      shown.set(id, from);
+      const url = new URL(from.view.webContents.getURL());
+      url.searchParams.set("tab", id);
+      void openAgentTab(session, url.href, id, inUse && id === followed, page).catch(() => undefined);
+    }
+    // A tab without a viewer hears nothing from its page: it goes once no
+    // viewer lists the page. Each list is as of its viewer's last report, so
+    // a viewer that has not yet heard of a new page takes no tab away.
+    const listedPages = new Set([...session.tabs.values()].flatMap((tab) => tab.remote?.tabs.map(({ id }) => id) ?? []));
+    for (const tab of [...session.tabs.values()]) {
+      if (tab.viewer && tab.agentTab && !listedPages.has(tab.agentTab))
+        void closeAgentTab(session, tab.tabId, false).catch((error) => console.warn("Unable to close the agent browser's tab", error));
+    }
+    // The last agent tab stays (empty) while the agent has no page: its viewer
+    // is how the agent's next page reaches the panel.
+    const closed = report.closed;
+    const others = [...session.tabs.values()].some((tab) => tab !== from && tab.agentTab !== undefined);
+    if (!closed || !others || from.closing) return;
+    // In front, it hands over to the tab that opened it. Pages opened just
+    // above map to `from` itself: no opener to go back to.
+    const opener = closed.next ? shown.get(closed.next) : undefined;
+    void closeAgentTab(session, from.tabId, false, opener && opener !== from ? opener.tabId : undefined).catch(
+      (error) => console.warn("Unable to close the agent browser's tab", error),
+    );
+  };
+
+  // The one way an agent tab closes, whoever closes it. agent-browser never
+  // sees agent tabs (agentBrowserTargets), so this never goes through its
+  // tab-select or tab-close. closePage: a tab closed here closes its page in
+  // the agent browser, as closing any tab would; a page that closed on its
+  // own just takes its tab along. show: the tab to bring forward when this
+  // one is in front (else the last tab, as for any tab).
+  const closeAgentTab = async (
+    session: BrowserSessionEntry,
+    tabId: string,
+    closePage: boolean,
+    show?: string,
+  ): Promise<BrowserTabsState> => {
+    const entry = session.tabs.get(tabId);
+    if (!entry) return listTabs(session);
+    const page = entry.agentTab;
+    // Its page is going: a report from another viewer that has not heard yet
+    // must not bring it back meanwhile.
+    if (page) (session.agentTabsClosed ??= new Map()).set(page, { at: Date.now(), closePage });
+    if (closePage && page && !entry.remote?.closed) {
+      entry.closing = true;
+      // Before the view goes: a viewer's socket carries the close. Any viewer
+      // closes any page, so one closed before its first report has another
+      // agent tab's viewer close it (and one between sockets, syncAgentTabs).
+      const via = entry.remote ? entry : [...session.tabs.values()].find((tab) => tab.remote);
+      if (via) await Promise.race([runInRemoteViewer(via, `close(${JSON.stringify(page)})`), new Promise((resolve) => setTimeout(resolve, 800))]);
+      // Another close (a second click, a profile switch) may have taken the
+      // tab meanwhile: nothing left to do.
+      if (session.tabs.get(tabId) !== entry) return listTabs(session);
+    }
+    if (session.nativeActiveTabId === tabId) session.nativeActiveTabId = undefined;
+    // The keyboard moves with a close the person made, or off a tab that had
+    // it; a page closing on its own leaves it where the person is typing.
+    const tabs = closeTab(session, tabId, show, closePage || entry.view.webContents.isFocused?.() === true);
+    // The agent's pages reach the panel only through a viewer's reports: one
+    // stays loaded while agent tabs are left.
+    const left = [...session.tabs.values()].filter((tab) => tab.agentTab !== undefined);
+    if (left.length && left.every((tab) => tab.viewer)) loadViewer(session, left[0]!);
+    return tabs;
+  };
+
+  // How the panel reads and drives a tab: a person's tab is its own page, an
+  // agent tab the agent's page, which its viewer reports and drives. Picked
+  // here, once: an operation on a tab goes through its driver (entry.driver)
+  // rather than checking agentTab. Checks that keep agent tabs out of what is
+  // the person's (history, Recently Closed, agent-browser) stay where they are.
+  const tabDriver = (session: BrowserSessionEntry, entry: BrowserEntry): TabDriver => {
+    const { webContents } = entry.view;
+    if (entry.agentTab === undefined)
+      return {
+        page: () => ({
+          url: webContents.getURL(),
+          title: webContents.getTitle(),
+          canGoBack: webContents.canGoBack(),
+          canGoForward: webContents.canGoForward(),
+          isLoading: webContents.isLoading(),
+        }),
+        nav: (command) => {
+          if (command === "back") {
+            if (webContents.canGoBack()) webContents.goBack();
+          } else if (command === "forward") {
+            if (webContents.canGoForward()) webContents.goForward();
+          } else if (command === "reload") webContents.reload();
+          else webContents.stop();
+        },
+        navigate: (href, loadOptions) => loadEntry(entry, href, loadOptions),
+        show: () => undefined,
+        // Through agent-browser, when it runs: its tab numbers must keep
+        // matching AO's.
+        close: async (signal) =>
+          options.agentBrowserRuntime ? closeNativeTab(session, entry.tabId, signal) : closeTab(session, entry.tabId),
+      };
+    return {
+      page: () => {
+        const remote = entry.remote;
+        if (remote)
+          return { url: remote.url, title: remote.title, canGoBack: remote.back, canGoForward: remote.fwd, isLoading: remote.loading };
+        // Before its viewer reports, its page is as another viewer lists it,
+        // and there is no page history yet: the viewer's own is not the
+        // person's to walk (nav).
+        const listed = entry.listed;
+        return {
+          url: listed ? listed.url : webContents.getURL(),
+          title: listed ? listed.title : webContents.getTitle(),
+          canGoBack: false,
+          canGoForward: false,
+          isLoading: webContents.isLoading(),
+        };
+      },
+      // Back/Forward/Reload/Stop drive the agent's page through its viewer
+      // and never the viewer's own history (Back there left the viewer for
+      // about:blank). Before the viewer first reports there is no page to
+      // drive: Reload reloads the viewer, and the rest do nothing (Stop would
+      // abort the viewer's load). So does Reload in a viewer that has stopped
+      // running.
+      nav: (command) => {
+        if (entry.remote && command === "reload") {
+          void viewerRuns(entry)
+            .then((runs) => (runs ? runInRemoteViewer(entry, "reload()") : webContents.reload()))
+            .catch(() => undefined);
+        } else if (entry.remote) void runInRemoteViewer(entry, `${command}()`);
+        else if (command === "reload") webContents.reload();
+      },
+      // An address typed into it loads in the agent's page (nothing happens
+      // before its viewer runs); the viewer's own address is main's load of
+      // the viewer, into the tab itself.
+      navigate: async (href) => {
+        if (options.isAgentBrowserUrl?.(href)) return loadEntry(entry, href);
+        if (entry.remote) void runInRemoteViewer(entry, `navigate(${JSON.stringify(href)})`);
+        return pushNavState(options, entry);
+      },
+      // Offscreen tabs stay "visible" to their pages, and the agent's Chrome
+      // paints only its front page: the viewer streams, and brings its page to
+      // the front, only while its tab is the one shown. Shown for the first
+      // time, the tab loads its viewer (openAgentTab).
+      show: (shown) => {
+        if (shown) loadViewer(session, entry);
+        if (entry.remote && entry.remote.shown !== shown) void runInRemoteViewer(entry, `show(${shown})`);
+      },
+      // Never through agent-browser, which never sees agent tabs: the page
+      // closes in the agent browser too.
+      close: () => closeAgentTab(session, entry.tabId, true),
+    };
+  };
+
   function activateTab(
     session: BrowserSessionEntry,
     tabId: string,
@@ -1552,6 +1939,8 @@ export function createBrowserViewHost(
       applyBrowserViewBounds(previous.view, OFFSCREEN_BOUNDS, false);
     }
     session.activeTabId = tabId;
+    if (previous && previous !== next) previous.driver().show(false);
+    next.driver().show(true);
     if (session.devtools && isBlankBrowserEntry(next)) destroyDevTools(session);
     applySessionBounds(session, next);
     pushNavState(options, next);
@@ -1579,6 +1968,10 @@ export function createBrowserViewHost(
   function closeTab(
     session: BrowserSessionEntry,
     tabId = session.activeTabId,
+    // The tab to bring forward when the closed one is in front (default: the
+    // last tab), and whether the keyboard moves to it.
+    show?: string,
+    focus = true,
     closedContents?: {
       id: number;
       session?: BrowserElectronSession;
@@ -1592,16 +1985,20 @@ export function createBrowserViewHost(
         "TAB_NOT_FOUND",
         `Browser tab ${tabId} does not exist`,
       );
-    const closedTab = closedContents
-      ? {
-          id: tabId,
-          url: tab.state.url,
-          title: tab.state.title,
-          active: false,
-          ...(tab.favicon ? { favicon: tab.favicon } : {}),
-          untrustedExternalContent: true as const,
-        }
-      : tabResult(tab, false);
+    // An agent tab is the agent's page, not the person's to reopen: Recently
+    // Closed only takes the person's own tabs.
+    const closedTab = tab.agentTab !== undefined
+      ? undefined
+      : closedContents
+        ? {
+            id: tabId,
+            url: tab.state.url,
+            title: tab.state.title,
+            active: false,
+            ...(tab.favicon ? { favicon: tab.favicon } : {}),
+            untrustedExternalContent: true as const,
+          }
+        : tabResult(tab, false);
     const wasActive = tabId === session.activeTabId;
     if (closedContents && session.devtools?.contents === closedContents.contents)
       destroyDevTools(session);
@@ -1610,7 +2007,9 @@ export function createBrowserViewHost(
     // resolves — a second ⌘W in that window bypasses every before-input-event
     // handler and hits the menu's Close item, killing the app window.
     const nextTabId = wasActive
-      ? [...session.tabs.keys()].filter((id) => id !== tabId).at(-1)
+      ? show && show !== tabId && session.tabs.has(show)
+        ? show
+        : [...session.tabs.keys()].filter((id) => id !== tabId).at(-1)
       : undefined;
     const wasLastTab = session.tabs.size === 1;
     // A destroyed guest's native view must not be laid out as the previous
@@ -1643,7 +2042,7 @@ export function createBrowserViewHost(
       forgetBrowserShortcutTarget(session.viewId);
       shellContents(options).send("browser:navState", emptyNavState(session.viewId));
     }
-    if (wasActive && nextTabId) {
+    if (wasActive && nextTabId && focus) {
       const replacement = session.tabs.get(nextTabId);
       if (replacement) {
         lastUsedViewId = session.viewId;
@@ -1656,7 +2055,7 @@ export function createBrowserViewHost(
         }
       }
     }
-    const state = listTabs(session, { kind: "closed", tabId, tab: closedTab });
+    const state = listTabs(session, { kind: "closed", tabId, ...(closedTab ? { tab: closedTab } : {}) });
     shellContents(options).send("browser:tabsState", state);
     return state;
   }
@@ -1695,14 +2094,14 @@ export function createBrowserViewHost(
     session: BrowserSessionEntry,
     tabId: string,
     signal?: AbortSignal,
-  ): Promise<BrowserTabsState> =>
-    queueNativeOperation(
+  ): Promise<BrowserTabsState> => {
+    return queueNativeOperation(
       session,
       async () => {
         if (!session.tabs.has(tabId)) return listTabs(session);
         if (session.tabs.size === 1) return closeTab(session, tabId);
         try {
-          await ensureNativeActiveTab(session, signal);
+          await ensureNativeActiveTab(session, signal, true);
         } catch (error) {
           if (!isBrowserTargetMismatch(error)) throw error;
           throwIfAborted(signal);
@@ -1747,15 +2146,15 @@ export function createBrowserViewHost(
       },
       signal,
     );
+  };
 
   const closeUserTab = async (
     session: BrowserSessionEntry,
     tabId: string,
   ): Promise<BrowserTabsState> => {
     if (!session.tabs.has(tabId)) return listTabs(session);
-    // Dispose the final native target directly: no replacement page is needed.
-    if (!options.agentBrowserRuntime) return closeTab(session, tabId);
-    return closeNativeTab(session, tabId);
+    // Dispose the final tab directly: no replacement page is needed.
+    return session.tabs.get(tabId)?.driver().close() ?? listTabs(session);
   };
 
   const focusLocation = (session: BrowserSessionEntry): void => {
@@ -1790,9 +2189,26 @@ export function createBrowserViewHost(
     contents.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown" || options.isKeybindingRecording?.()) return;
       const action = browserShortcutAction(input, Boolean(options.isMac));
-      if (!action) return;
+      if (!action) {
+        // Cmd+Shift+R (Ctrl+Shift+R) in an agent tab reloads its viewer
+        // itself, not the agent's page: the way back for a viewer that is
+        // stuck (an error page after the agent browser restarted). Anywhere
+        // else the key stays the app menu's.
+        const session =
+          isNativePage && isHardReloadShortcut(input, Boolean(options.isMac))
+            ? getSession()
+            : undefined;
+        const entry = session?.tabs.get(session.activeTabId);
+        if (entry?.agentTab === undefined) return;
+        event.preventDefault();
+        if (!input.isAutoRepeat) entry.view.webContents.reload();
+        return;
+      }
       const session = getSession();
       if (!session) return;
+      // Cmd+F typed in an agent tab is its viewer's: its find searches the
+      // agent's page, where AO's would search the viewer's picture of it.
+      if (action === "find" && isNativePage && session.tabs.get(session.activeTabId)?.agentTab !== undefined) return;
       event.preventDefault();
       // Consume repeats without re-firing: a held ⌘W must not fall through
       // to the menu's Close item and kill the app window.
@@ -1808,18 +2224,12 @@ export function createBrowserViewHost(
         return;
       }
       if (action === "reload") {
-        activeEntry(session).view.webContents.reload();
+        // An agent tab reloads the agent's page, as its toolbar Reload does.
+        activeEntry(session).driver().nav("reload");
         return;
       }
       if (action === "back" || action === "forward") {
-        invokeNav(
-          session.viewId,
-          (contents) => {
-            if (action === "back" && contents.canGoBack()) contents.goBack();
-            if (action === "forward" && contents.canGoForward()) contents.goForward();
-          },
-          true,
-        );
+        invokeNav(session.viewId, action, true);
         return;
       }
       if (action === "new-tab") {
@@ -1893,7 +2303,11 @@ export function createBrowserViewHost(
       debugger: entry.view.webContents.debugger,
     });
     return {
-      listTargets: () => [...session.tabs.values()].map(target),
+      // The agent's own browser is not local automation's to drive.
+      listTargets: () =>
+        [...session.tabs.values()]
+          .filter((entry) => entry.agentTab === undefined)
+          .map(target),
       createTarget: async (url) =>
         target(
           await openTab(session, url === "about:blank" ? undefined : url, true),
@@ -2210,21 +2624,30 @@ export function createBrowserViewHost(
   const navigateEntry = async (
     entry: BrowserEntry,
     url: string,
+    loadOptions?: Electron.LoadURLOptions,
   ): Promise<BrowserNavState> => {
     await entry.ready;
     const normalized = normalizeBrowserURL(url);
     if (!isAllowedBrowserURL(normalized.href, options.rendererOrigin)) {
       throw new Error("Unsupported browser URL");
     }
-    if (
-      !isSameAnnotationPage(entry.view.webContents.getURL(), normalized.href)
-    ) {
+    return entry.driver().navigate(normalized.href, loadOptions);
+  };
+
+  // Loads a checked address into the tab's own view (navigateEntry).
+  const loadEntry = async (
+    entry: BrowserEntry,
+    href: string,
+    loadOptions?: Electron.LoadURLOptions,
+  ): Promise<BrowserNavState> => {
+    if (!isSameAnnotationPage(entry.view.webContents.getURL(), href)) {
       cancelAnnotation(options, entry, "navigation");
     }
-    const pendingNavigation = { url: normalized.href };
+    const pendingNavigation = { url: href };
     entry.pendingNavigation = pendingNavigation;
     try {
-      await entry.view.webContents.loadURL(normalized.href);
+      if (loadOptions) await entry.view.webContents.loadURL(href, loadOptions);
+      else await entry.view.webContents.loadURL(href);
     } catch (err) {
       if ((err as { errorCode?: number })?.errorCode === -3)
         return pushNavState(options, entry);
@@ -2259,18 +2682,30 @@ export function createBrowserViewHost(
     assertProfileStable(session);
     return withBrowserOperation(session, async () => {
       if (!session.tabs.size) return emptyNavState(viewId);
-      const entry = activeEntry(session);
+      const active = activeEntry(session);
+      // A cleared preview never blanks the agent's browser. With an agent tab
+      // in front, the preview is in the person's tab behind it (where the
+      // renderer's showPreview put it), which is blanked there.
+      const entry =
+        active.agentTab === undefined
+          ? active
+          : [...session.tabs.values()].find(
+              (tab) => tab.agentTab === undefined && REMOTE_PREVIEW_URL.test(tab.view.webContents.getURL()),
+            );
+      if (!entry) return pushNavState(options, active);
       cancelAnnotation(options, entry, "navigation");
-      if (session.devtools) destroyDevTools(session);
-      session.visible = false;
-      session.bounds = OFFSCREEN_BOUNDS;
-      applySessionBounds(session, entry);
-      forgetNativeFocus(viewId);
-      forgetBrowserShortcutTarget(viewId);
+      if (entry === active) {
+        if (session.devtools) destroyDevTools(session);
+        session.visible = false;
+        session.bounds = OFFSCREEN_BOUNDS;
+        applySessionBounds(session, entry);
+        forgetNativeFocus(viewId);
+        forgetBrowserShortcutTarget(viewId);
+      }
       entry.ready = entry.view.webContents.loadURL("about:blank");
       await entry.ready;
       entry.view.webContents.clearHistory();
-      return pushNavState(options, entry);
+      return pushNavState(options, active);
     });
   };
 
@@ -2409,7 +2844,10 @@ export function createBrowserViewHost(
     entry.view.webContents.close?.();
   };
 
-  type SavedBrowserTab = { tabId: string; url?: string };
+  // agentTab and viewer: an agent tab's binding and, until it is first shown,
+  // its viewer (BrowserEntry). They are kept as is: its address says nothing
+  // while its host is away.
+  type SavedBrowserTab = { tabId: string; url?: string; agentTab?: string; viewer?: string };
 
   const disposeSessionTabs = (session: BrowserSessionEntry): void => {
     for (const entry of session.tabs.values()) {
@@ -2428,14 +2866,17 @@ export function createBrowserViewHost(
     session: BrowserSessionEntry,
   ): SavedBrowserTab[] =>
     [...session.tabs.values()].map((entry) => {
+      const { tabId, agentTab, viewer } = entry;
       try {
         const url = entry.view.webContents.getURL();
         return {
-          tabId: entry.tabId,
+          tabId,
+          agentTab,
+          viewer,
           ...(isAllowedBrowserURL(url, options.rendererOrigin) ? { url } : {}),
         };
       } catch {
-        return { tabId: entry.tabId };
+        return { tabId, agentTab, viewer };
       }
     });
 
@@ -2461,7 +2902,10 @@ export function createBrowserViewHost(
       const match = /^t(\d+)$/.exec(saved.tabId);
       if (match)
         highestTabNumber = Math.max(highestTabNumber, Number(match[1]));
-      createTab(session, false, false, saved.tabId);
+      const entry = createTab(session, false, false, saved.tabId);
+      // An agent tab stays one, bound to the same page.
+      entry.agentTab = saved.agentTab;
+      entry.viewer = saved.viewer;
     }
     session.nextTabNumber = Math.max(nextTabNumber, highestTabNumber + 1);
     // Activate before reloading: pages can take seconds to load in the new
@@ -2492,9 +2936,10 @@ export function createBrowserViewHost(
     }
     assertCurrentSession();
     // A newly-created agent-browser runtime starts on the provider's first
-    // target, regardless of which human tab AO restored as active. Preserve
-    // that distinction so the next agent command selects the right target.
-    session.nativeActiveTabId = tabs[0]!.tabId;
+    // target (agent tabs are none), regardless of which human tab AO restored
+    // as active. Preserve that distinction so the next agent command selects
+    // the right target.
+    session.nativeActiveTabId = tabs.find((tab) => tab.agentTab === undefined)?.tabId;
   };
 
   const switchProfile = async (
@@ -2740,7 +3185,7 @@ export function createBrowserViewHost(
 
   const invokeNav = (
     viewId: string,
-    action: (contents: BrowserWebContents) => void,
+    command: TabNavCommand,
     cancelForNavigation = false,
     reapplyBounds = false,
   ): BrowserNavState => {
@@ -2754,7 +3199,7 @@ export function createBrowserViewHost(
     if (cancelForNavigation || reapplyBounds) {
       applySessionBounds(session, entry);
     }
-    action(entry.view.webContents);
+    entry.driver().nav(command);
     return pushNavState(options, entry);
   };
 
@@ -2767,6 +3212,9 @@ export function createBrowserViewHost(
     if (!browserSession || !browserSession.tabs.size) return;
     assertProfileStable(browserSession);
     const entry = activeEntry(browserSession);
+    // An agent tab shows the agent's page as its viewer's picture: a pick
+    // would land on the viewer's canvas and report the viewer's address.
+    if (input.enabled && entry.agentTab !== undefined) return;
     if (!input.enabled) {
       // Drop the open composer when leaving annotation mode. Keep saved
       // batch annotations/markers so they reappear on the next entry.
@@ -2873,7 +3321,7 @@ export function createBrowserViewHost(
     if (!entry || !options.clipboard) return false;
     const image = await capturePageImage(entry);
     if (!image) return false;
-    options.clipboard.writeImage(image);
+    await options.clipboard.writeImage(image);
     return true;
   };
 
@@ -3032,22 +3480,22 @@ export function createBrowserViewHost(
   );
   handle("browser:goBack", (event, viewId: string) =>
     isRendererOwned(event, viewId)
-      ? invokeNav(viewId, (contents) => contents.goBack(), true)
+      ? invokeNav(viewId, "back", true)
       : emptyNavState(viewId),
   );
   handle("browser:goForward", (event, viewId: string) =>
     isRendererOwned(event, viewId)
-      ? invokeNav(viewId, (contents) => contents.goForward(), true)
+      ? invokeNav(viewId, "forward", true)
       : emptyNavState(viewId),
   );
   handle("browser:reload", (event, viewId: string) =>
     isRendererOwned(event, viewId)
-      ? invokeNav(viewId, (contents) => contents.reload(), false, true)
+      ? invokeNav(viewId, "reload", false, true)
       : emptyNavState(viewId),
   );
   handle("browser:stop", (event, viewId: string) =>
     isRendererOwned(event, viewId)
-      ? invokeNav(viewId, (contents) => contents.stop(), true)
+      ? invokeNav(viewId, "stop", true)
       : emptyNavState(viewId),
   );
   handle("browser:find", (event, input: BrowserFindInput) => {
@@ -3146,7 +3594,7 @@ export function createBrowserViewHost(
         "The browser page could not be captured",
       );
     }
-    options.clipboard.writeImage(image);
+    await options.clipboard.writeImage(image);
   });
   handle("browser:downloads:list", (event) => {
     if (event.sender.id !== shellWebContents.id) return { downloads: [] };
@@ -3205,7 +3653,8 @@ export function createBrowserViewHost(
     assertProfileStable(session);
     return queueNativeOperation(session, async () => {
       activateTab(session, input.tabId);
-      await ensureNativeActiveTab(session);
+      if (session.tabs.get(input.tabId)?.agentTab === undefined)
+        await ensureNativeActiveTab(session);
       return listTabs(session);
     });
   });
@@ -3262,6 +3711,32 @@ export function createBrowserViewHost(
         throw browserError("NAVIGATION_FAILED", "Unsupported browser URL");
       }
       url = normalized.href;
+    }
+    // The agent's browser opens once, behind the page in use, then shows as
+    // one tab per agent page (syncAgentTabs). It never takes over a tab:
+    // agent-browser numbers the tabs it sees, and a tab gone from its sight
+    // would shift its numbers off AO's. A reconnected host may serve it on a
+    // new origin: its tabs move there. On the same origin a viewer reconnects
+    // by itself, unless it failed to load while the host was away (an error
+    // page, without the viewer's script): that one loads again.
+    if (url && options.isAgentBrowserUrl?.(url)) {
+      const agentTabs = [...session.tabs.values()].filter((tab) => tab.agentTab !== undefined);
+      if (!agentTabs.length) void openAgentTab(session, url, "", false).catch(() => undefined);
+      for (const tab of agentTabs) {
+        const moved = new URL(url);
+        if (tab.agentTab) moved.searchParams.set("tab", tab.agentTab);
+        // One not shown yet loads its viewer there when first shown.
+        if (tab.viewer) {
+          tab.viewer = moved.href;
+          continue;
+        }
+        const sameOrigin = new URL(tab.view.webContents.getURL() || url).origin === moved.origin;
+        void (async () => {
+          if (sameOrigin && (await viewerRuns(tab))) return;
+          await withBrowserOperation(session, () => navigateEntry(tab, moved.href));
+        })().catch(() => undefined);
+      }
+      return listTabs(session);
     }
     return openUserTab(session, url);
   });
@@ -3357,7 +3832,7 @@ export function createBrowserViewHost(
           return queueNativeOperation(
             session,
             async () => {
-              await ensureNativeActiveTab(session, nativeSignal);
+              await ensureNativeActiveTab(session, nativeSignal, nativeAction.startsWith("tab-"));
               const targetEntry = activeEntry(session);
               const targetTabId = targetEntry.tabId;
               await targetEntry.ready;
@@ -3399,7 +3874,7 @@ export function createBrowserViewHost(
               if (nativeAction.startsWith("tab-") || nativeAction === "frame")
                 session.snapshotDeltaBaseline = undefined;
               if (nativeAction.startsWith("tab-"))
-                await ensureNativeActiveTab(session, nativeSignal);
+                await ensureNativeActiveTab(session, nativeSignal, true);
               const targetAfterAction = session.tabs.get(targetTabId);
               return {
                 ...result,
@@ -3791,16 +4266,13 @@ export function createBrowserViewHost(
                 "The only browser tab cannot be closed",
               );
             }
-            if (!session.tabs.has(tabId))
+            const closing = session.tabs.get(tabId);
+            if (!closing)
               throw browserError(
                 "TAB_NOT_FOUND",
                 `Browser tab ${tabId} does not exist`,
               );
-            if (!options.agentBrowserRuntime) {
-              closeTab(session, tabId);
-            } else {
-              await closeNativeTab(session, tabId, signal);
-            }
+            await closing.driver().close(signal);
             return { closedTabId: tabId, ...agentTabsResult(session) };
           }
           case "scroll":
@@ -3980,6 +4452,12 @@ export function createBrowserViewHost(
       // Stored narrowed as BrowserWebContents but is a full WebContents at runtime.
       const contents = entry.view.webContents as unknown as WebContents;
       return contents.isDestroyed() ? null : contents;
+    },
+    reloadAgentTab: (contents) => {
+      const entry = tabsByWebContentsId.get(contents.id);
+      if (entry?.agentTab === undefined) return false;
+      entry.driver().nav("reload");
+      return true;
     },
     toggleDevToolsForLastFocused: async () => {
       if (lastFocusedViewId === null) return null;
@@ -4526,12 +5004,14 @@ function tabResult(
   entry: BrowserEntry,
   active: boolean,
 ): BrowserTabState & { untrustedExternalContent: true } {
+  const { url, title } = entry.driver().page();
   return {
     id: entry.tabId,
-    url: entry.view.webContents.getURL(),
-    title: entry.view.webContents.getTitle(),
+    url,
+    title,
     active,
     ...(entry.favicon ? { favicon: entry.favicon } : {}),
+    ...(entry.agentTab !== undefined ? { remote: { tabId: entry.agentTab } } : {}),
     untrustedExternalContent: true,
   };
 }
@@ -4690,17 +5170,25 @@ function hardenWebContents(
   options: BrowserViewHostOptions,
   entry: BrowserEntry,
   isCurrent: () => boolean,
-  openPopup: (url: string) => void,
+  popupWebPreferences: Electron.WebPreferences,
+  createPopup: (
+    windowOptions: BrowserPopupOptions,
+    details: Electron.HandlerDetails,
+  ) => WebContents,
 ): void {
-  contents.setWindowOpenHandler(({ url }) => {
-    if (!isCurrent() || !isAllowedBrowserURL(url, options.rendererOrigin)) {
+  contents.setWindowOpenHandler((details) => {
+    const { url } = details;
+    if (
+      !isCurrent() ||
+      (url !== "about:blank" && !isAllowedBrowserURL(url, options.rendererOrigin))
+    ) {
       return { action: "deny" };
     }
-    // Always deny — never return createWindow. See the call site's comment for
-    // why: Electron's own guest-window linkage check crashes the process
-    // otherwise. Open our own tab instead, outside Electron's guest-window flow.
-    openPopup(url);
-    return { action: "deny" };
+    return {
+      action: "allow",
+      overrideBrowserWindowOptions: { webPreferences: popupWebPreferences },
+      createWindow: (windowOptions) => createPopup(windowOptions, details),
+    };
   });
   const blockUnsafeNavigation = (event: Electron.Event, url: string) => {
     if (!isAllowedBrowserURL(url, options.rendererOrigin)) {
@@ -4802,6 +5290,9 @@ function wireNavEvents(
 // wireNavEvents' own did-navigate handler rather than registering a second
 // listener for the same event.
 function clearStaleFavicon(entry: BrowserEntry, url: string): void {
+  // An agent tab's icon is its agent page's, which the viewer's own loads
+  // (a reload, a move to a new origin) do not change.
+  if (entry.agentTab !== undefined) return;
   const origin = originOf(url);
   if (origin && origin === entry.faviconOrigin) return;
   entry.favicon = undefined;
@@ -4816,6 +5307,9 @@ function wireFaviconEvents(
   syncTabs: () => void,
 ): void {
   contents.on("page-favicon-updated", (_event, favicons) => {
+    // An agent tab shows its agent page's icon, from its viewer's reports;
+    // the viewer page's own icon is never fetched.
+    if (entry.agentTab !== undefined) return;
     const url = favicons[0];
     // Not yet applied (faviconSourceUrl) and not already in flight
     // (faviconPendingUrl) — a page re-announcing the same favicon while a
@@ -5039,19 +5533,37 @@ function pushNavState(
   return entry.state;
 }
 
+// Drives the agent browser page an agent tab shows, through its viewer.
+function runInRemoteViewer(entry: BrowserEntry, call: string): Promise<unknown> {
+  return entry.view.webContents
+    .executeJavaScript(`window.__rbHost && window.__rbHost.${call}`)
+    .catch(() => undefined);
+}
+
+// Whether an agent tab's viewer page runs. One that failed to load (Chromium's
+// error page, or the proxy's 404 while its host was away) keeps the viewer's
+// address but has no script: nothing drives the agent's page through it, and
+// no socket comes back by itself.
+function viewerRuns(entry: BrowserEntry): Promise<boolean> {
+  return entry.view.webContents
+    .executeJavaScript("typeof window.__rbHost === 'object'")
+    .then((runs) => runs === true, () => false);
+}
+
+function isHardReloadShortcut(input: BrowserShortcutInput, isMac: boolean): boolean {
+  const primary = isMac ? input.meta && !input.control : input.control && !input.meta;
+  return primary && input.shift && !input.alt && input.key.toLowerCase() === "r";
+}
+
 function readNavState(entry: BrowserEntry): BrowserNavState {
-  const { webContents } = entry.view;
-  const currentURL = webContents.getURL();
+  const page = entry.driver().page();
   return {
     viewId: entry.state.viewId,
+    ...page,
     // about:blank is the cleared/blank state — surface it as an empty url so
     // the panel renders its "enter a URL" empty state and the address bar is
     // blank rather than showing "about:blank".
-    url: currentURL === "about:blank" ? "" : currentURL,
-    title: webContents.getTitle(),
-    canGoBack: webContents.canGoBack(),
-    canGoForward: webContents.canGoForward(),
-    isLoading: webContents.isLoading(),
+    url: page.url === "about:blank" ? "" : page.url,
   };
 }
 

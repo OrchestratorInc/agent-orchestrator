@@ -166,6 +166,20 @@ func (s *Store) SetSessionProvisionedWorkspace(
 	return rows > 0, nil
 }
 
+// SetSessionNamedWorkspace publishes naming facts before an agent can launch.
+func (s *Store) SetSessionNamedWorkspace(ctx context.Context, id domain.SessionID, expectedPath, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.SetSessionNamedWorkspace(ctx, gen.SetSessionNamedWorkspaceParams{
+		ID: id, ExpectedPath: expectedPath, Branch: branch, WorkspacePath: workspacePath,
+		WorkspaceRepoPath: workspaceRepoPath, UpdatedAt: now,
+	})
+	if err != nil {
+		return false, fmt.Errorf("record named workspace for %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
 // SetTaskPreparationBase records the immutable base only while the row is hidden.
 func (s *Store) SetTaskPreparationBase(ctx context.Context, id domain.SessionID, baseSHA, baseRef string) (bool, error) {
 	s.writeMu.Lock()
@@ -205,8 +219,8 @@ func (s *Store) SetSessionProvisionState(
 	return rows > 0, nil
 }
 
-// SetSessionProvisionSteps publishes an asynchronous Chat start's checklist. Like
-// SetSessionProvisionState it writes only its own column.
+// SetSessionProvisionSteps publishes start progress and the pre-launch setup
+// checkpoint. Like SetSessionProvisionState it writes only its own column.
 func (s *Store) SetSessionProvisionSteps(
 	ctx context.Context,
 	id domain.SessionID,
@@ -877,6 +891,9 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 	return domain.SessionRecord{
 		Revision:                  row.Revision,
 		ID:                        row.ID,
+		ClientRequestID:           row.ClientRequestID,
+		ClientRequestHash:         row.ClientRequestHash,
+		ClientRequestCommitted:    row.ClientRequestCommitted,
 		ProjectID:                 projectIDValue(row.ProjectID),
 		AutomationRunID:           row.AutomationRunID,
 		AutomationLaunchCompleted: row.AutomationLaunchCompleted,
@@ -950,9 +967,6 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 	}
 }
 
-// decodeProvisionSteps reads the start-up checklist. A malformed value reads as
-// no checklist: it only drives display, and ProvisionState stays the start's
-// authoritative outcome.
 // staleBinaryFromRow reports a stale-binary mark only for the launch it was
 // taken on: the Chat controller generation or the terminal launch id.
 func staleBinaryFromRow(row gen.GetSessionRow) *domain.SessionStaleBinary {
@@ -973,6 +987,9 @@ func staleBinaryFromRow(row gen.GetSessionRow) *domain.SessionStaleBinary {
 	}
 }
 
+// decodeProvisionSteps reads the start-up checklist. A malformed value reads as
+// no checklist. Missing setup evidence never authorizes interrupted-request
+// cleanup, and ProvisionState stays the start's authoritative outcome.
 func decodeProvisionSteps(raw string) []domain.SessionProvisionStep {
 	if raw == "" {
 		return nil

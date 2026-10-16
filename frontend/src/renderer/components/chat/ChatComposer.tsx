@@ -101,7 +101,7 @@ import {
 	type ChatDraftRetainedAttachment,
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
-import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages } from "./messageAttachments";
+import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath } from "./messageAttachments";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
 
@@ -228,8 +228,14 @@ export const ChatComposer = memo(function ChatComposer({
 	emptyPlaceholder,
 	promptSuggestion,
 	onSelectAnnotation,
+	sentMessages,
+	sentMessagesScope,
 }: {
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
+	/** This conversation's sent human messages, oldest first, recalled with Up and Down. */
+	sentMessages?: readonly string[];
+	/** The conversation branch `sentMessages` belongs to; changing it ends an open walk. */
+	sentMessagesScope?: string;
 	focusRef?: Ref<ChatComposerHandle>;
 	onSend: (
 		text: string,
@@ -413,6 +419,14 @@ export const ChatComposer = memo(function ChatComposer({
 	const previousTrigger = useRef<ComposerTrigger | undefined>(undefined);
 	const triggerRef = useRef<ComposerTrigger | undefined>(undefined);
 	const automaticDeliveryRecoveryAttempted = useRef<string | undefined>(undefined);
+	/**
+	 * Up/Down recall of sent messages. The history is captured newest first when
+	 * browsing starts, so a message arriving meanwhile cannot shift the position, and
+	 * `draft` is what the editor held before, for Down to bring back. A recalled
+	 * message is never saved as the draft until it is edited: leaving mid-browse keeps
+	 * the user's own text.
+	 */
+	const historyBrowse = useRef<{ entries: string[]; index: number; draft: string; shown: string } | null>(null);
 	// Code selected in a file or diff view ("Ask in chat") arrives here as a
 	// reference chip. Only the session's ordinary prompt accepts it; a queued-turn
 	// edit has no draftSessionId and stays out of the way.
@@ -504,6 +518,7 @@ export const ChatComposer = memo(function ChatComposer({
 	useEffect(() => {
 		if (restoredSessionId.current === draftScopeKey) return;
 		restoredSessionId.current = draftScopeKey;
+		historyBrowse.current = null;
 		synchronouslyClearedDeliveryRevision.current = undefined;
 		const currentDraft = draftScope ? readChatSessionDraft(draftScope) : undefined;
 		composerRevision.current = currentDraft?.composer.revision ?? 0;
@@ -761,6 +776,7 @@ export const ChatComposer = memo(function ChatComposer({
 	}, [autoFocus, focusEditor]);
 
 	const clearEditorView = useCallback(() => {
+		historyBrowse.current = null;
 		textRef.current = "";
 		hasTextRef.current = false;
 		setHasText(false);
@@ -794,7 +810,10 @@ export const ChatComposer = memo(function ChatComposer({
 				textRef.current = result.draft.composer.text;
 				hasTextRef.current = textRef.current.trim().length > 0;
 				setHasText(hasTextRef.current);
-				if (editor.current?.getSnapshot().text !== textRef.current) editor.current?.setText(textRef.current);
+				if (editor.current?.getSnapshot().text !== textRef.current) {
+					historyBrowse.current = null;
+					editor.current?.setText(textRef.current);
+				}
 			} else if (!unsavedText.current && editor.current?.getSnapshot().text !== "") {
 				clearEditorView();
 			}
@@ -950,6 +969,7 @@ export const ChatComposer = memo(function ChatComposer({
 		hasTextRef.current = committedSeedText.trim().length > 0;
 		setHasText(hasTextRef.current);
 		if (editor.current?.getSnapshot().text !== committedSeedText) {
+			historyBrowse.current = null;
 			editor.current?.setText(committedSeedText);
 			dismissedKeyRef.current = null;
 			setDismissedKey(null);
@@ -1028,27 +1048,32 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 	}, [clearEditorView, editingQueuedTurnId]);
 
+	const persistComposerText = useCallback((text: string) => {
+		if (!draftScope) return;
+		const result = writeChatComposerText(draftScope, text);
+		if (result.ok) composerRevision.current = result.draft.composer.revision;
+		unsavedText.current = result.ok ? undefined : { text, revision: composerRevision.current };
+		// A disabled Lexical editor can still publish an internal state update
+		// while its editability changes. It must not erase the recovery notice
+		// for a durable delivery that still owns this exact composer revision.
+		if (!result.ok || !result.draft.composer.delivery) {
+			setTextDraftPersistenceError(
+				result.ok
+					? null
+					: "chat.draft.saveFailed",
+			);
+		}
+	}, [draftScope]);
+
 	const onEditorChange = useCallback((snapshot: ComposerEditorSnapshot) => {
 		// Changing Lexical's editability can publish the optimistic visual clear.
 		if (optimisticSend && !snapshot.text && !textRef.current) return;
+		// Editing a recalled message makes it the draft; until then the saved draft stands.
+		if (historyBrowse.current && snapshot.text !== historyBrowse.current.shown) historyBrowse.current = null;
 		const previousText = textRef.current;
 		textRef.current = snapshot.text;
 		onQueuedDraftChange?.(snapshot.text);
-		if (draftScope && snapshot.text !== previousText) {
-			const result = writeChatComposerText(draftScope, snapshot.text);
-			if (result.ok) composerRevision.current = result.draft.composer.revision;
-			unsavedText.current = result.ok ? undefined : { text: snapshot.text, revision: composerRevision.current };
-			// A disabled Lexical editor can still publish an internal state update
-			// while its editability changes. It must not erase the recovery notice
-			// for a durable delivery that still owns this exact composer revision.
-			if (!result.ok || !result.draft.composer.delivery) {
-				setTextDraftPersistenceError(
-					result.ok
-						? null
-						: "chat.draft.saveFailed",
-				);
-			}
-		}
+		if (snapshot.text !== previousText && !historyBrowse.current) persistComposerText(snapshot.text);
 		if (hasTextRef.current !== snapshot.hasText) {
 			hasTextRef.current = snapshot.hasText;
 			setHasText(snapshot.hasText);
@@ -1072,7 +1097,20 @@ export const ChatComposer = memo(function ChatComposer({
 			dismissedKeyRef.current = null;
 			setDismissedKey(null);
 		}
-	}, [draftScope, onQueuedDraftChange, optimisticSend]);
+	}, [onQueuedDraftChange, optimisticSend, persistComposerText]);
+	// A walk holds one branch's prompts. Once another branch or conversation is
+	// active they are abandoned history, so put the user's own draft back.
+	const walkedScope = useRef(sentMessagesScope);
+	useEffect(() => {
+		if (walkedScope.current === sentMessagesScope) return;
+		walkedScope.current = sentMessagesScope;
+		const browse = historyBrowse.current;
+		if (!browse) return;
+		historyBrowse.current = null;
+		editor.current?.setText(browse.draft, "start");
+		const snapshot = editor.current?.getSnapshot();
+		if (snapshot) onEditorChange(snapshot);
+	}, [onEditorChange, sentMessagesScope]);
 	useImperativeHandle(
 		focusRef,
 		() => ({
@@ -1103,6 +1141,9 @@ export const ChatComposer = memo(function ChatComposer({
 
 	useEffect(() => {
 		if (isComposing || !trigger || trigger.kind !== "skill" || trigger.key === dismissedKey) return;
+		// A recalled message is shown, not typed: moving the caret through its `/skill`
+		// must not rewrite it, which would also make it the saved draft.
+		if (historyBrowse.current) return;
 		const query = trigger.query.toLowerCase();
 		if (!query) return;
 		const exact = slashCommands.find((skill) => skill.name.toLowerCase() === query);
@@ -1154,6 +1195,8 @@ export const ChatComposer = memo(function ChatComposer({
 		// second transport whose local admission rejection would look like a real
 		// provider failure.
 		if (submitInFlight.current) return submitInFlight.current;
+		// Sending a recalled message makes it the message, not a history position.
+		historyBrowse.current = null;
 		restoreFocusAfterSubmission.current =
 			typeof document !== "undefined" &&
 			document.activeElement?.getAttribute("aria-label") === "Message the agent";
@@ -1566,10 +1609,56 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 		}
 
+		if ((event.key === "ArrowUp" || event.key === "ArrowDown") && recallSentMessage(event.key === "ArrowUp", event)) {
+			event.preventDefault();
+			return;
+		}
+
 		if (event.key === "Escape" && editingQueuedTurnId && onCancelQueuedEdit && !queuedEditRecovery && !submitInFlight.current) {
 			event.preventDefault();
 			onCancelQueuedEdit();
 		}
+	}
+
+	/**
+	 * Up walks back through sent messages and Down forward, ending on the draft the
+	 * user had. Up starts a walk only with the caret at the very start of the text
+	 * (always true when it is empty), so the arrows still move the caret inside a
+	 * multiline draft. Every step leaves the caret at the start, where either key
+	 * continues; Down also continues from the end, after reading down a long message.
+	 */
+	function recallSentMessage(older: boolean, event: KeyboardEvent<HTMLDivElement>): boolean {
+		if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || isComposing) return false;
+		// A queued edit, a delivery still settling, or a disabled controller owns the text.
+		if (editingQueuedTurnId || queuedEditRecovery || disabled || submitInFlight.current || draftMutationPending) {
+			return false;
+		}
+		// A pasted image holds its place in the draft until staging fills it in.
+		if (fileAttachments.preparing || fileAttachments.hasPendingReads()) return false;
+		const caret = editor.current?.caretBoundary();
+		const browsing = historyBrowse.current;
+		if (!caret || !(caret.atStart || (browsing && !older && caret.atEnd))) return false;
+		const browse = browsing ?? (older && sentMessages?.length
+			? { entries: [...sentMessages].reverse(), index: -1, draft: textRef.current, shown: textRef.current }
+			: null);
+		if (!browse) return false;
+		const index = browse.index + (older ? 1 : -1);
+		if (index >= browse.entries.length) return false;
+		editor.current?.setText(index < 0 ? browse.draft : browse.entries[index]!, "start");
+		const snapshot = editor.current?.getSnapshot();
+		historyBrowse.current = index < 0 || !snapshot ? null : { ...browse, index, shown: snapshot.text };
+		if (snapshot) onEditorChange(snapshot);
+		return true;
+	}
+
+	/** The image left the draft, which is held aside while a recalled message shows. */
+	function removeImageFromSavedDraft(path: string) {
+		const browse = historyBrowse.current;
+		if (!browse) return;
+		const draft = removeInlineImagePath(browse.draft, path);
+		if (draft === browse.draft) return;
+		historyBrowse.current = { ...browse, draft };
+		persistComposerText(draft);
 	}
 
 	// Images get an inline chip only beside prose that can refer to them.
@@ -1758,7 +1847,10 @@ export const ChatComposer = memo(function ChatComposer({
 											type="button"
 											onClick={() => {
 											if (submitInFlight.current) return;
-											if (path) editor.current?.removeImage(path);
+											if (path) {
+											editor.current?.removeImage(path);
+											removeImageFromSavedDraft(path);
+										}
 											if (visibleRetainedAttachments.some((attachment) => attachment.id === file.id)) {
 												const next = retainedAttachments.filter((attachment) => attachment.id !== file.id);
 												setRetainedAttachments(next);

@@ -94,9 +94,9 @@ describe("CoderSettingsSection templates list", () => {
 			isError: false,
 		};
 		renderSection();
-		// Scope to the read-only list: the selected template's name also appears in
-		// the default-template dropdown trigger above it.
-		const list = within(screen.getByRole("list", { name: "Templates on your Coder" }));
+		// Scope to the templates section: its rows sit in the section's grouped
+		// card (dividers come from the card), so there is no separate list element.
+		const list = within(screen.getByRole("heading", { name: "Templates on your Coder" }).closest("section")!);
 		// Prefers displayName, with the short description as subtext.
 		expect(list.getByText("AO Dev-kit (Medium)")).toBeInTheDocument();
 		expect(list.getByText("4 vCPU / 16 GB")).toBeInTheDocument();

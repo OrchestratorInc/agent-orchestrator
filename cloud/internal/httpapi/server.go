@@ -212,6 +212,7 @@ type Server struct {
 	terminalStreamEnabled   bool
 	terminalRelayEnabled    bool
 	terminalStreams         *terminalStreams
+	agentBrowserRelays      *agentBrowserRelays
 	workWaiters             *workWaiters
 	notificationWake        func()
 	sandboxWake             func()
@@ -382,6 +383,7 @@ func New(options Options) *Server {
 		terminalStreamEnabled:     options.TerminalStreamEnabled,
 		terminalRelayEnabled:      options.TerminalRelayEnabled,
 		terminalStreams:           newTerminalStreams(),
+		agentBrowserRelays:        newAgentBrowserRelays(),
 		workWaiters:               newWorkWaiters(),
 		notificationWake:          options.NotificationWake,
 		sandboxWake:               options.SandboxWake,
@@ -530,6 +532,8 @@ func New(options Options) *Server {
 			router.Get("/worker/terminals/{terminalId}/stream", server.workerTerminalStream)
 			router.Post("/worker/terminals/{terminalId}/exit", server.workerTerminalExit)
 			router.Post("/worker/terminals/agent", server.workerEnsureAgentTerminal)
+			router.Get("/worker/agent-browser", server.workerAgentBrowserControl)
+			router.Get("/worker/agent-browser/streams/{stream}", server.workerAgentBrowserStream)
 		})
 		router.Get("/terminal", server.connectTerminal)
 		router.Route("/orgs/{orgId}", func(router chi.Router) {
@@ -602,6 +606,8 @@ func New(options Options) *Server {
 				router.MethodFunc(method, "/sessions/{sessionId}/browser/{origin}", server.proxyBrowser)
 				router.MethodFunc(method, "/sessions/{sessionId}/browser/{origin}/*", server.proxyBrowser)
 			}
+			router.Get("/sessions/{sessionId}/agent-browser/*", server.proxyAgentBrowser)
+			router.Post("/sessions/{sessionId}/agent-browser/*", server.proxyAgentBrowser)
 			router.Get("/sessions/{sessionId}/workspace/files", server.listWorkspaceFiles)
 			router.Post("/sessions/{sessionId}/workspace/checkout", server.requestWorkspaceCheckout)
 			router.Get("/sessions/{sessionId}/workspace/file", server.readWorkspaceFile)

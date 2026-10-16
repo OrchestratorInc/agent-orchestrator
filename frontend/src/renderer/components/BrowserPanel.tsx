@@ -90,6 +90,7 @@ import { useBrowserDownloads } from "../hooks/useBrowserDownloads";
 import { BrowserDownloadsList } from "./BrowserDownloadsList";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { aoBridge } from "../lib/bridge";
+import { isHostLocalWebLink } from "../lib/loopback";
 
 // One-click viewport width presets for responsive testing — height is shown
 // for reference but not enforced (only width drives CSS breakpoints, and
@@ -403,6 +404,7 @@ export function BrowserPanel({
 }
 
 export function BrowserPanelView({
+	session,
 	active,
 	poppedOut,
 	onTogglePopOut,
@@ -457,7 +459,13 @@ export function BrowserPanelView({
 		annotationQueue;
 	const hasNativeBrowser = Boolean(window.ao?.browser);
 	const showStaticPreview = !hasNativeBrowser && navState.url !== "";
-	const canAnnotate = Boolean(window.ao?.browser && viewId && navState.url);
+	// Not on an agent tab: its page is its viewer's picture of the agent's page.
+	const onAgentTab = Boolean(tabs.find((tab) => tab.active)?.remote);
+	const canAnnotate = Boolean(window.ao?.browser && viewId && navState.url && !onAgentTab);
+	// An agent tab's localhost page is the host's: opened here it would be this
+	// computer's own. Before the viewer's first report the tab shows the viewer
+	// itself, an ao-preview-….localhost address, so that is held back too.
+	const agentPageOnHost = onAgentTab && isHostLocalWebLink(navState.url);
 	const canRetryAnnotation = status === "error" && queuedCount > 0;
 	const [devicePreset, setDevicePreset] = useState<string | null>(null);
 	const [customDeviceWidth, setCustomDeviceWidth] = useState("390");
@@ -843,15 +851,23 @@ export function BrowserPanelView({
 		setUrlEditing(true);
 	};
 
-	const openCurrentPageExternally = () => {
-		if (!isWebLink(navState.url)) return;
-		void openLinkInSystemBrowser(navState.url);
+	// A remote preview's address works only in this panel, which trusts its
+	// certificate: outside AO it goes by its plain-http address.
+	const externalURL = async (url: string): Promise<string> => {
+		if (!session.hostId) return url;
+		// A disconnected host has no other address for it: keep the one shown.
+		return aoBridge.remotes.externalUrl(session.hostId, url).catch(() => url);
+	};
+
+	const openCurrentPageExternally = async () => {
+		if (!isWebLink(navState.url) || agentPageOnHost) return;
+		await openLinkInSystemBrowser(await externalURL(navState.url));
 	};
 
 	const copyCurrentURL = async () => {
 		if (!navState.url) return;
 		try {
-			await aoBridge.clipboard.writeText(navState.url);
+			await aoBridge.clipboard.writeText(await externalURL(navState.url));
 			setUrlCopied(true);
 			clearTimeout(copyFeedbackTimeoutRef.current);
 			copyFeedbackTimeoutRef.current = setTimeout(() => setUrlCopied(false), 1_200);
@@ -1006,17 +1022,20 @@ export function BrowserPanelView({
 								</Button>
 							</BrowserControlTooltip>
 						) : null}
+						{/* On an agent's host page, aria-disabled rather than disabled: a
+						    disabled button would lose the tooltip that says why. */}
 						{currentURLIsWeb ? (
-							<BrowserControlTooltip label={t("inspector.openInSystemBrowser")}>
+							<BrowserControlTooltip label={agentPageOnHost ? t("browser.agentPageOnHost") : t("inspector.openInSystemBrowser")}>
 									<Button
+										aria-disabled={agentPageOnHost || undefined}
 										aria-label={t("inspector.openInSystemBrowser")}
 										className="browser-panel__url-external"
-										onClick={openCurrentPageExternally}
+										onClick={() => void openCurrentPageExternally()}
 										size="icon-sm"
 										type="button"
 										variant="ghost"
 									>
-										<ExternalLink aria-hidden="true" className="size-icon-base" />
+										<ExternalLink aria-hidden="true" className={cn("size-icon-base", agentPageOnHost && "opacity-50")} />
 									</Button>
 							</BrowserControlTooltip>
 						) : null}
@@ -1346,7 +1365,15 @@ export function BrowserPanelView({
 					</span>
 				) : null}
 				<BrowserControlTooltip
-					label={annotationStatusLabel || agentStatusLabel || (canRetryAnnotation ? t("browser.retryAnnotation") : t("browser.annotate"))}
+					label={
+						annotationStatusLabel ||
+						agentStatusLabel ||
+						(canRetryAnnotation
+							? t("browser.retryAnnotation")
+							: onAgentTab
+								? t("browser.annotateAgentTab")
+								: t("browser.annotate"))
+					}
 				>
 					<span className="inline-flex">
 							<Button
@@ -1951,6 +1978,7 @@ function getDisplayUrl(url: string): string {
 		return url;
 	}
 }
+
 
 function webOrigin(url: string): string | undefined {
 	try {

@@ -1168,11 +1168,14 @@ describe("SessionView", () => {
 		expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
 		expect(screen.queryByTestId("terminal-center")).not.toBeInTheDocument();
 		expect(workspaceSessionLookup).toHaveBeenCalledWith("sess-1", undefined, false);
+		// Its Browser panel shows the sandbox's agent browser, from the control plane.
+		expect(browserViewOptions.current).toMatchObject({ cloudAgentBrowser: { baseUrl: "https://cloud.example.test", orgId: "cloud-org", sessionId: "sess-1" } });
 		cloudView.unmount();
 
 		const localView = render(<SessionView cloudOrgId="cloud-org" projectId="proj-1" sessionId="sess-1" />);
 		expect(screen.getByTestId("terminal-center")).toBeInTheDocument();
 		expect(screen.queryByTestId("cloud-chat-surface")).not.toBeInTheDocument();
+		expect(browserViewOptions.current).toMatchObject({ cloudAgentBrowser: undefined });
 		expect(cloudSessionLookup).toHaveBeenLastCalledWith("cloud-org", "sess-1", false);
 		localView.unmount();
 

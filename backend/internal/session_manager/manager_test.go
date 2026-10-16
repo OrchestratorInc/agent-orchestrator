@@ -140,6 +140,16 @@ func (f *fakeStore) CommitClientRequestSession(_ context.Context, id domain.Sess
 	f.sessions[id] = rec
 	return nil
 }
+func (f *fakeStore) RenameSessionIfDisplayName(_ context.Context, id domain.SessionID, current, name string, at time.Time) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok || rec.DisplayName != current {
+		return false, nil
+	}
+	rec.DisplayName, rec.UpdatedAt = name, at
+	f.sessions[id] = rec
+	return true, nil
+}
+
 func (f *fakeStore) UpdateSession(_ context.Context, rec domain.SessionRecord) error {
 	if f.updateSessionErr != nil {
 		return f.updateSessionErr
@@ -205,6 +215,17 @@ func (f *fakeStore) SetSessionProvisionedWorkspace(_ context.Context, id domain.
 	rec.Metadata.Branch = branch
 	rec.Metadata.WorkspacePath = workspacePath
 	rec.Metadata.WorkspaceRepoPath = workspaceRepoPath
+	rec.UpdatedAt = now
+	f.sessions[id] = rec
+	return true, nil
+}
+
+func (f *fakeStore) SetSessionNamedWorkspace(_ context.Context, id domain.SessionID, expectedPath, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok || rec.Metadata.RuntimeHandleID != "" || rec.Metadata.ProviderConversationID != "" || rec.IsTerminated || rec.IsTaskPreparation || rec.Metadata.WorkspacePath != "" && rec.Metadata.WorkspacePath != expectedPath && rec.Metadata.WorkspacePath != workspacePath {
+		return false, nil
+	}
+	rec.Metadata.Branch, rec.Metadata.WorkspacePath, rec.Metadata.WorkspaceRepoPath = branch, workspacePath, workspaceRepoPath
 	rec.UpdatedAt = now
 	f.sessions[id] = rec
 	return true, nil

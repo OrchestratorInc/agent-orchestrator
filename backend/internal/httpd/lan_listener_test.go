@@ -101,6 +101,44 @@ func TestLANManagerAuthGatesSharedHandler(t *testing.T) {
 	}
 }
 
+func TestLANManagerServesHTTP2WithoutTLS(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, r.Proto)
+	})
+	st := &authState{}
+	st.setHash(mobilebridge.HashPassword("secret12"))
+	m := NewLANManager(inner, st, 0, slog.Default(), nil)
+	port, err := m.Start(0)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer m.Stop(context.Background())
+
+	protocols := new(http.Protocols)
+	protocols.SetUnencryptedHTTP2(true)
+	client := &http.Client{Transport: &http.Transport{Protocols: protocols}}
+	base := fmt.Sprintf("http://127.0.0.1:%d/anything", port)
+	resp, err := client.Get(base)
+	if err != nil {
+		t.Fatalf("h2c without auth: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("h2c without auth: got %d want 401", resp.StatusCode)
+	}
+	req, _ := http.NewRequest(http.MethodGet, base, nil)
+	req.Header.Set("Authorization", "Bearer secret12")
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("h2c with auth: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "HTTP/2.0" {
+		t.Fatalf("h2c with auth: got %d %q, want 200 over HTTP/2.0", resp.StatusCode, body)
+	}
+}
+
 func TestLANManagerTunnelOnlyBindsLoopback(t *testing.T) {
 	m := NewMobileLAN(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), "h_test", 0, nil, nil)
 	m.SetPasswordHash(mobilebridge.HashPassword("secret12"))

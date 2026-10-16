@@ -3,6 +3,7 @@ package httpd
 import (
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -180,6 +181,8 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 			Capabilities:             deps.SessionCapabilities,
 			ArtifactVersions:         deps.ArtifactVersions,
 			ShellPreviewCapabilities: deps.ShellPreviewCapabilities,
+			AgentBrowser:             agentBrowserURL(cfg.AgentBrowserURL),
+			AgentBrowserToken:        cfg.AgentBrowserToken,
 		},
 		automations:   &controllers.AutomationsController{Svc: deps.Automations},
 		desktop:       &controllers.DesktopWorkspaceController{Svc: deps.DesktopWorkspaces},
@@ -231,6 +234,14 @@ func (a *API) Register(root chi.Router) {
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 					if attachmentUploadRoute(req) {
 						upload.ServeHTTP(w, req)
+						return
+					}
+					// A managed preview carries the dev server's HMR socket and event
+					// streams, and the agent browser its stream socket: both stay open
+					// as long as the page does.
+					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/sessions/{sessionId}/preview/app/*" ||
+						pattern == "/api/v1/sessions/{sessionId}/agent-browser/*" {
+						next.ServeHTTP(w, req)
 						return
 					}
 					ordinary.ServeHTTP(w, req)
@@ -324,4 +335,14 @@ func memoryPressure(svc controllers.SessionMemoryService) controllers.MemoryPres
 		return p
 	}
 	return nil
+}
+
+// agentBrowserURL is the host's agent browser, or nil when it has none.
+// config.Load already accepted only a loopback http URL.
+func agentBrowserURL(raw string) *url.URL {
+	u, err := url.Parse(raw)
+	if raw == "" || err != nil {
+		return nil
+	}
+	return u
 }

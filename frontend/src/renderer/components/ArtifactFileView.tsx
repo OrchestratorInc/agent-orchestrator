@@ -2,21 +2,21 @@ import { useEffect, useMemo, useRef } from "react";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import { ArtifactSelectionAsk } from "./ArtifactSelectionAsk";
 import { FileContentPane, type FileViewMode } from "./FileContentPane";
+import { isSvgPath } from "../lib/image-files";
 
-// Mirrors FileContentPane's own canRenderMarkdown extension check: a markdown
-// artifact should open already rendered, the same way GitHub opens a README,
-// rather than making the reader click over to the "Rendered" tab themselves.
+// Mirrors FileContentPane's own canRenderMarkdown/canRenderSvg extension checks:
+// a markdown or SVG artifact should open already rendered, the same way GitHub
+// opens a README, rather than making the reader click over to "Rendered".
 function initialModeFor(path: string): FileViewMode {
-	return /\.(md|markdown)$/i.test(path) ? "rendered" : "file";
+	return /\.(md|markdown)$/i.test(path) || isSvgPath(path) ? "rendered" : "file";
 }
 
 /**
  * Content view for one file in a session's artifact directory, reusing the
  * same `FileContentPane` the workspace/PR Files flow uses (source-agnostic:
- * dispatches on `source.kind`). Artifacts fetch raw content from `rawUrl`,
- * the artifact preview origin's raw-bytes URL (a distinct host from the
- * workspace preview origin, so it can never resolve to a workspace file of
- * the same path), rather than the workspace-diff machinery, since artifacts
+ * dispatches on `source.kind`). Local artifacts fetch raw content through the
+ * daemon API with the artifact root selected; remote and cloud artifacts keep
+ * their provided content URL. Neither uses the workspace-diff machinery, since artifacts
  * live outside the git workspace and have no diff/status.
  *
  * One view, no display mode switch: a markdown artifact renders, any other

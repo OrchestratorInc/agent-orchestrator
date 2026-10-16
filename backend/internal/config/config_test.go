@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -524,6 +525,53 @@ func TestLoadTrackerIntakeRejectsGarbage(t *testing.T) {
 	t.Setenv("AO_TRACKER_INTAKE", "maybe")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() = nil error, want error for malformed AO_TRACKER_INTAKE")
+	}
+}
+
+// The daemon proxies desktop requests to the agent browser, so it may only
+// ever point at this host.
+func TestLoadAgentBrowserURL(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want string
+	}{
+		{"http://127.0.0.1:8080", "http://127.0.0.1:8080"},
+		{" http://localhost:8080/ ", "http://localhost:8080"},
+		{"http://10.0.0.5:8080", ""},
+		{"http://example.com:8080", ""},
+		{"https://127.0.0.1:8080", ""},
+		{"http://user:pw@127.0.0.1:8080", ""},
+		{"http://127.0.0.1:8080/?token=x", ""},
+	} {
+		t.Setenv("AO_AGENT_BROWSER_URL", tc.raw)
+		t.Setenv("AO_AGENT_BROWSER_TOKEN", "rb-secret")
+		cfg, err := Load()
+		if tc.want == "" {
+			if err == nil {
+				t.Errorf("%q: loaded, want an error", tc.raw)
+			}
+			continue
+		}
+		if err != nil || cfg.AgentBrowserURL != tc.want || cfg.AgentBrowserToken != "rb-secret" {
+			t.Errorf("%q: got %q, %q, %v; want %q", tc.raw, cfg.AgentBrowserURL, cfg.AgentBrowserToken, err, tc.want)
+		}
+	}
+}
+
+// The agent browser refuses every request without its exact token: a padded
+// one would never match, and a missing one must stop the daemon with a reason
+// rather than leave the agent tab silently empty.
+func TestLoadAgentBrowserToken(t *testing.T) {
+	t.Setenv("AO_AGENT_BROWSER_URL", "http://127.0.0.1:8080")
+	t.Setenv("AO_AGENT_BROWSER_TOKEN", " rb-secret\n")
+	if cfg, err := Load(); err != nil || cfg.AgentBrowserToken != "rb-secret" {
+		t.Errorf("padded token: got %q, %v; want rb-secret", cfg.AgentBrowserToken, err)
+	}
+	for _, token := range []string{"", " \t"} {
+		t.Setenv("AO_AGENT_BROWSER_TOKEN", token)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "AO_AGENT_BROWSER_TOKEN") {
+			t.Errorf("token %q: got %v, want an error naming AO_AGENT_BROWSER_TOKEN", token, err)
+		}
 	}
 }
 

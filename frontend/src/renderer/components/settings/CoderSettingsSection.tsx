@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
+import { cn } from "../../lib/utils";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -21,6 +22,7 @@ import {
 	onboardingFieldHintClass,
 	onboardingFormLabelClass,
 } from "../../lib/onboarding-ui";
+import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 
 /**
@@ -81,8 +83,8 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	// signed out, so say why it is empty instead of rendering a blank pane.
 	if (status !== "authenticated") {
 		return (
-			<SettingsSection title={t("settings.coder.title")} sectionId="coder" titleHidden={titleHidden}>
-				<p className="px-3 text-xs leading-relaxed text-muted-foreground">{t("settings.coder.signIn")}</p>
+			<SettingsSection title={t("settings.coder.title")} sectionId="coder" titleHidden={titleHidden} grouped>
+				<p className="settings-row-bar text-sm text-settings-muted">{t("settings.coder.signIn")}</p>
 			</SettingsSection>
 		);
 	}
@@ -106,7 +108,8 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	const saveAllowed = loaded?.editable !== false;
 	const canSave = !busy && !readOnly && saveAllowed && orgId !== "" && baseUrl.trim() !== "" && !devEnvInvalid
 		&& (token.trim() !== "" || (tokenStored && devEnvDirty));
-	const canRemove = loaded != null && !readOnly && orgId !== "" && !busy;
+	const hasConnection = loaded != null && !readOnly && orgId !== "";
+	const canRemove = hasConnection && !busy;
 	const save = async () => {
 		if (!canSave) return;
 		setBusy(true);
@@ -164,158 +167,173 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	};
 
 	return (
-		<SettingsSection title={t("settings.coder.title")} sectionId="coder" titleHidden={titleHidden}>
-			<div className="flex w-full flex-col gap-4 px-3 py-1">
-				<p className="text-xs leading-relaxed text-muted-foreground">{t("settings.coder.description")}</p>
-				{saveAllowed ? null : <p className={onboardingFieldHintClass}>{t("settings.coder.capabilityLost")}</p>}
+		<>
+			<SettingsSection title={t("settings.coder.title")} sectionId="coder" titleHidden={titleHidden} grouped>
+				<div className="settings-content-row flex w-full flex-col gap-4">
+					<p className="text-pretty text-control leading-4 text-settings-muted">{t("settings.coder.description")}</p>
+					{saveAllowed ? null : <p className={onboardingFieldHintClass}>{t("settings.coder.capabilityLost")}</p>}
 
-				<div className="flex flex-col gap-1.5">
-					<Label htmlFor="coder-base-url" className={onboardingFormLabelClass}>{t("settings.coder.urlLabel")}</Label>
-					<p className={onboardingFieldHintClass}>{t("settings.coder.urlHint")}</p>
-					<Input
-						id="coder-base-url"
-						type="text"
-						autoComplete="off"
-						spellCheck={false}
-						className="font-mono text-[13px]"
-						placeholder={t("settings.coder.urlPlaceholder")}
-						disabled={busy || !saveAllowed}
-						value={baseUrl}
-						onChange={(event) => setBaseUrl(event.target.value)}
-					/>
+					<div className="flex flex-col gap-1.5">
+						<Label htmlFor="coder-base-url" className={onboardingFormLabelClass}>{t("settings.coder.urlLabel")}</Label>
+						<p className={onboardingFieldHintClass}>{t("settings.coder.urlHint")}</p>
+						<Input
+							id="coder-base-url"
+							type="text"
+							autoComplete="off"
+							spellCheck={false}
+							className="font-mono text-[13px]"
+							placeholder={t("settings.coder.urlPlaceholder")}
+							disabled={busy || !saveAllowed}
+							value={baseUrl}
+							onChange={(event) => setBaseUrl(event.target.value)}
+						/>
+					</div>
+
+					<div className="flex flex-col gap-1.5">
+						<Label htmlFor="coder-token" className={onboardingFormLabelClass}>{t("settings.coder.tokenLabel")}</Label>
+						<p className={onboardingFieldHintClass}>{t("settings.coder.tokenHint")}</p>
+						<Input
+							id="coder-token"
+							type="password"
+							autoComplete="off"
+							spellCheck={false}
+							className="font-mono text-[13px]"
+							placeholder={tokenStored ? t("settings.coder.tokenStored") : t("settings.coder.tokenPlaceholder")}
+							disabled={busy || !saveAllowed}
+							value={token}
+							onChange={(event) => setToken(event.target.value)}
+						/>
+					</div>
 				</div>
-
-				<div className="flex flex-col gap-1.5">
-					<Label htmlFor="coder-token" className={onboardingFormLabelClass}>{t("settings.coder.tokenLabel")}</Label>
-					<p className={onboardingFieldHintClass}>{t("settings.coder.tokenHint")}</p>
-					<Input
-						id="coder-token"
-						type="password"
-						autoComplete="off"
-						spellCheck={false}
-						className="font-mono text-[13px]"
-						placeholder={tokenStored ? t("settings.coder.tokenStored") : t("settings.coder.tokenPlaceholder")}
-						disabled={busy || !saveAllowed}
-						value={token}
-						onChange={(event) => setToken(event.target.value)}
-					/>
-					{saveAllowed ? <div className="mt-1 flex flex-col gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2.5">
-						<p className="text-xs font-medium text-foreground">{t("settings.coder.tokenHowToTitle", { defaultValue: "Need a token?" })}</p>
-						<ol className="list-decimal space-y-1 pl-4 text-xs leading-relaxed text-muted-foreground">
-							<li>{t("settings.coder.tokenStep1", { defaultValue: "Open your Coder token page below. If you are not signed in to Coder, you will be asked to log in first, then land on the token page." })}</li>
-							<li>{t("settings.coder.tokenStep2", { defaultValue: "Give the token a name (for example \"AO\"), set a lifetime, and create it." })}</li>
-							<li>{t("settings.coder.tokenStep3", { defaultValue: "Copy the token, paste it in the field above, then Save and fetch templates." })}</li>
-						</ol>
-						<Button
-							type="button"
-							variant="outline"
-							size="sm"
-							className="w-fit gap-1.5"
-							disabled={baseUrl.trim() === ""}
-							onClick={() => void aoBridge.app.openExternal(`${baseUrl.trim().replace(/\/+$/, "")}/settings/tokens/new`)}
-						>
-							<ExternalLink className="size-3.5" aria-hidden="true" />
-							{t("settings.coder.tokenCreate", { defaultValue: "Create a token in Coder" })}
-						</Button>
-						{baseUrl.trim() === "" ? (
-							<p className={onboardingFieldHintClass}>{t("settings.coder.tokenCreateNeedsUrl", { defaultValue: "Enter your Coder URL above first." })}</p>
-						) : null}
-					</div> : null}
-				</div>
-
-				{tokenStored ? (
-					<WorkspaceSetupFields
-						draft={devEnv}
-						errors={devEnvFieldErrors}
-						disabled={busy || readOnly || !saveAllowed}
-						readOnly={readOnly}
-						currentControlPlane={currentControlPlane}
-						onChange={(patch) => setDevEnv((current) => ({ ...current, ...patch }))}
-					/>
+				{saveAllowed ? (
+				<SettingsRow
+					label={t("settings.coder.tokenHowToTitle", { defaultValue: "Need a token?" })}
+					description={
+						<>
+							<ol className="list-decimal space-y-1 pl-4">
+								<li>{t("settings.coder.tokenStep1", { defaultValue: "Use the button to open your Coder token page. If you are not signed in to Coder, you will be asked to log in first, then land on the token page." })}</li>
+								<li>{t("settings.coder.tokenStep2", { defaultValue: "Give the token a name (for example \"AO\"), set a lifetime, and create it." })}</li>
+								<li>{t("settings.coder.tokenStep3", { defaultValue: "Copy the token, paste it in the field above, then Save and fetch templates." })}</li>
+							</ol>
+							{baseUrl.trim() === "" ? (
+								<p className="mt-1">{t("settings.coder.tokenCreateNeedsUrl", { defaultValue: "Enter your Coder URL above first." })}</p>
+							) : null}
+						</>
+					}
+				>
+					<Button
+						type="button"
+						variant="ghost"
+						size="sm"
+						className="shrink-0 text-settings-muted hover:text-settings-label"
+						disabled={baseUrl.trim() === ""}
+						onClick={() => void aoBridge.app.openExternal(`${baseUrl.trim().replace(/\/+$/, "")}/settings/tokens/new`)}
+					>
+						<ExternalLink className="size-3.5" aria-hidden="true" />
+						{t("settings.coder.tokenCreate", { defaultValue: "Create a token in Coder" })}
+					</Button>
+				</SettingsRow>
 				) : null}
-
-				{tokenStored ? (
-					// Read-only catalog of every template on the connected Coder — so the
-					// whole Coder story lives inside AO. Same tidy name + one-line-spec
-					// style as the session template picker; the template for a session is
-					// chosen per project at creation time, not here.
-					<div className="flex flex-col gap-2 border-t border-border pt-4">
-						<div className="flex items-center justify-between gap-2">
-							<Label className={onboardingFormLabelClass}>{t("settings.coder.templatesListLabel")}</Label>
-							<div className="flex items-center gap-1.5">
+			</SettingsSection>
+			{tokenStored ? (
+				<SettingsSection title={t("settings.coder.workspaceSetupTitle")} grouped>
+					<div className="settings-content-row">
+						<WorkspaceSetupFields
+							draft={devEnv}
+							errors={devEnvFieldErrors}
+							disabled={busy || readOnly || !saveAllowed}
+							readOnly={readOnly}
+							currentControlPlane={currentControlPlane}
+							onChange={(patch) => setDevEnv((current) => ({ ...current, ...patch }))}
+						/>
+					</div>
+				</SettingsSection>
+			) : null}
+			{tokenStored ? (
+				// Read-only catalog of every template on the connected Coder — so the
+				// whole Coder story lives inside AO. Same tidy name + one-line-spec
+				// style as the session template picker; the template for a session is
+				// chosen per project at creation time, not here.
+				<SettingsSection title={t("settings.coder.templatesListLabel")} grouped>
+					<div className="settings-row-bar">
+						<p className="min-w-0 text-pretty text-control leading-4 text-settings-muted">{t("settings.coder.templatesListHint")}</p>
+						<div className="flex shrink-0 items-center gap-1">
+							<Button
+								type="button"
+								variant="ghost"
+								size="icon-sm"
+								className="shrink-0 text-settings-muted hover:text-settings-label"
+								aria-label={t("settings.coder.templatesRefresh", { defaultValue: "Refresh templates" })}
+								title={t("settings.coder.templatesRefresh", { defaultValue: "Refresh templates" })}
+								disabled={templatesLoading}
+								onClick={() => void queryClient.invalidateQueries({ queryKey: coderTemplatesQueryKey })}
+							>
+								<RefreshCw className={`size-3.5 ${templatesLoading ? "animate-spin" : ""}`} aria-hidden="true" />
+							</Button>
+							<Button
+								type="button"
+								variant="ghost"
+								size="sm"
+								className="shrink-0 text-settings-muted hover:text-settings-label"
+								disabled={baseUrl.trim() === ""}
+								onClick={() => void aoBridge.app.openExternal(`${baseUrl.trim().replace(/\/+$/, "")}/templates/new`)}
+							>
+								<Plus className="size-3.5" aria-hidden="true" />
+								{t("settings.coder.templateCreate", { defaultValue: "New template in Coder" })}
+								<ExternalLink className="size-3" aria-hidden="true" />
+							</Button>
+						</div>
+					</div>
+					{templatesLoading ? (
+						<div className="settings-row-bar justify-start gap-2 text-sm text-settings-muted">
+							<Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+							<span>{t("settings.coder.templatesLoading")}</span>
+						</div>
+					) : templatesError ? (
+						<p className="settings-row-bar text-xs text-error" role="alert">{t("settings.coder.templatesError")}</p>
+					) : templates.length === 0 ? (
+						<p className="settings-row-bar text-sm text-settings-muted">{t("settings.coder.templatesEmpty")}</p>
+					) : (
+						templates.map((tpl) => (
+							<SettingsRow
+								key={tpl.id}
+								label={tpl.displayName || tpl.name}
+								description={tpl.description || undefined}
+							>
 								<Button
 									type="button"
 									variant="ghost"
 									size="icon-sm"
-									className="shrink-0 text-muted-foreground hover:text-foreground"
-									aria-label={t("settings.coder.templatesRefresh", { defaultValue: "Refresh templates" })}
-									title={t("settings.coder.templatesRefresh", { defaultValue: "Refresh templates" })}
-									disabled={templatesLoading}
-									onClick={() => void queryClient.invalidateQueries({ queryKey: coderTemplatesQueryKey })}
-								>
-									<RefreshCw className={`size-3.5 ${templatesLoading ? "animate-spin" : ""}`} aria-hidden="true" />
-								</Button>
-								<Button
-									type="button"
-									variant="outline"
-									size="sm"
-									className="shrink-0 gap-1.5"
+									className="shrink-0 text-settings-muted hover:text-settings-label"
+									aria-label={t("settings.coder.templateDocs", { defaultValue: "Open template docs in Coder" })}
+									title={t("settings.coder.templateDocs", { defaultValue: "Open template docs in Coder" })}
 									disabled={baseUrl.trim() === ""}
-									onClick={() => void aoBridge.app.openExternal(`${baseUrl.trim().replace(/\/+$/, "")}/templates/new`)}
+									onClick={() => void aoBridge.app.openExternal(`${baseUrl.trim().replace(/\/+$/, "")}/templates/${encodeURIComponent(tpl.name)}/docs`)}
 								>
-									<Plus className="size-3.5" aria-hidden="true" />
-									{t("settings.coder.templateCreate", { defaultValue: "New template in Coder" })}
-									<ExternalLink className="size-3" aria-hidden="true" />
+									<ExternalLink className="size-3.5" aria-hidden="true" />
 								</Button>
-							</div>
-						</div>
-						<p className={onboardingFieldHintClass}>{t("settings.coder.templatesListHint")}</p>
-						{templatesLoading ? (
-							<div className="flex items-center gap-2 px-1 py-3 text-xs text-muted-foreground">
-								<Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-								<span>{t("settings.coder.templatesLoading")}</span>
-							</div>
-						) : templatesError ? (
-							<p className={onboardingFieldErrorClass} role="alert">{t("settings.coder.templatesError")}</p>
-						) : templates.length === 0 ? (
-							<p className="px-1 py-3 text-xs text-muted-foreground">{t("settings.coder.templatesEmpty")}</p>
-						) : (
-							<ul aria-label={t("settings.coder.templatesListLabel")} className="flex flex-col overflow-hidden rounded-md border border-border">
-								{templates.map((tpl) => (
-									<li key={tpl.id} className="flex items-center justify-between gap-2 border-b border-border px-3 py-2 last:border-b-0">
-										<div className="flex min-w-0 flex-col gap-0.5">
-											<span className="truncate text-[13px] text-foreground">{tpl.displayName || tpl.name}</span>
-											{tpl.description ? <span className="truncate text-[11px] text-muted-foreground">{tpl.description}</span> : null}
-										</div>
-										<Button
-											type="button"
-											variant="ghost"
-											size="icon-sm"
-											className="shrink-0 text-muted-foreground hover:text-foreground"
-											aria-label={t("settings.coder.templateDocs", { defaultValue: "Open template docs in Coder" })}
-											title={t("settings.coder.templateDocs", { defaultValue: "Open template docs in Coder" })}
-											disabled={baseUrl.trim() === ""}
-											onClick={() => void aoBridge.app.openExternal(`${baseUrl.trim().replace(/\/+$/, "")}/templates/${encodeURIComponent(tpl.name)}/docs`)}
-										>
-											<ExternalLink className="size-3.5" aria-hidden="true" />
-										</Button>
-									</li>
-								))}
-							</ul>
-						)}
-					</div>
-				) : null}
-
-				{error ? <p className={onboardingFieldErrorClass} role="alert">{error}</p> : null}
-
-				<div className="flex items-center justify-end gap-3">
-					{canRemove ? (
-						<Button type="button" variant="ghost" className="text-muted-foreground hover:text-foreground" onClick={() => { setRemoveError(null); setConfirmingRemove(true); }}>
+							</SettingsRow>
+						))
+					)}
+				</SettingsSection>
+			) : null}
+			<div className="flex flex-col items-end gap-2 px-(--settings-row-inset)">
+				{error ? <p className={cn(onboardingFieldErrorClass, "self-stretch")} role="alert">{error}</p> : null}
+				<div className="flex items-center gap-2">
+					{hasConnection ? (
+						<Button type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" disabled={!canRemove} onClick={() => { setRemoveError(null); setConfirmingRemove(true); }}>
 							{t("settings.coder.removeConnection")}
 						</Button>
 					) : null}
 					{saveAllowed ? (
-						<Button type="button" variant="outline" disabled={!canSave} onClick={() => void save()}>
+						<Button
+							type="button"
+							variant="ghost"
+							size="sm"
+							className="text-settings-muted hover:text-settings-label"
+							disabled={!canSave}
+							onClick={() => void save()}
+						>
 							{busy ? t("settings.coder.saving") : t("settings.coder.save")}
 						</Button>
 					) : null}
@@ -332,7 +350,7 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 				onConfirm={() => void remove()}
 				onOpenChange={setConfirmingRemove}
 			/>
-		</SettingsSection>
+		</>
 	);
 }
 
@@ -381,9 +399,8 @@ function WorkspaceSetupFields({ draft, errors, disabled, readOnly, currentContro
 		</div>
 	);
 	return (
-		<div className="flex flex-col gap-4 border-t border-border pt-4">
+		<div className="flex flex-col gap-4">
 			<div className="flex flex-col gap-1">
-				<p className={onboardingFormLabelClass}>{t("settings.coder.workspaceSetupTitle")}</p>
 				<p className={onboardingFieldHintClass}>{t("settings.coder.workspaceSetupHint")}</p>
 				{readOnly ? <p className={onboardingFieldHintClass}>{t("settings.coder.workspaceSetupReadOnly")}</p> : null}
 			</div>
