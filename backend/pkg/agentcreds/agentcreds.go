@@ -144,6 +144,8 @@ type Model struct {
 
 // Result is a validation outcome together with what can be said about it.
 type Result struct {
+	// HTTPStatus is the provider response code, without its body or URL.
+	HTTPStatus int
 	// State is the three-state verdict.
 	State State
 	// Provider is the API surface that was asked.
@@ -247,6 +249,7 @@ func (v *Validator) probe(result Result, spec requestSpec) Result {
 		return result
 	}
 	defer func() { _ = response.Body.Close() }()
+	result.HTTPStatus = response.StatusCode
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, maxBodyBytes))
 	if readErr != nil {
 		result.State = StateUnknown

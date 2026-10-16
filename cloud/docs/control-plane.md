@@ -146,6 +146,19 @@ terminal input. The desktop connects to these public API endpoints; terminal
 support in the optional private web app must be checked in that app's source
 and deployment.
 
+## Agent browser relay
+
+The agent browser runs inside the sandbox; the control plane only relays it.
+The worker holds a control connection on
+`GET /api/cloud/v1/worker/agent-browser` and dials
+`/api/cloud/v1/worker/agent-browser/streams/{id}` for each stream, one
+HTTP/1.1 connection per stream. The desktop calls
+`/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/agent-browser/{tail}`, which
+is forwarded to the worker over those streams. Browser traffic is never
+persisted. Like the live terminal relay, the relay is process-local: a request
+is served only by the replica holding the worker's control connection, so the
+deployment keeps one control-plane replica for this path.
+
 ## Replica lifecycle
 
 - `/healthz` reports process liveness.

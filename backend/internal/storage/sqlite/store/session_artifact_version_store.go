@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"time"
@@ -48,6 +49,7 @@ func (s *Store) AppendSessionArtifactVersion(ctx context.Context, v domain.Sessi
 		row, err = q.InsertSessionArtifactVersion(ctx, gen.InsertSessionArtifactVersionParams{
 			SessionID: v.SessionID, Path: v.Path, Version: next, Sha256: v.SHA256, Size: v.Size,
 			ContentType: v.ContentType, Mtime: v.ModTime.UnixNano(), CreatedAt: v.CreatedAt,
+			Source: string(cmp.Or(v.Source, domain.ArtifactVersionSourceAgent)), Harness: string(v.Harness), RestoredFrom: v.RestoredFrom,
 		})
 		if err != nil {
 			return err
@@ -64,6 +66,17 @@ func (s *Store) AppendSessionArtifactVersion(ctx context.Context, v domain.Sessi
 		return domain.SessionArtifactVersion{}, nil, fmt.Errorf("%s %q: %w", v.SessionID, v.Path, err)
 	}
 	return sessionArtifactVersionFromGen(row), pruned, nil
+}
+
+// DeleteSessionArtifactVersions removes every version row of a session, for
+// when the user deletes the session's artifacts.
+func (s *Store) DeleteSessionArtifactVersions(ctx context.Context, id domain.SessionID) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.DeleteSessionArtifactVersions(ctx, id); err != nil {
+		return fmt.Errorf("delete artifact versions for %s: %w", id, err)
+	}
+	return nil
 }
 
 // CountSessionArtifactVersionsBySHA counts a session's version rows, across
@@ -88,5 +101,6 @@ func sessionArtifactVersionFromGen(r gen.SessionArtifactVersion) domain.SessionA
 	return domain.SessionArtifactVersion{
 		SessionID: r.SessionID, Path: r.Path, Version: r.Version, SHA256: r.Sha256, Size: r.Size,
 		ContentType: r.ContentType, ModTime: time.Unix(0, r.Mtime).UTC(), CreatedAt: r.CreatedAt,
+		Source: domain.ArtifactVersionSource(r.Source), Harness: domain.AgentHarness(r.Harness), RestoredFrom: r.RestoredFrom,
 	}
 }

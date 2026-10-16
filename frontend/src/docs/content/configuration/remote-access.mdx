@@ -88,3 +88,55 @@ This walkthrough was checked against the desktop pairing UI, daemon mobile bridg
 <Callout type="info">
 	Chat and Terminal UI are two controllers for the same Orchestrator session. Switching does not create a new worktree, but a first switch from Terminal UI to Chat does not reconstruct old terminal screen output as structured messages.
 </Callout>
+
+## Keeping a MacBook reachable with its lid closed
+
+Ordinary **Keep this Mac awake** prevents idle sleep; normal lid sleep remains
+allowed. Eligible Apple Silicon MacBooks (macOS 13–27) with the bundled desktop
+helper can opt into **Keep awake with lid closed**. Enabling this mode also
+enables **Keep this Mac awake** in the same request. It starts while Connect
+Mobile is on and the listener is serving. Your phone does not need to maintain
+an active socket. Turning off mobile access, Keep awake or the lid option
+releases the request. Turning off Keep awake in desktop settings also turns off
+the lid option; turning off just the lid option keeps idle wake on.
+
+Explicit opt-in registers a local recovery helper without an administrator
+password. Short daemon leases and launchd restart recovery handle abandoned
+requests. The UI distinguishes saved intent, an armed native control, and
+safety/recovery stops. macOS authentication stays in effect; an external display
+is not required by the implementation.
+
+Keep the Mac on a ventilated surface, not in a closed bag. Lid wakefulness stops
+below 10% battery, on unknown battery state or at critical thermal pressure.
+After charging/cooling, turn the lid option off and on to restart. Do not run
+another lid utility concurrently; macOS's lid control is global.
+
+A reviewer verified basic lid-close operation and continued phone connectivity
+on one macOS 26 MacBook. Full physical compatibility validation, including crash
+recovery and macOS 27, is pending. A successful probe or "armed"
+status is not a connectivity guarantee on every OS/hardware combination. Test a
+short lid-closed session on your machine before relying on it unattended.
+[ADR 0005](https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/adr/0005-mobile-closed-lid-wake.md)
+records current evidence and the release gate.
+
+Helper versions, plist, leases and recovery journal live under `~/.ao/data/wake`,
+shared by AO instances of the same login using the default `~/.ao/data` durable
+data root. Custom or scratch `AO_DATA_DIR` roots disable native lid control so
+isolated runs cannot affect production state or host power. Ordinary Keep awake
+remains available.
+Turning the feature off retains recovery registration but ends requests. To
+remove registration, open the lid, turn the option off in every AO instance and
+wait for recovery to finish, then run
+`launchctl bootout gui/$(id -u)/com.aoagents.mobile-wake`. Do not delete an
+unfinished recovery journal. Re-enabling the option registers the helper again.
+
+An existing compatible helper is reused across app builds, rather than replaced
+while sessions may be active. To upgrade that helper, use the removal steps above
+with the lid open, then enable the option again; fresh registration removes stale
+helper copies.
+
+Native protocol version 2 stores coordinator state inside the default durable
+data root. An existing version-1 registration is never replaced automatically;
+open the lid, stop all old wake sessions and unload its registration before
+opting in again. Retain any unfinished legacy recovery journal under
+`~/.ao/wake` until recovery has completed.

@@ -51,6 +51,22 @@ describe("CloudSessionChatSurface", () => {
 			role: "user", origin: "automation", senderLabel: "Worker · Builder", text: "Full prompt",
 		});
 	});
+	it("shows a project setup outcome as a system row outside any turn", () => {
+		const events: CloudCpClientEvent[] = [
+			{ sessionId: session.id, sequence: 1, type: "workspace.setup", payload: { status: "succeeded", exitCode: 0, durationMs: 12_400, output: "stack up" }, createdAt: "2026-10-01T00:00:00Z" },
+			{ sessionId: session.id, sequence: 2, type: "workspace.setup", payload: { status: "failed", step: 3, exitCode: 2, durationMs: 800 }, createdAt: "2026-10-01T00:01:00Z" },
+		];
+		const [succeeded, failed] = toSnapshot(session, events).items;
+		expect(succeeded).toMatchObject({
+			kind: "activity", activityKind: "system", status: "completed",
+			detail: { event: "workspace.setup", setupStatus: "succeeded", exitCode: 0, durationMs: 12_400, output: "stack up" },
+		});
+		expect(failed).toMatchObject({
+			status: "failed", detail: { event: "workspace.setup", setupStatus: "failed", setupStep: 3, exitCode: 2 },
+		});
+		expect(succeeded?.turnId).toBeUndefined();
+		expect(failed?.kind === "activity" ? failed.detail?.output : "unexpected").toBeUndefined();
+	});
 	it("preserves structured sender metadata for linked automation rendering", () => {
 		const events: CloudCpClientEvent[] = [{
 			sessionId: session.id, sequence: 1, type: "chat.user_message",

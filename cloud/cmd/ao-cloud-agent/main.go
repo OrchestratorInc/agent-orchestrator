@@ -80,6 +80,10 @@ func run(args []string) error {
 		printUsage(os.Stdout)
 		return nil
 	}
+	// The browser runs beside the agent and needs no control-plane credential.
+	if args[0] == "browser" {
+		return runBrowser(args[1:])
+	}
 	apiURL := strings.TrimRight(strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_API_URL")), "/")
 	tokenFile := strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_TOKEN_FILE"))
 	if apiURL == "" {
@@ -604,8 +608,11 @@ func printUsage(out io.Writer) {
   ao kill SESSION_ID
   ao claim-pr NUMBER_OR_URL
   ao review trigger
+  ao browser COMMAND [ARGS...]
+    (agent-browser commands: open, snapshot, click, fill, screenshot, ...; the
+    person sees and can use the same pages in AO's Browser panel)
 
-All commands are authenticated through the control plane. spawn/list/send/kill
-require an orchestrator session; report requires an orchestrator parent. Child
-workers never connect directly to one another.`)
+All commands except browser are authenticated through the control plane.
+spawn/list/send/kill require an orchestrator session; report requires an
+orchestrator parent. Child workers never connect directly to one another.`)
 }

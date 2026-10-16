@@ -10,9 +10,11 @@ package registry
 import (
 	"log/slog"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	commandcodeagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/commandcode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/copilot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/deepseekharness"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/droid"
@@ -25,9 +27,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/qwen"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/unrealagent"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/agyacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/claudeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/commandcodeacp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/copilotacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/cursoracp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/deepseekharnessacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/droidacp"
@@ -93,6 +97,8 @@ func Build(log *slog.Logger, onClaudeAuthRejected func()) *Registry {
 		unrealchat.New(unrealagent.New(), log),
 		deepseekharnessacp.New(deepseekharness.New(), log),
 		commandcodeacp.New(commandcodeagent.New(), log),
+		copilotacp.New(copilot.New(), log),
+		agyacp.New(agy.New(), log),
 		hermesacp.New(hermes.New(), log),
 	)
 }

@@ -117,6 +117,7 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/chat-view", c.setChatView)
 	r.Get("/sessions/{sessionId}/conversation", c.snapshot)
 	r.Post("/sessions/{sessionId}/conversation/messages", c.send)
+	r.Post("/sessions/{sessionId}/conversation/prompt-suggestion", c.promptSuggestion)
 	r.Post("/sessions/{sessionId}/conversation/approvals/{requestId}/resolve", c.resolve)
 	r.Post("/sessions/{sessionId}/conversation/inputs/{requestId}/resolve", c.resolveInput)
 	r.Post("/sessions/{sessionId}/conversation/interrupt", c.interrupt)
@@ -852,6 +853,7 @@ func (c *ConversationsController) send(w http.ResponseWriter, r *http.Request) {
 		Excerpts:        excerpts,
 		ClientMessageID: req.ClientMessageID,
 		Origin:          domain.MessageOriginHuman,
+		Continuation:    req.Continuation,
 	})
 	if err != nil {
 		writeConversationError(w, r, err)
@@ -1037,6 +1039,10 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 			"CHAT_CONTROLLER_NOT_READY",
 			"the agent controller for this session is not running", nil)
 
+	case errors.Is(err, chatsvc.ErrContinuationUnavailable):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_CONTINUATION_UNAVAILABLE", err.Error(), nil)
+
 	case errors.Is(err, chatsvc.ErrExcerptInvalid):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
 			"CHAT_EXCERPT_INVALID", err.Error(), nil)
@@ -1044,6 +1050,10 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, chatsvc.ErrExcerptStale):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_EXCERPT_STALE", err.Error(), nil)
+
+	case errors.Is(err, chatsvc.ErrPromptSuggestionStale):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_PROMPT_SUGGESTION_STALE", err.Error(), nil)
 
 	case errors.Is(err, chatsvc.ErrControllerHandoff):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
@@ -1177,6 +1187,7 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 // Items arrive already ordered by sequence, so nothing is re-sorted here.
 func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotResponse {
 	out := ConversationSnapshotResponse{
+		ContinueTurnID:                   chatsvc.ContinuableTurnID(s.Turns),
 		ConversationID:                   s.Conversation.ID,
 		ActiveBranchID:                   s.Conversation.ActiveBranchID,
 		BranchedFromEarlierMessage:       s.BranchedFromEarlierMessage,
@@ -1238,6 +1249,7 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 			ClientMessageID:   msg.ClientMessageID,
 			Streaming:         msg.Streaming,
 			CreatedAt:         msg.CreatedAt.UTC().Format(time.RFC3339),
+			Continuation:      msg.Continuation,
 		}
 		message.Content, message.EditAvailable = conversationContentSummary(msg)
 		message.EditAvailable = message.EditAvailable && msg.Sequence > s.EditFloorSequence
