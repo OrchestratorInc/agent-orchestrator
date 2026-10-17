@@ -21,6 +21,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/amp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/scratch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -3039,12 +3040,22 @@ func TestNativeModelConfirmationIgnoresRawScrollback(t *testing.T) {
 }
 
 func TestRestoreMemcodeDropsUnsupportedSavedModel(t *testing.T) {
-	for _, model := range []string{"claude-opus-4-1", "opus"} {
+	for _, test := range []struct {
+		model    string
+		endpoint string
+		want     string
+	}{
+		{model: "claude-opus-4-1"},
+		{model: "opus", want: "opus"},
+		{model: "opus", endpoint: "http://127.0.0.1:11434/v1"},
+	} {
 		st := newFakeStore()
-		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+		config := testRoleAgents()
+		config.Env = map[string]string{"MEMCODE_ENDPOINT_URL": test.endpoint}
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: config}
 		st.sessions["mer-1"] = domain.SessionRecord{
 			ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessMemcode, IsTerminated: true,
-			Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", Model: model, Prompt: "saved task"},
+			Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", Model: test.model, Prompt: "saved task"},
 		}
 		agent := &recordingAgent{}
 		m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
@@ -3052,13 +3063,27 @@ func TestRestoreMemcodeDropsUnsupportedSavedModel(t *testing.T) {
 		if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
 			t.Fatal(err)
 		}
-		want := ""
-		if model == "opus" {
-			want = model
+		if agent.lastConfig.Model != test.want {
+			t.Fatalf("restored model = %q, want %q (saved %q, endpoint %q)", agent.lastConfig.Model, test.want, test.model, test.endpoint)
 		}
-		if agent.lastConfig.Model != want {
-			t.Fatalf("restored model = %q, want %q", agent.lastConfig.Model, want)
-		}
+	}
+}
+
+func TestMemcodeWithoutPromptOrModelSkipsReadiness(t *testing.T) {
+	agent := memcode.New()
+	cfg := ports.LaunchConfig{}
+	hints, err := agent.PromptReadinessHints(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := &fakeRuntime{outputs: hints.Patterns}
+	msg := &fakeMessenger{}
+	m := New(Deps{Runtime: rt, Messenger: msg})
+	if err := m.deliverAfterStartPrompt(ctx, agent, cfg, ports.RuntimeHandle{}, "mer-1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if rt.outputCalls != 0 || len(msg.msgs) != 0 {
+		t.Fatalf("empty startup performed %d readiness reads and sent %#v", rt.outputCalls, msg.msgs)
 	}
 }
 
