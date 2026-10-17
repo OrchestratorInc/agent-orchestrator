@@ -172,6 +172,7 @@ var (
 	ErrSpawnCreate             = errors.New("create")
 	ErrSpawnSystemPrompt       = errors.New("system prompt file")
 	ErrSpawnArtifactDir        = errors.New("artifact dir")
+	ErrSpawnAgentAccount       = errors.New("agent account")
 	ErrWorkspaceCreate         = errors.New("workspace")
 	ErrWorkspaceProvision      = errors.New("provision")
 	ErrSpawnAttachments        = errors.New("attachments")
@@ -433,6 +434,9 @@ type Manager struct {
 	preview                     PreviewLifecycle
 	browser                     BrowserLifecycle
 	browserCapabilities         BrowserCapabilityIssuer
+	agentAccounts               ports.AgentAccountLaunchEnv
+	accountOverrideMu           sync.Mutex
+	accountOverrides            map[domain.SessionID]string
 	attachments                 *attachmentstore.Store
 	attachmentSuffix            func() (string, error)
 	dataDir                     string
@@ -643,6 +647,12 @@ func (m *Manager) SetTerminalInputGate(gate TerminalInputGate) {
 // SetAgentReadiness completes daemon wiring before request handling begins.
 func (m *Manager) SetAgentReadiness(provider ports.AgentReadinessProvider) {
 	m.agentReadiness = provider
+}
+
+// SetAgentAccounts completes daemon wiring before request handling begins.
+// Nil launches every agent under the computer's own CLI login.
+func (m *Manager) SetAgentAccounts(accounts ports.AgentAccountLaunchEnv) {
+	m.agentAccounts = accounts
 }
 
 // SetPersistentHostReconcileDone fences cold Chat resumes until startup has
@@ -1116,6 +1126,18 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 	}
 	id := rec.ID
+	if m.agentAccounts != nil {
+		if err := m.agentAccounts.BindSession(ctx, id, cfg.Harness, cfg.AgentAccountID); err != nil {
+			if prep != nil {
+				cleanupCtx, cancel := spawnRollbackContext(ctx)
+				m.discardClaimedTaskPreparation(cleanupCtx, prep)
+				cancel()
+			} else {
+				m.rollbackSpawnSeedRow(ctx, id)
+			}
+			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnAgentAccount, err)
+		}
+	}
 	// The system prompt embeds the artifact directory path, so the directory
 	// must exist and be known before buildSpawnTexts runs. For a prep-derived
 	// session the value is threaded through the later promoteTaskPreparation
@@ -5895,6 +5917,7 @@ func (m *Manager) runtimeEnv(id domain.SessionID, project domain.ProjectID, issu
 	setProtectedEnv(env, EnvBrowserCapability, "", caseInsensitive)
 	setProtectedEnv(env, EnvBrowserRuntimeToken, "", caseInsensitive)
 	setProtectedEnv(env, EnvBrowserRuntimeTokenStdin, "", caseInsensitive)
+	m.applyAgentAccountEnv(id, env, caseInsensitive)
 	path, err := hookPATHForOS(m.executable, os.Getenv, projectEnv, m.dataDir, caseInsensitive)
 	if err != nil {
 		m.logger.Warn("session PATH not pinned to the daemon binary; `ao hooks` callbacks may resolve to a different ao and activity tracking will stall",
@@ -5903,6 +5926,30 @@ func (m *Manager) runtimeEnv(id domain.SessionID, project domain.ProjectID, issu
 	}
 	setProtectedEnv(env, "PATH", path, caseInsensitive)
 	return env
+}
+
+// applyAgentAccountEnv runs each provider's CLI under the session's account.
+// It wins over project env, because a project value would silently launch the
+// agent under a different login than the one the session shows.
+func (m *Manager) applyAgentAccountEnv(id domain.SessionID, env map[string]string, caseInsensitive bool) {
+	if m.agentAccounts == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var accountEnv map[string]string
+	var err error
+	if override := m.accountOverride(id); override != "" {
+		accountEnv, err = m.agentAccounts.SessionLaunchEnvWith(ctx, id, override)
+	} else {
+		accountEnv, err = m.agentAccounts.SessionLaunchEnv(ctx, id)
+	}
+	if err != nil {
+		m.logger.Warn("session agent account env incomplete", "session", id, "error", err)
+	}
+	for key, value := range accountEnv {
+		setProtectedEnv(env, key, value, caseInsensitive)
+	}
 }
 
 func deleteProtectedEnv(env map[string]string, key string, caseInsensitive bool) {
@@ -6215,7 +6262,7 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 		return fmt.Errorf("install hooks: %w", err)
 	}
 	if pl, ok := agent.(preLauncher); ok {
-		if err := pl.PreLaunch(ctx, ports.LaunchConfig{DataDir: m.dataDir, SessionID: string(id), WorkspacePath: workspacePath}); err != nil {
+		if err := pl.PreLaunch(ctx, ports.LaunchConfig{DataDir: m.dataDir, SessionID: string(id), WorkspacePath: workspacePath, Env: env}); err != nil {
 			m.cleanupPreparedAgentWorkspace(ctx, agent, id, workspacePath, env)
 			return fmt.Errorf("pre-launch: %w", err)
 		}
