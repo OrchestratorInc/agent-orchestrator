@@ -1518,8 +1518,11 @@ func (e *Engine) listLocked(ctx stdctx.Context, workerID domain.SessionID, selec
 	// stable id when it probes alive, so the inspector's kill control stays
 	// visible and reviews/kill can reach the orphaned pane. Chat-mode handles
 	// are session-scoped and cannot be reconstructed from the worker id, so
-	// they keep the DB-only behavior (#6064).
-	if handle == "" && (reviewRow.ID == "" || reviewRow.InterfaceMode != domain.ReviewerInterfaceChat) {
+	// they keep the DB-only behavior (#6064). Probe only while the reviewer
+	// still counts as active — a #6064 zombie dies mid-turn, so its pass is
+	// still running; a finished reviewer keeps reporting no handle even when
+	// its terminal pane lingers.
+	if handle == "" && reviewerRowActive(reviewRow, runs) && reviewRow.InterfaceMode != domain.ReviewerInterfaceChat {
 		// No launch id: the stable-id probe wants the plain child-alive check,
 		// which is what Alive does when launchID is blank.
 		if alive, err := e.launcher.Alive(ctx, reviewerHandleID(workerID), ""); err == nil && alive {

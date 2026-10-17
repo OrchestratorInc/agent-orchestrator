@@ -1642,8 +1642,11 @@ func TestTerminateReviewerNoopsWhenNoReviewHistory(t *testing.T) {
 }
 
 func TestListReportsAliveDeterministicHandleWhenDBHandleCleared(t *testing.T) {
+	// The #6064 zombie dies mid-turn: the pass is still running while the
+	// teardown has already cleared the DB handle and the pane probes alive.
 	store := &fakeStore{
-		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerCodex},
+		review: &domain.Review{ID: "rev-codex", SessionID: "mer-1", Harness: domain.ReviewerCodex},
+		runs:   []domain.ReviewRun{requestedRun("run-codex", domain.ReviewerCodex, domain.ReviewRunRunning, domain.VerdictNone, 1)},
 	}
 	launcher := &fakeLauncher{alive: true}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
