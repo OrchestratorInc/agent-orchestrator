@@ -695,6 +695,12 @@ erDiagram
     }
 ```
 
+### Pre-migration snapshot
+
+When `sqlite.Open` finds migrations pending (an embedded migration with no `goose_db_version` row), it first checkpoints the WAL and saves `ao.db` as `<data dir>/backups/ao-pre-<from>-to-<to>.db`, then migrates. The save is a copy-on-write clone where the filesystem has one (macOS `clonefile`, Linux `FICLONE` on btrfs/XFS), which costs almost no time or space. Otherwise it is a full copy, and only when the volume has room for the database plus 10% plus 256 MiB; if it does not, or the snapshot fails for any other reason, `Open` logs a warning and migrates without one. Only the newest snapshot is kept, and nothing is saved on a new install or when nothing is pending. A full copy is made with a read transaction open, so another process cannot checkpoint into `ao.db` while it is read. A restart after a migration failed partway keeps the original snapshot of that upgrade instead of replacing it with the half-migrated database, and keeps it until the upgrade completes, even if that is days later.
+
+To roll back, quit AO, delete `ao.db-wal` and `ao.db-shm`, copy the snapshot over `ao.db`, and start the AO build you upgraded from. To look inside a snapshot first, open it read-only with `sqlite3 "file:<path>?immutable=1"`; a plain `sqlite3 -readonly <path>` cannot open a WAL-mode file that has no `-shm`.
+
 ### CDC pipeline
 
 ```mermaid
