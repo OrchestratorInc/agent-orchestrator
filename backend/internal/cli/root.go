@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
@@ -73,6 +74,9 @@ type Deps struct {
 	CommandOutputInDir    func(ctx context.Context, dir, name string, args ...string) ([]byte, error)
 	RunInteractiveCommand func(ctx context.Context, name string, args []string, stdin io.Reader, stdout, stderr io.Writer) error
 	ReadSecret            func(io.Reader) ([]byte, error)
+	// DoctorResolveCodexBinary resolves the codex binary like a spawn does;
+	// see checkCodexLaunchFlags for why LookPath is not equivalent.
+	DoctorResolveCodexBinary func(ctx context.Context) (string, error)
 	// DoctorGitHubRESTBase lets tests point the doctor GitHub token probe at
 	// httptest without mutating package-global state.
 	DoctorGitHubRESTBase string
@@ -86,22 +90,23 @@ type Deps struct {
 // DefaultDeps returns production dependencies.
 func DefaultDeps() Deps {
 	return Deps{
-		In:                    os.Stdin,
-		Out:                   os.Stdout,
-		Err:                   os.Stderr,
-		HTTPClient:            &http.Client{Timeout: 2 * time.Second},
-		Executable:            os.Executable,
-		StartProcess:          startProcess,
-		ProcessAlive:          processalive.Alive,
-		LookPath:              exec.LookPath,
-		CommandOutput:         commandOutput,
-		CommandOutputInDir:    commandOutputInDir,
-		RunInteractiveCommand: runInteractiveCommand,
-		ReadSecret:            readSecret,
-		DoctorGitHubRESTBase:  defaultDoctorGitHubRESTBase,
-		DoctorGitLabRESTBase:  defaultDoctorGitLabRESTBase,
-		Now:                   time.Now,
-		Sleep:                 time.Sleep,
+		In:                       os.Stdin,
+		Out:                      os.Stdout,
+		Err:                      os.Stderr,
+		HTTPClient:               &http.Client{Timeout: 2 * time.Second},
+		Executable:               os.Executable,
+		StartProcess:             startProcess,
+		ProcessAlive:             processalive.Alive,
+		LookPath:                 exec.LookPath,
+		CommandOutput:            commandOutput,
+		CommandOutputInDir:       commandOutputInDir,
+		RunInteractiveCommand:    runInteractiveCommand,
+		ReadSecret:               readSecret,
+		DoctorResolveCodexBinary: codex.ResolveCodexBinary,
+		DoctorGitHubRESTBase:     defaultDoctorGitHubRESTBase,
+		DoctorGitLabRESTBase:     defaultDoctorGitLabRESTBase,
+		Now:                      time.Now,
+		Sleep:                    time.Sleep,
 	}
 }
 
@@ -152,6 +157,9 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.ReadSecret == nil {
 		d.ReadSecret = def.ReadSecret
+	}
+	if d.DoctorResolveCodexBinary == nil {
+		d.DoctorResolveCodexBinary = def.DoctorResolveCodexBinary
 	}
 	if d.DoctorGitHubRESTBase == "" {
 		d.DoctorGitHubRESTBase = def.DoctorGitHubRESTBase
