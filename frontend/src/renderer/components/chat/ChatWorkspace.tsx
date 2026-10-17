@@ -4218,9 +4218,13 @@ const TurnGroup = memo(function TurnGroup({
 		(_run, index) => index >= leadingHumanCount && index !== finalAssistantRunIndex,
 	);
 	const finalRun = finalAssistantRunIndex >= 0 ? runs[finalAssistantRunIndex] : undefined;
-	// Errors and system warnings stay readable after the turn settles instead of
-	// folding away with the routine work.
-	const noticeRuns = group.outcome ? workedRuns.filter(isNoticeRun) : [];
+	// Errors, system warnings and anything the user wrote mid-turn (a steer or a
+	// later message) stay readable after the turn settles instead of folding away
+	// with the routine work. Hiding the user's own words would leave the reply
+	// below the Worked row answering a question the reader cannot see.
+	const noticeRuns = group.outcome
+		? workedRuns.filter((run) => isNoticeRun(run) || isHumanRun(run.items[0]))
+		: [];
 	const foldedRuns = workedRuns.filter((run) => !noticeRuns.includes(run) && !rendersNothing(run));
 	// Keep the live row mounted while its spinner animates out, then hand over to the settled row.
 	const [showSettledStatus, setShowSettledStatus] = useState(!group.live);
