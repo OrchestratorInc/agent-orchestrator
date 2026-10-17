@@ -29,6 +29,7 @@ in [gemini-cli.md](gemini-cli.md).
 | [harnesses/unreal-agent.md](harnesses/unreal-agent.md) | Built-in Unreal Agent Chat setup, provider environment, persistence, and current limits.                              |
 | [harnesses/mimo-code.md](harnesses/mimo-code.md)       | MiMo Code TUI setup, permissions, activity hooks, exact restore, and current limits.                                 |
 | [harnesses/deepseek-harness.md](harnesses/deepseek-harness.md) | DeepSeek Harness Chat over ACP, headless task mode, credentials, and current limits.                        |
+| [Harness integration and audit skill](../.agents/skills/ao-agent-harness/SKILL.md) | Contributor workflow for adding harnesses and running evidence-backed native lifecycle audits. |
 | [harnesses/command-code.md](harnesses/command-code.md)   | Command Code TUI setup, activity hooks, Chat over `cmd acp`, exact restore, and current limits.                 |
 | [STATUS.md](STATUS.md)                                 | What is shipped on `main` today and what is still in flight.                                                          |
 | [stack.md](stack.md)                                   | Accepted library/runtime choices, pending stack decisions, and dependencies explicitly avoided for V1.                |
