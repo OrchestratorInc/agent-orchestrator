@@ -477,42 +477,61 @@ func (*Plugin) EmptyComposerProvesWaitingInputReady() bool { return true }
 // DetectTerminalActivity implements the scoped native adapter contract.
 func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
 	// Native placeholders use italic; typed composer text has normal styling.
-	composerOutput := regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllStringFunc(output, func(sequence string) string {
+	composerOutput := regexp.MustCompile(`\x1b\[[0-9;:]*m`).ReplaceAllStringFunc(output, func(sequence string) string {
 		params := strings.Split(strings.TrimSuffix(strings.TrimPrefix(sequence, "\x1b["), "m"), ";")
-		for _, param := range params {
-			if param == "3" {
-				return strings.TrimSuffix(sequence, "m") + ";2m"
+		for i := 0; i < len(params); i++ {
+			code, _, colon := strings.Cut(params[i], ":")
+			// Color payloads contain numbers that are not SGR attributes.
+			if code == "38" || code == "48" || code == "58" {
+				if !colon && i+1 < len(params) {
+					switch params[i+1] {
+					case "5":
+						i = min(i+2, len(params)-1)
+					case "2":
+						i = min(i+4, len(params)-1)
+					}
+				}
+				continue
 			}
-			if param == "23" {
-				return strings.TrimSuffix(sequence, "m") + ";22m"
+			// Insert beside the real attribute so later resets retain their order.
+			switch code {
+			case "3":
+				params[i] += ";2"
+			case "23":
+				params[i] += ";22"
 			}
 		}
-		return sequence
+		return "\x1b[" + strings.Join(params, ";") + "m"
 	})
 	lines := terminalui.PlainTerminalLines(output)
 	last := len(lines) - 1
 	for last >= 0 && strings.TrimSpace(lines[last]) == "" {
 		last--
 	}
+	// The running composer also has borders and an italic placeholder. Inspect
+	// the newest prompt first so that chrome cannot satisfy the idle check.
+	for i := last; i >= 0 && i >= last-7; i-- {
+		line := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(line, nativeWarningPrompt) || strings.HasPrefix(line, nativeQuestionPrompt) {
+			return domain.ActivityBlocked, true
+		}
+		if strings.HasPrefix(line, nativeNamedPrompt) || (strings.HasPrefix(line, nativePrompt) && strings.Contains(line, "msg=interrupt")) {
+			return domain.ActivityActive, true
+		}
+		if strings.HasPrefix(line, nativePrompt) {
+			break
+		}
+	}
 	if last >= 0 {
 		bottom := strings.TrimSpace(lines[last])
 		if len([]rune(bottom)) >= 16 && strings.Trim(bottom, "─") == "" &&
-			(terminalui.LastBorderedPromptIsEmptyOrDimPlaceholder(composerOutput, nativePrompt) ||
-				terminalui.LastBorderedPromptIsEmptyOrDimPlaceholder(composerOutput, nativeNamedPrompt)) {
+			terminalui.LastBorderedPromptIsEmptyOrDimPlaceholder(composerOutput, nativePrompt) {
 			return domain.ActivityIdle, true
-		}
-		// Approval and question prompts are native chrome at the bottom of the
-		// pane. Plain modal labels may also occur in task or model scrollback.
-		if strings.HasPrefix(bottom, nativeWarningPrompt) || strings.HasPrefix(bottom, nativeQuestionPrompt) {
-			return domain.ActivityBlocked, true
 		}
 	}
 	for i := last; i >= 0 && i >= last-4; i-- {
 		line := strings.TrimSpace(lines[i])
-		if (strings.HasPrefix(line, nativePrompt) || strings.HasPrefix(line, nativeNamedPrompt)) && strings.Contains(line, "msg=interrupt") {
-			return domain.ActivityActive, true
-		}
-		if strings.HasPrefix(line, nativePrompt) || strings.HasPrefix(line, nativeNamedPrompt) {
+		if strings.HasPrefix(line, nativePrompt) {
 			return domain.ActivityBlocked, true
 		}
 	}

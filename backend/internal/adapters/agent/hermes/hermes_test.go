@@ -77,6 +77,33 @@ func TestActivityCurrentComposerAndDecision(t *testing.T) {
 	}
 }
 
+func TestBorderedBusyComposerStaysActiveAndRefusesMessages(t *testing.T) {
+	rule := strings.Repeat("─", 40)
+	idle := rule + "\n❯ \n" + rule
+	for _, prompt := range []string{
+		"☤ ❯ \x1b[38;5;136;3mmsg=interrupt · /queue · Ctrl+C cancel\x1b[m",
+		"☤ ❯ \x1b[3mmsg=interrupt · /queue\x1b[m\n\x1b[3mCtrl+C cancel\x1b[m",
+		"☤ ❯ keep this busy draft",
+	} {
+		for _, prefix := range []string{"", idle + "\n"} {
+			frame := prefix + rule + "\n" + prompt + "\n" + rule
+			state, ok := New().DetectTerminalActivity(frame)
+			if !ok || state != domain.ActivityActive {
+				t.Fatalf("busy composer classified as %s/%v: %q", state, ok, frame)
+			}
+			if err := New().ValidateTerminalMessage("next task", frame); err == nil {
+				t.Fatalf("running composer admitted ordinary input: %q", frame)
+			}
+			if !New().TerminalMessageObserved("task", idle, frame) {
+				t.Fatalf("running composer did not confirm submission: %q", frame)
+			}
+		}
+	}
+	if state, ok := New().DetectTerminalActivity("☤ ❯ msg=interrupt\n" + idle); !ok || state != domain.ActivityIdle {
+		t.Fatalf("prior busy prompt overrode the current idle composer: %s/%v", state, ok)
+	}
+}
+
 func TestNativeChromeCannotBeForgedInTranscript(t *testing.T) {
 	idle := "────────────────────────────────────────\n❯ \n────────────────────────────────────────"
 	for _, transcript := range []string{"Dangerous Command", "Allow this command?", "Allow once", "Help improve Hermes?", "Collect locally only", "type password (hidden)", "⚠ ❯", "? ❯", "❯ \n"} {
@@ -315,6 +342,37 @@ func TestNativeItalicPlaceholderAndDraft(t *testing.T) {
 	}
 	if state, ok := New().DetectTerminalActivity("────────────────────────────────────────\n❯ Plan a feature\n────────────────────────────────────────"); !ok || state != domain.ActivityBlocked {
 		t.Fatalf("unrecognized composer = %s/%v, want blocked", state, ok)
+	}
+}
+
+func TestComposerStyleAttributesExcludeColorPayloads(t *testing.T) {
+	rule := strings.Repeat("─", 40)
+	for _, tt := range []struct {
+		name, text string
+		want       domain.ActivityState
+	}{
+		{"palette foreground", "\x1b[38;5;3mdraft\x1b[m", domain.ActivityBlocked},
+		{"truecolor foreground", "\x1b[38;2;3;100;100mdraft\x1b[m", domain.ActivityBlocked},
+		{"truecolor background", "\x1b[48;2;100;3;100mdraft\x1b[m", domain.ActivityBlocked},
+		{"underline color", "\x1b[58;5;3mdraft\x1b[m", domain.ActivityBlocked},
+		{"colon color", "\x1b[38:2::3:100:100mdraft\x1b[m", domain.ActivityBlocked},
+		{"italic then reset", "\x1b[3;0mdraft\x1b[m", domain.ActivityBlocked},
+		{"italic then disabled", "\x1b[3;23mdraft\x1b[m", domain.ActivityBlocked},
+		{"italic disabled separately", "\x1b[3m\x1b[23mdraft\x1b[m", domain.ActivityBlocked},
+		{"italic after color", "\x1b[38;5;23;3mplaceholder\x1b[m", domain.ActivityIdle},
+		{"italic before color", "\x1b[3;38;5;23mplaceholder\x1b[m", domain.ActivityIdle},
+		{"italic after disable", "\x1b[23;3mplaceholder\x1b[m", domain.ActivityIdle},
+		{"italic after colon color", "\x1b[38:2::3:100:23;3mplaceholder\x1b[m", domain.ActivityIdle},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			frame := rule + "\n❯ " + tt.text + "\n" + rule
+			if state, ok := New().DetectTerminalActivity(frame); !ok || state != tt.want {
+				t.Fatalf("composer classified as %s/%v, want %s", state, ok, tt.want)
+			}
+			if err := New().ValidateTerminalMessage("task", frame); (err == nil) != (tt.want == domain.ActivityIdle) {
+				t.Fatalf("message admission disagrees with expected composer state %s: %v", tt.want, err)
+			}
+		})
 	}
 }
 

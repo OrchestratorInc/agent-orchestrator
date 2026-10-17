@@ -81,6 +81,13 @@ func TestHermesEveryGuardedWriteRequiresCurrentEmptyComposer(t *testing.T) {
 	if len(runtime.messages) != 0 {
 		t.Fatal("refused messages wrote bytes")
 	}
+	runtime.screen = "────────────────────────────────────────\n☤ ❯ \x1b[3mmsg=interrupt · Ctrl+C cancel\x1b[m\n────────────────────────────────────────"
+	if err := messenger.Send(ctx, rec.ID, "next task"); err == nil {
+		t.Fatal("bordered running composer admitted input using stale durable idle")
+	}
+	if len(runtime.messages) != 0 {
+		t.Fatal("running composer refusal wrote bytes")
+	}
 	runtime.screen = "────────────────────────────────────────\n❯ \n────────────────────────────────────────"
 	var wg sync.WaitGroup
 	var successes int

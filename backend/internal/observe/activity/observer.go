@@ -176,31 +176,32 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 			nativeID = id
 		}
 	}
-	if state == session.Activity.State && (nativeID == "" || nativeID == session.Metadata.AgentSessionID) {
-		return
+	if state != session.Activity.State || (nativeID != "" && nativeID != session.Metadata.AgentSessionID) {
+		event := "terminal-" + string(state)
+		if rendered, ok := agent.(interface{ RequiresRenderedActivity() bool }); ok && rendered.RequiresRenderedActivity() && session.Activity.State == domain.ActivityBlocked && state != domain.ActivityBlocked {
+			// A current native composer/busy frame resolves the prior modal. Keep
+			// its observed destination state: lifecycle accepts this boundary for
+			// active, idle, and waiting input, and clears the blocked tool flight.
+			event = "permission-resolved"
+		} else if state == domain.ActivityWaitingInput {
+			event = "terminal-waiting-input"
+		}
+		err = o.sink.ApplyActivitySignal(ctx, session.ID, ports.ActivitySignal{
+			AgentSessionID:   nativeID,
+			Valid:            true,
+			State:            state,
+			Timestamp:        now,
+			ExpectedRevision: &session.Revision,
+			Event:            event,
+			LaunchID:         session.Metadata.RuntimeLaunchID,
+		})
+		if err != nil {
+			o.logger.Error("activity observer: reconciliation failed", "session", session.ID, "err", err)
+			return
+		}
 	}
-	event := "terminal-" + string(state)
-	if rendered, ok := agent.(interface{ RequiresRenderedActivity() bool }); ok && rendered.RequiresRenderedActivity() && session.Activity.State == domain.ActivityBlocked && state != domain.ActivityBlocked {
-		// A current native composer/busy frame resolves the prior modal. Keep
-		// its observed destination state: lifecycle accepts this boundary for
-		// active, idle, and waiting input, and clears the blocked tool flight.
-		event = "permission-resolved"
-	} else if state == domain.ActivityWaitingInput {
-		event = "terminal-waiting-input"
-	}
-	err = o.sink.ApplyActivitySignal(ctx, session.ID, ports.ActivitySignal{
-		AgentSessionID:   nativeID,
-		Valid:            true,
-		State:            state,
-		Timestamp:        now,
-		ExpectedRevision: &session.Revision,
-		Event:            event,
-		LaunchID:         session.Metadata.RuntimeLaunchID,
-	})
-	if err != nil {
-		o.logger.Error("activity observer: reconciliation failed", "session", session.ID, "err", err)
-		return
-	}
+	// Locator persistence is idempotent and can fail after the durable identity
+	// write. Retry it even when subsequent polls see the same state and identity.
 	if nativeID != "" {
 		if persister, supports := agent.(ports.AgentNativeSessionPersister); supports {
 			if err := persister.PersistNativeSessionID(ctx, resolveCfg, nativeID); err != nil {

@@ -53,6 +53,7 @@ type pollingResolverAgent struct {
 	resolvedID         string
 	resolveCalls       int
 	persistCalls       int
+	persistErr         error
 	onPersist          func()
 }
 
@@ -72,7 +73,7 @@ func (a *pollingResolverAgent) PersistNativeSessionID(context.Context, ports.Nat
 	if a.onPersist != nil {
 		a.onPersist()
 	}
-	return nil
+	return a.persistErr
 }
 
 func TestPollOnlyResolvesOrdinaryNativeIdentityOnStateChange(t *testing.T) {
@@ -117,6 +118,40 @@ func TestPollPersistsHermesLocatorAfterNativeIdentitySignal(t *testing.T) {
 	}
 	if agent.persistCalls != 0 {
 		t.Fatal("locator was persisted after the identity signal failed")
+	}
+}
+
+func TestPollRetriesHermesLocatorAfterIdleIdentityIsCommitted(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessHermes)
+	agent := &pollingResolverAgent{
+		state:              domain.ActivityIdle,
+		continuousIdentity: true,
+		resolvedID:         "native-id",
+		persistErr:         errors.New("temporary locator failure"),
+	}
+	sink := &fakeSink{applied: func() {
+		session.Activity.State = domain.ActivityIdle
+		session.Metadata.AgentSessionID = agent.resolvedID
+		session.Revision++
+	}}
+	observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, &fakeRuntime{}, fakeAgents{session.Harness: agent}, Config{DataDir: t.TempDir(), Clock: func() time.Time { return now }, Logger: testLogger()})
+	if err := observer.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.signals) != 1 || agent.persistCalls != 1 || session.Metadata.AgentSessionID != agent.resolvedID {
+		t.Fatalf("initial identity was not committed before locator failure: signals=%+v persists=%d session=%+v", sink.signals, agent.persistCalls, session)
+	}
+	observer.sessions = fakeSessions{rows: []domain.SessionRecord{session}}
+	agent.persistErr = nil
+	if err := observer.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if agent.resolveCalls != 2 || agent.persistCalls != 2 {
+		t.Fatalf("unchanged idle identity did not retry locator: resolves=%d persists=%d", agent.resolveCalls, agent.persistCalls)
+	}
+	if len(sink.signals) != 1 {
+		t.Fatalf("locator retry emitted a redundant activity signal: %+v", sink.signals)
 	}
 }
 
