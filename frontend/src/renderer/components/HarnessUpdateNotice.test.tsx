@@ -549,6 +549,28 @@ describe("harness updates while sessions run", () => {
 		expect(await screen.findByRole("dialog", { name: "Sessions using Claude Code" })).toBeInTheDocument();
 	});
 
+	it("keeps a finished update busy until its advisory has refreshed", async () => {
+		const refresh = deferred<void>();
+		const post = vi.mocked(apiClient.POST);
+		const original = post.getMockImplementation()!;
+		post.mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/readiness/ensure") await refresh.promise;
+			return original(path, options);
+		});
+		jobs = [{ target: "claude-code", status: "installing" }];
+		mountNotice();
+		expect(await screen.findByRole("button", { name: /Updating/ })).toBeDisabled();
+		jobs = [{ target: "claude-code", status: "succeeded" }];
+		await waitFor(() => expect(post).toHaveBeenCalledWith("/api/v1/agents/readiness/ensure", expect.anything()), { timeout: 3000 });
+		// The cached advisory still says behind; the card must not offer Update again.
+		expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
+		expect(screen.getByRole("button", { name: /Updating/ })).toBeDisabled();
+		advisories["claude-code"] = { ...claudeAdvisory, status: "current", currentVersion: "2.1.292" };
+		refresh.resolve();
+		await waitFor(() => expect(screen.queryByRole("button", { name: /Updating/ })).toBeNull());
+		expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
+	});
+
 	it("starts a Windows update that waits for idle sessions without asking", async () => {
 		advisories["claude-code"] = { ...claudeAdvisory, inUse: { liveSessions: 1, sessionIds: ["s1"], level: "idle" } };
 		mountNotice();

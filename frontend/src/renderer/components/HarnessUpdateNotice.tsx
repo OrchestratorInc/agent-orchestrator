@@ -47,6 +47,9 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	// Updates started from a notice run right here; the notice shows progress
 	// and any failure instead of sending the user to Settings.
 	const [starting, setStarting] = useState<ReadonlySet<AgentId>>(new Set());
+	// Harnesses whose finished job is still refreshing its advisory: until the
+	// refresh lands, the old advisory would offer Update again for a moment.
+	const [settling, setSettling] = useState<ReadonlySet<AgentId>>(new Set());
 	const startingRef = useRef(new Set<AgentId>());
 	const updateAllInFlight = useRef(false);
 	const [startingAll, setStartingAll] = useState(false);
@@ -77,10 +80,17 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	// Refresh even on failure: a command can change the binary before
 	// failing verification. Never keep advertising an obsolete version.
 	const refreshAfterJob = (agentId: string) => {
+		setSettling((current) => new Set([...current, agentId as AgentId]));
 		void ensureAgentReadiness([agentId]).then(async (result) => {
 			cacheAgentReadiness(queryClient, result);
 			await queryClient.invalidateQueries({ queryKey: updateAdvisoryQueryKey(agentId as AgentId) });
-		}).catch(() => undefined);
+		}).catch(() => undefined).finally(() => {
+			setSettling((current) => {
+				const next = new Set(current);
+				next.delete(agentId as AgentId);
+				return next;
+			});
+		});
 		void queryClient.invalidateQueries({ queryKey: installerQueryKey });
 	};
 	useEffect(() => {
@@ -166,7 +176,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	const updateAllTargets = ready ? updates.flatMap(({ agentId, advisory }) => {
 		const method = installers.data?.find((plan) => plan.agentId === agentId)?.methods.find((candidate) => candidate.id === maintenanceMethodId(advisory));
 		const needsLogin = needsHarnessLogin(authPlans.data?.find((plan) => plan.agentId === agentId), readinessById.get(agentId)?.authentication.state);
-		if (!method?.available || !method.updateAvailable || needsLogin || starting.has(agentId)
+		if (!method?.available || !method.updateAvailable || needsLogin || starting.has(agentId) || settling.has(agentId)
 			|| isActiveInstallJob(jobs.data?.find((job) => job.target === agentId))) return [];
 		return [{ agentId, advisory, methodId: method.id }];
 	}) : [];
@@ -262,7 +272,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 				const authPlan = authPlans.data?.find((candidate) => candidate.agentId === agentId);
 				const needsLogin = needsHarnessLogin(authPlan, readinessById.get(agentId)?.authentication.state);
 				const canUpdate = Boolean(method?.available && method.updateAvailable);
-				const busy = isActiveInstallJob(job) || starting.has(agentId);
+				const busy = isActiveInstallJob(job) || starting.has(agentId) || settling.has(agentId);
 				// A job this notice started that failed stays explained here.
 				const failed = startedJobs.current.has(agentId) && isFailedInstallJob(job);
 				const error = errors[agentId] ?? (failed ? job?.error || t("settings.harness.updateJobFailed") : undefined);
