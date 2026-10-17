@@ -2051,13 +2051,15 @@ export const ChatComposer = memo(function ChatComposer({
 						) : attachLater ? (
 							<Tooltip>
 								<TooltipTrigger asChild>
-									<span className="inline-flex">
+									{/* Focusable so keyboard users reach the explanation the disabled button cannot. */}
+									<span className="inline-flex rounded-full focus-visible:outline-2 focus-visible:outline-ring" tabIndex={0} aria-label={t("chat.composer.attachLater")}>
 										<Button
 											type="button"
 											variant="ghost"
 											size="icon-sm"
 											disabled
-											aria-label="Attach a file"
+											aria-hidden="true"
+											tabIndex={-1}
 											className="size-7 shrink-0 rounded-full p-0 text-muted-foreground"
 										>
 											<Plus aria-hidden="true" className="size-3.5 text-muted-foreground" />
