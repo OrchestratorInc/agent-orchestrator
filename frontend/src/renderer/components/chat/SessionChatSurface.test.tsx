@@ -53,6 +53,7 @@ const {
 	agentSwitchState: { data: [] as AgentSwitchSummary[] },
 	conversationCommandState: {
 		busy: false,
+		send: vi.fn(),
 		chooseSettings: vi.fn(),
 		pendingAcceptedTurnId: undefined as string | undefined,
 		acknowledgeAcceptedTurn: vi.fn(),
@@ -131,6 +132,8 @@ vi.mock("./ChatWorkspace", async () => {
 	const { useState } = await vi.importActual<typeof import("react")>("react");
 	const { TurnSettingsBar } = await vi.importActual<typeof import("./TurnSettingsBar")>("./TurnSettingsBar");
 	return {
+		CONTINUE_STOPPED_TURN_PROMPT: "Continue from where you stopped.",
+		continuableTurnId: (snapshot: ConversationSnapshot) => snapshot.continueTurnId ?? "",
 		ChatWorkspace: ({
 			agentInputDisabled,
 			headerActions,
@@ -139,6 +142,7 @@ vi.mock("./ChatWorkspace", async () => {
 			onLinkOpen,
 			onRememberPermissions,
 			onChooseSettings,
+			onContinueTurn,
 			configOptionError,
 			configOptions,
 			models,
@@ -155,6 +159,7 @@ vi.mock("./ChatWorkspace", async () => {
 			onLinkOpen?: (url: string) => void;
 			onRememberPermissions?: unknown;
 			onChooseSettings?: unknown;
+			onContinueTurn?: () => Promise<unknown> | void;
 			configOptionError?: string;
 			configOptions?: ChatConfigOption[];
 			models: ChatModel[];
@@ -186,6 +191,7 @@ vi.mock("./ChatWorkspace", async () => {
 					))}
 					{snapshot.harness === "claude-code" && <TurnSettingsBar models={models} settings={snapshot.settings} harness={snapshot.harness} configOptions={configOptions} onChangeConfigOption={() => {}} />}
 					<div data-testid="prompt-suggestion">{promptSuggestion?.text}</div>
+					<button type="button" onClick={() => { void Promise.resolve(onContinueTurn?.()).catch(() => {}); }}>Continue test turn</button>
 					{headerActions}
 					{sessionTabAction}
 					<button type="button" onClick={() => onLinkOpen?.(LINK)}>
@@ -240,6 +246,7 @@ beforeEach(() => {
 	conversationState.hasOlder = false;
 	conversationState.isLoadingOlder = false;
 	conversationState.loadOlder = vi.fn();
+	conversationCommandState.send = vi.fn().mockResolvedValue({});
 	conversationCommandState.busy = false;
 	conversationCommandState.pendingAcceptedTurnId = undefined;
 	conversationCommandState.acknowledgeAcceptedTurn.mockReset();
@@ -1370,6 +1377,41 @@ describe("project remembering waits for provider permissions", () => {
 	});
 });
 
+
+describe("SessionChatSurface continuation identity", () => {
+	it("starts a fresh intent when undo makes a previously continued stop eligible again", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		conversationState.snapshot = { ...snapshotFor(session.id), continueTurnId: "stopped-1", latestSequence: 1 };
+		const view = render(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		await userEvent.click(screen.getByRole("button", { name: "Continue test turn" }));
+		const originalId = conversationCommandState.send.mock.calls[0]![0].clientMessageId;
+		conversationState.snapshot = { ...snapshotFor(session.id), continueTurnId: "", latestSequence: 2 };
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
+		conversationState.snapshot = { ...snapshotFor(session.id), continueTurnId: "stopped-1", latestSequence: 2 };
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
+		await userEvent.click(screen.getByRole("button", { name: "Continue test turn" }));
+		expect(conversationCommandState.send.mock.calls[1]![0].clientMessageId).not.toBe(originalId);
+	});
+
+	it("reuses an intent id after an ambiguous failure and changes it for a new stopped turn", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		conversationState.snapshot = { ...snapshotFor(session.id), continueTurnId: "stopped-1" };
+		conversationCommandState.send.mockRejectedValueOnce(new Error("response lost"));
+		const view = render(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		await userEvent.click(screen.getByRole("button", { name: "Continue test turn" }));
+		await userEvent.click(screen.getByRole("button", { name: "Continue test turn" }));
+		const first = conversationCommandState.send.mock.calls[0]![0];
+		const second = conversationCommandState.send.mock.calls[1]![0];
+		expect(first.clientMessageId).toBeTruthy();
+		expect(second.clientMessageId).toBe(first.clientMessageId);
+		expect(first).toMatchObject({ text: "Continue from where you stopped.", continuation: true });
+		conversationState.snapshot = { ...snapshotFor(session.id), continueTurnId: "stopped-2" };
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
+		await userEvent.click(screen.getByRole("button", { name: "Continue test turn" }));
+		expect(conversationCommandState.send.mock.calls[2]![0].clientMessageId).not.toBe(first.clientMessageId);
+	});
+});
+
 describe("side command routing", () => {
 	beforeEach(() => {
 		useUiStore.setState({ developerMode: true, sideChats: true });
@@ -1385,8 +1427,7 @@ describe("side command routing", () => {
 	] as const)("sends /btw to the main chat when %s", async (_case, flags, provider) => {
 		useUiStore.setState(flags);
 		sideMocks.create.mockReset();
-		const mainSend = vi.fn().mockResolvedValue(undefined);
-		(conversationCommandState as { send?: unknown }).send = mainSend;
+		const mainSend = conversationCommandState.send;
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		render(
 			<Wrapper client={queryClient}>
@@ -1398,7 +1439,6 @@ describe("side command routing", () => {
 		});
 		expect(sideMocks.create).not.toHaveBeenCalled();
 		expect(mainSend).toHaveBeenCalledWith(expect.objectContaining({ text: "/btw what is this?", clientMessageId: "submission-main" }));
-		delete (conversationCommandState as { send?: unknown }).send;
 	});
 
 	it.each(["btw", "side"])(

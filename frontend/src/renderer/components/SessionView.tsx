@@ -1312,6 +1312,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const browserView = useBrowserView({
 		sessionId: uiSessionId,
 		origin: hostId ? { hostId, sessionId, proxyBase: remoteBase ?? "" } : undefined,
+		cloudAgentBrowser: session?.cloud && cloudCpReady ? { baseUrl: cloudCpBaseUrl, orgId: session.cloud.orgId, sessionId: session.id } : undefined,
 		active: browserSlotVisible,
 		poppedOut: browserPoppedOut,
 		terminated: browserTerminated,

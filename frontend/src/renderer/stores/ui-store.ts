@@ -41,6 +41,10 @@ export type GlobalSettingsSection =
 /** Project settings pages: the project form sections plus the cues manager. */
 export type ProjectSettingsSection = ProjectFormSection | "environment" | "scripts" | "cues";
 
+/** Which failure a "Show diagnostics" shortcut is about: the job it produced,
+ * if any, and the error the user saw. */
+export type HarnessDiagnosticsRequest = { jobStartedAt?: string; error?: string };
+
 export type SettingsModal =
 	| {
 			scope: "global";
@@ -51,6 +55,8 @@ export type SettingsModal =
 			harnessView?: "local" | "cloud";
 			/** Start focusAgentId's login flow as soon as the Harness page can. */
 			startLogin?: boolean;
+			/** Open the diagnostics of focusAgentId's failed install or update, ready to copy. */
+			showDiagnostics?: HarnessDiagnosticsRequest;
 			/** Preserve the project form while global recovery settings is above it. */
 			returnTo?: Extract<SettingsModal, { scope: "project" }>;
 	}
@@ -194,7 +200,7 @@ export type UiState = {
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
-	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; preserveProject?: boolean }) => void;
+	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean }) => void;
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
 	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
@@ -419,6 +425,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			...(options?.hostId && options.hostId !== "local" ? { hostId: options.hostId } : {}),
 			...(options?.harnessView ? { harnessView: options.harnessView } : {}),
 			...(options?.startLogin && options.focusAgentId ? { startLogin: true } : {}),
+			...(options?.showDiagnostics && options.focusAgentId ? { showDiagnostics: options.showDiagnostics } : {}),
 			...(options?.preserveProject && state.settingsModal?.scope === "project"
 				? { returnTo: state.settingsModal }
 				: options?.preserveProject && state.settingsModal?.scope === "global" && state.settingsModal.returnTo

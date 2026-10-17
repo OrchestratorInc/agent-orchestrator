@@ -2402,15 +2402,20 @@ type MobileStatusResponse struct {
 // KeepAwakeStatus describes the macOS-only option that stops the machine from
 // idle-sleeping while Connect Mobile is on, so a paired phone stays connected.
 type KeepAwakeStatus struct {
-	Supported  bool `json:"supported"`  // this platform can hold the machine awake (macOS)
-	Enabled    bool `json:"enabled"`    // the user turned the option on
-	Active     bool `json:"active"`     // the sleep assertion is currently held
-	HasBattery bool `json:"hasBattery"` // a laptop, where closing the lid still sleeps it
+	Supported    bool   `json:"supported"`  // this platform can hold the machine awake (macOS)
+	Enabled      bool   `json:"enabled"`    // the user turned the option on
+	Active       bool   `json:"active"`     // the sleep assertion is currently held
+	HasBattery   bool   `json:"hasBattery"` // this machine has an internal battery
+	LidClosed    bool   `json:"lidClosed,omitempty"`
+	LidSupported bool   `json:"lidSupported,omitempty"`
+	LidActive    bool   `json:"lidActive,omitempty"` // native control armed for this daemon's live lease
+	LidReason    string `json:"lidReason,omitempty"`
 }
 
 // SetKeepAwakeRequest is the body of POST /api/v1/mobile/keep-awake.
 type SetKeepAwakeRequest struct {
-	Enabled bool `json:"enabled"`
+	Enabled   bool  `json:"enabled"`
+	LidClosed *bool `json:"lidClosed,omitempty"`
 }
 
 // SecurePairingStatus describes the optional TLS-over-Tailscale pairing mode,
@@ -2533,6 +2538,8 @@ type SendConversationMessageRequest struct {
 	Attachments     []ConversationImageContentRequest     `json:"attachments,omitempty"`
 	Resources       []ConversationResourceContentRequest  `json:"resources,omitempty"`
 	Excerpts        []ConversationExcerptReferenceRequest `json:"excerpts,omitempty"`
+	// Continuation marks the user's request to continue an interrupted task.
+	Continuation bool `json:"continuation,omitempty"`
 }
 
 // ConversationExcerptReferenceRequest attaches verified selected transcript
@@ -2893,8 +2900,11 @@ type ConversationMessageResponse struct {
 	ClientMessageID string `json:"clientMessageId,omitempty"`
 	EditAvailable   bool   `json:"editAvailable"`
 	// Streaming is true while more deltas are expected for this message.
-	Streaming bool   `json:"streaming"`
-	CreatedAt string `json:"createdAt"`
+	Streaming bool `json:"streaming"`
+	// Continuation is the user's one-click "continue" after stopping a turn,
+	// shown as a marker instead of a message bubble.
+	Continuation bool   `json:"continuation,omitempty"`
+	CreatedAt    string `json:"createdAt"`
 }
 
 // ConversationActivityResponse is one non-message timeline entry.
@@ -2944,6 +2954,7 @@ type ConversationActivityResponse struct {
 
 // ConversationSnapshotResponse is the durable read model a client bootstraps from.
 type ConversationSnapshotResponse struct {
+	ContinueTurnID string `json:"continueTurnId"`
 	// SupportsExcerpts advertises daemon-owned source verification separately from
 	// provider capabilities. Older daemons silently ignore the excerpts input.
 	SupportsExcerpts           bool   `json:"supportsExcerpts,omitempty"`

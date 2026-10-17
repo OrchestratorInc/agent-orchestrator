@@ -136,12 +136,22 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 				grouped
 			>
 				<SettingsRow label={t("settings.browserImport.rowLabel")}>
-					<Button disabled={!bridge} onClick={() => setImportOpen(true)} type="button" variant="secondary">
+					<Button
+						className="text-settings-muted hover:text-settings-label"
+						disabled={!bridge}
+						onClick={() => setImportOpen(true)}
+						size="sm"
+						type="button"
+						variant="ghost"
+					>
 						<Import aria-hidden="true" className="size-icon-base" />
 						{t("settings.browserImport.action")}
 					</Button>
 				</SettingsRow>
-				<SettingsRow label={t("settings.browserProfiles.create")}>
+				<SettingsRow
+					label={t("settings.browserProfiles.create")}
+					description={t("settings.browserProfiles.description")}
+				>
 					{/* One field with its submit embedded at the trailing edge. */}
 					<form
 						className="flex h-control-form w-52 min-w-0 items-center gap-1 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) pl-3 pr-1"
@@ -172,31 +182,28 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 					</form>
 				</SettingsRow>
 			</SettingsSection>
-			<SettingsSection title={t("settings.browserProfiles.profiles")}>
-				{error ? <p className="text-xs text-destructive" role="alert">{error}</p> : null}
+			<SettingsSection title={t("settings.browserProfiles.profiles")} grouped>
+				{error ? <div className="settings-row-bar text-xs text-error" role="alert">{error}</div> : null}
 				{loading ? (
-					<p className="py-2 text-xs text-settings-muted">{t("settings.browserProfiles.loading")}</p>
+					<div className="settings-row-bar text-sm text-settings-muted">{t("settings.browserProfiles.loading")}</div>
 				) : profiles.length === 0 ? (
-					<p className="py-2 text-xs text-settings-muted">{t("settings.browserProfiles.empty")}</p>
+					<div className="settings-row-bar text-sm text-settings-muted">{t("settings.browserProfiles.empty")}</div>
 				) : (
-					<ul className="flex flex-col divide-y divide-border">
-						{profiles.map((profile) => (
-							<BrowserProfileRow
-								key={profile.id}
-								profile={profile}
-								isDefault={defaultProfileId === profile.id}
-								onToggleDefault={() => void toggleDefault(profile)}
-								renaming={renamingId === profile.id}
-								onRenameStart={() => setRenamingId(profile.id)}
-								onRenameEnd={(value) => void rename(profile, value)}
-								onRenameCancel={() => setRenamingId(null)}
-								onClear={() => requestAction("clear", profile)}
-								onDelete={() => requestAction("delete", profile)}
-							/>
-						))}
-					</ul>
+					profiles.map((profile) => (
+						<BrowserProfileRow
+							key={profile.id}
+							profile={profile}
+							isDefault={defaultProfileId === profile.id}
+							onToggleDefault={() => void toggleDefault(profile)}
+							renaming={renamingId === profile.id}
+							onRenameStart={() => setRenamingId(profile.id)}
+							onRenameEnd={(value) => void rename(profile, value)}
+							onRenameCancel={() => setRenamingId(null)}
+							onClear={() => requestAction("clear", profile)}
+							onDelete={() => requestAction("delete", profile)}
+						/>
+					))
 				)}
-				<p className="text-xs leading-relaxed text-settings-muted">{t("settings.browserProfiles.description")}</p>
 			</SettingsSection>
 			<ConfirmDialog
 				open={pendingAction !== null}
@@ -274,8 +281,8 @@ function BrowserProfileRow({
 	const cancelOnBlur = useRef(false);
 
 	return (
-		<li className="flex min-h-11 min-w-0 items-center gap-3 py-1.5">
-			<UserRound aria-hidden="true" className="size-4 shrink-0 text-settings-muted" />
+		<div className="settings-row-bar min-w-0">
+			<UserRound aria-hidden="true" className="size-icon-lg shrink-0 text-settings-muted" />
 			{/* The name slot keeps the row's width whether it shows the name or the
 			    field, so the menu button never moves while renaming. */}
 			<div className="min-w-0 flex-1">
@@ -363,6 +370,6 @@ function BrowserProfileRow({
 					</DropdownMenuItem>
 				</DropdownMenuContent>
 			</DropdownMenu>
-		</li>
+		</div>
 	);
 }

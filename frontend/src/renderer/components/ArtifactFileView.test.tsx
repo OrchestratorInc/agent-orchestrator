@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { aoBridge } from "../lib/bridge";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -66,7 +67,7 @@ describe("ArtifactFileView", () => {
 
 	const RAW_URL = "http://ao-preview-artifact.abc123.localhost:3001/notes.txt?raw=true";
 
-	it("fetches a .txt artifact through its rawUrl and renders its content", async () => {
+	it("fetches a local artifact through the explicit loopback artifact API and renders its content", async () => {
 		fetchMock.mockResolvedValue(new Response("hello world", { status: 200 }));
 
 		renderWithQuery(<ArtifactFileView artifactName="notes.txt" path="notes.txt" rawUrl={RAW_URL} sessionId="sess-1" />);
@@ -74,7 +75,7 @@ describe("ArtifactFileView", () => {
 		await waitFor(() => expect(screen.getByText("hello world")).toBeInTheDocument());
 		expect(scrollContainer()).toHaveClass("overflow-y-auto", "min-h-0", "select-text");
 
-		expect(fetchMock).toHaveBeenCalledWith(RAW_URL);
+		expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:3001/api/v1/sessions/sess-1/preview/files/notes.txt?source=artifact&raw=true");
 	});
 
 	it("opens a .md artifact already rendered, not as raw markdown source", async () => {
@@ -84,19 +85,35 @@ describe("ArtifactFileView", () => {
 		renderWithQuery(<ArtifactFileView artifactName="notes.md" path="notes.md" rawUrl={rawUrl} sessionId="sess-1" />);
 
 		await waitFor(() => expect(screen.getByRole("heading", { name: "Notes" })).toBeInTheDocument());
-		expect(fetchMock).toHaveBeenCalledWith(rawUrl);
+		expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:3001/api/v1/sessions/sess-1/preview/files/notes.md?source=artifact&raw=true");
 		expect(screen.getByText("hello")).toBeInTheDocument();
 		expect(screen.queryByText(/^# Notes/)).not.toBeInTheDocument();
 	});
 
-	it("fetches whatever rawUrl the session provided, unmodified", async () => {
+	it("encodes nested artifact paths without treating their characters as URL delimiters", async () => {
 		fetchMock.mockResolvedValue(new Response("content", { status: 200 }));
 		const rawUrl = "http://ao-preview-artifact.abc123.localhost:3001/sub%20dir/report.txt?raw=true";
 
-		renderWithQuery(<ArtifactFileView artifactName="report.txt" path="sub dir/report.txt" rawUrl={rawUrl} sessionId="sess-1" />);
+		renderWithQuery(<ArtifactFileView artifactName="report #1?.txt" path="sub dir/report #1?.txt" rawUrl={rawUrl} sessionId="sess-1" />);
 
 		await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+		expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:3001/api/v1/sessions/sess-1/preview/files/sub%20dir/report%20%231%3F.txt?source=artifact&raw=true");
+	});
+
+	it.each([
+		"http://127.0.0.1:4200/remote/capability/notes.txt?raw=true",
+		"https://artifacts.example.test/signed/notes.txt?signature=example",
+	])("preserves a remote or cloud content URL: %s", async (rawUrl) => {
+		fetchMock.mockResolvedValue(new Response("remote content", { status: 200 }));
+		renderWithQuery(<ArtifactFileView artifactName="notes.txt" path="notes.txt" rawUrl={rawUrl} sessionId="sess-1" />);
+		await screen.findByText("remote content");
 		expect(fetchMock).toHaveBeenCalledWith(rawUrl);
+	});
+
+	it.each(["../secret.txt", "sub/../../secret.txt", "/secret.txt", "sub\\secret.txt"])("rejects an invalid local artifact path before making a request: %s", async (path) => {
+		renderWithQuery(<ArtifactFileView artifactName="secret.txt" path={path} rawUrl={RAW_URL} sessionId="sess-1" />);
+		await screen.findByRole("button", { name: "Retry" });
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
 	it("marks binary artifacts as binary instead of decoding them as text", async () => {
@@ -200,6 +217,43 @@ describe("ArtifactFileView", () => {
 		expect(message).toContain("- Location: Selected text");
 		expect(message).toContain("- Selected text: Cache the session list.");
 		expect(message).toContain("- Path: plan.md");
+	});
+
+	it("copies text selected in the rendered artifact with the copy shortcut while the composer has focus", async () => {
+		fetchMock.mockResolvedValue(new Response("# Plan\n\nCache the session list.", { status: 200 }));
+		vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(40, 200, 120, 16));
+		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+
+		renderWithQuery(<ArtifactFileView artifactName="plan.md" path="plan.md" rawUrl={RAW_URL} sessionId="sess-1" />);
+
+		const paragraph = await screen.findByText("Cache the session list.");
+		const range = document.createRange();
+		range.selectNodeContents(paragraph);
+		window.getSelection()?.removeAllRanges();
+		window.getSelection()?.addRange(range);
+		fireEvent.pointerUp(paragraph);
+		const textbox = await screen.findByRole("textbox", { name: "Feedback for plan.md · selected text" });
+
+		const setData = vi.fn();
+		fireEvent.copy(textbox, { clipboardData: { setData } });
+		expect(setData).toHaveBeenCalledWith("text/plain", "Cache the session list.");
+
+		expect(screen.queryByRole("button", { name: /copy/i })).not.toBeInTheDocument();
+		fireEvent.keyDown(textbox, { key: "c", metaKey: true });
+		expect(writeText).toHaveBeenCalledWith("Cache the session list.");
+		writeText.mockClear();
+		fireEvent.keyDown(textbox, { key: "c", ctrlKey: true });
+		expect(writeText).toHaveBeenCalledWith("Cache the session list.");
+	});
+
+	it("copies a fenced code block in a rendered markdown artifact", async () => {
+		fetchMock.mockResolvedValue(new Response("# Setup\n\n```sh\nnpm install\n```", { status: 200 }));
+		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+
+		renderWithQuery(<ArtifactFileView artifactName="setup.md" path="setup.md" rawUrl={RAW_URL} sessionId="sess-1" />);
+
+		fireEvent.click(await screen.findByRole("button", { name: "Copy code" }));
+		expect(writeText).toHaveBeenCalledWith("npm install");
 	});
 
 	it("closes an empty selection composer on a click elsewhere", async () => {

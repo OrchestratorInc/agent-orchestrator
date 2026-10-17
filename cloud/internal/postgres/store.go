@@ -26,6 +26,9 @@ var (
 	ErrTerminalSessionExited = errors.New("terminal session exited")
 	ErrTransportExpired      = errors.New("worker request expired")
 	ErrWorkspaceReadOnly     = errors.New("workspace is read-only")
+	// ErrProviderConnectionInUse refuses deleting a provider connection that a
+	// sandbox not yet fully deleted still runs on. It is a conflict.
+	ErrProviderConnectionInUse = fmt.Errorf("provider connection in use: %w", ErrConflict)
 )
 
 type Store struct {

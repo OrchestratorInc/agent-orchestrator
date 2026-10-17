@@ -140,6 +140,16 @@ func (f *fakeStore) CommitClientRequestSession(_ context.Context, id domain.Sess
 	f.sessions[id] = rec
 	return nil
 }
+func (f *fakeStore) RenameSessionIfDisplayName(_ context.Context, id domain.SessionID, current, name string, at time.Time) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok || rec.DisplayName != current {
+		return false, nil
+	}
+	rec.DisplayName, rec.UpdatedAt = name, at
+	f.sessions[id] = rec
+	return true, nil
+}
+
 func (f *fakeStore) UpdateSession(_ context.Context, rec domain.SessionRecord) error {
 	if f.updateSessionErr != nil {
 		return f.updateSessionErr
@@ -205,6 +215,17 @@ func (f *fakeStore) SetSessionProvisionedWorkspace(_ context.Context, id domain.
 	rec.Metadata.Branch = branch
 	rec.Metadata.WorkspacePath = workspacePath
 	rec.Metadata.WorkspaceRepoPath = workspaceRepoPath
+	rec.UpdatedAt = now
+	f.sessions[id] = rec
+	return true, nil
+}
+
+func (f *fakeStore) SetSessionNamedWorkspace(_ context.Context, id domain.SessionID, expectedPath, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok || rec.Metadata.RuntimeHandleID != "" || rec.Metadata.ProviderConversationID != "" || rec.IsTerminated || rec.IsTaskPreparation || rec.Metadata.WorkspacePath != "" && rec.Metadata.WorkspacePath != expectedPath && rec.Metadata.WorkspacePath != workspacePath {
+		return false, nil
+	}
+	rec.Metadata.Branch, rec.Metadata.WorkspacePath, rec.Metadata.WorkspaceRepoPath = branch, workspacePath, workspaceRepoPath
 	rec.UpdatedAt = now
 	f.sessions[id] = rec
 	return true, nil
@@ -2201,6 +2222,35 @@ func TestRestore_RotatesSupervisedAgentGeneration(t *testing.T) {
 	wantArgv := []string{"/opt/ao", "agent-process", "supervise", "--session", "mer-1", "--launch", "launch-new", "--", "codex", "resume", "agent-x"}
 	if !reflect.DeepEqual(rt.lastCfg.Argv, wantArgv) {
 		t.Fatalf("restored runtime argv = %#v, want %#v", rt.lastCfg.Argv, wantArgv)
+	}
+}
+
+func TestRestore_RotatesSupervisedAgentGeneration_Agy(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x", RuntimeLaunchID: "launch-old"})
+	rec := st.sessions["mer-1"]
+	rec.Harness = domain.HarnessAgy
+	st.sessions["mer-1"] = rec
+	rt := &fakeRuntime{}
+	agent := supervisedLaunchAgent{launchArgvAgent{argv: []string{"agy", "--conversation", "agent-x"}}}
+	m := New(Deps{
+		Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st},
+		LookPath:    func(string) (string, error) { return "/bin/true", nil },
+		Executable:  func() (string, error) { return "/opt/ao", nil },
+		NewLaunchID: func() string { return "launch-new" },
+	})
+
+	result, err := m.RestoreWithMode(ctx, "mer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Session.Metadata.RuntimeLaunchID != "launch-new" {
+		t.Fatalf("restored launch id = %q, want launch-new", result.Session.Metadata.RuntimeLaunchID)
+	}
+	if result.Session.Metadata.AgentSessionIDLaunchID != "launch-new" {
+		t.Fatalf("restored native identity launch = %q, want launch-new", result.Session.Metadata.AgentSessionIDLaunchID)
 	}
 }
 
@@ -4561,6 +4611,46 @@ func TestRestore_RefreshesModelFromSessionMetadata(t *testing.T) {
 	}
 	if res.Mode != RestoreModeNative {
 		t.Fatalf("restore mode = %q, want native (no new session)", res.Mode)
+	}
+}
+
+// TestRestore_RefreshesEffortFromSessionMetadata is the effort sibling of the
+// ChatUI ↔ TUI persistence bug above: a per-spawn or ChatUI-selected reasoning
+// effort recorded on the session's durable metadata must reach the harness
+// restore command for every effort-capable harness, not silently revert to the
+// project default for everyone except Claude Code.
+func TestRestore_RefreshesEffortFromSessionMetadata(t *testing.T) {
+	st := newFakeStore()
+	// The project default would otherwise win; the session's own persisted
+	// effort must take precedence for the rebuild.
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{
+		AgentConfig: domain.AgentConfig{Model: "project-default-model", Effort: "low"},
+	}}
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Harness: domain.HarnessCodex, IsTerminated: true,
+		Activity: domain.Activity{State: domain.ActivityExited},
+		Metadata: domain.SessionMetadata{
+			WorkspacePath:  "/ws/mer-1",
+			Branch:         "b",
+			AgentSessionID: "codex-native-1",
+			Effort:         "high",
+		},
+	}
+	agent := &recordingAgent{}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+
+	if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	// The persisted effort, not the project default, reaches the harness restore cmd.
+	if agent.lastConfig.Effort != "high" {
+		t.Fatalf("restore config effort = %q, want the session's persisted effort high", agent.lastConfig.Effort)
+	}
+	// History is preserved: the restore resumed the existing native conversation
+	// rather than spawning a new session.
+	if !reflect.DeepEqual(agent.lastRestore.Session.Metadata[ports.MetadataKeyAgentSessionID], "codex-native-1") {
+		t.Fatalf("resume identity = %q, want codex-native-1 (conversation must be preserved)", agent.lastRestore.Session.Metadata[ports.MetadataKeyAgentSessionID])
 	}
 }
 
@@ -7420,6 +7510,78 @@ func TestSpawn_RejectsUnsupportedClaudeTUIEffortBeforeSessionRow(t *testing.T) {
 	}
 	if rt.created != 0 {
 		t.Fatal("runtime must not be created for an unsupported Claude effort")
+	}
+}
+
+func TestSpawn_RejectsExplicitEffortForUnsupportedHarnessBeforeSessionRow(t *testing.T) {
+	m, st, rt, ws := newManager()
+	m.SetModelCatalog(tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+		{ID: "gemini-2.5-pro", IsDefault: true, Efforts: []string{"low", "high"}},
+	}}})
+
+	// TUI is the default session mode: an explicit --effort for a harness that
+	// cannot honor it must fail before any durable state exists, not ride
+	// along unused while the CLI reports success.
+	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+		ProjectID:     "mer",
+		Kind:          domain.KindWorker,
+		Harness:       domain.HarnessDroid,
+		RequestedMode: domain.SessionModeTUI,
+		AgentConfig: ports.AgentConfig{
+			Model: "gemini-2.5-pro", Effort: "high",
+		},
+		EffortOverride: true,
+	})
+	if !errors.Is(err, ports.ErrUnsupportedEffort) {
+		t.Fatalf("err = %v, want ErrUnsupportedEffort", err)
+	}
+	if len(st.sessions) != 0 {
+		t.Fatalf("no session row should be created, got %d", len(st.sessions))
+	}
+	if ws.lastCfg.SessionID != "" || ws.destroyed != 0 {
+		t.Fatal("workspace must not be created for an unsupported harness effort")
+	}
+	if rt.created != 0 {
+		t.Fatal("runtime must not be created for an unsupported harness effort")
+	}
+}
+
+// TestSpawn_TUICodexEffortIsResolvedAndPersisted asserts a TUI codex spawn
+// with an explicit effort override resolves and validates it against the model
+// catalog and persists the resolved selection durably, so a later rebuild can
+// keep the choice instead of reverting to the project default.
+func TestSpawn_TUICodexEffortIsResolvedAndPersisted(t *testing.T) {
+	m, st, rt, _ := newManager()
+	agent := &recordingAgent{}
+	m.agents = singleAgent{agent: agent}
+	m.SetModelCatalog(tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+		{ID: "gpt-5.6-sol", IsDefault: true, Efforts: []string{"low", "medium", "high"}},
+	}}})
+
+	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+		ProjectID:      "mer",
+		Kind:           domain.KindWorker,
+		Harness:        domain.HarnessCodex,
+		RequestedMode:  domain.SessionModeTUI,
+		Prompt:         "do the work",
+		AgentConfig:    ports.AgentConfig{Effort: "high"},
+		EffortOverride: true,
+	})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if rt.created != 1 {
+		t.Fatalf("runtime creates = %d, want 1", rt.created)
+	}
+	if agent.lastConfig.Effort != "high" {
+		t.Fatalf("launch effort = %q, want high", agent.lastConfig.Effort)
+	}
+	stored, ok := st.sessions[rec.ID]
+	if !ok {
+		t.Fatal("spawned session row missing")
+	}
+	if stored.Metadata.Effort != "high" {
+		t.Fatalf("persisted effort = %q, want high (explicit override must be durable for a TUI rebuild)", stored.Metadata.Effort)
 	}
 }
 

@@ -294,6 +294,19 @@ type AgentInterfaceHandoffHistoryProbe interface {
 	) (bool, error)
 }
 
+// AgentInterfaceHandoffStorageBridge is an OPTIONAL capability for adapters
+// whose native conversation files live in interface-specific storage roots.
+// Session Manager calls it only after the source controller is stopped.
+type AgentInterfaceHandoffStorageBridge interface {
+	PrepareInterfaceHandoffStorage(
+		ctx context.Context,
+		session SessionRef,
+		from, to domain.SessionMode,
+		nativeConversationID string,
+		env map[string]string,
+	) error
+}
+
 // ModelSelectionMode tells clients how to render an agent's model control.
 type ModelSelectionMode string
 
@@ -621,6 +634,10 @@ type ActiveTurnSteerer interface {
 // Session Manager can bridge its typed metadata onto a SessionRef without
 // either side hard-coding the other's vocabulary.
 const MetadataKeyAgentSessionID = "agentSessionId"
+
+// MetadataKeySessionMode is the SessionRef.Metadata key that carries the
+// current session mode (e.g. "chat" or "tui").
+const MetadataKeySessionMode = "sessionMode"
 
 // MetadataKeyTitle and MetadataKeySummary are the SessionRef.Metadata keys
 // carrying a session's human title and one-line summary. They are the shared

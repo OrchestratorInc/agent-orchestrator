@@ -123,12 +123,12 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 			<Button type="button" aria-expanded={diagnosticsExpanded} size="sm" variant="ghost" onClick={onToggleDiagnostics}>
 				{t(diagnosticsExpanded ? "settings.harness.hideDiagnostics" : "settings.harness.showDiagnostics")}
 			</Button>
-			{diagnosticsExpanded ? <div className="rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) p-3 text-xs text-settings-muted">
+			{diagnosticsExpanded ? <div data-harness-diagnostics="" className="rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) p-3 text-xs text-settings-muted">
 				{job?.method ? <p><span className="font-medium text-settings-label">{t("settings.harness.method")}:</span> {job.method}</p> : null}
 				{job?.expectedDestination ? <p className="break-all"><span className="font-medium text-settings-label">{t("settings.harness.expectedDestination")}:</span> {job.expectedDestination}</p> : null}
 				{job?.error ? <p className="mt-2 whitespace-pre-wrap text-error">{job.error}</p> : null}
 				{job?.output ? <pre className="settings-thin-scrollbar mt-2 max-h-40 overflow-auto overscroll-contain whitespace-pre-wrap break-words font-mono">{job.output}</pre> : null}
-				<Button type="button" className="mt-2" size="sm" variant="outline" onClick={() => job && onCopyDiagnostics(job)}><Copy aria-hidden="true" />{t("settings.harness.copyDiagnostics")}</Button>
+				<Button type="button" data-harness-copy-diagnostics="" className="mt-2" size="sm" variant="outline" onClick={() => job && onCopyDiagnostics(job)}><Copy aria-hidden="true" />{t("settings.harness.copyDiagnostics")}</Button>
 			</div> : null}
 		</div> : null}
 	</div>;

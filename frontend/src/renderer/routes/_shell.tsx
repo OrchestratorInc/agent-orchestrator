@@ -1147,10 +1147,10 @@ function ShellLayout() {
 		return () => cancelAnimationFrame(frame);
 	}, [resolvedTheme]);
 
-	// macOS window transparency (Developer Mode flag): the shell becomes one
+	// macOS Appearance preference: the shell becomes one
 	// translucent plate over the native vibrancy blur (styles.css, "macOS window
 	// transparency").
-	const windowTranslucent = isMac && developerMode && windowTranslucency;
+	const windowTranslucent = isMac && windowTranslucency;
 	useEffect(() => {
 		if (!isMac) return;
 		applyWindowTranslucency(windowTranslucent);

@@ -1735,6 +1735,38 @@ func TestActivity_StopWithoutCurrentPromptNeverPairsWithPriorTurn(t *testing.T) 
 	}
 }
 
+func TestActivity_AgyTUIStopRetainsCheckpointForNativeHistoryReplay(t *testing.T) {
+	m, store, _ := newManager()
+	rec := working("mer-1")
+	rec.Harness = domain.HarnessAgy
+	rec.Mode = domain.SessionModeTUI
+	rec.Metadata.RuntimeLaunchID = "launch-current"
+	rec.Metadata.AgentSessionID = "native-current"
+	rec.Metadata.AgentSessionIDLaunchID = "launch-current"
+	rec.Metadata.LatestUserPrompt = "prior Chat prompt"
+	rec.Metadata.LatestUserPromptAt = time.Unix(122, 0).UTC()
+	rec.Metadata.LatestAssistantUpdate = "prior Chat answer"
+	rec.Metadata.ConversationCheckpointState = domain.ConversationCheckpointComplete
+	rec.Metadata.ConversationCheckpointGeneration = "old-chat-generation"
+	rec.Metadata.ConversationCheckpointNativeID = "native-current"
+	store.sessions[rec.ID] = rec
+
+	if err := m.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
+		Valid: true, State: domain.ActivityIdle, Event: "stop",
+		LaunchID: "launch-current", AgentSessionID: "native-current",
+		LatestAssistantUpdate: "TUI answer without a prompt-boundary hook",
+	}); err != nil {
+		t.Fatalf("ApplyActivitySignal stop: %v", err)
+	}
+	got := store.sessions[rec.ID].Metadata
+	if got.LatestUserPrompt != rec.Metadata.LatestUserPrompt ||
+		got.LatestAssistantUpdate != rec.Metadata.LatestAssistantUpdate ||
+		got.ConversationCheckpointState != rec.Metadata.ConversationCheckpointState ||
+		got.ConversationCheckpointUnsettled {
+		t.Fatalf("Agy Stop changed the trusted checkpoint or marked it unsettled: %+v", got)
+	}
+}
+
 func TestActivity_NonBoundaryEventCannotReplaceConversationCheckpoint(t *testing.T) {
 	m, store, _ := newManager()
 	rec := working("mer-1")

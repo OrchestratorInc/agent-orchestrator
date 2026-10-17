@@ -105,6 +105,12 @@ func (m *Manager) runBackgroundTask(ctx context.Context, id domain.SessionID, sy
 	if rec.IsTerminated {
 		return "", fmt.Errorf("session %s is terminated", id)
 	}
+	// Existing background titles and suggestions use the provider's default effort.
+	rec.Metadata.Effort = ""
+	return m.runRecordBackgroundTask(ctx, rec, systemPrompt, prompt, run)
+}
+
+func (m *Manager) runRecordBackgroundTask(ctx context.Context, rec domain.SessionRecord, systemPrompt, prompt string, run func(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)) (string, error) {
 	releaseHarness, err := m.beginHarnessUse(rec.Harness)
 	if err != nil {
 		return "", err
@@ -127,7 +133,7 @@ func (m *Manager) runBackgroundTask(ctx context.Context, id domain.SessionID, sy
 	defer func() { _ = os.RemoveAll(workspace) }()
 
 	config := ports.AgentConfig{
-		Model: rec.Metadata.Model, Permissions: backgroundTaskPermissions(rec.Harness),
+		Model: rec.Metadata.Model, Effort: rec.Metadata.Effort, Permissions: backgroundTaskPermissions(rec.Harness),
 	}
 	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, nil)
 	if m.agents != nil {

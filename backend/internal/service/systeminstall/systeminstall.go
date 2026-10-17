@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -718,6 +719,14 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		if baseline != nil && baseline.path != "" {
 			plan = targetInstalledCopy(s.goos, plan, target, baseline.path)
 		}
+		if target == TargetKimi {
+			binaryPath := ""
+			if baseline != nil {
+				binaryPath = baseline.path
+			}
+			home, _ := os.UserHomeDir()
+			plan = bindKimiInstallerUpdate(s.goos, plan, binaryPath, home, os.Getenv("PATH"))
+		}
 		plan = s.validateNPMUpdateTarget(ctx, plan, plannedPrefix)
 	}
 	if operation == AgentOperationUpdate && expected != "" {
@@ -1043,7 +1052,7 @@ func (s *Service) Verify(ctx context.Context, target Target) (Job, error) {
 	}
 	go func() { //nolint:gosec // bounded daemon-owned worker intentionally outlives the request.
 		defer s.workers.Done()
-		s.runAgentVerification(s.backgroundContext, job, nil)
+		s.runAgentVerification(s.backgroundContext, job, nil, "")
 	}()
 	return initial, nil
 }
@@ -1173,6 +1182,9 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 			}
 		}
 	} else {
+		if plan.Method == "official-installer" {
+			env = append(env, vendorUpdateEnv[plan.Target]...)
+		}
 		runCommand := func(argv []string) error {
 			if s.installCommands != nil {
 				return s.installCommands.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: env}, out, out)
@@ -1222,13 +1234,52 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		s.finishAgentJob(job, StatusFailed, "", fmt.Sprintf("persist verifying state: %v", err), "")
 		return
 	}
-	s.runAgentVerification(s.backgroundContext, job, baseline)
+	updaterReport := ""
+	if plan.Script == nil {
+		updaterReport = lastOutputLine(out.String())
+	}
+	s.runAgentVerification(s.backgroundContext, job, baseline, updaterReport)
+}
+
+// maxUpdaterReportRunes bounds the updater line quoted in a failed update.
+const maxUpdaterReportRunes = 200
+
+// terminalEscape matches ANSI CSI and OSC sequences that colour or retitle
+// terminal output.
+var terminalEscape = regexp.MustCompile(`\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
+
+// lastOutputLine is the last non-empty line a command printed, as a terminal
+// would show it: escape sequences removed and only the text after a line's
+// last carriage return, shortened to fit an error message.
+func lastOutputLine(output string) string {
+	output = terminalEscape.ReplaceAllString(strings.ReplaceAll(output, "\r\n", "\n"), "")
+	lines := strings.Split(output, "\n")
+	for index := len(lines) - 1; index >= 0; index-- {
+		// A terminal keeps the last carriage-return segment that printed text,
+		// including one followed by a trailing bare \r.
+		line := ""
+		segments := strings.Split(lines[index], "\r")
+		for segment := len(segments) - 1; segment >= 0 && line == ""; segment-- {
+			line = strings.TrimSpace(segments[segment])
+		}
+		if line == "" {
+			continue
+		}
+		if runes := []rune(line); len(runes) > maxUpdaterReportRunes {
+			line = string(runes[:maxUpdaterReportRunes]) + "…"
+		}
+		return line
+	}
+	return ""
 }
 
 // runAgentVerification re-probes the harness after a job. For an update, the
 // baseline from before the command decides whether the binary sessions run
-// actually changed; a zero exit status alone is not proof.
-func (s *Service) runAgentVerification(ctx context.Context, job *Job, baseline *installedBaseline) {
+// actually changed; a zero exit status alone is not proof. updaterReport is
+// the update command's last line: self-updaters can exit 0 without replacing
+// the binary ("already up to date", "update manually", "restart to finish"),
+// and a failed update quotes it so the user sees which.
+func (s *Service) runAgentVerification(ctx context.Context, job *Job, baseline *installedBaseline, updaterReport string) {
 	if s.verifier == nil {
 		s.finishAgentJob(job, StatusFailed, "", "adapter-backed install verifier is not configured", "")
 		return
@@ -1248,6 +1299,9 @@ func (s *Service) runAgentVerification(ctx context.Context, job *Job, baseline *
 		output = strings.TrimRight(output, "\n") + "\n" + note
 	}
 	if failure != "" {
+		if updaterReport != "" {
+			failure = fmt.Sprintf("%s; the update command reported: %q", failure, updaterReport)
+		}
 		s.finishAgentJob(job, StatusFailed, output, failure, result.ResolvedPath)
 		return
 	}

@@ -65,6 +65,12 @@ export interface CloudCpOffering {
 	kind: CloudCpOfferingKind;
 	/** Plan feature flags; empty when none. */
 	features: string[];
+	/**
+	 * The org holds the coder capability (WorkOS metadata capabilities=coder):
+	 * it may connect its own Coder deployment, and its Coder sessions are not
+	 * billed. Absent from older control planes.
+	 */
+	customCoder?: boolean;
 }
 
 /** GET /me */
@@ -444,11 +450,19 @@ export interface CloudCpOrgCoderConfig {
 	protectSecretFiles?: boolean;
 	/** True when an API token is stored. The token itself is never returned. */
 	tokenSet: boolean;
+	/**
+	 * False when the org may no longer save a connection (it lacks the coder
+	 * capability) but still has this one, which it can read and remove.
+	 * Absent means true.
+	 */
+	editable?: boolean;
 }
 
 export interface CloudCpOrgCoderConfigResponse {
 	/** The stored config, or null when the org has none configured yet. */
 	coderConfig: CloudCpOrgCoderConfig | null;
+	/** The org may save a connection; absent from older control planes (true). */
+	editable?: boolean;
 }
 
 /**

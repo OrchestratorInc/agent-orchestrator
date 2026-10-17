@@ -52,16 +52,26 @@ func (c *SessionsController) artifactFile(w http.ResponseWriter, r *http.Request
 		envelope.WriteError(w, r, err)
 		return
 	}
-	asset := chi.URLParam(r, "*")
-	// chi matches the escaped path whenever the request carried one, as a
-	// page's link to "chart (1).png" does.
-	if r.URL.RawPath != "" {
-		if asset, err = url.PathUnescape(asset); err != nil {
-			writeArtifactFileNotFound(w, r)
-			return
-		}
+	asset, _, err := wildcardPath(r)
+	if err != nil {
+		writeArtifactFileNotFound(w, r)
+		return
 	}
 	serveArtifactFile(w, r, renderContentSecurityPolicy, sess.Metadata.ArtifactDir, asset)
+}
+
+// wildcardPath returns the route's "*" tail unescaped. chi matches the escaped
+// path whenever the request carried a non-default escape, as a page's link to
+// "chart (1).png" or Turbopack's "%40swc" chunk names do; escaped is that
+// tail as sent then, and empty otherwise.
+func wildcardPath(r *http.Request) (tail, escaped string, err error) {
+	tail = chi.URLParam(r, "*")
+	if r.URL.RawPath == "" {
+		return tail, "", nil
+	}
+	escaped = tail
+	tail, err = url.PathUnescape(escaped)
+	return tail, escaped, err
 }
 
 // serveArtifactFile serves asset from the artifact directory root in the
@@ -184,7 +194,8 @@ func removeArtifactFile(dir, relPath string) error {
 }
 
 // artifactEditMu serialises artifact writes so two saves cannot both pass the
-// fingerprint check against the same content.
+// fingerprint check against the same content. saveArtifactContent and
+// restoreArtifactContent hold it.
 var artifactEditMu sync.Mutex
 
 // updateArtifactFile replaces the content of one listed artifact file when
@@ -222,9 +233,7 @@ func (c *SessionsController) updateArtifactFile(w http.ResponseWriter, r *http.R
 		writeArtifactFileNotFound(w, r)
 		return
 	}
-	artifactEditMu.Lock()
-	defer artifactEditMu.Unlock()
-	if err := writeArtifactFile(sess.Metadata.ArtifactDir, clean, expected, []byte(in.Content)); err != nil {
+	if err := c.saveArtifactContent(r.Context(), sess.SessionRecord, clean, expected, []byte(in.Content)); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			writeArtifactFileNotFound(w, r)
 			return

@@ -432,7 +432,7 @@ it("automatically reveals a remote preview after session data finishes loading",
 	await connectHost("http://box-a:3001");
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	renderRemoteSession(queryClient);
-	await waitFor(() => expect(ensure).toHaveBeenCalledWith("remote:box-a:session-1"));
+	await waitFor(() => expect(ensure).toHaveBeenCalledWith("remote:box-a:session-1", false));
 	await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 	releaseInitialSessions();
 	await screen.findByRole("combobox", { name: "Message the agent" });
