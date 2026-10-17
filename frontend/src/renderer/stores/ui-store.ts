@@ -5,6 +5,7 @@ import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
 import type { FilesSource } from "../hooks/useSessionWorkspaceFiles";
+import type { CloudCpWorkspaceReviewScope } from "../lib/cloud-cp";
 import {
 	applyDocumentTheme,
 	applyDocumentThemeStyle,
@@ -84,6 +85,7 @@ export type InspectorSessionState = {
 	filesChangedOnly?: boolean;
 	/** Files tab: source shared by the docked and maximized explorers. */
 	filesSource?: FilesSource;
+	cloudReviewSelection?: { scope: CloudCpWorkspaceReviewScope; commitSha?: string };
 	/** Files: display mode picked per path in a centre tab, restored for the same open request after a remount. */
 	fileDisplayModes?: Record<string, RememberedFileDisplayMode>;
 	/** The session-entry defaulting (Summary tab, baseline browser reveal) has already run once for this session's lifetime. */
@@ -222,6 +224,7 @@ export type UiState = {
 	setBrowserUnseen: (sessionId: string, unseen: boolean) => void;
 	setFilesChangedOnly: (sessionId: string, changedOnly: boolean) => void;
 	setFilesSource: (sessionId: string, source: FilesSource) => void;
+	setCloudReviewSelection: (sessionId: string, selection: { scope: CloudCpWorkspaceReviewScope; commitSha?: string }) => void;
 	setFileDisplayMode: (sessionId: string, path: string, mode: FileDisplayMode, requestKey: number) => void;
 	setCommandPaletteOpen: (open: boolean) => void;
 	setProjectRestarting: (projectId: string, restarting: boolean, hostId?: string) => void;
@@ -556,6 +559,18 @@ export const useUiStore = create<UiState>((set, get) => ({
 				inspectorSessions: {
 					...state.inspectorSessions,
 					[sessionId]: { ...current, filesSource },
+				},
+			};
+		}),
+	setCloudReviewSelection: (sessionId, cloudReviewSelection) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			if (current.cloudReviewSelection?.scope === cloudReviewSelection.scope
+				&& current.cloudReviewSelection.commitSha === cloudReviewSelection.commitSha) return state;
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, cloudReviewSelection },
 				},
 			};
 		}),

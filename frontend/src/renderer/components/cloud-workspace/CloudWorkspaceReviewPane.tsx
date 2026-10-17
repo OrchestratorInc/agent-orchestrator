@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { cloudWorkspaceReviewDiffsQueryOptions } from "../../hooks/useCloudWorkspaceReview";
 import type { CloudCpClient, CloudCpWorkspaceReviewCommit, CloudCpWorkspaceReviewFileSummary, CloudCpWorkspaceReviewResponse, CloudCpWorkspaceReviewScope } from "../../lib/cloud-cp";
 import { cn } from "../../lib/utils";
+import { useUiStore } from "../../stores/ui-store";
 import type { FileAnnotationModel } from "../WorkspaceDiffView";
 import { cancelFileAnnotations, FileAnnotationSendBar, PanelMessage, RetryButton } from "../WorkspaceDiffView";
 import { Button } from "../ui/button";
@@ -77,8 +78,10 @@ export function CloudWorkspaceReviewPane({
 }) {
 	const { t } = useTranslation();
 	const first = useMemo(() => initialSelection(data), [data]);
-	const [scope, setScope] = useState<CloudCpWorkspaceReviewScope>(first.scope);
-	const [commitSha, setCommitSha] = useState<string | undefined>(first.commitSha);
+	const storedSelection = useUiStore((state) => state.inspectorSessions[sessionId]?.cloudReviewSelection);
+	const setStoredSelection = useUiStore((state) => state.setCloudReviewSelection);
+	const scope = storedSelection?.scope ?? first.scope;
+	const commitSha = storedSelection ? storedSelection.commitSha : first.commitSha;
 	const [commitBrowserOpen, setCommitBrowserOpen] = useState(false);
 	const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
 	const [loadedDeferred, setLoadedDeferred] = useState<Set<string>>(() => new Set());
@@ -112,8 +115,8 @@ export function CloudWorkspaceReviewPane({
 		if (scope === "committed" && selectedCommit) return;
 		if (scope === "combined") return;
 		if (scope !== "committed" && data.sections[scope].length > 0) return;
-		setScope(first.scope); setCommitSha(first.commitSha);
-	}, [data.sections, first, scope, selectedCommit]);
+		setStoredSelection(sessionId, first);
+	}, [data.sections, first, scope, selectedCommit, sessionId, setStoredSelection]);
 
 	const requested = files.filter((file) => !deferredByDefault(file) || loadedDeferred.has(file.path));
 	const batches = chunk(requested.map((file) => file.path));
@@ -141,8 +144,8 @@ export function CloudWorkspaceReviewPane({
 		window.localStorage.setItem(storageKey, JSON.stringify(next));
 		return next;
 	});
-	const selectScope = (next: CloudCpWorkspaceReviewScope) => { cancelFileAnnotations(annotation, (target) => target.surface === "review"); setScope(next); setCommitSha(undefined); setCommitBrowserOpen(false); };
-	const selectCommit = (commit: CloudCpWorkspaceReviewCommit) => { cancelFileAnnotations(annotation, (target) => target.surface === "review"); setScope("committed"); setCommitSha(commit.sha); setCommitBrowserOpen(false); };
+	const selectScope = (next: CloudCpWorkspaceReviewScope) => { cancelFileAnnotations(annotation, (target) => target.surface === "review"); setStoredSelection(sessionId, { scope: next }); setCommitBrowserOpen(false); };
+	const selectCommit = (commit: CloudCpWorkspaceReviewCommit) => { cancelFileAnnotations(annotation, (target) => target.surface === "review"); setStoredSelection(sessionId, { scope: "committed", commitSha: commit.sha }); setCommitBrowserOpen(false); };
 	const collapseFile = useCallback((path: string) => {
 		cancelFileAnnotations(annotation, (target) => target.surface === "review" && target.path === path);
 		setCollapsed((current) => {
