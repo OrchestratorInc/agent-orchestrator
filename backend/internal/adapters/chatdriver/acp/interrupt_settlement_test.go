@@ -132,9 +132,11 @@ func TestPersistentACPInterruptedReplayCanReadSettlementResponse(t *testing.T) {
 			return
 		}
 		var request struct {
-			ID json.RawMessage `json:"id"`
-			Method string `json:"method"`
-			Params struct { SessionID string `json:"sessionId"` } `json:"params"`
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params struct {
+				SessionID string `json:"sessionId"`
+			} `json:"params"`
 		}
 		if err := json.Unmarshal(frame, &request); err != nil || request.Method != "mcode/session/delegation/stop" || request.Params.SessionID != "native-session" {
 			server <- fmt.Errorf("unexpected settlement request: %s (%v)", frame, err)
@@ -147,7 +149,9 @@ func TestPersistentACPInterruptedReplayCanReadSettlementResponse(t *testing.T) {
 		frame, err = reader.ReadBytes('\n')
 		var ack struct {
 			Method string `json:"method"`
-			Params struct { EventID string `json:"eventId"` } `json:"params"`
+			Params struct {
+				EventID string `json:"eventId"`
+			} `json:"params"`
 		}
 		if err == nil {
 			err = json.Unmarshal(frame, &ack)

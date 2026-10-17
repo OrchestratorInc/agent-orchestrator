@@ -745,7 +745,9 @@ func (c *conversation) finishPrompt(
 	interrupt := c.interrupt
 	isCompaction := c.compactingTurnID != "" && c.compactingTurnID == turnID
 	c.mu.Unlock()
-	c.settleOpenItems(turnID)
+	if c.afterInterrupt == nil {
+		c.settleOpenItems(turnID)
+	}
 	interruptedLocally := false
 	if interrupt != nil && interrupt.turnID == turnID {
 		// ACP cancellation and Prompt completion can race. Wait for the sender's
@@ -801,6 +803,11 @@ func (c *conversation) finishPrompt(
 				Err:             fmt.Errorf("%w: ACP interrupt settlement: %w", ports.ErrChatRecoveryInconclusive, fenceErr)})
 			return
 		}
+	}
+	if c.afterInterrupt != nil {
+		// The reader has consumed any native updates preceding the stop reply.
+		// Settle items only after that provider-owned quiescence boundary.
+		c.settleOpenItems(turnID)
 	}
 	if errors.Is(turnErr, ports.ErrChatAuthRequired) {
 		// The provider has just contradicted whatever the readiness cache holds.
