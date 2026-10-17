@@ -96,7 +96,10 @@ func (c *Coordinator) Start(ctx context.Context) <-chan struct{} {
 func (c *Coordinator) run(ctx context.Context) {
 	for {
 		delay, err := c.RunDue(ctx)
-		if err != nil {
+		// Preserve a positive durable deadline from RunDue; only fall back when
+		// the cycle did not compute one (keeps deferred available_at accurate).
+		// Borrowed from #6584.
+		if err != nil && delay <= 0 {
 			delay = c.retryDelay
 		}
 		if delay < 0 {
