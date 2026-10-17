@@ -3050,6 +3050,22 @@ func (s *Store) TurnByID(ctx context.Context, turnID string) (domain.Conversatio
 func (s *Store) SetTurnAutoResume(ctx context.Context, conversationID, turnID string, resetsAt *time.Time, enabled bool, resumeError string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	if !enabled && resumeError != "" {
+		turn, err := s.qw.SelectConversationTurnByID(ctx, turnID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.ErrNoConversationTurn
+		}
+		if err != nil {
+			return fmt.Errorf("read turn auto-resume consent: %w", err)
+		}
+		if turn.ConversationID != conversationID {
+			return domain.ErrNoConversationTurn
+		}
+		// A manual retry or cancellation may have consumed the scanned intent.
+		if turn.UsageLimitAutoResume == 0 {
+			return nil
+		}
+	}
 	var armed int64
 	if enabled {
 		armed = 1
@@ -3070,8 +3086,8 @@ func (s *Store) SetTurnAutoResume(ctx context.Context, conversationID, turnID st
 	return nil
 }
 
-// AutoResumeTurns reads durable intent, including future deadlines so a sweep
-// can cancel sources that were superseded or whose session ended.
+// AutoResumeTurns reads durable intent and deadlines so a sweep can skip future
+// turns cheaply and validate their eligibility when due.
 func (s *Store) AutoResumeTurns(ctx context.Context) ([]domain.ConversationTurn, error) {
 	rows, err := s.qr.SelectAutoResumeConversationTurns(ctx)
 	if err != nil {
@@ -4008,8 +4024,11 @@ func (s *Store) RetryPrompt(ctx context.Context, conversationID, turnID string) 
 	row, err := s.qr.SelectRetryableConversationPrompt(ctx, gen.SelectRetryableConversationPromptParams{
 		ID: turnID, ConversationID: conversationID,
 	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.RetryPrompt{}, fmt.Errorf("%w: %s", domain.ErrNoConversationTurn, turnID)
+	}
 	if err != nil {
-		return domain.RetryPrompt{}, err
+		return domain.RetryPrompt{}, fmt.Errorf("read retry prompt %s: %w", turnID, err)
 	}
 	return domain.RetryPrompt{
 		Continuation:        row.Continuation != 0,

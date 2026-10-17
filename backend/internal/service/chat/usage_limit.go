@@ -16,6 +16,8 @@ var ErrUsageLimitAutoResumeInvalid = errors.New("usage-limit auto-resume is unav
 // ErrUsageLimitResetUnknown refuses scheduling without a known reset deadline.
 var ErrUsageLimitResetUnknown = errors.New("the provider did not report a known usage-limit reset time")
 
+const usageLimitAutoResumeBackoff = 30 * time.Second
+
 type usageLimitStore interface {
 	SetTurnAutoResume(context.Context, string, string, *time.Time, bool, string) error
 	AutoResumeTurns(context.Context) ([]domain.ConversationTurn, error)
@@ -51,7 +53,11 @@ func (s *Service) SetTurnAutoResume(ctx context.Context, id domain.SessionID, tu
 		return domain.ErrNoConversationTurn
 	}
 	if !enabled {
-		return store.SetTurnAutoResume(ctx, conversation.ID, turnID, nil, false, "")
+		err = store.SetTurnAutoResume(ctx, conversation.ID, turnID, nil, false, "")
+		if err == nil {
+			delete(s.autoResumeRetryAt, turnID)
+		}
+		return err
 	}
 	if err := s.validateUsageLimitSession(ctx, id); err != nil {
 		return err
@@ -59,7 +65,11 @@ func (s *Service) SetTurnAutoResume(ctx context.Context, id domain.SessionID, tu
 	if err := validateUsageLimitSource(ctx, s.store, store, source, id); err != nil {
 		return err
 	}
-	return store.SetTurnAutoResume(ctx, conversation.ID, turnID, source.UsageLimit.ResetsAt, true, "")
+	err = store.SetTurnAutoResume(ctx, conversation.ID, turnID, source.UsageLimit.ResetsAt, true, "")
+	if err == nil {
+		delete(s.autoResumeRetryAt, turnID)
+	}
+	return err
 }
 
 func (s *Service) validateUsageLimitSession(ctx context.Context, id domain.SessionID) error {
@@ -138,10 +148,28 @@ func (c *Controller) retryUsageLimitTurn(ctx context.Context, turnID string) (do
 	return c.retryTurnLocked(ctx, turnID)
 }
 
-// ResumeUsageLimitedTurns is a daemon sweep: consent and deadlines survive a
-// closed view or a restart. One-shot attempts consume consent transactionally;
-// refusals are visible on the source rather than repeatedly hitting a provider.
+func permanentUsageLimitResumeError(err error) bool {
+	return errors.Is(err, ErrUsageLimitAutoResumeInvalid) ||
+		errors.Is(err, ErrUsageLimitResetUnknown) ||
+		errors.Is(err, ports.ErrSessionNotFound) ||
+		errors.Is(err, ErrNotChatMode) ||
+		errors.Is(err, domain.ErrNoConversation) ||
+		errors.Is(err, domain.ErrNoConversationTurn) ||
+		errors.Is(err, domain.ErrConversationRebound) ||
+		errors.Is(err, ErrTurnNotRetryable) ||
+		errors.Is(err, ErrRetryStaleBranch) ||
+		errors.Is(err, ErrRetryDeliveryUncertain) ||
+		errors.Is(err, ErrRetryContentInvalid) ||
+		errors.Is(err, ErrRetryUnsupported) ||
+		errors.Is(err, ports.ErrChatAuthRequired)
+}
+
+// ResumeUsageLimitedTurns preserves consent through temporary failures. Only a
+// permanent refusal or the transaction recording a retry consumes it.
 func (s *Service) ResumeUsageLimitedTurns(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	store, ok := s.store.(usageLimitStore)
 	if !ok {
 		return nil
@@ -150,44 +178,80 @@ func (s *Service) ResumeUsageLimitedTurns(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	armed := make(map[string]bool, len(sources))
+	for _, source := range sources {
+		armed[source.ID] = true
+	}
+	s.autoResumeMu.Lock()
+	for id := range s.autoResumeRetryAt {
+		if !armed[id] {
+			delete(s.autoResumeRetryAt, id)
+		}
+	}
+	s.autoResumeMu.Unlock()
+	var failures []error
 	for _, candidate := range sources {
+		// Deadline-independent eligibility reads are needed only once work is due.
+		if candidate.UsageLimit != nil && candidate.UsageLimit.ResetsAt != nil &&
+			candidate.UsageLimit.ResetsAt.After(s.now()) {
+			continue
+		}
 		if err := func() error {
 			s.autoResumeMu.Lock()
 			defer s.autoResumeMu.Unlock()
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			// A cancellation or manual retry can consume intent after the scan.
-			source, err := s.store.TurnByID(ctx, candidate.ID)
-			if err != nil {
-				return err
-			}
-			if source.UsageLimit != nil && !source.UsageLimit.AutoResume {
+			if s.autoResumeRetryAt[candidate.ID].After(s.now()) {
 				return nil
 			}
-			err = s.validateUsageLimitSession(ctx, source.HandledBySessionID)
+			// A cancellation or manual retry can consume intent after the scan.
+			source, err := s.store.TurnByID(ctx, candidate.ID)
+			if err == nil {
+				if source.UsageLimit != nil && !source.UsageLimit.AutoResume {
+					delete(s.autoResumeRetryAt, candidate.ID)
+					return nil
+				}
+				if source.UsageLimit != nil && source.UsageLimit.ResetsAt != nil && source.UsageLimit.ResetsAt.After(s.now()) {
+					return nil
+				}
+				err = s.validateUsageLimitSession(ctx, source.HandledBySessionID)
+			}
 			if err == nil {
 				err = validateUsageLimitSource(ctx, s.store, store, source, source.HandledBySessionID)
 			}
-			if err == nil && source.UsageLimit.ResetsAt.After(s.now()) {
-				return nil
-			}
 			if err == nil {
-				attemptCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				// Hibernation recovery already permits a 60-second native wake.
+				attemptCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 				_, err = s.retryTurn(attemptCtx, source.HandledBySessionID, source.ID, true)
 				cancel()
 			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			message := ""
-			if err != nil {
-				message = "Auto-resume stopped: " + err.Error()
+			if err == nil {
+				delete(s.autoResumeRetryAt, candidate.ID)
+				return nil
 			}
-			return store.SetTurnAutoResume(ctx, source.ConversationID, source.ID, nil, false, message)
-		}(); err != nil {
+			if permanentUsageLimitResumeError(err) {
+				err = store.SetTurnAutoResume(ctx, candidate.ConversationID, candidate.ID, nil, false,
+					"Auto-resume stopped: "+err.Error())
+				if err == nil {
+					delete(s.autoResumeRetryAt, candidate.ID)
+					return nil
+				}
+			}
+			if s.autoResumeRetryAt == nil {
+				s.autoResumeRetryAt = make(map[string]time.Time)
+			}
+			s.autoResumeRetryAt[candidate.ID] = s.now().Add(usageLimitAutoResumeBackoff)
 			return err
+		}(); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			failures = append(failures, err)
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
