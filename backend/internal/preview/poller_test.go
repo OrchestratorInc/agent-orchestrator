@@ -22,8 +22,20 @@ type previewSet struct {
 	url string
 }
 
-func (f *fakePreviewSessions) ListAllSessions(_ context.Context) ([]domain.SessionRecord, error) {
-	return append([]domain.SessionRecord(nil), f.sessions...), nil
+func (f *fakePreviewSessions) ListActiveWorkerPreviews(_ context.Context) ([]domain.SessionPreviewRecord, error) {
+	var out []domain.SessionPreviewRecord
+	for _, sess := range f.sessions {
+		if sess.IsTerminated || sess.Kind != domain.KindWorker {
+			continue
+		}
+		out = append(out, domain.SessionPreviewRecord{
+			ID:              sess.ID,
+			WorkspacePath:   sess.Metadata.WorkspacePath,
+			PreviewURL:      sess.Metadata.PreviewURL,
+			PreviewRevision: sess.Metadata.PreviewRevision,
+		})
+	}
+	return out, nil
 }
 
 func (f *fakePreviewSessions) SetPreview(_ context.Context, id domain.SessionID, previewURL string) (domain.Session, error) {
@@ -305,6 +317,29 @@ func TestPollerSkipsNonWorkerSessions(t *testing.T) {
 	if len(svc.sets) != 0 {
 		t.Fatalf("sets = %#v, want no preview updates for orchestrator sessions", svc.sets)
 	}
+}
+
+func TestPollerForgetsTerminatedWorkerWithClearedPreview(t *testing.T) {
+	workspace := t.TempDir()
+	svc := &fakePreviewSessions{sessions: []domain.SessionRecord{workerSession("ao-1", workspace, "index.html")}}
+	poller := NewPoller(svc, svc, "http://127.0.0.1:3001", PollerConfig{Logger: discardLogger()})
+	if err := poller.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assertSets(t, svc.sets, previewSet{id: "ao-1", url: ""})
+
+	svc.sessions[0].IsTerminated = true
+	if err := poller.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(poller.seen) != 0 {
+		t.Fatalf("terminated preview still tracked: %v", poller.seen)
+	}
+	writeFile(t, filepath.Join(workspace, "index.html"), "<main>back</main>")
+	if err := poller.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assertSets(t, svc.sets, previewSet{id: "ao-1", url: ""})
 }
 
 func workerSession(id domain.SessionID, workspace, previewURL string) domain.SessionRecord {

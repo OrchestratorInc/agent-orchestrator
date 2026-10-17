@@ -672,6 +672,48 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) er
 	return err
 }
 
+const listActiveWorkerPreviews = `-- name: ListActiveWorkerPreviews :many
+SELECT id, workspace_path, preview_url, preview_revision
+FROM sessions WHERE is_terminated = 0 AND kind = 'worker'
+ORDER BY id
+`
+
+type ListActiveWorkerPreviewsRow struct {
+	ID              domain.SessionID
+	WorkspacePath   string
+	PreviewURL      string
+	PreviewRevision int64
+}
+
+// Keep blank previews: the poller may be waiting for a deleted file to reappear.
+func (q *Queries) ListActiveWorkerPreviews(ctx context.Context) ([]ListActiveWorkerPreviewsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listActiveWorkerPreviews)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListActiveWorkerPreviewsRow{}
+	for rows.Next() {
+		var i ListActiveWorkerPreviewsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspacePath,
+			&i.PreviewURL,
+			&i.PreviewRevision,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAllSessions = `-- name: ListAllSessions :many
 SELECT id, project_id, num, issue_id, kind, harness,
     activity_state, activity_last_at, is_terminated, branch, workspace_path,

@@ -291,6 +291,12 @@ SELECT id, project_id, num, issue_id, kind, harness,
     hibernated_at, client_request_id, client_request_hash, client_request_committed
 FROM sessions ORDER BY project_id, num;
 
+-- name: ListActiveWorkerPreviews :many
+-- Keep blank previews: the poller may be waiting for a deleted file to reappear.
+SELECT id, workspace_path, preview_url, preview_revision
+FROM sessions WHERE is_terminated = 0 AND kind = 'worker'
+ORDER BY id;
+
 -- name: ListChatHibernationCandidates :many
 SELECT id FROM sessions
 WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
