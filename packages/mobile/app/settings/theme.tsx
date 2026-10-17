@@ -52,8 +52,9 @@ export default function ThemeScreen() {
 									onPress={() => choose(theme.id)}
 									style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
 								>
-									<ThemePaletteSwatch theme={themeFor(scheme, theme.id)} border={t.borderDefault} />
+									<ThemePaletteSwatch theme={themeFor(scheme, theme.id)} />
 									<Text style={[styles.rowLabel, selected && styles.rowLabelSelected]} numberOfLines={1}>{theme.label}</Text>
+									<View style={styles.spacer} />
 									{selected ? <Feather name="check" size={17} color={t.textPrimary} /> : null}
 								</Pressable>
 							</View>
@@ -74,10 +75,11 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	backButton: { left: 14 },
 	content: { paddingHorizontal: space.lg, paddingTop: space.xs, paddingBottom: space.xxxl, gap: space.xs },
 	card: { backgroundColor: t.bgElevated, borderRadius: 16, borderCurve: "continuous", overflow: "hidden" },
-	separator: { height: StyleSheet.hairlineWidth, backgroundColor: t.borderSubtle, marginLeft: 64 },
+	separator: { height: StyleSheet.hairlineWidth, backgroundColor: t.borderSubtle, marginLeft: space.md },
 	row: { minHeight: 52, flexDirection: "row", alignItems: "center", paddingHorizontal: space.md, gap: space.md },
 	rowPressed: { backgroundColor: t.bgElevatedHover },
-	rowLabel: { fontFamily: "Geist_400Regular", flex: 1, color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight },
+	spacer: { flex: 1 },
+	rowLabel: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight },
 	rowLabelSelected: { fontFamily: "Geist_600SemiBold", fontWeight: "600" },
 	footer: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, paddingHorizontal: space.sm },
 });

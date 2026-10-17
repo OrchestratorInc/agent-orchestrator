@@ -2,16 +2,16 @@ import { StyleSheet, View } from "react-native";
 import type { Theme } from "./theme";
 
 /**
- * A theme drawn on its own canvas: its highlight, then the working, ready and
- * merged hues. Colours come from the swatch's theme, not the active one, because
- * each swatch previews a theme that usually isn't applied. The mobile twin of
- * desktop's settings/ThemePaletteSwatch.tsx, but drawn from the phone's derived
- * palette so the preview matches what the theme will look like here.
+ * A theme's signature hues as a row of dots before its name: its highlight,
+ * then the working, ready and merged colours. Colours come from the swatch's
+ * theme, not the active one, because each swatch previews a theme that usually
+ * isn't applied. Drawn from the phone's derived palette so the preview matches
+ * what the theme will look like here.
  */
-export function ThemePaletteSwatch({ theme, border }: { theme: Theme; border: string }) {
+export function ThemePaletteSwatch({ theme }: { theme: Theme }) {
 	const hues = [theme.highlight, theme.orange, theme.green, theme.purple];
 	return (
-		<View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={[styles.tile, { backgroundColor: theme.bgBase, borderColor: border }]}>
+		<View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.dots}>
 			{hues.map((color, index) => (
 				<View key={index} style={[styles.dot, { backgroundColor: color }]} />
 			))}
@@ -20,17 +20,6 @@ export function ThemePaletteSwatch({ theme, border }: { theme: Theme; border: st
 }
 
 const styles = StyleSheet.create({
-	tile: {
-		width: 40,
-		height: 26,
-		borderRadius: 7,
-		borderCurve: "continuous",
-		borderWidth: StyleSheet.hairlineWidth,
-		flexDirection: "row",
-		alignItems: "flex-end",
-		gap: 3,
-		paddingHorizontal: 5,
-		paddingBottom: 5,
-	},
-	dot: { width: 6, height: 6, borderRadius: 3 },
+	dots: { flexDirection: "row", alignItems: "center", gap: 4 },
+	dot: { width: 8, height: 8, borderRadius: 4 },
 });
