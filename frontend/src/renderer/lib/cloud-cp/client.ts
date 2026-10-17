@@ -10,6 +10,7 @@
 import { CloudCpAuthError, CloudCpError } from "./errors";
 import { createSseFrameParser } from "./sse";
 import type {
+	CloudCpOffering,
 	CloudCpAgentProvider,
 	CloudCpCancelTurnResponse,
 	CloudCpChatEventsQuery,
@@ -234,6 +235,17 @@ export interface CloudCpClient {
 		templateId: string,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpCoderTemplateParametersResponse>;
+	/**
+	 * A Coder template's parameters with draft values applied, so a parameter
+	 * the template declares only for some value of another appears once it
+	 * applies. An older control plane without the route answers 404 or 405.
+	 */
+	evaluateCoderTemplateParameters(
+		orgId: string,
+		templateId: string,
+		values: Readonly<Record<string, string>>,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpCoderTemplateParametersResponse>;
 	/** Reads the org's bring-your-own-Coder connection (non-secret fields only; the API token is never returned). */
 	getOrgCoderConfig(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpOrgCoderConfigResponse>;
 	/** The org's plan, its limits, and usage against them. */
@@ -249,6 +261,11 @@ export interface CloudCpClient {
 	resetBillingUsage(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingSummary>;
 	/** Heartbeat while a session is on screen, so reading it keeps it awake. */
 	touchSessionPresence(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<void>;
+	/**
+	 * Set the org's default sandbox provider (org admins; only an org offered
+	 * more than one provider). "" clears it. Returns the org's updated offering.
+	 */
+	putOrgSandboxProvider(orgId: string, defaultProvider: string, options?: CloudCpRequestOptions): Promise<CloudCpOffering>;
 	/** Saves the org's bring-your-own-Coder connection. Omit the token to keep the stored one. */
 	putOrgCoderConfig(
 		orgId: string,
@@ -709,6 +726,11 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("GET", `/orgs/${seg(orgId)}/sandbox/coder/templates`, { signal: o?.signal }),
 		getCoderTemplateParameters: (orgId, templateId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/coder-templates/${seg(templateId)}/parameters`, { signal: o?.signal }),
+		evaluateCoderTemplateParameters: (orgId, templateId, values, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/coder-templates/${seg(templateId)}/parameters/evaluate`, {
+				body: { values },
+				signal: o?.signal,
+			}),
 		getOrgCoderConfig: (orgId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/coder-config`, { signal: o?.signal }),
 		getBilling: (orgId, o) => requestJson("GET", `/orgs/${seg(orgId)}/billing`, { signal: o?.signal }),
@@ -720,6 +742,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("POST", `/orgs/${seg(orgId)}/billing/usage/reset`, { body: {}, signal: o?.signal }),
 		touchSessionPresence: (orgId, sessionId, o) =>
 			requestVoid("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/presence`, { signal: o?.signal }),
+		putOrgSandboxProvider: (orgId, defaultProvider, o) =>
+			requestJson("PUT", `/orgs/${seg(orgId)}/sandbox-provider`, { body: { defaultProvider }, signal: o?.signal }),
 		putOrgCoderConfig: (orgId, body, o) =>
 			requestJson("PUT", `/orgs/${seg(orgId)}/coder-config`, { body, signal: o?.signal }),
 		deleteOrgCoderConfig: (orgId, o) =>

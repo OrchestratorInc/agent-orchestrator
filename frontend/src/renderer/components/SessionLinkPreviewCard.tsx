@@ -9,6 +9,7 @@ import { useRestoreSession } from "../hooks/useRestoreSession";
 import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { csvPreviewRows, tabularDelimiter } from "../lib/csv-preview";
 import { clampPreviewText, parseMarkdownFrontmatter } from "../lib/markdown-frontmatter";
+import { IMAGE_CHECKERBOARD, isRasterImagePath, isSvgPath } from "../lib/image-files";
 import { cn } from "../lib/utils";
 import { parseArtifactLink, parseSessionLink } from "../lib/session-links";
 import { getSessionStatusDotView, getSessionStatusView } from "../lib/session-presentation";
@@ -301,6 +302,27 @@ function ArtifactPagePreview({ url, title }: { url: string; title: string }) {
 	);
 }
 
+/** An image artifact, fit inside the card. Its update time keys the URL so a rewrite refetches. */
+function ArtifactImagePreview({ rawUrl, name, updatedAt }: { rawUrl: string; name: string; updatedAt: string }) {
+	const { t } = useTranslation();
+	const src = useMemo(() => {
+		try {
+			const url = new URL(rawUrl);
+			url.searchParams.set("v", updatedAt);
+			return url.toString();
+		} catch {
+			return rawUrl;
+		}
+	}, [rawUrl, updatedAt]);
+	const [failedSrc, setFailedSrc] = useState<string | null>(null);
+	if (failedSrc === src) return <p className="text-xs text-muted-foreground">{t("artifactLink.noPreview")}</p>;
+	return (
+		<div className="grid max-h-40 place-items-center overflow-hidden rounded-sm text-passive" style={{ background: IMAGE_CHECKERBOARD }}>
+			<img alt={name} className="max-h-40 max-w-full object-contain" onError={() => setFailedSrc(src)} src={src} />
+		</div>
+	);
+}
+
 function ArtifactTablePreview({ rows }: { rows: string[][] }) {
 	const [header = [], ...body] = rows;
 	return (
@@ -327,8 +349,11 @@ function ArtifactContentPreview({ artifact, session, remote }: { artifact: Sessi
 	// origin. A remote host's page URL carries a proxy capability token the page could
 	// read, so a remote or Cloud session shows the text excerpt instead.
 	const page = artifact.kind === "html" && !remote && artifact.inlineUrl && isInlineArtifactUrl(artifact.inlineUrl) ? artifact.inlineUrl : undefined;
-	const file = useQuery({ ...sessionArtifactFileQueryOptions(session.id, artifact.path, artifact.rawUrl), enabled: Boolean(artifact.rawUrl) && !page, staleTime: 30_000 });
+	// The raw route serves an SVG as image/svg+xml, and an <img> runs none of its scripts.
+	const image = artifact.rawUrl && (isRasterImagePath(artifact.path) || isSvgPath(artifact.path)) ? artifact.rawUrl : undefined;
+	const file = useQuery({ ...sessionArtifactFileQueryOptions(session.id, artifact.path, artifact.rawUrl), enabled: Boolean(artifact.rawUrl) && !page && !image, staleTime: 30_000 });
 	if (page) return <ArtifactPagePreview url={page} title={artifact.name} />;
+	if (image) return <ArtifactImagePreview name={artifact.name} rawUrl={image} updatedAt={artifact.updatedAt} />;
 	if (file.isLoading) return <div className="space-y-1.5"><Skeleton className="h-2.5 w-full" /><Skeleton className="h-2.5 w-5/6" /><Skeleton className="h-2.5 w-2/3" /></div>;
 	const content = file.data && !file.data.binary ? file.data.content : "";
 	const delimiter = tabularDelimiter(artifact.path);
@@ -377,6 +402,17 @@ function ArtifactCardBody({ artifact, session, remote }: { artifact: SessionArti
 				<ArtifactContentPreview artifact={artifact} session={session} remote={remote} />
 			</div>
 		</div>
+	);
+}
+
+/** The artifact hover preview for an artifact already in hand (e.g. a board card row). */
+export function ArtifactPreviewCard({ artifact, session }: { artifact: SessionArtifact; session: WorkspaceSession }) {
+	return (
+		// React bubbles portal clicks through the component tree, so stop them
+		// before they reach a clickable parent such as the board card.
+		<HoverCardContent collisionPadding={8} sideOffset={6} className="w-80 p-3" onClick={(event) => event.stopPropagation()}>
+			<ArtifactCardBody artifact={artifact} session={session} remote={Boolean(session.cloud || (session.hostId && session.hostId !== LOCAL_HOST))} />
+		</HoverCardContent>
 	);
 }
 

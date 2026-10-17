@@ -8,6 +8,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -56,5 +57,28 @@ func TestReviewCommandPreflightShapeAndCancellation(t *testing.T) {
 	cancel, err := r.ReviewCancel(context.Background())
 	if err != nil || cancel.Mode != ports.ReviewCancelInterrupt || cancel.Interrupts != 2 {
 		t.Fatalf("cancel = %#v, %v", cancel, err)
+	}
+}
+
+func TestReviewCommandForwardsSavedAmpMode(t *testing.T) {
+	r := &Reviewer{resolveBinary: func(context.Context) (string, error) { return "/opt/amp", nil }}
+	root := t.TempDir()
+	// A configured model reaches the reviewer as the model field, exactly as
+	// it does for Amp workers.
+	saved := domain.AgentConfig{Model: "high"}
+	spec, err := r.ReviewCommand(context.Background(), ports.ReviewInvocation{TaskPromptRoot: root, Prompt: "Read task.", Config: saved})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"/opt/amp", "--settings-file", filepath.Join(root, "amp-settings.json"), "--mode", "high"}; !slices.Equal(spec.Argv, want) {
+		t.Fatalf("argv = %#v, want %#v", spec.Argv, want)
+	}
+	restore, _, err := r.ReviewRestoreCommand(context.Background(), ports.ReviewInvocation{Config: domain.AgentConfig{Mode: "low"}})
+	if err != nil || !slices.Equal(restore.Argv, []string{"/opt/amp", "--mode", "low"}) {
+		t.Fatalf("restore argv = %#v, %v", restore.Argv, err)
+	}
+	unknown, err := r.ReviewCommand(context.Background(), ports.ReviewInvocation{Config: domain.AgentConfig{Model: "gpt-5"}})
+	if err != nil || !slices.Equal(unknown.Argv, []string{"/opt/amp"}) {
+		t.Fatalf("unknown mode argv = %#v, %v", unknown.Argv, err)
 	}
 }

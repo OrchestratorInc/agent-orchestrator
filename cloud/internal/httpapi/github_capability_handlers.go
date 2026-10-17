@@ -426,6 +426,10 @@ func (s *Server) createEnvironmentScratchProject(
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project configuration is invalid.")
 		return
 	}
+	if configJSON, err = s.pinProjectProvider(r.Context(), principal, request.OrgID, configJSON); err != nil {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project configuration is invalid.")
+		return
+	}
 	plan, connectionID, ok := s.scratchSessionPlan(
 		w, r, principal, request.OrgID, request.Orchestrator.Harness, configJSON,
 	)
@@ -456,6 +460,7 @@ func (s *Server) createEnvironmentScratchProject(
 			DisplayName:             request.DisplayName,
 			Config:                  configJSON,
 			Session: domain.CreateSession{
+				CoderCapability:     s.orgHasCoderCapability(principal, request.OrgID),
 				Kind:                "orchestrator",
 				Harness:             request.Orchestrator.Harness,
 				DisplayName:         "Orchestrator",

@@ -48,8 +48,25 @@ export interface paths {
         /** Get the current or last install job for one agent harness */
         get: operations["getAgentInstallStatus"];
         put?: never;
-        /** Start an asynchronous install for one fixed agent harness */
+        /** Start an asynchronous install, reinstall, or update for one fixed agent harness */
         post: operations["startAgentInstall"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/{agent}/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Open the fixed native logout flow for one agent */
+        post: operations["logoutAgent"];
         delete?: never;
         options?: never;
         head?: never;
@@ -101,6 +118,23 @@ export interface paths {
         put?: never;
         /** Ensure launch-fresh readiness for one agent adapter */
         post: operations["probeAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/{agent}/update-advisory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Compare an installed harness version with its known package source */
+        get: operations["getAgentUpdateAdvisory"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -698,7 +732,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Check whether a GitHub personal access token is stored locally */
+        /** Report whether a GitHub token is stored and the GitHub username AO is signed in as */
         get: operations["getGitHubStatus"];
         put?: never;
         post?: never;
@@ -1604,6 +1638,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/agent-browser/*": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Proxy the host's agent browser stream viewer (page, stream socket, downloads) */
+        get: operations["getSessionAgentBrowser"];
+        put?: never;
+        /** Upload a file into the host's agent browser */
+        post: operations["postSessionAgentBrowser"];
+        delete?: never;
+        options?: never;
+        /** Read headers from the host's agent browser stream viewer */
+        head: operations["headSessionAgentBrowser"];
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/agent-switches": {
         parameters: {
             query?: never;
@@ -1663,7 +1716,8 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        put?: never;
+        /** Replace the text content of one file in a session's artifact directory */
+        put: operations["updateSessionArtifactFile"];
         post?: never;
         /** Delete one file from a session's artifact directory and return the session with its refreshed artifact list */
         delete: operations["deleteSessionArtifactFile"];
@@ -1683,6 +1737,74 @@ export interface paths {
         get: operations["getSessionArtifactFile"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/artifact-versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the saved versions of one file in a session's artifact directory */
+        get: operations["listSessionArtifactVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/artifact-versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one saved version of an artifact file */
+        get: operations["getSessionArtifactVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/artifact-versions/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore an artifact file to an earlier saved version */
+        post: operations["restoreSessionArtifactVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/artifact-versions/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record an artifact file's unrecorded edit, then list its saved versions */
+        post: operations["syncSessionArtifactVersions"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3269,6 +3391,23 @@ export interface paths {
         patch: operations["updateCloudOffering"];
         trace?: never;
     };
+    "/api/v1/settings/harness-defaults/{agent}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Choose which models one harness's pickers offer */
+        patch: operations["updateHarnessDefault"];
+        trace?: never;
+    };
     "/api/v1/settings/session-interface": {
         parameters: {
             query?: never;
@@ -3555,6 +3694,33 @@ export interface components {
             path: string;
             projectId?: null | string;
         };
+        AgentAccountIdentity: {
+            email?: string;
+            /** @enum {string} */
+            method?: "account" | "api_key" | "token";
+            name?: string;
+            organization?: string;
+            plan?: string;
+            provider?: string;
+            source?: string;
+            /** @enum {string} */
+            sourceKind?: "environment" | "file" | "command" | "keychain";
+        };
+        AgentAuthDiagnostic: {
+            cached: boolean;
+            /** Format: date-time */
+            checkedAt: string;
+            code: string;
+            /** Format: int64 */
+            durationMs: number;
+            exitCode?: null | number;
+            httpStatus?: number;
+            method: string;
+            nextStep?: string;
+            provider?: string;
+            reason: string;
+            source?: string;
+        };
         AgentAuthPlan: {
             action: string;
             agentId: string;
@@ -3564,13 +3730,16 @@ export interface components {
             guidance?: string;
             /** @enum {string} */
             launchMode: "terminal" | "documentation";
+            logoutCommand?: string;
             reason?: string;
         };
         AgentAuthenticationObservation: {
+            account?: components["schemas"]["AgentAccountIdentity"];
             /** Format: date-time */
             attemptedAt: null | string;
             /** Format: date-time */
             checkedAt: null | string;
+            diagnostics?: components["schemas"]["AgentAuthDiagnostic"][];
             /** @enum {string} */
             freshness: "fresh" | "stale" | "checking";
             reason: string;
@@ -3615,6 +3784,9 @@ export interface components {
             reinstallAvailable: boolean;
             reinstallCommand?: string;
             reinstallReason?: string;
+            updateAvailable: boolean;
+            updateCommand?: string;
+            updateReason?: string;
         };
         AgentInstallPlan: {
             agentId: string;
@@ -3644,9 +3816,12 @@ export interface components {
             agents: components["schemas"]["AgentInstallPlan"][];
         };
         AgentModelInfo: {
+            /** Format: int64 */
+            contextWindow?: number;
             defaultEffort?: string;
             efforts?: string[];
             id: string;
+            inputs?: string[];
             isDefault?: boolean;
             label: string;
             /** Format: date-time */
@@ -3657,6 +3832,7 @@ export interface components {
             agentId: string;
             allowCustom: boolean;
             binaryVersion?: string;
+            configuredProviders?: string[];
             /** @enum {string} */
             customModelEntry: "none" | "direct" | "configured";
             /** Format: date-time */
@@ -3668,6 +3844,7 @@ export interface components {
                 [key: string]: string;
             };
             models: components["schemas"]["AgentModelInfo"][];
+            providers?: string[];
             refreshError?: string;
             refreshRecommended?: boolean;
             /** @enum {string} */
@@ -3722,6 +3899,20 @@ export interface components {
         AgentSwitchResponse: {
             switch: components["schemas"]["AgentSwitch"];
         };
+        AgentUpdateAdvisory: {
+            agentId: string;
+            binaryPath?: string;
+            /** Format: date-time */
+            checkedAt: string;
+            currentVersion?: string;
+            latestVersion?: string;
+            maintenanceMethod?: string;
+            /** @enum {string} */
+            reason?: "ownership_unconfirmed" | "unsupported_source" | "version_unparseable" | "channel_unconfirmed" | "lookup_failed" | "disabled" | "build_unordered";
+            source?: string;
+            /** @enum {string} */
+            status: "unknown" | "current" | "behind_latest" | "ahead_of_latest";
+        };
         AppMemoryResponse: {
             /** @description False when there was no earlier sample to measure against: cpuPercent is unknown, not zero. */
             cpuMeasured: boolean;
@@ -3731,6 +3922,62 @@ export interface components {
             processCount: number;
             reviewers?: components["schemas"]["ControllersReviewerMemoryResponse"][];
             rssBytes: number;
+        };
+        ArtifactFileResponse: {
+            /** @description Hex SHA-256 of the file's content. */
+            fileFingerprint: string;
+            path: string;
+            /** Format: int64 */
+            size: number;
+        };
+        ArtifactVersionResponse: {
+            /** @description The version's UTF-8 text content, cut short when truncated is set. */
+            content: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** @description Hex SHA-256 of the version's content. */
+            fileFingerprint: string;
+            /** @description Best effort: the agent that was running the session when the version was recorded, which after an agent switch can differ from the agent that wrote it. Absent for older versions. */
+            harness?: string;
+            path: string;
+            /**
+             * Format: int64
+             * @description The version this one restored, when it is a restore.
+             */
+            restoredFrom?: number;
+            /** Format: int64 */
+            size: number;
+            /**
+             * @description Who wrote the version: the agent, or the user through a save or restore.
+             * @enum {string}
+             */
+            source: "agent" | "user";
+            /** @description The content is only the first 256 KiB of the version. A restore still writes the whole version. */
+            truncated?: boolean;
+            /** Format: int64 */
+            version: number;
+        };
+        ArtifactVersionSummary: {
+            /** Format: date-time */
+            createdAt: string;
+            /** @description Hex SHA-256 of the version's content. */
+            fileFingerprint: string;
+            /** @description Best effort: the agent that was running the session when the version was recorded, which after an agent switch can differ from the agent that wrote it. Absent for older versions. */
+            harness?: string;
+            /**
+             * Format: int64
+             * @description The version this one restored, when it is a restore.
+             */
+            restoredFrom?: number;
+            /** Format: int64 */
+            size: number;
+            /**
+             * @description Who wrote the version: the agent, or the user through a save or restore.
+             * @enum {string}
+             */
+            source: "agent" | "user";
+            /** Format: int64 */
+            version: number;
         };
         AttachmentInput: {
             data: string;
@@ -4084,6 +4331,10 @@ export interface components {
             active: boolean;
             enabled: boolean;
             hasBattery: boolean;
+            lidActive?: boolean;
+            lidClosed?: boolean;
+            lidReason?: string;
+            lidSupported?: boolean;
             supported: boolean;
         };
         ControllersKillSessionRequest: {
@@ -4194,6 +4445,7 @@ export interface components {
         };
         ControllersSetKeepAwakeRequest: {
             enabled: boolean;
+            lidClosed?: null | boolean;
         };
         ControllersSetSecurePairingRequest: {
             enabled: boolean;
@@ -4312,6 +4564,7 @@ export interface components {
         ConversationMessageResponse: {
             clientMessageId?: string;
             content?: components["schemas"]["ConversationContentSummaryResponse"][];
+            continuation?: boolean;
             createdAt: string;
             editAvailable: boolean;
             id: string;
@@ -4404,6 +4657,7 @@ export interface components {
             branchedFromEarlierMessage: boolean;
             capabilities?: string[];
             compactedAt?: null | string;
+            continueTurnId: string;
             /** @enum {string} */
             controller: "connecting" | "ready" | "busy" | "recovering" | "hibernated" | "stopped";
             conversationId: string;
@@ -4695,6 +4949,11 @@ export interface components {
             owner?: string;
             private?: null | boolean;
         };
+        GitHubStatusResponse: {
+            connected: boolean;
+            /** @description GitHub username AO is signed in as, from a stored token or the gh CLI; absent when it could not be resolved. */
+            login?: string;
+        };
         GitPreparationEvent: {
             /** @enum {string} */
             action: "git_init" | "git_commit" | "create_remote_repository" | "set_remote";
@@ -4725,6 +4984,9 @@ export interface components {
             initialCommitMessage?: string;
             remoteUrl?: string;
             repoPath: string;
+        };
+        HarnessDefault: {
+            disabledModels?: string[];
         };
         IdentityResponse: {
             apiVersion: number;
@@ -4848,6 +5110,10 @@ export interface components {
             installed: components["schemas"]["AgentInfo"][];
             /** @description Agents supported by this daemon build. */
             supported: components["schemas"]["AgentInfo"][];
+        };
+        ListArtifactVersionsResponse: {
+            path: string;
+            versions: components["schemas"]["ArtifactVersionSummary"][];
         };
         ListAutomationRunsResponse: {
             nextCursor?: string;
@@ -5332,6 +5598,15 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        RestoreArtifactVersionRequest: {
+            /** @description Artifact-directory-relative file path, as listed in the session's artifactFiles. */
+            path: string;
+            /**
+             * Format: int64
+             * @description The version whose content becomes the file's content.
+             */
+            version: number;
+        };
         RestoreReviewResponse: {
             reviewerHandleId: string;
             reviewerHarness?: string;
@@ -5408,6 +5683,7 @@ export interface components {
         SendConversationMessageRequest: {
             attachments?: components["schemas"]["ConversationImageContentRequest"][];
             clientMessageId?: string;
+            continuation?: boolean;
             excerpts?: components["schemas"]["ConversationExcerptReferenceRequest"][];
             resources?: components["schemas"]["ConversationResourceContentRequest"][];
             text: string;
@@ -5678,6 +5954,8 @@ export interface components {
             conversationCheckpointOrigin?: "human" | "coordination";
             /** @description Opaque identity of an AO-authored semantic prompt accepted by the native agent. */
             coordinationId?: string;
+            /** @description Provider process-kind marker (Claude's CLAUDE_CODE_ENTRYPOINT) of the process that fired the hook. */
+            entrypoint?: string;
             /** @description AO hook sub-command that produced this state (e.g. post-tool-use). */
             event?: string;
             /** @description Latest assistant update exposed by the provider hook. */
@@ -5804,6 +6082,9 @@ export interface components {
             cloudOffering: boolean;
             /** @enum {string} */
             defaultSessionMode: "chat" | "tui";
+            harnessDefaults?: {
+                [key: string]: components["schemas"]["HarnessDefault"];
+            };
             localEnabled: boolean;
             trackerIntakeEnabled: boolean;
         };
@@ -6046,13 +6327,15 @@ export interface components {
             terminalInput?: string;
         };
         StartAgentInstallRequest: {
-            /** @description Server-issued installation method id. Omit to use the recommended viable method. */
+            /** @description For updates, the available version explicitly approved by the user. The update must reach it. It is installed only when it lies between the installed version and the latest release AO found; otherwise that latest release is installed. A version at or below the installed one, or one sent with another operation, is rejected with INVALID_UPDATE_VERSION. */
+            expectedVersion?: string;
+            /** @description Server-issued installation method id. Omit to use the recommended viable method for an install or reinstall, and the method that owns the installed copy for an update. */
             method?: string;
             /**
              * @description Requested operation. Defaults to install for older clients.
              * @enum {string}
              */
-            operation?: "install" | "reinstall";
+            operation?: "install" | "reinstall" | "update";
         };
         StartCodexAccountSwitchRequest: {
             /** @deprecated */
@@ -6137,6 +6420,10 @@ export interface components {
              */
             targetHarness: "claude-code" | "codex" | "fx";
         };
+        SyncArtifactVersionsRequest: {
+            /** @description Artifact-directory-relative file path, as listed in the session's artifactFiles. */
+            path: string;
+        };
         SystemMemoryResponse: {
             /** @description What the kernel would hand out without swapping (MemAvailable). */
             availableBytes: number;
@@ -6218,6 +6505,14 @@ export interface components {
             deleted: boolean;
             token: string;
         };
+        UpdateArtifactFileRequest: {
+            /** @description The file's new UTF-8 text content. */
+            content: string;
+            /** @description Hex SHA-256 of the file content the edit started from. */
+            expectedFileFingerprint: string;
+            /** @description Artifact-directory-relative file path, as listed in the session's artifactFiles. */
+            path: string;
+        };
         UpdateAutomationRequest: {
             cron?: null | string;
             displayName?: null | string;
@@ -6231,6 +6526,9 @@ export interface components {
         };
         UpdateChatHibernationRequest: {
             enabled: null | boolean;
+        };
+        UpdateHarnessDefaultRequest: {
+            disabledModels: null | string[];
         };
         UpdateProjectSettingsInput: {
             config: components["schemas"]["ProjectConfig"];
@@ -6652,9 +6950,61 @@ export interface operations {
             };
         };
     };
+    logoutAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartAgentAuthResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     getAgentModels: {
         parameters: {
             query?: {
+                /** @description Return catalog facts without reading session history for model recency. Cached catalogs are served while discovery refreshes in the background. */
+                catalogOnly?: boolean;
                 /** @description Optional project identifier used as the model-catalog cache scope. */
                 projectId?: string;
             };
@@ -6717,6 +7067,8 @@ export interface operations {
     refreshAgentModels: {
         parameters: {
             query?: {
+                /** @description Refresh the Harness Settings browsing catalog without session-history enrichment; FX includes all connections in a separate cache. */
+                catalogOnly?: boolean;
                 /** @description Optional project identifier used as the model-catalog cache scope. */
                 projectId?: string;
                 /** @description When true, compare executable and config metadata before running discovery. */
@@ -6797,6 +7149,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProbeAgentResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getAgentUpdateAdvisory: {
+        parameters: {
+            query?: {
+                /** @description Re-probe the installed binary, ownership and latest release instead of reusing cached advisory evidence. */
+                refresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentUpdateAdvisory"];
                 };
             };
             /** @description Bad Request */
@@ -8963,9 +9368,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: boolean;
-                    };
+                    "application/json": components["schemas"]["GitHubStatusResponse"];
                 };
             };
             /** @description Internal Server Error */
@@ -12209,6 +12612,123 @@ export interface operations {
             };
         };
     };
+    getSessionAgentBrowser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    postSessionAgentBrowser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string;
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    headSessionAgentBrowser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     listSessionAgentSwitches: {
         parameters: {
             query?: never;
@@ -12394,6 +12914,78 @@ export interface operations {
             };
         };
     };
+    updateSessionArtifactFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateArtifactFileRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactFileResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     deleteSessionArtifactFile: {
         parameters: {
             query?: {
@@ -12469,6 +13061,258 @@ export interface operations {
                 };
                 content: {
                     "text/html": string;
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listSessionArtifactVersions: {
+        parameters: {
+            query?: {
+                /** @description Artifact-directory-relative file path, as listed in the session's artifactFiles. */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListArtifactVersionsResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionArtifactVersion: {
+        parameters: {
+            query?: {
+                /** @description Artifact-directory-relative file path, as listed in the session's artifactFiles. */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Version number within the file's history. */
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactVersionResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    restoreSessionArtifactVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestoreArtifactVersionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactFileResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    syncSessionArtifactVersions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SyncArtifactVersionsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListArtifactVersionsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Not Found */
@@ -18718,6 +19562,69 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateHarnessDefault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateHarnessDefaultRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

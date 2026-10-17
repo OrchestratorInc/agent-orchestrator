@@ -63,6 +63,24 @@ describe("cloudStartupProblem", () => {
 		return value;
 	}
 
+	it("reports a workspace the worker could not prepare even though the worker is connected", () => {
+		const setupError = {
+			code: "project_setup_failed",
+			message: "Setup step 1 failed: exit status 3.",
+			at: "2026-10-13T18:31:39Z",
+			detail: "missing secret\n",
+		};
+		expect(cloudStartupProblem(withRuntime("running", { startupError: setupError }, true))).toEqual({
+			phase: "failed",
+			message: setupError.message,
+			code: "project_setup_failed",
+			detail: "missing secret",
+			at: "2026-10-13T18:31:39Z",
+		});
+		// A control-plane startup error still disappears once the worker connects.
+		expect(cloudStartupProblem(withRuntime("running", { startupError }, true))).toBeUndefined();
+	});
+
 	it("reports a final startup failure once AO gives up", () => {
 		expect(cloudStartupProblem(withRuntime("terminated", { startupError }))).toEqual({
 			phase: "failed",

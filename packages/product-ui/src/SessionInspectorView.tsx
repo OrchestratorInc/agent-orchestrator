@@ -1,4 +1,4 @@
-import { type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject, useEffect, useId, useRef, useState } from "react";
+import { type KeyboardEvent, type ReactNode, type RefObject, useEffect, useId, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ExternalLinkComponent } from "./external-link";
 import {
@@ -119,7 +119,6 @@ export function SessionInspectorShellView({
 					"session-inspector__topbar flex h-inspector-tabs shrink-0 items-center border-b border-border-strong pl-1",
 					activeView === "browser" && "session-inspector__topbar--browser",
 				)}
-				style={{ "--inspector-tab-count": tabs.length } as CSSProperties}
 			>
 				{isVisible && tabs.length === 1 ? (
 					<span className="min-w-0 flex-1 px-2 text-sm text-passive">{tabs[0].label}</span>

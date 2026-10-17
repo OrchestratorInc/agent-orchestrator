@@ -351,10 +351,12 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 	}
 	reviewerChat, _ := chat.(reviewcore.ReviewerChatController)
 	reviewEngine := reviewcore.New(reviewcore.Deps{
-		Store:    store,
-		Sessions: store,
-		PRs:      store,
-		Projects: store,
+		// The manager's installer gate is bound after the installer is built.
+		HarnessUse: mgr,
+		Store:      store,
+		Sessions:   store,
+		PRs:        store,
+		Projects:   store,
 		Launcher: reviewcore.NewLauncher(reviewers, runtime, cfg.DataDir,
 			reviewcore.WithRunFilePath(cfg.RunFilePath),
 			reviewcore.WithAgentAuth(reviewerAgentAuth{readiness: agentReadiness}),

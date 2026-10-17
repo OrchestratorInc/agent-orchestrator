@@ -26,6 +26,9 @@ type Store interface {
 	CompleteGitHubUserAuthorization(context.Context, []byte, postgres.GitHubUserConnectionInput) (domain.GitHubUserConnection, error)
 	GitHubUserConnection(context.Context, string) (domain.GitHubUserConnection, error)
 	UpdateGitHubUserConnection(context.Context, string, postgres.GitHubUserConnectionInput) (domain.GitHubUserConnection, error)
+	SaveGitHubUserConnection(context.Context, string, postgres.GitHubUserConnectionInput) (domain.GitHubUserConnection, error)
+	GitHubUserScopeIntact(ctx context.Context, orgID, userID string) (bool, error)
+	GitHubConnectOthersTarget(ctx context.Context, orgID, userID string) (email string, onlyMember bool, err error)
 	DeleteGitHubUserConnection(context.Context, string) error
 	DeleteGitHubUserConnectionByGitHubID(context.Context, int64) error
 	CreateGitHubInstallAttempt(context.Context, domain.Principal, string, []byte, time.Time) (domain.GitHubInstallAttempt, error)
@@ -106,6 +109,9 @@ func (s *Service) MergePullRequest(ctx context.Context, orgID, repository string
 	if !ok || owner == "" || repo == "" {
 		return postgres.ErrInvalid
 	}
+	if err := s.requireUserScopedPush(ctx, orgID, repository, repositoryID); err != nil {
+		return err
+	}
 	access, err := s.client.repositoryWriteToken(ctx, installationID, repositoryID)
 	if err != nil {
 		return err
@@ -114,15 +120,23 @@ func (s *Service) MergePullRequest(ctx context.Context, orgID, repository string
 }
 
 type Service struct {
-	store                    Store
-	client                   *Client
-	stateKey                 []byte
-	webhookSecret            string
-	installTTL               time.Duration
-	logger                   *slog.Logger
-	workerID                 string
-	credentialKey            []byte
-	userTokenMu              sync.Mutex
+	store         Store
+	client        *Client
+	stateKey      []byte
+	webhookSecret string
+	installTTL    time.Duration
+	logger        *slog.Logger
+	workerID      string
+	credentialKey []byte
+	userTokenMu   sync.Mutex
+	// userAccess caches positive live access checks of user-scoped
+	// connections; see userRepositoryAccess.
+	userAccessMu sync.Mutex
+	userAccess   map[userAccessKey]userAccessEntry
+	// userScopeRefreshAt is when each user-scoped connection last started a
+	// background refresh; see refreshUserScopedInBackground.
+	userScopeRefreshMu       sync.Mutex
+	userScopeRefreshAt       map[string]time.Time
 	checkMu                  sync.Mutex
 	checkAt                  time.Time
 	checkErr                 error
@@ -269,13 +283,38 @@ func (s *Service) CompleteOAuth(
 	ctx context.Context,
 	state, code string,
 ) (domain.GitHubInstallation, error) {
+	installation, _, err := s.CompleteOAuthWithOffer(ctx, state, code)
+	return installation, err
+}
+
+// CompleteOAuthWithOffer is CompleteOAuth that also returns, when there is
+// one, the offer to connect the user's other GitHub installations, for the
+// callback page to show (see connect_others.go).
+func (s *Service) CompleteOAuthWithOffer(
+	ctx context.Context,
+	state, code string,
+) (domain.GitHubInstallation, *ConnectOthersOffer, error) {
+	installation, attempt, userToken, err := s.completeOAuth(ctx, state, code)
+	if err != nil {
+		return domain.GitHubInstallation{}, nil, err
+	}
+	return installation, s.connectOthersOffer(ctx, attempt, userToken), nil
+}
+
+func (s *Service) completeOAuth(
+	ctx context.Context,
+	state, code string,
+) (domain.GitHubInstallation, domain.GitHubInstallAttempt, UserAccessToken, error) {
+	fail := func(err error) (domain.GitHubInstallation, domain.GitHubInstallAttempt, UserAccessToken, error) {
+		return domain.GitHubInstallation{}, domain.GitHubInstallAttempt{}, UserAccessToken{}, err
+	}
 	if state == "" || code == "" {
-		return domain.GitHubInstallation{}, postgres.ErrInvalid
+		return fail(postgres.ErrInvalid)
 	}
 	stateHash := HashState(state)
 	attempt, err := s.store.GitHubOAuthAttempt(ctx, stateHash)
 	if err != nil {
-		return domain.GitHubInstallation{}, err
+		return fail(err)
 	}
 	associatedData := []byte(strconv.FormatInt(attempt.PendingGitHubInstallationID, 10))
 	verifier, err := Decrypt(
@@ -285,32 +324,33 @@ func (s *Service) CompleteOAuth(
 		associatedData,
 	)
 	if err != nil {
-		return domain.GitHubInstallation{}, err
+		return fail(err)
 	}
-	accessToken, err := s.client.ExchangeOAuthCode(ctx, code, string(verifier))
+	userToken, err := s.client.ExchangeOAuthCodeForUser(ctx, code, string(verifier))
 	if err != nil {
-		return domain.GitHubInstallation{}, err
+		return fail(err)
 	}
+	accessToken := userToken.Token()
 	authorized, err := s.client.UserHasInstallation(
 		ctx,
 		accessToken,
 		attempt.PendingGitHubInstallationID,
 	)
 	if err != nil {
-		return domain.GitHubInstallation{}, err
+		return fail(err)
 	}
 	if !authorized {
-		return domain.GitHubInstallation{}, postgres.ErrForbidden
+		return fail(postgres.ErrForbidden)
 	}
 	providerInstallation, err := s.client.GetInstallation(
 		ctx,
 		attempt.PendingGitHubInstallationID,
 	)
 	if err != nil {
-		return domain.GitHubInstallation{}, err
+		return fail(err)
 	}
 	if !InstallationSupportsAuthorityProof(providerInstallation) {
-		return domain.GitHubInstallation{}, postgres.ErrForbidden
+		return fail(postgres.ErrForbidden)
 	}
 	authorized, err = s.client.UserCanAdministerInstallation(
 		ctx,
@@ -318,20 +358,24 @@ func (s *Service) CompleteOAuth(
 		providerInstallation,
 	)
 	if err != nil {
-		return domain.GitHubInstallation{}, err
+		return fail(err)
 	}
 	if !authorized {
-		return domain.GitHubInstallation{}, postgres.ErrForbidden
+		return fail(postgres.ErrForbidden)
 	}
+	// The user administers this installation (checked above), so it is a
+	// whole-installation connection.
+	completed := toDomainInstallation(providerInstallation)
+	completed.AccessScope = domain.GitHubAccessScopeInstallation
 	installation, err := s.store.CompleteGitHubInstallation(
 		ctx,
 		stateHash,
-		toDomainInstallation(providerInstallation),
+		completed,
 	)
 	if err != nil {
-		return domain.GitHubInstallation{}, err
+		return fail(err)
 	}
-	return installation, nil
+	return installation, attempt, userToken, nil
 }
 
 // CompleteInstallationOAuth handles GitHub's combined installation and user
@@ -346,19 +390,30 @@ func (s *Service) CompleteInstallationOAuth(
 	state, code string,
 	installationID int64,
 ) (domain.GitHubInstallation, error) {
+	installation, _, err := s.CompleteInstallationOAuthWithOffer(ctx, state, code, installationID)
+	return installation, err
+}
+
+// CompleteInstallationOAuthWithOffer is CompleteInstallationOAuth returning the
+// callback page's offer, as CompleteOAuthWithOffer does.
+func (s *Service) CompleteInstallationOAuthWithOffer(
+	ctx context.Context,
+	state, code string,
+	installationID int64,
+) (domain.GitHubInstallation, *ConnectOthersOffer, error) {
 	if state == "" || code == "" || installationID <= 0 {
-		return domain.GitHubInstallation{}, postgres.ErrInvalid
+		return domain.GitHubInstallation{}, nil, postgres.ErrInvalid
 	}
 	stateHash := HashState(state)
 	if err := s.store.ValidateGitHubInstallState(ctx, stateHash); err != nil {
-		return domain.GitHubInstallation{}, err
+		return domain.GitHubInstallation{}, nil, err
 	}
 	providerInstallation, err := s.client.GetInstallation(ctx, installationID)
 	if err != nil {
-		return domain.GitHubInstallation{}, err
+		return domain.GitHubInstallation{}, nil, err
 	}
 	if !InstallationSupportsAuthorityProof(providerInstallation) {
-		return domain.GitHubInstallation{}, postgres.ErrForbidden
+		return domain.GitHubInstallation{}, nil, postgres.ErrForbidden
 	}
 	// No PKCE verifier: GitHub already performed the authorization during
 	// installation, so we never issued a code_challenge. Store an empty verifier
@@ -367,7 +422,7 @@ func (s *Service) CompleteInstallationOAuth(
 	associatedData := []byte(strconv.FormatInt(installationID, 10))
 	ciphertext, nonce, err := Encrypt(s.stateKey, nil, associatedData)
 	if err != nil {
-		return domain.GitHubInstallation{}, err
+		return domain.GitHubInstallation{}, nil, err
 	}
 	if _, err := s.store.BeginGitHubOAuth(
 		ctx,
@@ -378,9 +433,9 @@ func (s *Service) CompleteInstallationOAuth(
 		nonce,
 		time.Now().UTC().Add(s.installTTL),
 	); err != nil {
-		return domain.GitHubInstallation{}, err
+		return domain.GitHubInstallation{}, nil, err
 	}
-	return s.CompleteOAuth(ctx, state, code)
+	return s.CompleteOAuthWithOffer(ctx, state, code)
 }
 
 func (s *Service) ListInstallations(
@@ -397,6 +452,11 @@ func (s *Service) ListInstallations(
 		if installation.Status != "active" {
 			continue
 		}
+		// A user-scoped connection follows its user's GitHub access, which can
+		// change without any installation webhook (a team removal, a repository
+		// permission change). The desktop polls this list while it is picking a
+		// repository, so refresh a stale one, in the background.
+		s.refreshUserScopedInBackground(ctx, installation)
 		_, err := s.client.GetInstallation(ctx, installation.GitHubInstallationID)
 		if err == nil {
 			continue
@@ -480,7 +540,8 @@ func (s *Service) IssueCheckoutGrant(
 	if err != nil {
 		return CheckoutGrant{}, err
 	}
-	repositoryIDs := s.checkoutRepositoryIDs(ctx, orgID, sessionID, authorization)
+	repositoryIDs := s.filterUserScopedRepositoryIDs(ctx, authorization,
+		s.checkoutRepositoryIDs(ctx, orgID, sessionID, authorization), false)
 	access, err := s.client.repositoryReadTokenForRepos(
 		ctx,
 		authorization.GitHubInstallationID,
@@ -607,7 +668,11 @@ func (s *Service) IssuePushGrant(
 	if err != nil {
 		return CheckoutGrant{}, err
 	}
-	repositoryIDs := s.checkoutRepositoryIDs(ctx, orgID, sessionID, authorization)
+	if err := s.requireUserScopedAccess(ctx, authorization, authorization.GitHubRepositoryID, true); err != nil {
+		return CheckoutGrant{}, err
+	}
+	repositoryIDs := s.filterUserScopedRepositoryIDs(ctx, authorization,
+		s.checkoutRepositoryIDs(ctx, orgID, sessionID, authorization), true)
 	access, err := s.client.repositoryWriteTokenForRepos(
 		ctx,
 		authorization.GitHubInstallationID,
@@ -645,6 +710,9 @@ func (s *Service) IssuePushGrantForRepo(
 	}
 	repositoryID, err := s.pushRepositoryID(ctx, orgID, sessionID, authorization, repoFullName)
 	if err != nil {
+		return CheckoutGrant{}, err
+	}
+	if err := s.requireUserScopedAccess(ctx, authorization, repositoryID, true); err != nil {
 		return CheckoutGrant{}, err
 	}
 	access, err := s.client.repositoryWriteToken(ctx, authorization.GitHubInstallationID, repositoryID)
@@ -734,6 +802,11 @@ func (s *Service) resolveWorkerCheckoutAuthorization(
 		authorization.GitHubRepositoryID <= 0 ||
 		!validGitHubCloneIdentity(authorization.CloneURL, authorization.FullName) {
 		return domain.GitHubCheckoutContext{}, postgres.ErrForbidden
+	}
+	// A user-scoped connection reaches a repository only while its user still
+	// can on GitHub, re-checked live rather than trusting the last sync.
+	if err := s.requireUserScopedAccess(ctx, authorization, authorization.GitHubRepositoryID, false); err != nil {
+		return domain.GitHubCheckoutContext{}, err
 	}
 	return authorization, nil
 }
@@ -830,6 +903,9 @@ func (s *Service) RaisePullRequest(
 	if !ok || owner == "" || repo == "" {
 		return domain.PullRequest{}, postgres.ErrInvalid
 	}
+	if err := s.requireUserScopedAccess(ctx, authorization, authorization.GitHubRepositoryID, true); err != nil {
+		return domain.PullRequest{}, err
+	}
 	access, err := s.client.repositoryWriteToken(
 		ctx,
 		authorization.GitHubInstallationID,
@@ -878,6 +954,9 @@ func (s *Service) ClaimPullRequest(
 	}
 	number, err := parsePullRequestReference(reference, authorization.FullName)
 	if err != nil {
+		return domain.PullRequest{}, err
+	}
+	if err := s.requireUserScopedAccess(ctx, authorization, authorization.GitHubRepositoryID, true); err != nil {
 		return domain.PullRequest{}, err
 	}
 	access, err := s.client.repositoryWriteToken(
@@ -1222,10 +1301,16 @@ func (s *Service) syncOnce(
 	if err != nil {
 		return err
 	}
-	providerRepositories, err := s.client.ListRepositories(
-		ctx,
-		installation.GitHubInstallationID,
-	)
+	var providerRepositories []Repository
+	if installation.UserScoped() {
+		// Only what the connecting user can access on GitHub; see user_scope.go.
+		providerRepositories, err = s.userScopedRepositories(ctx, installation)
+	} else {
+		providerRepositories, err = s.client.ListRepositories(
+			ctx,
+			installation.GitHubInstallationID,
+		)
+	}
 	if err != nil {
 		_ = s.store.MarkGitHubSyncFailure(
 			ctx,

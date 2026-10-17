@@ -97,8 +97,8 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 			paths = append(paths, filepath.Join(workingDir, ".qwen", "settings.json"))
 		}
 	case "continue":
-		if home != "" {
-			paths = append(paths, filepath.Join(home, ".continue", "config.yaml"))
+		if root := continueHomeDir(func(name string) string { return envValue(env, name) }); root != "" {
+			paths = append(paths, filepath.Join(root, "config.yaml"))
 		}
 	case "goose":
 		if root := strings.TrimSpace(env["GOOSE_PATH_ROOT"]); root != "" {
