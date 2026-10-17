@@ -48,4 +48,29 @@ describe("useScrollFollow", () => {
 		result.current.glideToEnd();
 		expect(node.scrollTop).toBe(2000);
 	});
+
+	it("keeps repeated upward reader intent authoritative during virtualized streamed growth", () => {
+		const node = viewport({ scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		const { result } = renderHook(() => useScrollFollow(() => node));
+
+		result.current.hold(10_000);
+		node.scrollTop = 0;
+		result.current.hold(10_000);
+		expect(result.current.isOwnScroll(0)).toBe(false);
+
+		Object.defineProperty(node, "scrollHeight", { configurable: true, value: 4300 });
+		result.current.followEnd();
+		expect(node.scrollTop).toBe(0);
+	});
+
+	it("keeps a genuine virtualizer adjustment app-owned after nested reader intent", () => {
+		const node = viewport({ scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		const { result } = renderHook(() => useScrollFollow(() => node));
+
+		result.current.hold(10_000);
+		node.scrollTop = 3000;
+		result.current.markWritten(3000);
+
+		expect(result.current.isOwnScroll(3000)).toBe(true);
+	});
 });

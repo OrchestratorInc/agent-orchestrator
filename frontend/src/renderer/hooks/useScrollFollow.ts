@@ -47,6 +47,7 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 	// is cleared, so cancel keys off this too.
 	const lastAimAt = useRef(0);
 	const holdUntil = useRef(0);
+	const readerIntentFrom = useRef<number | null>(null);
 
 	const endOf = (node: HTMLElement) => Math.max(0, node.scrollHeight - node.clientHeight);
 	const write = (node: HTMLElement, top: number) => {
@@ -87,20 +88,32 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 	 * decides, so a gesture consumed by a nested scroller never unpins the log.
 	 */
 	const hold = useCallback((ms: number) => {
+		const continuingIntent = performance.now() < holdUntil.current && readerIntentFrom.current != null;
 		cancel();
+		if (!continuingIntent) readerIntentFrom.current = getNode()?.scrollTop ?? null;
 		holdUntil.current = performance.now() + ms;
-	}, [cancel]);
+	}, [cancel, getNode]);
 
 	/** Record a write made outside this hook (e.g. virtualizer anchoring) as ours. */
 	const markWritten = useCallback((top: number) => {
+		readerIntentFrom.current = null;
 		lastWritten.current = top;
 	}, []);
 
 	/** True while a smooth scroll we started is still in flight. */
 	const isFlying = useCallback(() => flying(), []);
+	const isHeld = useCallback(() => performance.now() < holdUntil.current, []);
 
 	/** True when a scroll event at `top` was caused by one of our writes or animations. */
 	const isOwnScroll = useCallback((top: number) => {
+		if (
+			performance.now() < holdUntil.current &&
+			readerIntentFrom.current != null &&
+			top < readerIntentFrom.current - OWN_SCROLL_PX
+		) {
+			readerIntentFrom.current = null;
+			return false;
+		}
 		const current = flying() ? flight.current : null;
 		if (current) {
 			const low = Math.min(current.from, current.to) - OWN_SCROLL_PX;
@@ -143,6 +156,7 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 		if (!node) return;
 		// A deliberate jump (send, Jump to latest) overrides any pending wheel hold.
 		holdUntil.current = 0;
+		readerIntentFrom.current = null;
 		if (snap.current) {
 			flight.current = null;
 			write(node, node.scrollHeight);
@@ -180,5 +194,5 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 		flight.current = null;
 	}, []);
 
-	return { glideToEnd, followEnd, cancel, hold, markWritten, isOwnScroll, isFlying, reaim, endFlight };
+	return { glideToEnd, followEnd, cancel, hold, markWritten, isOwnScroll, isFlying, isHeld, reaim, endFlight };
 }

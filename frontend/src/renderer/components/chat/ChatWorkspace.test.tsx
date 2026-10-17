@@ -2528,6 +2528,52 @@ describe("ChatWorkspace timeline", () => {
 		}
 	});
 
+	it("keeps an upward viewport gesture through a streaming resize after its hold expires", async () => {
+		stubVirtualTimelineGeometry();
+		const originalObserver = window.ResizeObserver;
+		const observers: Array<{ targets: Set<Element>; callback: ResizeObserverCallback }> = [];
+		class TestResizeObserver {
+			targets = new Set<Element>();
+			constructor(public callback: ResizeObserverCallback) { observers.push(this); }
+			observe(target: Element) { this.targets.add(target); }
+			unobserve(target: Element) { this.targets.delete(target); }
+			disconnect() { this.targets.clear(); }
+		}
+		window.ResizeObserver = TestResizeObserver as unknown as typeof ResizeObserver;
+		try {
+			render(<ChatWorkspace snapshot={chatFixtureLongHistory(60)} />);
+			const log = screen.getByRole("log");
+			const content = log.firstElementChild!;
+			log.scrollTop = log.scrollHeight - log.clientHeight;
+			fireEvent.scroll(log);
+
+			fireEvent.wheel(log, { deltaY: -120 });
+			log.scrollTop = 0;
+			act(() => {
+				const entry = { target: content, borderBoxSize: [{ blockSize: log.scrollHeight + 120, inlineSize: 768 }] } as unknown as ResizeObserverEntry;
+				for (const observer of observers) {
+					if (observer.targets.has(content)) observer.callback([entry], observer as unknown as ResizeObserver);
+				}
+			});
+			expect(log.scrollTop).toBe(0);
+
+			fireEvent.scroll(log);
+			expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
+
+			act(() => {
+				const entry = { target: content, borderBoxSize: [{ blockSize: log.scrollHeight + 240, inlineSize: 768 }] } as unknown as ResizeObserverEntry;
+				for (const observer of observers) {
+					if (observer.targets.has(content)) observer.callback([entry], observer as unknown as ResizeObserver);
+				}
+			});
+			expect(log.scrollTop).toBe(0);
+			expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+		} finally {
+			window.ResizeObserver = originalObserver;
+		}
+	});
+
 	it.each([1200, 300])("preserves the spacer and bottom anchor during a disclosure resize to %ipx", async (height) => {
 		stubVirtualTimelineGeometry();
 		const originalObserver = window.ResizeObserver;

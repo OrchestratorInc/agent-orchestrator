@@ -2494,6 +2494,7 @@ export function Timeline({
 		markWritten,
 		isOwnScroll,
 		isFlying,
+		isHeld,
 		reaim,
 		endFlight,
 	} = useScrollFollow(getScroller);
@@ -3338,9 +3339,10 @@ export function Timeline({
 				reaim();
 				return;
 			}
+			const previousTop = instance.scrollElement.scrollTop;
 			instance.scrollElement.scrollTop = offset + adjustments;
 			// Anchoring writes are ours; they must never read as the reader leaving the end.
-			markWritten(instance.scrollElement.scrollTop);
+			if (instance.scrollElement.scrollTop !== previousTop) markWritten(instance.scrollElement.scrollTop);
 		},
 		rangeExtractor: (range) => {
 			const indexes = defaultRangeExtractor(range);
@@ -3543,13 +3545,15 @@ export function Timeline({
 	// over the first frames (and may arrive in more than one snapshot), so keep
 	// snapping briefly after the first real layout instead of animating across them.
 	const followOrSnapToEnd = useCallback((node: HTMLElement) => {
+		if (isHeld()) return;
 		if (!initialLayoutDone.current || performance.now() - initialLayoutAt.current < INITIAL_SNAP_MS) {
+			const previousTop = node.scrollTop;
 			node.scrollTop = node.scrollHeight;
-			markWritten(node.scrollTop);
+			if (node.scrollTop !== previousTop) markWritten(node.scrollTop);
 			return;
 		}
 		followEnd();
-	}, [followEnd, markWritten]);
+	}, [followEnd, isHeld, markWritten]);
 
 	const syncScrollLayout = useCallback(() => {
 		anchorGeometry.current = null;
