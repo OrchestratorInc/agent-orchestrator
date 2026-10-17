@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { MAX_PROJECT_DISPLAY_NAME_LEN, ProjectSettingsFormView, ProjectSettingsInputRow, ProjectSettingsRow, ProjectSettingsSection, ProjectSettingsValueRow } from "@aoagents/product-ui";
-import { Pencil } from "lucide-react";
+import { Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { ProjectSettingsSaveState, ProjectSettingsSection as SettingsSection } from "./ProjectSettingsForm";
@@ -14,6 +14,8 @@ export type ProjectSettingsDraft = {
 	displayName: string;
 	defaultBranch: string;
 	sessionPrefix: string;
+	/** Repository-relative paths linked into each worker worktree. */
+	symlinks?: string[];
 	workerAgent: string;
 	orchestratorAgent: string;
 	reviewerHarness: string;
@@ -133,6 +135,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 		if ([...draft.displayName.trim()].length > nameLimit && draft.displayName.trim() !== initialValues.displayName.trim()) return t("settings.project.nameTooLong", { max: nameLimit });
 		if (capabilities.requiredBranch && (!draft.defaultBranch.trim() || [...draft.defaultBranch.trim()].length > 255)) return t("settings.cloudProject.identityValidation");
 		if (visibleRoles.some((role) => !validity[role])) return t("settings.project.tuningInvalid");
+		if (capabilities.workflow && (draft.symlinks ?? []).some((path) => !isValidSymlinkPath(path))) return t("settings.project.symlinkPathInvalid");
 		return undefined;
 	};
 	const submit = () => {
@@ -178,6 +181,14 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 					<ProjectSettingsSection title={t("settings.project.worktrees")} grouped>
 						<ProjectSettingsInputRow id="defaultBranch" label={t("settings.project.defaultBranch")} editLabel={t("settings.field.edit", { label: t("settings.project.defaultBranch") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.defaultBranch} placeholder={capabilities.requiredBranch ? undefined : "auto"} onChange={(defaultBranch) => patch({ defaultBranch })} />
 						{capabilities.sessionPrefix && <ProjectSettingsInputRow id="sessionPrefix" label={t("settings.project.sessionPrefix")} editLabel={t("settings.field.edit", { label: t("settings.project.sessionPrefix") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.sessionPrefix} placeholder="ao" onChange={(sessionPrefix) => patch({ sessionPrefix })} />}
+					</ProjectSettingsSection>
+					<ProjectSettingsSection title={t("settings.project.worktreeSetup")} grouped>
+						<div className="px-3 py-2 text-xs text-settings-muted">{t("settings.project.symlinksDescription")}</div>
+						{(draft.symlinks ?? []).map((path, index) => <div className="settings-row-bar" key={index}>
+							<input aria-label={t("settings.project.symlinkPath", { index: index + 1 })} className="settings-inline-edit-input min-w-0 flex-1" value={path} placeholder=".env" onChange={(event) => patch({ symlinks: (draft.symlinks ?? []).map((item, i) => (i === index ? event.target.value : item)) })} />
+							<button type="button" className="ml-2 rounded p-1 text-settings-muted hover:text-error" aria-label={t("settings.project.removeSymlink")} onClick={() => patch({ symlinks: (draft.symlinks ?? []).filter((_, i) => i !== index) })}><Trash2 className="size-icon-sm" aria-hidden="true" /></button>
+						</div>)}
+						<button type="button" className="flex items-center gap-1 px-3 py-2 text-xs text-settings-muted hover:text-settings-label" onClick={() => patch({ symlinks: [...(draft.symlinks ?? []), ""] })}><Plus className="size-icon-sm" aria-hidden="true" />{t("settings.project.addSymlink")}</button>
 					</ProjectSettingsSection>
 					{capabilities.intake && <ProjectSettingsSection title={t("settings.project.issues")} grouped><IntakeFields variant="settings" form={intake} onChange={(values) => patch({ intakeEnabled: values.enabled ?? draft.intakeEnabled, intakeRepo: values.repo ?? draft.intakeRepo, intakeAssignee: values.assignee ?? draft.intakeAssignee })} repoPreview={{ value: draft.intakeRepo.trim() || deriveRepoPath(repository ?? ""), host: deriveRepoHost(repository ?? "") }} /></ProjectSettingsSection>}
 					<ProjectSettingsSection title={t("settings.project.pullRequests")} grouped>
@@ -237,4 +248,10 @@ function ProjectRolePermissions({ role, agent, value, runtimeDefaults, onChange 
 	const values = runtimeDefaults ? ["", "default", "auto", ...(agent === "opencode" ? [] : ["accept-edits"]), "bypass-permissions"] : [...(agent === "codex" ? [] : ["default"]), "auto", "accept-edits", "bypass-permissions"];
 	const options = values.map((permission) => ({ value: permission, label: permission === "" ? t("settings.cloudProject.sessionPolicy") : permission === "default" ? t(agent === "claude-code" ? "settings.project.permissionUseClaude" : "settings.project.permissionUseAgent") : t(permission === "accept-edits" ? "settings.project.permissionAcceptEdits" : permission === "auto" ? "settings.project.permissionAuto" : "settings.project.permissionBypass") }));
 	return <SettingsOptionMenu aria-label={label} value={runtimeDefaults ? value : value === "default" && agent === "codex" ? "bypass-permissions" : value || "auto"} options={options} disabled={runtimeDefaults && !agent} placeholder={t("settings.project.permissionNotReported")} triggerClassName="w-fit" onChange={onChange} />;
+}
+
+function isValidSymlinkPath(value: string): boolean {
+	const path = value.trim().replaceAll("\\", "/");
+	if (!path || path.startsWith("/") || /^[A-Za-z]:\//.test(path)) return false;
+	return !path.split("/").some((part) => part === "..");
 }

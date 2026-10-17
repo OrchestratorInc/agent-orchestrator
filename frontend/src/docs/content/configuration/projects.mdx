@@ -104,7 +104,7 @@ If you explicitly request Chat from an unsupported harness, spawning fails. An i
 <span id="prepare-each-session" />
 <span id="give-agents-project-rules" />
 
-Use `env`, `symlinks`, and `postCreate` for repeatable workspace setup. A failing `postCreate` command prevents the agent from starting, so keep setup commands deterministic. Symlink restrictions are described in [Configuration fields](#configuration-fields).
+Use `env`, `symlinks`, and `postCreate` for repeatable workspace setup. A failing `postCreate` command prevents the agent from starting, so keep setup commands deterministic. Symlink paths are added in **Project Settings → General → Worktree setup**. Each path must be repository-relative. AO never links `.env` files implicitly, and linked files can expose local secrets to worker sessions, so only add paths you trust the worker to access. See [Configuration fields](#configuration-fields) for the restrictions.
 
 Open **Project Settings → Scripts** to edit the **Setup** and **Cleanup** steps. Switching tabs keeps your edits. **Save changes** saves both lists. The scripts run automatically at their workspace lifecycle events.
 
