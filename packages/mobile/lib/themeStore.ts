@@ -52,3 +52,15 @@ export async function saveThemeStyle(style: ThemeStyle): Promise<void> {
 		/* a lost choice only means the picker resets next launch */
 	}
 }
+
+export type ThemeSettings = { preference: ThemePreference; style: ThemeStyle };
+
+/**
+ * Both stored choices, read together so the root can hold the splash until they
+ * are in and the first frame already draws the user's theme. Never throws: each
+ * half falls back to its default.
+ */
+export async function loadThemeSettings(): Promise<ThemeSettings> {
+	const [preference, style] = await Promise.all([loadThemePreference(), loadThemeStyle()]);
+	return { preference, style };
+}

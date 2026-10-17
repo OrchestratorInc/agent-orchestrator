@@ -10,7 +10,7 @@ import {
 	type ThemePreference,
 	type ThemeStyle,
 } from "./themePreference";
-import { loadThemePreference, loadThemeStyle, saveThemePreference, saveThemeStyle } from "./themeStore";
+import { saveThemePreference, saveThemeStyle, type ThemeSettings } from "./themeStore";
 
 type ThemeState = {
 	theme: Theme;
@@ -51,27 +51,16 @@ export function useThemedStyles<T>(factory: (t: Theme) => T): T {
 	return useMemo(() => factory(theme), [factory, theme]);
 }
 
-export function ThemeProvider({ children }: { children: ReactNode }) {
+/**
+ * `initial` is the stored choice, read by the root layout while the splash is
+ * still up (loadThemeSettings), so the first frame already draws the user's
+ * theme. Reading it here after mount painted one frame of the default palette
+ * first: a visible flash for anyone on a named theme or an explicit light/dark.
+ */
+export function ThemeProvider({ children, initial }: { children: ReactNode; initial?: ThemeSettings }) {
 	const systemScheme = useColorScheme();
-	const [preference, setPreferenceState] = useState<ThemePreference>(DEFAULT_PREFERENCE);
-	const [style, setStyleState] = useState<ThemeStyle>(DEFAULT_THEME_STYLE);
-
-	// The stored preference arrives a tick after mount. Until then we render the
-	// default ("system"), which already tracks the OS — so the common case shows
-	// the right theme immediately and only an explicit override or a named
-	// colour theme can flash.
-	useEffect(() => {
-		let active = true;
-		loadThemePreference().then((p) => {
-			if (active) setPreferenceState(p);
-		});
-		loadThemeStyle().then((s) => {
-			if (active) setStyleState(s);
-		});
-		return () => {
-			active = false;
-		};
-	}, []);
+	const [preference, setPreferenceState] = useState<ThemePreference>(initial?.preference ?? DEFAULT_PREFERENCE);
+	const [style, setStyleState] = useState<ThemeStyle>(initial?.style ?? DEFAULT_THEME_STYLE);
 
 	const setPreference = useCallback((next: ThemePreference) => {
 		// Optimistic: the switch should move under the finger, not after a write.
