@@ -56,6 +56,13 @@ func TestCoordinatorRoutesAtAttemptAndLeavesPendingWithoutOrchestrator(t *testin
 	if store.reports[0].DeliveryState != domain.ReportPending {
 		t.Fatalf("state = %s, want pending", store.reports[0].DeliveryState)
 	}
+	if store.reports[0].DeliveryAttempts != 1 {
+		t.Fatalf("attempts = %d, want claim+backoff attempt", store.reports[0].DeliveryAttempts)
+	}
+	if !store.reports[0].AvailableAt.Equal(now.Add(time.Second)) {
+		t.Fatalf("available_at = %s, want deferred by retryDelay", store.reports[0].AvailableAt)
+	}
+	now = now.Add(time.Second)
 	store.sessions = []domain.SessionRecord{
 		{ID: "old", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat, IsTerminated: true, CreatedAt: now},
 		{ID: "replacement", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat, CreatedAt: now.Add(time.Second)},
@@ -164,8 +171,14 @@ func reportAt(id string, worker domain.SessionID, created, available time.Time, 
 func (s *coordinatorStore) add(records ...domain.ReportRecord) {
 	s.reports = append(s.reports, records...)
 }
-func (s *coordinatorStore) ListSessions(context.Context, domain.ProjectID) ([]domain.SessionRecord, error) {
-	return append([]domain.SessionRecord(nil), s.sessions...), nil
+func (s *coordinatorStore) ListSessions(_ context.Context, project domain.ProjectID) ([]domain.SessionRecord, error) {
+	out := make([]domain.SessionRecord, 0, len(s.sessions))
+	for _, rec := range s.sessions {
+		if rec.ProjectID == project {
+			out = append(out, rec)
+		}
+	}
+	return out, nil
 }
 func (s *coordinatorStore) GetSession(_ context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
 	for _, rec := range s.sessions {
@@ -175,7 +188,7 @@ func (s *coordinatorStore) GetSession(_ context.Context, id domain.SessionID) (d
 	}
 	return domain.SessionRecord{}, false, nil
 }
-func (s *coordinatorStore) ListPendingReportSchedule(context.Context, int64) ([]domain.ReportRecord, error) {
+func (s *coordinatorStore) ListPendingReportSchedule(_ context.Context, limit int64) ([]domain.ReportRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var pending []domain.ReportRecord
@@ -185,34 +198,44 @@ func (s *coordinatorStore) ListPendingReportSchedule(context.Context, int64) ([]
 		}
 	}
 	sortReports(pending)
-	if len(pending) > 1 {
-		pending = pending[:1]
+	if limit > 0 && int64(len(pending)) > limit {
+		pending = pending[:limit]
 	}
 	return pending, nil
 }
 func (s *coordinatorStore) ClaimPendingReportBatch(_ context.Context, project domain.ProjectID, token string, at time.Time) ([]domain.ReportRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	batchID := ""
-	for i := range s.reports {
-		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportPending {
-			batchID = s.reports[i].DeliveryBatchID
-			if batchID == "" {
-				batchID = "report-batch:" + s.reports[i].ID
+	var scheduled []domain.ReportRecord
+	for _, rec := range s.reports {
+		if rec.ProjectID == project && rec.DeliveryState == domain.ReportPending {
+			scheduled = append(scheduled, rec)
+		}
+	}
+	sortReports(scheduled)
+	if len(scheduled) == 0 {
+		return nil, nil
+	}
+	batchID := scheduled[0].DeliveryBatchID
+	if batchID == "" {
+		batchID = "report-batch:" + scheduled[0].ID
+		for i := range s.reports {
+			if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportPending && s.reports[i].DeliveryBatchID == "" {
+				s.reports[i].DeliveryBatchID = batchID
 			}
-			break
 		}
 	}
 	var claimed []domain.ReportRecord
 	for i := range s.reports {
-		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportPending {
-			if s.reports[i].DeliveryBatchID != "" && s.reports[i].DeliveryBatchID != batchID {
-				continue
-			}
-			s.reports[i].DeliveryBatchID = batchID
-			s.reports[i].DeliveryState, s.reports[i].ClaimToken, s.reports[i].ClaimedAt = domain.ReportClaimed, token, at
-			claimed = append(claimed, s.reports[i])
+		if s.reports[i].ProjectID != project || s.reports[i].DeliveryState != domain.ReportPending || s.reports[i].DeliveryBatchID != batchID {
+			continue
 		}
+		s.reports[i].DeliveryState = domain.ReportClaimed
+		s.reports[i].ClaimToken = token
+		s.reports[i].ClaimedAt = at
+		s.reports[i].DeliveryAttempts++
+		s.reports[i].LastError = ""
+		claimed = append(claimed, s.reports[i])
 	}
 	sortReports(claimed)
 	return claimed, nil
@@ -230,28 +253,38 @@ func (s *coordinatorStore) AcknowledgeReportBatch(_ context.Context, project dom
 	s.acked += count
 	return count, nil
 }
-func (s *coordinatorStore) ReleaseReportBatch(_ context.Context, project domain.ProjectID, token string, _ time.Time, _ string) (int, error) {
+func (s *coordinatorStore) ReleaseReportBatch(_ context.Context, project domain.ProjectID, token string, at time.Time, reason string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	count := 0
 	for i := range s.reports {
 		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportClaimed && s.reports[i].ClaimToken == token {
-			s.reports[i].DeliveryState, s.reports[i].ClaimToken = domain.ReportPending, ""
+			if at.Before(s.reports[i].AvailableAt) {
+				s.reports[i].AvailableAt = at
+			}
+			s.reports[i].DeliveryState = domain.ReportPending
+			s.reports[i].ClaimToken = ""
+			s.reports[i].ClaimedAt = time.Time{}
+			s.reports[i].LastError = reason
 			count++
 		}
 	}
 	return count, nil
 }
-func (s *coordinatorStore) DeferReportBatch(ctx context.Context, project domain.ProjectID, token string, at time.Time, reason string) (int, error) {
-	count, err := s.ReleaseReportBatch(ctx, project, token, at, reason)
-	if err != nil {
-		return count, err
-	}
+func (s *coordinatorStore) DeferReportBatch(_ context.Context, project domain.ProjectID, token string, at time.Time, reason string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	count := 0
 	for i := range s.reports {
-		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportPending && s.reports[i].DeliveryBatchID != "" && s.reports[i].AvailableAt.Before(at) {
-			s.reports[i].AvailableAt = at
+		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportClaimed && s.reports[i].ClaimToken == token {
+			if s.reports[i].AvailableAt.Before(at) {
+				s.reports[i].AvailableAt = at
+			}
+			s.reports[i].DeliveryState = domain.ReportPending
+			s.reports[i].ClaimToken = ""
+			s.reports[i].ClaimedAt = time.Time{}
+			s.reports[i].LastError = reason
+			count++
 		}
 	}
 	return count, nil
@@ -280,12 +313,18 @@ type coordinatorSubmission struct {
 	message, key string
 }
 type coordinatorDelivery struct {
-	submissions []coordinatorSubmission
-	interrupts  []domain.SessionID
-	submitErr   error
+	submissions    []coordinatorSubmission
+	interrupts     []domain.SessionID
+	submitErr      error
+	submitErrByKey map[string]error
+	submitKeys     []string
 }
 
 func (d *coordinatorDelivery) Submit(_ context.Context, target domain.SessionID, message, key string) error {
+	d.submitKeys = append(d.submitKeys, key)
+	if err, ok := d.submitErrByKey[key]; ok {
+		return err
+	}
 	if d.submitErr != nil {
 		return d.submitErr
 	}
