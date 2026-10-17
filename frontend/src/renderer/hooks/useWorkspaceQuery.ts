@@ -239,6 +239,7 @@ function toLocalWorkspaceSession(
 		branchState: session.branchState,
 		isTerminated: session.isTerminated,
 		workspaceCleanup: session.workspaceCleanup,
+		needsResume: session.needsResume,
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,
 		autoInjectReview: session.autoInjectReview ?? true,
 		autoInjectCI: session.autoInjectCI ?? true,
