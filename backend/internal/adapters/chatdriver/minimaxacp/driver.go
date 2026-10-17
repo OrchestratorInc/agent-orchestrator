@@ -1,6 +1,8 @@
 // Package minimaxacp binds MiniMax Code 0.6.5's native ACP server to the shared
 // AO Chat transport and renderer. It remains unregistered until native Chat
 // conformance is qualified independently of the TUI integration.
+// Version 0.6.5 can finish cancellation before releasing its active turn,
+// rejecting the next prompt; production registration stays disabled.
 package minimaxacp
 
 import (

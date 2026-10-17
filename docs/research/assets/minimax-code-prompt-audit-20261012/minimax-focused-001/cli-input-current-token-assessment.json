@@ -1,8 +1,0 @@
-{
-  "at": "2026-10-13T00:32:34.471724+00:00",
-  "capturedFileSHA256": "0ef0e0d29eab4cccaf9b3a4890e7ad941e49881c6df3c297aa0808c5963d3b52",
-  "fileStillByteIdentical": true,
-  "actualPostKillTokenPresent": true,
-  "initialTokenPresent": false,
-  "qualification": "Recorded CLI launch input contains the actual post-Kill token, not the initial token, and its captured SHA remains unchanged. This proves input configuration, not authenticated provider wire or consumption."
-}
