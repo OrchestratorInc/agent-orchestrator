@@ -2256,12 +2256,35 @@ describe("TaskComposer", () => {
 			await waitFor(() => expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument());
 		});
 
-		it("explains an expired login that Claude Code renews on its own", async () => {
+		it("stays quiet about an expired login that Claude Code renews on its own", async () => {
 			h.agentCatalog = { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "configured" })] };
 			serveClaude(() => claudeCatalog({ warning: "the saved Claude Code login token expired", warningCode: "auth_expired" }));
 			render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
-			expect(await screen.findByTestId("model-catalog-notice")).toHaveTextContent("Claude Code's saved login has expired.");
-			expect(screen.getByRole("button", { name: "Log in again" })).toBeInTheDocument();
+			await waitFor(() => expect(h.get).toHaveBeenCalledWith(expect.stringContaining("/models"), expect.anything()));
+			// The catalog has rendered once its models are listed; only then is
+			// the absence of the notice meaningful.
+			await userEvent.click(await screen.findByRole("button", { name: "Model" }));
+			expect(await screen.findByText("Sonnet 5.5")).toBeInTheDocument();
+			expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument();
+			expect(screen.queryByText("the saved Claude Code login token expired")).not.toBeInTheDocument();
+		});
+
+		// A remote host may run an older daemon that still refuses the spawn for a
+		// stale catalog, so it keeps the notice and its Log in shortcut.
+		it("keeps the expired-login notice for a remote host", async () => {
+			const claude = agentReadiness("claude-code", "Claude Code", { authentication: "configured" });
+			h.agentCatalog = { agents: [claude] };
+			h.remoteGet.mockImplementation(async (path: string) => {
+				if (path.includes("/models")) return { data: claudeCatalog({ warning: "the saved Claude Code login token expired", warningCode: "auth_expired" }) };
+				if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: [] } };
+				return { data: { status: "ok", project: { id: "project-a", config: { worker: { agent: "claude-code" } } } } };
+			});
+			h.remotePost.mockImplementation(async (path: string) => path === "/api/v1/agents/readiness/ensure"
+				? { data: { agents: [claude] } }
+				: { data: {} });
+			render(<Wrap><TaskComposer hostId="box-a" projectId="project-a" onCreated={vi.fn()} /></Wrap>);
+			expect(await screen.findByTestId("model-catalog-notice")).toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "Log in" })).toBeInTheDocument();
 		});
 
 		it("recognizes a login error from a daemon that predates warning codes", async () => {

@@ -88,3 +88,36 @@ func TestExpiredLoginWithoutRefreshTokenStillProbes(t *testing.T) {
 		t.Fatalf("provider requests = %d, want one probe", requests)
 	}
 }
+
+// Once the refresh token has lapsed too, Claude Code cannot renew the login, so
+// the expired access token goes to the provider. The 401 must read as a
+// definite rejection: auth diagnostics report it rejected, and model discovery
+// fails with the credential-rejected error that the catalog service turns into
+// auth_required (the composer's Log in), not into a generic stale catalog.
+func TestExpiredLoginWithLapsedRefreshTokenIsRejectedByProvider(t *testing.T) {
+	InvalidateAuthCache()
+	t.Cleanup(InvalidateAuthCache)
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	pinClaudeNow(t, now)
+	requests := 0
+	server := withStubValidator(t, func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"OAuth access token has expired."}}`))
+	})
+	resolved := storedLoginContext(now.Add(-time.Hour), true, server.URL)
+	resolved.credential.RefreshExpiresAt = now.Add(-time.Minute)
+
+	status, ok, step := (&Plugin{}).probeResolvedAuthDiagnostics(context.Background(), resolved, true)
+	if !ok || status != ports.AgentAuthStatusUnauthorized || step.Code != "provider_rejected" || step.HTTPStatus != http.StatusUnauthorized {
+		t.Fatalf("status=%s ok=%v step=%+v", status, ok, step)
+	}
+	InvalidateAuthCache()
+	_, err := providerModelsFor(context.Background(), resolved)
+	if !errors.Is(err, ports.ErrAgentModelDiscoveryCredentialRejected) {
+		t.Fatalf("discovery error = %v, want ErrAgentModelDiscoveryCredentialRejected", err)
+	}
+	if requests == 0 {
+		t.Fatal("a login whose refresh token lapsed must be sent to the provider")
+	}
+}

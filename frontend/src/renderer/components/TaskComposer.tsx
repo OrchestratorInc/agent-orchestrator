@@ -599,16 +599,21 @@ export function TaskComposer({
 	// the cloud connection: once that is connected, this computer's login state is
 	// irrelevant to the task and the notice only confuses.
 	const cloudHarnessReady = isCloudProject && isCloudHarnessConnected(cloudConnectionsQuery.data, selectedAgent);
-	const modelWarning = modelAuthIssue && cloudHarnessReady ? undefined : modelAuthIssue ? (
+	// An expired login whose refresh token is still in date needs nothing from
+	// the user on this computer: its daemon lets the task start and the agent
+	// renews the token as it launches. A remote host may run an older daemon
+	// that still rejects the spawn for a stale catalog, so keep the notice there.
+	const loginRenewsItself = modelAuthIssue === "expired" && !hostId;
+	const showModelNotice = Boolean(modelAuthIssue) && !loginRenewsItself && !cloudHarnessReady;
+	const modelWarning = showModelNotice ? (
 		<ModelCatalogNotice
 			agentLabel={selectedAgentLabel}
-			issue={modelAuthIssue}
 			detail={modelWarningText}
 			cloud={isCloudProject}
 			onLogin={startAgentLogin}
 			onRetry={refreshSelectedModels}
 		/>
-	) : modelWarningText;
+	) : modelAuthIssue ? undefined : modelWarningText;
 	useEffect(() => {
 		if (!agentTouched) setAgent(defaultWorkerAgent);
 	}, [agentTouched, defaultWorkerAgent]);

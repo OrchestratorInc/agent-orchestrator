@@ -504,6 +504,64 @@ func TestResolveClaudeModelWithoutEffortRejectsUnknownAndStaleCatalogs(t *testin
 	}
 }
 
+func TestResolveClaudeModelAllowsCatalogStaleFromExpiredLogin(t *testing.T) {
+	// Claude Code renews an expired stored login when it starts, so a catalog
+	// stale only for that reason must not block the launch that renews it.
+	expired := ports.AgentModelCatalog{
+		Models:      []ports.AgentModelInfo{{ID: "claude-sonnet-5-5", Efforts: []string{"low", "medium"}}},
+		Stale:       true,
+		WarningCode: ports.ModelCatalogWarningAuthExpired,
+	}
+	m := &Manager{modelCatalog: tuningCatalog{catalog: expired}}
+	spawn := func(model, effort string) (ports.AgentConfig, error) {
+		return m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+			ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+			AgentConfig: ports.AgentConfig{Model: model, Effort: effort}, EffortOverride: true,
+		}, domain.ProjectConfig{})
+	}
+
+	resolved, err := spawn("claude-sonnet-5-5", "medium")
+	if err != nil || resolved.Model != "claude-sonnet-5-5" || resolved.Effort != "medium" {
+		t.Fatalf("listed model = %#v, %v; want launch with medium effort", resolved, err)
+	}
+	if _, err := spawn("claude-sonnet-5-5", "max"); !errors.Is(err, ports.ErrUnsupportedEffort) {
+		t.Fatalf("unsupported effort error = %v, want ErrUnsupportedEffort", err)
+	}
+	resolved, err = spawn("claude-opus-5-5", "high")
+	if err != nil || resolved.Model != "claude-opus-5-5" || resolved.Effort != "high" {
+		t.Fatalf("unlisted model = %#v, %v; want launch left to the CLI", resolved, err)
+	}
+	if _, err := spawn("claude-opus-5-5", "ultra"); !errors.Is(err, ports.ErrUnsupportedEffort) {
+		t.Fatalf("unknown effort on unlisted model error = %v, want ErrUnsupportedEffort", err)
+	}
+	resolved, err = spawn("claude-opus-5-5", "")
+	if err != nil || resolved.Model != "claude-opus-5-5" || resolved.Effort != "" {
+		t.Fatalf("unlisted model without effort = %#v, %v; want launch left to the CLI", resolved, err)
+	}
+
+	// Against the account's own last-known list, an unlisted ID is not passed
+	// through: it is more likely a typo than a newly released model.
+	succeeded := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	accountScoped := expired
+	accountScoped.LastSuccessAt = &succeeded
+	m.modelCatalog = tuningCatalog{catalog: accountScoped}
+	if _, err := spawn("claude-opus-5-5", "high"); !errors.Is(err, ErrUnsupportedModel) {
+		t.Fatalf("unlisted model on account-scoped catalog error = %v, want ErrUnsupportedModel", err)
+	}
+	if _, err := spawn("claude-opus-5-5", ""); !errors.Is(err, ErrUnsupportedModel) {
+		t.Fatalf("unlisted model without effort on account-scoped catalog error = %v, want ErrUnsupportedModel", err)
+	}
+	if resolved, err := spawn("claude-sonnet-5-5", "medium"); err != nil || resolved.Effort != "medium" {
+		t.Fatalf("listed model on account-scoped catalog = %#v, %v; want launch", resolved, err)
+	}
+
+	expired.WarningCode = ports.ModelCatalogWarningAuthRequired
+	m.modelCatalog = tuningCatalog{catalog: expired}
+	if _, err := spawn("claude-sonnet-5-5", ""); !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) {
+		t.Fatalf("signed-out stale catalog error = %v, want ErrModelCapabilitiesUnavailable", err)
+	}
+}
+
 func TestResolveCodexTUIAgentConfigFallsBackWhenCatalogCannotValidate(t *testing.T) {
 	cfg := ports.SpawnConfig{ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
 		AgentConfig: domain.AgentConfig{Model: "gpt-custom", Effort: "xhigh"}}
