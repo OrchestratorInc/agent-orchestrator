@@ -1541,8 +1541,25 @@ func (e *Engine) listLocked(ctx stdctx.Context, workerID domain.SessionID, selec
 	if err != nil {
 		return SessionReviews{}, err
 	}
+	handle := legacyReviewerHandle(reviewRow)
+	// Same cleared-handle gap as in TerminateReviewer: the DB handle can be
+	// gone while the deterministic terminal pane is still alive. Report the
+	// stable id when it probes alive, so the inspector's kill control stays
+	// visible and reviews/kill can reach the orphaned pane. Chat-mode handles
+	// are session-scoped and cannot be reconstructed from the worker id, so
+	// they keep the DB-only behavior (#6064). Probe only while the reviewer
+	// still counts as active — a #6064 zombie dies mid-turn, so its pass is
+	// still running; a finished reviewer keeps reporting no handle even when
+	// its terminal pane lingers.
+	if handle == "" && reviewerRowActive(reviewRow, runs) && reviewRow.InterfaceMode != domain.ReviewerInterfaceChat {
+		// No launch id: the stable-id probe wants the plain child-alive check,
+		// which is what Alive does when launchID is blank.
+		if alive, err := e.launcher.Alive(ctx, reviewerHandleID(workerID), ""); err == nil && alive {
+			handle = reviewerHandleID(workerID)
+		}
+	}
 	return SessionReviews{
-		ReviewerHandleID:      legacyReviewerHandle(reviewRow),
+		ReviewerHandleID:      handle,
 		ReviewerHarness:       reviewerHarness,
 		ReviewerActivityState: reviewRow.ReviewerActivityState,
 		Runs:                  runs,
@@ -1815,9 +1832,15 @@ func (e *Engine) TerminateReviewer(ctx stdctx.Context, workerID domain.SessionID
 	return e.terminateReviewer(ctx, workerID, body, false)
 }
 
-// ArchiveReviewer retires all reviewer surfaces but retains conversations and results.
-func (e *Engine) ArchiveReviewer(ctx stdctx.Context, workerID domain.SessionID) error {
-	_, err := e.terminateReviewer(ctx, workerID, "cancelled because reviewer was archived", true)
+// ArchiveReviewer retires all reviewer surfaces but retains conversations and
+// results. cancelBody is stamped onto the cancelled runs: the kill endpoint
+// passes domain.ReviewRunCancelledByKill so the auto-review coordinator
+// re-arms the same SHA (#3745); blank keeps the archive wording.
+func (e *Engine) ArchiveReviewer(ctx stdctx.Context, workerID domain.SessionID, cancelBody string) error {
+	if cancelBody == "" {
+		cancelBody = "cancelled because reviewer was archived"
+	}
+	_, err := e.terminateReviewer(ctx, workerID, cancelBody, true)
 	return err
 }
 
@@ -1852,6 +1875,17 @@ func (e *Engine) terminateReviewer(ctx stdctx.Context, workerID domain.SessionID
 		if destroyedHandle == "" {
 			destroyedHandle = review.ReviewerHandleID
 		}
+	}
+	// A cleared DB handle does not mean a dead pane: teardown paths clear
+	// ReviewerHandleID on terminal-state writes while the deterministic
+	// terminal pane (stable per worker, launcher.go reviewerHandleID) can
+	// still be running. Destroy it by its stable id — Destroy on an absent
+	// pane is a no-op. Sessions with no review history at all stay a no-op.
+	if destroyedHandle == "" && len(reviews) > 0 {
+		if err := e.launcher.Destroy(ctx, reviewerHandleID(workerID)); err != nil {
+			return TerminateResult{}, err
+		}
+		destroyedHandle = reviewerHandleID(workerID)
 	}
 	if !archive && len(reviews) > 0 {
 		if err := e.store.ClearReviewerHandle(ctx, workerID); err != nil {

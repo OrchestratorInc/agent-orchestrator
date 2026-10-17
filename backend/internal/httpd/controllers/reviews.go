@@ -294,7 +294,10 @@ func (c *ReviewsController) kill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	workerID := sessionID(r)
-	if err := c.Svc.ArchiveReviewer(r.Context(), workerID); err != nil {
+	// Kill is an explicit force-restart: the kill marker lets the auto-review
+	// coordinator re-arm the same SHA (#3745) while the archive semantics of
+	// the kill endpoint are kept (#6291).
+	if err := c.Svc.ArchiveReviewer(r.Context(), workerID, domain.ReviewRunCancelledByKill); err != nil {
 		writeReviewError(w, r, err)
 		return
 	}
