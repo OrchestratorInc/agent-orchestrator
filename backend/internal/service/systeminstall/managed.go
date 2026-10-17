@@ -505,6 +505,11 @@ func (s *Service) RemoveUnusedManagedReleases(ctx context.Context) {
 	if s.managedRoot == "" || s.releases == nil {
 		return
 	}
+	processes, err := s.snapshotManagedProcesses(ctx)
+	if err != nil {
+		// Unknown process state is never proof that an old release is unused.
+		return
+	}
 	_ = s.releases.PruneSessionHarnessReleases(ctx)
 	entries, err := os.ReadDir(s.managedRoot)
 	if err != nil {
@@ -565,7 +570,7 @@ func (s *Service) RemoveUnusedManagedReleases(ctx context.Context) {
 		releases, _ := os.ReadDir(versionsDir)
 		names := make([]string, 0, len(releases))
 		for _, release := range releases {
-			if !keep[release.Name()] {
+			if !keep[release.Name()] && !s.managedReleaseHasProcess(processes, target, record, release.Name()) {
 				names = append(names, release.Name())
 			}
 		}

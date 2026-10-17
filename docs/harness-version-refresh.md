@@ -41,7 +41,7 @@ cross-version compatibility guarantees for every historical CLI release.
 | Droid | `droid -r ID` | Yes |
 | Amp | `amp threads continue ID` | Yes; no latest-thread selection |
 | Agy | `agy --conversation ID` | Yes |
-| Crush | `crush --session ID` | Yes |
+| Crush | `crush --session ID` | Requires current-launch native identity; private live TUI test captured none |
 | Goose | `goose session --resume --session-id ID` | Yes; interactive `session`, not headless `run` |
 | Auggie | `auggie --resume ID` | Yes; passive resume omits `--print` |
 | Devin | `devin -r ID` | Yes |
@@ -119,6 +119,15 @@ files; their update remains available after those processes exit.
 The in-use advisory resolves the same update recipe as the operation for its
 ownership-checked maintenance method, so eligible managed updates show `safe`;
 disabled management, rejected capabilities and in-place recipes stay blocked.
+
+Release cleanup also checks live process references independently of session
+rows. A real Cline hub remained alive after its foreground session moved and
+exposed why leases alone are insufficient. Managed releases and deferred
+Homebrew kegs stay on disk while a detached process references them; mutable
+launcher aliases are retained conservatively until the process exits. Failed,
+empty, malformed or truncated inventories defer cleanup. Windows uses local
+process command/image metadata, retaining opaque script-runtime references;
+that branch is fixture-tested here, not claimed as native Windows validation.
 
 A durable `.unsettled` intent precedes switching `current`. Startup repairs a
 missing Windows junction using the validated intended or last published release,

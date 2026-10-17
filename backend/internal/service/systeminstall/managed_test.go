@@ -117,6 +117,10 @@ func newManagedCodexFixture(t *testing.T, sessions []domain.SessionRecord) *mana
 		return os.WriteFile(filepath.Join(prefix, "bin", "codex"), []byte(version+"\n"), 0o755)
 	})
 	s.commands = commandRunnerFunc(func(_ context.Context, argv []string, stdout, _ io.Writer) error {
+		if len(argv) > 0 && argv[0] == "ps" {
+			_, err := io.WriteString(stdout, "1 /usr/local/bin/ao\n")
+			return err
+		}
 		if len(argv) == 2 && argv[1] == "--version" {
 			_, err := io.WriteString(stdout, "codex "+strings.TrimSpace(readFile(argv[0]))+"\n")
 			return err

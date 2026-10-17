@@ -68,6 +68,10 @@ func (s *Service) RunDeferredCleanups(ctx context.Context) {
 	if len(pending) == 0 || observer == nil {
 		return
 	}
+	processes, err := s.snapshotManagedProcesses(ctx)
+	if err != nil {
+		return
+	}
 	for target, formula := range pending {
 		if ctx.Err() != nil {
 			continue
@@ -95,6 +99,10 @@ func (s *Service) RunDeferredCleanups(ctx context.Context) {
 		}
 		s.mu.Unlock()
 		if !active {
+			if used, probeErr := s.brewCleanupHasProcess(ctx, target, formula, processes); probeErr != nil || used {
+				gate.Unlock()
+				continue
+			}
 			argv := []string{"brew", "cleanup", formula}
 			env := []string{"CI=1", "NONINTERACTIVE=1", "HOMEBREW_NO_AUTO_UPDATE=1"}
 			if s.installCommands != nil {
