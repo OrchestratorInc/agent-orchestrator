@@ -67,6 +67,9 @@ type ChatControllerStart struct {
 	// legacy/untrusted hook text during a TUI-to-Chat replay. Trusted checkpoints
 	// and AO high-water facts remain mandatory.
 	HistoryPolicy domain.SessionInterfaceTransitionHistoryPolicy
+	// Standby is a provider started ahead of this start for the same target;
+	// see ChatStartConfig.Standby. Resume paths discard it.
+	Standby ChatStandby
 	// ControllerReady commits the controller's durable generation before event
 	// consumption starts. A controller that exits immediately must report after
 	// the launch has been marked live, so its exited signal cannot be overwritten

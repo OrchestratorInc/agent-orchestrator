@@ -72,6 +72,34 @@ paths:
       summary: Open the fixed native authentication flow for one agent
       tags:
       - agents
+  /api/v1/agents/{agent}/chat/prewarm:
+    post:
+      operationId: prewarmChatAgent
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrewarmChatAgentResponse'
+          description: Accepted
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Run an agent's Chat readiness check in the background so a later switch
+        to it skips it
+      tags:
+      - conversations
   /api/v1/agents/{agent}/install:
     get:
       operationId: getAgentInstallStatus
@@ -9626,6 +9654,46 @@ paths:
       summary: Switch a logical AO session to another agent harness
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/switch-agent/prewarm:
+    post:
+      operationId: prewarmSessionAgentSwitch
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrewarmAgentSwitchRequest'
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrewarmAgentSwitchResponse'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Start the agent picked for a chat's next switch so the send that carries
+        the switch adopts it
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/workspace/diffs:
     post:
       operationId: getSessionWorkspaceDiffs
@@ -10951,6 +11019,32 @@ paths:
       summary: Check local machine readiness (git, tmux, agent harness, gh)
       tags:
       - system
+  /api/v1/task-preparations:
+    post:
+      operationId: prepareStandaloneTask
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrepareTaskResponse'
+          description: Accepted
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Reserve a standalone session and its scratch workspace for a new chat
+        page
+      tags:
+      - sessions
   /api/v1/task-preparations/{token}:
     delete:
       operationId: cancelTaskPreparation
@@ -10978,6 +11072,46 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Cancel an unclaimed speculative task worktree
+      tags:
+      - projects
+  /api/v1/task-preparations/{token}/agent:
+    post:
+      operationId: prewarmTaskAgent
+      parameters:
+      - description: Opaque speculative task-worktree token.
+        in: path
+        name: token
+        required: true
+        schema:
+          description: Opaque speculative task-worktree token.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrewarmTaskAgentRequest'
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrewarmTaskAgentResponse'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Start the agent a new-chat page has selected in its task preparation,
+        without a provider session
       tags:
       - projects
   /api/v1/usage/memory/pressure:
@@ -15659,6 +15793,71 @@ components:
       - state
       - logs
       type: object
+    PrewarmAgentSwitchRequest:
+      properties:
+        model:
+          description: Model the switch will request, if any.
+          maxLength: 256
+          type: string
+        reasoningEffort:
+          description: Reasoning effort the switch will request, if any.
+          maxLength: 64
+          type: string
+        targetHarness:
+          description: Agent picked for the chat's next switch. Picking the chat's
+            current agent drops any earlier standby.
+          type: string
+      required:
+      - targetHarness
+      type: object
+    PrewarmAgentSwitchResponse:
+      properties:
+        targetHarness:
+          description: Agent whose process is being started.
+          type: string
+      required:
+      - targetHarness
+      type: object
+    PrewarmChatAgentResponse:
+      properties:
+        agent:
+          description: Agent adapter identifier whose Chat check was started.
+          type: string
+      required:
+      - agent
+      type: object
+    PrewarmTaskAgentRequest:
+      properties:
+        agent:
+          description: Agent selected on the new-chat page.
+          type: string
+        approvalMode:
+          enum:
+          - default
+          - accept-edits
+          - auto
+          - bypass-permissions
+          type: string
+        effort:
+          description: Nil inherits the project default; an empty string selects the
+            provider default.
+          maxLength: 64
+          type:
+          - "null"
+          - string
+        model:
+          maxLength: 256
+          type: string
+      required:
+      - agent
+      type: object
+    PrewarmTaskAgentResponse:
+      properties:
+        agent:
+          type: string
+      required:
+      - agent
+      type: object
     ProbeAgentResponse:
       properties:
         agent:
@@ -18003,6 +18202,9 @@ components:
           enum:
           - artifact
           type: string
+        taskPreparation:
+          maxLength: 128
+          type: string
         trackerProvider:
           enum:
           - github
@@ -18251,16 +18453,22 @@ components:
             rejected.
           maxLength: 128
           type: string
+        message:
+          $ref: '#/components/schemas/SendConversationMessageRequest'
+          description: Chat only. The human message the target agent answers first,
+            in place of AO's activation prompt.
         model:
           description: Optional model override for the target agent launch or resume.
           maxLength: 256
           type: string
+        reasoningEffort:
+          description: Optional reasoning effort for the target agent's launch.
+          maxLength: 64
+          type: string
         targetHarness:
-          description: Agent harness to continue the logical AO session with.
-          enum:
-          - claude-code
-          - codex
-          - fx
+          description: Agent harness to continue the logical AO session with. Chat
+            sessions accept any agent with a Chat driver; terminal sessions accept
+            claude-code, codex, and fx.
           type: string
       required:
       - targetHarness

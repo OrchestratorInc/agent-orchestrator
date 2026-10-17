@@ -227,6 +227,19 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 	// Chat Service retains this unprivileged base environment. The bearer is
 	// minted inside its per-session launch gate and is never cached for reuse.
 	env := m.runtimeEnv(id, in.record.ProjectID, in.record.IssueID, in.project.Config.Env)
+
+	// A new-chat page may have started this agent in the task preparation's
+	// worktree while the user typed. Taken before the workspace files are
+	// written: a prewarm still starting writes its own, and once this returns
+	// it has finished or stopped.
+	standby := m.takeChatStandby(id, in.cfg.Harness, agentConfig)
+	var standbyHandle ports.ChatStandby
+	var standbyEnv func() (map[string]string, error)
+	if standby != nil {
+		standbyHandle = standby.handle
+		defer standby.handle.Discard()
+	}
+
 	if agent, ok := m.agents.Agent(in.cfg.Harness); ok {
 		m.augmentAgentRuntimeEnv(agent, env)
 		// Chat launches go through the same workspace preparation as terminal
@@ -245,6 +258,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		completionErr       error
 	)
 	_, err = m.chat.StartChat(ctx, ChatStart{
+		Standby:                 standbyHandle,
 		SessionID:               id,
 		ProjectID:               in.cfg.ProjectID,
 		Kind:                    in.cfg.Kind,
@@ -260,6 +274,16 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		MCPServers:              m.aoMCPServers(in.cfg.Harness, env),
 		ExpectedControllerOwner: in.record.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
+			if standby != nil {
+				if standbyEnv == nil {
+					standbyEnv = standby.controllerEnv(launchCtx, m, &in.record, expected)
+				}
+				launchEnv, envErr := standbyEnv()
+				if envErr != nil {
+					return nil, fmt.Errorf("%w: %w", ErrSpawnBrowser, envErr)
+				}
+				return launchEnv, nil
+			}
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
 				launchCtx, in.record, in.project.Config.Env, expected,
 			)

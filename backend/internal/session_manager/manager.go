@@ -486,8 +486,16 @@ type Manager struct {
 	statusVerificationLimit     time.Duration
 	agentOpMu                   sync.Mutex
 	agentOperations             map[domain.SessionID]agentOperationKind
-	interfaceRecoveryMu         sync.Mutex
-	deferredInterfaceRecovery   map[domain.SessionID]string
+	// chatStandbys holds the target agent of a picked, unsent Chat switch per
+	// session; chatStandbyLocks serializes its prewarm and takeover.
+	chatStandbyMu    sync.Mutex
+	chatStandbys     map[domain.SessionID]*chatSwitchStandby
+	chatStandbyLocks map[domain.SessionID]chan struct{}
+	// chatStandbyEpochs moves on when a launch stops waiting for a prewarm, so
+	// the prewarm, finishing late, backs off instead of touching that launch.
+	chatStandbyEpochs         map[domain.SessionID]uint64
+	interfaceRecoveryMu       sync.Mutex
+	deferredInterfaceRecovery map[domain.SessionID]string
 	// switchDecisionInput opens a narrow human-only terminal lane while the
 	// source is blocked on permission during a mandatory switch.
 	switchDecisionInput map[domain.SessionID]domain.AgentSwitchID
@@ -1076,8 +1084,15 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	asyncChat := cfg.Async && mode == domain.SessionModeChat && m.chat != nil && (cfg.Kind == domain.KindOrchestrator || cfg.Kind == domain.KindWorker)
 
 	var prep *taskPreparation
-	if cfg.AutomationRunID == nil && cfg.Branch == "" {
+	// A preparation reserves a worker's id, branch, and directory.
+	if cfg.AutomationRunID == nil && cfg.Branch == "" && cfg.Kind == domain.KindWorker {
 		prep = m.claimTaskPreparation(cfg.TaskPreparation, cfg.ProjectID)
+	}
+	if prep != nil && mode != domain.SessionModeChat {
+		// A terminal launch never adopts the agent the new-chat page started;
+		// a prewarm still starting stops before it writes anything more.
+		m.supersedeChatStandby(prep.record.ID)
+		m.dropChatStandby(prep.record.ID, false)
 	}
 	var rec domain.SessionRecord
 	if prep != nil {

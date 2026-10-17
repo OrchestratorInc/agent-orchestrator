@@ -68,6 +68,8 @@ export function LaunchSettingsBar({ harness, models, settings, configOptions, sh
 				configOptions={configOptions}
 				onChangeConfigOption={providerMode ? ignoreChange : undefined}
 				showApprovalMode={showApprovalMode}
+				// The page and the session both show the agent, so the held bar does too.
+				agentIcon
 				disabled
 			/>
 		</div>

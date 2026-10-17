@@ -8,8 +8,11 @@ import { sessionUiKey } from "./hosts";
 // view registers to bring the Chat surface forward when a reference arrives.
 type ReferenceListener = (reference: FileChatReference) => void;
 type RevealListener = () => void;
+// Returns whether the composer took the text (after what the user typed).
+type RestoreListener = (text: string) => boolean;
 
 const composers = new Map<string, Set<ReferenceListener>>();
+const restorers = new Map<string, Set<RestoreListener>>();
 const revealers = new Map<string, Set<RevealListener>>();
 const availabilityListeners = new Set<() => void>();
 
@@ -40,6 +43,23 @@ export function subscribeChatComposerReferences(sessionId: string, listener: Ref
 		remove();
 		notifyAvailability();
 	};
+}
+
+/** Registers the session's composer to take back text whose send failed after it left. */
+export function subscribeChatComposerRestore(sessionId: string, listener: RestoreListener): () => void {
+	return add(restorers, sessionId, listener);
+}
+
+/**
+ * Hands text back to the session's mounted composer, after whatever the user
+ * has typed since. False when no composer took it.
+ */
+export function restoreChatComposerText(sessionId: string, text: string): boolean {
+	// One composer takes it, even when the session shows in two places.
+	for (const listener of restorers.get(sessionId) ?? []) {
+		if (listener(text)) return true;
+	}
+	return false;
 }
 
 /** Registers a callback that brings the session's Chat surface on screen. */

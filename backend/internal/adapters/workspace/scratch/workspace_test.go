@@ -118,6 +118,43 @@ func TestWorkspaceDestroyPreservesNonEmptyDirectory(t *testing.T) {
 	}
 }
 
+func TestDiscardPreparedWorkspaceRemovesAgentFilesInsideRootOnly(t *testing.T) {
+	root := t.TempDir()
+	ws, err := scratch.New(scratch.Options{ManagedRoot: root})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	info, err := ws.Create(context.Background(), ports.WorkspaceConfig{SessionID: "standalone-7", Kind: domain.KindWorker})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// An agent started ahead of the send wrote its setup files.
+	if err := os.MkdirAll(filepath.Join(info.Path, ".claude"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(info.Path, ".claude", "settings.local.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.DiscardPreparedWorkspace(context.Background(), info); err != nil {
+		t.Fatalf("DiscardPreparedWorkspace: %v", err)
+	}
+	if _, err := os.Stat(info.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("prepared scratch dir survived: %v", err)
+	}
+	// Already gone is fine.
+	if err := ws.DiscardPreparedWorkspace(context.Background(), info); err != nil {
+		t.Fatalf("second discard: %v", err)
+	}
+	// Nothing outside the managed root is ever removed.
+	outside := t.TempDir()
+	if err := ws.DiscardPreparedWorkspace(context.Background(), ports.WorkspaceInfo{Path: outside}); err == nil {
+		t.Fatal("discard outside the managed root was allowed")
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("directory outside the root was touched: %v", err)
+	}
+}
+
 func TestWorkspaceRejectsUnsafeSessionIDs(t *testing.T) {
 	ws, err := scratch.New(scratch.Options{ManagedRoot: t.TempDir()})
 	if err != nil {

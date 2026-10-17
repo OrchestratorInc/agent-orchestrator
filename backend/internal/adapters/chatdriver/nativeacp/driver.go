@@ -56,6 +56,9 @@ type Config struct {
 	// ValidateInitialize optionally admits only the ACP agent and version the
 	// handshake identifies. See acpdriver.Config.ValidateInitialize.
 	ValidateInitialize func(acpsdk.InitializeResponse) error
+	// SessionMeta carries provider-defined _meta on session/new, session/load,
+	// and session/resume. See acpdriver.Config.SessionMeta.
+	SessionMeta func(acpdriver.LaunchConfig) map[string]any
 	// SessionPreamble delivers standing context on the first prompt. See
 	// acpdriver.Config.SessionPreamble for when a binding needs it.
 	SessionPreamble              func(acpdriver.LaunchConfig) []acpsdk.ContentBlock
@@ -67,6 +70,13 @@ type Config struct {
 	DecodeProviderConversationID func(string) (string, error)
 	// VersionProbe optionally gates admission on a minimum binary version.
 	VersionProbe VersionProbe
+	// Standby opts the binding into starting its provider ahead of an agent
+	// switch. See acpdriver.StandbyConfig.
+	Standby *acpdriver.StandbyConfig
+	// QuickStop: see acpdriver.Config.QuickStop.
+	QuickStop bool
+	// ProviderNotice: see acpdriver.Config.ProviderNotice.
+	ProviderNotice func(string) bool
 }
 
 // New creates a Chat driver that launches the exact executable resolved by the
@@ -155,6 +165,7 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		RequireAdvertisedOptions:     cfg.RequireAdvertisedOptions,
 		CloseSessionBeforeReload:     cfg.CloseSessionBeforeReload,
 		ValidateInitialize:           cfg.ValidateInitialize,
+		SessionMeta:                  cfg.SessionMeta,
 		SessionPreamble:              cfg.SessionPreamble,
 		PermissionPolicy:             cfg.PermissionPolicy,
 		ClientExtension:              cfg.ClientExtension,
@@ -162,5 +173,8 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		ValidateTurnSettings:         cfg.ValidateTurnSettings,
 		EncodeProviderConversationID: cfg.EncodeProviderConversationID,
 		DecodeProviderConversationID: cfg.DecodeProviderConversationID,
+		Standby:                      cfg.Standby,
+		QuickStop:                    cfg.QuickStop,
+		ProviderNotice:               cfg.ProviderNotice,
 	}
 }

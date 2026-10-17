@@ -227,6 +227,11 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersConversationMCPServerPayload":              "ConversationMCPServerPayload",
 	"ControllersReloadConversationMCPServersResponse":      "ReloadConversationMCPServersResponse",
 	"ControllersCompactConversationResponse":               "CompactConversationResponse",
+	"ControllersPrewarmChatAgentResponse":                  "PrewarmChatAgentResponse",
+	"ControllersPrewarmAgentSwitchRequest":                 "PrewarmAgentSwitchRequest",
+	"ControllersPrewarmTaskAgentRequest":                   "PrewarmTaskAgentRequest",
+	"ControllersPrewarmTaskAgentResponse":                  "PrewarmTaskAgentResponse",
+	"ControllersPrewarmAgentSwitchResponse":                "PrewarmAgentSwitchResponse",
 	"ControllersRollbackConversationResponse":              "RollbackConversationResponse",
 	"ControllersRetryTurnResponse":                         "RetryTurnResponse",
 	"ControllersSetConversationTitleRequest":               "SetConversationTitleRequest",
@@ -1672,6 +1677,15 @@ func agentOperations() []operation {
 			resps: []respUnit{
 				{http.StatusOK, controllers.ListAgentAuthPlansResponse{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/agents/{agent}/chat/prewarm", id: "prewarmChatAgent", tag: "conversations",
+			summary:    "Run an agent's Chat readiness check in the background so a later switch to it skips it",
+			pathParams: []any{controllers.AgentIDParam{}},
+			resps: []respUnit{
+				{http.StatusAccepted, controllers.PrewarmChatAgentResponse{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
@@ -3168,6 +3182,17 @@ func sessionOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/switch-agent/prewarm", id: "prewarmSessionAgentSwitch", tag: "sessions",
+			summary:    "Start the agent picked for a chat's next switch so the send that carries the switch adopts it",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.PrewarmAgentSwitchRequest{},
+			resps: []respUnit{
+				{http.StatusAccepted, controllers.PrewarmAgentSwitchResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/agent-switches", id: "listSessionAgentSwitches", tag: "sessions",
 			summary:    "List a session's durable agent-switch history",
 			pathParams: []any{controllers.SessionIDParam{}},
@@ -3386,6 +3411,26 @@ func sessionOperations() []operation {
 			resps: []respUnit{
 				{http.StatusNoContent, nil},
 				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/task-preparations", id: "prepareStandaloneTask", tag: "sessions",
+			summary: "Reserve a standalone session and its scratch workspace for a new chat page",
+			resps: []respUnit{
+				{http.StatusAccepted, controllers.PrepareTaskResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/task-preparations/{token}/agent", id: "prewarmTaskAgent", tag: "projects",
+			summary:    "Start the agent a new-chat page has selected in its task preparation, without a provider session",
+			pathParams: []any{controllers.TaskPreparationTokenParam{}},
+			reqBody:    controllers.PrewarmTaskAgentRequest{},
+			resps: []respUnit{
+				{http.StatusAccepted, controllers.PrewarmTaskAgentResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},

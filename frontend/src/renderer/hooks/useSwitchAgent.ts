@@ -8,18 +8,37 @@ import { agentSwitchesQueryKey, type AgentSwitch } from "./useAgentSwitches";
 import {
 	clearConversationProviderCatalogs,
 	conversationQueryKey,
+	releaseSwitchLocalEcho,
+	seedSwitchLocalEcho,
 } from "./useConversation";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 
 export type SwitchAgentHarness = components["schemas"]["SwitchAgentRequest"]["targetHarness"];
+export type SwitchAgentMessage = components["schemas"]["SendConversationMessageRequest"] & { clientMessageId: string };
 
 export type SwitchAgentInput = {
 	session: WorkspaceSession;
 	targetHarness: SwitchAgentHarness;
 	model: string;
+	/** Reasoning level the new agent starts with; empty keeps the project's. */
+	effort?: string;
 	idempotencyKey: string;
+	/** Sent from the composer: the new agent answers this first. */
+	message?: SwitchAgentMessage;
 };
+
+/** The daemon refused the switch, so the message it carried was never delivered. */
+export const AGENT_SWITCH_REJECTED = "AGENT_SWITCH_REJECTED";
+
+// Switches started from the composer. They show as the message working, not as
+// the switch dialog's progress card. Renderer-lifetime only: after a reload a
+// switch still in flight falls back to the card.
+const composerSwitchIds = new Set<string>();
+
+export function isComposerAgentSwitch(switchId: string | undefined): boolean {
+	return Boolean(switchId && composerSwitchIds.has(switchId));
+}
 
 export const switchAgentMutationKey = ["switch-agent"] as const;
 export const recoverAgentSwitchMutationKey = ["recover-agent-switch"] as const;
@@ -90,15 +109,22 @@ export function useSwitchAgent() {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationKey: switchAgentMutationKey,
-		mutationFn: async ({ session, targetHarness, model, idempotencyKey }: SwitchAgentInput) => {
+		onMutate: ({ session, message }: SwitchAgentInput) => {
+			if (!message) return;
+			seedSwitchLocalEcho(queryClient, session.id, session.hostId, {
+				clientMessageId: message.clientMessageId,
+				text: message.text,
+				excerpts: message.excerpts,
+				createdAt: new Date().toISOString(),
+			});
+		},
+		mutationFn: async ({ session, targetHarness, model, effort, idempotencyKey, message }: SwitchAgentInput) => {
 			recordDirectWorkerInteraction(session.id, "lifecycle", session.kind, session.hostId);
-			const body: {
-				targetHarness: SwitchAgentHarness;
-				model?: string;
-				idempotencyKey: string;
-			} = { targetHarness, idempotencyKey };
+			const body: components["schemas"]["SwitchAgentRequest"] = { targetHarness, idempotencyKey };
 			const normalizedModel = model.trim();
 			if (normalizedModel) body.model = normalizedModel;
+			if (effort?.trim()) body.reasoningEffort = effort.trim();
+			if (message) body.message = message;
 			const { data, error, response } = await clientForSessionHost(session.hostId).POST(
 				"/api/v1/sessions/{sessionId}/switch-agent",
 				{
@@ -110,12 +136,22 @@ export function useSwitchAgent() {
 				const fallback = response
 					? `Failed to switch agent (${response.status})`
 					: "Failed to switch agent";
-				throw new Error(apiErrorMessage(error, fallback));
+				const failure = new Error(apiErrorMessage(error, fallback));
+				// A refusal means no switch exists, so the composer may give the text back.
+				// Anything else may have been accepted; a retry reuses the same key.
+				if (response && response.status >= 400 && response.status < 500) {
+					Object.assign(failure, { code: AGENT_SWITCH_REJECTED });
+				}
+				throw failure;
 			}
 			return data.switch;
 		},
+		onError: (_error, { session, message }) => {
+			if (message) releaseSwitchLocalEcho(queryClient, session.id, session.hostId, message.clientMessageId);
+		},
 		onSuccess: (agentSwitch, variables) => {
 			if (!agentSwitch) return;
+			if (variables.message) composerSwitchIds.add(agentSwitch.id);
 			queryClient.setQueryData<AgentSwitch[]>(
 				agentSwitchesQueryKey(variables.session.id, variables.session.hostId),
 				(current = []) => [agentSwitch, ...current.filter((entry) => entry.id !== agentSwitch.id)],

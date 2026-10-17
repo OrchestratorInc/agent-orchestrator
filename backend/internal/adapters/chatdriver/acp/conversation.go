@@ -24,6 +24,11 @@ import (
 const (
 	eventBuffer  = 4096
 	approvalWait = 30 * time.Minute
+	// sessionCloseWait bounds the session/close sent before a provider is
+	// terminated; an answered close lets the host stop the provider sooner. A
+	// QuickStop provider gets quickSessionCloseWait.
+	sessionCloseWait      = 2 * time.Second
+	quickSessionCloseWait = 500 * time.Millisecond
 )
 
 var (
@@ -138,6 +143,10 @@ type conversation struct {
 	promptResponseFailure func(acpsdk.PromptResponse) error
 	hibernationCheck      func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 	historyNotice         func(string) bool
+	providerNotice        func(string) bool
+	// answeringTurn is the turn whose answer text has started; provider
+	// notices are dropped only before it.
+	answeringTurn string
 	// preamble is standing context attached to the first prompt that actually
 	// reaches the provider. It is the delivery channel for agents that accept no
 	// system-prompt launch flag and ignore session/new _meta but do execute
@@ -188,6 +197,14 @@ var _ ports.ChatCompactor = (*conversation)(nil)
 var _ acpsdk.Client = (*conversation)(nil)
 var _ acpsdk.ClientExperimental = (*conversation)(nil)
 var _ acpsdk.ExtensionMethodHandler = (*conversation)(nil)
+
+// setProviderScope gives an adopted standby the scope of the session it now
+// serves. It runs before session/new, so no provider id has been scoped yet.
+func (c *conversation) setProviderScope(id string) {
+	c.mu.Lock()
+	c.providerScopeID = id
+	c.mu.Unlock()
+}
 
 func newConversation(
 	proc *process,
@@ -1115,8 +1132,16 @@ func (c *conversation) closeProvider(terminate, closeSession bool) error {
 		c.failPendingPermissions()
 		c.failPendingInputs()
 		if closeSession && sessionID != "" {
-			closeCtx, cancelClose := context.WithTimeout(context.Background(), 2*time.Second)
-			_, _ = c.conn.CloseSession(closeCtx, acpsdk.CloseSessionRequest{SessionId: acpsdk.SessionId(sessionID)})
+			// The provider may save its session state while answering, so it gets
+			// a bounded wait before it is terminated (gracefully first).
+			wait := sessionCloseWait
+			if c.proc.quickStop.Load() {
+				wait = quickSessionCloseWait
+			}
+			closeCtx, cancelClose := context.WithTimeout(context.Background(), wait)
+			if _, err := c.conn.CloseSession(closeCtx, acpsdk.CloseSessionRequest{SessionId: acpsdk.SessionId(sessionID)}); err == nil {
+				c.proc.quickStop.Store(true)
+			}
 			cancelClose()
 		}
 		if persistent {

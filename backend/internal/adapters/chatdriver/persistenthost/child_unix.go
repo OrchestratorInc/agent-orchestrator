@@ -30,3 +30,15 @@ func killProviderProcess(_ context.Context, cmd *exec.Cmd) error {
 	}
 	return err
 }
+
+// terminateProviderProcess asks the hosted process group to exit.
+func terminateProviderProcess(cmd *exec.Cmd) error {
+	if cmd.Process == nil {
+		return nil
+	}
+	err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	if errors.Is(err, syscall.ESRCH) {
+		return nil
+	}
+	return err
+}

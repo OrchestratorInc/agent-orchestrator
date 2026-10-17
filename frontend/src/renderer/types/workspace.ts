@@ -94,6 +94,8 @@ export type AgentSwitchSummary = {
 	id: string;
 	state: string;
 	targetHarness: string;
+	/** When the switch was asked for; the switch-history API carries it. */
+	requestedAt?: string;
 	updatedAt?: string;
 };
 

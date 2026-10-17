@@ -12,6 +12,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
 
 const (
@@ -54,6 +55,63 @@ func (s *Service) PrepareTask(ctx context.Context, projectID domain.ProjectID) (
 		return "", err
 	}
 	token, err := s.manager.PrepareTaskWorkspace(ctx, project)
+	return string(token), err
+}
+
+// taskAgentPrewarmer starts a new-chat page's agent in its task preparation.
+type taskAgentPrewarmer interface {
+	PrewarmTaskAgent(ctx context.Context, token domain.TaskPreparationToken, in sessionmanager.TaskAgentPrewarm) error
+}
+
+// PrewarmTaskAgentInput is the agent choice a new-chat page holds, as the
+// later delegate request will send it.
+type PrewarmTaskAgentInput struct {
+	Agent        domain.AgentHarness
+	Model        string
+	Effort       *string
+	ApprovalMode domain.PermissionMode
+}
+
+// PrewarmTaskAgent starts the selected agent in the task preparation's worktree
+// in the background and returns at once. A failure only costs the head start.
+func (s *Service) PrewarmTaskAgent(token string, in PrewarmTaskAgentInput) {
+	prewarmer, ok := s.manager.(taskAgentPrewarmer)
+	if !ok {
+		return
+	}
+	base := s.backgroundContext
+	if base == nil {
+		base = context.Background()
+	}
+	effort, effortOverride := optionalTuningValue(in.Effort)
+	work := func() {
+		ctx, cancel := context.WithTimeout(base, agentSwitchPrewarmTimeout)
+		defer cancel()
+		err := prewarmer.PrewarmTaskAgent(ctx, domain.TaskPreparationToken(token), sessionmanager.TaskAgentPrewarm{
+			Harness: in.Agent, Model: in.Model, Effort: effort, EffortOverride: effortOverride,
+			Permissions: in.ApprovalMode,
+		})
+		if err != nil && s.logger != nil {
+			s.logger.Info("task agent prewarm failed", "agent", in.Agent, "error", err)
+		}
+	}
+	if s.runBackground != nil {
+		s.runBackground(work)
+		return
+	}
+	go work()
+}
+
+// PrepareStandaloneTask reserves a standalone session and its scratch
+// workspace for a new chat page.
+func (s *Service) PrepareStandaloneTask(ctx context.Context) (string, error) {
+	preparer, ok := s.manager.(interface {
+		PrepareStandaloneTaskWorkspace(context.Context) (domain.TaskPreparationToken, error)
+	})
+	if !ok {
+		return "", nil
+	}
+	token, err := preparer.PrepareStandaloneTaskWorkspace(ctx)
 	return string(token), err
 }
 

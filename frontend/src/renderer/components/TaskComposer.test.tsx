@@ -65,7 +65,10 @@ vi.mock("../lib/api-client", () => ({
 	apiClient: {
 		DELETE: h.delete,
 		GET: h.get,
-		POST: h.post,
+		// A standalone composer reserves its session on mount. These tests script
+		// the create call, so the reservation answers with no token on its own.
+		POST: (path: string, init?: unknown) =>
+			path === "/api/v1/task-preparations" ? Promise.resolve({ data: { taskPreparation: "" } }) : h.post(path, init),
 	},
 	apiErrorCode: (error: { code?: string }) => error?.code,
 	apiErrorMessage: (error: { message?: string }, fallback = "err") => error?.message ?? fallback,
@@ -212,6 +215,34 @@ describe("TaskComposer", () => {
 			body: expect.objectContaining({ projectId: "project-a", brief: "Fix the issue" }),
 		}));
 		expect(h.post.mock.calls.some(([path]) => path === "/api/v1/orchestrators/delegate")).toBe(false);
+	});
+
+	it("starts the selected agent in the prepared worktree and sends with that preparation", async () => {
+		h.agentCatalog = { agents: [agentReadiness("opencode", "OpenCode")] };
+		h.remoteGet.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) return { data: { agent: "opencode", selectionMode: "text", models: [], allowCustom: true } };
+			if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: ["opencode"] } };
+			return { data: { status: "ok", project: { id: "project-a", config: { worker: { agent: "opencode" } } } } };
+		});
+		h.remotePost.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents/readiness/ensure") return { data: { agents: [agentReadiness("opencode", "OpenCode")] } };
+			if (path === "/api/v1/projects/{id}/tasks/prepare") return { data: { taskPreparation: "prep-1" } };
+			if (path === "/api/v1/orchestrators/delegate") return { data: { workerId: "prepared-task" } };
+			return { data: {} };
+		});
+		const onCreated = vi.fn();
+		render(<Wrap><TaskComposer hostId="box-a" projectId="project-a" onCreated={onCreated} /></Wrap>);
+		await waitFor(() => expect(h.remotePost).toHaveBeenCalledWith("/api/v1/task-preparations/{token}/agent", expect.objectContaining({
+			params: { path: { token: "prep-1" } },
+			body: expect.objectContaining({ agent: "opencode" }),
+		})), { timeout: 2_000 });
+		await waitForTaskReady();
+		fireEvent.change(task(), { target: { value: "Fix it" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("prepared-task"));
+		expect(h.remotePost).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.objectContaining({
+			body: expect.objectContaining({ taskPreparation: "prep-1" }),
+		}));
 	});
 
 	it("reuses a task request id after an uncertain response and changes it with the draft", async () => {

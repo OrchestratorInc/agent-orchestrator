@@ -87,6 +87,21 @@ func TestBindingLaunchesExactUserInstalledBinary(t *testing.T) {
 	}
 }
 
+func TestBindingForwardsSessionMeta(t *testing.T) {
+	cfg := buildConfig(fakePlugin{binary: "/user/provider"}, Config{
+		Harness: domain.HarnessGrok,
+		SessionMeta: func(in acpdriver.LaunchConfig) map[string]any {
+			return map[string]any{"rules": in.SystemPrompt}
+		},
+	}, nil)
+	if cfg.SessionMeta == nil {
+		t.Fatal("SessionMeta was not forwarded to the ACP transport")
+	}
+	if got := cfg.SessionMeta(acpdriver.LaunchConfig{SystemPrompt: "AO rules"}); got["rules"] != "AO rules" {
+		t.Fatalf("SessionMeta = %#v", got)
+	}
+}
+
 func TestBindingMapsPluginDiscoveryAndAuth(t *testing.T) {
 	t.Run("incomplete provider binding", func(t *testing.T) {
 		cfg := buildConfig(fakePlugin{binary: "/user/provider"}, Config{Harness: domain.HarnessDroid}, nil)

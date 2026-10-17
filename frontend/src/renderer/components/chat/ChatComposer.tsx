@@ -104,13 +104,15 @@ import {
 } from "../../lib/chat-drafts";
 import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath } from "./messageAttachments";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
-import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
+import { subscribeChatComposerReferences, subscribeChatComposerRestore } from "../../lib/chat-context-bus";
 
 // These responses precede AppendUserMessage. Provider/transport errors can
 // follow durable acceptance and must keep the original delivery ID for recovery.
 const DEFINITIVE_SEND_REJECTIONS = new Set([
 	// The new chat page could not create the session this brief would start.
 	"TASK_CREATE_FAILED",
+	// The daemon refused an agent switch, so the message it carried never left.
+	"AGENT_SWITCH_REJECTED",
 	// Cloud validation failures reject the request before durable acceptance.
 	"validation_error",
 	"INVALID_BODY",
@@ -1118,6 +1120,21 @@ export const ChatComposer = memo(function ChatComposer({
 		const snapshot = editor.current?.getSnapshot();
 		if (snapshot) onEditorChange(snapshot);
 	}, [onEditorChange, sentMessagesScope]);
+	// A send that failed after it left the composer (an agent switch the daemon
+	// accepted, then could not finish) comes back here, after anything the user
+	// has typed since. It goes through the editor's change path, so Send and the
+	// saved draft see it.
+	useEffect(() => {
+		if (!draftSessionId) return;
+		return subscribeChatComposerRestore(draftSessionId, (text) => {
+			if (!editor.current) return false;
+			const typed = editor.current.getSnapshot();
+			editor.current.setText(typed.hasText ? `${typed.text}\n\n${text}` : text);
+			onEditorChange(editor.current.getSnapshot());
+			window.requestAnimationFrame(() => editor.current?.focus());
+			return true;
+		});
+	}, [draftSessionId, onEditorChange]);
 	useImperativeHandle(
 		focusRef,
 		() => ({

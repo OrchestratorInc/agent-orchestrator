@@ -23,6 +23,7 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 func newDriver(plugin nativeacp.Plugin, probe nativeacp.VersionProbe, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
 		Harness:        domain.HarnessQwen,
+		Standby:        &acpdriver.StandbyConfig{PromptAtLaunch: true},
 		Configure:      configure,
 		SessionMode:    sessionMode,
 		SessionOptions: sessionOptions,

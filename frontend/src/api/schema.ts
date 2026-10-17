@@ -38,6 +38,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/{agent}/chat/prewarm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run an agent's Chat readiness check in the background so a later switch to it skips it */
+        post: operations["prewarmChatAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/{agent}/install": {
         parameters: {
             query?: never;
@@ -3135,6 +3152,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/switch-agent/prewarm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start the agent picked for a chat's next switch so the send that carries the switch adopts it */
+        post: operations["prewarmSessionAgentSwitch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/workspace/diffs": {
         parameters: {
             query?: never;
@@ -3578,6 +3612,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/task-preparations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reserve a standalone session and its scratch workspace for a new chat page */
+        post: operations["prepareStandaloneTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/task-preparations/{token}": {
         parameters: {
             query?: never;
@@ -3590,6 +3641,23 @@ export interface paths {
         post?: never;
         /** Cancel an unclaimed speculative task worktree */
         delete: operations["cancelTaskPreparation"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/task-preparations/{token}/agent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start the agent a new-chat page has selected in its task preparation, without a provider session */
+        post: operations["prewarmTaskAgent"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -5376,6 +5444,34 @@ export interface components {
             targetKind?: "app" | "api";
             url?: string;
         };
+        PrewarmAgentSwitchRequest: {
+            /** @description Model the switch will request, if any. */
+            model?: string;
+            /** @description Reasoning effort the switch will request, if any. */
+            reasoningEffort?: string;
+            /** @description Agent picked for the chat's next switch. Picking the chat's current agent drops any earlier standby. */
+            targetHarness: string;
+        };
+        PrewarmAgentSwitchResponse: {
+            /** @description Agent whose process is being started. */
+            targetHarness: string;
+        };
+        PrewarmChatAgentResponse: {
+            /** @description Agent adapter identifier whose Chat check was started. */
+            agent: string;
+        };
+        PrewarmTaskAgentRequest: {
+            /** @description Agent selected on the new-chat page. */
+            agent: string;
+            /** @enum {string} */
+            approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+            /** @description Nil inherits the project default; an empty string selects the provider default. */
+            effort?: null | string;
+            model?: string;
+        };
+        PrewarmTaskAgentResponse: {
+            agent: string;
+        };
         ProbeAgentResponse: {
             agent: components["schemas"]["AgentInfo"];
             installed: boolean;
@@ -6304,6 +6400,7 @@ export interface components {
             prompt?: string;
             /** @enum {string} */
             requestedOutput?: "artifact";
+            taskPreparation?: string;
             /** @enum {string} */
             trackerProvider?: "github" | "gitlab";
         };
@@ -6412,13 +6509,14 @@ export interface components {
         SwitchAgentRequest: {
             /** @description Optional retry key. Reusing it with a different request is rejected. */
             idempotencyKey?: string;
+            /** @description Chat only. The human message the target agent answers first, in place of AO's activation prompt. */
+            message?: components["schemas"]["SendConversationMessageRequest"];
             /** @description Optional model override for the target agent launch or resume. */
             model?: string;
-            /**
-             * @description Agent harness to continue the logical AO session with.
-             * @enum {string}
-             */
-            targetHarness: "claude-code" | "codex" | "fx";
+            /** @description Optional reasoning effort for the target agent's launch. */
+            reasoningEffort?: string;
+            /** @description Agent harness to continue the logical AO session with. Chat sessions accept any agent with a Chat driver; terminal sessions accept claude-code, codex, and fx. */
+            targetHarness: string;
         };
         SyncArtifactVersionsRequest: {
             /** @description Artifact-directory-relative file path, as listed in the session's artifactFiles. */
@@ -6833,6 +6931,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    prewarmChatAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrewarmChatAgentResponse"];
                 };
             };
             /** @description Not Implemented */
@@ -18661,6 +18791,51 @@ export interface operations {
             };
         };
     };
+    prewarmSessionAgentSwitch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrewarmAgentSwitchRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrewarmAgentSwitchResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     getSessionWorkspaceDiffs: {
         parameters: {
             query?: never;
@@ -20266,6 +20441,44 @@ export interface operations {
             };
         };
     };
+    prepareStandaloneTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrepareTaskResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     cancelTaskPreparation: {
         parameters: {
             query?: never;
@@ -20287,6 +20500,51 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    prewarmTaskAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Opaque speculative task-worktree token. */
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrewarmTaskAgentRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrewarmTaskAgentResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -141,6 +141,19 @@ func (w *Workspace) DestroyReclaim(ctx context.Context, info ports.WorkspaceInfo
 	return ports.WorkspaceReclaimRemoved, adapter.Destroy(ctx, info)
 }
 
+// DiscardPreparedWorkspace removes an unclaimed task preparation's workspace,
+// contents included where the adapter supports it, else through Destroy.
+func (w *Workspace) DiscardPreparedWorkspace(ctx context.Context, info ports.WorkspaceInfo) error {
+	adapter, err := w.adapterForProject(ctx, info.ProjectID)
+	if err != nil {
+		return err
+	}
+	if discarder, ok := adapter.(ports.WorkspacePreparationDiscarder); ok {
+		return discarder.DiscardPreparedWorkspace(ctx, info)
+	}
+	return adapter.Destroy(ctx, info)
+}
+
 // DeletePreparedBranch delegates safe speculative-branch cleanup to Git workspaces.
 func (w *Workspace) DeletePreparedBranch(ctx context.Context, info ports.WorkspaceInfo) error {
 	adapter, err := w.adapterForProject(ctx, info.ProjectID)

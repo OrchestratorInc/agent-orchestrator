@@ -110,3 +110,7 @@ func killProviderProcess(ctx context.Context, cmd *exec.Cmd) error {
 	}
 	return nil
 }
+
+// terminateProviderProcess has no graceful equivalent on Windows; the stop
+// deadline's kill reaps the job.
+func terminateProviderProcess(*exec.Cmd) error { return nil }

@@ -101,6 +101,11 @@ type AgentIDParam struct {
 	Agent string `path:"agent" description:"Agent adapter identifier."`
 }
 
+// PrewarmChatAgentResponse acknowledges a background Chat readiness check.
+type PrewarmChatAgentResponse struct {
+	Agent string `json:"agent" description:"Agent adapter identifier whose Chat check was started."`
+}
+
 // ListAgentAuthPlansResponse is the display-safe authentication catalog.
 type ListAgentAuthPlansResponse struct {
 	Plans []agentauth.Plan `json:"plans"`
@@ -432,7 +437,10 @@ type SpawnSessionRequest struct {
 	ClientRequestID string `json:"clientRequestId,omitempty" maxLength:"128"`
 	// ProjectID is omitted for a standalone worker session.
 	ProjectID domain.ProjectID `json:"projectId,omitempty"`
-	IssueID   domain.IssueID   `json:"issueId,omitempty"`
+	// TaskPreparation claims a standalone preparation from POST
+	// /task-preparations, and the agent a new chat page started in it.
+	TaskPreparation string         `json:"taskPreparation,omitempty" maxLength:"128"`
+	IssueID         domain.IssueID `json:"issueId,omitempty"`
 	// ParentSessionID is supplied by `ao spawn` inside an AO session. The daemon
 	// validates it before deriving inherited worker settings.
 	ParentSessionID domain.SessionID       `json:"parentSessionId,omitempty"`
@@ -500,9 +508,26 @@ type SpawnSessionResponse struct {
 
 // SwitchAgentRequest is the body of POST /api/v1/sessions/{sessionId}/switch-agent.
 type SwitchAgentRequest struct {
-	TargetHarness  domain.AgentHarness `json:"targetHarness" enum:"claude-code,codex,fx" description:"Agent harness to continue the logical AO session with."`
-	Model          string              `json:"model,omitempty" maxLength:"256" description:"Optional model override for the target agent launch or resume."`
-	IdempotencyKey string              `json:"idempotencyKey,omitempty" maxLength:"128" description:"Optional retry key. Reusing it with a different request is rejected."`
+	TargetHarness   domain.AgentHarness `json:"targetHarness" description:"Agent harness to continue the logical AO session with. Chat sessions accept any agent with a Chat driver; terminal sessions accept claude-code, codex, and fx."`
+	Model           string              `json:"model,omitempty" maxLength:"256" description:"Optional model override for the target agent launch or resume."`
+	ReasoningEffort string              `json:"reasoningEffort,omitempty" maxLength:"64" description:"Optional reasoning effort for the target agent's launch."`
+	IdempotencyKey  string              `json:"idempotencyKey,omitempty" maxLength:"128" description:"Optional retry key. Reusing it with a different request is rejected."`
+	// Message is the human message that opens the target's first turn. Chat only.
+	// It replaces AO's activation prompt, so a switch made from the composer costs
+	// one model turn, not two.
+	Message *SendConversationMessageRequest `json:"message,omitempty" description:"Chat only. The human message the target agent answers first, in place of AO's activation prompt."`
+}
+
+// PrewarmAgentSwitchRequest names the agent picked for a chat's next switch.
+type PrewarmAgentSwitchRequest struct {
+	TargetHarness   domain.AgentHarness `json:"targetHarness" description:"Agent picked for the chat's next switch. Picking the chat's current agent drops any earlier standby."`
+	Model           string              `json:"model,omitempty" maxLength:"256" description:"Model the switch will request, if any."`
+	ReasoningEffort string              `json:"reasoningEffort,omitempty" maxLength:"64" description:"Reasoning effort the switch will request, if any."`
+}
+
+// PrewarmAgentSwitchResponse acknowledges a background prewarm.
+type PrewarmAgentSwitchResponse struct {
+	TargetHarness domain.AgentHarness `json:"targetHarness" description:"Agent whose process is being started."`
 }
 
 // AgentSwitchView is the deliberately small public projection of a durable
@@ -1128,6 +1153,20 @@ type DelegateTaskRequest struct {
 	// TaskPreparation is the opaque worktree token returned while the New Task
 	// dialog is open. Missing or expired tokens fall back to normal creation.
 	TaskPreparation string `json:"taskPreparation,omitempty"`
+}
+
+// PrewarmTaskAgentRequest is the agent a new-chat page has selected for its
+// task preparation, with the model, effort, and approval its send will carry.
+type PrewarmTaskAgentRequest struct {
+	Agent        domain.AgentHarness   `json:"agent" description:"Agent selected on the new-chat page."`
+	Model        string                `json:"model,omitempty" maxLength:"256"`
+	Effort       *string               `json:"effort,omitempty" maxLength:"64" description:"Nil inherits the project default; an empty string selects the provider default."`
+	ApprovalMode domain.PermissionMode `json:"approvalMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
+}
+
+// PrewarmTaskAgentResponse acknowledges a background agent start.
+type PrewarmTaskAgentResponse struct {
+	Agent domain.AgentHarness `json:"agent"`
 }
 
 // PrepareTaskResponse returns the opaque token for a speculative task workspace.

@@ -44,6 +44,7 @@ func New(plugin piPlugin, log *slog.Logger) ports.ChatDriver {
 func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpdriver.Config {
 	return acpdriver.Config{
 		Harness: domain.HarnessPi,
+		Standby: &acpdriver.StandbyConfig{PromptAtLaunch: true},
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityStreaming: true,
 			ports.ChatCapabilityTools:     true,

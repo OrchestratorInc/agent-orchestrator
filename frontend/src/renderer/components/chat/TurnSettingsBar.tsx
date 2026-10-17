@@ -611,7 +611,8 @@ function ClubbedConfigPicker({
 	const leftCount =
 		modelOptions.length + effortOptions.length + Number(Boolean(executionMode)) + toggles.length + extraOptions.length;
 	if (leftCount === 0) return null;
-	if (leftCount === 1) {
+	// A lone option gets its own picker, unless the agent row or icon needs the full menu.
+	if (leftCount === 1 && !agentMenu && !agentIcon) {
 		if (primaryEffort) {
 			return (
 				<EffortPicker

@@ -1,3 +1,5 @@
+import { AgentAvatar } from "../AgentAvatar";
+import { agentLabel } from "../../lib/agent-options";
 import { AppLink } from "../AppLink";
 /**
  * Timeline entries for the Chat surface.
@@ -329,6 +331,29 @@ export function CompactionMarker({ activity }: { activity: ConversationActivity 
 			message="The conversation history was compacted"
 			detail={[detail, fullness].filter(Boolean).join(" · ") || undefined}
 		/>
+	);
+}
+
+/** Where the chat moved to another agent; the turns below are the new agent's. */
+export function AgentSwitchMarker({ from, to, className }: { from: string; to: string; className?: string }) {
+	const agent = (harness: string) => (
+		<span className="inline-flex min-w-0 items-center gap-1 text-muted-foreground">
+			<AgentAvatar provider={harness} className="size-icon-sm" decorative />
+			<span className="truncate">{agentLabel(harness)}</span>
+		</span>
+	);
+	return (
+		<div
+			role="separator"
+			aria-label={`Switched from ${agentLabel(from)} to ${agentLabel(to)}`}
+			className={cn("flex min-w-0 items-center gap-3 text-xs text-muted-foreground/70", className)}
+		>
+			<span aria-hidden="true" className="h-px flex-1 bg-border" />
+			<span className="inline-flex min-w-0 shrink items-center gap-1.5">
+				Switched from {agent(from)} to {agent(to)}
+			</span>
+			<span aria-hidden="true" className="h-px flex-1 bg-border" />
+		</div>
 	);
 }
 

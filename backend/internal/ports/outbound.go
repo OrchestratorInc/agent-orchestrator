@@ -348,6 +348,15 @@ type WorkspacePreparationBranchCleaner interface {
 	DeletePreparedBranch(ctx context.Context, info WorkspaceInfo) error
 }
 
+// WorkspacePreparationDiscarder removes a speculative workspace that no session
+// ever claimed, contents included. AO and an agent started ahead of the send
+// may have written files there, but no user work ran in it. Adapters whose
+// ordinary Destroy already handles that (Git, where the files are ignored)
+// need not implement it.
+type WorkspacePreparationDiscarder interface {
+	DiscardPreparedWorkspace(ctx context.Context, info WorkspaceInfo) error
+}
+
 // Workspace is the isolated checkout an agent works in (a git worktree or clone).
 type Workspace interface {
 	Create(ctx context.Context, cfg WorkspaceConfig) (WorkspaceInfo, error)

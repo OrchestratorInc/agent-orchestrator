@@ -142,6 +142,8 @@ export type ConversationLocalEcho = {
 	turnId?: string;
 	/** A new session's brief, sent before the session existed; its first human message is this. */
 	opening?: boolean;
+	/** Sent with an agent switch: the new agent's first turn, shown while it starts. */
+	switching?: boolean;
 };
 type ConversationLocalEchosBySession = Record<string, ConversationLocalEcho[]>;
 
@@ -164,6 +166,36 @@ export function seedOpeningLocalEcho(
 	echo: Pick<ConversationLocalEcho, "clientMessageId" | "text" | "createdAt">,
 ): void {
 	addConversationLocalEcho(queryClient, sessionUiKey(sessionId, hostId), { ...echo, opening: true });
+}
+
+/** Shows a message sent with an agent switch while the new agent starts. */
+export function seedSwitchLocalEcho(
+	queryClient: QueryClient,
+	sessionId: string,
+	hostId: string | undefined,
+	echo: Pick<ConversationLocalEcho, "clientMessageId" | "text" | "createdAt" | "excerpts">,
+): void {
+	addConversationLocalEcho(queryClient, sessionUiKey(sessionId, hostId), { ...echo, switching: true });
+}
+
+/** Shows a message held while an agent switch runs, in the queue dock. */
+export function seedHeldLocalEcho(
+	queryClient: QueryClient,
+	sessionId: string,
+	hostId: string | undefined,
+	echo: Pick<ConversationLocalEcho, "clientMessageId" | "text" | "createdAt" | "excerpts">,
+): void {
+	addConversationLocalEcho(queryClient, sessionUiKey(sessionId, hostId), { ...echo, queued: true });
+}
+
+/** Drops a switch's message when the switch did not deliver it. */
+export function releaseSwitchLocalEcho(
+	queryClient: QueryClient,
+	sessionId: string,
+	hostId: string | undefined,
+	clientMessageId: string,
+): void {
+	releaseConversationLocalEcho(queryClient, sessionUiKey(sessionId, hostId), clientMessageId);
 }
 
 function acceptConversationLocalEcho(

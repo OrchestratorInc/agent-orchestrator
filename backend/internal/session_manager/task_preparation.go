@@ -40,6 +40,16 @@ func (m *Manager) PrepareTaskWorkspace(ctx context.Context, project domain.Proje
 	if project.ID == "" {
 		return "", nil
 	}
+	return m.prepareTaskWorkspace(ctx, project)
+}
+
+// PrepareStandaloneTaskWorkspace reserves a standalone session id and its
+// scratch workspace, so a new chat page can start its agent before the send.
+func (m *Manager) PrepareStandaloneTaskWorkspace(ctx context.Context) (domain.TaskPreparationToken, error) {
+	return m.prepareTaskWorkspace(ctx, domain.ProjectRecord{})
+}
+
+func (m *Manager) prepareTaskWorkspace(ctx context.Context, project domain.ProjectRecord) (domain.TaskPreparationToken, error) {
 	m.taskPreparationsMu.Lock()
 	active := 0
 	for _, prep := range m.taskPreparations {
@@ -61,7 +71,11 @@ func (m *Manager) PrepareTaskWorkspace(ctx context.Context, project domain.Proje
 		m.taskPreparationsMu.Unlock()
 		return "", fmt.Errorf("prepare task workspace: reserve session: %w", err)
 	}
-	branch := DefaultSpawnBranch(rec.ID, domain.KindWorker, sessionPrefix(project), project.Kind.WithDefault(), m.dataDir)
+	projectKind := project.Kind.WithDefault()
+	if project.ID == "" {
+		projectKind = domain.ProjectKindScratch
+	}
+	branch := DefaultSpawnBranch(rec.ID, domain.KindWorker, sessionPrefix(project), projectKind, m.dataDir)
 	rec.Metadata.Branch = branch
 	if err := m.store.UpdateSession(ctx, rec); err != nil {
 		m.rollbackSpawnSeedRowAfterFailure(ctx, rec.ID)
@@ -234,8 +248,10 @@ func (m *Manager) cleanupTaskPreparation(ctx context.Context, prep *taskPreparat
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+	// An agent started for this preparation runs in the worktree removed below.
+	m.discardSessionStandby(ctx, prep.record.ID)
 	if prep.workspace.Path != "" || prep.workspaceProject != nil && len(prep.workspaceProject.Worktrees) > 0 {
-		if err := m.destroyPreparedWorkspace(ctx, prep.workspace, prep.workspaceProject); err != nil {
+		if err := m.removePreparedWorkspace(ctx, prep.workspace, prep.workspaceProject, !prep.promoted); err != nil {
 			return err
 		}
 	}
@@ -331,7 +347,8 @@ func (m *Manager) cleanupTaskPreparationRecord(ctx context.Context, rec domain.S
 			return err
 		}
 	} else if ws.Path != "" {
-		if err := m.workspace.Destroy(ctx, ws); err != nil {
+		// A hidden preparation row was never claimed by a session.
+		if err := m.removePreparedWorkspace(ctx, ws, nil, true); err != nil {
 			return err
 		}
 		if err := m.deletePreparedBranches(ctx, ws, nil); err != nil {
@@ -370,6 +387,22 @@ func (m *Manager) requireCompletePreparedWorkspaceProject(ctx context.Context, p
 		}
 	}
 	return nil
+}
+
+// removePreparedWorkspace tears down a preparation's workspace. One no session
+// ever claimed is discarded with its contents where the adapter supports it:
+// a scratch directory refuses ordinary Destroy once an agent started ahead of
+// the send has written its setup files there.
+func (m *Manager) removePreparedWorkspace(ctx context.Context, ws ports.WorkspaceInfo, project *ports.WorkspaceProjectInfo, unclaimed bool) error {
+	if discarder, ok := m.workspace.(ports.WorkspacePreparationDiscarder); ok && unclaimed && project == nil {
+		err := discarder.DiscardPreparedWorkspace(ctx, ws)
+		if err == nil {
+			return nil
+		}
+		// Ordinary Destroy keeps a non-empty directory rather than guess.
+		m.logger.Warn("discard prepared workspace failed; destroying it normally", "path", ws.Path, "error", err)
+	}
+	return m.destroyPreparedWorkspace(ctx, ws, project)
 }
 
 func (m *Manager) destroyPreparedWorkspace(ctx context.Context, ws ports.WorkspaceInfo, project *ports.WorkspaceProjectInfo) error {

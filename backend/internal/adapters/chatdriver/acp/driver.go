@@ -119,6 +119,10 @@ type Config struct {
 	// into its own transcript. Replay starts no turn for it, so the agent's
 	// output after it stays in the turn before, as it did live.
 	HistoryNotice func(string) bool
+	// ProviderNotice reports agent message text that is the provider's own
+	// diagnostics, not its answer. Such chunks are dropped while they lead a
+	// turn; once the answer starts, every chunk is kept.
+	ProviderNotice func(string) bool
 	// CanHibernate checks provider-owned work that outlives an ACP prompt.
 	CanHibernate func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 	// EncodeProviderConversationID and DecodeProviderConversationID let a binding
@@ -126,6 +130,14 @@ type Config struct {
 	// raw value on the ACP wire.
 	EncodeProviderConversationID func(string) string
 	DecodeProviderConversationID func(string) (string, error)
+	// Standby opts the binding into starting its provider ahead of an agent
+	// switch (ports.ChatStandbyDriver). Nil leaves Prewarm unsupported.
+	Standby *StandbyConfig
+	// QuickStop marks a provider whose stop gains nothing from waiting: it
+	// keeps its session saved after every turn, or never reacts to stdin
+	// closing. It gets a short session/close wait and is signalled after
+	// providerQuickGrace instead of the full stdin grace.
+	QuickStop bool
 	// OnAuthRejected is called when the provider rejects the credential during
 	// a live turn. It is how a cached "this credential works" verdict is
 	// corrected the moment the provider says otherwise, and it is the only
@@ -250,11 +262,30 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		Model: cfg.Model, Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
 		ProviderScopeID: cfg.ProviderScopeID,
 	}
-	connectStarted := time.Now()
-	conv, init, live, err := d.connect(ctx, launchCfg, cfg.PrepareEnv)
-	d.logStartStage(cfg.SessionID, "connect", connectStarted, err)
-	if err != nil {
-		return nil, err
+	var (
+		conv    *conversation
+		init    acpsdk.InitializeResponse
+		live    *persistenthost.ACPState
+		err     error
+		adopted bool
+	)
+	if cfg.Standby != nil {
+		adoptStarted := time.Now()
+		conv, init, err = d.adoptStandby(ctx, cfg.Standby, cfg, launchCfg)
+		d.logStartStage(cfg.SessionID, "standby_adopt", adoptStarted, err)
+		adopted = err == nil
+		if err != nil {
+			d.log.Info("chat: ACP standby not adopted; starting a new provider",
+				"sessionID", cfg.SessionID, "harness", d.cfg.Harness, "reason", err)
+		}
+	}
+	if !adopted {
+		connectStarted := time.Now()
+		conv, init, live, err = d.connect(ctx, launchCfg, cfg.PrepareEnv)
+		d.logStartStage(cfg.SessionID, "connect", connectStarted, err)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if live != nil {
 		// A fresh-start request colliding with a surviving host is a durable-state
@@ -280,8 +311,19 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 
 	settings := ports.ChatTurnSettings{Model: cfg.Model, Effort: cfg.Effort, Approval: cfg.Permissions}
 	if err := d.openNewSession(ctx, conv, init, launchCfg, settings, additional, mcpServers); err != nil {
-		conv.discard()
+		if adopted {
+			// The adopted host already answers to the session key; discarding
+			// would only detach and leave it running.
+			_ = conv.Terminate()
+		} else {
+			conv.discard()
+		}
 		return nil, err
+	}
+	if adopted && d.cfg.Standby != nil && d.cfg.Standby.PromptAtLaunch && d.cfg.SessionPreamble == nil {
+		// The standby was launched with the standing instructions only; the
+		// switch's handoff did not exist yet.
+		conv.setSessionPreamble(ContinuationPreamble(launchCfg.SystemPrompt))
 	}
 	d.logStartStage(cfg.SessionID, "total", totalStarted, nil)
 	return conv, nil
@@ -353,6 +395,15 @@ func (d *Driver) applyLaunchSessionOptions(ctx context.Context, conv *conversati
 		return nil
 	}
 	return conv.applySessionOptions(ctx, d.cfg.LaunchSessionOptions(cfg))
+}
+
+// resumedSessionPreamble is the standing context for a conversation the
+// provider already holds. A switch's handoff went in with its first turn and is
+// in the provider's own history, so it is not sent again: re-sent after a
+// restart it reads as a fresh instruction to continue old work.
+func (d *Driver) resumedSessionPreamble(cfg LaunchConfig) []acpsdk.ContentBlock {
+	cfg.SystemPrompt = StandingInstructions(cfg.SystemPrompt)
+	return d.sessionPreamble(cfg)
 }
 
 func (d *Driver) sessionPreamble(cfg LaunchConfig) []acpsdk.ContentBlock {
@@ -456,7 +507,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		)
 		conv.setReportedProviderConversationID(reportedProviderConversationID)
 		conv.initialPermission = ports.PermissionMode(live.InitialPermissions)
-		conv.setSessionPreamble(d.sessionPreamble(launchCfg))
+		conv.setSessionPreamble(d.resumedSessionPreamble(launchCfg))
 		return conv, nil
 	}
 	return d.resumeSession(ctx, conv, init, launchCfg, cfg, reportedProviderConversationID)
@@ -547,7 +598,7 @@ func (d *Driver) resumeSession(
 	// Standing context is process input, not transcript history, so a resumed
 	// conversation must receive it again even though the provider recovers the
 	// messages itself.
-	conv.setSessionPreamble(d.sessionPreamble(launchCfg))
+	conv.setSessionPreamble(d.resumedSessionPreamble(launchCfg))
 	if err := d.applyLaunchSessionOptions(ctx, conv, launchCfg); err != nil {
 		conv.discard()
 		return nil, fmt.Errorf("%w: configure ACP session: %w", ports.ErrChatResumeFailed, err)
@@ -622,6 +673,7 @@ func (d *Driver) initialize(
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
 	conv.requireAdvertised = d.cfg.RequireAdvertisedOptions
+	conv.providerNotice = d.cfg.ProviderNotice
 	if proc.reconnected {
 		state := proc.acpState
 		if state == nil || len(state.InitializeResult) == 0 || len(state.SessionResult) == 0 || state.SessionID == "" {
@@ -708,13 +760,29 @@ func (d *Driver) connectProcess(
 	cfg LaunchConfig,
 	prepareEnv func(context.Context) (map[string]string, error),
 ) (*process, error) {
-	// Ownership is stable across app upgrades and mutable model/approval choices.
-	// An adopted provider keeps its original launch environment and instructions;
-	// changes to those take effect only when the provider is explicitly replaced.
+	return d.connectProcessAt(ctx, cfg, prepareEnv, newHostKey(string(cfg.SessionID)))
+}
+
+// ownershipFingerprint is stable across app upgrades and mutable model/approval
+// choices. An adopted provider keeps its original launch environment and
+// instructions; changes to those take effect only when the provider is
+// explicitly replaced.
+func (d *Driver) ownershipFingerprint(cfg LaunchConfig) string {
 	owner, _ := json.Marshal([]string{filepath.Clean(cfg.WorkspacePath), string(d.cfg.Harness), cfg.ProviderScopeID})
-	identity := fmt.Sprintf("%x", sha256.Sum256(owner))
+	return fmt.Sprintf("%x", sha256.Sum256(owner))
+}
+
+// connectProcessAt attaches to or starts the host under key. A standby host is
+// rekeyed onto its session after start, so shutdown reads the key it has then.
+func (d *Driver) connectProcessAt(
+	ctx context.Context,
+	cfg LaunchConfig,
+	prepareEnv func(context.Context) (map[string]string, error),
+	key *hostKey,
+) (*process, error) {
+	identity := d.ownershipFingerprint(cfg)
 	hostConfig := persistenthost.Config{
-		SessionID: string(cfg.SessionID), DataDir: cfg.DataDir, Workdir: cfg.WorkspacePath,
+		SessionID: key.get(), DataDir: cfg.DataDir, Workdir: cfg.WorkspacePath,
 		Protocol: persistenthost.ProtocolACP, OwnershipFingerprint: identity,
 		ReconnectOnly: cfg.ReconnectOnly,
 		Prepare: func(prepareCtx context.Context) (persistenthost.PreparedProvider, error) {
@@ -759,8 +827,14 @@ func (d *Driver) connectProcess(
 		reconnected: transport.Reconnected, acpState: transport.ACPState,
 	}
 	proc.stop = persistentStop(gate, transport.Stdin)
-	proc.terminate = persistentTerminate(gate, transport.Stdin, func(shutdownCtx context.Context) error {
-		return persistenthost.Shutdown(shutdownCtx, cfg.DataDir, string(cfg.SessionID))
+	if d.cfg.QuickStop {
+		proc.quickStop.Store(true)
+	}
+	proc.terminate = persistentTerminate(gate, transport.Stdin, &proc.quickStop, func(shutdownCtx context.Context, quick bool) error {
+		if quick {
+			return persistenthost.ShutdownQuick(shutdownCtx, cfg.DataDir, key.get())
+		}
+		return persistenthost.Shutdown(shutdownCtx, cfg.DataDir, key.get())
 	})
 	return proc, nil
 }

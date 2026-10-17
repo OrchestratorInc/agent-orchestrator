@@ -31,6 +31,19 @@ func (m *Manager) executeChatAgentSwitch(
 	project := admitted.project
 	targetAgent := admitted.targetAgent
 	recorder := newAgentSwitchFlightRecorder(result, domain.SessionModeChat, domain.AgentSwitchExecutionLive)
+	// Every step boundary feeds both the flight recorder and the timing log.
+	var timer agentSwitchStageTimer
+	stage := func(point domain.AgentSwitchFailurePoint) {
+		recorder.boundary(point)
+		timer.mark(point)
+	}
+	// Registered first so it runs last, after the outcome below is settled.
+	defer func() {
+		stages, total := timer.render()
+		m.logger.Info("agent switch timing",
+			"sessionID", id, "switchID", result.ID, "from", rec.Harness, "to", cfg.TargetHarness,
+			"state", result.State, "total", total.Round(time.Millisecond), "stages", stages)
+	}()
 
 	sourceStopConclusive := false
 	sourceStopped := false
@@ -62,7 +75,7 @@ func (m *Manager) executeChatAgentSwitch(
 		}
 		rollbackSafe := retErr != nil && sourceStopped && !targetOwnerCommitted && !targetOwnershipAmbiguous
 		if retErr != nil && targetWorkspacePrepared && !targetOwnerCommitted && !targetOwnershipAmbiguous {
-			recorder.boundary(domain.AgentSwitchFailureTargetWorkspaceCleanup)
+			stage(domain.AgentSwitchFailureTargetWorkspaceCleanup)
 			cleanupCtx, cancel := switchDurableContext(workerCtx)
 			cleanupErr := m.cleanupPreparedAgentWorkspaceStrict(
 				cleanupCtx, targetAgent, id, rec.Metadata.WorkspacePath, targetSetupEnv)
@@ -79,7 +92,7 @@ func (m *Manager) executeChatAgentSwitch(
 			}
 		}
 		if rollbackSafe {
-			recorder.boundary(domain.AgentSwitchFailureSourceControllerRestore)
+			stage(domain.AgentSwitchFailureSourceControllerRestore)
 			rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(workerCtx), switchPostStopWait)
 			rollbackErr := m.rollbackStoppedChatAgentSwitchSource(rollbackCtx, rec, project)
 			cancel()
@@ -156,32 +169,49 @@ func (m *Manager) executeChatAgentSwitch(
 		m.retainAgentSwitch(id)
 	}()
 
-	recorder.boundary(domain.AgentSwitchFailureTargetPreflight)
+	stage(domain.AgentSwitchFailureTargetPreflight)
 	if m.chat == nil {
 		return result, fmt.Errorf("switch Chat agent %s: %w", id, ports.ErrChatUnsupported)
 	}
-	if err := m.chat.PreflightChat(
-		ctx,
-		cfg.TargetHarness,
-		effectiveAgentConfig(cfg.TargetHarness, rec.Kind, project.Config).Permissions,
-	); err != nil {
+	baseAgentConfig := effectiveAgentConfig(cfg.TargetHarness, rec.Kind, project.Config)
+	// The target keeps the chat's approval mode, not the project default: a chat
+	// someone set to bypass stays in bypass across a switch.
+	baseAgentConfig.Permissions = m.chatSwitchPermissions(ctx, rec, baseAgentConfig.Permissions)
+	if err := m.chat.PreflightChat(ctx, cfg.TargetHarness, baseAgentConfig.Permissions); err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: target preflight: %w", id, err)
 	}
 	handoff, ok := m.chat.(chatHandoffLauncher)
 	if !ok {
 		return result, fmt.Errorf("switch Chat agent %s: %w", id, ErrInterfaceHandoffUnsupported)
 	}
-	baseAgentConfig := effectiveAgentConfig(cfg.TargetHarness, rec.Kind, project.Config)
 	agentConfig, err := m.resolveAgentConfig(ctx, ports.SpawnConfig{
 		ProjectID: rec.ProjectID,
 		Kind:      rec.Kind,
 		Harness:   cfg.TargetHarness,
 		AgentConfig: ports.AgentConfig{
-			Model: strings.TrimSpace(cfg.Model),
+			Model:  strings.TrimSpace(cfg.Model),
+			Effort: strings.TrimSpace(cfg.Effort),
 		},
+		EffortOverride: strings.TrimSpace(cfg.Effort) != "",
 	}, domain.ProjectConfig{AgentConfig: baseAgentConfig})
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: target config: %w", id, err)
+	}
+	// A target the user picked before sending may already be running. Its hook
+	// and trust files are in the workspace, so failure cleanup covers them.
+	standby := m.takeChatStandby(id, cfg.TargetHarness, agentConfig)
+	if standby != nil {
+		defer standby.handle.Discard()
+		// The standby wrote the target's files before this switch prepared any.
+		// A switch that fails before preparing them itself removes them best
+		// effort; their removal never decides the switch's outcome.
+		defer func() {
+			if retErr != nil && !targetWorkspacePrepared && !targetOwnerCommitted {
+				cleanupCtx, cancel := switchDurableContext(workerCtx)
+				m.cleanupPreparedAgentWorkspace(cleanupCtx, targetAgent, id, rec.Metadata.WorkspacePath, targetSetupEnv)
+				cancel()
+			}
+		}()
 	}
 
 	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, true)
@@ -189,16 +219,17 @@ func (m *Manager) executeChatAgentSwitch(
 		return result, fmt.Errorf("switch Chat agent %s: system prompt: %w", id, err)
 	}
 	systemPrompt = appendAgentContinuationProtocol(systemPrompt)
-	targetConfigDir, err := nativeConfigDir(ctx, targetAgent, targetSetupEnv)
+	targetConfigDir, err := nativeConfigDirForMode(ctx, targetAgent, targetSetupEnv, domain.SessionModeChat)
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: target config: %w", id, err)
 	}
-	resumeCandidate, resumable, err := m.findTargetResumeCandidate(
-		ctx, store, rec, cfg.TargetHarness, targetAgent, targetConfigDir)
-	if err != nil {
-		recorder.failurePoint = domain.AgentSwitchFailureTargetResumeLookup
-		return result, fmt.Errorf("switch Chat agent %s: target resume candidate: %w", id, err)
-	}
+	// The target always starts a fresh native conversation. A resumed one keeps
+	// the instructions it was started with and ignores this switch's handoff, so
+	// an agent coming back would know only its own earlier turns and none of
+	// what the agents in between did. A fresh start gets the whole
+	// conversation, its own earlier turns included, through the handoff.
+	var resumeCandidate domain.AgentNativeSession
+	resumable := false
 	targetStartMode := domain.AgentSwitchTargetStartFresh
 	providerConversationID := ""
 	if resumable {
@@ -210,18 +241,18 @@ func (m *Manager) executeChatAgentSwitch(
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: workspace roots: %w", id, err)
 	}
-	recorder.boundary(domain.AgentSwitchFailureHandoffDirectoryPrepare)
+	stage(domain.AgentSwitchFailureHandoffDirectoryPrepare)
 	if _, _, err := m.prepareAgentHandoffPaths(ctx, id, string(result.ID)); err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: prepare handoff directory: %w", id, err)
 	}
 
-	recorder.boundary(domain.AgentSwitchFailureHandoffSettlement)
+	stage(domain.AgentSwitchFailureHandoffSettlement)
 	result, err = m.settleOptionalAgentHandoff(
 		ctx, store, result, domain.AgentHandoffUnavailable)
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: close optional source handoff: %w", id, err)
 	}
-	recorder.boundary(domain.AgentSwitchFailureChatSourceQuiesce)
+	stage(domain.AgentSwitchFailureChatSourceQuiesce)
 	if err := handoff.PrepareChatHandoff(
 		ctx, id, domain.SessionInterfaceTransitionInterrupt); err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: quiesce source: %w", id, err)
@@ -231,7 +262,7 @@ func (m *Manager) executeChatAgentSwitch(
 	if targetGeneration == "" {
 		return result, fmt.Errorf("switch Chat agent %s: target controller generation is empty", id)
 	}
-	recorder.boundary(domain.AgentSwitchFailureStoppingSourceCommit)
+	stage(domain.AgentSwitchFailureStoppingSourceCommit)
 	if err := m.advanceAgentSwitch(ctx, store, &result, domain.AgentSwitchStoppingSource, func(next *domain.AgentSwitch) {
 		next.TargetStartMode = targetStartMode
 		next.TargetGenerationID = targetGeneration
@@ -240,7 +271,7 @@ func (m *Manager) executeChatAgentSwitch(
 	}
 	recorder.durable(result)
 
-	recorder.boundary(domain.AgentSwitchFailureSourceControllerStop)
+	stage(domain.AgentSwitchFailureSourceControllerStop)
 	if err := m.stopSourceControllerConclusive(rec); err != nil {
 		recorder.failurePoint = domain.AgentSwitchFailureSourceControllerDrain
 		recorder.callOutcome = domain.AgentSwitchCallEffectUnknown
@@ -251,7 +282,7 @@ func (m *Manager) executeChatAgentSwitch(
 	sourceStopConclusive = true
 	stoppedAt := m.clock()
 	boundaryCtx, cancelBoundary := switchDurableContext(workerCtx)
-	recorder.boundary(domain.AgentSwitchFailureSourceStopCommit)
+	stage(domain.AgentSwitchFailureSourceStopCommit)
 	confirmed, err := m.lcm.ConfirmAgentSwitchSourceStopped(
 		boundaryCtx,
 		domain.AgentSwitchSourceStopConfirmation{
@@ -303,9 +334,13 @@ func (m *Manager) executeChatAgentSwitch(
 	defer cancelPostStop()
 	ctx = postStopCtx
 
-	recorder.boundary(domain.AgentSwitchFailureSourceTranscriptCapture)
+	stage(domain.AgentSwitchFailureSourceTranscriptCapture)
+	// The excerpt comes from AO's own record of the conversation: every agent's
+	// turns, in order. A provider's transcript holds only that provider's turns,
+	// so after a few switches it would leave out what the others said. The
+	// provider transcript, when there is one, stays as a pointer for detail.
 	observedTranscript, sourceTranscriptStatus := m.captureSourceTranscriptFact(
-		ctx, admitted.sourceAgent, admitted.sourceNative, true)
+		ctx, admitted.sourceAgent, admitted.sourceNative, false)
 	finalContext := deterministicSwitchContext{
 		OriginalTask:          stoppedSession.Metadata.Prompt,
 		LatestUserPrompt:      stoppedSession.Metadata.LatestUserPrompt,
@@ -313,19 +348,25 @@ func (m *Manager) executeChatAgentSwitch(
 		Workspaces:            m.captureWorkspaceFacts(ctx, stoppedSession),
 		PullRequests:          m.capturePRFacts(ctx, id),
 		CapturedAt:            m.clock(),
+		HumanMessageFollows:   cfg.Message != nil,
 	}
 	if observedTranscript != nil {
 		finalContext.SourceTranscriptPath = observedTranscript.Path
 	}
-	recorder.boundary(domain.AgentSwitchFailureContinuationBuild)
-	continuation := buildTargetContinuationMessageWithLimit(
-		result, finalContext, observedTranscript, handoffContinuationMaxBytes)
-	recorder.boundary(domain.AgentSwitchFailureFinalArtifactPublish)
+	stage(domain.AgentSwitchFailureContinuationBuild)
+	// When AO's own record cannot be read, the source's native transcript tail
+	// (what the handoff carried before AO kept its own) stands in for it.
+	nativeTail := func() *switchTranscriptFact {
+		fact, _ := m.captureSourceTranscriptFact(ctx, admitted.sourceAgent, admitted.sourceNative, true)
+		return fact
+	}
+	continuation := m.buildChatSwitchContinuation(ctx, id, result, finalContext, observedTranscript, nativeTail)
+	stage(domain.AgentSwitchFailureFinalArtifactPublish)
 	writtenFinal, err := m.writeFinalizedHandoffFile(ctx, result, continuation)
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: retain finalized handoff: %w", id, err)
 	}
-	recorder.boundary(domain.AgentSwitchFailureFinalArtifactCommit)
+	stage(domain.AgentSwitchFailureFinalArtifactCommit)
 	result, err = m.finalizeAgentSwitchHandoff(
 		ctx, store, result, writtenFinal, false, sourceTranscriptStatus)
 	if err != nil {
@@ -335,12 +376,12 @@ func (m *Manager) executeChatAgentSwitch(
 		return result, fmt.Errorf("switch Chat agent %s: record finalized handoff: %w", id, err)
 	}
 	finalSystemPrompt := appendAgentSwitchContinuation(systemPrompt, continuation)
-	recorder.boundary(domain.AgentSwitchFailureTargetPromptPrepare)
+	stage(domain.AgentSwitchFailureTargetPromptPrepare)
 	systemPromptFile, err := m.prepareSystemPromptFile(rec.ID, cfg.TargetHarness, finalSystemPrompt)
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: target system prompt file: %w", id, err)
 	}
-	recorder.boundary(domain.AgentSwitchFailureTargetWorkspacePrepare)
+	stage(domain.AgentSwitchFailureTargetWorkspacePrepare)
 	if err := m.prepareWorkspace(
 		ctx, targetAgent, rec.ID, rec.Metadata.WorkspacePath,
 		finalSystemPrompt, systemPromptFile, agentConfig, targetSetupEnv,
@@ -348,7 +389,7 @@ func (m *Manager) executeChatAgentSwitch(
 		return result, fmt.Errorf("switch Chat agent %s: prepare target workspace: %w", id, err)
 	}
 	targetWorkspacePrepared = true
-	recorder.boundary(domain.AgentSwitchFailureChatProviderBoundaryCommit)
+	stage(domain.AgentSwitchFailureChatProviderBoundaryCommit)
 	if err := m.advanceAgentSwitch(ctx, store, &result, domain.AgentSwitchStartingTarget, nil); err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: record target start: %w", id, err)
 	}
@@ -374,15 +415,21 @@ func (m *Manager) executeChatAgentSwitch(
 	defer releaseCodexAdmission()
 
 	if resumable {
-		recorder.boundary(domain.AgentSwitchFailureChatProviderResume)
+		stage(domain.AgentSwitchFailureChatProviderResume)
 	} else {
-		recorder.boundary(domain.AgentSwitchFailureChatProviderStart)
+		stage(domain.AgentSwitchFailureChatProviderStart)
 	}
 	historyMode := ports.ChatHistoryImport
 	if resumable {
 		historyMode = ports.ChatHistoryDeferred
 	}
+	var standbyHandle ports.ChatStandby
+	var standbyEnv func() (map[string]string, error)
+	if standby != nil {
+		standbyHandle = standby.handle
+	}
 	_, err = m.chat.StartChat(ctx, ChatStart{
+		Standby:                 standbyHandle,
 		SessionID:               id,
 		ProjectID:               rec.ProjectID,
 		Kind:                    rec.Kind,
@@ -398,6 +445,14 @@ func (m *Manager) executeChatAgentSwitch(
 		MCPServers:              m.aoMCPServers(cfg.TargetHarness, targetLaunchEnv),
 		ExpectedControllerOwner: credentialRecord.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
+			if standby != nil {
+				// The standby already holds a bearer; persisting its verifier now,
+				// after the source stopped, is the rotation a cold start does here.
+				if standbyEnv == nil {
+					standbyEnv = standby.controllerEnv(launchCtx, m, &credentialRecord, expected)
+				}
+				return standbyEnv()
+			}
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
 				launchCtx, credentialRecord, project.Config.Env, expected,
 			)
@@ -426,7 +481,7 @@ func (m *Manager) executeChatAgentSwitch(
 			}
 			var stored domain.AgentNativeSession
 			if resumable {
-				recorder.boundary(domain.AgentSwitchFailureChatNativeIdentityCommit)
+				stage(domain.AgentSwitchFailureChatNativeIdentityCommit)
 				if started.ProviderConversationID != resumeCandidate.NativeSessionID {
 					return emptyCommit, errors.New("resumed target Chat controller changed provider conversation identity")
 				}
@@ -442,7 +497,7 @@ func (m *Manager) executeChatAgentSwitch(
 					return emptyCommit, errors.New("resumed target Chat native session changed concurrently")
 				}
 			} else {
-				recorder.boundary(domain.AgentSwitchFailureChatNativeIdentityCommit)
+				stage(domain.AgentSwitchFailureChatNativeIdentityCommit)
 				now := m.clock()
 				native := domain.AgentNativeSession{
 					ID:          domain.AgentNativeSessionID("native-" + uuid.NewString()),
@@ -456,7 +511,7 @@ func (m *Manager) executeChatAgentSwitch(
 					return emptyCommit, fmt.Errorf("persist target Chat native session: %w", createErr)
 				}
 			}
-			recorder.boundary(domain.AgentSwitchFailureChatProviderBoundaryCommit)
+			stage(domain.AgentSwitchFailureChatProviderBoundaryCommit)
 			if err := m.advanceAgentSwitch(ctx, store, &result, domain.AgentSwitchStartingTarget, func(next *domain.AgentSwitch) {
 				next.TargetNativeSessionRef = nativeSessionIDPtr(stored.ID)
 			}); err != nil {
@@ -473,7 +528,7 @@ func (m *Manager) executeChatAgentSwitch(
 				ControllerGeneration:   started.ControllerGeneration,
 				ActivatedAt:            activatedAt,
 			}
-			recorder.boundary(domain.AgentSwitchFailureChatTargetActivationCommit)
+			stage(domain.AgentSwitchFailureChatTargetActivationCommit)
 			activated, activationErr := m.lcm.ActivateChatAgentSwitchTarget(
 				ctx,
 				activation,
@@ -536,18 +591,17 @@ func (m *Manager) executeChatAgentSwitch(
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: reload target activation: %w", id, err)
 	}
-	recorder.boundary(domain.AgentSwitchFailureDeliveryOpenCommit)
+	stage(domain.AgentSwitchFailureDeliveryOpenCommit)
 	if err := m.advanceAgentSwitch(ctx, store, &result, domain.AgentSwitchDelivering, nil); err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: begin continuation delivery: %w", id, err)
 	}
 	recorder.durable(result)
-	recorder.boundary(domain.AgentSwitchFailureChatContinuationRelay)
-	if _, err := m.chat.RelaySessionChatTurn(
-		ctx, id, aoTargetActivationPrompt, chatSwitchActivationMessageID(result.ID), ports.MessageDeliveryOptions{}); err != nil {
+	stage(domain.AgentSwitchFailureChatContinuationRelay)
+	if err := m.deliverChatSwitchOpening(ctx, id, result.ID, cfg.Message); err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: deliver continuation: %w", id, err)
 	}
 	acknowledgedAt := m.clock()
-	recorder.boundary(domain.AgentSwitchFailureChatTargetAckCommit)
+	stage(domain.AgentSwitchFailureChatTargetAckCommit)
 	result, acknowledged, err := m.acknowledgeAgentSwitchTargetWithReadback(ctx, store, result, targetGeneration, acknowledgedAt)
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: acknowledge continuation: %w", id, err)
@@ -557,7 +611,7 @@ func (m *Manager) executeChatAgentSwitch(
 		return result, nil
 	}
 	completionCtx, cancelCompletion := switchDurableContext(ctx)
-	recorder.boundary(domain.AgentSwitchFailureCompletionCommit)
+	stage(domain.AgentSwitchFailureCompletionCommit)
 	result, err = m.completeAcknowledgedAgentSwitch(completionCtx, store, result)
 	cancelCompletion()
 	if err != nil {
@@ -579,6 +633,141 @@ func committedChatSwitchConversation(
 	conversation.Settings.ReasoningEffort = ""
 	conversation.UpdatedAt = activatedAt
 	return conversation
+}
+
+// chatSwitchPermissions is the approval mode a switch target starts with: the
+// chat's current one when the conversation records it (someone may have changed
+// it mid-chat), else the mode the session was launched with, else fallback.
+func (m *Manager) chatSwitchPermissions(ctx context.Context, rec domain.SessionRecord, fallback ports.PermissionMode) ports.PermissionMode {
+	if history, ok := m.store.(chatHandoffHistoryStore); ok {
+		if conversation, err := history.ConversationForSession(ctx, rec.ID); err == nil && conversation.Settings.ApprovalMode != "" {
+			return conversation.Settings.ApprovalMode
+		}
+	}
+	if rec.Metadata.Permissions != "" {
+		return rec.Metadata.Permissions
+	}
+	return fallback
+}
+
+// chatMessageSender delivers a human message through the ordinary Chat send
+// path, with the same idempotency and attachment handling as the composer.
+type chatMessageSender interface {
+	SendSessionChatMessage(ctx context.Context, id domain.SessionID, msg ports.ChatUserMessage) (string, error)
+}
+
+// chatTranscriptExcerpter reads AO's own record of a Chat conversation. Every
+// agent has one, whether or not its provider keeps a transcript AO can read.
+type chatTranscriptExcerpter interface {
+	ChatTranscriptExcerpt(ctx context.Context, id domain.SessionID, maxBytes int, markers []ChatTranscriptMarker) (excerpt string, truncated bool, err error)
+}
+
+// ChatTranscriptMarker labels a point in a Chat conversation's history, placed
+// among its messages by time.
+type ChatTranscriptMarker struct {
+	At   time.Time
+	Text string
+}
+
+// chatSwitchMarkers marks where each earlier completed switch handed the chat
+// to another agent, so the next agent can tell which one said what.
+func (m *Manager) chatSwitchMarkers(ctx context.Context, id domain.SessionID) []ChatTranscriptMarker {
+	switches, err := m.ListAgentSwitches(ctx, id)
+	if err != nil {
+		return nil
+	}
+	markers := make([]ChatTranscriptMarker, 0, len(switches))
+	for _, sw := range switches {
+		if sw.State != domain.AgentSwitchCompleted || sw.RequestedAt.IsZero() {
+			continue
+		}
+		markers = append(markers, ChatTranscriptMarker{
+			At:   sw.RequestedAt,
+			Text: fmt.Sprintf("chat switched from %s to %s; messages below are from %s", sw.FromHarness, sw.TargetHarness, sw.TargetHarness),
+		})
+	}
+	return markers
+}
+
+// deliverChatSwitchOpening opens the target's first turn. A switch made from
+// the composer carries the user's message, which the target answers directly;
+// otherwise AO's brief activation prompt starts it.
+func (m *Manager) deliverChatSwitchOpening(
+	ctx context.Context,
+	id domain.SessionID,
+	switchID domain.AgentSwitchID,
+	message *ports.ChatUserMessage,
+) error {
+	if message == nil {
+		_, err := m.chat.RelaySessionChatTurn(
+			ctx, id, aoTargetActivationPrompt, chatSwitchActivationMessageID(switchID), ports.MessageDeliveryOptions{})
+		return err
+	}
+	sender, ok := m.chat.(chatMessageSender)
+	if !ok {
+		return errors.New("chat launcher cannot deliver a human message")
+	}
+	_, err := sender.SendSessionChatMessage(ctx, id, *message)
+	return err
+}
+
+// buildChatSwitchContinuation fills the handoff with as much of the
+// conversation as fits under the handoff cap. The excerpt comes from AO's own
+// record, every agent's turns and actions in order; a provider's transcript
+// holds only its own, so after a few switches it would leave out what the
+// others said. The provider transcript, when there is one, stays as a pointer.
+//
+// Over the cap, the generic builder falls back to a few KiB of history, so the
+// excerpt is first sized to the whole cap, then shrunk by each overflow.
+func (m *Manager) buildChatSwitchContinuation(
+	ctx context.Context,
+	id domain.SessionID,
+	sw domain.AgentSwitch,
+	facts deterministicSwitchContext,
+	native *switchTranscriptFact,
+	nativeTail func() *switchTranscriptFact,
+) string {
+	transcript := native
+	budget := handoffContinuationMaxBytes
+	for attempt := 0; attempt < 4 && budget > 0; attempt++ {
+		conversation := m.chatTranscriptFact(ctx, id, budget)
+		if conversation == nil {
+			if attempt == 0 && nativeTail != nil {
+				if fallback := nativeTail(); fallback != nil {
+					transcript = fallback
+				}
+			}
+			break
+		}
+		if native != nil {
+			conversation.Path = native.Path
+		}
+		transcript = conversation
+		over := len(buildTargetContinuationMessageBody(sw, facts, transcript)) - handoffContinuationMaxBytes
+		if over <= 0 {
+			break
+		}
+		budget -= over + 4<<10
+	}
+	return buildTargetContinuationMessageWithLimit(sw, facts, transcript, handoffContinuationMaxBytes)
+}
+
+// chatTranscriptFact is the newest maxBytes of AO's record of this
+// conversation, or nil when there is none to read.
+func (m *Manager) chatTranscriptFact(ctx context.Context, id domain.SessionID, maxBytes int) *switchTranscriptFact {
+	excerpter, ok := m.chat.(chatTranscriptExcerpter)
+	if !ok {
+		return nil
+	}
+	excerpt, truncated, err := excerpter.ChatTranscriptExcerpt(ctx, id, maxBytes, m.chatSwitchMarkers(ctx, id))
+	if err != nil {
+		m.logger.Warn("Chat agent switch: AO transcript excerpt unavailable", "sessionID", id, "error", err)
+		return nil
+	}
+	if strings.TrimSpace(excerpt) == "" {
+		return nil
+	}
+	return &switchTranscriptFact{Tail: excerpt, Truncated: truncated, Conversation: true}
 }
 
 func chatSwitchProviderBoundaryID(switchID domain.AgentSwitchID) string {
@@ -782,8 +971,10 @@ func (m *Manager) recoverActivatedChatAgentSwitch(
 		return false, err
 	}
 	recorder.boundary(domain.AgentSwitchFailureChatContinuationRelay)
+	// The human message a composer switch carried lived only in the request
+	// AO was serving when it restarted, so it may never arrive.
 	if _, err := m.chat.RelaySessionChatTurn(
-		ctx, rec.ID, aoTargetActivationPrompt, chatSwitchActivationMessageID(current.ID), ports.MessageDeliveryOptions{}); err != nil {
+		ctx, rec.ID, aoTargetRecoveryPrompt, chatSwitchActivationMessageID(current.ID), ports.MessageDeliveryOptions{}); err != nil {
 		recorder.userImpact = domain.AgentSwitchUserImpactDeliveryUnknown
 		_, failErr := m.failAgentSwitchWithRecorder(ctx, store, current, domain.AgentSwitchErrorDeliveryUnconfirmed, recorder)
 		return failErr == nil, failErr

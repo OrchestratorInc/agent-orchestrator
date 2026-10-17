@@ -628,6 +628,10 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		}
 		id := c.providerItemID(messageID(update.AgentMessageChunk.MessageId, "assistant", turnID))
 		if delta := contentText(update.AgentMessageChunk.Content); delta != "" {
+			if c.leadingProviderNotice(turnID, delta) {
+				c.log.Debug("chat: dropped provider notice", "turn", turnID, "chars", len(delta))
+				break
+			}
 			if parentID := c.providerItemID(parentToolUseID(update.AgentMessageChunk.Meta)); parentID != "" {
 				c.mu.Lock()
 				item, existed := c.nestedMessages[id]
@@ -1280,4 +1284,23 @@ func pointerValue[T any](value *T) T {
 		return zero
 	}
 	return *value
+}
+
+// leadingProviderNotice reports a chunk of the provider's own diagnostics
+// that comes before the turn's answer. The first other chunk starts the
+// answer, after which nothing is dropped.
+func (c *conversation) leadingProviderNotice(turnID, delta string) bool {
+	if c.providerNotice == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.answeringTurn == turnID {
+		return false
+	}
+	if c.providerNotice(delta) {
+		return true
+	}
+	c.answeringTurn = turnID
+	return false
 }

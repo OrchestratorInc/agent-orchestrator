@@ -110,6 +110,32 @@ func (w *Workspace) destroy(_ context.Context, info ports.WorkspaceInfo) (ports.
 	return reclaim, nil
 }
 
+// DiscardPreparedWorkspace removes a task preparation's scratch directory that
+// no session ever claimed. Unlike Destroy it removes contents: the files are
+// the agent setup AO wrote, and whatever an agent started ahead of the send
+// created before it was stopped.
+func (w *Workspace) DiscardPreparedWorkspace(_ context.Context, info ports.WorkspaceInfo) error {
+	if _, err := os.Lstat(info.Path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	path, err := w.validateManagedPath(info.Path)
+	if err != nil {
+		return err
+	}
+	// Only the session's own directory, never a parent the stored path might
+	// name.
+	expected, err := w.managedPath(ports.WorkspaceConfig{
+		SessionID: info.SessionID, ProjectID: info.ProjectID, Kind: domain.KindWorker,
+	})
+	if err != nil || !samePath(path, expected) {
+		return fmt.Errorf("scratch workspace: %q is not session %q's prepared directory", path, info.SessionID)
+	}
+	if err := os.RemoveAll(path); err != nil {
+		return fmt.Errorf("scratch workspace: discard prepared %q: %w", path, err)
+	}
+	return nil
+}
+
 // ForceDestroy intentionally follows Destroy semantics for scratch. Normal AO
 // paths must never force-delete non-empty scratch work.
 func (w *Workspace) ForceDestroy(ctx context.Context, info ports.WorkspaceInfo) error {

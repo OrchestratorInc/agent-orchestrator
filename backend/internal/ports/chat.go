@@ -333,6 +333,29 @@ type ChatStartConfig struct {
 	// MCPServers are client-supplied tool servers for this provider conversation.
 	// User/provider configuration still loads normally; these are additive.
 	MCPServers []ChatMCPServerConfig
+	// Standby is a provider the same driver started ahead of this Start (see
+	// ChatStandbyDriver). The driver adopts it instead of launching a process
+	// when its launch inputs still match, and discards it otherwise.
+	Standby ChatStandby
+}
+
+// ChatStandby is a provider process started and initialized ahead of a known
+// upcoming Start. It holds no provider session.
+type ChatStandby interface {
+	Harness() domain.AgentHarness
+	// Discard stops the process. It is safe to call more than once, and does
+	// nothing once a Start has adopted the standby.
+	Discard()
+}
+
+// ChatStandbyDriver starts a provider ahead of a Start whose inputs are known
+// early, such as an agent switch the user has picked but not yet sent. cfg is
+// what the later Start will pass, except that the standby has no provider
+// scope yet. The standby must not create a provider session.
+type ChatStandbyDriver interface {
+	// SupportsStandby reports whether Prewarm can start this driver's provider.
+	SupportsStandby() bool
+	Prewarm(ctx context.Context, cfg ChatStartConfig) (ChatStandby, error)
 }
 
 // ChatResumeConfig reattaches to a provider conversation after a restart.

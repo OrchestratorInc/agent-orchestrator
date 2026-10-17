@@ -21,6 +21,10 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
 		Harness:   domain.HarnessDroid,
 		Configure: configure,
+		// Droid spends 2 to 3s in initialize and its first session/new, so an
+		// agent switch starts it when the user picks it. The standing
+		// instructions go in as --append-system-prompt at launch.
+		Standby: &acpdriver.StandbyConfig{PromptAtLaunch: true},
 	}, log)
 }
 

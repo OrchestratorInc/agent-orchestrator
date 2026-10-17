@@ -24,6 +24,7 @@ import (
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
 		Harness:              domain.HarnessOpenCodeV2,
+		Standby:              &acpdriver.StandbyConfig{PromptAtLaunch: true},
 		Configure:            configure,
 		SessionMode:          sessionMode,
 		SessionOptions:       sessionOptions,

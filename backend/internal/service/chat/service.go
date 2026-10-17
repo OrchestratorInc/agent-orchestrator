@@ -98,6 +98,9 @@ type Service struct {
 	gates            map[domain.ConversationOwner]controllerGate
 	probeMu          sync.Mutex
 	probed           map[domain.AgentHarness]ports.ChatCapabilities
+	// probeLocks serializes the probe of one harness, so a slow or hanging
+	// probe never holds up another harness's starts.
+	probeLocks map[domain.AgentHarness]*sync.Mutex
 }
 
 // SetReportCoordinator installs the report piggyback hook after daemon wiring
@@ -290,6 +293,8 @@ func notifyControllerReady(
 
 func cloneStartConfig(cfg StartConfig) StartConfig {
 	cloned := cfg
+	// A standby serves one launch; a retained config must not offer it again.
+	cloned.Standby = nil
 	cloned.Env = make(map[string]string, len(cfg.Env))
 	for key, value := range cfg.Env {
 		cloned.Env[key] = value
@@ -688,6 +693,9 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	var conv ports.ChatConversation
 	hostID := providerHostID(cfg)
 	if cfg.ProviderConversationID != "" {
+		if cfg.Standby != nil {
+			cfg.Standby.Discard()
+		}
 		conv, err = resume(ctx, ports.ChatResumeConfig{
 			SessionID:              hostID,
 			ProviderConversationID: cfg.ProviderConversationID,
@@ -723,6 +731,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			ProviderScopeID:       providerScopeID,
 			AdditionalDirectories: cfg.AdditionalDirectories,
 			MCPServers:            cfg.MCPServers,
+			Standby:               cfg.Standby,
 		})
 	}
 	if err != nil {
@@ -2046,6 +2055,69 @@ func (s *Service) PreflightChat(
 	return capabilityAdmissionError(harness, caps, permissions)
 }
 
+// prewarmTimeout bounds one background readiness check.
+const prewarmTimeout = 30 * time.Second
+
+// PrewarmChat runs PreflightChat's capability probe in the background so a
+// later switch to harness finds it cached. The probe launches a throwaway
+// provider process the first time each harness is checked; that cost (up to
+// ~1.3s) otherwise lands on the switch itself. Failures are not cached, so a
+// later switch still reports them.
+func (s *Service) PrewarmChat(harness domain.AgentHarness) {
+	driver, err := s.drivers.Driver(harness)
+	if err != nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), prewarmTimeout)
+		defer cancel()
+		_, _ = s.driverCapabilities(ctx, harness, driver)
+	}()
+}
+
+// SupportsChatStandby reports whether harness's driver can start a standby.
+func (s *Service) SupportsChatStandby(harness domain.AgentHarness) bool {
+	driver, err := s.drivers.Driver(harness)
+	if err != nil {
+		return false
+	}
+	standbyDriver, ok := driver.(ports.ChatStandbyDriver)
+	return ok && standbyDriver.SupportsStandby()
+}
+
+// PrewarmChatStandby starts cfg's provider ahead of the Start that will adopt
+// it, for drivers that support standbys. The standby holds no provider session.
+func (s *Service) PrewarmChatStandby(ctx context.Context, cfg StartConfig) (ports.ChatStandby, error) {
+	driver, err := s.drivers.Driver(cfg.Harness)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s has no chat driver", ports.ErrChatUnsupported, cfg.Harness)
+	}
+	standbyDriver, ok := driver.(ports.ChatStandbyDriver)
+	if !ok {
+		return nil, fmt.Errorf("%w: %s has no standby support", ports.ErrChatUnsupported, cfg.Harness)
+	}
+	caps, err := s.driverCapabilities(ctx, cfg.Harness, driver)
+	if err != nil {
+		return nil, err
+	}
+	if err := capabilityAdmissionError(cfg.Harness, caps, cfg.Permissions); err != nil {
+		return nil, err
+	}
+	return standbyDriver.Prewarm(ctx, ports.ChatStartConfig{
+		SessionID:             providerHostID(cfg),
+		DataDir:               cfg.DataDir,
+		WorkspacePath:         cfg.WorkspacePath,
+		Env:                   cfg.Env,
+		Model:                 cfg.Model,
+		Effort:                cfg.Effort,
+		Permissions:           cfg.Permissions,
+		ReadOnly:              cfg.ReadOnly,
+		SystemPrompt:          cfg.SystemPrompt,
+		AdditionalDirectories: cfg.AdditionalDirectories,
+		MCPServers:            cfg.MCPServers,
+	})
+}
+
 func capabilityAdmissionError(
 	harness domain.AgentHarness,
 	caps ports.ChatCapabilities,
@@ -2080,15 +2152,35 @@ func (s *Service) driverCapabilities(
 	driver ports.ChatDriver,
 ) (ports.ChatCapabilities, error) {
 	s.probeMu.Lock()
-	defer s.probeMu.Unlock()
 	if caps, ok := s.probed[harness]; ok {
+		s.probeMu.Unlock()
+		return caps, nil
+	}
+	if s.probeLocks == nil {
+		s.probeLocks = make(map[domain.AgentHarness]*sync.Mutex)
+	}
+	lock := s.probeLocks[harness]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		s.probeLocks[harness] = lock
+	}
+	s.probeMu.Unlock()
+
+	lock.Lock()
+	defer lock.Unlock()
+	s.probeMu.Lock()
+	caps, ok := s.probed[harness]
+	s.probeMu.Unlock()
+	if ok {
 		return caps, nil
 	}
 	caps, err := driver.Probe(ctx)
 	if err != nil {
 		return nil, err
 	}
+	s.probeMu.Lock()
 	s.probed[harness] = caps
+	s.probeMu.Unlock()
 	return caps, nil
 }
 

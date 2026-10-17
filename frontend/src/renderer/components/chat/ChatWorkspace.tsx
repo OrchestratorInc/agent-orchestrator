@@ -113,6 +113,7 @@ import {
 	ActivityRow,
 	ApprovalCard,
 	AssistantMessage,
+	AgentSwitchMarker,
 	CompactionMarker,
 	ContinuedMarker,
 	HumanMessage,
@@ -213,6 +214,11 @@ export const CONTINUE_STOPPED_TURN_PROMPT = "Continue from where you stopped.";
 export function continuableTurnId(snapshot: ConversationSnapshot): string {
 	return snapshot.continueTurnId ?? "";
 }
+
+// A message sent with an agent switch reaches the chat once the new agent has
+// started, within this long of the switch even from a slow start; anything
+// later is an ordinary send.
+const SWITCH_MESSAGE_WINDOW_MS = 120_000;
 
 export interface ChatRetryControl {
 	retry: (turnId: string) => void | Promise<unknown>;
@@ -364,6 +370,11 @@ export interface ChatWorkspaceProps {
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	/** Suppress a transient stopped snapshot while a mode handoff installs Chat. */
 	controllerTransitioning?: boolean;
+	/**
+	 * An agent switch is replacing the controller. Its stopped and connecting
+	 * states are the hand-over, not a failure, and sends queue meanwhile.
+	 */
+	agentSwitching?: boolean;
 	/** The conversation is still being read on a plain open or navigation; hold the composer without the startup shimmer. */
 	loadingQuietly?: boolean;
 	/**
@@ -537,6 +548,16 @@ export interface ChatWorkspaceProps {
 	editQueuedTurnPendingTurnId?: string;
 	/** Replaces the turn settings bar, for a chat whose session does not exist yet. */
 	draftSettings?: ReactNode;
+	/** The Agent row at the top of the live model menu. */
+	agentMenu?: ReactNode;
+	/**
+	 * A message sent with an agent switch, shown working while the new agent
+	 * starts: the message reads as Working from the send, as a new chat's brief
+	 * does. Messages sent meanwhile wait in the queue dock.
+	 */
+	switchingEcho?: { clientMessageId: string; startedAt: string };
+	/** Where the chat moved to another agent, drawn as a row in the transcript. */
+	agentSwitchMarkers?: AgentSwitchMarkerData[];
 	/** Shown under the composer, for a chat whose session does not exist yet. */
 	draftNotice?: ReactNode;
 	/**
@@ -562,6 +583,9 @@ function OfflineRemoteTerminal() {
 	const { t } = useTranslation();
 	return <div className="flex h-full items-center justify-center text-sm text-muted-foreground" role="status">{t("remote.hostOffline")}</div>;
 }
+
+/** A finished agent switch, by harness id: the transcript shows "Switched from X to Y" where it happened. */
+export type AgentSwitchMarkerData = { id: string; from: string; to: string; at: string };
 
 /**
  * Do not mount any renderer draft owner until the daemon incarnation has
@@ -653,6 +677,7 @@ function ChatWorkspaceContent({
 	auxiliaryTabOrder,
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
+	agentSwitching = false,
 	loadingQuietly,
 	agentResuming = false,
 	startingSteps,
@@ -742,6 +767,9 @@ function ChatWorkspaceContent({
 	cancelQueuedTurnPendingTurnId,
 	editQueuedTurnPendingTurnId,
 	draftSettings,
+	agentMenu,
+	switchingEcho,
+	agentSwitchMarkers,
 	draftNotice,
 	openingStartedAt,
 	composerTray,
@@ -1394,6 +1422,8 @@ function ChatWorkspaceContent({
 					onChangeConfigOption={newWorkDisabled ? undefined : onChooseConfigOption}
 					configPending={configOptionPending}
 					autoSelectEffortOnOpen={snapshot.items.length === 0 && !turn}
+					agentMenu={agentMenu}
+					agentIcon={Boolean(agentMenu)}
 					error={configOptionError}
 					// Turn settings require a live controller even while messages can queue.
 				// A background resume keeps the controls visible with their last values.
@@ -1408,6 +1438,7 @@ function ChatWorkspaceContent({
 				/>
 			) : null,
 		[
+			agentMenu,
 			settingsReady,
 			configOptionError,
 			configOptionPending,
@@ -1739,9 +1770,9 @@ function ChatWorkspaceContent({
 					) : null}
 					<ControllerBanner
 						controller={snapshot.controller}
-						quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
+						quietConnect={agentSwitching || (Boolean(openingStartedAt) && !firstTurnSettled(snapshot))}
 						provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
-						transitioning={controllerTransitioning || agentResuming}
+						transitioning={controllerTransitioning || agentResuming || agentSwitching}
 						automaticWakePending={suppressStopped}
 						onResume={newWorkDisabled ? undefined : onResumeAgent}
 						resuming={resumingAgent}
@@ -1797,6 +1828,8 @@ function ChatWorkspaceContent({
 									localEchos={localEchos}
 									startup={sessionRole === "orchestrator" ? undefined : startup}
 									openingStartedAt={openingStartedAt}
+									switchingEcho={switchingEcho}
+									agentSwitchMarkers={agentSwitchMarkers}
 									arriving={arrivingInChat}
 								/>
 							</ChatImageSourceProvider>
@@ -1876,7 +1909,7 @@ function ChatWorkspaceContent({
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat}
-										disabled={(orchestratorStarting || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorStarting || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !agentSwitching && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
 										disabledPlaceholder={
 											arrivingInChat
 												? arrivingPlaceholder
@@ -2489,6 +2522,8 @@ export function Timeline({
 	startup,
 	arriving = false,
 	openingStartedAt,
+	switchingEcho,
+	agentSwitchMarkers,
 }: {
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
 	/** Replaces the default "Add to chat" (write to this draft scope's composer). */
@@ -2528,6 +2563,9 @@ export function Timeline({
 	arriving?: boolean;
 	/** When the brief that started this chat was sent; see ChatWorkspaceProps. */
 	openingStartedAt?: string;
+	/** A message sent with an agent switch; see ChatWorkspaceProps. */
+	switchingEcho?: ChatWorkspaceProps["switchingEcho"];
+	agentSwitchMarkers?: AgentSwitchMarkerData[];
 }) {
 	const hasTranscript = snapshot.items.length > 0;
 	const arrivedEmpty = useRef(false);
@@ -3355,13 +3393,57 @@ export function Timeline({
 		if (openingTurnId) hiddenTurns.delete(openingTurnId);
 		const firstTurn = snapshot.turns[0];
 		if (openingPending && firstTurn) hiddenTurns.delete(firstTurn.id);
-		return groupByTurn({ ...snapshot, items: timelineItems })
+		const switchingTurnId = switchingEcho ? `local:${switchingEcho.clientMessageId}` : undefined;
+		const timeline = groupByTurn({ ...snapshot, items: timelineItems })
 			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
 				? { ...group, live: true, liveStartedAt: openingStartedAt }
-				: group);
-	}, [openingPending, openingStartedAt, openingTurnId, snapshot, timelineItems]);
+				// The new agent is still starting: its first turn reads as Working already.
+				: switchingTurnId && group.turnId === switchingTurnId
+					? { ...group, live: true, liveStartedAt: switchingEcho?.startedAt }
+					: group);
+		// The turn a switch opened was working from the send, not from when the new
+		// agent took it, so its timer carries on through the hand-over.
+		for (const marker of agentSwitchMarkers ?? []) {
+			const switchedAt = Date.parse(marker.at);
+			// Only a message sent with the switch: a switch from the dialog has no
+			// message, and the user's next one may come hours later.
+			const index = timeline.findIndex((group) => {
+				const sentAt = Date.parse(group.items[0]?.createdAt ?? "");
+				return Boolean(group.turnId) && !group.turnId?.startsWith("local:") && groupHasHumanPrompt(group) &&
+					sentAt >= wholeSecond(marker.at) && sentAt - switchedAt <= SWITCH_MESSAGE_WINDOW_MS;
+			});
+			const group = timeline[index];
+			if (!group) continue;
+			const turnRow = snapshot.turns.find((candidate) => candidate.id === group.turnId);
+			const completedAt = turnRow?.completedAt ? Date.parse(turnRow.completedAt) : NaN;
+			timeline[index] = {
+				...group,
+				liveStartedAt: marker.at,
+				outcome: group.outcome && Number.isFinite(completedAt)
+					? { ...group.outcome, durationMs: Math.max(1_000, completedAt - switchedAt) }
+					: group.outcome,
+			};
+		}
+		return timeline;
+	}, [agentSwitchMarkers, openingPending, openingStartedAt, openingTurnId, snapshot, switchingEcho, timelineItems]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
+	// Each switch sits above the first turn that started after it; one with no
+	// turn after it yet sits at the end.
+	const switchMarkers = useMemo(() => {
+		const byGroup = new Map<string, AgentSwitchMarkerData[]>();
+		const trailing: AgentSwitchMarkerData[] = [];
+		for (const marker of agentSwitchMarkers ?? []) {
+			const at = wholeSecond(marker.at);
+			const group = groups.find((candidate) => {
+				const first = candidate.items[0];
+				return first ? Date.parse(first.createdAt) >= at : false;
+			});
+			if (group) byGroup.set(group.key, [...(byGroup.get(group.key) ?? []), marker]);
+			else trailing.push(marker);
+		}
+		return { byGroup, trailing };
+	}, [agentSwitchMarkers, groups]);
 	// One slot carries the start-up row from the first frame: the opening turn's
 	// group, or before that turn exists, the brief's own live group. Drawing it
 	// anywhere else first would make it jump lines when the turn arrives.
@@ -3980,6 +4062,9 @@ export function Timeline({
 								} : undefined}
 								data-chat-scroll-anchor={groupHasHumanPrompt(group) ? "" : undefined}
 							>
+								{switchMarkers.byGroup.get(group.key)?.map((marker) => (
+									<AgentSwitchMarker key={marker.id} from={marker.from} to={marker.to} className="mb-4.5" />
+								))}
 								<TurnGroup
 									group={group}
 									startup={group.key === startupGroupKey ? rowStartup : undefined}
@@ -4028,6 +4113,9 @@ export function Timeline({
 						);
 					})}
 					</div>
+					{switchMarkers.trailing.map((marker) => (
+						<AgentSwitchMarker key={marker.id} from={marker.from} to={marker.to} />
+					))}
 					{/* Normally drawn inside the opening turn's group; this covers a start
 					    whose brief is not in the timeline. */}
 					{rowStartup && (openingSetup || showStartup) && !startupGroupKey ? (
@@ -4831,6 +4919,16 @@ function groupPreview(group: TimelineGroup): GroupPreview {
 			: firstActivity?.detail?.text || firstActivity?.detail?.output || firstActivity?.summary;
 	const detail = detailSource ? previewText(detailSource, 240) : undefined;
 	return { title, detail: detail && detail !== title ? detail : undefined };
+}
+
+/**
+ * A switch's time cut to the whole second. Stored messages carry whole-second
+ * times, so the message that made a switch can read as up to a second earlier
+ * than the switch itself; matching at second precision keeps the divider and
+ * timer on that message instead of jumping past it.
+ */
+function wholeSecond(at: string): number {
+	return Math.floor(Date.parse(at) / 1000) * 1000;
 }
 
 function groupHasHumanPrompt(group: TimelineGroup): boolean {

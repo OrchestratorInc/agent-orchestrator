@@ -260,6 +260,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/exit-agent", c.exitAgent)
 	r.Post("/sessions/{sessionId}/resume-agent", c.resumeAgent)
 	r.Post("/sessions/{sessionId}/switch-agent", c.switchAgent)
+	r.Post("/sessions/{sessionId}/switch-agent/prewarm", c.prewarmAgentSwitch)
 	r.Get("/sessions/{sessionId}/agent-switches", c.listAgentSwitches)
 	r.Post("/sessions/{sessionId}/agent-switches/{switchId}/recover", c.recoverAgentSwitch)
 	r.Post("/sessions/{sessionId}/agent-switches/{switchId}/handoff", c.submitAgentHandoff)
@@ -279,6 +280,8 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/orchestrators/delegate", c.delegateTask)
 	r.Post("/projects/{id}/tasks/prepare", c.prepareTask)
 	r.Delete("/task-preparations/{token}", c.cancelTaskPreparation)
+	r.Post("/task-preparations", c.prepareStandaloneTask)
+	r.Post("/task-preparations/{token}/agent", c.prewarmTaskAgent)
 	r.Get("/orchestrators/{id}", c.getOrchestrator)
 }
 
@@ -365,10 +368,11 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 	if in.ClientRequestID != "" {
 		keyless := in
 		keyless.ClientRequestID = ""
+		keyless.TaskPreparation = ""
 		keyless.Attachments = nil
 		requestHash = clientRequestFingerprint("session", keyless, attachments)
 	}
-	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, RequestedMode: in.Mode, Prompt: in.Prompt, RequestedOutput: in.RequestedOutput, DisplayName: displayName, Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, EffortOverride: strings.TrimSpace(in.Effort) != "", ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash})
+	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, RequestedMode: in.Mode, Prompt: in.Prompt, RequestedOutput: in.RequestedOutput, DisplayName: displayName, Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, EffortOverride: strings.TrimSpace(in.Effort) != "", ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash, TaskPreparation: domain.TaskPreparationToken(strings.TrimSpace(in.TaskPreparation))})
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -1909,6 +1913,8 @@ func (c *SessionsController) switchAgent(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var in SwitchAgentRequest
+	// The opening message may carry images, so it gets a send's body budget.
+	r.Body = http.MaxBytesReader(w, r.Body, maxConversationBody)
 	if err := decodeJSONStrict(r, &in); err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
@@ -1923,21 +1929,77 @@ func (c *SessionsController) switchAgent(w http.ResponseWriter, r *http.Request)
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "MODEL_TOO_LONG", "Model must be 256 characters or fewer", nil)
 		return
 	}
+	effort := strings.TrimSpace(domain.SanitizeControlChars(in.ReasoningEffort))
+	if len(effort) > 64 {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "REASONING_EFFORT_TOO_LONG", "reasoningEffort must be 64 characters or fewer", nil)
+		return
+	}
 	idempotencyKey := strings.TrimSpace(in.IdempotencyKey)
 	if len(idempotencyKey) > maxIdempotencyKey {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "IDEMPOTENCY_KEY_TOO_LONG", "idempotencyKey is too long", nil)
 		return
 	}
+	var message *ports.ChatUserMessage
+	if in.Message != nil {
+		msg, msgErr := chatUserMessage(*in.Message)
+		if msgErr != nil {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", msgErr.code, msgErr.message, nil)
+			return
+		}
+		message = &msg
+	}
 	switchRecord, err := c.Svc.SwitchAgent(r.Context(), sessionID(r), sessionsvc.SwitchAgentInput{
 		TargetHarness:  targetHarness,
 		Model:          model,
+		Effort:         effort,
 		IdempotencyKey: idempotencyKey,
+		Message:        message,
 	})
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusAccepted, AgentSwitchResponse{Switch: agentSwitchView(switchRecord)})
+}
+
+// agentSwitchPrewarmer starts a chat's picked switch target ahead of the send.
+type agentSwitchPrewarmer interface {
+	PrewarmAgentSwitch(id domain.SessionID, in sessionsvc.SwitchAgentInput)
+}
+
+// prewarmAgentSwitch starts the agent someone picked in a chat's model menu,
+// without a provider session, so the send that carries the switch adopts a
+// running process. It returns before the process is ready.
+func (c *SessionsController) prewarmAgentSwitch(w http.ResponseWriter, r *http.Request) {
+	prewarmer, ok := c.Svc.(agentSwitchPrewarmer)
+	if c.Svc == nil || !ok {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/switch-agent/prewarm")
+		return
+	}
+	var in PrewarmAgentSwitchRequest
+	if err := decodeJSONStrict(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	targetHarness := domain.AgentHarness(strings.TrimSpace(string(in.TargetHarness)))
+	if targetHarness == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "TARGET_HARNESS_REQUIRED", "targetHarness is required", nil)
+		return
+	}
+	model := strings.TrimSpace(domain.SanitizeControlChars(in.Model))
+	if utf8.RuneCountInString(model) > maxModelLen {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "MODEL_TOO_LONG", "Model must be 256 characters or fewer", nil)
+		return
+	}
+	effort := strings.TrimSpace(domain.SanitizeControlChars(in.ReasoningEffort))
+	if len(effort) > 64 {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "REASONING_EFFORT_TOO_LONG", "reasoningEffort must be 64 characters or fewer", nil)
+		return
+	}
+	prewarmer.PrewarmAgentSwitch(sessionID(r), sessionsvc.SwitchAgentInput{
+		TargetHarness: targetHarness, Model: model, Effort: effort,
+	})
+	envelope.WriteJSON(w, http.StatusAccepted, PrewarmAgentSwitchResponse{TargetHarness: targetHarness})
 }
 
 func (c *SessionsController) listAgentSwitches(w http.ResponseWriter, r *http.Request) {
@@ -2227,6 +2289,64 @@ func (c *SessionsController) cancelTaskPreparation(w http.ResponseWriter, r *htt
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// standaloneTaskPreparer reserves a standalone session for a new chat page.
+type standaloneTaskPreparer interface {
+	PrepareStandaloneTask(ctx context.Context) (string, error)
+}
+
+func (c *SessionsController) prepareStandaloneTask(w http.ResponseWriter, r *http.Request) {
+	preparer, ok := c.Svc.(standaloneTaskPreparer)
+	if c.Svc == nil || !ok {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/task-preparations")
+		return
+	}
+	token, err := preparer.PrepareStandaloneTask(r.Context())
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusAccepted, PrepareTaskResponse{OK: true, TaskPreparation: token})
+}
+
+// taskAgentPrewarmer starts a new-chat page's agent in its task preparation.
+type taskAgentPrewarmer interface {
+	PrewarmTaskAgent(token string, in sessionsvc.PrewarmTaskAgentInput)
+}
+
+// prewarmTaskAgent starts the agent a new-chat page has selected in the task
+// preparation's worktree, without a provider session, so the send adopts it.
+// It returns before the agent is ready.
+func (c *SessionsController) prewarmTaskAgent(w http.ResponseWriter, r *http.Request) {
+	prewarmer, ok := c.Svc.(taskAgentPrewarmer)
+	if c.Svc == nil || !ok {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/task-preparations/{token}/agent")
+		return
+	}
+	var in PrewarmTaskAgentRequest
+	if err := decodeJSONStrict(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	agent := domain.AgentHarness(strings.TrimSpace(string(in.Agent)))
+	if agent == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "AGENT_REQUIRED", "agent is required", nil)
+		return
+	}
+	model := domain.SanitizeControlChars(strings.TrimSpace(in.Model))
+	if utf8.RuneCountInString(model) > maxModelLen {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "MODEL_TOO_LONG", "Model must be 256 characters or fewer", nil)
+		return
+	}
+	if in.ApprovalMode != "" && !in.ApprovalMode.Valid() {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_APPROVAL_MODE", "approvalMode is invalid", nil)
+		return
+	}
+	prewarmer.PrewarmTaskAgent(chi.URLParam(r, "token"), sessionsvc.PrewarmTaskAgentInput{
+		Agent: agent, Model: model, Effort: sanitizedOptionalString(in.Effort), ApprovalMode: in.ApprovalMode,
+	})
+	envelope.WriteJSON(w, http.StatusAccepted, PrewarmTaskAgentResponse{Agent: agent})
 }
 
 func sanitizedOptionalString(value *string) *string {

@@ -56,9 +56,7 @@ func TestConfigureWritesManagedStandingRuleForStartAndResume(t *testing.T) {
 	if len(args) != 3 || args[0] != "--plugin-dir" || args[2] != "acp" || !filepath.IsAbs(args[1]) {
 		t.Fatalf("args = %#v, want --plugin-dir <absolute-path> acp", args)
 	}
-	if env != nil {
-		t.Fatalf("env = %#v, want nil", env)
-	}
+	assertNetPreload(t, dataDir, env["NODE_OPTIONS"])
 	rulePath := filepath.Join(args[1], "rules", "ao-standing.mdc")
 	rule, err := os.ReadFile(rulePath)
 	if err != nil {
@@ -88,6 +86,52 @@ func TestConfigureWritesManagedStandingRuleForStartAndResume(t *testing.T) {
 	}
 	if !strings.Contains(string(rule), cfg.SystemPrompt) || strings.Contains(string(rule), "instructions for start") {
 		t.Fatalf("resumed managed rule = %q", rule)
+	}
+}
+
+func assertNetPreload(t *testing.T, dataDir, nodeOptions string) {
+	t.Helper()
+	const prefix = `--require "`
+	start := strings.LastIndex(nodeOptions, prefix)
+	if start < 0 || !strings.HasSuffix(nodeOptions, `"`) {
+		t.Fatalf("NODE_OPTIONS = %q, want it to require the Cursor preload", nodeOptions)
+	}
+	path := filepath.FromSlash(nodeOptions[start+len(prefix) : len(nodeOptions)-1])
+	if filepath.Dir(path) != filepath.Join(dataDir, "cursor") {
+		t.Fatalf("preload path = %q, want it under %q", path, filepath.Join(dataDir, "cursor"))
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read preload: %v", err)
+	}
+	if string(body) != string(netPreload) {
+		t.Fatal("preload on disk differs from the embedded preload")
+	}
+}
+
+func TestConfigureKeepsInheritedNodeOptions(t *testing.T) {
+	t.Setenv("NODE_OPTIONS", "")
+	dataDir := t.TempDir()
+	_, env, err := configure(context.Background(), acpdriver.LaunchConfig{
+		DataDir: dataDir,
+		Env:     map[string]string{"NODE_OPTIONS": "--max-old-space-size=4096"},
+	})
+	if err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	got := env["NODE_OPTIONS"]
+	if !strings.HasPrefix(got, "--max-old-space-size=4096 --require ") {
+		t.Fatalf("NODE_OPTIONS = %q, want the inherited options kept ahead of the preload", got)
+	}
+	assertNetPreload(t, dataDir, got)
+
+	// A second launch reuses the same content-named file.
+	_, again, err := configure(context.Background(), acpdriver.LaunchConfig{DataDir: dataDir})
+	if err != nil {
+		t.Fatalf("configure again: %v", err)
+	}
+	if !strings.HasSuffix(got, again["NODE_OPTIONS"]) {
+		t.Fatalf("second NODE_OPTIONS = %q, want the same preload as %q", again["NODE_OPTIONS"], got)
 	}
 }
 
@@ -303,5 +347,23 @@ func TestSessionOptionsMapOnlyAdvertisedModel(t *testing.T) {
 	}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("options = %#v, want only provider-advertised model option %#v", got, want)
+	}
+}
+
+func TestStandingRuleLeavesOutSwitchHandoff(t *testing.T) {
+	dataDir := t.TempDir()
+	args, _, err := configure(context.Background(), acpdriver.LaunchConfig{
+		SessionID: "worker-1", DataDir: dataDir,
+		SystemPrompt: "AO standing\n\n<ao-continuation switch-id=s1>transcript with secrets</ao-continuation>",
+	})
+	if err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	rule, err := os.ReadFile(filepath.Join(args[1], "rules", "ao-standing.mdc"))
+	if err != nil {
+		t.Fatalf("read rule: %v", err)
+	}
+	if !strings.Contains(string(rule), "AO standing") || strings.Contains(string(rule), "transcript with secrets") {
+		t.Fatalf("rule = %q, want standing instructions without the handoff", rule)
 	}
 }

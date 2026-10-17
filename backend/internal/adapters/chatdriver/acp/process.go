@@ -7,6 +7,7 @@ import (
 	"io"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
@@ -15,10 +16,14 @@ import (
 )
 
 type process struct {
-	stdin       io.WriteCloser
-	stdout      io.Reader
-	stop        func() error
-	terminate   func() error
+	stdin     io.WriteCloser
+	stdout    io.Reader
+	stop      func() error
+	terminate func() error
+	// quickStop records that the provider gains nothing from the stdin grace
+	// at stop: it answered session/close, or it never exits on stdin closing.
+	// A persistent host then signals it sooner.
+	quickStop   atomic.Bool
 	reconnected bool
 	gate        *gatedReader
 	acpState    *persistenthost.ACPState
@@ -112,7 +117,8 @@ func persistentStop(gate *gatedReader, stdin io.WriteCloser) func() error {
 func persistentTerminate(
 	gate *gatedReader,
 	stdin io.WriteCloser,
-	shutdown func(context.Context) error,
+	quickStop *atomic.Bool,
+	shutdown func(ctx context.Context, quick bool) error,
 ) func() error {
 	var once sync.Once
 	var result error
@@ -122,7 +128,7 @@ func persistentTerminate(
 			_ = stdin.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			result = shutdown(ctx)
+			result = shutdown(ctx, quickStop.Load())
 		})
 		return result
 	}

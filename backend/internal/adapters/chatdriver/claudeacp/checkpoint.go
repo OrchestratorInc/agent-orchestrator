@@ -22,6 +22,23 @@ type checkpointDriver struct {
 	plugin claudePlugin
 }
 
+var _ ports.ChatStandbyDriver = (*checkpointDriver)(nil)
+
+// SupportsStandby and Prewarm forward to the wrapped driver, which embedding
+// ports.ChatDriver would otherwise hide.
+func (d *checkpointDriver) SupportsStandby() bool {
+	standby, ok := d.ChatDriver.(ports.ChatStandbyDriver)
+	return ok && standby.SupportsStandby()
+}
+
+func (d *checkpointDriver) Prewarm(ctx context.Context, cfg ports.ChatStartConfig) (ports.ChatStandby, error) {
+	standby, ok := d.ChatDriver.(ports.ChatStandbyDriver)
+	if !ok {
+		return nil, fmt.Errorf("%w: claude-code has no standby support", ports.ErrChatUnsupported)
+	}
+	return standby.Prewarm(ctx, cfg)
+}
+
 // Reconnect forwards to the wrapped driver. Embedding ports.ChatDriver exposes
 // only that interface's methods, so without this the startup health check never
 // finds a reconnector and marks every live Claude chat as exited.

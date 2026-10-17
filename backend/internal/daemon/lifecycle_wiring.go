@@ -673,6 +673,17 @@ func (c chatLauncher) StartChat(ctx context.Context, cfg sessionmanager.ChatStar
 	return c.svc.StartChat(ctx, cfg)
 }
 
+func (c chatLauncher) SupportsChatStandby(harness domain.AgentHarness) bool {
+	return c.svc.SupportsChatStandby(harness)
+}
+
+func (c chatLauncher) PrewarmChatStandby(ctx context.Context, cfg sessionmanager.ChatStart) (ports.ChatStandby, error) {
+	if err := c.waitForPersistentHostReconcile(ctx); err != nil {
+		return nil, err
+	}
+	return c.svc.PrewarmChatStandby(ctx, cfg)
+}
+
 func (c chatLauncher) RunBackgroundTask(ctx context.Context, harness domain.AgentHarness, cfg ports.ChatStartConfig, prompt string) (string, error) {
 	return c.svc.RunBackgroundTask(ctx, harness, cfg, prompt)
 }
@@ -687,6 +698,22 @@ func (c chatLauncher) StartChatTurn(ctx context.Context, id domain.SessionID, te
 
 func (c chatLauncher) RelaySessionChatTurn(ctx context.Context, id domain.SessionID, text, clientMessageID string, options ports.MessageDeliveryOptions) (string, error) {
 	return c.svc.RelaySessionChatTurn(ctx, id, text, clientMessageID, options)
+}
+
+func (c chatLauncher) SendSessionChatMessage(ctx context.Context, id domain.SessionID, msg ports.ChatUserMessage) (string, error) {
+	turn, err := c.svc.Send(ctx, id, msg)
+	if err != nil {
+		return "", err
+	}
+	return turn.ID, nil
+}
+
+func (c chatLauncher) ChatTranscriptExcerpt(ctx context.Context, id domain.SessionID, maxBytes int, markers []sessionmanager.ChatTranscriptMarker) (string, bool, error) {
+	converted := make([]chatsvc.TranscriptMarker, 0, len(markers))
+	for _, marker := range markers {
+		converted = append(converted, chatsvc.TranscriptMarker{At: marker.At, Text: marker.Text})
+	}
+	return c.svc.TranscriptExcerpt(ctx, id, maxBytes, converted)
 }
 
 func (c chatLauncher) QueueChatPrompt(ctx context.Context, id domain.SessionID, text string) (string, error) {
