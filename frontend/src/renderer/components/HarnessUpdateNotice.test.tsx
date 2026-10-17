@@ -552,7 +552,7 @@ describe("harness updates while sessions run", () => {
 	it("keeps a finished update busy until its advisory has refreshed", async () => {
 		const refresh = deferred<void>();
 		const post = vi.mocked(apiClient.POST);
-		const original = post.getMockImplementation()!;
+		const original = post.getMockImplementation() as unknown as (path: unknown, options: unknown) => Promise<never>;
 		post.mockImplementation(async (path, options) => {
 			if (path === "/api/v1/agents/readiness/ensure") await refresh.promise;
 			return original(path, options);
