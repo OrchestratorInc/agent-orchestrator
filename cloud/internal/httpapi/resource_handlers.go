@@ -84,12 +84,13 @@ type projectResponse struct {
 }
 
 type createSessionRequest struct {
-	ProjectID   string `json:"projectId"`
-	Kind        string `json:"kind"`
-	Harness     string `json:"harness"`
-	DisplayName string `json:"displayName"`
-	Prompt      string `json:"prompt"`
-	Mode        string `json:"mode,omitempty"`
+	ProjectID     string `json:"projectId"`
+	Kind          string `json:"kind"`
+	Harness       string `json:"harness"`
+	DisplayName   string `json:"displayName"`
+	Prompt        string `json:"prompt"`
+	Mode          string `json:"mode,omitempty"`
+	InterfaceMode string `json:"interfaceMode,omitempty"`
 	// Model is the coding-agent model the session launches with (harness-native
 	// id, e.g. "anthropic/claude-opus-4-8" for opencode). Optional: empty uses
 	// the harness default.
@@ -494,13 +495,24 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	request.Harness = strings.TrimSpace(request.Harness)
 	request.DisplayName = strings.TrimSpace(request.DisplayName)
 	request.Mode = strings.TrimSpace(request.Mode)
+	request.InterfaceMode = strings.TrimSpace(request.InterfaceMode)
 	request.SandboxProviderConnectionID = strings.TrimSpace(request.SandboxProviderConnectionID)
 	request.Provider = strings.ToLower(strings.TrimSpace(request.Provider))
 	if request.Mode == "" {
 		request.Mode = "trusted"
 	}
+	if request.InterfaceMode == "" {
+		request.InterfaceMode = string(domain.SessionInterfaceTUI)
+	}
 	if !validSessionInput(request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Session project, kind, harness, name, or prompt is invalid.")
+		return
+	}
+	if request.InterfaceMode == string(domain.SessionInterfaceChat) && !s.interfaceTransitionSupported(request.Harness) {
+		writeError(
+			w, r, http.StatusUnprocessableEntity, "INTERFACE_MODE_UNSUPPORTED",
+			request.Harness+" does not support the Chat interface in Cloud.",
+		)
 		return
 	}
 	if !supportedInteractivePolicy(request) {
@@ -670,6 +682,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			Model:               request.Model,
 			ReasoningEffort:     request.ReasoningEffort,
 			DeniedCommands:      request.DeniedCommands,
+			Interface:           domain.SessionInterface(request.InterfaceMode),
 			Provider:            plan.Provider,
 			SandboxConnectionID: request.SandboxProviderConnectionID,
 			ResourceProfile:     plan.ResourceProfile,
@@ -1257,6 +1270,7 @@ func validSessionInput(request createSessionRequest) bool {
 	if requireUUID(request.ProjectID, "projectId") != nil ||
 		(request.Kind != "worker" && request.Kind != "orchestrator") ||
 		(request.Mode != "read-only" && request.Mode != "standard" && request.Mode != "trusted") ||
+		(request.InterfaceMode != "" && !domain.SessionInterface(request.InterfaceMode).Valid()) ||
 		len(request.Harness) < 1 || len(request.Harness) > 120 ||
 		// Count runes, not bytes: the renderer derives this name from the task
 		// brief with a 100-CHARACTER slice, so a byte cap would reject a valid

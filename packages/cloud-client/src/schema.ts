@@ -2484,6 +2484,8 @@ export interface components {
             prompt: string;
             /** @default trusted */
             mode: components["schemas"]["SessionMode"];
+            /** @description The initial interface. Omitted defaults to tui. */
+            interfaceMode?: components["schemas"]["SessionInterfaceMode"];
             /** @description Coding-agent model the session launches with (harness-native id, e.g. "anthropic/claude-opus-4-8"). Optional; empty uses the harness default. */
             model?: string;
             /** @default [] */

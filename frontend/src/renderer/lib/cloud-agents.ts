@@ -8,6 +8,11 @@ import type { CloudCpProviderConnection } from "./cloud-cp";
  * local's full AGENT_OPTIONS list, cloud has no "install" step, so any
  * unlisted agent would just be a dead end. */
 export const CLOUD_AGENT_PROVIDERS = ["claude-code", "codex", "cursor", "opencode"] as const;
+export const CLOUD_CHAT_AGENT_PROVIDERS = ["claude-code", "codex", "cursor"] as const;
+
+export function isCloudChatHarness(provider: string): boolean {
+	return (CLOUD_CHAT_AGENT_PROVIDERS as readonly string[]).includes(provider);
+}
 
 /** A cloud session has no local daemon project, yet its opencode model picker
  * must reflect the models the *pushed* credential can run — opencode lists a

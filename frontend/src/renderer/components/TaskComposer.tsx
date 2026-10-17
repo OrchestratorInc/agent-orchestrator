@@ -26,7 +26,7 @@ import { useOfferedModels } from "../hooks/useOfferedModels";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useProviderConnections } from "../hooks/useProviderConnections";
-import { cloudAgentInfos, connectedCredentialType, credentialModelScope, isCloudHarnessConnected } from "../lib/cloud-agents";
+import { cloudAgentInfos, connectedCredentialType, credentialModelScope, isCloudChatHarness, isCloudHarnessConnected } from "../lib/cloud-agents";
 import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../lib/agent-model-choices";
 import { fallbackEffort } from "../lib/effort";
 import {
@@ -186,15 +186,20 @@ export function TaskComposer({
 			try {
 				// No provider: the control plane runs the session on the project's
 				// stored provider (config.sandboxProvider), else the org's default.
-				const { session } = await cloudClient.createSession(cloudOrg.id, {
-					projectId: input.projectId,
-					kind: "worker",
-					harness: input.agent ?? "claude-code",
-					displayName: input.brief.trim().slice(0, 100) || (input.agent ?? "claude-code"),
-					prompt: input.brief,
-					...(input.model ? { model: input.model } : {}),
-					...(input.effort ? { reasoningEffort: input.effort } : {}),
-				});
+				const { session } = await cloudClient.createSession(
+					cloudOrg.id,
+					{
+						projectId: input.projectId,
+						kind: "worker",
+						harness: input.agent ?? "claude-code",
+						displayName: input.brief.trim().slice(0, 100) || (input.agent ?? "claude-code"),
+						prompt: input.brief,
+						...(input.model ? { model: input.model } : {}),
+						...(input.effort ? { reasoningEffort: input.effort } : {}),
+						...(input.mode ? { interfaceMode: input.mode } : {}),
+					},
+					{ idempotencyKey: input.clientRequestId },
+				);
 				// The control plane provisions the sandbox asynchronously; surface the
 				// new session on the board immediately.
 				void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
@@ -546,7 +551,7 @@ export function TaskComposer({
 	const requiresTuiFallback =
 		selectedAgent !== "" &&
 		settings?.defaultSessionMode === "chat" &&
-		!settings.chatHarnesses.includes(selectedAgent);
+		!(isCloudProject ? isCloudChatHarness(selectedAgent) : settings.chatHarnesses.includes(selectedAgent));
 	// With no provider default for the reported levels AO picks one, shows it as
 	// selected, and sends it, so the picker matches what the task runs with.
 	const aoDefaultEffort = requiresTuiFallback ? undefined : fallbackEffort(effortOptions, implicitEffort);
@@ -573,6 +578,7 @@ export function TaskComposer({
 	const canSubmit =
 		hostConnected &&
 		Boolean(projectId) &&
+		(!isCloudProject || settings !== undefined) &&
 		(!isStandalone || selectedAgent !== "") &&
 		(!hostId || Boolean(agentCatalog?.agents.some((candidate) => candidate.id === selectedAgent && isLaunchableAgent(candidate)))) &&
 		(isCloudProject || isStandalone || projectQuery.data !== undefined) &&
@@ -813,7 +819,7 @@ export function TaskComposer({
 					void (fallbackAction === "bypass-permissions"
 						? submitTask(brief, selectedAgent === "unreal-agent" ? "chat" : undefined, "bypass-permissions")
 						: submitTask(brief, "tui")),
-				onSubmit: (brief) => void submitTask(brief, selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined),
+				onSubmit: (brief) => void submitTask(brief, selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : isCloudProject ? settings?.defaultSessionMode : undefined),
 			}}
 			renderAgentControl={(control) => <DesktopAgentControl {...control} hostId={hostId} manageView={isCloudProject ? "cloud" : "local"} />}
 			renderEffortControl={(control) => <TaskEffortPicker {...control} value={control.value || cloudDefaultEffort} defaultEffort={inheritedEffort || effortModel?.defaultEffort} availability={effortAvailability} />}

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +67,46 @@ func TestCreateSessionPreservesInitialEffort(t *testing.T) {
 	}
 	if launch.ReasoningEffort != "medium" {
 		t.Fatalf("launch effort = %q, want medium", launch.ReasoningEffort)
+	}
+}
+
+func TestCreateSessionRetryPreservesInitialChatInterfaceWithoutDuplication(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	key := "create-chat-" + uuid.NewString()
+	input := domain.CreateSession{
+		ProjectID: fixture.projectID, Kind: "worker", Harness: "claude-code", DisplayName: "Chat task",
+		Prompt: "hello", Provider: "docker", Interface: domain.SessionInterfaceChat,
+	}
+	first, err := store.CreateSession(ctx, principal, fixture.orgID, key, 10, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.CreateSession(ctx, principal, fixture.orgID, key, 10, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != first.ID || second.Interface != domain.SessionInterfaceChat {
+		t.Fatalf("retry session = (%q, %q), want (%q, %q)", second.ID, second.Interface, first.ID, domain.SessionInterfaceChat)
+	}
+	var count int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM ao_sessions WHERE org_id = $1 AND id = $2`, fixture.orgID, first.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("session rows = %d, want 1", count)
+	}
+	input.Interface = domain.SessionInterfaceTUI
+	if _, err := store.CreateSession(ctx, principal, fixture.orgID, key, 10, input); !errors.Is(err, ErrIdempotencyMismatch) {
+		t.Fatalf("changed retry error = %v, want ErrIdempotencyMismatch", err)
+	}
+	launch, err := store.WorkerLaunchSpec(ctx, fixture.orgID, first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if launch.Interface != domain.SessionInterfaceChat {
+		t.Fatalf("launch interface = %q, want chat", launch.Interface)
 	}
 }
 
