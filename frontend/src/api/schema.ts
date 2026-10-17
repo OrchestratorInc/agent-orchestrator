@@ -6727,6 +6727,7 @@ export interface components {
             sessionId: string;
         };
         WorkspaceRepo: {
+            defaultBranch?: string;
             gitStatus?: string;
             name: string;
             relativePath: string;

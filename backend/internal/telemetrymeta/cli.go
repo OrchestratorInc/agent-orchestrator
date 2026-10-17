@@ -29,6 +29,7 @@ var routineInternalCLICommands = []string{
 	"ao session handoff",
 	"ao project ls",
 	"ao project get",
+	"ao project repos",
 	"ao orchestrator ls",
 	"ao hooks",
 	"ao pty-host",
