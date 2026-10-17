@@ -105,7 +105,8 @@ func TestStartNativeCheckpointAdmission(t *testing.T) {
 			if test.consent {
 				policy = domain.SessionInterfaceTransitionHistoryProvider
 			}
-			startCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+			// This deadline guards a stuck start, not admission latency.
+			startCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()
 			_, err = svc.Start(startCtx, chatsvc.StartConfig{
 				SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),

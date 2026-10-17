@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -56,23 +57,31 @@ func (s *changedExcerptStore) TurnByID(ctx context.Context, id string) (domain.C
 	return turn, err
 }
 
-func (s *changedExcerptStore) NextQueuedTurn(ctx context.Context, id string) (domain.QueuedTurn, error) {
-	queued, err := s.Store.NextQueuedTurn(ctx, id)
-	if err != nil || !s.changed.Load() || s.mode != "invalid" || queued.DeliveryContentJSON == "" {
-		return queued, err
+func (s *changedExcerptStore) ListQueuedBatch(ctx context.Context, id string, limit int) ([]domain.QueuedTurn, error) {
+	batch, err := s.Store.ListQueuedBatch(ctx, id, limit)
+	if err != nil || !s.changed.Load() || s.mode != "invalid" {
+		return batch, err
 	}
-	var content []ports.ChatContent
-	if err := json.Unmarshal([]byte(queued.DeliveryContentJSON), &content); err != nil {
-		return queued, err
-	}
-	for i := range content {
-		if content[i].Excerpt != nil {
-			content[i].Excerpt.Reference.ConversationID = "another-conversation"
+	for j := range batch {
+		if batch[j].DeliveryContentJSON == "" {
+			continue
+		}
+		var content []ports.ChatContent
+		if err := json.Unmarshal([]byte(batch[j].DeliveryContentJSON), &content); err != nil {
+			return batch, err
+		}
+		for i := range content {
+			if content[i].Excerpt != nil {
+				content[i].Excerpt.Reference.ConversationID = "another-conversation"
+			}
+		}
+		encoded, err := json.Marshal(content)
+		batch[j].DeliveryContentJSON = string(encoded)
+		if err != nil {
+			return batch, err
 		}
 	}
-	encoded, err := json.Marshal(content)
-	queued.DeliveryContentJSON = string(encoded)
-	return queued, err
+	return batch, nil
 }
 
 func TestQueuedExcerptValidationFailureContinuesDrain(t *testing.T) {
@@ -115,7 +124,7 @@ func TestQueuedExcerptValidationFailureContinuesDrain(t *testing.T) {
 				t.Fatalf("excerpt state = %s, want queued", stale.State)
 			}
 			send("next valid")
-			send("last valid")
+			last := send("last valid")
 			changed.changed.Store(true)
 			h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted,
 				ProviderTurnID: active.ProviderTurnID, TurnState: domain.TurnStateCompleted})
@@ -123,35 +132,32 @@ func TestQueuedExcerptValidationFailureContinuesDrain(t *testing.T) {
 				states := turnStateByText(t, s)
 				return states["stale excerpt"] == domain.TurnStateFailed && states["next valid"] == domain.TurnStateRunning
 			})
-			if turnStateByText(t, snapshot)["last valid"] != domain.TurnStateQueued {
-				t.Fatal("drain dispatched more than one valid turn")
+			lastTurn, err := h.st.TurnByID(ctx, last.ID)
+			if err != nil || lastTurn.State != domain.TurnStateCompleted {
+				t.Fatalf("last queued message did not join the batch: turn=%+v err=%v", lastTurn, err)
 			}
 			for _, turn := range snapshot.Turns {
-				if turn.ID == stale.ID && turn.ErrorMessage != "chat excerpt is stale" {
+				if turn.ID == stale.ID && !strings.Contains(turn.ErrorMessage, "chat excerpt") {
 					t.Fatalf("failure reason = %q", turn.ErrorMessage)
 				}
 			}
 			h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted,
 				ProviderTurnID: "provider-turn-3", TurnState: domain.TurnStateCompleted})
-			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-				return turnStateByText(t, s)["last valid"] == domain.TurnStateRunning
-			})
-			h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted,
-				ProviderTurnID: "provider-turn-4", TurnState: domain.TurnStateCompleted})
 			snapshot = h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-				return turnStateByText(t, s)["last valid"] == domain.TurnStateCompleted
+				return turnStateByText(t, s)["next valid"] == domain.TurnStateCompleted
 			})
 			if turnStateByText(t, snapshot)["stale excerpt"] != domain.TurnStateFailed {
 				t.Fatal("later drains retried the stale turn")
 			}
-			if got := h.conv.sentTexts(); !reflect.DeepEqual(got, []string{"seed", "active", "next valid", "last valid"}) {
+			if got := h.conv.sentTexts(); len(got) != 3 ||
+				!reflect.DeepEqual([]string{parseDeliveredBatch(t, got[2])[0].Text, parseDeliveredBatch(t, got[2])[1].Text}, []string{"next valid", "last valid"}) {
 				t.Fatalf("provider sends = %v", got)
 			}
 		})
 	}
 }
 
-func TestQueuedProviderDispatchFailureStopsDrain(t *testing.T) {
+func TestQueuedProviderDispatchFailureFailsClaimedBatchOnce(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	for _, text := range []string{"active", "provider failure", "still queued"} {
@@ -169,8 +175,8 @@ func TestQueuedProviderDispatchFailureStopsDrain(t *testing.T) {
 	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		return turnStateByText(t, s)["provider failure"] == domain.TurnStateFailed
 	})
-	if turnStateByText(t, snapshot)["still queued"] != domain.TurnStateQueued {
-		t.Fatal("provider failure settled an unrelated queued message")
+	if turnStateByText(t, snapshot)["still queued"] != domain.TurnStateFailed {
+		t.Fatal("provider failure did not preserve the second batch member as failed")
 	}
 	if got := h.conv.sendCallCount(); got != 2 {
 		t.Fatalf("provider calls = %d, want initial send and one failed dispatch", got)
