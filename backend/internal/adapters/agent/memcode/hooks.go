@@ -13,12 +13,32 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hooksjson"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 var component = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+const maxInstructionChunks = 64
+
+var memcodeHooks = hooksjson.Manager{
+	Label: "memcode", Flat: true, CommandPrefix: "ao hooks memcode ",
+	LegacyCommandPrefixes: []string{"ao hooks memcode "}, Timeout: 30,
+	Path: func(workspace string) string { return filepath.Join(workspace, ".memcode", "hooks.json") },
+	Managed: func() []hooksjson.HookSpec {
+		// Memcode truncates each hook's stdout at 8 KiB. Stable slots preserve
+		// that bound without letting sessions sharing a workspace change each
+		// other's hook list. Unused slots emit nothing.
+		specs := []hooksjson.HookSpec{{Event: "session_start", Command: "ao hooks memcode session-start"}}
+		for i := 1; i < maxInstructionChunks; i++ {
+			specs = append(specs, hooksjson.HookSpec{Event: "session_start", Command: fmt.Sprintf("ao hooks memcode context-chunk-%d", i)})
+		}
+		return append(specs, hooksjson.HookSpec{Event: "pre_tool_use", Command: "ao hooks memcode pre-tool-use"},
+			hooksjson.HookSpec{Event: "post_tool_use"}) // remove the formerly installed no-op hook
+	}(),
+}
 
 type witness struct {
 	Generation      string `json:"generation"`
@@ -103,6 +123,9 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if !component.MatchString(cfg.SessionID) {
 		return errors.New("invalid AO session identity")
 	}
+	if cfg.Config.Model != "" && cfg.Env["MEMCODE_ENDPOINT_URL"] != "" {
+		return errors.New("memcode custom endpoint models must be selected in the native TUI")
+	}
 	instructions := []byte(cfg.SystemPrompt)
 	if cfg.SystemPromptFile != "" {
 		b, err := os.ReadFile(cfg.SystemPromptFile)
@@ -118,75 +141,35 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if err != nil {
 		return err
 	}
-	if len(chunks) > 64 {
+	if len(chunks) > maxInstructionChunks {
 		return errors.New("memcode private instruction chunk count exceeds bounded limit")
 	}
 	private := filepath.Join(cfg.DataDir, "agent-launches", "memcode", cfg.SessionID)
 	if err := os.MkdirAll(private, 0o700); err != nil {
 		return err
 	}
-	for i, chunk := range chunks {
-		if err := hookutil.AtomicWriteFile(filepath.Join(private, fmt.Sprintf("instructions-%d.txt", i)), chunk, 0o600); err != nil {
-			return err
-		}
-	}
-	dir := filepath.Join(cfg.WorkspacePath, ".memcode")
-	path := filepath.Join(dir, "hooks.json")
-	var config map[string]json.RawMessage
-	b, err := os.ReadFile(path)
-	if err == nil {
-		if err := json.Unmarshal(b, &config); err != nil {
-			return err
-		}
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	if config == nil {
-		config = map[string]json.RawMessage{}
-	}
-	hooks := map[string][]map[string]json.RawMessage{}
-	if b := config["hooks"]; len(b) > 0 {
-		if err := json.Unmarshal(b, &hooks); err != nil {
-			return err
-		}
-	}
-	if hooks == nil {
-		hooks = map[string][]map[string]json.RawMessage{}
-	}
-	for native, event := range map[string]string{"session_start": "session-start", "pre_tool_use": "pre-tool-use", "post_tool_use": "post-tool-use"} {
-		entries := hooks[native][:0]
-		for _, entry := range hooks[native] {
-			var command string
-			_ = json.Unmarshal(entry["command"], &command)
-			if !strings.Contains(command, "ao hooks memcode ") {
-				entries = append(entries, entry)
-			}
-		}
-		command, _ := json.Marshal("ao hooks memcode " + event)
-		entries = append(entries, map[string]json.RawMessage{"command": command, "timeout": json.RawMessage("2")})
-		if native == "session_start" {
-			for i := 1; i < len(chunks); i++ {
-				command, _ := json.Marshal(fmt.Sprintf("ao hooks memcode context-chunk-%d", i))
-				entries = append(entries, map[string]json.RawMessage{"command": command, "timeout": json.RawMessage("2")})
-			}
-		}
-		hooks[native] = entries
-	}
-	config["hooks"], err = json.Marshal(hooks)
+	// One atomic snapshot also prevents stale chunks after a shorter reprepare.
+	b, err := json.Marshal(chunks)
 	if err != nil {
 		return err
 	}
-	b, err = json.MarshalIndent(config, "", "  ")
-	if err != nil {
+	if err := hookutil.AtomicWriteFile(filepath.Join(private, "instructions.json"), b, 0o600); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := memcodeHooks.Install(ctx, cfg.WorkspacePath); err != nil {
 		return err
 	}
-	if err := hookutil.AtomicWriteFile(path, b, 0o600); err != nil {
-		return fmt.Errorf("memcode hooks: %w", err)
-	}
-	return hookutil.EnsureWorkspaceGitignore(dir, "hooks.json", "sessions/")
+	return hookutil.EnsureWorkspaceGitignore(filepath.Join(cfg.WorkspacePath, ".memcode"), "hooks.json", "sessions/")
+}
+
+// UninstallHooks removes AO commands without affecting another session's private context.
+func (*Plugin) UninstallHooks(ctx context.Context, workspace string) error {
+	return memcodeHooks.Uninstall(ctx, workspace)
+}
+
+// AreHooksInstalled reports whether the workspace has AO-managed hooks.
+func (*Plugin) AreHooksInstalled(ctx context.Context, workspace string) (bool, error) {
+	return memcodeHooks.AreInstalled(ctx, workspace)
 }
 
 // CleanupWorkspace removes only the private launch artifacts owned by the
@@ -251,22 +234,29 @@ func instructionChunks(data []byte) ([][]byte, error) {
 // EmitInstructionChunk emits one bounded private native context hook.
 func EmitInstructionChunk(out io.Writer, event string) error {
 	index, err := strconv.Atoi(strings.TrimPrefix(event, "context-chunk-"))
-	if err != nil || index < 0 || index > 63 {
+	if err != nil || index < 0 || index >= maxInstructionChunks {
 		return errors.New("invalid memcode context chunk")
 	}
 	data, session := os.Getenv("AO_MEMCODE_DATA_DIR"), os.Getenv("AO_MEMCODE_SESSION")
 	if !component.MatchString(session) || !filepath.IsAbs(data) {
 		return errors.New("invalid private memcode context location")
 	}
-	file, err := os.Open(filepath.Join(data, "agent-launches", "memcode", session, fmt.Sprintf("instructions-%d.txt", index)))
+	file, err := os.Open(filepath.Join(data, "agent-launches", "memcode", session, "instructions.json"))
 	if err != nil {
 		return err
 	}
 	defer func() { _ = file.Close() }()
-	content, err := io.ReadAll(io.LimitReader(file, 8193))
-	if err != nil {
+	var chunks [][]byte
+	if err := json.NewDecoder(io.LimitReader(file, 1<<20)).Decode(&chunks); err != nil {
 		return err
 	}
+	if len(chunks) == 0 || len(chunks) > maxInstructionChunks {
+		return errors.New("invalid memcode instruction chunk count")
+	}
+	if index >= len(chunks) {
+		return nil
+	}
+	content := chunks[index]
 	if len(content) > 8192 {
 		return errors.New("memcode native hook chunk exceeds output limit")
 	}

@@ -345,7 +345,7 @@ func TestHooks_MemcodeReportsSessionChangesAfterRestore(t *testing.T) {
 	if err := os.MkdirAll(instructions, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(instructions, "instructions-0.txt"), []byte("context"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(instructions, "instructions.json"), []byte(`["Y29udGV4dA=="]`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg := setConfigEnv(t)

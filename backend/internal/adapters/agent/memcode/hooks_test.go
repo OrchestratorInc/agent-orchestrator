@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -39,7 +40,7 @@ func TestPrivateInstructionsAndWitnessPreserveUserHooks(t *testing.T) {
 	if err := json.Unmarshal(b, &config); err != nil {
 		t.Fatal(err)
 	}
-	if !config.Extra || len(config.Hooks["session_start"]) != 2 || len(config.Hooks["session_end"]) != 1 {
+	if !config.Extra || len(config.Hooks["session_start"]) != maxInstructionChunks+1 || len(config.Hooks["session_end"]) != 1 {
 		t.Fatal(string(b))
 	}
 	if bytes.Contains(b, []byte("PRIVATE")) {
@@ -99,7 +100,7 @@ func TestEmitStartWitnessCommitsOnlyAfterContextEmission(t *testing.T) {
 				if err := os.MkdirAll(dir, 0o700); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(filepath.Join(dir, "instructions-0.txt"), []byte("context"), 0o600); err != nil {
+				if err := os.WriteFile(filepath.Join(dir, "instructions.json"), []byte(`["Y29udGV4dA=="]`), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -142,7 +143,7 @@ func TestGetAgentHooksAcceptsNullHooks(t *testing.T) {
 	if err := json.Unmarshal(b, &config); err != nil {
 		t.Fatal(err)
 	}
-	if len(config.Hooks["session_start"]) != 1 || len(config.Hooks["pre_tool_use"]) != 1 || len(config.Hooks["post_tool_use"]) != 1 {
+	if len(config.Hooks["session_start"]) != maxInstructionChunks || len(config.Hooks["pre_tool_use"]) != 1 || len(config.Hooks["post_tool_use"]) != 0 {
 		t.Fatal(string(b))
 	}
 }
@@ -212,5 +213,108 @@ func TestInstructionChunksWalkBackPastIndentedBoundary(t *testing.T) {
 	}
 	if strings.Join(parts, "\n\n") != string(data) {
 		t.Fatal("walked-back split altered instruction text")
+	}
+}
+
+func TestSharedWorkspaceKeepsEachSessionsContext(t *testing.T) {
+	workspace, data := t.TempDir(), t.TempDir()
+	p := New()
+	long := strings.TrimSpace(strings.Repeat("private long paragraph\n\n", 1000))
+	for _, order := range [][]string{{long, "short"}, {"short", long}} {
+		for i, prompt := range order {
+			if err := p.GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{
+				DataDir: data, WorkspacePath: workspace, SessionID: fmt.Sprintf("ao-%d", i), SystemPrompt: prompt,
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for i, prompt := range order {
+			t.Setenv("AO_MEMCODE_DATA_DIR", data)
+			t.Setenv("AO_MEMCODE_SESSION", fmt.Sprintf("ao-%d", i))
+			var parts []string
+			for slot := 0; slot < maxInstructionChunks; slot++ {
+				var out bytes.Buffer
+				if err := EmitInstructionChunk(&out, fmt.Sprintf("context-chunk-%d", slot)); err != nil {
+					t.Fatal(err)
+				}
+				if out.Len() > 8192 {
+					t.Fatal("native per-hook output limit exceeded")
+				}
+				if text := strings.TrimSpace(out.String()); text != "" {
+					parts = append(parts, text)
+				}
+			}
+			if got := strings.Join(parts, "\n\n"); got != prompt {
+				t.Fatalf("session %d context changed after shared hook installation", i)
+			}
+		}
+	}
+}
+
+func TestHooksReconcileAndUninstallOnlyOwnedCommands(t *testing.T) {
+	workspace, data := t.TempDir(), t.TempDir()
+	dir := filepath.Join(workspace, ".memcode")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "hooks.json")
+	initial := `{"extra":true,"hooks":{"session_start":[{"command":"echo ao hooks memcode user-command","custom":true},{"command":"ao hooks memcode context-chunk-1","timeout":2}],"post_tool_use":[{"command":"ao hooks memcode post-tool-use"},{"command":"user-post","matcher":"Read"}]}}`
+	if err := os.WriteFile(path, []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := New()
+	if err := p.GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{
+		DataDir: data, WorkspacePath: workspace, SessionID: "ao-1", SystemPrompt: "context",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Extra bool `json:"extra"`
+		Hooks map[string][]struct {
+			Command string `json:"command"`
+			Timeout int    `json:"timeout"`
+			Custom  bool   `json:"custom"`
+			Matcher string `json:"matcher"`
+		} `json:"hooks"`
+	}
+	b, _ := os.ReadFile(path)
+	if err := json.Unmarshal(b, &config); err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Hooks["session_start"]) != maxInstructionChunks+1 || !config.Hooks["session_start"][0].Custom {
+		t.Fatal("user hook lost or old AO hooks duplicated")
+	}
+	for _, entry := range config.Hooks["session_start"][1:] {
+		if entry.Timeout < 30 {
+			t.Fatalf("startup hook timeout = %d, want at least 30s", entry.Timeout)
+		}
+	}
+	if len(config.Hooks["post_tool_use"]) != 1 || config.Hooks["post_tool_use"][0].Matcher != "Read" {
+		t.Fatal("no-op AO post-tool hook retained or user hook lost")
+	}
+	if installed, err := p.AreHooksInstalled(context.Background(), workspace); err != nil || !installed {
+		t.Fatal(installed, err)
+	}
+	if err := p.UninstallHooks(context.Background(), workspace); err != nil {
+		t.Fatal(err)
+	}
+	if installed, err := p.AreHooksInstalled(context.Background(), workspace); err != nil || installed {
+		t.Fatal(installed, err)
+	}
+	b, _ = os.ReadFile(path)
+	if !bytes.Contains(b, []byte("echo ao hooks memcode user-command")) || !bytes.Contains(b, []byte(`"extra": true`)) {
+		t.Fatal("uninstall removed user configuration")
+	}
+}
+
+func TestProjectEndpointRejectsAOModelOverride(t *testing.T) {
+	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), WorkspacePath: t.TempDir(), SessionID: "ao-1",
+		Config: ports.AgentConfig{Model: "opus"}, Env: map[string]string{"MEMCODE_ENDPOINT_URL": "http://127.0.0.1:11434/v1"}}
+	if err := New().GetAgentHooks(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "custom endpoint") {
+		t.Fatalf("project endpoint model override error = %v", err)
+	}
+	cfg.Config.Model = ""
+	if err := New().GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatalf("native model selection should remain available: %v", err)
 	}
 }

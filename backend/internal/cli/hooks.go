@@ -606,7 +606,7 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		return nil
 	}
 	var payload []byte
-	if agent == "memcode" || hookReadsStdin(agent, event) {
+	if hookReadsStdin(agent, event) {
 		var err error
 		payload, err = io.ReadAll(c.deps.In)
 		if err != nil {

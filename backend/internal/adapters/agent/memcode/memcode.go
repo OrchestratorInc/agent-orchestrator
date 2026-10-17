@@ -41,7 +41,9 @@ func (*Plugin) Manifest() adapters.Manifest {
 var binarySpec = binaryutil.BinarySpec{Label: "memcode", Names: []string{"memcode"}, WinNames: []string{"memcode.exe"}, UnixHomePaths: [][]string{{".local", "bin", "memcode"}}, ValidateIdentity: func(ctx context.Context, path string) bool {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	b, err := process.CommandContext(ctx, path, "--version").CombinedOutput()
+	cmd := process.CommandContext(ctx, path, "--version")
+	cmd.Env = append(os.Environ(), "MEMCODE_AUTO_UPDATE=off")
+	b, err := cmd.CombinedOutput()
 	return err == nil && strings.Contains(string(b), "memcode")
 }}
 
@@ -157,5 +159,19 @@ func (*Plugin) AfterStartCommand(ctx context.Context, cfg ports.LaunchConfig) (s
 // AfterStartCommandApplied confirms that Memcode accepted the requested native model.
 func (*Plugin) AfterStartCommandApplied(cfg ports.LaunchConfig, output string) bool {
 	model := cfg.Config.Model
-	return model != "" && emptyComposer(output) && strings.Contains(terminalui.PlainTerminalText(output), "model → "+model)
+	if model == "" || !emptyComposer(output) {
+		return false
+	}
+	// Only the newest confirmation in the current viewport is authoritative.
+	confirmed := ""
+	for _, line := range strings.Split(terminalui.PlainTerminalText(output), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "model → ") {
+			confirmed = ""
+			if fields := strings.Fields(strings.TrimPrefix(line, "model → ")); len(fields) > 0 {
+				confirmed = fields[0]
+			}
+		}
+	}
+	return confirmed == model
 }

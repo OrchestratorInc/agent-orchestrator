@@ -349,10 +349,6 @@ func (s *Service) modelCatalog(ctx context.Context, agentID, projectID string, r
 			return ports.AgentModelCatalog{}, err
 		}
 		if ok {
-			// Memcode's former empty catalog must be invalidated before serving it.
-			if agentID == "memcode" && s.modelCatalogInputsChanged(ctx, agentID, projectID, cached.BinaryVersion) {
-				return s.coalesceModelLoad(ctx, agentID, projectID, modelLoadCached)
-			}
 			// Claude provider model IDs are credential-scoped. The cache is served
 			// at once and its local discovery inputs are checked in the background;
 			// while that runs the catalog reports itself refreshing, so open views
