@@ -551,7 +551,7 @@ func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent
 		return successfulInstallation(attempted, domain.AgentInstallationUnknown, domain.AgentReadinessReasonInstallIdentityPending, item.Manifest.Name+" is present but its identity has not been confirmed."), false
 	}
 	if errors.Is(err, ports.ErrAgentBinaryLinuxOnly) {
-		return successfulInstallation(attempted, domain.AgentInstallationUnknown, domain.AgentReadinessReasonInstallCheckUnsupported, item.Manifest.Name+" is supported on Linux only."), false
+		return successfulInstallation(attempted, domain.AgentInstallationUnknown, domain.AgentReadinessReasonPlatformUnsupported, item.Manifest.Name+" is supported on Linux only."), false
 	}
 	if err == nil && path != "" {
 		return successfulInstallation(attempted, domain.AgentInstallationInstalled, domain.AgentReadinessReasonInstalled, item.Manifest.Name+" is installed."), false

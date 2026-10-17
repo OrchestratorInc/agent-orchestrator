@@ -87,7 +87,7 @@ export function describeHarness(input: HarnessDescribeInput) {
 	// Unknown inventory is not proof that installing is safe. Preserve the
 	// existing cached-readiness fallback when fetching the snapshot fails.
 	const installationPending = !input.readinessFailed && (input.readinessPending || readinessAgent?.installation.state === "unknown");
-	const unsupportedInstallation = readinessAgent?.installation.reasonCode === "install_check_unsupported"
+	const unsupportedInstallation = readinessAgent?.installation.reasonCode === "install_platform_unsupported"
 		? readinessAgent.installation.reason
 		: undefined;
 	const isSetupAction = authPlan?.action === "setup";

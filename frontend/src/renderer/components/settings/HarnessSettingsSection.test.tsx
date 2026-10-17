@@ -1914,9 +1914,13 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Check configuration" })).not.toBeInTheDocument();
 	});
 
-	it("shows a neutral unknown state without install controls before the first observation", async () => {
+	it.each(["not_checked", "install_check_unsupported"])("shows a neutral unknown state without install controls for %s", async (reasonCode) => {
 		const unknown = catalogWithInstalled();
 		unknown.agents[1].installation.state = "unknown";
+		unknown.agents[1].installation.reasonCode = reasonCode;
+		unknown.agents[1].installation.reason = reasonCode === "not_checked"
+			? "Installation has not been checked yet."
+			: "Installation checks are not supported for this harness.";
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: unknown } as never;
 			if (path === "/api/v1/agents/installers") return { data: plans } as never;
@@ -1928,6 +1932,7 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const row = await findAgentRow("codex");
 		expect(await within(row).findByText("Installation status unknown")).toBeInTheDocument();
+		expect(within(row).queryByText("Installation checks are not supported for this harness.")).not.toBeInTheDocument();
 		expect(within(row).queryByRole("button", { name: "Install" })).not.toBeInTheDocument();
 	});
 
@@ -1937,7 +1942,7 @@ describe("HarnessSettingsSection", () => {
 			...unsupported.agents[1],
 			id: "hermes",
 			label: "Hermes Agent",
-			installation: { ...unsupported.agents[1].installation, state: "unknown", reasonCode: "install_check_unsupported", reason: "Hermes Agent is supported on Linux only." },
+			installation: { ...unsupported.agents[1].installation, state: "unknown", reasonCode: "install_platform_unsupported", reason: "Hermes Agent is supported on Linux only." },
 			effectiveReadiness: "unknown",
 		});
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
