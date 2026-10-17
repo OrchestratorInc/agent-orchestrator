@@ -254,8 +254,11 @@ func (f *usageLimitDaemonFixture) trigger(session string, delay int) (usageLimit
 	result := usageLimitTriggerResult{SessionID: session}
 	var raw json.RawMessage
 	status, err := f.daemon.call("POST", "/sessions/"+session+"/conversation/messages", map[string]any{"text": marker, "clientMessageId": marker}, &raw)
-	if err != nil || status != http.StatusAccepted {
-		return result, fmt.Errorf("trigger status=%d error=%v response=%s", status, err, raw)
+	if err != nil {
+		return result, fmt.Errorf("trigger request: %w", err)
+	}
+	if status != http.StatusAccepted {
+		return result, fmt.Errorf("trigger status=%d response=%s", status, raw)
 	}
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return result, err

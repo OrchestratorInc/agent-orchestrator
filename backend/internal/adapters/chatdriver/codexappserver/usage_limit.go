@@ -102,9 +102,10 @@ func (u *usageLimitTracker) decorate(ev ports.ChatEvent, now time.Time) ports.Ch
 		if ev.Err == nil && ev.TurnState == domain.TurnStateFailed && ev.ProviderTurnID == u.failureTurnID {
 			ev.Err = u.failure
 		}
-		if ev.ProviderTurnID == u.turnID {
+		switch ev.ProviderTurnID {
+		case u.turnID:
 			*u = usageLimitTracker{threadID: u.threadID}
-		} else if ev.ProviderTurnID == u.failureTurnID {
+		case u.failureTurnID:
 			u.failureTurnID, u.failure = "", nil
 		}
 	}

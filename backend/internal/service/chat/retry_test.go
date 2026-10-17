@@ -79,7 +79,7 @@ func TestRetryTurnClassifiesPromptReadErrors(t *testing.T) {
 			if !errors.Is(retryErr, tc.want) {
 				t.Fatalf("RetryTurn = %v, want %v", retryErr, tc.want)
 			}
-			if tc.want != chatsvc.ErrTurnNotRetryable && errors.Is(retryErr, chatsvc.ErrTurnNotRetryable) {
+			if !errors.Is(tc.want, chatsvc.ErrTurnNotRetryable) && errors.Is(retryErr, chatsvc.ErrTurnNotRetryable) {
 				t.Fatalf("read failure was classified as a permanent refusal: %v", retryErr)
 			}
 			if sent := h.conv.sentMessages(); len(sent) != 1 {

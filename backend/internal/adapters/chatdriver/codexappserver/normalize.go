@@ -2,6 +2,7 @@ package codexappserver
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -715,11 +716,11 @@ func codexProviderFailure(turnErr codexproto.TurnError) error {
 	if strings.TrimSpace(turnErr.Message) == "" && strings.TrimSpace(detail) == "" && cause == nil {
 		return nil
 	}
-	if strings.TrimSpace(turnErr.Message) == "" && strings.TrimSpace(detail) == "" && cause == errCodexUsageLimitExceeded {
+	if strings.TrimSpace(turnErr.Message) == "" && strings.TrimSpace(detail) == "" && errors.Is(cause, errCodexUsageLimitExceeded) {
 		return ports.NewChatProviderFailure("Usage limit exceeded", "", cause)
 	}
 	failure := ports.NewChatProviderFailure(turnErr.Message, detail, cause)
-	if cause == errCodexUsageLimitExceeded && domain.ParseConversationUsageLimit(failure.Error(), nil) == nil {
+	if errors.Is(cause, errCodexUsageLimitExceeded) && domain.ParseConversationUsageLimit(failure.Error(), nil) == nil {
 		return ports.NewChatProviderFailure("Usage limit exceeded", failure.Error(), cause)
 	}
 	return failure
