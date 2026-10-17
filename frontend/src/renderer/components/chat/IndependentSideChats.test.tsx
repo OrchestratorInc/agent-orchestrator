@@ -26,6 +26,7 @@ function renderSideComposer(
 	const onFocusSide = vi.fn();
 	const onCompact = vi.fn();
 	const onNavigate = vi.fn();
+	const onRemoveAllReferences = vi.fn();
 	render(
 		<SideComposer
 			draft={draft}
@@ -44,6 +45,7 @@ function renderSideComposer(
 			side={side}
 			onSettings={vi.fn()}
 			onRemoveReference={vi.fn()}
+			onRemoveAllReferences={onRemoveAllReferences}
 			onFocusSide={canCreate ? onFocusSide : undefined}
 			onCompact={onCompact}
 			onNavigate={onNavigate}
@@ -55,6 +57,7 @@ function renderSideComposer(
 		onFocusSide,
 		onCompact,
 		onNavigate,
+		onRemoveAllReferences,
 		field: screen.getByLabelText("Side chat question") as HTMLElement,
 	};
 }
@@ -81,6 +84,7 @@ describe("side composer slash menu", () => {
 	it("shows ordered references in a removable compact summary", async () => {
 		const draft = {
 			...emptySideChatDraft(),
+			attachments: [{ id: "image", path: ".ao/attachments/shot.png", name: "shot.png", mimeType: "image/png", bytes: 4 }],
 			references: [
 				{
 					id: "one",
@@ -100,10 +104,17 @@ describe("side composer slash menu", () => {
 				},
 			],
 		};
-		renderSideComposer(draft);
+		const { onRemoveAllReferences, onNavigate } = renderSideComposer(draft);
+		const row = screen.getByTestId("side-chat-attachments-and-annotations");
+		expect(row).toHaveClass("flex", "flex-wrap", "items-center");
+		expect(row).toContainElement(screen.getByRole("button", { name: "2 annotations" }));
+		expect(row).toContainElement(screen.getByRole("button", { name: "Remove shot.png" }));
 		await userEvent.click(screen.getByRole("button", { name: "2 annotations" }));
 		expect(screen.getByRole("button", { name: "sun" })).toBeInTheDocument();
 		expect(screen.getAllByRole("button", { name: /Remove annotation/ })).toHaveLength(2);
+		await userEvent.click(screen.getByRole("button", { name: "Remove all annotations" }));
+		expect(onRemoveAllReferences).toHaveBeenCalledOnce();
+		expect(onNavigate).not.toHaveBeenCalled();
 	});
 
 	it("keeps a typed bare /btw in this side without sending", async () => {

@@ -60,7 +60,8 @@ type State struct {
 	// KeepAwake is the user's choice to keep this Mac from idle-sleeping while
 	// the bridge is on. Kept separate from Enabled so turning the bridge off and
 	// on again does not forget it.
-	KeepAwake bool `json:"keepAwake"`
+	KeepAwake    bool `json:"keepAwake"`
+	KeepAwakeLid bool `json:"keepAwakeLid,omitempty"`
 }
 
 // Path returns the Connect Mobile config file location under the data dir

@@ -38,6 +38,20 @@ type codexRPC struct {
 	onRequest      func(codexFrame)
 }
 
+// codexRPCError is an app-server JSON-RPC error response.
+type codexRPCError struct {
+	Method  string
+	Message string
+	Code    int
+}
+
+func (e *codexRPCError) Error() string {
+	return fmt.Sprintf("Codex %s: %s (%d)", e.Method, e.Message, e.Code)
+}
+
+// codexMethodNotFound is the JSON-RPC code for a method this Codex lacks.
+const codexMethodNotFound = -32601
+
 func newCodexRPC(input io.Writer, output io.Reader) *codexRPC {
 	c := &codexRPC{input: input, pending: make(map[int64]chan codexFrame), done: make(chan struct{})}
 	go c.read(output)
@@ -119,7 +133,7 @@ func (c *codexRPC) request(ctx context.Context, method string, params any, respo
 	select {
 	case frame := <-answer:
 		if frame.Error != nil {
-			return fmt.Errorf("Codex %s: %s (%d)", method, frame.Error.Message, frame.Error.Code)
+			return &codexRPCError{Method: method, Message: frame.Error.Message, Code: frame.Error.Code}
 		}
 		if response != nil {
 			return json.Unmarshal(frame.Result, response)
@@ -202,7 +216,7 @@ func (s *Supervisor) runCodex(ctx context.Context, turn worker.Turn, command Com
 	if !ok {
 		return errors.New("Cloud approval control is unavailable")
 	}
-	process := exec.CommandContext(ctx, command.Path, "app-server")
+	process := exec.CommandContext(ctx, command.Path, append(codexSecretFileGuardArgs(command.SecretFileGuard), "app-server")...)
 	configureProviderProcess(process)
 	process.Dir = command.Dir
 	process.Env = mergedEnvironment(command.Env)
@@ -231,6 +245,16 @@ func (s *Supervisor) runCodex(ctx context.Context, turn worker.Turn, command Com
 	}
 	if err := conn.notify("initialized", map[string]any{}); err != nil {
 		return err
+	}
+	if command.SecretFileGuard != "" {
+		if err := trustCodexSecretFileGuard(openCtx, conn, command.Dir, command.SecretFileGuard); errors.Is(err, errCodexHooksUnsupported) {
+			// A template's older Codex without session hooks keeps working, as
+			// it did before the guard existed; its file tools were never
+			// covered by deny rules either.
+			s.Logger.Warn("Codex in this workspace cannot run AO's secret-file guard; Chat runs without it", "error", err)
+		} else if err != nil {
+			return fmt.Errorf("protect secret files in Codex: %w", err)
+		}
 	}
 	policy, sandbox, reviewer := codexApprovalSettings(turn)
 	threadParams := map[string]any{

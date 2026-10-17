@@ -96,6 +96,7 @@ vi.mock("./CuesDialog", () => ({
 
 vi.mock("./ProjectScriptsSettings", () => ({
 	ProjectScriptsSettings: ({ projectId }: { projectId: string }) => <div data-testid="project-scripts-settings">{projectId}</div>,
+	CloudProjectScriptsSettings: ({ projectId, cloudOrgId }: { projectId: string; cloudOrgId: string }) => <div data-testid="cloud-project-scripts-settings">{cloudOrgId}/{projectId}</div>,
 }));
 
 // The dialog reads the cloud gate to decide whether the Cloud nav page exists;
@@ -107,7 +108,7 @@ vi.mock("../hooks/useCloudGate", () => ({
 // The dialog reads the org's offering to gate the Coder and Upgrade pages.
 // Nothing resolved here (signed out), so neither page is visible.
 vi.mock("../hooks/useCloudOffering", () => ({
-	useCloudOffering: () => ({ hasCoder: false, selfServeBilling: false }),
+	useCloudOffering: () => ({ customCoder: false, selfServeBilling: false }),
 }));
 vi.mock("../lib/cloud-session", () => ({
 	useCloudSession: () => ({ status: "unauthenticated", session: null }),
@@ -194,9 +195,20 @@ describe("SettingsDialog", () => {
 		expect(await screen.findByTestId("cloud-project-settings")).toHaveTextContent("org-1");
 		expect(screen.getByRole("button", { name: "General" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Agents" })).toBeInTheDocument();
-		for (const section of ["Scripts", "Environment", "Cues"]) {
+		// Scripts are project settings on Cloud projects too; environment and cues stay local.
+		expect(screen.getByRole("button", { name: "Scripts" })).toBeInTheDocument();
+		for (const section of ["Environment", "Cues"]) {
 			expect(screen.queryByRole("button", { name: section })).not.toBeInTheDocument();
 		}
+		expect(screen.queryByTestId("project-scripts-settings")).not.toBeInTheDocument();
+	});
+
+	it("opens a cloud project's Scripts page from the control plane", async () => {
+		cloudProjectsState.data = [{ id: "cloud-1", orgId: "org-1", displayName: "ao-landing" }];
+		useUiStore.getState().openProjectSettings("cloud-1", { section: "scripts" });
+		renderSettingsDialog();
+
+		expect(await screen.findByTestId("cloud-project-scripts-settings")).toHaveTextContent("org-1/cloud-1");
 		expect(screen.queryByTestId("project-scripts-settings")).not.toBeInTheDocument();
 	});
 
@@ -336,8 +348,8 @@ describe("SettingsDialog", () => {
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("diagnostics");
 		expect(screen.getByRole("button", { name: "Diagnostics" })).toBeInTheDocument();
 		// The live monitor is a page of its own: the aggregate view never mounts it.
-		expect(globalSettingsItemsFor("all", { cloudEnabled: true, developerMode: true, diagnostics: true, hasCoder: false, selfServeBilling: false }).map((item) => item.id)).not.toContain("diagnostics");
-		expect(visibleGlobalSettings({ cloudEnabled: true, developerMode: true, diagnostics: true, hasCoder: false, selfServeBilling: false }).map((item) => item.id)).toContain("diagnostics");
+		expect(globalSettingsItemsFor("all", { cloudEnabled: true, developerMode: true, diagnostics: true, customCoder: false, selfServeBilling: false }).map((item) => item.id)).not.toContain("diagnostics");
+		expect(visibleGlobalSettings({ cloudEnabled: true, developerMode: true, diagnostics: true, customCoder: false, selfServeBilling: false }).map((item) => item.id)).toContain("diagnostics");
 	});
 
 	it("hides Diagnostics until its toggle is on in Developer mode, falling back to General if asked for", async () => {
@@ -347,7 +359,7 @@ describe("SettingsDialog", () => {
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
 		expect(screen.queryByRole("button", { name: "Diagnostics" })).not.toBeInTheDocument();
-		expect(visibleGlobalSettings({ cloudEnabled: true, developerMode: true, diagnostics: false, hasCoder: false, selfServeBilling: false }).map((item) => item.id)).not.toContain("diagnostics");
+		expect(visibleGlobalSettings({ cloudEnabled: true, developerMode: true, diagnostics: false, customCoder: false, selfServeBilling: false }).map((item) => item.id)).not.toContain("diagnostics");
 	});
 
 	it("hides Diagnostics outside Developer mode even with its toggle left on", async () => {
@@ -360,26 +372,26 @@ describe("SettingsDialog", () => {
 	});
 
 	describe("offering gates", () => {
-		const pages = (context: { hasCoder: boolean; selfServeBilling: boolean; cloudEnabled?: boolean }) =>
+		const pages = (context: { customCoder: boolean; selfServeBilling: boolean; cloudEnabled?: boolean }) =>
 			visibleGlobalSettings({ cloudEnabled: true, developerMode: false, diagnostics: false, ...context }).map((item) => item.id);
 
 		it("a B2C self-serve org sees Upgrade and no Coder page", () => {
-			expect(pages({ hasCoder: false, selfServeBilling: true })).toContain("billing");
-			expect(pages({ hasCoder: false, selfServeBilling: true })).not.toContain("coder");
+			expect(pages({ customCoder: false, selfServeBilling: true })).toContain("billing");
+			expect(pages({ customCoder: false, selfServeBilling: true })).not.toContain("coder");
 		});
 
 		it("a B2B contract org sees the Coder page and no Upgrade", () => {
-			expect(pages({ hasCoder: true, selfServeBilling: false })).toContain("coder");
-			expect(pages({ hasCoder: true, selfServeBilling: false })).not.toContain("billing");
+			expect(pages({ customCoder: true, selfServeBilling: false })).toContain("coder");
+			expect(pages({ customCoder: true, selfServeBilling: false })).not.toContain("billing");
 		});
 
 		it("an org on both sees both, and Upgrade only while self-serve", () => {
-			expect(pages({ hasCoder: true, selfServeBilling: true })).toEqual(expect.arrayContaining(["coder", "billing"]));
-			expect(pages({ hasCoder: true, selfServeBilling: false })).not.toContain("billing");
+			expect(pages({ customCoder: true, selfServeBilling: true })).toEqual(expect.arrayContaining(["coder", "billing"]));
+			expect(pages({ customCoder: true, selfServeBilling: false })).not.toContain("billing");
 		});
 
 		it("shows neither cloud page with cloud off", () => {
-			const ids = pages({ hasCoder: true, selfServeBilling: true, cloudEnabled: false });
+			const ids = pages({ customCoder: true, selfServeBilling: true, cloudEnabled: false });
 			expect(ids).not.toContain("coder");
 			expect(ids).not.toContain("billing");
 		});

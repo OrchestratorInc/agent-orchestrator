@@ -10,12 +10,16 @@ import { CoderTemplateOptions } from "./CoderTemplateOptions";
 
 const mocks = vi.hoisted(() => ({
 	getCoderTemplateParameters: vi.fn(),
+	evaluateCoderTemplateParameters: vi.fn(),
 	hasCoder: true,
 }));
 
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
-		client: { getCoderTemplateParameters: mocks.getCoderTemplateParameters },
+		client: {
+			getCoderTemplateParameters: mocks.getCoderTemplateParameters,
+			evaluateCoderTemplateParameters: mocks.evaluateCoderTemplateParameters,
+		},
 		ready: true,
 		baseUrl: "https://cp.test",
 	}),
@@ -69,6 +73,8 @@ describe("CoderTemplateOptions", () => {
 		await appI18n.changeLanguage("en");
 		mocks.hasCoder = true;
 		mocks.getCoderTemplateParameters.mockReset();
+		// An older control plane without the evaluate route: the form reads the GET.
+		mocks.evaluateCoderTemplateParameters.mockReset().mockRejectedValue(new CloudCpError("Not found", { status: 404 }));
 	});
 
 	it("renders an input per parameter type, prefilled with defaults", async () => {
@@ -183,5 +189,77 @@ describe("CoderTemplateOptions", () => {
 		renderOptions();
 		// The hook retries once before giving up.
 		expect(await screen.findByRole("alert", {}, { timeout: 4000 })).toHaveTextContent("Couldn't load this template's options.");
+	});
+});
+
+describe("CoderTemplateOptions with dynamic parameters", () => {
+	// Like 11x's template: other_github_repo exists only once "Other" is picked.
+	const repos: CloudCpCoderTemplateParameter = {
+		name: "github_repos", displayName: "Github Repositories", type: "list(string)", mutable: false, required: false, defaultValue: "[\"Alice\"]", order: 1,
+		options: [{ name: "Alice", value: "Alice" }, { name: "Other", value: "Other" }],
+	};
+	const otherRepo: CloudCpCoderTemplateParameter = {
+		name: "other_github_repo", displayName: "Other Github Repository", type: "string", mutable: false, required: false, defaultValue: "", order: 2,
+	};
+	const region: CloudCpCoderTemplateParameter = { name: "region", displayName: "Region", type: "string", mutable: true, required: false, defaultValue: "eu", order: 3 };
+
+	beforeEach(async () => {
+		await appI18n.changeLanguage("en");
+		mocks.hasCoder = true;
+		mocks.getCoderTemplateParameters.mockReset().mockResolvedValue({ parameters: [repos, region] });
+		mocks.evaluateCoderTemplateParameters.mockReset().mockImplementation(async (_org: string, _tpl: string, values: Record<string, string>) => {
+			const parameters = [repos];
+			if ((values.github_repos ?? "").includes("Other")) parameters.push(otherRepo);
+			parameters.push(values.region === "mars"
+				? { ...region, diagnostics: [{ severity: "error", summary: "Value must be a valid option" }] }
+				: region);
+			return { parameters };
+		});
+	});
+
+	it("reveals a conditional parameter once its trigger is picked and keeps its value", async () => {
+		const { onChange } = renderOptions();
+		await screen.findByText("Github Repositories");
+		expect(screen.queryByText("Other Github Repository")).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("checkbox", { name: "Other" }));
+		const field = await screen.findByRole("textbox", { name: "Other Github Repository" }, { timeout: 3000 });
+		expect(mocks.evaluateCoderTemplateParameters).toHaveBeenLastCalledWith("org-1", "tpl-1", { github_repos: "[\"Alice\",\"Other\"]" }, expect.anything());
+		await userEvent.type(field, "https://github.com/acme/places");
+		await waitFor(() => expect(onChange).toHaveBeenLastCalledWith({
+			github_repos: "[\"Alice\",\"Other\"]", other_github_repo: "https://github.com/acme/places",
+		}));
+		expect(mocks.getCoderTemplateParameters).not.toHaveBeenCalled();
+	});
+
+	it("drops the value of a parameter that no longer applies after an edit", async () => {
+		const { onChange } = renderOptions({ github_repos: "[\"Alice\",\"Other\"]", other_github_repo: "https://github.com/acme/places" });
+		expect(await screen.findByRole("textbox", { name: "Other Github Repository" })).toHaveValue("https://github.com/acme/places");
+		// Opening the form never prunes a saved value.
+		expect(onChange).not.toHaveBeenCalled();
+		await userEvent.click(screen.getByRole("checkbox", { name: "Other" }));
+		await waitFor(() => expect(onChange).toHaveBeenLastCalledWith({}), { timeout: 3000 });
+		expect(screen.queryByText("Other Github Repository")).not.toBeInTheDocument();
+	});
+
+	it("shows Coder's error about a value under its field", async () => {
+		renderOptions({ region: "mars" });
+		expect(await screen.findByRole("alert")).toHaveTextContent("Value must be a valid option");
+	});
+
+	it("keeps the fields editable when the control plane refuses a value", async () => {
+		const evaluate = mocks.evaluateCoderTemplateParameters.getMockImplementation()!;
+		mocks.evaluateCoderTemplateParameters.mockImplementation(async (org: string, tpl: string, values: Record<string, string>) => {
+			if ((values.region ?? "").length > 10) throw new CloudCpError("template parameter value too long", { status: 422 });
+			return evaluate(org, tpl, values);
+		});
+		renderOptions();
+		const field = await screen.findByRole("textbox", { name: "Region" });
+		expect(field).toHaveAttribute("maxLength", "4096");
+		await userEvent.type(field, "much-too-long");
+		expect(await screen.findByRole("alert", {}, { timeout: 4000 })).toHaveTextContent("Change the last value you edited");
+		// The value can still be fixed.
+		await userEvent.clear(screen.getByRole("textbox", { name: "Region" }));
+		await userEvent.type(screen.getByRole("textbox", { name: "Region" }), "us");
+		await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument(), { timeout: 4000 });
 	});
 });

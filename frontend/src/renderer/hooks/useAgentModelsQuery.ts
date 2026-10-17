@@ -8,6 +8,12 @@ import { LOCAL_HOST } from "../lib/hosts";
 export type AgentModelCatalog = components["schemas"]["AgentModelsResponse"];
 
 const MODEL_CATALOG_VALIDATION_INTERVAL_MS = 10 * 60 * 1_000;
+const MODEL_CATALOG_REFRESH_POLL_MS = 3_000;
+
+/** Whether the daemon is still refreshing this catalog in the background. */
+export function isRefreshingCatalog(catalog: Pick<AgentModelCatalog, "refreshState"> | undefined): boolean {
+	return catalog?.refreshState === "refreshing" || catalog?.refreshState === "queued";
+}
 
 export const agentModelsQueryPrefix = (agentId: string) =>
 	["agent-models", agentId] as const;
@@ -20,18 +26,19 @@ async function requestAgentModels(
 	projectId: string,
 	mode: "cached" | "refresh" | "revalidate",
 	hostId?: string,
+	catalogOnly = false,
 ): Promise<AgentModelCatalog> {
 	const client = hostId ? clientForHost(hostId) : apiClient;
 	const path = { agent: agentId };
 	const result =
 		mode === "cached"
 			? await client.GET("/api/v1/agents/{agent}/models", {
-					params: { path, query: { projectId: projectId || undefined } },
+					params: { path, query: { projectId: projectId || undefined, ...(catalogOnly ? { catalogOnly: true } : {}) } },
 				})
 			: await client.POST("/api/v1/agents/{agent}/models/refresh", {
 					params: {
 						path,
-						query: { projectId: projectId || undefined, revalidate: mode === "revalidate" || undefined },
+						query: { projectId: projectId || undefined, revalidate: mode === "revalidate" || undefined, ...(catalogOnly ? { catalogOnly: true } : {}) },
 					},
 				});
 	if (result.error) throw new Error(apiErrorMessage(result.error));
@@ -39,14 +46,19 @@ async function requestAgentModels(
 	return agentId === "claude-code" ? { ...catalog, models: foldClaudeAliasDefault(catalog.models) } : catalog;
 }
 
-export function agentModelsQueryOptions(agentId: string, projectId: string, hostId?: string) {
+export function agentModelsQueryOptions(agentId: string, projectId: string, hostId?: string, catalogOnly = false) {
+	const key = agentModelsQueryKey(agentId, projectId, hostId);
 	return queryOptions({
-		queryKey: agentModelsQueryKey(agentId, projectId, hostId),
-		queryFn: () => requestAgentModels(agentId, projectId, "cached", hostId),
+		// Both read the shared daemon catalog; only task responses add recency.
+		queryKey: catalogOnly ? [...key, "catalog"] as const : key,
+		queryFn: () => requestAgentModels(agentId, projectId, "cached", hostId, catalogOnly),
 		enabled: agentId !== "",
 		// A catalog that carries a warning describes a problem the user may fix
 		// outside AO (a login in a terminal), so any remount re-reads it.
 		staleTime: (query) => (query.state.data?.warning ? 0 : MODEL_CATALOG_VALIDATION_INTERVAL_MS),
+		// The daemon serves its cached catalog at once and refreshes it in the
+		// background; re-read it while that runs so the new one appears.
+		refetchInterval: (query) => (isRefreshingCatalog(query.state.data) ? MODEL_CATALOG_REFRESH_POLL_MS : false),
 	});
 }
 
@@ -84,8 +96,8 @@ export function invalidateAgentModelCatalogs(queryClient: QueryClient, agentId: 
 	]);
 }
 
-export function refreshAgentModels(agentId: string, projectId: string, hostId?: string) {
-	return requestAgentModels(agentId, projectId, "refresh", hostId);
+export function refreshAgentModels(agentId: string, projectId: string, hostId?: string, catalogOnly = false) {
+	return requestAgentModels(agentId, projectId, "refresh", hostId, catalogOnly);
 }
 
 export function revalidateAgentModels(agentId: string, projectId: string, hostId?: string) {

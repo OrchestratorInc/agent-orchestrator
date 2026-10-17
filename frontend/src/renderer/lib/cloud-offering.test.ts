@@ -74,6 +74,20 @@ describe("resolveCloudOffering", () => {
 		expect(resolveCloudOffering(me, undefined, true)?.billingMode).toBe("off");
 	});
 
+	it("reads customCoder from the server, and from the providers on an older control plane", () => {
+		const generic = (customCoder?: boolean): CloudCpMeResponse => ({
+			user, organizations: [org("o1")],
+			offering: offering({ providers: ["coder", "freestyle"], defaultProvider: "freestyle", kind: "both", customCoder }),
+		});
+		expect(resolveCloudOffering(generic(false))?.customCoder).toBe(false);
+		expect(resolveCloudOffering(generic(true))?.customCoder).toBe(true);
+		// A control plane without the field offered Coder only to orgs with the
+		// coder capability.
+		expect(resolveCloudOffering(generic(undefined))?.customCoder).toBe(true);
+		const legacy: CloudCpMeResponse = { user, organizations: [org("o1")], sandboxProviders: { available: ["freestyle"], default: "freestyle" } };
+		expect(resolveCloudOffering(legacy)?.customCoder).toBe(false);
+	});
+
 	it("resolves nothing before /me loads, and no cloud without providers", () => {
 		expect(resolveCloudOffering(undefined)).toBeUndefined();
 		expect(resolveCloudOffering({ user, organizations: [] })).toMatchObject({ providers: [], defaultProvider: "", kind: "none" });
@@ -115,6 +129,12 @@ describe("projectSandboxProvider", () => {
 		expect(projectSandboxProvider({ sandboxProvider: "Coder" }, { defaultProvider: "freestyle" })).toBe("coder");
 		expect(projectSandboxProvider({}, { defaultProvider: "freestyle" })).toBe("freestyle");
 		expect(projectSandboxProvider(undefined, undefined)).toBe("");
+	});
+
+	it("keeps a project with Coder config on Coder whatever the org default", () => {
+		expect(projectSandboxProvider({ coder: { templateId: "tpl-1" } }, { defaultProvider: "freestyle" })).toBe("coder");
+		expect(projectSandboxProvider({ coder: null }, { defaultProvider: "freestyle" })).toBe("freestyle");
+		expect(projectSandboxProvider({ sandboxProvider: "freestyle", coder: {} }, { defaultProvider: "coder" })).toBe("freestyle");
 	});
 });
 

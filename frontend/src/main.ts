@@ -8,6 +8,7 @@ import {
 	BaseWindow,
 	BrowserWindow,
 	clipboard,
+	ClipboardItem,
 	dialog,
 	ipcMain,
 	Menu,
@@ -49,6 +50,7 @@ import { readUpdateSettings, type UpdateSettings, type UpdateStatus } from "./ma
 import { readKeybindingOverrides, writeKeybindingOverrides } from "./main/keybinding-settings";
 import { readEditorSettings, writeEditorPreference } from "./main/editor-settings";
 import { createEditorHandoff } from "./main/editor-handoff";
+import { discoverMacTerminalApps } from "./main/mac-terminal-apps";
 import { registerCliLinkIpc } from "./main/cli-link-ipc";
 import { launchCommand } from "./main/launch-command";
 import { blocksRenderFrameNavigation } from "./main/render-frame-guard";
@@ -69,7 +71,7 @@ import {
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { chmod, copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -135,6 +137,7 @@ import {
 	showCloudSignInFailure,
 } from "./main/cloud-auth";
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
+import { createCloudAgentProxy } from "./main/cloud-agent-proxy";
 import { installCloudCpProxy } from "./main/cloud-cp-proxy";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "./shared/posthog-config";
 import { DEFAULT_SENTRY_DSN } from "./shared/sentry-config";
@@ -156,6 +159,7 @@ import {
 import { createBrowserProfileStore } from "./main/browser-profile-store";
 import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
+import { registerChatImageIpc } from "./main/chat-image-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
 import {
 	registerBrowserProfileIpc,
@@ -424,6 +428,11 @@ let windowTranslucent = false;
 
 function syncNativeWindowBackground(): void {
 	if (!windowComposition || !mainWindow || mainWindow.isDestroyed()) return;
+	// Keep vibrancy and the native background in sync after window/renderer
+	// lifecycle changes, as well as theme updates.
+	if (process.platform === "darwin") {
+		mainWindow.setVibrancy(windowTranslucent ? "under-window" : null);
+	}
 	if (windowTranslucent) {
 		mainWindow.setBackgroundColor("#00000000");
 		return;
@@ -535,6 +544,14 @@ function windowIconPath(): string | undefined {
 	return existsSync(fallback) ? fallback : undefined;
 }
 
+// Electron 44 removed clipboard.writeImage in favour of the W3C-style
+// ClipboardItem API; the browser host and chat images share this adapter.
+function writeClipboardImage(image: Electron.NativeImage): Promise<void> {
+	return clipboard.write([
+		new ClipboardItem({ "image/png": new Blob([new Uint8Array(image.toPNG())], { type: "image/png" }) }),
+	]);
+}
+
 function applyRuntimeAppIcon(): void {
 	if (process.platform !== "darwin") return;
 	// Unpackaged runs keep Electron's default dock icon so the dev window is
@@ -544,7 +561,7 @@ function applyRuntimeAppIcon(): void {
 	if (!iconPath) return;
 	const icon = nativeImage.createFromPath(iconPath);
 	if (!icon.isEmpty()) {
-		app.dock.setIcon(icon);
+		app.dock?.setIcon(icon);
 	}
 }
 
@@ -781,8 +798,8 @@ async function createWindowInternal(): Promise<void> {
 						titleBarStyle: "hiddenInset" as const,
 						// Window transparency: an opaque window keeps Chromium's compositor
 						// opaque, hiding the vibrancy view. Transparent windows still paint
-						// the theme colour via setBackgroundColor unless the Developer Mode
-						// window transparency flag is on.
+						// the theme colour via setBackgroundColor unless window transparency
+						// is enabled in Appearance.
 						transparent: true,
 						// Keep the window-transparency blur vivid when the window loses focus.
 						visualEffectState: "active" as const,
@@ -954,6 +971,9 @@ async function createWindowInternal(): Promise<void> {
 	);
 
 	browserViewHost = createBrowserViewHost({
+		// Agent tabs: only a connected host's or a cloud session's own
+		// agent-browser viewer may report the remote page a Browser tab shows.
+		isAgentBrowserUrl: (url) => remoteRegistry.isAgentBrowserUrl(url) || cloudAgentProxy.isAgentBrowserUrl(url),
 		mainWindow,
 		shellWebContents,
 		ipcMain,
@@ -975,7 +995,8 @@ async function createWindowInternal(): Promise<void> {
 			notify: (state) => shellWebContents.send("browser:downloadsChanged", state),
 		}),
 		clearBrowserProfileData: clearElectronBrowserProfileData,
-		clipboard,
+		clipboard: { writeImage: writeClipboardImage },
+		onNativeViewAdded: () => windowComposition?.restackShell(),
 	});
 	browserProfileImporter = profileImporter;
 	browserProfileIpc = registerBrowserProfileIpc({
@@ -1023,11 +1044,14 @@ async function createWindowInternal(): Promise<void> {
 
 	const syncWindowChrome = () => {
 		if (!mainWindow || shellWebContents.isDestroyed()) return;
+		syncNativeWindowBackground();
 		if (process.platform === "darwin") syncMacWindowButtons(mainWindow, shellWebContents);
 		shellWebContents.send("window:zoom", shellWebContents.getZoomFactor());
 	};
 	// Resize/zoom and fullscreen exit can reset AppKit's button placement.
 	mainWindow.on("resize", syncWindowChrome);
+	mainWindow.on("show", syncWindowChrome);
+	mainWindow.on("restore", syncWindowChrome);
 	shellWebContents.on("did-finish-load", syncWindowChrome);
 	shellWebContents.on("zoom-changed", () => setTimeout(syncWindowChrome, 0));
 
@@ -1035,6 +1059,7 @@ async function createWindowInternal(): Promise<void> {
 	// the renderer keeps the same header height and navigation centerline.
 	const pushFullScreen = () => {
 		if (!mainWindow) return;
+		syncNativeWindowBackground();
 		getShellWebContents()?.send("window:fullscreen", mainWindow.isFullScreen());
 	};
 	const pushMaximized = () => {
@@ -1142,7 +1167,13 @@ function editorStateDir(): string {
 const workspaceCheckUnavailable = (message: string) =>
 	Object.assign(new Error(message), { code: "SERVICE_UNAVAILABLE" });
 
-async function resolveSessionWorkspaceForDesktop(sessionId: string): Promise<string> {
+// Reads one absolute session path from the loopback-only desktop routes.
+async function fetchDesktopSessionPath(
+	sessionId: string,
+	route: "workspace" | "artifacts",
+	field: "workspacePath" | "artifactDir",
+	unavailableMessage: string,
+): Promise<string> {
 	if (daemonStatus.state !== "ready" || !daemonStatus.port) {
 		throw workspaceCheckUnavailable("AO daemon is not ready.");
 	}
@@ -1150,7 +1181,7 @@ async function resolveSessionWorkspaceForDesktop(sessionId: string): Promise<str
 	const timer = setTimeout(() => controller.abort(), DAEMON_PROBE_TIMEOUT_MS);
 	try {
 		const response = await net.fetch(
-			`http://127.0.0.1:${daemonStatus.port}/api/v1/desktop/sessions/${encodeURIComponent(sessionId)}/workspace`,
+			`http://127.0.0.1:${daemonStatus.port}/api/v1/desktop/sessions/${encodeURIComponent(sessionId)}/${route}`,
 			{ signal: controller.signal },
 		).catch((error: unknown) => {
 			if (error instanceof Error && error.name === "AbortError") throw error;
@@ -1161,14 +1192,14 @@ async function resolveSessionWorkspaceForDesktop(sessionId: string): Promise<str
 			throw error;
 		}) as Record<string, unknown>;
 		if (!response.ok) {
-			const message = typeof body.message === "string" ? body.message : "Session workspace is not available.";
+			const message = typeof body.message === "string" ? body.message : unavailableMessage;
 			throw Object.assign(new Error(message), typeof body.code === "string" ? { code: body.code } : {});
 		}
-		const workspacePath = body.workspacePath;
-		if (typeof workspacePath !== "string" || !path.isAbsolute(workspacePath)) {
-			throw new Error("Session workspace is not available.");
+		const sessionPath = body[field];
+		if (typeof sessionPath !== "string" || !path.isAbsolute(sessionPath)) {
+			throw new Error(unavailableMessage);
 		}
-		return workspacePath;
+		return sessionPath;
 	} catch (error) {
 		if (error instanceof Error && error.name === "AbortError") {
 			throw workspaceCheckUnavailable("Timed out while resolving the session workspace.");
@@ -1179,11 +1210,22 @@ async function resolveSessionWorkspaceForDesktop(sessionId: string): Promise<str
 	}
 }
 
+function resolveSessionWorkspaceForDesktop(sessionId: string): Promise<string> {
+	return fetchDesktopSessionPath(sessionId, "workspace", "workspacePath", "Session workspace is not available.");
+}
+
+// The daemon owns each session's artifact directory, which can live outside
+// this app's data dir when the daemon runs with its own AO_DATA_DIR.
+function resolveSessionArtifactDirForDesktop(sessionId: string): Promise<string> {
+	return fetchDesktopSessionPath(sessionId, "artifacts", "artifactDir", "This session has no artifacts folder yet.");
+}
+
 const editorHandoff = createEditorHandoff({
 	platform: process.platform,
 	env: process.env,
 	homeDir: os.homedir(),
 	resolveWorkspace: resolveSessionWorkspaceForDesktop,
+	resolveArtifactDir: resolveSessionArtifactDirForDesktop,
 	readPreference: async () => (await readEditorSettings(editorStateDir())).preferredEditorId,
 	writePreference: async (editorId) => {
 		await writeEditorPreference(editorStateDir(), editorId);
@@ -1193,7 +1235,14 @@ const editorHandoff = createEditorHandoff({
 		const error = await shell.openPath(workspacePath);
 		if (error) throw new Error(error);
 	},
+	revealPath: async (filePath) => {
+		if (!(await stat(filePath).catch(() => undefined))) throw new Error(`${filePath} does not exist`);
+		shell.showItemInFolder(filePath);
+	},
+	realPath: (candidatePath) => realpath(candidatePath),
 	copyText: (text) => clipboard.writeText(text),
+	discoverTerminalApps: discoverMacTerminalApps,
+	readIcon: async (appPath) => (await app.getFileIcon(appPath, { size: "normal" })).toDataURL(),
 	logError: (message, error) => console.error(message, error),
 });
 
@@ -1325,6 +1374,15 @@ function ensureShellEnv(): Promise<void> {
 	return shellEnvPromise;
 }
 
+// The daemon spawn waits on this probe (0.2-2s), so start it with the process
+// rather than after the window opens. Windows probes the shell chosen in UI
+// settings, which are not loaded yet, so it still starts with the daemon.
+let earlyShellEnvProbe: Promise<void> | null = null;
+if (process.platform !== "win32") {
+	earlyShellEnvProbe = ensureShellEnv();
+	earlyShellEnvProbe.catch(() => undefined);
+}
+
 // One id per app launch, minted eagerly so every daemon spawn in this process
 // (including supervisor restarts) reports the same run. An explicit
 // AO_APP_RUN_ID in the environment wins, which lets a test or a wrapper pin it.
@@ -1377,6 +1435,9 @@ function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv 
 		AO_OWNER,
 		AO_DATA_DIR: desktopDataDir,
 		AO_APP_RUN_ID: appRunId,
+        ...(process.platform === "darwin" ? { AO_WAKE_HELPER: app.isPackaged
+            ? path.join(process.resourcesPath, "wake-helper", "ao-wake")
+            : path.join(app.getAppPath(), "wake-helper", "ao-wake") } : {}),
 		// The browser runtime token is handed over through the child's private
 		// stdin pipe below. Never put it in the daemon environment, where a
 		// same-UID worker could inspect the parent process.
@@ -1821,6 +1882,17 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	await shellEnvReady;
 	if (startEpoch !== daemonStartEpoch) {
 		return daemonStatus;
+	}
+	// The early probe runs while Electron itself is starting, the busiest moment
+	// of launch. If it failed there, probe once more before settling for a bare
+	// PATH for the daemon's whole run.
+	if (!cachedShellEnv && earlyShellEnvProbe && shellEnvPromise === earlyShellEnvProbe) {
+		earlyShellEnvProbe = null;
+		shellEnvPromise = null;
+		await ensureShellEnv();
+		if (startEpoch !== daemonStartEpoch) {
+			return daemonStatus;
+		}
 	}
 
 	// Wedged-orphan kill+replace: both attach paths returned null, but a process
@@ -2282,13 +2354,17 @@ ipcMain.handle("sideChats:capture", async (event, closedSideId?: string, cancelC
 	return captureSideChatState(closedSideId, cancelClose);
 });
 
-ipcMain.handle("editorHandoff:getState", (event, sessionId: string) => {
+ipcMain.handle("editorHandoff:getState", (event, sessionId: string, options) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
-	return editorHandoff.getState(typeof sessionId === "string" ? sessionId : "");
+	return editorHandoff.getState(typeof sessionId === "string" ? sessionId : "", { refreshTerminals: options?.refreshTerminals === true });
 });
 ipcMain.handle("editorHandoff:open", (event, input) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
 	return editorHandoff.open(input && typeof input === "object" ? input : { sessionId: "" });
+});
+ipcMain.handle("editorHandoff:openArtifacts", (event, input) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
+	return editorHandoff.openArtifacts(input && typeof input === "object" ? input : { sessionId: "", targetId: "file-manager" });
 });
 ipcMain.handle("editorHandoff:copyWorkspacePath", (event, sessionId: string) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
@@ -2326,10 +2402,11 @@ ipcMain.handle("theme:set-window-background", (_event, color: unknown) => {
 });
 
 ipcMain.handle("theme:set-window-translucent", (_event, enabled: unknown) => {
-	if (process.platform !== "darwin" || typeof enabled !== "boolean" || enabled === windowTranslucent) return;
+	// No early return when the value is unchanged: each new shell document asks
+	// again, and re-applying is cheap and recovers any native state that drifted.
+	if (process.platform !== "darwin" || typeof enabled !== "boolean") return;
 	if (!mainWindow || mainWindow.isDestroyed()) return;
 	windowTranslucent = enabled;
-	mainWindow.setVibrancy(enabled ? "under-window" : null);
 	syncNativeWindowBackground();
 });
 
@@ -2416,6 +2493,8 @@ ipcMain.handle("menu:action", (_event, action: string) => {
 		case "edit.selectAll":
 			return wc.selectAll();
 		case "view.reload":
+			// An agent tab's Reload is the agent's page, not its viewer's.
+			if (browserViewHost?.reloadAgentTab(wc)) return;
 			return wc.reload();
 		case "view.devtools":
 			if (browserViewHost) {
@@ -2648,13 +2727,22 @@ ipcMain.handle("app:checkGitHubRepositoryAvailability", async (_event, input: { 
 		return { available: false, message: "Could not check this repository name. Confirm GitHub CLI is signed in." };
 	}
 });
-ipcMain.handle("clipboard:writeText", (_event, text: string) => {
-	clipboard.writeText(text, "clipboard");
+ipcMain.handle("clipboard:writeText", async (_event, text: string) => {
+	// Electron 44: writeText is async and the Linux selection clipboard moved
+	// to the clipboard.selection sub-namespace.
+	await clipboard.writeText(text);
 	if (process.platform === "linux") {
-		clipboard.writeText(text, "selection");
+		await clipboard.selection.writeText(text);
 	}
 });
 ipcMain.handle("clipboard:readText", () => clipboard.readText());
+registerChatImageIpc({
+	ipcMain,
+	clipboard: { writeImage: writeClipboardImage },
+	createImage: (bytes) => nativeImage.createFromBuffer(bytes),
+	dialog,
+	downloadsDirectory: () => app.getPath("downloads"),
+});
 
 // A file dropped onto the terminal is delivered as raw bytes (its original path
 // is unavailable to the sandboxed renderer on macOS — see webUtils.getPathForFile
@@ -2945,8 +3033,14 @@ function cloudDataDir(): string {
 		: path.join(os.homedir(), ".ao");
 }
 
+// Cloud sessions' agent browsers, served to the Browser panel's agent tabs.
+const cloudAgentProxy = createCloudAgentProxy(cloudDataDir);
+
 function notifyRenderersOfCloudSession(account: import("./shared/cloud-account").CloudAccount | null): void {
-	if (!account) void remoteRegistry.disconnectAll();
+	if (!account) {
+		void remoteRegistry.disconnectAll();
+		void cloudAgentProxy.close();
+	}
 	const contents = getShellWebContents();
 	if (!contents || contents.isDestroyed()) return;
 	contents.send("cloud:sessionChanged", account);
@@ -2962,6 +3056,8 @@ installCloudLocalAuthIPC(cloudDataDir, notifyRenderersOfCloudSession);
 // Cloud control-plane proxy IPC — cloudCp:request/openStream/closeStream.
 // CP calls go through main so the WorkOS bearer token never reaches a renderer.
 installCloudCpProxy(cloudDataDir);
+ipcMain.handle("cloudCp:agentBrowserUrl", (_event, baseUrl: unknown, orgId: unknown, sessionId: unknown) =>
+	cloudAgentProxy.agentBrowserUrl(baseUrl, orgId, sessionId));
 
 function focusCloudWindow(): void {
 	const window = BaseWindow.getAllWindows()[0];
@@ -3253,9 +3349,15 @@ app.whenReady().then(async () => {
 	if (process.platform === "darwin") {
 		powerMonitor.on("shutdown", () => desktopQuit.quitCompletely());
 	}
+	// Boot the daemon alongside the window, not after it: the board cannot show
+	// until the daemon answers. createWindow links the browser runtime itself
+	// when the daemon is already ready by the time the window exists. Windows
+	// keeps the old order until this path has been tried there.
+	const daemonStartsWithWindow = process.platform !== "win32";
+	if (daemonStartsWithWindow) void startDaemon();
 	await createWindow();
 	if (browserQuitRequested) return;
-	void startDaemon();
+	if (!daemonStartsWithWindow) void startDaemon();
 	initAutoUpdates();
 
 	// Windows/Linux: on first launch, the deep-link URL may arrive as a
@@ -3327,6 +3429,7 @@ app.on("before-quit", (event) => {
 			const cleanup = Promise.all([
 				disposeAllBrowserViewHosts(),
 				remoteRegistry.closeAll(),
+				cloudAgentProxy.close(),
 				telemetryPolicyController?.close() ?? Promise.resolve(),
 				retireSides(),
 			]);

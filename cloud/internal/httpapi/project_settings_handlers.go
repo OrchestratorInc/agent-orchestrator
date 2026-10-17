@@ -51,6 +51,9 @@ func (s *Server) updateProjectSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotImplemented, "not_implemented", "Cloud project settings are unavailable.")
 		return
 	}
+	if !s.requireAdminForProjectScripts(w, r, orgID, patch.Config) {
+		return
+	}
 	if parameters, patched := patchedCoderParameters(patch.Config); patched && len(parameters) > 0 {
 		// Template parameters belong to the template chosen at project creation
 		// and are checked (best effort) against what that template declares.
@@ -64,10 +67,12 @@ func (s *Server) updateProjectSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Coder template parameters require a project with a chosen Coder template.")
 			return
 		}
-		if unknown := s.unknownCoderTemplateParameters(
+		// The patch replaces the stored map as a whole, so it is the full set
+		// the template is evaluated with.
+		if problem := s.coderTemplateParameterProblem(
 			r.Context(), orgID, strings.TrimSpace(coderConfig.TemplateID), parameters, requestID(r),
-		); len(unknown) > 0 {
-			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", unknownCoderTemplateParametersMessage(unknown))
+		); problem != "" {
+			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", problem)
 			return
 		}
 	}
@@ -99,4 +104,41 @@ func patchedCoderParameters(config json.RawMessage) (map[string]string, bool) {
 		return nil, false
 	}
 	return envelope.Coder.Parameters, true
+}
+
+// requireAdminForProjectScripts lets only organization owners and admins set
+// a project's Setup or Cleanup commands (or clear them). They run in every
+// later session of the project, including other members' sessions with those
+// members' own credentials, so they are an admin setting like the Coder
+// connection. It reports whether the request may continue and writes the
+// error when not.
+func (s *Server) requireAdminForProjectScripts(w http.ResponseWriter, r *http.Request, orgID string, config json.RawMessage) bool {
+	if !configSetsProjectScripts(config) {
+		return true
+	}
+	store, ok := s.store.(orgAdminStore)
+	if !ok {
+		writeError(w, r, http.StatusNotImplemented, "not_implemented", "Project scripts are unavailable.")
+		return false
+	}
+	if err := store.RequireOrgAdmin(r.Context(), principalFrom(r), orgID); err != nil {
+		s.writeStoreError(w, r, err)
+		return false
+	}
+	return true
+}
+
+// configSetsProjectScripts reports whether a project config (or settings
+// patch) carries the postCreate or preRemove key.
+func configSetsProjectScripts(config json.RawMessage) bool {
+	if len(config) == 0 {
+		return false
+	}
+	var keys map[string]json.RawMessage
+	if json.Unmarshal(config, &keys) != nil {
+		return false
+	}
+	_, setup := keys["postCreate"]
+	_, cleanup := keys["preRemove"]
+	return setup || cleanup
 }

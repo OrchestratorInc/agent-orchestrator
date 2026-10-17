@@ -37,6 +37,91 @@ type ProjectSettingsConfig struct {
 	// workspaceNamePrefix and template parameters; the rest is chosen when the
 	// project is created.
 	Coder *ProjectCoderConfig `json:"coder,omitempty"`
+	// The project's Setup and Cleanup commands (postCreate and preRemove) are
+	// read by ProjectScripts and checked on write (ValidateProjectScriptsConfig
+	// and the settings patch); they are not decoded here, so a stored value of
+	// an unexpected shape never blocks creating a session.
+}
+
+// Bounds for a project's Setup and Cleanup commands.
+const (
+	MaxProjectScriptCommands     = 20
+	MaxProjectScriptCommandBytes = 4 << 10
+)
+
+// ValidateProjectScriptCommands checks one list of Setup or Cleanup commands:
+// at most MaxProjectScriptCommands non-blank commands of at most
+// MaxProjectScriptCommandBytes each.
+func ValidateProjectScriptCommands(kind string, commands []string) error {
+	if len(commands) > MaxProjectScriptCommands {
+		return fmt.Errorf("%s must contain at most %d commands", kind, MaxProjectScriptCommands)
+	}
+	for _, command := range commands {
+		if strings.TrimSpace(command) == "" {
+			return fmt.Errorf("%s commands must not be empty", kind)
+		}
+		if len(command) > MaxProjectScriptCommandBytes {
+			return fmt.Errorf("each %s command must be at most 4 KB", kind)
+		}
+		if strings.ContainsRune(command, 0) || !utf8.ValidString(command) {
+			return fmt.Errorf("%s commands contain invalid characters", kind)
+		}
+	}
+	return nil
+}
+
+// ValidateProjectScriptsConfig checks the postCreate and preRemove keys of a
+// project config: each, when present, must be an array of commands that
+// passes ValidateProjectScriptCommands.
+func ValidateProjectScriptsConfig(config json.RawMessage) error {
+	var values map[string]json.RawMessage
+	if len(config) == 0 || json.Unmarshal(config, &values) != nil {
+		return nil
+	}
+	for _, key := range []string{"postCreate", "preRemove"} {
+		raw, ok := values[key]
+		if !ok {
+			continue
+		}
+		var commands []string
+		if json.Unmarshal(raw, &commands) != nil {
+			return fmt.Errorf("%s must be an array of strings", key)
+		}
+		if err := ValidateProjectScriptCommands(key, commands); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ProjectScripts reads a project's Setup and Cleanup commands from its config
+// for a worker launch. Like the role rules, a value of the wrong shape is
+// ignored rather than making the session unbootable.
+func ProjectScripts(config json.RawMessage) (postCreate, preRemove []string) {
+	var values struct {
+		PostCreate json.RawMessage `json:"postCreate"`
+		PreRemove  json.RawMessage `json:"preRemove"`
+	}
+	if len(config) == 0 || json.Unmarshal(config, &values) != nil {
+		return nil, nil
+	}
+	decode := func(raw json.RawMessage) []string {
+		var commands []string
+		if len(raw) == 0 || json.Unmarshal(raw, &commands) != nil {
+			return nil
+		}
+		kept := make([]string, 0, len(commands))
+		for _, command := range commands {
+			if strings.TrimSpace(command) != "" {
+				kept = append(kept, command)
+			}
+		}
+		if len(kept) == 0 {
+			return nil
+		}
+		return kept
+	}
+	return decode(values.PostCreate), decode(values.PreRemove)
 }
 
 // Config contains a partial object. Arrays replace; nested role objects merge.
@@ -233,7 +318,7 @@ func validateSettingsPatchObject(raw json.RawMessage, kind string) error {
 		return fmt.Errorf("%s must be an object", kind)
 	}
 	allowed := map[string][]string{
-		"config":      {"worker", "orchestrator", "reviewers", "autoReview", "sessionPrefix", "coder"},
+		"config":      {"worker", "orchestrator", "reviewers", "autoReview", "sessionPrefix", "coder", "postCreate", "preRemove"},
 		"coder":       {"workspaceNamePrefix", "parameters"},
 		"role":        {"agent", "agentConfig"},
 		"reviewer":    {"harness", "agentConfig"},
@@ -300,6 +385,14 @@ func validateSettingsPatchObject(raw json.RawMessage, kind string) error {
 			var enabled bool
 			if json.Unmarshal(value, &enabled) != nil {
 				return fmt.Errorf("autoReview must be a boolean")
+			}
+		case "postCreate", "preRemove":
+			var commands []string
+			if json.Unmarshal(value, &commands) != nil {
+				return fmt.Errorf("%s must be an array of strings", key)
+			}
+			if err := ValidateProjectScriptCommands(key, commands); err != nil {
+				return err
 			}
 		default:
 			var setting string
