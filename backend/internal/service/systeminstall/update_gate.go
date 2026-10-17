@@ -167,7 +167,7 @@ func uniqueSessionIDs(ids []domain.SessionID) []domain.SessionID {
 //
 //	live  level      result
 //	0     any        run
-//	>0    safe/warn  run; sessions on the old release restart on the new one once idle
+//	>0    safe       run; sessions on the old release restart on the new one once idle
 //	>0    idle       wait for idle sessions, then stop, update, resume (errUpdateWhenIdle)
 //	>0    blocked    HarnessActiveError (AO_UPDATE_WHILE_RUNNING=off, a reinstall,
 //	                 or Windows without update-when-idle)
@@ -216,7 +216,23 @@ func (s *Service) updateInUse(ctx context.Context, target Target, advisory Updat
 	for _, id := range uniqueSessionIDs(append(slices.Clone(sessions), reviewers...)) {
 		ids = append(ids, string(id))
 	}
-	level := s.effectiveUpdateLevel(updateWhileRunningLevel(s.goos, target, advisory.MaintenanceMethod, advisory.maintenanceCask))
+	level := updateWhileRunningLevel(s.goos, target, advisory.MaintenanceMethod, advisory.maintenanceCask)
+	if managedMethods[advisory.MaintenanceMethod] && s.managedRoot != "" {
+		// MaintenanceMethod is the ownership-checked source of this advisory.
+		// Use the same update recipe as StartAgentOperation: the raw method
+		// overwrites files, but its eligible managed recipe keeps them intact.
+		// Recheck capabilities so a rejected runtime cannot advertise safety.
+		level = UpdateWhileRunningBlocked
+		if planner, err := s.newRequestPlanner(ctx); err == nil {
+			for _, plan := range planner.agentMethodPlans(target, AgentOperationUpdate) {
+				if plan.Method == advisory.MaintenanceMethod && !plan.Unsupported {
+					level = plan.UpdateWhileRunning
+					break
+				}
+			}
+		}
+	}
+	level = s.effectiveUpdateLevel(level)
 	if strings.TrimSpace(advisory.MaintenanceMethod) == "" {
 		level = UpdateWhileRunningBlocked
 	}

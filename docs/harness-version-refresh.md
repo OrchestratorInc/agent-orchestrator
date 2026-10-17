@@ -14,6 +14,9 @@ A native ID must belong to the current launch. Strict resume cannot replay the
 original task or fall back to a fresh conversation; failed/unknown startup
 checks retain recoverable identity and stale-version state. History probes must
 positively verify the exact ID when the CLI can otherwise open a fresh composer.
+A confirmed-dead replacement is reconciled to stopped activity even when its
+uncommitted generation's exit hook is fenced. Its retry can run immediately;
+unknown liveness retains retry intent without stopping a possibly live child.
 
 ## Shipped support matrix
 
@@ -96,6 +99,9 @@ Managed installers keep each release immutable. OpenCode v1/v2 use distinct
 managed launchers despite sharing the native executable name. Unmanaged
 in-place installers are blocked while a live session/reviewer depends on the
 files; their update remains available after those processes exit.
+The in-use advisory resolves the same update recipe as the operation for its
+ownership-checked maintenance method, so eligible managed updates show `safe`;
+disabled management, rejected capabilities and in-place recipes stay blocked.
 
 A durable `.unsettled` intent precedes switching `current`. Startup repairs a
 missing Windows junction using the validated intended or last published release,

@@ -3561,6 +3561,18 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			}
 		}
 		if startErr != nil {
+			if rec.StaleBinary != nil && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI {
+				// This replacement has not committed its launch ID, so its exit
+				// hook is correctly fenced from the old row. Reconcile a proven
+				// dead child explicitly: otherwise that row stays idle and Resume
+				// (including the automatic retry) cannot recover it. Unknown
+				// probes retain state without claiming that a process has died.
+				probe := m.runtime.ProbeFencedRuntime(ctx, ports.FencedRuntimeRef{Handle: handle, SessionID: rec.ID, Generation: launchID})
+				if probe.Liveness == ports.FencedDead {
+					_, preserveErr := m.preserveFailedReconcileRelaunch(ctx, rec)
+					startErr = errors.Join(startErr, preserveErr)
+				}
+			}
 			return RestoreResult{}, fmt.Errorf("%s %s: resumed agent did not start: %w", operation, rec.ID, startErr)
 		}
 	}

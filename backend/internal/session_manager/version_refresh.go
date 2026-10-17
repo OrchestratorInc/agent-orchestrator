@@ -237,7 +237,19 @@ func (m *Manager) RetryVersionMoves(ctx context.Context) error {
 	var errs []error
 	for _, id := range m.versionRetries.pending() {
 		rec, err := m.getRecord(ctx, id)
-		if err != nil || rec.IsTerminated || !versionMoveStopped(rec, m.chat) {
+		if err != nil || rec.IsTerminated {
+			m.versionRetries.done(id)
+			continue
+		}
+		if !versionMoveStopped(rec, m.chat) {
+			// A failed terminal move can still have inconclusive liveness. Keep
+			// the retry intent until stopped state is proven or a successful
+			// native resume clears the failure; never replace a possibly live
+			// child merely because its startup probe was unknown.
+			if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI &&
+				rec.StaleBinary != nil && rec.StaleBinary.SwitchFailedAt != nil {
+				continue
+			}
 			m.versionRetries.done(id)
 			continue
 		}

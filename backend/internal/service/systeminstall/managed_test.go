@@ -210,6 +210,24 @@ func TestManagedUpdateRunsAlongsideSessionsOnEveryPlatform(t *testing.T) {
 	}
 }
 
+func TestManagedAdvisoryAgreesWithAcceptedUpdate(t *testing.T) {
+	f := newManagedCodexFixture(t, []domain.SessionRecord{{ID: "codex-1", Harness: domain.HarnessCodex}})
+	f.s.updateChecksDisabled = false
+	f.s.managedVersion = func(context.Context, Plan) (string, error) { return "1.1.0", nil }
+	advisory, err := f.s.UpdateAdvisory(context.Background(), TargetCodex, true)
+	if err != nil || advisory.Status != UpdateStatusBehindLatest || advisory.MaintenanceMethod != "npm" ||
+		advisory.InUse == nil || advisory.InUse.Level != UpdateWhileRunningSafe {
+		t.Fatalf("ownership-checked advisory = %+v, %v", advisory, err)
+	}
+	if _, err := f.s.StartAgentOperation(context.Background(), TargetCodex, advisory.MaintenanceMethod, AgentOperationUpdate, ""); err != nil {
+		t.Fatalf("advertised safe update was refused: %v", err)
+	}
+	f.s.workers.Wait()
+	if job, _ := f.s.Status(context.Background(), TargetCodex); job.Status != StatusSucceeded {
+		t.Fatalf("managed update = %+v", job)
+	}
+}
+
 func TestFailedManagedInstallLeavesTheCurrentReleaseAlone(t *testing.T) {
 	f := newManagedCodexFixture(t, nil)
 	if job := f.update(t, "1.1.0"); job.Status != StatusSucceeded {

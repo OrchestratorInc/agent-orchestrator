@@ -289,6 +289,17 @@ func TestRefreshStaleTerminalWithoutChatHandoff(t *testing.T) {
 			if wantFailure && (store.failed != 1 || got.StaleBinary == nil || got.StaleBinary.SwitchFailedAt == nil) {
 				t.Fatal("failure was not retained")
 			}
+			if scenario == "unknown startup probe" {
+				if got.Activity.State != domain.ActivityIdle {
+					t.Fatal("unknown startup was treated as a dead process")
+				}
+				if err := mgr.RetryVersionMoves(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				if len(mgr.versionRetries.pending()) != 1 || rt.restarted != 1 {
+					t.Fatal("unknown child was replaced or its retry intent discarded")
+				}
+			}
 		})
 	}
 }
@@ -310,6 +321,42 @@ func TestFailedVersionMoveRetryNeverStartsFreshConversation(t *testing.T) {
 	}
 	if st.sessions[rec.ID].StaleBinary == nil {
 		t.Fatal("failed migration notice lost")
+	}
+}
+
+func TestFailedTerminalChildStartupCanRetryWithoutOldExitCallback(t *testing.T) {
+	dead := false
+	rt := &refreshTestRuntime{fakeRestartRuntime: &fakeRestartRuntime{fakeRuntime: &fakeRuntime{
+		aliveByHandle: map[string]bool{"tmux-mer-1": true}, supervisedSequence: []bool{true, false}, supervisedAliveOverride: &dead,
+	}}}
+	agent := refreshTestAgent{supervisedLaunchAgent{launchArgvAgent{argv: []string{"pi", "--session", "agent-x"}}}}
+	mgr, st, _ := newExitedResumeManager(t, rt, agent)
+	store := &refreshTestStore{fakeStore: st}
+	mgr.store = store
+	mgr.SetTerminalInputGate(&refreshInputGate{})
+	mgr.switchTargetStartWait = time.Millisecond
+	rec := st.sessions["mer-1"]
+	rec.Harness = domain.HarnessPi
+	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now().Add(-time.Hour)}
+	rec.Metadata.AgentSessionIDLaunchID = rec.Metadata.RuntimeLaunchID
+	rec.StaleBinary = &domain.SessionStaleBinary{Version: "new", Since: time.Now().Add(-time.Hour)}
+	st.sessions[rec.ID] = rec
+	if err := mgr.RefreshStaleTerminals(context.Background(), time.Minute); err == nil {
+		t.Fatal("replacement child startup failure was accepted")
+	}
+	failed := st.sessions[rec.ID]
+	if failed.Metadata.RuntimeLaunchID != "launch-old" || failed.Metadata.AgentSessionID != "agent-x" || failed.StaleBinary == nil {
+		t.Fatalf("recoverable native state lost: %+v", failed)
+	}
+	// No old-generation exit hook is delivered. The proven-dead replacement
+	// must still leave a resumable stopped state and an actionable retry.
+	alive := true
+	rt.supervisedAliveOverride = &alive
+	if err := mgr.RetryVersionMoves(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if rt.restarted != 2 || st.sessions[rec.ID].Metadata.RuntimeLaunchID != "launch-new" {
+		t.Fatalf("failed child was not retried: restarts=%d state=%+v", rt.restarted, st.sessions[rec.ID])
 	}
 }
 

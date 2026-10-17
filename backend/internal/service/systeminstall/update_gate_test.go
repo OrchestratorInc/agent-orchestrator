@@ -269,6 +269,48 @@ func TestAdvisoryReportsSessionsInUse(t *testing.T) {
 	}
 }
 
+func TestAdvisoryUsesManagedUpdatePlan(t *testing.T) {
+	for _, method := range []struct {
+		name   string
+		target Target
+	}{{"npm", TargetCodex}, {"bun", TargetOMP}, {"uv", TargetVibe}, {"pipx", TargetVibe}} {
+		for _, control := range []string{"managed", "disabled", "unmanaged", "old npm runtime", "missing installer runner", "capability probe failure"} {
+			t.Run(method.name+"/"+control, func(t *testing.T) {
+				s := newTestService("linux", "npm", "bun", "uv", "pipx", "bash", "sh")
+				s.updateChecksDisabled = false
+				s.managedRoot = t.TempDir()
+				s.installCommands = installCommandRunnerFunc(func(context.Context, ports.InstallCommand, io.Writer, io.Writer) error { return nil })
+				s.sessions = sessionListerStub{sessions: []domain.SessionRecord{{ID: "live", Harness: domain.AgentHarness(method.target)}}}
+				s.updateAdvisories = map[Target]UpdateAdvisory{method.target: {AgentID: string(method.target), Status: UpdateStatusBehindLatest, MaintenanceMethod: method.name, CheckedAt: time.Now()}}
+				want := UpdateWhileRunningSafe
+				switch control {
+				case "disabled":
+					s.updateWhileRunningDisabled = true
+					want = UpdateWhileRunningBlocked
+				case "unmanaged":
+					s.managedRoot = ""
+					want = UpdateWhileRunningBlocked
+				case "missing installer runner":
+					s.installCommands = nil
+					want = UpdateWhileRunningBlocked
+				case "capability probe failure":
+					s.installCapabilities = installCapabilitiesStub{probe: func(context.Context) error { return errors.New("unavailable") }}
+					want = UpdateWhileRunningBlocked
+				case "old npm runtime":
+					s.installCapabilities = installCapabilitiesStub{prefix: "/prefix", nodeVersion: "v14.0.0", writable: true}
+					if method.name == "npm" {
+						want = UpdateWhileRunningBlocked
+					}
+				}
+				advisory, err := s.UpdateAdvisory(context.Background(), method.target, false)
+				if err != nil || advisory.InUse == nil || advisory.InUse.Level != want {
+					t.Fatalf("in-use advisory = %+v, %v; want %s", advisory.InUse, err, want)
+				}
+			})
+		}
+	}
+}
+
 func TestLaunchDropsAdvisoryForBinaryReplacedOutsideAO(t *testing.T) {
 	dir := t.TempDir()
 	versions := filepath.Join(dir, "versions")
