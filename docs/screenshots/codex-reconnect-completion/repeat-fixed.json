@@ -1,0 +1,144 @@
+{
+  "case": "lost",
+  "startedAt": "2026-10-17T20:40:58.912914+00:00",
+  "expectation": "fixed",
+  "expectedOutcome": "completed-after-reconnect",
+  "sessionId": "standalone-11",
+  "nativeTurnId": "01a14b98-d0ef-7082-bbcc-d1d7eb039320",
+  "before": {
+    "observedAt": "2026-10-17T20:41:25.605396+00:00",
+    "controller": "busy",
+    "conversationId": "9e2c88a0-1543-4aaa-afa1-a0c372865211",
+    "latestSequence": 4,
+    "turns": [
+      {
+        "id": "75624b5b-0360-48f0-943d-3174a4123872",
+        "state": "running",
+        "providerTurnId": "codex:41:9e2c88a0-1543-4aaa-afa1-a0c372865211:root01a14b98-d0ef-7082-bbcc-d1d7eb039320",
+        "requestedAt": "2026-10-17T20:41:08Z",
+        "startedAt": "2026-10-17T20:41:08Z"
+      }
+    ]
+  },
+  "daemonPausedAt": "2026-10-17T20:41:26.628726+00:00",
+  "gateReleasedAt": "2026-10-17T20:41:26.705797+00:00",
+  "nativeLifecycleEvents": [
+    {
+      "timestamp": "2026-10-17T20:41:08.673Z",
+      "type": "task_started",
+      "turn_id": "01a14b98-d0ef-7082-bbcc-d1d7eb039320"
+    },
+    {
+      "timestamp": "2026-10-17T20:41:28.748Z",
+      "type": "task_complete",
+      "turn_id": "01a14b98-d0ef-7082-bbcc-d1d7eb039320"
+    }
+  ],
+  "daemonKilledAt": "2026-10-17T20:41:30.292990+00:00",
+  "recovered": {
+    "observedAt": "2026-10-17T20:41:55.459801+00:00",
+    "controller": "ready",
+    "conversationId": "9e2c88a0-1543-4aaa-afa1-a0c372865211",
+    "latestSequence": 5,
+    "turns": [
+      {
+        "id": "75624b5b-0360-48f0-943d-3174a4123872",
+        "state": "completed",
+        "providerTurnId": "codex:41:9e2c88a0-1543-4aaa-afa1-a0c372865211:root01a14b98-d0ef-7082-bbcc-d1d7eb039320",
+        "requestedAt": "2026-10-17T20:41:08Z",
+        "startedAt": "2026-10-17T20:41:08Z",
+        "completedAt": "2026-10-17T20:41:55Z"
+      }
+    ]
+  },
+  "recoveredContent": {
+    "turnId": "75624b5b-0360-48f0-943d-3174a4123872",
+    "expectedAssistantText": "REPRO_COMPLETE",
+    "exactCompletedAnswerCount": 1,
+    "streamingAnswerCount": 0,
+    "commandStatuses": [
+      {
+        "id": "f68eb78e-adaa-4cc2-ace9-e68958af79cc",
+        "status": "completed"
+      }
+    ],
+    "runningActivityCount": 0
+  },
+  "postReconnectSend": {
+    "turnId": "ff12b9c7-f95f-47d7-a2d2-070420fc95f1",
+    "providerTurnId": "codex:41:9e2c88a0-1543-4aaa-afa1-a0c372865211:root01a14b99-8b63-7503-9e89-83dcc4b18ddb",
+    "state": "running",
+    "duplicate": false
+  },
+  "postReconnectNativeCompletion": {
+    "timestamp": "2026-10-17T20:41:58.782Z",
+    "type": "task_complete",
+    "turn_id": "01a14b99-8b63-7503-9e89-83dcc4b18ddb"
+  },
+  "postReconnectContent": {
+    "turnId": "ff12b9c7-f95f-47d7-a2d2-070420fc95f1",
+    "expectedAssistantText": "AFTER_RECONNECT_OK",
+    "exactCompletedAnswerCount": 1,
+    "streamingAnswerCount": 0,
+    "commandStatuses": [],
+    "runningActivityCount": 0
+  },
+  "after": {
+    "observedAt": "2026-10-17T20:41:59.199848+00:00",
+    "controller": "ready",
+    "conversationId": "9e2c88a0-1543-4aaa-afa1-a0c372865211",
+    "latestSequence": 7,
+    "turns": [
+      {
+        "id": "75624b5b-0360-48f0-943d-3174a4123872",
+        "state": "completed",
+        "providerTurnId": "codex:41:9e2c88a0-1543-4aaa-afa1-a0c372865211:root01a14b98-d0ef-7082-bbcc-d1d7eb039320",
+        "requestedAt": "2026-10-17T20:41:08Z",
+        "startedAt": "2026-10-17T20:41:08Z",
+        "completedAt": "2026-10-17T20:41:55Z"
+      },
+      {
+        "id": "ff12b9c7-f95f-47d7-a2d2-070420fc95f1",
+        "state": "completed",
+        "providerTurnId": "codex:41:9e2c88a0-1543-4aaa-afa1-a0c372865211:root01a14b99-8b63-7503-9e89-83dcc4b18ddb",
+        "requestedAt": "2026-10-17T20:41:56Z",
+        "startedAt": "2026-10-17T20:41:56Z",
+        "completedAt": "2026-10-17T20:41:58Z"
+      }
+    ]
+  },
+  "assertions": {
+    "nativeTurnIncompleteBeforeGateRelease": true,
+    "exactNativeTurnCompleted": true,
+    "originalCompletedAndControllerReadyAfterRestart": true,
+    "originalFinalAnswerAndCommandRestored": true,
+    "sameOriginalProviderTurnHostAndCodexProcess": true,
+    "newMessageStartedOnAdoptedProvider": true,
+    "newMessageCompletedWithExactReplyAndReadyController": true,
+    "sameHostAndCodexThroughFollowup": true
+  },
+  "result": "FIX_VERIFIED",
+  "finishedAt": "2026-10-17T20:42:00.685178+00:00",
+  "providerIdentity": {
+    "host": {
+      "Before": {
+        "pid": 20576,
+        "started": "Sun Oct 18 02:11:03 2026"
+      },
+      "After": {
+        "pid": 20576,
+        "started": "Sun Oct 18 02:11:03 2026"
+      }
+    },
+    "codex": {
+      "Before": {
+        "pid": 20588,
+        "started": "Sun Oct 18 02:11:04 2026"
+      },
+      "After": {
+        "pid": 20588,
+        "started": "Sun Oct 18 02:11:04 2026"
+      }
+    }
+  }
+}

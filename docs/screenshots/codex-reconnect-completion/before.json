@@ -1,0 +1,112 @@
+{
+  "case": "lost",
+  "startedAt": "2026-10-17T20:29:52.355020+00:00",
+  "sessionId": "standalone-10",
+  "nativeTurnId": "01a14b8e-ba7b-7400-97ed-c66bca290dff",
+  "before": {
+    "observedAt": "2026-10-17T20:30:22.247828+00:00",
+    "controller": "busy",
+    "conversationId": "8c5d8760-71a0-4ab5-9bc9-858650673eef",
+    "latestSequence": 2,
+    "turns": [
+      {
+        "id": "7cc05418-7f6c-4439-8437-7f06ab0c053a",
+        "state": "running",
+        "providerTurnId": "codex:41:8c5d8760-71a0-4ab5-9bc9-858650673eef:root01a14b8e-ba7b-7400-97ed-c66bca290dff",
+        "requestedAt": "2026-10-17T20:30:06Z",
+        "startedAt": "2026-10-17T20:30:08Z"
+      }
+    ]
+  },
+  "daemonPausedAt": "2026-10-17T20:30:26.452103+00:00",
+  "gateReleasedAt": "2026-10-17T20:30:26.935135+00:00",
+  "nativeLifecycleEvents": [
+    {
+      "timestamp": "2026-10-17T20:30:08.688Z",
+      "type": "task_started",
+      "turn_id": "01a14b8e-ba7b-7400-97ed-c66bca290dff"
+    },
+    {
+      "timestamp": "2026-10-17T20:30:30.397Z",
+      "type": "task_complete",
+      "turn_id": "01a14b8e-ba7b-7400-97ed-c66bca290dff"
+    }
+  ],
+  "daemonKilledAt": "2026-10-17T20:30:35.319642+00:00",
+  "after": {
+    "observedAt": "2026-10-17T20:31:49.947952+00:00",
+    "controller": "busy",
+    "conversationId": "8c5d8760-71a0-4ab5-9bc9-858650673eef",
+    "latestSequence": 2,
+    "turns": [
+      {
+        "id": "7cc05418-7f6c-4439-8437-7f06ab0c053a",
+        "state": "running",
+        "providerTurnId": "codex:41:8c5d8760-71a0-4ab5-9bc9-858650673eef:root01a14b8e-ba7b-7400-97ed-c66bca290dff",
+        "requestedAt": "2026-10-17T20:30:06Z",
+        "startedAt": "2026-10-17T20:30:08Z"
+      }
+    ]
+  },
+  "assertions": {
+    "nativeTurnIncompleteBeforeGateRelease": true,
+    "exactNativeTurnCompleted": true,
+    "nativeCompletedButAOOriginalStillRunningAndBusy": true,
+    "sameOriginalProviderTurnHostAndCodexProcess": true
+  },
+  "result": "REPRODUCED",
+  "finishedAt": "2026-10-17T20:31:55.453408+00:00",
+  "baselineCommit": "edf0bfaacbf63f3df693dcb88f72e9a1d7168480",
+  "baselineDaemonSha256": "fcf9df29562b9204beea16402d722e58b336b798f1b5d26ded3f8224a51cd93b",
+  "daemonPids": {
+    "before": 45578,
+    "after": 73882
+  },
+  "followupSend": {
+    "turnId": "bace7d4b-85e4-4d4e-adc5-131378cb93e8",
+    "state": "queued",
+    "duplicate": false
+  },
+  "afterFollowupSend": {
+    "observedAt": "2026-10-17T20:33:15.369818+00:00",
+    "controller": "busy",
+    "conversationId": "8c5d8760-71a0-4ab5-9bc9-858650673eef",
+    "latestSequence": 3,
+    "turns": [
+      {
+        "id": "7cc05418-7f6c-4439-8437-7f06ab0c053a",
+        "state": "running",
+        "providerTurnId": "codex:41:8c5d8760-71a0-4ab5-9bc9-858650673eef:root01a14b8e-ba7b-7400-97ed-c66bca290dff",
+        "requestedAt": "2026-10-17T20:30:06Z",
+        "startedAt": "2026-10-17T20:30:08Z"
+      },
+      {
+        "id": "bace7d4b-85e4-4d4e-adc5-131378cb93e8",
+        "state": "queued",
+        "requestedAt": "2026-10-17T20:33:15Z"
+      }
+    ]
+  },
+  "providerIdentity": {
+    "host": {
+      "Before": {
+        "pid": 65745,
+        "started": "Sun Oct 18 01:59:58 2026"
+      },
+      "After": {
+        "pid": 65745,
+        "started": "Sun Oct 18 01:59:58 2026"
+      }
+    },
+    "codex": {
+      "Before": {
+        "pid": 65775,
+        "started": "Sun Oct 18 01:59:58 2026"
+      },
+      "After": {
+        "pid": 65775,
+        "started": "Sun Oct 18 01:59:58 2026"
+      }
+    }
+  }
+}

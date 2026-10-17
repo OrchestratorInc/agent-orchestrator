@@ -1,0 +1,17 @@
+=== RUN   TestLiveReconnectRecoversCompletionLostBeforeDaemonRestart
+=== RUN   TestLiveReconnectRecoversCompletionLostBeforeDaemonRestart/stable_item_ID
+    live_reconnect_test.go:151: native turn completed before restart, but AO retained original=running followup=queued controller=busy; want completed/running/busy
+=== RUN   TestLiveReconnectRecoversCompletionLostBeforeDaemonRestart/regenerated_streaming_item_ID
+    live_reconnect_test.go:151: native turn completed before restart, but AO retained original=running followup=queued controller=busy; want completed/running/busy
+=== RUN   TestLiveReconnectRecoversCompletionLostBeforeDaemonRestart/regenerated_completed_item_ID
+    live_reconnect_test.go:151: native turn completed before restart, but AO retained original=running followup=queued controller=busy; want completed/running/busy
+=== RUN   TestLiveReconnectRecoversCompletionLostBeforeDaemonRestart/ambiguous_streaming_prefixes_stay_separate
+    live_reconnect_test.go:151: native turn completed before restart, but AO retained original=running followup=queued controller=busy; want completed/running/busy
+--- FAIL: TestLiveReconnectRecoversCompletionLostBeforeDaemonRestart (24.85s)
+    --- FAIL: TestLiveReconnectRecoversCompletionLostBeforeDaemonRestart/stable_item_ID (14.40s)
+    --- FAIL: TestLiveReconnectRecoversCompletionLostBeforeDaemonRestart/regenerated_streaming_item_ID (3.18s)
+    --- FAIL: TestLiveReconnectRecoversCompletionLostBeforeDaemonRestart/regenerated_completed_item_ID (3.32s)
+    --- FAIL: TestLiveReconnectRecoversCompletionLostBeforeDaemonRestart/ambiguous_streaming_prefixes_stay_separate (3.95s)
+FAIL
+FAIL	github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver	26.251s
+FAIL

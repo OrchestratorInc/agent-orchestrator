@@ -88,6 +88,7 @@ type conversation struct {
 	compactedTurn string
 
 	pumpDone     chan struct{}
+	liveRecovery chan liveTurnRecovery
 	eventsMu     sync.RWMutex
 	eventsClosed bool
 	closeOnce    sync.Once
@@ -122,6 +123,7 @@ func newConversation(proc *process, log *slog.Logger, providerScopeID string) *c
 		events:          make(chan ports.ChatEvent, eventBuffer),
 		pending:         make(map[string]*parkedRequest),
 		pumpDone:        make(chan struct{}),
+		liveRecovery:    make(chan liveTurnRecovery),
 		providerScopeID: providerScopeID,
 	}
 	c.conn = newConnAt(proc.stdin, proc.stdout, log, c.handleServerRequest, proc.nextRequestID)
@@ -167,24 +169,34 @@ func (c *conversation) pump() {
 	}()
 	retries := make(map[string]ports.ChatEvent)
 	citations := newCitationFormatter()
+	var recoveredTurnID string
 
-	for n := range c.conn.notifs() {
-		// Before normalizing, because a token-usage report is the only place the
-		// context position is stated and a compaction event that arrives in the same
-		// batch has to be able to read it.
-		c.trackContext(n)
-		// Some normalized output events omit their thread ID. Read the native
-		// envelope so child-thread recovery cannot settle the root's retry.
+notifications:
+	for {
+		var events []ports.ChatEvent
+		var recovery bool
 		var scope struct {
 			ThreadID string `json:"threadId"`
 		}
-		_ = json.Unmarshal(n.Params, &scope)
-		citations.observeNotification(n, c.threadID)
+		select {
+		case repair := <-c.liveRecovery:
+			recoveredTurnID = repair.turnID
+			recovery = true
+			scope.ThreadID = c.threadID
+			events = repair.events
+		case n, ok := <-c.conn.notifs():
+			if !ok {
+				break notifications
+			}
+			// Context position must be recorded before a compaction in this batch.
+			c.trackContext(n)
+			// Some normalized events omit their thread ID; preserve the wire scope.
+			_ = json.Unmarshal(n.Params, &scope)
+			citations.observeNotification(n, c.threadID)
+			events = normalizeNotification(n, time.Now())
+		}
 
-		// The clock is passed in rather than read inside: a rate-limit reset arrives
-		// as an absolute instant and has to become a remaining duration, and a
-		// normalizer that reads the clock itself cannot be tested deterministically.
-		for _, ev := range normalizeNotification(n, time.Now()) {
+		for _, ev := range events {
 			threadID := ev.ProviderConversationID
 			if threadID == "" {
 				threadID = scope.ThreadID
@@ -192,10 +204,17 @@ func (c *conversation) pump() {
 			if threadID == "" {
 				threadID = c.threadID
 			}
-			var visible bool
-			ev, visible = citations.formatEvent(threadID, ev)
-			if !visible {
+			// Native terminal proof supersedes replay still queued on the old
+			// attachment; late starts/deltas must not reopen or alter that turn.
+			if !recovery && recoveredTurnID != "" && threadID == c.threadID && ev.ProviderTurnID == recoveredTurnID {
 				continue
+			}
+			if !recovery {
+				var visible bool
+				ev, visible = citations.formatEvent(threadID, ev)
+				if !visible {
+					continue
+				}
 			}
 			key := threadID + ":" + ev.ProviderTurnID
 			if ev.Kind == ports.ChatEventError {

@@ -136,78 +136,89 @@ func (c *conversation) ReadHistory(ctx context.Context) ([]ports.ChatEvent, erro
 		}
 	}
 	for _, turn := range resp.Thread.Turns {
-		state := turnStateFrom(string(turn.Status))
-
-		events = append(events, ports.ChatEvent{
-			Kind:            ports.ChatEventTurnStarted,
-			ProviderEventID: historyEventID(c.threadID, turn.ID, "started"),
-			ProviderTurnID:  turn.ID,
-		})
-
-		for itemIndex, nativeItem := range turn.Items {
-			item := nativeItem
-			itemID := deref(item.ID)
-			eventItemID := itemID
-			if itemID == "" {
-				// Current persisted Codex history can omit item ids. The projection's
-				// provider-item key is conversation-wide, so an index alone would make
-				// item 1 in every turn overwrite item 1 from the first turn. Include the
-				// turn in that key while keeping the event identity position-based.
-				eventItemID = fmt.Sprintf("item-%d", itemIndex)
-				itemID = fmt.Sprintf("%s-%s", turn.ID, eventItemID)
-				item.ID = &itemID
-			}
-
-			if item.Type == codexproto.ThreadItemTypeUserMessage {
-				text := historicalUserText(item)
-				if text == "" {
-					continue
-				}
-				clientID := deref(item.ClientID)
-				if clientID == "" {
-					clientID = historyEventID(c.threadID, turn.ID, "user", eventItemID)
-				}
-				events = append(events, ports.ChatEvent{
-					Kind:            ports.ChatEventUserMessageCompleted,
-					ProviderEventID: historyEventID(c.threadID, turn.ID, "user", eventItemID),
-					ProviderTurnID:  turn.ID,
-					ProviderItemID:  itemID,
-					ClientMessageID: clientID,
-					Text:            text,
-				})
-				continue
-			}
-
-			params, err := json.Marshal(map[string]any{
-				"threadId": c.threadID,
-				"turnId":   turn.ID,
-				"item":     item,
-			})
-			if err != nil {
-				return nil, fmt.Errorf("encode history item %s: %w", itemID, err)
-			}
-			for eventIndex, event := range normalizeItem(params, true) {
-				event, _ = citations.formatEvent(c.threadID, event)
-				event.ProviderEventID = historyEventID(
-					c.threadID, turn.ID, "item", eventItemID, string(event.Kind), fmt.Sprint(eventIndex))
-				events = append(events, event)
-			}
+		turnEvents, err := c.historyTurnEvents(turn, citations)
+		if err != nil {
+			return nil, err
 		}
-
-		completed := ports.ChatEvent{
-			Kind:            ports.ChatEventTurnCompleted,
-			ProviderEventID: historyEventID(c.threadID, turn.ID, "completed"),
-			ProviderTurnID:  turn.ID,
-			TurnState:       state,
-		}
-		if turn.Error != nil {
-			completed.Err = codexProviderFailure(*turn.Error)
-		}
-		events = append(events, completed)
+		events = append(events, turnEvents...)
 	}
 	for i := range events {
 		events[i] = c.scopedEvent(events[i])
 	}
+	return events, nil
+}
+
+// historyTurnEvents normalizes one native snapshot before ownership scoping.
+func (c *conversation) historyTurnEvents(turn codexproto.Turn, citations *citationFormatter) ([]ports.ChatEvent, error) {
+	events := make([]ports.ChatEvent, 0, len(turn.Items)*2+2)
+	state := turnStateFrom(string(turn.Status))
+
+	events = append(events, ports.ChatEvent{
+		Kind:            ports.ChatEventTurnStarted,
+		ProviderEventID: historyEventID(c.threadID, turn.ID, "started"),
+		ProviderTurnID:  turn.ID,
+	})
+
+	for itemIndex, nativeItem := range turn.Items {
+		item := nativeItem
+		itemID := deref(item.ID)
+		eventItemID := itemID
+		if itemID == "" {
+			// Current persisted Codex history can omit item ids. The projection's
+			// provider-item key is conversation-wide, so an index alone would make
+			// item 1 in every turn overwrite item 1 from the first turn. Include the
+			// turn in that key while keeping the event identity position-based.
+			eventItemID = fmt.Sprintf("item-%d", itemIndex)
+			itemID = fmt.Sprintf("%s-%s", turn.ID, eventItemID)
+			item.ID = &itemID
+		}
+
+		if item.Type == codexproto.ThreadItemTypeUserMessage {
+			text := historicalUserText(item)
+			if text == "" {
+				continue
+			}
+			clientID := deref(item.ClientID)
+			if clientID == "" {
+				clientID = historyEventID(c.threadID, turn.ID, "user", eventItemID)
+			}
+			events = append(events, ports.ChatEvent{
+				Kind:            ports.ChatEventUserMessageCompleted,
+				ProviderEventID: historyEventID(c.threadID, turn.ID, "user", eventItemID),
+				ProviderTurnID:  turn.ID,
+				ProviderItemID:  itemID,
+				ClientMessageID: clientID,
+				Text:            text,
+			})
+			continue
+		}
+
+		params, err := json.Marshal(map[string]any{
+			"threadId": c.threadID,
+			"turnId":   turn.ID,
+			"item":     item,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("encode history item %s: %w", itemID, err)
+		}
+		for eventIndex, event := range normalizeItem(params, true) {
+			event, _ = citations.formatEvent(c.threadID, event)
+			event.ProviderEventID = historyEventID(
+				c.threadID, turn.ID, "item", eventItemID, string(event.Kind), fmt.Sprint(eventIndex))
+			events = append(events, event)
+		}
+	}
+
+	completed := ports.ChatEvent{
+		Kind:            ports.ChatEventTurnCompleted,
+		ProviderEventID: historyEventID(c.threadID, turn.ID, "completed"),
+		ProviderTurnID:  turn.ID,
+		TurnState:       state,
+	}
+	if turn.Error != nil {
+		completed.Err = codexProviderFailure(*turn.Error)
+	}
+	events = append(events, completed)
 	return events, nil
 }
 

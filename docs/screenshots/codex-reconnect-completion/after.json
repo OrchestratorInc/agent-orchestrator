@@ -1,0 +1,90 @@
+{
+  "startedAt": "2026-10-17T20:40:05.878898+00:00",
+  "sameBeforeCase": "standalone-10",
+  "originalTurnId": "7cc05418-7f6c-4439-8437-7f06ab0c053a",
+  "queuedFollowupTurnId": "bace7d4b-85e4-4d4e-adc5-131378cb93e8",
+  "after": {
+    "observedAt": "2026-10-17T20:40:28.422712+00:00",
+    "controller": "ready",
+    "conversationId": "8c5d8760-71a0-4ab5-9bc9-858650673eef",
+    "latestSequence": 5,
+    "turns": [
+      {
+        "id": "7cc05418-7f6c-4439-8437-7f06ab0c053a",
+        "state": "completed",
+        "providerTurnId": "codex:41:8c5d8760-71a0-4ab5-9bc9-858650673eef:root01a14b8e-ba7b-7400-97ed-c66bca290dff",
+        "requestedAt": "2026-10-17T20:30:06Z",
+        "startedAt": "2026-10-17T20:30:08Z",
+        "completedAt": "2026-10-17T20:40:18Z"
+      },
+      {
+        "id": "bace7d4b-85e4-4d4e-adc5-131378cb93e8",
+        "state": "completed",
+        "providerTurnId": "codex:41:8c5d8760-71a0-4ab5-9bc9-858650673eef:root01a14b98-0d5a-7ba0-81c7-3f29a8a54f35",
+        "requestedAt": "2026-10-17T20:33:15Z",
+        "startedAt": "2026-10-17T20:40:19Z",
+        "completedAt": "2026-10-17T20:40:28Z"
+      }
+    ]
+  },
+  "originalContent": {
+    "turnId": "7cc05418-7f6c-4439-8437-7f06ab0c053a",
+    "expectedAssistantText": "REPRO_COMPLETE",
+    "exactCompletedAnswerCount": 1,
+    "streamingAnswerCount": 0,
+    "commandStatuses": [
+      {
+        "id": "06ee341a-70d8-4f47-a3ce-c0e85dcfd542",
+        "status": "completed"
+      }
+    ],
+    "runningActivityCount": 0
+  },
+  "followupContent": {
+    "turnId": "bace7d4b-85e4-4d4e-adc5-131378cb93e8",
+    "expectedAssistantText": "AFTER_RECONNECT_OK",
+    "exactCompletedAnswerCount": 1,
+    "streamingAnswerCount": 0,
+    "commandStatuses": [],
+    "runningActivityCount": 0
+  },
+  "assertions": {
+    "sameOriginalTurnNowCompleted": true,
+    "previouslyQueuedMessageCompleted": true,
+    "exactSingleRestoredAnswerAndCompletedCommand": true,
+    "sameHostAndCodexProcessSinceBeforeFault": true,
+    "controllerReady": true
+  },
+  "result": "SAME_SESSION_FIX_VERIFIED",
+  "finishedAt": "2026-10-17T20:40:29.743417+00:00",
+  "fixedBinarySha256": "34b6ea5dac368dee766ed1f918c0c4710e57e559722632b9ea1f86a0353b94b8",
+  "fixedBackendSourceHash": "d9589cde5a5b20c02d88cdcbce2e5ec4f60b6964f4543cca084aff664c55f293",
+  "daemonPid": 15883,
+  "providerIdentity": {
+    "host": {
+      "pid": 65745,
+      "started": "Sun Oct 18 01:59:58 2026"
+    },
+    "codex": {
+      "pid": 65775,
+      "started": "Sun Oct 18 01:59:58 2026"
+    }
+  },
+  "nativeComposerCheck": {
+    "inputRoute": "native Electron composer; cua-driver type_text then Return",
+    "expectedReply": "UI_SEND_OK",
+    "turnId": "7d112e0d-7b59-4a33-be7e-8ce88d75b1f3",
+    "content": {
+      "turnId": "7d112e0d-7b59-4a33-be7e-8ce88d75b1f3",
+      "expectedAssistantText": "UI_SEND_OK",
+      "exactCompletedAnswerCount": 1,
+      "streamingAnswerCount": 0,
+      "commandStatuses": [],
+      "runningActivityCount": 0
+    },
+    "result": "NATIVE_COMPOSER_VERIFIED",
+    "finishedAt": "2026-10-17T20:44:49.316385+00:00",
+    "controller": "ready",
+    "sameOriginalProvider": true
+  }
+}

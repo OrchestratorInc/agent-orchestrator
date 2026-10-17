@@ -45,7 +45,7 @@ func TestPersistentACPReplayBackpressure(t *testing.T) {
 	}
 	conv := opened.(*conversation)
 	t.Cleanup(func() { _ = conv.Close() })
-	if err := conv.ActivateLiveReconnect(context.Background(), "durable-turn"); err != nil {
+	if err := conv.ActivateLiveReconnect(context.Background(), "durable-turn", nil); err != nil {
 		t.Fatal(err)
 	}
 	_ = nextEvent(t, conv.Events()) // Initialization ready event.

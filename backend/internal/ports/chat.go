@@ -1212,7 +1212,9 @@ type ChatLiveReconnector interface {
 // ChatLiveReconnectActivator releases provider replay only after the service
 // has restored the durable active-turn correlation for the same live process.
 type ChatLiveReconnectActivator interface {
-	ActivateLiveReconnect(ctx context.Context, providerTurnID string) error
+	// reconcile maps a terminal snapshot onto existing AO facts before replay.
+	// Events use AO-scoped identities; nil leaves provider replay unchanged.
+	ActivateLiveReconnect(ctx context.Context, providerTurnID string, reconcile func([]ChatEvent) []ChatEvent) error
 }
 
 // ChatProviderEventAcknowledger lets a persistent provider discard replay
