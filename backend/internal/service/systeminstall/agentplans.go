@@ -47,6 +47,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetDeepSeek:    "https://github.com/deepseek-ai/deepseek-harness",
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
+	TargetHermes:      "https://github.com/NousResearch/hermes-agent",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -267,6 +268,10 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
+	case TargetHermes:
+		plans = []Plan{s.officialByOS(target,
+			"https://hermes-agent.nousresearch.com/install.sh", "bash",
+			"https://hermes-agent.nousresearch.com/install.ps1", agentDocumentationURLs[target])}
 	default:
 		plans = []Plan{{Target: target, Unsupported: true, Method: "manual", Reason: "unknown install target"}}
 	}

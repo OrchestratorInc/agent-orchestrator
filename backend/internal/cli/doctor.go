@@ -88,6 +88,7 @@ var harnessProbeSpecs = map[string]harnessProbeSpec{
 	"kilocode":    {BinaryName: "kilocode", VersionArg: "--version"},
 	"omp":         {BinaryName: "omp", VersionArg: "--version"},
 	"codewhale":   {BinaryName: "codewhale", VersionArg: "--version"},
+	"hermes":      {BinaryName: "hermes", VersionArg: "--version"},
 	"cursor":      {BinaryName: "cursor-agent"},
 	"continue":    {BinaryName: "cn"},
 	// Command Code's binary is `cmd` on Unix and `cmdc` on Windows, where `cmd`

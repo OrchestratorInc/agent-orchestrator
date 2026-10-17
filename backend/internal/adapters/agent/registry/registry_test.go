@@ -324,3 +324,25 @@ func hasLine(content, line string) bool {
 	}
 	return false
 }
+
+func TestRegistryIncludesHermes(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("hermes")
+	if !ok {
+		t.Fatal("registry does not contain hermes")
+	}
+	manifest := adapter.Manifest()
+	if manifest.Name != "Hermes" {
+		t.Fatalf("hermes manifest name = %q, want Hermes", manifest.Name)
+	}
+
+	for _, item := range Harnessed() {
+		if item.Harness == domain.HarnessHermes {
+			return
+		}
+	}
+	t.Fatal("Harnessed does not contain hermes")
+}

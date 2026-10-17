@@ -2064,19 +2064,21 @@ func reconcileSchema(db *sql.DB) error {
 }
 
 const (
-	sessionsHarnessCheckWithoutMuse                   = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'kiro', 'kilocode', 'vibe', 'pi', 'autohand', 'fake'))`
-	sessionsHarnessCheckWithMuse                      = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'autohand', 'fake'))`
-	sessionsHarnessCheckWithoutMuseQM                 = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'kiro', 'kilocode', 'vibe', 'pi', 'autohand', 'qm', 'fake'))`
-	sessionsHarnessCheckWithMuseQM                    = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'autohand', 'qm', 'fake'))`
-	sessionsHarnessCheckWithMuseKimchi                = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'autohand', 'fake'))`
-	sessionsHarnessCheckWithMuseQMKimchi              = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'autohand', 'qm', 'fake'))`
-	sessionsHarnessCheckWithMusePrimeAgent            = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'prime-agent', 'autohand', 'fake'))`
-	sessionsHarnessCheckWithMuseQMPrimeAgent          = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'prime-agent', 'autohand', 'qm', 'fake'))`
-	sessionsHarnessCheckWithMuseQMLegacyPrimeAgent    = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'autohand', 'qm', 'prime-agent', 'fake'))`
-	sessionsHarnessCheckWithMuseKimchiPrimeAgent      = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'prime-agent', 'autohand', 'fake'))`
-	sessionsHarnessCheckWithMuseQMKimchiPrimeAgent    = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'prime-agent', 'autohand', 'qm', 'fake'))`
-	sessionsHarnessCheckWithMuseKimchiPrimeAgentOMP   = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'prime-agent', 'autohand', 'omp', 'fake'))`
-	sessionsHarnessCheckWithMuseQMKimchiPrimeAgentOMP = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'prime-agent', 'autohand', 'omp', 'qm', 'fake'))`
+	sessionsHarnessCheckWithoutMuse                         = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'kiro', 'kilocode', 'vibe', 'pi', 'autohand', 'fake'))`
+	sessionsHarnessCheckWithMuse                            = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'autohand', 'fake'))`
+	sessionsHarnessCheckWithoutMuseQM                       = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'kiro', 'kilocode', 'vibe', 'pi', 'autohand', 'qm', 'fake'))`
+	sessionsHarnessCheckWithMuseQM                          = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'autohand', 'qm', 'fake'))`
+	sessionsHarnessCheckWithMuseKimchi                      = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'autohand', 'fake'))`
+	sessionsHarnessCheckWithMuseQMKimchi                    = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'autohand', 'qm', 'fake'))`
+	sessionsHarnessCheckWithMusePrimeAgent                  = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'prime-agent', 'autohand', 'fake'))`
+	sessionsHarnessCheckWithMuseQMPrimeAgent                = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'prime-agent', 'autohand', 'qm', 'fake'))`
+	sessionsHarnessCheckWithMuseQMLegacyPrimeAgent          = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'autohand', 'qm', 'prime-agent', 'fake'))`
+	sessionsHarnessCheckWithMuseKimchiPrimeAgent            = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'prime-agent', 'autohand', 'fake'))`
+	sessionsHarnessCheckWithMuseQMKimchiPrimeAgent          = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'prime-agent', 'autohand', 'qm', 'fake'))`
+	sessionsHarnessCheckWithMuseKimchiPrimeAgentOMP         = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'prime-agent', 'autohand', 'omp', 'fake'))`
+	sessionsHarnessCheckWithMuseQMKimchiPrimeAgentOMP       = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'prime-agent', 'autohand', 'omp', 'qm', 'fake'))`
+	sessionsHarnessCheckWithMuseKimchiPrimeAgentOMPHermes   = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'prime-agent', 'autohand', 'omp', 'hermes', 'fake'))`
+	sessionsHarnessCheckWithMuseQMKimchiPrimeAgentOMPHermes = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'prime-agent', 'autohand', 'omp', 'hermes', 'qm', 'fake'))`
 )
 
 const (
@@ -2108,7 +2110,8 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsDeepSeek := !strings.Contains(schema, "'deepseek-harness'")
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
-	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
+	needsHermes := !strings.Contains(schema, "'hermes'")
+	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsHermes {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2222,6 +2225,15 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		// without Command Code, so anchor there instead of enumerating shapes.
 		repairs = append(repairs, replacement{"'fake'))", "'command-code', 'fake'))"})
 	}
+	if needsHermes {
+		// Migration 0197 widens the constraint by anchoring on the retained
+		// 'fake' fixture harness, for the same reason as DeepSeek above. A
+		// database that skipped an earlier harness migration reaches this repair
+		// without Hermes, so anchor there instead of enumerating shapes. This
+		// runs after the Command Code repair, so a database missing both gets
+		// 'command-code', 'hermes', 'fake' in that order.
+		repairs = append(repairs, replacement{"'fake'))", "'hermes', 'fake'))"})
+	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
 			`UPDATE sqlite_master
@@ -2273,6 +2285,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'command-code'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Command Code and did not match known pre-Command-Code schema")
+	}
+	if !strings.Contains(schema, "'hermes'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Hermes and did not match known pre-Hermes schema")
 	}
 	return nil
 }

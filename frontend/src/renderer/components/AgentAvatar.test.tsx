@@ -57,4 +57,10 @@ describe("AgentAvatar", () => {
 
 		expect(themeSources("opencode-v2")).toEqual(themeSources("opencode"));
 	});
+
+	it("renders the Hermes brand asset", () => {
+		render(<AgentAvatar provider="hermes" />);
+
+		expect(screen.getByRole("img", { name: "hermes" })).toHaveAttribute("src", expect.stringContaining("hermes.png"));
+	});
 });

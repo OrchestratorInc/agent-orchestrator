@@ -40,6 +40,7 @@ import gooseDarkLogo from "../assets/agents/goose-dark.svg";
 import gooseLightLogo from "../assets/agents/goose-light.svg";
 import grokDarkLogo from "../assets/agents/grok-dark.svg";
 import grokLightLogo from "../assets/agents/grok-light.svg";
+import hermesLogo from "../assets/agents/hermes.png";
 import kilocodeDarkLogo from "../assets/agents/kilocode-dark.svg";
 import kilocodeLightLogo from "../assets/agents/kilocode-light.svg";
 import kimiDarkLogo from "../assets/agents/kimi-dark.svg";
@@ -105,6 +106,7 @@ const LOGOS: AgentLogoSources = {
 	"unreal-agent": { light: unrealAgentLightLogo, dark: unrealAgentDarkLogo },
 	"mimo-code": mimoCodeLogo,
 	"deepseek-harness": { light: deepseekHarnessLightLogo, dark: deepseekHarnessDarkLogo },
+	hermes: hermesLogo,
 };
 
 /**
