@@ -176,10 +176,10 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	if resolver, supports := agent.(ports.AgentNativeSessionResolver); supports && o.dataDir != "" {
 		id, found, resolveErr := resolver.ResolveNativeSessionID(ctx, resolveCfg)
 		if resolveErr != nil {
+			// Native identity is optional evidence; a failed lookup must not
+			// discard activity established by the current terminal frame.
 			o.logger.Debug("activity observer: native identity unavailable", "session", session.ID, "err", resolveErr)
-			return
-		}
-		if found {
+		} else if found {
 			nativeID = id
 		}
 	}

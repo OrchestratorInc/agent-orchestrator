@@ -55,6 +55,7 @@ type pollingResolverAgent struct {
 	state              domain.ActivityState
 	continuousIdentity bool
 	resolvedID         string
+	resolveErr         error
 	resolveCalls       int
 	persistCalls       int
 	persistErr         error
@@ -70,7 +71,7 @@ func (a *pollingResolverAgent) ContinuouslyResolveNativeSessionID() bool {
 }
 func (a *pollingResolverAgent) ResolveNativeSessionID(context.Context, ports.NativeSessionResolveConfig) (string, bool, error) {
 	a.resolveCalls++
-	return a.resolvedID, true, nil
+	return a.resolvedID, true, a.resolveErr
 }
 func (a *pollingResolverAgent) PersistNativeSessionID(context.Context, ports.NativeSessionResolveConfig, string) error {
 	a.persistCalls++
@@ -98,6 +99,57 @@ func TestPollOnlyResolvesOrdinaryNativeIdentityOnStateChange(t *testing.T) {
 	}
 	if agent.resolveCalls != 1 || len(sink.signals) != 1 || sink.signals[0].AgentSessionID != "native-id" {
 		t.Fatalf("state change missed native identity: calls=%d signals=%+v", agent.resolveCalls, sink.signals)
+	}
+}
+
+type renderedResolverAgent struct{ *pollingResolverAgent }
+
+func (renderedResolverAgent) RequiresRenderedActivity() bool { return true }
+
+func TestPollReconcilesActivityWhenNativeIdentityResolutionFails(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		current, next domain.ActivityState
+		event         string
+	}{
+		{"active to idle", domain.ActivityActive, domain.ActivityIdle, "terminal-idle"},
+		{"blocked to idle", domain.ActivityBlocked, domain.ActivityIdle, "permission-resolved"},
+		{"blocked to active", domain.ActivityBlocked, domain.ActivityActive, "permission-resolved"},
+		{"blocked to waiting", domain.ActivityBlocked, domain.ActivityWaitingInput, "permission-resolved"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Unix(500, 0).UTC()
+			session := activeSession(now, domain.HarnessHermes)
+			session.Activity.State = tt.current
+			session.Metadata.AgentSessionID = "previous-native-id"
+			agent := &pollingResolverAgent{
+				state:              tt.next,
+				continuousIdentity: true,
+				resolvedID:         "unconfirmed-native-id",
+				resolveErr:         errors.New("native state unavailable"),
+			}
+			sink := &fakeSink{}
+			observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, &renderedRuntime{}, fakeAgents{session.Harness: renderedResolverAgent{agent}}, Config{DataDir: t.TempDir(), Clock: func() time.Time { return now }, Logger: testLogger()})
+			for range 2 {
+				if err := observer.Poll(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if len(sink.signals) != 2 || agent.resolveCalls != 2 {
+				t.Fatalf("identity failures dropped activity: resolves=%d signals=%+v", agent.resolveCalls, sink.signals)
+			}
+			for _, signal := range sink.signals {
+				if !signal.Valid || signal.State != tt.next || signal.Event != tt.event || signal.AgentSessionID != "" {
+					t.Fatalf("activity or unconfirmed identity was projected incorrectly: %+v", signal)
+				}
+				if signal.ExpectedRevision == nil || *signal.ExpectedRevision != session.Revision || signal.LaunchID != session.Metadata.RuntimeLaunchID {
+					t.Fatalf("activity reconciliation lost its fences: %+v", signal)
+				}
+			}
+			if agent.persistCalls != 0 {
+				t.Fatal("failed identity lookup persisted a restore locator")
+			}
+		})
 	}
 }
 
