@@ -501,7 +501,10 @@ function NotificationsRow() {
 			label="Notifications"
 			disabled={toggle.disabled}
 			right={
-				<Host style={{ width: 54, height: 34 }} colorScheme={scheme} seedColor={t.accent}>
+				// iOS uses seedColor as the SwiftUI tint, i.e. the "on" track. The dark
+				// accent is near-white, which hides the white thumb, so follow the
+				// system convention of a green track there.
+				<Host style={{ width: 54, height: 34 }} colorScheme={scheme} seedColor={Platform.OS === "ios" ? t.green : t.accent}>
 					<Switch value={pending ?? toggle.value} disabled={toggle.disabled || pending !== null} onValueChange={onToggle} />
 				</Host>
 			}
