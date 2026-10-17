@@ -423,7 +423,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot),
 		hostId,
 	);
-	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot), hostId);
+	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot) && !session.needsResume, hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
 	const [annotationNavigationRequest, setAnnotationNavigationRequest] = useState<{ id: string; text: string; messageId?: string; revision?: number }>();
 	const sideEnabled = useSideChatsAvailable(session, hostId) && !unavailable;

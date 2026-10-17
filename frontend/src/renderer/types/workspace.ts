@@ -185,6 +185,7 @@ export type WorkspaceSession = {
 	/** Whether the cloud worker has a current control-plane connection. */
 	runtimeConnected?: boolean;
 	chatProviderPreserved?: boolean;
+	/** An imported chat not opened yet: it has no AO workspace until it resumes. */
 	needsResume?: boolean;
 	/** User preference to tear down this session when its PR set completes through a merge. */
 	terminateOnPrMerge?: boolean;
