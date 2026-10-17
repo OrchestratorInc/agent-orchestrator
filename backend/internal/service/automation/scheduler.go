@@ -145,15 +145,27 @@ func (s *Service) dispatch(ctx context.Context, store schedulerStore, run domain
 		_, releaseErr := store.ReleaseAutomationRun(context.WithoutCancel(ctx), run.ID, runError(err), now)
 		return errors.Join(err, releaseErr)
 	}
-	prompt, displayName := definition.Prompt, definition.DisplayName
+	spawn := ports.SpawnConfig{
+		ProjectID: definition.ProjectID, Kind: definition.Kind, Harness: definition.Harness,
+		Prompt: definition.Prompt, DisplayName: definition.DisplayName, AutomationRunID: &run.ID,
+	}
 	if run.TriggerSessionID != nil {
 		transcripts, _ := s.spawner.(transcriptLocator)
-		prompt, displayName = sessionEndedLaunch(ctx, store, transcripts, definition, *run.TriggerSessionID)
+		if definition.Purpose == domain.AutomationPurposeDreaming {
+			spawn, err = s.dreamSpawn(ctx, store, transcripts, definition, run)
+			if err != nil {
+				if errors.Is(err, errNoDreamingAgent) {
+					_, markErr := store.FailAutomationRun(context.WithoutCancel(ctx), run.ID, runError(err), now)
+					return errors.Join(err, markErr)
+				}
+				_, releaseErr := store.ReleaseAutomationRun(context.WithoutCancel(ctx), run.ID, runError(err), now)
+				return errors.Join(err, releaseErr)
+			}
+		} else {
+			spawn.Prompt, spawn.DisplayName = sessionEndedLaunch(ctx, store, transcripts, definition, *run.TriggerSessionID)
+		}
 	}
-	session, _, _, spawnErr := s.spawner.Spawn(ctx, ports.SpawnConfig{
-		ProjectID: definition.ProjectID, Kind: definition.Kind, Harness: definition.Harness,
-		Prompt: prompt, DisplayName: displayName, AutomationRunID: &run.ID,
-	})
+	session, _, _, spawnErr := s.spawner.Spawn(ctx, spawn)
 	if spawnErr != nil {
 		var apiError *apierr.Error
 		if session, ok, lookupErr := store.GetSessionByAutomationRunID(context.WithoutCancel(ctx), run.ID); lookupErr != nil {

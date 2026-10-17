@@ -1981,7 +1981,11 @@ type CreateAutomationRequest struct {
 	Harness     string `json:"harness,omitempty"`
 	// Trigger defaults to schedule. A session_ended automation takes no
 	// rrule or cron.
-	Trigger  string `json:"trigger,omitempty" enum:"schedule,session_ended"`
+	Trigger string `json:"trigger,omitempty" enum:"schedule,session_ended"`
+	// Purpose "dreaming" makes the automation learn from each ended session in
+	// its project and update the standing instructions. It implies the
+	// session_ended trigger; an empty prompt or name takes the default.
+	Purpose  string `json:"purpose,omitempty" enum:"dreaming"`
 	RRule    string `json:"rrule,omitempty"`
 	Cron     string `json:"cron,omitempty"`
 	Timezone string `json:"timezone"`
@@ -2023,6 +2027,7 @@ type AutomationResponse struct {
 	Kind        string                        `json:"kind" enum:"worker,orchestrator"`
 	Harness     string                        `json:"harness,omitempty"`
 	Trigger     string                        `json:"trigger" enum:"schedule,session_ended"`
+	Purpose     string                        `json:"purpose,omitempty" enum:"dreaming"`
 	RRule       string                        `json:"rrule"`
 	Timezone    string                        `json:"timezone"`
 	Enabled     bool                          `json:"enabled"`
@@ -2067,6 +2072,52 @@ type AutomationRunResponse struct {
 type ListAutomationRunsResponse struct {
 	Runs       []AutomationRunResponse `json:"runs"`
 	NextCursor string                  `json:"nextCursor,omitempty"`
+}
+
+// InstructionsProjectIDParam names the project whose standing instructions are
+// read or saved.
+type InstructionsProjectIDParam struct {
+	ProjectID string `path:"projectId" description:"Project whose standing instructions are read or saved."`
+}
+
+// SaveInstructionsRequest replaces one set of standing instructions.
+type SaveInstructionsRequest struct {
+	Body string `json:"body"`
+	// Revision, when set, makes the save fail with 409 unless it is still the
+	// latest revision. Dreaming sessions must set it.
+	Revision *int64 `json:"revision,omitempty"`
+	// SessionID is the AO session saving, if any. A dreaming session must keep
+	// every line in protectedLines.
+	SessionID string `json:"sessionId,omitempty"`
+}
+
+// InstructionsAuthorResponse is the AO session that saved a revision.
+type InstructionsAuthorResponse struct {
+	SessionID string `json:"sessionId,omitempty"`
+	Title     string `json:"title,omitempty"`
+	Dreamed   bool   `json:"dreamed"`
+}
+
+// InstructionsResponse is one set of standing instructions: the user's own
+// (no projectId), which AO adds to every new session, or one project's.
+type InstructionsResponse struct {
+	ProjectID string `json:"projectId,omitempty"`
+	Body      string `json:"body"`
+	// Revision is 0 until the first save.
+	Revision  int64                       `json:"revision"`
+	UpdatedAt *time.Time                  `json:"updatedAt,omitempty"`
+	UpdatedBy *InstructionsAuthorResponse `json:"updatedBy,omitempty"`
+	// PreviousBody is the revision before the latest, which undo restores.
+	PreviousBody *string `json:"previousBody,omitempty"`
+	// ProtectedLines are the lines a dreaming save must keep.
+	ProtectedLines []string `json:"protectedLines"`
+	// RemovedLines are lines people deleted; dreaming must not add them back.
+	RemovedLines []string `json:"removedLines"`
+}
+
+// InstructionsEnvelope wraps one set of standing instructions.
+type InstructionsEnvelope struct {
+	Instructions InstructionsResponse `json:"instructions"`
 }
 
 // AgentInstallResponse is shared by the agent harness start and status routes.

@@ -5611,6 +5611,10 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 		return "", nil
 	}
 
+	cfg.UserInstructions = m.standingInstructions(ctx, "")
+	if projectID != "" {
+		cfg.ProjectInstructions = m.standingInstructions(ctx, projectID)
+	}
 	if projectID != "" {
 		workspacePrompt, err := m.workspaceProjectPrompt(ctx, kind, projectID)
 		if err != nil {
@@ -5630,6 +5634,27 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 		cfg.AdditionalSections = append(cfg.AdditionalSections, artifactOutputPrompt)
 	}
 	return buildSystemPromptText(cfg), nil
+}
+
+// instructionsReader is the optional store lookup for the standing
+// instructions the user keeps in AO.
+type instructionsReader interface {
+	CurrentInstructions(context.Context, domain.ProjectID) (string, error)
+}
+
+// standingInstructions returns one set of standing instructions, or "" when
+// the store cannot read them. A failed read must not block a launch.
+func (m *Manager) standingInstructions(ctx context.Context, projectID domain.ProjectID) string {
+	reader, ok := m.store.(instructionsReader)
+	if !ok {
+		return ""
+	}
+	text, err := reader.CurrentInstructions(ctx, projectID)
+	if err != nil {
+		m.logger.Warn("read standing instructions; launching without them", "project", projectID, "err", err)
+		return ""
+	}
+	return text
 }
 
 // aoSkillPointer is appended to every agent system prompt. It points the agent

@@ -86,7 +86,9 @@ func (f *schedulerMemoryStore) ClaimNextAutomationRun(_ context.Context, now, le
 	}
 	var candidates []domain.AutomationRun
 	for _, run := range f.runs {
-		if run.Status == domain.AutomationRunPending && f.automations[run.AutomationID].Enabled && (!active[run.AutomationID] || run.TriggerSessionID != nil) {
+		definition := f.automations[run.AutomationID]
+		overlaps := run.TriggerSessionID != nil && definition.Purpose != domain.AutomationPurposeDreaming
+		if run.Status == domain.AutomationRunPending && definition.Enabled && (!active[run.AutomationID] || overlaps) {
 			candidates = append(candidates, run)
 		}
 	}

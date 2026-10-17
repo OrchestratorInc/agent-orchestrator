@@ -6158,6 +6158,42 @@ func TestSystemPrompt_AppendsConfidentialityGuard(t *testing.T) {
 	}
 }
 
+// instructionsStore adds the standing-instructions lookup the SQLite store has.
+type instructionsStore struct {
+	*fakeStore
+	byProject map[domain.ProjectID]string
+}
+
+func (s instructionsStore) CurrentInstructions(_ context.Context, projectID domain.ProjectID) (string, error) {
+	return s.byProject[projectID], nil
+}
+
+// A new session must start with the instructions saved in AO at launch time,
+// so what dreaming learned reaches the next session without a restart.
+func TestSystemPrompt_ReadsStandingInstructionsFromTheStore(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: t.TempDir(), Config: testRoleAgents()}
+	m := New(Deps{
+		Runtime:   &fakeRuntime{},
+		Agents:    singleAgent{agent: &recordingAgent{}},
+		Workspace: &fakeWorkspace{},
+		Store:     instructionsStore{fakeStore: st, byProject: map[domain.ProjectID]string{"": "Answer first.", "mer": "Run focused tests."}},
+		Messenger: &fakeMessenger{},
+		Lifecycle: &fakeLCM{store: st},
+		DataDir:   t.TempDir(),
+		LookPath:  func(string) (string, error) { return "/bin/true", nil },
+	})
+	for _, kind := range []domain.SessionKind{domain.KindWorker, domain.KindOrchestrator} {
+		sp, err := m.buildSystemPrompt(ctx, kind, "mer", "mer-7", "", false)
+		if err != nil {
+			t.Fatalf("buildSystemPrompt(%s): %v", kind, err)
+		}
+		if !strings.Contains(sp, "## User Instructions") || !strings.Contains(sp, "Answer first.") || !strings.Contains(sp, "## Project Instructions") || !strings.Contains(sp, "Run focused tests.") {
+			t.Fatalf("%s system prompt is missing the standing instructions:\n%s", kind, sp)
+		}
+	}
+}
+
 func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: t.TempDir(), Config: testRoleAgents()}

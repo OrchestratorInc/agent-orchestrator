@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 // AutomationID identifies one recurring automation definition.
 type AutomationID string
@@ -35,6 +38,22 @@ const (
 	AutomationTriggerSessionEnded AutomationTrigger = "session_ended"
 )
 
+// AutomationPurpose marks an automation AO gives a built-in job.
+type AutomationPurpose string
+
+const (
+	// AutomationPurposeNone is an ordinary user-defined automation.
+	AutomationPurposeNone AutomationPurpose = ""
+	// AutomationPurposeDreaming learns from each ended session in its project
+	// and updates the user's and the project's standing instructions. A
+	// project has at most one.
+	AutomationPurposeDreaming AutomationPurpose = "dreaming"
+)
+
+// ErrDreamingAutomationExists reports a second dreaming automation for a
+// project.
+var ErrDreamingAutomationExists = errors.New("the project already has a dreaming automation")
+
 // Automation is the durable user-authored recurring definition. RRuleText is
 // canonical; Timezone preserves the wall-clock intent used to advance it.
 // Session-ended definitions have no schedule: RRuleText is empty and
@@ -47,6 +66,7 @@ type Automation struct {
 	Kind        SessionKind       `json:"kind"`
 	Harness     AgentHarness      `json:"harness,omitempty"`
 	Trigger     AutomationTrigger `json:"trigger"`
+	Purpose     AutomationPurpose `json:"purpose,omitempty"`
 	RRuleText   string            `json:"rrule"`
 	Timezone    string            `json:"timezone"`
 	Enabled     bool              `json:"enabled"`

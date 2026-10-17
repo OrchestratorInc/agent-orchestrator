@@ -17,6 +17,8 @@ import { Input } from "./ui/input";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { DreamingPanel } from "./DreamingPanel";
+import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import { useAgentReadinessQuery, type AgentReadinessSnapshot } from "../hooks/useAgentReadinessQuery";
 import { useProjectDefaultWorker } from "../hooks/useProjectDefaultWorker";
@@ -71,7 +73,10 @@ export function AutomationsView() {
 	const { t } = useTranslation();
 	const query = useAutomations();
 	const showPageTitle = hidesShellTopbar();
-	const workspaces = useWorkspaceQuery().data ?? [];
+	const allWorkspaces = useWorkspaceQuery().data ?? [];
+	// Automations belong to projects; the Scratchpad groups standalone sessions
+	// (dreams run there) and is not one.
+	const workspaces = allWorkspaces.filter((workspace) => workspace.id !== STANDALONE_WORKSPACE_ID);
 	const harnesses = useAgentReadinessQuery().data?.agents ?? [];
 	const create = useCreateAutomation();
 	const update = useUpdateAutomation();
@@ -83,7 +88,7 @@ export function AutomationsView() {
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [filter, setFilter] = useState<"all" | "enabled" | "paused">("all");
 	const automations = query.data ?? [];
-	const sessionTitles = new Map(workspaces.flatMap((workspace) => workspace.sessions.map((session) => [session.id, session.title] as const)));
+	const sessionTitles = new Map(allWorkspaces.flatMap((workspace) => workspace.sessions.map((session) => [session.id, session.title] as const)));
 	const visibleAutomations = automations.filter((item) => filter === "all" || (filter === "enabled" ? item.enabled : !item.enabled));
 
 	return (
@@ -101,6 +106,7 @@ export function AutomationsView() {
 			<main className="relative min-h-0 flex-1 overflow-hidden">
 				<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60" tabIndex={0}>
 				<div className="p-4">
+				<DreamingPanel automations={automations} projects={workspaces.map((workspace) => ({ id: workspace.id, name: workspace.name }))} />
 				{actionError ? <p role="alert" className="mb-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{actionError}</p> : null}
 				{query.isLoading ? <p role="status" className="px-3 py-8 text-center text-sm text-muted-foreground">{t("automations.loading")}</p> : null}
 				{query.error ? <p role="alert" className="text-sm text-destructive">{query.error.message}</p> : null}

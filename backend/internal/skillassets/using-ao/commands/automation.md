@@ -48,6 +48,8 @@ ao automation create --project my-app --name "Session review" --prompt "Review h
 
 A session-ended run starts one new worker per ended worker. Its prompt ends with the ended session's ID, branch, PRs, task, and transcript path. Sessions started by a session-ended run never start another one.
 
+A dreaming automation is a session-ended automation with a built-in job. It reads what the user typed in the ended session after the opening task, and updates the standing instructions: the user's own and the project's (see [instructions.md](instructions.md)). Each project has at most one, and you turn it on from the desktop app's Automations page. It skips sessions where the user typed nothing after the opening task. Each dream runs as a standalone session, so it needs no worktree. Within a project, dreams run one at a time.
+
 ---
 
 ### ao automation list

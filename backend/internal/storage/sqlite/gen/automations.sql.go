@@ -194,7 +194,7 @@ func (q *Queries) FailAutomationRun(ctx context.Context, arg FailAutomationRunPa
 const getAutomation = `-- name: GetAutomation :one
 SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
     timezone, enabled, next_run_at, last_run_at, created_at, updated_at,
-    trigger_type
+    trigger_type, purpose
 FROM automations
 WHERE id = ?
 `
@@ -217,6 +217,7 @@ func (q *Queries) GetAutomation(ctx context.Context, id domain.AutomationID) (Au
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TriggerType,
+		&i.Purpose,
 	)
 	return i, err
 }
@@ -295,7 +296,9 @@ FROM automation_runs r
 JOIN automations a ON a.id = r.automation_id
 WHERE r.status = 'pending'
   AND a.enabled = 1
-  AND (r.trigger_session_id IS NOT NULL OR NOT EXISTS (
+  -- Session-ended runs may overlap, except dreaming: its runs edit the same
+  -- instructions, so they take turns.
+  AND ((r.trigger_session_id IS NOT NULL AND a.purpose <> 'dreaming') OR NOT EXISTS (
       SELECT 1 FROM automation_runs active
       WHERE active.automation_id = r.automation_id
         AND active.status IN ('spawning', 'running')
@@ -330,8 +333,8 @@ const insertAutomation = `-- name: InsertAutomation :exec
 INSERT INTO automations (
     id, project_id, display_name, prompt, kind, harness, rrule_text,
     timezone, enabled, next_run_at, last_run_at, created_at, updated_at,
-    trigger_type
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    trigger_type, purpose
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertAutomationParams struct {
@@ -349,6 +352,7 @@ type InsertAutomationParams struct {
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	TriggerType domain.AutomationTrigger
+	Purpose     domain.AutomationPurpose
 }
 
 func (q *Queries) InsertAutomation(ctx context.Context, arg InsertAutomationParams) error {
@@ -367,6 +371,7 @@ func (q *Queries) InsertAutomation(ctx context.Context, arg InsertAutomationPara
 		arg.CreatedAt,
 		arg.UpdatedAt,
 		arg.TriggerType,
+		arg.Purpose,
 	)
 	return err
 }
@@ -561,7 +566,7 @@ func (q *Queries) ListAutomationRuns(ctx context.Context, arg ListAutomationRuns
 const listAutomations = `-- name: ListAutomations :many
 SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
     timezone, enabled, next_run_at, last_run_at, created_at, updated_at,
-    trigger_type
+    trigger_type, purpose
 FROM automations
 WHERE (?1 = '' OR project_id = ?1)
   AND (?2 < 0 OR enabled = ?2)
@@ -605,6 +610,7 @@ func (q *Queries) ListAutomations(ctx context.Context, arg ListAutomationsParams
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.TriggerType,
+			&i.Purpose,
 		); err != nil {
 			return nil, err
 		}
@@ -622,7 +628,7 @@ func (q *Queries) ListAutomations(ctx context.Context, arg ListAutomationsParams
 const listDueAutomations = `-- name: ListDueAutomations :many
 SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
     timezone, enabled, next_run_at, last_run_at, created_at, updated_at,
-    trigger_type
+    trigger_type, purpose
 FROM automations
 WHERE enabled = 1 AND trigger_type = 'schedule' AND next_run_at <= ?
 ORDER BY next_run_at, id
@@ -658,6 +664,7 @@ func (q *Queries) ListDueAutomations(ctx context.Context, arg ListDueAutomations
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.TriggerType,
+			&i.Purpose,
 		); err != nil {
 			return nil, err
 		}
@@ -740,7 +747,7 @@ func (q *Queries) ListLatestAutomationRuns(ctx context.Context, automationIds []
 const listSessionEndedAutomations = `-- name: ListSessionEndedAutomations :many
 SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
     timezone, enabled, next_run_at, last_run_at, created_at, updated_at,
-    trigger_type
+    trigger_type, purpose
 FROM automations
 WHERE project_id = ? AND enabled = 1 AND trigger_type = 'session_ended'
 ORDER BY created_at, id
@@ -770,6 +777,7 @@ func (q *Queries) ListSessionEndedAutomations(ctx context.Context, projectID dom
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.TriggerType,
+			&i.Purpose,
 		); err != nil {
 			return nil, err
 		}

@@ -16,6 +16,9 @@ func (s *Store) CreateAutomation(ctx context.Context, rec domain.Automation) (do
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if err := s.qw.InsertAutomation(ctx, automationToInsert(rec)); err != nil {
+		if rec.Purpose == domain.AutomationPurposeDreaming && isSQLiteUnique(err) {
+			return domain.Automation{}, domain.ErrDreamingAutomationExists
+		}
 		return domain.Automation{}, fmt.Errorf("insert automation %s: %w", rec.ID, err)
 	}
 	return rec, nil
@@ -278,6 +281,7 @@ func automationToInsert(rec domain.Automation) gen.InsertAutomationParams {
 		CreatedAt:   rec.CreatedAt,
 		UpdatedAt:   rec.UpdatedAt,
 		TriggerType: automationTrigger(rec.Trigger),
+		Purpose:     rec.Purpose,
 	}
 }
 
@@ -298,6 +302,7 @@ func automationFromGen(row gen.Automation) domain.Automation {
 		Kind:        row.Kind,
 		Harness:     row.Harness,
 		Trigger:     row.TriggerType,
+		Purpose:     row.Purpose,
 		RRuleText:   row.RruleText,
 		Timezone:    row.Timezone,
 		Enabled:     row.Enabled,

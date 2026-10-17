@@ -204,6 +204,7 @@ var shippedMigrations = map[int64]string{
 	199: "0199_conversation_message_continuation.sql",
 	200: "0200_session_artifact_version_source.sql",
 	201: "0201_automation_session_ended_trigger.sql",
+	202: "0202_dreaming_instructions.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

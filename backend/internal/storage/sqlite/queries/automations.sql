@@ -2,20 +2,20 @@
 INSERT INTO automations (
     id, project_id, display_name, prompt, kind, harness, rrule_text,
     timezone, enabled, next_run_at, last_run_at, created_at, updated_at,
-    trigger_type
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    trigger_type, purpose
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetAutomation :one
 SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
     timezone, enabled, next_run_at, last_run_at, created_at, updated_at,
-    trigger_type
+    trigger_type, purpose
 FROM automations
 WHERE id = ?;
 
 -- name: ListAutomations :many
 SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
     timezone, enabled, next_run_at, last_run_at, created_at, updated_at,
-    trigger_type
+    trigger_type, purpose
 FROM automations
 WHERE (sqlc.arg(project_id) = '' OR project_id = sqlc.arg(project_id))
   AND (sqlc.arg(enabled_filter) < 0 OR enabled = sqlc.arg(enabled_filter))
@@ -46,7 +46,7 @@ WHERE id = ? AND enabled = 1 AND next_run_at = ?;
 -- name: ListDueAutomations :many
 SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
     timezone, enabled, next_run_at, last_run_at, created_at, updated_at,
-    trigger_type
+    trigger_type, purpose
 FROM automations
 WHERE enabled = 1 AND trigger_type = 'schedule' AND next_run_at <= ?
 ORDER BY next_run_at, id
@@ -123,7 +123,9 @@ FROM automation_runs r
 JOIN automations a ON a.id = r.automation_id
 WHERE r.status = 'pending'
   AND a.enabled = 1
-  AND (r.trigger_session_id IS NOT NULL OR NOT EXISTS (
+  -- Session-ended runs may overlap, except dreaming: its runs edit the same
+  -- instructions, so they take turns.
+  AND ((r.trigger_session_id IS NOT NULL AND a.purpose <> 'dreaming') OR NOT EXISTS (
       SELECT 1 FROM automation_runs active
       WHERE active.automation_id = r.automation_id
         AND active.status IN ('spawning', 'running')
@@ -170,7 +172,7 @@ WHERE id = ? AND status = 'spawning';
 -- name: ListSessionEndedAutomations :many
 SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
     timezone, enabled, next_run_at, last_run_at, created_at, updated_at,
-    trigger_type
+    trigger_type, purpose
 FROM automations
 WHERE project_id = ? AND enabled = 1 AND trigger_type = 'session_ended'
 ORDER BY created_at, id;

@@ -251,6 +251,11 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersAutomationRunSummaryResponse":              "AutomationRunSummaryResponse",
 	"ControllersAutomationResponse":                        "AutomationResponse",
 	"ControllersAutomationEnvelope":                        "AutomationEnvelope",
+	"ControllersInstructionsProjectIDParam":                "InstructionsProjectIDParam",
+	"ControllersSaveInstructionsRequest":                   "SaveInstructionsRequest",
+	"ControllersInstructionsAuthorResponse":                "InstructionsAuthorResponse",
+	"ControllersInstructionsResponse":                      "InstructionsResponse",
+	"ControllersInstructionsEnvelope":                      "InstructionsEnvelope",
 	"ControllersListAutomationsResponse":                   "ListAutomationsResponse",
 	"ControllersAutomationRunResponse":                     "AutomationRunResponse",
 	"ControllersListAutomationRunsResponse":                "ListAutomationRunsResponse",
@@ -672,6 +677,7 @@ func operations() []operation {
 	ops = append(ops, projectOperations()...)
 	ops = append(ops, sessionOperations()...)
 	ops = append(ops, automationOperations()...)
+	ops = append(ops, instructionsOperations()...)
 	ops = append(ops, prOperations()...)
 	ops = append(ops, reviewOperations()...)
 	ops = append(ops, notificationOperations()...)
@@ -708,6 +714,33 @@ func automationOperations() []operation {
 		{method: http.MethodPatch, path: "/api/v1/automations/{automationId}", id: "updateAutomation", tag: "automations", summary: "Update an automation", pathParams: id, reqBody: controllers.UpdateAutomationRequest{}, resps: append([]respUnit{{http.StatusOK, controllers.AutomationEnvelope{}}}, commonErrors...)},
 		{method: http.MethodDelete, path: "/api/v1/automations/{automationId}", id: "deleteAutomation", tag: "automations", summary: "Delete an automation and its run history", pathParams: id, resps: append([]respUnit{{http.StatusNoContent, nil}}, commonErrors...)},
 		{method: http.MethodGet, path: "/api/v1/automations/{automationId}/runs", id: "listAutomationRuns", tag: "automations", summary: "List durable automation run history", pathParams: []any{controllers.AutomationIDParam{}, controllers.ListAutomationRunsQuery{}}, resps: append([]respUnit{{http.StatusOK, controllers.ListAutomationRunsResponse{}}}, commonErrors...)},
+	}
+}
+
+// instructionsOperations declares the standing-instructions routes. Must stay
+// 1:1 with InstructionsController.Register.
+func instructionsOperations() []operation {
+	project := []any{controllers.InstructionsProjectIDParam{}}
+	getResps := []respUnit{
+		{http.StatusOK, controllers.InstructionsEnvelope{}},
+		{http.StatusNotFound, envelope.APIError{}},
+		{http.StatusInternalServerError, envelope.APIError{}},
+		{http.StatusNotImplemented, envelope.APIError{}},
+	}
+	saveResps := []respUnit{
+		{http.StatusOK, controllers.InstructionsEnvelope{}},
+		{http.StatusBadRequest, envelope.APIError{}},
+		{http.StatusForbidden, envelope.APIError{}},
+		{http.StatusNotFound, envelope.APIError{}},
+		{http.StatusConflict, envelope.APIError{}},
+		{http.StatusInternalServerError, envelope.APIError{}},
+		{http.StatusNotImplemented, envelope.APIError{}},
+	}
+	return []operation{
+		{method: http.MethodGet, path: "/api/v1/instructions", id: "getUserInstructions", tag: "instructions", summary: "Get the user's standing instructions, which AO adds to every new session", resps: getResps},
+		{method: http.MethodPut, path: "/api/v1/instructions", id: "saveUserInstructions", tag: "instructions", summary: "Save the user's standing instructions", reqBody: controllers.SaveInstructionsRequest{}, resps: saveResps},
+		{method: http.MethodGet, path: "/api/v1/projects/{projectId}/instructions", id: "getProjectInstructions", tag: "instructions", summary: "Get a project's standing instructions, which AO adds to the project's new sessions", pathParams: project, resps: getResps},
+		{method: http.MethodPut, path: "/api/v1/projects/{projectId}/instructions", id: "saveProjectInstructions", tag: "instructions", summary: "Save a project's standing instructions", pathParams: project, reqBody: controllers.SaveInstructionsRequest{}, resps: saveResps},
 	}
 }
 

@@ -2,6 +2,7 @@ package automation
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -20,6 +21,10 @@ const (
 var (
 	errInvalidTrigger       = apierr.Invalid("INVALID_AUTOMATION_TRIGGER", "Automation trigger must be schedule or session_ended", nil)
 	errSessionEndedSchedule = apierr.Invalid("INVALID_AUTOMATION_SCHEDULE", "Session-ended automations have no schedule", nil)
+	errInvalidPurpose       = apierr.Invalid("INVALID_AUTOMATION_PURPOSE", "Automation purpose must be empty or dreaming", nil)
+	errDreamingTrigger      = apierr.Invalid("INVALID_AUTOMATION_TRIGGER", "Dreaming starts when a session ends", nil)
+	errDreamingKind         = apierr.Invalid("INVALID_AUTOMATION_KIND", "Dreaming runs as a worker", nil)
+	errDreamingExists       = apierr.Conflict("DREAMING_EXISTS", "This project already has a dreaming automation", nil)
 )
 
 // Store is the persistence surface needed for definition management.
@@ -72,7 +77,10 @@ type CreateInput struct {
 	Harness     domain.AgentHarness
 	// Trigger defaults to schedule. Session-ended definitions take no
 	// schedule.
-	Trigger  domain.AutomationTrigger
+	Trigger domain.AutomationTrigger
+	// Purpose dreaming fills an empty name, prompt, kind and trigger with
+	// the dreaming defaults, and requires the session_ended trigger.
+	Purpose  domain.AutomationPurpose
 	RRule    string
 	Cron     string
 	Timezone string
@@ -104,6 +112,19 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automat
 	}
 	if !ok || !project.ArchivedAt.IsZero() {
 		return domain.Automation{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
+	}
+	switch input.Purpose {
+	case domain.AutomationPurposeNone:
+	case domain.AutomationPurposeDreaming:
+		input = withDreamingDefaults(input)
+		if input.Trigger != domain.AutomationTriggerSessionEnded {
+			return domain.Automation{}, errDreamingTrigger
+		}
+		if input.Kind != domain.KindWorker {
+			return domain.Automation{}, errDreamingKind
+		}
+	default:
+		return domain.Automation{}, errInvalidPurpose
 	}
 	displayName := strings.TrimSpace(input.DisplayName)
 	if displayName == "" || utf8.RuneCountInString(displayName) > maxDisplayNameRunes {
@@ -154,6 +175,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automat
 		Kind:        input.Kind,
 		Harness:     input.Harness,
 		Trigger:     trigger,
+		Purpose:     input.Purpose,
 		RRuleText:   schedule.RRuleText,
 		Timezone:    schedule.Timezone,
 		Enabled:     enabled,
@@ -162,6 +184,9 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automat
 		UpdatedAt:   now,
 	}
 	created, err := s.store.CreateAutomation(ctx, rec)
+	if errors.Is(err, domain.ErrDreamingAutomationExists) {
+		return domain.Automation{}, errDreamingExists
+	}
 	if err != nil {
 		return domain.Automation{}, apierr.Internal("AUTOMATION_CREATE_FAILED", "Failed to create automation")
 	}
@@ -260,6 +285,14 @@ func (s *Service) Update(ctx context.Context, id domain.AutomationID, input Upda
 			return domain.Automation{}, errInvalidTrigger
 		}
 		rec.Trigger = *input.Trigger
+	}
+	if rec.Purpose == domain.AutomationPurposeDreaming {
+		if rec.Trigger != domain.AutomationTriggerSessionEnded {
+			return domain.Automation{}, errDreamingTrigger
+		}
+		if rec.Kind != domain.KindWorker {
+			return domain.Automation{}, errDreamingKind
+		}
 	}
 	if rec.Trigger == domain.AutomationTriggerSessionEnded {
 		if (input.RRule != nil && strings.TrimSpace(*input.RRule) != "") || (input.Cron != nil && strings.TrimSpace(*input.Cron) != "") {

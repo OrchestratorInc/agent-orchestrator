@@ -150,6 +150,20 @@ sql:
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
               type: "AutomationTrigger"
+          - column: "automations.purpose"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "AutomationPurpose"
+          - column: "instruction_revisions.project_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "ProjectID"
+              pointer: true
+          - column: "instruction_revisions.session_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "SessionID"
+              pointer: true
           - column: "automation_runs.id"
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"

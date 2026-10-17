@@ -173,6 +173,7 @@ type Automation struct {
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	TriggerType domain.AutomationTrigger
+	Purpose     domain.AutomationPurpose
 }
 
 type AutomationRun struct {
@@ -397,6 +398,15 @@ type Cue struct {
 	Prompt    string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+type InstructionRevision struct {
+	ID        int64
+	ProjectID *domain.ProjectID
+	Body      string
+	SessionID *domain.SessionID
+	Dreamed   bool
+	CreatedAt time.Time
 }
 
 type ModelUsageEvent struct {

@@ -2,6 +2,8 @@ package store_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -457,5 +459,54 @@ func TestTriggeredAutomationRunsDedupePerSessionAndMayOverlap(t *testing.T) {
 		if err != nil || !ok || claimed.ID != want || claimed.TriggerSessionID == nil {
 			t.Fatalf("claim = %#v ok=%v err=%v, want %s with its trigger session", claimed, ok, err, want)
 		}
+	}
+}
+
+// A project gets one dreaming automation, and its runs take turns: each dream
+// edits the same instructions, so a second must wait for the first.
+func TestDreamingAutomationIsOnePerProjectAndItsRunsTakeTurns(t *testing.T) {
+	store := newTestStore(t)
+	seedProject(t, store, "scheduled")
+	seedProject(t, store, "other")
+	ctx := context.Background()
+	base := time.Date(2026, time.October, 17, 9, 0, 0, 0, time.UTC)
+	dream := func(id domain.AutomationID, project domain.ProjectID) error {
+		_, err := store.CreateAutomation(ctx, domain.Automation{
+			ID: id, ProjectID: project, DisplayName: "Dreaming", Prompt: "Learn", Kind: domain.KindWorker,
+			Trigger: domain.AutomationTriggerSessionEnded, Purpose: domain.AutomationPurposeDreaming,
+			Enabled: true, Timezone: "UTC", NextRunAt: base, CreatedAt: base, UpdatedAt: base,
+		})
+		return err
+	}
+	if err := dream("dream", "scheduled"); err != nil {
+		t.Fatalf("first dreaming automation: %v", err)
+	}
+	if err := dream("dream-again", "scheduled"); !errors.Is(err, domain.ErrDreamingAutomationExists) {
+		t.Fatalf("second dreaming automation err = %v, want ErrDreamingAutomationExists", err)
+	}
+	if err := dream("dream-other", "other"); err != nil {
+		t.Fatalf("dreaming in another project: %v", err)
+	}
+	if got, ok, err := store.GetAutomation(ctx, "dream"); err != nil || !ok || got.Purpose != domain.AutomationPurposeDreaming {
+		t.Fatalf("dreaming automation = %#v ok=%v err=%v", got, ok, err)
+	}
+	for i := range 2 {
+		session, err := store.CreateSession(ctx, sampleRecord("scheduled"))
+		if err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+		if _, err := store.CreateTriggeredAutomationRun(ctx, domain.AutomationRun{
+			ID: domain.AutomationRunID(fmt.Sprintf("dream-run-%d", i)), AutomationID: "dream", ScheduledFor: base,
+			TriggerSessionID: &session.ID, Status: domain.AutomationRunPending, CreatedAt: base, UpdatedAt: base,
+		}); err != nil {
+			t.Fatalf("CreateTriggeredAutomationRun: %v", err)
+		}
+	}
+	lease := base.Add(time.Minute)
+	if first, ok, err := store.ClaimNextAutomationRun(ctx, base, lease); err != nil || !ok || first.ID != "dream-run-0" {
+		t.Fatalf("first claim = %#v ok=%v err=%v", first, ok, err)
+	}
+	if second, ok, err := store.ClaimNextAutomationRun(ctx, base, lease); err != nil || ok {
+		t.Fatalf("second dream claimed while the first runs: %#v ok=%v err=%v", second, ok, err)
 	}
 }

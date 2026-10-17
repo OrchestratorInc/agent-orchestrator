@@ -48,6 +48,10 @@ vi.mock("../hooks/useAgentModelsQuery", () => ({
 	refreshAgentModels: vi.fn(),
 	revalidateAgentModels: vi.fn(),
 }));
+vi.mock("../hooks/useInstructions", () => ({
+	useInstructions: () => ({ data: { body: "", revision: 0, protectedLines: [], removedLines: [] }, isLoading: false, error: null }),
+	useSaveInstructions: () => ({ mutate: vi.fn(), isPending: false, error: null }),
+}));
 vi.mock("../hooks/useAutomations", () => ({
 	useAutomations: () => ({ data: mocks.automations, isLoading: false, error: null }),
 	useCreateAutomation: () => ({ mutateAsync: mocks.create, isPending: false, error: null }),

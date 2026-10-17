@@ -2153,6 +2153,91 @@ paths:
       summary: Validate a selected folder for project import onboarding
       tags:
       - import
+  /api/v1/instructions:
+    get:
+      operationId: getUserInstructions
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstructionsEnvelope'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get the user's standing instructions, which AO adds to every new session
+      tags:
+      - instructions
+    put:
+      operationId: saveUserInstructions
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaveInstructionsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstructionsEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Save the user's standing instructions
+      tags:
+      - instructions
   /api/v1/link-preview:
     get:
       operationId: getLinkPreview
@@ -3337,6 +3422,108 @@ paths:
       summary: Create a cue for a project
       tags:
       - cues
+  /api/v1/projects/{projectId}/instructions:
+    get:
+      operationId: getProjectInstructions
+      parameters:
+      - description: Project whose standing instructions are read or saved.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose standing instructions are read or saved.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstructionsEnvelope'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get a project's standing instructions, which AO adds to the project's
+        new sessions
+      tags:
+      - instructions
+    put:
+      operationId: saveProjectInstructions
+      parameters:
+      - description: Project whose standing instructions are read or saved.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose standing instructions are read or saved.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaveInstructionsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstructionsEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Save a project's standing instructions
+      tags:
+      - instructions
   /api/v1/projects/clone:
     post:
       operationId: cloneProject
@@ -11941,6 +12128,10 @@ components:
           type: string
         prompt:
           type: string
+        purpose:
+          enum:
+          - dreaming
+          type: string
         rrule:
           type: string
         timezone:
@@ -13953,6 +14144,10 @@ components:
           type: string
         prompt:
           type: string
+        purpose:
+          enum:
+          - dreaming
+          type: string
         rrule:
           type: string
         timezone:
@@ -14844,6 +15039,58 @@ components:
       required:
       - target
       - status
+      type: object
+    InstructionsAuthorResponse:
+      properties:
+        dreamed:
+          type: boolean
+        sessionId:
+          type: string
+        title:
+          type: string
+      required:
+      - dreamed
+      type: object
+    InstructionsEnvelope:
+      properties:
+        instructions:
+          $ref: '#/components/schemas/InstructionsResponse'
+      required:
+      - instructions
+      type: object
+    InstructionsResponse:
+      properties:
+        body:
+          type: string
+        previousBody:
+          type:
+          - "null"
+          - string
+        projectId:
+          type: string
+        protectedLines:
+          items:
+            type: string
+          type: array
+        removedLines:
+          items:
+            type: string
+          type: array
+        revision:
+          format: int64
+          type: integer
+        updatedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        updatedBy:
+          $ref: '#/components/schemas/InstructionsAuthorResponse'
+      required:
+      - body
+      - revision
+      - protectedLines
+      - removedLines
       type: object
     InvokeCueRequest:
       properties:
@@ -16391,6 +16638,19 @@ components:
       required:
       - ok
       - sessionId
+      type: object
+    SaveInstructionsRequest:
+      properties:
+        body:
+          type: string
+        revision:
+          type:
+          - "null"
+          - integer
+        sessionId:
+          type: string
+      required:
+      - body
       type: object
     SaveRenderArtifactRequest:
       properties:
