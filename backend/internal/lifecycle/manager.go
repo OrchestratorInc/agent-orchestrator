@@ -271,6 +271,12 @@ type Manager struct {
 	// adapter via WithUrgentNudgeGate; the default answers false, so an unknown
 	// harness never takes an urgent write while waiting_input.
 	urgentNudgeWaitingInputSafe func(domain.AgentHarness) bool
+	// reviewNoticeMu serializes "review done" deliveries so the submit path,
+	// a PR observation, and the sweep can never send the same notice twice.
+	// reviewNoticeSeen records when a finished pass was first found waiting
+	// for its provider review to be observed (see reviewNoticeObserveGrace).
+	reviewNoticeMu   sync.Mutex
+	reviewNoticeSeen map[string]time.Time
 }
 
 // New builds a Lifecycle Manager over the session store it writes and the messenger it uses for agent nudges.
@@ -288,6 +294,7 @@ func New(store sessionStore, messenger ports.AgentMessenger, opts ...Option) *Ma
 		flights:                     map[domain.SessionID]*toolFlight{},
 		steps:                       map[domain.SessionID][]domain.SessionStep{},
 		pendingLaunches:             map[domain.SessionID]pendingLaunch{},
+		reviewNoticeSeen:            map[string]time.Time{},
 		steerActive:                 func(domain.AgentHarness) bool { return false },
 		startupSignalGatesInput:     func(domain.AgentHarness) bool { return false },
 		urgentNudgeWaitingInputSafe: func(domain.AgentHarness) bool { return false },

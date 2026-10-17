@@ -516,6 +516,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			// Completion refreshes this snapshot before delivery. Keeping the
 			// trigger-time value also makes a running pass truthful in the API.
 			AutoInjectReview: worker.AutoInjectReview,
+			ReviewerModel:    config.Model,
 		}
 		if err := e.store.InsertReviewRun(ctx, run); err != nil {
 			if errors.Is(err, domain.ErrDuplicateReviewRun) {

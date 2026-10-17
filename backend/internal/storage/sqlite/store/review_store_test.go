@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -872,5 +873,110 @@ func TestInsertReviewRunAllowsRerunAfterApproval(t *testing.T) {
 	runs, err := s.ListReviewRunsBySession(ctx, rec.ID)
 	if err != nil || len(runs) != 2 || runs[0].Verdict != domain.VerdictApproved || runs[1].Verdict != domain.VerdictApproved {
 		t.Fatalf("approval history = %+v, %v", runs, err)
+	}
+}
+
+// A pass that ends owes its worker one "review done" message, marked on the
+// final status write itself so every ending path (submit, cancel, failure)
+// and a daemon restart see it. Sessions with review feedback off owe none.
+func TestReviewRunFinalStatusQueuesWorkerNotice(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	on, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	offRec := sampleRecord("mer")
+	offRec.AutoInjectReview = false
+	off, err := s.CreateSession(ctx, offRec)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, sess := range []domain.SessionRecord{on, off} {
+		if err := s.UpsertReview(ctx, domain.Review{ID: "rev-" + string(sess.ID), SessionID: sess.ID, ProjectID: sess.ProjectID, Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now}); err != nil {
+			t.Fatalf("upsert review: %v", err)
+		}
+	}
+	insert := func(id string, sess domain.SessionRecord, sha string, at time.Time) {
+		t.Helper()
+		run := domain.ReviewRun{ID: id, ReviewID: "rev-" + string(sess.ID), SessionID: sess.ID, Harness: domain.ReviewerCodex, ReviewerModel: "gpt-5.5",
+			PRURL: "https://example/pr/" + string(sess.ID), TargetSHA: sha, Status: domain.ReviewRunRunning, CreatedAt: at, AutoInjectReview: sess.AutoInjectReview}
+		if err := s.InsertReviewRun(ctx, run); err != nil {
+			t.Fatalf("insert %s: %v", id, err)
+		}
+	}
+	notice := func(id string) domain.ReviewRun {
+		t.Helper()
+		run, ok, err := s.GetReviewRun(ctx, id)
+		if err != nil || !ok {
+			t.Fatalf("get %s: ok=%v err=%v", id, ok, err)
+		}
+		return run
+	}
+
+	insert("approved", on, "sha1", now)
+	if got := notice("approved"); got.WorkerNotice != domain.ReviewWorkerNoticeNone || got.ReviewerModel != "gpt-5.5" {
+		t.Fatalf("running pass = notice %q model %q, want no notice and the recorded model", got.WorkerNotice, got.ReviewerModel)
+	}
+	if ok, err := s.UpdateReviewRunResult(ctx, "approved", domain.ReviewRunComplete, domain.VerdictApproved, "LGTM", "555", true); err != nil || !ok {
+		t.Fatalf("submit: ok=%v err=%v", ok, err)
+	}
+	if got := notice("approved").WorkerNotice; got != domain.ReviewWorkerNoticePending {
+		t.Fatalf("approved notice = %q, want pending", got)
+	}
+	// A rerun on the same head is its own pass with its own notice.
+	insert("rerun", on, "sha1", now.Add(time.Second))
+	insert("cancelled", on, "sha2", now.Add(2*time.Second))
+	if n, err := s.CancelRunningReviewRunsBySession(ctx, on.ID, "cancelled by user"); err != nil || n != 2 {
+		t.Fatalf("cancel: n=%d err=%v", n, err)
+	}
+	insert("no-inject", off, "sha3", now)
+	if ok, err := s.UpdateReviewRunResult(ctx, "no-inject", domain.ReviewRunComplete, domain.VerdictApproved, "LGTM", "", false); err != nil || !ok {
+		t.Fatalf("submit no-inject: ok=%v err=%v", ok, err)
+	}
+	if got := notice("no-inject").WorkerNotice; got != domain.ReviewWorkerNoticeNone {
+		t.Fatalf("feedback-off notice = %q, want none", got)
+	}
+
+	pending, err := s.ListPendingReviewRunNotices(ctx, on.ID)
+	if err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+	var ids []string
+	for _, run := range pending {
+		ids = append(ids, run.ID)
+	}
+	if strings.Join(ids, ",") != "approved,rerun,cancelled" {
+		t.Fatalf("pending notices = %v, want oldest first", ids)
+	}
+	sessions, err := s.ListSessionsWithPendingReviewRunNotices(ctx)
+	if err != nil || len(sessions) != 1 || sessions[0] != on.ID {
+		t.Fatalf("sessions with pending notices = %v err=%v", sessions, err)
+	}
+
+	if ok, err := s.MarkReviewRunNoticeSent(ctx, "approved"); err != nil || !ok {
+		t.Fatalf("mark sent: ok=%v err=%v", ok, err)
+	}
+	if ok, err := s.MarkReviewRunNoticeSent(ctx, "approved"); err != nil || ok {
+		t.Fatalf("second mark sent: ok=%v err=%v, want no-op", ok, err)
+	}
+	if got := notice("approved").WorkerNotice; got != domain.ReviewWorkerNoticeSent {
+		t.Fatalf("approved notice = %q, want sent", got)
+	}
+
+	// A terminated worker cannot take a message; the sweep skips it.
+	term := notice("rerun")
+	rec, _, err := s.GetSession(ctx, term.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.IsTerminated = true
+	if err := s.UpdateSession(ctx, rec); err != nil {
+		t.Fatalf("terminate: %v", err)
+	}
+	if sessions, err := s.ListSessionsWithPendingReviewRunNotices(ctx); err != nil || len(sessions) != 0 {
+		t.Fatalf("sessions with pending notices after terminate = %v err=%v", sessions, err)
 	}
 }
