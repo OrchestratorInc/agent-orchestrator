@@ -221,6 +221,7 @@ var shippedMigrations = map[int64]string{
 	20261021142844923: "20261021142844923_index_conversation_activity_provider_item_lookup.sql",
 	20261021230230412: "20261021230230412_provider_events_session_index.sql",
 	20261022054735000: "20261022054735000_device_model_catalogs.sql",
+	20261022081903875: "20261022081903875_review_run_worker_notice.sql",
 	20261022144835405: "20261022144835405_provider_events_turn_completed_index.sql",
 	20261022172135175: "20261022172135175_session_branch_naming.sql",
 }

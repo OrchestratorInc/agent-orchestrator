@@ -97,7 +97,28 @@ type ReviewRun struct {
 	// AutoInjectReview snapshots the session policy when this result is first
 	// recorded. Later toggle changes must not rewrite or deliver this run.
 	AutoInjectReview bool `json:"autoInjectReview"`
+	// ReviewerModel is the model the reviewer ran with for this pass; empty
+	// means the harness default.
+	ReviewerModel string `json:"-"`
+	// WorkerNotice tracks the one "review done" message owed to the worker
+	// once this pass is final. The store marks it pending on the final status
+	// write when the session receives review feedback.
+	WorkerNotice ReviewWorkerNotice `json:"-"`
 }
+
+// ReviewWorkerNotice is the delivery state of a pass's "review done" message.
+type ReviewWorkerNotice string
+
+// Review done notice states.
+const (
+	// ReviewWorkerNoticeNone marks a pass that owes no notice: still running,
+	// recorded before notices existed, or the session had feedback delivery off.
+	ReviewWorkerNoticeNone ReviewWorkerNotice = ""
+	// ReviewWorkerNoticePending marks a final pass whose notice is not yet sent.
+	ReviewWorkerNoticePending ReviewWorkerNotice = "pending"
+	// ReviewWorkerNoticeSent marks a pass whose notice reached the worker.
+	ReviewWorkerNoticeSent ReviewWorkerNotice = "sent"
+)
 
 // ReviewTriggerSource identifies who initiated a review pass.
 type ReviewTriggerSource string

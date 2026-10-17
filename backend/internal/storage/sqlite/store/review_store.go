@@ -253,6 +253,7 @@ func (s *Store) InsertReviewRun(ctx context.Context, r domain.ReviewRun) error {
 		GithubReviewID:   r.GithubReviewID,
 		CreatedAt:        r.CreatedAt,
 		AutoInjectReview: r.AutoInjectReview,
+		ReviewerModel:    r.ReviewerModel,
 	})
 	if isSQLiteUnique(err) {
 		return fmt.Errorf("insert review run for session %s pr %s sha %s: %w", r.SessionID, r.PRURL, r.TargetSHA, domain.ErrDuplicateReviewRun)
@@ -395,6 +396,42 @@ func (s *Store) ListReviewRunsByBatch(ctx context.Context, id domain.SessionID, 
 	return out, nil
 }
 
+// ListPendingReviewRunNotices returns a worker's final review passes that
+// still owe it a "review done" message, oldest first.
+func (s *Store) ListPendingReviewRunNotices(ctx context.Context, id domain.SessionID) ([]domain.ReviewRun, error) {
+	rows, err := s.qr.ListPendingReviewRunNoticesBySession(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("list pending review notices for session %s: %w", id, err)
+	}
+	out := make([]domain.ReviewRun, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, reviewRunFromRow(row))
+	}
+	return out, nil
+}
+
+// ListSessionsWithPendingReviewRunNotices returns every worker that is still
+// owed at least one "review done" message.
+func (s *Store) ListSessionsWithPendingReviewRunNotices(ctx context.Context) ([]domain.SessionID, error) {
+	ids, err := s.qr.ListSessionsWithPendingReviewRunNotices(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions with pending review notices: %w", err)
+	}
+	return ids, nil
+}
+
+// MarkReviewRunNoticeSent records that a pass's "review done" message reached
+// the worker. It reports false when the notice was not pending.
+func (s *Store) MarkReviewRunNoticeSent(ctx context.Context, id string) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	n, err := s.qw.MarkReviewRunNoticeSent(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 func reviewFromGetReviewBySessionRow(r gen.GetReviewBySessionRow) domain.Review {
 	return domain.Review{
 		ID:                     r.ID,
@@ -505,6 +542,8 @@ func reviewRunFromRow(r gen.ReviewRun) domain.ReviewRun {
 		CreatedAt:        r.CreatedAt,
 		DeliveredAt:      deliveredAt,
 		AutoInjectReview: r.AutoInjectReview,
+		ReviewerModel:    r.ReviewerModel,
+		WorkerNotice:     domain.ReviewWorkerNotice(r.WorkerNotice),
 	}
 }
 
