@@ -384,6 +384,49 @@ func protectCodexPrivateDirectory(path string) error {
 	return setCodexWindowsPrivateDACL(handle, true)
 }
 
+func protectNewCodexPrivateDirectory(path string) error {
+	handle, _, ownerCurrent, ownerTrusted, aclSafe, err := openCodexWindowsPathWithAccess(
+		path,
+		true,
+		windows.WRITE_OWNER|windows.WRITE_DAC|windows.READ_CONTROL,
+		false,
+	)
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(handle)
+	if !ownerTrusted || !aclSafe {
+		return errors.New("new codex private directory owner or ACL is unsafe")
+	}
+	if !ownerCurrent {
+		if err := setCodexWindowsOwnerToCurrent(handle); err != nil {
+			return err
+		}
+	}
+	return setCodexWindowsPrivateDACL(handle, true)
+}
+
+func setCodexWindowsOwnerToCurrent(handle windows.Handle) error {
+	token, err := windows.OpenCurrentProcessToken()
+	if err != nil {
+		return err
+	}
+	defer token.Close()
+	user, err := token.GetTokenUser()
+	if err != nil {
+		return err
+	}
+	return windows.SetSecurityInfo(
+		handle,
+		windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION,
+		user.User.Sid,
+		nil,
+		nil,
+		nil,
+	)
+}
+
 func protectCodexPrivateFile(path string, file *os.File) error {
 	if file == nil {
 		return errors.New("codex private file handle is unavailable")
@@ -392,21 +435,30 @@ func protectCodexPrivateFile(path string, file *os.File) error {
 	if err := windows.GetFileInformationByHandle(windows.Handle(file.Fd()), &original); err != nil {
 		return err
 	}
-	handle, opened, ownerCurrent, _, _, err := openCodexWindowsPathWithAccess(
+	handle, opened, ownerCurrent, ownerTrusted, aclSafe, err := openCodexWindowsPathWithAccess(
 		path,
 		false,
-		windows.WRITE_DAC|windows.READ_CONTROL,
+		windows.WRITE_OWNER|windows.WRITE_DAC|windows.READ_CONTROL,
 		false,
 	)
 	if err != nil {
 		return err
 	}
 	defer windows.CloseHandle(handle)
-	if !ownerCurrent || !codexWindowsSameStableIdentity(
+	// This protects a file the process just created. Elevated sessions and CI
+	// runners stamp new files with Administrators/SYSTEM as owner, so any trusted
+	// principal is accepted and ownership is then normalized to the current user.
+	// The stable-identity check still rejects a file swapped in after creation.
+	if !ownerTrusted || !aclSafe || !codexWindowsSameStableIdentity(
 		codexWindowsMetadata(original, true, true),
 		codexWindowsMetadata(opened, true, true),
 	) {
 		return errors.New("codex private file changed before ACL protection")
+	}
+	if !ownerCurrent {
+		if err := setCodexWindowsOwnerToCurrent(handle); err != nil {
+			return err
+		}
 	}
 	return setCodexWindowsPrivateDACL(handle, false)
 }

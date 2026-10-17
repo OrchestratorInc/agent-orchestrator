@@ -13,6 +13,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -57,6 +58,9 @@ type Service struct {
 	executables ports.ExecutableFinder
 	commands    ports.CommandRunner
 	terminals   GitHubAuthTerminalOpener
+
+	deviceMu sync.Mutex
+	device   *githubDeviceLogin
 }
 
 // SetGitHubAuthTerminalOpener late-binds the shell terminal service, which is
