@@ -23,6 +23,8 @@ var component = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 const maxInstructionChunks = 64
 
+const instructionChunkCountEnv = "AO_MEMCODE_CHUNK_COUNT"
+
 var memcodeHooks = hooksjson.Manager{
 	Label: "memcode", Flat: true, CommandPrefix: "ao hooks memcode ",
 	LegacyCommandPrefixes: []string{"ao hooks memcode "}, Timeout: 30,
@@ -159,7 +161,14 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if err := memcodeHooks.Install(ctx, cfg.WorkspacePath); err != nil {
 		return err
 	}
-	return hookutil.EnsureWorkspaceGitignore(filepath.Join(cfg.WorkspacePath, ".memcode"), "hooks.json", "sessions/")
+	if err := hookutil.EnsureWorkspaceGitignore(filepath.Join(cfg.WorkspacePath, ".memcode"), "hooks.json", "sessions/"); err != nil {
+		return err
+	}
+	if cfg.Env != nil {
+		// Pin this launch's count, never the last session to install shared hooks.
+		cfg.Env[instructionChunkCountEnv] = strconv.Itoa(len(chunks))
+	}
+	return nil
 }
 
 // UninstallHooks removes AO commands without affecting another session's private context.
@@ -241,6 +250,16 @@ func EmitInstructionChunk(out io.Writer, event string) error {
 	if !component.MatchString(session) || !filepath.IsAbs(data) {
 		return errors.New("invalid private memcode context location")
 	}
+	count := 0
+	if raw := os.Getenv(instructionChunkCountEnv); raw != "" {
+		count, err = strconv.Atoi(raw)
+		if err != nil || count < 1 || count > maxInstructionChunks {
+			return errors.New("invalid memcode launch instruction chunk count")
+		}
+		if index >= count {
+			return nil // unused slots need no file I/O or JSON decoding
+		}
+	}
 	file, err := os.Open(filepath.Join(data, "agent-launches", "memcode", session, "instructions.json"))
 	if err != nil {
 		return err
@@ -252,6 +271,9 @@ func EmitInstructionChunk(out io.Writer, event string) error {
 	}
 	if len(chunks) == 0 || len(chunks) > maxInstructionChunks {
 		return errors.New("invalid memcode instruction chunk count")
+	}
+	if count != 0 && count != len(chunks) {
+		return errors.New("memcode launch instruction chunk count changed")
 	}
 	if index >= len(chunks) {
 		return nil
