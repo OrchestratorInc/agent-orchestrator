@@ -51,7 +51,33 @@ func (s *Store) CreateImportedSession(ctx context.Context, rec domain.SessionRec
 	return created, fresh, err
 }
 
-// LoadSessionImportMessages pages the immutable archive. It remains after native adoption.
+// ReplaceImportedMessages swaps in a fresher read of the source until the
+// session's conversation exists; from then on live rows follow the archive.
+func (s *Store) ReplaceImportedMessages(ctx context.Context, id domain.SessionID, messages []sessionimport.Message) error {
+	if len(messages) == 0 {
+		return errors.New("readable native history is required")
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "refresh import archive", func(q *gen.Queries) error {
+		if _, err := q.SelectConversationBySession(ctx, &id); err == nil {
+			return nil
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if err := q.DeleteSessionImportMessages(ctx, string(id)); err != nil {
+			return err
+		}
+		for i, msg := range messages {
+			if err := q.InsertSessionImportMessage(ctx, gen.InsertSessionImportMessageParams{SessionID: string(id), Sequence: int64(i + 1), Role: string(msg.Role), Text: msg.Text, CreatedAt: msg.At}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// LoadSessionImportMessages pages the archive. It remains after native adoption.
 func (s *Store) LoadSessionImportMessages(ctx context.Context, id domain.SessionID, before, limit int64) ([]domain.ConversationMessage, bool, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 100

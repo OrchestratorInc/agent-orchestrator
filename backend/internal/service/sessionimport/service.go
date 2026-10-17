@@ -21,11 +21,15 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// Per-provider discovery budget, newest first, so one large history cannot hide another.
+// Per-provider discovery budget, newest first, so one large history cannot hide
+// another. It never cuts the recent window the dialog preselects.
 var (
 	maxScanFiles       = 2000
 	maxScanBytes int64 = 1 << 30
 )
+
+// recentDays is the window that is always scanned and preselected.
+const recentDays = 30
 
 // Store keeps registration and the readable copy atomic. It never launches a controller.
 type Store interface {
@@ -405,8 +409,10 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 			return Preview{}, err
 		}
 		var bytes int64
+		// ponytail: a recent window over the budget is read whole (measured 1.2 GiB in 42 s); add a persistent index if that grows.
+		recent := time.Now().AddDate(0, 0, -recentDays)
 		for i, file := range files {
-			if i >= maxScanFiles || bytes+file.size > maxScanBytes {
+			if file.modTime.Before(recent) && (i >= maxScanFiles || bytes+file.size > maxScanBytes) {
 				preview.Truncated = true
 				files = files[:i]
 				break
@@ -454,7 +460,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 			if title == "" {
 				title = "Imported conversation"
 			}
-			c := Candidate{ID: id, Harness: harness, Title: title, ProjectID: project, LastActivity: source.last, Suggested: source.last.After(time.Now().AddDate(0, 0, -30)), MessageCount: result.count}
+			c := Candidate{ID: id, Harness: harness, Title: title, ProjectID: project, LastActivity: source.last, Suggested: source.last.After(recent), MessageCount: result.count}
 			for _, rec := range sessions {
 				if rec.Harness != harness {
 					continue
@@ -480,6 +486,41 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 		return preview.Candidates[i].LastActivity.After(preview.Candidates[j].LastActivity)
 	})
 	return preview, nil
+}
+
+// RefreshArchive rereads an imported conversation just before its first open,
+// so turns added in another app since the import stay in the visible history.
+// The store ignores it once the session's conversation exists.
+func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) error {
+	source := rec.Metadata.ImportSource
+	replacer, ok := s.store.(interface {
+		ReplaceImportedMessages(context.Context, domain.SessionID, []Message) error
+	})
+	if source == nil || source.Adopted || !ok {
+		return nil
+	}
+	paths := []string{rec.Metadata.NativeTranscriptPath}
+	if rec.Harness == domain.HarnessCodex {
+		// Long Codex threads continue in later segment files.
+		files, err := s.discover(ctx, rec.Harness, source.ConfigDir)
+		if err != nil {
+			return err
+		}
+		for _, file := range files {
+			if file.key == source.NativeID {
+				paths = file.paths
+				break
+			}
+		}
+	}
+	fresh, err := readTranscript(ctx, rec.Harness, source.ConfigDir, paths...)
+	if err != nil {
+		return err
+	}
+	if fresh.nativeID != source.NativeID || len(fresh.messages) == 0 {
+		return errors.New("the source no longer holds this conversation")
+	}
+	return replacer.ReplaceImportedMessages(ctx, rec.ID, fresh.messages)
 }
 
 // Import revalidates source identity and destination before each atomic registration.

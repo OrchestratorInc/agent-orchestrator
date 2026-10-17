@@ -12,6 +12,15 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+const deleteSessionImportMessages = `-- name: DeleteSessionImportMessages :exec
+DELETE FROM session_import_messages WHERE session_id = ?1
+`
+
+func (q *Queries) DeleteSessionImportMessages(ctx context.Context, sessionID string) error {
+	_, err := q.db.ExecContext(ctx, deleteSessionImportMessages, sessionID)
+	return err
+}
+
 const findImportedSession = `-- name: FindImportedSession :one
 SELECT id FROM sessions
 WHERE harness = ?1
@@ -104,6 +113,28 @@ func (q *Queries) ListSessionImportMessages(ctx context.Context, arg ListSession
 		return nil, err
 	}
 	return items, nil
+}
+
+const seedImportedConversationSequence = `-- name: SeedImportedConversationSequence :one
+UPDATE conversations SET latest_sequence = (
+    SELECT CAST(COALESCE(MAX(m.sequence), 0) AS INTEGER) FROM session_import_messages AS m
+    WHERE m.session_id = ?1
+)
+WHERE id = ?2
+RETURNING latest_sequence
+`
+
+type SeedImportedConversationSequenceParams struct {
+	SessionID string
+	ID        string
+}
+
+// The archive owns sequences 1..N of an imported session; live rows follow it.
+func (q *Queries) SeedImportedConversationSequence(ctx context.Context, arg SeedImportedConversationSequenceParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, seedImportedConversationSequence, arg.SessionID, arg.ID)
+	var latest_sequence int64
+	err := row.Scan(&latest_sequence)
+	return latest_sequence, err
 }
 
 const setSessionImportWorkspace = `-- name: SetSessionImportWorkspace :execrows

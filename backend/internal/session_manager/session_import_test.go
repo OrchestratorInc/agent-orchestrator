@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -493,5 +494,90 @@ func TestImportedSessionWhoseFolderIsGoneStartsFromProjectCheckout(t *testing.T)
 	}
 	if got, want := runManagerGit(t, ready.Metadata.WorkspacePath, "rev-parse", "HEAD"), runManagerGit(t, root, "rev-parse", "HEAD"); got != want {
 		t.Fatalf("workspace HEAD = %s, want project HEAD %s", got, want)
+	}
+}
+
+// A provider that holds the native conversation after adoption still gets the
+// open-elsewhere explanation, not a generic resume failure.
+func TestAdoptedResumeReportsOwnershipRefusal(t *testing.T) {
+	launcher := &recordingLauncher{startErr: errors.New("thread 019a already has an active writer")}
+	m, st, _ := newChatManager(launcher)
+	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}}
+	rec.Metadata = domain.SessionMetadata{WorkspacePath: "/already-copied", Branch: "ao/import", ProviderConversationID: "thread-1", ImportSource: &domain.SessionImportSource{NativeID: "thread-1", ConfigDir: "/provider-home", Transferred: true, Prepared: true, Adopted: true}}
+	st.sessions[rec.ID] = rec
+	if _, err := m.ResumeAgentWithMode(context.Background(), rec.ID); !errors.Is(err, ErrSessionOpenElsewhere) {
+		t.Fatalf("ownership refusal after adoption lost: %v", err)
+	}
+}
+
+// A conversation from a second clone lends its commit and files; the AO
+// worktree and branch still belong to the registered repository.
+func TestImportedCloneLeavesSourceRepositoryUntouched(t *testing.T) {
+	m, st, _, root := newGitTaskPreparationManager(t)
+	project := st.projects["mer"]
+	clone := filepath.Join(t.TempDir(), "clone")
+	runManagerGit(t, root, "clone", "--no-local", root, clone)
+	if err := os.WriteFile(filepath.Join(clone, "new-commit"), []byte("unpublished"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	runManagerGit(t, clone, "add", "new-commit")
+	runManagerGit(t, clone, "-c", "user.name=AO test", "-c", "user.email=test@example.invalid", "commit", "-m", "unpublished")
+	if err := os.WriteFile(filepath.Join(clone, "local-edit"), []byte("dirty clone"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}}
+	rec.Metadata = domain.SessionMetadata{ProviderConversationID: "thread-1", ImportSource: &domain.SessionImportSource{NativeID: "thread-1", ConfigDir: "/provider", CWD: clone}}
+	st.sessions[rec.ID] = rec
+	ready, err := m.prepareImportedWorkspace(context.Background(), rec, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := ready.Metadata.WorkspacePath
+	if got, want := runManagerGit(t, workspace, "rev-parse", "HEAD"), runManagerGit(t, clone, "rev-parse", "HEAD"); got != want {
+		t.Fatalf("workspace HEAD = %s, want the clone's unpublished %s", got, want)
+	}
+	if got, err := os.ReadFile(filepath.Join(workspace, "local-edit")); err != nil || string(got) != "dirty clone" {
+		t.Fatalf("local edit = %q: %v", got, err)
+	}
+	if got, want := runManagerGit(t, workspace, "rev-parse", "--path-format=absolute", "--git-common-dir"), runManagerGit(t, root, "rev-parse", "--path-format=absolute", "--git-common-dir"); got != want {
+		t.Fatalf("workspace repository = %s, want registered %s", got, want)
+	}
+	if branches := runManagerGit(t, clone, "branch", "--list", "ao/*"); branches != "" {
+		t.Fatalf("source clone gained branches %q", branches)
+	}
+	if worktrees := runManagerGit(t, clone, "worktree", "list", "--porcelain"); strings.Count(worktrees, "worktree ") != 1 {
+		t.Fatalf("source clone gained worktrees:\n%s", worktrees)
+	}
+}
+
+// The replay boundary is recorded once, at adoption. A controller rebuild reuses
+// the launch callback and must not move it over later AO turns.
+func TestImportReplayBoundaryIsFixedAtAdoption(t *testing.T) {
+	const sessionID = domain.SessionID("mer-1")
+	st := &historicalChatRestoreStore{transitionStore: newTransitionStore(), conversation: domain.ConversationRecord{
+		ID: "conv-1", Scope: domain.ConversationScopeSession, ProjectID: "mer", SessionID: sessionID, LatestSequence: 7,
+	}}
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	rec := domain.SessionRecord{ID: sessionID, ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}}
+	rec.Metadata = domain.SessionMetadata{WorkspacePath: "/already-copied", Branch: "ao/import", ProviderConversationID: "thread-1", ImportSource: &domain.SessionImportSource{NativeID: "thread-1", ConfigDir: "/provider-home", Transferred: true, Prepared: true}}
+	st.sessions[sessionID] = rec
+	launcher := &recordingLauncher{}
+	m := New(Deps{
+		Runtime: &fakeRuntime{}, Agents: fakeAgents{}, Workspace: &fakeWorkspace{},
+		Store: st, Messenger: &fakeMessenger{}, Chat: launcher,
+		Lifecycle: &fakeLCM{store: st.fakeStore}, DataDir: "/ao-test-data",
+	})
+	if _, err := m.ResumeAgentWithMode(context.Background(), sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions[sessionID].Metadata.ImportSource; got == nil || !got.Adopted || got.HistoryThrough != 7 {
+		t.Fatalf("adopted import = %+v, want boundary 7", got)
+	}
+	st.conversation.LatestSequence = 12 // AO turns after adoption
+	if _, err := launcher.started[0].ControllerReady(ChatStarted{ProviderConversationID: "thread-1", ControllerGeneration: "gen-2"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions[sessionID].Metadata.ImportSource.HistoryThrough; got != 7 {
+		t.Fatalf("rebuild moved the boundary to %d", got)
 	}
 }

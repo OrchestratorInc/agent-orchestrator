@@ -31,6 +31,10 @@ func (s *importStore) CreateImportedSession(_ context.Context, r domain.SessionR
 	s.messages = msg
 	return r, true, nil
 }
+func (s *importStore) ReplaceImportedMessages(_ context.Context, _ domain.SessionID, msg []Message) error {
+	s.messages = msg
+	return nil
+}
 func writeClaude(t *testing.T, root, id, cwd, text string, at time.Time) string {
 	t.Helper()
 	dir := filepath.Join(root, "projects", "project")
@@ -204,5 +208,41 @@ func TestClaudeImportFollowsActiveAncestry(t *testing.T) {
 				t.Fatalf("history = %#v, %v", history.messages, err)
 			}
 		})
+	}
+}
+
+// Turns added in another app between import and first open stay visible.
+func TestRefreshArchiveRereadsBeforeFirstOpen(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st := &importStore{}
+	svc := New(st, "")
+	id := "66666666-6666-4666-8666-666666666666"
+	path := writeClaude(t, root, id, "", "first", time.Now().Add(-time.Hour))
+	later, err := json.Marshal(map[string]any{"type": "user", "sessionId": id, "cwd": "", "timestamp": time.Now(), "message": map[string]any{"role": "user", "content": "added later"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write(append(later, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rec := domain.SessionRecord{ID: "import-1", Harness: domain.HarnessClaudeCode, Metadata: domain.SessionMetadata{NativeTranscriptPath: path, ImportSource: &domain.SessionImportSource{NativeID: id, ConfigDir: root}}}
+	if err := svc.RefreshArchive(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.messages) != 2 || st.messages[1].Text != "added later" {
+		t.Fatalf("archive = %+v", st.messages)
+	}
+	st.messages = nil
+	rec.Metadata.ImportSource.Adopted = true
+	if err := svc.RefreshArchive(ctx, rec); err != nil || st.messages != nil {
+		t.Fatalf("adopted archive was rewritten: %+v %v", st.messages, err)
 	}
 }

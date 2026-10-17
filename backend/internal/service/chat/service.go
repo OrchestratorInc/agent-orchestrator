@@ -1935,6 +1935,11 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("load conversation page %s: %w", conversation.ID, err)
 	}
+	if source := record.Metadata.ImportSource; source != nil && source.HistoryThrough > 0 && !rows.HasMoreBefore {
+		if rows, err = s.withImportedHistory(ctx, id, source.HistoryThrough, rows, beforeSequence, limit); err != nil {
+			return Snapshot{}, err
+		}
+	}
 	waking := s.isWaking(id)
 	state := idleControllerState(record)
 	if waking && !record.IsTerminated && state == ports.ChatControllerStopped {

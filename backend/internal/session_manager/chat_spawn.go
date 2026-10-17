@@ -565,6 +565,9 @@ func (m *Manager) resumeChatController(
 			metadata := rec.Metadata
 			if metadata.ImportSource != nil {
 				adopted := *metadata.ImportSource
+				if !adopted.Adopted {
+					adopted.HistoryThrough = m.importReplayedThrough(ctx, rec.ID)
+				}
 				adopted.Adopted = true
 				metadata.ImportSource = &adopted
 			}
@@ -598,6 +601,8 @@ func (m *Manager) resumeChatController(
 				// Chat retains this callback for controller rebuilds. Consume the
 				// reservation after publication so those rebuilds resume normally.
 				providerHandoff = nil
+				// Rebuilds continue the adopted import; its replay boundary is fixed.
+				rec.Metadata.ImportSource = metadata.ImportSource
 			}
 			completionErr = commitErr
 			return ChatControllerCommit{
@@ -609,7 +614,8 @@ func (m *Manager) resumeChatController(
 		},
 	})
 	if err != nil {
-		if rec.NeedsImportResume() && providerRefusedImportOwnership(err) {
+		// Another app can hold the native conversation after adoption too.
+		if providerRefusedImportOwnership(err) {
 			return RestoreResult{}, ErrSessionOpenElsewhere
 		}
 		if completionErr != nil {

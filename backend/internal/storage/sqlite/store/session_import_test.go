@@ -88,3 +88,36 @@ func TestImportedWorkspacePublicationKeepsConcurrentSessionEdits(t *testing.T) {
 		t.Fatalf("published onto terminated session: %v %v", ok, err)
 	}
 }
+
+// The archive owns the first sequences; live rows follow it, so a refresh is
+// only accepted until the conversation exists.
+func TestImportedConversationFollowsArchive(t *testing.T) {
+	s := newTestStore(t)
+	seedProject(t, s, "hist")
+	ctx := context.Background()
+	rec := sampleRecord("hist")
+	rec.Mode = domain.SessionModeChat
+	rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "native-1", ConfigDir: "/provider/home"}
+	rec.Metadata.ProviderConversationID = "native-1"
+	message := func(text string) sessionimport.Message {
+		return sessionimport.Message{Role: domain.MessageRoleUser, Text: text, At: time.Now()}
+	}
+	imported, _, err := s.CreateImportedSession(ctx, rec, []sessionimport.Message{message("one"), message("two")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReplaceImportedMessages(ctx, imported.ID, []sessionimport.Message{message("one"), message("two"), message("three")}); err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := s.OpenNativeConversation(ctx, "conv-hist", domain.ConversationScopeSession, "hist", imported.ID, time.Now())
+	if err != nil || conversation.LatestSequence != 3 {
+		t.Fatalf("conversation = %+v: %v", conversation, err)
+	}
+	if err := s.ReplaceImportedMessages(ctx, imported.ID, []sessionimport.Message{message("late")}); err != nil {
+		t.Fatal(err)
+	}
+	page, _, err := s.LoadSessionImportMessages(ctx, imported.ID, 0, 10)
+	if err != nil || len(page) != 3 || page[2].Text != "three" {
+		t.Fatalf("archive after the conversation opened = %+v: %v", page, err)
+	}
+}

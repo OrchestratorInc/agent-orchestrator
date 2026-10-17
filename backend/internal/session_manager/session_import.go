@@ -22,6 +22,42 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 )
 
+// ImportArchiveRefresher rereads an imported conversation before its first open.
+type ImportArchiveRefresher interface {
+	RefreshArchive(context.Context, domain.SessionRecord) error
+}
+
+// SetImportArchiveRefresher late-binds the import service; nil skips the refresh.
+func (m *Manager) SetImportArchiveRefresher(refresher ImportArchiveRefresher) {
+	m.importArchive = refresher
+}
+
+// refreshImportArchive keeps turns added in another app since the import in the
+// visible history. The copy taken at import remains when the source is unreadable.
+func (m *Manager) refreshImportArchive(ctx context.Context, rec domain.SessionRecord) {
+	if m.importArchive == nil {
+		return
+	}
+	if err := m.importArchive.RefreshArchive(ctx, rec); err != nil {
+		m.logger.Warn("imported history refresh failed; keeping the import-time copy", "sessionID", rec.ID, "error", err)
+	}
+}
+
+// importReplayedThrough is the last sequence of the provider replay projected
+// while adopting an import. Native history import runs before ControllerReady,
+// so no AO turn can sit at or below it.
+func (m *Manager) importReplayedThrough(ctx context.Context, id domain.SessionID) int64 {
+	store, ok := m.store.(chatProviderOwnershipStore)
+	if !ok {
+		return 0
+	}
+	conversation, err := store.ConversationForSession(ctx, id)
+	if err != nil {
+		return 0
+	}
+	return conversation.LatestSequence
+}
+
 // ErrSessionOpenElsewhere requires the other writer to close; AO never takes it over.
 var ErrSessionOpenElsewhere = errors.New("this is open elsewhere; close it there to continue here")
 
@@ -139,6 +175,16 @@ func writableTranscriptOwner(ctx context.Context, path string) bool {
 	return false
 }
 
+// importCommit fetches unpublished commits into the registered repository so
+// every later restore/kill still uses the ordinary workspace lifecycle.
+func importCommit(ctx context.Context, repo, source, sha string) error {
+	if _, err := importGit(ctx, repo, "cat-file", "-e", sha+"^{commit}"); err == nil {
+		return nil
+	}
+	_, err := importGit(ctx, repo, "fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--", source, sha)
+	return err
+}
+
 func importGit(ctx context.Context, path string, args ...string) ([]byte, error) {
 	cmd := process.CommandContext(ctx, "git", append([]string{"-C", path}, args...)...)
 	var stderr bytes.Buffer
@@ -214,8 +260,14 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 			if err != nil {
 				return rec, err
 			}
+			sha := strings.TrimSpace(string(head))
+			// The worktree belongs to the registered repository, never to a second
+			// clone the conversation ran in: that clone only lends its commit.
+			if err := importCommit(ctx, project.Path, repoRoot, sha); err != nil {
+				return rec, err
+			}
 			if created {
-				ws, err = m.workspace.Create(ctx, ports.WorkspaceConfig{ProjectID: rec.ProjectID, SessionID: rec.ID, Kind: rec.Kind, SessionPrefix: sessionPrefix(project), Branch: branch, FreshBranch: true, BaseRef: strings.TrimSpace(string(head)), RepoPath: repoRoot})
+				ws, err = m.workspace.Create(ctx, ports.WorkspaceConfig{ProjectID: rec.ProjectID, SessionID: rec.ID, Kind: rec.Kind, SessionPrefix: sessionPrefix(project), Branch: branch, FreshBranch: true, BaseRef: sha})
 				if err != nil {
 					return rec, err
 				}
@@ -268,12 +320,8 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 					return rec, err
 				}
 				sha := strings.TrimSpace(string(head))
-				// Import unpublished commits into the registered repository so every
-				// later restore/kill still uses the ordinary workspace lifecycle.
-				if _, err := importGit(ctx, repoPath, "cat-file", "-e", sha+"^{commit}"); err != nil {
-					if _, err := importGit(ctx, repoPath, "fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--", nativePath, sha); err != nil {
-						return rec, err
-					}
+				if err := importCommit(ctx, repoPath, nativePath, sha); err != nil {
+					return rec, err
 				}
 				baseRefs[repoPath] = sha
 			}
