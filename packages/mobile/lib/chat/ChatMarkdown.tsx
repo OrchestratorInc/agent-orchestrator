@@ -7,6 +7,7 @@ import { haptics } from "../haptics";
 import { openGitHub } from "../openGitHub";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
+import { textSelectionColors } from "../textSelection";
 import { useAndroidResponseSelection } from "./useAndroidResponseSelection";
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { allowsUnderscoreEmphasis } from "./inlineEmphasis";
@@ -53,7 +54,7 @@ export function ChatLinkProvider({ onLinkOpen, onAddToChat, children }: { onLink
 export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false, continuousSelection = false, selectionSource }: { text: string; streaming?: boolean; continuousSelection?: boolean; selectionSource?: Omit<ChatExcerpt, "text"> }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const selectionColor = Platform.OS === "android" ? t.accentBorder : t.accent;
+	const selectionColor = textSelectionColors(t).selectionColor;
 	const blocks = parseBlocks(text);
 	if (continuousSelection) {
 		// Native selection cannot cross sibling views. Keep every response text block
@@ -114,7 +115,7 @@ export function SelectableResponseText({ text, source }: { text: string; source?
 	const select = useCallback((selected: string) => source ? addToChat?.(selected, source) : addToChat?.(selected), [addToChat, source]);
 	const onLayout = useAndroidResponseSelection(addToChat && source ? select : null);
 	const styles = useThemedStyles(makeStyles);
-	const selectionColor = Platform.OS === "android" ? t.accentBorder : t.accent;
+	const selectionColor = textSelectionColors(t).selectionColor;
 	return <Text selectable uiTextView selectionColor={selectionColor} style={styles.body} onLayout={onLayout} addToChatEnabled={Boolean(addToChat && source)} onAddToChat={(event) => select(event.nativeEvent.text)}>
 		{parseBlocks(text).map((block, index) => {
 			const separator = index > 0 ? "\n\n" : "";
