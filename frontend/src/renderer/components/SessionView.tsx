@@ -1318,6 +1318,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		terminated: browserTerminated,
 		previewUrl,
 		previewRevision,
+		// Only BrowserPanelView reads browserRuntimeConnected, and it has its own
+		// hook instance for it. Subscribing here would make every runtime link
+		// transition re-render the whole session view for a field it never reads.
+		subscribeRuntimeState: false,
 	});
 	const browserAnnotationQueue = useBrowserAnnotationQueue({
 		sessionId: session?.id,

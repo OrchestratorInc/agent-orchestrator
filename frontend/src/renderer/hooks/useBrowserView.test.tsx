@@ -282,6 +282,23 @@ describe("useBrowserView", () => {
 		expect(slot).toBeInTheDocument();
 	});
 
+	it("skips the runtime state subscription for a caller that opts out", async () => {
+		// SessionView hosts the browser panel but never reads browserRuntimeConnected.
+		// Subscribing there would re-render the whole session view on every link
+		// transition, so its hook instance opts out; BrowserPanelView keeps its own.
+		const bridge = setupBridge();
+		bridge.getRuntimeState.mockResolvedValue({ connected: true });
+		const { result } = renderHook(() =>
+			useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false, subscribeRuntimeState: false }),
+		);
+
+		// Effects have run by the time renderHook returns, so neither the initial
+		// hydration nor the live subscription should have been set up.
+		expect(bridge.getRuntimeState).not.toHaveBeenCalled();
+		expect(bridge.onRuntimeState).not.toHaveBeenCalled();
+		expect(result.current.browserRuntimeConnected).toBeNull();
+	});
+
 	it("keeps bounds revisions increasing when the same native view remounts", async () => {
 		const bridge = setupBridge();
 		const firstSlot = createSlot();

@@ -87,6 +87,13 @@ type UseBrowserViewOptions = {
 	 * unrelated session update, which leave it unchanged, are ignored).
 	 */
 	previewRevision?: number;
+	/**
+	 * Subscribe to the app-wide browser runtime link state (default). Pass false
+	 * when the caller never reads `browserRuntimeConnected` — the session view
+	 * hosting the browser panel, for one — so a link transition re-renders only
+	 * the panel instead of every component above it.
+	 */
+	subscribeRuntimeState?: boolean;
 };
 
 export type BrowserViewModel = {
@@ -287,6 +294,7 @@ export function useBrowserView({
 	terminated,
 	previewUrl,
 	previewRevision,
+	subscribeRuntimeState = true,
 }: UseBrowserViewOptions): BrowserViewModel {
 	const [viewId, setViewId] = useState("");
 	const [navState, setNavState] = useState<BrowserNavState>(EMPTY_NAV_STATE);
@@ -646,7 +654,12 @@ export function useBrowserView({
 		});
 	}, []);
 
+	// The runtime link state is app-wide, not per session, and only the browser
+	// panel renders it. A caller that never reads browserRuntimeConnected opts out
+	// with subscribeRuntimeState: false so a link transition cannot re-render the
+	// whole tree that merely hosts the panel.
 	useEffect(() => {
+		if (!subscribeRuntimeState) return;
 		let disposed = false;
 		const applyState = (state: BrowserRuntimeState) => {
 			if (!disposed) setBrowserRuntimeConnected(state.connected);
@@ -657,7 +670,7 @@ export function useBrowserView({
 			disposed = true;
 			unsubscribe?.();
 		};
-	}, []);
+	}, [subscribeRuntimeState]);
 
 	const reconnectBrowserRuntime = useCallback(async () => {
 		await window.ao?.browser.reconnectRuntime();
