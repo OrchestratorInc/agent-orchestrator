@@ -444,3 +444,24 @@ func TestPostHogSinkClearsStalePersonProperties(t *testing.T) {
 		t.Errorf("second event $process_person_profile = %#v, want false", second["$process_person_profile"])
 	}
 }
+
+func TestAutomationCreationPayloadIsClosedVocabulary(t *testing.T) {
+	got := sanitizeRemotePayload("ao.automation.created", map[string]any{
+		"template_id": "daily_pr_review_v1", "use_case": "pr_review",
+		"prompt": "private", "display_name": "private", "project_id": "private",
+		"repository": "private", "output": "private", "automation_id": "private",
+	})
+	if len(got) != 2 || got["template_id"] != "daily_pr_review_v1" || got["use_case"] != "pr_review" {
+		t.Fatalf("payload = %#v", got)
+	}
+	for _, hostile := range []any{"private prompt", "PR_REVIEW", " pr_review ", 42, true, []string{"pr_review"}, map[string]any{"use_case": "pr_review"}} {
+		got = sanitizeRemotePayload("ao.automation.created", map[string]any{"template_id": hostile, "use_case": hostile})
+		if len(got) != 0 {
+			t.Fatalf("accepted %#v: %#v", hostile, got)
+		}
+	}
+	got = sanitizeRemotePayload("ao.automation.created", map[string]any{"template_id": "custom", "use_case": "unknown"})
+	if len(got) != 2 {
+		t.Fatalf("legacy defaults lost: %#v", got)
+	}
+}

@@ -11943,16 +11943,38 @@ components:
           type: string
         rrule:
           type: string
+        templateId:
+          enum:
+          - custom
+          - daily_pr_review_v1
+          - daily_issue_triage_v1
+          - weekly_release_notes_v1
+          type: string
         timezone:
           type: string
         updatedAt:
           format: date-time
+          type: string
+        useCase:
+          enum:
+          - pr_review
+          - issue_triage
+          - repo_digest
+          - ci_triage
+          - release_notes
+          - security_audit
+          - dependency_maintenance
+          - docs_maintenance
+          - other
+          - unknown
           type: string
       required:
       - id
       - projectId
       - displayName
       - prompt
+      - useCase
+      - templateId
       - kind
       - rrule
       - timezone
@@ -13945,7 +13967,27 @@ components:
           type: string
         rrule:
           type: string
+        templateId:
+          enum:
+          - custom
+          - daily_pr_review_v1
+          - daily_issue_triage_v1
+          - weekly_release_notes_v1
+          type: string
         timezone:
+          type: string
+        useCase:
+          enum:
+          - pr_review
+          - issue_triage
+          - repo_digest
+          - ci_triage
+          - release_notes
+          - security_audit
+          - dependency_maintenance
+          - docs_maintenance
+          - other
+          - unknown
           type: string
       required:
       - projectId
@@ -18539,6 +18581,21 @@ components:
           - "null"
           - string
         timezone:
+          type:
+          - "null"
+          - string
+        useCase:
+          enum:
+          - pr_review
+          - issue_triage
+          - repo_digest
+          - ci_triage
+          - release_notes
+          - security_audit
+          - dependency_maintenance
+          - docs_maintenance
+          - other
+          - unknown
           type:
           - "null"
           - string

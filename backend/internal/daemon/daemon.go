@@ -840,7 +840,7 @@ func Run() error {
 		return fmt.Errorf("reconcile sessions on boot: %w", reconcileErr)
 	}
 	agentSvc.WarmCodexAccounts()
-	automationSvc, automationDone := startAutomations(ctx, store, sessionSvc, log)
+	automationSvc, automationDone := startAutomations(ctx, store, sessionSvc, telemetrySink, log)
 	lcStack.automationDone = automationDone
 	autoReview := autoreview.New(store, reviewSvc, autoreview.Config{Logger: log})
 	lcStack.autoReviewDone = autoReview.Start(ctx)

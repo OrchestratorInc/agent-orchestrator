@@ -220,3 +220,36 @@ func TestAutomationGetRequiresIDAsUsageError(t *testing.T) {
 		t.Fatalf("err=%v exit=%d", err, ExitCode(err))
 	}
 }
+
+func TestAutomationIntentMetadataWireContract(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var requests []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/internal/telemetry/cli-invoked" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		requests = append(requests, body)
+		_ = json.NewEncoder(w).Encode(automationEnvelopeDTO{Automation: automationDTO{ID: "one", TemplateID: "daily_pr_review_v1", UseCase: "pr_review"}})
+	}))
+	t.Cleanup(server.Close)
+	writeRunFileFor(t, cfg, server)
+	out, stderr, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "automation", "create", "--project", "demo", "--name", "Review", "--prompt", "Review", "--rrule", "FREQ=DAILY", "--timezone", "UTC", "--template-id", "daily_pr_review_v1", "--use-case", "pr_review", "--json")
+	if err != nil {
+		t.Fatalf("%v: %s", err, stderr)
+	}
+	if len(requests) != 1 || requests[0]["templateId"] != "daily_pr_review_v1" || requests[0]["useCase"] != "pr_review" || !strings.Contains(out, `"templateId": "daily_pr_review_v1"`) {
+		t.Fatalf("request=%#v output=%s", requests, out)
+	}
+	_, stderr, err = executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "automation", "update", "one", "--use-case", "other")
+	if err != nil {
+		t.Fatalf("%v: %s", err, stderr)
+	}
+	if len(requests) != 2 || requests[1]["useCase"] != "other" || len(requests[1]) != 1 {
+		t.Fatalf("update request=%#v", requests)
+	}
+}

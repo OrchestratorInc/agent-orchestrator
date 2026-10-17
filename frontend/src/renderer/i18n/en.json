@@ -3125,5 +3125,17 @@
 	"settings.defaultSandbox.description": "Where new projects run their cloud sessions, and where sessions go when a project hasn't picked one.",
 	"settings.defaultSandbox.single": "Where your cloud sessions run. Only one sandbox is available.",
 	"settings.defaultSandbox.adminOnly": "Only organization admins can change this.",
-	"settings.defaultSandbox.saveFailed": "Couldn't save the default sandbox. Try again."
+	"settings.defaultSandbox.saveFailed": "Couldn't save the default sandbox. Try again.",
+	"automations.template.daily_pr_review_v1": "PR review inbox",
+	"automations.template.daily_issue_triage_v1": "Daily issue triage",
+	"automations.template.weekly_release_notes_v1": "Weekly release notes",
+	"automations.validation.promptBytes": "Keep the prompt within 4,096 UTF-8 bytes.",
+	"automations.customFrequency.weekdays": "Weekdays (Mon–Fri)",
+	"automations.templates.title": "Start with a template",
+	"automations.templates.description": "Pick a starting point, make it yours, and let your agent take it from there.",
+	"automations.search": "Search automations…",
+	"automations.template.daily_pr_review_v1.description": "Find the pull requests that need your attention, with review priorities and suggested next steps.",
+	"automations.template.daily_issue_triage_v1.description": "Turn new and recently updated issues into a focused triage list with clear next actions.",
+	"automations.template.weekly_release_notes_v1.description": "Draft release notes from merged pull requests, grouped into features, fixes, and other changes.",
+	"automations.templates.setup": "Requires GitHub read access for the selected project."
 }

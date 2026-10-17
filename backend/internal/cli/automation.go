@@ -17,6 +17,8 @@ type automationDTO struct {
 	ProjectID   string                   `json:"projectId"`
 	DisplayName string                   `json:"displayName"`
 	Prompt      string                   `json:"prompt"`
+	UseCase     string                   `json:"useCase,omitempty"`
+	TemplateID  string                   `json:"templateId,omitempty"`
 	Kind        string                   `json:"kind"`
 	Harness     string                   `json:"harness,omitempty"`
 	RRule       string                   `json:"rrule"`
@@ -59,6 +61,8 @@ type automationCreateDTO struct {
 	ProjectID   string `json:"projectId"`
 	DisplayName string `json:"displayName"`
 	Prompt      string `json:"prompt"`
+	UseCase     string `json:"useCase,omitempty"`
+	TemplateID  string `json:"templateId,omitempty"`
 	Kind        string `json:"kind"`
 	Harness     string `json:"harness,omitempty"`
 	RRule       string `json:"rrule,omitempty"`
@@ -69,6 +73,7 @@ type automationCreateDTO struct {
 type automationUpdateDTO struct {
 	DisplayName *string `json:"displayName,omitempty"`
 	Prompt      *string `json:"prompt,omitempty"`
+	UseCase     *string `json:"useCase,omitempty"`
 	Kind        *string `json:"kind,omitempty"`
 	Harness     *string `json:"harness,omitempty"`
 	RRule       *string `json:"rrule,omitempty"`
@@ -84,7 +89,7 @@ func newAutomationCommand(ctx *commandContext) *cobra.Command {
 }
 
 func newAutomationCreateCommand(ctx *commandContext) *cobra.Command {
-	var project, name, prompt, rrule, cron, timezone, kind, harness string
+	var project, name, prompt, rrule, cron, timezone, kind, harness, templateID, useCase string
 	var disabled, jsonOutput bool
 	cmd := &cobra.Command{Use: "create", Short: "Create a recurring automation", Args: usageArgs(cobra.NoArgs), RunE: func(cmd *cobra.Command, _ []string) error {
 		if strings.TrimSpace(project) == "" || strings.TrimSpace(name) == "" || strings.TrimSpace(prompt) == "" {
@@ -100,7 +105,7 @@ func newAutomationCreateCommand(ctx *commandContext) *cobra.Command {
 			}
 		}
 		enabled := !disabled
-		body := automationCreateDTO{ProjectID: project, DisplayName: name, Prompt: prompt, Kind: kind, Harness: harness, RRule: rrule, Cron: cron, Timezone: timezone, Enabled: &enabled}
+		body := automationCreateDTO{TemplateID: templateID, UseCase: useCase, ProjectID: project, DisplayName: name, Prompt: prompt, Kind: kind, Harness: harness, RRule: rrule, Cron: cron, Timezone: timezone, Enabled: &enabled}
 		var response automationEnvelopeDTO
 		if err := ctx.postJSON(cmd.Context(), "automations", body, &response); err != nil {
 			return err
@@ -111,6 +116,8 @@ func newAutomationCreateCommand(ctx *commandContext) *cobra.Command {
 		_, err := fmt.Fprintf(cmd.OutOrStdout(), "created automation %s (%s), next run %s\n", response.Automation.ID, response.Automation.DisplayName, formatAutomationTime(response.Automation.NextRunAt))
 		return err
 	}}
+	cmd.Flags().StringVar(&templateID, "template-id", "custom", "Starter template origin")
+	cmd.Flags().StringVar(&useCase, "use-case", "unknown", "Automation purpose category")
 	cmd.Flags().StringVar(&project, "project", "", "Project id")
 	cmd.Flags().StringVar(&name, "name", "", "Display name")
 	cmd.Flags().StringVar(&prompt, "prompt", "", "Session task prompt")
@@ -196,7 +203,7 @@ func newAutomationGetCommand(ctx *commandContext) *cobra.Command {
 }
 
 func newAutomationUpdateCommand(ctx *commandContext) *cobra.Command {
-	var name, prompt, rrule, cron, timezone, kind, harness string
+	var name, prompt, rrule, cron, timezone, kind, harness, useCase string
 	var enabled, jsonOutput bool
 	cmd := &cobra.Command{Use: "update <id>", Short: "Update an automation", Args: usageArgs(cobra.ExactArgs(1)), RunE: func(cmd *cobra.Command, args []string) error {
 		body := automationUpdateDTO{}
@@ -210,6 +217,7 @@ func newAutomationUpdateCommand(ctx *commandContext) *cobra.Command {
 		}
 		stringFlag("name", name, &body.DisplayName)
 		stringFlag("prompt", prompt, &body.Prompt)
+		stringFlag("use-case", useCase, &body.UseCase)
 		stringFlag("rrule", rrule, &body.RRule)
 		stringFlag("cron", cron, &body.Cron)
 		stringFlag("timezone", timezone, &body.Timezone)
@@ -235,6 +243,7 @@ func newAutomationUpdateCommand(ctx *commandContext) *cobra.Command {
 		_, err := fmt.Fprintf(cmd.OutOrStdout(), "updated automation %s (%s)\n", response.Automation.ID, response.Automation.DisplayName)
 		return err
 	}}
+	cmd.Flags().StringVar(&useCase, "use-case", "", "New automation purpose category")
 	cmd.Flags().StringVar(&name, "name", "", "New display name")
 	cmd.Flags().StringVar(&prompt, "prompt", "", "New task prompt")
 	cmd.Flags().StringVar(&rrule, "rrule", "", "Replace schedule with RRule")

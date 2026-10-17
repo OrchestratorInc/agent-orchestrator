@@ -3144,5 +3144,17 @@
 	"settings.defaultSandbox.description": "新しいプロジェクトのクラウドセッションを実行する場所と、プロジェクトが選択していない場合のセッションの実行先です。",
 	"settings.defaultSandbox.single": "クラウドセッションの実行場所です。利用できるサンドボックスは 1 つだけです。",
 	"settings.defaultSandbox.adminOnly": "これを変更できるのは組織の管理者だけです。",
-	"settings.defaultSandbox.saveFailed": "デフォルトのサンドボックスを保存できませんでした。もう一度お試しください。"
+	"settings.defaultSandbox.saveFailed": "デフォルトのサンドボックスを保存できませんでした。もう一度お試しください。",
+	"automations.template.daily_pr_review_v1": "PR レビュー受信箱",
+	"automations.template.daily_issue_triage_v1": "毎日の課題トリアージ",
+	"automations.template.weekly_release_notes_v1": "週次リリースノート",
+	"automations.validation.promptBytes": "プロンプトは UTF-8 で 4,096 バイト以内にしてください。",
+	"automations.customFrequency.weekdays": "平日（月〜金）",
+	"automations.templates.title": "テンプレートから始める",
+	"automations.templates.description": "出発点を選んでカスタマイズし、エージェントに任せましょう。",
+	"automations.search": "オートメーションを検索…",
+	"automations.template.daily_pr_review_v1.description": "対応が必要なプルリクエストを見つけ、レビューの優先度と次のステップを整理します。",
+	"automations.template.daily_issue_triage_v1.description": "新規・更新された課題を、次のアクションが明確なトリアージリストにまとめます。",
+	"automations.template.weekly_release_notes_v1.description": "マージされたプルリクエストから、機能・修正・その他の変更別にリリースノートを下書きします。",
+	"automations.templates.setup": "選択したプロジェクトへの GitHub 読み取りアクセスが必要です。"
 }

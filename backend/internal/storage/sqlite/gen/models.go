@@ -172,6 +172,8 @@ type Automation struct {
 	LastRunAt   sql.NullTime
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	TemplateID  string
+	UseCase     string
 }
 
 type AutomationRun struct {

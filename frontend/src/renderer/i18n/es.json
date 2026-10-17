@@ -3191,5 +3191,17 @@
 	"settings.defaultSandbox.description": "Dónde ejecutan los proyectos nuevos sus sesiones en la nube y adónde van las sesiones cuando un proyecto no ha elegido uno.",
 	"settings.defaultSandbox.single": "Dónde se ejecutan tus sesiones en la nube. Solo hay un sandbox disponible.",
 	"settings.defaultSandbox.adminOnly": "Solo los administradores de la organización pueden cambiar esto.",
-	"settings.defaultSandbox.saveFailed": "No se pudo guardar el sandbox predeterminado. Inténtalo de nuevo."
+	"settings.defaultSandbox.saveFailed": "No se pudo guardar el sandbox predeterminado. Inténtalo de nuevo.",
+	"automations.template.daily_pr_review_v1": "Bandeja de revisión de PR",
+	"automations.template.daily_issue_triage_v1": "Clasificación diaria de incidencias",
+	"automations.template.weekly_release_notes_v1": "Notas de versión semanales",
+	"automations.validation.promptBytes": "El prompt no debe superar los 4.096 bytes UTF-8.",
+	"automations.customFrequency.weekdays": "Días laborables (lun–vie)",
+	"automations.templates.title": "Empieza con una plantilla",
+	"automations.templates.description": "Elige un punto de partida, personalízalo y deja que tu agente se encargue.",
+	"automations.search": "Buscar automatizaciones…",
+	"automations.template.daily_pr_review_v1.description": "Encuentra las solicitudes de cambios que necesitan tu atención, con prioridades y próximos pasos.",
+	"automations.template.daily_issue_triage_v1.description": "Convierte las incidencias nuevas y actualizadas en una lista priorizada con acciones claras.",
+	"automations.template.weekly_release_notes_v1.description": "Redacta notas de versión a partir de solicitudes fusionadas, agrupadas en funciones, correcciones y otros cambios.",
+	"automations.templates.setup": "Requiere acceso de lectura a GitHub para el proyecto seleccionado."
 }

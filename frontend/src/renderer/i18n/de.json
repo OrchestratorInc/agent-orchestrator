@@ -3144,5 +3144,17 @@
 	"settings.defaultSandbox.description": "Wo neue Projekte ihre Cloud-Sitzungen ausführen und wohin Sitzungen gehen, wenn ein Projekt keine gewählt hat.",
 	"settings.defaultSandbox.single": "Wo deine Cloud-Sitzungen laufen. Es ist nur eine Sandbox verfügbar.",
 	"settings.defaultSandbox.adminOnly": "Nur Organisationsadmins können das ändern.",
-	"settings.defaultSandbox.saveFailed": "Die Standard-Sandbox konnte nicht gespeichert werden. Versuche es erneut."
+	"settings.defaultSandbox.saveFailed": "Die Standard-Sandbox konnte nicht gespeichert werden. Versuche es erneut.",
+	"automations.template.daily_pr_review_v1": "PR-Review-Eingang",
+	"automations.template.daily_issue_triage_v1": "Tägliche Issue-Triage",
+	"automations.template.weekly_release_notes_v1": "Wöchentliche Versionshinweise",
+	"automations.validation.promptBytes": "Der Prompt darf höchstens 4.096 UTF-8-Bytes umfassen.",
+	"automations.customFrequency.weekdays": "Werktags (Mo–Fr)",
+	"automations.templates.title": "Mit einer Vorlage starten",
+	"automations.templates.description": "Wähle einen Ausgangspunkt, passe ihn an und überlasse den Rest deinem Agenten.",
+	"automations.search": "Automationen suchen…",
+	"automations.template.daily_pr_review_v1.description": "Finde Pull Requests, die deine Aufmerksamkeit brauchen, mit Prioritäten und nächsten Schritten.",
+	"automations.template.daily_issue_triage_v1.description": "Erstelle aus neuen und aktualisierten Issues eine übersichtliche Liste mit nächsten Schritten.",
+	"automations.template.weekly_release_notes_v1.description": "Entwirf Release Notes aus zusammengeführten Pull Requests, gruppiert nach Funktionen und Korrekturen.",
+	"automations.templates.setup": "Benötigt GitHub-Lesezugriff für das gewählte Projekt."
 }

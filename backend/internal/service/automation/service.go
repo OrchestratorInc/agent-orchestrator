@@ -10,6 +10,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 const (
@@ -31,7 +32,8 @@ type Store interface {
 
 // Deps are the automation service's injectable dependencies.
 type Deps struct {
-	Store Store
+	Store     Store
+	Telemetry ports.EventSink
 	// Spawner is the existing daemon session service; automations do not add a
 	// second launch path.
 	Spawner SessionSpawner
@@ -41,10 +43,11 @@ type Deps struct {
 
 // Service owns automation validation and scheduling behavior.
 type Service struct {
-	store   Store
-	spawner SessionSpawner
-	clock   func() time.Time
-	newID   func() string
+	store     Store
+	telemetry ports.EventSink
+	spawner   SessionSpawner
+	clock     func() time.Time
+	newID     func() string
 }
 
 // New constructs the daemon-owned automation service.
@@ -55,7 +58,7 @@ func New(deps Deps) *Service {
 	if deps.NewID == nil {
 		deps.NewID = uuid.NewString
 	}
-	return &Service{store: deps.Store, spawner: deps.Spawner, clock: deps.Clock, newID: deps.NewID}
+	return &Service{store: deps.Store, telemetry: deps.Telemetry, spawner: deps.Spawner, clock: deps.Clock, newID: deps.NewID}
 }
 
 // CreateInput is the validated user intent for one recurring definition.
@@ -63,6 +66,8 @@ type CreateInput struct {
 	ProjectID   domain.ProjectID
 	DisplayName string
 	Prompt      string
+	TemplateID  string
+	UseCase     string
 	Kind        domain.SessionKind
 	Harness     domain.AgentHarness
 	RRule       string
@@ -76,6 +81,7 @@ type CreateInput struct {
 type UpdateInput struct {
 	DisplayName *string
 	Prompt      *string
+	UseCase     *string
 	Kind        *domain.SessionKind
 	Harness     *domain.AgentHarness
 	RRule       *string
@@ -88,6 +94,18 @@ type UpdateInput struct {
 func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automation, error) {
 	if s.store == nil {
 		return domain.Automation{}, apierr.Internal("AUTOMATION_CREATE_FAILED", "Failed to create automation")
+	}
+	if input.TemplateID == "" {
+		input.TemplateID = domain.AutomationTemplateCustom
+	}
+	if input.UseCase == "" {
+		input.UseCase = domain.AutomationUseCaseUnknown
+	}
+	if !domain.ValidAutomationTemplateID(input.TemplateID) {
+		return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_TEMPLATE", "Unknown automation template", nil)
+	}
+	if !domain.ValidAutomationUseCase(input.UseCase) {
+		return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_USE_CASE", "Unknown automation use case", nil)
 	}
 	project, ok, err := s.store.GetProject(ctx, string(input.ProjectID))
 	if err != nil {
@@ -126,6 +144,8 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automat
 		ProjectID:   input.ProjectID,
 		DisplayName: displayName,
 		Prompt:      prompt,
+		TemplateID:  input.TemplateID,
+		UseCase:     input.UseCase,
 		Kind:        input.Kind,
 		Harness:     input.Harness,
 		RRuleText:   schedule.RRuleText,
@@ -138,6 +158,13 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automat
 	created, err := s.store.CreateAutomation(ctx, rec)
 	if err != nil {
 		return domain.Automation{}, apierr.Internal("AUTOMATION_CREATE_FAILED", "Failed to create automation")
+	}
+	if s.telemetry != nil {
+		s.telemetry.Emit(context.WithoutCancel(ctx), ports.TelemetryEvent{
+			Name: "ao.automation.created", Source: "automation_service", OccurredAt: now,
+			Level:   ports.TelemetryLevelInfo,
+			Payload: map[string]any{"template_id": created.TemplateID, "use_case": created.UseCase},
+		})
 	}
 	return created, nil
 }
@@ -196,6 +223,12 @@ func (s *Service) Update(ctx context.Context, id domain.AutomationID, input Upda
 	rec, err := s.Get(ctx, id)
 	if err != nil {
 		return domain.Automation{}, err
+	}
+	if input.UseCase != nil {
+		if !domain.ValidAutomationUseCase(*input.UseCase) {
+			return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_USE_CASE", "Unknown automation use case", nil)
+		}
+		rec.UseCase = *input.UseCase
 	}
 	if input.DisplayName != nil {
 		rec.DisplayName = strings.TrimSpace(*input.DisplayName)

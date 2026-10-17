@@ -88,6 +88,31 @@ leading and trailing whitespace:
 | `l` | 801 to 2,000 bytes |
 | `xl` | More than 2,000 bytes |
 
+The daemon also emits `ao.automation.created` once after successfully saving a
+new definition, whether created through the desktop, CLI, or API. Its only
+automation-specific properties are `template_id` and `use_case`, both restricted
+to closed vocabularies. It does not include the automation ID, prompt, name,
+repository, project ID, or generated output. Existing desktop/daemon telemetry
+controls apply; delivery is best effort and a telemetry failure does not fail
+creation.
+
+`template_id` is one of `custom`, `daily_pr_review_v1`,
+`daily_issue_triage_v1`, or `weekly_release_notes_v1`. It records the chosen
+starting point and stays fixed even if the prompt changes. `use_case` is one of
+`pr_review`, `issue_triage`, `repo_digest`, `ci_triage`, `release_notes`,
+`security_audit`, `dependency_maintenance`, `docs_maintenance`, `other`, or
+`unknown`. The desktop derives the category from the selected starter; custom
+definitions use `unknown`. CLI/API clients may optionally supply or update a
+category, including `other`. Older definitions and clients default to
+`custom` / `unknown`.
+
+For intent analysis, count `ao.automation.created` grouped by these two fields.
+Do not add renderer success events to this count: they describe the same desktop
+creations and exclude CLI/API creations. Updates, runs, and startup migration do
+not emit creation events. This measures declared intent at creation, not current
+active usage, successful execution, or the exact contents of a customized prompt.
+Existing events cannot be used to reconstruct historical automation intent.
+
 ## Artifact creation
 
 When desktop product telemetry is enabled, Orchestrator.inc records visits to the

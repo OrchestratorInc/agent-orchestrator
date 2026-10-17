@@ -3126,5 +3126,17 @@
 	"settings.defaultSandbox.description": "新项目运行云会话的位置，以及项目未选择时会话的运行位置。",
 	"settings.defaultSandbox.single": "你的云会话运行的位置。只有一个沙盒可用。",
 	"settings.defaultSandbox.adminOnly": "只有组织管理员可以更改此设置。",
-	"settings.defaultSandbox.saveFailed": "无法保存默认沙盒。请重试。"
+	"settings.defaultSandbox.saveFailed": "无法保存默认沙盒。请重试。",
+	"automations.template.daily_pr_review_v1": "PR 审查收件箱",
+	"automations.template.daily_issue_triage_v1": "每日问题分流",
+	"automations.template.weekly_release_notes_v1": "每周发布说明",
+	"automations.validation.promptBytes": "提示词不得超过 4,096 个 UTF-8 字节。",
+	"automations.customFrequency.weekdays": "工作日（周一至周五）",
+	"automations.templates.title": "从模板开始",
+	"automations.templates.description": "选择一个起点，按需调整，然后交给你的智能体。",
+	"automations.search": "搜索自动化…",
+	"automations.template.daily_pr_review_v1.description": "找出需要关注的拉取请求，整理审查优先级和建议的后续步骤。",
+	"automations.template.daily_issue_triage_v1.description": "将新建和最近更新的议题整理成重点明确的分类列表，并给出清晰的后续行动。",
+	"automations.template.weekly_release_notes_v1.description": "根据已合并的拉取请求起草发布说明，按功能、修复和其他更改分组。",
+	"automations.templates.setup": "需要所选项目的 GitHub 读取权限。"
 }

@@ -3,12 +3,14 @@ package automation
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func TestCreatePersistsWeeklyNextRunOnChosenWeekday(t *testing.T) {
@@ -386,3 +388,111 @@ func isAPIError(err error, kind apierr.Kind) bool {
 	var apiError *apierr.Error
 	return errors.As(err, &apiError) && apiError.Kind == kind
 }
+
+// Creation intent is emitted only after persistence; updates and invalid/failed
+// creations must not inflate the canonical creation count.
+func TestCreationIntentTelemetry(t *testing.T) {
+	for _, tc := range []struct{ template, useCase, wantTemplate, wantUseCase string }{
+		{"", "", "custom", "unknown"},
+		{"daily_pr_review_v1", "pr_review", "daily_pr_review_v1", "pr_review"},
+		{"daily_issue_triage_v1", "issue_triage", "daily_issue_triage_v1", "issue_triage"},
+		{"weekly_release_notes_v1", "release_notes", "weekly_release_notes_v1", "release_notes"},
+		{"custom", "other", "custom", "other"},
+	} {
+		t.Run(tc.wantTemplate+"/"+tc.wantUseCase, func(t *testing.T) {
+			store := newFakeStore()
+			sink := &intentSink{store: store, t: t}
+			svc := New(Deps{Store: store, Telemetry: sink})
+			input := intentInput()
+			input.TemplateID, input.UseCase = tc.template, tc.useCase
+			created, err := svc.Create(context.Background(), input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if created.TemplateID != tc.wantTemplate || created.UseCase != tc.wantUseCase {
+				t.Fatalf("metadata = %+v", created)
+			}
+			if len(sink.events) != 1 {
+				t.Fatalf("events = %+v", sink.events)
+			}
+			event := sink.events[0]
+			want := map[string]any{"template_id": tc.wantTemplate, "use_case": tc.wantUseCase}
+			if event.Name != "ao.automation.created" || !reflect.DeepEqual(event.Payload, want) || event.ProjectID != nil || event.SessionID != nil || event.RequestID != "" {
+				t.Fatalf("unsafe or incorrect event: %+v", event)
+			}
+			useCase := "ci_triage"
+			updated, err := svc.Update(context.Background(), created.ID, UpdateInput{UseCase: &useCase})
+			if err != nil || updated.UseCase != useCase || updated.TemplateID != created.TemplateID {
+				t.Fatalf("update=%+v error=%v", updated, err)
+			}
+			if len(sink.events) != 1 {
+				t.Fatal("update emitted creation event")
+			}
+		})
+	}
+}
+
+func TestCreationIntentRejectsInvalidMetadataAndStoreFailures(t *testing.T) {
+	for _, field := range []string{"template", "useCase", "store"} {
+		t.Run(field, func(t *testing.T) {
+			store := newFakeStore()
+			sink := &intentSink{store: store, t: t}
+			var persistence Store = store
+			input := intentInput()
+			switch field {
+			case "template":
+				input.TemplateID = "private prompt"
+			case "useCase":
+				input.UseCase = "private prompt"
+			case "store":
+				persistence = failingIntentStore{store}
+			}
+			svc := New(Deps{Store: persistence, Telemetry: sink})
+			if _, err := svc.Create(context.Background(), input); err == nil {
+				t.Fatal("expected error")
+			}
+			if len(sink.events) != 0 || len(store.automations) != 0 {
+				t.Fatal("failed creation persisted or emitted")
+			}
+		})
+	}
+	store := newFakeStore()
+	svc := New(Deps{Store: store})
+	created, err := svc.Create(context.Background(), intentInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []string{"", "secret", "PR_REVIEW"} {
+		if _, err := svc.Update(context.Background(), created.ID, UpdateInput{UseCase: &invalid}); err == nil {
+			t.Fatalf("accepted %q", invalid)
+		}
+	}
+	if store.automations[created.ID].UseCase != "unknown" {
+		t.Fatal("invalid update mutated stored purpose")
+	}
+}
+
+func intentInput() CreateInput {
+	return CreateInput{ProjectID: "scheduled", DisplayName: "private name", Prompt: "private prompt", Kind: domain.KindWorker, RRule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0", Timezone: "UTC"}
+}
+
+type failingIntentStore struct{ *fakeStore }
+
+func (f failingIntentStore) CreateAutomation(context.Context, domain.Automation) (domain.Automation, error) {
+	return domain.Automation{}, errors.New("disk full")
+}
+
+type intentSink struct {
+	t      *testing.T
+	store  *fakeStore
+	events []ports.TelemetryEvent
+}
+
+func (s *intentSink) Emit(_ context.Context, event ports.TelemetryEvent) {
+	s.t.Helper()
+	if len(s.store.automations) == 0 {
+		s.t.Fatal("event emitted before persistence")
+	}
+	s.events = append(s.events, event)
+}
+func (s *intentSink) Close(context.Context) error { return nil }

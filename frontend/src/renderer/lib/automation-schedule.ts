@@ -1,5 +1,5 @@
 export type SchedulePreset = "daily" | "weekly" | "custom";
-export type CustomFrequency = "daily" | "weekly" | "monthly";
+export type CustomFrequency = "daily" | "weekly" | "weekdays" | "monthly";
 export type WeekdayCode = "MO" | "TU" | "WE" | "TH" | "FR" | "SA" | "SU";
 
 export const WEEKDAY_CODES: WeekdayCode[] = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
@@ -12,7 +12,7 @@ export type ScheduleFields = {
 	weekday: WeekdayCode;
 	hour: string;
 	minute: string;
-	/** Unmapped RRULE text preserved until the user edits the custom builder. */
+	/** Original anchored or unmapped RRULE, preserved until a schedule edit. */
 	legacyRaw: string | null;
 };
 
@@ -109,9 +109,15 @@ export function scheduleFieldsFromRRule(rruleText: string): ScheduleFields {
 	}
 
 	const lines = trimmed.split("\n").map((line) => line.trim()).filter(Boolean);
-	if (lines.length > 1 || trimmed.includes("INTERVAL=")) {
+	const anchored = lines.length === 2 &&
+		(lines[0].startsWith("DTSTART:") || lines[0].startsWith("DTSTART;TZID=")) &&
+		lines[1].startsWith("RRULE:");
+	if ((lines.length > 1 && !anchored) || trimmed.includes("INTERVAL=")) {
 		return emptyCustom();
 	}
+	// Saved daemon rules include an anchor. Show their actual schedule while
+	// preserving that anchor until the user explicitly changes the schedule.
+	const legacyRaw = anchored ? trimmed : null;
 
 	const parts = parseRRuleParts(trimmed);
 	const hour = parts.BYHOUR ?? defaultHour;
@@ -127,7 +133,17 @@ export function scheduleFieldsFromRRule(rruleText: string): ScheduleFields {
 			weekday: "MO",
 			hour,
 			minute,
-			legacyRaw: null,
+			legacyRaw,
+		};
+	}
+	if (
+		parts.FREQ === "WEEKLY" && parts.BYDAY === "MO,TU,WE,TH,FR" &&
+		parts.BYHOUR !== undefined && parts.BYMINUTE !== undefined && parts.BYSECOND === "0" &&
+		Object.keys(parts).sort().join(",") === "BYDAY,BYHOUR,BYMINUTE,BYSECOND,FREQ"
+	) {
+		return {
+			preset: "custom", time, customFrequency: "weekdays", monthDay: "1",
+			weekday: "MO", hour, minute, legacyRaw,
 		};
 	}
 	if (isSimpleWeekly(parts)) {
@@ -139,7 +155,7 @@ export function scheduleFieldsFromRRule(rruleText: string): ScheduleFields {
 			weekday: normalizeWeekday(parts.BYDAY),
 			hour,
 			minute,
-			legacyRaw: null,
+			legacyRaw,
 		};
 	}
 	if (isSimpleMonthly(parts)) {
@@ -151,7 +167,7 @@ export function scheduleFieldsFromRRule(rruleText: string): ScheduleFields {
 			weekday: "MO",
 			hour,
 			minute,
-			legacyRaw: null,
+			legacyRaw,
 		};
 	}
 
@@ -175,6 +191,9 @@ export function buildRRuleFromSchedule(fields: ScheduleFields): string {
 	const monthDay = Number(fields.monthDay);
 	if (fields.customFrequency === "daily") {
 		return `FREQ=DAILY;BYHOUR=${hour};BYMINUTE=${minute};BYSECOND=0`;
+	}
+	if (fields.customFrequency === "weekdays") {
+		return `FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=${hour};BYMINUTE=${minute};BYSECOND=0`;
 	}
 	if (fields.customFrequency === "weekly") {
 		return `FREQ=WEEKLY;BYDAY=${fields.weekday};BYHOUR=${hour};BYMINUTE=${minute};BYSECOND=0`;

@@ -31,6 +31,8 @@ type Automation struct {
 	ProjectID   ProjectID    `json:"projectId"`
 	DisplayName string       `json:"displayName"`
 	Prompt      string       `json:"prompt"`
+	TemplateID  string       `json:"templateId"`
+	UseCase     string       `json:"useCase"`
 	Kind        SessionKind  `json:"kind"`
 	Harness     AgentHarness `json:"harness,omitempty"`
 	RRuleText   string       `json:"rrule"`
@@ -43,6 +45,33 @@ type Automation struct {
 	// LatestRun is populated by list/get service reads for API projection. It is
 	// derived from automation_runs and never persisted on the definition row.
 	LatestRun *AutomationRun `json:"-"`
+}
+
+// AutomationTemplateCustom and AutomationUseCaseUnknown preserve compatibility
+// for definitions created before optional origin and purpose metadata existed.
+const (
+	AutomationTemplateCustom = "custom"
+	AutomationUseCaseUnknown = "unknown"
+)
+
+// ValidAutomationTemplateID accepts only bundled origins and custom definitions.
+func ValidAutomationTemplateID(value string) bool {
+	switch value {
+	case AutomationTemplateCustom, "daily_pr_review_v1", "daily_issue_triage_v1", "weekly_release_notes_v1":
+		return true
+	default:
+		return false
+	}
+}
+
+// ValidAutomationUseCase accepts the closed vocabulary of declared purposes.
+func ValidAutomationUseCase(value string) bool {
+	switch value {
+	case "pr_review", "issue_triage", "repo_digest", "ci_triage", "release_notes", "security_audit", "dependency_maintenance", "docs_maintenance", "other", AutomationUseCaseUnknown:
+		return true
+	default:
+		return false
+	}
 }
 
 // AutomationFilter is the storage/service list contract. Nil filters mean all;

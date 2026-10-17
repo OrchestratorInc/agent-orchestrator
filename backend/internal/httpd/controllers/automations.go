@@ -49,7 +49,7 @@ func (c *AutomationsController) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rec, err := c.Svc.Create(r.Context(), automationsvc.CreateInput{
-		ProjectID: domain.ProjectID(req.ProjectID), DisplayName: req.DisplayName, Prompt: req.Prompt,
+		ProjectID: domain.ProjectID(req.ProjectID), DisplayName: req.DisplayName, Prompt: req.Prompt, TemplateID: req.TemplateID, UseCase: req.UseCase,
 		Kind: domain.SessionKind(req.Kind), Harness: domain.AgentHarness(req.Harness), RRule: req.RRule,
 		Cron: req.Cron, Timezone: req.Timezone, Enabled: req.Enabled,
 	})
@@ -123,7 +123,7 @@ func (c *AutomationsController) update(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
-	input := automationsvc.UpdateInput{DisplayName: req.DisplayName, Prompt: req.Prompt, RRule: req.RRule, Cron: req.Cron, Timezone: req.Timezone, Enabled: req.Enabled}
+	input := automationsvc.UpdateInput{UseCase: req.UseCase, DisplayName: req.DisplayName, Prompt: req.Prompt, RRule: req.RRule, Cron: req.Cron, Timezone: req.Timezone, Enabled: req.Enabled}
 	if req.Kind != nil {
 		value := domain.SessionKind(*req.Kind)
 		input.Kind = &value
@@ -184,7 +184,7 @@ func automationResponse(rec domain.Automation) AutomationResponse {
 		response := automationRunSummaryResponse(*rec.LatestRun)
 		latest = &response
 	}
-	return AutomationResponse{ID: string(rec.ID), ProjectID: string(rec.ProjectID), DisplayName: rec.DisplayName, Prompt: rec.Prompt, Kind: string(rec.Kind), Harness: string(rec.Harness), RRule: rec.RRuleText, Timezone: rec.Timezone, Enabled: rec.Enabled, NextRunAt: rec.NextRunAt, LastRunAt: rec.LastRunAt, CreatedAt: rec.CreatedAt, UpdatedAt: rec.UpdatedAt, LatestRun: latest}
+	return AutomationResponse{ID: string(rec.ID), ProjectID: string(rec.ProjectID), DisplayName: rec.DisplayName, Prompt: rec.Prompt, TemplateID: rec.TemplateID, UseCase: rec.UseCase, Kind: string(rec.Kind), Harness: string(rec.Harness), RRule: rec.RRuleText, Timezone: rec.Timezone, Enabled: rec.Enabled, NextRunAt: rec.NextRunAt, LastRunAt: rec.LastRunAt, CreatedAt: rec.CreatedAt, UpdatedAt: rec.UpdatedAt, LatestRun: latest}
 }
 func automationRunSummaryResponse(run domain.AutomationRun) AutomationRunSummaryResponse {
 	response := AutomationRunSummaryResponse{ID: string(run.ID), Status: string(run.Status), ScheduledFor: run.ScheduledFor, ErrorMessage: run.ErrorMessage, StartedAt: run.StartedAt, FinishedAt: run.FinishedAt}

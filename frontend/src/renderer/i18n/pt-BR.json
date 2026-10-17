@@ -3191,5 +3191,17 @@
 	"settings.defaultSandbox.description": "Onde os novos projetos executam suas sessões na nuvem e para onde vão as sessões quando um projeto não escolheu um.",
 	"settings.defaultSandbox.single": "Onde suas sessões na nuvem são executadas. Só há um sandbox disponível.",
 	"settings.defaultSandbox.adminOnly": "Somente administradores da organização podem alterar isso.",
-	"settings.defaultSandbox.saveFailed": "Não foi possível salvar o sandbox padrão. Tente novamente."
+	"settings.defaultSandbox.saveFailed": "Não foi possível salvar o sandbox padrão. Tente novamente.",
+	"automations.template.daily_pr_review_v1": "Caixa de revisão de PRs",
+	"automations.template.daily_issue_triage_v1": "Triagem diária de issues",
+	"automations.template.weekly_release_notes_v1": "Notas de versão semanais",
+	"automations.validation.promptBytes": "O prompt deve ter no máximo 4.096 bytes UTF-8.",
+	"automations.customFrequency.weekdays": "Dias úteis (seg–sex)",
+	"automations.templates.title": "Comece com um modelo",
+	"automations.templates.description": "Escolha um ponto de partida, personalize e deixe seu agente cuidar do resto.",
+	"automations.search": "Buscar automações…",
+	"automations.template.daily_pr_review_v1.description": "Encontre os pull requests que precisam da sua atenção, com prioridades de revisão e próximos passos.",
+	"automations.template.daily_issue_triage_v1.description": "Transforme issues novas e atualizadas em uma lista de triagem com próximas ações claras.",
+	"automations.template.weekly_release_notes_v1.description": "Esboce notas de versão a partir de pull requests mesclados, agrupados em recursos, correções e outras mudanças.",
+	"automations.templates.setup": "Requer acesso de leitura ao GitHub para o projeto selecionado."
 }

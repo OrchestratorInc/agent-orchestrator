@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -86,6 +87,7 @@ var remoteCommandTokens = map[string]struct{}{
 }
 
 var remotePayloadAllowlist = map[string]map[string]struct{}{
+	"ao.automation.created": {"use_case": {}, "template_id": {}},
 	// Reported by the LAN listener on the first authenticated request per
 	// transport per day (httpd/mobile_connect_telemetry.go). "transport" is a
 	// closed vocabulary — lan / tailscale / loopback / other — never an address.
@@ -507,6 +509,12 @@ func sanitizeRemotePayload(name string, payload map[string]any) map[string]any {
 		value, ok := payload[key]
 		if !ok {
 			continue
+		}
+		if name == "ao.automation.created" {
+			text, ok := value.(string)
+			if !ok || (key == "use_case" && !domain.ValidAutomationUseCase(text)) || (key == "template_id" && !domain.ValidAutomationTemplateID(text)) {
+				continue
+			}
 		}
 		if safe, ok := sanitizeRemoteValue(key, value); ok {
 			sanitized[key] = safe
