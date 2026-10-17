@@ -327,6 +327,35 @@ func (c *conversation) start(
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerReady})
 }
 
+// markSettingsApplied records settings the live session already runs with as
+// the catalog's current values, without asking the provider.
+//
+// A reconnect rebuilds the catalog from the host's session/new snapshot. That
+// snapshot predates initial_settings and every picker change since, so it names
+// the agent's launch defaults as current while the provider process is still in
+// the state AO last applied. The restored settings are that state; a value the
+// catalog does not offer is left alone, as applyTurnSettings would leave it.
+func (c *conversation) markSettingsApplied(settings ports.ChatTurnSettings) {
+	c.mu.Lock()
+	modeFor, optionsFor := c.modeFor, c.optionsFor
+	c.mu.Unlock()
+	if modeFor != nil && settings.Approval != "" {
+		if mode := modeFor(settings.Approval); mode != "" {
+			if offered, known := c.configOptionOffers("mode", mode); known && offered {
+				c.applyAcceptedConfigOption("mode", ports.ChatConfigOptionValue{Select: mode})
+			}
+		}
+	}
+	if optionsFor == nil {
+		return
+	}
+	for _, option := range optionsFor(settings) {
+		if offered, known := c.configOptionOffers(option.ID, option.Value); known && offered {
+			c.applyAcceptedConfigOption(option.ID, ports.ChatConfigOptionValue{Select: option.Value})
+		}
+	}
+}
+
 func (c *conversation) ProviderConversationID() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
