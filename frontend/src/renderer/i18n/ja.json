@@ -26,7 +26,7 @@
 	"chat.accountSwitchedDetail": "切り替えのため、エージェントはここで停止しました。続行を押してこのターンを再開するか、新しいメッセージを送ってください。",
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
-	"chat.startup.queuePlaceholder": "{{agent}} を起動しています. メッセージは順番に送信されます",
+	"chat.startup.queuePlaceholder": "{{agent}} の準備中にメッセージを追加できます",
 	"chat.projectSetup.succeeded": "セットアップに成功しました",
 	"chat.projectSetup.succeededIn": "セットアップが {{duration}} で成功しました",
 	"chat.projectSetup.timedOut": "セットアップのステップ {{step}} がタイムアウトしました",

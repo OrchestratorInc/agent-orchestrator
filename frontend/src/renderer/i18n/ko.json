@@ -26,7 +26,7 @@
 	"chat.accountSwitchedDetail": "전환 때문에 에이전트가 여기서 멈췄습니다. 계속을 눌러 이 턴을 재개하거나 새 메시지를 보내세요.",
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
-	"chat.startup.queuePlaceholder": "{{agent}} 시작 중. 메시지는 순서대로 전송됩니다",
+	"chat.startup.queuePlaceholder": "{{agent}} 준비 중에 다음 메시지를 대기열에 추가하세요",
 	"chat.projectSetup.succeeded": "설정에 성공했습니다",
 	"chat.projectSetup.succeededIn": "설정이 {{duration}} 만에 성공했습니다",
 	"chat.projectSetup.timedOut": "설정 {{step}}단계가 시간 초과되었습니다",

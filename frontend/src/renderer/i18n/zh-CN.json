@@ -26,7 +26,7 @@
 	"chat.accountSwitchedDetail": "智能体因切换在此停止。按“继续”恢复此轮，或发送一条新消息。",
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
-	"chat.startup.queuePlaceholder": "{{agent}} 正在启动. 消息将按顺序发送",
+	"chat.startup.queuePlaceholder": "{{agent}} 准备期间可先排队发送消息",
 	"chat.projectSetup.succeeded": "设置成功",
 	"chat.projectSetup.succeededIn": "设置已在 {{duration}} 内成功",
 	"chat.projectSetup.timedOut": "设置步骤 {{step}} 超时",

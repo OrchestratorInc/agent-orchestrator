@@ -2046,7 +2046,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText("Fix clicking attachments")).toBeInTheDocument();
 		expect(screen.queryByText("Queued · sends when the agent finishes")).not.toBeInTheDocument();
 		expect(screen.queryByTestId("queued-message-dock")).not.toBeInTheDocument();
-		expect(screen.getByText("Codex is starting. Messages send in order")).toBeInTheDocument();
+		expect(screen.getByText("Queue a follow-up while Codex gets ready")).toBeInTheDocument();
 		expect(screen.queryByText(/^Working for /)).not.toBeInTheDocument();
 		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();

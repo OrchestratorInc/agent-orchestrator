@@ -37,10 +37,14 @@ export function SessionStartup({
 }) {
 	const { t } = useTranslation();
 	const now = useNowWhile(!failed && steps.some((step) => step.status === "running"));
+	// A start that has just begun reveals its steps one by one; reopening a session
+	// part-way through setup shows them at once.
+	const [stagger] = useState(() => !failed && !steps.some((step) => step.status === "done") &&
+		steps.every((step) => !step.startedAt || Date.now() - Date.parse(step.startedAt) < 3000));
 	return (
 		<section aria-label={t("chat.startup.label")} data-testid="session-startup" data-failed={failed || undefined}>
 			<ol aria-label={t("chat.startup.steps")} className="mt-1 flex flex-col">
-				{steps.map((step) => {
+				{steps.map((step, index) => {
 					// The daemon leaves the stage it stopped in "running"; the failed
 					// session is what makes that stage the one that failed.
 					const status: StepStatus = failed && step.status === "running" ? "failed" : step.status;
@@ -51,7 +55,8 @@ export function SessionStartup({
 							key={step.id}
 							data-step={step.id}
 							data-status={status}
-							className="flex min-h-7 items-center gap-1.5 text-xs"
+							className={cn("flex min-h-7 items-center gap-1.5 text-xs", stagger && "session-startup-step-in")}
+							style={stagger ? { animationDelay: `${index * 90}ms` } : undefined}
 						>
 							<StepIcon status={status} />
 							<span className="sr-only">{t(`chat.startup.status.${status}`)}:</span>

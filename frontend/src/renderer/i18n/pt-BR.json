@@ -26,7 +26,7 @@
 	"chat.accountSwitchedDetail": "O agente parou aqui por causa da troca. Pressione Continuar para retomar este turno ou envie uma nova mensagem.",
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
-	"chat.startup.queuePlaceholder": "{{agent}} está iniciando. As mensagens são enviadas em ordem",
+	"chat.startup.queuePlaceholder": "Adicione uma mensagem enquanto {{agent}} se prepara",
 	"chat.projectSetup.succeeded": "Configuração bem-sucedida",
 	"chat.projectSetup.succeededIn": "Configuração bem-sucedida em {{duration}}",
 	"chat.projectSetup.timedOut": "A etapa {{step}} da configuração excedeu o tempo limite",

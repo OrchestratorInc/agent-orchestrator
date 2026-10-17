@@ -26,7 +26,7 @@
 	"chat.accountSwitchedDetail": "Der Agent hat hier für den Wechsel angehalten. Drücke Fortsetzen, um diesen Schritt wieder aufzunehmen, oder sende eine neue Nachricht.",
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
-	"chat.startup.queuePlaceholder": "{{agent}} startet. Nachrichten werden der Reihe nach gesendet",
+	"chat.startup.queuePlaceholder": "Folgenachricht einreihen, während {{agent}} startet",
 	"chat.projectSetup.succeeded": "Setup erfolgreich",
 	"chat.projectSetup.succeededIn": "Setup in {{duration}} erfolgreich",
 	"chat.projectSetup.timedOut": "Setup-Schritt {{step}} hat das Zeitlimit überschritten",
