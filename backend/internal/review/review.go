@@ -335,7 +335,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		return TriggerResult{}, err
 	}
 	if len(prs) == 0 {
-		return TriggerResult{}, fmt.Errorf("%w: AO is not tracking a PR for worker %q yet; if you just opened one, run `ao review trigger --pr <url>`", ErrInvalid, workerID)
+		return TriggerResult{}, fmt.Errorf("%w: %s", ErrInvalid, noTrackedPRMessage(worker))
 	}
 	if want := strings.TrimSpace(opts.PRURL); want != "" {
 		// A targeted pass reviews only the named PR, matched by API or web URL.
@@ -774,6 +774,16 @@ func autoReviewSessionReason(worker domain.SessionRecord, now time.Time) string 
 
 // headHasReview reports whether any reviewer has a running or completed pass
 // on the PR head. Failed and cancelled passes never produced a review.
+// noTrackedPRMessage explains a trigger with no PR to review and gives the
+// exact retry command, since the PR may simply not be discovered yet.
+func noTrackedPRMessage(worker domain.SessionRecord) string {
+	retry := fmt.Sprintf("`ao review trigger %s --pr <url>`", worker.ID)
+	if branch := strings.TrimSpace(worker.Metadata.Branch); branch != "" {
+		return fmt.Sprintf("AO is not tracking a PR for worker %q yet and found no open PR from its branch %q; if you just opened one, run %s with that PR's URL", worker.ID, branch, retry)
+	}
+	return fmt.Sprintf("AO is not tracking a PR for worker %q yet; if you just opened one, run %s with that PR's URL", worker.ID, retry)
+}
+
 func headHasReview(runs []domain.ReviewRun, prURL, targetSHA string) bool {
 	for _, run := range runs {
 		if run.PRURL != prURL || run.TargetSHA != targetSHA {

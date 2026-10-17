@@ -1010,6 +1010,13 @@ type fakePRRefresher struct {
 	err   map[string]error
 	// order records refreshes relative to the engine trigger.
 	order *[]string
+	// branchPRs and findErr answer FindBranchPRs.
+	branchPRs []string
+	findErr   error
+}
+
+func (f *fakePRRefresher) FindBranchPRs(context.Context, domain.SessionID) ([]string, error) {
+	return f.branchPRs, f.findErr
 }
 
 func (f *fakePRRefresher) RefreshPR(_ context.Context, _ domain.SessionID, prURL string) error {
@@ -1073,5 +1080,57 @@ func TestTriggerRequestedNamedPRAttachesItAndTargetsIt(t *testing.T) {
 	refresher.err = map[string]error{url: fmt.Errorf("%w: owned", reviewcore.ErrPROwnedElsewhere)}
 	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{PRURL: url}); !errors.Is(err, ErrPROwnedElsewhere) {
 		t.Fatalf("err = %v, want the attach failure for an untracked PR", err)
+	}
+}
+
+// A review requested right after opening a PR, before the SCM observer has
+// discovered it, attaches the one open PR from the worker's branch and
+// reviews it instead of failing.
+func TestTriggerRequestedAttachesTheBranchPRWhenNoneIsTracked(t *testing.T) {
+	var order []string
+	url := "https://github.com/o/r/pull/9"
+	refresher := &fakePRRefresher{order: &order, branchPRs: []string{url}}
+	svc := New(nil, &fakeStore{}, WithPRRefresher(refresher))
+	svc.engineTrigger = func(_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		order = append(order, "trigger")
+		return reviewcore.TriggerResult{Created: true}, nil
+	}
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent}); err != nil {
+		t.Fatalf("TriggerRequested: %v", err)
+	}
+	if strings.Join(order, ",") != "refresh "+url+",trigger" {
+		t.Fatalf("order = %v, want the branch PR attached before planning", order)
+	}
+
+	// A lookup failure is not fatal: the engine still explains that no PR
+	// is tracked.
+	order = nil
+	refresher.branchPRs, refresher.findErr = nil, errors.New("provider down")
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent}); err != nil {
+		t.Fatalf("TriggerRequested: %v", err)
+	}
+	if strings.Join(order, ",") != "trigger" {
+		t.Fatalf("order = %v, want planning without an attach", order)
+	}
+}
+
+func TestTriggerRequestedNamesEachBranchPRWhenSeveralAreOpen(t *testing.T) {
+	refresher := &fakePRRefresher{branchPRs: []string{"https://github.com/o/r/pull/9", "https://github.com/o/r/pull/10"}}
+	svc := New(nil, &fakeStore{}, WithPRRefresher(refresher))
+	svc.engineTrigger = func(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		t.Fatal("ambiguous branch PRs must not start a review")
+		return reviewcore.TriggerResult{}, nil
+	}
+	_, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid", err)
+	}
+	for _, want := range []string{"`ao review trigger mer-1 --pr https://github.com/o/r/pull/9`", "`ao review trigger mer-1 --pr https://github.com/o/r/pull/10`"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %v, want it to contain %s", err, want)
+		}
+	}
+	if len(refresher.calls) != 0 {
+		t.Fatalf("attached %v, want nothing attached", refresher.calls)
 	}
 }

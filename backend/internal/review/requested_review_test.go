@@ -421,11 +421,15 @@ func TestTriggerPRURLReviewsOnlyTheNamedPR(t *testing.T) {
 	}
 }
 
+// With no PR tracked, the error names the worker's branch and the exact retry
+// command for this worker, so any caller can attach a PR AO has not picked up.
 func TestTriggerWithNoTrackedPRPointsAtThePRFlag(t *testing.T) {
-	eng := newEngineForTest(&fakeStore{}, fakeSessions{rec: liveWorker(), ok: true}, fakePRs{}, fakeProjects{}, &fakeLauncher{})
+	worker := liveWorker()
+	worker.Metadata.Branch = "ao/mer-1/fix"
+	eng := newEngineForTest(&fakeStore{}, fakeSessions{rec: worker, ok: true}, fakePRs{}, fakeProjects{}, &fakeLauncher{})
 	_, err := eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Source: domain.ReviewTriggerAgent})
-	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "ao review trigger --pr <url>") {
-		t.Fatalf("err = %v, want a pointer to --pr for a PR AO has not picked up", err)
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "`ao review trigger mer-1 --pr <url>`") || !strings.Contains(err.Error(), `branch "ao/mer-1/fix"`) {
+		t.Fatalf("err = %v, want the branch and the exact --pr retry for a PR AO has not picked up", err)
 	}
 }
 
