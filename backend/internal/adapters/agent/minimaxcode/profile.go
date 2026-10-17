@@ -202,7 +202,8 @@ func readPrivateConfig(path string) ([]byte, error) {
 
 // Refresh only source-owned credentials/configuration at each new native launch.
 // Provider history and AO context files are never replaced. Validate and stage
-// first so malformed or symlinked sources cannot destroy the previous snapshot.
+// first so malformed, missing or symlinked auth cannot destroy a saved snapshot.
+// A failed config write restores the old auth; failed rollback retains its backup.
 func refreshProfileCredentials(ctx context.Context, target, source string) error {
 	config, err := readPrivateConfig(filepath.Join(source, "config.yaml"))
 	if err != nil {
@@ -216,23 +217,70 @@ func refreshProfileCredentials(ctx context.Context, target, source string) error
 	if err != nil {
 		return err
 	}
-	defer func() { _ = os.RemoveAll(staging) }()
-	if err := copyProfileTree(ctx, filepath.Join(source, "auth"), filepath.Join(staging, "auth")); err != nil {
+	keepBackup := false
+	defer func() {
+		if !keepBackup {
+			_ = os.RemoveAll(staging)
+		}
+	}()
+	stagedAuth := filepath.Join(staging, "auth")
+	if err := copyProfileTree(ctx, filepath.Join(source, "auth"), stagedAuth); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	auth := filepath.Join(target, "auth")
+	info, err := os.Lstat(stagedAuth)
+	if errors.Is(err, os.ErrNotExist) {
+		// An absent source is not an explicit credential replacement. Refuse
+		// to pair its new config with an existing private auth snapshot.
+		if _, err := os.Lstat(auth); err == nil {
+			return errors.New("MiniMax source auth is missing; previous credentials and config were preserved")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return hookutil.AtomicWriteFile(filepath.Join(target, "config.yaml"), config, 0o600)
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return errors.New("MiniMax source auth must be a directory")
+	}
 	backup := filepath.Join(staging, "previous")
-	if err := os.Rename(auth, backup); err != nil && !errors.Is(err, os.ErrNotExist) {
+	err = os.Rename(auth, backup)
+	hadAuth := err == nil
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := os.Rename(filepath.Join(staging, "auth"), auth); err != nil && !errors.Is(err, os.ErrNotExist) {
-		_ = os.Rename(backup, auth)
-		return err
+	installedAuth := false
+	rollback := func(cause error) error {
+		if installedAuth {
+			if err := os.RemoveAll(auth); err != nil {
+				keepBackup = true
+				return errors.Join(cause, fmt.Errorf("remove replacement auth: %w; recovery staging retained at %s", err, staging))
+			}
+		}
+		if hadAuth {
+			if err := os.Rename(backup, auth); err != nil {
+				keepBackup = true
+				return errors.Join(cause, fmt.Errorf("restore previous auth: %w; snapshot retained at %s", err, backup))
+			}
+		}
+		return cause
 	}
-	return hookutil.AtomicWriteFile(filepath.Join(target, "config.yaml"), config, 0o600)
+	if err := os.Rename(stagedAuth, auth); err != nil {
+		return rollback(err)
+	}
+	installedAuth = true
+	if err := ctx.Err(); err != nil {
+		return rollback(err)
+	}
+	if err := hookutil.AtomicWriteFile(filepath.Join(target, "config.yaml"), config, 0o600); err != nil {
+		return rollback(err)
+	}
+	return nil
 }
 
 func copyProfileTree(ctx context.Context, source, target string) error {
