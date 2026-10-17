@@ -26,6 +26,7 @@ const {
 	postMock,
 	workspaceQueryMock,
 	boardActionsInPanelMock,
+	projectReportsMock,
 } = vi.hoisted(() => ({
 	appMemoryMock: vi.fn(),
 	sessionMemoryMock: vi.fn(),
@@ -34,9 +35,14 @@ const {
 	postMock: vi.fn(),
 	workspaceQueryMock: vi.fn(),
 	boardActionsInPanelMock: vi.fn(() => false),
+	projectReportsMock: vi.fn(),
 }));
 
 vi.mock("./ShellTopbar", async (importOriginal) => ({ ...(await importOriginal<typeof import("./ShellTopbar")>()), ShellTopbar: () => null }));
+
+vi.mock("../hooks/useProjectReports", () => ({
+	useProjectReports: projectReportsMock,
+}));
 
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
@@ -148,6 +154,7 @@ beforeEach(() => {
 	notificationShowMock.mockReset().mockResolvedValue(undefined);
 	postMock.mockReset().mockResolvedValue({ data: {} });
 	workspaceQueryMock.mockReset().mockReturnValue({ data: [], isError: false });
+	projectReportsMock.mockReset().mockReturnValue({});
 	appMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
 	sessionMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
 	window.localStorage.removeItem("ao.board.archive.layout");
@@ -230,6 +237,21 @@ describe("SessionsBoard", () => {
 		expect(await screen.findByText("Running task")).toBeInTheDocument();
 		expect(screen.queryByTestId("session-resource")).not.toBeInTheDocument();
 		expect(screen.queryByTestId("app-memory-indicator")).not.toBeInTheDocument();
+	});
+
+	it("drops the reports delivery indicator together with Developer mode", () => {
+		// react-query keeps .data when the query disables, so the badge's render
+		// gate must recheck developerMode or the stale count survives the flip.
+		projectReportsMock.mockReturnValue({ data: { undelivered: 2, errored: 1 } });
+		boardActionsInPanelMock.mockReturnValue(true);
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({ id: "reports", title: "Reporting task", status: "idle", activity: { state: "idle", lastActivityAt: "2026-01-01T00:00:00Z" } })])],
+			isSuccess: true, isError: false,
+		});
+		renderBoard("p1");
+		expect(screen.getByTestId("board-reports-indicator")).toBeInTheDocument();
+		act(() => useUiStore.setState({ developerMode: false }));
+		expect(screen.queryByTestId("board-reports-indicator")).not.toBeInTheDocument();
 	});
 
 	it("shows AO memory pressure in the archive bar even with nothing archived", async () => {

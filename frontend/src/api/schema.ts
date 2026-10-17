@@ -5573,8 +5573,14 @@ export interface components {
         };
         ReportResponse: {
             /** Format: date-time */
+            availableAt?: null | string;
+            /** Format: date-time */
             createdAt: string;
+            /** Format: int64 */
+            deliveryAttempts?: number;
+            deliveryState?: string;
             id: string;
+            lastError?: string;
             message?: string;
             note?: string;
             outputs?: components["schemas"]["ReportOutputResponse"][];

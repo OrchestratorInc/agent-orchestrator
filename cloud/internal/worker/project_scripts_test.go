@@ -2,10 +2,12 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -98,6 +100,22 @@ func TestSetupKeepsTheTailOfLongOutput(t *testing.T) {
 	}
 }
 
+// runHookFile executes an installed hook script. A sibling test that forks in
+// the moment WriteCleanupHook still holds the script's temporary write fd
+// inherits it, and this fork/exec then fails with ETXTBSY ("text file busy");
+// the foreign fd closes within moments, so a short retry rides it out.
+func runHookFile(path string) (string, int, error) {
+	output, err := exec.Command(path).CombinedOutput()
+	for retry := 0; errors.Is(err, syscall.ETXTBSY) && retry < 100; retry++ {
+		time.Sleep(10 * time.Millisecond)
+		output, err = exec.Command(path).CombinedOutput()
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		return string(output), exitErr.ExitCode(), nil
+	}
+	return string(output), 0, err
+}
+
 // The Cleanup hook runs the commands in the workspace with the session
 // environment, stops at the first failure, runs them only once however often
 // it is invoked, and stays installed (doing nothing) when the project has no
@@ -114,14 +132,11 @@ func TestCleanupHookRunsCommandsOnce(t *testing.T) {
 	}
 	hook := filepath.Join(dataDir, CleanupHookFile)
 	run := func() (string, int) {
-		output, err := exec.Command(hook).CombinedOutput()
-		code := 0
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			code = exitErr.ExitCode()
-		} else if err != nil {
+		output, code, err := runHookFile(hook)
+		if err != nil {
 			t.Fatalf("run hook: %v", err)
 		}
-		return string(output), code
+		return output, code
 	}
 	output, code := run()
 	if code != 5 || !strings.Contains(output, "cleaning") || !strings.Contains(output, "cleanup step 2 failed") {
@@ -141,10 +156,7 @@ func TestCleanupHookRunsCommandsOnce(t *testing.T) {
 	if err := WriteCleanupHook(emptyDir, []string{" "}, workspace, scriptEnvironment(workspace)); err != nil {
 		t.Fatal(err)
 	}
-	output, err = func() (string, error) {
-		out, err := exec.Command(filepath.Join(emptyDir, CleanupHookFile)).CombinedOutput()
-		return string(out), err
-	}()
+	output, _, err = runHookFile(filepath.Join(emptyDir, CleanupHookFile))
 	if err != nil || strings.TrimSpace(output) != "" {
 		t.Fatalf("hook with no Cleanup commands: output = %q, err = %v; want a silent success", output, err)
 	}

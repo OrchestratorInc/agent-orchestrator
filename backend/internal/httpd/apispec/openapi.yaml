@@ -16129,10 +16129,22 @@ components:
       type: object
     ReportResponse:
       properties:
+        availableAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         createdAt:
           format: date-time
           type: string
+        deliveryAttempts:
+          format: int64
+          type: integer
+        deliveryState:
+          type: string
         id:
+          type: string
+        lastError:
           type: string
         message:
           type: string

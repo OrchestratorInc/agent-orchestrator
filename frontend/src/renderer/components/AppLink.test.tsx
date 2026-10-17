@@ -85,11 +85,19 @@ describe("AppLink", () => {
 
 	it("mounts a caller supplied preview only after a session link opens", async () => {
 		const preview = vi.fn(() => <div data-testid="session-preview">Worker details</div>);
-		render(<AppLink href="ao://sessions/project/session" hoverPreview={preview}>Worker</AppLink>);
+		// The hover card schedules real timers that Radix only cancels on
+		// unmount; one firing after jsdom teardown fails the whole run with an
+		// unhandled "window is not defined" even when every test passed.
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			render(<AppLink href="ao://sessions/project/session" hoverPreview={preview}>Worker</AppLink>);
 
-		expect(preview).not.toHaveBeenCalled();
-		fireEvent.pointerOver(screen.getByRole("link"), { pointerType: "mouse" });
-		await waitFor(() => expect(screen.getByTestId("session-preview")).toBeInTheDocument());
-		expect(preview).toHaveBeenCalled();
+			expect(preview).not.toHaveBeenCalled();
+			fireEvent.pointerOver(screen.getByRole("link"), { pointerType: "mouse" });
+			await waitFor(() => expect(screen.getByTestId("session-preview")).toBeInTheDocument());
+			expect(preview).toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

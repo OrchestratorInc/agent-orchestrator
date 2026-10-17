@@ -270,22 +270,30 @@ describe("ChatMarkdown", () => {
 
 	it("scopes a session preview to the chat source", async () => {
 		sessionPreview.mockClear();
-		render(
-			<ChatLinkProvider
-				onSessionLinkOpen={vi.fn()}
-				sessionLinkHostId="box-a"
-			>
-				<ChatMarkdown text="[Worker](ao://sessions/project/session)" />
-			</ChatLinkProvider>,
-		);
+		// The hover card schedules real timers that Radix only cancels on
+		// unmount; one firing after jsdom teardown fails the whole run with an
+		// unhandled "window is not defined" even when every test passed.
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			render(
+				<ChatLinkProvider
+					onSessionLinkOpen={vi.fn()}
+					sessionLinkHostId="box-a"
+				>
+					<ChatMarkdown text="[Worker](ao://sessions/project/session)" />
+				</ChatLinkProvider>,
+			);
 
-		fireEvent.pointerOver(screen.getByRole("link"), { pointerType: "mouse" });
-		await waitFor(() => expect(screen.getByTestId("session-link-preview")).toBeInTheDocument());
-		expect(sessionPreview).toHaveBeenCalledWith({
-			href: "ao://sessions/project/session",
-			sourceHostId: "box-a",
-			sourceKind: undefined,
-		});
+			fireEvent.pointerOver(screen.getByRole("link"), { pointerType: "mouse" });
+			await waitFor(() => expect(screen.getByTestId("session-link-preview")).toBeInTheDocument());
+			expect(sessionPreview).toHaveBeenCalledWith({
+				href: "ao://sessions/project/session",
+				sourceHostId: "box-a",
+				sourceKind: undefined,
+			});
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("renders remote workspace paths as text while keeping external links working", async () => {
