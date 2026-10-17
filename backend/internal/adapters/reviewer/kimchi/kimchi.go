@@ -23,22 +23,26 @@ const HostTrustWarning = "experimental host-trusted reviewer: Kimchi tool allow/
 // JSON, and `ao review submit` to record the verdict) without stalling. This is
 // hardening, not an OS sandbox; the adapter remains host-trusted.
 //
-// The review protocol (review/prompt.go step 1) requires the piped command:
+// The review protocol (review/prompt.go steps 1-2) stages payloads as base64
+// and posts or submits from the staged file:
 //
-//	printf '%s' '{...}' | gh api --method POST .../reviews --input -
+//	printf '%s' '<base64>' | base64 -d > /tmp/ao-review-<worker-session>-post.json
+//	gh api --method POST .../reviews --input /tmp/ao-review-<worker-session>-post.json
+//	ao review submit --session <worker-session> --reviews /tmp/ao-review-<worker-session>-results.json
 //
 // Kimchi's allow matcher is single-segment only, so piped commands can't be
 // auto-approved by an allow rule — they fall to the classifier under --auto.
-// Including both bash(printf:*) and bash(gh:*) ensures the classifier
-// recognizes each segment. Dangerous gh verbs (merge, DELETE/PUT/PATCH, gist)
-// are denied in reviewerDisallowedTools; git show is denied there too.
-// Kimchi's rule parser is case-insensitive on tool names, so lowercase tool
-// names are used to match Kimchi's internal names.
+// Including bash(printf:*), bash(base64:*), and bash(gh:*) ensures the
+// classifier recognizes each segment. Dangerous gh verbs (merge,
+// DELETE/PUT/PATCH, gist) are denied in reviewerDisallowedTools; git show is
+// denied there too. Kimchi's rule parser is case-insensitive on tool names, so
+// lowercase tool names are used to match Kimchi's internal names.
 var reviewerAllowedTools = []string{
 	"read",
 	"grep",
 	"glob",
 	"bash(printf:*)",
+	"bash(base64:*)",
 	"bash(git diff:*)",
 	"bash(git log:*)",
 	"bash(git status:*)",
