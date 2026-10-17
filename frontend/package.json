@@ -134,6 +134,13 @@
 		"ws": "^8.21.1",
 		"zustand": "^5.0.14"
 	},
+	"overrides": {
+		"@radix-ui/react-dropdown-menu": {
+			".": "2.1.19",
+			"@radix-ui/react-menu": "2.1.17",
+			"@radix-ui/react-primitive": "2.1.5"
+		}
+	},
 	"optionalDependencies": {
 		"electron-installer-debian": "^3.2.0",
 		"electron-installer-redhat": "^3.4.0"
