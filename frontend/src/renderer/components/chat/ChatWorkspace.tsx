@@ -3579,11 +3579,22 @@ export function Timeline({
 	const syncStreamedGrowth = useCallback(() => {
 		if (!pinnedRef.current || !initialLayoutDone.current) return;
 		anchorGeometry.current = null;
-		syncPromptSpacer();
 		const node = scroller.current;
+		// Something at the end shrank on its own (a finished plan folding away). The
+		// browser has already clamped scrollTop by the time this observer runs, before
+		// the spacer could grow back, so put the view back now, before paint, instead
+		// of gliding back from the clamped spot. Without a spacer the clamp is already
+		// the end and this writes nothing.
+		const clampedFrom = node && node.scrollTop < lastScrollTop.current - 1 ? lastScrollTop.current : undefined;
+		syncPromptSpacer();
+		if (node && clampedFrom !== undefined) {
+			node.scrollTop = Math.min(clampedFrom, Math.max(0, node.scrollHeight - node.clientHeight));
+			markWritten(node.scrollTop);
+			lastScrollTop.current = node.scrollTop;
+		}
 		if (node) followOrSnapToEnd(node);
 		updateScrollbar();
-	}, [syncPromptSpacer, followOrSnapToEnd, updateScrollbar]);
+	}, [syncPromptSpacer, followOrSnapToEnd, updateScrollbar, markWritten]);
 
 	// A disclosure animation changes the content box but is not new conversation
 	// content. Re-measure it without re-pinning the viewport to the bottom; doing

@@ -20,7 +20,7 @@
 
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { Check, ListChecks, Loader2 } from "lucide-react";
+import { ChevronDown, ListChecks } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { ConversationPlan, PlanStepStatus } from "../../types/conversation";
 
@@ -98,36 +98,49 @@ export const TurnPlan = memo(function TurnPlan({
 	}, [expanded, syncEdgeFade]);
 
 	if (plan.steps.length === 0) return null;
+	const total = plan.steps.length;
+	// Folded, the header still says where the agent is.
+	const currentStep = !expanded && !allDone ? plan.steps[activeStep]?.text : undefined;
 
 	return (
 		<section
 			aria-label="Agent plan"
-			className="rounded-lg border border-border bg-surface"
+			// Busy while the agent can still tick steps off, so assistive tech knows the
+			// list is changing rather than final.
+			aria-busy={Boolean(live) && !allDone}
+			className="overflow-hidden rounded-xl border border-border"
 			data-turn-plan="true"
 		>
-			<div className="flex items-center gap-2 px-3.5 py-2.5">
-				<button
-					type="button"
-					onClick={() => setExpanded((open) => !open)}
-					aria-expanded={expanded}
-					aria-label={expanded ? "Collapse plan" : "Expand plan"}
-					className="inline-flex size-control-sm shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-				>
-					<ListChecks aria-hidden="true" className="size-4" />
-				</button>
-				<strong className="shrink-0 text-xs font-semibold text-foreground">Plan</strong>
-				{live && done < plan.steps.length ? (
-					<Loader2
-						aria-label="still planning"
-						className="size-3 shrink-0 animate-spin text-muted-foreground/60"
-					/>
-				) : null}
-				<span className="flex-1" />
-				{/* Tabular so the count does not jitter the header as it climbs. */}
-				<span className="shrink-0 font-mono text-caption tabular-nums text-muted-foreground">
-					{done}/{plan.steps.length}
+			{/* The whole header is the toggle, so the target is the row rather than an icon. */}
+			<button
+				type="button"
+				onClick={() => setExpanded((open) => !open)}
+				aria-expanded={expanded}
+				aria-label={expanded ? "Collapse plan" : "Expand plan"}
+				className="group/plan flex h-11 w-full items-center gap-2.5 px-3.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+			>
+				<PlanMark done={allDone} />
+				<span className="shrink-0 text-sm font-medium text-foreground">Plan</span>
+				<span className="min-w-0 flex-1 truncate text-sm text-muted-foreground" title={currentStep}>
+					{currentStep}
 				</span>
-			</div>
+				{/* Tabular so the count does not jitter the header as it climbs. */}
+				<span
+					className={cn(
+						"shrink-0 text-xs font-medium tabular-nums transition-colors duration-300 motion-reduce:transition-none",
+						allDone ? "text-success" : "text-muted-foreground",
+					)}
+				>
+					{done}/{total}
+				</span>
+				<ChevronDown
+					aria-hidden="true"
+					className={cn(
+						"size-4 shrink-0 text-muted-foreground/50 transition-[transform,color] duration-200 group-hover/plan:text-foreground motion-reduce:transition-none",
+						expanded && "rotate-180",
+					)}
+				/>
+			</button>
 
 			<AnimatePresence initial={false}>
 				{expanded ? (
@@ -140,43 +153,44 @@ export const TurnPlan = memo(function TurnPlan({
 						className="overflow-hidden"
 					>
 						{plan.explanation ? (
-							<p className="px-3.5 pb-2 text-caption leading-relaxed text-muted-foreground">
+							<p className="px-3.5 pb-1.5 text-xs leading-relaxed text-muted-foreground">
 								{plan.explanation}
 							</p>
 						) : null}
 
-						{/* The rule sits outside the scroll window so the top fade never eats it. */}
-						<div className="border-t border-border">
-							<div
-								ref={viewportRef}
-								onScroll={syncEdgeFade}
-								className="turn-plan-viewport scrollbar-none relative max-h-48 overflow-y-auto"
-							>
-								{/* A real list, so a screen reader hears "list, 5 items" and the status of each
-								    step is spoken rather than left to a colour. */}
-								<ol className="flex flex-col py-1">
-									{plan.steps.map((step, index) => (
-										<li
-											key={`${index}-${step.text}`}
-											data-plan-step={index}
-											className="flex items-start gap-2.5 px-3.5 py-1"
-											aria-label={`${step.text} — ${STEP_LABEL[step.status]}`}
+						<div
+							ref={viewportRef}
+							onScroll={syncEdgeFade}
+							className="turn-plan-viewport scrollbar-none relative max-h-60 overflow-y-auto"
+						>
+							{/* A real list, so a screen reader hears "list, 5 items" and the status of each
+							    step is spoken rather than left to a colour. */}
+							<ol className="flex flex-col px-3.5 pb-2.5">
+								{plan.steps.map((step, index) => (
+									<li
+										key={`${index}-${step.text}`}
+										data-plan-step={index}
+										className="flex items-start gap-2.5 py-1"
+										aria-label={`${step.text} — ${STEP_LABEL[step.status]}`}
+									>
+										<StepMark status={step.status} />
+										{/* The strike is always there and only its colour changes, so a step
+										    being ticked off fades its line in, even across a wrapped line. */}
+										<span
+											className={cn(
+												"min-w-0 flex-1 text-sm leading-6 line-through transition-[color,text-decoration-color] duration-300 motion-reduce:transition-none",
+												step.status === "completed"
+													? "text-muted-foreground/60 decoration-muted-foreground/50"
+													: "decoration-transparent",
+												step.status === "in_progress" && "text-foreground",
+												step.status === "pending" && "text-muted-foreground",
+											)}
 										>
-											<StepMark status={step.status} />
-											<span
-												className={cn(
-													"min-w-0 flex-1 text-xs leading-[1.45]",
-													step.status === "completed" && "text-muted-foreground/70 line-through",
-													step.status === "in_progress" && "text-foreground",
-													step.status === "pending" && "text-muted-foreground",
-												)}
-											>
-												{step.text}
-											</span>
-										</li>
-									))}
-								</ol>
-							</div>
+											{step.text}
+										</span>
+									</li>
+								))}
+							</ol>
 						</div>
 					</motion.div>
 				) : null}
@@ -184,6 +198,38 @@ export const TurnPlan = memo(function TurnPlan({
 		</section>
 	);
 });
+
+/** The header's mark: the list icon while there is work left, a filled tick once it is all done. */
+function PlanMark({ done }: { done: boolean }) {
+	return (
+		<span aria-hidden="true" className="relative grid size-[18px] shrink-0 place-items-center">
+			<ListChecks
+				className={cn(
+					"absolute size-4 text-muted-foreground transition-[opacity,scale] duration-200 motion-reduce:transition-none",
+					done ? "scale-75 opacity-0" : "scale-100 opacity-100",
+				)}
+			/>
+			<svg
+				viewBox="0 0 18 18"
+				className={cn(
+					"absolute size-[18px] text-success transition-[opacity,scale] duration-200 motion-reduce:transition-none",
+					done ? "scale-100 opacity-100" : "scale-75 opacity-0",
+				)}
+			>
+				<circle cx="9" cy="9" r="9" fill="currentColor" />
+				<path
+					d="M5.6 9.3 7.9 11.6 12.5 6.8"
+					fill="none"
+					stroke="currentColor"
+					strokeWidth="2"
+					strokeLinecap="round"
+					strokeLinejoin="round"
+					className="text-background"
+				/>
+			</svg>
+		</span>
+	);
+}
 
 /** The step the window follows: the one in progress, else the next to start, else the last. */
 function activeStepIndex(plan: ConversationPlan): number {
@@ -198,21 +244,59 @@ function activeStepIndex(plan: ConversationPlan): number {
  *
  * Same box whatever the state, because these change while the reader is looking at
  * them: a spinner that is a pixel taller than a tick would nudge every line below it
- * each time a step finished.
+ * each time a step finished. All three marks are drawn and only the current one is
+ * shown, so a step that ticks over cross-fades in place instead of popping.
  */
 function StepMark({ status }: { status: PlanStepStatus }) {
+	const shown = (mark: PlanStepStatus) =>
+		cn("transition-opacity duration-200 motion-reduce:transition-none", status === mark ? "opacity-100" : "opacity-0");
 	return (
-		<span
-			aria-hidden="true"
-			className="mt-[3px] flex size-3 shrink-0 items-center justify-center"
-		>
-			{status === "completed" ? (
-				<Check className="size-3 text-success" />
-			) : status === "in_progress" ? (
-				<Loader2 className="size-3 animate-spin text-status-working" />
-			) : (
-				<span className="size-[7px] rounded-full border border-muted-foreground/50" />
-			)}
+		<span aria-hidden="true" className="flex h-6 w-4 shrink-0 items-center justify-center">
+			<svg viewBox="0 0 16 16" className="size-4 overflow-visible">
+				{/* Not started: a dashed ring, present but quiet. */}
+				<circle
+					cx="8"
+					cy="8"
+					r="6.75"
+					fill="none"
+					stroke="currentColor"
+					strokeWidth="1.25"
+					strokeDasharray="2.6 2.7"
+					className={cn("text-muted-foreground/45", shown("pending"))}
+				/>
+				{/* In progress: a faint ring with an arc turning round it, neutral like the
+				    chat's own Working spinner. */}
+				<g className={cn("text-foreground", shown("in_progress"))}>
+					<circle cx="8" cy="8" r="6.75" fill="none" stroke="currentColor" strokeOpacity="0.18" strokeWidth="1.5" />
+					<circle
+						cx="8"
+						cy="8"
+						r="6.75"
+						fill="none"
+						stroke="currentColor"
+						strokeWidth="1.5"
+						strokeLinecap="round"
+						strokeDasharray="12 43"
+						className="origin-center animate-spin [transform-box:fill-box] motion-reduce:animate-none"
+					/>
+				</g>
+				{/* Done: an outlined circle whose tick draws itself in as the step finishes. */}
+				<g className={cn("text-muted-foreground/70", shown("completed"))}>
+					<circle cx="8" cy="8" r="6.75" fill="none" stroke="currentColor" strokeWidth="1.25" />
+					<path
+						d="M5.3 8.2 7.2 10.1 10.8 6.3"
+						pathLength={1}
+						fill="none"
+						stroke="currentColor"
+						strokeWidth="1.5"
+						strokeLinecap="round"
+						strokeLinejoin="round"
+						strokeDasharray={1}
+						strokeDashoffset={status === "completed" ? 0 : 1}
+						className="transition-[stroke-dashoffset] delay-75 duration-300 ease-out motion-reduce:transition-none"
+					/>
+				</g>
+			</svg>
 		</span>
 	);
 }

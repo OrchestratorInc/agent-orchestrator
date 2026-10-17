@@ -9,6 +9,10 @@ import type { ConversationPlan, PlanStepStatus } from "../../types/conversation"
 // than only as a colour, and the panel is absent rather than empty when the agent
 // made no plan.
 
+// The body folds away over 200ms; a loaded machine can stretch that past
+// waitFor's 1s default.
+const FOLD_WAIT = { timeout: 5000 };
+
 const plan: ConversationPlan = {
 	explanation: "Land the store first so the endpoint has something to read.",
 	steps: [
@@ -40,7 +44,7 @@ describe("TurnPlan", () => {
 
 	it("says the plan can still change while the turn runs", () => {
 		render(<TurnPlan plan={plan} live />);
-		expect(screen.getByLabelText("still planning")).toBeInTheDocument();
+		expect(screen.getByRole("region", { name: "Agent plan" })).toHaveAttribute("aria-busy", "true");
 	});
 
 	// A finished plan is not still planning, even on a turn that is technically live.
@@ -51,7 +55,15 @@ describe("TurnPlan", () => {
 				live
 			/>,
 		);
-		expect(screen.queryByLabelText("still planning")).not.toBeInTheDocument();
+		expect(screen.getByRole("region", { name: "Agent plan" })).toHaveAttribute("aria-busy", "false");
+	});
+
+	it("names the step in progress on the folded header", async () => {
+		const user = userEvent.setup();
+		render(<TurnPlan plan={plan} live />);
+
+		await user.click(screen.getByRole("button", { name: "Collapse plan" }));
+		expect(screen.getByRole("button", { name: "Expand plan" })).toHaveTextContent("Run the backend tests");
 	});
 
 	it("renders nothing for a plan with no steps", () => {
@@ -71,7 +83,7 @@ describe("TurnPlan", () => {
 		expect(screen.getByRole("list")).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Collapse plan" }));
 		// The body folds away rather than vanishing, so it leaves once the fold ends.
-		await waitFor(() => expect(screen.queryByRole("list")).not.toBeInTheDocument());
+		await waitFor(() => expect(screen.queryByRole("list")).not.toBeInTheDocument(), FOLD_WAIT);
 		expect(screen.queryByText(/Land the store first/)).not.toBeInTheDocument();
 		expect(screen.getByText("1/3")).toBeInTheDocument();
 
@@ -96,7 +108,7 @@ describe("TurnPlan", () => {
 		expect(screen.getByRole("list")).toBeInTheDocument();
 
 		rerender(<TurnPlan plan={finished(plan)} live />);
-		await waitFor(() => expect(screen.queryByRole("list")).not.toBeInTheDocument());
+		await waitFor(() => expect(screen.queryByRole("list")).not.toBeInTheDocument(), FOLD_WAIT);
 		expect(screen.getByText("3/3")).toBeInTheDocument();
 
 		rerender(
