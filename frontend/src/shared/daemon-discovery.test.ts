@@ -93,6 +93,11 @@ describe("parseRunFile", () => {
 		);
 	});
 
+	it("preserves the OS process start identity separately from startedAt", () => {
+		expect(parseRunFile(JSON.stringify({ pid: 4242, port: 3037, processStartId: "darwin:123:456" }))?.processStartId).toBe("darwin:123:456");
+		expect(parseRunFile(JSON.stringify({ pid: 4242, port: 3037, processStartId: 123 }))?.processStartId).toBeUndefined();
+	});
+
 	it("returns null for malformed JSON", () => {
 		expect(parseRunFile("{not json")).toBeNull();
 		expect(parseRunFile("")).toBeNull();

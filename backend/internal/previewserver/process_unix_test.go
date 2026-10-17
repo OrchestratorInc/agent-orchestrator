@@ -3,6 +3,7 @@
 package previewserver
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -16,7 +17,75 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
+
+func TestPreviewProcessStartTimeKeepsLegacyFormat(t *testing.T) {
+	for _, tc := range []struct{ name, locale, zone string }{
+		{"UTC", "C", "UTC"},
+		{"non-UTC", "C", "Asia/Kolkata"},
+		{"localized", "fr_FR.UTF-8", "Europe/Paris"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("LC_ALL", tc.locale)
+			t.Setenv("TZ", tc.zone)
+			want := legacyPSStartTime(t, os.Getpid())
+			if got := processalive.StartTime(context.Background(), os.Getpid()); got != want {
+				t.Fatalf("process start time = %q, want legacy ps format %q", got, want)
+			}
+		})
+	}
+}
+
+func TestPreviewProcessStartTimeRejectsInvalidPID(t *testing.T) {
+	for _, pid := range []int{-1, 0} {
+		if got := previewProcessStartTime(pid); got != "" {
+			t.Fatalf("process start time for pid %d = %q, want empty identity", pid, got)
+		}
+	}
+}
+
+func TestPreviewProcessStartTimeUsesNativeIdentityOnDarwin(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("native start times come from macOS")
+	}
+	want := processalive.Identify(context.Background(), os.Getpid()).StartID
+	if want == "" {
+		t.Fatal("native process start identity is unavailable")
+	}
+	t.Setenv("PATH", t.TempDir())
+	if got := previewProcessStartTime(os.Getpid()); got != want {
+		t.Fatalf("process start identity = %q, want %q without ps", got, want)
+	}
+}
+
+func TestSignalPreviewGroupRefusesMismatchedNativeIdentity(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("native start times come from macOS")
+	}
+	cmd := startSleeper(t, "sleep", "60")
+	if err := signalPreviewGroup(cmd.Process.Pid, "darwin:0:0", syscall.SIGKILL); !errors.Is(err, errStalePreviewPID) {
+		t.Fatalf("signalPreviewGroup = %v, want errStalePreviewPID", err)
+	}
+	if !sleeperRunning(t, cmd.Process.Pid) {
+		t.Fatal("native identity mismatch killed an unrelated process")
+	}
+}
+
+func legacyPSStartTime(t *testing.T, pid int) string {
+	t.Helper()
+	cmd := exec.Command("ps", "-o", "lstart=", "-p", strconv.Itoa(pid))
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("read legacy process start time: %v", err)
+	}
+	start := strings.TrimSpace(string(out))
+	if start == "" {
+		t.Fatal("legacy ps returned no process start time")
+	}
+	return start
+}
 
 // fakeStartTime is a launch identity that can never match a live process.
 const fakeStartTime = "Thu Jan  1 00:00:00 1970"
@@ -107,10 +176,7 @@ func TestReapPersistedProcessesSkipsLegacyEntriesWithoutStartTime(t *testing.T) 
 // Reap still does its job when the recorded identity checks out.
 func TestReapPersistedProcessesKillsVerifiedProcess(t *testing.T) {
 	cmd := startSleeper(t, "sleep", "60")
-	startTime := previewProcessStartTime(cmd.Process.Pid)
-	if startTime == "" {
-		t.Fatal("could not capture launch identity")
-	}
+	startTime := legacyPSStartTime(t, cmd.Process.Pid)
 
 	dataDir := t.TempDir()
 	registry, err := json.Marshal([]persistedProcess{{
@@ -207,10 +273,11 @@ func waitUntil(t *testing.T, timeout time.Duration, done func() bool, message st
 // start time is boot+<this boot's id>+<non-zero ticks since boot>.
 func requireBootTicks(t *testing.T, pid int) (start, ticks string) {
 	t.Helper()
-	boot, err := bootID()
+	bootFile, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
 	if err != nil {
 		t.Fatalf("read boot id: %v", err)
 	}
+	boot := strings.TrimSpace(string(bootFile))
 	start = previewProcessStartTime(pid)
 	ticks, ok := strings.CutPrefix(start, bootTicksPrefix+boot+"+")
 	if n, err := strconv.ParseUint(ticks, 10, 64); !ok || err != nil || n == 0 {
@@ -227,6 +294,7 @@ func TestPreviewProcessStartTimeUsesBootTicksOnLinux(t *testing.T) {
 		t.Skip("boot ticks come from /proc")
 	}
 	cmd := startSleeper(t, "sleep", "60")
+	t.Setenv("PATH", t.TempDir())
 	requireBootTicks(t, cmd.Process.Pid)
 }
 
@@ -272,7 +340,7 @@ func TestSignalPreviewGroupRefusesRecordFromAnotherBoot(t *testing.T) {
 // can still be stopped.
 func TestSignalPreviewGroupAcceptsLstartRecord(t *testing.T) {
 	cmd := startSleeper(t, "sleep", "60")
-	recorded := psStartTime(cmd.Process.Pid)
+	recorded := processalive.StartTime(context.Background(), cmd.Process.Pid)
 	if recorded == "" {
 		t.Fatal("ps reported no start time")
 	}

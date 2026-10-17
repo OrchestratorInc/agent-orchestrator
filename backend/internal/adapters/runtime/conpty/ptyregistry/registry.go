@@ -11,21 +11,21 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
 
 // Entry is one registered pty-host process.
 type Entry struct {
-	SessionID    string `json:"sessionId"`
-	PtyHostPID   int    `json:"ptyHostPid"`
-	PipePath     string `json:"pipePath"`
-	LaunchID     string `json:"launchId,omitempty"`
-	RegisteredAt string `json:"registeredAt"` // RFC3339; set by caller
+	SessionID      string `json:"sessionId"`
+	PtyHostPID     int    `json:"ptyHostPid"`
+	ProcessStartID string `json:"processStartId,omitempty"`
+	PipePath       string `json:"pipePath"`
+	LaunchID       string `json:"launchId,omitempty"`
+	RegisteredAt   string `json:"registeredAt"` // RFC3339; set by caller
 }
 
-// pidAlive is the PID-liveness probe. Tests replace it with a fake.
-// defaultPidAlive is provided in build-tagged files (pidalive_unix.go /
-// pidalive_windows.go).
-var pidAlive = defaultPidAlive
+var checkOwnership = processalive.CheckOwnership
 
 // rewriteRegistry is the prune-write seam. Tests replace it to prove a write
 // or permission failure cannot be reported as a complete empty scan.
@@ -264,8 +264,45 @@ func Unregister(ctx context.Context, sessionID string) error {
 	return writeRaw(ctx, next)
 }
 
+// UnregisterOwned removes only the recorded host incarnation. A cached owner
+// must not erase a successor registered under the same session ID.
+func UnregisterOwned(ctx context.Context, expected Entry) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	all, complete, err := readRaw(ctx)
+	if err != nil || !complete {
+		return errors.Join(err, errors.New("conpty pty registry scan incomplete"))
+	}
+	next := make([]Entry, 0, len(all))
+	for _, e := range all {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if e.SessionID != expected.SessionID {
+			next = append(next, e)
+			continue
+		}
+		// A failed post-start write can leave this exact launch's reservation
+		// on disk after its known process is gone. A nonempty generation is
+		// required to distinguish it from another owner's pending launch.
+		ownReservation := e.PtyHostPID == 0 && e.ProcessStartID == "" && e.PipePath == UnresolvedPipePath &&
+			e.LaunchID != "" && e.LaunchID == expected.LaunchID
+		if !ownReservation && (e.PtyHostPID != expected.PtyHostPID || e.ProcessStartID != expected.ProcessStartID ||
+			e.PipePath != expected.PipePath || e.LaunchID != expected.LaunchID) {
+			return errors.New("conpty pty registry owner changed")
+		}
+	}
+	if len(next) == len(all) {
+		return nil
+	}
+	return writeRaw(ctx, next)
+}
+
 // Scan returns the live registry entries and whether the scan is complete.
-// Dead entries are pruned only after a complete read and parse. Any read,
+// Gone or reused process entries are pruned only after a complete read and parse. Any read,
 // parse, or prune-write failure returns incomplete evidence.
 func Scan(ctx context.Context) (entries []Entry, complete bool, err error) {
 	if err := ctx.Err(); err != nil {
@@ -293,8 +330,12 @@ func scanLocked(ctx context.Context) (entries []Entry, complete bool, err error)
 			// A prelaunch reservation has no PID to probe. Retain it until an
 			// exact owner replaces or explicitly unregisters the reservation.
 			live = append(live, e)
-		} else if pidAlive(e.PtyHostPID) {
-			live = append(live, e)
+		} else {
+			switch checkOwnership(ctx, e.PtyHostPID, e.ProcessStartID) {
+			case processalive.OwnershipGone, processalive.OwnershipReused:
+			default:
+				live = append(live, e)
+			}
 		}
 		if err := ctx.Err(); err != nil {
 			return live, false, err

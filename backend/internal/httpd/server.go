@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 	"github.com/aoagents/agent-orchestrator/backend/internal/terminal"
 )
@@ -104,6 +105,7 @@ func (s *Server) RunWithReady(ctx context.Context, onReady func()) error {
 func (s *Server) run(ctx context.Context, onReady func()) error {
 	info := runfile.Info{
 		PID:                   os.Getpid(),
+		ProcessStartID:        processalive.Identify(ctx, os.Getpid()).StartID,
 		Port:                  s.boundPort(),
 		StartedAt:             time.Now().UTC(),
 		Owner:                 os.Getenv("AO_OWNER"),
@@ -115,7 +117,7 @@ func (s *Server) run(ctx context.Context, onReady func()) error {
 		return fmt.Errorf("write run-file: %w", err)
 	}
 	defer func() {
-		if err := runfile.RemoveIfOwned(s.cfg.RunFilePath, info.PID); err != nil {
+		if err := runfile.RemoveIfOwned(s.cfg.RunFilePath, info); err != nil {
 			s.log.Warn("failed to remove run-file", "path", s.cfg.RunFilePath, "err", err)
 		}
 	}()

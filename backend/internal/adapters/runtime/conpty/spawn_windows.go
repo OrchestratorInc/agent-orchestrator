@@ -98,6 +98,9 @@ func defaultSpawnHost(ctx context.Context, sessionID, cwd string, argv []string,
 	if err := cmd.Start(); err != nil {
 		return "", 0, fmt.Errorf("conpty spawn: start: %w", err)
 	}
+	if opts.processStarted != nil {
+		opts.processStarted(cmd.Process.Pid)
+	}
 
 	// Read READY line with a timeout.
 	readyC := make(chan struct {

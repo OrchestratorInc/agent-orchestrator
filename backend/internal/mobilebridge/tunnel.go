@@ -2,6 +2,7 @@ package mobilebridge
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
 
 // The hostname of a quick tunnel is only ever available by scraping
@@ -226,13 +228,28 @@ func TunnelPIDPath(dataDir string) string {
 	return filepath.Join(dataDir, "mobile", "tunnel.pid")
 }
 
-// WriteTunnelPID records the pid of the connector we just spawned, so a daemon
-// that dies without stopping it can clean up on its next start.
+type tunnelPIDIdentity struct {
+	PID            int    `json:"pid"`
+	ProcessStartID string `json:"processStartId"`
+}
+
+// WriteTunnelPID records the connector's PID and process start identity, so a
+// daemon that dies without stopping it can safely clean up on its next start.
 func WriteTunnelPID(path string, pid int) error {
+	ctx, cancel := context.WithTimeout(context.Background(), processProbeTimeout)
+	defer cancel()
+	return writeTunnelPIDIdentity(path, tunnelPIDIdentity{PID: pid, ProcessStartID: processalive.Identify(ctx, pid).StartID})
+}
+
+func writeTunnelPIDIdentity(path string, identity tunnelPIDIdentity) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("mkdir mobile dir: %w", err)
 	}
-	if err := os.WriteFile(path, []byte(strconv.Itoa(pid)+"\n"), 0o600); err != nil {
+	data, err := json.Marshal(identity)
+	if err != nil {
+		return fmt.Errorf("encode tunnel pid: %w", err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write tunnel pid: %w", err)
 	}
 	return nil
@@ -240,15 +257,25 @@ func WriteTunnelPID(path string, pid int) error {
 
 // ReadTunnelPID returns the recorded pid, if there is one.
 func ReadTunnelPID(path string) (int, bool) {
+	identity, err := readTunnelPIDIdentity(path)
+	return identity.PID, err == nil
+}
+
+func readTunnelPIDIdentity(path string) (tunnelPIDIdentity, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return 0, false
+		return tunnelPIDIdentity{}, err
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil || pid <= 0 {
-		return 0, false
+	var identity tunnelPIDIdentity
+	if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+		identity.PID = pid // Legacy records have no start identity.
+	} else if err := json.Unmarshal(b, &identity); err != nil {
+		return tunnelPIDIdentity{}, fmt.Errorf("parse tunnel pid: %w", err)
 	}
-	return pid, true
+	if identity.PID <= 0 {
+		return tunnelPIDIdentity{}, fmt.Errorf("invalid tunnel pid %d", identity.PID)
+	}
+	return identity, nil
 }
 
 // ReapStaleTunnel kills a connector left behind by a previous daemon, then
@@ -257,25 +284,55 @@ func ReadTunnelPID(path string) (int, bool) {
 // Without this, a daemon crash leaves a public tunnel to the machine running
 // with nobody watching it.
 //
-// isOurs is required and must actually confirm the process: pids are reused, so
-// killing a recorded pid on trust alone would eventually kill something
-// unrelated. When it cannot confirm, we clear the file and kill nothing —
-// leaking a tunnel until reboot is a far smaller harm than killing an arbitrary
-// process.
+// Only a matching process start identity and confirmed cloudflared command
+// authorize a signal. Unknown ownership keeps the record and blocks replacement.
 func ReapStaleTunnel(path string, isOurs func(pid int) bool, kill func(pid int) error) error {
-	pid, ok := ReadTunnelPID(path)
-	if !ok {
-		return nil
-	}
-	defer func() { _ = os.Remove(path) }()
+	ctx, cancel := context.WithTimeout(context.Background(), processProbeTimeout)
+	defer cancel()
+	return reapStaleTunnel(ctx, path, processalive.CheckOwnership, isOurs, kill)
+}
 
-	if isOurs == nil || !isOurs(pid) {
+func reapStaleTunnel(ctx context.Context, path string, check func(context.Context, int, string) processalive.Ownership, isOurs func(int) bool, kill func(int) error) error {
+	owner := newTunnelPIDOwner(path)
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	identity, err := readTunnelPIDIdentity(path)
+	if os.IsNotExist(err) {
 		return nil
 	}
-	if err := kill(pid); err != nil {
-		return fmt.Errorf("kill stale tunnel %d: %w", pid, err)
+	if err != nil {
+		return fmt.Errorf("read stale tunnel identity: %w", err)
 	}
-	return nil
+	switch check(ctx, identity.PID, identity.ProcessStartID) {
+	case processalive.OwnershipGone, processalive.OwnershipReused:
+		return RemoveOwnTunnelPIDFile(path, identity.PID, identity.ProcessStartID)
+	case processalive.OwnershipMatching:
+		if isOurs == nil || !isOurs(identity.PID) || kill == nil {
+			return fmt.Errorf("cannot confirm stale tunnel %d command", identity.PID)
+		}
+		// The command probe can block while the PID is recycled.
+		if ownership := check(ctx, identity.PID, identity.ProcessStartID); ownership != processalive.OwnershipMatching {
+			return fmt.Errorf("stale tunnel %d ownership changed to %s", identity.PID, ownership)
+		}
+		if err := kill(identity.PID); err != nil {
+			return fmt.Errorf("kill stale tunnel %d: %w", identity.PID, err)
+		}
+		tick := time.NewTicker(25 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			switch check(ctx, identity.PID, identity.ProcessStartID) {
+			case processalive.OwnershipGone, processalive.OwnershipReused:
+				return RemoveOwnTunnelPIDFile(path, identity.PID, identity.ProcessStartID)
+			}
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("wait for stale tunnel %d exit: %w", identity.PID, ctx.Err())
+			case <-tick.C:
+			}
+		}
+	default:
+		return fmt.Errorf("cannot establish ownership of stale tunnel %d", identity.PID)
+	}
 }
 
 // TunnelStatus is the connector's observable state, for the desktop's Connect
@@ -466,24 +523,31 @@ func newTunnelPIDOwner(path string) tunnelPIDOwner {
 	return tunnelPIDOwner{path: path, mu: lock}
 }
 
-func (o tunnelPIDOwner) claim(pid int) error {
+func (o tunnelPIDOwner) claim(identity tunnelPIDIdentity) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return WriteTunnelPID(o.path, pid)
+	return writeTunnelPIDIdentity(o.path, identity)
 }
 
-func (o tunnelPIDOwner) release(pid int) error {
+func (o tunnelPIDOwner) release(identity tunnelPIDIdentity) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return RemoveOwnTunnelPIDFile(o.path, pid)
+	return RemoveOwnTunnelPIDFile(o.path, identity.PID, identity.ProcessStartID)
 }
 
-// RemoveOwnTunnelPIDFile clears the recorded pid, but only while it is still
-// the one this runner wrote. Callers that can overlap replacement startup must
+// RemoveOwnTunnelPIDFile clears only the PID and start identity this runner
+// wrote. Callers that can overlap replacement startup must
 // invoke it through tunnelPIDOwner.release so the check and removal are
 // serialized against the replacement claim.
-func RemoveOwnTunnelPIDFile(path string, pid int) error {
-	if recorded, ok := ReadTunnelPID(path); ok && recorded != pid {
+func RemoveOwnTunnelPIDFile(path string, pid int, startID string) error {
+	recorded, err := readTunnelPIDIdentity(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if recorded != (tunnelPIDIdentity{PID: pid, ProcessStartID: startID}) {
 		return nil // A replacement already owns the file; not ours to delete.
 	}
 	return RemoveTunnelPIDFile(path)

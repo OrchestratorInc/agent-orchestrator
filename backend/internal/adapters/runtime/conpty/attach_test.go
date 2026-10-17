@@ -17,7 +17,7 @@ import (
 func runtimeForFixture(id string, f *serveFixture) *Runtime {
 	r := New(Options{})
 	r.mu.Lock()
-	r.sessions[id] = &hostSession{addr: f.addr, pid: f.pty.PID()}
+	r.sessions[id] = &hostSession{addr: f.addr, pid: livePID()}
 	r.mu.Unlock()
 	return r
 }

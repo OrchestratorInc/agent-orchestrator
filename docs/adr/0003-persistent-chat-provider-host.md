@@ -52,6 +52,17 @@ Codex app-server uses the original raw protocol profile:
   state proves its Chat session is terminated, absent, or no longer Chat. An unreadable
   store, incompatible descriptor, live PID with an unreachable endpoint, or
   failed auth is preserved rather than treated as death.
+- Descriptors and launch locks record the kernel process-start identity, so a
+  recycled PID cannot preserve a dead host. Legacy descriptors use their
+  publication timestamp; legacy PID locks use their own file timestamp. Linux
+  legacy records with a live PID remain protected because `ps` start dates move
+  with the wall clock. Modern Linux records use the boot ID and start ticks.
+  On other platforms, a process demonstrably started later permits replacement;
+  missing or ambiguous identity remains protected. A permanent OS-locked gate
+  serializes launch-lock reclamation and stays held until host cleanup finishes.
+  New launch locks are JSON identity records; plain PID locks remain accepted.
+  Older binaries can still adopt live hosts through the unchanged hello protocol,
+  but fail closed if asked to reclaim a new-format lock after host loss.
 - Branch activation first fences an idle source controller, then explicitly
   terminates its host before opening the replacement. If replacement fails, AO
   restores the source branch through native resume. This keeps one provider

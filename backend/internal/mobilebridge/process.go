@@ -18,11 +18,8 @@ const processProbeTimeout = 3 * time.Second
 
 // IsLiveCloudflared reports whether pid is a running cloudflared.
 //
-// Both halves matter. Liveness alone is not enough because pids are reused, and
-// ReapStaleTunnel would then kill whatever inherited the number — so this
-// confirms the process's own name before anything is signalled. When identity
-// cannot be established it returns false: leaking a tunnel until reboot is a
-// far smaller harm than killing an unrelated process.
+// ReapStaleTunnel separately verifies the recorded process start identity.
+// This command check is an additional requirement before signalling it.
 func IsLiveCloudflared(pid int) bool {
 	if pid <= 0 {
 		return false

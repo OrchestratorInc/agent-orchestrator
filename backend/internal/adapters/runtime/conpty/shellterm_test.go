@@ -37,7 +37,7 @@ func TestIsChildAlivePreservesInconclusiveStatus(t *testing.T) {
 				_, _ = conn.Write(frame)
 			}()
 			rt := New(Options{})
-			rt.sessions["shell"] = &hostSession{addr: listener.Addr().String(), pid: deadPID()}
+			rt.sessions["shell"] = &hostSession{addr: listener.Addr().String(), pid: livePID(), processStartID: testProcessStartID(t)}
 			alive, err := rt.IsChildAlive(context.Background(), ports.RuntimeHandle{ID: "shell"})
 			if alive || err == nil {
 				t.Fatalf("incomplete child status %q = %v, %v; want probe error", payload, alive, err)
@@ -93,8 +93,7 @@ func TestShellReconciliationClosesHostAfterChildExit(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			isolateRegistry(t)
 			hosts := map[string]*inProcHost{}
-			// This host runs inside the test. Never give Destroy a real PID.
-			rt := New(Options{Spawner: fakeSpawnerFor(t, hosts, deadPID())})
+			rt := New(Options{Spawner: fakeSpawnerFor(t, hosts, livePID())})
 			ctx := context.Background()
 			handle, err := rt.Create(ctx, ports.RuntimeConfig{
 				SessionID: "shellterm-exit", WorkspacePath: t.TempDir(), Argv: []string{"sh"},
@@ -103,6 +102,7 @@ func TestShellReconciliationClosesHostAfterChildExit(t *testing.T) {
 				t.Fatal(err)
 			}
 			h := hosts[handle.ID]
+			modelInProcHostExit(t, rt, h)
 			stopped := false
 			t.Cleanup(func() {
 				if !stopped {

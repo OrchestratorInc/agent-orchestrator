@@ -11,8 +11,9 @@ func TestWriteReadRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "running.json")
 	want := Info{
 		PID: 4242, Port: 3001,
-		StartedAt: time.Now().UTC().Truncate(time.Second),
-		AppRunID:  "apprun-1",
+		ProcessStartID: "darwin:123:456",
+		StartedAt:      time.Now().UTC().Truncate(time.Second),
+		AppRunID:       "apprun-1",
 	}
 
 	if err := Write(path, want); err != nil {
@@ -26,7 +27,7 @@ func TestWriteReadRoundTrip(t *testing.T) {
 		t.Fatal("Read returned nil for an existing file")
 		return
 	}
-	if got.PID != want.PID || got.Port != want.Port || got.AppRunID != want.AppRunID || !got.StartedAt.Equal(want.StartedAt) {
+	if got.PID != want.PID || got.ProcessStartID != want.ProcessStartID || got.Port != want.Port || got.AppRunID != want.AppRunID || !got.StartedAt.Equal(want.StartedAt) {
 		t.Errorf("round trip mismatch: got %+v, want %+v", *got, want)
 	}
 }
@@ -126,7 +127,7 @@ func TestRemoveIfOwnedDoesNotDeleteSuccessorRunfile(t *testing.T) {
 	if err := Write(path, Info{PID: 2, Port: 3002}); err != nil {
 		t.Fatalf("Write successor: %v", err)
 	}
-	if err := RemoveIfOwned(path, 1); err != nil {
+	if err := RemoveIfOwned(path, Info{PID: 1, Port: 3001}); err != nil {
 		t.Fatalf("RemoveIfOwned predecessor: %v", err)
 	}
 	got, err := Read(path)
@@ -136,11 +137,55 @@ func TestRemoveIfOwnedDoesNotDeleteSuccessorRunfile(t *testing.T) {
 	if got == nil || got.PID != 2 || got.Port != 3002 {
 		t.Fatalf("successor runfile was removed or changed: %+v", got)
 	}
-	if err := RemoveIfOwned(path, 2); err != nil {
+	if err := RemoveIfOwned(path, Info{PID: 2, Port: 3002}); err != nil {
 		t.Fatalf("RemoveIfOwned successor: %v", err)
 	}
 	if got, err := Read(path); err != nil || got != nil {
 		t.Fatalf("after owner removal got=%+v err=%v", got, err)
+	}
+}
+
+func TestRemoveIfOwnedPreservesReusedPID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "running.json")
+	owner := Info{PID: 42, Port: 3001, ProcessStartID: "old"}
+	successor := Info{PID: 42, Port: 3001, ProcessStartID: "new"}
+	if err := Write(path, successor); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveIfOwned(path, owner); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read(path)
+	if err != nil || got == nil || *got != successor {
+		t.Fatalf("successor record changed: got=%+v err=%v", got, err)
+	}
+}
+
+func TestRunfileWritersHonorTakeoverLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "running.json")
+	owner := Info{PID: 42, Port: 3001, ProcessStartID: "old"}
+	if err := Write(path, owner); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := lock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	for name, operation := range map[string]func() error{
+		"write":        func() error { return Write(path, Info{PID: 43, Port: 3002}) },
+		"remove":       func() error { return Remove(path) },
+		"remove owner": func() error { return RemoveIfOwned(path, owner) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := operation(); err == nil {
+				t.Fatal("writer bypassed the takeover lock")
+			}
+		})
+	}
+	got, err := Read(path)
+	if err != nil || got == nil || *got != owner {
+		t.Fatalf("locked owner record changed: got=%+v err=%v", got, err)
 	}
 }
 

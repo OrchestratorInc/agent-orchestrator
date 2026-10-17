@@ -130,8 +130,9 @@ func TestShouldEmitCLIInvocationSkipsNonUsageAndRoutineInternalCommands(t *testi
 		byName[cmd.Name()] = cmd
 	}
 	for name, want := range map[string]bool{
-		"daemon": false, // supervisor-driven bootstrapping, not human usage
-		"start":  false,
+		"daemon":          false, // supervisor-driven bootstrapping, not human usage
+		"daemon-takeover": false,
+		"start":           false,
 		// hooks/status are routine internal polling paths; pty-host is only an
 		// internal Windows runtime process. Successful executions should not
 		// count as CLI usage.
@@ -177,6 +178,7 @@ func TestTelemetryMetaClassifiesRegisteredCommandPaths(t *testing.T) {
 		"ao chat-host":               {},
 		"ao completion":              {},
 		"ao daemon":                  {},
+		"ao daemon-takeover":         {},
 		"ao help":                    {},
 		"ao mcp":                     {},
 		"ao pty-host":                {},

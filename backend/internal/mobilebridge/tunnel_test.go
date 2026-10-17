@@ -1,11 +1,14 @@
 package mobilebridge
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
 
 // Verbatim cloudflared 2026.7.2 stderr. The hostname is only ever available by
@@ -240,20 +243,27 @@ func TestReadTunnelPIDAbsentWhenNeverWritten(t *testing.T) {
 // the machine running unattended. On the next start we kill what we spawned.
 func TestReapStaleTunnelKillsAnOrphanedConnector(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tunnel.pid")
-	if err := WriteTunnelPID(path, 4242); err != nil {
+	pid := os.Getpid()
+	if err := WriteTunnelPID(path, pid); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
 	killed := 0
-	err := ReapStaleTunnel(path,
-		func(pid int) bool { return pid == 4242 }, // still running, and ours
+	err := reapStaleTunnel(context.Background(), path,
+		func(context.Context, int, string) processalive.Ownership {
+			if killed != 0 {
+				return processalive.OwnershipGone
+			}
+			return processalive.OwnershipMatching
+		},
+		func(got int) bool { return got == pid }, // still running, and ours
 		func(pid int) error { killed = pid; return nil },
 	)
 	if err != nil {
 		t.Fatalf("reap: %v", err)
 	}
-	if killed != 4242 {
-		t.Fatalf("killed %d, want 4242", killed)
+	if killed != pid {
+		t.Fatalf("killed %d, want %d", killed, pid)
 	}
 	if _, ok := ReadTunnelPID(path); ok {
 		t.Error("pid file survived the reap")
@@ -265,23 +275,23 @@ func TestReapStaleTunnelKillsAnOrphanedConnector(t *testing.T) {
 // user cares about far more than a tunnel.
 func TestReapStaleTunnelNeverKillsAnUnconfirmedProcess(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tunnel.pid")
-	if err := WriteTunnelPID(path, 4242); err != nil {
+	if err := WriteTunnelPID(path, os.Getpid()); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
 	killed := false
 	err := ReapStaleTunnel(path,
-		func(int) bool { return false }, // pid reused by something else
+		func(int) bool { return false }, // command cannot be confirmed
 		func(int) error { killed = true; return nil },
 	)
-	if err != nil {
-		t.Fatalf("reap: %v", err)
+	if err == nil {
+		t.Fatal("unconfirmed process must block replacement")
 	}
 	if killed {
 		t.Fatal("killed a process that was not confirmed to be ours")
 	}
-	if _, ok := ReadTunnelPID(path); ok {
-		t.Error("stale pid file should still be cleared")
+	if _, ok := ReadTunnelPID(path); !ok {
+		t.Error("unconfirmed process must retain its pid record")
 	}
 }
 
@@ -511,7 +521,7 @@ func TestRemoveOwnTunnelPIDFileLeavesAReplacementAlone(t *testing.T) {
 
 	// The outgoing runner (pid 1111) cleans up after the replacement (4242)
 	// has already claimed the file.
-	if err := RemoveOwnTunnelPIDFile(path, 1111); err != nil {
+	if err := RemoveOwnTunnelPIDFile(path, 1111, ""); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 
@@ -523,11 +533,12 @@ func TestRemoveOwnTunnelPIDFileLeavesAReplacementAlone(t *testing.T) {
 
 func TestRemoveOwnTunnelPIDFileClearsItsOwnRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tunnel.pid")
-	if err := WriteTunnelPID(path, 1111); err != nil {
+	identity := tunnelPIDIdentity{PID: 1111, ProcessStartID: "owned-start"}
+	if err := writeTunnelPIDIdentity(path, identity); err != nil {
 		t.Fatalf("seed pid: %v", err)
 	}
 
-	if err := RemoveOwnTunnelPIDFile(path, 1111); err != nil {
+	if err := RemoveOwnTunnelPIDFile(path, identity.PID, identity.ProcessStartID); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 
@@ -539,7 +550,7 @@ func TestRemoveOwnTunnelPIDFileClearsItsOwnRecord(t *testing.T) {
 // A clean stop after the file has already been removed is not an error.
 func TestRemoveOwnTunnelPIDFileToleratesAMissingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tunnel.pid")
-	if err := RemoveOwnTunnelPIDFile(path, 1111); err != nil {
+	if err := RemoveOwnTunnelPIDFile(path, 1111, ""); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 }

@@ -426,9 +426,22 @@ func TestLinuxRuntimeDestroyReapsTermIgnoringProcessTreeEndToEnd(t *testing.T) {
 		t.Fatalf("Destroy: %v", err)
 	}
 
-	// Ensure pty-host is gone.
+	// Destroy proves the executable has exited; the spawn goroutine may still
+	// be reaping its zombie process-table entry with cmd.Wait.
+	if info, err := readLinuxProcInfo(hostPID); err == nil {
+		if !info.zombie {
+			t.Fatalf("pty-host pid %d is still executable after Destroy: %+v", hostPID, info)
+		}
+		t.Logf("pty-host pid %d exited and is awaiting asynchronous reaping", hostPID)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("read pty-host pid %d after Destroy: %v", hostPID, err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for pidAlive(hostPID) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
 	if pidAlive(hostPID) {
-		t.Fatalf("pty-host pid %d survived Destroy", hostPID)
+		t.Fatalf("pty-host pid %d was not reaped after Destroy", hostPID)
 	}
 }
 

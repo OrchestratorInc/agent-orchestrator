@@ -63,6 +63,8 @@ export function createListenPortScanner(onPort: (port: number) => void): (chunk:
 /** Parsed running.json handshake — see backend/internal/runfile.Info. */
 export type RunFileInfo = {
 	pid: number;
+	/** OS process incarnation; startedAt is a daemon startup timestamp only. */
+	processStartId?: string;
 	port: number;
 	/** startedAt in epoch ms; 0 when missing/unparseable. */
 	startedAtMs: number;
@@ -88,8 +90,9 @@ export function parseRunFile(contents: string): RunFileInfo | null {
 		return null;
 	}
 	if (typeof raw !== "object" || raw === null) return null;
-	const { pid, port, startedAt, owner, appRunId, browserRuntimeAddress } = raw as {
+	const { pid, processStartId, port, startedAt, owner, appRunId, browserRuntimeAddress } = raw as {
 		pid?: unknown;
+		processStartId?: unknown;
 		port?: unknown;
 		startedAt?: unknown;
 		owner?: unknown;
@@ -100,6 +103,7 @@ export function parseRunFile(contents: string): RunFileInfo | null {
 	const startedAtMs = typeof startedAt === "string" ? Date.parse(startedAt) : NaN;
 	return {
 		pid: typeof pid === "number" && Number.isInteger(pid) ? pid : 0,
+		processStartId: typeof processStartId === "string" ? processStartId : undefined,
 		port,
 		startedAtMs: Number.isNaN(startedAtMs) ? 0 : startedAtMs,
 		owner: typeof owner === "string" ? owner : undefined,
