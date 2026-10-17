@@ -93,10 +93,16 @@ func TestNativeMiniMaxRegisteredChatAPI(t *testing.T) {
 	}
 	d.mustCall("POST", "/sessions/"+session+"/conversation/messages", http.StatusAccepted,
 		map[string]any{"text": "ao-edit", "clientMessageId": "minimax-edit-once"}, &retry)
-	if !retry.Duplicate || retry.TurnID != turnID {
-		t.Fatal("retry did not preserve the accepted Chat turn")
+	// The API deliberately returns no turn ID for a duplicate delivery.
+	// Assert one durable turn and one native dispatch, rather than requiring
+	// the retry response to repeat an ID that the API contract omits.
+	if turnID == "" || !retry.Duplicate || retry.TurnID != "" {
+		t.Fatalf("retry response: first=%q duplicate=%v retry=%q", turnID, retry.Duplicate, retry.TurnID)
 	}
-	awaitMiniMaxTurn(t, d, session, turnID, true)
+	edited := awaitMiniMaxTurn(t, d, session, turnID, true)
+	if len(edited.Turns) != len(initial.Turns)+1 {
+		t.Fatalf("retry created an extra durable turn: %s", describe(edited))
+	}
 	proof := filepath.Join(identity.Workspace, "ao-native-proof.txt")
 	assertMiniMaxFile(t, proof, "native-proof")
 	if provider.RequestCount("ao-edit") != 1 {
