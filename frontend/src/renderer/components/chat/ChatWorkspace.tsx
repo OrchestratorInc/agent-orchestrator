@@ -1607,8 +1607,11 @@ function ChatWorkspaceContent({
 	// Arriving from the new chat page, whose header strip is empty, the session's
 	// header slides into that strip. Only on that arrival, not on a later visit.
 	const [headerSlideIn] = useState(() => {
-		if (!openingStartedAt || Date.now() - Date.parse(openingStartedAt) > 15_000 || headerSlidSessions.has(snapshot.sessionId)) return false;
-		headerSlidSessions.add(snapshot.sessionId);
+		const slideKey = uiSessionId ?? snapshot.sessionId;
+		if (!openingStartedAt || Date.now() - Date.parse(openingStartedAt) > 15_000 || headerSlidSessions.has(slideKey)) return false;
+		headerSlidSessions.add(slideKey);
+		// Past the arrival window the start time alone rules out a replay.
+		setTimeout(() => headerSlidSessions.delete(slideKey), 15_000);
 		return true;
 	});
 	const openingStarting = Boolean(openingStartedAt) && startupState !== "failed" && !firstTurnSettled(snapshot) &&

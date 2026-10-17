@@ -140,6 +140,17 @@ export type TaskLaunchOptions = {
 	approvalMode?: ApprovalMode;
 	/** Idempotency key; a retry with the same key cannot create a second session. */
 	clientRequestId?: string;
+	/** Send exactly this request instead of the current picks, e.g. a retry of a send whose response was lost. */
+	replay?: LaunchReplay;
+};
+
+/** The agent, model and permission parts of a create request, saved so a retry can repeat them exactly. */
+export type LaunchReplay = {
+	agent?: string;
+	model?: string;
+	effort?: string;
+	approvalMode?: ApprovalMode;
+	mode?: "chat" | "tui";
 };
 
 /**
@@ -211,7 +222,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 					...(input.model ? { model: input.model } : {}),
 					...(input.effort ? { reasoningEffort: input.effort } : {}),
 					...(input.mode ? { interfaceMode: input.mode } : {}),
-				});
+				}, input.clientRequestId ? { idempotencyKey: input.clientRequestId } : undefined);
 				// The control plane provisions the sandbox asynchronously; surface the
 				// new session on the board immediately.
 				void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
@@ -607,7 +618,9 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		(isCloudProject || isStandalone || projectQuery.data !== undefined) &&
 		(!hostId || (agentsQuery.isSuccess && settings !== undefined));
 	// Named for its remote origins; a local project that failed to load reports here too.
-	const remoteLoadError = !hostId ? (projectQuery.error instanceof Error ? projectQuery.error.message : undefined) : !hostConnected ? t("remote.hostOffline") :
+	// A cloud project is not read locally, so a lookup made before it was known to be
+	// a cloud project must not linger as its error.
+	const remoteLoadError = !hostId ? (!isCloudProject && projectQuery.error instanceof Error ? projectQuery.error.message : undefined) : !hostConnected ? t("remote.hostOffline") :
 		[projectQuery.error, agentsQuery.error].find((cause): cause is Error => cause instanceof Error)?.message ?? settingsError ??
 			(agentsQuery.isSuccess && !agentCatalog?.agents.some(isLaunchableAgent) ? t("remote.noReadyAgent") : undefined);
 	const refreshSelectedModels = useCallback(async () => {
@@ -655,7 +668,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	useEffect(() => () => clearAttachments(), [clearAttachments]);
 
 	// Rejects with the create error after recording it (and any fallback) here.
-	const launch = async (brief: string, { interfaceMode, approvalMode: requestedApproval, clientRequestId }: TaskLaunchOptions = {}): Promise<string> => {
+	const launch = async (brief: string, { interfaceMode, approvalMode: requestedApproval, clientRequestId, replay }: TaskLaunchOptions = {}): Promise<string> => {
 		if (!projectId || !canSubmit || isSubmitting) throw new Error(remoteLoadError ?? t("newTask.unableToStart"));
 
 		setIsSubmitting(true);
@@ -677,14 +690,22 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 			const request: CreateTaskInput = {
 				projectId,
 				brief,
-				agent: selectedAgent ? (selectedAgent as CreateTaskInput["agent"]) : undefined,
-				model: requestedModel,
-				// Only explicit Codex picks set this; agent changes reset it, and TUI retries preserve it.
-				effort: requestedEffort,
-				// The local daemon applies the default session mode itself; the control
-				// plane has none, so a cloud task carries it.
-				mode: interfaceMode ?? (isCloudProject ? settings?.defaultSessionMode : undefined),
-				approvalMode: requestedApproval ?? approvalMode,
+				...(replay ? {
+					agent: replay.agent as CreateTaskInput["agent"],
+					model: replay.model,
+					effort: replay.effort,
+					mode: replay.mode ?? (isCloudProject ? settings?.defaultSessionMode : undefined),
+					approvalMode: replay.approvalMode,
+				} : {
+					agent: selectedAgent ? (selectedAgent as CreateTaskInput["agent"]) : undefined,
+					model: requestedModel,
+					// Only explicit Codex picks set this; agent changes reset it, and TUI retries preserve it.
+					effort: requestedEffort,
+					// The local daemon applies the default session mode itself; the control
+					// plane has none, so a cloud task carries it.
+					mode: interfaceMode ?? (isCloudProject ? settings?.defaultSessionMode : undefined),
+					approvalMode: requestedApproval ?? approvalMode,
+				}),
 				attachments: attachmentPayloads.length > 0 ? attachmentPayloads : undefined,
 				taskPreparation: submittedPreparation || undefined,
 			};
@@ -725,7 +746,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 			if (selectedAgent) {
 				// Remember a model only when the user chose it (now or before). The one
 				// shown because the agent marks no default is not their preference.
-				const modelChosen = Boolean(model || mode) || rememberedModelIsValid || rememberedModeIsValid;
+				const modelChosen = modelTouched || rememberedModelIsValid || rememberedModeIsValid;
 				const preference: TaskComposerAgentPreference = {
 					model: selectedModel && modelChosen ? requestedModel ?? "" : "",
 					mode: selectedMode && modelChosen ? requestedModel ?? "" : "",
@@ -819,6 +840,17 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	return {
 		launch,
 		launchFallback,
+		// What a plain send would request right now, to save alongside a send.
+		launchSnapshot: (): LaunchReplay => ({
+			agent: selectedAgent || undefined,
+			model: requestedModel,
+			effort: requestedEffort,
+			approvalMode,
+			mode: submitMode,
+		}),
+		// The interface a plain send starts in, including the Settings default.
+		effectiveInterface: (submitMode ?? settings?.defaultSessionMode ?? "tui") as "chat" | "tui",
+		refreshModels: refreshSelectedModels,
 		submitMode,
 		isCloudProject,
 		canSubmit,

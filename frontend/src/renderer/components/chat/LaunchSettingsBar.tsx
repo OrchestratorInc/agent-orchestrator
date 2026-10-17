@@ -18,9 +18,10 @@ export type LaunchSettings = {
 
 const launchSettingsKey = (sessionId: string, hostId?: string) => ["session-launch-settings", sessionUiKey(sessionId, hostId)] as const;
 
-// Nothing observes these entries, so without this the cache would drop them after
-// five minutes, mid-way through a long setup.
-const keep = (queryClient: QueryClient, key: readonly string[]) => queryClient.setQueryDefaults(key, { gcTime: Infinity });
+// Nothing observes these entries, so the default five minutes could drop them
+// mid-way through a long setup; two hours covers a slow start without keeping a
+// hand-off that nothing ever opened for the life of the app.
+const keep = (queryClient: QueryClient, key: readonly string[]) => queryClient.setQueryDefaults(key, { gcTime: 2 * 60 * 60 * 1000 });
 
 export function rememberLaunchSettings(queryClient: QueryClient, sessionId: string, hostId: string | undefined, settings: LaunchSettings): void {
 	keep(queryClient, ["session-launch-settings"]);

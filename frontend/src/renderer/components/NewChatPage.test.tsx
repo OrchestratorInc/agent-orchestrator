@@ -29,6 +29,9 @@ vi.mock("./TaskComposer", () => ({
 		submitMode: undefined,
 		isCloudProject: false,
 		canSubmit: true,
+		launchSnapshot: () => ({ agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined, mode: undefined }),
+		effectiveInterface: "chat",
+		refreshModels: async () => undefined,
 		chatModels: [{ id: "gpt-6", displayName: "GPT-6", default: true }],
 		turnSettings: { model: "gpt-6", reasoningEffort: "high", approvalMode: "auto" },
 		chooseTurnSettings: vi.fn(),
@@ -54,6 +57,7 @@ function renderPage() {
 }
 
 beforeEach(() => {
+	window.localStorage.removeItem("ao.newTask.pendingLaunch.v1");
 	h.navigate.mockReset();
 	h.launch.mockReset();
 	h.workspace = undefined;
@@ -76,7 +80,10 @@ describe("NewChatPage", () => {
 			settings: { model: "gpt-6", reasoningEffort: "high", approvalMode: "auto" },
 		}) }));
 		expect(h.workspace?.openingStartedAt).toEqual(expect.any(String));
-		await waitFor(() => expect(h.launch).toHaveBeenCalledWith("Fix the build", { interfaceMode: undefined, clientRequestId: "cid-1" }));
+		await waitFor(() => expect(h.launch).toHaveBeenCalledWith("Fix the build", {
+			clientRequestId: "cid-1",
+			replay: { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined, mode: undefined },
+		}));
 
 		await act(async () => {
 			resolve("sess-1");

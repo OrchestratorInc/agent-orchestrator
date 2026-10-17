@@ -2040,8 +2040,8 @@ describe("ChatWorkspace timeline", () => {
 			["worktree", "done"],
 			["agent", "running"],
 		]);
-		expect(steps[1]).toHaveTextContent(/^Workspace created$/);
-		expect(steps[2]).toHaveTextContent(/^Getting Codex ready$/);
+		expect(within(steps[1]).getByText("Workspace created")).toBeInTheDocument();
+		expect(within(steps[2]).getByText("Getting Codex ready")).toBeInTheDocument();
 		expect(screen.getByText("Fix clicking attachments")).toBeInTheDocument();
 		expect(screen.queryByText("Queued · sends when the agent finishes")).not.toBeInTheDocument();
 		expect(screen.queryByTestId("queued-message-dock")).not.toBeInTheDocument();
@@ -2131,7 +2131,7 @@ describe("ChatWorkspace timeline", () => {
 		);
 		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Setting up session$/);
 		expect(screen.getByTestId("session-startup")).toBeInTheDocument();
-		expect(within(screen.getByTestId("session-startup")).getByRole("status")).toHaveClass("chat-working-shimmer");
+		expect(within(screen.getByTestId("session-startup")).getByText("Preparing your workspace")).toHaveClass("chat-working-shimmer");
 		expect(screen.queryByText("ao/mer-1/root")).not.toBeInTheDocument();
 	});
 

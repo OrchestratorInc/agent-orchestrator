@@ -233,7 +233,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		},
 	});
 	const projectConfig = projectScripts.data && "config" in projectScripts.data ? projectScripts.data.config : undefined;
-	const showSetupStep = Boolean(hostId || session.cloud) ||
+	const showSetupStep = Boolean(hostId || session.cloud) || !projectScripts.isSuccess ||
 		(projectConfig?.postCreate ?? []).some((command: string) => command.trim() !== "");
 	const launchSettings = launchSettingsFor(queryClient, session.id, hostId);
 	const openingStartedAt = openingStartFor(queryClient, session.id, hostId);

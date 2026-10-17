@@ -21,7 +21,7 @@ import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
 import { useUiStore } from "../stores/ui-store";
 import { topbarDragStyle } from "./ShellTopbar";
-import { useTaskLaunch } from "./TaskComposer";
+import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 
@@ -39,6 +39,9 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	// Sends read the latest render's launch, not the one they started in.
 	const taskRef = useRef(task);
 	taskRef.current = task;
+	// The page this render shows. A send is bound to the page it started on.
+	const targetRef = useRef({ projectId, hostId });
+	targetRef.current = { projectId, hostId };
 	const mounted = useRef(true);
 	useEffect(() => {
 		mounted.current = true;
@@ -47,19 +50,21 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		};
 	}, []);
 	// One draft per host, so switching project keeps what was typed.
-	const draftId = `new-chat:${hostId ?? "local"}`;
-	const draftScope = { sessionId: draftId, incarnation: draftId };
+	const hostKey = hostId ?? "local";
+	const draftId = `new-chat:${hostKey}`;
+	const draftScope = useMemo(() => ({ sessionId: draftId, incarnation: draftId }), [draftId]);
 	const [echo, setEcho] = useState<ConversationLocalEcho>();
 	// The settings bar the brief was sent with, held still until the session takes over.
 	const [launched, setLaunched] = useState<LaunchSettings>();
-	const lastBrief = useRef("");
 	// A failed fallback start has no composer send to report it, so the page does.
 	const [fallbackFailed, setFallbackFailed] = useState(false);
-	// A send whose response was lost is retried with the same request id, so its
-	// settings stay frozen until that send resolves either way.
-	const [uncertainSend, setUncertainSend] = useState<string>();
+	// A fallback start keeps its request id until it is answered, so a retry after a
+	// lost response cannot create a second session.
+	const fallbackRequest = useRef<string | undefined>(undefined);
 	// The model menu stays open when switching agent swaps the bar's picker.
 	const [modelMenuOpen, setModelMenuOpen] = useState(false);
+	// Bumped when a saved launch is resolved, so the page re-reads it.
+	const [, setLaunchRevision] = useState(0);
 	const snapshot = useMemo<ConversationSnapshot>(
 		() => ({ ...startingConversationSnapshot(draftId, task.agent.value || "claude-code"), controller: { state: "ready" } }),
 		[draftId, task.agent.value],
@@ -68,14 +73,21 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	// controls, holding this chat's choices, so the bar never changes on handoff.
 	const harness = task.agent.value;
 	const template = useMemo(() => readChatSettingsTemplate(harness, hostId), [harness, hostId]);
-	const providerOptions = template ? draftProviderOptions(template.options, harness, task.chatModels, task.turnSettings) : undefined;
-	const barSettings: LaunchSettings = {
-		harness,
-		models: providerOptions ? [] : task.chatModels,
-		settings: task.turnSettings,
-		configOptions: providerOptions,
-		showApprovalMode: !task.isCloudProject,
+	const barFor = (settings: TurnSettings): LaunchSettings => {
+		const providerOptions = template ? draftProviderOptions(template.options, harness, task.chatModels, settings, task.isCloudProject) : undefined;
+		return {
+			harness,
+			models: providerOptions ? [] : task.chatModels,
+			settings,
+			configOptions: providerOptions,
+			showApprovalMode: !task.isCloudProject,
+		};
 	};
+	const barSettings = barFor(task.turnSettings);
+	const providerOptions = barSettings.configOptions;
+	// Sends capture the bar as it is once loading finishes, not as it was at Enter.
+	const barRef = useRef(barSettings);
+	barRef.current = barSettings;
 	const chooseProviderOption = (optionId: string, value: ChatConfigOptionValue) => {
 		const option = template?.options.find((candidate) => candidate.id === optionId);
 		if (!option || !("value" in value)) return;
@@ -92,16 +104,43 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		}
 	};
 
-	// Escape leaves, as closing the old dialog did; the draft is kept.
+	// A send whose response was lost is retried with the same request id. It is saved
+	// with its project and request, so the retry repeats exactly that request, even
+	// after a reload; the page returns to that project until it is resolved.
+	const pendingLaunch = readPendingLaunch(hostKey, draftScope);
+	useEffect(() => {
+		if (!pendingLaunch || pendingLaunch.projectId === projectId) return;
+		void navigate({
+			to: "/new",
+			search: { project: pendingLaunch.projectId === STANDALONE_WORKSPACE_ID ? undefined : pendingLaunch.projectId, host: hostId },
+			replace: true,
+		});
+	}, [hostId, navigate, pendingLaunch, projectId]);
+	const resolveLaunch = () => {
+		clearPendingLaunch(hostKey);
+		setLaunchRevision((revision) => revision + 1);
+	};
+
+	// Escape leaves, as closing the old dialog did; the draft is kept. Not while
+	// Settings (which closes on the same key) or an input method owns it.
 	const pendingRef = useRef(false);
 	useEffect(() => {
+		let settingsOwnsEscape = false;
+		const noteSettings = (event: KeyboardEvent) => {
+			if (event.key === "Escape") settingsOwnsEscape = useUiStore.getState().settingsModal !== null;
+		};
 		const onKeyDown = (event: KeyboardEvent) => {
-			if (event.key !== "Escape" || event.defaultPrevented || pendingRef.current) return;
+			if (event.key !== "Escape" || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+			if (settingsOwnsEscape || pendingRef.current) return;
 			if (document.querySelector('[role="menu"], [role="dialog"], [role="alertdialog"], [role="listbox"]')) return;
 			if (router.history.canGoBack()) router.history.back();
 		};
+		window.addEventListener("keydown", noteSettings, true);
 		window.addEventListener("keydown", onKeyDown);
-		return () => window.removeEventListener("keydown", onKeyDown);
+		return () => {
+			window.removeEventListener("keydown", noteSettings, true);
+			window.removeEventListener("keydown", onKeyDown);
+		};
 	}, [router]);
 
 	// Load the session page's code now: a first visit otherwise renders the
@@ -110,67 +149,94 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		void router.preloadRoute(sessionNavigateTarget(projectId, "preload", hostId)).catch(() => undefined);
 	}, [hostId, projectId, router]);
 
-	const openSession = async (sessionId: string, brief: ConversationLocalEcho, settings: LaunchSettings, interfaceMode?: "chat" | "tui") => {
+	const openSession = async (
+		sessionId: string,
+		brief: ConversationLocalEcho,
+		settings: LaunchSettings,
+		interfaceMode: "chat" | "tui",
+		target: { projectId: string; hostId?: string },
+	) => {
 		// The session's chat shows the brief from its first frame; cloud and
-		// terminal sessions open on their own surfaces instead.
-		if (!task.isCloudProject && interfaceMode !== "tui") {
-			seedOpeningLocalEcho(queryClient, sessionId, hostId, brief);
-			rememberLaunchSettings(queryClient, sessionId, hostId, settings);
-			rememberOpeningStart(queryClient, sessionId, hostId, brief.createdAt);
+		// terminal sessions open on their own surfaces and need none of it.
+		if (!taskRef.current.isCloudProject && interfaceMode === "chat") {
+			seedOpeningLocalEcho(queryClient, sessionId, target.hostId, brief);
+			rememberLaunchSettings(queryClient, sessionId, target.hostId, settings);
+			rememberOpeningStart(queryClient, sessionId, target.hostId, brief.createdAt);
 		}
-		await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
+		await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(target.hostId) });
 		// After the composer settles this send, so its draft never outlives the page.
-		// Someone who already left is not pulled back to the session.
+		// Someone who has since left, or opened another new task, stays where they are.
 		setTimeout(() => {
-			if (mounted.current) void navigate({ ...sessionNavigateTarget(projectId, sessionId, hostId), replace: true });
+			const here = targetRef.current;
+			if (mounted.current && here.projectId === target.projectId && here.hostId === target.hostId) {
+				void navigate({ ...sessionNavigateTarget(target.projectId, sessionId, target.hostId), replace: true });
+			}
 		}, 0);
 	};
 
 	const send = async (text: string, _attachments?: unknown, clientMessageId: string = crypto.randomUUID()) => {
+		const target = { ...targetRef.current };
+		const saved = readPendingLaunch(hostKey, draftScope, clientMessageId);
 		const brief = { clientMessageId, text, createdAt: new Date().toISOString() };
-		const retrying = uncertainSend === clientMessageId;
-		const settings = retrying && launched ? launched : barSettings;
-		lastBrief.current = text;
 		setEcho(brief);
-		setLaunched(settings);
+		// Held still from Enter; replaced by the loaded bar once the page is ready.
+		setLaunched(saved?.settings ?? barRef.current);
 		try {
+			// A saved send belongs to its own project; the page is on its way back there.
+			if (saved && saved.projectId !== target.projectId) throw new Error(t("newTask.unableToStart"));
 			// A send right after opening waits for the project and agents to load,
 			// unless loading has already failed.
 			if (!(await until(() => taskRef.current.canSubmit || Boolean(taskRef.current.remoteLoadError), 10_000)) || !taskRef.current.canSubmit) {
 				throw Object.assign(new Error(taskRef.current.remoteLoadError ?? t("newTask.unableToStart")), { code: "TASK_NOT_READY" });
 			}
+			// Nothing was created yet, so a page that moved to another project or host
+			// returns the brief rather than starting it there.
+			const here = targetRef.current;
+			if (here.projectId !== target.projectId || here.hostId !== target.hostId) {
+				throw Object.assign(new Error(t("newTask.unableToStart")), { code: "TASK_RETARGETED" });
+			}
 			const launch = taskRef.current;
-			const sessionId = await launch.launch(text, { interfaceMode: launch.submitMode, clientRequestId: clientMessageId });
-			setUncertainSend(undefined);
-			await openSession(sessionId, brief, settings, launch.submitMode);
+			const settings = saved?.settings ?? barRef.current;
+			const replay = saved?.replay ?? launch.launchSnapshot();
+			setLaunched(settings);
+			writePendingLaunch(hostKey, { clientMessageId, projectId: target.projectId, replay, settings });
+			const sessionId = await launch.launch(text, { clientRequestId: clientMessageId, replay });
+			resolveLaunch();
+			await openSession(sessionId, brief, settings, replay.mode ?? launch.effectiveInterface, target);
 		} catch (error) {
 			setEcho(undefined);
-			// Only an answer from the daemon is final: it returns the brief with the
-			// reason. A lost response stays uncertain, so the composer retries with the
-			// same request id instead of creating a second task.
-			if (!(error instanceof Error && ("code" in error || error.name === "TaskCreateError"))) {
-				setUncertainSend(clientMessageId);
-				throw error;
-			}
-			setUncertainSend(undefined);
+			// Only a refusal from the daemon is final: it returns the brief with the
+			// reason. A lost response, or a failure after the session may have started,
+			// stays uncertain, so the composer retries with the same request id.
+			if (sendIsUncertain(error)) throw error;
+			resolveLaunch();
 			throw Object.assign(new Error(apiErrorMessage(error, t("newTask.unableToStart"))), { code: "TASK_CREATE_FAILED" });
 		}
 	};
 
-	// The fallback starts what the composer holds now, edits included.
+	// The fallback starts what the composer holds now; a brief the user cleared stays cleared.
 	const sendFallback = async () => {
-		const text = readChatSessionDraft(draftScope).composer.text.trim() || lastBrief.current;
-		const brief = { clientMessageId: crypto.randomUUID(), text, createdAt: new Date().toISOString() };
-		const settings = barSettings;
-		const tui = task.fallbackAction === "tui";
+		const text = readChatSessionDraft(draftScope).composer.text.trim();
+		if (!text) return;
+		const target = { ...targetRef.current };
+		fallbackRequest.current ??= crypto.randomUUID();
+		const clientMessageId = fallbackRequest.current;
+		const brief = { clientMessageId, text, createdAt: new Date().toISOString() };
+		const fallback = task.fallbackAction;
+		// The bar shows what the fallback actually sends.
+		const settings = fallback === "bypass-permissions"
+			? barFor({ ...task.turnSettings, approvalMode: "bypass-permissions" })
+			: barSettings;
 		setFallbackFailed(false);
 		setEcho(brief);
 		setLaunched(settings);
 		try {
-			const sessionId = await task.launchFallback(brief.text, brief.clientMessageId);
+			const sessionId = await task.launchFallback(brief.text, clientMessageId);
+			fallbackRequest.current = undefined;
 			writeChatComposerText(draftScope, "");
-			await openSession(sessionId, brief, settings, tui ? "tui" : undefined);
-		} catch {
+			await openSession(sessionId, brief, settings, fallback === "tui" ? "tui" : task.effectiveInterface, target);
+		} catch (error) {
+			if (!sendIsUncertain(error)) fallbackRequest.current = undefined;
 			// The hook keeps the reason; the notice below shows it.
 			setFallbackFailed(true);
 			setEcho(undefined);
@@ -178,7 +244,8 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	};
 
 	const pending = Boolean(echo);
-	const frozen = pending || Boolean(uncertainSend);
+	const frozen = pending || Boolean(pendingLaunch);
+	const frozenSettings = launched ?? pendingLaunch?.settings;
 	pendingRef.current = pending;
 	const notice = pending ? null : task.fallbackAction ? (
 		<div className="flex items-center justify-end">
@@ -189,7 +256,12 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	) : task.remoteLoadError ? (
 		<p role="alert" className="px-1 text-xs text-destructive">{task.remoteLoadError}</p>
 	) : typeof task.modelWarning === "string" ? (
-		<p role="status" className="px-1 text-xs text-warning">{task.modelWarning}</p>
+		<div className="flex items-center gap-2 px-1">
+			<p role="status" className="min-w-0 text-xs text-warning">{task.modelWarning}</p>
+			<Button size="sm" variant="ghost" className="h-6 shrink-0 px-2 text-xs" onClick={() => void task.refreshModels().catch(() => undefined)}>
+				{t("newTask.modelNotice.retry")}
+			</Button>
+		</div>
 	) : task.modelWarning;
 
 	return (
@@ -218,7 +290,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				busy={pending}
 				// The session's own composer controls from the start: the same bar, held
 				// still once sent, with the agent at the top of the model menu.
-				draftSettings={frozen ? (launched ? <LaunchSettingsBar {...launched} /> : null) : (
+				draftSettings={frozen ? (frozenSettings ? <LaunchSettingsBar {...frozenSettings} /> : null) : (
 					<>
 						<TurnSettingsBar
 							models={barSettings.models}
@@ -246,11 +318,16 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
  * Undefined when they cannot show exactly what the task will start with; the page
  * then draws AO's own controls instead.
  */
-function draftProviderOptions(options: ChatConfigOption[], harness: string, models: ChatModel[], settings: TurnSettings): ChatConfigOption[] | undefined {
+function draftProviderOptions(options: ChatConfigOption[], harness: string, models: ChatModel[], settings: TurnSettings, cloud: boolean): ChatConfigOption[] | undefined {
 	const grouped = partitionConfigOptions(options);
 	const out: ChatConfigOption[] = [];
 	const model = grouped.model[0];
 	if (!model) return undefined;
+	// A saved template predates the live catalog: a model it does not list means it
+	// can no longer show every choice, so AO's own controls take over.
+	const listed = (item: ChatModel) => model.choices.some((choice) =>
+		choice.value === item.id || choice.name === agentModelDisplayLabel(harness, item.displayName));
+	if (models.some((item) => item.id !== "default" && !listed(item))) return undefined;
 	// Only choices a new task can start with: those AO's model list also has.
 	const modelChoices = model.choices.filter((choice) => catalogModelFor(choice, harness, models));
 	const chosen = models.find((item) => item.id === settings.model);
@@ -260,8 +337,15 @@ function draftProviderOptions(options: ChatConfigOption[], harness: string, mode
 	if (!modelValue) return undefined;
 	out.push({ ...model, choices: modelChoices, currentValue: modelValue });
 	const effort = grouped.effort[0];
-	if (effort) out.push({ ...effort, currentValue: settings.reasoningEffort || "default" });
-	if (grouped.mode) {
+	if (effort) {
+		// Efforts belong to a model; the template's list must match the chosen one's.
+		const offered = new Set(chosen?.efforts ?? []);
+		const listedEfforts = effort.choices.map((choice) => choice.value).filter((value) => value !== "default");
+		if (listedEfforts.length !== offered.size || listedEfforts.some((value) => !offered.has(value))) return undefined;
+		out.push({ ...effort, currentValue: settings.reasoningEffort || "default" });
+	}
+	// Cloud tasks do not send a permission choice, so none is offered.
+	if (grouped.mode && !cloud) {
 		// Only choices a new task can start with: those with an AO permission equivalent.
 		const choices = grouped.mode.choices.filter((choice) => choice.permissionMode);
 		const value = choices.find((choice) => choice.permissionMode === settings.approvalMode)?.value;
@@ -269,6 +353,66 @@ function draftProviderOptions(options: ChatConfigOption[], harness: string, mode
 		out.push({ ...grouped.mode, choices, currentValue: value });
 	}
 	return out;
+}
+
+// Errors raised after the daemon may have created the session: a retry with the
+// same request id must be possible, so these never count as a final refusal.
+const POST_START_ERRORS = new Set([
+	"SPAWN_COMMIT_FAILED", "SPAWN_INTERNAL", "SPAWN_PROMPT_DELIVERY_FAILED", "SPAWN_LAUNCH_COMMAND_FAILED",
+	"SPAWN_SUPERVISOR_FAILED", "SPAWN_PREPARE_LAUNCH_FAILED", "RUNTIME_CREATE_FAILED",
+]);
+
+/** A send whose outcome is unknown: no answer, or a failure after the session may exist. */
+function sendIsUncertain(error: unknown): boolean {
+	if (!(error instanceof Error)) return true;
+	const code = "code" in error && typeof error.code === "string" ? error.code : undefined;
+	if (code) return POST_START_ERRORS.has(code);
+	return error.name !== "TaskCreateError";
+}
+
+type PendingLaunch = { clientMessageId: string; projectId: string; replay: LaunchReplay; settings: LaunchSettings };
+const PENDING_LAUNCH_KEY = "ao.newTask.pendingLaunch.v1";
+
+function readPendingLaunches(): Record<string, PendingLaunch> {
+	try {
+		const parsed: unknown = JSON.parse(window.localStorage.getItem(PENDING_LAUNCH_KEY) ?? "{}");
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, PendingLaunch>) : {};
+	} catch {
+		return {};
+	}
+}
+
+/**
+ * This host's unresolved send, while the composer still holds its delivery; a send
+ * the composer no longer holds is dropped. With an id, only that send.
+ */
+function readPendingLaunch(hostKey: string, scope: { sessionId: string; incarnation: string }, clientMessageId?: string): PendingLaunch | undefined {
+	const saved = readPendingLaunches()[hostKey];
+	if (!saved) return undefined;
+	if (readChatSessionDraft(scope).composer.delivery?.clientMessageId !== saved.clientMessageId) {
+		clearPendingLaunch(hostKey);
+		return undefined;
+	}
+	return clientMessageId === undefined || saved.clientMessageId === clientMessageId ? saved : undefined;
+}
+
+function writePendingLaunch(hostKey: string, launch: PendingLaunch): void {
+	try {
+		window.localStorage.setItem(PENDING_LAUNCH_KEY, JSON.stringify({ ...readPendingLaunches(), [hostKey]: launch }));
+	} catch {
+		// Without it a retry after a reload rebuilds the request from the current picks.
+	}
+}
+
+function clearPendingLaunch(hostKey: string): void {
+	const all = readPendingLaunches();
+	if (!(hostKey in all)) return;
+	delete all[hostKey];
+	try {
+		window.localStorage.setItem(PENDING_LAUNCH_KEY, JSON.stringify(all));
+	} catch {
+		// Nothing to undo: an unreadable entry is dropped on the next read.
+	}
 }
 
 /** Resolves once `ready` holds, or false when it has not within `ms`. */
