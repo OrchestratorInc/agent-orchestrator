@@ -149,3 +149,63 @@ func TestMigration0203AddsHermesBeforeLegacySchemaRepair(t *testing.T) {
 		t.Fatalf("legacy repair lost a harness: %s", schema)
 	}
 }
+
+func TestHermesLegacyRepairPreservesLaterHarness(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 194)
+	upTo(t, db, 203)
+	mustExec(t, db, `PRAGMA writable_schema = ON`)
+	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(replace(sql, '''command-code'', ', ''), '''fake''))', '''later-harness'', ''fake''))') WHERE type = 'table' AND name = 'sessions'`)
+	mustExec(t, db, `PRAGMA writable_schema = RESET`)
+	if err := reconcileHarnessConstraint(db); err != nil {
+		t.Fatalf("legacy repair with a harness after Hermes: %v", err)
+	}
+	var schema string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`).Scan(&schema); err != nil {
+		t.Fatal(err)
+	}
+	for _, harness := range []string{"'hermes'", "'command-code'", "'later-harness'"} {
+		if strings.Count(schema, harness) != 1 {
+			t.Fatalf("legacy repair lost or duplicated %s: %s", harness, schema)
+		}
+	}
+	mustExec(t, db, `INSERT INTO projects (id, path, registered_at) VALUES ('later-project', '/tmp/later-project', CURRENT_TIMESTAMP)`)
+	insert := `INSERT INTO sessions (id, project_id, num, harness, created_at, updated_at, activity_last_at) VALUES (?, 'later-project', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+	for i, harness := range []string{"hermes", "command-code", "later-harness"} {
+		mustExec(t, db, insert, harness, i+1, harness)
+	}
+	if err := reconcileHarnessConstraint(db); err != nil {
+		t.Fatalf("repeated repair with a later harness: %v", err)
+	}
+}
+
+func TestMigration0203PreservesHarnessesAfterHermes(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 196)
+	mustExec(t, db, `PRAGMA writable_schema = ON`)
+	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''fake''))', '''hermes'', ''later-harness'', ''fake''))') WHERE type = 'table' AND name = 'sessions'`)
+	mustExec(t, db, `PRAGMA writable_schema = RESET`)
+	var before string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	// A preexisting Hermes entry may be followed by a later harness even when
+	// this migration runs or retries; neither Up nor Down may drop that entry.
+	upTo(t, db, 203)
+	downTo(t, db, 196)
+	var after string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.Replace(before, "'hermes', ", "", 1); after != want {
+		t.Fatalf("rollback changed entries other than Hermes:\ngot: %s\nwant: %s", after, want)
+	}
+	mustExec(t, db, `INSERT INTO projects (id, path, registered_at) VALUES ('later-project', '/tmp/later-project', CURRENT_TIMESTAMP)`)
+	insert := `INSERT INTO sessions (id, project_id, num, harness, created_at, updated_at, activity_last_at) VALUES (?, 'later-project', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+	mustExec(t, db, insert, "later", 1, "later-harness")
+	if _, err := db.Exec(insert, "hermes", 2, "hermes"); err == nil || !strings.Contains(err.Error(), "CHECK") {
+		t.Fatalf("Hermes insertion after rollback = %v; want CHECK failure", err)
+	}
+	var integrity string
+	if err := db.QueryRow(`PRAGMA integrity_check`).Scan(&integrity); err != nil || integrity != "ok" {
+		t.Fatalf("integrity after rollback = %q, %v", integrity, err)
+	}
+}

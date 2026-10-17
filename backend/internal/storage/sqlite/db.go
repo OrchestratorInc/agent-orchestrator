@@ -2112,16 +2112,14 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if !needsNativeAssistant && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
 		return nil
 	}
-	if !needsNativeAssistant && !strings.Contains(schema, "'hermes', 'fake'))") {
-		return fmt.Errorf("schema repair: unrecognized Hermes harness constraint")
-	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
 		return fmt.Errorf("schema repair: enable writable_schema for sessions harness constraint: %w", err)
 	}
 	if !needsNativeAssistant {
 		// Older constraints need exact historical repairs. Temporarily remove
-		// Hermes, apply those repairs, then append Hermes at the end below.
-		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''hermes'', ''fake''))', '''fake''))') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+		// Hermes wherever it appears before the final fake entry, apply those
+		// repairs, then append Hermes below without removing later harnesses.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''hermes'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
 			return fmt.Errorf("schema repair: normalize Hermes constraint: %w", err)
 		}
 		needsNativeAssistant = true
