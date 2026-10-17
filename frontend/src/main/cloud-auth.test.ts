@@ -66,10 +66,12 @@ import {
   handleCloudDeepLink,
   installCloudIPC,
   readAuthStore,
+  registerCloudProtocol,
   showCloudSignInFailure,
   signOutCloud,
   writeAuthStore,
 } from "./cloud-auth";
+import { app } from "electron";
 
 describe("native WorkOS authentication", () => {
   let dataDir: string;
@@ -521,5 +523,39 @@ describe("native WorkOS authentication", () => {
 
     expect(mocks.openExternal).not.toHaveBeenCalled();
     await expect(getCloudSession(dataDir)).resolves.toBeNull();
+  });
+});
+
+describe("registerCloudProtocol", () => {
+  const platform = process.platform;
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: platform });
+    (app as { isPackaged: boolean }).isPackaged = true;
+    vi.mocked(app.setAsDefaultProtocolClient).mockClear();
+  });
+
+  function setPlatform(value: NodeJS.Platform): void {
+    Object.defineProperty(process, "platform", { value });
+  }
+
+  it("does not let an unpackaged macOS build claim ao-app://", () => {
+    setPlatform("darwin");
+    (app as { isPackaged: boolean }).isPackaged = false;
+    registerCloudProtocol();
+    expect(app.setAsDefaultProtocolClient).not.toHaveBeenCalled();
+  });
+
+  it("registers ao-app:// for the packaged macOS app", () => {
+    setPlatform("darwin");
+    registerCloudProtocol();
+    expect(app.setAsDefaultProtocolClient).toHaveBeenCalledWith("ao-app");
+  });
+
+  it("still registers unpackaged builds off macOS", () => {
+    setPlatform("win32");
+    (app as { isPackaged: boolean }).isPackaged = false;
+    registerCloudProtocol();
+    expect(app.setAsDefaultProtocolClient).toHaveBeenCalled();
   });
 });
