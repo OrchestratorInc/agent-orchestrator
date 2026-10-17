@@ -64,7 +64,11 @@ surface (`npm run sqlc`, `npm run api`).
   archive/projection, controller-generation fencing, turns, messages,
   activities, approvals, structured input, usage, compaction, and rollback.
 - Chat drivers for the user's installed Codex (native app-server), Claude Code
-  (claude-agent-acp), Cursor, OpenCode 1 and 2, Droid, Kimchi, Kimi, Pi, OMP, Qwen, DeepSeek Harness, GitHub Copilot, and
+  (claude-agent-acp), Auggie (native `auggie --acp`), Autohand
+  (`autohand-acp`), Cline (native `cline --acp`), Goose (native `goose acp`),
+  Kilo Code (native `kilocode acp`), Kiro (native `kiro-cli acp`), Vibe
+  (native `vibe-acp`), Cursor, OpenCode 1 and 2, Droid, Kimchi, Kimi, Pi, OMP,
+  Qwen, DeepSeek Harness, GitHub Copilot, and
   the built-in Unreal Agent library. Unreal Agent Chat runs on macOS and Linux
   behind AO's detached provider host, persists its native session plus an
   acknowledged AO event journal, and currently requires an explicit
@@ -83,6 +87,9 @@ surface (`npm run sqlc`, `npm run api`).
   probe and is never downloaded by AO. AO reuses each harness's existing
   binary/auth/environment resolution and does not bundle provider CLIs; Unreal
   Agent is the library-backed exception. Cursor has both Chat and TUI adapters; cross-interface history handoff is a separate capability and must not be inferred from Chat registration.
+  Per-binding launch shapes, permission mappings, standing-instruction handling,
+  and the TUI-only harness blocker matrix are in
+  [docs/harnesses/acp-bindings.md](harnesses/acp-bindings.md).
 - MiMo Code 0.1.14+ is available as a TUI worker/orchestrator harness with
   model selection, native-session restore, workspace activity hooks, and
   truthful configured-credential readiness. Chat and reviewer support are not

@@ -93,6 +93,21 @@ describe("TurnOutcome", () => {
 			"https://example.com/billing",
 		);
 	});
+
+	it("shows a JSON-RPC message and keeps its payload in collapsed details", () => {
+		const payload = JSON.stringify({
+			code: -32000,
+			message: "Insufficient balance",
+			data: { provider: "openai-codex", account: "meraj@example.com" },
+		});
+		render(<TurnOutcome state="failed" error={`ACP session/prompt: ${payload}`} />);
+
+		expect(screen.getByText("Insufficient balance")).toBeInTheDocument();
+		const details = screen.getByText("Details").closest("details");
+		expect(details).not.toHaveAttribute("open");
+		expect(details).toHaveTextContent(payload);
+		expect(screen.queryByText(`ACP session/prompt: ${payload}`)).not.toBeInTheDocument();
+	});
 });
 
 describe("AssistantMessage streaming", () => {
@@ -386,6 +401,22 @@ describe("ActivityRow", () => {
 		);
 		expect(screen.getByText("outcome unknown")).toBeInTheDocument();
 		expect(screen.queryByText("failed")).not.toBeInTheDocument();
+	});
+
+	it("wraps system notices instead of truncating their advice", () => {
+		const notice = "Cline returned no response. Check the selected provider's credits and sign-in, then retry.";
+		render(
+			<ActivityRow
+				activity={{
+					kind: "activity", id: "empty-turn", sequence: 1, revision: 0,
+					createdAt: "2026-08-23T00:00:00Z", activityKind: "system",
+					status: "completed", summary: notice,
+				}}
+			/>,
+		);
+		const title = screen.getByTitle(notice);
+		expect(title).not.toHaveClass("truncate");
+		expect(title).toHaveClass("whitespace-normal");
 	});
 });
 

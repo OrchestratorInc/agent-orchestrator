@@ -65,6 +65,8 @@ type Config struct {
 	ValidateTurnSettings         acpdriver.TurnSettingsValidator
 	EncodeProviderConversationID func(string) string
 	DecodeProviderConversationID func(string) (string, error)
+	FixedAgentMode               bool
+	EmptyTurnNotice              string
 	// VersionProbe optionally gates admission on a minimum binary version.
 	VersionProbe VersionProbe
 }
@@ -162,5 +164,7 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		ValidateTurnSettings:         cfg.ValidateTurnSettings,
 		EncodeProviderConversationID: cfg.EncodeProviderConversationID,
 		DecodeProviderConversationID: cfg.DecodeProviderConversationID,
+		FixedAgentMode:               cfg.FixedAgentMode,
+		EmptyTurnNotice:              cfg.EmptyTurnNotice,
 	}
 }

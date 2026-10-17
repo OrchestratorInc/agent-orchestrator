@@ -364,6 +364,7 @@ export function TurnOutcome({
 		},
 		failed: { label: "The agent ran into a problem", tone: "text-destructive" },
 	}[state];
+	const errorCopy = error ? providerErrorTextCopy(error) ?? { headline: error } : undefined;
 
 	const action = retry ? (
 		<>
@@ -392,7 +393,21 @@ export function TurnOutcome({
 					<span>{copy.label}</span>
 					{action}
 				</div>
-				{error ? <div className="whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-foreground">{linkifiedProviderErrorText(error)}</div> : null}
+				{errorCopy ? (
+					<div className="flex min-w-0 flex-col gap-1 whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-foreground">
+						<div>{linkifiedProviderErrorText(errorCopy.headline)}</div>
+						{errorCopy.payload ? (
+							<details className="text-xs text-muted-foreground">
+								<summary className="w-fit cursor-pointer select-none">Details</summary>
+								<pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap wrap-anywhere rounded bg-muted/40 p-2 font-mono text-[10px] leading-snug">
+									{errorCopy.payload}
+								</pre>
+							</details>
+						) : errorCopy.detail ? (
+							<div>{linkifiedProviderErrorText(errorCopy.detail)}</div>
+						) : null}
+					</div>
+				) : null}
 			</div>
 		);
 	}
@@ -1193,7 +1208,10 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 						className={cn(
 							compactSummary
 								? "activity-row-label shrink-0 text-xs font-normal text-muted-foreground group-hover/activity:text-foreground"
-								: "min-w-0 truncate font-medium",
+								: activity.activityKind === "system"
+									? // System notices carry advice the user must read, so they wrap instead of truncating.
+										"min-w-0 whitespace-normal wrap-anywhere font-medium"
+									: "min-w-0 truncate font-medium",
 							!compactSummary &&
 								(activity.status === "failed" ? "text-destructive" : "text-foreground"),
 						)}
@@ -2257,8 +2275,8 @@ export function providerErrorCopy(activity: ConversationActivity): {
 	for (const candidate of candidates) {
 		const raw = String(candidate ?? "").trim();
 		if (!raw) continue;
-		const unwrapped = unwrapProviderErrorJson(raw);
-		if (unwrapped) return unwrapped;
+		const unwrapped = providerErrorTextCopy(raw);
+		if (unwrapped) return { headline: unwrapped.headline, detail: unwrapped.detail };
 	}
 
 	const headline = String(activity.detail?.message ?? activity.summary ?? "").trim();
@@ -2266,6 +2284,16 @@ export function providerErrorCopy(activity: ConversationActivity): {
 	if (!headline) return { headline: extra || "Provider error" };
 	if (extra && extra !== headline) return { headline, detail: extra };
 	return { headline };
+}
+
+function providerErrorTextCopy(raw: string): { headline: string; detail?: string; payload?: string } | undefined {
+	const unwrapped = unwrapProviderErrorJson(raw);
+	if (!unwrapped) return undefined;
+	const start = raw.indexOf("{");
+	return {
+		...unwrapped,
+		payload: start >= 0 ? raw.slice(start).trim() : undefined,
+	};
 }
 
 function unwrapProviderErrorJson(raw: string): { headline: string; detail?: string } | undefined {

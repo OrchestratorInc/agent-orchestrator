@@ -82,6 +82,72 @@ func TestControllerReadyReleasesActiveTurn(t *testing.T) {
 	<-done
 }
 
+func TestEmptyTurnNoticeOnlyOnSuccessfulEmptyTurn(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		output     *ports.ChatEvent
+		stopReason acpsdk.StopReason
+		err        error
+		compaction bool
+		wantNotice bool
+	}{
+		{name: "empty", stopReason: acpsdk.StopReasonEndTurn, wantNotice: true},
+		{name: "message", output: &ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderTurnID: "turn-1", Delta: "hello"}, stopReason: acpsdk.StopReasonEndTurn},
+		{name: "tool only", output: &ports.ChatEvent{Kind: ports.ChatEventActivityCompleted, ProviderTurnID: "turn-1", ActivityKind: domain.ActivityKindCommand}, stopReason: acpsdk.StopReasonEndTurn},
+		{name: "reported error", output: &ports.ChatEvent{Kind: ports.ChatEventError, ProviderTurnID: "turn-1"}, stopReason: acpsdk.StopReasonEndTurn},
+		{name: "failed", stopReason: acpsdk.StopReasonEndTurn, err: errors.New("provider failed")},
+		{name: "cancelled", stopReason: acpsdk.StopReasonCancelled},
+		{name: "compaction", stopReason: acpsdk.StopReasonEndTurn, compaction: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conv := &conversation{
+				sessionID: "session-1", activeTurn: "turn-1", emptyTurnNotice: "Cline returned no response.",
+				events: make(chan ports.ChatEvent, 8), log: slog.New(slog.DiscardHandler),
+			}
+			if tc.compaction {
+				conv.compactingTurnID = "turn-1"
+			}
+			if tc.output != nil {
+				conv.emit(*tc.output)
+			}
+			conv.finishPrompt("turn-1", acpsdk.PromptResponse{StopReason: tc.stopReason}, tc.err)
+
+			var noticeCount, accountCount int
+			for len(conv.events) > 0 {
+				event := <-conv.events
+				if event.Kind == ports.ChatEventActivityCompleted && event.ActivityKind == domain.ActivityKindSystem {
+					noticeCount++
+					if event.Summary != conv.emptyTurnNotice || event.ProviderTurnID != "turn-1" || event.ProviderItemID == "" {
+						t.Fatalf("notice = %#v", event)
+					}
+				}
+				if event.Kind == ports.ChatEventAccountChanged {
+					accountCount++
+				}
+			}
+			if got := noticeCount == 1; got != tc.wantNotice {
+				t.Fatalf("notice count = %d, want notice %v", noticeCount, tc.wantNotice)
+			}
+			if tc.wantNotice && accountCount != 0 {
+				t.Fatalf("empty turn emitted %d account recovery events", accountCount)
+			}
+		})
+	}
+}
+
+func TestEmptyTurnNoticeRequiresConfiguredBinding(t *testing.T) {
+	conv := &conversation{
+		sessionID: "session-1", activeTurn: "turn-1",
+		events: make(chan ports.ChatEvent, 8), log: slog.New(slog.DiscardHandler),
+	}
+	conv.finishPrompt("turn-1", acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil)
+	for len(conv.events) > 0 {
+		if event := <-conv.events; event.Kind == ports.ChatEventActivityCompleted && event.ActivityKind == domain.ActivityKindSystem {
+			t.Fatalf("unconfigured binding emitted empty-turn notice: %#v", event)
+		}
+	}
+}
+
 func TestACPDriverPromptResponseFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

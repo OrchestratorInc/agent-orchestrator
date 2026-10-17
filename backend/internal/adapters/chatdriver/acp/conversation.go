@@ -127,6 +127,9 @@ type conversation struct {
 	extensionMethods   map[string]string
 	legacyModel        bool
 	legacyMode         bool
+	fixedAgentMode     bool
+	emptyTurnNotice    string
+	turnHadOutput      bool
 	liveState          *persistenthost.ACPState
 	hasDurableTurns    bool
 	detaching          bool
@@ -425,6 +428,7 @@ func (c *conversation) ActivateLiveReconnect(ctx context.Context, providerTurnID
 	c.mu.Lock()
 	if durableBusy {
 		c.activeTurn = providerTurnID
+		c.turnHadOutput = false
 		if c.liveState.ActiveCompaction {
 			c.compactingTurnID = providerTurnID
 			c.compactionBefore = c.contextTokens
@@ -667,6 +671,7 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 		c.preambleSpent = true
 	}
 	c.activeTurn = turn.id
+	c.turnHadOutput = false
 	c.settlingTurn = ""
 	turnCtx, cancel := context.WithCancel(context.Background())
 	c.turnCancel = cancel
@@ -772,13 +777,26 @@ func (c *conversation) finishPrompt(
 			}})
 		}
 	}
+	c.mu.Lock()
+	emptyTurn := c.emptyTurnNotice != "" && !c.turnHadOutput && !isCompaction &&
+		state == domain.TurnStateCompleted && turnErr == nil && !interruptedLocally
+	c.mu.Unlock()
+	if emptyTurn {
+		detail, _ := json.Marshal(map[string]string{"text": c.emptyTurnNotice})
+		c.emit(ports.ChatEvent{
+			Kind: ports.ChatEventActivityCompleted, ProviderTurnID: turnID,
+			ProviderItemID: c.providerItemID("empty-turn:" + turnID),
+			ActivityKind:   domain.ActivityKindSystem, ActivityStatus: domain.ActivityStatusCompleted,
+			Summary: c.emptyTurnNotice, Detail: detail,
+		})
+	}
 	if errors.Is(turnErr, ports.ErrChatAuthRequired) {
 		// The provider has just contradicted whatever the readiness cache holds.
 		// Correct it for both request errors and structured prompt failures.
 		if c.onAuthRejected != nil {
 			c.onAuthRejected()
 		}
-	} else if turnErr == nil && state == domain.TurnStateCompleted {
+	} else if turnErr == nil && state == domain.TurnStateCompleted && !emptyTurn {
 		// A successful provider turn is affirmative recovery evidence, including
 		// after a daemon restart where this conversation has no in-memory memory
 		// of the earlier rejection. The projector ignores this when no durable
@@ -853,6 +871,7 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 	before := c.contextTokens
 	id := uuid.NewString()
 	c.activeTurn = id
+	c.turnHadOutput = false
 	c.compactingTurnID = id
 	c.compactionBefore = before
 	c.compactionSummary = ""
@@ -1179,6 +1198,13 @@ func (c *conversation) emit(event ports.ChatEvent) {
 	if c.captureHistoryEvent(event) {
 		return
 	}
+	if c.emptyTurnNotice != "" && visibleTurnOutput(event) {
+		c.mu.Lock()
+		if event.ProviderTurnID != "" && event.ProviderTurnID == c.activeTurn {
+			c.turnHadOutput = true
+		}
+		c.mu.Unlock()
+	}
 	c.eventMu.RLock()
 	defer c.eventMu.RUnlock()
 	if c.eventsClosed {
@@ -1207,6 +1233,22 @@ func (c *conversation) emit(event ports.ChatEvent) {
 	case c.events <- event:
 	case <-time.After(5 * time.Second):
 		c.log.Error("dropped ACP lifecycle event: consumer stalled", "kind", event.Kind)
+	}
+}
+
+func visibleTurnOutput(event ports.ChatEvent) bool {
+	switch event.Kind {
+	case ports.ChatEventMessageDelta, ports.ChatEventReasoningDelta, ports.ChatEventActivityText:
+		return strings.TrimSpace(event.Delta) != ""
+	case ports.ChatEventMessageCompleted:
+		return strings.TrimSpace(event.Text) != ""
+	case ports.ChatEventActivityStarted, ports.ChatEventActivityCompleted,
+		ports.ChatEventApprovalRequested, ports.ChatEventInputRequested, ports.ChatEventError:
+		return true
+	case ports.ChatEventPlanUpdated:
+		return event.Plan != nil && len(event.Plan.Steps) > 0
+	default:
+		return false
 	}
 }
 
