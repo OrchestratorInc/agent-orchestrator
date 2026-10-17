@@ -21,6 +21,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/amp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/scratch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -985,6 +986,31 @@ type afterStartAgent struct {
 	*recordingAgent
 }
 
+type selectingAfterStartAgent struct{ afterStartAgent }
+
+type selectingInteractiveAgent struct{ selectingAfterStartAgent }
+
+func (selectingInteractiveAgent) PrepareNativeRestore(context.Context, ports.RestoreConfig) (ports.NativeRestoreInitialization, error) {
+	return nil, ports.ErrNativeHistoryUnavailable
+}
+
+type selectingRuntime struct {
+	fakeRuntime
+	viewport string
+}
+
+func (r *selectingRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
+	return r.viewport, nil
+}
+
+func (selectingAfterStartAgent) AfterStartCommand(_ context.Context, cfg ports.LaunchConfig) (string, error) {
+	return "/model " + cfg.Config.Model, nil
+}
+
+func (selectingAfterStartAgent) AfterStartCommandApplied(cfg ports.LaunchConfig, output string) bool {
+	return strings.Contains(output, "model → "+cfg.Config.Model)
+}
+
 func (a afterStartAgent) GetPromptDeliveryStrategy(context.Context, ports.LaunchConfig) (ports.PromptDeliveryStrategy, error) {
 	return ports.PromptDeliveryAfterStart, nil
 }
@@ -1661,6 +1687,21 @@ func seedTerminal(st *fakeStore, id domain.SessionID, meta domain.SessionMetadat
 }
 func mkLive(id domain.SessionID) domain.SessionRecord {
 	return domain.SessionRecord{ID: id, ProjectID: "mer", Metadata: domain.SessionMetadata{WorkspacePath: "/ws/" + string(id), RuntimeHandleID: "h1"}, Activity: domain.Activity{State: domain.ActivityActive}}
+}
+
+func TestMemcodeIgnoresInheritedModelFromPreviousHarness(t *testing.T) {
+	cfg := domain.ProjectConfig{
+		AgentConfig: domain.AgentConfig{Model: "claude-opus-4-1"},
+		Worker:      domain.RoleOverride{Harness: domain.HarnessCodex, AgentConfig: domain.AgentConfig{Model: "gpt-5"}},
+	}
+	if got := effectiveAgentConfig(domain.HarnessMemcode, domain.KindWorker, cfg).Model; got != "" {
+		t.Fatalf("inherited foreign model = %q, want native selection", got)
+	}
+	cfg.Worker.Harness = domain.HarnessMemcode
+	cfg.Worker.AgentConfig.Model = "opus"
+	if got := effectiveAgentConfig(domain.HarnessMemcode, domain.KindWorker, cfg).Model; got != "opus" {
+		t.Fatalf("memcode project choice = %q, want opus", got)
+	}
 }
 
 func TestSpawn_ResolvesProjectConfig(t *testing.T) {
@@ -2905,6 +2946,144 @@ func TestSpawn_AfterStartPromptBuilderCombinesStandingInstructionsAndTaskOnce(t 
 	}
 	if got := st.sessions["mer-1"].Metadata.Prompt; got != "fix the button" {
 		t.Fatalf("stored prompt = %q, want original task", got)
+	}
+}
+
+func TestSpawn_SelectsNativeModelBeforeTask(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	rt := &selectingRuntime{viewport: "model → opus"}
+	msg := &fakeMessenger{}
+	agent := selectingAfterStartAgent{afterStartAgent{recordingAgent: &recordingAgent{}}}
+	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: msg, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
+	m.SetModelCatalog(tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "opus"}}}})
+	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker,
+		Prompt: "fix the button", AgentConfig: ports.AgentConfig{Model: "opus"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 2 || msg.msgs[0] != "/model opus" || msg.msgs[1] != "fix the button" {
+		t.Fatalf("delivered input = %#v", msg.msgs)
+	}
+}
+
+func TestSpawn_UnconfirmedNativeModelPreventsTask(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	msg := &fakeMessenger{}
+	agent := selectingAfterStartAgent{afterStartAgent{recordingAgent: &recordingAgent{}}}
+	m := New(Deps{Runtime: &fakeRuntime{outputs: []string{"starting"}}, Agents: singleAgent{agent: agent},
+		Workspace: &fakeWorkspace{}, Store: st, Messenger: msg, Lifecycle: &fakeLCM{store: st},
+		LookPath: func(string) (string, error) { return "/bin/true", nil }})
+	m.SetModelCatalog(tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "opus"}}}})
+	deadline, cancel := context.WithTimeout(ctx, 150*time.Millisecond)
+	defer cancel()
+	_, _, _, err := m.Spawn(deadline, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker,
+		Prompt: "fix the button", AgentConfig: ports.AgentConfig{Model: "opus"}})
+	if err == nil {
+		t.Fatal("spawn succeeded without native model confirmation")
+	}
+	if len(msg.msgs) != 1 || msg.msgs[0] != "/model opus" {
+		t.Fatalf("delivered input = %#v; task should be held", msg.msgs)
+	}
+}
+
+func TestPromptlessLaunchSelectsNativeModel(t *testing.T) {
+	for _, action := range []string{"spawn-worker", "spawn-orchestrator", "restore"} {
+		t.Run(action, func(t *testing.T) {
+			st := newFakeStore()
+			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+			rt := &selectingRuntime{viewport: "model → opus"}
+			msg := &fakeMessenger{}
+			agent := selectingInteractiveAgent{selectingAfterStartAgent{afterStartAgent{recordingAgent: &recordingAgent{}}}}
+			m := New(Deps{Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+				Messenger: msg, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
+			m.SetModelCatalog(tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "opus"}}}})
+			if action == "restore" {
+				st.sessions["mer-1"] = domain.SessionRecord{
+					ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
+					Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", Model: "opus"},
+				}
+				if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				kind := domain.KindWorker
+				if action == "spawn-orchestrator" {
+					kind = domain.KindOrchestrator
+				}
+				if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: kind, AgentConfig: ports.AgentConfig{Model: "opus"}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if len(msg.msgs) != 1 || msg.msgs[0] != "/model opus" {
+				t.Fatalf("promptless launch input = %#v, want only model command", msg.msgs)
+			}
+		})
+	}
+}
+
+func TestNativeModelConfirmationIgnoresRawScrollback(t *testing.T) {
+	rt := &selectingRuntime{fakeRuntime: fakeRuntime{outputs: []string{"model → opus"}}, viewport: "model → sonnet"}
+	m := New(Deps{Runtime: rt})
+	deadline, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+	agent := selectingAfterStartAgent{}
+	err := m.waitForAfterStartCommand(deadline, agent, ports.LaunchConfig{Config: ports.AgentConfig{Model: "opus"}}, ports.RuntimeHandle{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("confirmation = %v, want timeout for stale raw scrollback", err)
+	}
+	if rt.outputCalls != 0 {
+		t.Fatal("model confirmation read raw scrollback")
+	}
+}
+
+func TestRestoreMemcodeDropsUnsupportedSavedModel(t *testing.T) {
+	for _, test := range []struct {
+		model    string
+		endpoint string
+		want     string
+	}{
+		{model: "claude-opus-4-1"},
+		{model: "opus", want: "opus"},
+		{model: "opus", endpoint: "http://127.0.0.1:11434/v1"},
+	} {
+		st := newFakeStore()
+		config := testRoleAgents()
+		config.Env = map[string]string{"MEMCODE_ENDPOINT_URL": test.endpoint}
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: config}
+		st.sessions["mer-1"] = domain.SessionRecord{
+			ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessMemcode, IsTerminated: true,
+			Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", Model: test.model, Prompt: "saved task"},
+		}
+		agent := &recordingAgent{}
+		m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+			Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
+		if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
+			t.Fatal(err)
+		}
+		if agent.lastConfig.Model != test.want {
+			t.Fatalf("restored model = %q, want %q (saved %q, endpoint %q)", agent.lastConfig.Model, test.want, test.model, test.endpoint)
+		}
+	}
+}
+
+func TestMemcodeWithoutPromptOrModelSkipsReadiness(t *testing.T) {
+	agent := memcode.New()
+	cfg := ports.LaunchConfig{}
+	hints, err := agent.PromptReadinessHints(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := &fakeRuntime{outputs: hints.Patterns}
+	msg := &fakeMessenger{}
+	m := New(Deps{Runtime: rt, Messenger: msg})
+	if err := m.deliverAfterStartPrompt(ctx, agent, cfg, ports.RuntimeHandle{}, "mer-1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if rt.outputCalls != 0 || len(msg.msgs) != 0 {
+		t.Fatalf("empty startup performed %d readiness reads and sent %#v", rt.outputCalls, msg.msgs)
 	}
 }
 

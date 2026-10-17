@@ -1958,6 +1958,43 @@ func TestClaudeModelsRevalidationKeepsMatchingProviderCacheOnFailure(t *testing.
 	}
 }
 
+func TestMemcodeModelsRevalidatePreviouslyEmptyCatalogInBackground(t *testing.T) {
+	oldCatalog := ports.AgentModelCatalog{AgentID: "memcode", SelectionMode: ports.ModelSelectionCatalog, Models: []ports.AgentModelInfo{}, Source: "manual"}
+	data, err := json.Marshal(oldCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{
+		"memcode\x00": {AgentID: "memcode", BinaryVersion: "old", CatalogJSON: string(data)},
+	}}
+	discoverer := &fakeModelDiscoverer{version: "native-picker-v1", catalog: ports.AgentModelCatalog{
+		AgentID: "memcode", SelectionMode: ports.ModelSelectionCatalog,
+		Models: []ports.AgentModelInfo{{ID: "sonnet"}, {ID: "opus"}}, Source: "official-catalog",
+	}}
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("memcode", "Memcode", nil)}, cache, nil, discoverer)
+	got, err := svc.Models(context.Background(), "memcode", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Models) != 0 {
+		t.Fatalf("catalog = %#v, want cached result on first read", got)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		cached, ok, err := svc.cachedCatalog(context.Background(), "memcode", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok && len(cached.Catalog.Models) == 2 && cached.Catalog.Source == "official-catalog" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background refresh did not replace the old catalog")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestClaudeModelsRejectProviderCacheWhenCredentialFingerprintChanges(t *testing.T) {
 	cached := ports.AgentModelCatalog{
 		AgentID: "claude-code", SelectionMode: ports.ModelSelectionCatalog,
