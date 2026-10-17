@@ -1,12 +1,13 @@
 // Package minimaxacp binds MiniMax Code 0.6.5's native ACP server to the shared
 // AO Chat transport and renderer. It remains unregistered until native Chat
 // conformance is qualified independently of the TUI integration.
-// Version 0.6.5 can finish cancellation before releasing its active turn,
-// rejecting the next prompt; production registration stays disabled.
+// Cancellation is settled through its native delegation-stop receipt before
+// AO admits a subsequent prompt; production registration is a separate gate.
 package minimaxacp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -37,6 +38,7 @@ func New(plugin Plugin, log *slog.Logger) ports.ChatDriver {
 		Harness:                      domain.HarnessMiniMaxCode,
 		Configure:                    configure(plugin),
 		ValidateInitialize:           validateInitialize,
+		AfterInterrupt:               settleInterrupt,
 		DecodeProviderConversationID: decodeNativeID,
 		RequireAdvertisedOptions:     true,
 		LaunchSessionOptions:         launchOptions,
@@ -113,6 +115,38 @@ func validateInitialize(init acpsdk.InitializeResponse) error {
 	if init.AgentInfo == nil || init.AgentInfo.Name != "minimax-code" || init.AgentInfo.Version != "0.6.5" ||
 		init.ProtocolVersion != acpsdk.ProtocolVersionNumber || !init.AgentCapabilities.LoadSession {
 		return errors.New("MiniMax Chat requires MiniMax Code 0.6.5 ACP v1 with exact session/load")
+	}
+	return nil
+}
+
+const delegationStopMethod = "mcode/session/delegation/stop"
+
+// MiniMax's cancelled prompt can precede release of the runtime's root turn.
+// This supported RPC awaits abortSession's released/not-running boundary and
+// reports failures and remaining delegates. A cancel notification has no reply.
+// Keep the exact native session; never sleep, retry a prompt, or discard errors.
+func settleInterrupt(ctx context.Context, request acpdriver.AgentRequest, sessionID string) error {
+	raw, err := request(ctx, delegationStopMethod, map[string]string{"sessionId": sessionID})
+	if err != nil {
+		return fmt.Errorf("MiniMax native stop receipt: %w", err)
+	}
+	var result struct {
+		Receipt *struct {
+			SchemaVersion    int       `json:"schemaVersion"`
+			RootSessionID    string    `json:"rootSessionId"`
+			RootStopped      bool      `json:"rootStopped"`
+			ActiveSessionIDs *[]string `json:"activeSessionIds"`
+			FailedSessionIDs *[]string `json:"failedSessionIds"`
+		} `json:"receipt"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return fmt.Errorf("decode MiniMax native stop receipt: %w", err)
+	}
+	r := result.Receipt
+	if r == nil || r.SchemaVersion != 1 || r.RootSessionID != sessionID || !r.RootStopped ||
+		r.ActiveSessionIDs == nil || r.FailedSessionIDs == nil ||
+		len(*r.ActiveSessionIDs) != 0 || len(*r.FailedSessionIDs) != 0 {
+		return errors.New("MiniMax native stop did not confirm the exact root and all delegates stopped")
 	}
 	return nil
 }

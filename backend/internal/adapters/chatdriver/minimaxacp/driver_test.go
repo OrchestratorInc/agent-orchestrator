@@ -2,6 +2,7 @@ package minimaxacp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -187,6 +188,41 @@ func TestCanonicalModelResolvesOnlyAgainstNativeVariantCatalog(t *testing.T) {
 				}
 			} else if err != nil || got.Value != tc.want {
 				t.Fatalf("resolved = %q, %v; want %q", got.Value, err, tc.want)
+			}
+		})
+	}
+}
+
+// Accepting an empty, wrong-session or partial receipt would admit a prompt
+// while MiniMax's root turn or a delegated operation could still be running.
+func TestInterruptRequiresCompleteExactNativeStopReceipt(t *testing.T) {
+	for _, tc := range []struct {
+		name, receipt string
+		requestErr error
+		valid bool
+	}{
+		{"released", `{"receipt":{"schemaVersion":1,"rootSessionId":"native-session","rootStopped":true,"stoppedSessionIds":[],"activeSessionIds":[],"failedSessionIds":[]}}`, nil, true},
+		{"missing receipt", `{}`, nil, false},
+		{"wrong session", `{"receipt":{"schemaVersion":1,"rootSessionId":"another-session","rootStopped":true,"activeSessionIds":[],"failedSessionIds":[]}}`, nil, false},
+		{"unreleased root", `{"receipt":{"schemaVersion":1,"rootSessionId":"native-session","rootStopped":false,"activeSessionIds":[],"failedSessionIds":[]}}`, nil, false},
+		{"active delegate", `{"receipt":{"schemaVersion":1,"rootSessionId":"native-session","rootStopped":true,"activeSessionIds":["child"],"failedSessionIds":[]}}`, nil, false},
+		{"failed stop", `{"receipt":{"schemaVersion":1,"rootSessionId":"native-session","rootStopped":true,"activeSessionIds":[],"failedSessionIds":["native-session"]}}`, nil, false},
+		{"missing lists", `{"receipt":{"schemaVersion":1,"rootSessionId":"native-session","rootStopped":true}}`, nil, false},
+		{"malformed", `{`, nil, false},
+		{"transport failure", "", context.DeadlineExceeded, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := settleInterrupt(context.Background(), func(_ context.Context, method string, params any) (json.RawMessage, error) {
+				if method != "mcode/session/delegation/stop" || !reflect.DeepEqual(params, map[string]string{"sessionId": "native-session"}) {
+					t.Fatalf("native stop request = %s, %#v", method, params)
+				}
+				return json.RawMessage(tc.receipt), tc.requestErr
+			}, "native-session")
+			if (err == nil) != tc.valid {
+				t.Fatalf("settlement error = %v, valid=%v", err, tc.valid)
+			}
+			if tc.requestErr != nil && !errors.Is(err, tc.requestErr) {
+				t.Fatalf("lost native request failure: %v", err)
 			}
 		})
 	}

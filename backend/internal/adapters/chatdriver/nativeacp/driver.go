@@ -70,6 +70,8 @@ type Config struct {
 	DecodeProviderConversationID func(string) (string, error)
 	// VersionProbe optionally gates admission on a minimum binary version.
 	VersionProbe VersionProbe
+	// AfterInterrupt verifies native quiescence before the interrupted turn settles.
+	AfterInterrupt func(context.Context, acpdriver.AgentRequest, string) error
 }
 
 // New creates a Chat driver that launches the exact executable resolved by the
@@ -159,6 +161,7 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		RequireAdvertisedOptions:     cfg.RequireAdvertisedOptions,
 		CloseSessionBeforeReload:     cfg.CloseSessionBeforeReload,
 		ValidateInitialize:           cfg.ValidateInitialize,
+		AfterInterrupt:               cfg.AfterInterrupt,
 		SessionPreamble:              cfg.SessionPreamble,
 		PermissionPolicy:             cfg.PermissionPolicy,
 		ClientExtension:              cfg.ClientExtension,

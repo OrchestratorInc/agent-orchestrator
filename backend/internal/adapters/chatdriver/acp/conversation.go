@@ -138,6 +138,7 @@ type conversation struct {
 	onAuthRejected        func()
 	promptResponseFailure func(acpsdk.PromptResponse) error
 	hibernationCheck      func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
+	afterInterrupt       func(context.Context, AgentRequest, string) error
 	historyNotice         func(string) bool
 	// preamble is standing context attached to the first prompt that actually
 	// reaches the provider. It is the delivery channel for agents that accept no
@@ -783,6 +784,22 @@ func (c *conversation) finishPrompt(
 				CachedTokens: int64(cached), TotalTokens: int64(resp.Usage.TotalTokens),
 				TotalsKnown: true,
 			}})
+		}
+	}
+	if (state == domain.TurnStateInterrupted || interruptedLocally) && c.afterInterrupt != nil {
+		c.mu.Lock()
+		sessionID := c.sessionID
+		c.mu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		fenceErr := c.afterInterrupt(ctx, c.legacyWire.request, sessionID)
+		cancel()
+		if fenceErr != nil {
+			// Do not commit/ACK the native terminal receipt or release activeTurn.
+			// A replacement daemon must replay it and verify the fence again.
+			c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState,
+				ControllerState: ports.ChatControllerStopped,
+				Err: fmt.Errorf("%w: ACP interrupt settlement: %w", ports.ErrChatRecoveryInconclusive, fenceErr)})
+			return
 		}
 	}
 	if errors.Is(turnErr, ports.ErrChatAuthRequired) {
