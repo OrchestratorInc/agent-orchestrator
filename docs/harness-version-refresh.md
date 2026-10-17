@@ -33,7 +33,7 @@ cross-version compatibility guarantees for every historical CLI release.
 | OpenCode v2 | `opencode --standalone --session ID` | Yes; isolated v2 `session export ID --standalone` preflight |
 | Grok | `grok -r ID` | Yes |
 | Cursor | `cursor-agent --resume ID` | Yes |
-| Qwen | `qwen --resume ID` | Yes |
+| Qwen | `qwen --resume ID` | Yes; preserves the selected runtime/hook PATH |
 | Gemini | `gemini --resume ID` | Yes |
 | Copilot | `copilot --resume ID` | Yes; retains native saved model |
 | Kimi | `kimi --session ID` | Yes; exact `session list --all --json` preflight |
@@ -51,7 +51,7 @@ cross-version compatibility guarantees for every historical CLI release.
 | Cline | `cline --id ID` | Yes; durable CLI root ID and exact local history preflight |
 | Kiro | `kiro-cli chat --resume-id ID` | Yes |
 | Kilo Code | `kilo --session ID` | Yes; exact export preflight |
-| Vibe | `vibe --resume ID` | Yes |
+| Vibe | `vibe --resume ID` | Yes; scoped native completion supplies fresh idle proof |
 | Pi | `pi --session ID` | Yes; not the interactive `--resume` picker |
 | Kimchi | `kimchi --session ID` | Yes |
 | Prime Agent | `prime-agent --resume ID` | Yes |
@@ -103,6 +103,25 @@ history, and the same working directory under the launch home. Missing,
 unreadable or oversized history fails closed; files above 16 MiB require manual
 recovery rather than an automatic restart. The contract is visible in
 [Cline hook serialization](https://github.com/cline/cline/blob/main/apps/cli/src/utils/hooks.ts).
+
+Qwen's remote-input shell does not load login profiles: those can reset AO's
+selected Node and hook PATH. A real 0.25.1 launch failed on an older Node's
+missing `node:fs.openAsBlob` before this correction; the corrected launch and
+0.25.1 → 0.25.2 native conversation migration were exercised privately.
+
+Vibe profiles carry standing rules in the native `instructions` field. In
+2.26.0, resolving an AO custom `system_prompt_id` while validating the profile
+failed before its additional prompt directory was available. Tool-free Vibe
+turns only emit `post_agent`, so a newer completion for the exact current launch
+and native conversation updates idle proof even if activity remained idle.
+Unscoped, stale-generation and duplicate boundaries remain deduplicated; the
+existing typing barrier and idle threshold still apply.
+
+A private Kilo 7.8.10 → 7.8.12 run exposed native history incompatibility:
+7.8.10 exported the exact conversation from `kilo-rc.db`, whereas 7.8.12 reported
+`Session not found` with the same home and working directory. AO's export
+preflight retained the old process and reported failure. Native resume flags
+alone do not guarantee compatible history across arbitrary CLI releases.
 
 ## Release and recovery boundaries
 

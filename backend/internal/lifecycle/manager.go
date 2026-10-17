@@ -1024,7 +1024,15 @@ retryProjection:
 	// no_signal display status). Hook deliveries are best-effort, so the
 	// first to ARRIVE may match the seeded state — e.g. a turn's "active"
 	// POST is lost and its Stop hook lands idle on the idle-seeded row.
-	if sameState && !rec.FirstSignalAt.IsZero() {
+	// Some native CLIs only emit a post-agent boundary for tool-free turns.
+	// A scoped, newer completion is fresh idle proof even when the durable
+	// state stayed idle; otherwise terminal input permanently outlives it.
+	// Keep ordinary same-state notifications and unowned callbacks deduplicated.
+	completedIdleTurn := s.State == domain.ActivityIdle && s.Event == "post-agent" &&
+		s.LaunchID != "" && s.LaunchID == rec.Metadata.RuntimeLaunchID &&
+		s.AgentSessionID != "" && s.AgentSessionID == rec.Metadata.AgentSessionID &&
+		act.LastActivityAt.After(rec.Activity.LastActivityAt)
+	if sameState && !rec.FirstSignalAt.IsZero() && !completedIdleTurn {
 		if metadataChanged || s.Event == "user-prompt-submit" {
 			rec.UpdatedAt = now
 			applied, retry, err := project(rec)
