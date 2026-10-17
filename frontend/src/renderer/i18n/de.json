@@ -1082,6 +1082,8 @@
 	"newTask.removeImage": "Bild {{number}} entfernen",
 	"newTask.start": "Aufgabe starten",
 	"newTask.create": "Aufgabe erstellen",
+	"newTask.description": "Starten Sie einen Worker direkt aus diesem Projekt.",
+	"newTask.standaloneDescription": "Starten Sie einen Worker, ohne ihn einem Projekt oder Repository zuzuordnen.",
 	"newTask.starting": "Wird gestartet...",
 	"newTask.titleLabel": "Titel",
 	"newTask.titlePlaceholder": "WebGL-Fallback-Renderer reparieren",

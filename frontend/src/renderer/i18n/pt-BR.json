@@ -1090,6 +1090,8 @@
 	"newTask.removeImage": "Remover imagem {{number}}",
 	"newTask.start": "Iniciar tarefa",
 	"newTask.create": "Criar tarefa",
+	"newTask.description": "Inicie um worker diretamente neste projeto.",
+	"newTask.standaloneDescription": "Inicie um worker sem vinculá-lo a um projeto ou repositório.",
 	"newTask.starting": "Iniciando...",
 	"newTask.titleLabel": "Título",
 	"newTask.titlePlaceholder": "Corrigir renderer de fallback WebGL",

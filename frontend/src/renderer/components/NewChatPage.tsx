@@ -9,7 +9,7 @@ import { apiErrorMessage } from "../lib/api-client";
 import { readChatSessionDraft, writeChatComposerText } from "../lib/chat-drafts";
 import { labelForHost } from "../lib/host-clients";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
-import { STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../types/workspace";
+import { CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import type { ChatConfigOption, ChatConfigOptionValue, ChatModel, ConversationSnapshot, TurnSettings } from "../types/conversation";
 import { readChatSettingsTemplate } from "../lib/chat-settings-template";
 import { agentModelDisplayLabel } from "../lib/agent-model-choices";
@@ -142,6 +142,13 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			window.removeEventListener("keydown", onKeyDown);
 		};
 	}, [router]);
+
+	// Cloud projects keep the New Task dialog for now: a link here hands over to it.
+	useEffect(() => {
+		if (!task.isCloudProject) return;
+		void navigate({ to: "/new", search: { host: hostId }, replace: true });
+		useUiStore.getState().requestNewTask(projectId, hostId);
+	}, [hostId, navigate, projectId, task.isCloudProject]);
 
 	// Load the session page's code now: a first visit otherwise renders the
 	// router's empty pending frame between this page and the session.
@@ -433,8 +440,9 @@ function NewChatProjectPicker({ projectId, hostId, disabled, onChange }: { proje
 	const localWorkspaces = useWorkspaceQuery().data ?? [];
 	const remoteWorkspaces = useRemoteWorkspaces().data ?? [];
 	const workspaces = hostId ? remoteWorkspaces.filter((workspace) => workspace.hostId === hostId) : localWorkspaces;
+	// Cloud projects start tasks from the New Task dialog for now.
 	const projects = workspaces.filter(
-		(workspace) => workspace.id !== STANDALONE_WORKSPACE_ID && workspace.kind !== STANDALONE_PROJECT_KIND,
+		(workspace) => workspace.id !== STANDALONE_WORKSPACE_ID && workspace.kind !== STANDALONE_PROJECT_KIND && workspace.kind !== CLOUD_PROJECT_KIND,
 	);
 	const projectOptions = [
 		{ value: STANDALONE_WORKSPACE_ID, label: t("standalone.workspaceName") },

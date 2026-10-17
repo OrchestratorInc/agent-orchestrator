@@ -1069,6 +1069,8 @@
 	"newTask.removeImage": "Remove image {{number}}",
 	"newTask.start": "Start task",
 	"newTask.create": "Create task",
+	"newTask.description": "Start a worker directly from this project.",
+	"newTask.standaloneDescription": "Start a worker without attaching it to a project or repository.",
 	"newTask.starting": "Starting...",
 	"newTask.titleLabel": "Title",
 	"newTask.titlePlaceholder": "Fix WebGL fallback renderer",

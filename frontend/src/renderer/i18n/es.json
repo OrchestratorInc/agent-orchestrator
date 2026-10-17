@@ -1090,6 +1090,8 @@
 	"newTask.removeImage": "Quitar imagen {{number}}",
 	"newTask.start": "Iniciar tarea",
 	"newTask.create": "Crear tarea",
+	"newTask.description": "Inicia un worker directamente desde este proyecto.",
+	"newTask.standaloneDescription": "Inicia un worker sin vincularlo a un proyecto o repositorio.",
 	"newTask.starting": "Iniciando...",
 	"newTask.titleLabel": "Título",
 	"newTask.titlePlaceholder": "Corregir el renderizador de respaldo de WebGL",

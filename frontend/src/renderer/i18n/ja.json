@@ -1082,6 +1082,8 @@
 	"newTask.removeImage": "画像 {{number}} を削除",
 	"newTask.start": "タスクを開始",
 	"newTask.create": "タスクを作成",
+	"newTask.description": "このプロジェクトからワーカーを直接開始します。",
+	"newTask.standaloneDescription": "プロジェクトやリポジトリに関連付けずにワーカーを開始します。",
 	"newTask.starting": "開始中...",
 	"newTask.titleLabel": "タイトル",
 	"newTask.titlePlaceholder": "WebGL フォールバックレンダラーを修正",

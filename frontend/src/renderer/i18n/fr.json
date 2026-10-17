@@ -1090,6 +1090,8 @@
 	"newTask.removeImage": "Supprimer l'image {{number}}",
 	"newTask.start": "Démarrer la tâche",
 	"newTask.create": "Créer la tâche",
+	"newTask.description": "Démarrez un worker directement depuis ce projet.",
+	"newTask.standaloneDescription": "Démarrez un worker sans le rattacher à un projet ou dépôt.",
 	"newTask.starting": "Démarrage...",
 	"newTask.titleLabel": "Titre",
 	"newTask.titlePlaceholder": "Corriger le moteur de rendu de secours WebGL",

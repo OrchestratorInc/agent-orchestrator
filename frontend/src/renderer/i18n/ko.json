@@ -1082,6 +1082,8 @@
 	"newTask.removeImage": "이미지 {{number}} 제거",
 	"newTask.start": "작업 시작",
 	"newTask.create": "작업 만들기",
+	"newTask.description": "이 프로젝트에서 워커를 직접 시작합니다.",
+	"newTask.standaloneDescription": "프로젝트나 저장소에 연결하지 않고 워커를 시작합니다.",
 	"newTask.starting": "시작 중...",
 	"newTask.titleLabel": "제목",
 	"newTask.titlePlaceholder": "WebGL 폴백 렌더러 수정",
