@@ -298,17 +298,7 @@ func (s *Server) readShareUpload(w http.ResponseWriter, r *http.Request) (shareU
 // writing an error and returning false when the bucket refuses it.
 func (s *Server) putShareObject(w http.ResponseWriter, r *http.Request, key string, upload shareUpload) (string, bool) {
 	sum, _ := hex.DecodeString(upload.sha256)
-	versionID, err := s.artifacts.Put(r.Context(), key, upload.body, upload.size, sum)
-	if errors.Is(err, artifactstore.ErrChecksumMismatch) {
-		writeError(w, r, http.StatusUnprocessableEntity, "checksum_mismatch", "The body does not match its SHA-256.")
-		return "", false
-	}
-	if err != nil {
-		s.logger.ErrorContext(r.Context(), "store artifact share", "error", err, "request_id", requestID(r))
-		writeError(w, r, http.StatusBadGateway, "artifact_store_unavailable", "The artifact could not be stored.")
-		return "", false
-	}
-	return versionID, true
+	return s.putArtifactObject(w, r, key, upload.body, upload.size, sum)
 }
 
 func (s *Server) dropShareVersion(ctx context.Context, key, versionID string) {
@@ -363,34 +353,11 @@ func (s *Server) serveArtifactShare(w http.ResponseWriter, r *http.Request, slug
 		s.writeStoreError(w, r, err)
 		return
 	}
-	etag := `"` + share.SHA256 + `"`
-	w.Header().Set("Content-Security-Policy", artifactFileCSP)
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Referrer-Policy", "no-referrer")
-	w.Header().Set("Cache-Control", "public, no-cache")
-	w.Header().Set("ETag", etag)
-	if r.Header.Get("If-None-Match") == etag {
-		w.WriteHeader(http.StatusNotModified)
-		return
-	}
-	object, err := s.artifacts.Get(r.Context(), share.S3Key, share.VersionID)
-	if errors.Is(err, artifactstore.ErrNotFound) {
-		writeError(w, r, http.StatusNotFound, "artifact_unavailable", "This artifact is no longer available.")
-		return
-	}
-	if err != nil {
-		s.logger.ErrorContext(r.Context(), "read artifact share", "error", err, "request_id", requestID(r))
-		writeError(w, r, http.StatusBadGateway, "artifact_store_unavailable", "The artifact could not be read.")
-		return
-	}
-	defer object.Body.Close()
-	w.Header().Set("Content-Type", share.ContentType)
-	w.Header().Set("Content-Length", strconv.FormatInt(object.Size, 10))
-	w.WriteHeader(http.StatusOK)
-	if r.Method == http.MethodHead {
-		return
-	}
-	if _, err := io.Copy(w, object.Body); err != nil {
-		s.logger.WarnContext(r.Context(), "stream artifact share", "error", err, "request_id", requestID(r))
-	}
+	s.writeArtifactObject(w, r, artifactObject{
+		key:          share.S3Key,
+		versionID:    share.VersionID,
+		sha256:       share.SHA256,
+		contentType:  share.ContentType,
+		cacheControl: "public, no-cache",
+	})
 }
