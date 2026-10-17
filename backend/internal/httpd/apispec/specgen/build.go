@@ -164,6 +164,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateChatHibernationRequest":              "UpdateChatHibernationRequest",
 	"ControllersConversationSnapshotResponse":              "ConversationSnapshotResponse",
 	"ControllersConversationTurnResponse":                  "ConversationTurnResponse",
+	"ControllersConversationUsageLimitResponse":            "ConversationUsageLimitResponse",
+	"ControllersSetTurnAutoResumeRequest":                  "SetTurnAutoResumeRequest",
 	"ControllersConversationTurnDiffResponse":              "ConversationTurnDiffResponse",
 	"ControllersConversationDiffFileResponse":              "ConversationDiffFileResponse",
 	"ControllersConversationMessageResponse":               "ConversationMessageResponse",
@@ -1499,6 +1501,11 @@ func shellTerminalOperations() []operation {
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/auto-resume", id: "setSessionConversationTurnAutoResume", tag: "conversations",
+			summary: "Schedule or cancel a usage-limited turn retry", pathParams: []any{controllers.SessionIDParam{}, controllers.ConversationTurnIDParam{}}, reqBody: controllers.SetTurnAutoResumeRequest{},
+			resps: []respUnit{{http.StatusNoContent, nil}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/retry", id: "retrySessionConversationTurn", tag: "conversations",

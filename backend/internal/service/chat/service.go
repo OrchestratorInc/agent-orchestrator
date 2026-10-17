@@ -86,6 +86,8 @@ type Service struct {
 	waking             map[domain.SessionID]int
 	wakeRuns           map[domain.SessionID]*wakeRun
 	backgroundWakes    map[domain.SessionID]bool
+	autoResumeMu       sync.Mutex
+	autoResumeRetryAt  map[string]time.Time
 
 	runPromptSuggestion   func(context.Context, domain.SessionID, string, string, string) (string, error)
 	promptSuggestionSlots chan struct{}
@@ -2362,12 +2364,21 @@ func (s *Service) RetryTurn(
 	id domain.SessionID,
 	turnID string,
 ) (domain.ConversationTurn, error) {
+	return s.retryTurn(ctx, id, turnID, false)
+}
+
+func (s *Service) retryTurn(ctx context.Context, id domain.SessionID, turnID string, autoResume bool) (domain.ConversationTurn, error) {
 	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
 	defer release()
-	result, err := controller.RetryTurn(ctx, turnID)
+	var result domain.ConversationTurn
+	if autoResume {
+		result, err = controller.retryUsageLimitTurn(ctx, turnID)
+	} else {
+		result, err = controller.RetryTurn(ctx, turnID)
+	}
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}

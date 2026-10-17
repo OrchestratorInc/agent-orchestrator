@@ -1553,6 +1553,10 @@ func (c *Controller) sendLocked(
 func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.ConversationTurn, error) {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
+	return c.retryTurnLocked(ctx, turnID)
+}
+
+func (c *Controller) retryTurnLocked(ctx context.Context, turnID string) (domain.ConversationTurn, error) {
 	if c.handoffActive() {
 		return domain.ConversationTurn{}, ErrControllerHandoff
 	}
@@ -1569,8 +1573,11 @@ func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.Conve
 	}
 
 	prompt, err := c.store.RetryPrompt(ctx, c.conversation.ID, turnID)
-	if err != nil {
+	if errors.Is(err, domain.ErrNoConversationTurn) {
 		return domain.ConversationTurn{}, fmt.Errorf("%w: %s", ErrTurnNotRetryable, turnID)
+	}
+	if err != nil {
+		return domain.ConversationTurn{}, fmt.Errorf("read retry prompt %s: %w", turnID, err)
 	}
 	if !prompt.ActiveLineage {
 		return domain.ConversationTurn{}, fmt.Errorf("%w: %s", ErrRetryStaleBranch, turnID)
