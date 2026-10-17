@@ -10,7 +10,8 @@
 //    text colour, never its accent: several themes (Catppuccin, Dracula) use
 //    their purple as the accent, which is exactly the "merged" hue, and a button
 //    must never read as a worker state. The accent goes to `highlight` instead:
-//    links, text selection and the cursor.
+//    links, text selection and the cursor, unless it matches a state that asks
+//    for attention (see chooseHighlight).
 //  - States keep the phone's meanings: orange is a working agent and amber
 //    (the palette's yellow) is "needs you", whatever desktop does with them.
 //  - Light surfaces follow the iOS grouped-list convention, a slightly darker
@@ -20,7 +21,7 @@
 //  - Text and state colours are pushed until they clear contrast on the base
 //    they render on. The palettes are only checked against their own canvas,
 //    and the darker grouped-list base can take a muted grey below the floor.
-import { contrastRatio, mixColor, withAlpha } from "../../shared/theme/color";
+import { colorDistance, contrastRatio, mixColor, withAlpha } from "../../shared/theme/color";
 import type { ThemePalette } from "../../shared/theme/palettes";
 import type { ColorScheme, TerminalTheme, Theme } from "./theme";
 
@@ -28,6 +29,27 @@ import type { ColorScheme, TerminalTheme, Theme } from "./theme";
 export const TEXT_CONTRAST = 4.5;
 /** The decorative step (`textFaint`), matching the hand-tuned palette. */
 export const FAINT_CONTRAST = 3;
+/**
+ * How far (OKLab) the highlight must sit from every attention state. Themes
+ * whose accent *is* one of those hues (Monokai's yellow, Everforest's green,
+ * Flexoki's orange) land at or near 0, well inside this; distinct hues sit
+ * further apart.
+ */
+export const HIGHLIGHT_STATE_DISTANCE = 0.08;
+
+/**
+ * The theme's accent, unless it could pass for a state that asks for attention:
+ * working (orange), needs you (yellow), failing (red) or ready (green). A link
+ * or cursor in "needs you" yellow reads as a status, so such themes fall back to
+ * the hue-less text colour. Blue (exited) and purple (merged) are settled states
+ * and the accents of most themes, so they stay allowed.
+ *
+ * Compared as rendered, after the contrast push: darkening for a light plate can
+ * pull two distinct hues together (Rosé Pine Dawn's iris and love).
+ */
+export function chooseHighlight(accent: string, attentionStates: string[], text: string): string {
+	return attentionStates.some((state) => colorDistance(accent, state) < HIGHLIGHT_STATE_DISTANCE) ? text : accent;
+}
 
 /**
  * `color`, moved toward `toward` in small steps until it clears `min` against
@@ -62,6 +84,7 @@ export function deriveMobileTheme(p: ThemePalette, scheme: ColorScheme, fontMono
 	const red = readable(p.red);
 	const green = readable(p.green);
 	const purple = readable(p.purple);
+	const highlight = chooseHighlight(readable(p.accent), [orange, amber, red, green], p.text);
 
 	return {
 		bgBase,
@@ -85,7 +108,8 @@ export function deriveMobileTheme(p: ThemePalette, scheme: ColorScheme, fontMono
 		accentTint: withAlpha(p.text, dark ? 0.14 : 0.08),
 		accentBorder: withAlpha(p.text, dark ? 0.28 : 0.24),
 		accentPressed: withAlpha(p.text, dark ? 0.22 : 0.16),
-		highlight: readable(p.accent),
+		highlight,
+		selection: withAlpha(highlight, dark ? 0.28 : 0.24),
 
 		orange,
 		blue,

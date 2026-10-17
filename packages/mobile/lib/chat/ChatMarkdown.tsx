@@ -53,7 +53,7 @@ export function ChatLinkProvider({ onLinkOpen, onAddToChat, children }: { onLink
 export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false, continuousSelection = false, selectionSource }: { text: string; streaming?: boolean; continuousSelection?: boolean; selectionSource?: Omit<ChatExcerpt, "text"> }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const selectionColor = Platform.OS === "android" ? t.accentBorder : t.highlight;
+	const selectionColor = Platform.OS === "android" ? t.selection : t.highlight;
 	const blocks = parseBlocks(text);
 	if (continuousSelection) {
 		// Native selection cannot cross sibling views. Keep every response text block
@@ -114,7 +114,7 @@ export function SelectableResponseText({ text, source }: { text: string; source?
 	const select = useCallback((selected: string) => source ? addToChat?.(selected, source) : addToChat?.(selected), [addToChat, source]);
 	const onLayout = useAndroidResponseSelection(addToChat && source ? select : null);
 	const styles = useThemedStyles(makeStyles);
-	const selectionColor = Platform.OS === "android" ? t.accentBorder : t.highlight;
+	const selectionColor = Platform.OS === "android" ? t.selection : t.highlight;
 	return <Text selectable uiTextView selectionColor={selectionColor} style={styles.body} onLayout={onLayout} addToChatEnabled={Boolean(addToChat && source)} onAddToChat={(event) => select(event.nativeEvent.text)}>
 		{parseBlocks(text).map((block, index) => {
 			const separator = index > 0 ? "\n\n" : "";

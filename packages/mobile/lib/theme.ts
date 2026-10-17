@@ -69,6 +69,12 @@ export type Theme = {
 	 * theme puts its signature colour here and nowhere a state could be implied.
 	 */
 	highlight: string;
+	/**
+	 * Android's text-selection fill: the highlight, translucent so the selected
+	 * text stays legible (iOS draws its own tint from `highlight`). The default
+	 * palette keeps it equal to `accentBorder`.
+	 */
+	selection: string;
 
 	orange: string;
 	blue: string;
@@ -123,6 +129,7 @@ export const darkTheme: Theme = {
 	accentBorder: "rgba(244,245,247,0.28)",
 	accentPressed: "rgba(244,245,247,0.22)",
 	highlight: "#f4f5f7",
+	selection: "rgba(244,245,247,0.28)",
 
 	orange: "#f59f4c",
 	blue: "#60a5fa",
@@ -174,6 +181,7 @@ export const lightTheme: Theme = {
 	accentBorder: "rgba(20,21,25,0.24)",
 	accentPressed: "rgba(20,21,25,0.16)",
 	highlight: "#141519",
+	selection: "rgba(20,21,25,0.24)",
 
 	// Hue kept, darkened for contrast on white — each clears 4.5:1 both on the
 	// base surface and on its own 12% tint, which is where these actually render.

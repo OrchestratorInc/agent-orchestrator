@@ -22,7 +22,7 @@ export function SpawnPromptInput({ value, onChangeText }: SpawnPromptInputProps)
 			onChangeText={onChangeText}
 			placeholder="What should this worker do?"
 			placeholderTextColor={t.textTertiary}
-			selectionColor={t.accentBorder}
+			selectionColor={t.selection}
 			cursorColor={t.highlight}
 			selectionHandleColor={t.accent}
 			multiline

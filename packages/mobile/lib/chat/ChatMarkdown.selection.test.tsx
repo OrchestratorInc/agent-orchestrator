@@ -5,7 +5,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST
 
 const { platform, theme } = vi.hoisted(() => ({
 	platform: { OS: "ios" },
-	theme: { accent: "#f4f5f7", accentBorder: "rgba(244,245,247,0.28)", highlight: "#79b0dc" },
+	theme: { accent: "#f4f5f7", accentBorder: "rgba(244,245,247,0.28)", highlight: "#79b0dc", selection: "rgba(121,176,220,0.28)" },
 }));
 
 vi.mock("react-native", () => ({
@@ -161,7 +161,7 @@ it("uses the spawn prompt's translucent selection gray on Android", () => {
 		act(() => { renderer = create(<ChatMarkdown text={"Paragraph response\n\n```text\nCode response\n```"} />); });
 		const selectable = renderer.root.findAll((node) => node.props.uiTextView === true);
 		expect(selectable.map(textOf)).toEqual(["Paragraph response", "Code response"]);
-		for (const node of selectable) expect(node.props.selectionColor).toBe(theme.accentBorder);
+		for (const node of selectable) expect(node.props.selectionColor).toBe(theme.selection);
 		act(() => renderer.unmount());
 	} finally {
 		platform.OS = "ios";

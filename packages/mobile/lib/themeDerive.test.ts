@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { contrastRatio } from "../../shared/theme/color";
+import { colorDistance, contrastRatio } from "../../shared/theme/color";
 import { DEFAULT_THEME_STYLE, THEMES, type ThemeStyle } from "../../shared/theme/palettes";
 import { darkTheme, lightTheme, terminalTheme, themeFor, type ColorScheme } from "./theme";
-import { ensureContrast, FAINT_CONTRAST, TEXT_CONTRAST } from "./themeDerive";
+import { ensureContrast, FAINT_CONTRAST, HIGHLIGHT_STATE_DISTANCE, TEXT_CONTRAST } from "./themeDerive";
 
 const SCHEMES: ColorScheme[] = ["dark", "light"];
 const NAMED = THEMES.filter((theme) => theme.id !== DEFAULT_THEME_STYLE).map((theme) => theme.id as ThemeStyle);
@@ -66,6 +66,31 @@ describe("themeFor with a named theme", () => {
 		const t = themeFor(scheme, style);
 		expect(t.accent).toBe(t.textPrimary);
 		expect(contrastRatio(t.onAccent, t.accent)).toBeGreaterThanOrEqual(TEXT_CONTRAST);
+	});
+
+	it.each(CASES)("%s %s keeps the highlight from passing for an attention state", (style, scheme) => {
+		const t = themeFor(scheme, style);
+		if (t.highlight === t.textPrimary) return;
+		for (const [state, color] of Object.entries({ orange: t.orange, amber: t.amber, red: t.red, green: t.green })) {
+			expect(colorDistance(t.highlight, color), state).toBeGreaterThanOrEqual(HIGHLIGHT_STATE_DISTANCE);
+		}
+	});
+
+	it("falls back to the text colour where the accent is a state hue", () => {
+		for (const style of ["monokai", "ayu", "everforest", "vitesse", "flexoki"] as const) {
+			for (const scheme of SCHEMES) expect(themeFor(scheme, style).highlight, `${style} ${scheme}`).toBe(themeFor(scheme, style).textPrimary);
+		}
+	});
+
+	it("keeps a blue or purple accent as the highlight", () => {
+		for (const style of ["github", "catppuccin", "tokyo-night", "dracula"] as const) {
+			for (const scheme of SCHEMES) expect(themeFor(scheme, style).highlight, `${style} ${scheme}`).not.toBe(themeFor(scheme, style).textPrimary);
+		}
+	});
+
+	it("keeps Orchestrate's Android selection on the hue-less accent border", () => {
+		expect(darkTheme.selection).toBe(darkTheme.accentBorder);
+		expect(lightTheme.selection).toBe(lightTheme.accentBorder);
 	});
 
 	it.each(NAMED)("%s light lifts cards off the base", (style) => {

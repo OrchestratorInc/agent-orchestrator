@@ -72,3 +72,10 @@ export function contrastRatio(a: string, b: string): number {
 	const [hi, lo] = [relativeLuminance(a), relativeLuminance(b)].sort((x, y) => y - x);
 	return (hi + 0.05) / (lo + 0.05);
 }
+
+/** Perceptual distance between two colors: Euclidean in OKLab (0 = identical). */
+export function colorDistance(a: string, b: string): number {
+	const x = rgbToOklab(parseHex(a));
+	const y = rgbToOklab(parseHex(b));
+	return Math.hypot(x[0] - y[0], x[1] - y[1], x[2] - y[2]);
+}
