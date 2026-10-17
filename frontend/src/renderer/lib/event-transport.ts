@@ -25,6 +25,12 @@ export type EventTransport = {
 };
 
 const INVALIDATE_WINDOW_MS = 150;
+// Session updates that change nothing the sidebar shows (id-only bookkeeping
+// such as usage accounting, or a repeat of the session's last-seen status)
+// refresh at most once per this interval. The daemon can emit them for every
+// session several times a second, and refetching the workspace for each one
+// kept the renderer refetching around the clock.
+const BACKGROUND_REFRESH_INTERVAL_MS = 5_000;
 // EventSource.CLOSED, referenced numerically so test stubs without the static
 // constants still work.
 const EVENTSOURCE_CLOSED = 2;
@@ -74,6 +80,15 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			// refreshed by their own events. A fresh stream starts at the newest event,
 			// so a lifecycle refresh must cover whatever changed in the gap.
 			let allEventScopedCachesInvalidationPending = false;
+			// The background lane (see BACKGROUND_REFRESH_INTERVAL_MS).
+			let backgroundWorkspacePending = false;
+			const backgroundConversationSessions = new Set<string>();
+			const backgroundEditorHandoffSessions = new Set<string>();
+			let backgroundTimer: ReturnType<typeof setTimeout> | undefined;
+			let lastBackgroundFlushAt = Number.NEGATIVE_INFINITY;
+			// The status each session's last update carried, to tell a real status
+			// change from an update that only repeats it.
+			const lastSessionStatus = new Map<string, string>();
 			let retryTimer: ReturnType<typeof setTimeout> | undefined;
 			let source: EventSource | undefined;
 			let sourceBaseUrl: string | undefined;
@@ -225,6 +240,12 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			// it immediately without waiting out a full window.
 			let lastFlushAt = Number.NEGATIVE_INFINITY;
 			const flushPending = () => {
+				// Background work this flush already covers need not run again.
+				if (workspaceInvalidationPending) backgroundWorkspacePending = false;
+				if (allConversationsInvalidationPending) backgroundConversationSessions.clear();
+				for (const sessionId of pendingConversationSessions) backgroundConversationSessions.delete(sessionId);
+				if (allEditorHandoffsInvalidationPending) backgroundEditorHandoffSessions.clear();
+				for (const sessionId of pendingEditorHandoffSessions) backgroundEditorHandoffSessions.delete(sessionId);
 				if (allConversationsInvalidationPending) {
 					invalidate(conversationQueryRoot);
 					invalidate(reviewerConversationQueryRoot);
@@ -278,16 +299,54 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				}
 				pendingModelCatalogScopes.clear();
 			};
+			const flushBackground = () => {
+				lastBackgroundFlushAt = Date.now();
+				if (!backgroundWorkspacePending && backgroundConversationSessions.size === 0 && backgroundEditorHandoffSessions.size === 0) return;
+				if (backgroundWorkspacePending) workspaceInvalidationPending = true;
+				for (const sessionId of backgroundConversationSessions) pendingConversationSessions.add(sessionId);
+				for (const sessionId of backgroundEditorHandoffSessions) pendingEditorHandoffSessions.add(sessionId);
+				backgroundWorkspacePending = false;
+				backgroundConversationSessions.clear();
+				backgroundEditorHandoffSessions.clear();
+				flushPending();
+			};
+			// Leading edge after a quiet interval, then at most one trailing flush
+			// per interval however many updates arrive.
+			const scheduleBackground = () => {
+				if (backgroundTimer !== undefined) return;
+				const wait = BACKGROUND_REFRESH_INTERVAL_MS - (Date.now() - lastBackgroundFlushAt);
+				if (wait <= 0) {
+					flushBackground();
+					return;
+				}
+				backgroundTimer = setTimeout(() => {
+					backgroundTimer = undefined;
+					if (!disposed) flushBackground();
+				}, wait);
+			};
+			// True when a session_updated carries no status beyond its id, or the
+			// same status as that session's previous update.
+			const isQuietSessionUpdate = (sessionId: string, payload: object | undefined) => {
+				const status = Object.entries(payload ?? {})
+					.filter(([key]) => key !== "id" && key !== "sessionId")
+					.sort(([left], [right]) => left.localeCompare(right));
+				if (status.length === 0) return true;
+				const signature = JSON.stringify(status);
+				if (lastSessionStatus.get(sessionId) === signature) return true;
+				lastSessionStatus.set(sessionId, signature);
+				return false;
+			};
 			const refreshWorkspaces = (event?: Event) => {
 				if (disposed) return;
 				let conversationOnly = false;
 				let modelCatalogOnly = false;
+				let quietSessionUpdate = false;
 				if (event === undefined) {
 					// A lifecycle refresh -- reconnect, daemon status change, base-URL change --
-					// carries no event, so we cannot know which conversations moved. Normally the
-					// replay that follows tells us, but when the event log has been truncated the
-					// daemon starts us at head and no CDC arrives at all. EventSource cannot read
-					// the header reporting that clamp, so refresh every conversation instead of
+					// carries no event, so we cannot know which conversations moved. A new
+					// stream starts at head, and a resumed one starts at head too when the
+					// event log was truncated, so no CDC tells us. EventSource cannot read
+					// the header reporting that, so refresh every conversation instead of
 					// leaving an open chat frozen on its pre-gap snapshot.
 					allConversationsInvalidationPending = true;
 					allEditorHandoffsInvalidationPending = true;
@@ -369,13 +428,25 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							// Async chat startup changes the session's provisionState, but
 							// does not emit a conversationId. Refresh the open conversation
 							// so its controller state can leave "connecting".
-							pendingConversationSessions.add(decoded.sessionId);
-							pendingEditorHandoffSessions.add(decoded.sessionId);
+							if (isQuietSessionUpdate(decoded.sessionId, payload)) {
+								// Still refreshed, but through the background lane.
+								quietSessionUpdate = true;
+								backgroundConversationSessions.add(decoded.sessionId);
+								backgroundEditorHandoffSessions.add(decoded.sessionId);
+							} else {
+								pendingConversationSessions.add(decoded.sessionId);
+								pendingEditorHandoffSessions.add(decoded.sessionId);
+							}
 						}
 					} catch {
 						// A malformed CDC payload still invalidates workspaces; it simply
 						// cannot target a conversation cache precisely.
 					}
+				}
+				if (quietSessionUpdate) {
+					backgroundWorkspacePending = true;
+					scheduleBackground();
+					return;
 				}
 				if (!conversationOnly && !modelCatalogOnly) workspaceInvalidationPending = true;
 				// A busy stream must not postpone visible updates until traffic
@@ -540,6 +611,10 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				healthAttempt += 1;
 				disposed = true;
 				if (refreshTimer !== undefined) clearTimeout(refreshTimer);
+				if (backgroundTimer !== undefined) clearTimeout(backgroundTimer);
+				backgroundConversationSessions.clear();
+				backgroundEditorHandoffSessions.clear();
+				lastSessionStatus.clear();
 				pendingConversationSessions.clear();
 				pendingReviewSessions.clear();
 				pendingInterfaceTransitionSessions.clear();
