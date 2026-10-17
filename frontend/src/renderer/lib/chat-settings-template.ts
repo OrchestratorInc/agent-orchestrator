@@ -1,4 +1,4 @@
-import type { ChatConfigOption } from "../types/conversation";
+import type { ChatConfigOption, ChatSkill } from "../types/conversation";
 
 const STORAGE_KEY = "ao.chat.settingsTemplate.v1";
 
@@ -46,5 +46,31 @@ export function rememberChatSettingsTemplate(harness: string, hostId: string | u
 		storage()?.setItem(STORAGE_KEY, JSON.stringify(all));
 	} catch {
 		// Only polish: without it a new chat draws AO's own controls.
+	}
+}
+
+const SKILLS_KEY = "ao.chat.skills.v1";
+
+/** The skills a session of this agent last listed, for a new chat's "/" menu. */
+export function readChatSkills(harness: string, hostId?: string): ChatSkill[] {
+	if (!harness) return [];
+	try {
+		const all: unknown = JSON.parse(storage()?.getItem(SKILLS_KEY) ?? "{}");
+		const skills = all && typeof all === "object" ? (all as Record<string, unknown>)[keyFor(harness, hostId)] : undefined;
+		return Array.isArray(skills) ? (skills as ChatSkill[]) : [];
+	} catch {
+		return [];
+	}
+}
+
+export function rememberChatSkills(harness: string, hostId: string | undefined, skills: ChatSkill[]): void {
+	try {
+		const all: Record<string, ChatSkill[]> = JSON.parse(storage()?.getItem(SKILLS_KEY) ?? "{}");
+		const key = keyFor(harness, hostId);
+		if (JSON.stringify(all[key]) === JSON.stringify(skills)) return;
+		all[key] = skills;
+		storage()?.setItem(SKILLS_KEY, JSON.stringify(all));
+	} catch {
+		// Only polish: without it a new chat offers no "/" skills.
 	}
 }
