@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -1355,6 +1356,38 @@ func TestResolveDefaultBranchKeepsSlashBranchOnOriginWithoutMatchingRemote(t *te
 	want := ports.WorkspaceDefaultBranch{Remote: "origin", Branch: "release/2026", BaseRef: "refs/remotes/origin/release/2026"}
 	if target != want {
 		t.Fatalf("target = %#v, want %#v", target, want)
+	}
+}
+
+// TestResolveDefaultBranchBoundsStalledRemoteLookup pins the spawn-wedge fix:
+// a remote whose ls-remote never answers must not hang resolution until the
+// caller's outer (request) deadline; the resolver falls back to the cached
+// remote HEAD within its own budget instead.
+func TestResolveDefaultBranchBoundsStalledRemoteLookup(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, tmp)
+	// Shim git so ls-remote stalls well past the budget while every other
+	// call still reaches the real binary.
+	shim := filepath.Join(tmp, "git-stall-shim")
+	script := "#!/bin/sh\nfor a in \"$@\"; do\n  if [ \"$a\" = \"ls-remote\" ]; then sleep 30 >/dev/null 2>&1; fi\ndone\nexec " + git + " \"$@\"\n"
+	if err := os.WriteFile(shim, []byte(script), 0o755); err != nil {
+		t.Fatalf("write shim: %v", err)
+	}
+	ws, err := New(Options{Binary: shim, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	start := time.Now()
+	target, err := ws.ResolveDefaultBranch(context.Background(), repo, "")
+	if err != nil {
+		t.Fatalf("resolve default branch: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 9*time.Second {
+		t.Fatalf("resolve took %s; the remote lookup must be bounded by its own budget", elapsed)
+	}
+	if target.BaseRef != "refs/remotes/origin/main" {
+		t.Fatalf("base ref = %q, want cached refs/remotes/origin/main", target.BaseRef)
 	}
 }
 
