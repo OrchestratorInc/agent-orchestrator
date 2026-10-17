@@ -876,6 +876,63 @@ func TestEditMessageReplaysDurableContextWhenNativeForkIsUnavailable(t *testing.
 	}
 }
 
+// The launch config registered at Start is what the session was spawned with.
+// Choices made in the picker since are conversation settings; the provider an
+// edit launches continues that conversation and must run with them, whether it
+// forks natively or replays. Before this, an edit dropped them for the agent's
+// defaults, so a session pinned to one model silently answered with another.
+func TestEditMessageLaunchesReplacementWithCurrentConversationSettings(t *testing.T) {
+	chosen := domain.ConversationSettings{
+		Model: "opus", ReasoningEffort: "xhigh", ApprovalMode: ports.PermissionModeBypassPermissions,
+	}
+	for _, tc := range []struct {
+		name   string
+		replay bool
+	}{{"replay", true}, {"native fork", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _, driver := newEditHarness(t, tc.replay)
+			ctx := context.Background()
+			completeTurn(t, h, "A", "provider-turn-1")
+			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
+			second, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "B", Origin: domain.MessageOriginHuman})
+			if err != nil {
+				t.Fatalf("Send B: %v", err)
+			}
+			h.conv.emit(
+				ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-2"},
+				ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: "provider-turn-2", ProviderItemID: "answer-b", Text: "answer B"},
+				ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-2", TurnState: domain.TurnStateCompleted},
+			)
+			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 4 })
+			if _, err := h.svc.SetTurnSettings(ctx, testSession, chosen); err != nil {
+				t.Fatalf("SetTurnSettings: %v", err)
+			}
+
+			if _, err := h.svc.EditMessage(ctx, testSession, second.ID, ports.ChatUserMessage{
+				Text: "B edited", Origin: domain.MessageOriginHuman,
+			}); err != nil {
+				t.Fatalf("EditMessage: %v", err)
+			}
+			driver.mu.Lock()
+			starts := append([]ports.ChatStartConfig(nil), driver.startConfigs...)
+			resumes := append([]ports.ChatResumeConfig(nil), driver.resumeCalls...)
+			driver.mu.Unlock()
+			got := domain.ConversationSettings{}
+			switch {
+			case tc.replay && len(starts) == 2:
+				got = domain.ConversationSettings{Model: starts[1].Model, ReasoningEffort: starts[1].Effort, ApprovalMode: starts[1].Permissions}
+			case !tc.replay && len(resumes) == 1:
+				got = domain.ConversationSettings{Model: resumes[0].Model, ReasoningEffort: resumes[0].Effort, ApprovalMode: resumes[0].Permissions}
+			default:
+				t.Fatalf("replacement launches: starts=%d resumes=%d", len(starts), len(resumes))
+			}
+			if got != chosen {
+				t.Fatalf("replacement launched with %+v, want the conversation's %+v", got, chosen)
+			}
+		})
+	}
+}
+
 func TestEditMessageRejectsReplayWhenFreshProviderNegotiatesFewerCapabilities(t *testing.T) {
 	h, _, driver := newEditHarness(t, true)
 	ctx := context.Background()

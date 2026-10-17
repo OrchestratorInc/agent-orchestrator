@@ -969,7 +969,14 @@ func (s *Service) branchLaunchConfig(
 	if err != nil {
 		return StartConfig{}, nil, fmt.Errorf("chat driver for %s: %w", cfg.Harness, err)
 	}
-	return cloneStartConfig(cfg), driver, nil
+	// The registered config is what the session was spawned with. The provider
+	// a branch launches continues this conversation, so it runs with the model,
+	// effort and approval mode chosen since, as a controller rebuilt after a
+	// restart does; otherwise an edit silently drops them for the agent's
+	// defaults.
+	launch := cloneStartConfig(cfg)
+	applyConversationSettings(&launch, source.Settings())
+	return launch, driver, nil
 }
 
 func (s *Service) prepareBranchControllerEnv(ctx context.Context, cfg StartConfig) (map[string]string, error) {
