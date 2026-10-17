@@ -74,6 +74,8 @@ export function sideConversationActivity(activity: SideActivity): ConversationAc
 						? activity.detail
 						: {}),
 					output: activity.text,
+					// The detail's own copy of the output may have been cut; this one was not.
+					outputTruncated: undefined,
 				}
 			: activity.detail;
 	return {
