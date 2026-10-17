@@ -15,9 +15,10 @@ import {
 	ACCENT_ACTION_SHELL,
 	QUIET_ACTION_PILL,
 } from "./action-pill";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { ThinkingOrb as Orb } from "thinking-orbs";
 import {
 	AlertTriangle,
 	Brain,
@@ -621,28 +622,16 @@ export function ResponseSpinner() {
 	);
 }
 
-const ORB_TICKS = 18;
-/** Wave periods round the ring: three gives the slow, rounded-triangle wobble. */
-const ORB_LOBES = 3;
-const ORB_WAVE_S = 1.6;
-
 /**
- * The live turn's thinking mark: a ring of short ticks with a wave running round it,
- * so the ring breathes out of round rather than spinning like a loader. Pure CSS
- * (see `.thinking-orb`); each tick only carries its angle and its place in the wave.
+ * The live turn's thinking mark: the dotted "breathing" orb from thinking-orbs (a
+ * ring slowly morphing), at its 20px inline preset. It is decorative here, since
+ * "Working for" beside it says the same thing in words, and it follows AO's
+ * `data-theme`, honours reduced motion, and pauses when scrolled offscreen.
  */
 export function ThinkingOrb() {
 	return (
-		<span aria-hidden="true" data-testid="response-spinner" className="thinking-orb shrink-0 text-muted-foreground">
-			{Array.from({ length: ORB_TICKS }, (_, index) => (
-				<i
-					key={index}
-					style={{
-						"--orb-angle": `${(index / ORB_TICKS) * 360}deg`,
-						"--orb-delay": `${-((index * ORB_LOBES) / ORB_TICKS) * ORB_WAVE_S}s`,
-					} as CSSProperties}
-				/>
-			))}
+		<span aria-hidden="true" data-testid="response-spinner" className="flex size-5 shrink-0 items-center justify-center">
+			<Orb state="breathing" size={20} aria-hidden="true" />
 		</span>
 	);
 }
@@ -1062,7 +1051,7 @@ export function LiveResponseStatus({ startedAt, settling = false, startupLabel, 
 	// even when the main thread is busy finishing the turn. These are keyframe
 	// animations rather than transitions so they also play when the row first
 	// mounts already settled. The orb shrinks and fades in place while the label
-	// slides left by the orb's footprint (14px + 6px gap), so "Worked for" ends flush
+	// slides left by the orb's footprint (20px + 6px gap), so "Worked for" ends flush
 	// with the turn's text before the row hands over. The label keeps its shimmer class
 	// throughout (only the highlight fades), so the text never changes paint
 	// technique and cannot blink.

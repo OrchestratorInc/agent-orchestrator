@@ -131,6 +131,7 @@
 		"remark-gfm": "^4.0.1",
 		"semver": "^7.8.5",
 		"tailwind-merge": "^3.6.0",
+		"thinking-orbs": "^0.3.2",
 		"ws": "^8.21.1",
 		"zustand": "^5.0.14"
 	},
