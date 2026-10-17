@@ -822,6 +822,98 @@ func TestLauncherSpawnPropagatesRestoreErrorWithoutFreshFallback(t *testing.T) {
 	}
 }
 
+// Reviewer harnesses place their system prompt in argv (Cline reads it into
+// `-s`), so a Windows npm shim reviewer must be rewritten before Create just
+// like worker launches: through cmd.exe it dies on the same command-line
+// limit. These tests run Windows-only because the rewrite is a no-op
+// elsewhere.
+const windowsReviewerShimBody = "@ECHO off\n" +
+	"GOTO start\n" +
+	":find_dp0\n" +
+	"SET dp0=%~dp0\n" +
+	"EXIT /b\n" +
+	":start\n" +
+	"SETLOCAL\n" +
+	"CALL :find_dp0\n" +
+	"\n" +
+	"IF EXIST \"%dp0%\\node.exe\" (\n" +
+	"  SET \"_prog=%dp0%\\node.exe\"\n" +
+	") ELSE (\n" +
+	"  SET \"_prog=node\"\n" +
+	"  SET PATHEXT=%PATHEXT:;.JS;=;%\n" +
+	")\n" +
+	"\n" +
+	"endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\" \"%dp0%\\node_modules\\pkg\\bin\\entry\" %*\n"
+
+func writeWindowsReviewerShim(t *testing.T) (shim, node, entry string) {
+	t.Helper()
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "node_modules", "pkg", "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	entry = filepath.Join(binDir, "entry")
+	if err := os.WriteFile(entry, []byte("#!/usr/bin/env node\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	node = filepath.Join(dir, "node.exe")
+	if err := os.WriteFile(node, []byte("MZ"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	shim = filepath.Join(dir, "reviewer.cmd")
+	if err := os.WriteFile(shim, []byte(windowsReviewerShimBody), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return shim, node, entry
+}
+
+func TestLauncherSpawnRewritesWindowsShimReviewerArgv(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("npm shim rewrite is Windows-only")
+	}
+	shim, node, entry := writeWindowsReviewerShim(t)
+
+	reviewer := &fakeReviewer{}
+	reviewerWithCommand := reviewerCommandFunc{reviewer: reviewer, reviewCommand: func(_ context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
+		reviewer.gotInv = inv
+		return ports.ReviewCommandSpec{Argv: []string{shim, "-s", "prompt"}}, nil
+	}}
+	rt := &fakeRuntime{}
+	l := newTestLauncher(t, reviewerWithCommand, rt)
+
+	if _, err := l.Spawn(context.Background(), launchSpec()); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	want := []string{node, entry, "-s", "prompt"}
+	if strings.Join(rt.createCfg.Argv, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("runtime argv = %#v, want %#v", rt.createCfg.Argv, want)
+	}
+}
+
+func TestLauncherRestoreTerminalRewritesWindowsShimReviewerArgv(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("npm shim rewrite is Windows-only")
+	}
+	shim, node, entry := writeWindowsReviewerShim(t)
+
+	reviewer := &fakeRestoringReviewer{
+		restoreOK: true,
+		restoreSpec: ports.ReviewCommandSpec{
+			Argv: []string{shim, "-s", "prompt"},
+		},
+	}
+	rt := &fakeRuntime{}
+	l := newTestLauncher(t, reviewer, rt)
+
+	if _, err := l.RestoreTerminal(context.Background(), launchSpec()); err != nil {
+		t.Fatalf("RestoreTerminal: %v", err)
+	}
+	want := []string{node, entry, "-s", "prompt"}
+	if strings.Join(rt.createCfg.Argv, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("runtime argv = %#v, want %#v", rt.createCfg.Argv, want)
+	}
+}
+
 func TestLauncherSpawnRunsReviewerPreLaunch(t *testing.T) {
 	reviewer := &fakePreLaunchReviewer{}
 	rt := &fakeRuntime{}
