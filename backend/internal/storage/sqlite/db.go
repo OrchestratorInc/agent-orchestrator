@@ -10,11 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pressly/goose/v3"
 
@@ -34,11 +36,15 @@ var migrationsFS embed.FS
 
 // pragmas are applied on every connection open. WAL + NORMAL lets readers run
 // concurrently with the writer; busy_timeout absorbs brief writer contention;
-// foreign_keys enforces the cascades and the CDC triggers' lookups.
+// foreign_keys enforces the cascades and the CDC triggers' lookups;
+// journal_size_limit (32 MiB, per connection) makes the writer cut the -wal file
+// back to that size when it resets the log, instead of leaving it at its
+// high-water mark until the last connection closes.
 const pragmas = "?_pragma=journal_mode(WAL)" +
 	"&_pragma=busy_timeout(5000)" +
 	"&_pragma=foreign_keys(ON)" +
-	"&_pragma=synchronous(NORMAL)"
+	"&_pragma=synchronous(NORMAL)" +
+	"&_pragma=journal_size_limit(33554432)"
 
 const readOnlyPragmas = "?mode=ro" +
 	"&_pragma=busy_timeout(5000)" +
@@ -141,6 +147,22 @@ func Open(dataDir string) (*Store, error) {
 	if err := migrate(writeDB); err != nil {
 		_ = writeDB.Close()
 		return nil, err
+	}
+	// Collect planner statistics. optimize analyzes a table only when one of its
+	// indexes has no statistics or its row count changed about 10x, so a start
+	// that finds nothing to analyze is a check of about ten milliseconds. A table
+	// that a migration gave a new index, or rebuilt (which drops its statistics),
+	// is analyzed again on the next start. That run counts every index of the
+	// table and holds the writer meanwhile: 23-27 s cold for the 2.3M-row
+	// provider-event archive of a 3.9 GB database grown in place, about 1 s on a
+	// compacted copy of it. It runs here, before anything else needs the writer,
+	// rather than behind the listener. It is an optimization: a failure is logged
+	// and never blocks startup.
+	optimizeStart := time.Now()
+	if _, err := writeDB.Exec(`PRAGMA optimize=0x10012`); err != nil {
+		slog.Default().Warn("sqlite: collect planner statistics", "error", err)
+	} else if took := time.Since(optimizeStart); took > time.Second {
+		slog.Default().Info("sqlite: collected planner statistics", "took", took.Round(time.Millisecond))
 	}
 
 	readDB, err := sql.Open("sqlite", dsn)
