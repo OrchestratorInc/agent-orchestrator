@@ -202,7 +202,21 @@ func (g *Guard) Deliver(ctx context.Context, id domain.SessionID, msg string) (O
 // Manager uses it to persist narrow message facts before a provider switch can
 // close admission and snapshot handoff context.
 func (g *Guard) DeliverWithPostWrite(ctx context.Context, id domain.SessionID, msg string, after func(context.Context) error) (Outcome, error) {
-	return g.sendThen(ctx, id, msg, g.refuseDeliver, after)
+	return g.sendThen(ctx, id, msg, g.refuseDeliver, nil, after)
+}
+
+// DeliverCheckedWithPostWrite is DeliverWithPostWrite plus one caller-owned
+// proof that runs after the durable session read and immediately before the
+// runtime write, inside the same input lease. A preWrite error suppresses the
+// write and is returned wrapped, so callers can match their own sentinels.
+func (g *Guard) DeliverCheckedWithPostWrite(
+	ctx context.Context,
+	id domain.SessionID,
+	msg string,
+	preWrite func(context.Context, domain.SessionRecord) error,
+	after func(context.Context) error,
+) (Outcome, error) {
+	return g.sendThen(ctx, id, msg, g.refuseDeliver, preWrite, after)
 }
 
 // DeliverUnderMutation applies the same just-in-time session safety checks as
@@ -358,10 +372,10 @@ func (g *Guard) NudgeCoordination(ctx context.Context, id domain.SessionID, msg 
 // available without scraping the terminal. Fail closed: a store error
 // suppresses the write rather than pressing Enter on an unknown state.
 func (g *Guard) send(ctx context.Context, id domain.SessionID, msg string, refuse func(domain.SessionRecord) (Outcome, bool)) (Outcome, error) {
-	return g.sendThen(ctx, id, msg, refuse, nil)
+	return g.sendThen(ctx, id, msg, refuse, nil, nil)
 }
 
-func (g *Guard) sendThen(ctx context.Context, id domain.SessionID, msg string, refuse func(domain.SessionRecord) (Outcome, bool), after func(context.Context) error) (Outcome, error) {
+func (g *Guard) sendThen(ctx context.Context, id domain.SessionID, msg string, refuse func(domain.SessionRecord) (Outcome, bool), preWrite func(context.Context, domain.SessionRecord) error, after func(context.Context) error) (Outcome, error) {
 	g.leaseMu.RLock()
 	lease := g.lease
 	g.leaseMu.RUnlock()
@@ -373,7 +387,7 @@ func (g *Guard) sendThen(ctx context.Context, id domain.SessionID, msg string, r
 		}
 		defer release()
 	}
-	outcome, err := g.sendAdmitted(ctx, id, msg, refuse)
+	outcome, err := g.sendAdmittedChecked(ctx, id, msg, refuse, preWrite)
 	if err == nil && outcome == Sent && after != nil {
 		if afterErr := after(ctx); afterErr != nil {
 			return outcome, afterErr

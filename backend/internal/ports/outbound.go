@@ -119,6 +119,10 @@ const (
 	FencedReasonRegistryMalformed  FencedProbeReason = "registry_malformed"
 	FencedReasonProbeFailed        FencedProbeReason = "probe_failed"
 	FencedReasonGenerationMismatch FencedProbeReason = "generation_mismatch"
+	// FencedReasonWorkloadUnconfirmed means the exact AO supervisor is alive
+	// but its managed agent has not been observed: it may still be starting.
+	// Only a workload that was seen and is gone proves exit.
+	FencedReasonWorkloadUnconfirmed FencedProbeReason = "workload_unconfirmed"
 )
 
 // FencedRuntimeRef identifies the exact AO-owned runtime generation whose

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -456,5 +457,40 @@ func TestSetRunFilePathEmptyClearsOverride(t *testing.T) {
 	}
 	if _, err := os.Stat(regPath); err != nil {
 		t.Fatalf("expected default HOME-based registry at %s: %v", regPath, err)
+	}
+}
+
+// The supervised flag is additive: entries written before it existed read as
+// unsupervised, and an unsupervised entry is written exactly as before.
+func TestSupervisedFlagIsBackwardCompatible(t *testing.T) {
+	path := setupHome(t)
+	withFakePidAlive(t, func(int) bool { return true })
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `[{"sessionId":"old","ptyHostPid":11,"pipePath":"127.0.0.1:1","launchId":"l1","registeredAt":"2026-01-01T00:00:00Z"}]`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Register(context.Background(), Entry{SessionID: "new", PtyHostPID: 12, PipePath: "127.0.0.1:2", LaunchID: "l2", Supervised: true, RegisteredAt: nowRFC3339()}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervised := map[string]bool{}
+	for _, e := range got {
+		supervised[e.SessionID] = e.Supervised
+	}
+	if len(supervised) != 2 || supervised["old"] || !supervised["new"] {
+		t.Fatalf("supervised flags = %v, want old=false new=true", supervised)
+	}
+	raw, err := json.Marshal(Entry{SessionID: "plain", LaunchID: "l3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "supervised") {
+		t.Fatalf("unsupervised entry changed its encoding: %s", raw)
 	}
 }

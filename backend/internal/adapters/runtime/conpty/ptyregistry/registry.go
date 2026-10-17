@@ -15,10 +15,14 @@ import (
 
 // Entry is one registered pty-host process.
 type Entry struct {
-	SessionID    string `json:"sessionId"`
-	PtyHostPID   int    `json:"ptyHostPid"`
-	PipePath     string `json:"pipePath"`
-	LaunchID     string `json:"launchId,omitempty"`
+	SessionID  string `json:"sessionId"`
+	PtyHostPID int    `json:"ptyHostPid"`
+	PipePath   string `json:"pipePath"`
+	LaunchID   string `json:"launchId,omitempty"`
+	// Supervised records that the host's direct child is the AO supervisor
+	// rather than the agent itself. Entries written before this field existed
+	// read as false and keep their direct-child liveness semantics.
+	Supervised   bool   `json:"supervised,omitempty"`
 	RegisteredAt string `json:"registeredAt"` // RFC3339; set by caller
 }
 

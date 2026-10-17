@@ -4826,7 +4826,7 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 			}
 		}
 	}
-	outcome, err := m.messenger.DeliverWithPostWrite(ctx, id, message, afterWrite)
+	outcome, err := m.messenger.DeliverCheckedWithPostWrite(ctx, id, message, m.requireLiveDeliveryTarget, afterWrite)
 	if err != nil {
 		return fmt.Errorf("send %s: %w", id, err)
 	}
@@ -4875,6 +4875,44 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 		m.confirmActive(ctx, m.messenger, id)
 	}
 	return nil
+}
+
+// sendTargetProbeTimeout bounds the runtime evidence read made while the
+// session's input lease is held, so a slow probe cannot indefinitely delay a
+// mutation that is waiting for admitted input to drain.
+const sendTargetProbeTimeout = 3 * time.Second
+
+// requireLiveDeliveryTarget runs inside the guard's input lease, after its
+// durable reread and immediately before the pane write. A runtime host can
+// outlive its agent and silently discard input, so an idle row alone does not
+// prove the write can be read. It acts only on exact evidence for the launch
+// generation it reread: a definite exit refuses with ErrAgentExited, and an
+// inconclusive probe or a different live generation refuses without a death
+// verdict. A launch without a generation, or a runtime that cannot identify
+// one (legacy and hookless panes), keeps the previous unchecked behavior.
+// Nothing here writes lifecycle facts; the reaper and exit hooks own those.
+func (m *Manager) requireLiveDeliveryTarget(ctx context.Context, rec domain.SessionRecord) error {
+	handleID := strings.TrimSpace(rec.Metadata.RuntimeHandleID)
+	launchID := strings.TrimSpace(rec.Metadata.RuntimeLaunchID)
+	if domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI || handleID == "" || launchID == "" {
+		return nil
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, sendTargetProbeTimeout)
+	defer cancel()
+	probe := m.runtime.ProbeFencedRuntime(probeCtx, ports.FencedRuntimeRef{
+		Handle: ports.RuntimeHandle{ID: handleID}, SessionID: rec.ID, Generation: launchID,
+	})
+	switch {
+	case probe.Liveness == ports.FencedAlive:
+		return nil
+	case probe.Liveness == ports.FencedDead:
+		return ErrAgentExited
+	case probe.Liveness == ports.FencedUnknown && probe.Reason == ports.FencedReasonIdentityMissing:
+		return nil
+	default:
+		return fmt.Errorf("delivery target launch %s is unverified (%s %s): %w",
+			launchID, probe.Liveness, probe.Reason, ports.ErrRuntimeProbeInconclusive)
+	}
 }
 
 func (m *Manager) prepareOutboundMessage(ctx context.Context, id domain.SessionID, message string) (string, error) {

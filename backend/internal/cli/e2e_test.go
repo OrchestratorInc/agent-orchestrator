@@ -27,12 +27,19 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/conpty"
 )
 
 // aoBin is the path to the binary built once for the whole suite.
 var aoBin string
 
 func TestMain(m *testing.M) {
+	// Native runtime tests drive conpty.Runtime from this process; its detached
+	// host re-execs the current executable through the hidden pty-host entry.
+	if len(os.Args) > 1 && os.Args[1] == "pty-host" {
+		os.Exit(conpty.RunHost(os.Args[2:], os.Stdout))
+	}
 	dir, err := os.MkdirTemp("", "ao-e2e-bin")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "e2e: mktemp:", err)

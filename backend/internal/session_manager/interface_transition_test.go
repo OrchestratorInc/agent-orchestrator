@@ -2828,7 +2828,9 @@ func TestSendQueuesDuringInterfaceTransition(t *testing.T) {
 }
 
 func TestTransitionMessagesReturnToSourceAfterPreflightFailure(t *testing.T) {
-	manager, store, _, chat, _ := newTransitionManager(t, domain.SessionModeTUI)
+	manager, store, runtime, chat, _ := newTransitionManager(t, domain.SessionModeTUI)
+	// The seeded source launch is live; the returned message is delivered to it.
+	runtime.aliveByHandle = map[string]bool{"runtime-1": true}
 	chat.preflightErr = ports.ErrChatDriverUnavailable
 	chat.preflightStarted = make(chan struct{}, 1)
 	chat.preflightRelease = make(chan struct{})
