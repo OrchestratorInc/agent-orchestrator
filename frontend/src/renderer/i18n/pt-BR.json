@@ -1559,7 +1559,6 @@
 	"settings.updates.selectFeature": "Selecione um build de feature...",
 	"settings.updates.switchFeatureBody": "Mudar para o PR #{{pr}}: {{title}}? O app baixará o build de feature e reiniciará.",
 	"settings.updates.switchFeatureTitle": "Mudar de build de feature?",
-	"settings.updates.updating": "Atualizando…",
 	"settings.updates.update": "Atualizar",
 	"settings.updates.startingDownload": "Iniciando download…",
 	"settings.updates.preparing": "Preparando atualização…",

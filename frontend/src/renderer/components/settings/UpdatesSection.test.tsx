@@ -8,6 +8,7 @@ import type { UpdateStatus } from "../../../main/update-settings";
 const {
 	updGetStatus,
 	updOnStatus,
+	updDownload,
 	settingsGet,
 	settingsSet,
 	getVersion,
@@ -17,6 +18,7 @@ const {
 } = vi.hoisted(() => ({
 	updGetStatus: vi.fn(),
 	updOnStatus: vi.fn(),
+	updDownload: vi.fn(),
 	settingsGet: vi.fn(),
 	settingsSet: vi.fn(),
 	getVersion: vi.fn(),
@@ -32,7 +34,7 @@ vi.mock("../../lib/bridge", () => ({
 			getStatus: updGetStatus,
 			onStatus: updOnStatus,
 			install: vi.fn(),
-			download: vi.fn(),
+			download: updDownload,
 			check: vi.fn(),
 			returnHome: vi.fn(),
 		},
@@ -63,7 +65,7 @@ function renderUpdates() {
 }
 
 beforeEach(() => {
-	for (const m of [updGetStatus, updOnStatus, settingsGet, settingsSet, getVersion, featureBuildsList, featureBuildsGetActive, telemetryCapture]) {
+	for (const m of [updGetStatus, updOnStatus, updDownload, settingsGet, settingsSet, getVersion, featureBuildsList, featureBuildsGetActive, telemetryCapture]) {
 		m.mockReset();
 	}
 	updOnStatus.mockReturnValue(() => undefined);
@@ -121,20 +123,82 @@ it.each(["downloaded", "error"] as const)("shows updating feedback immediately u
 	updGetStatus.mockResolvedValue({ state: "available", version: "9.9.9" } satisfies UpdateStatus);
 	renderUpdates();
 
-	fireEvent.click(await screen.findByRole("button", { name: "Update to v9.9.9" }));
-	const updating = screen.getByRole("button", { name: "Updating…" });
+	const update = await screen.findByRole("button", { name: "Update to v9.9.9" });
+	update.focus();
+	fireEvent.click(update);
+	const updating = screen.getByRole("button", { name: "Starting download… Update to v9.9.9" });
 	expect(updating).toBeVisible();
-	expect(updating).toBeDisabled();
-	expect(updating).toHaveAttribute("aria-busy", "true");
+	expect(updating).toHaveAttribute("aria-disabled", "true");
+	expect(updating).not.toBeDisabled();
+	expect(updating).toHaveFocus();
+	fireEvent.click(updating);
+	expect(updDownload).toHaveBeenCalledTimes(1);
+	expect(screen.getByTestId("update-status-line")).toHaveAttribute("aria-busy", "true");
 
 	act(() => emit({ state: "downloading", version: "9.9.9", percent: 42 }));
-	expect(screen.getByRole("button", { name: "Updating…" })).toBeDisabled();
+	expect(screen.getByRole("button", { name: "Downloading… 42% Update to v9.9.9" })).toHaveFocus();
+	expect(screen.getByRole("progressbar")).toHaveAttribute("value", "42");
 	act(() => emit({ state: "preparing", version: "9.9.9" }));
-	expect(screen.getByRole("button", { name: "Updating…" })).toBeDisabled();
+	expect(screen.getByRole("button", { name: "Preparing update… Update to v9.9.9" })).toHaveFocus();
 
 	act(() => emit({ state, version: "9.9.9", ...(state === "error" ? { message: "Download failed" } : {}) }));
-	expect(screen.queryByRole("button", { name: "Updating…" })).not.toBeInTheDocument();
-	if (state === "downloaded") expect(screen.getByRole("button", { name: "Restart & install" })).toBeEnabled();
-	else expect(screen.getByText("Download failed")).toBeVisible();
+	expect(updating).not.toBeInTheDocument();
+	expect(screen.getByTestId("update-status-line")).toHaveAttribute("aria-busy", "false");
+	if (state === "downloaded") expect(screen.getByRole("button", { name: "Restart & install" })).toHaveFocus();
+	else {
+		expect(screen.getByText("Download failed")).toBeVisible();
+		expect(screen.getByRole("button", { name: "Check for updates" })).toHaveFocus();
+	}
 	expect(screen.getByRole("button", { name: "Check for updates" })).toBeEnabled();
+});
+
+it.each(["downloading", "preparing"] as const)("shows an existing %s update without a click", async (state) => {
+	updGetStatus.mockResolvedValue({ state, version: "9.9.9" } satisfies UpdateStatus);
+	renderUpdates();
+
+	const label = state === "downloading" ? "Starting download…" : "Preparing update…";
+	const updating = await screen.findByRole("button", { name: `${label} Update to v9.9.9` });
+	expect(updating).toBeVisible();
+	expect(updating).toHaveAttribute("aria-disabled", "true");
+	expect(updating).not.toBeDisabled();
+	expect(updating).not.toHaveFocus();
+	fireEvent.click(updating);
+	expect(updDownload).not.toHaveBeenCalled();
+	expect(screen.getByTestId("update-status-line")).toHaveAttribute("aria-busy", "true");
+});
+
+it.each(["downloaded", "error"] as const)("does not steal focus when an update reaches %s", async (state) => {
+	let emit: (status: UpdateStatus) => void = () => undefined;
+	updOnStatus.mockImplementation((listener: typeof emit) => {
+		emit = listener;
+		return () => undefined;
+	});
+	updGetStatus.mockResolvedValue({ state: "available", version: "9.9.9" } satisfies UpdateStatus);
+	renderUpdates();
+	const update = await screen.findByRole("button", { name: "Update to v9.9.9" });
+	update.focus();
+	fireEvent.click(update);
+	const automaticUpdates = screen.getByRole("switch");
+	automaticUpdates.focus();
+
+	act(() => emit({ state, version: "9.9.9" }));
+	expect(automaticUpdates).toHaveFocus();
+});
+
+it("focuses the status after a fast failure while the manual check action is still busy", async () => {
+	let emit: (status: UpdateStatus) => void = () => undefined;
+	updOnStatus.mockImplementation((listener: typeof emit) => {
+		emit = listener;
+		return () => undefined;
+	});
+	renderUpdates();
+	fireEvent.click(await screen.findByRole("button", { name: "Check for updates" }));
+	act(() => emit({ state: "available", version: "9.9.9" }));
+	const update = screen.getByRole("button", { name: "Update to v9.9.9" });
+	update.focus();
+	fireEvent.click(update);
+
+	act(() => emit({ state: "error", message: "Download failed" }));
+	expect(screen.getByRole("button", { name: "Checking for updates…" })).toBeDisabled();
+	expect(screen.getByTestId("update-status-line")).toHaveFocus();
 });

@@ -1559,7 +1559,6 @@
 	"settings.updates.selectFeature": "Selecciona una compilación de funciones...",
 	"settings.updates.switchFeatureBody": "¿Cambiar al PR #{{pr}}: {{title}}? La aplicación descargará la compilación de funciones y se reiniciará.",
 	"settings.updates.switchFeatureTitle": "¿Cambiar de compilación de funciones?",
-	"settings.updates.updating": "Actualizando…",
 	"settings.updates.update": "Actualizar",
 	"settings.updates.startingDownload": "Iniciando descarga…",
 	"settings.updates.preparing": "Preparando actualización…",
