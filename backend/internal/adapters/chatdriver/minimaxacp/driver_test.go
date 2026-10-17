@@ -46,8 +46,8 @@ func TestConfigureUsesPrivateAdditiveContextOnEveryLaunch(t *testing.T) {
 		if len(args) != 3 || args[0] != "acp" || args[1] != "--append-system-prompt-file" {
 			t.Fatalf("unexpected argv: %v", args)
 		}
-		if filepath.Dir(args[2]) != profile || args[2] == previous {
-			t.Fatal("context file must be private and fresh per process")
+		if filepath.Dir(args[2]) != profile || (previous != "" && args[2] != previous) {
+			t.Fatal("context file must be private and reuse one bounded path")
 		}
 		previous = args[2]
 		data, err := os.ReadFile(args[2])
@@ -66,6 +66,56 @@ func TestConfigureUsesPrivateAdditiveContextOnEveryLaunch(t *testing.T) {
 		if env["MINIMAX_DATA_DIR"] != profile || env["MAVIS_DATA_DIR"] != profile {
 			t.Fatalf("private environment mismatch: %v", env)
 		}
+	}
+	entries, err := os.ReadDir(profile)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("repeated launches retained extra context files: %v, %v", entries, err)
+	}
+}
+
+func TestConfigurePrunesLegacyContextFiles(t *testing.T) {
+	for _, prompt := range []string{"replacement-context", ""} {
+		t.Run(map[bool]string{true: "with-context", false: "without-context"}[prompt != ""], func(t *testing.T) {
+			profile := t.TempDir()
+			for _, name := range []string{".ao-chat-context-one.md", ".ao-chat-context-two.md", ".ao-chat-context.md", "user-notes.md"} {
+				if err := os.WriteFile(filepath.Join(profile, name), []byte("previous-content"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			legacyDirectory := filepath.Join(profile, ".ao-chat-context-resource.md")
+			if err := os.Mkdir(legacyDirectory, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			args, _, err := configure(stubPlugin{profile: profile})(context.Background(), acpdriver.LaunchConfig{SystemPrompt: prompt})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{".ao-chat-context-one.md", ".ao-chat-context-two.md"} {
+				if _, err := os.Lstat(filepath.Join(profile, name)); !os.IsNotExist(err) {
+					t.Fatalf("legacy context %s retained: %v", name, err)
+				}
+			}
+			if prompt == "" {
+				if !reflect.DeepEqual(args, []string{"acp"}) {
+					t.Fatalf("empty context added a prompt-file argument: %v", args)
+				}
+				if _, err := os.Lstat(filepath.Join(profile, ".ao-chat-context.md")); !os.IsNotExist(err) {
+					t.Fatalf("empty context left the previous prompt file behind: %v", err)
+				}
+			} else {
+				data, err := os.ReadFile(filepath.Join(profile, ".ao-chat-context.md"))
+				if err != nil || string(data) != prompt {
+					t.Fatalf("replacement context missing: %q, %v", data, err)
+				}
+			}
+			data, err := os.ReadFile(filepath.Join(profile, "user-notes.md"))
+			if err != nil || string(data) != "previous-content" {
+				t.Fatalf("context cleanup changed unrelated data: %q, %v", data, err)
+			}
+			if info, err := os.Stat(legacyDirectory); err != nil || !info.IsDir() {
+				t.Fatalf("context cleanup removed a directory: %v", err)
+			}
+		})
 	}
 }
 

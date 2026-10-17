@@ -13,11 +13,13 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/nativeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -89,21 +91,34 @@ func configure(plugin Plugin) nativeacp.Configure {
 			return nil, nil, err
 		}
 		args := []string{"acp"}
+		contextFile := filepath.Join(profile, ".ao-chat-context.md")
 		if cfg.SystemPrompt != "" {
 			// MiniMax reads this once at process start and appends after its native
 			// identity. It is neither a transcript turn nor a replacement prompt.
-			// A replacement process gets a fresh file, including after exact load.
-			file, err := os.CreateTemp(profile, ".ao-chat-context-*.md")
-			if err != nil {
+			// Atomically replace one private file on each process launch.
+			if err := hookutil.AtomicWriteFile(contextFile, []byte(cfg.SystemPrompt), 0o600); err != nil {
 				return nil, nil, err
 			}
-			_, writeErr := file.WriteString(cfg.SystemPrompt)
-			closeErr := file.Close()
-			if writeErr != nil || closeErr != nil {
-				_ = os.Remove(file.Name())
-				return nil, nil, errors.Join(writeErr, closeErr)
+			args = append(args, "--append-system-prompt-file", contextFile)
+		} else if err := os.Remove(contextFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, nil, err
+		}
+		// Remove per-launch copies left by earlier AO builds, including when
+		// the new launch has no standing context. Never recurse into directories.
+		entries, err := os.ReadDir(profile)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, entry := range entries {
+			if !entry.Type().IsRegular() || !strings.HasPrefix(entry.Name(), ".ao-chat-context-") || !strings.HasSuffix(entry.Name(), ".md") {
+				continue
 			}
-			args = append(args, "--append-system-prompt-file", file.Name())
+			if err := ctx.Err(); err != nil {
+				return nil, nil, err
+			}
+			if err := os.Remove(filepath.Join(profile, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return nil, nil, err
+			}
 		}
 		return args, map[string]string{
 			"MINIMAX_DATA_DIR": profile, "MAVIS_DATA_DIR": profile,
