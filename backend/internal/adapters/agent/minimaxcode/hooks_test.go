@@ -181,7 +181,7 @@ func TestHookPinsIdentityAndRejectsReplacement(t *testing.T) {
 	}
 }
 
-func TestOldHookKeepsItsRuntimeGeneration(t *testing.T) {
+func TestPrunedHookCannotReportAsCurrentGeneration(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX executable fixture")
 	}
@@ -223,12 +223,19 @@ func TestOldHookKeepsItsRuntimeGeneration(t *testing.T) {
 		cmd := exec.Command(node, filepath.Join(profile, "plugins", "ao-activity", "hook.cjs"), hookLaunchArgument(profile, generation))
 		cmd.Env = append(os.Environ(), "PATH="+bin)
 		cmd.Stdin = strings.NewReader(`{"hook_event_name":"Stop","session_id":"` + id + `"}`)
-		if out, err := cmd.CombinedOutput(); err != nil || len(out) != 0 {
+		out, err := cmd.CombinedOutput()
+		if generation == "generation-one" {
+			if err != nil || !strings.Contains(string(out), `"continue":false`) {
+				t.Fatalf("pruned generation hook was not refused: %s %v", out, err)
+			}
+			continue
+		}
+		if err != nil || len(out) != 0 {
 			t.Fatalf("hook failed: %s %v", out, err)
 		}
 	}
 	data, err := os.ReadFile(log)
-	if err != nil || string(data) != "generation-one\ngeneration-two\n" {
+	if err != nil || string(data) != "generation-two\n" {
 		t.Fatalf("hook generations=%q, %v", data, err)
 	}
 }
@@ -309,19 +316,20 @@ child.spawnSync=(...args)=>{
 		}
 		return value
 	}
-	for _, turn := range []struct{ generation, context string }{{"first", "OLD_PRIVATE_CONTEXT"}, {"restored", "NEW_PRIVATE_CONTEXT"}} {
-		value := run(turn.generation, "UserPromptSubmit", id, "0")
-		output, ok := value["hookSpecificOutput"].(map[string]any)
-		if !ok || output["hookEventName"] != "UserPromptSubmit" || output["additionalContext"] != turn.context {
-			t.Fatalf("wrong generation context: %+v", value)
-		}
-		if _, ok := value["continue"]; ok {
-			t.Fatal("context injection must not override native admission decisions")
-		}
-		info, err := os.Stat(filepath.Join(profile, "launches", turn.generation, "standing.txt"))
-		if err != nil || info.Mode().Perm() != 0600 {
-			t.Fatalf("private snapshot permissions: %v %v", info, err)
-		}
+	value := run("restored", "UserPromptSubmit", id, "0")
+	output, ok := value["hookSpecificOutput"].(map[string]any)
+	if !ok || output["hookEventName"] != "UserPromptSubmit" || output["additionalContext"] != "NEW_PRIVATE_CONTEXT" {
+		t.Fatalf("wrong generation context: %+v", value)
+	}
+	if _, ok := value["continue"]; ok {
+		t.Fatal("context injection must not override native admission decisions")
+	}
+	info, err := os.Stat(filepath.Join(profile, "launches", "restored", "standing.txt"))
+	if err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("private snapshot permissions: %v %v", info, err)
+	}
+	if value := run("first", "UserPromptSubmit", id, "0"); value["continue"] != false || value["hookSpecificOutput"] != nil {
+		t.Fatalf("pruned generation admitted stale context: %+v", value)
 	}
 	if value := run("restored", "SessionStart", id, "0"); len(value) != 0 {
 		t.Fatalf("duplicate context at SessionStart: %+v", value)

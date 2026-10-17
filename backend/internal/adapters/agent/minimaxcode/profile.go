@@ -449,7 +449,36 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 	if err := hookutil.AtomicWriteFile(filepath.Join(launch, "standing.txt"), instructions, 0o600); err != nil {
 		return err
 	}
-	return writeHookConfig(filepath.Join(profile, "plugins", "ao-activity"), launch)
+	if err := writeHookConfig(filepath.Join(profile, "plugins", "ao-activity"), launch); err != nil {
+		return err
+	}
+	// Publish the complete current generation before pruning. A cached hook
+	// from an earlier generation then fails closed on its missing routing file.
+	root, err := os.OpenRoot(profile)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	marker, err := fs.ReadFile(root.FS(), ".ao-managed")
+	if err != nil || string(marker) != profileMarker {
+		return errors.New("MiniMax private profile ownership marker is invalid")
+	}
+	entries, err := fs.ReadDir(root.FS(), "launches")
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Name() == env["AO_RUNTIME_LAUNCH_ID"] || !entry.IsDir() || !launchIDPattern.MatchString(entry.Name()) {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := root.RemoveAll(filepath.Join("launches", entry.Name())); err != nil {
+			return fmt.Errorf("prune MiniMax launch %q: %w", entry.Name(), err)
+		}
+	}
+	return nil
 }
 
 func requireStandingTransport(profile string) error {

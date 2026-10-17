@@ -137,3 +137,72 @@ func TestProfileRefreshSupportsConfigOnlyCredentials(t *testing.T) {
 		t.Fatalf("config-only refresh invented auth directory: %v", err)
 	}
 }
+
+func TestRuntimeLaunchPrunesOldSnapshotsAfterPublication(t *testing.T) {
+	source, data := t.TempDir(), t.TempDir()
+	cfg := ports.WorkspaceHookConfig{
+		DataDir: data, SessionID: "prune-1",
+		Env: map[string]string{
+			"MINIMAX_DATA_DIR": source, "AO_DATA_DIR": data,
+			"AO_SESSION_ID": "prune-1", "AO_RUNTIME_LAUNCH_ID": "first",
+		},
+	}
+	plugin := New()
+	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	profile, _ := profilePath(data, cfg.SessionID)
+	launches := filepath.Join(profile, "launches")
+	writeRefreshFixture(t, filepath.Join(profile, "standing.txt"), "first-context")
+	if err := plugin.PrepareRuntimeLaunch(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	writeRefreshFixture(t, filepath.Join(launches, "abandoned", "tmp", "old-tool-cache"), "old-cache")
+	history := filepath.Join(profile, "v2", "history-proof")
+	neighbor := filepath.Join(data, "agents", adapterID, "other-session", "launches", "other", "standing.txt")
+	writeRefreshFixture(t, history, "native-history")
+	writeRefreshFixture(t, neighbor, "other-session-context")
+
+	// A failed hook-config publication must not prune the previous snapshot.
+	hookConfig := filepath.Join(profile, "plugins", "ao-activity", "hooks", "hooks.json")
+	if err := os.Remove(hookConfig); err != nil {
+		t.Fatal(err)
+	}
+	writeRefreshFixture(t, filepath.Join(hookConfig, "block-rename"), "blocked")
+	cfg.Env["AO_RUNTIME_LAUNCH_ID"] = "failed"
+	if err := plugin.PrepareRuntimeLaunch(context.Background(), cfg); err == nil {
+		t.Fatal("hook config publication unexpectedly succeeded")
+	}
+	got, err := os.ReadFile(filepath.Join(launches, "first", "standing.txt"))
+	if err != nil || string(got) != "first-context" {
+		t.Fatalf("failed launch pruned previous snapshot: %q, %v", got, err)
+	}
+	if err := os.Remove(filepath.Join(hookConfig, "block-rename")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(hookConfig); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg.Env["AO_RUNTIME_LAUNCH_ID"] = "current"
+	writeRefreshFixture(t, filepath.Join(profile, "standing.txt"), "current-context")
+	if err := plugin.PrepareRuntimeLaunch(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(launches)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "current" {
+		t.Fatalf("old or failed launch snapshots remain: %v, %v", entries, err)
+	}
+	for path, want := range map[string]string{
+		filepath.Join(launches, "current", "standing.txt"): "current-context",
+		history: "native-history", neighbor: "other-session-context",
+	} {
+		got, err := os.ReadFile(path)
+		if err != nil || string(got) != want {
+			t.Fatalf("pruning changed retained state at %s: %q, %v", path, got, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(launches, "current", "routing.json")); err != nil {
+		t.Fatalf("current routing snapshot was pruned: %v", err)
+	}
+}
