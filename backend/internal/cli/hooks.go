@@ -519,20 +519,46 @@ var reviewerSubmitCommandPattern = regexp.MustCompile(`^printf '%s' ` + reviewer
 // base64 instead of inline JSON (#6021).
 const reviewerBase64Literal = `'[A-Za-z0-9+/=]*'`
 
-// reviewerStagedSubmitCommandPattern matches the base64-staged shapes the
+// reviewerStagedSubmitCommandPatterns match the base64-staged shapes the
 // current review task dictates: the payload is staged with `printf '%s'
-// '<base64>' | base64 -d` to a fixed /tmp path, then posted to GitHub or
-// submitted to AO from that file. The fixed paths keep every shape statically
-// verifiable, and the consuming commands carry no payload at all. The staged
-// submit still carries the worker session id, checked like the legacy shape.
-var reviewerStagedSubmitCommandPattern = regexp.MustCompile(
-	`^printf '%s' ` + reviewerBase64Literal + ` \| base64 -d > /tmp/ao-review-(?:post|results)\.json$` +
-		`|^gh api --method POST repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pulls/[0-9]+/reviews --input /tmp/ao-review-post\.json --jq '\.id'$` +
-		`|^ao review submit --session (?P<session>[A-Za-z0-9_-]+) --reviews /tmp/ao-review-results\.json$`)
+// '<base64>' | base64 -d` to a per-worker /tmp path, then posted to GitHub or
+// submitted to AO from that file. The worker session id is part of every file
+// name and every shape captures it, so two parallel reviewers (a sweep plus a
+// manual trigger) can never stage over or consume each other's payloads; the
+// captured ids are checked against AO_REVIEW_WORKER_SESSION_ID exactly like
+// the submit flag. The fixed path templates keep every shape statically
+// verifiable, and the consuming commands carry no payload at all.
+var reviewerStagedSubmitCommandPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`^printf '%s' ` + reviewerBase64Literal + ` \| base64 -d > /tmp/ao-review-(?P<session>[A-Za-z0-9_-]+)-(?:post|results)\.json$`),
+	regexp.MustCompile(`^gh api --method POST repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pulls/[0-9]+/reviews --input /tmp/ao-review-(?P<session>[A-Za-z0-9_-]+)-post\.json --jq '\.id'$`),
+	regexp.MustCompile(`^ao review submit --session (?P<session>[A-Za-z0-9_-]+) --reviews /tmp/ao-review-(?P<fileSession>[A-Za-z0-9_-]+)-results\.json$`),
+}
+
+// reviewerSubmitCommandPatterns is the full allowlist the permission decision
+// walks: the legacy shapes first, then the staged ones.
+var reviewerSubmitCommandPatterns = append([]*regexp.Regexp{reviewerSubmitCommandPattern}, reviewerStagedSubmitCommandPatterns...)
+
+// submitSessionChecked reports whether every captured session id in a matched
+// shape belongs to this reviewer's worker: staged files carry the worker
+// session in their name, so consuming another reviewer's file is as much a
+// mismatch as passing another worker to --session.
+func submitSessionChecked(pattern *regexp.Regexp, m []string, workerSessionID string) bool {
+	if workerSessionID == "" {
+		// An unset AO_REVIEW_WORKER_SESSION_ID means a broken launch (the
+		// launcher always sets it); admit nothing rather than any worker.
+		return false
+	}
+	for i, name := range pattern.SubexpNames() {
+		if strings.HasSuffix(strings.ToLower(name), "session") && m[i] != "" && m[i] != workerSessionID {
+			return false
+		}
+	}
+	return true
+}
 
 const reviewerPermissionDenyMessage = "AO headless reviewer: no human can answer permission prompts. " +
 	"Use only the allowlisted read commands (git diff/log/show/status, gh pr view/diff/checks, Read, Grep, Glob) " +
-	"and the exact staged commands from the review task: `printf '%s' '<base64>' | base64 -d > /tmp/ao-review-post.json` (or -results.json), then `gh api ... --input /tmp/ao-review-post.json` or `ao review submit ... --reviews /tmp/ao-review-results.json`."
+	"and the exact staged commands from the review task: `printf '%s' '<base64>' | base64 -d > /tmp/ao-review-<worker-session>-post.json` (or -results.json), then `gh api ... --input /tmp/ao-review-<worker-session>-post.json` or `ao review submit ... --reviews /tmp/ao-review-<worker-session>-results.json`."
 
 // reviewerPermissionDecision answers a Claude Code reviewer's PermissionRequest:
 // allow the exact submit shapes, deny everything else so the session degrades
@@ -553,22 +579,18 @@ func reviewerPermissionDecision(payload []byte, workerSessionID string) claudePe
 		return out
 	}
 	command := strings.TrimSpace(p.ToolInput.Command)
-	pattern := reviewerSubmitCommandPattern
-	m := pattern.FindStringSubmatch(command)
-	if m == nil {
-		pattern = reviewerStagedSubmitCommandPattern
-		m = pattern.FindStringSubmatch(command)
-	}
-	if m == nil {
+	for _, pattern := range reviewerSubmitCommandPatterns {
+		m := pattern.FindStringSubmatch(command)
+		if m == nil {
+			continue
+		}
+		if !submitSessionChecked(pattern, m, workerSessionID) {
+			return out
+		}
+		out.HookSpecificOutput.Decision.Behavior = "allow"
+		out.HookSpecificOutput.Decision.Message = ""
 		return out
 	}
-	if session := m[pattern.SubexpIndex("session")]; workerSessionID == "" || (session != "" && session != workerSessionID) {
-		// An unset AO_REVIEW_WORKER_SESSION_ID means a broken launch (the
-		// launcher always sets it); admit nothing rather than any worker.
-		return out
-	}
-	out.HookSpecificOutput.Decision.Behavior = "allow"
-	out.HookSpecificOutput.Decision.Message = ""
 	return out
 }
 

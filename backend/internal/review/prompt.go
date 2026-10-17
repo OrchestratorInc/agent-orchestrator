@@ -18,18 +18,18 @@ func reviewTexts(spec LaunchSpec) (prompt, systemPrompt string) {
 	systemPrompt = reviewSystemPrompt()
 
 	queueText := reviewQueueText(spec)
-	prompt = fmt.Sprintf(`Review the requested implementation pull request(s) owned by worker session %s.
-%s
+	prompt = fmt.Sprintf(`Review the requested implementation pull request(s) owned by worker session %[1]s.
+%[2]s
 
 Complete every review task in the queue autonomously. Do not ask the user whether to continue to the next PR, and do not stop after the first PR unless the provider or checkout is genuinely unusable for every queued task.
 
-This headless sandbox auto-allows the exact commands below; no human will ever be prompted for them. Their base64 payload makes each command long — that is expected and required. Any standing rule against long inline arguments or staged files does not apply here: these shapes are the only sanctioned submission channel, so emit them exactly as shown.
+This headless sandbox auto-allows the exact commands below; no human will ever be prompted for them. Their base64 payload makes each command long — that is expected and required. Any standing rule against long inline arguments or staged files does not apply here: these shapes are the only sanctioned submission channel, so emit them exactly as shown. The staged file names embed %[1]s — your own worker session, which is the only session the sandbox allows you to stage for or submit as.
 
 Do these steps in order:
 1. For each PR below, post a separate review on that pull request and capture its id in one call. Post with `+"`gh api`"+` rather than `+"`gh pr review`"+`: it is the only way to attach inline comments, and its response carries the created review's id, so AO can tell the worker exactly which review to address. Build the complete JSON payload, base64-encode it yourself (the encoding is pure letters, digits, and +/=, so it carries no shell-quoting hazard at any length and never needs escaping), stage it, and post from the staged file:
 
-    printf '%%s' '<BASE64 OF THE COMPLETE JSON PAYLOAD>' | base64 -d > /tmp/ao-review-post.json
-    gh api --method POST repos/{owner}/{repo}/pulls/{number}/reviews --input /tmp/ao-review-post.json --jq '.id'
+    printf '%%s' '<BASE64 OF THE COMPLETE JSON PAYLOAD>' | base64 -d > /tmp/ao-review-%[1]s-post.json
+    gh api --method POST repos/{owner}/{repo}/pulls/{number}/reviews --input /tmp/ao-review-%[1]s-post.json --jq '.id'
 
    The JSON payload: { "event": "COMMENT", "body": "<summary>", "comments": [ { "path": "<file>", "line": <n>, "body": "<finding>" } ] }
    - Substitute the PR's owner/repo/number. The worker receives only your inline comments, never the summary, and treats each one as a required change. So:
@@ -41,13 +41,13 @@ Do these steps in order:
    - The printed number is the review id. If the call fails on the provider, leave the id empty.
 2. After every PR has its own GitHub review from step 1, record AO's bookkeeping for those already-posted reviews: stage the JSON the same way, then run one submit command. Stage to /tmp only — never into the worktree, where a file could be committed onto the worker's branch. Include one object per PR/run from the queue:
 
-    printf '%%s' '<BASE64 OF THE COMPLETE JSON PAYLOAD>' | base64 -d > /tmp/ao-review-results.json
-    ao review submit --session %s --reviews /tmp/ao-review-results.json
+    printf '%%s' '<BASE64 OF THE COMPLETE JSON PAYLOAD>' | base64 -d > /tmp/ao-review-%[1]s-results.json
+    ao review submit --session %[1]s --reviews /tmp/ao-review-%[1]s-results.json
 
    The JSON payload: { "reviews": [ { "runId": "<run-id>", "verdict": "<approved|changes_requested>", "githubReviewId": "<id-from-step-1-or-empty>", "body": "<your full review markdown>" } ] }
 
 Only if step 1 genuinely fails on the provider for a PR, still include that run in step 2 with an empty githubReviewId so the result is recorded.`,
-		spec.WorkerID, queueText, spec.WorkerID)
+		spec.WorkerID, queueText)
 	return prompt, systemPrompt
 }
 

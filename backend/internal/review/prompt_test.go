@@ -31,14 +31,15 @@ func TestReviewTextsIncludesMultiPRQueue(t *testing.T) {
 		"not use a heredoc",
 		`"reviews": [`,
 		"base64-encode",
-		// #6021: payloads are staged via base64 to fixed /tmp paths and posted
-		// or submitted from the files. These exact lines are the shapes the
-		// cli permission hook auto-allows (hooks_test.go pins the same shapes),
-		// so the two sides must change together.
-		"printf '%s' '<BASE64 OF THE COMPLETE JSON PAYLOAD>' | base64 -d > /tmp/ao-review-post.json",
-		"gh api --method POST repos/{owner}/{repo}/pulls/{number}/reviews --input /tmp/ao-review-post.json --jq '.id'",
-		"printf '%s' '<BASE64 OF THE COMPLETE JSON PAYLOAD>' | base64 -d > /tmp/ao-review-results.json",
-		"ao review submit --session mer-1 --reviews /tmp/ao-review-results.json",
+		// #6021: payloads are staged via base64 to per-worker /tmp paths and
+		// posted or submitted from the files. These exact lines are the shapes
+		// the cli permission hook auto-allows (hooks_test.go pins the same
+		// shapes), so the two sides must change together. The worker session
+		// in the file name keeps parallel reviewers' staging apart.
+		"printf '%s' '<BASE64 OF THE COMPLETE JSON PAYLOAD>' | base64 -d > /tmp/ao-review-mer-1-post.json",
+		"gh api --method POST repos/{owner}/{repo}/pulls/{number}/reviews --input /tmp/ao-review-mer-1-post.json --jq '.id'",
+		"printf '%s' '<BASE64 OF THE COMPLETE JSON PAYLOAD>' | base64 -d > /tmp/ao-review-mer-1-results.json",
+		"ao review submit --session mer-1 --reviews /tmp/ao-review-mer-1-results.json",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
