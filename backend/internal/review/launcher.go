@@ -65,17 +65,18 @@ type Launcher interface {
 
 // LaunchSpec is the engine's request to (re)launch a reviewer for one pass.
 type LaunchSpec struct {
-	RunID           string
-	BatchID         string
-	ReviewSessionID string
-	LaunchID        string
-	WorkerID        domain.SessionID
-	ProjectID       domain.ProjectID
-	ProjectEnv      map[string]string
-	Harness         domain.ReviewerHarness
-	AgentConfig     domain.AgentConfig
-	WorkspacePath   string
-	AgentSessionID  string
+	RunID            string
+	BatchID          string
+	ReviewSessionID  string
+	LaunchID         string
+	WorkerID         domain.SessionID
+	ProjectID        domain.ProjectID
+	ProjectEnv       map[string]string
+	ProjectEnvRemove []string
+	Harness          domain.ReviewerHarness
+	AgentConfig      domain.AgentConfig
+	WorkspacePath    string
+	AgentSessionID   string
 	// ProviderConversationID is the typed Chat driver's stable conversation id.
 	// Terminal reviewers continue to use AgentSessionID.
 	ProviderConversationID string
@@ -114,6 +115,7 @@ type ReviewerChatStart struct {
 	DataDir                string
 	WorkspacePath          string
 	Env                    map[string]string
+	EnvRemove              []string
 	Prompt                 string
 	SystemPrompt           string
 	ProviderConversationID string
@@ -496,7 +498,7 @@ func (l *agentLauncher) startReviewerChat(ctx context.Context, spec LaunchSpec, 
 	if spec.DeferInitialMessage {
 		prompt = ""
 	}
-	start := ReviewerChatStart{BatchID: spec.BatchID, ReviewID: spec.ReviewSessionID, WorkerID: spec.WorkerID, ProjectID: spec.ProjectID, Harness: profile.ReviewChatHarness(), Model: spec.AgentConfig.Model, Effort: spec.AgentConfig.Effort, DataDir: l.dataDir, WorkspacePath: spec.WorkspacePath, Env: l.runtimeEnv(ctx, spec, nil, nil), Prompt: prompt, SystemPrompt: string(systemPrompt), ProviderConversationID: providerID}
+	start := ReviewerChatStart{BatchID: spec.BatchID, ReviewID: spec.ReviewSessionID, WorkerID: spec.WorkerID, ProjectID: spec.ProjectID, Harness: profile.ReviewChatHarness(), Model: spec.AgentConfig.Model, Effort: spec.AgentConfig.Effort, DataDir: l.dataDir, WorkspacePath: spec.WorkspacePath, Env: l.runtimeEnv(ctx, spec, nil, nil), EnvRemove: spec.ProjectEnvRemove, Prompt: prompt, SystemPrompt: string(systemPrompt), ProviderConversationID: providerID}
 	if restore {
 		providerID, err = l.chat.RestoreReviewChat(ctx, start)
 	} else {
@@ -581,6 +583,7 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 		WorkspacePath: workingDirectory,
 		Argv:          argv,
 		Env:           env,
+		EnvRemove:     spec.ProjectEnvRemove,
 	})
 	if err != nil {
 		return LaunchResult{}, fmt.Errorf("reviewer runtime: %w", agentlaunch.RedactError(err, spec.ProjectEnv))
@@ -662,6 +665,7 @@ func outputContainsAny(output string, patterns []string) bool {
 
 func (l *agentLauncher) runtimeEnv(ctx context.Context, spec LaunchSpec, argv []string, base map[string]string) map[string]string {
 	env := agentlaunch.MergeEnv(spec.ProjectEnv, base)
+	agentlaunch.ApplyRemovals(env, spec.ProjectEnvRemove)
 	delete(env, sessionmanager.EnvSessionID)
 	env["AO_REVIEW_SESSION_ID"] = spec.ReviewSessionID
 	env["AO_REVIEW_WORKER_SESSION_ID"] = string(spec.WorkerID)

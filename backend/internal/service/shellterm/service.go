@@ -39,7 +39,7 @@ type ShellRuntime interface {
 // start in. The daemon wiring adapts the project service to it.
 type ProjectRootLocator interface {
 	ProjectRoot(ctx context.Context, id domain.ProjectID) (string, error)
-	ProjectEnv(ctx context.Context, id domain.ProjectID) (map[string]string, error)
+	ProjectEnv(ctx context.Context, id domain.ProjectID) (map[string]string, []string, error)
 }
 
 // SessionWorkspaceLocator resolves a session id to the workspace it is
@@ -188,13 +188,17 @@ func NewService(shellRuntime ShellRuntime, store Store, projects ProjectRootLoca
 	}
 }
 
-func (s *Service) pinnedEnv(projectEnv map[string]string) map[string]string {
+func (s *Service) pinnedEnv(projectEnv map[string]string, envRemove []string) map[string]string {
+	merged := agentlaunch.MergeEnv(projectEnv, nil)
+	// Configured removals run before the PATH pin below, so a removal can
+	// strip inherited values but the daemon PATH pin always wins.
+	agentlaunch.ApplyRemovals(merged, envRemove)
 	path, err := agentlaunch.PinnedPATH(s.executable, os.Getenv, projectEnv, s.dataDir)
 	if err != nil {
 		s.log.Warn("shell terminal PATH not pinned to the daemon binary; a bare `ao` may resolve to a different install", "err", err)
-		return agentlaunch.MergeEnv(projectEnv, nil)
+		return merged
 	}
-	return agentlaunch.MergeEnv(projectEnv, map[string]string{"PATH": path})
+	return agentlaunch.MergeEnv(merged, map[string]string{"PATH": path})
 }
 
 // ValidPreviewCapability accepts a shell's preview-only bearer while its
@@ -290,8 +294,9 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 		return ShellTerminal{}, err
 	}
 	var projectEnv map[string]string
+	var projectEnvRemove []string
 	if projectID != "" {
-		projectEnv, err = s.projects.ProjectEnv(ctx, projectID)
+		projectEnv, projectEnvRemove, err = s.projects.ProjectEnv(ctx, projectID)
 		if err != nil {
 			return ShellTerminal{}, fmt.Errorf("open shell terminal: resolve project environment: %w", err)
 		}
@@ -312,7 +317,7 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 		return ShellTerminal{}, apierr.Internal("SHELL_TERMINAL_NO_SHELL",
 			"Could not determine a shell to launch. Set SHELL (macOS/Linux) or ComSpec (Windows).")
 	}
-	env := s.pinnedEnv(projectEnv)
+	env := s.pinnedEnv(projectEnv, projectEnvRemove)
 	if env == nil {
 		env = make(map[string]string, 3)
 	}
@@ -341,7 +346,7 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 		}()
 	}
 	return s.openTerminal(ctx, openTerminalConfig{
-		argv: argv, env: env, projectEnv: projectEnv, projectID: projectID, sessionID: in.SessionID,
+		argv: argv, env: env, projectEnv: projectEnv, envRemove: projectEnvRemove, projectID: projectID, sessionID: in.SessionID,
 		workingDir: workingDir, title: title,
 		previewVerifier: verifier,
 		startOnAttach:   in.StartOnAttach,
@@ -434,18 +439,18 @@ func (s *Service) RunCueCommand(ctx context.Context, in RunCueCommandInput) (She
 	if len(argv) == 0 {
 		return ShellTerminal{}, apierr.Internal("SHELL_TERMINAL_NO_SHELL", "Could not determine a shell to launch. Set SHELL (macOS/Linux) or ComSpec (Windows).")
 	}
-	projectEnv, err := s.projects.ProjectEnv(ctx, projectID)
+	projectEnv, projectEnvRemove, err := s.projects.ProjectEnv(ctx, projectID)
 	if err != nil {
 		return ShellTerminal{}, fmt.Errorf("run cue command: resolve project environment: %w", err)
 	}
-	env := s.pinnedEnv(projectEnv)
+	env := s.pinnedEnv(projectEnv, projectEnvRemove)
 	readiness, err := prepareCueShellReadiness(s.dataDir, argv, env)
 	if err != nil {
 		return ShellTerminal{}, err
 	}
 	defer readiness.cleanup()
 	env = agentlaunch.MergeEnv(env, readiness.env)
-	terminal, err := s.openTerminal(ctx, openTerminalConfig{argv: readiness.argv, env: env, projectEnv: projectEnv, projectID: projectID,
+	terminal, err := s.openTerminal(ctx, openTerminalConfig{argv: readiness.argv, env: env, projectEnv: projectEnv, envRemove: projectEnvRemove, projectID: projectID,
 		sessionID: in.SessionID, workingDir: workingDir, title: nextShellTerminalTitle(records)})
 	if err != nil {
 		return ShellTerminal{}, err
@@ -588,6 +593,7 @@ type openTerminalConfig struct {
 	argv                     []string
 	env                      map[string]string
 	projectEnv               map[string]string
+	envRemove                []string
 	projectID                domain.ProjectID
 	sessionID                domain.SessionID
 	workingDir               string
@@ -622,6 +628,7 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		WorkspacePath: cfg.workingDir,
 		Argv:          cfg.argv,
 		Env:           cfg.env,
+		EnvRemove:     cfg.envRemove,
 		// A user shell's exit is final, just like a trusted command's exit.
 		// Durability across app launches is a separate persistence policy.
 		ExitOnCommandCompletion: true,

@@ -216,6 +216,12 @@ type RuntimeConfig struct {
 	WorkspacePath string
 	Argv          []string
 	Env           map[string]string
+	// EnvRemove names variables the runtime must ensure absent from the
+	// launched process, including names inherited from the daemon environment
+	// itself (tmux server env, pty base, driver environ). Runtimes that cannot
+	// unset ignore it; AO-owned pins applied by the session manager always
+	// win.
+	EnvRemove []string
 	// ExitOnCommandCompletion prevents a recovery shell after Argv exits.
 	// User shell terminals and trusted command terminals enable it; it does
 	// not determine whether a terminal survives an app launch. Agent runtimes

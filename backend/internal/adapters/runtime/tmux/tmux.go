@@ -354,6 +354,9 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 	if err := validateEnvKeys(cfg.Env); err != nil {
 		return ports.RuntimeHandle{}, tmuxCreateFailure(err)
 	}
+	if err := validateEnvNames(cfg.EnvRemove); err != nil {
+		return ports.RuntimeHandle{}, tmuxCreateFailure(err)
+	}
 
 	launchCmd := buildLaunchCommand(cfg)
 	args := newSessionArgs(id, cfg.WorkspacePath, r.shell, launchCmd)
@@ -435,6 +438,9 @@ func (r *Runtime) Restart(ctx context.Context, handle ports.RuntimeHandle, cfg p
 		return ports.RuntimeHandle{}, errors.New("tmux runtime: launch command is required")
 	}
 	if err := validateEnvKeys(cfg.Env); err != nil {
+		return ports.RuntimeHandle{}, err
+	}
+	if err := validateEnvNames(cfg.EnvRemove); err != nil {
 		return ports.RuntimeHandle{}, err
 	}
 
@@ -1538,6 +1544,15 @@ func validateEnvKeys(env map[string]string) error {
 	return nil
 }
 
+func validateEnvNames(names []string) error {
+	for _, key := range names {
+		if !validEnvKey(key) {
+			return fmt.Errorf("tmux runtime: invalid env name %q", key)
+		}
+	}
+	return nil
+}
+
 func validEnvKey(key string) bool {
 	if key == "" {
 		return false
@@ -1586,6 +1601,29 @@ func buildLaunchCommand(cfg ports.RuntimeConfig) string {
 	b.WriteString("cd ")
 	b.WriteString(shellQuote(cfg.WorkspacePath))
 	b.WriteString(" || exit; ")
+	// Configured removals must reach the launched process even for names that
+	// come from the ambient environment: a tmux server inherits the daemon's
+	// whole environ at its first CLI call, and panes start from that server
+	// environment plus the exports below. `unset` strips the inherited name;
+	// a name still present in cfg.Env is a pin or configured value that the
+	// export re-applies, so it is never unset.
+	if len(cfg.EnvRemove) > 0 {
+		remove := make([]string, 0, len(cfg.EnvRemove))
+		for _, key := range cfg.EnvRemove {
+			if _, exported := cfg.Env[key]; !exported {
+				remove = append(remove, key)
+			}
+		}
+		sort.Strings(remove)
+		if len(remove) > 0 {
+			b.WriteString("unset")
+			for _, key := range remove {
+				b.WriteString(" ")
+				b.WriteString(shellQuote(key))
+			}
+			b.WriteString("; ")
+		}
+	}
 	if _, configured := cfg.Env["NO_COLOR"]; !configured {
 		// The daemon may be launched from another agent or CI environment that
 		// sets NO_COLOR for its own captured output. Do not leak that ambient

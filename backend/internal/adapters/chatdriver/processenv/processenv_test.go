@@ -16,7 +16,7 @@ func TestMergeInheritsDaemonEnvironmentAndAppliesOverlay(t *testing.T) {
 	got := Merge(map[string]string{
 		"AO_PROCESSENV_REPLACED": "new",
 		"AO_PROCESSENV_SESSION":  "session",
-	})
+	}, nil)
 	if !slices.IsSorted(got) {
 		t.Fatalf("environment is not sorted: %v", got)
 	}
@@ -41,11 +41,28 @@ func TestMergeInheritsDaemonEnvironmentAndAppliesOverlay(t *testing.T) {
 	}
 }
 
+func TestMergeRemovesInheritedKeys(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:8118")
+	t.Setenv("STALE_TOKEN", "leak")
+
+	got := Merge(map[string]string{"STALE_TOKEN": "configured-pin"}, []string{"HTTP_PROXY", "STALE_TOKEN"})
+	for _, entry := range got {
+		if strings.HasPrefix(entry, "HTTP_PROXY=") {
+			t.Fatalf("removed HTTP_PROXY survived: %v", got)
+		}
+	}
+	// An overlay value for a removed name is a pin and wins over the removal.
+	if !slices.Contains(got, "STALE_TOKEN=configured-pin") {
+		t.Fatalf("overlay STALE_TOKEN did not survive its removal: %v", got)
+	}
+}
+
 func TestMergeWindowsExactPATHWinsConflictingOverlaySpelling(t *testing.T) {
 	for range 1000 {
 		got := merge(
 			[]string{"Path=inherited"},
 			map[string]string{"Path": "project", "PATH": "ao-pinned"},
+			nil,
 			true,
 		)
 		var paths []string

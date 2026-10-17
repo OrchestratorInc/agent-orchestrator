@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -16,6 +17,10 @@ type HostOptions struct {
 	StartOnAttach bool
 	// LazySurface builds the rendered surface only when it is first read.
 	LazySurface bool
+	// EnvRemove names variables stripped from the ambient daemon environment
+	// before the pty host (and the agent it owns) starts. Explicit configured
+	// values and argv assignments for the same name win.
+	EnvRemove []string
 }
 
 // hostSpawner starts a detached pty-host for the session and returns its
@@ -116,7 +121,26 @@ func stripEnvAssignments(argv []string) (assignments, rest []string) {
 // or an `env NO_COLOR=...` argv prefix. The native PTY and its xterm clients
 // support 24-bit SGR color, so advertise that capability consistently with the
 // legacy tmux runtime.
-func interactiveTerminalEnv(base []string, configured map[string]string, assignments []string) []string {
+func interactiveTerminalEnv(base []string, configured map[string]string, assignments, remove []string) []string {
+	removed := make(map[string]bool, len(remove))
+	for _, key := range remove {
+		removed[key] = true
+	}
+	caseFolded := runtime.GOOS == "windows"
+	isRemoved := func(key string) bool {
+		if removed[key] {
+			return true
+		}
+		if !caseFolded {
+			return false
+		}
+		for name := range removed {
+			if strings.EqualFold(name, key) {
+				return true
+			}
+		}
+		return false
+	}
 	env := make([]string, 0, len(base)+len(configured)+len(assignments)+2)
 	appendEntry := func(entry string, explicit bool) {
 		key, _, ok := strings.Cut(entry, "=")
@@ -131,6 +155,11 @@ func interactiveTerminalEnv(base []string, configured map[string]string, assignm
 			if !explicit {
 				return
 			}
+		}
+		// A configured removal strips ambient names; an explicit configured
+		// value or argv assignment for the same name is a pin and wins.
+		if !explicit && isRemoved(key) {
+			return
 		}
 		env = append(env, entry)
 	}

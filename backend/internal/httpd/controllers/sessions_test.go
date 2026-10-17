@@ -189,6 +189,7 @@ func (f *fakeManagedPreviewServer) Start(
 	workspacePath string,
 	configurationName string,
 	projectEnv map[string]string,
+	projectEnvRemove []string,
 ) (previewserver.Status, error) {
 	f.startName = configurationName
 	f.startWorkspace = workspacePath

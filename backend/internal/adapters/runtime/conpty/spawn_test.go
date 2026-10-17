@@ -282,6 +282,7 @@ func TestInteractiveTerminalEnvDropsAmbientNoColorAndAdvertisesTrueColor(t *test
 		[]string{"PATH=/usr/bin", "TERM=dumb", "COLORTERM=ansi", "NO_COLOR=1"},
 		map[string]string{"AO_SESSION_ID": "sess-1"},
 		nil,
+		nil,
 	)
 
 	for _, want := range []string{
@@ -315,12 +316,38 @@ func TestInteractiveTerminalEnvPreservesExplicitNoColor(t *testing.T) {
 				[]string{"NO_COLOR=ambient"},
 				tt.configured,
 				tt.assignments,
+				nil,
 			)
 			if !slices.Contains(env, "NO_COLOR=1") {
 				t.Fatalf("explicit NO_COLOR not preserved: %#v", env)
 			}
 		})
 	}
+}
+
+func TestInteractiveTerminalEnvRemovesConfiguredNames(t *testing.T) {
+	env := interactiveTerminalEnv(
+		[]string{"HTTP_PROXY=http://127.0.0.1:8118", "PATH=/usr/bin", "STALE=leak"},
+		map[string]string{"STALE": "configured-pin"},
+		nil,
+		[]string{"HTTP_PROXY", "STALE"},
+	)
+	if slices.Contains(env, "HTTP_PROXY=http://127.0.0.1:8118") {
+		t.Fatalf("removed ambient HTTP_PROXY survived: %#v", env)
+	}
+	if !slices.Contains(env, "PATH=/usr/bin") {
+		t.Fatalf("ambient PATH outside the removal list was dropped: %#v", env)
+	}
+	// A configured value for a removed name is a pin and wins over the removal.
+	if !slices.Contains(env, "STALE=configured-pin") {
+		t.Fatalf("configured STALE did not survive its removal: %#v", env)
+	}
+}
+
+// hostOptionsEqual compares HostOptions field-wise: the struct holds a slice,
+// so == panics on it since EnvRemove was added.
+func hostOptionsEqual(a, b HostOptions) bool {
+	return a.StartOnAttach == b.StartOnAttach && a.LazySurface == b.LazySurface && slices.Equal(a.EnvRemove, b.EnvRemove)
 }
 
 func TestCreatePassesHostOptionsToSpawner(t *testing.T) {
@@ -338,7 +365,7 @@ func TestCreatePassesHostOptionsToSpawner(t *testing.T) {
 	if !errors.Is(err, spawnErr) {
 		t.Fatalf("Create error = %v, want spawner error", err)
 	}
-	if want := (HostOptions{StartOnAttach: true, LazySurface: true}); got != want {
+	if want := (HostOptions{StartOnAttach: true, LazySurface: true}); !hostOptionsEqual(got, want) {
 		t.Fatalf("spawner options = %+v, want %+v", got, want)
 	}
 }

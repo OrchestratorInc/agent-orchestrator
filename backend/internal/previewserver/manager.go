@@ -223,6 +223,7 @@ func (m *Manager) Start(
 	workspacePath string,
 	configurationName string,
 	projectEnv map[string]string,
+	projectEnvRemove []string,
 ) (Status, error) {
 	releaseOperation := m.acquireOperation(sessionID)
 	operationLocked := true
@@ -279,7 +280,7 @@ func (m *Manager) Start(
 
 	cmd := previewCommand(executable, args...)
 	cmd.Dir = workingDir
-	cmd.Env = previewEnvironment(os.Environ(), projectEnv, cfg.Env, sessionID, port)
+	cmd.Env = previewEnvironment(os.Environ(), projectEnv, projectEnvRemove, cfg.Env, sessionID, port)
 	logs := newLineBuffer(maxBufferedLogLines)
 	cmd.Stdout = logs
 	cmd.Stderr = logs
@@ -832,6 +833,7 @@ func reservePort(preferred int, auto bool) (int, net.Listener, error) {
 func previewEnvironment(
 	base []string,
 	projectEnv map[string]string,
+	envRemove []string,
 	configured map[string]string,
 	sessionID domain.SessionID,
 	port int,
@@ -852,7 +854,9 @@ func previewEnvironment(
 	for key, value := range configured {
 		interpolated[key] = interpolatePort(value, port)
 	}
-	for key, value := range agentlaunch.MergeEnv(projectEnv, interpolated) {
+	merged := agentlaunch.MergeEnv(projectEnv, interpolated)
+	agentlaunch.ApplyRemovals(merged, envRemove)
+	for key, value := range merged {
 		env = append(env, key+"="+value)
 	}
 	env = append(env,

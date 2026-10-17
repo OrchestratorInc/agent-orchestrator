@@ -5760,6 +5760,7 @@ export interface components {
             env?: {
                 [key: string]: string;
             };
+            envRemove?: string[];
             orchestrator?: components["schemas"]["RoleOverride"];
             orchestratorRules?: string;
             postCreate?: string[];
