@@ -50,7 +50,7 @@ export function ElicitationTextField({ value, label, autoFocus, numeric, maxLeng
 			onChangeText={(next) => onChange(numeric ? (next === "" ? "" : Number(next)) : next)}
 			placeholder={label}
 			placeholderTextColor={t.textFaint}
-			selectionColor={t.accent}
+			selectionColor={t.highlight}
 			keyboardType={numeric ? "numeric" : "default"}
 			maxLength={maxLength}
 			style={[styles.input, { color: t.textPrimary, backgroundColor: t.bgSubtle, borderColor: t.borderDefault }]}

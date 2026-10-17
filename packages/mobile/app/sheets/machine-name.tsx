@@ -52,7 +52,7 @@ export default function MachineNameSheetRoute() {
 					onChangeText={setName}
 					placeholder="Studio Mac"
 					placeholderTextColor={t.textFaint}
-					selectionColor={t.accent}
+					selectionColor={t.highlight}
 					maxLength={48}
 					returnKeyType="done"
 					onSubmitEditing={save}

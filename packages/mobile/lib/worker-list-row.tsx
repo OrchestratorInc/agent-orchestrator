@@ -320,7 +320,7 @@ function WorkerRowContents({
 						onChangeText={onRenameTitleChange}
 						placeholder="Worker name"
 						placeholderTextColor={t.textFaint}
-						selectionColor={t.accent}
+						selectionColor={t.highlight}
 						maxLength={120}
 						returnKeyType="done"
 						onSubmitEditing={onRenameSave}
