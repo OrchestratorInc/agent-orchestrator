@@ -7,17 +7,18 @@ function refuse(message='AO refused a MiniMax conversation identity change. Rest
 }
 try {
   // MiniMax executes cached plugin copies, so __dirname is not the profile.
-  // TMPDIR survives its hook environment filter and is immutable per launch.
-  const inheritedTmp=process.env.TMPDIR || '';
-  if(!path.isAbsolute(inheritedTmp)){refuse();process.exit(0);}
-  const tmp=path.resolve(inheritedTmp);
-  const launchDir=path.dirname(tmp);
+  // The cached hook command carries its immutable launch path as a safe arg.
+  const encodedLaunch=process.argv[2] || '';
+  if(!/^[A-Za-z0-9_-]+$/.test(encodedLaunch)){refuse();process.exit(0);}
+  const inheritedLaunch=Buffer.from(encodedLaunch,'base64url').toString('utf8');
+  if(!path.isAbsolute(inheritedLaunch)){refuse();process.exit(0);}
+  const launchDir=path.resolve(inheritedLaunch);
   const launchID=path.basename(launchDir);
   const launches=path.dirname(launchDir);
-  if(path.basename(tmp)!=='tmp' || path.basename(launches)!=='launches' || !/^[A-Za-z0-9_-]+$/.test(launchID)){refuse();process.exit(0);}
+  if(path.basename(launches)!=='launches' || !/^[A-Za-z0-9_-]+$/.test(launchID)){refuse();process.exit(0);}
   const profile=path.dirname(launches);
   const routing=JSON.parse(fs.readFileSync(path.join(launchDir,'routing.json'),'utf8'));
-  if(routing.AO_RUNTIME_LAUNCH_ID!==launchID || !/^[A-Za-z0-9_-]+$/.test(routing.AO_SESSION_ID || '') || typeof routing.AO_DATA_DIR!=='string' || !path.isAbsolute(routing.AO_DATA_DIR)){refuse();process.exit(0);}
+  if(routing.AO_RUNTIME_LAUNCH_ID!==launchID || !/^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/.test(routing.AO_SESSION_ID || '') || typeof routing.AO_DATA_DIR!=='string' || !path.isAbsolute(routing.AO_DATA_DIR)){refuse();process.exit(0);}
   if(path.resolve(routing.AO_DATA_DIR,'agents','minimax-code',routing.AO_SESSION_ID)!==profile){refuse();process.exit(0);}
   const hookEnv={...process.env};
   for(const key of ['AO_SESSION_ID','AO_DATA_DIR','AO_RUN_FILE','AO_RUNTIME_LAUNCH_ID']) if(typeof routing[key]==='string') hookEnv[key]=routing[key];

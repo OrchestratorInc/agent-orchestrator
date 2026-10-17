@@ -347,6 +347,42 @@ func (f *styledRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, in
 	f.surfaceCalls++
 	return f.surface, f.surfaceErr
 }
+
+func TestPollRetainsClaudeAndCodexReconciliationOnOlderHosts(t *testing.T) {
+	for _, tc := range []struct {
+		harness domain.AgentHarness
+		agent   ports.Agent
+		output  string
+		want    domain.ActivityState
+	}{
+		{domain.HarnessClaudeCode, claudecode.New(), claudeStuckActiveScreen, domain.ActivityWaitingInput},
+		{domain.HarnessCodex, codex.New(), "› Write tests for @filename\n\ngpt-5.6-sol low · ~/project\n", domain.ActivityIdle},
+	} {
+		t.Run(string(tc.harness), func(t *testing.T) {
+			now := time.Unix(500, 0).UTC()
+			sink := &fakeSink{}
+			runtime := &styledRuntime{
+				fakeRuntime: fakeRuntime{output: tc.output},
+				surfaceErr:  ports.ErrStyledTerminalOutputUnavailable,
+			}
+			observer := New(
+				fakeSessions{rows: []domain.SessionRecord{activeSession(now, tc.harness)}},
+				sink, runtime, fakeAgents{tc.harness: tc.agent},
+				Config{Clock: func() time.Time { return now }, Logger: testLogger()},
+			)
+			if err := observer.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(sink.signals) != 1 || sink.signals[0].State != tc.want {
+				t.Fatalf("reconciliation = %+v, want %s", sink.signals, tc.want)
+			}
+			if runtime.calls != 1 || runtime.surfaceCalls != 0 {
+				t.Fatalf("raw calls=%d surface calls=%d", runtime.calls, runtime.surfaceCalls)
+			}
+		})
+	}
+}
+
 func TestPollUsesCurrentMiniMaxSurface(t *testing.T) {
 	const draft = "Stopped · message restored to the Composer.\n───\n› cancelled request\n───\n"
 	const footer = "workspace │ Auto │ ✦ glm-5.3-flash"

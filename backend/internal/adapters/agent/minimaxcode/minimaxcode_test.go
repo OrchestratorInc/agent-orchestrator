@@ -32,6 +32,104 @@ func TestLaunchContract(t *testing.T) {
 	}
 }
 
+func TestProfilePathAcceptsAOIDsWithoutAllowingTraversal(t *testing.T) {
+	data := t.TempDir()
+	for _, id := range []string{"acme.dev-2", "acme.dev.tools-3", "session-1"} {
+		got, err := profilePath(data, id)
+		if err != nil || got != filepath.Join(data, "agents", adapterID, id) {
+			t.Fatalf("profilePath(%q) = %q, %v", id, got, err)
+		}
+	}
+	for _, id := range []string{"", ".", "..", "../escape", "a/b", `a\b`, ".hidden", "a..b", "a."} {
+		if _, err := profilePath(data, id); err == nil {
+			t.Fatalf("accepted unsafe AO session ID %q", id)
+		}
+	}
+}
+
+func TestTUIProfileRefreshesCredentialsWithoutReplacingNativeState(t *testing.T) {
+	source := t.TempDir()
+	t.Setenv("MINIMAX_DATA_DIR", source)
+	write := func(path, text string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(source, "config.yaml"), "defaultModel: p/first\npermissionMode: auto\n")
+	write(filepath.Join(source, "auth", "token"), "original-token")
+	write(filepath.Join(source, "auth", "revoked"), "revoked-token")
+	cfg := ports.WorkspaceHookConfig{
+		DataDir: t.TempDir(), SessionID: "acme.dev-2", WorkspacePath: t.TempDir(),
+		Config: ports.AgentConfig{Permissions: ports.PermissionModeBypassPermissions},
+	}
+	plugin := New()
+	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	profile, _ := profilePath(cfg.DataDir, cfg.SessionID)
+	retained := map[string]string{
+		"v2/history-proof": "native-history", "ao-native-id": "native-identity",
+		"permission.json": "private-policy", "AGENTS.md": "private-rules",
+	}
+	for name, content := range retained {
+		write(filepath.Join(profile, name), content)
+	}
+	updated := "defaultModel: p/second\npermissionMode: auto\ncustom_provider:\n  new-provider:\n    apiKey: rotated-key\n"
+	write(filepath.Join(source, "config.yaml"), updated)
+	write(filepath.Join(source, "auth", "token"), "rotated-token")
+	if err := os.Remove(filepath.Join(source, "auth", "revoked")); err != nil {
+		t.Fatal(err)
+	}
+	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range retained {
+		got, err := os.ReadFile(filepath.Join(profile, name))
+		if err != nil || string(got) != content {
+			t.Fatalf("native state %s changed: %q, %v", name, got, err)
+		}
+	}
+	for _, tc := range []struct{ path, want string }{
+		{filepath.Join(source, "config.yaml"), updated},
+		{filepath.Join(profile, "auth", "token"), "rotated-token"},
+	} {
+		got, err := os.ReadFile(tc.path)
+		if err != nil || string(got) != tc.want {
+			t.Fatalf("credential/source mismatch at %s: %q, %v", tc.path, got, err)
+		}
+	}
+	config, err := os.ReadFile(filepath.Join(profile, "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"defaultModel: p/second", "apiKey: rotated-key", "permissionMode: bypassPermissions"} {
+		if !strings.Contains(string(config), want) {
+			t.Fatalf("refreshed private configuration omitted %q", want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(profile, "auth", "revoked")); !os.IsNotExist(err) {
+		t.Fatalf("revoked credential retained: %v", err)
+	}
+	write(filepath.Join(source, "config.yaml"), "invalid: [")
+	write(filepath.Join(source, "auth", "token"), "must-not-replace-snapshot")
+	if err := plugin.GetAgentHooks(context.Background(), cfg); err == nil {
+		t.Fatal("accepted malformed source configuration during refresh")
+	}
+	for _, tc := range []struct{ path, want string }{
+		{filepath.Join(profile, "config.yaml"), string(config)},
+		{filepath.Join(profile, "auth", "token"), "rotated-token"},
+	} {
+		got, err := os.ReadFile(tc.path)
+		if err != nil || string(got) != tc.want {
+			t.Fatalf("failed refresh changed previous snapshot at %s: %q, %v", tc.path, got, err)
+		}
+	}
+}
+
 func TestRestoreFailsClosed(t *testing.T) {
 	p := New()
 	p.resolvedBinary = "mcode"

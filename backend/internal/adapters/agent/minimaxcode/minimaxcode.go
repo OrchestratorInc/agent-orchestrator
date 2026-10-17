@@ -25,7 +25,8 @@ import (
 
 const adapterID = "minimax-code"
 
-var aoIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+var aoIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$`)
+var launchIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 var nativeIDPattern = regexp.MustCompile(`^mvs_[a-f0-9]{32}$`)
 
 // Plugin implements MiniMax Code's terminal-only worker contract.
@@ -138,7 +139,7 @@ func profilePath(dataDir, sessionID string) (string, error) {
 	return filepath.Join(dataDir, "agents", adapterID, sessionID), nil
 }
 
-// AugmentRuntimeLaunchEnv selects the private profile and immutable launch directory.
+// AugmentRuntimeLaunchEnv selects the private profile without changing tool temp paths.
 func (p *Plugin) AugmentRuntimeLaunchEnv(env map[string]string, dataDir string, id domain.SessionID, launchID string) {
 	profile, err := profilePath(dataDir, string(id))
 	if err != nil {
@@ -146,10 +147,6 @@ func (p *Plugin) AugmentRuntimeLaunchEnv(env map[string]string, dataDir string, 
 	}
 	env["MINIMAX_DATA_DIR"] = profile
 	env["MAVIS_DATA_DIR"] = profile
-	tmp := filepath.Join(profile, "launches", launchID, "tmp")
-	env["TMPDIR"] = tmp
-	env["TEMP"] = tmp
-	env["TMP"] = tmp
 }
 
 // SessionInfo returns the persisted native session metadata.

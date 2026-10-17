@@ -3,6 +3,7 @@ package minimaxcode
 import (
 	"context"
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -109,6 +110,13 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 		}
 
 	} else {
+		source, err := sourceProfile(cfg.Env)
+		if err != nil {
+			return err
+		}
+		if err := refreshProfileCredentials(ctx, target, source); err != nil {
+			return err
+		}
 		data, err = readPrivateConfig(filepath.Join(target, "config.yaml"))
 		if err != nil {
 			return err
@@ -158,9 +166,6 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	if err := hookutil.AtomicWriteFile(filepath.Join(plugin, "hook.cjs"), hookSource, 0o600); err != nil {
 		return err
 	}
-	if err := writeHookConfig(plugin); err != nil {
-		return err
-	}
 	if first {
 		return os.Rename(target, finalTarget)
 	}
@@ -194,6 +199,42 @@ func readPrivateConfig(path string) ([]byte, error) {
 	}
 	return os.ReadFile(path)
 }
+
+// Refresh only source-owned credentials/configuration at each new native launch.
+// Provider history and AO context files are never replaced. Validate and stage
+// first so malformed or symlinked sources cannot destroy the previous snapshot.
+func refreshProfileCredentials(ctx context.Context, target, source string) error {
+	config, err := readPrivateConfig(filepath.Join(source, "config.yaml"))
+	if err != nil {
+		return err
+	}
+	var parsed map[string]any
+	if err := yaml.Unmarshal(config, &parsed); err != nil {
+		return errors.New("MiniMax provider config is not valid YAML")
+	}
+	staging, err := os.MkdirTemp(target, ".ao-auth-refresh-")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(staging) }()
+	if err := copyProfileTree(ctx, filepath.Join(source, "auth"), filepath.Join(staging, "auth")); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	auth := filepath.Join(target, "auth")
+	backup := filepath.Join(staging, "previous")
+	if err := os.Rename(auth, backup); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Rename(filepath.Join(staging, "auth"), auth); err != nil && !errors.Is(err, os.ErrNotExist) {
+		_ = os.Rename(backup, auth)
+		return err
+	}
+	return hookutil.AtomicWriteFile(filepath.Join(target, "config.yaml"), config, 0o600)
+}
+
 func copyProfileTree(ctx context.Context, source, target string) error {
 	if _, err := os.Lstat(source); errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -217,7 +258,7 @@ func copyProfileTree(ctx context.Context, source, target string) error {
 			return err
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
-			return errors.New("MiniMax profile snapshot refuses symlinks")
+			return fmt.Errorf("MiniMax profile snapshot refuses symlink %q; use a regular file or directory in the source profile", path)
 		}
 		rel, err := filepath.Rel(source, path)
 		if err != nil {
@@ -327,7 +368,7 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 			env[key] = value
 		}
 	}
-	if env["AO_SESSION_ID"] != cfg.SessionID || env["AO_DATA_DIR"] != cfg.DataDir || !aoIDPattern.MatchString(env["AO_RUNTIME_LAUNCH_ID"]) {
+	if env["AO_SESSION_ID"] != cfg.SessionID || env["AO_DATA_DIR"] != cfg.DataDir || !launchIDPattern.MatchString(env["AO_RUNTIME_LAUNCH_ID"]) {
 		return errors.New("MiniMax hook routing requires the current AO runtime generation")
 	}
 	body, err := json.Marshal(env)
@@ -335,7 +376,7 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 		return err
 	}
 	launch := filepath.Join(profile, "launches", env["AO_RUNTIME_LAUNCH_ID"])
-	if err := os.MkdirAll(filepath.Join(launch, "tmp"), 0o700); err != nil {
+	if err := os.MkdirAll(launch, 0o700); err != nil {
 		return err
 	}
 	instructions, err := os.ReadFile(filepath.Join(profile, "standing.txt"))
@@ -357,7 +398,10 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 	if closeErr != nil {
 		return closeErr
 	}
-	return hookutil.AtomicWriteFile(filepath.Join(launch, "standing.txt"), instructions, 0o600)
+	if err := hookutil.AtomicWriteFile(filepath.Join(launch, "standing.txt"), instructions, 0o600); err != nil {
+		return err
+	}
+	return writeHookConfig(filepath.Join(profile, "plugins", "ao-activity"), launch)
 }
 
 func requireStandingTransport(profile string) error {
@@ -368,9 +412,11 @@ func requireStandingTransport(profile string) error {
 	return nil
 }
 
-func writeHookConfig(plugin string) error {
+func writeHookConfig(plugin, launch string) error {
 	// MiniMax expands its own plugin-root variable before invoking the command.
-	command := `node "${CLAUDE_PLUGIN_ROOT}/hook.cjs"`
+	// Its cached command pins the generation without repurposing TMPDIR. Encode
+	// the absolute path so spaces and shell metacharacters remain a single arg.
+	command := `node "${CLAUDE_PLUGIN_ROOT}/hook.cjs" ` + base64.RawURLEncoding.EncodeToString([]byte(launch))
 
 	hooks := map[string]any{}
 	for _, ev := range []string{"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest", "Stop"} {

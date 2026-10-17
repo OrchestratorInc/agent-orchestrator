@@ -134,11 +134,13 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 		return
 	}
 	readOutput := o.runtime.GetOutput
-	if _, inspectsSurface := agent.(ports.TerminalSurfaceInspector); inspectsSurface {
+	if session.Harness == domain.HarnessMiniMaxCode {
 		if styled, available := o.runtime.(ports.StyledTerminalOutputReader); available {
-			// Current-screen adapters need the rendered footer and composer, not
+			// MiniMax needs the rendered footer and composer, not
 			// raw history (which can omit the current non-newline fragment).
 			// Capture failures must not fall back to stale raw output.
+			// Other harnesses retain their existing no-surface reconciliation,
+			// including on older detached hosts that cannot capture a surface.
 			readOutput = styled.GetStyledOutput
 		}
 	}

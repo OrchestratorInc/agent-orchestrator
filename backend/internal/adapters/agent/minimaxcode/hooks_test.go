@@ -2,6 +2,7 @@ package minimaxcode
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,8 +12,65 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+func hookLaunchArgument(profile, generation string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(filepath.Join(profile, "launches", generation)))
+}
+
+func TestRuntimeLaunchPinsHookCommandWithoutChangingTempPaths(t *testing.T) {
+	t.Setenv("MINIMAX_DATA_DIR", t.TempDir())
+	cfg := ports.WorkspaceHookConfig{
+		DataDir:   filepath.Join(t.TempDir(), "AO data & (private)"),
+		SessionID: "acme.dev-2", WorkspacePath: t.TempDir(),
+	}
+	plugin := New()
+	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Env = map[string]string{
+		"AO_SESSION_ID": cfg.SessionID, "AO_DATA_DIR": cfg.DataDir,
+		"AO_RUNTIME_LAUNCH_ID": "current-generation",
+		"TMPDIR":               "original-unix-temp", "TEMP": "original-temp", "TMP": "original-tmp",
+	}
+	plugin.AugmentRuntimeLaunchEnv(cfg.Env, cfg.DataDir, domain.SessionID(cfg.SessionID), "current-generation")
+	for key, want := range map[string]string{"TMPDIR": "original-unix-temp", "TEMP": "original-temp", "TMP": "original-tmp"} {
+		if cfg.Env[key] != want {
+			t.Fatalf("launch replaced %s with %q", key, cfg.Env[key])
+		}
+	}
+	if err := plugin.PrepareRuntimeLaunch(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	profile, _ := profilePath(cfg.DataDir, cfg.SessionID)
+	body, err := os.ReadFile(filepath.Join(profile, "plugins", "ao-activity", "hooks", "hooks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Hooks map[string][]struct {
+			Hooks []struct {
+				Command string `json:"command"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(body, &config); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []string{"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest", "Stop"} {
+		groups := config.Hooks[event]
+		if len(groups) != 1 || len(groups[0].Hooks) != 1 {
+			t.Fatalf("missing managed hook for %s", event)
+		}
+		argument, ok := strings.CutPrefix(groups[0].Hooks[0].Command, `node "${CLAUDE_PLUGIN_ROOT}/hook.cjs" `)
+		launch, err := base64.RawURLEncoding.DecodeString(argument)
+		if !ok || err != nil || string(launch) != filepath.Join(profile, "launches", "current-generation") {
+			t.Fatalf("%s command lost its immutable generation: %q, %v", event, launch, err)
+		}
+	}
+}
 
 func TestHookPinsIdentityAndRejectsReplacement(t *testing.T) {
 	node, err := exec.LookPath("node")
@@ -21,7 +79,7 @@ func TestHookPinsIdentityAndRejectsReplacement(t *testing.T) {
 	}
 	source := t.TempDir()
 	t.Setenv("MINIMAX_DATA_DIR", source)
-	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "test-1", WorkspacePath: t.TempDir()}
+	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "acme.dev-2", WorkspacePath: t.TempDir()}
 	p := New()
 	if err := p.GetAgentHooks(context.Background(), cfg); err != nil {
 		t.Fatal(err)
@@ -46,8 +104,8 @@ func TestHookPinsIdentityAndRejectsReplacement(t *testing.T) {
 	first := "mvs_01234567890123456789012345678901"
 	run := func(id string) []byte {
 		t.Helper()
-		cmd := exec.Command(node, hook)
-		cmd.Env = append(os.Environ(), "PATH="+t.TempDir(), "TMPDIR="+filepath.Join(profile, "launches", "test-generation", "tmp"))
+		cmd := exec.Command(node, hook, hookLaunchArgument(profile, "test-generation"))
+		cmd.Env = append(os.Environ(), "PATH="+t.TempDir(), "TMPDIR="+t.TempDir())
 		cmd.Stdin = strings.NewReader(`{"hook_event_name":"SessionStart","session_id":"` + id + `"}`)
 		out, err := cmd.Output()
 		if err != nil {
@@ -62,6 +120,11 @@ func TestHookPinsIdentityAndRejectsReplacement(t *testing.T) {
 	if strings.TrimSpace(string(got)) != first {
 		t.Fatal("native identity not pinned")
 	}
+	missingLaunch := exec.Command(node, hook)
+	missingLaunch.Stdin = strings.NewReader(`{"hook_event_name":"SessionStart","session_id":"` + first + `"}`)
+	if out, err := missingLaunch.Output(); err != nil || !strings.Contains(string(out), `"continue":false`) {
+		t.Fatalf("hook accepted a missing launch argument: %s, %v", out, err)
+	}
 	preload := filepath.Join(t.TempDir(), "capture.cjs")
 	capture := filepath.Join(t.TempDir(), "payload.json")
 	preloadSource := `require('node:child_process').spawnSync=(_command,_args,options)=>{require('node:fs').writeFileSync(process.env.AO_HOOK_CAPTURE,options.input);return {status:0}};`
@@ -70,8 +133,8 @@ func TestHookPinsIdentityAndRejectsReplacement(t *testing.T) {
 	}
 	for _, event := range []string{"PreToolUse", "PermissionRequest", "PostToolUse", "PostToolUseFailure"} {
 		childPayload := fmt.Sprintf(`{"hook_event_name":%q,"session_id":"child-session","agent_id":"child-1","agent_type":"Explore"}`, event)
-		cmd := exec.Command(node, "--require", preload, hook)
-		cmd.Env = append(os.Environ(), "PATH="+t.TempDir(), "TMPDIR="+filepath.Join(profile, "launches", "test-generation", "tmp"), "AO_HOOK_CAPTURE="+capture)
+		cmd := exec.Command(node, "--require", preload, hook, hookLaunchArgument(profile, "test-generation"))
+		cmd.Env = append(os.Environ(), "PATH="+t.TempDir(), "AO_HOOK_CAPTURE="+capture)
 		cmd.Stdin = strings.NewReader(childPayload)
 		if out, err := cmd.CombinedOutput(); err != nil || len(out) != 0 {
 			t.Fatalf("%s child hook refused: %s %v", event, out, err)
@@ -104,8 +167,8 @@ func TestHookPinsIdentityAndRejectsReplacement(t *testing.T) {
 	if json.Unmarshal(out, &rejection) != nil || rejection.Continue == nil || *rejection.Continue || rejection.Message == "" {
 		t.Fatalf("replacement not refused: %s", out)
 	}
-	cmd := exec.Command(node, hook)
-	cmd.Env = append(os.Environ(), "PATH="+t.TempDir(), "TMPDIR="+filepath.Join(profile, "launches", "test-generation", "tmp"))
+	cmd := exec.Command(node, hook, hookLaunchArgument(profile, "test-generation"))
+	cmd.Env = append(os.Environ(), "PATH="+t.TempDir())
 	cmd.Stdin = strings.NewReader(`{"hook_event_name":"PreToolUse","session_id":"child-session","agent_id":"child-1"}`)
 	if out, err := cmd.Output(); err != nil || !strings.Contains(string(out), `"continue":false`) {
 		t.Fatalf("incomplete child provenance accepted: %s %v", out, err)
@@ -157,8 +220,8 @@ func TestOldHookKeepsItsRuntimeGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, generation := range []string{"generation-one", "generation-two"} {
-		cmd := exec.Command(node, filepath.Join(profile, "plugins", "ao-activity", "hook.cjs"))
-		cmd.Env = append(os.Environ(), "PATH="+bin, "TMPDIR="+filepath.Join(profile, "launches", generation, "tmp"))
+		cmd := exec.Command(node, filepath.Join(profile, "plugins", "ao-activity", "hook.cjs"), hookLaunchArgument(profile, generation))
+		cmd.Env = append(os.Environ(), "PATH="+bin)
 		cmd.Stdin = strings.NewReader(`{"hook_event_name":"Stop","session_id":"` + id + `"}`)
 		if out, err := cmd.CombinedOutput(); err != nil || len(out) != 0 {
 			t.Fatalf("hook failed: %s %v", out, err)
@@ -218,8 +281,8 @@ func TestStandingHookUsesImmutableCurrentGenerationContext(t *testing.T) {
 	// Exercise the actual managed helper, not a mock native provider.
 	run := func(generation, event, nativeID, status string) map[string]any {
 		t.Helper()
-		cmd := exec.Command(node, filepath.Join(profile, "plugins", "ao-activity", "hook.cjs"))
-		cmd.Env = append(os.Environ(), "PATH="+bin, "TMPDIR="+filepath.Join(profile, "launches", generation, "tmp"), "FIXTURE_CALLBACK_STATUS="+status)
+		cmd := exec.Command(node, filepath.Join(profile, "plugins", "ao-activity", "hook.cjs"), hookLaunchArgument(profile, generation))
+		cmd.Env = append(os.Environ(), "PATH="+bin, "FIXTURE_CALLBACK_STATUS="+status)
 		cmd.Stdin = strings.NewReader(fmt.Sprintf(`{"hook_event_name":%q,"session_id":%q}`, event, nativeID))
 		out, err := cmd.Output()
 		if err != nil {

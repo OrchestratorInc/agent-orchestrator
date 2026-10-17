@@ -35,7 +35,7 @@ func (p *Plugin) PrepareChatProfile(ctx context.Context, dataDir, sessionID stri
 		if err != nil {
 			return "", err
 		}
-		if err := refreshChatCredentials(ctx, target, source); err != nil {
+		if err := refreshProfileCredentials(ctx, target, source); err != nil {
 			return "", err
 		}
 		return target, nil
@@ -87,34 +87,3 @@ func (p *Plugin) PrepareChatProfile(ctx context.Context, dataDir, sessionID stri
 }
 
 const chatProfileMarker = "agent-orchestrator: private minimax-code ACP profile v1\n"
-
-// Refresh only source-owned credentials/configuration at each new native launch.
-// Provider history and AO context files are never replaced. Stage auth first so
-// malformed or symlinked source resources cannot destroy the previous snapshot.
-func refreshChatCredentials(ctx context.Context, target, source string) error {
-	config, err := readPrivateConfig(filepath.Join(source, "config.yaml"))
-	if err != nil {
-		return err
-	}
-	staging, err := os.MkdirTemp(target, ".ao-auth-refresh-")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.RemoveAll(staging) }()
-	if err := copyProfileTree(ctx, filepath.Join(source, "auth"), filepath.Join(staging, "auth")); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	auth := filepath.Join(target, "auth")
-	backup := filepath.Join(staging, "previous")
-	if err := os.Rename(auth, backup); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if err := os.Rename(filepath.Join(staging, "auth"), auth); err != nil && !errors.Is(err, os.ErrNotExist) {
-		_ = os.Rename(backup, auth)
-		return err
-	}
-	return hookutil.AtomicWriteFile(filepath.Join(target, "config.yaml"), config, 0o600)
-}
