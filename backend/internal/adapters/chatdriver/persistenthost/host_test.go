@@ -7,9 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -52,6 +55,11 @@ func TestProviderHelper(t *testing.T) {
 		return
 	}
 	scanner := bufio.NewScanner(os.Stdin)
+	if os.Getenv("AO_CHAT_HOST_CRASH_AFTER_FIRST_FRAME") == "1" {
+		scanner.Scan()
+		_, _ = fmt.Fprintln(os.Stderr, "fatal: adapter could not start")
+		os.Exit(7)
+	}
 	for scanner.Scan() {
 		var frame struct {
 			ID     int64  `json:"id"`
@@ -1000,5 +1008,61 @@ func TestReconnectOnlyNeverPreparesOrStartsMissingHost(t *testing.T) {
 	}
 	if _, err := readDescriptor(cfg.DataDir, cfg.SessionID); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("health check wrote a descriptor: %v", err)
+	}
+}
+
+func TestHostRecordsProviderExitBeforeReleasingDescriptor(t *testing.T) {
+	dataDir := t.TempDir()
+	// A record from an earlier provider must not describe this one.
+	if err := os.MkdirAll(filepath.Join(dataDir, "chat-hosts", "crashed"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeProviderExit(dataDir, "crashed", ProviderExit{State: "exit status 99"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{
+		SessionID: "crashed", DataDir: dataDir, Workdir: t.TempDir(),
+		Env: append(os.Environ(),
+			"AO_CHAT_HOST_PROVIDER_HELPER=1", "AO_CHAT_HOST_CRASH_AFTER_FIRST_FRAME=1"),
+		Argv: []string{os.Args[0], "-test.run=TestProviderHelper"},
+	}
+	transport, err := ConnectOrStart(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("ConnectOrStart: %v", err)
+	}
+	t.Cleanup(func() { _ = Shutdown(context.Background(), dataDir, cfg.SessionID) })
+	if _, err := fmt.Fprintln(transport.Stdin, `{"id":1,"method":"initialize"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(transport.Stdout); err != nil {
+		t.Fatalf("read until provider exit: %v", err)
+	}
+
+	exit, ok := WaitProviderExit(context.Background(), dataDir, cfg.SessionID)
+	if !ok {
+		t.Fatal("WaitProviderExit found no record for a provider that exited")
+	}
+	if exit.State != "exit status 7" || !strings.Contains(exit.StderrTail, "fatal: adapter could not start") {
+		t.Fatalf("provider exit = %+v, want exit status 7 with its stderr", exit)
+	}
+}
+
+func TestWaitProviderExitReturnsWhenHostLeftNoRecord(t *testing.T) {
+	started := time.Now()
+	if _, ok := WaitProviderExit(context.Background(), t.TempDir(), "never-hosted"); ok {
+		t.Fatal("WaitProviderExit reported a record that was never written")
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("WaitProviderExit waited %v for a host that does not exist", elapsed)
+	}
+}
+
+func TestTailBufferKeepsOnlyTheEnd(t *testing.T) {
+	var tail tailBuffer
+	_, _ = tail.Write(bytes.Repeat([]byte("a"), maxStderrTail))
+	_, _ = tail.Write([]byte("the cause"))
+	got := tail.String()
+	if len(got) != maxStderrTail || !strings.HasSuffix(got, "the cause") {
+		t.Fatalf("tail length %d suffix %q, want %d bytes ending in the latest write", len(got), got[len(got)-9:], maxStderrTail)
 	}
 }

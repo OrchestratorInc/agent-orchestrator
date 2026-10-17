@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -681,11 +682,13 @@ func (d *Driver) initialize(
 		},
 	})
 	if err != nil {
+		// Read the exit record before discard can ask the host to shut down.
+		exitDetail := providerExitDetail(ctx, conv, proc)
 		conv.discard()
 		if isACPAuthRequired(err) {
 			return nil, acpsdk.InitializeResponse{}, nil, normalizeACPError("ACP initialize", err)
 		}
-		return nil, acpsdk.InitializeResponse{}, nil, fmt.Errorf("%w: ACP initialize: %w", ports.ErrChatDriverIncompatible, err)
+		return nil, acpsdk.InitializeResponse{}, nil, fmt.Errorf("%w: ACP initialize: %w%s", ports.ErrChatDriverIncompatible, err, exitDetail)
 	}
 	if d.cfg.ValidateInitialize != nil {
 		if err := d.cfg.ValidateInitialize(init); err != nil {
@@ -757,6 +760,9 @@ func (d *Driver) connectProcess(
 	proc := &process{
 		stdin: transport.Stdin, stdout: gate, gate: gate,
 		reconnected: transport.Reconnected, acpState: transport.ACPState,
+		providerExit: func(ctx context.Context) (persistenthost.ProviderExit, bool) {
+			return persistenthost.WaitProviderExit(ctx, cfg.DataDir, string(cfg.SessionID))
+		},
 	}
 	proc.stop = persistentStop(gate, transport.Stdin)
 	proc.terminate = persistentTerminate(gate, transport.Stdin, func(shutdownCtx context.Context) error {
@@ -820,6 +826,37 @@ func pointer[T any](value T) *T { return &value }
 // isACPAuthRequired reports whether err is the agent telling us the credential
 // was refused, so the caller can raise a reauth prompt instead of a generic
 // turn failure.
+// maxExitDetailStderr bounds the stderr excerpt carried in a user-visible
+// error. The host's provider-exit.json keeps a longer tail.
+const maxExitDetailStderr = 1500
+
+// providerExitDetail explains a provider that disconnected during a request:
+// its exit state and the tail of its stderr. Without it a crashed adapter is
+// indistinguishable from any other transport loss.
+func providerExitDetail(ctx context.Context, conv *conversation, proc *process) string {
+	if proc.providerExit == nil {
+		return ""
+	}
+	select {
+	case <-conv.conn.Done():
+	default:
+		return "" // The provider answered; it did not disconnect.
+	}
+	exit, ok := proc.providerExit(context.WithoutCancel(ctx))
+	if !ok {
+		return ""
+	}
+	detail := "; ACP agent process exited (" + exit.State + ")"
+	tail := strings.TrimSpace(strings.ToValidUTF8(exit.StderrTail, "\uFFFD"))
+	if len(tail) > maxExitDetailStderr {
+		tail = "…" + strings.ToValidUTF8(tail[len(tail)-maxExitDetailStderr:], "")
+	}
+	if tail != "" {
+		detail += "; stderr: " + tail
+	}
+	return detail
+}
+
 func isACPAuthRequired(err error) bool {
 	var requestErr *acpsdk.RequestError
 	if !errors.As(err, &requestErr) {

@@ -577,6 +577,8 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer releaseLock()
+	// A record left by an earlier provider must not explain this one's exit.
+	removeProviderExit(cfg.DataDir, cfg.SessionID)
 	token, err := randomToken()
 	if err != nil {
 		return err
@@ -599,7 +601,10 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	child.Stderr = io.Discard
+	// Provider stderr is not part of the wire protocol. Keep only its tail so
+	// a provider that dies before answering can be explained to the daemon.
+	stderrTail := &tailBuffer{}
+	child.Stderr = stderrTail
 	closeProviderTree, err := startProviderProcess(child)
 	if err != nil {
 		return err
@@ -657,8 +662,10 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 	var runErr error
+	providerExited := false
 	select {
 	case runErr = <-providerDone:
+		providerExited = true
 		_ = killProviderProcess(context.WithoutCancel(ctx), child)
 	case <-h.shutdown:
 		stopProvider()
@@ -673,6 +680,13 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	_ = listener.Close()
 	_ = child.Wait()
+	if providerExited && child.ProcessState != nil {
+		// Publish before the deferred descriptor removal: WaitProviderExit
+		// treats a missing descriptor as proof that no record is coming.
+		_ = writeProviderExit(cfg.DataDir, cfg.SessionID, ProviderExit{
+			State: child.ProcessState.String(), StderrTail: stderrTail.String(), ExitedAt: time.Now().UTC(),
+		})
+	}
 	return runErr
 }
 
