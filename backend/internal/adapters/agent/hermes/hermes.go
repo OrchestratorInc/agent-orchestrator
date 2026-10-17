@@ -43,6 +43,9 @@ const (
 	nativeNamedPrompt    = "☤ ❯"
 	nativeWarningPrompt  = "⚠ ❯"
 	nativeQuestionPrompt = "? ❯"
+	nativeUserEcho       = "● "
+	nativeCommandEcho    = "⚙️  "
+	nativeTranscriptRule = "────────────────────────────────────────"
 )
 
 var (
@@ -638,9 +641,76 @@ func (p *Plugin) ValidateTerminalMessage(_, screen string) error {
 	return nil
 }
 
-// TerminalMessageObserved requires a new native running footer after submission.
-func (p *Plugin) TerminalMessageObserved(_, baseline, screen string) bool {
+// TerminalMessageObserved accepts a running footer or a newly committed native
+// transcript echo above an empty composer. A changed idle frame alone is not
+// evidence of submission: it may be an unrelated redraw before Enter is handled.
+func (p *Plugin) TerminalMessageObserved(message, baseline, screen string) bool {
 	before, ready := p.DetectTerminalActivity(baseline)
 	after, known := p.DetectTerminalActivity(screen)
-	return screen != baseline && ready && before == domain.ActivityIdle && known && after == domain.ActivityActive
+	if screen == baseline || !ready || before != domain.ActivityIdle || !known {
+		return false
+	}
+	if after == domain.ActivityActive {
+		return true
+	}
+	if after != domain.ActivityIdle {
+		return false
+	}
+	return committedMessageEchoes(message, screen) > committedMessageEchoes(message, baseline)
+}
+
+// Count complete matching native echoes outside the current composer. Comparing
+// counts prevents old identical text from acknowledging a new send after a redraw.
+// Truncated or wrapped previews that cannot be matched in full remain unconfirmed.
+func committedMessageEchoes(message, screen string) int {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return 0
+	}
+	lines := terminalui.PlainTerminalLines(screen)
+	end := len(lines)
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if !strings.HasPrefix(line, nativePrompt) && !strings.HasPrefix(line, nativeNamedPrompt) {
+			continue
+		}
+		for j := i - 1; j >= 0; j-- {
+			if row := strings.TrimSpace(lines[j]); len([]rune(row)) >= 16 && strings.Trim(row, "─") == "" {
+				end = j
+				break
+			}
+		}
+		break
+	}
+	rows := strings.Split(message, "\n")
+	rows[0] = nativeUserEcho + rows[0]
+	count := 0
+	for i := 0; i < end; i++ {
+		line := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(message, "/") && !strings.Contains(message, "\n") && line == nativeCommandEcho+message {
+			count++
+			continue
+		}
+		if i == 0 || strings.TrimSpace(lines[i-1]) != nativeTranscriptRule || i+len(rows) >= end {
+			continue
+		}
+		matches := true
+		for j, row := range rows {
+			if strings.TrimSpace(lines[i+j]) != strings.TrimSpace(row) {
+				matches = false
+				break
+			}
+		}
+		if !matches {
+			continue
+		}
+		j := i + len(rows)
+		for j < end && strings.TrimSpace(lines[j]) == "" {
+			j++
+		}
+		if j < end && strings.TrimSpace(lines[j]) == nativeTranscriptRule {
+			count++
+		}
+	}
+	return count
 }

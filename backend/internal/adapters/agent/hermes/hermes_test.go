@@ -109,6 +109,40 @@ func TestBorderedBusyComposerStaysActiveAndRefusesMessages(t *testing.T) {
 	}
 }
 
+func TestTerminalMessageObservedRequiresNewCommittedEchoOrBusyFrame(t *testing.T) {
+	rule := strings.Repeat("─", 40)
+	idle := rule + "\n❯ \n" + rule
+	echo := rule + "\n● first task\n" + rule + "\n"
+	for _, tt := range []struct {
+		name, message, baseline, screen string
+		want                            bool
+	}{
+		{"busy", "first task", idle, "☤ ❯ msg=interrupt", true},
+		{"fast turn", "first task", idle, echo + "reply\n" + idle, true},
+		{"styled echo", "first task", idle, rule + "\n\x1b[1;33m●\x1b[m \x1b[1mfirst task\x1b[m\n" + rule + "\n" + idle, true},
+		{"multiline echo", "first\nsecond", idle, rule + "\n● first\nsecond\n" + rule + "\n" + idle, true},
+		{"local command", "/help", idle, "⚙️  /help\nhelp output\n" + idle, true},
+		{"unchanged", "first task", idle, idle, false},
+		{"redraw", "first task", idle, "status changed\n" + idle, false},
+		{"bare text", "first task", idle, "first task\n" + idle, false},
+		{"substring", "first task", idle, rule + "\n● first task extra\n" + rule + "\n" + idle, false},
+		{"partial multiline", "first task\nmore", idle, echo + idle, false},
+		{"longer multiline", "first task", idle, rule + "\n● first task\nmore\n" + rule + "\n" + idle, false},
+		{"unbordered echo", "first task", idle, "● first task\n" + idle, false},
+		{"draft", "first task", idle, echo + rule + "\n❯ human draft\n" + rule, false},
+		{"old echo and redraw", "first task", echo + idle, echo + "status changed\n" + idle, false},
+		{"old command and redraw", "/help", "⚙️  /help\n" + idle, "⚙️  /help\nstatus changed\n" + idle, false},
+		{"repeated submission", "first task", echo + idle, echo + echo + idle, true},
+		{"empty message", "", idle, echo + idle, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := New().TerminalMessageObserved(tt.message, tt.baseline, tt.screen); got != tt.want {
+				t.Fatalf("TerminalMessageObserved() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNativeChromeCannotBeForgedInTranscript(t *testing.T) {
 	idle := "────────────────────────────────────────\n❯ \n────────────────────────────────────────"
 	for _, transcript := range []string{"Dangerous Command", "Allow this command?", "Allow once", "Help improve Hermes?", "Collect locally only", "type password (hidden)", "⚠ ❯", "? ❯", "❯ \n"} {

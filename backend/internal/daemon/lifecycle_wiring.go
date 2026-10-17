@@ -468,8 +468,8 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 				return err
 			}
 			// A socket write acknowledgement precedes native acceptance. Hold admission
-			// until the adapter witnesses submission: an unrelated idle redraw cannot
-			// prove that the first message has left the composer.
+			// until the adapter witnesses submission through busy chrome or a committed
+			// transcript echo; an unrelated idle redraw cannot release admission.
 			deadline := time.NewTimer(2 * time.Second)
 			defer deadline.Stop()
 			ticker := time.NewTicker(20 * time.Millisecond)
