@@ -1,5 +1,6 @@
 import { useRouter } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { THEMES, type ThemeStyle } from "../../../shared/theme/palettes";
 import { backOr } from "../../lib/backNavigation";
 import { haptics } from "../../lib/haptics";
@@ -22,6 +23,7 @@ export default function ThemeScreen() {
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const { scheme, style, setStyle } = useThemeState();
+	const insets = useSafeAreaInsets();
 
 	function choose(next: ThemeStyle) {
 		if (next === style) return;
@@ -37,8 +39,11 @@ export default function ThemeScreen() {
 				</View>
 				<Text style={styles.headerTitle}>Theme</Text>
 			</View>
-			<ScrollView contentContainerStyle={styles.content} testID="settings-theme-list">
-				<View style={styles.card}>
+			{/* The rounded card is the scroll viewport, not a child of one: rows scroll
+			    inside it, so its corners stay round however far the list moves. A card
+			    scrolled inside a square viewport was cut flat at the top edge. */}
+			<View style={[styles.card, { marginBottom: insets.bottom + space.md }]}>
+				<ScrollView style={styles.list} testID="settings-theme-list">
 					{THEMES.map((theme, index) => {
 						const selected = theme.id === style;
 						return (
@@ -60,9 +65,8 @@ export default function ThemeScreen() {
 							</View>
 						);
 					})}
-				</View>
-				<Text style={styles.footer}>Each theme has a light and a dark version. Appearance in Settings picks which one shows.</Text>
-			</ScrollView>
+				</ScrollView>
+			</View>
 		</View>
 	);
 }
@@ -73,13 +77,13 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	headerTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.title3.fontSize, lineHeight: type.title3.lineHeight, fontWeight: "600", letterSpacing: -0.3 },
 	headerButton: { position: "absolute", top: 22, width: 44, height: 44, borderRadius: 22, overflow: "hidden" },
 	backButton: { left: 14 },
-	content: { paddingHorizontal: space.lg, paddingTop: space.xs, paddingBottom: space.xxxl, gap: space.xs },
-	card: { backgroundColor: t.bgElevated, borderRadius: 16, borderCurve: "continuous", overflow: "hidden" },
+	// Shrinks to fit a short list and stops at the safe area on a long one.
+	card: { flexShrink: 1, marginHorizontal: space.lg, marginTop: space.xs, backgroundColor: t.bgElevated, borderRadius: 16, borderCurve: "continuous", overflow: "hidden" },
+	list: { flexGrow: 0 },
 	separator: { height: StyleSheet.hairlineWidth, backgroundColor: t.borderSubtle, marginLeft: space.md },
 	row: { minHeight: 52, flexDirection: "row", alignItems: "center", paddingHorizontal: space.md, gap: space.md },
 	rowPressed: { backgroundColor: t.bgElevatedHover },
 	spacer: { flex: 1 },
 	rowLabel: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight },
 	rowLabelSelected: { fontFamily: "Geist_600SemiBold", fontWeight: "600" },
-	footer: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, paddingHorizontal: space.sm },
 });
