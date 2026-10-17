@@ -3415,9 +3415,6 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	if effort := strings.TrimSpace(rec.Metadata.Effort); effort != "" {
 		agentConfig.Effort = effort
 	}
-	if rec.Harness == domain.HarnessMemcode && validateSpawnModel(rec.Harness, agentConfig.Model) != nil {
-		agentConfig.Model = ""
-	}
 	if rec.Metadata.Permissions != "" {
 		agentConfig.Permissions = rec.Metadata.Permissions
 	}
@@ -3425,6 +3422,9 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	rec, env, err = m.prepareWorkerLaunchEnv(ctx, rec, project.Config.Env)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: browser capability: %w", operation, rec.ID, err)
+	}
+	if rec.Harness == domain.HarnessMemcode && (env["MEMCODE_ENDPOINT_URL"] != "" || validateSpawnModel(rec.Harness, agentConfig.Model) != nil) {
+		agentConfig.Model = ""
 	}
 	m.augmentAgentRuntimeEnv(agent, env)
 	pinRuntimePermissionEnv(env, agentConfig.Permissions)
@@ -6333,24 +6333,26 @@ func (m *Manager) cleanupAgentWorkspace(ctx context.Context, rec domain.SessionR
 
 func (m *Manager) deliverAfterStartPrompt(ctx context.Context, agent ports.Agent, cfg ports.LaunchConfig, handle ports.RuntimeHandle, id domain.SessionID, prompt string) error {
 	selector, selects := agent.(ports.AgentAfterStartCommand)
-	if prompt == "" && !selects {
+	command := ""
+	if selects {
+		var err error
+		command, err = selector.AfterStartCommand(ctx, cfg)
+		if err != nil {
+			return err
+		}
+	}
+	if prompt == "" && command == "" {
 		return nil
 	}
 	if err := m.waitForPromptReadiness(ctx, agent, cfg, handle); err != nil {
 		return err
 	}
-	if selects {
-		command, err := selector.AfterStartCommand(ctx, cfg)
-		if err != nil {
+	if command != "" {
+		if err := m.deliverStartedInput(ctx, id, command); err != nil {
 			return err
 		}
-		if command != "" {
-			if err := m.deliverStartedInput(ctx, id, command); err != nil {
-				return err
-			}
-			if err := m.waitForAfterStartCommand(ctx, selector, cfg, handle); err != nil {
-				return err
-			}
+		if err := m.waitForAfterStartCommand(ctx, selector, cfg, handle); err != nil {
+			return err
 		}
 	}
 	if prompt == "" {
