@@ -2384,12 +2384,19 @@ func (m *Manager) markSpawnFailedTerminatedWithoutWorkspace(ctx context.Context,
 // rows still in seed state; if the row has progressed or the delete itself
 // fails, fall back to parking it terminated so a phantom row never looks live.
 func (m *Manager) rollbackSpawnSeedRow(ctx context.Context, id domain.SessionID) {
-	if deleted, err := m.store.DeleteSession(ctx, id); err == nil && deleted {
+	// Rollback usually unwinds after the spawn request context is already dead
+	// (the REST timeout canceled it mid-spawn). Store writes on a canceled
+	// context fail silently and strand the seed row as an "Almost there"
+	// phantom, so clean up detached, bounded by the same rollback budget as
+	// the sibling helpers: a wedged store write must not hang the goroutine.
+	cleanupCtx, cancel := spawnRollbackContext(ctx)
+	defer cancel()
+	if deleted, err := m.store.DeleteSession(cleanupCtx, id); err == nil && deleted {
 		m.cleanupSystemPromptDir(id)
-		m.cleanupAttachments(ctx, id)
+		m.cleanupAttachments(cleanupCtx, id)
 		return
 	}
-	m.markSpawnFailedTerminated(ctx, id)
+	m.markSpawnFailedTerminated(cleanupCtx, id)
 }
 
 // rollbackSpawn deletes a session row when it is still in seed state — used

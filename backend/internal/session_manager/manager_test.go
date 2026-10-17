@@ -369,7 +369,11 @@ func (f *fakeStore) ListChatHibernationCandidates(ctx context.Context) ([]domain
 	}
 	return ids, nil
 }
-func (f *fakeStore) DeleteSession(_ context.Context, id domain.SessionID) (bool, error) {
+func (f *fakeStore) DeleteSession(ctx context.Context, id domain.SessionID) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		// Mirror the sqlite driver: a dead context fails the write.
+		return false, err
+	}
 	if f.deleteErr != nil {
 		return false, f.deleteErr
 	}
@@ -7110,6 +7114,27 @@ func TestRollbackSpawn_FallsBackToKillForLiveRow(t *testing.T) {
 	}
 	if !st.sessions["mer-1"].IsTerminated {
 		t.Fatal("live row should be marked terminated after kill-fallback")
+	}
+}
+
+// TestRollbackSpawnSeedRow_SurvivesCanceledContext pins the phantom-row fix:
+// the REST timeout cancels the request context mid-spawn, and the rollback
+// unwinding after it must still delete the seed row instead of failing
+// silently on the dead context and stranding an "Almost there" phantom.
+func TestRollbackSpawnSeedRow_SurvivesCanceledContext(t *testing.T) {
+	m, st, _, _ := newManager()
+	m.dataDir = t.TempDir()
+	// Seed row matches what CreateSession produces — no Metadata at all.
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID:        "mer-1",
+		ProjectID: "mer",
+		Activity:  domain.Activity{State: domain.ActivityIdle},
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	m.rollbackSpawnSeedRow(canceled, "mer-1")
+	if _, present := st.sessions["mer-1"]; present {
+		t.Fatal("seed row must still be removed when the rollback runs on a canceled context")
 	}
 }
 
