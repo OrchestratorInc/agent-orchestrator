@@ -40,6 +40,9 @@ const renameSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 vi.mock("../lib/rename-session", () => ({ renameSession: renameSessionMock }));
 
 vi.mock("motion/react", () => ({
+	motion: {
+		div: ({ layoutScroll: _layoutScroll, ...props }: ComponentProps<"div"> & { layoutScroll?: boolean }) => <div {...props} />,
+	},
 	Reorder: {
 		Group: ({ children, onReorder }: { children: ReactNode; onReorder: (values: string[]) => void }) => {
 			reorderMocks.onReorder = onReorder;
@@ -1197,11 +1200,11 @@ describe("CenterPane toolbar session label", () => {
 		fireEvent.wheel(scrollRegion, { deltaY: 80 });
 		expect(scrollBy).toHaveBeenCalledWith({ left: 80 });
 
-		// Horizontal trackpad input is already native to overflow-x-auto and must
-		// not be re-applied by the vertical-wheel adapter.
+		// Horizontal trackpad input is driven by the strip too, so a gesture can
+		// never latch onto an outer scroller and leave the tabs stuck.
 		scrollBy.mockClear();
-		fireEvent.wheel(scrollRegion, { deltaX: 60 });
-		expect(scrollBy).not.toHaveBeenCalled();
+		expect(fireEvent.wheel(scrollRegion, { deltaX: 60, deltaY: 5 })).toBe(false);
+		expect(scrollBy).toHaveBeenCalledWith({ left: 60 });
 
 		// Ctrl+wheel is terminal font zoom, not tab scrolling.
 		scrollBy.mockClear();

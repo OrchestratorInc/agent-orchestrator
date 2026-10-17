@@ -153,6 +153,28 @@ func TestTaskPreparationsStayOutOfSessionReads(t *testing.T) {
 	}
 }
 
+func TestGetRecordReadsOnlyTheStoredRow(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Metadata: domain.SessionMetadata{PreviewURL: "http://localhost:5173/"}}
+	st.sessions["mer-2"] = domain.SessionRecord{ID: "mer-2", ProjectID: "mer", IsTaskPreparation: true}
+	svc := &Service{store: st}
+
+	rec, err := svc.GetRecord(context.Background(), "mer-1")
+	if err != nil || rec.Metadata.PreviewURL != "http://localhost:5173/" {
+		t.Fatalf("GetRecord = %+v, %v", rec, err)
+	}
+	if st.listPRFactsCalls != 0 || st.listReviewRunsCalls != 0 {
+		t.Fatalf("GetRecord read PR facts %d times and review runs %d times, want none", st.listPRFactsCalls, st.listReviewRunsCalls)
+	}
+	for _, id := range []domain.SessionID{"mer-2", "missing"} {
+		_, err = svc.GetRecord(context.Background(), id)
+		var apiError *apierr.Error
+		if !errors.As(err, &apiError) || apiError.Code != "SESSION_NOT_FOUND" {
+			t.Fatalf("GetRecord(%s) error = %v, want SESSION_NOT_FOUND", id, err)
+		}
+	}
+}
+
 func (f *fakeStore) GetActiveAgentSwitch(_ context.Context, id domain.SessionID) (domain.AgentSwitch, bool, error) {
 	if f.activeSwitchGetErr != nil {
 		return domain.AgentSwitch{}, false, f.activeSwitchGetErr
@@ -5826,5 +5848,102 @@ func TestSessionReadsExposeOnlyCurrentTerminatedCleanupFacts(t *testing.T) {
 		if err != nil || len(list) != 1 || list[0].WorkspaceCleanup != tc.want {
 			t.Fatalf("list=%+v err=%v", list, err)
 		}
+	}
+}
+
+type fakeArtifactDeleter struct {
+	deleted []domain.SessionID
+	err     error
+}
+
+func (f *fakeArtifactDeleter) DeleteSession(_ context.Context, id domain.SessionID) error {
+	f.deleted = append(f.deleted, id)
+	return f.err
+}
+
+func TestDeleteArtifactsDeletesThroughTheDeleterAndReconciles(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
+		OutputType: domain.SessionOutputArtifact,
+	}
+	deleter := &fakeArtifactDeleter{}
+	reconciler := &fakeOutputTypeReconciler{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: t.TempDir(), OutputTypeReconciler: reconciler, ArtifactDeleter: deleter})
+
+	if err := svc.DeleteArtifacts(context.Background(), "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(deleter.deleted) != 1 || deleter.deleted[0] != "mer-1" {
+		t.Fatalf("deleted = %v, want [mer-1]", deleter.deleted)
+	}
+	if len(reconciler.reconciled) != 1 || reconciler.reconciled[0] != "mer-1" {
+		t.Fatalf("reconciled = %v, want [mer-1]", reconciler.reconciled)
+	}
+}
+
+func TestDeleteArtifactsReconcilesAndReportsAFailedDelete(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true}
+	deleter := &fakeArtifactDeleter{err: errors.New("file in use")}
+	reconciler := &fakeOutputTypeReconciler{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: t.TempDir(), OutputTypeReconciler: reconciler, ArtifactDeleter: deleter})
+
+	if err := svc.DeleteArtifacts(context.Background(), "mer-1"); err == nil {
+		t.Fatal("DeleteArtifacts succeeded, want the deleter's error")
+	}
+	if len(reconciler.reconciled) != 1 {
+		t.Fatalf("reconciled = %v, want a reconcile after the failure too", reconciler.reconciled)
+	}
+}
+
+func TestDeleteArtifactsRefusesLiveSession(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
+	deleter := &fakeArtifactDeleter{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: t.TempDir(), ArtifactDeleter: deleter})
+
+	err := svc.DeleteArtifacts(context.Background(), "mer-1")
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "SESSION_NOT_TERMINATED" {
+		t.Fatalf("err = %v, want SESSION_NOT_TERMINATED", err)
+	}
+	if len(deleter.deleted) != 0 {
+		t.Fatalf("deleted = %v for a live session, want none", deleter.deleted)
+	}
+}
+
+func TestDeleteArtifactsRefusesAnArtifactDirOutsideTheDataDir(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
+		Metadata: domain.SessionMetadata{ArtifactDir: filepath.Join(t.TempDir(), "old-data", "artifacts", "mer-1")},
+	}
+	deleter := &fakeArtifactDeleter{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: t.TempDir(), ArtifactDeleter: deleter})
+
+	if err := svc.DeleteArtifacts(context.Background(), "mer-1"); err == nil {
+		t.Fatal("DeleteArtifacts succeeded, want a refusal")
+	}
+	if len(deleter.deleted) != 0 {
+		t.Fatalf("deleted = %v, want none", deleter.deleted)
+	}
+}
+
+func TestDeleteArtifactsAcceptsTheCanonicalArtifactDir(t *testing.T) {
+	dataDir := t.TempDir()
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
+		Metadata: domain.SessionMetadata{ArtifactDir: filepath.Join(dataDir, "artifacts", "mer-1")},
+	}
+	deleter := &fakeArtifactDeleter{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: dataDir, ArtifactDeleter: deleter})
+
+	if err := svc.DeleteArtifacts(context.Background(), "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(deleter.deleted) != 1 {
+		t.Fatalf("deleted = %v, want [mer-1]", deleter.deleted)
 	}
 }

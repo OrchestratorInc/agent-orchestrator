@@ -2,6 +2,7 @@ package mobilebridge
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -28,6 +29,7 @@ type KeepAwake struct {
 	binary     string
 	ownerPID   int
 	hasBattery bool
+	lid        *LidAwake
 
 	mu   sync.Mutex
 	cmd  *exec.Cmd
@@ -88,6 +90,9 @@ func (k *KeepAwake) Start() error {
 
 // Stop releases the assertion. Idempotent.
 func (k *KeepAwake) Stop() {
+	if k.lid != nil {
+		k.lid.Stop()
+	}
 	k.mu.Lock()
 	cmd, done := k.cmd, k.done
 	k.mu.Unlock()
@@ -100,3 +105,34 @@ func (k *KeepAwake) Stop() {
 	case <-time.After(processProbeTimeout):
 	}
 }
+
+// ConfigureLid keeps idle assertions separate from native lid ownership.
+func (k *KeepAwake) ConfigureLid(on, allowSetup bool) error {
+	if k.lid == nil {
+		if on {
+			return errors.New("closed-lid wakefulness is unavailable")
+		}
+		return nil
+	}
+	if allowSetup {
+		if err := k.lid.Setup(); err != nil {
+			return err
+		}
+	}
+	if on {
+		return k.lid.Start(false)
+	}
+	k.lid.Stop()
+	return nil
+}
+
+// LidStatus reports the optional native lid controller's observed state.
+func (k *KeepAwake) LidStatus() (bool, bool, string) {
+	if k.lid == nil {
+		return false, false, "helper_missing"
+	}
+	return k.lid.Status()
+}
+
+// SetLidController attaches the desktop's optional native recovery client.
+func (k *KeepAwake) SetLidController(lid *LidAwake) { k.lid = lid }

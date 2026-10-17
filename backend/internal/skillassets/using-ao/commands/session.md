@@ -18,7 +18,11 @@ ao://sessions/{project-id}/{session-id}
 - Treat the project ID and session ID as separate URL path segments. Encode
   either ID with URL percent encoding if it contains characters that are not
   safe in one segment.
-- Emit only the navigation route above. Do not append query strings, fragments,
+- To link a file in a session's artifact directory for the human, append
+  `/artifacts/{path}`, where `{path}` is relative to that directory and each
+  segment is percent-encoded: `ao://sessions/{project-id}/{session-id}/artifacts/{path}`.
+  Opening it navigates to the session and opens the artifact.
+- Emit only these navigation routes. Do not append query strings, fragments,
   action names, credentials, authorities, or extra path segments.
 - The link is handled only inside a currently running AO desktop app. It is not
   an operating-system protocol link and must not be described as supporting
@@ -307,6 +311,8 @@ ao session cleanup --dry-run
 ### ao session claim-pr
 
 Attach an existing PR to the current AO session, or target another session explicitly.
+Use this for authorized implementation continuation. Reviewing someone else's PR
+does not require or permit a claim; use a normal review-only worker session.
 
 **Syntax:**
 ```

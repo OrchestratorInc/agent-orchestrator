@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -25,13 +27,23 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return ports.AgentAuthStatusUnknown, nil
 }
 
+// droidLocalAuthStatus checks Droid's own Factory settings first;
+// FACTORY_API_KEY is the fallback when they hold no usable credential.
 func droidLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
-	if strings.TrimSpace(os.Getenv("FACTORY_API_KEY")) != "" {
+	status, ok, err := droidStoredAuthStatus(ctx)
+	if err == nil && ok && status.HasCredential() {
+		return status, true, nil
+	}
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, "FACTORY_API_KEY") != "" {
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
+	return status, ok, err
+}
+
+func droidStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
@@ -39,7 +51,12 @@ func droidLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 	if home == "" {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
-	return droidFactoryAuthStatus(filepath.Join(home, ".factory"))
+	factoryDir := filepath.Join(home, ".factory")
+	status, ok, err := droidFactoryAuthStatus(factoryDir)
+	if status == ports.AgentAuthStatusAuthorized {
+		ports.RecordAuthEvidence(ctx, authprobe.FileSource(filepath.Join(factoryDir, "settings.json")).WithMethod(domain.AgentAccountMethodAPIKey))
+	}
+	return status, ok, err
 }
 
 func droidFactoryAuthStatus(factoryDir string) (ports.AgentAuthStatus, bool, error) {

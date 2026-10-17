@@ -155,6 +155,7 @@ type AppSetting struct {
 	DefaultSessionMode domain.SessionMode
 	UpdatedAt          time.Time
 	CloudOffering      bool
+	HarnessDefaults    string
 }
 
 type Automation struct {
@@ -329,6 +330,7 @@ type ConversationMessage struct {
 	SenderSessionID     string
 	SenderProjectID     string
 	SenderDisplayName   string
+	Continuation        int64
 }
 
 type ConversationProviderEvent struct {
@@ -690,6 +692,20 @@ type Session struct {
 	HibernatedAt                     sql.NullTime
 	BranchState                      string
 	RequestedOutput                  string
+}
+
+type SessionArtifactVersion struct {
+	SessionID    domain.SessionID
+	Path         string
+	Version      int64
+	Sha256       string
+	Size         int64
+	ContentType  string
+	Mtime        int64
+	CreatedAt    time.Time
+	Source       string
+	Harness      string
+	RestoredFrom int64
 }
 
 type SessionCleanupFact struct {

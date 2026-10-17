@@ -1,69 +1,53 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { AgentAvatar } from "./AgentAvatar";
-import fxLogo from "../assets/agents/fx.svg";
+import fxDarkLogo from "../assets/agents/fx-dark.svg";
+import fxLightLogo from "../assets/agents/fx-light.svg";
+import geminiLogo from "../assets/agents/gemini.svg";
+import unrealAgentDarkLogo from "../assets/agents/unreal-agent-dark.png";
+import unrealAgentLightLogo from "../assets/agents/unreal-agent-light.png";
+
+function themeSources(name: string) {
+	const mark = screen.getByRole("img", { name });
+	return Array.from(mark.querySelectorAll("img"), (img) => img.getAttribute("src"));
+}
 
 describe("AgentAvatar", () => {
-	it("renders the official fx brand asset", () => {
+	it("renders the official fx light and dark marks under one accessible name", () => {
 		render(<AgentAvatar provider="fx" />);
-		expect(screen.getByRole("img", { name: "fx" })).toHaveAttribute("src", fxLogo);
-	});
-	it("renders the Prime Agent brand asset", () => {
-		render(<AgentAvatar provider="prime-agent" />);
 
-		expect(screen.getByRole("img", { name: "prime-agent" })).toHaveAttribute(
-			"src",
-			expect.stringContaining("prime-agent.png"),
-		);
+		expect(themeSources("fx")).toEqual([fxLightLogo, fxDarkLogo]);
 	});
 
-	it("renders the OMP brand asset", () => {
-		render(<AgentAvatar provider="omp" />);
-
-		expect(screen.getByRole("img", { name: "omp" })).toHaveAttribute("src", expect.stringContaining("omp.png"));
-	});
-
-	it("renders the Codewhale brand asset", () => {
-		render(<AgentAvatar provider="codewhale" />);
-
-		expect(screen.getByRole("img", { name: "codewhale" })).toHaveAttribute("src", expect.stringContaining("codewhale.svg"));
-	});
-
-	it("renders the Gemini CLI brand asset", () => {
+	it("renders a single mark when the brand reads on both themes", () => {
 		render(<AgentAvatar provider="gemini" />);
 
-		const img = screen.getByRole("img", { name: "gemini" });
-		expect(img).toHaveAttribute("src", expect.stringContaining("data:image/svg+xml"));
-		expect(img).toHaveAttribute("src", expect.stringContaining("Gemini"));
+		expect(screen.getByRole("img", { name: "gemini" })).toHaveAttribute("src", geminiLogo);
 	});
 
-	it("renders the DeepSeek Harness brand asset", () => {
-		render(<AgentAvatar provider="deepseek-harness" />);
-
-		const img = screen.getByRole("img", { name: "deepseek-harness" });
-		expect(img).toHaveAttribute("src", expect.stringContaining("data:image/svg+xml"));
-		expect(img).toHaveAttribute("src", expect.stringContaining("DeepSeek"));
-	});
-
-	it("renders the Unreal Agent brand asset", () => {
+	it("keeps raster marks as a theme pair when no vector exists", () => {
 		render(<AgentAvatar provider="unreal-agent" />);
 
-		expect(screen.getByRole("img", { name: "unreal-agent" })).toHaveAttribute(
-			"src",
-			expect.stringContaining("unreal-agent.png"),
-		);
+		expect(themeSources("unreal-agent")).toEqual([unrealAgentLightLogo, unrealAgentDarkLogo]);
 	});
 
-	it("renders the MiMo Code brand asset", () => {
-		render(<AgentAvatar provider="mimo-code" />);
-
-		expect(screen.getByRole("img", { name: "mimo-code" })).toHaveAttribute(
-			"src",
-			expect.stringContaining("data:image/svg+xml"),
+	it("gives every harness a theme-safe brand mark", () => {
+		const providers = ["prime-agent", "omp", "codewhale", "deepseek-harness", "mimo-code", "openhands", "amp"];
+		render(
+			<>
+				{providers.map((provider) => (
+					<AgentAvatar key={provider} provider={provider} />
+				))}
+			</>,
 		);
+
+		for (const provider of providers) {
+			const mark = screen.getByRole("img", { name: provider });
+			expect(mark.tagName === "IMG" || mark.querySelectorAll("img").length === 2).toBe(true);
+		}
 	});
 
-	it("reuses the OpenCode brand asset for OpenCode 2", () => {
+	it("reuses the OpenCode brand marks for OpenCode 2", () => {
 		render(
 			<>
 				<AgentAvatar provider="opencode" />
@@ -71,18 +55,6 @@ describe("AgentAvatar", () => {
 			</>,
 		);
 
-		expect(screen.getByRole("img", { name: "opencode-v2" })).toHaveAttribute(
-			"src",
-			screen.getByRole("img", { name: "opencode" }).getAttribute("src"),
-		);
-	});
-
-	it("renders the OpenHands brand asset", () => {
-		render(<AgentAvatar provider="openhands" />);
-
-		expect(screen.getByRole("img", { name: "openhands" })).toHaveAttribute(
-			"src",
-			expect.stringContaining("openhands.svg"),
-		);
+		expect(themeSources("opencode-v2")).toEqual(themeSources("opencode"));
 	});
 });

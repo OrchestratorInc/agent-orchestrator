@@ -635,6 +635,12 @@ func (m *Manager) rollbackStoppedChatAgentSwitchSource(
 	); err != nil {
 		return err
 	}
+	// A target that failed to start can leave its provider host behind. The
+	// session has one host, so the source cannot reopen while the target's
+	// host still owns it under another protocol. Stop it first.
+	if err := m.stopSourceControllerConclusive(current); err != nil {
+		return fmt.Errorf("stop failed target controller: %w", err)
+	}
 	_, err = m.resumeChatController(
 		ctx, "restore failed agent switch", current, project,
 		workspaceInfo(current), false, false, "", domain.SessionInterfaceTransitionHistoryStrict,

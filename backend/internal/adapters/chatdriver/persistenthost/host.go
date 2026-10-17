@@ -636,6 +636,11 @@ func Run(ctx context.Context, cfg Config) error {
 	h.cond = sync.NewCond(&h.mu)
 	providerDone := make(chan error, 1)
 	go func() { providerDone <- h.forwardProvider(stdout) }()
+	if h.acp != nil {
+		watchCtx, stopWatch := context.WithCancel(ctx)
+		defer stopWatch()
+		go h.watchPromptStall(watchCtx)
+	}
 	acceptDone := make(chan error, 1)
 	go func() { acceptDone <- h.accept() }()
 
@@ -854,6 +859,68 @@ func (h *host) detach(conn net.Conn) {
 	_ = conn.Close()
 }
 
+// deliverProviderFrameLocked routes one adapter frame to the attached
+// controller, or buffers it for replay while detached. Callers must hold
+// h.mu. retainedByACP marks frames the ACP relay owns for its own replay, so
+// they must not also enter the generic detached buffer.
+func (h *host) deliverProviderFrameLocked(frame []byte, retainedByACP bool) {
+	if requestID, ok := serverRequestID(frame); ok && !retainedByACP {
+		if _, exists := h.pendingRequests[requestID]; !exists {
+			h.pendingRequests[requestID] = &pendingRequest{frame: append([]byte(nil), frame...)}
+			h.pendingOrder = append(h.pendingOrder, requestID)
+		}
+	}
+	for h.client == nil && h.detachedBytes+len(frame) > maxDetachedBytes {
+		h.cond.Wait()
+	}
+	if h.client != nil {
+		if _, writeErr := h.client.Write(frame); writeErr != nil {
+			_ = h.client.Close()
+			h.client = nil
+			h.bufferPendingRequestsLocked()
+			if _, pending := serverRequestID(frame); !pending && !retainedByACP {
+				h.bufferFrameLocked(frame)
+			}
+		}
+	} else if !retainedByACP {
+		if requestID, pending := serverRequestID(frame); !pending || !h.pendingRequests[requestID].buffered {
+			h.bufferFrameLocked(frame)
+			if pending {
+				h.pendingRequests[requestID].buffered = true
+			}
+		}
+	}
+}
+
+// watchPromptStall terminates an in-flight prompt whose adapter went silent.
+// Turn settlement lives inside the ACP adapter, and the host discards the
+// adapter's stderr, so a lost completion (upstream claude-agent-acp#1145
+// class) leaves the session's Working indicator hanging with nothing to
+// observe. The watchdog gives such turns a terminal error and cancels the
+// adapter's turn. It never races forwardProvider: both relay under h.mu.
+func (h *host) watchPromptStall(ctx context.Context) {
+	ticker := time.NewTicker(promptStallCheckInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			h.mu.Lock()
+			frames, err := h.acp.failStalledPrompt(ctx, h.clientGeneration, h.client != nil, time.Now())
+			if err == nil && len(frames.client) > 0 {
+				h.deliverProviderFrameLocked(frames.client, true)
+			}
+			h.mu.Unlock()
+			// Like client frames, written outside h.mu: a full stdin pipe must
+			// not stall the provider reader.
+			if len(frames.provider) > 0 {
+				_, _ = h.stdin.Write(frames.provider)
+			}
+		}
+	}
+}
+
 func (h *host) forwardProvider(stdout io.Reader) error {
 	reader := bufio.NewReader(stdout)
 	for {
@@ -878,32 +945,7 @@ func (h *host) forwardProvider(stdout io.Reader) error {
 				}
 				continue
 			}
-			if requestID, ok := serverRequestID(frame); ok && !retainedByACP {
-				if _, exists := h.pendingRequests[requestID]; !exists {
-					h.pendingRequests[requestID] = &pendingRequest{frame: append([]byte(nil), frame...)}
-					h.pendingOrder = append(h.pendingOrder, requestID)
-				}
-			}
-			for h.client == nil && h.detachedBytes+len(frame) > maxDetachedBytes {
-				h.cond.Wait()
-			}
-			if h.client != nil {
-				if _, writeErr := h.client.Write(frame); writeErr != nil {
-					_ = h.client.Close()
-					h.client = nil
-					h.bufferPendingRequestsLocked()
-					if _, pending := serverRequestID(frame); !pending && !retainedByACP {
-						h.bufferFrameLocked(frame)
-					}
-				}
-			} else if !retainedByACP {
-				if requestID, pending := serverRequestID(frame); !pending || !h.pendingRequests[requestID].buffered {
-					h.bufferFrameLocked(frame)
-					if pending {
-						h.pendingRequests[requestID].buffered = true
-					}
-				}
-			}
+			h.deliverProviderFrameLocked(frame, retainedByACP)
 			h.mu.Unlock()
 		}
 		if err != nil {

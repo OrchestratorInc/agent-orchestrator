@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -420,6 +421,52 @@ func TestResolveClaudeTUIAgentConfigRejectsUnsupportedEffort(t *testing.T) {
 	}
 }
 
+func TestResolveAgentConfigRejectsExplicitEffortForUnsupportedHarness(t *testing.T) {
+	m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+		{ID: "gemini-2.5-pro", IsDefault: true, Efforts: []string{"low", "high"}},
+	}}}}
+	for _, harness := range []domain.AgentHarness{domain.HarnessDroid, domain.HarnessAider, domain.HarnessAmp} {
+		// A flagged explicit effort override must fail loudly instead of being
+		// silently discarded: the caller asked for something the harness cannot
+		// honor.
+		_, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+			ProjectID: "p", Kind: domain.KindWorker, Harness: harness,
+			AgentConfig: ports.AgentConfig{Model: "gemini-2.5-pro", Effort: "high"}, EffortOverride: true,
+		}, domain.ProjectConfig{})
+		if !errors.Is(err, ports.ErrUnsupportedEffort) {
+			t.Fatalf("harness %q override error = %v, want ErrUnsupportedEffort", harness, err)
+		}
+		if !strings.Contains(err.Error(), "only supported for codex, claude-code, and command-code") {
+			t.Fatalf("harness %q error = %v, want support hint", harness, err)
+		}
+		// Unflagged request-carried effort still clears silently, matching the
+		// long-standing contract for harnesses without effort support.
+		resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+			ProjectID: "p", Kind: domain.KindWorker, Harness: harness,
+			AgentConfig: ports.AgentConfig{Model: "gemini-2.5-pro", Effort: "high"},
+		}, domain.ProjectConfig{})
+		if err != nil {
+			t.Fatalf("harness %q unflagged error = %v, want silent clear", harness, err)
+		}
+		if resolved.Effort != "" {
+			t.Fatalf("harness %q unflagged effort = %q, want cleared", harness, resolved.Effort)
+		}
+	}
+
+	// Inherited project/role effort still clears silently: nothing explicit was
+	// requested, so there is nothing to reject.
+	resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessDroid,
+		AgentConfig: ports.AgentConfig{Model: "gemini-2.5-pro"},
+	}, domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Effort: "high"}}})
+	if err != nil {
+		t.Fatalf("inherited effort error = %v, want silent clear", err)
+	}
+	if resolved.Effort != "" {
+		t.Fatalf("inherited effort = %q, want provider default", resolved.Effort)
+	}
+}
+
 func TestResolveClaudeModelWithoutEffortStillRequiresCatalog(t *testing.T) {
 	m := &Manager{modelCatalog: tuningCatalog{err: errors.New("gateway does not list models")}}
 
@@ -454,6 +501,51 @@ func TestResolveClaudeModelWithoutEffortRejectsUnknownAndStaleCatalogs(t *testin
 	}}
 	if _, err := m.resolveAgentConfig(context.Background(), cfg, domain.ProjectConfig{}); !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) {
 		t.Fatalf("stale catalog error = %v, want ErrModelCapabilitiesUnavailable", err)
+	}
+}
+
+func TestResolveCodexTUIAgentConfigFallsBackWhenCatalogCannotValidate(t *testing.T) {
+	cfg := ports.SpawnConfig{ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
+		AgentConfig: domain.AgentConfig{Model: "gpt-custom", Effort: "xhigh"}}
+	unvalidated := domain.AgentConfig{Model: "gpt-custom", Effort: "xhigh"}
+	for name, catalog := range map[string]tuningCatalog{
+		"lookup failed":   {err: errors.New("not logged in")},
+		"stale":           {catalog: ports.AgentModelCatalog{Stale: true, Models: []ports.AgentModelInfo{{ID: "gpt-custom", Efforts: []string{"xhigh"}}}}},
+		"custom model":    {catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "gpt-5", Efforts: []string{"low"}}}}},
+		"unlisted effort": {catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "gpt-custom", Efforts: []string{"low"}}}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := &Manager{modelCatalog: catalog, logger: slog.New(slog.DiscardHandler)}
+			got, err := m.resolveTUIAgentConfig(context.Background(), cfg, domain.ProjectConfig{}, unvalidated)
+			if err != nil || got != unvalidated {
+				t.Fatalf("got %+v, %v; want unvalidated launch", got, err)
+			}
+		})
+	}
+}
+
+func TestResolveClaudeTUIAgentConfigStillRequiresCatalog(t *testing.T) {
+	m := &Manager{modelCatalog: tuningCatalog{err: errors.New("not logged in")}, logger: slog.New(slog.DiscardHandler)}
+	cfg := ports.SpawnConfig{ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		AgentConfig: domain.AgentConfig{Model: "opus", Effort: "high"}}
+	if _, err := m.resolveTUIAgentConfig(context.Background(), cfg, domain.ProjectConfig{}, cfg.AgentConfig); !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) {
+		t.Fatalf("err = %v, want ErrModelCapabilitiesUnavailable", err)
+	}
+}
+
+func TestResolveCodexTUIAgentConfigFallsBackWhenCatalogLookupTimesOut(t *testing.T) {
+	cfg := ports.SpawnConfig{ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
+		AgentConfig: domain.AgentConfig{Model: "gpt-custom", Effort: "xhigh"}}
+	m := &Manager{modelCatalog: tuningCatalog{err: fmt.Errorf("codex model/list: %w", context.DeadlineExceeded)}, logger: slog.New(slog.DiscardHandler)}
+	got, err := m.resolveTUIAgentConfig(context.Background(), cfg, domain.ProjectConfig{}, cfg.AgentConfig)
+	if err != nil || got != cfg.AgentConfig {
+		t.Fatalf("got %+v, %v; want unvalidated launch", got, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	m.modelCatalog = tuningCatalog{err: context.Canceled}
+	if _, err := m.resolveTUIAgentConfig(ctx, cfg, domain.ProjectConfig{}, cfg.AgentConfig); err == nil {
+		t.Fatal("cancelled spawn launched")
 	}
 }
 

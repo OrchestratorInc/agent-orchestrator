@@ -304,6 +304,13 @@ func copilotSystemPromptText(inline, file string) (string, error) {
 	return strings.TrimRight(string(data), "\n"), nil
 }
 
+// AgentProfileName is the per-session custom-agent profile AO installs for a
+// session with standing instructions, or "" when there are none. The terminal
+// launch selects it with --agent; Chat selects the same profile over ACP.
+func AgentProfileName(sessionID, systemPrompt, systemPromptFile string) string {
+	return copilotAgentName(sessionID, systemPrompt, systemPromptFile)
+}
+
 func copilotAgentName(sessionID, inlinePrompt, promptFile string) string {
 	if strings.TrimSpace(sessionID) == "" {
 		return ""
@@ -331,15 +338,23 @@ var copilotAgentNameReplacer = strings.NewReplacer(
 //	auto               -> --allow-all-tools (auto-approve every tool, still scoped paths/urls)
 //	bypass-permissions -> --allow-all (full bypass: tools, paths, urls)
 func appendApprovalFlags(cmd *[]string, permissions ports.PermissionMode) {
+	*cmd = append(*cmd, ApprovalArgs(permissions)...)
+}
+
+// ApprovalArgs returns the Copilot CLI approval flags for one AO permission
+// mode, so the terminal and Chat launches share one answer to what each mode
+// allows.
+func ApprovalArgs(permissions ports.PermissionMode) []string {
 	switch ports.NormalizePermissionMode(permissions) {
-	case ports.PermissionModeDefault:
-		// No flag: defer to the user's ~/.copilot config / interactive prompts.
 	case ports.PermissionModeAcceptEdits:
-		*cmd = append(*cmd, "--allow-tool", "write")
+		return []string{"--allow-tool", "write"}
 	case ports.PermissionModeAuto:
-		*cmd = append(*cmd, "--allow-all-tools")
+		return []string{"--allow-all-tools"}
 	case ports.PermissionModeBypassPermissions:
-		*cmd = append(*cmd, "--allow-all")
+		return []string{"--allow-all"}
+	default:
+		// No flag: defer to the user's ~/.copilot config / interactive prompts.
+		return nil
 	}
 }
 

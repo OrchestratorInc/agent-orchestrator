@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { aoBridge } from "../lib/bridge";
+import { developerModeStorageKey, windowTranslucencyStorageKey } from "../lib/window-translucency";
 import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
@@ -40,6 +41,10 @@ export type GlobalSettingsSection =
 /** Project settings pages: the project form sections plus the cues manager. */
 export type ProjectSettingsSection = ProjectFormSection | "environment" | "scripts" | "cues";
 
+/** Which failure a "Show diagnostics" shortcut is about: the job it produced,
+ * if any, and the error the user saw. */
+export type HarnessDiagnosticsRequest = { jobStartedAt?: string; error?: string };
+
 export type SettingsModal =
 	| {
 			scope: "global";
@@ -50,6 +55,8 @@ export type SettingsModal =
 			harnessView?: "local" | "cloud";
 			/** Start focusAgentId's login flow as soon as the Harness page can. */
 			startLogin?: boolean;
+			/** Open the diagnostics of focusAgentId's failed install or update, ready to copy. */
+			showDiagnostics?: HarnessDiagnosticsRequest;
 			/** Preserve the project form while global recovery settings is above it. */
 			returnTo?: Extract<SettingsModal, { scope: "project" }>;
 	}
@@ -64,7 +71,7 @@ export type SettingsModal =
 
 /** Worker detail view toggles — Changes (Git rail) is the default. */
 export type WorkbenchTab = "changes" | "files" | "terminal";
-export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files";
+export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files" | "artifacts";
 
 export type InspectorSessionState = {
 	isOpen: boolean;
@@ -133,6 +140,8 @@ export type UiState = {
 	diagnostics: boolean;
 	/** Experimental side chats in the inspector. Only takes effect in Developer mode. Default off. */
 	sideChats: boolean;
+	/** Developer Mode, macOS only: blur the desktop behind a translucent window. */
+	windowTranslucency: boolean;
 	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
 	terminalCopyOnSelect: boolean;
 	restartingProjectIds: ReadonlySet<string>;
@@ -185,12 +194,13 @@ export type UiState = {
 	setRemoteHosts: (enabled: boolean) => void;
 	setDiagnostics: (enabled: boolean) => void;
 	setSideChats: (enabled: boolean) => void;
+	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
-	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; preserveProject?: boolean }) => void;
+	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean }) => void;
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
 	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
@@ -241,7 +251,6 @@ export type OrchestratorReplacementFailure = {
 };
 
 const sidebarStorageKey = "ao.sidebar.open";
-const developerModeStorageKey = "ao.developerMode";
 const remoteHostsStorageKey = "ao.remoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
 const sideChatsStorageKey = "ao.sideChats";
@@ -271,6 +280,10 @@ function initialDiagnostics() {
 
 function initialSideChats() {
 	return getLocalStorage()?.getItem(sideChatsStorageKey) === "true";
+}
+
+function initialWindowTranslucency() {
+	return getLocalStorage()?.getItem(windowTranslucencyStorageKey) === "true";
 }
 
 function initialTerminalCopyOnSelect() {
@@ -333,6 +346,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	remoteHosts: initialRemoteHosts(),
 	diagnostics: initialDiagnostics(),
 	sideChats: initialSideChats(),
+	windowTranslucency: initialWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
@@ -392,6 +406,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 		getLocalStorage()?.setItem(sideChatsStorageKey, String(sideChats));
 		set({ sideChats });
 	},
+	setWindowTranslucency: (windowTranslucency) => {
+		getLocalStorage()?.setItem(windowTranslucencyStorageKey, String(windowTranslucency));
+		set({ windowTranslucency });
+	},
 	setTerminalCopyOnSelect: (terminalCopyOnSelect) => {
 		getLocalStorage()?.setItem(terminalCopyOnSelectStorageKey, String(terminalCopyOnSelect));
 		set({ terminalCopyOnSelect });
@@ -407,6 +425,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			...(options?.hostId && options.hostId !== "local" ? { hostId: options.hostId } : {}),
 			...(options?.harnessView ? { harnessView: options.harnessView } : {}),
 			...(options?.startLogin && options.focusAgentId ? { startLogin: true } : {}),
+			...(options?.showDiagnostics && options.focusAgentId ? { showDiagnostics: options.showDiagnostics } : {}),
 			...(options?.preserveProject && state.settingsModal?.scope === "project"
 				? { returnTo: state.settingsModal }
 				: options?.preserveProject && state.settingsModal?.scope === "global" && state.settingsModal.returnTo

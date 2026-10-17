@@ -517,6 +517,22 @@ describe("ACP session config options", () => {
 		},
 	);
 
+	it("shows Copilot's Agent and Plan as Plan Mode and keeps AO's approval control", async () => {
+		// The daemon removes Autopilot and allow_all from Copilot's catalog.
+		const uri = "https://agentclientprotocol.com/protocol/session-modes#";
+		const copilotModes: ChatConfigOption = {
+			id: "mode", name: "Mode", category: "mode", type: "select", currentValue: `${uri}agent`,
+			choices: [{ value: `${uri}agent`, name: "Agent" }, { value: `${uri}plan`, name: "Plan" }],
+		};
+		expect(hasProviderPermissionMode([copilotModes])).toBe(false);
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		render(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange} configOptions={[copilotModes]} />);
+		await user.click(screen.getByRole("button", { name: "Model mode for the next turn" }));
+		await user.click(screen.getByRole("switch", { name: "Plan Mode" }));
+		expect(onChange).toHaveBeenLastCalledWith("mode", { value: `${uri}plan` });
+	});
+
 	it("toggles a menu row from the keyboard with Enter and keeps the menu open", async () => {
 		const user = userEvent.setup();
 		const onChange = vi.fn();
@@ -1692,4 +1708,47 @@ describe("effort default when the provider reports none", () => {
 			models={[{ id: "m1", displayName: "Model", default: true, efforts: ["low", "medium", "high"], defaultEffort: "high" }]} />);
 		expect(onChange).not.toHaveBeenCalled();
 	});
+});
+
+it("presents Antigravity model variants as Codex-style model and effort choices with one approval picker", async () => {
+	const user = userEvent.setup();
+	const onChangeConfigOption = vi.fn();
+	const options: ChatConfigOption[] = [
+		{ id: "model", name: "Model", category: "model", type: "select", currentValue: "gemini-3.8-flash-high", choices: [
+			{ value: "gemini-3.8-flash-low", name: "Gemini 3.8 Flash (Low)" },
+			{ value: "gemini-3.8-flash-high", name: "Gemini 3.8 Flash (High)" },
+			{ value: "gemini-3.8-pro-low", name: "Gemini 3.8 Pro (Low)" },
+			{ value: "gemini-3.8-pro-high", name: "Gemini 3.8 Pro (High)" },
+		] },
+		{ id: "execution_mode", name: "Agent Mode", category: "mode", type: "select", currentValue: "agent", choices: [{ value: "agent", name: "Agent Mode" }] },
+		{ id: "session_mode", name: "Session Mode", type: "select", currentValue: "default", choices: [{ value: "default", name: "Session Mode" }] },
+		{ id: "mode", name: "Session Mode", category: "mode", type: "select", currentValue: "auto_edit", choices: [
+			{ value: "default", name: "Use agent permissions", permissionMode: "default" },
+			{ value: "auto_edit", name: "Accept edits", permissionMode: "accept-edits" },
+			{ value: "yolo", name: "Auto-approve", permissionMode: "auto" },
+			{ value: "agent", name: "Agent Mode" },
+		] },
+	];
+	render(<TurnSettingsBar harness="agy" models={[]} settings={{ approvalMode: "accept-edits" }} configOptions={options} onChangeConfigOption={onChangeConfigOption} />);
+	expect(screen.queryByRole("button", { name: "Session Mode" })).not.toBeInTheDocument();
+	const model = screen.getByRole("button", { name: "Model and reasoning effort for the next turn" });
+	expect(screen.queryByRole("button", { name: "Model mode for the next turn" })).not.toBeInTheDocument();
+	expect(model).toHaveTextContent("Gemini 3.8 Flash High");
+	await user.click(model);
+	await user.keyboard("{ArrowDown}{ArrowRight}");
+	await user.click(await screen.findByRole("menuitemradio", { name: "Gemini 3.8 Pro" }));
+	expect(onChangeConfigOption).toHaveBeenCalledWith("model", { value: "gemini-3.8-pro-high" });
+	await user.click(model);
+	await user.keyboard("{ArrowDown}{ArrowDown}{ArrowRight}");
+	await user.click(await screen.findByRole("menuitemradio", { name: "Low" }));
+	expect(onChangeConfigOption).toHaveBeenCalledWith("model", { value: "gemini-3.8-flash-low" });
+	await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+	expect(screen.queryByRole("menuitemradio", { name: "Use agent permissions" })).not.toBeInTheDocument();
+	expect(screen.queryByRole("menuitemradio", { name: "Agent Mode" })).not.toBeInTheDocument();
+	await user.click(screen.getByRole("menuitemradio", { name: "Ask for approval" }));
+	expect(onChangeConfigOption).toHaveBeenCalledWith("mode", { value: "default" });
+	await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+	await user.click(screen.getByRole("menuitemradio", { name: "Auto-approve" }));
+	expect(onChangeConfigOption).toHaveBeenCalledWith("mode", { value: "yolo" });
+	expect(options[0].choices).toHaveLength(4);
 });

@@ -12,6 +12,8 @@ type SandboxRef struct {
 	OrgID     string
 	SessionID string
 	Provider  string
+	// Billed: the sandbox counts against its organization's plan.
+	Billed bool
 }
 
 // Store is the durable state the scanner reads and pauses.
@@ -34,6 +36,11 @@ type Options struct {
 	// ProviderIdleThresholds overrides IdleThreshold for sandboxes on the named
 	// providers. A zero entry turns idle pause off for that provider.
 	ProviderIdleThresholds map[string]time.Duration
+	// BilledIdleThreshold, when non-zero, is how long a billed sandbox on any
+	// provider must be idle before it is paused, so plan minutes stop when the
+	// session goes quiet whichever provider it runs on. Unbilled sandboxes keep
+	// their provider's threshold.
+	BilledIdleThreshold time.Duration
 	// Logger receives lifecycle events.
 	Logger *slog.Logger
 }
@@ -90,7 +97,7 @@ func (s *Scanner) ScanOnce(ctx context.Context) error {
 		return err
 	}
 	for _, ref := range refs {
-		threshold := s.thresholdFor(ref.Provider)
+		threshold := s.thresholdFor(ref)
 		if threshold <= 0 {
 			continue
 		}
@@ -109,10 +116,13 @@ func (s *Scanner) ScanOnce(ctx context.Context) error {
 	return nil
 }
 
-// thresholdFor is how long a sandbox on provider must be idle before it is
-// paused; zero means never.
-func (s *Scanner) thresholdFor(provider string) time.Duration {
-	if threshold, ok := s.options.ProviderIdleThresholds[provider]; ok {
+// thresholdFor is how long a sandbox must be idle before it is paused; zero
+// means never.
+func (s *Scanner) thresholdFor(ref SandboxRef) time.Duration {
+	if ref.Billed && s.options.BilledIdleThreshold > 0 {
+		return s.options.BilledIdleThreshold
+	}
+	if threshold, ok := s.options.ProviderIdleThresholds[ref.Provider]; ok {
 		return threshold
 	}
 	return s.options.IdleThreshold
