@@ -1868,7 +1868,7 @@ describe("CreateProjectFlow project import validation", () => {
 		await user.click(await screen.findByLabelText("Worker agent"));
 		expect(screen.getByRole("option", { name: /Claude Code/ })).toBeInTheDocument();
 		expect(screen.queryByRole("option", { name: /Codex/ })).not.toBeInTheDocument();
-		expect(screen.getByRole("option", { name: "Manage harness connections…" })).toBeInTheDocument();
+		expect(screen.getByRole("option", { name: "Manage agent connections…" })).toBeInTheDocument();
 		expect(screen.queryByRole("option", { name: "Manage agents…" })).not.toBeInTheDocument();
 		await user.keyboard("{Escape}");
 		await user.click(await screen.findByRole("button", { name: "Create" }));
@@ -2841,9 +2841,9 @@ describe("CreateProjectFlow project import validation", () => {
 		await user.click(await screen.findByRole("combobox", { name: "Select a repository" }));
 		await user.click(await screen.findByRole("option", { name: /acme\/web-app/ }));
 
-		expect(await screen.findByText(/No harness is logged in for cloud yet/)).toBeInTheDocument();
+		expect(await screen.findByText(/No agent is logged in for cloud yet/)).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
-		await user.click(screen.getByRole("button", { name: "Go to Harness settings" }));
+		await user.click(screen.getByRole("button", { name: "Go to Agents settings" }));
 		expect(openGlobalSettings).toHaveBeenCalledWith("harness", { harnessView: "cloud", preserveProject: true });
 	});
 
