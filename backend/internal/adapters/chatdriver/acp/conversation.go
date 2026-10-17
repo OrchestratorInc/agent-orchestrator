@@ -138,7 +138,7 @@ type conversation struct {
 	onAuthRejected        func()
 	promptResponseFailure func(acpsdk.PromptResponse) error
 	hibernationCheck      func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
-	afterInterrupt       func(context.Context, AgentRequest, string) error
+	afterInterrupt        func(context.Context, AgentRequest, string) error
 	historyNotice         func(string) bool
 	// preamble is standing context attached to the first prompt that actually
 	// reaches the provider. It is the delivery channel for agents that accept no
@@ -798,7 +798,7 @@ func (c *conversation) finishPrompt(
 			// A replacement daemon must replay it and verify the fence again.
 			c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState,
 				ControllerState: ports.ChatControllerStopped,
-				Err: fmt.Errorf("%w: ACP interrupt settlement: %w", ports.ErrChatRecoveryInconclusive, fenceErr)})
+				Err:             fmt.Errorf("%w: ACP interrupt settlement: %w", ports.ErrChatRecoveryInconclusive, fenceErr)})
 			return
 		}
 	}

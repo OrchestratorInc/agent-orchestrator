@@ -161,7 +161,18 @@ func (e *Provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// body for instruction/history assertions. A tool result is never a task.
 	if !toolResult {
 		if label := promptLabel(prompt); label != "" {
-			prompt = label
+			// AO also runs tool-free title/suggestion requests containing task
+			// labels. They must not replace the worker's context receipt, inflate
+			// dispatch counts, or accidentally trigger a scripted Bash operation.
+			worker := false
+			for _, tool := range request.Tools {
+				worker = worker || strings.EqualFold(tool.Name, "bash")
+			}
+			if worker {
+				prompt = label
+			} else {
+				prompt = ""
+			}
 		}
 	}
 	e.mu.Lock()

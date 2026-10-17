@@ -62,7 +62,7 @@ type legacyModelInfo struct {
 
 type legacyACPResponse struct {
 	result json.RawMessage
-	err error
+	err    error
 }
 
 func newLegacyACPTransport(stdin io.WriteCloser) (*legacyACPTransport, io.WriteCloser, io.Reader) {

@@ -1,6 +1,11 @@
 package testfixture
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
 
 func TestPromptLabelCorrelatesNativeEnrichmentWithoutMatchingPrefixes(t *testing.T) {
 	for _, tc := range []struct {
@@ -19,5 +24,25 @@ func TestPromptLabelCorrelatesNativeEnrichmentWithoutMatchingPrefixes(t *testing
 		if got := promptLabel(tc.text); got != tc.want {
 			t.Fatalf("promptLabel(%q) = %q, want %q", tc.text, got, tc.want)
 		}
+	}
+}
+
+// Tool-free background work can quote the same task after the worker finishes.
+// It must neither overwrite private-context proof nor appear as a second send.
+func TestBackgroundRequestCannotOverwriteWorkerReceipt(t *testing.T) {
+	provider := New(t)
+	worker := `{"messages":[{"role":"user","content":[{"type":"text","text":"ao-seed"}]}],"system":"--PRIVATE_CONTEXT_4831","tools":[{"name":"Bash"}]}`
+	background := `{"messages":[{"role":"user","content":[{"type":"text","text":"Suggest a title for ao-seed"}]}]}`
+	for _, body := range []string{worker, background} {
+		req := httptest.NewRequest(http.MethodPost, "/messages", strings.NewReader(body))
+		response := httptest.NewRecorder()
+		provider.ServeHTTP(response, req)
+		if response.Code != http.StatusOK {
+			t.Fatalf("request rejected: %d, %s", response.Code, response.Body.String())
+		}
+	}
+	provider.AssertRequestContains(t, "ao-seed", "--PRIVATE_CONTEXT_4831")
+	if count := provider.RequestCount("ao-seed"); count != 1 {
+		t.Fatalf("worker dispatch count = %d, want 1", count)
 	}
 }

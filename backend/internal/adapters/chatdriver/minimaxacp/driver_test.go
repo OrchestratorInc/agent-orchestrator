@@ -198,8 +198,8 @@ func TestCanonicalModelResolvesOnlyAgainstNativeVariantCatalog(t *testing.T) {
 func TestInterruptRequiresCompleteExactNativeStopReceipt(t *testing.T) {
 	for _, tc := range []struct {
 		name, receipt string
-		requestErr error
-		valid bool
+		requestErr    error
+		valid         bool
 	}{
 		{"released", `{"receipt":{"schemaVersion":1,"rootSessionId":"native-session","rootStopped":true,"stoppedSessionIds":[],"activeSessionIds":[],"failedSessionIds":[]}}`, nil, true},
 		{"missing receipt", `{}`, nil, false},

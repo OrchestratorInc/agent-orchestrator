@@ -22,7 +22,7 @@ func TestACPInterruptedTurnWaitsForNativeSettlement(t *testing.T) {
 			release := make(chan struct{})
 			conv := &conversation{
 				sessionID: "native-session", activeTurn: "turn-1",
-				events: make(chan ports.ChatEvent, 8),
+				events:     make(chan ports.ChatEvent, 8),
 				legacyWire: &legacyACPTransport{},
 				afterInterrupt: func(ctx context.Context, _ AgentRequest, id string) error {
 					if id != "native-session" {
@@ -44,7 +44,7 @@ func TestACPInterruptedTurnWaitsForNativeSettlement(t *testing.T) {
 			go func() {
 				conv.finishPrompt("turn-1", acpsdk.PromptResponse{
 					StopReason: acpsdk.StopReasonCancelled,
-					Meta: map[string]any{persistenthost.ACPEventIDMetaKey: "terminal-1"},
+					Meta:       map[string]any{persistenthost.ACPEventIDMetaKey: "terminal-1"},
 				}, nil)
 				close(done)
 			}()
