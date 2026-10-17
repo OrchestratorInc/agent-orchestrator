@@ -1921,7 +1921,7 @@ describe("Sidebar", () => {
 		expect(onCreateProject).not.toHaveBeenCalled();
 	});
 
-	it("shows initialized workspace repositories that need fixes", async () => {
+	it("imports a workspace without initialized repositories that need fixes", async () => {
 		const user = userEvent.setup();
 		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/workspace");
 		window.ao!.app.checkAncestorRepo = vi.fn().mockResolvedValue(undefined);
@@ -1956,9 +1956,12 @@ describe("Sidebar", () => {
 		await screen.findByRole("dialog", { name: "Import workspace" });
 
 		expect(screen.getByText("unborn")).toBeInTheDocument();
-		expect(screen.getByText("Set an origin remote for the child repositories marked below before importing this workspace.")).toBeInTheDocument();
+		expect(screen.queryByText("Set an origin remote for the child repositories marked below before importing this workspace.")).not.toBeInTheDocument();
+		expect(screen.getByText("The 2 repositories marked below have no commit or origin remote yet. AO will import this workspace without them, and agents will not work in them.")).toBeInTheDocument();
+		expect(screen.getByText("Git setup needed · Not included")).toBeInTheDocument();
+		expect(screen.getByText("No remote · Not included")).toBeInTheDocument();
 		expect(screen.queryByRole("dialog", { name: "Prepare project" })).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
 		expect(screen.queryByRole("button", { name: /Set up|Hide setup/i })).not.toBeInTheDocument();
 		expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
 	});

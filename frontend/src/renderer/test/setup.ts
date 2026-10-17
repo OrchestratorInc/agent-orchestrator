@@ -171,6 +171,11 @@ if (typeof window !== "undefined") {
 		clipboard: {
 			writeText: async () => undefined,
 			readText: async () => "",
+			writeImage: async () => undefined,
+		},
+		chatImage: {
+			fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
+			save: async () => true,
 		},
 		daemon: {
 			getStatus: async () => ({ state: "stopped" }),
@@ -406,6 +411,8 @@ if (typeof window !== "undefined") {
 			disconnect: async () => undefined,
 			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
+		agentBrowserUrl: async () => "",
+			externalUrl: async (_hostId: string, url: string) => url,
 		},
 		cloud: {
 			getSession: async () => null,
@@ -427,6 +434,7 @@ if (typeof window !== "undefined") {
 			openStream: async () => ({ streamId: "stream_test" }),
 			closeStream: () => undefined,
 			onStreamEvent: () => () => undefined,
+			agentBrowserUrl: async () => "",
 		},
 	};
 } // end if (typeof window !== "undefined")

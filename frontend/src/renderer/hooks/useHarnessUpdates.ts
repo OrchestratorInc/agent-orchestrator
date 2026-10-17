@@ -117,20 +117,25 @@ export async function fetchUpdateAdvisory(agentId: AgentId, hostId?: string, ref
 	return data;
 }
 
-/** No job and no error: the click-time check found nothing left to install. */
-export type HarnessUpdateStart = { job?: InstallJob; error?: string };
+/**
+ * No job and no error: the click-time check found nothing left to install.
+ * advisory is that check's result once an install was requested, so a failed
+ * update names the release it actually tried.
+ */
+export type HarnessUpdateStart = { job?: InstallJob; error?: string; advisory?: AgentUpdateAdvisory };
 
 /**
  * Starts an update the user saw, shared by the notice and the Harness page.
- * The advisory is re-checked at click time, and only that release, through
- * that method, is installed. The started job lands in the shared jobs query.
+ * The advisory is re-checked at click time, and its latest release is
+ * installed through the method the user saw: a release published since the
+ * card was last checked is the update they asked for, not a reason to stop.
+ * The started job lands in the shared jobs query.
  */
 export function useStartHarnessUpdate(hostId?: string) {
 	const queryClient = useQueryClient();
 	const { t } = useTranslation();
-	return useCallback(async ({ agentId, latestVersion, methodId, canStart }: {
+	return useCallback(async ({ agentId, methodId, canStart }: {
 		agentId: AgentId;
-		latestVersion: string | undefined;
 		methodId: string;
 		/** Checked after the click-time probe, e.g. so an unmounted page starts nothing. */
 		canStart?: () => boolean;
@@ -142,15 +147,14 @@ export function useStartHarnessUpdate(hostId?: string) {
 			queryClient.setQueryData(key, fresh);
 			// No longer behind: the refreshed advisory already shows why.
 			if (!hasConfirmedHarnessUpdate(fresh) || canStart?.() === false) return {};
-			if (fresh.latestVersion !== latestVersion) return { error: t("settings.harness.updateTargetChanged", { version: versionLabel(fresh.latestVersion!) }) };
 			if (maintenanceMethodId(fresh) !== methodId) return { error: t("settings.harness.updateMethodChanged", { agent: agentLabel(agentId) }) };
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/install", {
 				params: { path: { agent: agentId } },
 				body: { method: methodId, operation: "update", expectedVersion: fresh.latestVersion },
 			});
-			if (error || !data) return { error: apiErrorMessage(error, t("settings.harness.updateFailed")) };
+			if (error || !data) return { error: apiErrorMessage(error, t("settings.harness.updateFailed")), advisory: fresh };
 			queryClient.setQueryData<InstallJob[]>(installJobsQueryKeyForHost(hostId), (current) => upsertInstallJob(current, data));
-			return { job: data };
+			return { job: data, advisory: fresh };
 		} catch (error) {
 			return { error: error instanceof Error ? error.message : t("settings.harness.updateFailed") };
 		}

@@ -530,6 +530,12 @@ html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] :is(button, 
 	-webkit-app-region: no-drag;
 }
 
+/* Settings content scrolls up under the page's transparent drag strip. Controls
+ * that pass beneath it punch through the drag region so a click still lands. */
+html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, select, textarea, label, [role="switch"], [role="combobox"], [role="tab"], [role="menuitem"]) {
+	-webkit-app-region: no-drag;
+}
+
 .center-panel-shell.center-panel-shell--mac.center-panel-shell--fullscreen {
 	padding: 0;
 }
@@ -776,10 +782,24 @@ html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] :is(button, 
 	padding-block: var(--size-settings-row-padding);
 }
 
-/* Helper copy belongs to the preceding settings row, not a separate divided row. */
-[data-section="updates"] .nightly-warning {
-	border-top: 0 !important;
-	border-block-start: 0 !important;
+/* Horizontal inset of settings row text inside a card. Page titles, section
+ * headings and helper text outside the card use it too so every text edge on
+ * a settings page lines up. */
+:root {
+	--settings-row-inset: var(--space-4);
+}
+
+/* One card per settings section: no outline, the raised card surface one
+ * step off the page groups it. Hairline dividers separate the items. */
+.settings-grouped-rows {
+	overflow: hidden;
+	border-radius: var(--radius-md);
+	background-color: var(--color-bg-secondary);
+	padding-block: var(--space-1);
+}
+
+.settings-grouped-rows > * + * {
+	border-top: 1px solid var(--color-border);
 }
 
 /* Tailwind preflight clears button backgrounds; keep settings rows filled. */
@@ -787,55 +807,22 @@ button.settings-row-bar {
 	background-color: var(--color-bg-settings-row);
 }
 
-/* Grouped rows size around the shared action control, keeping its top/bottom
- * inset equal to the row's right and left inset. */
+/* Grouped rows fit their content (10px vertical padding), the control
+ * vertically centered. */
 .settings-grouped-rows .settings-row-bar {
 	height: auto;
-	min-height: calc(var(--size-settings-action-height) + (var(--space-2) * 2));
-	padding-block: var(--space-2);
-	padding-inline: var(--space-3);
+	min-height: 0;
+	padding-block: var(--space-2_5);
+	padding-inline: var(--settings-row-inset);
 	border-radius: 0;
 }
 
-/* The dialog body owns the page inset. Rows must not add a second left/right
- * gutter or their labels drift from the dialog title and section headings. */
-.settings-dialog-body .settings-row-bar {
-	padding-inline: 0;
-}
-
-/* Match the open row layout used by the main Settings pages. */
-.project-settings-form > section,
-.project-settings-form > fieldset > section {
-	gap: var(--space-2);
-}
-
-.project-settings-form > section > h2,
-.project-settings-form > fieldset > section > h2 {
-	padding-inline: 0;
-	font-size: var(--font-size-sm);
-	font-weight: 500;
-	line-height: 1rem;
-	color: var(--color-text-settings-muted);
-}
-
-.project-settings-form > section > .settings-grouped-rows,
-.project-settings-form > fieldset > section > .settings-grouped-rows {
-	background: transparent;
-}
-
-.project-settings-form > section > .settings-grouped-rows .settings-row-bar,
-.project-settings-form > fieldset > section > .settings-grouped-rows .settings-row-bar {
-	padding-inline: 0;
-}
-
-.project-settings-form > section > .settings-grouped-rows > .settings-row-bar + .settings-row-bar,
-.project-settings-form > fieldset > section > .settings-grouped-rows > .settings-row-bar + .settings-row-bar {
-	border-top: 0;
-}
-
-/* The update summary is a content row, not a compact control row. */
-.settings-grouped-rows .update-status-row {
-	padding-block: var(--space-4);
+/* Non-row content in a settings card (forms, release notes, terminals, QR,
+ * charts): a direct card child inset to the rows' text edge. Block by default;
+ * add flex/gap utilities for its own layout. */
+@utility settings-content-row {
+	padding-inline: var(--settings-row-inset);
+	padding-block: var(--space-3);
 }
 
 @utility settings-menu-item {
@@ -1326,8 +1313,10 @@ button.settings-row-bar {
 		color: var(--color-text-settings-title);
 	}
 
+	/* Radix radio items take focus with the arrow keys; the checked fill alone
+	   does not show where focus is, so keyboard focus gets the shared ring. */
 	&:focus-visible {
-		box-shadow: none;
+		box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-ring) 55%, transparent);
 	}
 
 	&[data-state="checked"] {
@@ -1631,21 +1620,31 @@ textarea,
 	overflow: hidden;
 }
 
+/* Every wrapper between the section and the layout (the toolbar wrapper, then
+   the section body) is held to the page height, however deep it nests. */
 .settings-dialog-body:has([data-harness-detail]),
 .settings-dialog-body > div:has([data-harness-detail]),
 [data-section="harness"]:has([data-harness-detail]),
-[data-section="harness"]:has([data-harness-detail]) > div {
+[data-section="harness"] div:has([data-harness-detail]) {
 	min-width: 0;
-	max-width: 100%;
 	min-height: 0;
 	flex: 1;
+}
+
+/* The page body keeps its column cap (max-w on .settings-dialog-body); only
+   the inner wrappers are held to their parent. */
+.settings-dialog-body > div:has([data-harness-detail]),
+[data-section="harness"]:has([data-harness-detail]),
+[data-section="harness"] div:has([data-harness-detail]) {
+	max-width: 100%;
 }
 
 .settings-dialog-body:has([data-harness-detail]) {
 	padding-bottom: 18px;
 }
 
-[data-section="harness"]:has([data-harness-detail]) > div > :not([data-harness-detail]) {
+/* The layout's siblings (errors, host menu, remote note) keep their height. */
+[data-section="harness"] div:has(> [data-harness-detail]) > :not([data-harness-detail]) {
 	flex-shrink: 0;
 }
 
@@ -1669,6 +1668,31 @@ textarea,
 
 .settings-thin-scrollbar:hover::-webkit-scrollbar-thumb {
 	background-color: color-mix(in srgb, var(--color-scrollbar) 28%, transparent);
+}
+
+/* The harness list scrolls on its own edge: no track, just a thin thumb
+   over the rows. scrollbar-width must stay auto, or the webkit rules below
+   are ignored and the native bar reserves a gutter. */
+.harness-list-scrollbar {
+	scrollbar-width: auto;
+	scrollbar-color: auto;
+}
+
+.harness-list-scrollbar::-webkit-scrollbar {
+	width: 6px;
+}
+
+.harness-list-scrollbar::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.harness-list-scrollbar::-webkit-scrollbar-thumb {
+	border-radius: 999px;
+	background-color: color-mix(in srgb, var(--color-scrollbar) 24%, transparent);
+}
+
+.harness-list-scrollbar:hover::-webkit-scrollbar-thumb {
+	background-color: color-mix(in srgb, var(--color-scrollbar) 40%, transparent);
 }
 
 /* Repository pickers keep a visible scroll track so a long grant list is
@@ -4111,27 +4135,19 @@ html.sidebar-reordering * {
  * (gap width + x-transform). Dragging updates --ao-inspector-w directly. */
 
 .session-inspector__topbar {
-	/* Width the tab list needs (its tabs, their gaps and the leading pad).
-	   The centered field never grows past what is left once both side tracks
-	   hold that much, so it cannot overlap the last tab. */
-	--inspector-tabs-reserve: calc(var(--inspector-tab-count, 4) * (var(--size-control-md) + var(--space-1)));
 	background: var(--bg);
 	color: var(--fg);
 	user-select: none;
 }
 
-/* In browser mode, use equal side tracks so the address field is centered in
-   the inspector itself. Flex centering only centers it in the leftover space,
-   which shifts it right because the tab controls are wider than the actions. */
+/* In browser mode, center the address field in the space between the tabs and
+   the pinned actions. Intrinsic side tracks follow the tab count, so the field
+   stays centered in that gap as Files or Artifacts tabs appear. */
 .session-inspector__topbar--browser {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, clamp(120px, calc(100cqw - 2 * var(--inspector-tabs-reserve)), 240px)) minmax(0, 1fr);
+	grid-template-columns: max-content minmax(0, 1fr) max-content;
+	column-gap: var(--space-1);
 	padding-left: 0;
-	transition: grid-template-columns var(--duration-fast) ease;
-}
-
-.session-inspector__topbar--browser:has(.browser-panel__address-bar--editing) {
-	grid-template-columns: minmax(0, 1fr) clamp(120px, min(52cqw, calc(100cqw - 2 * var(--inspector-tabs-reserve))), 560px) minmax(0, 1fr);
 }
 
 .session-inspector__topbar--browser > .session-inspector__tablist {
@@ -4141,7 +4157,13 @@ html.sidebar-reordering * {
 
 .session-inspector__topbar > .browser-panel__topbar-host {
 	grid-column: 2;
-	width: 100%;
+	width: min(100%, 240px);
+	justify-self: center;
+	transition: width var(--duration-fast) ease;
+}
+
+.session-inspector__topbar--browser:has(.browser-panel__address-bar--editing) > .browser-panel__topbar-host {
+	width: min(100%, 52cqw, 560px);
 }
 
 .session-inspector__topbar--browser > .session-inspector__trailing {
@@ -6053,105 +6075,14 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	padding-block: var(--space-2);
 }
 
-/* Connect Mobile: the pairing QR and the wait before it. The placeholder is a
-   real QR carrying decoy data, so it can dissolve into the finished code
-   instead of being swapped for it. See PairingQr.tsx. */
-/* The library's SVG includes a generous quiet zone. Enlarge the artwork
-   inside the fixed card so the preview and the finished code share the same
-   visible bounds while the card still supplies the clipping edge. */
-.ao-qr-visual > svg {
-	transform: scale(0.885);
-	transform-origin: center;
-}
-
-/* A triangular ramp occupying half the cycle. With four layers offset by a
-   quarter cycle, two are always mid-ramp in opposite directions, so the
-   composite dissolves continuously instead of swapping one code for the next. */
-@keyframes ao-qr-decoy-cycle {
-	0% {
-		opacity: 0;
-	}
-	25% {
-		opacity: 0.5;
-	}
-	50% {
-		opacity: 0;
-	}
-	100% {
-		opacity: 0;
-	}
-}
-
-/* A slow wander, so the panel reads as working rather than frozen. Small
-   enough that it never looks like a layout bug. */
-@keyframes ao-qr-drift {
-	0%,
-	100% {
-		transform: translate3d(0, 0, 0);
-	}
-	25% {
-		transform: translate3d(-3px, 2px, 0);
-	}
-	50% {
-		transform: translate3d(2px, -3px, 0);
-	}
-	75% {
-		transform: translate3d(3px, 2px, 0);
-	}
-}
-
-@keyframes ao-qr-resolve-in {
-	from {
-		opacity: 0;
-		filter: blur(4px);
-	}
-	to {
-		opacity: 1;
-		filter: blur(0);
-	}
-}
-
-@keyframes ao-qr-decoy-settle {
-	to {
-		opacity: 0;
-		filter: blur(4px);
-	}
-}
-
-.ao-qr-decoy {
-	opacity: 0;
-	animation: ao-qr-decoy-cycle 4800ms linear infinite;
-}
-
-.ao-qr-drift {
-	animation: ao-qr-drift 9s ease-in-out infinite;
-}
-
-/* The real code has arrived: stop cycling and clear away together. */
-.ao-qr-decoy--settling {
-	animation: ao-qr-decoy-settle 260ms ease-out forwards;
-}
-
-.ao-qr-resolved {
-	animation: ao-qr-resolve-in ease-out both;
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.ao-qr-decoy {
-		animation-duration: 9000ms;
-	}
-
-	.ao-qr-drift {
-		animation: none;
-	}
-
-	.ao-qr-resolved {
-		animation: none;
-	}
-}
-
 ::highlight(chat-annotation) {
 	background-color: #6b728040;
+	color: inherit;
+}
+
+/* Text selected in an artifact preview while its ask bar has focus. */
+::highlight(artifact-selection) {
+	background-color: var(--color-term-selection-light);
 	color: inherit;
 }
 
@@ -6204,9 +6135,11 @@ html[data-window-translucent="true"] body {
 }
 
 /* Floating surfaces sit above the material: back to solid theme values.
- * `.z-overlay` covers custom floating menus built on the shared menu recipe. */
+ * `.z-overlay` covers custom floating menus; update notices also need solid
+ * fills so the decorative stack stays behind the front card. */
 html[data-window-translucent="true"] :is(
 	.z-overlay,
+	.harness-update-notice,
 	[data-radix-popper-content-wrapper],
 	[role="dialog"],
 	[role="alertdialog"],
@@ -6227,6 +6160,7 @@ html[data-window-translucent="true"] :is(
 html[data-window-translucent="true"] :is(
 	body,
 	.z-overlay,
+	.harness-update-notice,
 	[data-radix-popper-content-wrapper],
 	[role="dialog"],
 	[role="alertdialog"],

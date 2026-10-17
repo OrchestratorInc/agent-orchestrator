@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,7 @@ type mobileBridge interface {
 	StartRemoteAccess() (MobileStatusResponse, error)
 	SetSecurePairing(on bool) (MobileStatusResponse, error)
 	SetKeepAwake(on bool) (MobileStatusResponse, error)
+	SetKeepAwakeLid(on, lidClosed bool) (MobileStatusResponse, error)
 }
 
 // MobileController exposes the Connect Mobile bridge control endpoints
@@ -162,7 +164,13 @@ func (c *MobileController) KeepAwake(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "invalid_request", "MOBILE_KEEP_AWAKE", "invalid body", nil)
 		return
 	}
-	res, err := c.Bridge.SetKeepAwake(body.Enabled)
+	var res MobileStatusResponse
+	var err error
+	if body.LidClosed != nil {
+		res, err = c.Bridge.SetKeepAwakeLid(body.Enabled, *body.LidClosed)
+	} else {
+		res, err = c.Bridge.SetKeepAwake(body.Enabled)
+	}
 	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "MOBILE_KEEP_AWAKE", err.Error(), nil)
 		return
@@ -201,6 +209,8 @@ type KeepAwakeController interface {
 	Stop()
 	Active() bool
 	HasBattery() bool
+	ConfigureLid(on, allowSetup bool) error
+	LidStatus() (supported, active bool, reason string)
 }
 
 // BridgeService is the production mobileBridge. It persists state and drives
@@ -326,7 +336,7 @@ func (b *BridgeService) Status() MobileStatusResponse {
 	if st.ServeCleanupPending && res.SecurePairing.Reason == "" {
 		res.SecurePairing.Reason = "clear_failed"
 	}
-	res.KeepAwake = b.keepAwakeStatus(st.KeepAwake)
+	res.KeepAwake = b.keepAwakeStatus(st.KeepAwake, st.KeepAwakeLid)
 	return res
 }
 
@@ -512,27 +522,36 @@ func (b *BridgeService) securePairingStatus(on, bridgeUp bool) SecurePairingStat
 	return sp
 }
 
-func (b *BridgeService) keepAwakeStatus(on bool) KeepAwakeStatus {
+func (b *BridgeService) keepAwakeStatus(on, lidClosed bool) KeepAwakeStatus {
 	if b.KeepAwake == nil {
 		return KeepAwakeStatus{}
 	}
-	return KeepAwakeStatus{
+	res := KeepAwakeStatus{
 		Supported:  true,
 		Enabled:    on,
 		Active:     b.KeepAwake.Active(),
 		HasBattery: b.KeepAwake.HasBattery(),
 	}
+	res.LidClosed = lidClosed
+	res.LidSupported, res.LidActive, res.LidReason = b.KeepAwake.LidStatus()
+	return res
 }
 
 // applyKeepAwakeLocked holds the machine awake only while the user opted in
 // and the bridge is actually serving: there is no phone to stay reachable for
 // otherwise. The caller owns transitionMu.
-func (b *BridgeService) applyKeepAwakeLocked(on bool) error {
+func (b *BridgeService) applyKeepAwakeLocked(on, lidClosed bool) error {
 	if b.KeepAwake == nil {
 		return nil
 	}
 	if on && b.LAN.Running() {
-		return b.KeepAwake.Start()
+		if err := b.KeepAwake.Start(); err != nil {
+			return err
+		}
+		// Idle wake succeeded. Native lid failures are reported in LidReason,
+		// and must not turn that success into an HTTP error.
+		_ = b.KeepAwake.ConfigureLid(lidClosed, false)
+		return nil
 	}
 	b.KeepAwake.Stop()
 	return nil
@@ -546,12 +565,52 @@ func (b *BridgeService) SetKeepAwake(on bool) (MobileStatusResponse, error) {
 	if b.KeepAwake == nil {
 		return MobileStatusResponse{}, errors.New("keeping this machine awake is only supported on macOS")
 	}
-	st, _ := mobilebridge.Load(b.ConfigPath)
+	st, err := mobilebridge.Load(b.ConfigPath)
+	if err != nil && !os.IsNotExist(err) {
+		return MobileStatusResponse{}, err
+	}
 	st.KeepAwake = on
 	if err := mobilebridge.Save(b.ConfigPath, st); err != nil {
 		return MobileStatusResponse{}, err
 	}
-	if err := b.applyKeepAwakeLocked(on); err != nil {
+	if err := b.applyKeepAwakeLocked(on && st.Enabled, st.KeepAwakeLid); err != nil {
+		return MobileStatusResponse{}, err
+	}
+	return b.Status(), nil
+}
+
+// SetKeepAwakeLid is desktop-local like the existing mobile control endpoint.
+// Older requests omit lidClosed and retain the separately saved lid preference.
+func (b *BridgeService) SetKeepAwakeLid(on, lidClosed bool) (MobileStatusResponse, error) {
+	b.transitionMu.Lock()
+	defer b.transitionMu.Unlock()
+	if b.KeepAwake == nil {
+		return MobileStatusResponse{}, errors.New("keeping this machine awake is only supported on macOS")
+	}
+	if lidClosed {
+		supported, _, reason := b.KeepAwake.LidStatus()
+		if !supported {
+			if reason == "isolated_data_dir" {
+				return MobileStatusResponse{}, errors.New("closed-lid wakefulness is disabled for custom or isolated AO_DATA_DIR directories; use the default ~/.ao/data directory to enable it")
+			}
+			return MobileStatusResponse{}, errors.New("closed-lid wakefulness requires a supported Apple Silicon MacBook (macOS 13–27) and the desktop helper")
+		}
+	}
+	st, err := mobilebridge.Load(b.ConfigPath)
+	if err != nil && !os.IsNotExist(err) {
+		return MobileStatusResponse{}, err
+	}
+	// Register before committing a new opt-in; failure preserves both preferences.
+	if lidClosed && !st.KeepAwakeLid {
+		if err := b.KeepAwake.ConfigureLid(false, true); err != nil {
+			return MobileStatusResponse{}, err
+		}
+	}
+	st.KeepAwake, st.KeepAwakeLid = on, lidClosed
+	if err := mobilebridge.Save(b.ConfigPath, st); err != nil {
+		return MobileStatusResponse{}, err
+	}
+	if err := b.applyKeepAwakeLocked(on && st.Enabled, st.KeepAwakeLid); err != nil {
 		return MobileStatusResponse{}, err
 	}
 	return b.Status(), nil
@@ -643,7 +702,7 @@ func (b *BridgeService) enableWithPasswordLocked(pw string, noPublicTunnel, loop
 		accountToken = ""
 		accountTokenOwner = ""
 	}
-	nextSt := mobilebridge.State{Enabled: true, Password: pw, LastPort: port, RetiredPasswordHash: retired, AccountTokenHash: accountTokenHash, AccountToken: accountToken, AccountTokenOwner: accountTokenOwner, SecurePairing: prevSt.SecurePairing, ServeCleanupPending: prevSt.ServeCleanupPending, KeepAwake: prevSt.KeepAwake, NoPublicTunnel: noPublicTunnel, LoopbackOnly: loopbackOnly}
+	nextSt := mobilebridge.State{Enabled: true, Password: pw, LastPort: port, RetiredPasswordHash: retired, AccountTokenHash: accountTokenHash, AccountToken: accountToken, AccountTokenOwner: accountTokenOwner, SecurePairing: prevSt.SecurePairing, ServeCleanupPending: prevSt.ServeCleanupPending, KeepAwake: prevSt.KeepAwake, KeepAwakeLid: prevSt.KeepAwakeLid, NoPublicTunnel: noPublicTunnel, LoopbackOnly: loopbackOnly}
 	if err := mobilebridge.Save(b.ConfigPath, nextSt); err != nil {
 		// Persist failed after the listener came up. A running listener still
 		// serves the old hash; a fresh enable must tear the listener back down.
@@ -683,7 +742,7 @@ func (b *BridgeService) startConnectorsLocked(port int, st mobilebridge.State) {
 	}
 	// Best-effort like the proxy: a failed caffeinate leaves the bridge up and
 	// Status reports the assertion as inactive.
-	_ = b.applyKeepAwakeLocked(st.KeepAwake)
+	_ = b.applyKeepAwakeLocked(st.KeepAwake && st.Enabled, st.KeepAwakeLid)
 	// Point the connector at the port Start actually bound, not DefaultPort:
 	// Start falls back to an ephemeral port when the default is taken, and a
 	// connector aimed at the wrong port tunnels nothing. Start is idempotent

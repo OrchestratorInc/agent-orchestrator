@@ -61,6 +61,40 @@ func TestClaudeSubmissionContextMatchesDurableNonce(t *testing.T) {
 	}
 }
 
+func TestClaudeHookReportsNativeEntrypoint(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "qa-1")
+	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	for _, tc := range []struct{ agent, env, want string }{
+		{"claude-code", "sdk-cli", "sdk-cli"},
+		{"claude-code", "cli", "cli"},
+		{"claude-code", "", ""},
+		// Only Claude defines this marker; other harnesses never forward it.
+		{"codex", "sdk-cli", ""},
+	} {
+		t.Setenv("CLAUDE_CODE_ENTRYPOINT", tc.env)
+		hits := capture.hits
+		if _, _, err := executeCLI(t, Deps{
+			In:           strings.NewReader(`{"session_id":"native-side"}`),
+			ProcessAlive: func(int) bool { return true },
+		}, "hooks", tc.agent, "session-end"); err != nil {
+			t.Fatal(err)
+		}
+		if capture.hits != hits+1 {
+			t.Fatalf("%s session-end posted %d activity requests, want 1", tc.agent, capture.hits-hits)
+		}
+		var request setActivityAPIRequest
+		if err := json.Unmarshal([]byte(capture.body), &request); err != nil {
+			t.Fatal(err)
+		}
+		if request.Entrypoint != tc.want {
+			t.Fatalf("%s entrypoint %q forwarded as %q, want %q", tc.agent, tc.env, request.Entrypoint, tc.want)
+		}
+	}
+}
+
 func TestClaudeSubmissionRetryReusesContextNonce(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "qa-1")
 	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")

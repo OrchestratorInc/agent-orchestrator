@@ -2,6 +2,8 @@ package worker
 
 import (
 	"encoding/json"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 )
@@ -52,16 +54,26 @@ func ActivityEventFromHook(
 	payload []byte,
 ) (ActivityEvent, bool) {
 	var native struct {
-		ToolName              string `json:"tool_name"`
-		ToolUseID             string `json:"tool_use_id"`
-		SessionID             string `json:"session_id"`
-		SessionIDCamel        string `json:"sessionId"`
-		ConversationID        string `json:"conversation_id"`
-		ConversationIDCamel   string `json:"conversationId"`
-		LatestUserPrompt      string `json:"prompt"`
-		LatestAssistantUpdate string `json:"lastAssistantMessage"`
+		ToolName            string `json:"tool_name"`
+		ToolUseID           string `json:"tool_use_id"`
+		SessionID           string `json:"session_id"`
+		SessionIDCamel      string `json:"sessionId"`
+		ConversationID      string `json:"conversation_id"`
+		ConversationIDCamel string `json:"conversationId"`
+		LatestUserPrompt    string `json:"prompt"`
+		// Claude Code's Stop hook sends last_assistant_message; the camelCase
+		// spelling is kept for payloads that already use it.
+		LastAssistantMessage      string `json:"last_assistant_message"`
+		LastAssistantMessageCamel string `json:"lastAssistantMessage"`
+		// SubagentStop shares the Stop shape; a subagent's reply is not the
+		// main conversation's answer.
+		SubagentID string `json:"agent_id"`
 	}
 	_ = json.Unmarshal(payload, &native)
+	latestAssistantUpdate := firstNonEmpty(native.LastAssistantMessage, native.LastAssistantMessageCamel)
+	if strings.TrimSpace(native.SubagentID) != "" {
+		latestAssistantUpdate = ""
+	}
 	if len(native.ToolName) > maxActivityCorrelationLength {
 		native.ToolName = ""
 	}
@@ -89,15 +101,37 @@ func ActivityEventFromHook(
 		ToolUseID:             native.ToolUseID,
 		AgentSessionID:        agentSessionID,
 		LatestUserPrompt:      boundedConversationText(native.LatestUserPrompt),
-		LatestAssistantUpdate: boundedConversationText(native.LatestAssistantUpdate),
+		LatestAssistantUpdate: boundedConversationText(latestAssistantUpdate),
 	}, true
 }
 
+const maxConversationText = 16 << 10
+
+// boundedConversationText keeps the start of an oversized prompt or answer
+// rather than dropping it, so a long terminal turn still reaches the chat. The
+// bound is on the JSON-escaped size: the worker posts this inside a size-capped
+// event, and an event over the cap would also lose the turn's activity state.
 func boundedConversationText(value string) string {
-	if len(value) > 16<<10 {
-		return ""
+	size := 0
+	for i, r := range value {
+		size += jsonEscapedRuneLen(r)
+		if size > maxConversationText {
+			return value[:i]
+		}
 	}
 	return value
+}
+
+// jsonEscapedRuneLen is the number of bytes encoding/json writes for r.
+func jsonEscapedRuneLen(r rune) int {
+	switch {
+	case r == '"' || r == '\\' || r == '\n' || r == '\r' || r == '\t' || r == '\b' || r == '\f':
+		return 2
+	case r < 0x20 || r == '<' || r == '>' || r == '&' || r == ' ' || r == ' ' || r == utf8.RuneError:
+		return 6
+	default:
+		return utf8.RuneLen(r)
+	}
 }
 
 // ValidActivityEvent ensures workers cannot pair a real hook name with an

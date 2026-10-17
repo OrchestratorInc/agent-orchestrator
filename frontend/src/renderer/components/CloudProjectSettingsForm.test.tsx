@@ -353,6 +353,12 @@ describe("Cloud project Coder template", () => {
 		expect(screen.queryByRole("button", { name: "Edit Workspace name prefix" })).not.toBeInTheDocument();
 	});
 
+	it("shows Coder settings for a project set up on Coder before projects recorded their provider", async () => {
+		mocks.me.mockResolvedValue({ organizations: [], offering: { providers: ["freestyle", "coder"], defaultProvider: "freestyle", billingMode: "contract", kind: "both", features: [] } });
+		mount("general");
+		expect(await screen.findByText("Coder template")).toBeInTheDocument();
+	});
+
 	it("shows Coder settings for a project stored on Coder when the org offers both", async () => {
 		mocks.me.mockResolvedValue({ organizations: [], offering: { providers: ["freestyle", "coder"], defaultProvider: "freestyle", billingMode: "contract", kind: "both", features: [] } });
 		project.config.sandboxProvider = "coder";
@@ -360,8 +366,9 @@ describe("Cloud project Coder template", () => {
 		expect(await screen.findByText("Coder template")).toBeInTheDocument();
 	});
 
-	it("hides Coder settings for a project on the org's non-Coder default when the org offers both", async () => {
+	it("hides Coder settings for a project recorded on Freestyle when the org offers both", async () => {
 		mocks.me.mockResolvedValue({ organizations: [], offering: { providers: ["freestyle", "coder"], defaultProvider: "freestyle", billingMode: "contract", kind: "both", features: [] } });
+		project.config.sandboxProvider = "freestyle";
 		mount("general");
 		expect(await screen.findByRole("button", { name: "Edit Project name" })).toBeInTheDocument();
 		await waitFor(() => expect(mocks.me).toHaveBeenCalled());
@@ -443,6 +450,7 @@ describe("Cloud project Coder template options", () => {
 	it("never asks for template options on a non-Coder project", async () => {
 		mocks.me.mockResolvedValue({ organizations: [], offering: { providers: ["freestyle", "coder"], defaultProvider: "freestyle", billingMode: "contract", kind: "both", features: [] } });
 		project.config.coder = { templateId: "tpl-1" };
+		project.config.sandboxProvider = "freestyle";
 		mount("general");
 		expect(await screen.findByRole("button", { name: "Edit Project name" })).toBeInTheDocument();
 		await waitFor(() => expect(mocks.me).toHaveBeenCalled());

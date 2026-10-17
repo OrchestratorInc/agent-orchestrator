@@ -1,7 +1,10 @@
 package worker
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 )
@@ -29,6 +32,67 @@ func TestActivityEventFromHookCarriesAssistantFactOnStop(t *testing.T) {
 	}
 	if event.LatestAssistantUpdate != "reply from the terminal" {
 		t.Fatalf("assistant update = %q", event.LatestAssistantUpdate)
+	}
+}
+
+// Claude Code's Stop hook names the answer last_assistant_message. Reading only
+// the camelCase spelling left every terminal answer out of the cloud chat while
+// the prompt, read from "prompt", still arrived.
+func TestActivityEventFromHookCarriesClaudeStopAnswer(t *testing.T) {
+	event, ok := ActivityEventFromHook("claude-code", "stop", []byte(`{
+		"session_id":"native-1",
+		"transcript_path":"/home/ao/.claude/projects/x/native-1.jsonl",
+		"hook_event_name":"Stop",
+		"stop_hook_active":false,
+		"last_assistant_message":"391 PINEAPPLE"
+	}`))
+	if !ok {
+		t.Fatal("hook event was not accepted")
+	}
+	if event.LatestAssistantUpdate != "391 PINEAPPLE" {
+		t.Fatalf("assistant update = %q, want the Stop hook's answer", event.LatestAssistantUpdate)
+	}
+}
+
+func TestActivityEventFromHookIgnoresSubagentAnswer(t *testing.T) {
+	event, ok := ActivityEventFromHook("claude-code", "stop", []byte(`{
+		"session_id":"native-1",
+		"agent_id":"subagent-1",
+		"last_assistant_message":"from a subagent"
+	}`))
+	if !ok {
+		t.Fatal("hook event was not accepted")
+	}
+	if event.LatestAssistantUpdate != "" {
+		t.Fatalf("assistant update = %q, want a subagent's reply left out", event.LatestAssistantUpdate)
+	}
+}
+
+func TestActivityEventFromHookKeepsTheStartOfALongAnswer(t *testing.T) {
+	answer := strings.Repeat("if a < b && c > d {\n\treturn \"é\"\n}\n", 2000)
+	payload, err := json.Marshal(map[string]string{"session_id": "native-1", "last_assistant_message": answer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, ok := ActivityEventFromHook("claude-code", "stop", payload)
+	if !ok {
+		t.Fatal("hook event was not accepted")
+	}
+	if event.LatestAssistantUpdate == "" || !strings.HasPrefix(answer, event.LatestAssistantUpdate) {
+		t.Fatalf("assistant update has %d bytes, want a non-empty prefix of the answer", len(event.LatestAssistantUpdate))
+	}
+	if !utf8.ValidString(event.LatestAssistantUpdate) {
+		t.Fatal("assistant update was cut inside a character")
+	}
+	if !ValidActivityEvent(event) {
+		t.Fatal("bounded event is not valid")
+	}
+	encoded, err := json.Marshal(event.LatestAssistantUpdate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded)-2 > 16<<10 {
+		t.Fatalf("escaped answer is %d bytes, want at most %d", len(encoded)-2, 16<<10)
 	}
 }
 

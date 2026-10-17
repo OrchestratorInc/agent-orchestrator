@@ -300,6 +300,11 @@ func (b HarnessBuilder) systemPrompt(launch worker.LaunchContext, workspace stri
 			systemPrompt += "\n\n" + note
 		}
 	}
+	// Set only when the sandbox has a browser (agentbrowser.Service).
+	if b.Env["AO_BROWSER_SOCKET"] != "" {
+		systemPrompt += "\n\nA browser is available: run `ao browser <command>` with agent-browser commands " +
+			"(open, snapshot, click, fill, screenshot, ...). The person sees and can use the same pages in AO's Browser panel."
+	}
 	return systemPrompt
 }
 
@@ -466,6 +471,11 @@ func (b HarnessBuilder) configureCredential(
 func (b HarnessBuilder) binary(harness string) string {
 	if binary := strings.TrimSpace(b.Binaries[harness]); binary != "" {
 		return binary
+	}
+	if harness == "claude-code" {
+		// The worker's own upgrade when the workspace's install is too old for
+		// current models; the bare name on PATH until that is ready.
+		return defaultClaudeCode.current()
 	}
 	if h, ok := harnessCredentialFor(harness); ok {
 		return h.defaultBinary()

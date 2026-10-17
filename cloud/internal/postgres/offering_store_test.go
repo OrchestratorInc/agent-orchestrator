@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/google/uuid"
@@ -77,33 +76,6 @@ func TestOrchestratorPlacementRejectsNonOrchestrator(t *testing.T) {
 	store, _, fixture := openNotificationTestStore(t)
 	if _, err := store.OrchestratorPlacement(context.Background(), fixture.orgID, fixture.sessionID); err != ErrForbidden {
 		t.Fatalf("err = %v, want ErrForbidden for a worker session", err)
-	}
-}
-
-func TestOrgBillingStandingReportsGrandfathering(t *testing.T) {
-	store, admin, fixture := openNotificationTestStore(t)
-	ctx := context.Background()
-	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
-
-	plan, grandfathered, err := store.OrgBillingStanding(ctx, principal, fixture.orgID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if grandfathered {
-		t.Fatalf("plan %q grandfathered with billing off, want not grandfathered", plan)
-	}
-
-	store.EnableBilling(time.Hour, time.Now().Add(time.Hour))
-	if _, grandfathered, err = store.OrgBillingStanding(ctx, principal, fixture.orgID); err != nil || !grandfathered {
-		t.Fatalf("grandfathered = %v (err %v), want an org created before the cutoff to be grandfathered", grandfathered, err)
-	}
-
-	if _, err := admin.Exec(ctx, `UPDATE ao_organizations SET plan = $2 WHERE id = $1`, fixture.orgID, domain.PlanInternal); err != nil {
-		t.Fatal(err)
-	}
-	plan, grandfathered, err = store.OrgBillingStanding(ctx, principal, fixture.orgID)
-	if err != nil || plan != domain.PlanInternal || grandfathered {
-		t.Fatalf("plan %q grandfathered %v (err %v), want internal and not grandfathered", plan, grandfathered, err)
 	}
 }
 

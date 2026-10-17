@@ -1,4 +1,4 @@
-import { FileText, MessageSquare } from "lucide-react";
+import { File, FileText, FolderClosed, MessageSquare } from "lucide-react";
 import { AppLink } from "./AppLink";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -149,23 +149,9 @@ const VIEW_DEFS: {
 	{
 		id: "files",
 		labelKey: "inspector.files",
-		icon: (
-			<svg
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.7"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-				aria-hidden="true"
-				data-testid="files-viewer-icon"
-			>
-				<path d="M3.5 7.5V5.75A1.75 1.75 0 0 1 5.25 4h4l2 2h7.5a1.75 1.75 0 0 1 1.75 1.75V18a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2V7.5Z" />
-				<path d="M7 10h10M7 13.5h8M7 17h6" />
-			</svg>
-		),
+		icon: <FolderClosed aria-hidden="true" data-testid="files-viewer-icon" />,
 	},
-	{ id: "artifacts", labelKey: "artifacts.title", icon: <FileText aria-hidden="true" /> },
+	{ id: "artifacts", labelKey: "artifacts.title", icon: <File aria-hidden="true" /> },
 ];
 
 const prStateLabelKeys: Record<SessionPRSummary["state"], MessageKey> = {

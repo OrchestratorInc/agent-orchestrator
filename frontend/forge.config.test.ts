@@ -100,6 +100,12 @@ describe("native runtime resources", () => {
 		expect(extraResourcesForPlatform("win32")).not.toContain("update-helper");
 	});
 
+	it("bundles the wake coordinator only on macOS", () => {
+		expect(extraResourcesForPlatform("darwin")).toContain("wake-helper");
+		expect(extraResourcesForPlatform("linux")).not.toContain("wake-helper");
+		expect(extraResourcesForPlatform("win32")).not.toContain("wake-helper");
+	});
+
 	it.each(["darwin", "linux"] as const)("bundles tmux on %s", (platform) => {
 		expect(extraResourcesForPlatform(platform)).toContain("tmux");
 	});

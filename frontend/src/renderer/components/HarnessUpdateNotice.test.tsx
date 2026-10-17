@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HarnessUpdateNotice } from "./HarnessUpdateNotice";
+import { HarnessUpdateNotice, noticePlacement } from "./HarnessUpdateNotice";
 import { apiClient } from "../lib/api-client";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { appI18n } from "../i18n";
@@ -69,6 +69,12 @@ describe("startup harness update notice", () => {
 		vi.spyOn(apiClient, "POST").mockResolvedValue({ data: readiness } as never);
 	});
 	afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+	it("never raises the native shell, which would block the live browser page", async () => {
+		mountNotice();
+		const notice = await screen.findByRole("region", { name: "Agent updates available" });
+		expect(notice).not.toHaveAttribute("data-browser-native-overlay");
+	});
 
 	it("finds updates without mounting Harness settings and starts no installation automatically", async () => {
 		mountNotice();
@@ -186,6 +192,35 @@ describe("startup harness update notice", () => {
 		expect(await screen.findByRole("alert")).toHaveTextContent("Post-install verification failed");
 		await userEvent.click(screen.getByRole("button", { name: "Dismiss Claude Code update" }));
 		expect(screen.queryByRole("region")).toBeNull();
+	});
+
+	it("keeps a failed update on the newer release the click-time check chose", async () => {
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		let started = false;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/{agent}/update-advisory") {
+				if (started) return { data: { agentId: "claude-code", status: "current", currentVersion: "2.1.293", latestVersion: "2.1.293", maintenanceMethod: "official-installer" } } as never;
+				// A release published after the card was checked.
+				if ((options as { params?: { query?: { refresh?: boolean } } })?.params?.query?.refresh) return { data: { agentId: "claude-code", status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.293", maintenanceMethod: "official-installer" } } as never;
+			}
+			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path !== "/api/v1/agents/{agent}/install") return { data: { agents: [agentReadiness("claude-code", "Claude Code")] } } as never;
+			started = true;
+			return { data: { target: "claude-code", status: "installing" } } as never;
+		});
+		const { client } = mountNotice();
+		const notice = await screen.findByRole("region", { name: "Agent updates available" });
+		expect(within(notice).getByText("v2.1.292")).toBeInTheDocument();
+		await userEvent.click(within(notice).getByRole("button", { name: "Update" }));
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "claude-code" } }, body: { method: "official-installer", operation: "update", expectedVersion: "2.1.293" } });
+		await waitFor(() => expect(client.getQueryData(installJobsQueryKey)).toEqual([expect.objectContaining({ status: "installing" })]));
+		act(() => client.setQueryData(installJobsQueryKey, [{ target: "claude-code", status: "failed", error: "Updater failed" }]));
+		await waitFor(() => expect(client.getQueryData(updateAdvisoryQueryKey("claude-code"))).toMatchObject({ status: "current" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Updater failed");
+		expect(screen.getByText("v2.1.293")).toBeInTheDocument();
+		expect(screen.queryByText("v2.1.292")).toBeNull();
 	});
 
 	it("stays out of the way while Settings is open", async () => {
@@ -369,5 +404,28 @@ describe("startup harness update notice", () => {
 		await screen.findByRole("region");
 		act(() => client.setQueryData(updateAdvisoryQueryKey("claude-code"), { agentId: "claude-code", status, currentVersion: "2.1.291", latestVersion: "2.1.292" }));
 		await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
+	});
+});
+
+describe("noticePlacement", () => {
+	// 1280px window, notice 300px wide starting 72px down and 200px tall.
+	const place = (browser: Parameters<typeof noticePlacement>[0]) => noticePlacement(browser, 72, 200, 1280);
+
+	it("keeps the default corner without a live browser page", () => {
+		expect(place(null)).toEqual({ right: 16 });
+	});
+
+	it("keeps the default corner when the page is elsewhere", () => {
+		expect(place({ left: 200, top: 60, right: 700, bottom: 800 })).toEqual({ right: 16 });
+		expect(place({ left: 800, top: 400, right: 1280, bottom: 800 })).toEqual({ right: 16 });
+	});
+
+	it("moves beside a docked page it would cover", () => {
+		expect(place({ left: 820, top: 100, right: 1270, bottom: 800 })).toEqual({ right: 1280 - 808 });
+	});
+
+	it("steps aside while the page leaves no room beside it", () => {
+		expect(place({ left: 0, top: 40, right: 1280, bottom: 800 })).toBe("hidden");
+		expect(place({ left: 300, top: 40, right: 1280, bottom: 800 })).toBe("hidden");
 	});
 });

@@ -692,6 +692,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			SessionID:              hostID,
 			ProviderConversationID: cfg.ProviderConversationID,
 			FreshIfMissing:         cfg.FreshIfProviderConversationMissing,
+			HasPriorTurns:          conversation.LatestSequence > 0,
 			DataDir:                cfg.DataDir,
 			WorkspacePath:          cfg.WorkspacePath,
 			Env:                    cfg.Env,
@@ -779,6 +780,12 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	}
 	if !liveReconnect && isOpenCodeHarness(cfg.Harness) && conversation.Settings.OpenCodeMode != "" {
 		if err := restoreOpenCodeMode(ctx, conv, conversation.Settings.OpenCodeMode); err != nil {
+			_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
+			return nil, err
+		}
+	}
+	if !liveReconnect && cfg.Harness == domain.HarnessCopilot && cfg.ProviderConversationID != "" {
+		if err := sanitizeCopilotLoadedMode(ctx, conv); err != nil {
 			_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
 			return nil, err
 		}
@@ -886,7 +893,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	// A fresh generation per launch, so events from the controller this one
 	// replaced can be told apart from the current one's.
 	controller := newController(
-		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
+		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
 		providerTurnID := controller.restoreLiveTurnOwnership(liveRows.Turns)
@@ -1374,11 +1381,7 @@ func truncateExcerptContext(text string) string {
 	if len(text) <= maxExcerptPairedTextBytes {
 		return text
 	}
-	cut := maxExcerptPairedTextBytes
-	for cut > 0 && !utf8.RuneStart(text[cut]) {
-		cut--
-	}
-	return text[:cut] + "\n[truncated]"
+	return truncateUTF8Head(text, maxExcerptPairedTextBytes) + "\n[truncated]"
 }
 
 // Resolve answers a pending approval.
@@ -2210,12 +2213,22 @@ func (s *Service) SetConfigOption(
 	if !ok {
 		return nil, ErrConfigOptionsUnsupported
 	}
+	if record.Harness == domain.HarnessCopilot {
+		if err := copilotConfigOptionAllowed(configID, value); err != nil {
+			return nil, err
+		}
+	}
 	controller.configMu.Lock()
 	defer controller.configMu.Unlock()
 	previous := controller.Settings()
 	options, err := configurer.SetConfigOption(ctx, configID, value)
 	if err != nil {
 		return nil, err
+	}
+	if len(options) == 0 {
+		if listed, listErr := configurer.ListConfigOptions(ctx); listErr == nil {
+			options = listed
+		}
 	}
 	options = permissionConfigOptions(record.Harness, options)
 	settings, _ := settingsFromConfigOptions(previous, options)
@@ -2489,6 +2502,9 @@ func (s *Service) StopChat(ctx context.Context, id domain.SessionID) error {
 // permissionConfigOptions annotates only provider controls whose semantics are
 // known. In particular, plan and dontAsk are not AO approval policies.
 func permissionConfigOptions(harness domain.AgentHarness, options []ports.ChatConfigOption) []ports.ChatConfigOption {
+	if harness == domain.HarnessCopilot {
+		options = copilotComposerOptions(options)
+	}
 	out := append([]ports.ChatConfigOption(nil), options...)
 	for i := range out {
 		out[i].Choices = append([]ports.ChatConfigOptionChoice(nil), out[i].Choices...)
@@ -2532,10 +2548,126 @@ func permissionConfigOptions(harness domain.AgentHarness, options []ports.ChatCo
 					choice.PermissionMode = mode
 					choice.Name = label
 				}
+			case domain.HarnessAgy:
+				// Antigravity's modes are approval tiers, relabelled into AO's
+				// vocabulary so the composer reads as the usual approval control.
+				if mode, label, ok := agyApprovalTier(choice.Value); ok {
+					choice.PermissionMode = mode
+					choice.Name = label
+				}
 			}
 		}
 	}
 	return out
+}
+
+// copilotComposerOptions removes the Copilot controls that would bypass AO's
+// approval state. AO drives "allow_all" from the session's approval mode, and
+// Autopilot turns allow-all on inside Copilot without AO knowing, so neither
+// is offered as a provider control. Agent and Plan remain execution modes.
+func copilotComposerOptions(options []ports.ChatConfigOption) []ports.ChatConfigOption {
+	out := make([]ports.ChatConfigOption, 0, len(options))
+	for _, option := range options {
+		if option.ID == copilotAllowAllOption {
+			continue
+		}
+		if option.ID == "mode" {
+			choices := make([]ports.ChatConfigOptionChoice, 0, len(option.Choices))
+			for _, choice := range option.Choices {
+				if !isCopilotAutopilot(choice.Value) {
+					choices = append(choices, choice)
+				}
+			}
+			option.Choices = choices
+		}
+		out = append(out, option)
+	}
+	return out
+}
+
+func copilotDefaultModeChoice(choices []ports.ChatConfigOptionChoice) string {
+	for _, choice := range choices {
+		if isCopilotAutopilot(choice.Value) {
+			continue
+		}
+		if strings.EqualFold(choice.Name, "agent") || strings.HasSuffix(choice.Value, "#agent") || choice.Value == "agent" {
+			return choice.Value
+		}
+	}
+	for _, choice := range choices {
+		if strings.EqualFold(choice.Name, "plan") || strings.HasSuffix(choice.Value, "#plan") || choice.Value == "plan" {
+			return choice.Value
+		}
+	}
+	return ""
+}
+
+// sanitizeCopilotLoadedMode resets Copilot's mode to Agent if a resumed native
+// session was left in Autopilot. Autopilot enables allow-all inside Copilot
+// without AO's knowledge, which would let turns bypass default approvals.
+func sanitizeCopilotLoadedMode(ctx context.Context, conv ports.ChatConversation) error {
+	configurer, ok := conv.(ports.ChatConfigOptionController)
+	if !ok {
+		return fmt.Errorf("read Copilot session mode: config options unavailable for resumed conversation")
+	}
+	options, err := configurer.ListConfigOptions(ctx)
+	if err != nil {
+		return fmt.Errorf("read Copilot session mode: %w", err)
+	}
+	modeFound := false
+	for _, option := range options {
+		if option.ID == "mode" {
+			modeFound = true
+		}
+		if option.ID == "mode" && isCopilotAutopilot(option.Current.Select) {
+			target := copilotDefaultModeChoice(option.Choices)
+			if target == "" {
+				return fmt.Errorf("%w: Copilot session is in Autopilot mode and has no safe mode fallback", ports.ErrChatConfigOptionInvalid)
+			}
+			updated, err := configurer.SetConfigOption(ctx, "mode", ports.ChatConfigOptionValue{Select: target})
+			if err != nil {
+				return fmt.Errorf("reset Copilot Autopilot mode to %q: %w", target, err)
+			}
+			updatedModeFound := false
+			for _, opt := range updated {
+				if opt.ID != "mode" {
+					continue
+				}
+				updatedModeFound = true
+				if opt.Current.Select != target {
+					return fmt.Errorf("reset Copilot Autopilot mode: provider reports %q, want %q", opt.Current.Select, target)
+				}
+			}
+			if !updatedModeFound {
+				return fmt.Errorf("reset Copilot Autopilot mode: provider did not report the resulting mode")
+			}
+			return nil
+		}
+	}
+	if !modeFound {
+		return fmt.Errorf("read Copilot session mode: mode option unavailable for resumed conversation")
+	}
+	return nil
+}
+
+// copilotConfigOptionAllowed refuses the Copilot settings AO owns or hides.
+func copilotConfigOptionAllowed(configID string, value ports.ChatConfigOptionValue) error {
+	if configID == copilotAllowAllOption {
+		return fmt.Errorf("%w: Copilot's allow_all follows the session's approval mode", ports.ErrChatConfigOptionInvalid)
+	}
+	if configID == "mode" && isCopilotAutopilot(value.Select) {
+		return fmt.Errorf("%w: Copilot Autopilot bypasses AO approvals; choose bypass permissions instead", ports.ErrChatConfigOptionInvalid)
+	}
+	return nil
+}
+
+const copilotAllowAllOption = "allow_all"
+
+// isCopilotAutopilot matches Copilot's Autopilot mode id, which it reports as
+// the ACP session-modes URI ending in #autopilot.
+func isCopilotAutopilot(value string) bool {
+	value = strings.TrimSpace(value)
+	return value == "autopilot" || strings.HasSuffix(value, "#autopilot")
 }
 
 func commandCodeApprovalMode(value string) (domain.PermissionMode, bool) {
@@ -2548,6 +2680,22 @@ func commandCodeApprovalMode(value string) (domain.PermissionMode, bool) {
 		return domain.PermissionModeBypassPermissions, true
 	default:
 		return "", false
+	}
+}
+
+// agyApprovalTier maps Antigravity's ACP modes onto AO's approval tiers. AO's
+// auto and bypass both select yolo, Antigravity's only run-without-asking mode,
+// which the menu presents as AO's auto.
+func agyApprovalTier(value string) (domain.PermissionMode, string, bool) {
+	switch value {
+	case "default":
+		return domain.PermissionModeDefault, "Use agent permissions", true
+	case "auto_edit":
+		return domain.PermissionModeAcceptEdits, "Accept edits", true
+	case "yolo":
+		return domain.PermissionModeAuto, "Auto-approve", true
+	default:
+		return "", "", false
 	}
 }
 
@@ -2564,4 +2712,15 @@ func openCodeApprovalTier(value string) (domain.PermissionMode, string, bool) {
 	default:
 		return "", "", false
 	}
+}
+
+func truncateUTF8Head(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	end := limit
+	for end > 0 && !utf8.RuneStart(text[end]) {
+		end--
+	}
+	return text[:end]
 }
