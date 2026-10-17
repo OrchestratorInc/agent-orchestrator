@@ -221,9 +221,12 @@ func TestSharedWorkspaceKeepsEachSessionsContext(t *testing.T) {
 	p := New()
 	long := strings.TrimSpace(strings.Repeat("private long paragraph\n\n", 1000))
 	for _, order := range [][]string{{long, "short"}, {"short", long}} {
+		envs := make([]map[string]string, len(order))
 		for i, prompt := range order {
+			envs[i] = map[string]string{}
 			if err := p.GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{
 				DataDir: data, WorkspacePath: workspace, SessionID: fmt.Sprintf("ao-%d", i), SystemPrompt: prompt,
+				Env: envs[i],
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -231,6 +234,7 @@ func TestSharedWorkspaceKeepsEachSessionsContext(t *testing.T) {
 		for i, prompt := range order {
 			t.Setenv("AO_MEMCODE_DATA_DIR", data)
 			t.Setenv("AO_MEMCODE_SESSION", fmt.Sprintf("ao-%d", i))
+			t.Setenv(instructionChunkCountEnv, envs[i][instructionChunkCountEnv])
 			var parts []string
 			for slot := 0; slot < maxInstructionChunks; slot++ {
 				var out bytes.Buffer
@@ -248,6 +252,49 @@ func TestSharedWorkspaceKeepsEachSessionsContext(t *testing.T) {
 				t.Fatalf("session %d context changed after shared hook installation", i)
 			}
 		}
+	}
+}
+
+func TestUnusedContextSlotSkipsInstructionSnapshot(t *testing.T) {
+	t.Setenv("AO_MEMCODE_DATA_DIR", t.TempDir())
+	t.Setenv("AO_MEMCODE_SESSION", "ao-1")
+	t.Setenv(instructionChunkCountEnv, "1")
+	var out bytes.Buffer
+	// There is no snapshot to open: only the active slot may require it.
+	if err := EmitInstructionChunk(&out, "context-chunk-1"); err != nil || out.Len() != 0 {
+		t.Fatalf("unused slot = %q, %v", out.String(), err)
+	}
+	if err := EmitInstructionChunk(&out, "context-chunk-0"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("active slot error = %v, want missing snapshot", err)
+	}
+	for _, invalid := range []string{"0", "65", "-1", "invalid"} {
+		t.Setenv(instructionChunkCountEnv, invalid)
+		if err := EmitInstructionChunk(&out, "context-chunk-1"); err == nil {
+			t.Fatalf("accepted invalid launch chunk count %q", invalid)
+		}
+	}
+}
+
+func TestLaunchChunkCountMustMatchPreparedContext(t *testing.T) {
+	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), WorkspacePath: t.TempDir(), SessionID: "ao-1",
+		SystemPrompt: "context", Env: map[string]string{instructionChunkCountEnv: "64"}}
+	if err := New().GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Env[instructionChunkCountEnv] != "1" {
+		t.Fatalf("launch count = %q, want prepared count 1", cfg.Env[instructionChunkCountEnv])
+	}
+	t.Setenv("AO_MEMCODE_DATA_DIR", cfg.DataDir)
+	t.Setenv("AO_MEMCODE_SESSION", cfg.SessionID)
+	t.Setenv(instructionChunkCountEnv, "2")
+	if err := EmitInstructionChunk(io.Discard, "context-chunk-0"); err == nil {
+		t.Fatal("accepted stale launch chunk count")
+	}
+	// Processes launched before the optimization retain the decode fallback.
+	t.Setenv(instructionChunkCountEnv, "")
+	var out bytes.Buffer
+	if err := EmitInstructionChunk(&out, "context-chunk-0"); err != nil || out.String() != "context" {
+		t.Fatalf("legacy launch = %q, %v", out.String(), err)
 	}
 }
 
@@ -316,5 +363,49 @@ func TestProjectEndpointRejectsAOModelOverride(t *testing.T) {
 	cfg.Config.Model = ""
 	if err := New().GetAgentHooks(context.Background(), cfg); err != nil {
 		t.Fatalf("native model selection should remain available: %v", err)
+	}
+}
+
+func BenchmarkInstructionHookSlots(b *testing.B) {
+	for _, test := range []struct {
+		name       string
+		paragraphs int
+		legacy     bool
+	}{
+		{name: "one-chunk/legacy", paragraphs: 1, legacy: true},
+		{name: "one-chunk/launch-count", paragraphs: 1},
+		{name: "four-chunks/legacy", paragraphs: 1000, legacy: true},
+		{name: "four-chunks/launch-count", paragraphs: 1000},
+	} {
+		b.Run(test.name, func(b *testing.B) {
+			cfg := ports.WorkspaceHookConfig{
+				DataDir: b.TempDir(), WorkspacePath: b.TempDir(), SessionID: "ao-bench",
+				SystemPrompt: strings.Repeat("private context paragraph\n\n", test.paragraphs), Env: map[string]string{},
+			}
+			if err := New().GetAgentHooks(context.Background(), cfg); err != nil {
+				b.Fatal(err)
+			}
+			b.Setenv("AO_MEMCODE_DATA_DIR", cfg.DataDir)
+			b.Setenv("AO_MEMCODE_SESSION", cfg.SessionID)
+			for key, value := range cfg.Env {
+				b.Setenv(key, value)
+			}
+			if test.legacy {
+				b.Setenv(instructionChunkCountEnv, "")
+			}
+			events := make([]string, maxInstructionChunks)
+			for i := range events {
+				events[i] = fmt.Sprintf("context-chunk-%d", i)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				for _, event := range events {
+					if err := EmitInstructionChunk(io.Discard, event); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+		})
 	}
 }
