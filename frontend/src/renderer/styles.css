@@ -1985,45 +1985,46 @@ textarea,
 	}
 }
 
-/* The plan's scroll window: steps fade out at whichever edge still has more to
-   scroll to, so a long plan reads as continuing rather than cut off. TurnPlan sets
-   the data attributes from the scroll position; the lengths are registered so the
-   fade eases in and out instead of snapping. */
-@property --turn-plan-fade-top {
+/* Chat scroll windows (the plan, a live turn's activity): content fades out at
+   whichever edge still has more to scroll to, so a long list reads as continuing
+   rather than cut off. syncEdgeFade (chat/edge-fade.ts) sets the data attributes
+   from the scroll position; the lengths are registered so the fade eases in and out
+   instead of snapping. */
+@property --edge-fade-top {
 	syntax: "<length>";
 	inherits: false;
 	initial-value: 0px;
 }
 
-@property --turn-plan-fade-bottom {
+@property --edge-fade-bottom {
 	syntax: "<length>";
 	inherits: false;
 	initial-value: 0px;
 }
 
-.turn-plan-viewport {
+.edge-fade-viewport {
 	mask-image: linear-gradient(
 		to bottom,
 		transparent,
-		#000 var(--turn-plan-fade-top),
-		#000 calc(100% - var(--turn-plan-fade-bottom)),
+		#000 var(--edge-fade-top),
+		#000 calc(100% - var(--edge-fade-bottom)),
 		transparent
 	);
 	transition:
-		--turn-plan-fade-top 150ms ease-out,
-		--turn-plan-fade-bottom 150ms ease-out;
+		--edge-fade-top 150ms ease-out,
+		--edge-fade-bottom 150ms ease-out;
 }
 
-.turn-plan-viewport[data-fade-top] {
-	--turn-plan-fade-top: 24px;
+.edge-fade-viewport[data-fade-top] {
+	--edge-fade-top: 24px;
 }
 
-.turn-plan-viewport[data-fade-bottom] {
-	--turn-plan-fade-bottom: 24px;
+.edge-fade-viewport[data-fade-bottom] {
+	--edge-fade-bottom: 24px;
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.turn-plan-viewport {
+	.edge-fade-viewport {
 		transition: none;
 	}
 }

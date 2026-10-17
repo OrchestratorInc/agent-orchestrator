@@ -136,10 +136,10 @@ describe("TurnPlan scroll window", () => {
 		const scrollTo = vi.fn();
 		Object.defineProperty(Element.prototype, "scrollTo", { configurable: true, writable: true, value: scrollTo });
 		vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) {
-			return this.classList.contains("turn-plan-viewport") ? rows * ROW + 8 : 0;
+			return this.classList.contains("edge-fade-viewport") ? rows * ROW + 8 : 0;
 		});
 		vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) {
-			return this.classList.contains("turn-plan-viewport") ? WINDOW : 0;
+			return this.classList.contains("edge-fade-viewport") ? WINDOW : 0;
 		});
 		vi.spyOn(HTMLElement.prototype, "offsetTop", "get").mockImplementation(function (this: HTMLElement) {
 			return 4 + Number(this.dataset.planStep ?? 0) * ROW;
@@ -163,7 +163,7 @@ describe("TurnPlan scroll window", () => {
 
 		// Step 8 starts at 4 + 7 × 24 = 172px; centring it in a 192px window puts it 84px down.
 		expect(scrollTo).toHaveBeenLastCalledWith({ top: 88, behavior: "auto" });
-		const viewport = container.querySelector(".turn-plan-viewport")!;
+		const viewport = container.querySelector(".edge-fade-viewport")!;
 		expect(viewport).toHaveAttribute("data-fade-bottom");
 		expect(viewport).not.toHaveAttribute("data-fade-top");
 
@@ -177,7 +177,7 @@ describe("TurnPlan scroll window", () => {
 		const { container } = render(<TurnPlan plan={plan} live />);
 
 		expect(scrollTo).not.toHaveBeenCalled();
-		const viewport = container.querySelector(".turn-plan-viewport")!;
+		const viewport = container.querySelector(".edge-fade-viewport")!;
 		expect(viewport).not.toHaveAttribute("data-fade-top");
 		expect(viewport).not.toHaveAttribute("data-fade-bottom");
 	});

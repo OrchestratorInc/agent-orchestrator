@@ -23,6 +23,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChevronDown, ListChecks } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { ConversationPlan, PlanStepStatus } from "../../types/conversation";
+import { syncEdgeFade as syncViewportEdgeFade } from "./edge-fade";
 
 const STEP_LABEL: Record<PlanStepStatus, string> = {
 	pending: "not started",
@@ -56,13 +57,7 @@ export const TurnPlan = memo(function TurnPlan({
 	}, [allDone]);
 
 	const syncEdgeFade = useCallback(() => {
-		const viewport = viewportRef.current;
-		if (!viewport) return;
-		viewport.toggleAttribute("data-fade-top", viewport.scrollTop > 1);
-		viewport.toggleAttribute(
-			"data-fade-bottom",
-			viewport.scrollTop + viewport.clientHeight < viewport.scrollHeight - 1,
-		);
+		if (viewportRef.current) syncViewportEdgeFade(viewportRef.current);
 	}, []);
 
 	// Keep the step being worked on in view, centred so the finished step before it
@@ -161,7 +156,7 @@ export const TurnPlan = memo(function TurnPlan({
 						<div
 							ref={viewportRef}
 							onScroll={syncEdgeFade}
-							className="turn-plan-viewport scrollbar-none relative max-h-60 overflow-y-auto"
+							className="edge-fade-viewport scrollbar-none relative max-h-60 overflow-y-auto"
 						>
 							{/* A real list, so a screen reader hears "list, 5 items" and the status of each
 							    step is spoken rather than left to a colour. */}

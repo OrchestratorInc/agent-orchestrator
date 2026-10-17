@@ -137,6 +137,7 @@ import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
+import { LiveActivityWindow } from "./LiveActivityWindow";
 import { TurnPlan } from "./TurnPlan";
 import { TurnSettingsBar } from "./TurnSettingsBar";
 import { ElicitationDock } from "./ElicitationDock";
@@ -4187,6 +4188,7 @@ const TurnGroup = memo(function TurnGroup({
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 }) {
 	const { t } = useTranslation();
+	const reducedMotion = useReducedMotion();
 	const hasTerminalFailure =
 		group.outcome?.state === "failed" && Boolean(group.outcome.error);
 	const runs = useMemo(
@@ -4323,9 +4325,7 @@ const TurnGroup = memo(function TurnGroup({
 		);
 	}
 	const outcome = showSettledStatus ? group.outcome : undefined;
-	if (!outcome) {
-		body.push(...workedRuns.map(renderRun));
-	} else {
+	if (outcome) {
 		const disclosureKey = `${group.key}:worked`;
 		body.push(
 			<TurnWorkSummary
@@ -4337,6 +4337,32 @@ const TurnGroup = memo(function TurnGroup({
 				{foldedRuns.length > 0 ? foldedRuns.map(renderRun) : undefined}
 			</TurnWorkSummary>,
 		);
+	}
+	// While the agent works, and through the handoff to "Worked for", its steps scroll
+	// in a window that follows the newest one. The reply being written stays outside
+	// at full size, so streaming text is never squeezed into the window. Once the turn
+	// settles the window fades away beneath "Worked for", which holds the same work.
+	const windowed = group.live || (Boolean(group.outcome) && !showSettledStatus);
+	const tail = workedRuns.at(-1);
+	const tailIsReply = group.live && tail?.kind === "single" && tail.items[0].kind === "message" && tail.items[0].role === "assistant";
+	const windowRuns = windowed ? (tailIsReply ? workedRuns.slice(0, -1) : workedRuns) : [];
+	body.push(
+		<AnimatePresence key="live-activity" initial={false}>
+			{windowRuns.length > 0 ? (
+				<motion.div
+					key="live-activity-window"
+					exit={{ height: 0, opacity: 0 }}
+					transition={{ duration: reducedMotion ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}
+					className="overflow-hidden"
+				>
+					<LiveActivityWindow>{windowRuns.map(renderRun)}</LiveActivityWindow>
+				</motion.div>
+			) : null}
+		</AnimatePresence>,
+	);
+	if (!outcome) {
+		if (!windowed) body.push(...workedRuns.map(renderRun));
+		else if (tailIsReply) body.push(renderRun(tail));
 	}
 	if (outcome) body.push(...noticeRuns.map(renderRun));
 	if (finalRun) body.push(renderRun(finalRun));
