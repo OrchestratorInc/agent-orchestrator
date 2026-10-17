@@ -25,6 +25,7 @@ import { saveSideChatDraft, readSideChatDraft } from "./sideChatDraftWriter";
 import { useTabScrollEdges } from "../../hooks/useTabScrollEdges";
 import { cn } from "../../lib/utils";
 import { MAX_SESSION_DISPLAY_NAME_LEN } from "../../hooks/useSessionRename";
+import { useUiStore } from "../../stores/ui-store";
 
 type Side = components["schemas"]["SideConversation"];
 type Snapshot = components["schemas"]["SideSnapshot"];
@@ -78,6 +79,7 @@ export function SideComposer({
 }) {
 	const { t } = useTranslation();
 	const editor = useRef<ComposerEditorHandle>(null);
+	const enterSends = useUiStore((state) => state.chatSendKeyMode === "enter");
 	const [concealExpired, setConcealExpired] = useState(false);
 	useEffect(() => {
 		if (!sending) {
@@ -209,6 +211,7 @@ export function SideComposer({
 					) : null}
 					<ComposerEditor
 						ref={editor}
+						enterSends={enterSends}
 						concealed={sending && !concealExpired}
 						label="Side chat question"
 						placeholder={
