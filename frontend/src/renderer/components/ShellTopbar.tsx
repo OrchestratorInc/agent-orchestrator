@@ -155,8 +155,8 @@ export function ShellTopbar({
 	});
 	const { showProjectEmpty } = useBoardPresentation({
 		projectId,
-		isSuccess: workspaceQuery.isSuccess,
-		isError: workspaceQuery.isError,
+		isSuccess: workspaceQuery.isSnapshotSuccess,
+		isError: workspaceQuery.isSnapshotError,
 		hasProjects: Boolean(project),
 		hasWorkerSessions: workspaceScope?.hasWorkerSessions ?? false,
 	});

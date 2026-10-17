@@ -1,5 +1,5 @@
 import { renderHook, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { onlineManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { appI18n } from "../i18n";
@@ -8,7 +8,12 @@ import type { WorkspaceSummary } from "../types/workspace";
 const { captureRendererEventMock, cloudState, getMock, hasTrustedApiBaseUrlMock, listProjectsMock, listSessionsMock, remoteGetMock, setQueryHealthyMock } = vi.hoisted(
 	() => ({
 		captureRendererEventMock: vi.fn().mockResolvedValue(undefined),
-		cloudState: { ready: false, org: undefined as { id: string } | undefined },
+		cloudState: {
+			ready: false,
+			loading: false,
+			error: undefined as unknown,
+			org: undefined as { id: string } | undefined,
+		},
 		getMock: vi.fn(),
 		hasTrustedApiBaseUrlMock: vi.fn(() => true),
 		listProjectsMock: vi.fn(),
@@ -36,10 +41,10 @@ vi.mock("./useCloudCp", () => ({
 }));
 
 vi.mock("./useCloudOrg", () => ({
-	useCloudOrg: () => ({ org: cloudState.org, isLoading: false, error: undefined, ready: cloudState.ready }),
+	useCloudOrg: () => ({ org: cloudState.org, isLoading: cloudState.loading, error: cloudState.error, ready: cloudState.ready }),
 }));
 
-import { useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { cloudProjectsQueryKey, cloudSessionsQueryKey, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 
 it("preserves the existing local and remote workspace cache keys", () => {
 	expect(workspaceQueryKeyForHost()).toBe(workspaceQueryKey);
@@ -64,10 +69,13 @@ function respondWith(payload: {
 }
 
 beforeEach(() => {
+	onlineManager.setOnline(true);
 	captureRendererEventMock.mockClear();
 	getMock.mockReset();
 	hasTrustedApiBaseUrlMock.mockReset().mockReturnValue(true);
 	cloudState.ready = false;
+	cloudState.loading = false;
+	cloudState.error = undefined;
 	cloudState.org = undefined;
 	listProjectsMock.mockReset();
 	listSessionsMock.mockReset().mockResolvedValue({ items: [] });
@@ -732,6 +740,253 @@ describe("useWorkspaceQuery", () => {
 });
 
 describe("useWorkspaceScope board presentation", () => {
+	it("keeps a routed Cloud board pending while Cloud readiness and its first snapshot start", async () => {
+		cloudState.loading = true;
+		respondWith({});
+		let resolveProjects!: (value: { items: Array<{ id: string; displayName: string }> }) => void;
+		let resolveSessions!: (value: { items: never[] }) => void;
+		listProjectsMock.mockReturnValue(new Promise((resolve) => {
+			resolveProjects = resolve;
+		}));
+		listSessionsMock.mockReturnValue(new Promise((resolve) => {
+			resolveSessions = resolve;
+		}));
+		const view = renderHook(() => useWorkspaceQuery({ projectId: "cloud-1" }), { wrapper });
+
+		await waitFor(() => expect(view.result.current.isSuccess).toBe(true));
+		expect(view.result.current.isSnapshotSuccess).toBe(false);
+		expect(listProjectsMock).not.toHaveBeenCalled();
+		expect(listSessionsMock).not.toHaveBeenCalled();
+
+		cloudState.ready = true;
+		view.rerender();
+		expect(view.result.current.isSnapshotSuccess).toBe(false);
+		expect(listProjectsMock).not.toHaveBeenCalled();
+
+		cloudState.loading = false;
+		cloudState.org = { id: "org-1" };
+		view.rerender();
+		await waitFor(() => expect(listProjectsMock).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(listSessionsMock).toHaveBeenCalledTimes(1));
+		expect(view.result.current.isSnapshotSuccess).toBe(false);
+
+		resolveProjects({ items: [{ id: "cloud-1", displayName: "Cloud project" }] });
+		await waitFor(() => expect(view.result.current.data?.find((workspace) => workspace.id === "cloud-1")).toBeDefined());
+		expect(view.result.current.isSnapshotSuccess).toBe(false);
+
+		resolveSessions({ items: [] });
+		await waitFor(() => expect(view.result.current.isSnapshotSuccess).toBe(true));
+	});
+
+	it("does not hold a missing local route behind Cloud when the offering is disabled", async () => {
+		respondWith({});
+		const { result } = renderHook(() => useWorkspaceQuery({ projectId: "missing" }), { wrapper });
+
+		await waitFor(() => expect(result.current.isSnapshotSuccess).toBe(true));
+		expect(result.current.isSnapshotError).toBe(false);
+		expect(listProjectsMock).not.toHaveBeenCalled();
+		expect(listSessionsMock).not.toHaveBeenCalled();
+	});
+
+	it("surfaces an initial Cloud project failure instead of resolving the routed board", async () => {
+		cloudState.ready = true;
+		cloudState.org = { id: "org-1" };
+		respondWith({});
+		listProjectsMock.mockRejectedValue(new Error("project snapshot unavailable"));
+		const { result } = renderHook(() => useWorkspaceQuery({ projectId: "cloud-1" }), { wrapper });
+
+		await waitFor(() => expect(result.current.isSnapshotError).toBe(true), { timeout: 3_000 });
+		expect(result.current.isSnapshotSuccess).toBe(false);
+		expect(result.current.data?.find((workspace) => workspace.id === "cloud-1")).toBeUndefined();
+	});
+
+	it("retains a valid cached Cloud board through org, project, and session refetch errors", async () => {
+		cloudState.ready = true;
+		cloudState.org = { id: "org-1" };
+		cloudState.error = new Error("org refresh unavailable");
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } });
+		queryClient.setQueryData(workspaceQueryKey, []);
+		queryClient.setQueryData(
+			[...cloudProjectsQueryKey, "https://cp.example.com", "org-1"],
+			[{ id: "cloud-1", displayName: "Cloud project" }],
+		);
+		queryClient.setQueryData(
+			[...cloudSessionsQueryKey, "https://cp.example.com", "org-1"],
+			[{ id: "cloud-worker", projectId: "cloud-1", kind: "worker", status: "working" }],
+		);
+		listProjectsMock.mockRejectedValue(new Error("project refresh unavailable"));
+		listSessionsMock.mockRejectedValue(new Error("session refresh unavailable"));
+		const scopedWrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const states: Array<{ error: boolean; success: boolean }> = [];
+		const { result } = renderHook(() => {
+			const query = useWorkspaceQuery({ projectId: "cloud-1" });
+			states.push({ error: query.isSnapshotError, success: query.isSnapshotSuccess });
+			return query;
+		}, { wrapper: scopedWrapper });
+
+		await waitFor(() => expect(listProjectsMock).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(listSessionsMock).toHaveBeenCalledTimes(2));
+		expect(result.current.data?.find((workspace) => workspace.id === "cloud-1")?.sessions).toHaveLength(1);
+		expect(states.every((state) => state.success && !state.error)).toBe(true);
+	});
+
+	it("does not reload an absent route during a background Cloud project refresh", async () => {
+		cloudState.ready = true;
+		cloudState.org = { id: "org-1" };
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } });
+		queryClient.setQueryData(workspaceQueryKey, []);
+		queryClient.setQueryData(
+			[...cloudProjectsQueryKey, "https://cp.example.com", "org-1"],
+			[{ id: "cloud-other", displayName: "Other Cloud project" }],
+		);
+		queryClient.setQueryData([...cloudSessionsQueryKey, "https://cp.example.com", "org-1"], []);
+		let resolveProjects!: (value: { items: Array<{ id: string; displayName: string }> }) => void;
+		listProjectsMock.mockReturnValue(new Promise((resolve) => {
+			resolveProjects = resolve;
+		}));
+		const scopedWrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result } = renderHook(() => useWorkspaceQuery({ projectId: "missing" }), { wrapper: scopedWrapper });
+
+		await waitFor(() => expect(listProjectsMock).toHaveBeenCalledTimes(1));
+		expect(result.current.isSnapshotSuccess).toBe(true);
+		expect(result.current.isSnapshotError).toBe(false);
+
+		resolveProjects({ items: [{ id: "cloud-other", displayName: "Other Cloud project" }] });
+		await waitFor(() => expect(queryClient.isFetching({ queryKey: cloudProjectsQueryKey })).toBe(0));
+		expect(result.current.isSnapshotSuccess).toBe(true);
+	});
+
+	it("keeps a cached Cloud project pending while its unfetched session snapshot is paused", async () => {
+		cloudState.ready = true;
+		cloudState.org = { id: "org-1" };
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } });
+		queryClient.setQueryData(workspaceQueryKey, []);
+		queryClient.setQueryData(
+			[...cloudProjectsQueryKey, "https://cp.example.com", "org-1"],
+			[{ id: "cloud-1", displayName: "Cloud project" }],
+		);
+		onlineManager.setOnline(false);
+		listSessionsMock.mockResolvedValue({ items: [] });
+		const scopedWrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result, unmount } = renderHook(() => useWorkspaceQuery({ projectId: "cloud-1" }), { wrapper: scopedWrapper });
+
+		try {
+			expect(result.current.isSuccess).toBe(true);
+			expect(result.current.data?.find((workspace) => workspace.id === "cloud-1")).toBeDefined();
+			expect(result.current.isSnapshotSuccess).toBe(false);
+			expect(listSessionsMock).not.toHaveBeenCalled();
+
+			onlineManager.setOnline(true);
+			await waitFor(() => expect(listSessionsMock).toHaveBeenCalledTimes(1));
+			await waitFor(() => expect(result.current.isSnapshotSuccess).toBe(true));
+		} finally {
+			unmount();
+			onlineManager.setOnline(true);
+		}
+	});
+
+	it("keeps a routed Cloud board pending while its project lookup catches up with cached local metadata", async () => {
+		cloudState.ready = true;
+		cloudState.org = { id: "org-1" };
+		respondWith({});
+		let resolveProjects!: (value: { items: Array<{ id: string; displayName: string }> }) => void;
+		listProjectsMock.mockReturnValue(new Promise((resolve) => {
+			resolveProjects = resolve;
+		}));
+		const { result } = renderHook(() => useWorkspaceQuery({ projectId: "cloud-1" }), { wrapper });
+
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+		expect(result.current.isSnapshotSuccess).toBe(false);
+		expect(result.current.isSnapshotError).toBe(false);
+		expect(result.current.data?.find((workspace) => workspace.id === "cloud-1")).toBeUndefined();
+
+		resolveProjects({ items: [{ id: "cloud-1", displayName: "Cloud project" }] });
+		await waitFor(() => expect(result.current.data?.find((workspace) => workspace.id === "cloud-1")).toBeDefined());
+		await waitFor(() => expect(result.current.isSnapshotSuccess).toBe(true));
+	});
+
+	it("does not resolve an empty Cloud board until its session snapshot arrives", async () => {
+		cloudState.ready = true;
+		cloudState.org = { id: "org-1" };
+		respondWith({});
+		listProjectsMock.mockResolvedValue({ items: [{ id: "cloud-1", displayName: "Cloud project" }] });
+		let resolveSessions!: (value: { items: never[] }) => void;
+		listSessionsMock.mockReturnValue(new Promise((resolve) => {
+			resolveSessions = resolve;
+		}));
+		const { result } = renderHook(() => useWorkspaceQuery({ projectId: "cloud-1" }), { wrapper });
+
+		await waitFor(() => expect(result.current.data?.find((workspace) => workspace.id === "cloud-1")).toBeDefined());
+		expect(result.current.data?.find((workspace) => workspace.id === "cloud-1")?.sessions).toEqual([]);
+		expect(result.current.isSnapshotSuccess).toBe(false);
+
+		resolveSessions({ items: [] });
+		await waitFor(() => expect(result.current.isSnapshotSuccess).toBe(true));
+		expect(result.current.data?.find((workspace) => workspace.id === "cloud-1")?.sessions).toEqual([]);
+	});
+
+	it.each([
+		{ label: "active", session: { id: "cloud-worker", projectId: "cloud-1", kind: "worker", status: "working", isTerminated: false } },
+		{ label: "archived", session: { id: "cloud-worker", projectId: "cloud-1", kind: "worker", status: "terminated", isTerminated: true } },
+	])("resolves a Cloud board with an $label worker without showing the project-empty state", async ({ session }) => {
+		cloudState.ready = true;
+		cloudState.org = { id: "org-1" };
+		respondWith({});
+		listProjectsMock.mockResolvedValue({ items: [{ id: "cloud-1", displayName: "Cloud project" }] });
+		listSessionsMock.mockResolvedValue({ items: [session] });
+		const { result } = renderHook(() => useWorkspaceScope("cloud-1"), { wrapper });
+
+		await waitFor(() => expect(result.current.isSnapshotSuccess).toBe(true));
+		expect(result.current.isSnapshotError).toBe(false);
+		expect(result.current.data?.hasWorkerSessions).toBe(true);
+	});
+
+	it("does not turn an initial Cloud session failure into an empty board", async () => {
+		cloudState.ready = true;
+		cloudState.org = { id: "org-1" };
+		respondWith({});
+		listProjectsMock.mockResolvedValue({ items: [{ id: "cloud-1", displayName: "Cloud project" }] });
+		listSessionsMock.mockRejectedValue(new Error("session snapshot unavailable"));
+		const { result } = renderHook(() => useWorkspaceQuery({ projectId: "cloud-1" }), { wrapper });
+
+		await waitFor(() => expect(result.current.data?.find((workspace) => workspace.id === "cloud-1")).toBeDefined());
+		await waitFor(() => expect(result.current.isSnapshotError).toBe(true), { timeout: 3_000 });
+		expect(result.current.isSnapshotSuccess).toBe(false);
+		expect(result.current.data?.find((workspace) => workspace.id === "cloud-1")?.sessions).toEqual([]);
+	});
+
+	it("keeps cached Cloud snapshots ready while navigating between existing projects", async () => {
+		cloudState.ready = true;
+		cloudState.org = { id: "org-1" };
+		respondWith({});
+		listProjectsMock.mockResolvedValue({ items: [
+			{ id: "cloud-1", displayName: "First Cloud project" },
+			{ id: "cloud-2", displayName: "Second Cloud project" },
+		] });
+		listSessionsMock.mockResolvedValue({ items: [
+			{ id: "cloud-worker", projectId: "cloud-2", kind: "worker", status: "working" },
+		] });
+		const { result, rerender } = renderHook(
+			({ projectId }) => useWorkspaceScope(projectId),
+			{ initialProps: { projectId: "cloud-1" }, wrapper },
+		);
+
+		await waitFor(() => expect(result.current.isSnapshotSuccess).toBe(true));
+		expect(result.current.data?.project?.id).toBe("cloud-1");
+		expect(result.current.data?.hasWorkerSessions).toBe(false);
+
+		rerender({ projectId: "cloud-2" });
+		expect(result.current.isSnapshotSuccess).toBe(true);
+		expect(result.current.data?.project?.id).toBe("cloud-2");
+		expect(result.current.data?.hasWorkerSessions).toBe(true);
+	});
+
 	it("reads a hosted session without contacting the laptop or AO Cloud", async () => {
 		cloudState.ready = true;
 		cloudState.org = { id: "org-1" };
