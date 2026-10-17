@@ -72,9 +72,33 @@ describe("ChatWorkspace retry", () => {
 		const snapshot = limitedSnapshot();
 		snapshot.turns[0]!.usageLimit!.resetsAt = new Date(Date.now() - 1_000).toISOString();
 		const retry = vi.fn();
-		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry }} />);
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry, error: "The previous resume request failed", turnId: "turn-1" }} />);
+		expect(screen.getByRole("alert")).toHaveTextContent("The previous resume request failed");
 		await userEvent.click(screen.getByRole("button", { name: "Resume" }));
 		expect(retry).toHaveBeenCalledWith("turn-1");
+	});
+
+	it.each([
+		{ resetInMs: -1_000, ready: true },
+		{ resetInMs: 60_000, ready: false },
+		{ resetInMs: undefined, ready: true },
+	])("preserves older limited-prompt recovery and refusal after later work: %j", async ({ resetInMs, ready }) => {
+		const snapshot = limitedSnapshot();
+		snapshot.turns[0]!.usageLimit!.resetsAt = resetInMs === undefined ? undefined : new Date(Date.now() + resetInMs).toISOString();
+		snapshot.turns.push({ id: "later", state: "completed", requestedAt: new Date().toISOString(), completedAt: new Date().toISOString() });
+		const retry = vi.fn();
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry, error: "Could not retry the earlier prompt", turnId: "turn-1" }} />);
+
+		expect(screen.getByRole("alert")).toHaveTextContent("Could not retry the earlier prompt");
+		expect(screen.queryByRole("button", { name: "Auto-resume at reset" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Cancel auto-resume" })).toBeNull();
+		if (ready) {
+			await userEvent.click(screen.getByRole("button", { name: "Resume" }));
+			expect(retry).toHaveBeenCalledWith("turn-1");
+		} else {
+			expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+			expect(screen.queryByRole("button", { name: "Retry this turn" })).toBeNull();
+		}
 	});
 
 	it("keeps limit history but hides resume actions after a later turn continues", () => {

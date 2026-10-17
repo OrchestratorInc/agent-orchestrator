@@ -360,7 +360,14 @@ export function TurnOutcome({
 	if (state === "failed" && usageLimit) {
 		return (
 			<div className="flex min-w-0 flex-col gap-2 py-3">
-				<UsageLimitNotice compact usageLimit={usageLimit} />
+				<UsageLimitNotice
+					compact={!retry}
+					usageLimit={usageLimit}
+					onResume={retry?.onRetry}
+					pending={retry?.pending}
+					disabled={retry?.disabled}
+					error={retry?.error}
+				/>
 				{error ? <div className="whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-foreground">{linkifiedProviderErrorText(error)}</div> : null}
 			</div>
 		);
