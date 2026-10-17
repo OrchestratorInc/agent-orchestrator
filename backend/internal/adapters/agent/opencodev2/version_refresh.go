@@ -13,7 +13,8 @@ import (
 func (*Plugin) SupportsTerminalVersionRefresh() bool { return true }
 
 // NativeConversationExists uses v2's session export command and isolated data
-// home. The v1 export command and store must never be used for a v2 resume.
+// home and private server, matching the resumed TUI. The v1 export command,
+// store and shared background server must never be used for a v2 resume.
 func (p *Plugin) NativeConversationExists(ctx context.Context, ref ports.SessionRef, nativeID string, env map[string]string) (bool, error) {
 	binary, err := p.ResolveBinary(ctx)
 	if err != nil {
@@ -28,7 +29,7 @@ func (p *Plugin) NativeConversationExists(ctx context.Context, ref ports.Session
 		probeEnv = map[string]string{}
 	}
 	probeEnv["XDG_DATA_HOME"] = home
-	return agentbase.NativeJSONSessionExists(ctx, binary, []string{"session", "export", nativeID}, ref, nativeID, probeEnv)
+	return agentbase.NativeJSONSessionExists(ctx, binary, []string{"session", "export", nativeID, "--standalone"}, ref, nativeID, probeEnv)
 }
 
 var _ ports.AgentInterfaceHandoffHistoryProbe = (*Plugin)(nil)

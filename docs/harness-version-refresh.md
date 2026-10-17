@@ -27,7 +27,7 @@ cross-version compatibility guarantees for every historical CLI release.
 | Claude Code | `claude --resume ID` | Yes |
 | Codex | `codex resume ID` | Yes |
 | OpenCode v1 | `opencode --session ID` | Yes; exact local export preflight |
-| OpenCode v2 | `opencode --standalone --session ID` | Yes; isolated v2 `session export` preflight |
+| OpenCode v2 | `opencode --standalone --session ID` | Yes; isolated v2 `session export ID --standalone` preflight |
 | Grok | `grok -r ID` | Yes |
 | Cursor | `cursor-agent --resume ID` | Yes |
 | Qwen | `qwen --resume ID` | Yes |
@@ -80,6 +80,7 @@ Primary references for providers and the unsupported identity limitation:
 
 - [Amp threads](https://ampcode.com/docs/threads): `threads continue ID`.
 - [OpenCode v1 CLI](https://opencode.ai/docs/cli/) and [v2 commands](https://dev.opencode.ai/v2/docs/cli/commands/): v1 `export ID` versus v2 `session export ID`.
+- [OpenCode v2 export handler](https://github.com/anomalyco/opencode/blob/dev/packages/cli/src/commands/handlers/session/export.ts) and [transfer schema](https://github.com/anomalyco/opencode/blob/dev/packages/schema/src/session-transfer.ts): `--standalone` selects the private server; exported JSON identifies the conversation through `info.id`.
 - [OpenCode v1 session route](https://github.com/anomalyco/opencode/blob/v1.2.27/packages/opencode/src/cli/cmd/tui/routes/session/index.tsx): a failed session load navigates home, so liveness alone is insufficient.
 - [Grok CLI](https://docs.x.ai/build/cli/reference), [Cursor CLI](https://prod.cursor.com/docs/cli/overview), [Gemini sessions](https://geminicli.com/docs/cli/session-management/), [Copilot sessions](https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli/work-with-multiple-sessions).
 - [Factory CLI](https://github.com/Factory-AI/factory/blob/main/docs/reference/cli-reference.mdx), [Kiro session management](https://kiro.dev/docs/cli/chat/session-management/).
