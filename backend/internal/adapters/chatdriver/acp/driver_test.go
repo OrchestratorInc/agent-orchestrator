@@ -2931,6 +2931,10 @@ func TestACPDriverExtractsCommandFromExecuteToolInput(t *testing.T) {
 	if started.Kind != ports.ChatEventActivityStarted {
 		t.Fatalf("started event = %#v", started)
 	}
+	if started.ActivityStatus != domain.ActivityStatusRunning {
+		t.Fatalf("started status = %q, want %q for a call ACP reports as pending",
+			started.ActivityStatus, domain.ActivityStatusRunning)
+	}
 	var detail map[string]any
 	if err := json.Unmarshal(started.Detail, &detail); err != nil {
 		t.Fatalf("detail: %v", err)
@@ -3167,6 +3171,25 @@ func TestToolOutputTextNormalizesProviderDefinedRawOutput(t *testing.T) {
 				t.Fatalf("toolOutputText() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestActivityStatusFromToolTreatsUnstartedCallsAsRunning(t *testing.T) {
+	tests := []struct {
+		status acpsdk.ToolCallStatus
+		want   domain.ActivityStatus
+	}{
+		// Input still streaming, or waiting on a permission decision: in flight.
+		{status: acpsdk.ToolCallStatusPending, want: domain.ActivityStatusRunning},
+		{status: acpsdk.ToolCallStatusInProgress, want: domain.ActivityStatusRunning},
+		{status: "", want: domain.ActivityStatusRunning},
+		{status: acpsdk.ToolCallStatusCompleted, want: domain.ActivityStatusCompleted},
+		{status: acpsdk.ToolCallStatusFailed, want: domain.ActivityStatusFailed},
+	}
+	for _, tt := range tests {
+		if got := activityStatusFromTool(tt.status); got != tt.want {
+			t.Errorf("activityStatusFromTool(%q) = %q, want %q", tt.status, got, tt.want)
+		}
 	}
 }
 
