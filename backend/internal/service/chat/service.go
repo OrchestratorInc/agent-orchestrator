@@ -1315,16 +1315,24 @@ func hydrateExcerptReferences(ctx context.Context, controller *Controller, msg *
 				break
 			}
 		}
-		if !found || source.Revision != excerpt.Revision || source.Streaming || source.TurnID == "" || !sourceContainsExcerptSelection(source, text) || (source.Role != domain.MessageRoleUser && source.Role != domain.MessageRoleAssistant) {
+		if !found || source.Revision != excerpt.Revision || source.Streaming || !sourceContainsExcerptSelection(source, text) || (source.Role != domain.MessageRoleUser && source.Role != domain.MessageRoleAssistant) {
 			return fmt.Errorf("%w: source message changed or no longer contains the selection; reselect it", ErrExcerptStale)
 		}
-		turn, err := controller.store.TurnByID(ctx, source.TurnID)
-		if err != nil || turn.ConversationID != controller.conversation.ID || turn.State != domain.TurnStateCompleted || turn.RolledBackAt != nil {
+		var userText, assistantText string
+		if source.TurnID == "" {
+			// Provider output with no AO turn, such as Claude Code answering a
+			// finished background task. It is settled transcript with no paired
+			// prompt, so the message itself is the only context.
+			if source.Role == domain.MessageRoleUser {
+				userText = source.Text
+			} else {
+				assistantText = source.Text
+			}
+		} else if turn, err := controller.store.TurnByID(ctx, source.TurnID); err != nil || turn.ConversationID != controller.conversation.ID || turn.State != domain.TurnStateCompleted || turn.RolledBackAt != nil {
 			return fmt.Errorf("%w: source turn is not complete", ErrExcerptStale)
 		}
-		var userText, assistantText string
 		for _, candidate := range messages {
-			if candidate.TurnID != source.TurnID || candidate.Streaming {
+			if source.TurnID == "" || candidate.TurnID != source.TurnID || candidate.Streaming {
 				continue
 			}
 			switch candidate.Role {
@@ -1340,7 +1348,7 @@ func hydrateExcerptReferences(ctx context.Context, controller *Controller, msg *
 				assistantText += candidate.Text
 			}
 		}
-		if userText == "" || assistantText == "" {
+		if source.TurnID != "" && (userText == "" || assistantText == "") {
 			return fmt.Errorf("%w: source turn has no complete user and assistant messages", ErrExcerptStale)
 		}
 		msg.Content = append(msg.Content, ports.ChatContent{

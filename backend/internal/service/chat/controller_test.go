@@ -3371,6 +3371,40 @@ func TestSendVerifiesExcerptAndFallsBackToTextForProvider(t *testing.T) {
 	}
 }
 
+// Claude Code can answer on its own after a background task finishes. That
+// message has no AO turn, but it is settled transcript the user can select.
+func TestSendAcceptsExcerptFromMessageOutsideAnyTurn(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	source := "Nothing else has changed. Did you close the `test` window?"
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderItemID: "turnless", Delta: source},
+		ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderItemID: "turnless", Text: source},
+	)
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Messages) == 1 && !s.Messages[0].Streaming
+	})
+	message := snapshot.Messages[0]
+	if message.TurnID != "" {
+		t.Fatalf("source turn = %q, want a message outside any turn", message.TurnID)
+	}
+
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "I think it crashed", ClientMessageID: "turnless-followup", Origin: domain.MessageOriginHuman,
+		Excerpts: []ports.ChatExcerptReference{{
+			ConversationID: h.ctrl.ConversationID(), MessageID: message.ID,
+			Revision: message.Revision, Text: "Did you close the test window?",
+		}},
+	}); err != nil {
+		t.Fatalf("send with excerpt from a message outside any turn: %v", err)
+	}
+	sent := h.conv.sentMessages()
+	if len(sent) != 1 || !strings.Contains(sent[0].Text, "Selected text:\n---\nDid you close the test window?") ||
+		!strings.Contains(sent[0].Text, "Assistant:\n"+source) {
+		t.Fatalf("provider delivery = %#v", sent)
+	}
+}
+
 func TestProviderPromptFailureSettlesTurnAndRecordsRecoveryOnce(t *testing.T) {
 	h := newHarness(t)
 	turn, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
