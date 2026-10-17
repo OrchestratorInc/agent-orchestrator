@@ -8,11 +8,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/aider"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cline"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/continueagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/crush"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/droid"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hermes"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kiro"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/muse"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -275,6 +279,35 @@ func TestPollContinuouslyReconcilesMuse(t *testing.T) {
 	}
 }
 
+func TestPollPreservesHookBlockedContinuousDetectors(t *testing.T) {
+	for _, tt := range []struct {
+		harness domain.AgentHarness
+		agent   ports.Agent
+	}{
+		{domain.HarnessAider, aider.New()},
+		{domain.HarnessCline, cline.New()},
+		{domain.HarnessContinue, continueagent.New()},
+		{domain.HarnessKiro, kiro.New()},
+		{domain.HarnessMuse, muse.New()},
+		{domain.HarnessFake, unrenderedWaitingAgent{}},
+	} {
+		t.Run(string(tt.harness), func(t *testing.T) {
+			now := time.Unix(500, 0).UTC()
+			session := activeSession(now, tt.harness)
+			session.Activity.State = domain.ActivityBlocked
+			sink := &fakeSink{}
+			runtime := &fakeRuntime{output: "◇ Finishing up (25s · esc to interrupt)\n"}
+			observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, runtime, fakeAgents{tt.harness: tt.agent}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})
+			if err := observer.Poll(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if runtime.calls != 0 || len(sink.signals) != 0 {
+				t.Fatalf("hook-owned block was sampled or reconciled: output calls=%d signals=%+v", runtime.calls, sink.signals)
+			}
+		})
+	}
+}
+
 func TestPollReconcilesWaitingCrushAfterUserResponds(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
@@ -458,6 +491,10 @@ type renderedRuntime struct {
 }
 
 type renderedWaitingAgent struct{ ports.Agent }
+
+type unrenderedWaitingAgent struct{ renderedWaitingAgent }
+
+func (unrenderedWaitingAgent) RequiresRenderedActivity() bool { return false }
 
 func (renderedWaitingAgent) DetectTerminalActivity(string) (domain.ActivityState, bool) {
 	return domain.ActivityWaitingInput, true

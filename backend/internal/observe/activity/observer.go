@@ -120,6 +120,13 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	if !ok {
 		return
 	}
+	rendered, supportsRendered := agent.(interface{ RequiresRenderedActivity() bool })
+	requiresRendered := supportsRendered && rendered.RequiresRenderedActivity()
+	// Hook-owned permission blocks stay sticky unless the adapter can observe
+	// the current rendered modal and its resolution.
+	if session.Activity.State == domain.ActivityBlocked && !requiresRendered {
+		return
+	}
 	continuous, ok := agent.(ports.ContinuousTerminalActivityDetector)
 	if !ok || !continuous.ContinuouslyDetectTerminalActivity() {
 		if session.Activity.State == domain.ActivityWaitingInput {
@@ -139,7 +146,7 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	}
 	var output string
 	var err error
-	if rendered, ok := agent.(interface{ RequiresRenderedActivity() bool }); ok && rendered.RequiresRenderedActivity() {
+	if requiresRendered {
 		reader, ok := o.runtime.(interface {
 			GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error)
 		})
@@ -178,7 +185,7 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	}
 	if state != session.Activity.State || (nativeID != "" && nativeID != session.Metadata.AgentSessionID) {
 		event := "terminal-" + string(state)
-		if rendered, ok := agent.(interface{ RequiresRenderedActivity() bool }); ok && rendered.RequiresRenderedActivity() && session.Activity.State == domain.ActivityBlocked && state != domain.ActivityBlocked {
+		if requiresRendered && session.Activity.State == domain.ActivityBlocked && state != domain.ActivityBlocked {
 			// A current native composer/busy frame resolves the prior modal. Keep
 			// its observed destination state: lifecycle accepts this boundary for
 			// active, idle, and waiting input, and clears the blocked tool flight.
