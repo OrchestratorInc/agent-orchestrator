@@ -2037,7 +2037,7 @@ func (m *Manager) collectOptionalAgentHandoff(ctx context.Context, store ports.A
 	if m.harnessNudgeSafe(rec.Harness) {
 		expectedSwitchID := sw.ID
 		expectedGeneration := sw.SourceGenerationID
-		m.confirmActiveUnderMutation(handoffCtx, m.messenger, rec.ID, func(checkCtx context.Context) (bool, error) {
+		_ = m.confirmActiveUnderMutation(handoffCtx, m.messenger, rec.ID, func(checkCtx context.Context) (bool, error) {
 			current, err := requireAgentSwitch(checkCtx, store, expectedSwitchID)
 			if err != nil {
 				return true, err

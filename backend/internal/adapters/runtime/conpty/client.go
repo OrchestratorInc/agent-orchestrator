@@ -11,6 +11,8 @@ import (
 	"net"
 	"syscall"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/inputdelay"
 )
 
 const (
@@ -84,8 +86,8 @@ func clientSendMessage(addr, message string) error {
 	// Skipped for an empty message — an Enter-only nudge has no paste to let
 	// settle, and the pause would only widen the guard-read→Enter window
 	// (mirrors the tmux runtime's enterDelay contract).
-	if len(runes) > 0 {
-		time.Sleep(ptyInputEnterDelay)
+	if delay := inputdelay.ForMessage(message, ptyInputEnterDelay); delay > 0 {
+		time.Sleep(delay)
 	}
 	frame, err := EncodeMessage(MsgTerminalInput, []byte("\r"))
 	if err != nil {

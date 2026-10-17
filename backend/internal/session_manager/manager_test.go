@@ -11068,7 +11068,7 @@ func TestSend_ConfirmsAndNudgesUntilActive(t *testing.T) {
 
 func TestSend_ConfirmBudgetCapsRetries(t *testing.T) {
 	// A signaling harness that never goes active must still terminate: at most
-	// maxAttempts Sends (initial + maxAttempts-1 nudges), and Send never errors.
+	// maxAttempts Sends (initial + maxAttempts-1 nudges), and Send surfaces ErrDeliveryUnconfirmed.
 	st := newFakeStore()
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code",
 		Activity: domain.Activity{State: domain.ActivityIdle}})
@@ -11077,8 +11077,9 @@ func TestSend_ConfirmBudgetCapsRetries(t *testing.T) {
 	var logBuf bytes.Buffer
 	m.logger = slog.New(slog.NewTextHandler(&logBuf, nil))
 
-	if err := m.Send(context.Background(), "s1", "stuck prompt", nil); err != nil {
-		t.Fatalf("Send: %v", err)
+	err := m.Send(context.Background(), "s1", "stuck prompt", nil)
+	if !errors.Is(err, ErrDeliveryUnconfirmed) {
+		t.Fatalf("Send error = %v, want ErrDeliveryUnconfirmed", err)
 	}
 	if len(msg.msgs) > m.sendConfirm.maxAttempts {
 		t.Fatalf("Send calls = %d, want <= %d (budget cap)", len(msg.msgs), m.sendConfirm.maxAttempts)

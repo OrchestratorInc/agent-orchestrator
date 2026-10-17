@@ -1468,6 +1468,9 @@ func mapSessionError(err error) error {
 	case errors.Is(err, sessionmanager.ErrSwitchDeliveryUnconfirmed):
 		return apierr.Conflict("AGENT_SWITCH_DELIVERY_UNCONFIRMED",
 			"The target agent started, but AO could not confirm that it accepted the continuation", nil)
+	case errors.Is(err, sessionmanager.ErrDeliveryUnconfirmed):
+		return apierr.Conflict("SESSION_DELIVERY_UNCONFIRMED",
+			"Message was written to the terminal but the agent did not start a turn; prompt may be unsubmitted", nil)
 	case errors.Is(err, sessionmanager.ErrSwitchInProgress):
 		return apierr.Conflict("AGENT_SWITCH_IN_PROGRESS",
 			"This session already has an agent switch in progress", nil)
