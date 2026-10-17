@@ -7,7 +7,7 @@
  * that: only for the latest turn that still counts, only once it was stopped.
  */
 
-import { render as rtlRender, screen } from "@testing-library/react";
+import { render as rtlRender, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -45,6 +45,19 @@ describe("ChatWorkspace continue", () => {
 
 		expect(onContinueTurn).toHaveBeenCalledTimes(1);
 		expect(onSend).not.toHaveBeenCalled();
+	});
+
+	it("ends a stopped turn on its outcome, which carries the answer's copy and undo", () => {
+		render(<ChatWorkspace snapshot={stoppedSnapshot()} onRollback={vi.fn()} />);
+
+		const outcome = document.querySelector<HTMLElement>('[data-turn-outcome="interrupted"]')!;
+		expect(outcome).toHaveTextContent("The agent was interrupted by you");
+		expect(within(outcome).getByRole("button", { name: "Copy message as markdown" })).toBeInTheDocument();
+		expect(within(outcome).getByRole("button", { name: "Roll back to here" })).toBeInTheDocument();
+
+		// The stopped answer hands its actions down rather than drawing a second row.
+		const answer = screen.getByText(/Tests are still running/).closest<HTMLElement>(".group\\/message")!;
+		expect(within(answer).queryByRole("button")).toBeNull();
 	});
 
 	it("uses daemon eligibility instead of a swept queued turn", () => {

@@ -120,6 +120,7 @@ import {
 	humanVisibleText,
 	OriginMessage,
 	SteerMessage,
+	TurnActions,
 	TurnChangedFiles,
 	TurnOutcome,
 	LiveResponseStatus,
@@ -4198,6 +4199,14 @@ const TurnGroup = memo(function TurnGroup({
 				.reverse()
 				.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id
 		: undefined;
+	// A turn that stopped or failed closes on its outcome, so the answer above it
+	// hands its copy and undo down to the outcome's action row: one row per turn.
+	const endsWithOutcome = Boolean(group.outcome && group.outcome.state !== "completed");
+	const copyableMessage = endsWithOutcome && copyableMessageId
+		? group.items.find(
+				(item): item is ConversationMessage => item.kind === "message" && item.id === copyableMessageId,
+			)
+		: undefined;
 	let finalAssistantRunIndex = -1;
 	if (group.outcome) {
 		for (let index = runs.length - 1; index >= 0; index -= 1) {
@@ -4270,10 +4279,10 @@ const TurnGroup = memo(function TurnGroup({
 				busy={busy}
 				queued={queued}
 				newHumanMessageIds={newHumanMessageIds}
-				showCopy={run.items[0]?.id === copyableMessageId}
+				showCopy={!endsWithOutcome && run.items[0]?.id === copyableMessageId}
 				live={group.live}
 				onRollback={
-					canRollback && run.items[0]?.id === copyableMessageId
+					canRollback && !endsWithOutcome && run.items[0]?.id === copyableMessageId
 						? () => onRollback(group.turnId as string)
 						: undefined
 				}
@@ -4339,30 +4348,24 @@ const TurnGroup = memo(function TurnGroup({
 				/>
 			) : null}
 			{group.live ? <TurnLiveStatus blocked={group.blocked} providerFailure={group.liveProviderFailure} /> : null}
-			{/* No assistant prose to hang the undo / duration on — still offer them
-			    before the outcome divider so a tool-only turn is not stuck without a
-			    way back or a record of how long it took. */}
-			{!copyableMessageId && !group.live && canRollback ? (
-				<div className="flex h-7 items-center gap-0.5">
-					{canRollback ? (
-						<button
-							type="button"
-							onClick={() => onRollback(group.turnId as string)}
-							disabled={rollbackDisabled}
-							aria-label="Roll back to here"
-							title="Roll back to here"
-							className="flex items-center rounded px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-						>
-							<Undo2 aria-hidden="true" className="size-3" />
-						</button>
-					) : null}
-				</div>
+			{/* No assistant prose to hang the undo on — still offer it so a tool-only
+			    turn is not stuck without a way back. A stopped or failed turn carries
+			    it on its outcome's row instead. */}
+			{!copyableMessageId && !group.live && !endsWithOutcome && canRollback ? (
+				<TurnActions
+					onRollback={() => onRollback(group.turnId as string)}
+					rollbackDisabled={rollbackDisabled}
+				/>
 			) : null}
 			{group.outcome && group.outcome.state !== "completed" ? (
 				<TurnOutcome
 					state={group.outcome.state}
 					error={group.outcome.error}
 					retry={group.outcome.state === "failed" ? retry : undefined}
+					copyText={copyableMessage?.text}
+					onRollback={canRollback ? () => onRollback(group.turnId as string) : undefined}
+					rollbackDisabled={rollbackDisabled}
+					timestamp={copyableMessage?.createdAt}
 				/>
 			) : null}
 		</div>

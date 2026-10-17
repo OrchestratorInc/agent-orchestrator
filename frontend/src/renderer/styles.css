@@ -1985,6 +1985,49 @@ textarea,
 	}
 }
 
+/* The plan's scroll window: steps fade out at whichever edge still has more to
+   scroll to, so a long plan reads as continuing rather than cut off. TurnPlan sets
+   the data attributes from the scroll position; the lengths are registered so the
+   fade eases in and out instead of snapping. */
+@property --turn-plan-fade-top {
+	syntax: "<length>";
+	inherits: false;
+	initial-value: 0px;
+}
+
+@property --turn-plan-fade-bottom {
+	syntax: "<length>";
+	inherits: false;
+	initial-value: 0px;
+}
+
+.turn-plan-viewport {
+	mask-image: linear-gradient(
+		to bottom,
+		transparent,
+		#000 var(--turn-plan-fade-top),
+		#000 calc(100% - var(--turn-plan-fade-bottom)),
+		transparent
+	);
+	transition:
+		--turn-plan-fade-top 150ms ease-out,
+		--turn-plan-fade-bottom 150ms ease-out;
+}
+
+.turn-plan-viewport[data-fade-top] {
+	--turn-plan-fade-top: 24px;
+}
+
+.turn-plan-viewport[data-fade-bottom] {
+	--turn-plan-fade-bottom: 24px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.turn-plan-viewport {
+		transition: none;
+	}
+}
+
 @keyframes multi-step-loader-step {
 	from {
 		filter: blur(2px);
