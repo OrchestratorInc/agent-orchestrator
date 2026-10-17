@@ -126,7 +126,7 @@ it.each(["downloaded", "error"] as const)("shows updating feedback immediately u
 	const update = await screen.findByRole("button", { name: "Update to v9.9.9" });
 	update.focus();
 	fireEvent.click(update);
-	const updating = screen.getByRole("button", { name: "Starting download… Update to v9.9.9" });
+	const updating = screen.getByRole("button", { name: "Updating… Update to v9.9.9" });
 	expect(updating).toBeVisible();
 	expect(updating).toHaveAttribute("aria-disabled", "true");
 	expect(updating).not.toBeDisabled();
@@ -136,10 +136,11 @@ it.each(["downloaded", "error"] as const)("shows updating feedback immediately u
 	expect(screen.getByTestId("update-status-line")).toHaveAttribute("aria-busy", "true");
 
 	act(() => emit({ state: "downloading", version: "9.9.9", percent: 42 }));
-	expect(screen.getByRole("button", { name: "Downloading… 42% Update to v9.9.9" })).toHaveFocus();
+	expect(screen.getByRole("button", { name: "Updating… Update to v9.9.9" })).toHaveFocus();
+	expect(updating).toHaveTextContent(/^Updating…$/);
 	expect(screen.getByRole("progressbar")).toHaveAttribute("value", "42");
 	act(() => emit({ state: "preparing", version: "9.9.9" }));
-	expect(screen.getByRole("button", { name: "Preparing update… Update to v9.9.9" })).toHaveFocus();
+	expect(screen.getByRole("button", { name: "Updating… Update to v9.9.9" })).toHaveFocus();
 
 	act(() => emit({ state, version: "9.9.9", ...(state === "error" ? { message: "Download failed" } : {}) }));
 	expect(updating).not.toBeInTheDocument();
@@ -156,8 +157,7 @@ it.each(["downloading", "preparing"] as const)("shows an existing %s update with
 	updGetStatus.mockResolvedValue({ state, version: "9.9.9" } satisfies UpdateStatus);
 	renderUpdates();
 
-	const label = state === "downloading" ? "Starting download…" : "Preparing update…";
-	const updating = await screen.findByRole("button", { name: `${label} Update to v9.9.9` });
+	const updating = await screen.findByRole("button", { name: "Updating… Update to v9.9.9" });
 	expect(updating).toBeVisible();
 	expect(updating).toHaveAttribute("aria-disabled", "true");
 	expect(updating).not.toBeDisabled();

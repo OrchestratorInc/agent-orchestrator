@@ -417,13 +417,7 @@ function UpdateActions({
 	const manualCheckPending = manualCheckRequestId !== null;
 	const checking = status.state === "checking" || manualCheckPending;
 	const downloading = status.state === "downloading" || status.state === "preparing";
-	let downloadLabel = t("settings.updates.update");
-	if (status.state === "preparing") downloadLabel = t("settings.updates.preparing");
-	else if (downloading) {
-		downloadLabel = status.percent === undefined
-			? t("settings.updates.startingDownload")
-			: t("settings.updates.downloading", { percent: status.percent });
-	}
+	const downloadLabel = downloading ? t("settings.updates.updating") : t("settings.updates.update");
 	const updateTargetLabel = status.version ? t("settings.updates.updateTo", { version: `v${status.version}` }) : t("settings.updates.updateToLatest");
 	const downloadAccessibleLabel = downloading ? `${downloadLabel} ${updateTargetLabel}` : updateTargetLabel;
 	// Only the user's OWN in-flight check blocks the button. A background check

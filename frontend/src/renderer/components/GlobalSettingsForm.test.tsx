@@ -929,7 +929,7 @@ it("keeps running version separate while live download progress becomes install 
 	updOnStatus.mockImplementation((listener) => { emit = listener; return () => undefined; });
 	renderForm("updates");
 	await screen.findByTestId("app-version");
-	// The busy action also names the phase; assert progress in the status row.
+	// Assert detailed progress in the status row, independently of the action label.
 	const statusLine = within(screen.getByTestId("update-status-line"));
 	act(() => emit({ state: "downloading", version: "2.0.0" }));
 	expect(statusLine.getByText("Starting download…")).toBeVisible();

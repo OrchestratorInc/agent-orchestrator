@@ -1532,6 +1532,7 @@
 	"settings.updates.switchFeatureBody": "PR #{{pr}}: {{title}}(으)로 전환하시겠습니까? 앱이 기능 빌드를 다운로드하고 다시 시작합니다.",
 	"settings.updates.switchFeatureTitle": "기능 빌드를 전환하시겠습니까?",
 	"settings.updates.update": "업데이트",
+	"settings.updates.updating": "업데이트 중…",
 	"settings.updates.startingDownload": "다운로드 시작 중…",
 	"settings.updates.preparing": "업데이트 준비 중…",
 	"settings.updates.progress": "다운로드 진행률",

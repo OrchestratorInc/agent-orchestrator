@@ -1532,6 +1532,7 @@
 	"settings.updates.switchFeatureBody": "Zu PR #{{pr}} wechseln: {{title}}? Die App lädt den Feature-Build herunter und startet neu.",
 	"settings.updates.switchFeatureTitle": "Feature-Build wechseln?",
 	"settings.updates.update": "Aktualisieren",
+	"settings.updates.updating": "Wird aktualisiert…",
 	"settings.updates.startingDownload": "Download wird gestartet…",
 	"settings.updates.preparing": "Update wird vorbereitet…",
 	"settings.updates.progress": "Downloadfortschritt",

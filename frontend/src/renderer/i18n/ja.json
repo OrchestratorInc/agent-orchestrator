@@ -1532,6 +1532,7 @@
 	"settings.updates.switchFeatureBody": "PR #{{pr}}: {{title}} に切り替えますか？アプリが機能ビルドをダウンロードして再起動します。",
 	"settings.updates.switchFeatureTitle": "機能ビルドを切り替えますか？",
 	"settings.updates.update": "更新",
+	"settings.updates.updating": "更新中…",
 	"settings.updates.startingDownload": "ダウンロードを開始しています…",
 	"settings.updates.preparing": "更新を準備しています…",
 	"settings.updates.progress": "ダウンロードの進行状況",

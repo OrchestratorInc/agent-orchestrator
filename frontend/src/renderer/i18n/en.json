@@ -1750,6 +1750,7 @@
 	"settings.updates.switchFeatureBody": "Switch to PR #{{pr}}: {{title}}? The app will download the feature build and restart.",
 	"settings.updates.switchFeatureTitle": "Switch feature build?",
 	"settings.updates.update": "Update",
+	"settings.updates.updating": "Updating…",
 	"settings.updates.startingDownload": "Starting download…",
 	"settings.updates.preparing": "Preparing update…",
 	"settings.updates.progress": "Download progress",

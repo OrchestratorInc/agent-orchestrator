@@ -1516,6 +1516,7 @@
 	"settings.updates.switchFeatureBody": "切换到 PR #{{pr}}：{{title}}？应用将下载该功能构建并重启。",
 	"settings.updates.switchFeatureTitle": "切换功能构建？",
 	"settings.updates.update": "更新",
+	"settings.updates.updating": "正在更新…",
 	"settings.updates.startingDownload": "正在开始下载…",
 	"settings.updates.preparing": "正在准备更新…",
 	"settings.updates.progress": "下载进度",

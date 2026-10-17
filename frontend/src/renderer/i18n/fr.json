@@ -1560,6 +1560,7 @@
 	"settings.updates.switchFeatureBody": "Basculer vers le PR #{{pr}} : {{title}} ? L'application téléchargera le build de fonctionnalité et redémarrera.",
 	"settings.updates.switchFeatureTitle": "Changer de build de fonctionnalité ?",
 	"settings.updates.update": "Mettre à jour",
+	"settings.updates.updating": "Mise à jour…",
 	"settings.updates.startingDownload": "Démarrage du téléchargement…",
 	"settings.updates.preparing": "Préparation de la mise à jour…",
 	"settings.updates.progress": "Progression du téléchargement",
