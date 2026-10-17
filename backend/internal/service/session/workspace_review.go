@@ -260,6 +260,8 @@ func (s *Service) GetWorkspaceDiffs(ctx context.Context, id domain.SessionID, in
 
 	groupsByKey := map[string]*workspaceDiffTargetGroup{}
 	seen := map[string]struct{}{}
+	// Every target belongs to this session, so they share one git context.
+	gitCtx := ctx
 	for _, rawPath := range input.Paths {
 		clean, err := cleanWorkspaceRelativePath(rawPath)
 		if err != nil {
@@ -269,10 +271,11 @@ func (s *Service) GetWorkspaceDiffs(ctx context.Context, id domain.SessionID, in
 			continue
 		}
 		seen[clean] = struct{}{}
-		target, err := s.resolveWorkspaceFileTarget(ctx, id, clean)
+		targetCtx, target, err := s.resolveWorkspaceFileTarget(ctx, id, clean)
 		if err != nil {
 			return WorkspaceDiffs{}, err
 		}
+		gitCtx = targetCtx
 		key := target.root + "\x00" + target.prefix + "\x00" + target.compare.gitBase()
 		group := groupsByKey[key]
 		if group == nil {
@@ -289,7 +292,7 @@ func (s *Service) GetWorkspaceDiffs(ctx context.Context, id domain.SessionID, in
 	sort.Strings(keys)
 	result := WorkspaceDiffs{SessionID: id, WorkspaceVersion: current.WorkspaceVersion, Groups: make([]WorkspaceDiffGroup, 0, len(keys))}
 	for _, key := range keys {
-		group, err := workspaceDiffGroup(ctx, groupsByKey[key], scope, input.ContextLines, input.IgnoreWhitespace)
+		group, err := workspaceDiffGroup(gitCtx, groupsByKey[key], scope, input.ContextLines, input.IgnoreWhitespace)
 		if err != nil {
 			group.Repository = groupsByKey[key].prefix
 			group.Errors = []WorkspaceDiffError{{Code: "WORKSPACE_DIFF_FAILED", Message: "Unable to load this repository's diff"}}
@@ -440,7 +443,7 @@ func (s *Service) getWorkspaceFileRevision(ctx context.Context, id domain.Sessio
 	// Unversioned live text reads are independent of Git comparison metadata.
 	// Snapshot-fenced and historical reads retain the complete validation path.
 	fastWorktree := side == WorkspaceBlobAfter && strings.TrimSpace(rawCommitSHA) == "" && workspaceVersion == "" && (resolvedScope == WorkspaceDiffCombined || resolvedScope == WorkspaceDiffUnstaged || resolvedScope == WorkspaceDiffUntracked)
-	target, err := s.resolveWorkspaceFileTargetWithCompare(ctx, id, rawPath, !fastWorktree)
+	ctx, target, err := s.resolveWorkspaceFileTargetWithCompare(ctx, id, rawPath, !fastWorktree)
 	if err != nil {
 		return WorkspaceFileRevision{}, err
 	}

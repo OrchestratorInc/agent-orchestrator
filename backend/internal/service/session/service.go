@@ -238,6 +238,9 @@ type Service struct {
 	// artifactDeleter deletes a session's artifact files and version rows. Nil
 	// makes DeleteArtifacts fail rather than delete outside the capture lock.
 	artifactDeleter artifactDeleter
+	// sandboxedSession decides whether git reads of a session's worktree are
+	// hardened. See Deps.SandboxedSession.
+	sandboxedSession func(context.Context, domain.SessionRecord) bool
 }
 
 // SetChatProviderPreserver wires the live Chat lifetime observation after both
@@ -285,6 +288,12 @@ type Deps struct {
 	// ArtifactDeleter deletes a session's artifacts; daemon wiring passes the
 	// shared *artifactversions.Capturer so a delete cannot race a capture.
 	ArtifactDeleter artifactDeleter
+	// SandboxedSession reports whether a session's worktree is agent-controlled,
+	// so the changes panel hardens its host git there (#6663). The daemon
+	// passes the same predicate the git workspace uses (sandbox state dir or
+	// config). Left nil, the project config decides and an unreadable project
+	// fails closed.
+	SandboxedSession func(ctx context.Context, rec domain.SessionRecord) bool
 }
 
 // NewWithDeps wires a session service with optional PR-claim dependencies.
@@ -293,7 +302,7 @@ func NewWithDeps(d Deps) *Service {
 	if backgroundContext == nil {
 		backgroundContext = context.Background()
 	}
-	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, logger: d.Logger, backgroundContext: backgroundContext, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity, titleRefinementSlots: make(chan struct{}, delegatedTaskTitleConcurrency), titleRefinementCancels: map[domain.SessionID]context.CancelFunc{}, outputTypeReconciler: d.OutputTypeReconciler, artifactDeleter: d.ArtifactDeleter}
+	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, logger: d.Logger, backgroundContext: backgroundContext, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity, titleRefinementSlots: make(chan struct{}, delegatedTaskTitleConcurrency), titleRefinementCancels: map[domain.SessionID]context.CancelFunc{}, outputTypeReconciler: d.OutputTypeReconciler, artifactDeleter: d.ArtifactDeleter, sandboxedSession: d.SandboxedSession}
 	if s.prClaimer == nil {
 		if w, ok := d.Store.(ports.PRClaimer); ok {
 			s.prClaimer = w
@@ -1497,6 +1506,10 @@ func mapSessionError(err error) error {
 		return apierr.Invalid("AGENT_BINARY_NOT_FOUND", err.Error(), nil)
 	case errors.Is(err, ports.ErrRuntimePrerequisite):
 		return apierr.Invalid("RUNTIME_PREREQUISITE_MISSING", err.Error(), nil)
+	case errors.Is(err, ports.ErrSandboxUnavailable):
+		return apierr.Invalid("SANDBOX_UNAVAILABLE", err.Error(), nil)
+	case errors.Is(err, ports.ErrSandboxMisconfigured):
+		return apierr.Invalid("SANDBOX_MISCONFIGURED", err.Error(), nil)
 	case errors.Is(err, ports.ErrRuntimeCommandLineTooLong):
 		return apierr.Invalid("WINDOWS_COMMAND_LINE_TOO_LONG",
 			"The agent launch command exceeds the Windows size limit. Shorten the task or project instructions.", nil)

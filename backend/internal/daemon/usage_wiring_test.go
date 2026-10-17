@@ -25,10 +25,11 @@ func TestUsagePipelineWatchRootsIncludesKimiWrites(t *testing.T) {
 	}
 
 	roots := usagesvc.SourceRoots{
-		ClaudeProjects: t.TempDir(),
-		CodexSessions:  t.TempDir(),
-		CodexArchived:  t.TempDir(),
-		KimiHome:       kimiHome,
+		ClaudeProjects:        t.TempDir(),
+		ClaudeSandboxProjects: t.TempDir(),
+		CodexSessions:         t.TempDir(),
+		CodexArchived:         t.TempDir(),
+		KimiHome:              kimiHome,
 	}
 	watcher, err := usagepipeline.NewTranscriptWatcher(
 		context.Background(), usagePipelineWatchRoots(roots),

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/tmux"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/sandbox/dockersandbox"
 	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
@@ -321,7 +323,7 @@ func TestWiring_StartSessionBuildsSessionService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildAgentResolver: %v", err)
 	}
-	svc, reviewSvc, lc, err := startSession(context.Background(), cfg, rt, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
+	svc, reviewSvc, lc, err := startSession(context.Background(), cfg, nil, rt, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("startSession: %v", err)
 	}
@@ -382,7 +384,7 @@ func TestWiring_StartSessionSpawnsScratchWithoutGitRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildAgentResolver: %v", err)
 	}
-	svc, _, _, err := startSession(context.Background(), cfg, runtime, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
+	svc, _, _, err := startSession(context.Background(), cfg, nil, runtime, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("startSession: %v", err)
 	}
@@ -439,7 +441,7 @@ func TestStartSession_SpawnDoesNotPanicWhenNoTrackerToken(t *testing.T) {
 	if agentsErr != nil {
 		t.Fatalf("buildAgentResolver: %v", agentsErr)
 	}
-	svc, _, _, err := startSession(context.Background(), cfg, rt, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
+	svc, _, _, err := startSession(context.Background(), cfg, nil, rt, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("startSession: %v", err)
 	}
@@ -473,7 +475,7 @@ func TestStartTrackerIntake_RunsEvenWithoutEnabledProjects(t *testing.T) {
 	if agentsErr != nil {
 		t.Fatalf("buildAgentResolver: %v", agentsErr)
 	}
-	svc, _, _, err := startSession(context.Background(), cfg, rt, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
+	svc, _, _, err := startSession(context.Background(), cfg, nil, rt, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("startSession: %v", err)
 	}
@@ -891,6 +893,120 @@ func TestProjectRepoResolver_ResolvesRegisteredProject(t *testing.T) {
 	}
 }
 
+// TestDaemonPortReportsBoundPort asserts the sandbox probes the port the
+// loopback listener actually bound, which differs from the configured one
+// when the server falls back to an ephemeral port.
+func TestDaemonPortReportsBoundPort(t *testing.T) {
+	p := newDaemonPort(3001)
+	if got := p.get(); got != 3001 {
+		t.Fatalf("before bind = %d, want configured 3001", got)
+	}
+	p.bound(&net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 49152})
+	if got := p.get(); got != 49152 {
+		t.Fatalf("after bind = %d, want bound 49152", got)
+	}
+	p.bound(&net.UnixAddr{Name: "/tmp/x", Net: "unix"})
+	if got := p.get(); got != 49152 {
+		t.Fatalf("a non-TCP address changed the port to %d", got)
+	}
+}
+
+type fakeSandboxLookup struct {
+	sessions   map[domain.SessionID]domain.SessionRecord
+	projects   map[string]domain.ProjectRecord
+	sessionErr error
+}
+
+func (f fakeSandboxLookup) GetSession(_ context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
+	rec, ok := f.sessions[id]
+	return rec, ok, f.sessionErr
+}
+
+func (f fakeSandboxLookup) GetProject(_ context.Context, id string) (domain.ProjectRecord, bool, error) {
+	rec, ok := f.projects[id]
+	return rec, ok, nil
+}
+
+// TestSessionSandboxProbe asserts AO's host git treats a worktree as
+// sandboxed from the session record and project config, and fails closed to
+// the hardened form whenever that cannot be established.
+func TestSessionSandboxProbe(t *testing.T) {
+	perAgent := domain.ProjectConfig{Sandbox: domain.SandboxConfig{Mode: domain.SandboxModePerAgent, Image: "node:22"}}
+	lookup := fakeSandboxLookup{
+		sessions: map[domain.SessionID]domain.SessionRecord{
+			"w-1": {ID: "w-1", ProjectID: "sb", Kind: domain.KindWorker},
+			"o-1": {ID: "o-1", ProjectID: "sb", Kind: domain.KindOrchestrator},
+			"h-1": {ID: "h-1", ProjectID: "host", Kind: domain.KindWorker},
+			"x-1": {ID: "x-1", ProjectID: "gone", Kind: domain.KindWorker},
+		},
+		projects: map[string]domain.ProjectRecord{
+			"sb":   {ID: "sb", Config: perAgent},
+			"host": {ID: "host"},
+		},
+	}
+	probe := sessionSandboxProbe{store: lookup}
+	ctx := context.Background()
+	cases := []struct {
+		id   domain.SessionID
+		want bool
+	}{
+		{"w-1", true},
+		{"o-1", false}, // the orchestrator never inherits the project sandbox
+		{"h-1", false},
+		{"x-1", true},     // unknown project: fail closed
+		{"missing", true}, // unknown session: fail closed
+	}
+	for _, tc := range cases {
+		if got := probe.sandboxed(ctx, ports.WorkspaceInfo{SessionID: tc.id}); got != tc.want {
+			t.Errorf("sandboxed(%s) = %v, want %v", tc.id, got, tc.want)
+		}
+	}
+	if probe.sandboxedRecord(ctx, domain.SessionRecord{ID: "s-0", Kind: domain.KindWorker}) {
+		t.Error("a session without a project can never have run sandboxed")
+	}
+	lookup.sessionErr = errors.New("db down")
+	if !(sessionSandboxProbe{store: lookup}).sandboxed(ctx, ports.WorkspaceInfo{SessionID: "h-1"}) {
+		t.Error("a failed session read must fail closed")
+	}
+}
+
+// TestSessionSandboxProbeHonoursSandboxStateDir asserts a session whose agent
+// ever ran in a container stays hardened after the sandbox config is turned
+// off: Ensure creates its state dir, and only a real directory counts.
+func TestSessionSandboxProbeHonoursSandboxStateDir(t *testing.T) {
+	dataDir := t.TempDir()
+	lookup := fakeSandboxLookup{
+		sessions: map[domain.SessionID]domain.SessionRecord{
+			"h-1": {ID: "h-1", ProjectID: "host", Kind: domain.KindWorker},
+			"h-2": {ID: "h-2", ProjectID: "host", Kind: domain.KindWorker},
+		},
+		projects: map[string]domain.ProjectRecord{"host": {ID: "host"}},
+	}
+	probe := sessionSandboxProbe{store: lookup, dataDir: dataDir}
+	ctx := context.Background()
+
+	if err := os.MkdirAll(dockersandbox.SessionStateDir(dataDir, "host", "h-1"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if !probe.sandboxed(ctx, ports.WorkspaceInfo{ProjectID: "host", SessionID: "h-1"}) {
+		t.Error("state dir present, config off: want hardened")
+	}
+	if !probe.sandboxedRecord(ctx, lookup.sessions["h-1"]) {
+		t.Error("record with state dir, config off: want hardened")
+	}
+
+	h2 := dockersandbox.SessionStateDir(dataDir, "host", "h-2")
+	if err := os.MkdirAll(filepath.Dir(h2), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), h2); err != nil {
+		t.Fatal(err)
+	}
+	if probe.sandboxed(ctx, ports.WorkspaceInfo{ProjectID: "host", SessionID: "h-2"}) {
+		t.Error("a symlink in place of the state dir must not count; config off decides")
+	}
+}
+
 // fakeSessionLifecycle records calls to Reconcile and RestoreAll so tests can
 // assert the daemon wiring invokes the correct methods without needing a real
 // runtime or worktree.
@@ -1014,6 +1130,8 @@ func (f *fakeSessionLifecycle) SetCodexAccountSwitchObserver(func()) {}
 func (f *fakeSessionLifecycle) PersistChatModel(_ context.Context, _ domain.SessionID, _ string) error {
 	return nil
 }
+
+func (f *fakeSessionLifecycle) CleanupTerminatedSandbox(context.Context, domain.SessionID) {}
 
 // TestWiring_SessionLifecycleInterfaceInvokedByDaemon asserts the
 // sessionLifecycle interface is satisfied by *sessionmanager.Manager (compile

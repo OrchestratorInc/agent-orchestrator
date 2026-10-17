@@ -68,7 +68,7 @@ func TestRuntimeLaunchEnvironmentAugmentedAfterGeneration(t *testing.T) {
 	for _, force := range []bool{false, true} {
 		m := New(Deps{DataDir: "/ao-data", Executable: func() (string, error) { return "/ao", nil }})
 		env := map[string]string{}
-		if _, err := m.wrapAgentProcessWithLaunchID(generationEnvAgent{}, "mer-1", env, []string{"fx"}, "launch-new", force); err != nil {
+		if _, err := m.wrapAgentProcessWithLaunchID(generationEnvAgent{}, "mer-1", env, []string{"fx"}, "launch-new", force, nil); err != nil {
 			t.Fatal(err)
 		}
 		if env["augmentation"] != "/ao-data:mer-1:launch-new:launch-new" {

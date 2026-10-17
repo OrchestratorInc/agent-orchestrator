@@ -274,6 +274,11 @@ func (m *Manager) admitAgentSwitch(ctx context.Context, id domain.SessionID, cfg
 	if err != nil {
 		return domain.AgentSwitch{}, nil, fmt.Errorf("switch agent %s: project: %w", id, err)
 	}
+	// Target activation launches on the host; the sandbox wrap is not threaded
+	// through switching yet (#6663). Refuse before any saga state exists.
+	if sandboxFor(rec.Kind, project.Config).Enabled() {
+		return domain.AgentSwitch{}, nil, fmt.Errorf("switch agent %s: %w: switching agents is not supported for sandboxed sessions yet", id, ports.ErrSandboxMisconfigured)
+	}
 	sourceAgent, ok := m.agents.Agent(rec.Harness)
 	if !ok {
 		return domain.AgentSwitch{}, nil, fmt.Errorf("switch agent %s: %w: %q", id, ErrUnknownHarness, rec.Harness)
@@ -1453,7 +1458,7 @@ func (m *Manager) prepareTargetActivation(ctx context.Context, store ports.Agent
 		return preparedTargetActivation{}, err
 	}
 	m.augmentRuntimePATHForLaunchBinary(ctx, env, argv)
-	argv, rawLaunchID, err := m.superviseAgentProcessForSwitch(agent, rec.ID, env, argv)
+	argv, rawLaunchID, err := m.superviseAgentProcessForSwitch(agent, rec.ID, env, argv, nil)
 	if err != nil {
 		return preparedTargetActivation{}, fmt.Errorf("supervisor: %w", err)
 	}
@@ -1595,7 +1600,7 @@ func (m *Manager) prepareTargetLaunchPrompt(ctx context.Context, rec domain.Sess
 		return err
 	}
 	m.augmentRuntimePATHForLaunchBinary(ctx, target.env, raw)
-	wrapped, err := m.wrapAgentProcessWithLaunchID(target.agent, rec.ID, target.env, raw, string(target.launchID), true)
+	wrapped, err := m.wrapAgentProcessWithLaunchID(target.agent, rec.ID, target.env, raw, string(target.launchID), true, nil)
 	if err != nil {
 		return fmt.Errorf("supervisor: %w", err)
 	}

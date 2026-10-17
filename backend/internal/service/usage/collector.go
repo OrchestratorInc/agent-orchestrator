@@ -61,9 +61,13 @@ type HookSignal struct {
 // transcripts.
 type SourceRoots struct {
 	ClaudeProjects string
-	CodexSessions  string
-	CodexArchived  string
-	KimiHome       string
+	// ClaudeSandboxProjects holds the per-project CLAUDE_CONFIG_DIRs of
+	// sandboxed Claude sessions; transcripts live under
+	// <root>/<project>/claude/projects.
+	ClaudeSandboxProjects string
+	CodexSessions         string
+	CodexArchived         string
+	KimiHome              string
 }
 
 // DefaultSourceRoots resolves provider-owned transcript directories. dataDir
@@ -84,10 +88,11 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 		dataDir = filepath.Join(home, ".ao", "data")
 	}
 	return SourceRoots{
-		ClaudeProjects: filepath.Join(home, ".claude", "projects"),
-		CodexSessions:  filepath.Join(codexHome, "sessions"),
-		CodexArchived:  filepath.Join(codexHome, "archived_sessions"),
-		KimiHome:       filepath.Join(dataDir, "kimi"),
+		ClaudeProjects:        filepath.Join(home, ".claude", "projects"),
+		ClaudeSandboxProjects: filepath.Join(dataDir, "sandbox", "projects"),
+		CodexSessions:         filepath.Join(codexHome, "sessions"),
+		CodexArchived:         filepath.Join(codexHome, "archived_sessions"),
+		KimiHome:              filepath.Join(dataDir, "kimi"),
 	}, nil
 }
 
@@ -2036,7 +2041,7 @@ func (c *Collector) validateSourceAttribution(
 func (c *Collector) allowedRoots(harness domain.AgentHarness) []string {
 	switch harness {
 	case domain.HarnessClaudeCode:
-		return []string{c.roots.ClaudeProjects}
+		return append([]string{c.roots.ClaudeProjects}, c.claudeSandboxProjectRoots()...)
 	case domain.HarnessCodex:
 		return []string{c.roots.CodexSessions, c.roots.CodexArchived}
 	case domain.HarnessKimi:
@@ -2044,6 +2049,28 @@ func (c *Collector) allowedRoots(harness domain.AgentHarness) []string {
 	default:
 		return nil
 	}
+}
+
+// claudeSandboxProjectRoots lists each sandboxed project's Claude transcript
+// dir, so the rest of the sandbox state dir is never accepted as a source.
+// The agent can write these dirs, so a root reached through a symlink is
+// skipped rather than followed out of the sandbox state dir.
+func (c *Collector) claudeSandboxProjectRoots() []string {
+	if c.roots.ClaudeSandboxProjects == "" {
+		return nil
+	}
+	base, err := filepath.EvalSymlinks(filepath.Clean(c.roots.ClaudeSandboxProjects))
+	if err != nil {
+		return nil
+	}
+	matches, _ := filepath.Glob(filepath.Join(base, "*", "claude", "projects"))
+	roots := matches[:0]
+	for _, root := range matches {
+		if resolved, err := filepath.EvalSymlinks(root); err == nil && resolved == root {
+			roots = append(roots, root)
+		}
+	}
+	return roots
 }
 
 func sourceKindForHarness(harness domain.AgentHarness) (domain.UsageSourceKind, bool) {
@@ -2099,6 +2126,9 @@ func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarnes
 	switch harness {
 	case domain.HarnessClaudeCode:
 		patterns = []string{filepath.Join(c.roots.ClaudeProjects, "*", nativeID+".jsonl")}
+		for _, root := range c.claudeSandboxProjectRoots() {
+			patterns = append(patterns, filepath.Join(root, "*", nativeID+".jsonl"))
+		}
 	case domain.HarnessCodex:
 		return c.discoverCodexPath(ctx, nativeID, "")
 	case domain.HarnessKimi:

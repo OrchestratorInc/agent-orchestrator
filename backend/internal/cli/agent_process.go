@@ -30,6 +30,7 @@ func newAgentProcessSuperviseCommand(ctx *commandContext) *cobra.Command {
 	var reviewID string
 	var activityReviewID string
 	var launchID string
+	var sandboxRelay string
 	cmd := &cobra.Command{
 		Use:    "supervise (--session <id>|--review <id>) [--activity-review <id>] --launch <id> -- <command> [args...]",
 		Short:  "Supervise one managed agent process (internal)",
@@ -67,7 +68,7 @@ func newAgentProcessSuperviseCommand(ctx *commandContext) *cobra.Command {
 			if activityReviewID == "" {
 				activityReviewID = reviewID
 			}
-			ctx.runSupervisedProcess(cmd.Context(), sessionID, activityReviewID, launchID, args)
+			ctx.runSupervisedProcess(cmd.Context(), sessionID, activityReviewID, launchID, strings.TrimSpace(sandboxRelay), args)
 			return nil
 		},
 	}
@@ -75,19 +76,59 @@ func newAgentProcessSuperviseCommand(ctx *commandContext) *cobra.Command {
 	cmd.Flags().StringVar(&reviewID, "review", "", "AO review id")
 	cmd.Flags().StringVar(&activityReviewID, "activity-review", "", "AO review id to receive process activity")
 	cmd.Flags().StringVar(&launchID, "launch", "", "AO process launch id")
+	cmd.Flags().StringVar(&sandboxRelay, "sandbox-relay", "", "serve in-container ao calls from this spool dir (internal)")
 	return cmd
 }
 
-func (c *commandContext) runSupervisedProcess(ctx context.Context, sessionID, reviewID, launchID string, argv []string) {
+func (c *commandContext) runSupervisedProcess(ctx context.Context, sessionID, reviewID, launchID, relayDir string, argv []string) {
 	child := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec,forbidigo // interactive CLI child must inherit the caller's console.
 	child.Stdin = c.deps.In
 	child.Stdout = c.deps.Out
 	child.Stderr = c.deps.Err
 
+	// Open the relay before the child starts. Without it every in-container ao
+	// call, including each hook, would hang until it times out, so the agent
+	// is not started at all.
+	var relayRoot *os.Root
+	var relayExe string
+	if relayDir != "" {
+		exe, err := os.Executable()
+		if err == nil {
+			relayRoot, err = openSandboxRelay(relayDir)
+		}
+		if err != nil {
+			_, _ = fmt.Fprintf(c.deps.Err, "ao: sandbox relay unavailable, not starting the agent: %v\n", err)
+			c.reportSupervisedExit(sessionID, reviewID, launchID)
+			return
+		}
+		relayExe = exe
+	}
+
 	if err := child.Start(); err != nil {
+		if relayRoot != nil {
+			_ = relayRoot.Close()
+		}
 		_, _ = fmt.Fprintf(c.deps.Err, "ao: start managed agent: %v\n", err)
 		c.reportSupervisedExit(sessionID, reviewID, launchID)
 		return
+	}
+
+	stopRelayAndWait := func() {}
+	if relayRoot != nil {
+		relayCtx, stopRelay := context.WithCancel(ctx)
+		relayDone := make(chan struct{})
+		go func() {
+			defer close(relayDone)
+			serveSandboxRelayRoot(relayCtx, relayRoot, hostAORunner(relayExe))
+		}()
+		stopRelayAndWait = func() {
+			stopRelay()
+			select {
+			case <-relayDone:
+			case <-time.After(sandboxRelayJoinTimeout):
+				_, _ = fmt.Fprintln(c.deps.Err, "ao: sandbox relay did not stop in time; continuing")
+			}
+		}
 	}
 
 	// The child shares the terminal foreground process group and therefore
@@ -96,6 +137,7 @@ func (c *commandContext) runSupervisedProcess(ctx context.Context, sessionID, re
 	interrupts := make(chan os.Signal, 1)
 	signal.Notify(interrupts, os.Interrupt)
 	_ = child.Wait()
+	stopRelayAndWait()
 	signal.Stop(interrupts)
 
 	c.reportSupervisedExit(sessionID, reviewID, launchID)
