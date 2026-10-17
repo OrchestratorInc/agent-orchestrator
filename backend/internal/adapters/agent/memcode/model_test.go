@@ -29,3 +29,22 @@ func TestNativeModelSelectionUsesConfirmedTUICommand(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeModelConfirmationRequiresExactNewestToken(t *testing.T) {
+	p := New()
+	cfg := ports.LaunchConfig{Config: ports.AgentConfig{Model: "glm-5p3"}}
+	for _, test := range []struct {
+		confirmation string
+		want         bool
+	}{
+		{"model → glm-5p3", true},
+		{"model → glm-5p3-flash", false},
+		{"model → glm-5p3\nmodel → glm-5p3-flash", false},
+		{"model → glm-5p3-flash\nmodel → glm-5p3", true},
+		{"model → glm-5p3 · 200k context", true},
+	} {
+		if got := p.AfterStartCommandApplied(cfg, readyTerminal+"\n"+test.confirmation); got != test.want {
+			t.Errorf("confirmation %q = %v, want %v", test.confirmation, got, test.want)
+		}
+	}
+}

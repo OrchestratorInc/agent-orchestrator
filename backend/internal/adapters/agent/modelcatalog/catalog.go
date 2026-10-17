@@ -829,11 +829,14 @@ func BinaryVersion(ctx context.Context, binary string) string {
 // CatalogFingerprint hashes every stable discovery input for an agent: the
 // resolved executable plus the configuration and credentials its discovery
 // reads. Only the digest is returned or persisted.
+// catalogSchemaVersions invalidates snapshots when an adapter's catalog format
+// changes independently of its installed executable or configuration.
+var catalogSchemaVersions = map[string]string{"memcode": "native-picker-v1"}
+
 func CatalogFingerprint(ctx context.Context, agentID, binary, workingDir string, env map[string]string) string {
 	binaryVersion := BinaryVersion(ctx, binary)
-	if agentID == "memcode" {
-		// Invalidate catalogs cached before AO exposed the native picker labels.
-		binaryVersion += ";native-picker-v1"
+	if version := catalogSchemaVersions[agentID]; version != "" {
+		binaryVersion += ";" + version
 	}
 	config := discoveryConfigInputs(ctx, agentID, workingDir, env)
 	// Refresh pre-provider catalogs after upgrading and when observed credential

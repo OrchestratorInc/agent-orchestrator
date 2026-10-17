@@ -1511,7 +1511,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		m.markSpawnFailedTerminatedAfterFailure(ctx, id, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnCommit, err)
 	}
-	if delivery == ports.PromptDeliveryAfterStart && afterStartPrompt != "" {
+	if delivery == ports.PromptDeliveryAfterStart {
 		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, id, afterStartPrompt); err != nil {
 			runtimeDestroyed := m.destroySpawnRuntimeAfterFailure(ctx, handle)
 			workspaceDestroyed := m.rollbackPreparedSpawnWorkspaceAfterFailure(ctx, rec, ws, workspaceProject, runtimeDestroyed)
@@ -3415,6 +3415,9 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	if effort := strings.TrimSpace(rec.Metadata.Effort); effort != "" {
 		agentConfig.Effort = effort
 	}
+	if rec.Harness == domain.HarnessMemcode && validateSpawnModel(rec.Harness, agentConfig.Model) != nil {
+		agentConfig.Model = ""
+	}
 	if rec.Metadata.Permissions != "" {
 		agentConfig.Permissions = rec.Metadata.Permissions
 	}
@@ -3577,7 +3580,10 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			return RestoreResult{}, fmt.Errorf("%s %s: native initialization: %w", operation, rec.ID, errors.Join(err, cleanupErr))
 		}
 	}
-	if delivery == ports.PromptDeliveryAfterStart && afterStartPrompt != "" {
+	if delivery == ports.PromptDeliveryAfterStart || initialization != nil {
+		if mode == RestoreModeNative {
+			afterStartPrompt = "" // restore native state without replaying a user turn
+		}
 		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, rec.ID, afterStartPrompt); err != nil {
 			m.destroySpawnRuntimeAfterFailure(ctx, handle)
 			cleanupCtx, cancel := spawnRollbackContext(ctx)
@@ -6326,10 +6332,14 @@ func (m *Manager) cleanupAgentWorkspace(ctx context.Context, rec domain.SessionR
 }
 
 func (m *Manager) deliverAfterStartPrompt(ctx context.Context, agent ports.Agent, cfg ports.LaunchConfig, handle ports.RuntimeHandle, id domain.SessionID, prompt string) error {
+	selector, selects := agent.(ports.AgentAfterStartCommand)
+	if prompt == "" && !selects {
+		return nil
+	}
 	if err := m.waitForPromptReadiness(ctx, agent, cfg, handle); err != nil {
 		return err
 	}
-	if selector, ok := agent.(ports.AgentAfterStartCommand); ok {
+	if selects {
 		command, err := selector.AfterStartCommand(ctx, cfg)
 		if err != nil {
 			return err
@@ -6343,16 +6353,23 @@ func (m *Manager) deliverAfterStartPrompt(ctx context.Context, agent ports.Agent
 			}
 		}
 	}
+	if prompt == "" {
+		return nil
+	}
 	return m.deliverStartedInput(ctx, id, prompt)
 }
 
 func (m *Manager) waitForAfterStartCommand(ctx context.Context, selector ports.AgentAfterStartCommand, cfg ports.LaunchConfig, handle ports.RuntimeHandle) error {
+	rendered, ok := m.runtime.(ports.StyledTerminalOutputReader)
+	if !ok {
+		return errors.New("native startup command requires current rendered terminal output")
+	}
 	deadline := time.NewTimer(10 * time.Second)
 	defer deadline.Stop()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		output, err := m.runtime.GetOutput(ctx, handle, 100)
+		output, err := rendered.GetStyledOutput(ctx, handle, 100)
 		if err != nil {
 			return fmt.Errorf("read native startup command output: %w", err)
 		}

@@ -1958,7 +1958,7 @@ func TestClaudeModelsRevalidationKeepsMatchingProviderCacheOnFailure(t *testing.
 	}
 }
 
-func TestMemcodeModelsReplacePreviouslyEmptyCatalogImmediately(t *testing.T) {
+func TestMemcodeModelsRevalidatePreviouslyEmptyCatalogInBackground(t *testing.T) {
 	oldCatalog := ports.AgentModelCatalog{AgentID: "memcode", SelectionMode: ports.ModelSelectionCatalog, Models: []ports.AgentModelInfo{}, Source: "manual"}
 	data, err := json.Marshal(oldCatalog)
 	if err != nil {
@@ -1976,8 +1976,22 @@ func TestMemcodeModelsReplacePreviouslyEmptyCatalogImmediately(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Models) != 2 || got.Source != "official-catalog" {
-		t.Fatalf("catalog = %#v, want new native picker list on first read", got)
+	if len(got.Models) != 0 {
+		t.Fatalf("catalog = %#v, want cached result on first read", got)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		cached, ok, err := svc.cachedCatalog(context.Background(), "memcode", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok && len(cached.Catalog.Models) == 2 && cached.Catalog.Source == "official-catalog" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background refresh did not replace the old catalog")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
