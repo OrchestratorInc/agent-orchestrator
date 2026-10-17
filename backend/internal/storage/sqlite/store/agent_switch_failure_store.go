@@ -77,7 +77,9 @@ func (s *Store) applyAgentSwitchMutation(ctx context.Context, mutation ports.Age
 		return ports.AgentSwitchMutationResult{}, err
 	}
 
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return ports.AgentSwitchMutationResult{}, err
+	}
 	defer s.writeMu.Unlock()
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -414,7 +416,9 @@ func (s *Store) EnqueueAgentSwitchOperationalFault(ctx context.Context, input po
 	if input.SwitchID == "" || input.ExpectedUpdatedAt.IsZero() {
 		return ports.AgentSwitchMutationResult{}, errors.New("enqueue agent switch operational fault: durable switch fingerprint is required")
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return ports.AgentSwitchMutationResult{}, err
+	}
 	defer s.writeMu.Unlock()
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -496,7 +500,9 @@ func (s *Store) EnqueueAgentSwitchDaemonFault(ctx context.Context, input ports.A
 			return ports.AgentSwitchMutationResult{}, errors.New("enqueue daemon agent switch fault: switch-only fields must be explicit not_applicable")
 		}
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return ports.AgentSwitchMutationResult{}, err
+	}
 	defer s.writeMu.Unlock()
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -517,7 +523,9 @@ func (s *Store) ForceDisableAgentSwitchFailurePolicy(ctx context.Context, update
 	if updatedAt.IsZero() {
 		return errors.New("force-disable agent switch failure policy: timestamp is required")
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	_, err := s.qw.ForceDisableAgentSwitchFailurePolicy(ctx, updatedAt)
 	return err
@@ -531,7 +539,9 @@ func (s *Store) ApplyAgentSwitchFailurePolicy(ctx context.Context, policy ports.
 	if policy.Authorization.Enabled && (policy.Authorization.ConsentGeneration == "" || policy.Authorization.DestinationFingerprint == "") {
 		return errors.New("apply agent switch failure policy: enabled policy requires generation and destination")
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -555,7 +565,9 @@ func (s *Store) ApplyAgentSwitchFailurePolicy(ctx context.Context, policy ports.
 
 // PurgeAgentSwitchFailurePayloads deletes every queued failure payload.
 func (s *Store) PurgeAgentSwitchFailurePayloads(ctx context.Context) (int64, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return 0, err
+	}
 	defer s.writeMu.Unlock()
 	return s.qw.PurgeAgentSwitchFailurePayloads(ctx)
 }
@@ -565,7 +577,9 @@ func (s *Store) EnrollCurrentAgentSwitchRecoveryMarkers(ctx context.Context, inp
 	if input.EnrolledAt.IsZero() {
 		return 0, errors.New("enroll current agent switch recovery markers: timestamp is required")
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return 0, err
+	}
 	defer s.writeMu.Unlock()
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -632,7 +646,9 @@ func (s *Store) ClaimAgentSwitchFailure(ctx context.Context, input ports.AgentSw
 	if !input.Authorization.Enabled || input.LeaseToken == "" || input.Now.IsZero() || !input.LeaseExpiresAt.After(input.Now) {
 		return ports.AgentSwitchFailureClaim{}, false, nil
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return ports.AgentSwitchFailureClaim{}, false, err
+	}
 	defer s.writeMu.Unlock()
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -688,7 +704,9 @@ func (s *Store) ClaimAgentSwitchFailure(ctx context.Context, input ports.AgentSw
 
 // BeginAgentSwitchFailureAttempt records the start of a still-authorized leased delivery attempt.
 func (s *Store) BeginAgentSwitchFailureAttempt(ctx context.Context, input ports.AgentSwitchFailureAttempt) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	n, err := s.qw.BeginAgentSwitchFailureAttempt(ctx, gen.BeginAgentSwitchFailureAttemptParams{
 		Now: sql.NullTime{Time: input.Now, Valid: true}, ID: input.ID,
@@ -705,7 +723,9 @@ func (s *Store) BeginAgentSwitchFailureAttempt(ctx context.Context, input ports.
 
 // SettleAgentSwitchFailureDelivery atomically records the outcome of a leased delivery attempt.
 func (s *Store) SettleAgentSwitchFailureDelivery(ctx context.Context, input ports.AgentSwitchFailureSettlement) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -791,7 +811,9 @@ func (s *Store) SettleAgentSwitchFailureDelivery(ctx context.Context, input port
 
 // ExpireAgentSwitchFailurePayloads deletes queued payloads whose retention window has elapsed.
 func (s *Store) ExpireAgentSwitchFailurePayloads(ctx context.Context, now time.Time) (int64, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return 0, err
+	}
 	defer s.writeMu.Unlock()
 	return s.qw.ExpireAgentSwitchFailurePayloads(ctx, now)
 }
@@ -801,7 +823,9 @@ func (s *Store) ResolveAgentSwitchFailureReceipts(ctx context.Context, input por
 	if input.ResolvedAt.IsZero() {
 		return 0, errors.New("resolve agent switch failure receipts: timestamp is required")
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return 0, err
+	}
 	defer s.writeMu.Unlock()
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {

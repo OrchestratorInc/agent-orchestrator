@@ -3,6 +3,11 @@ package store
 import (
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -49,4 +54,38 @@ type lockAdmissionContext struct {
 func (c *lockAdmissionContext) Err() error {
 	c.once.Do(func() { close(c.admission) })
 	return c.Context.Err()
+}
+
+// Break caught: 174 store writes took the writer with Lock(), so a request
+// whose caller was gone kept waiting behind a long write. Every store write
+// receives a context; take the writer with LockContext(ctx) so it can give up.
+func TestStoreWritersNeverWaitForTheWriterWithoutTheirContext(t *testing.T) {
+	fset := token.NewFileSet()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			method, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || method.Sel.Name != "Lock" {
+				return true
+			}
+			if mu, ok := method.X.(*ast.SelectorExpr); ok && mu.Sel.Name == "writeMu" {
+				t.Errorf("%s: writeMu.Lock() ignores the caller's context; use writeMu.LockContext(ctx)", fset.Position(call.Pos()))
+			}
+			return true
+		})
+	}
 }

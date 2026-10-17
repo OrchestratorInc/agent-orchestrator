@@ -16,7 +16,9 @@ import (
 // session_updated CDC event when the disposition or runtime-release state
 // actually changes (retry-bookkeeping-only writes are suppressed).
 func (s *Store) UpsertSessionCleanupFacts(ctx context.Context, rec domain.SessionCleanupRecord) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	disposition := rec.WorkspaceDisposition
 	if disposition == "" {

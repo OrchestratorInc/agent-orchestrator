@@ -88,7 +88,9 @@ func (s *Store) OpenNativeConversation(ctx context.Context, id string, scope dom
 // Reviewer identity, rather than the parent worker session, is the conversation
 // owner; a worker can therefore retain its own Chat narrative at the same time.
 func (s *Store) CreateReviewConversation(ctx context.Context, id, reviewID string, project domain.ProjectID, session domain.SessionID, now time.Time) (domain.ConversationRecord, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.ConversationRecord{}, err
+	}
 	defer s.writeMu.Unlock()
 
 	var conversation domain.ConversationRecord
@@ -184,7 +186,9 @@ func (s *Store) createConversation(
 	ctx context.Context,
 	options conversationCreateOptions,
 ) (domain.ConversationRecord, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.ConversationRecord{}, err
+	}
 	defer s.writeMu.Unlock()
 
 	scope := options.scope
@@ -471,7 +475,9 @@ func (s *Store) CreateConversationBranch(
 	branch domain.ConversationBranch,
 	now time.Time,
 ) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 
 	return s.inTx(ctx, "insert conversation branch", func(q *gen.Queries) error {
@@ -556,7 +562,9 @@ func (s *Store) CreateAndActivateConversationBranch(
 	generation string,
 	now time.Time,
 ) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 
 	return s.inTx(ctx, "create and activate conversation branch", func(q *gen.Queries) error {
@@ -589,7 +597,9 @@ func (s *Store) CreateAndActivateReviewConversationBranch(
 	generation string,
 	now time.Time,
 ) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 
 	return s.inTx(ctx, "create and activate reviewer conversation branch", func(q *gen.Queries) error {
@@ -675,7 +685,9 @@ func (s *Store) commitChatSpawn(
 		return errors.New("commit Chat spawn: incomplete or mismatched provider boundary ownership")
 	}
 
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "commit Chat spawn", func(q *gen.Queries) error {
 		owner, err := q.GetSession(ctx, rec.ID)
@@ -844,7 +856,9 @@ func (s *Store) UpdateConversationBranchReplacement(
 	ctx context.Context,
 	branchID, replacementTurnID string,
 ) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.UpdateConversationBranchReplacement(ctx,
 		gen.UpdateConversationBranchReplacementParams{
@@ -877,7 +891,9 @@ func (s *Store) RepairIncompleteConversationEdit(
 	conversationID string,
 	now time.Time,
 ) (repaired domain.ConversationBranch, restoredProviderOwner bool, err error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.ConversationBranch{}, false, err
+	}
 	defer s.writeMu.Unlock()
 
 	err = s.inTx(ctx, "repair incomplete conversation edit", func(q *gen.Queries) error {
@@ -986,7 +1002,9 @@ func (s *Store) ActivateConversationBranch(
 	conversationID, branchID, providerConversationID, generation string,
 	now time.Time,
 ) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 
 	return s.inTx(ctx, "activate conversation branch", func(q *gen.Queries) error {
@@ -1174,7 +1192,9 @@ func (s *Store) appendUserMessage(
 	retryOfTurnID string,
 	now time.Time,
 ) (created bool, err error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	if generation == "" && reviewID == "" {
 		// A Send may have read "provisioning" just before Kill or Ready.
@@ -1344,7 +1364,10 @@ func (s *Store) AdoptProviderTurn(
 	generation, turnID, providerTurnID string,
 	now time.Time,
 ) error {
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	if err := q.AdoptProviderConversationTurn(ctx, gen.AdoptProviderConversationTurnParams{
 		ID:                   turnID,
@@ -1364,7 +1387,10 @@ func (s *Store) AdoptProviderTurn(
 // typed owner. The worker session remains present for the existing lifecycle
 // and CDC projection, but never substitutes for reviewer ownership.
 func (s *Store) AdoptReviewProviderTurn(ctx context.Context, conversationID string, session domain.SessionID, reviewID, generation, turnID, providerTurnID string, now time.Time) error {
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	if err := q.AdoptReviewProviderConversationTurn(ctx, gen.AdoptReviewProviderConversationTurnParams{
 		ID: turnID, ConversationID: conversationID, HandledBySessionID: session, HandledByReviewID: nullableString(reviewID),
@@ -1389,10 +1415,13 @@ func (s *Store) AppendImportedUserMessage(
 	msg domain.ConversationMessage,
 	now time.Time,
 ) error {
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 
-	_, err := q.SelectConversationUserMessageByTurn(ctx,
+	_, err = q.SelectConversationUserMessageByTurn(ctx,
 		gen.SelectConversationUserMessageByTurnParams{
 			ConversationID: conversationID,
 			ProviderTurnID: providerTurnID,
@@ -1442,7 +1471,10 @@ func (s *Store) AppendImportedUserMessage(
 // provider call. If the later provider-ID binding fails, delivery is uncertain
 // but the prompt cannot be sent a second time by a reconnected controller.
 func (s *Store) MarkTurnDispatching(ctx context.Context, turnID string) error {
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	if err := q.MarkConversationTurnStarted(ctx, gen.MarkConversationTurnStartedParams{
 		ID: turnID,
@@ -1455,7 +1487,10 @@ func (s *Store) MarkTurnDispatching(ctx context.Context, turnID string) error {
 // BindTurnToProvider records the provider's turn id once a send is accepted and
 // marks the turn running.
 func (s *Store) BindTurnToProvider(ctx context.Context, turnID, providerTurnID string, now time.Time) error {
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	if err := q.BindConversationTurnProviderID(ctx, gen.BindConversationTurnProviderIDParams{
 		ProviderTurnID: providerTurnID,
@@ -1482,7 +1517,10 @@ func (s *Store) SettleTurn(
 	errMessage string,
 	now time.Time,
 ) error {
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 
 	turn, err := q.SelectConversationTurnByProviderID(ctx,
@@ -1615,7 +1653,10 @@ func terminalActivityStatus(state domain.TurnState) domain.ActivityStatus {
 // controller was running is not evidence the work finished, so it settles as
 // failed rather than silently completing.
 func (s *Store) SettleOrphanedTurns(ctx context.Context, session domain.SessionID, now time.Time) error {
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	if err := q.FailOrphanedConversationActivities(ctx,
 		gen.FailOrphanedConversationActivitiesParams{
@@ -1637,7 +1678,10 @@ func (s *Store) SettleOrphanedTurns(ctx context.Context, session domain.SessionI
 // SettleUnboundRunningTurn closes an ambiguous dispatch after live reconnect.
 // Recheck under the writer lock so a bound or queued turn is never settled.
 func (s *Store) SettleUnboundRunningTurn(ctx context.Context, conversationID string, session domain.SessionID, turnID string, now time.Time) error {
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	turn, err := q.SelectConversationTurnByID(ctx, turnID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1679,7 +1723,9 @@ func (s *Store) CleanupOwnedControllerWork(
 		return cleanupOwnedControllerWork(ctx, q, session, conversationID, generation, now)
 	}
 
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 
 	err = s.inTx(ctx, "clean up owned Chat controller work", func(q *gen.Queries) error {
@@ -1741,7 +1787,9 @@ func (s *Store) CleanupOwnedReviewControllerWork(
 		return cleanupOwnedReviewControllerWork(ctx, q, reviewID, conversationID, generation, now)
 	}
 
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	err = s.inTx(ctx, "clean up owned reviewer Chat work", func(q *gen.Queries) error {
 		var cleanupErr error
@@ -1813,7 +1861,9 @@ func (s *Store) SetConversationSettings(
 	settings domain.ConversationSettings,
 	now time.Time,
 ) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	if err := s.qw.UpdateConversationTurnSettings(ctx, gen.UpdateConversationTurnSettingsParams{
 		Model:           nullableString(settings.Model),
@@ -1837,7 +1887,10 @@ func (s *Store) SetConversationSettings(
 // generic activity writer has no business knowing which kinds move a column on the
 // conversation.
 func (s *Store) MarkCompacted(ctx context.Context, conversationID string, at time.Time) error {
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	if err := q.MarkConversationCompacted(ctx, gen.MarkConversationCompactedParams{
 		CompactedAt: sql.NullTime{Time: at, Valid: true},
@@ -1867,7 +1920,10 @@ func (s *Store) RecordUsage(
 	conversationID string,
 	usage domain.ConversationUsage,
 ) error {
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	if err := q.UpdateConversationUsage(ctx, gen.UpdateConversationUsageParams{
 		ContextUsed:       nullablePositive(usage.ContextUsed),
@@ -1892,7 +1948,10 @@ func (s *Store) RecordRateLimits(
 	conversationID string,
 	limits domain.ConversationRateLimits,
 ) error {
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	if err := q.UpdateConversationRateLimits(ctx, gen.UpdateConversationRateLimitsParams{
 		RateLimitPrimaryPercent:    nullablePercent(limits.PrimaryUsedPercent),
@@ -1943,7 +2002,10 @@ func (s *Store) RecordModelReroute(
 	if err != nil {
 		return fmt.Errorf("encode model reroute for %s: %w", conversationID, err)
 	}
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	if err := q.UpdateConversationModelReroute(ctx,
 		gen.UpdateConversationModelRerouteParams{
@@ -1973,7 +2035,10 @@ func (s *Store) RecordAccount(
 	if err != nil {
 		return fmt.Errorf("encode account for %s: %w", conversationID, err)
 	}
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	if err := q.UpdateConversationAccount(ctx, gen.UpdateConversationAccountParams{
 		AccountJson: sql.NullString{String: string(encoded), Valid: true},
@@ -2001,7 +2066,9 @@ func (s *Store) ConversationAccount(ctx context.Context, conversationID string) 
 // newer failures, generation claims, and branch/account changes.
 func (s *Store) ReconcileConversationAuthentication(ctx context.Context, conversationID, generation, providerTurnID string, now time.Time) (*domain.ConversationAccount, error) {
 	if _, ok := ctx.Value(conversationProjectionTxKey{}).(*gen.Queries); !ok {
-		s.writeMu.Lock()
+		if err := s.writeMu.LockContext(ctx); err != nil {
+			return nil, err
+		}
 		defer s.writeMu.Unlock()
 		tx, err := s.writeDB.BeginTx(ctx, nil)
 		if err != nil {
@@ -2077,7 +2144,10 @@ func (s *Store) RecordThreadState(
 	if err != nil {
 		return fmt.Errorf("encode thread state for %s: %w", conversationID, err)
 	}
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	if err := q.UpdateConversationThreadState(ctx,
 		gen.UpdateConversationThreadStateParams{
@@ -2108,7 +2178,10 @@ func (s *Store) RecordMCPServers(
 	if err != nil {
 		return fmt.Errorf("encode mcp servers for %s: %w", conversationID, err)
 	}
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	if err := q.UpdateConversationMcpServers(ctx,
 		gen.UpdateConversationMcpServersParams{
@@ -2140,7 +2213,10 @@ func (s *Store) SetTurnPlan(
 		return false, fmt.Errorf("encode plan for %s: %w", providerTurnID, err)
 	}
 
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return false, err
+	}
 	defer unlock()
 	rows, err := q.UpdateConversationTurnPlan(ctx, gen.UpdateConversationTurnPlanParams{
 		PlanJson:       string(encoded),
@@ -2170,6 +2246,8 @@ const MaxStreamedTextChars = 32 * 1024
 // an ordinary race, not a failure: the provider can emit a reasoning delta before
 // the item/started that creates the row, and the settled summary on item/completed
 // still lands.
+//
+//nolint:dupl // Streamed prose and command output fold into different activity columns with different caps.
 func (s *Store) AppendActivityStreamedText(
 	ctx context.Context,
 	conversationID, providerItemID, delta string,
@@ -2178,7 +2256,10 @@ func (s *Store) AppendActivityStreamedText(
 	if delta == "" {
 		return false, nil
 	}
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return false, err
+	}
 	defer unlock()
 
 	rows, err := q.AppendConversationActivityStreamedText(ctx,
@@ -2220,7 +2301,10 @@ func (s *Store) SettleActivityStreamedText(
 	if providerItemID == "" {
 		return false, nil
 	}
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return false, err
+	}
 	defer unlock()
 
 	rows, err := q.SettleConversationActivityStreamedText(ctx,
@@ -2266,7 +2350,9 @@ func (s *Store) ReserveQueuedTurnForPromotion(
 	conversationID, turnID string,
 	now time.Time,
 ) (domain.QueuedTurn, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.QueuedTurn{}, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.ReserveQueuedConversationTurnForPromotion(ctx,
 		gen.ReserveQueuedConversationTurnForPromotionParams{
@@ -2299,7 +2385,9 @@ func (s *Store) ReleaseQueuedTurnPromotion(
 	ctx context.Context,
 	conversationID, turnID string,
 ) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.ReleaseQueuedConversationTurnPromotion(ctx,
 		gen.ReleaseQueuedConversationTurnPromotionParams{ID: turnID, ConversationID: conversationID})
@@ -2320,7 +2408,9 @@ func (s *Store) CompleteQueuedTurnPromotion(
 	activity domain.ConversationActivity,
 	now time.Time,
 ) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "complete queued turn promotion", func(q *gen.Queries) error {
 		target, err := q.SelectConversationTurnByProviderID(ctx,
@@ -2361,7 +2451,9 @@ func (s *Store) CancelQueuedTurns(
 	conversationID string,
 	cutoff, now time.Time,
 ) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	if err := s.qw.CancelQueuedConversationTurns(ctx, gen.CancelQueuedConversationTurnsParams{
 		CompletedAt:    sql.NullTime{Time: now, Valid: true},
@@ -2381,7 +2473,9 @@ func (s *Store) CancelAllQueuedTurns(
 	conversationID string,
 	now time.Time,
 ) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	if err := s.qw.CancelAllQueuedConversationTurns(ctx, gen.CancelAllQueuedConversationTurnsParams{
 		CompletedAt:    sql.NullTime{Time: now, Valid: true},
@@ -2399,7 +2493,9 @@ func (s *Store) CancelQueuedTurnByID(
 	conversationID, turnID string,
 	now time.Time,
 ) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.CancelQueuedConversationTurnByID(ctx,
 		gen.CancelQueuedConversationTurnByIDParams{
@@ -2428,7 +2524,9 @@ func (s *Store) ReorderQueuedTurns(
 	conversationID string,
 	turnIDs []string,
 ) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 
 	current, err := s.qr.SelectQueuedConversationTurnOrder(ctx, conversationID)
@@ -2514,7 +2612,9 @@ func (s *Store) UpdateQueuedTurnMessage(
 	now time.Time,
 	delivery domain.ConversationQueuedEditDelivery,
 ) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "update queued turn message", func(q *gen.Queries) error {
 		if delivery.ClientMessageID != "" {
@@ -2565,7 +2665,9 @@ func (s *Store) SettleTurnByID(
 	errMessage string,
 	now time.Time,
 ) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	if err := s.qw.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
 		State:        state,
@@ -2586,10 +2688,13 @@ func (s *Store) AppendAssistantDelta(
 	conversationID, providerItemID, providerTurnID, delta, messageID string,
 	now time.Time,
 ) error {
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 
-	_, err := q.SelectConversationMessageByProviderItem(ctx,
+	_, err = q.SelectConversationMessageByProviderItem(ctx,
 		gen.SelectConversationMessageByProviderItemParams{
 			ConversationID: conversationID,
 			ProviderItemID: providerItemID,
@@ -2644,10 +2749,13 @@ func (s *Store) SettleAssistantMessage(
 	conversationID, providerItemID, providerTurnID, text, messageID string,
 	now time.Time,
 ) error {
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 
-	_, err := q.SelectConversationMessageByProviderItem(ctx,
+	_, err = q.SelectConversationMessageByProviderItem(ctx,
 		gen.SelectConversationMessageByProviderItemParams{
 			ConversationID: conversationID,
 			ProviderItemID: providerItemID,
@@ -2700,7 +2808,10 @@ func (s *Store) UpsertActivity(
 	activity domain.ConversationActivity,
 	now time.Time,
 ) error {
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 
 	detail := string(activity.Detail)
@@ -2776,6 +2887,8 @@ const MaxCommandOutputChars = 64 * 1024
 // an ordinary race, not a failure: the provider can emit a delta before the
 // item/started that creates the row, and the aggregate on item/completed still
 // lands. Silently dropping it is correct; claiming an error is not.
+//
+//nolint:dupl // Streamed prose and command output fold into different activity columns with different caps.
 func (s *Store) AppendCommandOutput(
 	ctx context.Context,
 	conversationID, providerItemID, delta string,
@@ -2784,7 +2897,10 @@ func (s *Store) AppendCommandOutput(
 	if delta == "" {
 		return false, nil
 	}
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return false, err
+	}
 	defer unlock()
 
 	rows, err := q.AppendConversationActivityOutput(ctx,
@@ -2833,7 +2949,10 @@ func (s *Store) SetTurnDiff(
 		return false, fmt.Errorf("encode turn diff for %s: %w", providerTurnID, err)
 	}
 
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return false, err
+	}
 	defer unlock()
 	rows, err := q.UpdateConversationTurnDiff(ctx, gen.UpdateConversationTurnDiffParams{
 		DiffJson:       string(encoded),
@@ -2853,7 +2972,10 @@ func (s *Store) ResolveApproval(
 	conversationID, requestID, detailJSON string,
 	now time.Time,
 ) error {
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	if err := q.ResolveConversationApproval(ctx, gen.ResolveConversationApprovalParams{
 		DetailJson:     detailJSON,
@@ -2879,7 +3001,10 @@ func (s *Store) HasPendingConversationInteractions(ctx context.Context, conversa
 // FailPendingApprovals closes out anything the user can no longer answer, because
 // the provider call it was blocking is gone.
 func (s *Store) FailPendingApprovals(ctx context.Context, conversationID string, now time.Time) error {
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	if err := q.FailPendingConversationApprovals(ctx,
 		gen.FailPendingConversationApprovalsParams{
@@ -2896,7 +3021,10 @@ func (s *Store) FailPendingApprovals(ctx context.Context, conversationID string,
 // the activity-kind boundary even though both use the same pending/resolved state
 // machine.
 func (s *Store) FailPendingInputs(ctx context.Context, conversationID string, now time.Time) error {
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	if err := q.FailPendingConversationInputs(ctx,
 		gen.FailPendingConversationInputsParams{
@@ -2949,7 +3077,9 @@ func (s *Store) projectProviderEvent(
 			providerEventID, method, payloadJSON, now, project,
 		)
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 
 	tx, err := s.writeDB.BeginTx(ctx, nil)
@@ -3054,7 +3184,9 @@ func (s *Store) RollbackTurns(
 	conversationID, turnID string,
 	now time.Time,
 ) (int, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return 0, err
+	}
 	defer s.writeMu.Unlock()
 
 	turn, err := s.qr.SelectConversationTurnByID(ctx, turnID)
@@ -3131,7 +3263,10 @@ func (s *Store) SetProviderTitle(
 	conversationID, title string,
 	now time.Time,
 ) error {
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	if err := q.UpdateConversationProviderTitle(ctx,
 		gen.UpdateConversationProviderTitleParams{
@@ -3163,7 +3298,10 @@ func (s *Store) ApplyProviderTitle(
 	title string,
 	now time.Time,
 ) (bool, error) {
-	q, unlock := s.conversationWriter(ctx)
+	q, unlock, err := s.conversationWriter(ctx)
+	if err != nil {
+		return false, err
+	}
 	defer unlock()
 
 	conversation, err := q.SelectConversationByID(ctx, conversationID)
@@ -3987,7 +4125,9 @@ func reserveConversationDelivery[Row, Delivery any](
 	toDomain func(Row) Delivery,
 	insertError, loadError string,
 ) (delivery Delivery, created bool, err error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return delivery, false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := insert(ctx)
 	if err != nil {
@@ -4066,7 +4206,9 @@ func (s *Store) RecoverCompletedEditDelivery(ctx context.Context, conversationID
 
 // BeginEditProviderWork fences retries before any provider operation can occur.
 func (s *Store) BeginEditProviderWork(ctx context.Context, conversationID, clientMessageID, generation string) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.BeginConversationEditProviderWork(ctx, gen.BeginConversationEditProviderWorkParams{
 		ConversationID: conversationID, ClientMessageID: clientMessageID, Generation: generation,
@@ -4089,7 +4231,9 @@ func (s *Store) CompleteEditDelivery(
 	turn domain.ConversationTurn,
 	now time.Time,
 ) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "complete edit delivery", func(q *gen.Queries) error {
 		rows, err := q.UpdateConversationBranchReplacement(ctx,
@@ -4130,7 +4274,9 @@ func (s *Store) RejectEditDelivery(
 	message string,
 	now time.Time,
 ) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.RejectConversationEditDelivery(ctx,
 		gen.RejectConversationEditDeliveryParams{
@@ -4229,7 +4375,9 @@ func (s *Store) CompleteSteerDelivery(
 	activity domain.ConversationActivity,
 	now time.Time,
 ) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "complete steer delivery", func(q *gen.Queries) error {
 		txCtx := context.WithValue(ctx, conversationProjectionTxKey{}, q)
@@ -4261,7 +4409,9 @@ func (s *Store) RejectSteerDelivery(
 	message string,
 	now time.Time,
 ) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.RejectConversationSteerDelivery(ctx,
 		gen.RejectConversationSteerDeliveryParams{
@@ -4296,7 +4446,9 @@ func steerDeliveryToDomain(row gen.ConversationSteerDelivery) domain.Conversatio
 // SettleReviewChatWork closes the previous review epoch before a downgrade or
 // configuration replacement. There may be durable work without a live process.
 func (s *Store) SettleReviewChatWork(ctx context.Context, reviewID string, now time.Time) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "settle reviewer Chat epoch", func(q *gen.Queries) error {
 		review, err := q.GetReviewByID(ctx, reviewID)

@@ -41,6 +41,8 @@ func newContextMutex() *contextMutex {
 	return mutex
 }
 
+// Lock waits for the mutex regardless of any caller's context. Store write paths
+// use LockContext so a cancelled request stops waiting; a source test enforces it.
 func (m *contextMutex) Lock() {
 	<-m.token
 }
@@ -69,15 +71,17 @@ type conversationProjectionTxKey struct{}
 
 // conversationWriter returns the transaction-bound query set when a provider
 // event projection is in progress. Otherwise it acquires the ordinary single
-// writer lock. This makes the existing focused store methods composable inside
-// one archive+projection transaction without exposing SQLite transactions above
-// the adapter boundary.
-func (s *Store) conversationWriter(ctx context.Context) (*gen.Queries, func()) {
+// writer lock, returning the context error if ctx ends first. This makes the
+// existing focused store methods composable inside one archive+projection
+// transaction without exposing SQLite transactions above the adapter boundary.
+func (s *Store) conversationWriter(ctx context.Context) (*gen.Queries, func(), error) {
 	if q, ok := ctx.Value(conversationProjectionTxKey{}).(*gen.Queries); ok && q != nil {
-		return q, func() {}
+		return q, func() {}, nil
 	}
-	s.writeMu.Lock()
-	return s.qw, s.writeMu.Unlock
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return nil, nil, err
+	}
+	return s.qw, s.writeMu.Unlock, nil
 }
 
 func (s *Store) conversationReader(ctx context.Context) *gen.Queries {

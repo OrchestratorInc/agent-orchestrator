@@ -25,7 +25,9 @@ func (s *Store) CreateSessionInterfaceTransition(
 		return domain.SessionInterfaceTransition{}, false,
 			fmt.Errorf("create interface transition: history policy %q is invalid", rec.HistoryPolicy)
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.SessionInterfaceTransition{}, false, err
+	}
 	defer s.writeMu.Unlock()
 	row, err := s.qw.InsertSessionInterfaceTransition(ctx, gen.InsertSessionInterfaceTransitionParams{
 		ID:                   rec.ID,
@@ -68,7 +70,9 @@ func (s *Store) CreateSessionInterfaceTransitionAfter(
 		return domain.SessionInterfaceTransition{}, false, false,
 			fmt.Errorf("create interface transition: expected predecessor is empty")
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.SessionInterfaceTransition{}, false, false, err
+	}
 	defer s.writeMu.Unlock()
 	err = s.inTx(ctx, "create interface transition after predecessor", func(q *gen.Queries) error {
 		latest, lookupErr := q.GetLatestSessionInterfaceTransition(ctx, rec.SessionID)
@@ -187,7 +191,9 @@ func (s *Store) AdvanceSessionInterfaceTransition(
 	nativeID, errorCode, errorDetail string,
 	now time.Time,
 ) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	var completed sql.NullTime
 	if next.Terminal() {
@@ -218,7 +224,9 @@ func (s *Store) AcknowledgeSessionInterfaceTransitionNotice(
 	transitionID string,
 	now time.Time,
 ) (domain.SessionInterfaceTransition, bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.SessionInterfaceTransition{}, false, err
+	}
 	defer s.writeMu.Unlock()
 	row, err := s.qw.AcknowledgeSessionInterfaceTransitionNotice(
 		ctx,
@@ -274,7 +282,9 @@ func (s *Store) commitSessionControllerEpoch(
 	restore bool,
 	now time.Time,
 ) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -352,7 +362,9 @@ func (s *Store) ReplaceUnpersistedChatProvider(
 	id domain.SessionID,
 	expectedProviderConversationID, providerConversationID string,
 ) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "replace unpersisted Chat provider for "+string(id), func(q *gen.Queries) error {
 		moved, err := q.ReplaceUnpersistedChatProvider(ctx, gen.ReplaceUnpersistedChatProviderParams{
@@ -388,7 +400,9 @@ func (s *Store) EnqueueSessionInterfaceTransitionMessage(
 	now time.Time,
 	opts ports.MessageDeliveryOptions,
 ) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "queue interface transition message", func(q *gen.Queries) error {
 		if err := q.EnqueueSessionInterfaceTransitionMessage(ctx, gen.EnqueueSessionInterfaceTransitionMessageParams{
@@ -435,7 +449,9 @@ func (s *Store) MarkSessionInterfaceTransitionMessageDelivered(
 	id int64,
 	now time.Time,
 ) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	_, err := s.qw.MarkSessionInterfaceTransitionMessageDelivered(ctx, gen.MarkSessionInterfaceTransitionMessageDeliveredParams{
 		DeliveredAt: sql.NullTime{Time: now, Valid: true},

@@ -24,7 +24,9 @@ func (s *Store) CreateAgentNativeSession(ctx context.Context, rec domain.AgentNa
 		return domain.AgentNativeSession{}, false, err
 	}
 
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.AgentNativeSession{}, false, err
+	}
 	defer s.writeMu.Unlock()
 
 	n, err := s.qw.InsertAgentNativeSession(ctx, agentNativeSessionToInsert(rec))
@@ -97,7 +99,9 @@ func (s *Store) UpdateAgentNativeSession(ctx context.Context, rec domain.AgentNa
 		return false, err
 	}
 
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	n, err := s.qw.UpdateAgentNativeSession(ctx, gen.UpdateAgentNativeSessionParams{
 		ConfigDir: rec.ConfigDir, NativeSessionID: rec.NativeSessionID,
@@ -127,7 +131,9 @@ func (s *Store) CreateAgentSwitch(ctx context.Context, rec domain.AgentSwitch) (
 		return domain.AgentSwitch{}, false, err
 	}
 
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.AgentSwitch{}, false, err
+	}
 	defer s.writeMu.Unlock()
 	n, err := s.qw.InsertAgentSwitch(ctx, agentSwitchToInsert(rec))
 	if err != nil {
@@ -262,7 +268,9 @@ func (s *Store) UpdateAgentSwitch(ctx context.Context, rec domain.AgentSwitch, e
 		return false, fmt.Errorf("update agent switch %s: delivery failure requires FailAgentSwitchIfUnacknowledged", rec.ID)
 	}
 
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	if err := ensureNativeSessionRefBelongsTo(ctx, s.qw, rec.SessionID, rec.TargetHarness, rec.TargetNativeSessionRef, "target"); err != nil {
 		return false, fmt.Errorf("update agent switch %s: %w", rec.ID, err)
@@ -314,7 +322,9 @@ func (s *Store) RecordAgentHandoff(ctx context.Context, id domain.AgentSwitchID,
 		return false, fmt.Errorf("record agent handoff for %s: %w", id, err)
 	}
 
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	var (
 		n   int64
@@ -357,7 +367,9 @@ func (s *Store) FinalizeAgentSwitchHandoff(ctx context.Context, id domain.AgentS
 	if !sourceTranscriptStatus.Captured() {
 		return false, fmt.Errorf("finalize agent switch handoff %s: captured source transcript status is required", id)
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	n, err := s.qw.FinalizeAgentSwitchHandoff(ctx, gen.FinalizeAgentSwitchHandoffParams{
 		FinalHandoffPath: handoffPath, FinalHandoffHash: handoffHash,
@@ -383,7 +395,9 @@ func (s *Store) ConfirmAgentSwitchSourceStopped(ctx context.Context, confirmatio
 		return false, err
 	}
 
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -456,7 +470,9 @@ func (s *Store) AcknowledgeAgentSwitchTarget(ctx context.Context, id domain.Agen
 		return false, fmt.Errorf("acknowledge agent switch target %s: switch, session, target generation, and timestamp are required", id)
 	}
 
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	n, err := s.qw.AcknowledgeAgentSwitchTarget(ctx, gen.AcknowledgeAgentSwitchTargetParams{
 		TargetAcknowledgedAt: sql.NullTime{Time: acknowledgedAt, Valid: true},
@@ -480,7 +496,9 @@ func (s *Store) ActivateAgentSwitchTarget(ctx context.Context, activation domain
 		return false, err
 	}
 
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -576,7 +594,9 @@ func (s *Store) ActivateChatAgentSwitchTarget(ctx context.Context, activation do
 		return false, err
 	}
 
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {

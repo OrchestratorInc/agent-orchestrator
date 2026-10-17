@@ -55,7 +55,9 @@ func (s *Store) SetDefaultSessionMode(ctx context.Context, mode domain.SessionMo
 	if !mode.Valid() {
 		return fmt.Errorf("invalid session mode %q", mode)
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	if err := s.qw.SetDefaultSessionMode(ctx, gen.SetDefaultSessionModeParams{
 		DefaultSessionMode: mode,
@@ -68,7 +70,9 @@ func (s *Store) SetDefaultSessionMode(ctx context.Context, mode domain.SessionMo
 
 // SetCloudOffering persists the user's cloud toggle.
 func (s *Store) SetCloudOffering(ctx context.Context, enabled bool, now time.Time) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	if err := s.qw.SetCloudOffering(ctx, gen.SetCloudOfferingParams{
 		CloudOffering: enabled,
@@ -82,7 +86,9 @@ func (s *Store) SetCloudOffering(ctx context.Context, enabled bool, now time.Tim
 // SetHarnessDefault updates one entry atomically so concurrent saves for other
 // harnesses cannot overwrite each other. Empty values remove the override.
 func (s *Store) SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault, now time.Time) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	path := `$."` + string(agent) + `"`
 	if value.IsZero() {

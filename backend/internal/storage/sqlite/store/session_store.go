@@ -18,7 +18,9 @@ import (
 // and inserts the record. The next-num read and insert share writeMu, so two
 // concurrent creates cannot collide.
 func (s *Store) CreateSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.SessionRecord{}, err
+	}
 	defer s.writeMu.Unlock()
 	created, _, err := s.createSessionLocked(ctx, rec)
 	return created, err
@@ -30,7 +32,9 @@ func (s *Store) CreateClientRequestSession(ctx context.Context, rec domain.Sessi
 	if rec.ClientRequestID == "" || rec.ClientRequestHash == "" {
 		return domain.SessionRecord{}, false, fmt.Errorf("client request id and hash are required")
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.SessionRecord{}, false, err
+	}
 	defer s.writeMu.Unlock()
 	return s.createSessionLocked(ctx, rec)
 }
@@ -61,7 +65,9 @@ func (s *Store) getSessionByClientRequestID(ctx context.Context, q *gen.Queries,
 
 // CommitClientRequestSession marks a successfully launched session replayable.
 func (s *Store) CommitClientRequestSession(ctx context.Context, id domain.SessionID) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.CommitClientRequestSession(ctx, id)
 	if err != nil {
@@ -80,7 +86,9 @@ func (s *Store) CreateAutomationSession(ctx context.Context, rec domain.SessionR
 	if rec.AutomationRunID == nil {
 		return domain.SessionRecord{}, false, fmt.Errorf("automation run id is required")
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.SessionRecord{}, false, err
+	}
 	defer s.writeMu.Unlock()
 	return s.createSessionLocked(ctx, rec)
 }
@@ -151,7 +159,9 @@ func (s *Store) SetSessionProvisionedWorkspace(
 	branch, workspacePath, workspaceRepoPath string,
 	now time.Time,
 ) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.SetSessionProvisionedWorkspace(ctx, gen.SetSessionProvisionedWorkspaceParams{
 		Branch:            branch,
@@ -168,7 +178,9 @@ func (s *Store) SetSessionProvisionedWorkspace(
 
 // SetSessionNamedWorkspace publishes naming facts before an agent can launch.
 func (s *Store) SetSessionNamedWorkspace(ctx context.Context, id domain.SessionID, expectedPath, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.SetSessionNamedWorkspace(ctx, gen.SetSessionNamedWorkspaceParams{
 		ID: id, ExpectedPath: expectedPath, Branch: branch, WorkspacePath: workspacePath,
@@ -182,7 +194,9 @@ func (s *Store) SetSessionNamedWorkspace(ctx context.Context, id domain.SessionI
 
 // SetTaskPreparationBase records the immutable base only while the row is hidden.
 func (s *Store) SetTaskPreparationBase(ctx context.Context, id domain.SessionID, baseSHA, baseRef string) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.SetTaskPreparationBase(ctx, gen.SetTaskPreparationBaseParams{
 		DiffBaseSha: baseSHA,
@@ -205,7 +219,9 @@ func (s *Store) SetSessionProvisionState(
 	provisionError string,
 	now time.Time,
 ) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.SetSessionProvisionState(ctx, gen.SetSessionProvisionStateParams{
 		ProvisionState: state.WithDefault(),
@@ -231,7 +247,9 @@ func (s *Store) SetSessionProvisionSteps(
 	if err != nil {
 		return fmt.Errorf("encode provision steps for %s: %w", id, err)
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	if _, err := s.qw.SetSessionProvisionSteps(ctx, gen.SetSessionProvisionStepsParams{
 		ProvisionSteps: string(raw),
@@ -250,7 +268,9 @@ func (s *Store) SetSessionBranchState(ctx context.Context, id domain.SessionID, 
 	if err != nil {
 		return false, fmt.Errorf("encode branch state for %s: %w", id, err)
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.SetSessionBranchState(ctx, gen.SetSessionBranchStateParams{
 		BranchState: string(raw),
@@ -265,7 +285,9 @@ func (s *Store) SetSessionBranchState(ctx context.Context, id domain.SessionID, 
 // PromoteTaskPreparation makes a hidden speculative row visible without
 // touching workspace facts that may be published by the preparation goroutine.
 func (s *Store) PromoteTaskPreparation(ctx context.Context, id domain.SessionID, rec domain.SessionRecord) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	activity := normalActivity(rec.Activity, rec.UpdatedAt)
 	rows, err := s.qw.PromoteTaskPreparation(ctx, gen.PromoteTaskPreparationParams{
@@ -298,7 +320,9 @@ func (s *Store) PromoteTaskPreparation(ctx context.Context, id domain.SessionID,
 
 // DeleteTaskPreparation removes only a row that has not been claimed.
 func (s *Store) DeleteTaskPreparation(ctx context.Context, id domain.SessionID) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -329,7 +353,9 @@ WHERE session_id = ?
 // provisioning state is owned by SetSessionProvisionState so stale lifecycle
 // snapshots cannot overwrite asynchronous start progress.
 func (s *Store) UpdateSession(ctx context.Context, rec domain.SessionRecord) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	return s.qw.UpdateSession(ctx, recordToUpdate(rec))
 }
@@ -337,7 +363,9 @@ func (s *Store) UpdateSession(ctx context.Context, rec domain.SessionRecord) err
 // SetSessionHibernated changes only the durable sleep marker if the caller's
 // session snapshot is still current. Passing nil clears the marker on wake.
 func (s *Store) SetSessionHibernated(ctx context.Context, id domain.SessionID, expectedRevision int64, at *time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.SetSessionHibernated(ctx, gen.SetSessionHibernatedParams{
 		HibernatedAt:     timePtrToNullTime(at),
@@ -353,7 +381,9 @@ func (s *Store) SetSessionHibernated(ctx context.Context, id domain.SessionID, e
 // UpdateSessionModel changes only the selected model, leaving concurrent
 // lifecycle and controller ownership updates intact.
 func (s *Store) UpdateSessionModel(ctx context.Context, id domain.SessionID, model string) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.UpdateSessionModel(ctx, gen.UpdateSessionModelParams{
 		ID:    id,
@@ -373,7 +403,9 @@ func (s *Store) UpdateSessionModel(ctx context.Context, id domain.SessionID, mod
 // never replay is_terminated, activity, runtime identity, or preview state
 // backwards over that newer write.
 func (s *Store) UpdateSessionArtifactOutput(ctx context.Context, id domain.SessionID, artifactDir string, outputType domain.SessionOutputType) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.UpdateSessionArtifactOutput(ctx, gen.UpdateSessionArtifactOutputParams{
 		ID:                id,
@@ -395,7 +427,9 @@ func (s *Store) UpdateBrowserCapabilityVerifier(
 	expected domain.SessionControllerOwner,
 	verifier string,
 ) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.UpdateBrowserCapabilityVerifier(ctx, gen.UpdateBrowserCapabilityVerifierParams{
 		BrowserCapabilityVerifier:      verifier,
@@ -423,7 +457,9 @@ func (s *Store) UpdateSessionFromActivitySignal(
 	expectedRevision int64,
 ) (bool, error) {
 	activity := normalActivity(rec.Activity, rec.UpdatedAt)
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.UpdateSessionFromActivitySignal(ctx, gen.UpdateSessionFromActivitySignalParams{
 		ActivityState:                    activity.State,
@@ -465,7 +501,9 @@ func (s *Store) UpdateSessionFromActivitySignal(
 // provenance. An unresolved Stop boundary remains until a canonical main-turn
 // hook supplies the missing boundary evidence.
 func (s *Store) RecordSessionLatestUserPrompt(ctx context.Context, id domain.SessionID, prompt string, updatedAt time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.RecordSessionLatestUserPrompt(ctx, gen.RecordSessionLatestUserPromptParams{
 		LatestUserPrompt: prompt,
@@ -486,7 +524,9 @@ func (s *Store) ClaimChatControllerGeneration(
 	id domain.SessionID,
 	generation string,
 ) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.ClaimChatControllerGeneration(ctx, gen.ClaimChatControllerGenerationParams{
 		ControllerGeneration: generation,
@@ -506,7 +546,9 @@ func (s *Store) ClaimChatControllerGeneration(
 // sessions_cdc_update trigger fans out a session_updated CDC event when the
 // display name actually changes.
 func (s *Store) RenameSession(ctx context.Context, id domain.SessionID, displayName string, updatedAt time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.RenameSession(ctx, gen.RenameSessionParams{
 		ID:          id,
@@ -527,7 +569,9 @@ func (s *Store) RenameSessionIfDisplayName(
 	currentDisplayName, displayName string,
 	updatedAt time.Time,
 ) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.RenameSessionIfDisplayName(ctx, gen.RenameSessionIfDisplayNameParams{
 		ID:                 id,
@@ -543,7 +587,9 @@ func (s *Store) RenameSessionIfDisplayName(
 
 // SetSessionPinned updates the pinned status of a session.
 func (s *Store) SetSessionPinned(ctx context.Context, id domain.SessionID, isPinned bool, pinnedAt *time.Time, updatedAt time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.SetSessionPinned(ctx, gen.SetSessionPinnedParams{
 		ID:        id,
@@ -562,7 +608,9 @@ func (s *Store) SetSessionPinned(ctx context.Context, id domain.SessionID, isPin
 // sessions_cdc_update trigger fans out a session_updated CDC event when the
 // preview URL actually changes.
 func (s *Store) SetSessionPreviewURL(ctx context.Context, id domain.SessionID, previewURL string, updatedAt time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.SetSessionPreviewURL(ctx, gen.SetSessionPreviewURLParams{
 		ID:         id,
@@ -578,7 +626,9 @@ func (s *Store) SetSessionPreviewURL(ctx context.Context, id domain.SessionID, p
 // SetSessionTerminateOnPRMerge updates the user's merge-completion lifecycle
 // policy. It returns ok=false when the session id does not exist.
 func (s *Store) SetSessionTerminateOnPRMerge(ctx context.Context, id domain.SessionID, terminate bool, updatedAt time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.SetSessionTerminateOnPRMerge(ctx, gen.SetSessionTerminateOnPRMergeParams{
 		ID:                 id,
@@ -593,7 +643,9 @@ func (s *Store) SetSessionTerminateOnPRMerge(ctx context.Context, id domain.Sess
 
 // SetSessionAutoInjectReview persists a session's automatic review-injection policy.
 func (s *Store) SetSessionAutoInjectReview(ctx context.Context, id domain.SessionID, autoInject bool, updatedAt time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.SetSessionAutoInjectReview(ctx, gen.SetSessionAutoInjectReviewParams{
 		ID:               id,
@@ -610,7 +662,9 @@ func (s *Store) SetSessionAutoInjectReview(ctx context.Context, id domain.Sessio
 // session and every PR currently owned by it. Future PRs still inherit this
 // value from the session row when first observed.
 func (s *Store) SetSessionAutoInjectCI(ctx context.Context, id domain.SessionID, autoInject bool, updatedAt time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	var updated bool
 	err := s.inTx(ctx, fmt.Sprintf("set auto-inject CI for session %s", id), func(q *gen.Queries) error {
@@ -648,7 +702,9 @@ func (s *Store) SetSessionReviewerConfig(
 	config domain.AgentConfig,
 	updatedAt time.Time,
 ) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	encoded, err := marshalAgentConfig(config)
 	if err != nil {
@@ -668,7 +724,9 @@ func (s *Store) SetSessionReviewerConfig(
 
 // SetSessionAutoReview persists the daemon-side review automation toggle.
 func (s *Store) SetSessionAutoReview(ctx context.Context, id domain.SessionID, enabled bool, updatedAt time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.SetSessionAutoReview(ctx, gen.SetSessionAutoReviewParams{
 		AutoReviewEnabled: enabled,
@@ -701,7 +759,9 @@ func (s *Store) SetSessionAutoReview(ctx context.Context, id domain.SessionID, e
 // already progressed past seed state). The latter case is benign — the caller
 // should fall back to MarkTerminated.
 func (s *Store) DeleteSession(ctx context.Context, id domain.SessionID) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {

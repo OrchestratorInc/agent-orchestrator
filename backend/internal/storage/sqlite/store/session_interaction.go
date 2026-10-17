@@ -14,7 +14,9 @@ import (
 // RecordSessionInteraction validates cooperative sender identity in the same
 // transaction as its narrow write. It never modifies human-only prompt facts.
 func (s *Store) RecordSessionInteraction(ctx context.Context, id domain.SessionID, sender string, at time.Time) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "record session interaction", func(q *gen.Queries) error {
 		return recordSessionInteraction(ctx, q, id, sender, at)
