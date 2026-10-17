@@ -8,6 +8,7 @@ package gen
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -200,6 +201,25 @@ type AdvanceConversationSequenceParams struct {
 func (q *Queries) AdvanceConversationSequence(ctx context.Context, arg AdvanceConversationSequenceParams) error {
 	_, err := q.db.ExecContext(ctx, advanceConversationSequence, arg.LatestSequence, arg.UpdatedAt, arg.ID)
 	return err
+}
+
+const advanceProviderEventRetentionCursor = `-- name: AdvanceProviderEventRetentionCursor :execrows
+UPDATE conversation_provider_event_retention
+SET pruned_through_id = ?1
+WHERE id = 1 AND pruned_through_id = ?2
+`
+
+type AdvanceProviderEventRetentionCursorParams struct {
+	ThroughID int64
+	AfterID   int64
+}
+
+func (q *Queries) AdvanceProviderEventRetentionCursor(ctx context.Context, arg AdvanceProviderEventRetentionCursorParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, advanceProviderEventRetentionCursor, arg.ThroughID, arg.AfterID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const appendConversationActivityOutput = `-- name: AppendConversationActivityOutput :execrows
@@ -591,6 +611,48 @@ func (q *Queries) ConversationActivityExistsForProviderItem(ctx context.Context,
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const deleteSettledProviderMessageDeltas = `-- name: DeleteSettledProviderMessageDeltas :execrows
+DELETE FROM conversation_provider_events
+WHERE conversation_provider_events.received_at < ?1
+  AND NOT EXISTS (
+      SELECT 1 FROM conversation_turns AS turn
+      WHERE turn.conversation_id = conversation_provider_events.conversation_id
+        AND turn.requested_at <= conversation_provider_events.received_at
+        AND (turn.completed_at IS NULL OR turn.completed_at >= ?1)
+  )
+  AND conversation_provider_events.provider_event_id = ''
+  AND conversation_provider_events.method = 'message.delta'
+  AND conversation_provider_events.id IN (/*SLICE:ids*/?)
+`
+
+type DeleteSettledProviderMessageDeltasParams struct {
+	SettledBefore time.Time
+	Ids           []int64
+}
+
+// A row is deleted once it arrived before settled_before and every turn its
+// conversation requested by then had completed before settled_before, which
+// covers the turn it belongs to. The id list stays last: sqlc numbers named
+// arguments, and a slice expanded ahead of them would take their numbers.
+func (q *Queries) DeleteSettledProviderMessageDeltas(ctx context.Context, arg DeleteSettledProviderMessageDeltasParams) (int64, error) {
+	query := deleteSettledProviderMessageDeltas
+	var queryParams []interface{}
+	queryParams = append(queryParams, arg.SettledBefore)
+	if len(arg.Ids) > 0 {
+		for _, v := range arg.Ids {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:ids*/?", strings.Repeat(",?", len(arg.Ids))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:ids*/?", "NULL", 1)
+	}
+	result, err := q.db.ExecContext(ctx, query, queryParams...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const detachSessionConversation = `-- name: DetachSessionConversation :exec
@@ -1458,6 +1520,17 @@ func (q *Queries) MarkConversationTurnsRolledBack(ctx context.Context, arg MarkC
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const maxConversationProviderEventID = `-- name: MaxConversationProviderEventID :one
+SELECT CAST(COALESCE(MAX(id), 0) AS INTEGER) AS id FROM conversation_provider_events
+`
+
+func (q *Queries) MaxConversationProviderEventID(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, maxConversationProviderEventID)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
 }
 
 const moveConversationActivities = `-- name: MoveConversationActivities :exec
@@ -3627,6 +3700,75 @@ func (q *Queries) SelectProjectConversation(ctx context.Context, projectID *doma
 		&i.OpencodeMode,
 	)
 	return i, err
+}
+
+const selectProviderEventRetentionCursor = `-- name: SelectProviderEventRetentionCursor :one
+SELECT pruned_through_id FROM conversation_provider_event_retention WHERE id = 1
+`
+
+// Retention for the archive above, the one delete it allows besides cascades. It
+// removes only streamed message deltas that carry no provider event id:
+//   - a row with an id is what deduplicates a replay of that event (a persistent
+//     host replaying an unacknowledged prompt, a native history import run
+//     again), so deleting it would apply the replayed text twice;
+//   - a row without one is never deduplicated, and once its turn settled the
+//     message row holds its text (message.completed replaces it with the
+//     settled text; deltas append uncapped and create the row on first sight);
+//   - reasoning and command output deltas are kept: their streams are capped,
+//     drop deltas that arrive before the item exists, take none once an activity
+//     is cancelled, and reasoning is replaced by a summary on settle or never
+//     settles when interrupted, so the deltas can hold text nothing else does.
+//
+// The pass walks the archive in id order behind a persisted cursor: the reader
+// seeks a bounded rowid window, the writer deletes the eligible rows and moves
+// the cursor in one transaction.
+func (q *Queries) SelectProviderEventRetentionCursor(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, selectProviderEventRetentionCursor)
+	var pruned_through_id int64
+	err := row.Scan(&pruned_through_id)
+	return pruned_through_id, err
+}
+
+const selectProviderEventRetentionWindow = `-- name: SelectProviderEventRetentionWindow :many
+SELECT id, received_at FROM conversation_provider_events
+WHERE id > ?1 AND id <= ?2
+  AND provider_event_id = '' AND method = 'message.delta'
+ORDER BY id
+LIMIT ?3
+`
+
+type SelectProviderEventRetentionWindowParams struct {
+	AfterID   int64
+	ThroughID int64
+	RowLimit  int64
+}
+
+type SelectProviderEventRetentionWindowRow struct {
+	ID         int64
+	ReceivedAt time.Time
+}
+
+func (q *Queries) SelectProviderEventRetentionWindow(ctx context.Context, arg SelectProviderEventRetentionWindowParams) ([]SelectProviderEventRetentionWindowRow, error) {
+	rows, err := q.db.QueryContext(ctx, selectProviderEventRetentionWindow, arg.AfterID, arg.ThroughID, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SelectProviderEventRetentionWindowRow{}
+	for rows.Next() {
+		var i SelectProviderEventRetentionWindowRow
+		if err := rows.Scan(&i.ID, &i.ReceivedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const selectProvisioningConversationsForSession = `-- name: SelectProvisioningConversationsForSession :many

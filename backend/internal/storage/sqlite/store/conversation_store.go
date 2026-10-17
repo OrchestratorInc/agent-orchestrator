@@ -3932,6 +3932,97 @@ func (s *Store) ProviderEventsSince(
 	return rows, nil
 }
 
+// PruneSettledProviderDeltas takes one step of the archive retention walk. On the
+// reader it seeks at most window archive ids past the persisted cursor for
+// message deltas without a provider event id, keeping at most limit of them and
+// stopping at the first one received at or after settledBefore minus grace. In
+// one writer transaction it deletes those whose turn settled before settledBefore
+// and moves the cursor past what it visited.
+//
+// The grace is what lets a turn settle after its deltas: in steady state the
+// cursor reaches a delta a grace after the delta crossed the cutoff, so a turn
+// that settles within the grace has its deltas pruned. A delta whose turn was
+// still open when the cursor passed it is kept for good.
+//
+// caughtUp reports that the cursor reached the newest archive row or a delta too
+// young to visit, so a pass can stop. writerHold is how long the transaction ran.
+func (s *Store) PruneSettledProviderDeltas(
+	ctx context.Context,
+	settledBefore time.Time,
+	grace time.Duration,
+	window, limit int64,
+) (deleted int64, caughtUp bool, writerHold time.Duration, err error) {
+	settledBefore = settledBefore.UTC()
+	visitBefore := settledBefore.Add(-grace)
+	after, err := s.qr.SelectProviderEventRetentionCursor(ctx)
+	if err != nil {
+		return 0, false, 0, fmt.Errorf("read provider event retention cursor: %w", err)
+	}
+	newest, err := s.qr.MaxConversationProviderEventID(ctx)
+	if err != nil {
+		return 0, false, 0, fmt.Errorf("read newest provider event id: %w", err)
+	}
+	if after >= newest {
+		return 0, true, 0, nil
+	}
+	through := min(after+window, newest)
+	rows, err := s.qr.SelectProviderEventRetentionWindow(ctx, gen.SelectProviderEventRetentionWindowParams{
+		AfterID: after, ThroughID: through, RowLimit: limit,
+	})
+	if err != nil {
+		return 0, false, 0, fmt.Errorf("read provider event retention window after %d: %w", after, err)
+	}
+	ids := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		if !row.ReceivedAt.Before(visitBefore) {
+			through, caughtUp = row.ID-1, true
+			break
+		}
+		ids = append(ids, row.ID)
+	}
+	if !caughtUp && int64(len(rows)) == limit {
+		through = rows[len(rows)-1].ID
+	}
+	if through == newest {
+		caughtUp = true
+	}
+	if through <= after {
+		return 0, caughtUp, 0, nil
+	}
+
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return 0, false, 0, err
+	}
+	defer s.writeMu.Unlock()
+	start := time.Now()
+	err = s.inTx(ctx, "prune settled provider deltas", func(q *gen.Queries) error {
+		if len(ids) > 0 {
+			n, err := q.DeleteSettledProviderMessageDeltas(ctx, gen.DeleteSettledProviderMessageDeltasParams{
+				SettledBefore: settledBefore, Ids: ids,
+			})
+			if err != nil {
+				return err
+			}
+			deleted = n
+		}
+		moved, err := q.AdvanceProviderEventRetentionCursor(ctx, gen.AdvanceProviderEventRetentionCursorParams{
+			ThroughID: through, AfterID: after,
+		})
+		if err != nil {
+			return err
+		}
+		if moved != 1 {
+			return fmt.Errorf("provider event retention cursor moved from %d by another writer", after)
+		}
+		return nil
+	})
+	writerHold = time.Since(start)
+	if err != nil {
+		return 0, false, writerHold, err
+	}
+	return deleted, caughtUp, writerHold, nil
+}
+
 // RetryPrompt returns the durable human prompt of a failed turn, for
 // re-dispatching it as a new turn. The content is loaded from AO's own rows
 // rather than from a client request that could be stale or substituted.

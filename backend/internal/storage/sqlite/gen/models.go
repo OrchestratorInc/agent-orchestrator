@@ -345,6 +345,11 @@ type ConversationProviderEvent struct {
 	ReviewID        sql.NullString
 }
 
+type ConversationProviderEventRetention struct {
+	ID              int64
+	PrunedThroughID int64
+}
+
 type ConversationQueuedEditDelivery struct {
 	ConversationID  string
 	ClientMessageID string
