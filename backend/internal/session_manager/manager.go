@@ -404,6 +404,7 @@ type Manager struct {
 	store     Store
 	// agentReadiness is late-bound by SetAgentReadiness.
 	agentReadiness ports.AgentReadinessProvider
+	importArchive  ImportArchiveRefresher
 	// messenger is a sessionguard.Guard wrapping the raw messenger, so every
 	// pane write is guarded (re-read state, refuse a blocked session) without
 	// each call site re-deriving the check. Send/confirmActive use Deliver for
@@ -3506,6 +3507,7 @@ func (m *Manager) resumeAgentRecordWithReservedGeneration(
 		if err != nil {
 			return RestoreResult{}, err
 		}
+		m.refreshImportArchive(ctx, rec)
 		requireNativeHistory = true
 	}
 

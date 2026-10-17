@@ -246,6 +246,9 @@ type sessionLifecycle interface {
 	// SetHarnessUseGate prevents lifecycle operations from racing a harness
 	// executable replacement.
 	SetHarnessUseGate(gate sessionmanager.HarnessUseGate)
+	// SetImportArchiveRefresher rereads an imported conversation before its
+	// first open, using the same import service the REST surface serves.
+	SetImportArchiveRefresher(refresher sessionmanager.ImportArchiveRefresher)
 	// PersistChatModel records the model the user picked in ChatUI onto the
 	// session's durable metadata before the next prompt routes. A later TUI
 	// rebuild reads it back so ChatUI model changes survive the handoff.

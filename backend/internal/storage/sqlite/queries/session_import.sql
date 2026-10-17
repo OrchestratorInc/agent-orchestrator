@@ -24,3 +24,15 @@ WHERE id = sqlc.arg(id) AND is_terminated = 0
     AND import_source = sqlc.arg(expected_source)
     AND json_extract(NULLIF(import_source, ''), '$.adopted') = 0
     AND (workspace_path = '' OR workspace_path = sqlc.arg(workspace_path));
+
+-- name: DeleteSessionImportMessages :exec
+DELETE FROM session_import_messages WHERE session_id = sqlc.arg(session_id);
+
+-- The archive owns sequences 1..N of an imported session; live rows follow it.
+-- name: SeedImportedConversationSequence :one
+UPDATE conversations SET latest_sequence = (
+    SELECT CAST(COALESCE(MAX(m.sequence), 0) AS INTEGER) FROM session_import_messages AS m
+    WHERE m.session_id = sqlc.arg(session_id)
+)
+WHERE id = sqlc.arg(id)
+RETURNING latest_sequence;

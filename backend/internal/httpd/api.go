@@ -267,6 +267,8 @@ func (a *API) Register(root chi.Router) {
 			// Large base64 bodies can spend longer than the ordinary REST budget
 			// uploading over a phone connection. Only attachment-bearing requests
 			// opt in; ordinary calls to the same routes keep the configured timeout.
+			// Resuming an agent reads its whole native history, which takes over a
+			// minute for a large imported Codex thread.
 			r.Use(func(next http.Handler) http.Handler {
 				ordinary := middleware.Timeout(timeout)(next)
 				upload := middleware.Timeout(max(timeout, 10*time.Minute))(next)
@@ -291,7 +293,7 @@ func (a *API) Register(root chi.Router) {
 						serveWithSetupBudget(next, w, req, budget)
 						return
 					}
-					if attachmentUploadRoute(req) {
+					if attachmentUploadRoute(req) || resumeAgentRoute(req) {
 						upload.ServeHTTP(w, req)
 						return
 					}
@@ -345,6 +347,11 @@ func (a *API) Register(root chi.Router) {
 		a.sessions.RegisterStreams(r)
 		a.events.Register(r)
 	})
+}
+
+func resumeAgentRoute(req *http.Request) bool {
+	return req.Method == http.MethodPost &&
+		chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/sessions/{sessionId}/resume-agent"
 }
 
 func attachmentUploadRoute(req *http.Request) bool {

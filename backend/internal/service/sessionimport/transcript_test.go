@@ -331,7 +331,7 @@ func TestScanBudgetPrefersNewestPerProvider(t *testing.T) {
 	claude, codex := t.TempDir(), t.TempDir()
 	now := time.Now()
 	for i, name := range []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"} {
-		at := now.Add(time.Duration(-i) * time.Hour)
+		at := now.AddDate(0, 0, -recentDays-1).Add(time.Duration(-i) * time.Hour)
 		path := writeClaude(t, claude, name, "", "claude "+name[:1], at)
 		if err := os.Chtimes(path, at, at); err != nil {
 			t.Fatal(err)
@@ -356,6 +356,39 @@ func TestScanBudgetPrefersNewestPerProvider(t *testing.T) {
 	}
 	sort.Strings(titles)
 	if !preview.Truncated || strings.Join(titles, ",") != "claude 1,claude 2,codex 1,codex 2" {
+		t.Fatalf("truncated=%v titles=%q", preview.Truncated, titles)
+	}
+}
+
+// The budget never hides the window the dialog preselects.
+func TestScanBudgetKeepsRecentWindow(t *testing.T) {
+	files := maxScanFiles
+	t.Cleanup(func() { maxScanFiles = files })
+	maxScanFiles = 1
+	claude := t.TempDir()
+	now := time.Now()
+	for i, name := range []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"} {
+		at := now.Add(time.Duration(-i) * 24 * time.Hour)
+		if i == 2 {
+			at = now.AddDate(0, 0, -recentDays-1)
+		}
+		path := writeClaude(t, claude, name, "", "claude "+name[:1], at)
+		if err := os.Chtimes(path, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := New(&importStore{}, "")
+	svc.roots = map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude}
+	preview, err := svc.Scan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var titles []string
+	for _, c := range preview.Candidates {
+		titles = append(titles, c.Title)
+	}
+	sort.Strings(titles)
+	if !preview.Truncated || strings.Join(titles, ",") != "claude 1,claude 2" {
 		t.Fatalf("truncated=%v titles=%q", preview.Truncated, titles)
 	}
 }

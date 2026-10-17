@@ -171,6 +171,9 @@ type SessionImportSource struct {
 	Transferred   bool   `json:"transferred"`
 	Prepared      bool   `json:"prepared"`
 	WorkingSubdir string `json:"workingSubdir,omitempty"`
+	// HistoryThrough is the last conversation sequence the provider replayed
+	// while adopting. The timeline shows the archive in place of that replay.
+	HistoryThrough int64 `json:"historyThrough,omitempty"`
 }
 
 // SessionMetadata is the typed, off-status metadata for a session: operational

@@ -635,6 +635,8 @@ func Run(buildVersion string) error {
 	// servers isn't clobbered. See preview_wiring.go (issue #4500).
 	wireManagedPreviewExit(managedPreview, sessionSvc, log)
 	sessMgr.SetTerminalInputGate(termMgr)
+	sessionImportSvc := sessionimport.New(store, cfg.DataDir)
+	sessMgr.SetImportArchiveRefresher(sessionImportSvc)
 	lifecycleMessenger.Bind(sessionLifecycleMessenger{sessMgr})
 	lcStack.LCM.SetCompletionTerminator(sessMgr)
 	// Lifecycle reactions deliberately do not hold Session Manager's input
@@ -1013,7 +1015,7 @@ func Run(buildVersion string) error {
 		DeviceRoster:       deviceRoster,
 		DeviceLive:         presenceTracker,
 		Import:             importsvc.New(importsvc.Deps{Store: store}),
-		SessionImport:      sessionimport.New(store, cfg.DataDir),
+		SessionImport:      sessionImportSvc,
 		Directories:        fsbrowsersvc.New(),
 		ShellTerminals:     shellTermSvc,
 		Cues:               cuesvc.New(cuesvc.Deps{Store: store, Sessions: sessionSvc, Terminals: shellTermSvc}),
