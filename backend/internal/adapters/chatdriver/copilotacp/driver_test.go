@@ -48,11 +48,11 @@ func TestDriverIdentity(t *testing.T) {
 // starts with that flag, so bypass goes through allow_all instead.
 func TestConfigureApprovalArgs(t *testing.T) {
 	cases := map[ports.PermissionMode][]string{
-		ports.PermissionModeDefault:           {"--acp"},
-		"":                                    {"--acp"},
-		ports.PermissionModeAcceptEdits:       {"--acp", "--allow-tool", "write"},
-		ports.PermissionModeAuto:              {"--acp", "--allow-all-tools"},
-		ports.PermissionModeBypassPermissions: {"--acp"},
+		ports.PermissionModeDefault:           {"--acp", "--no-auto-update"},
+		"":                                    {"--acp", "--no-auto-update"},
+		ports.PermissionModeAcceptEdits:       {"--acp", "--no-auto-update", "--allow-tool", "write"},
+		ports.PermissionModeAuto:              {"--acp", "--no-auto-update", "--allow-all-tools"},
+		ports.PermissionModeBypassPermissions: {"--acp", "--no-auto-update"},
 	}
 	for mode, want := range cases {
 		plugin := &fakePlugin{}

@@ -106,6 +106,12 @@ recovery rather than an automatic restart. The contract is visible in
 
 ## Release and recovery boundaries
 
+Copilot TUI launches, native resumes and ACP Chat launches include the verified
+`--no-auto-update` option. This prevents its vendor updater from changing the
+selected release outside AO's reference tracking. The flag was checked in the
+actual cached 1.0.97 CLI payload and installed 1.0.98 help during private live
+testing; the first unguarded run advanced itself before AO's update request.
+
 Managed installers keep each release immutable. OpenCode v1/v2 use distinct
 managed launchers despite sharing the native executable name. Unmanaged
 in-place installers are blocked while a live session/reviewer depends on the
