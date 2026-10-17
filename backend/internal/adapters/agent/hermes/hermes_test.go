@@ -335,8 +335,12 @@ func TestStickyProfileFailsClosed(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "active_profile"), []byte("work"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "test", Env: map[string]string{"HERMES_HOME": home}, SystemPrompt: "AO"}) == nil {
+	err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "test", Env: map[string]string{"HERMES_HOME": home}, SystemPrompt: "AO"})
+	if err == nil {
 		t.Fatal("sticky profile silently overridden")
+	}
+	if !strings.Contains(err.Error(), "clear active_profile") || !strings.Contains(err.Error(), "default native profile") || strings.Contains(err.Error(), "profiles/<name>") {
+		t.Fatalf("sticky profile error lacks supported recovery guidance: %v", err)
 	}
 }
 

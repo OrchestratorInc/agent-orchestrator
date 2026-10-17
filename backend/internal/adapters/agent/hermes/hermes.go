@@ -156,7 +156,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	}
 	// Native sticky profiles can redirect a root even when HERMES_HOME is set.
 	if b, e := os.ReadFile(filepath.Join(home, "active_profile")); e == nil && strings.TrimSpace(string(b)) != "" && strings.TrimSpace(string(b)) != "default" {
-		return fmt.Errorf("hermes: sticky native profile requires an explicit HERMES_HOME pointing to profiles/<name>")
+		return fmt.Errorf("hermes: sticky native profiles are not supported; clear active_profile or select the default native profile")
 	}
 	for _, managed := range []string{os.Getenv("HERMES_MANAGED_DIR"), cfg.Env["HERMES_MANAGED_DIR"], "/etc/hermes"} {
 		if managed != "" {
