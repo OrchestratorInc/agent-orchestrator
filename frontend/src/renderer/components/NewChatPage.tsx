@@ -55,6 +55,11 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	const lastBrief = useRef("");
 	// A failed fallback start has no composer send to report it, so the page does.
 	const [fallbackFailed, setFallbackFailed] = useState(false);
+	// A send whose response was lost is retried with the same request id, so its
+	// settings stay frozen until that send resolves either way.
+	const [uncertainSend, setUncertainSend] = useState<string>();
+	// The model menu stays open when switching agent swaps the bar's picker.
+	const [modelMenuOpen, setModelMenuOpen] = useState(false);
 	const snapshot = useMemo<ConversationSnapshot>(
 		() => ({ ...startingConversationSnapshot(draftId, task.agent.value || "claude-code"), controller: { state: "ready" } }),
 		[draftId, task.agent.value],
@@ -74,26 +79,18 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	const chooseProviderOption = (optionId: string, value: ChatConfigOptionValue) => {
 		const option = template?.options.find((candidate) => candidate.id === optionId);
 		if (!option || !("value" in value)) return;
+		// Partitioning returns copies of the options, so match them by id.
 		const grouped = partitionConfigOptions(template?.options ?? []);
 		const choice = option.choices.find((candidate) => candidate.value === value.value);
-		if (grouped.model.includes(option)) {
+		if (grouped.model.some((candidate) => candidate.id === optionId)) {
 			const model = choice ? catalogModelFor(choice, harness, task.chatModels) : undefined;
 			if (model) task.chooseTurnSettings({ ...task.turnSettings, model: model.id });
-		} else if (grouped.effort.includes(option)) {
+		} else if (grouped.effort.some((candidate) => candidate.id === optionId)) {
 			task.chooseTurnSettings({ ...task.turnSettings, reasoningEffort: value.value === "default" ? undefined : value.value });
-		} else if (grouped.mode === option && choice?.permissionMode) {
+		} else if (grouped.mode?.id === optionId && choice?.permissionMode) {
 			task.chooseTurnSettings({ ...task.turnSettings, approvalMode: choice.permissionMode });
 		}
 	};
-
-	const localWorkspaces = useWorkspaceQuery();
-	const remoteWorkspaces = useRemoteWorkspaces();
-	const workspacesLoaded = hostId ? remoteWorkspaces.data !== undefined : localWorkspaces.data !== undefined;
-	const projectMissing = workspacesLoaded && projectId !== STANDALONE_WORKSPACE_ID &&
-		!(hostId ? remoteWorkspaces.data ?? [] : localWorkspaces.data ?? []).some((workspace) => workspace.id === projectId);
-	useEffect(() => {
-		if (projectMissing) void navigate({ to: "/new", search: { host: hostId }, replace: true });
-	}, [hostId, navigate, projectMissing]);
 
 	// Escape leaves, as closing the old dialog did; the draft is kept.
 	const pendingRef = useRef(false);
@@ -131,24 +128,31 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 
 	const send = async (text: string, _attachments?: unknown, clientMessageId: string = crypto.randomUUID()) => {
 		const brief = { clientMessageId, text, createdAt: new Date().toISOString() };
-		const settings = barSettings;
+		const retrying = uncertainSend === clientMessageId;
+		const settings = retrying && launched ? launched : barSettings;
 		lastBrief.current = text;
 		setEcho(brief);
 		setLaunched(settings);
 		try {
-			// A send right after opening waits for the project and agents to load.
-			if (!(await until(() => taskRef.current.canSubmit, 10_000))) {
+			// A send right after opening waits for the project and agents to load,
+			// unless loading has already failed.
+			if (!(await until(() => taskRef.current.canSubmit || Boolean(taskRef.current.remoteLoadError), 10_000)) || !taskRef.current.canSubmit) {
 				throw Object.assign(new Error(taskRef.current.remoteLoadError ?? t("newTask.unableToStart")), { code: "TASK_NOT_READY" });
 			}
 			const launch = taskRef.current;
 			const sessionId = await launch.launch(text, { interfaceMode: launch.submitMode, clientRequestId: clientMessageId });
+			setUncertainSend(undefined);
 			await openSession(sessionId, brief, settings, launch.submitMode);
 		} catch (error) {
 			setEcho(undefined);
 			// Only an answer from the daemon is final: it returns the brief with the
 			// reason. A lost response stays uncertain, so the composer retries with the
 			// same request id instead of creating a second task.
-			if (!(error instanceof Error && ("code" in error || error.name === "TaskCreateError"))) throw error;
+			if (!(error instanceof Error && ("code" in error || error.name === "TaskCreateError"))) {
+				setUncertainSend(clientMessageId);
+				throw error;
+			}
+			setUncertainSend(undefined);
 			throw Object.assign(new Error(apiErrorMessage(error, t("newTask.unableToStart"))), { code: "TASK_CREATE_FAILED" });
 		}
 	};
@@ -174,6 +178,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	};
 
 	const pending = Boolean(echo);
+	const frozen = pending || Boolean(uncertainSend);
 	pendingRef.current = pending;
 	const notice = pending ? null : task.fallbackAction ? (
 		<div className="flex items-center justify-end">
@@ -205,7 +210,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				attachLater
 				composerTray={
 					<>
-						<NewChatProjectPicker projectId={projectId} hostId={hostId} onChange={(project) => void navigate({ to: "/new", search: { project, host: hostId }, replace: true })} />
+						<NewChatProjectPicker projectId={projectId} hostId={hostId} disabled={frozen} onChange={(project) => void navigate({ to: "/new", search: { project, host: hostId }, replace: true })} />
 						{hostId ? null : <MobileConnected />}
 					</>
 				}
@@ -213,7 +218,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				busy={pending}
 				// The session's own composer controls from the start: the same bar, held
 				// still once sent, with the agent at the top of the model menu.
-				draftSettings={pending ? (launched ? <LaunchSettingsBar {...launched} /> : null) : (
+				draftSettings={frozen ? (launched ? <LaunchSettingsBar {...launched} /> : null) : (
 					<>
 						<TurnSettingsBar
 							models={barSettings.models}
@@ -225,6 +230,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 							showApprovalMode={barSettings.showApprovalMode}
 							agentMenu={task.agentMenu}
 							agentIcon
+							modelMenu={{ open: modelMenuOpen, onOpenChange: setModelMenuOpen }}
 							autoSelectEffortOnOpen
 						/>
 					</>
@@ -244,16 +250,15 @@ function draftProviderOptions(options: ChatConfigOption[], harness: string, mode
 	const grouped = partitionConfigOptions(options);
 	const out: ChatConfigOption[] = [];
 	const model = grouped.model[0];
-	if (model) {
-		// Only choices a new task can start with: those AO's model list also has.
-		const choices = model.choices.filter((choice) => catalogModelFor(choice, harness, models));
-		const chosen = models.find((item) => item.id === settings.model);
-		const label = chosen ? agentModelDisplayLabel(harness, chosen.displayName) : undefined;
-		const value = choices.find((choice) => choice.value === settings.model)?.value ??
-			choices.find((choice) => choice.name === label)?.value;
-		if (!value) return undefined;
-		out.push({ ...model, choices, currentValue: value });
-	}
+	if (!model) return undefined;
+	// Only choices a new task can start with: those AO's model list also has.
+	const modelChoices = model.choices.filter((choice) => catalogModelFor(choice, harness, models));
+	const chosen = models.find((item) => item.id === settings.model);
+	const label = chosen ? agentModelDisplayLabel(harness, chosen.displayName) : undefined;
+	const modelValue = modelChoices.find((choice) => choice.value === settings.model)?.value ??
+		modelChoices.find((choice) => choice.name === label)?.value;
+	if (!modelValue) return undefined;
+	out.push({ ...model, choices: modelChoices, currentValue: modelValue });
 	const effort = grouped.effort[0];
 	if (effort) out.push({ ...effort, currentValue: settings.reasoningEffort || "default" });
 	if (grouped.mode) {
@@ -279,7 +284,7 @@ function catalogModelFor(choice: { value: string; name: string }, harness: strin
 		models.find((item) => agentModelDisplayLabel(harness, item.displayName) === choice.name);
 }
 
-function NewChatProjectPicker({ projectId, hostId, onChange }: { projectId: string; hostId?: string; onChange: (projectId: string) => void }) {
+function NewChatProjectPicker({ projectId, hostId, disabled, onChange }: { projectId: string; hostId?: string; disabled?: boolean; onChange: (projectId: string) => void }) {
 	const { t } = useTranslation();
 	const localWorkspaces = useWorkspaceQuery().data ?? [];
 	const remoteWorkspaces = useRemoteWorkspaces().data ?? [];
@@ -291,7 +296,11 @@ function NewChatProjectPicker({ projectId, hostId, onChange }: { projectId: stri
 		{ value: STANDALONE_WORKSPACE_ID, label: t("standalone.workspaceName") },
 		...projects.map((project) => ({ value: project.id, label: project.name })),
 	];
-	const selectedProjectName = projects.find((project) => project.id === projectId)?.name ?? t("standalone.workspaceName");
+	// A project that is not (or not yet) listed, such as one still loading or deleted,
+	// reads as unselected rather than as the scratchpad.
+	const selectedProjectName = projectId === STANDALONE_WORKSPACE_ID
+		? t("standalone.workspaceName")
+		: projects.find((project) => project.id === projectId)?.name ?? t("newTask.selectProject");
 	const hostLabel = hostId ? labelForHost(hostId) ?? hostId : undefined;
 	const requestCreateProject = useUiStore((state) => state.requestCreateProject);
 	return (
@@ -300,6 +309,7 @@ function NewChatProjectPicker({ projectId, hostId, onChange }: { projectId: stri
 			value={projectId}
 			options={projectOptions}
 			onChange={onChange}
+			disabled={disabled}
 			menuAlign="start"
 			menuClassName="w-48 max-h-72"
 			triggerClassName={cn(TRIGGER_CLASS, "w-fit shrink-0")}

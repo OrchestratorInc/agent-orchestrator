@@ -1,4 +1,4 @@
-import { useNavigate } from "@tanstack/react-router";
+import { useMatchRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 import { useUiStore } from "../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
@@ -9,6 +9,7 @@ import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 // nonce lets a repeat request for the same project fire again.
 export function NewTaskNavigator() {
 	const navigate = useNavigate();
+	const matchRoute = useMatchRoute();
 	const newTaskRequest = useUiStore((state) => state.newTaskRequest);
 	const lastNonce = useRef(newTaskRequest?.nonce ?? 0);
 
@@ -22,8 +23,10 @@ export function NewTaskNavigator() {
 				project: projectId === STANDALONE_WORKSPACE_ID ? undefined : projectId,
 				host: hostId,
 			},
+			// A new task from the new chat page replaces it rather than stacking history.
+			replace: Boolean(matchRoute({ to: "/new" })),
 		});
-	}, [navigate, newTaskRequest]);
+	}, [matchRoute, navigate, newTaskRequest]);
 
 	return null;
 }

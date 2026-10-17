@@ -39,6 +39,10 @@ export function rememberOpeningStart(queryClient: QueryClient, sessionId: string
 	queryClient.setQueryData(openingStartKey(sessionId, hostId), startedAt);
 }
 
+export function forgetOpeningStart(queryClient: QueryClient, sessionId: string, hostId?: string): void {
+	queryClient.removeQueries({ queryKey: openingStartKey(sessionId, hostId), exact: true });
+}
+
 export function openingStartFor(queryClient: QueryClient, sessionId: string, hostId?: string): string | undefined {
 	return queryClient.getQueryData<string>(openingStartKey(sessionId, hostId));
 }

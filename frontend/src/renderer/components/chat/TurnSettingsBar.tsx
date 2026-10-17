@@ -115,6 +115,7 @@ export function TurnSettingsBar({
 	lastModel,
 	agentMenu,
 	agentIcon = false,
+	modelMenu,
 	children,
 }: {
 	models: ChatModel[];
@@ -169,6 +170,8 @@ export function TurnSettingsBar({
 	agentMenu?: ReactNode;
 	/** Lead the model trigger with the agent's icon, for a chat that can still change agent. */
 	agentIcon?: boolean;
+	/** Holds the model menu open across a switch between the native and provider pickers. */
+	modelMenu?: MenuOpenState;
 }) {
 	const { t } = useTranslation();
 	const displayModels = useMemo(
@@ -452,6 +455,7 @@ export function TurnSettingsBar({
 						<ModelEffortPicker
 							agentMenu={agentMenu}
 							agentIcon={agentIcon && harness ? <AgentAvatar provider={harness} className="mr-2 size-icon-sm" decorative /> : null}
+							menuOpen={modelMenu}
 							models={harness === "claude-code" ? displayModels.filter((model) => model.id !== "default") : displayModels}
 							settings={settings}
 							onChange={onChange}
@@ -476,6 +480,7 @@ export function TurnSettingsBar({
 						<ClubbedConfigPicker
 							agentMenu={agentMenu}
 							agentIcon={agentIcon && harness ? <AgentAvatar provider={harness} className="mr-2 size-icon-sm" decorative /> : null}
+							menuOpen={modelMenu}
 							groupClaude={harness === "claude-code"}
 							modelOptions={grouped.model}
 							effortOptions={grouped.effort}
@@ -701,12 +706,14 @@ function ModelEffortPicker({
 	onChangeConfigOption,
 	agentMenu,
 	agentIcon,
+	menuOpen,
 }: {
 	models: ChatModel[];
 	settings: TurnSettings;
 	onChange: (next: TurnSettings) => void;
 	agentMenu?: ReactNode;
 	agentIcon?: ReactNode;
+	menuOpen?: MenuOpenState;
 	disabled?: boolean;
 	modelLabel: string;
 	groupLabel: string;
@@ -728,7 +735,7 @@ function ModelEffortPicker({
 	const savedEffort = settings.reasoningEffort === "default" ? "" : settings.reasoningEffort ?? "";
 
 	return (
-		<OptionMenu>
+		<OptionMenu open={menuOpen?.open} onOpenChange={menuOpen?.onOpenChange}>
 				<OptionMenuTrigger
 					showCaret={false}
 					disabled={disabled}
@@ -822,9 +829,11 @@ function ClubbedConfigPicker({
 	groupClaude,
 	agentMenu,
 	agentIcon,
+	menuOpen,
 }: {
 	agentMenu?: ReactNode;
 	agentIcon?: ReactNode;
+	menuOpen?: MenuOpenState;
 	groupClaude?: boolean;
 	modelOptions: ChatConfigOption[];
 	effortOptions: ChatConfigOption[];
@@ -877,7 +886,7 @@ function ClubbedConfigPicker({
 	}
 
 	return (
-		<OptionMenu>
+		<OptionMenu open={menuOpen?.open} onOpenChange={menuOpen?.onOpenChange}>
 				<OptionMenuTrigger
 					showCaret={false}
 					disabled={disabled}
@@ -1567,6 +1576,8 @@ function optionIsEnabled(option: ChatConfigOption): boolean {
 function choiceIsEnabled(choice: ChatConfigOption["choices"][number] | undefined): boolean {
 	return Boolean(choice && /(?:^|[\s_-])(on|enabled|true)(?:[\s_-]|$)/i.test(`${choice.name} ${choice.value}`));
 }
+
+type MenuOpenState = { open: boolean; onOpenChange: (open: boolean) => void };
 
 /**
  * Whether a provider catalog replaces AO's own approval control. A `mode` option
