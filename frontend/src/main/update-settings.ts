@@ -66,7 +66,8 @@ export interface UpdateStatus {
 	 * "there is something to install" should read this instead of `state`.
 	 */
 	/** ready=false means native preparation is outstanding, including restored provenance. */
-	staged?: { version?: string; stagedAt: number; escalated: boolean; ready?: boolean };
+	/** releaseNotes are the staged build's own; the top-level field follows `version`. */
+	staged?: { version?: string; stagedAt: number; escalated: boolean; ready?: boolean; releaseNotes?: string };
 	// Present when automatic update checks have failed several times in a row
 	// with Chromium network-stack errors (net::ERR_*) — the app's network stack
 	// is wedged and restarting the app usually fixes it (#3526).

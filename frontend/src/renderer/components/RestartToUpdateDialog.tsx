@@ -66,7 +66,12 @@ function RestartToUpdateDialogBody() {
 	}, []);
 
 	const version = confirmedBuild?.version ?? status.staged?.version ?? status.version;
-	const releaseNotes = confirmedBuild ? confirmedBuild.releaseNotes : status.releaseNotes;
+	// The top-level notes follow status.version, which can be a newer build
+	// downloading over the staged one; the staged build's own notes ride on
+	// status.staged.
+	const releaseNotes = confirmedBuild
+		? confirmedBuild.releaseNotes
+		: status.staged?.releaseNotes ?? (status.version === version ? status.releaseNotes : undefined);
 	const nightly = parseNightlyVersion(version);
 	const buildLabel = nightly
 		? t("shell.nightlyBuild", {

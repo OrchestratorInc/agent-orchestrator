@@ -1536,6 +1536,7 @@
 	"settings.updates.preparing": "업데이트 준비 중…",
 	"settings.updates.progress": "다운로드 진행률",
 	"settings.updates.targetVersion": "v{{version}} 버전으로 업데이트 중",
+	"settings.updates.availableVersion": "v{{version}} 버전을 사용할 수 있습니다",
 	"settings.updates.bytes": "{{downloaded}} / {{total}} MB",
 	"settings.updates.checkedJustNow": "방금 확인함",
 	"settings.updates.checkedMinutesAgo": "{{count}}분 전에 확인함",

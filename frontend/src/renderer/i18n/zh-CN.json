@@ -1520,6 +1520,7 @@
 	"settings.updates.preparing": "正在准备更新…",
 	"settings.updates.progress": "下载进度",
 	"settings.updates.targetVersion": "正在更新至 v{{version}}",
+	"settings.updates.availableVersion": "v{{version}} 可用",
 	"settings.updates.bytes": "{{downloaded}} / {{total}} MB",
 	"settings.updates.checkedJustNow": "刚刚检查过",
 	"settings.updates.checkedMinutesAgo": "{{count}} 分钟前检查过",

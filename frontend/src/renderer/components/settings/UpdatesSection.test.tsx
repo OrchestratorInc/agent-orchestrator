@@ -111,3 +111,16 @@ it("links PRs and commits in downloaded notes from the renamed repository", asyn
 	expect(screen.getByRole("link", { name: "7b7db96" })).toHaveAttribute("href", `${repo}/commit/${commit}`);
 	expect(screen.queryByText(/@illegalcall/)).toBeNull();
 });
+
+it("names the newer build when a full disk holds it back (#6607)", async () => {
+	updGetStatus.mockResolvedValue({
+		state: "error",
+		message: "Not enough disk space to install the update. Free up space, then retry.",
+		version: "0.13.8-nightly.202610121355",
+		staged: { version: "0.13.7-nightly.202610101220", stagedAt: 1, escalated: false, ready: false },
+	} satisfies UpdateStatus);
+	renderUpdates();
+
+	expect(await screen.findByText(/Not enough disk space to install the update/)).toBeVisible();
+	expect(screen.getByText("v0.13.8-nightly.202610121355 is available")).toBeVisible();
+});

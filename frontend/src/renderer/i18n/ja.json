@@ -1536,6 +1536,7 @@
 	"settings.updates.preparing": "更新を準備しています…",
 	"settings.updates.progress": "ダウンロードの進行状況",
 	"settings.updates.targetVersion": "v{{version}} に更新中",
+	"settings.updates.availableVersion": "v{{version}} が利用可能です",
 	"settings.updates.bytes": "{{downloaded}} / {{total}} MB",
 	"settings.updates.checkedJustNow": "たった今確認しました",
 	"settings.updates.checkedMinutesAgo": "{{count}} 分前に確認しました",

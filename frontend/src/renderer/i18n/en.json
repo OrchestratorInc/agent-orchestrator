@@ -1754,6 +1754,7 @@
 	"settings.updates.preparing": "Preparing update…",
 	"settings.updates.progress": "Download progress",
 	"settings.updates.targetVersion": "Updating to v{{version}}",
+	"settings.updates.availableVersion": "v{{version}} is available",
 	"settings.updates.bytes": "{{downloaded}} / {{total}} MB",
 	"settings.updates.checkedJustNow": "Checked just now",
 	"settings.updates.checkedMinutesAgo": "Checked {{count}} minutes ago",
