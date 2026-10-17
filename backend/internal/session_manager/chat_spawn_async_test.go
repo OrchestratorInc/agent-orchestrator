@@ -80,7 +80,7 @@ func TestSpawnAsyncChat_AnswersBeforeWorkspaceAndController(t *testing.T) {
 
 func testAsyncChatAnswersBeforeWorkspaceAndController(t *testing.T, kind domain.SessionKind) {
 	launcher := &recordingLauncher{}
-	m, st, rt := newChatManager(launcher)
+	m, st, rt := newChatManager(t, launcher)
 	m.browserCapabilities = browsersvc.NewAuthority()
 	deferred := deferredBackground(m)
 	ws := m.workspace.(*fakeWorkspace)
@@ -145,7 +145,7 @@ func TestSpawnAsyncChatPreservesForegroundEffortDuringBackgroundTitle(t *testing
 		}
 		t.Run(name, func(t *testing.T) {
 			launcher := &recordingLauncher{}
-			m, st, _ := newChatManager(launcher)
+			m, st, _ := newChatManager(t, launcher)
 			m.dataDir = t.TempDir()
 			m.browserCapabilities = browsersvc.NewAuthority()
 			deferred := deferredBackground(m)
@@ -184,7 +184,7 @@ func TestSpawnAsyncChatPreservesForegroundEffortDuringBackgroundTitle(t *testing
 
 func TestAsyncChatSpawnHoldsHarnessGateThroughControllerStart(t *testing.T) {
 	launcher := &recordingLauncher{}
-	m, _, _ := newChatManager(launcher)
+	m, _, _ := newChatManager(t, launcher)
 	m.browserCapabilities = browsersvc.NewAuthority()
 	deferred := deferredBackground(m)
 	gate := &countingHarnessUseGate{}
@@ -206,7 +206,7 @@ func TestAsyncChatSpawnHoldsHarnessGateThroughControllerStart(t *testing.T) {
 // messages queued into it — in place, with a reason the user can read.
 func TestSpawnAsyncChat_FailedStartKeepsSessionAndReason(t *testing.T) {
 	launcher := &recordingLauncher{}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	m.browserCapabilities = browsersvc.NewAuthority()
 	deferred := deferredBackground(m)
 	ws := m.workspace.(*fakeWorkspace)
@@ -235,7 +235,7 @@ func TestSpawnAsyncChat_FailedStartKeepsSessionAndReason(t *testing.T) {
 
 func TestSpawnAsyncChat_DrainFailureLeavesRetryableSession(t *testing.T) {
 	launcher := &recordingLauncher{drainErr: errors.New("controller stopped before dispatch")}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	m.browserCapabilities = browsersvc.NewAuthority()
 	deferred := deferredBackground(m)
 	rec, _, _, err := m.Spawn(context.Background(), asyncChatSpawnConfig("do the thing"))
@@ -261,7 +261,7 @@ func TestResumeFailedAsyncChatSpawnRetriesSameSessionAndQueue(t *testing.T) {
 
 func testResumeFailedAsyncChatSpawn(t *testing.T, kind domain.SessionKind) {
 	launcher := &recordingLauncher{}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	m.browserCapabilities = browsersvc.NewAuthority()
 	deferred := deferredBackground(m)
 	gate := &countingHarnessUseGate{}
@@ -315,7 +315,7 @@ func testResumeFailedAsyncChatSpawn(t *testing.T, kind domain.SessionKind) {
 }
 
 func TestResumeCannotStartSecondControllerDuringInitialAsyncSpawn(t *testing.T) {
-	m, _, _ := newChatManager(&recordingLauncher{})
+	m, _, _ := newChatManager(t, &recordingLauncher{})
 	m.browserCapabilities = browsersvc.NewAuthority()
 	deferred := deferredBackground(m)
 	rec, _, _, err := m.Spawn(context.Background(), asyncChatSpawnConfig("do the thing"))
@@ -410,7 +410,7 @@ func TestResumeFailedAsyncChatSpawnRetriesAttachmentProjection(t *testing.T) {
 
 func TestResumeFailedAsyncChatSpawnReusesPublishedWorkspace(t *testing.T) {
 	launcher := &recordingLauncher{}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	m.browserCapabilities = browsersvc.NewAuthority()
 	deferred := deferredBackground(m)
 	workspacePath := t.TempDir()
@@ -446,7 +446,7 @@ func TestResumeFailedAsyncChatSpawnReusesPublishedWorkspace(t *testing.T) {
 
 func TestResumeFailedAsyncChatSpawnAdoptsLiveController(t *testing.T) {
 	launcher := &recordingLauncher{live: true}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID: "mer-1", ProjectID: chatTestProject, Kind: domain.KindWorker,
 		Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
@@ -506,7 +506,7 @@ func TestResumeFailedAsyncChatSpawnResetsChecklist(t *testing.T) {
 }
 
 func TestCancelAsyncChatSpawnClearsStaleStartingState(t *testing.T) {
-	m, st, _ := newChatManager(&recordingLauncher{})
+	m, st, _ := newChatManager(t, &recordingLauncher{})
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID: "mer-1", ProvisionState: domain.SessionProvisionProvisioning,
 	}
@@ -523,7 +523,7 @@ func TestCancelAsyncChatSpawnClearsStaleStartingState(t *testing.T) {
 // client, deleting it would turn an open session into a 404.
 func TestSpawnAsyncChat_PublishedSessionIsNeverDeleted(t *testing.T) {
 	launcher := &recordingLauncher{startErr: errors.New("provider refused the session")}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	m.browserCapabilities = browsersvc.NewAuthority()
 	deferred := deferredBackground(m)
 
@@ -551,7 +551,7 @@ func TestSpawnAsyncChat_PublishedSessionIsNeverDeleted(t *testing.T) {
 // for the desktop's bounded readiness poll to give up on a healthy session.
 func TestSpawnAsyncChat_PublishesTheWorktreeBeforeTheController(t *testing.T) {
 	launcher := &recordingLauncher{startErr: errors.New("provider is slow today")}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	m.browserCapabilities = browsersvc.NewAuthority()
 	deferred := deferredBackground(m)
 
@@ -581,7 +581,7 @@ func TestSpawnAsyncChat_PublishesTheWorktreeBeforeTheController(t *testing.T) {
 
 func TestSpawnAsyncChat_DaemonShutdownCancelsAndWaitsForWorker(t *testing.T) {
 	launcher := &recordingLauncher{}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	m.browserCapabilities = browsersvc.NewAuthority()
 	daemonCtx, cancelDaemon := context.WithCancel(context.Background())
 	m.backgroundContext = daemonCtx
@@ -612,7 +612,7 @@ func TestSpawnAsyncChat_DaemonShutdownCancelsAndWaitsForWorker(t *testing.T) {
 
 func TestSpawnAsyncChat_ReadyWriteFailureMarksSessionFailed(t *testing.T) {
 	launcher := &recordingLauncher{}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	m.store = &failReadyProvisionStore{fakeStore: st}
 	m.browserCapabilities = browsersvc.NewAuthority()
 	deferred := deferredBackground(m)
@@ -631,7 +631,7 @@ func TestSpawnAsyncChat_ReadyWriteFailureMarksSessionFailed(t *testing.T) {
 }
 
 func TestSpawnAsyncChat_FailedCleanupRetainsWorkspacePath(t *testing.T) {
-	m, st, _ := newChatManager(&recordingLauncher{})
+	m, st, _ := newChatManager(t, &recordingLauncher{})
 	m.browserCapabilities = browsersvc.NewAuthority()
 	deferred := deferredBackground(m)
 	ws := m.workspace.(*fakeWorkspace)
@@ -653,7 +653,7 @@ func TestSpawnAsyncChat_FailedCleanupRetainsWorkspacePath(t *testing.T) {
 }
 
 func TestSpawnAsyncChat_WorktreeRecordFailurePreservesDirtyWorkspace(t *testing.T) {
-	m, st, _ := newChatManager(&recordingLauncher{})
+	m, st, _ := newChatManager(t, &recordingLauncher{})
 	m.browserCapabilities = browsersvc.NewAuthority()
 	deferred := deferredBackground(m)
 	project := st.projects[string(chatTestProject)]
@@ -679,7 +679,7 @@ func TestSpawnAsyncChat_WorktreeRecordFailurePreservesDirtyWorkspace(t *testing.
 }
 
 func TestDestroySpawnWorkspace_FailedProjectCleanupRetainsWorktreeRows(t *testing.T) {
-	m, st, _ := newChatManager(&recordingLauncher{})
+	m, st, _ := newChatManager(t, &recordingLauncher{})
 	ws := m.workspace.(*fakeWorkspace)
 	ws.destroyErr = errors.New("dirty worktree")
 	info := ports.WorkspaceInfo{SessionID: "mer-1", Path: t.TempDir()}
@@ -702,7 +702,7 @@ func TestDestroySpawnWorkspace_FailedProjectCleanupRetainsWorktreeRows(t *testin
 
 func TestSpawnAsyncChat_KillFencesWorkspacePublicationAndControllerStart(t *testing.T) {
 	launcher := &recordingLauncher{}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	m.browserCapabilities = browsersvc.NewAuthority()
 	blockingStore := &blockingWorkspacePublishStore{
 		fakeStore: st,
@@ -761,7 +761,7 @@ func TestSpawnAsyncChat_KillFencesWorkspacePublicationAndControllerStart(t *test
 
 func TestSpawnAsyncChat_PreparedProvisionFailureClearsRemovedWorkspace(t *testing.T) {
 	launcher := &recordingLauncher{}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	m.browserCapabilities = browsersvc.NewAuthority()
 	ws := m.workspace.(*fakeWorkspace)
 	ws.path = t.TempDir()
@@ -797,7 +797,7 @@ func TestSpawnAsyncChat_PreparedProvisionFailureClearsRemovedWorkspace(t *testin
 // A restart leaves nothing behind that could finish a background start, so a
 // row left mid-start must not read as "still starting" forever.
 func TestFailInterruptedProvisioning(t *testing.T) {
-	m, st, _ := newChatManager(&recordingLauncher{})
+	m, st, _ := newChatManager(t, &recordingLauncher{})
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID: "mer-1", ProjectID: chatTestProject, Kind: domain.KindWorker,
 		Mode: domain.SessionModeChat, ProvisionState: domain.SessionProvisionProvisioning,
@@ -827,7 +827,7 @@ func TestFailInterruptedProvisioning(t *testing.T) {
 // queued messages are still in it. An empty brief makes this sharpest, because
 // that row also still matches the seed-state predicate that rollback deletes on.
 func TestReconcileLive_KeepsAnInterruptedAsyncSpawn(t *testing.T) {
-	m, st, _ := newChatManager(&recordingLauncher{})
+	m, st, _ := newChatManager(t, &recordingLauncher{})
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID: "mer-1", ProjectID: chatTestProject, Kind: domain.KindWorker,
 		Mode: domain.SessionModeChat, ProvisionState: domain.SessionProvisionFailed,
