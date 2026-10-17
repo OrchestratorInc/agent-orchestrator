@@ -16,10 +16,13 @@ import (
 )
 
 // historyDepth reads every revision the store keeps.
-const historyDepth = 50
+const historyDepth = 100
 
 // maxRemovedLines bounds the lines Get reports as removed by people.
 const maxRemovedLines = 50
+
+// maxHistory bounds the changes Get reports.
+const maxHistory = 20
 
 // Store is the persistence the service needs.
 type Store interface {
@@ -58,11 +61,25 @@ type View struct {
 	UpdatedBy *Author
 	// PreviousBody is the revision before the latest, which undo restores.
 	PreviousBody *string
-	// ProtectedLines are the lines dreaming must keep: those of the newest
-	// revision dreaming did not write.
+	// ProtectedLines are the lines the user typed or edited. Dreaming must
+	// keep them word for word; it may rewrite every other line.
 	ProtectedLines []string
 	// RemovedLines are lines people deleted. Dreaming must not add them back.
 	RemovedLines []string
+	// History is the newest changes, oldest first, so dreaming can tell what
+	// it learned when and from which session.
+	History []Change
+}
+
+// Change is one saved edit to a set of instructions.
+type Change struct {
+	At time.Time
+	// Session titles the AO session that saved it, such as a dream; empty
+	// when the user saved it.
+	Session string
+	Dreamed bool
+	Added   []string
+	Removed []string
 }
 
 // Author is the AO session that saved a revision.
@@ -108,7 +125,7 @@ func (s *Service) Get(ctx context.Context, projectID domain.ProjectID) (View, er
 
 // Save stores a new revision of one set of instructions and returns the
 // result. A dreaming session must name the revision it read and keep every
-// line people saved.
+// line the user typed or edited.
 func (s *Service) Save(ctx context.Context, projectID domain.ProjectID, input SaveInput) (View, error) {
 	if err := s.checkProject(ctx, projectID); err != nil {
 		return View{}, err
@@ -135,26 +152,29 @@ func (s *Service) Save(ctx context.Context, projectID domain.ProjectID, input Sa
 		}
 		rev.SessionID, rev.Dreamed = &session.ID, true
 	}
+	if rev.Dreamed && input.Revision == nil {
+		return View{}, errNoRev
+	}
+	latest, err := s.store.ListInstructionRevisions(ctx, projectID, 1)
+	if err != nil {
+		return View{}, apierr.Internal("INSTRUCTIONS_SAVE_FAILED", "Failed to save instructions")
+	}
+	var previous domain.InstructionsRevision
+	if len(latest) > 0 {
+		previous = latest[0]
+	}
 	if rev.Dreamed {
-		if input.Revision == nil {
-			return View{}, errNoRev
-		}
-		revisions, err := s.store.ListInstructionRevisions(ctx, projectID, historyDepth)
-		if err != nil {
-			return View{}, apierr.Internal("INSTRUCTIONS_SAVE_FAILED", "Failed to save instructions")
-		}
-		var latest int64
-		if len(revisions) > 0 {
-			latest = revisions[0].ID
-		}
-		if *input.Revision != latest {
+		if *input.Revision != previous.ID {
 			return View{}, errChanged
 		}
-		if missing := missingLines(protectedLines(revisions), body); len(missing) > 0 {
+		if missing := missingLines(previous.UserLines, body); len(missing) > 0 {
 			return View{}, apierr.Invalid("INSTRUCTIONS_LINES_REMOVED",
-				"Keep every line the user saved, word for word. Put these back: "+strings.Join(missing, " | "),
+				"Keep every line the user typed or edited, word for word. Put these back: "+strings.Join(missing, " | "),
 				map[string]any{"lines": missing})
 		}
+		rev.UserLines = previous.UserLines
+	} else {
+		rev.UserLines = userLinesAfter(previous, body)
 	}
 	if _, _, err := s.store.SaveInstructionRevision(ctx, rev, input.Revision); err != nil {
 		if errors.Is(err, domain.ErrInstructionsChanged) {
@@ -196,21 +216,22 @@ func (s *Service) isDream(ctx context.Context, session domain.SessionRecord) (bo
 }
 
 func (s *Service) view(ctx context.Context, projectID domain.ProjectID, revisions []domain.InstructionsRevision) View {
-	view := View{ProjectID: projectID, ProtectedLines: protectedLines(revisions), RemovedLines: removedLines(revisions)}
+	view := View{
+		ProjectID: projectID, ProtectedLines: make([]string, 0),
+		RemovedLines: removedLines(revisions), History: s.history(ctx, revisions),
+	}
 	if len(revisions) == 0 {
 		return view
 	}
 	latest := revisions[0]
 	view.Body, view.Revision = latest.Body, latest.ID
+	view.ProtectedLines = append(view.ProtectedLines, latest.UserLines...)
 	updatedAt := latest.CreatedAt
 	view.UpdatedAt = &updatedAt
 	if latest.SessionID != nil || latest.Dreamed {
 		author := &Author{Dreamed: latest.Dreamed}
 		if latest.SessionID != nil {
-			author.SessionID, author.Title = *latest.SessionID, string(*latest.SessionID)
-			if session, ok, err := s.store.GetSession(ctx, *latest.SessionID); err == nil && ok && strings.TrimSpace(session.DisplayName) != "" {
-				author.Title = strings.TrimSpace(session.DisplayName)
-			}
+			author.SessionID, author.Title = *latest.SessionID, s.sessionTitle(ctx, *latest.SessionID)
 		}
 		view.UpdatedBy = author
 	}
@@ -226,6 +247,54 @@ func (s *Service) view(ctx context.Context, projectID domain.ProjectID, revision
 	return view
 }
 
+// sessionTitle returns a session's display name, else its id.
+func (s *Service) sessionTitle(ctx context.Context, id domain.SessionID) string {
+	if session, ok, err := s.store.GetSession(ctx, id); err == nil && ok && strings.TrimSpace(session.DisplayName) != "" {
+		return strings.TrimSpace(session.DisplayName)
+	}
+	return string(id)
+}
+
+// history returns the newest changes between kept revisions, oldest first.
+// revisions are newest first. The oldest kept revision counts as a change from
+// empty text only when no older revision was pruned.
+func (s *Service) history(ctx context.Context, revisions []domain.InstructionsRevision) []Change {
+	out := make([]Change, 0)
+	for i, rev := range revisions {
+		if len(out) == maxHistory {
+			break
+		}
+		var before []string
+		if i+1 < len(revisions) {
+			before = lines(revisions[i+1].Body)
+		} else if len(revisions) == historyDepth {
+			break
+		}
+		after := lines(rev.Body)
+		change := Change{At: rev.CreatedAt, Dreamed: rev.Dreamed, Added: subtract(after, before), Removed: subtract(before, after)}
+		if len(change.Added) == 0 && len(change.Removed) == 0 {
+			continue
+		}
+		if rev.SessionID != nil {
+			change.Session = s.sessionTitle(ctx, *rev.SessionID)
+		}
+		out = append(out, change)
+	}
+	slices.Reverse(out)
+	return out
+}
+
+// subtract returns the lines of a that b lacks, in order.
+func subtract(a, b []string) []string {
+	out := make([]string, 0)
+	for _, line := range a {
+		if !slices.Contains(b, line) && !slices.Contains(out, line) {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
 // lines returns body's non-blank lines, trimmed. Dreaming's rules compare
 // lines, not raw text, so reflowing whitespace never counts as a change.
 func lines(body string) []string {
@@ -238,15 +307,18 @@ func lines(body string) []string {
 	return out
 }
 
-// protectedLines returns the lines of the newest revision dreaming did not
-// write. revisions are newest first.
-func protectedLines(revisions []domain.InstructionsRevision) []string {
-	for _, rev := range revisions {
-		if !rev.Dreamed {
-			return lines(rev.Body)
+// userLinesAfter returns the user's lines once they save body over previous:
+// the lines they typed or edited now, plus their earlier lines body still has.
+// Lines body keeps unchanged from a dream stay the dream's.
+func userLinesAfter(previous domain.InstructionsRevision, body string) []string {
+	before := lines(previous.Body)
+	out := make([]string, 0)
+	for _, line := range lines(body) {
+		if (!slices.Contains(before, line) || slices.Contains(previous.UserLines, line)) && !slices.Contains(out, line) {
+			out = append(out, line)
 		}
 	}
-	return make([]string, 0)
+	return out
 }
 
 // removedLines returns lines that a revision dreaming did not write dropped

@@ -13154,6 +13154,8 @@ components:
           type: boolean
         autoReviewEnabled:
           type: boolean
+        background:
+          type: boolean
         branch:
           type: string
         branchState:
@@ -15051,6 +15053,29 @@ components:
       required:
       - dreamed
       type: object
+    InstructionsChangeResponse:
+      properties:
+        added:
+          items:
+            type: string
+          type: array
+        at:
+          format: date-time
+          type: string
+        dreamed:
+          type: boolean
+        removed:
+          items:
+            type: string
+          type: array
+        session:
+          type: string
+      required:
+      - at
+      - dreamed
+      - added
+      - removed
+      type: object
     InstructionsEnvelope:
       properties:
         instructions:
@@ -15062,6 +15087,10 @@ components:
       properties:
         body:
           type: string
+        history:
+          items:
+            $ref: '#/components/schemas/InstructionsChangeResponse'
+          type: array
         previousBody:
           type:
           - "null"
@@ -15091,6 +15120,7 @@ components:
       - revision
       - protectedLines
       - removedLines
+      - history
       type: object
     InvokeCueRequest:
       properties:

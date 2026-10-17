@@ -20,8 +20,20 @@ type InstructionsRevision struct {
 	// saved it.
 	SessionID *SessionID
 	// Dreamed reports that a dreaming session saved this revision.
-	Dreamed   bool
+	Dreamed bool
+	// UserLines are the lines of Body the user typed or edited, in this
+	// revision or an earlier one. Dreaming must keep them word for word; it
+	// may rewrite every other line.
+	UserLines []string
 	CreatedAt time.Time
+}
+
+// SessionCommand is one shell command an agent ran in a chat session, without
+// its output. Dreaming learns verified project facts from these, such as which
+// test command passes.
+type SessionCommand struct {
+	Command string
+	Failed  bool
 }
 
 // ErrInstructionsChanged reports a save that named a revision that is no

@@ -2686,7 +2686,7 @@
 	"automations.description": "일정에 따라 또는 세션이 끝난 후 실행되는 세션.",
 	"automations.dreaming.title": "Dreaming",
 	"automations.dreaming.name": "Dreaming",
-	"automations.dreaming.description": "세션이 끝날 때마다 AO가 입력한 내용에서 배우고 이 지침을 업데이트합니다. 새 세션은 모두 이 지침으로 시작합니다.",
+	"automations.dreaming.description": "세션이 끝날 때마다 AO가 입력한 내용과 잘 된 방법에서 배우고 이 지침을 업데이트합니다. 새 세션은 모두 이 지침으로 시작합니다.",
 	"automations.dreaming.toggle": "모든 프로젝트에서 Dreaming",
 	"automations.dreaming.partial": "프로젝트 {{total}}개 중 {{on}}개에서 켜짐",
 	"automations.dreaming.switchError": "Dreaming을 변경하지 못했습니다.",

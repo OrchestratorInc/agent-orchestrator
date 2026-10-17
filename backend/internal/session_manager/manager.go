@@ -5341,6 +5341,7 @@ func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now t
 		ProjectID:         cfg.ProjectID,
 		IssueID:           cfg.IssueID,
 		AutomationRunID:   cfg.AutomationRunID,
+		Background:        cfg.Background,
 		ClientRequestID:   cfg.ClientRequestID,
 		ClientRequestHash: cfg.ClientRequestHash,
 		Kind:              cfg.Kind,
@@ -5559,12 +5560,30 @@ func appendAttachmentReferences(prompt string, refs []string) string {
 // promptless spawn delivers no user prompt at all: the agent simply lands at an
 // empty input box rather than receiving an auto-generated kickoff turn.
 func (m *Manager) buildSpawnTexts(ctx context.Context, cfg ports.SpawnConfig, sessionID domain.SessionID) (prompt, systemPrompt string, err error) {
+	chat := domain.NormalizeSessionMode(cfg.RequestedMode) == domain.SessionModeChat
 	prompt = buildPrompt(cfg)
-	systemPrompt, err = m.buildSystemPrompt(ctx, cfg.Kind, cfg.ProjectID, sessionID, cfg.RequestedOutput, domain.NormalizeSessionMode(cfg.RequestedMode) == domain.SessionModeChat)
+	if cfg.Background && strings.TrimSpace(prompt) != "" {
+		prompt += "\n\n" + backgroundSessionNote(chat)
+	}
+	systemPrompt, err = m.buildSystemPrompt(ctx, cfg.Kind, cfg.ProjectID, sessionID, cfg.RequestedOutput, chat)
 	if err != nil {
 		return "", "", err
 	}
 	return prompt, systemPrompt, nil
+}
+
+// backgroundSessionNote tells an agent that runs out of sight how its session
+// ends. In chat AO sees each turn finish and closes the session itself. A
+// terminal gives AO no reliable done signal, so the agent ends it. A PR keeps
+// the session open; claiming it links it at once, before AO's next PR poll.
+func backgroundSessionNote(chat bool) string {
+	if chat {
+		return "AO runs this session in the background. When you are done, just stop: AO closes the session after your turn. " +
+			"If you open a pull request, attach it first with `ao session claim-pr <pr-url>`, so AO keeps the session open and shows it."
+	}
+	return "AO runs this session in the background and can't tell when you are done. " +
+		"If you opened a pull request, attach it with `ao session claim-pr <pr-url>` and leave the session running. " +
+		"Otherwise, when you finish, end the session with `ao session kill \"$AO_SESSION_ID\"`."
 }
 
 // buildSystemPrompt derives the standing instructions for a session of the

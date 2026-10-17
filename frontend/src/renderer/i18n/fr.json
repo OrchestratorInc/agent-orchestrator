@@ -2727,7 +2727,7 @@
 	"automations.description": "Des sessions qui s'exécutent selon un calendrier ou à la fin d'une session.",
 	"automations.dreaming.title": "Dreaming",
 	"automations.dreaming.name": "Dreaming",
-	"automations.dreaming.description": "Après chaque session, AO apprend de ce que vous avez saisi et met à jour ces instructions. Chaque nouvelle session démarre avec elles.",
+	"automations.dreaming.description": "Après chaque session, AO apprend de ce que vous avez saisi et de ce qui a fonctionné, et met à jour ces instructions. Chaque nouvelle session démarre avec elles.",
 	"automations.dreaming.toggle": "Dreaming dans tous les projets",
 	"automations.dreaming.partial": "Actif dans {{on}} projets sur {{total}}",
 	"automations.dreaming.switchError": "Impossible de modifier Dreaming.",

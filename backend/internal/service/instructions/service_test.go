@@ -99,7 +99,7 @@ func TestUserSavesAlwaysWinAndDreamsMustNameTheLatestRevision(t *testing.T) {
 	}
 }
 
-// Dreaming may add lines but never drop or reword what the user saved, and
+// Dreaming may add lines but never drop or reword what the user typed, and
 // it learns which lines people removed so it does not add them back.
 func TestDreamsKeepTheUsersLinesAndSeeWhatTheyRemoved(t *testing.T) {
 	f := newFixture(t)
@@ -126,11 +126,78 @@ func TestDreamsKeepTheUsersLinesAndSeeWhatTheyRemoved(t *testing.T) {
 	if want := []string{"Keep notes.py free of globals."}; !reflect.DeepEqual(trimmed.RemovedLines, want) {
 		t.Fatalf("removed lines = %q, want %q", trimmed.RemovedLines, want)
 	}
-	if want := []string{"Run python3 -m unittest, not make test.", "Notes are stored newest first."}; !reflect.DeepEqual(trimmed.ProtectedLines, want) {
+	// Keeping a dreamed line while deleting another doesn't make it the user's.
+	if want := []string{"Run python3 -m unittest, not make test."}; !reflect.DeepEqual(trimmed.ProtectedLines, want) {
 		t.Fatalf("protected lines = %q, want %q", trimmed.ProtectedLines, want)
 	}
 	if dreamed.Revision == trimmed.Revision {
 		t.Fatalf("user save did not add a revision")
+	}
+}
+
+// A dream keeps the instructions current by rewriting lines dreaming wrote,
+// even after the user saved around them, but a line the user typed or edited
+// is theirs from then on.
+func TestDreamsMayRewriteTheirOwnLinesButNotTheUsers(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	save := func(body string, dream bool, revision int64) (View, error) {
+		input := SaveInput{Body: body}
+		if dream {
+			input.SessionID, input.Revision = f.dream, rev(revision)
+		}
+		return f.svc.Save(ctx, f.project, input)
+	}
+	view, err := save("Use unittest.", false, 0)
+	if err != nil {
+		t.Fatalf("user save: %v", err)
+	}
+	if _, err = save("Use unittest.\nRun make test.", true, view.Revision); err != nil {
+		t.Fatalf("dream adds a line: %v", err)
+	}
+	if view, err = save("Use unittest.\nRun make test.\nKeep notes.py small.", false, 0); err != nil {
+		t.Fatalf("user adds a line: %v", err)
+	}
+	if want := []string{"Use unittest.", "Keep notes.py small."}; !reflect.DeepEqual(view.ProtectedLines, want) {
+		t.Fatalf("protected lines = %q, want %q", view.ProtectedLines, want)
+	}
+	if view, err = save("Use unittest.\nRun python3 -m unittest.\nKeep notes.py small.", true, view.Revision); err != nil {
+		t.Fatalf("dream rewrites its own line after a user save: %v", err)
+	}
+	if _, err := save("Use unittest.\nRun python3 -m unittest.", true, view.Revision); apiCode(err) != "INSTRUCTIONS_LINES_REMOVED" || !strings.Contains(err.Error(), "Keep notes.py small.") {
+		t.Fatalf("dream that drops the user's new line err = %v", err)
+	}
+	if view, err = save("Use unittest.\nRun python3 -m unittest -v.\nKeep notes.py small.", false, 0); err != nil {
+		t.Fatalf("user edits a dreamed line: %v", err)
+	}
+	if want := []string{"Use unittest.", "Run python3 -m unittest -v.", "Keep notes.py small."}; !reflect.DeepEqual(view.ProtectedLines, want) {
+		t.Fatalf("protected lines after the edit = %q, want %q", view.ProtectedLines, want)
+	}
+}
+
+// A dream reads the history to tell what earlier dreams learned and when, so
+// each edit must show who made it and which lines it added and removed.
+func TestHistoryShowsWhatEachEditAddedAndRemoved(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	first, err := f.svc.Save(ctx, "", SaveInput{Body: "Answer first."})
+	if err != nil {
+		t.Fatalf("user save: %v", err)
+	}
+	if _, err := f.svc.Save(ctx, "", SaveInput{Body: "Answer first.\nAsk before committing.", SessionID: f.dream, Revision: rev(first.Revision)}); err != nil {
+		t.Fatalf("dream save: %v", err)
+	}
+	view, err := f.svc.Save(ctx, "", SaveInput{Body: "Answer first, in one line.\nAsk before committing."})
+	if err != nil {
+		t.Fatalf("user edit: %v", err)
+	}
+	want := []Change{
+		{At: testNow, Added: []string{"Answer first."}, Removed: []string{}},
+		{At: testNow, Session: "Dreaming: Fix note ordering", Dreamed: true, Added: []string{"Ask before committing."}, Removed: []string{}},
+		{At: testNow, Added: []string{"Answer first, in one line."}, Removed: []string{"Answer first."}},
+	}
+	if !reflect.DeepEqual(view.History, want) {
+		t.Fatalf("history = %#v, want %#v", view.History, want)
 	}
 }
 

@@ -91,6 +91,12 @@ func instructionsResponse(view instructionssvc.View) InstructionsResponse {
 	if response.RemovedLines == nil {
 		response.RemovedLines = []string{}
 	}
+	response.History = make([]InstructionsChangeResponse, 0, len(view.History))
+	for _, change := range view.History {
+		response.History = append(response.History, InstructionsChangeResponse{
+			At: change.At, Session: change.Session, Dreamed: change.Dreamed, Added: change.Added, Removed: change.Removed,
+		})
+	}
 	if view.UpdatedBy != nil {
 		response.UpdatedBy = &InstructionsAuthorResponse{
 			SessionID: string(view.UpdatedBy.SessionID), Title: view.UpdatedBy.Title, Dreamed: view.UpdatedBy.Dreamed,

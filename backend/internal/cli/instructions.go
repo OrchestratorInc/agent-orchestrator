@@ -15,13 +15,22 @@ import (
 // These DTOs mirror the daemon's standing-instructions API without importing
 // controller types.
 type instructionsDTO struct {
-	ProjectID      string                 `json:"projectId,omitempty"`
-	Body           string                 `json:"body"`
-	Revision       int64                  `json:"revision"`
-	UpdatedAt      *time.Time             `json:"updatedAt,omitempty"`
-	UpdatedBy      *instructionsAuthorDTO `json:"updatedBy,omitempty"`
-	ProtectedLines []string               `json:"protectedLines"`
-	RemovedLines   []string               `json:"removedLines"`
+	ProjectID      string                  `json:"projectId,omitempty"`
+	Body           string                  `json:"body"`
+	Revision       int64                   `json:"revision"`
+	UpdatedAt      *time.Time              `json:"updatedAt,omitempty"`
+	UpdatedBy      *instructionsAuthorDTO  `json:"updatedBy,omitempty"`
+	ProtectedLines []string                `json:"protectedLines"`
+	RemovedLines   []string                `json:"removedLines"`
+	History        []instructionsChangeDTO `json:"history"`
+}
+
+type instructionsChangeDTO struct {
+	At      time.Time `json:"at"`
+	Session string    `json:"session,omitempty"`
+	Dreamed bool      `json:"dreamed"`
+	Added   []string  `json:"added"`
+	Removed []string  `json:"removed"`
 }
 
 type instructionsAuthorDTO struct {
@@ -65,8 +74,9 @@ func newInstructionsShowCommand(ctx *commandContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "show",
 		Short: "Print the instructions",
-		Long:  "Print the instructions. --json adds the revision to pass to `set --revision`, the lines a dreaming save must keep (protectedLines), and lines people deleted (removedLines).",
-		Args:  usageArgs(cobra.NoArgs),
+		Long: "Print the instructions. --json adds the revision to pass to `set --revision`, the lines the user typed or edited, which a dreaming save must keep (protectedLines), " +
+			"lines people deleted (removedLines), and the newest edits with the lines each added and removed (history).",
+		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			var response instructionsEnvelopeDTO
 			if err := ctx.getJSON(cmd.Context(), instructionsPath(project), &response); err != nil {

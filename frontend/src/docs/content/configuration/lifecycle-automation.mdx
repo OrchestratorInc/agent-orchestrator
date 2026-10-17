@@ -40,6 +40,8 @@ Automations run in the local daemon, so the computer must be awake and Orchestra
 
 An automation can also run **after a session ends** instead of on a schedule. Under **Runs**, choose **After a session ends**, or pass `--trigger session_ended` to `ao automation create`. It starts one new worker each time a worker in the project is archived, or ends because its PR merged. Archiving from the app, `ao session kill`, and an orchestrator all count. Daemon shutdowns, crashes, agent switches, and project removal do not start it. The new session's prompt ends with the ended session's ID, title, branch, PRs, task, and transcript path, so the agent can review what happened, for example to improve your skills or `AGENTS.md`. Reviews of different sessions can run at the same time. A session that such a run started never starts another one.
 
+A worker started this way runs in the background, so the session you ended doesn't seem to come back. It stays off the board, the sidebar and Archive until it opens a PR or needs you. With a chat agent, AO closes the worker when its turn ends without a PR. A terminal agent can't tell AO when it's done, so it ends the session itself. Open the worker from the automation's run history. An orchestrator started this way stays visible, because it coordinates workers over many turns.
+
 ### Dreaming and instructions
 
 **Instructions** are standing directions that Orchestrator adds to new sessions. There are two kinds, and both are edited at the top of the **Automations** page:
@@ -48,18 +50,19 @@ An automation can also run **after a session ends** instead of on a schedule. Un
 
 Each set is plain text, up to 8 KB. A session keeps the instructions it started with.
 
-**Dreaming** keeps instructions up to date. Turn it on with the **Dreaming** switch, which adds one dreaming automation to each project. After each session in that project ends, a dreaming agent reads what you typed in it after the opening task:
+**Dreaming** keeps instructions up to date. Turn it on with the **Dreaming** switch, which adds one dreaming automation to each project. After each worker in that project ends, a dreaming agent reads what you typed after the opening task, and which commands the agent ran and whether they passed:
 - What holds in any project, such as how you like answers or when to commit, goes into your instructions.
 - Facts about the repository, such as its test command, go into the project's.
 
-Dreaming changes only a few lines at a time:
-- It keeps every line you saved, word for word.
+Each dream treats the instructions as everything learned so far and keeps them true and short:
+- It merges duplicates, rewrites lines a newer session refined, and removes lines a newer session contradicted. It also checks the history of earlier dreams.
+- It never changes a line you typed or edited. If a session contradicts one of your lines, the dream says so in its summary instead.
 - It never adds back a line you deleted.
-- It learns only from what you typed, never from tool output, files or web pages.
+- It learns about you only from what you typed. From the agent's commands it learns only project facts, such as which test command passes. It never copies instructions from tool output, files or web pages.
 
 Under the box you can see when dreaming last changed the text. **View session** opens the dream that made the change, and **Undo** restores the text from before it. If you save while a dream is running, your text wins and the dream retries on top of it.
 
-Each dream runs as a standalone session, so it needs no worktree and runs no setup scripts. Within a project, dreams run one at a time. Sessions where you typed nothing after the opening task don't start a dream. That covers workers an orchestrator started and you never talked to. To change what dreaming looks for, or which agent runs it, edit the **Dreaming** automation in the list. Agents can read the instructions with `ao instructions show`, but only you and dreaming can change them. That way a hostile file or web page can't plant instructions in every later session.
+Each dream runs as a standalone session, so it needs no worktree and runs no setup scripts. It also runs in the background: it doesn't appear on the board, in the sidebar or in Archive, so the session you ended stays archived. Open a dream from **View session** under the box, or from the run history of the **Dreaming** automation. A dream appears in the sidebar only if it needs you, for example when it stops or waits for an answer. With a chat agent, AO closes the dream when its turn ends; a terminal agent ends the session itself. If the dream's last step fails, the **Dreaming** automation shows the error. Within a project, dreams run one at a time. Every ended worker starts a dream, including workers an orchestrator started and you never talked to; from those, a dream learns only project facts. To change what dreaming looks for, or which agent runs it, edit the **Dreaming** automation in the list. Agents can read the instructions with `ao instructions show`, but only you and dreaming can change them. That way a hostile file or web page can't plant instructions in every later session.
 
 To try an automation, create one in **Automations** with a short prompt and a schedule a few minutes ahead. Then open its run history and linked session. If it does not run, check the time zone, confirm the automation is enabled, and make sure Orchestrator stayed open and the computer stayed awake. Pause the automation before changing a schedule you are testing.
 

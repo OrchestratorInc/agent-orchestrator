@@ -121,6 +121,10 @@ func TestTickLaunchesSessionEndedRunsWithEndedSessionContext(t *testing.T) {
 	if first.DisplayName != "Session review: Fix login redirect" {
 		t.Fatalf("display name = %q", first.DisplayName)
 	}
+	// Out of sight, so ending a session doesn't seem to bring it back.
+	if !first.Background {
+		t.Fatalf("session-ended worker spawn is not a background session")
+	}
 	for _, want := range []string{
 		"Suggest improvements to our skills.",
 		"- Session: worker-1",
@@ -179,5 +183,25 @@ func TestSessionEndedTriggerValidation(t *testing.T) {
 	updated, err = svc.Update(ctx, created.ID, UpdateInput{Trigger: &sessionEnded})
 	if err != nil || updated.RRuleText != "" {
 		t.Fatalf("Update to session ended = %#v err=%v, want the rule cleared", updated, err)
+	}
+}
+
+// An orchestrator coordinates workers over many turns, so a session-ended
+// orchestrator stays visible; AO never closes it after one turn.
+func TestTickKeepsASessionEndedOrchestratorVisible(t *testing.T) {
+	now := time.Date(2026, time.October, 17, 9, 0, 0, 0, time.UTC)
+	store := sessionEndedStore()
+	review := store.automations["review"]
+	review.Kind = domain.KindOrchestrator
+	store.automations["review"] = review
+	ended := domain.SessionID("worker-1")
+	store.sessions[ended] = domain.SessionRecord{ID: ended, ProjectID: "app", Kind: domain.KindWorker}
+	store.runs["run-1"] = domain.AutomationRun{ID: "run-1", AutomationID: "review", ScheduledFor: now, TriggerSessionID: &ended, Status: domain.AutomationRunPending}
+	spawner := &recordingSpawner{store: store}
+	if err := New(Deps{Store: store, Spawner: spawner, Clock: func() time.Time { return now }}).Tick(context.Background(), now); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if len(spawner.calls) != 1 || spawner.calls[0].Background {
+		t.Fatalf("spawns = %#v, want one visible orchestrator", spawner.calls)
 	}
 }

@@ -163,6 +163,11 @@ func (s *Service) dispatch(ctx context.Context, store schedulerStore, run domain
 			}
 		} else {
 			spawn.Prompt, spawn.DisplayName = sessionEndedLaunch(ctx, store, transcripts, definition, *run.TriggerSessionID)
+			// A worker that runs because a session ended stays out of sight
+			// until it opens a PR or needs the user, so ending a session
+			// doesn't seem to bring it back. An orchestrator stays visible: it
+			// coordinates workers across many turns.
+			spawn.Background = definition.Kind == domain.KindWorker
 		}
 	}
 	session, _, _, spawnErr := s.spawner.Spawn(ctx, spawn)
@@ -278,6 +283,22 @@ func (s *Service) completeAndAdoptActive(ctx context.Context, store schedulerSto
 			if _, err := store.MarkAutomationRunRunning(ctx, run.ID, session.ID, now); err != nil {
 				problems = append(problems, err)
 			}
+		}
+		if done, failed := s.finishedBackgroundRun(ctx, store, run, session); done && s.spawner != nil {
+			if _, err := s.spawner.Kill(ctx, session.ID); err != nil {
+				problems = append(problems, fmt.Errorf("close finished background run %s: %w", session.ID, err))
+				continue
+			}
+			var markErr error
+			if failed {
+				_, markErr = store.FailAutomationRun(ctx, run.ID, errBackgroundRunStopped, now)
+			} else {
+				_, markErr = store.CompleteAutomationRun(ctx, run.ID, now)
+			}
+			if markErr != nil {
+				problems = append(problems, markErr)
+			}
+			continue
 		}
 		if session.IsTerminated {
 			if _, err := store.CompleteAutomationRun(ctx, run.ID, now); err != nil {

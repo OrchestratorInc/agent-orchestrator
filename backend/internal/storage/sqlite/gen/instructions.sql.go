@@ -24,8 +24,8 @@ func (q *Queries) CountSessionConversations(ctx context.Context, sessionID *doma
 }
 
 const insertInstructionRevision = `-- name: InsertInstructionRevision :execlastid
-INSERT INTO instruction_revisions (project_id, body, session_id, dreamed, created_at)
-VALUES (?, ?, ?, ?, ?)
+INSERT INTO instruction_revisions (project_id, body, session_id, dreamed, created_at, user_lines)
+VALUES (?, ?, ?, ?, ?, ?)
 `
 
 type InsertInstructionRevisionParams struct {
@@ -34,6 +34,7 @@ type InsertInstructionRevisionParams struct {
 	SessionID *domain.SessionID
 	Dreamed   bool
 	CreatedAt time.Time
+	UserLines string
 }
 
 func (q *Queries) InsertInstructionRevision(ctx context.Context, arg InsertInstructionRevisionParams) (int64, error) {
@@ -43,6 +44,7 @@ func (q *Queries) InsertInstructionRevision(ctx context.Context, arg InsertInstr
 		arg.SessionID,
 		arg.Dreamed,
 		arg.CreatedAt,
+		arg.UserLines,
 	)
 	if err != nil {
 		return 0, err
@@ -83,7 +85,7 @@ func (q *Queries) ListHumanMessagesForSession(ctx context.Context, sessionID *do
 }
 
 const listInstructionRevisions = `-- name: ListInstructionRevisions :many
-SELECT id, project_id, body, session_id, dreamed, created_at
+SELECT id, project_id, body, session_id, dreamed, created_at, user_lines
 FROM instruction_revisions
 WHERE COALESCE(project_id, '') = ?1
 ORDER BY id DESC
@@ -112,10 +114,88 @@ func (q *Queries) ListInstructionRevisions(ctx context.Context, arg ListInstruct
 			&i.SessionID,
 			&i.Dreamed,
 			&i.CreatedAt,
+			&i.UserLines,
 		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSessionCommands = `-- name: ListSessionCommands :many
+SELECT a.summary, a.status
+FROM conversation_activities AS a
+JOIN conversations AS c ON c.id = a.conversation_id
+WHERE c.session_id = ?1 AND a.kind = 'command'
+  AND a.status IN ('completed', 'failed') AND a.summary <> ''
+ORDER BY a.created_at DESC, a.sequence DESC
+LIMIT ?2
+`
+
+type ListSessionCommandsParams struct {
+	SessionID *domain.SessionID
+	RowLimit  int64
+}
+
+type ListSessionCommandsRow struct {
+	Summary string
+	Status  domain.ActivityStatus
+}
+
+// The newest commands the agent ran in a session's own conversations that
+// passed or failed, newest first.
+func (q *Queries) ListSessionCommands(ctx context.Context, arg ListSessionCommandsParams) ([]ListSessionCommandsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionCommands, arg.SessionID, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSessionCommandsRow{}
+	for rows.Next() {
+		var i ListSessionCommandsRow
+		if err := rows.Scan(&i.Summary, &i.Status); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSessionTurnStates = `-- name: ListSessionTurnStates :many
+SELECT t.state
+FROM conversation_turns AS t
+JOIN conversations AS c ON c.id = t.conversation_id
+WHERE c.session_id = ?
+ORDER BY t.requested_at, t.id
+`
+
+// The states of a session's own conversation turns, oldest first.
+func (q *Queries) ListSessionTurnStates(ctx context.Context, sessionID *domain.SessionID) ([]domain.TurnState, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionTurnStates, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []domain.TurnState{}
+	for rows.Next() {
+		var state domain.TurnState
+		if err := rows.Scan(&state); err != nil {
+			return nil, err
+		}
+		items = append(items, state)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -135,10 +215,6 @@ WHERE COALESCE(instruction_revisions.project_id, '') = ?1
       ORDER BY keep.id DESC
       LIMIT ?2
   )
-  AND id NOT IN (
-      SELECT MAX(saved.id) FROM instruction_revisions AS saved
-      WHERE COALESCE(saved.project_id, '') = ?1 AND saved.dreamed = 0
-  )
 `
 
 type PruneInstructionRevisionsParams struct {
@@ -146,8 +222,8 @@ type PruneInstructionRevisionsParams struct {
 	KeepCount  int64
 }
 
-// Keeps the newest keep_count revisions plus the newest one dreaming did not
-// write: it decides which lines dreaming must keep.
+// Keeps the newest keep_count revisions. Each revision carries the user's
+// lines itself, so older ones are only history.
 func (q *Queries) PruneInstructionRevisions(ctx context.Context, arg PruneInstructionRevisionsParams) error {
 	_, err := q.db.ExecContext(ctx, pruneInstructionRevisions, arg.ProjectKey, arg.KeepCount)
 	return err

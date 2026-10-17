@@ -37,10 +37,39 @@ func TestSeedRecordPreservesAutomationRunIdentity(t *testing.T) {
 	runID := domain.AutomationRunID("run-1")
 	rec := seedRecord(ports.SpawnConfig{
 		ProjectID: "scheduled", Kind: domain.KindWorker,
-		AutomationRunID: &runID,
+		AutomationRunID: &runID, Background: true,
 	}, domain.ProjectConfig{}, time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC))
 	if rec.AutomationRunID == nil || *rec.AutomationRunID != runID {
 		t.Fatalf("automation run id = %v, want %q", rec.AutomationRunID, runID)
+	}
+	// A dream's row must be created out of sight, not hidden after it appears.
+	if !rec.Background {
+		t.Fatalf("seed record dropped the background flag")
+	}
+}
+
+// An agent nobody watches must know how its session ends: in chat AO closes
+// it after the turn, while a terminal agent has to end it itself. Either way
+// it must attach a PR it opens, or AO could close the session before its PR
+// poll sees the PR.
+func TestBackgroundSpawnsTellTheAgentHowTheSessionEnds(t *testing.T) {
+	m, _, _, _ := newManager()
+	for mode, want := range map[domain.SessionMode]string{
+		domain.SessionModeChat: "AO closes the session after your turn",
+		domain.SessionModeTUI:  "end the session with `ao session kill \"$AO_SESSION_ID\"`",
+	} {
+		cfg := ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "Review it.", RequestedMode: mode, Background: true}
+		prompt, _, err := m.buildSpawnTexts(ctx, cfg, "mer-1")
+		if err != nil {
+			t.Fatalf("%s: buildSpawnTexts: %v", mode, err)
+		}
+		if !strings.Contains(prompt, "Review it.") || !strings.Contains(prompt, want) || !strings.Contains(prompt, "ao session claim-pr <pr-url>") {
+			t.Fatalf("%s background prompt = %q, want %q and the PR claim", mode, prompt, want)
+		}
+		cfg.Background = false
+		if prompt, _, _ := m.buildSpawnTexts(ctx, cfg, "mer-1"); strings.Contains(prompt, "in the background") {
+			t.Fatalf("%s visible prompt mentions the background: %q", mode, prompt)
+		}
 	}
 }
 

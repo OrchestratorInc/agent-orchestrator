@@ -2668,7 +2668,7 @@
 	"automations.description": "按计划或在会话结束后运行的会话。",
 	"automations.dreaming.title": "Dreaming",
 	"automations.dreaming.name": "Dreaming",
-	"automations.dreaming.description": "每个会话结束后，AO 会从你输入的内容中学习，并更新这些指令。每个新会话都会带上它们。",
+	"automations.dreaming.description": "每个会话结束后，AO 会从你输入的内容和行之有效的做法中学习，并更新这些指令。每个新会话都会带上它们。",
 	"automations.dreaming.toggle": "在所有项目中启用 Dreaming",
 	"automations.dreaming.partial": "已在 {{total}} 个项目中的 {{on}} 个启用",
 	"automations.dreaming.switchError": "无法更改 Dreaming。",

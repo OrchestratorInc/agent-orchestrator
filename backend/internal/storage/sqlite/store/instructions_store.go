@@ -3,16 +3,16 @@ package store
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
 // instructionRevisionsKept bounds the history of one set of instructions.
-// Undo needs only the previous revision; the rest lets dreaming see which
-// lines the user removed. The newest revision dreaming did not write is kept
-// beyond this bound.
-const instructionRevisionsKept = 20
+// Undo needs only the previous revision; the rest shows dreaming how the text
+// evolved and which lines people removed.
+const instructionRevisionsKept = 100
 
 // ListInstructionRevisions returns up to limit revisions of one set of
 // standing instructions, newest first. An empty projectID selects the user's
@@ -70,7 +70,7 @@ func (s *Store) SaveInstructionRevision(ctx context.Context, rev domain.Instruct
 		}
 		id, err := q.InsertInstructionRevision(ctx, gen.InsertInstructionRevisionParams{
 			ProjectID: projectID, Body: rev.Body, SessionID: rev.SessionID,
-			Dreamed: rev.Dreamed, CreatedAt: rev.CreatedAt,
+			Dreamed: rev.Dreamed, CreatedAt: rev.CreatedAt, UserLines: strings.Join(rev.UserLines, "\n"),
 		})
 		if err != nil {
 			return err
@@ -102,10 +102,39 @@ func (s *Store) HumanMessagesForSession(ctx context.Context, id domain.SessionID
 	return texts, true, nil
 }
 
+// SessionTurnStates returns the states of a session's own conversation turns,
+// oldest first. AO closes a dream once its turns have settled.
+func (s *Store) SessionTurnStates(ctx context.Context, id domain.SessionID) ([]domain.TurnState, error) {
+	states, err := s.qr.ListSessionTurnStates(ctx, &id)
+	if err != nil {
+		return nil, fmt.Errorf("list turn states for %s: %w", id, err)
+	}
+	return states, nil
+}
+
+// SessionCommands returns up to limit of the newest commands the agent ran in
+// a session's own conversations that passed or failed, newest first.
+func (s *Store) SessionCommands(ctx context.Context, id domain.SessionID, limit int) ([]domain.SessionCommand, error) {
+	rows, err := s.qr.ListSessionCommands(ctx, gen.ListSessionCommandsParams{SessionID: &id, RowLimit: int64(limit)})
+	if err != nil {
+		return nil, fmt.Errorf("list commands for %s: %w", id, err)
+	}
+	out := make([]domain.SessionCommand, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.SessionCommand{Command: row.Summary, Failed: row.Status == domain.ActivityStatusFailed})
+	}
+	return out, nil
+}
+
 func instructionRevisionFromGen(row gen.InstructionRevision) domain.InstructionsRevision {
 	rev := domain.InstructionsRevision{
 		ID: row.ID, Body: row.Body, SessionID: row.SessionID,
 		Dreamed: row.Dreamed, CreatedAt: row.CreatedAt,
+	}
+	for line := range strings.SplitSeq(row.UserLines, "\n") {
+		if line != "" {
+			rev.UserLines = append(rev.UserLines, line)
+		}
 	}
 	if row.ProjectID != nil {
 		rev.ProjectID = *row.ProjectID

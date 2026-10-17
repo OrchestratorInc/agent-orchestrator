@@ -2727,7 +2727,7 @@
 	"automations.description": "Sessões que rodam por agendamento ou quando uma sessão termina.",
 	"automations.dreaming.title": "Dreaming",
 	"automations.dreaming.name": "Dreaming",
-	"automations.dreaming.description": "Depois de cada sessão, o AO aprende com o que você digitou e atualiza estas instruções. Toda sessão nova começa com elas.",
+	"automations.dreaming.description": "Depois de cada sessão, o AO aprende com o que você digitou e com o que funcionou, e atualiza estas instruções. Toda sessão nova começa com elas.",
 	"automations.dreaming.toggle": "Dreaming em todos os projetos",
 	"automations.dreaming.partial": "Ativo em {{on}} de {{total}} projetos",
 	"automations.dreaming.switchError": "Não foi possível mudar o Dreaming.",

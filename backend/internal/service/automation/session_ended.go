@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -59,13 +58,7 @@ func (s *Service) SessionEnded(ctx context.Context, id domain.SessionID) (bool, 
 	now := s.clock().UTC()
 	queued := false
 	var problems []error
-	// Dreaming learns from what the user typed, so a session they never
-	// typed in has nothing to teach it.
-	learnable := !slices.ContainsFunc(definitions, isDreaming) || userTyped(ctx, store, id)
 	for _, definition := range definitions {
-		if isDreaming(definition) && !learnable {
-			continue
-		}
 		created, err := store.CreateTriggeredAutomationRun(ctx, domain.AutomationRun{
 			ID: domain.AutomationRunID("automation-run-" + s.newID()), AutomationID: definition.ID,
 			ScheduledFor: now, TriggerSessionID: &id, Status: domain.AutomationRunPending,
@@ -77,10 +70,6 @@ func (s *Service) SessionEnded(ctx context.Context, id domain.SessionID) (bool, 
 		queued = queued || created
 	}
 	return queued, errors.Join(problems...)
-}
-
-func isDreaming(definition domain.Automation) bool {
-	return definition.Purpose == domain.AutomationPurposeDreaming
 }
 
 // transcriptLocator is the optional session-service lookup for an ended

@@ -2091,6 +2091,17 @@ type SaveInstructionsRequest struct {
 	SessionID string `json:"sessionId,omitempty"`
 }
 
+// InstructionsChangeResponse is one saved edit to a set of instructions.
+type InstructionsChangeResponse struct {
+	At time.Time `json:"at"`
+	// Session titles the AO session that saved the edit, such as a dream;
+	// absent when the user saved it.
+	Session string   `json:"session,omitempty"`
+	Dreamed bool     `json:"dreamed"`
+	Added   []string `json:"added"`
+	Removed []string `json:"removed"`
+}
+
 // InstructionsAuthorResponse is the AO session that saved a revision.
 type InstructionsAuthorResponse struct {
 	SessionID string `json:"sessionId,omitempty"`
@@ -2109,10 +2120,13 @@ type InstructionsResponse struct {
 	UpdatedBy *InstructionsAuthorResponse `json:"updatedBy,omitempty"`
 	// PreviousBody is the revision before the latest, which undo restores.
 	PreviousBody *string `json:"previousBody,omitempty"`
-	// ProtectedLines are the lines a dreaming save must keep.
+	// ProtectedLines are the lines the user typed or edited. A dreaming save
+	// must keep them; it may rewrite every other line.
 	ProtectedLines []string `json:"protectedLines"`
 	// RemovedLines are lines people deleted; dreaming must not add them back.
 	RemovedLines []string `json:"removedLines"`
+	// History is the newest edits, oldest first.
+	History []InstructionsChangeResponse `json:"history"`
 }
 
 // InstructionsEnvelope wraps one set of standing instructions.

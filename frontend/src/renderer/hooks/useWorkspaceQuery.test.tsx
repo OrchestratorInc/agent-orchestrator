@@ -429,6 +429,53 @@ describe("useWorkspaceQuery", () => {
 		});
 	});
 
+	it("keeps a running dream from making the Scratchpad appear", async () => {
+		const dream = {
+			id: "standalone-2",
+			displayName: "Dreaming: Fix note ordering",
+			harness: "claude-code",
+			status: "working",
+			isTerminated: false,
+			background: true,
+			updatedAt: "2026-10-17T09:00:00Z",
+		};
+		respondWith({
+			projects: { data: { projects: [{ id: "proj-1", name: "my-app", path: "/p" }] }, error: undefined },
+			sessions: { data: { sessions: [dream] }, error: undefined },
+		});
+
+		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+		expect(result.current.data?.map((workspace) => workspace.id)).toEqual(["proj-1"]);
+	});
+
+	it("shows the Scratchpad for a dream that needs the user", async () => {
+		respondWith({
+			projects: { data: { projects: [] }, error: undefined },
+			sessions: {
+				data: {
+					sessions: [{
+						id: "standalone-2",
+						displayName: "Dreaming: Fix note ordering",
+						harness: "claude-code",
+						status: "needs_input",
+						isTerminated: false,
+						background: true,
+						updatedAt: "2026-10-17T09:00:00Z",
+					}],
+				},
+				error: undefined,
+			},
+		});
+
+		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+		expect(result.current.data?.map((workspace) => workspace.id)).toEqual(["__standalone__"]);
+		expect(result.current.data?.[0].sessions[0]).toMatchObject({ id: "standalone-2", background: true, status: "needs_input" });
+	});
+
 	it("localizes the standalone workspace name", async () => {
 		await appI18n.changeLanguage("zh-CN");
 		respondWith({

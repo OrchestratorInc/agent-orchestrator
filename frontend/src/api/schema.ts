@@ -4426,6 +4426,7 @@ export interface components {
             autoInjectCI: boolean;
             autoInjectReview: boolean;
             autoReviewEnabled: boolean;
+            background?: boolean;
             branch?: string;
             branchState?: components["schemas"]["SessionBranchState"];
             chatProviderPreserved: boolean;
@@ -5110,11 +5111,20 @@ export interface components {
             sessionId?: string;
             title?: string;
         };
+        InstructionsChangeResponse: {
+            added: string[];
+            /** Format: date-time */
+            at: string;
+            dreamed: boolean;
+            removed: string[];
+            session?: string;
+        };
         InstructionsEnvelope: {
             instructions: components["schemas"]["InstructionsResponse"];
         };
         InstructionsResponse: {
             body: string;
+            history: components["schemas"]["InstructionsChangeResponse"][];
             previousBody?: null | string;
             projectId?: string;
             protectedLines: string[];

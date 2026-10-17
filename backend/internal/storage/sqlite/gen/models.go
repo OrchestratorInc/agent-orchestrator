@@ -407,6 +407,7 @@ type InstructionRevision struct {
 	SessionID *domain.SessionID
 	Dreamed   bool
 	CreatedAt time.Time
+	UserLines string
 }
 
 type ModelUsageEvent struct {
@@ -704,6 +705,7 @@ type Session struct {
 	HibernatedAt                     sql.NullTime
 	BranchState                      string
 	RequestedOutput                  string
+	Background                       bool
 }
 
 type SessionArtifactVersion struct {

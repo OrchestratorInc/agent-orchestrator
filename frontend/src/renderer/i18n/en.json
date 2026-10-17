@@ -2669,7 +2669,7 @@
 	"automations.description": "Sessions that run on a schedule or after a session ends.",
 	"automations.dreaming.title": "Dreaming",
 	"automations.dreaming.name": "Dreaming",
-	"automations.dreaming.description": "After each session, AO learns from what you typed and updates these instructions. Every new session starts with them.",
+	"automations.dreaming.description": "After each session, AO learns from what you typed and what worked, and updates these instructions. Every new session starts with them.",
 	"automations.dreaming.toggle": "Dreaming in every project",
 	"automations.dreaming.partial": "On in {{on}} of {{total}} projects",
 	"automations.dreaming.switchError": "Could not change dreaming.",

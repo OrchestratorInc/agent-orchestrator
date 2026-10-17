@@ -9,8 +9,9 @@ ao instructions set --file <path|-> [--project <id>] [--revision <n>] [--json]
 
 Without `--project`, both commands use the user's own instructions. `show` prints the text. `show --json` also prints:
 - `revision`, to pass to `set --revision`;
-- `protectedLines`, the lines a dreaming save must keep;
-- `removedLines`, lines people deleted.
+- `protectedLines`, the lines the user typed or edited, which a dreaming save must keep (dreaming may rewrite every other line);
+- `removedLines`, lines people deleted;
+- `history`, the newest edits, oldest first: when, which session saved each one, and which lines it added and removed.
 
 `set` replaces the whole text with the file's contents; `-` reads stdin. With `--revision`, the save fails if someone saved since that revision.
 

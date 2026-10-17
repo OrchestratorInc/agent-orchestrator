@@ -2686,7 +2686,7 @@
 	"automations.description": "スケジュールまたはセッション終了後に実行されるセッション。",
 	"automations.dreaming.title": "Dreaming",
 	"automations.dreaming.name": "Dreaming",
-	"automations.dreaming.description": "各セッションの後、AO は入力内容から学習し、この指示を更新します。新しいセッションはすべてこの指示から始まります。",
+	"automations.dreaming.description": "各セッションの後、AO は入力内容とうまくいった方法から学習し、この指示を更新します。新しいセッションはすべてこの指示から始まります。",
 	"automations.dreaming.toggle": "すべてのプロジェクトで Dreaming",
 	"automations.dreaming.partial": "{{total}} 件中 {{on}} 件のプロジェクトでオン",
 	"automations.dreaming.switchError": "Dreaming を変更できませんでした。",

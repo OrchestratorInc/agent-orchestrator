@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,27 +64,31 @@ func TestInstructionRevisionsKeepScopesApartAndCheckTheRevision(t *testing.T) {
 }
 
 // History must stay bounded: every dream adds a revision, so unbounded rows
-// would grow the database for as long as dreaming runs. The user's newest
-// save must survive, or dreaming could drop the lines it protects.
-func TestInstructionRevisionsKeepTheNewestTwenty(t *testing.T) {
+// would grow the database for as long as dreaming runs. Each revision carries
+// the user's lines, so the newest one still protects them after pruning.
+func TestInstructionRevisionsKeepTheNewestHundred(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 	at := time.Date(2026, time.October, 17, 9, 0, 0, 0, time.UTC)
-	if _, _, err := store.SaveInstructionRevision(ctx, domain.InstructionsRevision{Body: "Saved by the user.", CreatedAt: at}, nil); err != nil {
+	mine := []string{"Saved by the user.", "Also mine."}
+	if _, _, err := store.SaveInstructionRevision(ctx, domain.InstructionsRevision{Body: "Saved by the user.\nAlso mine.", UserLines: mine, CreatedAt: at}, nil); err != nil {
 		t.Fatalf("save user revision: %v", err)
 	}
-	for i := range 25 {
-		if _, _, err := store.SaveInstructionRevision(ctx, domain.InstructionsRevision{Body: fmt.Sprintf("Rule %d.", i), Dreamed: true, CreatedAt: at}, nil); err != nil {
+	for i := range 105 {
+		body := fmt.Sprintf("Saved by the user.\nAlso mine.\nRule %d.", i)
+		if _, _, err := store.SaveInstructionRevision(ctx, domain.InstructionsRevision{Body: body, UserLines: mine, Dreamed: true, CreatedAt: at}, nil); err != nil {
 			t.Fatalf("save %d: %v", i, err)
 		}
 	}
-	revisions, err := store.ListInstructionRevisions(ctx, "", 100)
+	revisions, err := store.ListInstructionRevisions(ctx, "", 200)
 	if err != nil {
 		t.Fatalf("ListInstructionRevisions: %v", err)
 	}
-	// The user's revision survives 25 dreams: it decides what dreaming keeps.
-	if len(revisions) != 21 || revisions[0].Body != "Rule 24." || revisions[19].Body != "Rule 5." || revisions[20].Body != "Saved by the user." {
+	if len(revisions) != 100 || !strings.HasSuffix(revisions[0].Body, "Rule 104.") || !strings.HasSuffix(revisions[99].Body, "Rule 5.") {
 		t.Fatalf("kept %d revisions, newest %q oldest %q", len(revisions), revisions[0].Body, revisions[len(revisions)-1].Body)
+	}
+	if !reflect.DeepEqual(revisions[0].UserLines, mine) {
+		t.Fatalf("user lines = %q, want %q", revisions[0].UserLines, mine)
 	}
 }
 
@@ -116,5 +121,71 @@ func TestHumanMessagesForSessionReturnsOnlyWhatTheUserTyped(t *testing.T) {
 	}
 	if _, found, err := store.HumanMessagesForSession(ctx, "terminal-only"); err != nil || found {
 		t.Fatalf("session without a conversation found=%v err=%v", found, err)
+	}
+}
+
+// A dream is created as a background session and must read back as one, from
+// a single lookup and from the full list the desktop polls.
+func TestBackgroundSessionsRoundTrip(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	rec := sampleRecord("")
+	rec.Background = true
+	created, err := store.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	got, ok, err := store.GetSession(ctx, created.ID)
+	if err != nil || !ok || !got.Background {
+		t.Fatalf("GetSession background=%v ok=%v err=%v", got.Background, ok, err)
+	}
+	all, err := store.ListAllSessions(ctx)
+	if err != nil {
+		t.Fatalf("ListAllSessions: %v", err)
+	}
+	for _, session := range all {
+		if session.ID == created.ID && !session.Background {
+			t.Fatalf("listed session lost its background flag")
+		}
+	}
+}
+
+// A dream learns verified project facts from the commands the agent ran: each
+// command that passed or failed, newest first, never one still running.
+func TestSessionCommandsReportFinishedCommandsNewestFirst(t *testing.T) {
+	store, session, conversation := seededChatConversation(t)
+	ctx := context.Background()
+	for i, activity := range []domain.ConversationActivity{
+		{ID: "a1", Kind: domain.ActivityKindCommand, Status: domain.ActivityStatusFailed, Summary: "make test", ProviderItemID: "item-1"},
+		{ID: "a2", Kind: domain.ActivityKindCommand, Status: domain.ActivityStatusCompleted, Summary: "python3 -m unittest", ProviderItemID: "item-2"},
+		{ID: "a3", Kind: domain.ActivityKindCommand, Status: domain.ActivityStatusRunning, Summary: "sleep 100", ProviderItemID: "item-3"},
+		{ID: "a4", Kind: domain.ActivityKindPlan, Status: domain.ActivityStatusCompleted, Summary: "Plan the fix", ProviderItemID: "item-4"},
+	} {
+		if err := store.UpsertActivity(ctx, conversation.ID, "", activity, testNow.Add(time.Duration(i)*time.Second)); err != nil {
+			t.Fatalf("upsert %s: %v", activity.ID, err)
+		}
+	}
+	commands, err := store.SessionCommands(ctx, session.ID, 10)
+	if err != nil {
+		t.Fatalf("SessionCommands: %v", err)
+	}
+	want := []domain.SessionCommand{{Command: "python3 -m unittest"}, {Command: "make test", Failed: true}}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+}
+
+// AO closes a dream once its turns settle, so the store must report each turn
+// of the session's own conversation, oldest first.
+func TestSessionTurnStatesReportsTheConversationsTurns(t *testing.T) {
+	store, session, conversation := seededChatConversation(t)
+	ctx := context.Background()
+	if states, err := store.SessionTurnStates(ctx, session.ID); err != nil || len(states) != 0 {
+		t.Fatalf("turn states before any turn = %v, %v", states, err)
+	}
+	seedTurn(t, store, conversation.ID, session.ID, "turn-1", "Learn from it.", testNow)
+	states, err := store.SessionTurnStates(ctx, session.ID)
+	if err != nil || !reflect.DeepEqual(states, []domain.TurnState{domain.TurnStateCompleted}) {
+		t.Fatalf("turn states = %v, %v; want one completed turn", states, err)
 	}
 }
