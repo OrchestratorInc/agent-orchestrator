@@ -22,7 +22,10 @@ import {
 } from "../../hooks/useAgentSwitches";
 import { useObservedAgentSwitchLifecycle } from "../../hooks/useObservedAgentSwitchLifecycle";
 import { useAgentSwitchPresentationVisibility, useAgentSwitchRouteVisibility } from "../../hooks/useAgentSwitchVisibility";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiClient, apiErrorMessage } from "../../lib/api-client";
+import { forgetLaunchSettings, forgetOpeningStart, LaunchSettingsBar, launchSettingsFor, openingStartFor } from "./LaunchSettingsBar";
+import { rememberChatSettingsTemplate, rememberChatSkills } from "../../lib/chat-settings-template";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
 import { useOfferedModels } from "../../hooks/useOfferedModels";
 import { useSwitchAgentState } from "../../hooks/useSwitchAgent";
@@ -214,6 +217,26 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
 	const commands = useConversationCommands(session.id, hostId);
+	// Set only when this task was started from the new chat page.
+	const queryClient = useQueryClient();
+	// Whether the project has a setup script, so a start lists that step only when it
+	// runs something. Remote and cloud projects are not read here and keep the step.
+	const plansSetup = Boolean(session.provisionSteps?.some((step) => step.id === "setup"));
+	const projectScripts = useQuery({
+		queryKey: ["project", session.workspaceId],
+		enabled: plansSetup && !hostId && !session.cloud,
+		staleTime: 30_000,
+		queryFn: async () => {
+			const { data, error } = await apiClient.GET("/api/v1/projects/{id}", { params: { path: { id: session.workspaceId } } });
+			if (error) throw new Error(apiErrorMessage(error));
+			return data?.status === "ok" ? data.project : undefined;
+		},
+	});
+	const projectConfig = projectScripts.data && "config" in projectScripts.data ? projectScripts.data.config : undefined;
+	const showSetupStep = Boolean(hostId || session.cloud) || !projectScripts.isSuccess ||
+		(projectConfig?.postCreate ?? []).some((command: string) => command.trim() !== "");
+	const launchSettings = launchSettingsFor(queryClient, session.id, hostId);
+	const openingStartedAt = openingStartFor(queryClient, session.id, hostId);
 	const projectPermissions = useRememberProjectPermissions(session.workspaceId, snapshot?.harness, hostId);
 	const {
 		acknowledgeAcceptedTurn,
@@ -247,7 +270,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		);
 		const queuedTurnIds = new Set(snapshot.turns.filter((turn) => turn.state === "queued").map((turn) => turn.id));
 		for (const echo of localEchos) {
-			if (
+			if (echo.opening && durableHumanTurnIds.size > 0) acknowledgeLocalEcho?.(undefined, echo.clientMessageId);
+			else if (
 				echo.turnId && durableHumanTurnIds.has(echo.turnId) &&
 				!(echo.backgroundWake && queuedTurnIds.has(echo.turnId))
 			) acknowledgeLocalEcho?.(echo.turnId);
@@ -361,6 +385,14 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// Suppress native controls only for dimensions the provider catalog replaces;
 	// a model-only catalog must not hide the Approvals control.
 	const providerOptions = configOptions.options ?? [];
+	// Keep this agent's settings so the new chat page can draw the very bar a
+	// session of it will show, before that session exists.
+	// Keyed by the raw harness: the provider label folds unknown harnesses into one.
+	const templateHarness = snapshot?.harness;
+	useEffect(() => {
+		if (session.kind !== "worker" || !templateHarness || !configOptions.loaded || providerOptions.length === 0) return;
+		rememberChatSettingsTemplate(templateHarness, hostId, { options: providerOptions });
+	}, [configOptions.loaded, hostId, providerOptions, session.kind, templateHarness]);
 	const hasProviderMode = hasProviderPermissionMode(providerOptions);
 	const hasProviderModel = providerOptions.some(
 		(option) => option.category === "model" || option.id === "model",
@@ -423,6 +455,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot),
 		hostId,
 	);
+	// A new chat of this agent offers these "/" skills before its own session runs.
+	const skillsHarness = snapshot?.harness;
+	useEffect(() => {
+		if (session.kind !== "worker" || !skillsHarness || skills.length === 0) return;
+		rememberChatSkills(skillsHarness, hostId, skills);
+	}, [hostId, session.kind, skills, skillsHarness]);
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot), hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
 	const [annotationNavigationRequest, setAnnotationNavigationRequest] = useState<{ id: string; text: string; messageId?: string; revision?: number }>();
@@ -550,7 +588,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// arrival, even over a cached transcript, so history appears once and fades
 	// in instead of flashing, hiding, and reappearing as the controller restarts.
 	const optimisticArrival = Boolean(arriving) && !renderShellFallback;
-	const optimisticChat = (session.kind === "orchestrator" && isLoading && !renderShellFallback) || optimisticArrival;
+	// A task started from the new chat page already shows its brief, so its first
+	// read keeps that frame instead of flashing a loading state.
+	const openingSend = localEchos.some((echo) => echo.opening);
+	const optimisticChat = ((session.kind === "orchestrator" || openingSend) && isLoading && !renderShellFallback) || optimisticArrival;
 	const continueIntent = useRef<{ turnId: string; clientMessageId: string; sequence: number } | null>(null);
 	const renderSnapshot =
 		(optimisticArrival
@@ -591,6 +632,19 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				!workspaceFileActive,
 		),
 	});
+
+	const settingsReady = Boolean(renderSnapshot) && !optimisticChat && (targetChatControllerReady || agentResuming) &&
+		(!renderSnapshot || !can(renderSnapshot, "config_options") || configOptions.loaded);
+	// The session's own settings have taken over; a later restart must not bring the launch chips back.
+	useEffect(() => {
+		if (settingsReady && launchSettings) forgetLaunchSettings(queryClient, session.id, hostId);
+	}, [hostId, launchSettings, queryClient, session.id, settingsReady]);
+	// Once the opening brief's turn has settled the chat is an ordinary one; a later
+	// Undo of that turn must not bring the start-up state back.
+	const openingSettled = Boolean(snapshot?.turns[0] && snapshot.turns[0].state !== "queued" && snapshot.turns[0].state !== "running");
+	useEffect(() => {
+		if (openingStartedAt && openingSettled) forgetOpeningStart(queryClient, session.id, hostId);
+	}, [hostId, openingSettled, openingStartedAt, queryClient, session.id]);
 
 	if (isLoading && !renderShellFallback && !optimisticChat) {
 		return (
@@ -636,6 +690,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			{refreshError ? <p role="alert" className="px-4 py-2 text-xs text-destructive">{refreshError}</p> : null}
 			{sideChatContainer ? createPortal(sideChats.panel, sideChatContainer) : null}
 			<ChatWorkspace
+				showSetupStep={showSetupStep}
 				onAddToSideChat={sideEnabled && (sideChats.activeId || sideCreationEnabled) ? attachToSide : undefined}
 				annotationNavigationRequest={annotationNavigationRequest}
 				key={uiSessionId}
@@ -732,7 +787,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onOpenShell={onOpenShell}
 				openingShell={openingShell}
 				shellError={shellError}
-				settingsReady={!optimisticChat && (targetChatControllerReady || agentResuming) && (!can(renderSnapshot, "config_options") || configOptions.loaded)}
+				settingsReady={settingsReady}
+				openingStartedAt={openingStartedAt}
+				// A task started from the new chat page keeps its chips until these are ready.
+				draftSettings={!settingsReady && launchSettings ? <LaunchSettingsBar {...launchSettings} /> : undefined}
 				models={models}
 				onChooseSettings={hasProviderMode ? undefined : commands.chooseSettings}
 				onRememberPermissions={can(renderSnapshot, "config_options") && !configOptions.loaded

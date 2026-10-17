@@ -1,6 +1,8 @@
 package claudecode
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -65,5 +67,18 @@ func TestAuthCacheDoesNotStoreResultsWithoutAStableFingerprint(t *testing.T) {
 	cache.put(agentcreds.Result{State: agentcreds.StateInvalid, Provider: agentcreds.ProviderFirstParty})
 	if cache.entry != nil {
 		t.Fatal("a result without a credential fingerprint must not be cached")
+	}
+}
+
+func TestAuthCacheDoesNotStoreAProbeItsCallerCanceled(t *testing.T) {
+	cache := newAuthCache(time.Minute)
+	credential := agentcreds.Credential{Kind: agentcreds.KindAPIKey, Secret: "working"}
+	canceled := fmt.Errorf("Get \"https://api.anthropic.com/v1/models\": %w", context.Canceled)
+	cache.put(agentcreds.Result{
+		State: agentcreds.StateUnknown, Provider: agentcreds.ProviderFirstParty,
+		Fingerprint: credential.Fingerprint(), Err: canceled,
+	})
+	if _, ok := cache.get(credential.Fingerprint(), agentcreds.ProviderFirstParty); ok {
+		t.Fatal("an abandoned probe must not answer later callers")
 	}
 }

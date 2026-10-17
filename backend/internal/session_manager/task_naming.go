@@ -143,8 +143,15 @@ func (m *Manager) nameTaskWorkspace(ctx context.Context, rec domain.SessionRecor
 	if project != nil {
 		info = *project
 	}
+	// The path being renamed is ws.Path. A prepared worktree can publish it after
+	// the caller read rec (a send while preparation is still running), so an empty
+	// recorded path must not stand in for it.
+	expectedPath := rec.Metadata.WorkspacePath
+	if expectedPath == "" {
+		expectedPath = ws.Path
+	}
 	info, namingErr := namer.NameTaskWorkspace(ctx, info, aoBranch(generatedBranchNamespace(m.dataDir), name.Slug, "root"), name.Slug)
-	persistErr := m.persistTaskWorkspace(ctx, rec.ID, info, rec.Metadata.WorkspacePath)
+	persistErr := m.persistTaskWorkspace(ctx, rec.ID, info, expectedPath)
 	if namingErr == nil && persistErr == nil {
 		persistErr = m.completeNamedWorktree(ctx, info)
 	}

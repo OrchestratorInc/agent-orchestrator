@@ -1850,13 +1850,12 @@ describe("ChatWorkspace timeline", () => {
 			["worktree", "done"],
 			["agent", "running"],
 		]);
-		expect(steps[1]).toHaveTextContent("Create worktree");
-		expect(steps[1]).toHaveTextContent("ao/mer-1");
-		expect(steps[2]).toHaveTextContent("Start Codex");
+		expect(within(steps[1]).getByText("Workspace created")).toBeInTheDocument();
+		expect(within(steps[2]).getByText("Getting Codex ready")).toBeInTheDocument();
 		expect(screen.getByText("Fix clicking attachments")).toBeInTheDocument();
 		expect(screen.queryByText("Queued · sends when the agent finishes")).not.toBeInTheDocument();
 		expect(screen.queryByTestId("queued-message-dock")).not.toBeInTheDocument();
-		expect(screen.getByText("Codex is starting. Messages send in order")).toBeInTheDocument();
+		expect(screen.getByText("Queue a follow-up while Codex gets ready")).toBeInTheDocument();
 		expect(screen.queryByText(/^Working for /)).not.toBeInTheDocument();
 		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
@@ -1872,7 +1871,7 @@ describe("ChatWorkspace timeline", () => {
 				onResumeAgent={vi.fn()}
 			/>,
 		);
-		expect(screen.getByText("Codex 正在启动. 消息将按顺序发送")).toBeInTheDocument();
+		expect(screen.getByText("Codex 准备期间可先排队发送消息")).toBeInTheDocument();
 	});
 
 	// The checklist keeps the working slot until the agent is up and its first
@@ -1942,7 +1941,7 @@ describe("ChatWorkspace timeline", () => {
 		);
 		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Setting up session$/);
 		expect(screen.getByTestId("session-startup")).toBeInTheDocument();
-		expect(within(screen.getByTestId("session-startup")).getByRole("status")).toHaveClass("chat-working-shimmer");
+		expect(within(screen.getByTestId("session-startup")).getByText("Preparing your workspace")).toHaveClass("chat-working-shimmer");
 		expect(screen.queryByText("ao/mer-1/root")).not.toBeInTheDocument();
 	});
 
@@ -2008,9 +2007,10 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText("Describe the page or document you want")).toBeInTheDocument();
 		const prompts = within(screen.getByRole("list", { name: "Sample artifact requests" })).getAllByRole("button");
 		expect(prompts.map((prompt) => prompt.textContent)).toEqual([
-			"Write a one-page plan for a new feature",
-			"Build an HTML page comparing three options side by side",
-			"Turn my rough notes into a polished Markdown document",
+			"Write a plan",
+			"Compare options",
+			"Polish my notes",
+			"Make slides",
 		]);
 
 		await user.click(prompts[1]);
@@ -2027,9 +2027,10 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByRole("list", { name: "Sample artifact requests" })).not.toBeInTheDocument();
 		const prompts = within(screen.getByRole("list", { name: "Sample requests" })).getAllByRole("button");
 		expect(prompts.map((prompt) => prompt.textContent)).toEqual([
-			"Review my recent changes for bugs",
-			"Add tests for the code I am working on",
-			"Walk me through how a request flows through this code",
+			"Review my changes",
+			"Add tests",
+			"Trace a request",
+			"Simplify my code",
 		]);
 
 		await user.click(prompts[0]);

@@ -127,6 +127,32 @@ func TestTaskNamingRetainsJournalUntilWorktreeProgressIsSaved(t *testing.T) {
 	}
 }
 
+// A send while the prepared worktree is still being created reads the session
+// before preparation publishes its path; naming must still rename that worktree.
+func TestTaskNamingAcceptsPathPublishedAfterRead(t *testing.T) {
+	m, st, ws, _ := newGitTaskPreparationManager(t)
+	m.dataDir = t.TempDir()
+	rec, err := st.CreateSession(t.Context(), domain.SessionRecord{ProjectID: "mer", Kind: domain.KindWorker, ProvisionState: domain.SessionProvisionProvisioning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := ws.Create(t.Context(), ports.WorkspaceConfig{ProjectID: "mer", SessionID: rec.ID, Branch: "ao/mer-1/root", BaseBranch: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published := st.sessions[rec.ID]
+	published.Metadata.WorkspacePath = root.Path
+	st.sessions[rec.ID] = published
+
+	moved, _, err := m.nameTaskWorkspace(t.Context(), rec, root, nil, generatedTaskName{Slug: "login-redirect"})
+	if err != nil {
+		t.Fatalf("naming refused a path published after the read: %v", err)
+	}
+	if got := st.sessions[rec.ID].Metadata.WorkspacePath; got != moved.Path || moved.Path == root.Path {
+		t.Fatalf("workspace path = %q, want renamed %q", got, moved.Path)
+	}
+}
+
 func (l *taskNamingLauncher) RunBackgroundTask(ctx context.Context, harness domain.AgentHarness, cfg ports.ChatStartConfig, prompt string) (string, error) {
 	l.background = append(l.background, cfg)
 	l.backgroundHarnesses = append(l.backgroundHarnesses, harness)

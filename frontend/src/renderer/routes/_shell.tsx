@@ -1,7 +1,7 @@
 import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
 import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
-import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNavigate, useParams, useRouter } from "@tanstack/react-router";
+import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
 import { isCancelledError, useQueryClient } from "@tanstack/react-query";
 import { lazy, memo, Suspense, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderPlus } from "lucide-react";
@@ -13,7 +13,7 @@ import { DaemonStartupLoader } from "../components/DaemonStartupLoader";
 import { NotificationRuntime } from "../components/NotificationCenter";
 import { HarnessUpdateNotice } from "../components/HarnessUpdateNotice";
 import { TrayRuntime } from "../components/TrayRuntime";
-import { GlobalNewTaskDialog } from "../components/GlobalNewTaskDialog";
+import { NewTaskNavigator } from "../components/NewTaskNavigator";
 import { GlobalToast } from "../components/GlobalToast";
 import { SettingsPane, SettingsProvider } from "../components/SettingsDialog";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
@@ -63,7 +63,7 @@ import {
 	hidesShellTopbar,
 } from "../lib/platform";
 import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
-import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, sessionIsActive, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
+import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, sessionIsActive, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
 import { useAgentInventoryTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
@@ -93,6 +93,19 @@ function preloadOrchestratorStartingChat(): void {
 const SessionView = lazy(() => loadSessionView().then((module) => ({ default: module.SessionView })));
 function preloadSessionView(): void {
 	void loadSessionView().catch(() => undefined);
+}
+
+const LAST_PROJECT_KEY = "ao.newTask.lastProject";
+
+/** The last project the user was in, while it still exists. */
+function lastProjectId(workspaces: WorkspaceSummary[]): string | undefined {
+	let id: string | null = null;
+	try {
+		id = localStorage.getItem(LAST_PROJECT_KEY);
+	} catch {
+		return undefined;
+	}
+	return workspaces.some((workspace) => workspace.id === id && workspace.kind !== STANDALONE_PROJECT_KIND) ? id ?? undefined : undefined;
 }
 
 export const Route = createFileRoute("/_shell")({
@@ -479,6 +492,19 @@ function ShellLayout() {
 		: routeParams.sessionId
 			? workspaces.find((workspace) => workspace.sessions.some((session) => session.id === routeParams.sessionId))?.id
 			: undefined;
+	// The last project the user was in, so a new session started from outside any
+	// project opens there rather than in the scratchpad.
+	const scopedIsProject = Boolean(scopedProjectId) && workspaces.some(
+		(workspace) => workspace.id === scopedProjectId && workspace.kind !== STANDALONE_PROJECT_KIND,
+	);
+	useEffect(() => {
+		if (!scopedIsProject || !scopedProjectId || scopedProjectId === STANDALONE_WORKSPACE_ID) return;
+		try {
+			localStorage.setItem(LAST_PROJECT_KEY, scopedProjectId);
+		} catch {
+			// Without it a new session outside a project starts in the scratchpad.
+		}
+	}, [scopedIsProject, scopedProjectId]);
 	const scopedSession = routeParams.sessionId
 		? (routeParams.hostId ? remoteWorkspaces : workspaces)
 			.flatMap((workspace) => workspace.sessions)
@@ -520,6 +546,13 @@ function ShellLayout() {
 	// The root route is the intentionally minimal home surface, regardless of
 	// whether projects have already been registered.
 	const isHomeRoute = Boolean(matchRoute({ to: "/" }));
+	// The new chat page is a session that does not exist yet, so it takes the
+	// session frame and the session view replaces it without the chrome moving.
+	const isNewChatRoute = Boolean(matchRoute({ to: "/new" }));
+	// The new chat page keeps its host in the search, not the path.
+	const newChatHost = useRouterState({
+		select: (state) => (isNewChatRoute ? (state.location.search as { host?: string }).host : undefined),
+	});
 	useEffect(() => {
 		if (!routeParams.hostId && routeParams.projectId) recordProjectOpened(routeParams.projectId);
 	}, [routeParams.hostId, routeParams.projectId]);
@@ -1191,6 +1224,11 @@ function ShellLayout() {
 	useEffect(
 		() =>
 			aoBridge.app.onNewSessionShortcut(() => {
+			// The last project is remembered for this machine only; a remote new chat stays on its host.
+			if (newChatHost) {
+				requestNewTask(STANDALONE_WORKSPACE_ID, newChatHost);
+				return;
+			}
 			if (routeParams.hostId) {
 				if (routeParams.projectId) requestNewTask(routeParams.projectId, routeParams.hostId);
 				else requestNewTask(STANDALONE_WORKSPACE_ID, routeParams.hostId);
@@ -1199,10 +1237,10 @@ function ShellLayout() {
 				if (scopedProjectId) {
 					requestNewTask(scopedProjectId);
 				} else {
-					requestNewTask(STANDALONE_WORKSPACE_ID);
+					requestNewTask(lastProjectId(workspaces) ?? STANDALONE_WORKSPACE_ID);
 				}
 			}),
-		[routeParams.hostId, routeParams.projectId, scopedProjectId, requestNewTask],
+		[newChatHost, routeParams.hostId, routeParams.projectId, scopedProjectId, requestNewTask, workspaces],
 	);
 
 	// ⌘/ toggles: a second press closes the sheet.
@@ -1344,7 +1382,7 @@ function ShellLayout() {
 						</div>
 					</div>
 				) : null}
-				<GlobalNewTaskDialog />
+				<NewTaskNavigator />
 				<GlobalToast />
 				<RestartToUpdateDialog />
 				<TelemetryConsentRenewalDialog />
@@ -1383,7 +1421,7 @@ function ShellLayout() {
             macOS/Linux. */}
 				<WindowTitlebar />
 				{/* App routes render their topbar inside the framed panel, matching the board chrome across platforms while leaving OS titlebars native. */}
-				{!framedAppTopbar && !hideShellTopbar && !routeParams.sessionId && !openingOrchestrator && !settingsOpen ? <ShellTopbar /> : null}
+				{!framedAppTopbar && !hideShellTopbar && !routeParams.sessionId && !isNewChatRoute && !openingOrchestrator && !settingsOpen ? <ShellTopbar /> : null}
 				{/* Controlled by the ui-store so TitlebarNav / Topbar toggles (which
 			    call the store directly) stay in sync. Direct dragging scopes its
 			    width override to the sidebar's layout consumers. */}
@@ -1438,7 +1476,7 @@ function ShellLayout() {
 							{/* Board/session routes render inside the same inset box the welcome board and settings paint for themselves, so every screen sits within the app's outer boundary. */}
 							<ShellCenter
 								hideShellTopbar={hideShellTopbar}
-								isSessionRoute={Boolean(routeParams.sessionId)}
+								isSessionRoute={Boolean(routeParams.sessionId) || isNewChatRoute}
 								selfFramedCenterPanel={selfFramedCenterPanel}
 								startingOrchestrator={openingOrchestrator}
 								startingCloudOrchestrator={!routeParams.hostId && startingWorkspace?.kind === CLOUD_PROJECT_KIND}

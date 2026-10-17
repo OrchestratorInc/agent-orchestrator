@@ -1,6 +1,8 @@
 package claudecode
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -53,6 +55,12 @@ func (c *authCache) get(fingerprint string, provider agentcreds.Provider) (agent
 
 func (c *authCache) put(result agentcreds.Result) {
 	if c == nil || result.Fingerprint == "" {
+		return
+	}
+	// A probe its caller abandoned says nothing about the credential or the
+	// network. Cached, it would answer every other caller (model discovery
+	// among them) with "context canceled" until the negative TTL ran out.
+	if errors.Is(result.Err, context.Canceled) {
 		return
 	}
 	c.mu.Lock()
