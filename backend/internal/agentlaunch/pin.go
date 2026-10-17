@@ -14,44 +14,18 @@ import (
 
 var pinMu sync.Mutex
 
-// pinDirectory uses the install directory only when it contains no sibling
-// executables. Shared installs get a shim so pinning ao cannot promote node,
-// git, or other tools ahead of the agent's selected runtime.
+// pinDirectory creates an AO-owned directory for ao and the gh wrapper without
+// modifying the installation or promoting unrelated sibling executables.
 func pinDirectory(exe, dataDir string) (string, error) {
 	dir := pinnedDirForExecutable(exe)
 	if dir == "" {
 		return "", nil
 	}
-	entries, err := os.ReadDir(dir)
-	if os.IsNotExist(err) {
+	// Preserve normal command-not-found diagnostics for missing installations.
+	if _, err := os.Stat(exe); os.IsNotExist(err) {
 		return dir, nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("inspect AO install directory: %w", err)
-	}
-	shared := false
-	for _, entry := range entries {
-		if entry.Name() == filepath.Base(exe) || entry.IsDir() {
-			continue
-		}
-		info, statErr := os.Stat(filepath.Join(dir, entry.Name()))
-		if statErr != nil {
-			continue
-		}
-		if !info.Mode().IsRegular() {
-			continue
-		}
-		if runtime.GOOS == "windows" {
-			switch strings.ToLower(filepath.Ext(entry.Name())) {
-			case ".exe", ".com", ".cmd", ".bat":
-				shared = true
-			}
-		} else if info.Mode()&0o111 != 0 {
-			shared = true
-		}
-	}
-	if !shared {
-		return dir, nil
+	} else if err != nil {
+		return "", err
 	}
 	if !filepath.IsAbs(dataDir) {
 		return "", fmt.Errorf("AO shim data directory must be absolute, got %q", dataDir)
@@ -73,7 +47,24 @@ func pinDirectory(exe, dataDir string) (string, error) {
 	if err := os.MkdirAll(shimDir, 0o700); err != nil {
 		return "", err
 	}
+	passthrough := filepath.Join(shimDir, "passthrough")
+	if err := os.MkdirAll(passthrough, 0o700); err != nil {
+		return "", err
+	}
+	if err := ensureExecutableAlias(filepath.Join(passthrough, filepath.Base(absolute)), absolute, os.Link); err != nil {
+		return "", err
+	}
 	target := filepath.Join(shimDir, name)
+	if err := os.WriteFile(filepath.Join(shimDir, ghWrapperMarker), []byte("AO managed gh proxy\n"), 0o600); err != nil {
+		return "", err
+	}
+	ghName := "gh"
+	if runtime.GOOS == "windows" {
+		ghName = "gh.exe"
+	}
+	if err := ensureExecutableAlias(filepath.Join(shimDir, ghName), absolute, os.Link); err != nil {
+		return "", err
+	}
 	if content, err := os.ReadFile(target); err == nil && string(content) == script {
 		if runtime.GOOS == "windows" {
 			if err := ensureWindowsAOExecutable(shimDir, absolute); err != nil {
@@ -114,7 +105,11 @@ func ensureWindowsAOExecutable(shimDir, executable string) error {
 }
 
 func ensureWindowsAOExecutableWithLink(shimDir, executable string, link func(string, string) error) error {
-	target := filepath.Join(shimDir, "ao.exe")
+	return ensureExecutableAlias(filepath.Join(shimDir, "ao.exe"), executable, link)
+}
+
+func ensureExecutableAlias(target, executable string, link func(string, string) error) error {
+	shimDir := filepath.Dir(target)
 	sourceInfo, err := os.Stat(executable)
 	if err != nil {
 		return fmt.Errorf("stat AO executable: %w", err)
