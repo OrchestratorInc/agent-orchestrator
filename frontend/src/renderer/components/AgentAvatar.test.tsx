@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import mastraCodeLogo from "../assets/agents/mastra-code.svg";
 import { AgentAvatar } from "./AgentAvatar";
 import fxDarkLogo from "../assets/agents/fx-dark.svg";
 import fxLightLogo from "../assets/agents/fx-light.svg";
@@ -13,6 +14,11 @@ function themeSources(name: string) {
 }
 
 describe("AgentAvatar", () => {
+	it("renders the mastra-code brand asset", () => {
+		render(<AgentAvatar provider="mastra-code" />);
+		expect(screen.getByRole("img", { name: "mastra-code" })).toHaveAttribute("src", mastraCodeLogo);
+	});
+
 	it("renders the official fx light and dark marks under one accessible name", () => {
 		render(<AgentAvatar provider="fx" />);
 

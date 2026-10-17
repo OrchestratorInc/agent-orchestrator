@@ -497,6 +497,7 @@ type Manager struct {
 	// gates; an actively-running switch remains non-reentrant.
 	retainedSwitches map[domain.SessionID]struct{}
 	inputLeases      map[domain.SessionID]int
+	serializedInput  map[domain.SessionID]bool
 	inputDrained     map[domain.SessionID]chan struct{}
 	// handoffWait bounds optional source-agent enrichment. Time spent waiting
 	// for a human permission decision is paused and charged only against the
@@ -2385,6 +2386,7 @@ func (m *Manager) markSpawnFailedTerminatedWithoutWorkspace(ctx context.Context,
 // fails, fall back to parking it terminated so a phantom row never looks live.
 func (m *Manager) rollbackSpawnSeedRow(ctx context.Context, id domain.SessionID) {
 	if deleted, err := m.store.DeleteSession(ctx, id); err == nil && deleted {
+		m.forgetSerializedInput(id)
 		m.cleanupSystemPromptDir(id)
 		m.cleanupAttachments(ctx, id)
 		return
@@ -2409,6 +2411,7 @@ func (m *Manager) rollbackSpawn(ctx context.Context, id domain.SessionID) (delet
 		return false, false, fmt.Errorf("rollback %s: %w", id, err)
 	}
 	if deleted {
+		m.forgetSerializedInput(id)
 		m.cleanupSystemPromptDir(id)
 		m.cleanupAttachments(ctx, id)
 		return true, false, nil
@@ -2480,6 +2483,7 @@ func (m *Manager) recordTermination(ctx context.Context, id domain.SessionID, dr
 	if err := m.lcm.MarkTerminated(ctx, id); err != nil {
 		return fmt.Errorf("kill %s: %w", id, errors.Join(err, markerErr))
 	}
+	m.forgetSerializedInput(id)
 	m.cleanupSystemPromptDir(id)
 	if markerErr != nil {
 		return fmt.Errorf("kill %s: clear restore marker: %w", id, markerErr)
@@ -3514,6 +3518,19 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, fmt.Errorf("%s %s: runtime: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env))
 	}
+	verifiedNativeIdentity := false
+	if verifier, requiresProof := agent.(ports.NativeRestoreVerifier); requiresProof && mode == RestoreModeNative {
+		proofCfg := ports.RestoreConfig{DataDir: m.dataDir, Config: agentConfig, Session: ports.SessionRef{
+			ID: string(rec.ID), WorkspacePath: ws.Path,
+			Metadata: map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID},
+		}}
+		if err := m.verifyNativeRestore(ctx, verifier, proofCfg, launchID, handle); err != nil {
+			m.destroySpawnRuntimeAfterFailure(ctx, handle)
+			m.cleanupSystemPromptDir(rec.ID)
+			return RestoreResult{}, fmt.Errorf("%s %s: native identity: %w", operation, rec.ID, err)
+		}
+		verifiedNativeIdentity = true
+	}
 	metadata := domain.SessionMetadata{
 		Permissions:               rec.Metadata.Permissions,
 		Branch:                    ws.Branch,
@@ -3532,7 +3549,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	// The interface coordinator provides the same guarantee after it freezes Chat
 	// and transfers the required native history. Fresh and fallback launches
 	// still require current-generation identity proof from their hooks.
-	bindNativeIdentity := mode == RestoreModeNative &&
+	bindNativeIdentity := verifiedNativeIdentity || mode == RestoreModeNative &&
 		(rec.Harness == domain.HarnessCodex || rec.Harness == domain.HarnessClaudeCode || rec.Harness == domain.HarnessAgy)
 	if (bindNativeIdentity || (requireNativeHistory && !forceFresh)) && strings.TrimSpace(metadata.AgentSessionID) != "" {
 		metadata.AgentSessionIDLaunchID = launchID
@@ -6224,6 +6241,9 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 }
 
 func (m *Manager) prepareRuntimeLaunch(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, env map[string]string) error {
+	if _, guarded := agent.(ports.TerminalMessageInputGuard); guarded {
+		m.enableSerializedInput(id)
+	}
 	preparer, ok := agent.(runtimeLaunchPreparer)
 	if !ok {
 		return nil

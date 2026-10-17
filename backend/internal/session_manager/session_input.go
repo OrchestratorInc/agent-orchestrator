@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 )
 
@@ -36,6 +37,10 @@ var _ sessionguard.InputLease = (*Manager)(nil)
 func (m *Manager) AcquireSessionInput(id domain.SessionID) (release func(), ok bool) {
 	id = domain.SessionID(strings.TrimSpace(string(id)))
 	m.agentOpMu.Lock()
+	if m.serializedInput[id] && m.inputLeases[id] != 0 {
+		m.agentOpMu.Unlock()
+		return nil, false
+	}
 	if m.agentOperationActiveLocked(id) && !m.agentSwitchDecisionInputAllowedLocked(id) {
 		m.agentOpMu.Unlock()
 		return nil, false
@@ -50,6 +55,53 @@ func (m *Manager) AcquireSessionInput(id domain.SessionID) (release func(), ok b
 	return func() {
 		once.Do(func() { m.releaseSessionInput(id) })
 	}, true
+}
+
+// No durable reads belong in lease acquisition. Prepare sets this before
+// launch; the first guarded paste also sets it after detached-host adoption.
+// That paste fails closed if another already-admitted writer is still active.
+func (m *Manager) enableSerializedInput(id domain.SessionID) bool {
+	m.agentOpMu.Lock()
+	defer m.agentOpMu.Unlock()
+	if m.serializedInput == nil {
+		m.serializedInput = make(map[domain.SessionID]bool)
+	}
+	m.serializedInput[id] = true
+	return m.inputLeases[id] <= 1
+}
+
+func (m *Manager) forgetSerializedInput(id domain.SessionID) {
+	m.agentOpMu.Lock()
+	defer m.agentOpMu.Unlock()
+	delete(m.serializedInput, id)
+}
+
+// ValidateSessionMessageInput runs while the shared input lease excludes native
+// keystrokes and runtime replacement for an opted-in harness.
+func (m *Manager) ValidateSessionMessageInput(ctx context.Context, rec domain.SessionRecord, message string) error {
+	if m.agents == nil || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI {
+		return nil
+	}
+	agent, found := m.agents.Agent(rec.Harness)
+	if !found {
+		return nil
+	}
+	guard, guarded := agent.(ports.TerminalMessageInputGuard)
+	if !guarded {
+		return nil
+	}
+	if !m.enableSerializedInput(rec.ID) {
+		return ports.ErrTerminalMessageNotReady
+	}
+	reader, available := m.runtime.(ports.StyledTerminalOutputReader)
+	if !available {
+		return errors.New("current rendered terminal is unavailable")
+	}
+	output, err := reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, 32)
+	if err != nil {
+		return err
+	}
+	return guard.ValidateTerminalMessage(output, message)
 }
 
 func (m *Manager) releaseSessionInput(id domain.SessionID) {

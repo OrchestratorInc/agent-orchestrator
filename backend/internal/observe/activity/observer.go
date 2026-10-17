@@ -133,7 +133,17 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 		session.Activity.State != domain.ActivityWaitingInput {
 		return
 	}
-	output, err := o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+	var output string
+	var err error
+	if _, requiresViewport := agent.(ports.TerminalMessageInputGuard); requiresViewport {
+		reader, available := o.runtime.(ports.StyledTerminalOutputReader)
+		if !available {
+			return
+		}
+		output, err = reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+	} else {
+		output, err = o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+	}
 	if err != nil {
 		o.logger.Debug("activity observer: terminal output unavailable", "session", session.ID, "err", err)
 		return

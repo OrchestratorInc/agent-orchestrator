@@ -199,6 +199,9 @@ jobs:
       - name: Test Windows PowerShell installers
         run: go test -race -count=1 -v -run '^TestRunInstallScriptPowerShell' ./internal/adapters/systemexec/
 
+      - name: Test Mastra native history and Windows lock liveness
+        run: go test -race -count=1 -timeout=10m ./internal/adapters/agent/mastracode
+
       - name: Test native Goose identity
         run: go test -race -count=1 -timeout=10m ./internal/adapters/agent/binaryutil ./internal/adapters/agent/goose
 

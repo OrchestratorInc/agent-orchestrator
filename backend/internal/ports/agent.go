@@ -10,6 +10,8 @@ import (
 )
 
 var (
+	// ErrTerminalMessageNotReady refuses a paste into native decisions or drafts.
+	ErrTerminalMessageNotReady = errors.New("terminal composer is not ready for a message")
 	// ErrUnsupportedEffort reports a value the selected model did not advertise.
 	ErrUnsupportedEffort = errors.New("unsupported model effort")
 	// ErrModelCapabilitiesUnavailable reports tuning that cannot be validated safely.
@@ -739,6 +741,20 @@ type RestoreConfig struct {
 	// system-prompt flag should re-apply this in their resume command.
 	SystemPrompt     string
 	SystemPromptFile string
+}
+
+// NativeRestoreVerifier is required by CLIs whose resume command can silently
+// open fresh history. AO checks current-generation native evidence and a
+// rendered viewport before publishing the replacement runtime.
+type NativeRestoreVerifier interface {
+	VerifyNativeRestore(context.Context, RestoreConfig, string, string) (bool, error)
+}
+
+// TerminalMessageInputGuard opts a harness into serialized pane input and
+// validates pasted messages against the current rendered composer. Raw user
+// keystrokes remain available for native decisions and editing drafts.
+type TerminalMessageInputGuard interface {
+	ValidateTerminalMessage(output, message string) error
 }
 
 // SessionRef identifies an AO session whose agent-owned metadata may be read.
