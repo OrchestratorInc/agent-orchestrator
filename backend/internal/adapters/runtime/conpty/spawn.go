@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/envfilter"
 )
 
 // HostOptions are the optional pty-host behaviours chosen at spawn.
@@ -131,6 +133,15 @@ func interactiveTerminalEnv(base []string, configured map[string]string, assignm
 			if !explicit {
 				return
 			}
+		}
+		// base is os.Environ() at the call sites (spawn_darwin.go,
+		// spawn_windows.go). A daemon started from inside a Claude Code
+		// session carries that session's own identity markers — dropping
+		// them here keeps them from reaching the worker's terminal, where
+		// its own claude-code process would otherwise misidentify itself as
+		// a child of that unrelated parent session.
+		if !explicit && envfilter.IsParentSessionMarker(key) {
+			return
 		}
 		env = append(env, entry)
 	}
