@@ -1955,7 +1955,57 @@ textarea,
 
 @keyframes chat-working-shift {
 	from { transform: translateX(0); }
-	to { transform: translateX(-18px); }
+	to { transform: translateX(-20px); }
+}
+
+/* The live turn's thinking orb (ThinkingOrb): a ring of short ticks, each pushed out
+   and brightened in turn so a three-lobed wave runs round it while the whole ring
+   turns slowly. Reads as breathing rather than as a loader spinning. */
+.thinking-orb {
+	position: relative;
+	display: inline-block;
+	width: 14px;
+	height: 14px;
+	animation: thinking-orb-turn 6s linear infinite;
+}
+
+.thinking-orb > i {
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	width: 0.9px;
+	height: 2.3px;
+	margin: -1.15px 0 0 -0.45px;
+	border-radius: 1px;
+	background: currentColor;
+	transform: rotate(var(--orb-angle)) translateY(-5px);
+	animation: thinking-orb-tick 1.6s ease-in-out infinite;
+	animation-delay: var(--orb-delay);
+}
+
+@keyframes thinking-orb-tick {
+	0%, 100% {
+		transform: rotate(var(--orb-angle)) translateY(-4.6px);
+		opacity: 0.4;
+	}
+	50% {
+		transform: rotate(var(--orb-angle)) translateY(-5.9px);
+		opacity: 1;
+	}
+}
+
+@keyframes thinking-orb-turn {
+	to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.thinking-orb,
+	.thinking-orb > i {
+		animation: none;
+	}
+	.thinking-orb > i {
+		opacity: 0.7;
+	}
 }
 
 @keyframes chat-working-fade {
@@ -1976,7 +2026,7 @@ textarea,
 		color: var(--color-muted-foreground);
 	}
 	.chat-working-shimmer[data-settling] {
-		transform: translateX(-18px);
+		transform: translateX(-20px);
 	}
 	.chat-working-spinner-slot[data-settling] {
 		animation: none;

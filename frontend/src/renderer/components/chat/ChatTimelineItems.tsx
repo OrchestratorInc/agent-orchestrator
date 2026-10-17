@@ -15,7 +15,7 @@ import {
 	ACCENT_ACTION_SHELL,
 	QUIET_ACTION_PILL,
 } from "./action-pill";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
@@ -621,6 +621,32 @@ export function ResponseSpinner() {
 	);
 }
 
+const ORB_TICKS = 18;
+/** Wave periods round the ring: three gives the slow, rounded-triangle wobble. */
+const ORB_LOBES = 3;
+const ORB_WAVE_S = 1.6;
+
+/**
+ * The live turn's thinking mark: a ring of short ticks with a wave running round it,
+ * so the ring breathes out of round rather than spinning like a loader. Pure CSS
+ * (see `.thinking-orb`); each tick only carries its angle and its place in the wave.
+ */
+export function ThinkingOrb() {
+	return (
+		<span aria-hidden="true" data-testid="response-spinner" className="thinking-orb shrink-0 text-muted-foreground">
+			{Array.from({ length: ORB_TICKS }, (_, index) => (
+				<i
+					key={index}
+					style={{
+						"--orb-angle": `${(index / ORB_TICKS) * 360}deg`,
+						"--orb-delay": `${-((index * ORB_LOBES) / ORB_TICKS) * ORB_WAVE_S}s`,
+					} as CSSProperties}
+				/>
+			))}
+		</span>
+	);
+}
+
 function formatTime(iso: string): string {
 	const parsed = new Date(iso);
 	return Number.isNaN(parsed.getTime()) ? "" : timeFormatter.format(parsed);
@@ -1035,9 +1061,9 @@ export function LiveResponseStatus({ startedAt, settling = false, startupLabel, 
 	// Settling animates opacity and transform only, never layout, so it stays smooth
 	// even when the main thread is busy finishing the turn. These are keyframe
 	// animations rather than transitions so they also play when the row first
-	// mounts already settled. The spinner shrinks and fades in place while the label
-	// slides left by the spinner's footprint (12px + 6px gap), landing exactly where
-	// the settled "Worked for" row puts it. The label keeps its shimmer class
+	// mounts already settled. The orb shrinks and fades in place while the label
+	// slides left by the orb's footprint (14px + 6px gap), so "Worked for" ends flush
+	// with the turn's text before the row hands over. The label keeps its shimmer class
 	// throughout (only the highlight fades), so the text never changes paint
 	// technique and cannot blink.
 	return (
@@ -1048,7 +1074,7 @@ export function LiveResponseStatus({ startedAt, settling = false, startupLabel, 
 					data-settling={settling || undefined}
 					className="chat-working-spinner-slot flex shrink-0 origin-center"
 				>
-					{failed ? <X className="size-3 text-destructive" /> : <ResponseSpinner />}
+					{failed ? <X className="size-3 text-destructive" /> : <ThinkingOrb />}
 				</span>
 				<span
 					role={failed ? "alert" : "status"}

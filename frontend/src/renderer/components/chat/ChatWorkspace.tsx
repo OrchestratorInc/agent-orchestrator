@@ -4307,23 +4307,22 @@ const TurnGroup = memo(function TurnGroup({
 	// when the turn settles: the final answer leaving the worked runs, or a notice
 	// moving out from among them, does not remount it or drop the reader's selection.
 	const body: ReactNode[] = humanRuns.map(renderRun);
-	// A live provider failure replaces the Working row with its reconnect card, and a
-	// turn that stops without an outcome (cancelled) has no settled row to hand over to.
-	// The setup checklist sits exactly where the Working row will, so the handoff
-	// does not move anything.
-	if (startup || (!group.liveProviderFailure && (group.live || (group.outcome && !showSettledStatus)))) {
-		body.push(
+	// The Working row sits at the end of the live turn, under what the agent has
+	// written so far, where the reader is already looking. A live provider failure
+	// replaces it with its reconnect card, and a turn that stops without an outcome
+	// (cancelled) has no settled row to hand over to. The setup checklist shares the
+	// row, so the handoff from setup to work does not move anything.
+	const workingRow =
+		startup || (!group.liveProviderFailure && (group.live || (group.outcome && !showSettledStatus))) ? (
 			<LiveResponseStatus
-				key="turn-working"
 				startedAt={group.liveStartedAt}
 				settling={!startup && !group.live}
 				startupLabel={startup ? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : undefined}
 				failed={startup?.failed}
 			>
 				{startup ? <SessionStartup {...startup} /> : null}
-			</LiveResponseStatus>,
-		);
-	}
+			</LiveResponseStatus>
+		) : null;
 	const outcome = showSettledStatus ? group.outcome : undefined;
 	if (outcome) {
 		const disclosureKey = `${group.key}:worked`;
@@ -4384,6 +4383,20 @@ const TurnGroup = memo(function TurnGroup({
 					onOpenFile={onOpenFile}
 				/>
 			) : null}
+			{/* Once the turn settles the row fades away and "Worked for" takes over at
+			    the top of the turn. */}
+			<AnimatePresence initial={false}>
+				{workingRow ? (
+					<motion.div
+						key="turn-working"
+						exit={{ height: 0, opacity: 0 }}
+						transition={{ duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}
+						className="overflow-hidden"
+					>
+						{workingRow}
+					</motion.div>
+				) : null}
+			</AnimatePresence>
 			{group.live ? <TurnLiveStatus blocked={group.blocked} providerFailure={group.liveProviderFailure} /> : null}
 			{/* No assistant prose to hang the undo on — still offer it so a tool-only
 			    turn is not stuck without a way back. A stopped or failed turn carries
