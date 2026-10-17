@@ -45,7 +45,11 @@ const (
 	nativeQuestionPrompt = "? ❯"
 )
 
-var nativeVersionLine = regexp.MustCompile("^" + regexp.QuoteMeta(nativeVersion) + "$")
+var (
+	nativeVersionLine   = regexp.MustCompile("^" + regexp.QuoteMeta(nativeVersion) + "$")
+	terminalKeyUnsafe   = regexp.MustCompile(`[^A-Za-z0-9._-]`)
+	nativeStyleSequence = regexp.MustCompile(`\x1b\[[0-9;:]*m`)
+)
 
 // New creates the native TUI adapter.
 func New() *Plugin { return &Plugin{} }
@@ -384,7 +388,7 @@ func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launch
 		if e != nil || !strings.HasPrefix(tty, "/dev/pts/") {
 			continue
 		}
-		key := "tty-" + regexp.MustCompile(`[^A-Za-z0-9._-]`).ReplaceAllString(strings.Trim(tty, "/"), "-")
+		key := "tty-" + terminalKeyUnsafe.ReplaceAllString(strings.Trim(tty, "/"), "-")
 		crumbPath := filepath.Join(home, "terminal-sessions", key)
 		crumb, e := readBreadcrumb(crumbPath)
 		if e != nil || crumb.Timestamp < lease.Start {
@@ -477,7 +481,7 @@ func (*Plugin) EmptyComposerProvesWaitingInputReady() bool { return true }
 // DetectTerminalActivity implements the scoped native adapter contract.
 func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
 	// Native placeholders use italic; typed composer text has normal styling.
-	composerOutput := regexp.MustCompile(`\x1b\[[0-9;:]*m`).ReplaceAllStringFunc(output, func(sequence string) string {
+	composerOutput := nativeStyleSequence.ReplaceAllStringFunc(output, func(sequence string) string {
 		params := strings.Split(strings.TrimSuffix(strings.TrimPrefix(sequence, "\x1b["), "m"), ";")
 		for i := 0; i < len(params); i++ {
 			code, _, colon := strings.Cut(params[i], ":")

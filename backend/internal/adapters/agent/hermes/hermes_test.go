@@ -357,7 +357,9 @@ func TestComposerStyleAttributesExcludeColorPayloads(t *testing.T) {
 		want       domain.ActivityState
 	}{
 		{"palette foreground", "\x1b[38;5;3mdraft\x1b[m", domain.ActivityBlocked},
+		{"palette background", "\x1b[48;5;3mdraft\x1b[m", domain.ActivityBlocked},
 		{"truecolor foreground", "\x1b[38;2;3;100;100mdraft\x1b[m", domain.ActivityBlocked},
+		{"truecolor green operand", "\x1b[38;2;255;3;0mdraft\x1b[m", domain.ActivityBlocked},
 		{"truecolor background", "\x1b[48;2;100;3;100mdraft\x1b[m", domain.ActivityBlocked},
 		{"underline color", "\x1b[58;5;3mdraft\x1b[m", domain.ActivityBlocked},
 		{"colon color", "\x1b[38:2::3:100:100mdraft\x1b[m", domain.ActivityBlocked},
