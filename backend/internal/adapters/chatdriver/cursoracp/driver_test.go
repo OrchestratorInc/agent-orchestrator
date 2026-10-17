@@ -25,6 +25,25 @@ type fakeExtensionBridge struct {
 	plan          *domain.ConversationPlan
 }
 
+func TestCursorPromptMessageFailure(t *testing.T) {
+	const failure = "Error: RetriableError: [resource_exhausted] Error"
+	for _, tc := range []struct {
+		text string
+		want bool
+	}{
+		{failure, true},
+		{"working\n\n" + failure + "\n", true},
+		{"completed", false},
+		{"Example: " + failure, false},
+		{"\x60\x60\x60text\n" + failure + "\n\x60\x60\x60", false},
+		{failure + "\nRecovered successfully", false},
+	} {
+		if err := cursorPromptMessageFailure(tc.text); (err != nil) != tc.want {
+			t.Errorf("cursorPromptMessageFailure(%q) = %v, want failure %v", tc.text, err, tc.want)
+		}
+	}
+}
+
 func (f *fakeExtensionBridge) RequestInput(
 	_ context.Context,
 	request ports.ChatInputRequest,

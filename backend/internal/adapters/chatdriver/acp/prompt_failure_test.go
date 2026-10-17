@@ -17,6 +17,41 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+func TestPromptMessageFailureMarksTurnFailed(t *testing.T) {
+	failure := errors.New("RetriableError: [resource_exhausted] Error")
+	for _, tc := range []struct {
+		name   string
+		reason acpsdk.StopReason
+		parse  func(string) error
+		want   domain.TurnState
+	}{
+		{"provider error", acpsdk.StopReasonEndTurn, func(string) error { return failure }, domain.TurnStateFailed},
+		{"normal response", acpsdk.StopReasonEndTurn, func(string) error { return nil }, domain.TurnStateCompleted},
+		{"other provider", acpsdk.StopReasonEndTurn, nil, domain.TurnStateCompleted},
+		{"cancelled", acpsdk.StopReasonCancelled, func(string) error { return failure }, domain.TurnStateInterrupted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conv := &conversation{
+				sessionID: "session-1", activeTurn: "turn-1",
+				messages:             map[string]string{"assistant": "working\n\nError: " + failure.Error()},
+				promptMessageFailure: tc.parse,
+				events:               make(chan ports.ChatEvent, 8), log: slog.New(slog.DiscardHandler),
+			}
+			conv.finishPrompt("turn-1", acpsdk.PromptResponse{StopReason: tc.reason}, nil)
+			for {
+				event := nextEvent(t, conv.Events())
+				if event.Kind != ports.ChatEventTurnCompleted {
+					continue
+				}
+				if event.TurnState != tc.want || errors.Is(event.Err, failure) != (tc.want == domain.TurnStateFailed) {
+					t.Fatalf("completion = %s / %v, want %s", event.TurnState, event.Err, tc.want)
+				}
+				break
+			}
+		})
+	}
+}
+
 func TestControllerReadyReleasesActiveTurn(t *testing.T) {
 	conv := &conversation{
 		sessionID:  "session-1",
