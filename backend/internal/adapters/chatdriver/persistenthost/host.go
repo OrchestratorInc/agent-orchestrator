@@ -36,6 +36,17 @@ const (
 	handshakeTimeout = time.Second
 )
 
+// clientWriteTimeout bounds each write to the attached controller. A controller
+// that stops reading while keeping its socket open (a wedged projector, a
+// half-dead daemon) must not hold host ownership forever: an unbounded write
+// blocks the provider pump inside the host-wide mutex, so every later attach
+// reports ErrAttached until the host process is killed. Expiry takes the
+// existing write-failure path — detach, buffer or journal the frame, keep the
+// provider alive — which is the designed resumable detached state. One deadline
+// per write, not per connection: idle time and the total replay duration do not
+// consume the next frame's write budget.
+var clientWriteTimeout = 30 * time.Second
+
 // Protocol selects the provider-wire behavior owned by the host.
 type Protocol string
 
@@ -712,6 +723,29 @@ func (h *host) accept() error {
 	}
 }
 
+// clientWriteDeadline bounds one controller-facing write. The deadline is
+// cleared after success so an idle attached host does not inherit a stale one
+// on a much later frame; a failed write keeps it, but its only reader takes
+// the detach path and closes the connection.
+type clientWriteDeadline struct{ conn net.Conn }
+
+func (w clientWriteDeadline) Write(p []byte) (int, error) {
+	if err := w.conn.SetWriteDeadline(time.Now().Add(clientWriteTimeout)); err != nil {
+		return 0, err
+	}
+	n, err := w.conn.Write(p)
+	if err != nil {
+		return n, err
+	}
+	_ = w.conn.SetWriteDeadline(time.Time{})
+	return n, nil
+}
+
+func writeClientFrame(conn net.Conn, frame []byte) error {
+	_, err := clientWriteDeadline{conn: conn}.Write(frame)
+	return err
+}
+
 func (h *host) handle(conn net.Conn) {
 	reader := bufio.NewReader(conn)
 	var request hello
@@ -755,13 +789,19 @@ func (h *host) handle(conn net.Conn) {
 	if h.acp != nil {
 		response.ACPState = h.acp.snapshot()
 	}
-	writeErr := json.NewEncoder(conn).Encode(response)
+	var writeErr error
+	encoded, encodeErr := json.Marshal(response)
+	if encodeErr != nil {
+		writeErr = encodeErr
+	} else {
+		writeErr = writeClientFrame(conn, append(encoded, '\n'))
+	}
 	if writeErr == nil && h.acp != nil {
-		writeErr = h.acp.replayTo(h.ctx, conn)
+		writeErr = h.acp.replayTo(h.ctx, clientWriteDeadline{conn: conn})
 	}
 	if writeErr == nil {
 		for _, frame := range h.detached {
-			if _, writeErr = conn.Write(frame); writeErr != nil {
+			if writeErr = writeClientFrame(conn, frame); writeErr != nil {
 				break
 			}
 		}
@@ -808,7 +848,7 @@ func (h *host) handle(conn net.Conn) {
 				}
 			}
 			if readErr == nil && len(clientFrame) > 0 {
-				if _, err := conn.Write(clientFrame); err != nil {
+				if err := writeClientFrame(conn, clientFrame); err != nil {
 					readErr = err
 				}
 			}
@@ -874,7 +914,7 @@ func (h *host) deliverProviderFrameLocked(frame []byte, retainedByACP bool) {
 		h.cond.Wait()
 	}
 	if h.client != nil {
-		if _, writeErr := h.client.Write(frame); writeErr != nil {
+		if writeErr := writeClientFrame(h.client, frame); writeErr != nil {
 			_ = h.client.Close()
 			h.client = nil
 			h.bufferPendingRequestsLocked()

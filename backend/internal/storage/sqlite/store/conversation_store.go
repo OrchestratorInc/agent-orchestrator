@@ -701,6 +701,46 @@ func (s *Store) commitChatSpawn(
 				return errors.New("native Chat handoff history changed")
 			}
 		}
+		if handoff != nil && handoff.RecoverySource != nil {
+			// The recovery source was proven before provider I/O. Re-prove it here:
+			// the previous branch must still carry the retired predecessor's stale
+			// identity, so a competing boundary or an identity rewrite during
+			// provider I/O fails closed instead of stacking on top of it.
+			parent, err := q.SelectConversationBranch(ctx, gen.SelectConversationBranchParams{
+				ConversationID: branch.ConversationID,
+				BranchID:       branch.ParentBranchID,
+			})
+			if err != nil {
+				return fmt.Errorf("re-prove Chat handoff recovery source branch: %w", err)
+			}
+			parentBranch := conversationBranchToDomain(parent)
+			if parentBranch.SessionID != handoff.RecoverySource.SessionID ||
+				parentBranch.ProviderConversationID != handoff.RecoverySource.ProviderConversationID {
+				return errors.New("native Chat handoff recovery source changed")
+			}
+			if expectedSession == rec.ID {
+				// The conversation is already rebound to the recovering session, so
+				// the retired-predecessor block below is skipped; re-prove it here.
+				previous, err := q.GetSession(ctx, handoff.RecoverySource.SessionID)
+				if err != nil {
+					return fmt.Errorf("re-prove Chat handoff recovery predecessor: %w", err)
+				}
+				prevRec := rowToRecord(previous)
+				if prevRec.Kind != domain.KindOrchestrator || !prevRec.IsTerminated ||
+					prevRec.ProjectID != rec.ProjectID || !rec.CreatedAt.After(prevRec.CreatedAt) {
+					return errors.New("native Chat handoff project owner is not a retired predecessor")
+				}
+				sessions, err := q.ListSessionsByProject(ctx, optionalProjectID(rec.ProjectID))
+				if err != nil {
+					return err
+				}
+				for _, session := range sessions {
+					if session.Kind == domain.KindOrchestrator && session.ID != rec.ID && !session.IsTerminated {
+						return errors.New("native Chat handoff has a competing live orchestrator")
+					}
+				}
+			}
+		}
 		if conversation.CurrentSessionID == nil || *conversation.CurrentSessionID != expectedSession {
 			return fmt.Errorf("conversation %s is no longer owned by session %s",
 				branch.ConversationID, rec.ID)
