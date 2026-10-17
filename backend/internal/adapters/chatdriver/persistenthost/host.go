@@ -291,6 +291,9 @@ func validateDescriptor(cfg Config, d Descriptor) error {
 // ConnectOrStart attaches to an existing compatible host or starts one with the
 // current AO executable. Failed/incompatible probes never terminate that host.
 func ConnectOrStart(ctx context.Context, cfg Config) (*Transport, error) {
+	// staleToken names a descriptor whose host was observed dead. The host this
+	// call starts replaces it, so it is never an answer to the start below.
+	staleToken := ""
 	if d, err := readDescriptor(cfg.DataDir, cfg.SessionID); err == nil {
 		if err := validateDescriptor(cfg, d); err != nil && processalive.Alive(d.PID) {
 			return nil, err
@@ -327,6 +330,7 @@ func ConnectOrStart(ctx context.Context, cfg Config) (*Transport, error) {
 		if processalive.Alive(d.PID) {
 			return nil, fmt.Errorf("%w: %w", ErrOwnershipInconclusive, attachErr)
 		}
+		staleToken = d.Token
 		// Do not remove stale ownership files here. Another starter may have
 		// already reclaimed the dead lock and published a replacement descriptor
 		// since this client read d. The detached host's O_EXCL lock acquisition is
@@ -363,17 +367,28 @@ func ConnectOrStart(ctx context.Context, cfg Config) (*Transport, error) {
 			return nil, err
 		}
 		d, err := readDescriptor(cfg.DataDir, cfg.SessionID)
-		if err == nil {
+		switch {
+		case err != nil:
+			lastErr = err
+		case staleToken != "" && d.Token == staleToken:
+			// The dead host's descriptor stays until the new host takes the
+			// launch lock and publishes its own. A host that died uncleanly
+			// (crash, reboot) can have run another harness, so its descriptor
+			// may not match this request; it is not a live conflict.
+			lastErr = errors.New("chat host has not replaced the dead host's descriptor yet")
+		default:
 			if compatibleErr := validateDescriptor(cfg, d); compatibleErr != nil {
-				return nil, compatibleErr
+				if processalive.Alive(d.PID) {
+					return nil, compatibleErr
+				}
+				lastErr = compatibleErr
+				break
 			}
 			transport, attachErr := attach(ctx, d, false)
 			if attachErr == nil {
 				return transport, nil
 			}
 			lastErr = attachErr
-		} else {
-			lastErr = err
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
