@@ -342,6 +342,10 @@ type SessionRecord struct {
 	// boundary, and kept after the start settles. A step still running when the
 	// session reads ProvisionState failed is the step that failed.
 	ProvisionSteps []SessionProvisionStep `json:"provisionSteps,omitempty"`
+	// SpawnWarnings are non-fatal problems the spawn worked around, such as a
+	// default-branch fetch that failed so the worktree may start from a stale
+	// local base. The spawn succeeded; these tell the user what may be off.
+	SpawnWarnings []string `json:"spawnWarnings,omitempty"`
 	// BranchState is what the daemon last observed about the session branch:
 	// its commits on top of the base and whether they reached the remote. The
 	// branch-state reconcile writes it only when a fact changes; nil until the first

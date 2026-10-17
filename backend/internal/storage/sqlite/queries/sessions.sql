@@ -226,7 +226,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     requested_output,
-    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, spawn_warnings, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, client_request_id, client_request_hash, client_request_committed
 FROM sessions WHERE id = ?;
@@ -246,7 +246,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     requested_output,
-    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, spawn_warnings, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, client_request_id, client_request_hash, client_request_committed
 FROM sessions WHERE automation_run_id = ?;
@@ -266,7 +266,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     requested_output,
-    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, spawn_warnings, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, client_request_id, client_request_hash, client_request_committed
 FROM sessions WHERE project_id IS ? ORDER BY num;
@@ -286,7 +286,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     requested_output,
-    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, spawn_warnings, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, client_request_id, client_request_hash, client_request_committed
 FROM sessions ORDER BY project_id, num;
@@ -420,6 +420,14 @@ WHERE id = sqlc.arg(id);
 -- the rest of the row from its own goroutine.
 UPDATE sessions SET
     provision_steps = sqlc.arg(provision_steps),
+    updated_at = sqlc.arg(updated_at)
+WHERE id = sqlc.arg(id);
+
+-- name: SetSessionSpawnWarnings :execrows
+-- Record non-fatal spawn warnings. Like SetSessionProvisionSteps it writes only
+-- its own column, so a concurrent controller commit cannot clear it.
+UPDATE sessions SET
+    spawn_warnings = sqlc.arg(spawn_warnings),
     updated_at = sqlc.arg(updated_at)
 WHERE id = sqlc.arg(id);
 

@@ -123,6 +123,9 @@ type projectConfig struct {
 	Orchestrator      roleOverride         `json:"orchestrator,omitempty"`
 	TrackerIntake     trackerIntakeConfig  `json:"trackerIntake,omitempty"`
 	AutoReview        bool                 `json:"autoReview,omitempty"`
+	// DisableFetchBeforeSpawn must round-trip through set-config so a CLI edit
+	// of another field never silently re-enables the pre-spawn fetch.
+	DisableFetchBeforeSpawn bool `json:"disableFetchBeforeSpawn,omitempty"`
 	// WorkersRequestReview must round-trip through set-config so a CLI edit
 	// of another field never silently turns it off.
 	WorkersRequestReview bool             `json:"workersRequestReview,omitempty"`

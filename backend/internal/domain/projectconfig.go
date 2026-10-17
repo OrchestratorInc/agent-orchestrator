@@ -27,6 +27,10 @@ type ProjectConfig struct {
 	// SessionPrefix overrides the displayed session-id prefix.
 	SessionPrefix string `json:"sessionPrefix,omitempty"`
 
+	// DisableFetchBeforeSpawn skips the default-branch fetch that runs before each
+	// spawn. Spawns then use the local remote-tracking ref as the base, which may
+	// be stale. Use it for very large or air-gapped repositories.
+	DisableFetchBeforeSpawn bool `json:"disableFetchBeforeSpawn,omitempty"`
 	// Env are extra environment variables forwarded into worker session
 	// runtimes. The AO_ namespace is reserved for AO-owned variables.
 	Env map[string]string `json:"env,omitempty"`

@@ -692,6 +692,7 @@ type Session struct {
 	HibernatedAt                     sql.NullTime
 	BranchState                      string
 	RequestedOutput                  string
+	SpawnWarnings                    string
 }
 
 type SessionArtifactVersion struct {

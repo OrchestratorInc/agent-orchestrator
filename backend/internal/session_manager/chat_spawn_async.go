@@ -165,7 +165,8 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		}
 	}
 	if ws.Path == "" {
-		baseRefs := m.refreshDefaultBranchesBestEffort(ctx, in.project)
+		baseRefs, spawnWarnings := m.refreshDefaultBranchesBestEffort(ctx, in.project)
+		m.recordSpawnWarnings(ctx, id, spawnWarnings)
 		m.logAsyncChatSpawnStage(id, "default_branch_refresh", stageStarted)
 		progress.complete(ctx, domain.SessionProvisionStepFetch)
 		stageStarted = time.Now()

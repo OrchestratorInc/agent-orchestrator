@@ -254,6 +254,17 @@ func (f *fakeStore) SetSessionProvisionState(_ context.Context, id domain.Sessio
 	return true, nil
 }
 
+func (f *fakeStore) SetSessionSpawnWarnings(_ context.Context, id domain.SessionID, warnings []string, now time.Time) error {
+	rec, ok := f.sessions[id]
+	if !ok {
+		return nil
+	}
+	rec.SpawnWarnings = append([]string(nil), warnings...)
+	rec.UpdatedAt = now
+	f.sessions[id] = rec
+	return nil
+}
+
 func (f *fakeStore) SetSessionProvisionSteps(_ context.Context, id domain.SessionID, steps []domain.SessionProvisionStep, now time.Time) error {
 	rec, ok := f.sessions[id]
 	if !ok {
@@ -5488,7 +5499,7 @@ func TestRefreshDefaultBranchesUsesOneOverallFetchBudget(t *testing.T) {
 	}
 
 	started := time.Now()
-	baseRefs := m.refreshDefaultBranchesBestEffort(context.Background(), project)
+	baseRefs, _ := m.refreshDefaultBranchesBestEffort(context.Background(), project)
 	elapsed := time.Since(started)
 
 	if elapsed > 250*time.Millisecond {

@@ -219,6 +219,31 @@ func (s *Store) SetSessionProvisionState(
 	return rows > 0, nil
 }
 
+// SetSessionSpawnWarnings records the non-fatal warnings a spawn produced. Like
+// SetSessionProvisionSteps it writes only its own column, so a later full-row
+// update cannot erase it.
+func (s *Store) SetSessionSpawnWarnings(
+	ctx context.Context,
+	id domain.SessionID,
+	warnings []string,
+	now time.Time,
+) error {
+	raw, err := json.Marshal(warnings)
+	if err != nil {
+		return fmt.Errorf("encode spawn warnings for %s: %w", id, err)
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if _, err := s.qw.SetSessionSpawnWarnings(ctx, gen.SetSessionSpawnWarningsParams{
+		SpawnWarnings: string(raw),
+		UpdatedAt:     now,
+		ID:            id,
+	}); err != nil {
+		return fmt.Errorf("set spawn warnings for %s: %w", id, err)
+	}
+	return nil
+}
+
 // SetSessionProvisionSteps publishes start progress and the pre-launch setup
 // checkpoint. Like SetSessionProvisionState it writes only its own column.
 func (s *Store) SetSessionProvisionSteps(
@@ -901,6 +926,7 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 		ProvisionState:    row.ProvisionState.WithDefault(),
 		ProvisionError:    row.ProvisionError,
 		ProvisionSteps:    decodeProvisionSteps(row.ProvisionSteps),
+		SpawnWarnings:     decodeSpawnWarnings(row.SpawnWarnings),
 		BranchState:       decodeBranchState(row.BranchState),
 		IsTaskPreparation: row.IsTaskPreparation,
 	}
@@ -918,6 +944,19 @@ func decodeProvisionSteps(raw string) []domain.SessionProvisionStep {
 		return nil
 	}
 	return steps
+}
+
+// decodeSpawnWarnings reads the spawn warnings. A malformed value reads as none:
+// the warnings only inform the user and never gate the session.
+func decodeSpawnWarnings(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var warnings []string
+	if err := json.Unmarshal([]byte(raw), &warnings); err != nil {
+		return nil
+	}
+	return warnings
 }
 
 // decodeBranchState reads the observed branch facts. A missing or malformed

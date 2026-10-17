@@ -386,6 +386,7 @@ type Store interface {
 	DeleteSessionWorktrees(ctx context.Context, id domain.SessionID) error
 	SetSessionProvisionState(ctx context.Context, id domain.SessionID, state domain.SessionProvisionState, message string, now time.Time) (bool, error)
 	SetSessionProvisionSteps(ctx context.Context, id domain.SessionID, steps []domain.SessionProvisionStep, now time.Time) error
+	SetSessionSpawnWarnings(ctx context.Context, id domain.SessionID, warnings []string, now time.Time) error
 	SetSessionProvisionedWorkspace(ctx context.Context, id domain.SessionID, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error)
 	SetSessionNamedWorkspace(ctx context.Context, id domain.SessionID, expectedPath, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error)
 	SetTaskPreparationBase(ctx context.Context, id domain.SessionID, baseSHA, baseRef string) (bool, error)
@@ -1271,7 +1272,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 	}
 	if ws.Path == "" {
-		baseRefs := m.refreshDefaultBranchesBestEffort(ctx, project)
+		baseRefs, spawnWarnings := m.refreshDefaultBranchesBestEffort(ctx, project)
+		m.recordSpawnWarnings(ctx, id, spawnWarnings)
+		rec.SpawnWarnings = spawnWarnings
 		ws, workspaceProject, err = m.createSessionWorkspace(ctx, project, cfg, id, branch, baseRefs)
 	}
 	if err != nil {
@@ -1807,16 +1810,20 @@ type defaultBranchRefreshTarget struct {
 	resolved         ports.WorkspaceDefaultBranch
 }
 
-func (m *Manager) refreshDefaultBranchesBestEffort(ctx context.Context, project domain.ProjectRecord) map[string]string {
+// refreshDefaultBranchesBestEffort resolves each repository's base ref and then
+// fetches it so the new worktree starts from the remote's current tip. It returns
+// the resolved refs and one warning per fetch that failed. A failed fetch never
+// fails the spawn; the worktree then starts from the local remote-tracking ref.
+func (m *Manager) refreshDefaultBranchesBestEffort(ctx context.Context, project domain.ProjectRecord) (map[string]string, []string) {
 	if project.Kind.WithDefault() == domain.ProjectKindScratch {
-		return nil
+		return nil, nil
 	}
 	if strings.TrimSpace(project.Path) == "" {
-		return nil
+		return nil, nil
 	}
 	refresher, ok := m.workspace.(ports.WorkspaceDefaultBranchRefresher)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	baseRefs := make(map[string]string)
 	targets := []defaultBranchRefreshTarget{{
@@ -1863,10 +1870,16 @@ func (m *Manager) refreshDefaultBranchesBestEffort(ctx context.Context, project 
 		}
 	}
 
+	// Projects can opt out of the fetch for very large or air-gapped repositories.
+	// Resolution above is local-only, so the canonical refs are still accurate.
+	if project.Config.DisableFetchBeforeSpawn {
+		return baseRefs, nil
+	}
 	// One deadline covers the complete workspace refresh. A slow or offline
 	// repository cannot multiply spawn latency by the number of child repos.
 	fetchCtx, cancel := context.WithTimeout(ctx, m.defaultBranchRefreshTimeout)
 	defer cancel()
+	var warnings []string
 	for _, target := range targets {
 		if target.resolved.BaseRef == "" {
 			continue
@@ -1880,9 +1893,28 @@ func (m *Manager) refreshDefaultBranchesBestEffort(ctx context.Context, project 
 				"baseRef", target.resolved.BaseRef,
 				"error", err,
 			)
+			warnings = append(warnings, staleBaseWarning(target.resolved, target.repoPath))
 		}
 	}
-	return baseRefs
+	return baseRefs, warnings
+}
+
+// staleBaseWarning is the user-facing form of a failed pre-spawn fetch. It omits
+// the git error, which names the command and paths; the daemon log keeps it.
+func staleBaseWarning(target ports.WorkspaceDefaultBranch, repoPath string) string {
+	return fmt.Sprintf("Could not fetch %s/%s for %s before spawning, so the worktree may start from a stale local base.",
+		target.Remote, target.Branch, filepath.Base(repoPath))
+}
+
+// recordSpawnWarnings persists a spawn's warnings on the session. A failed write
+// is logged, not returned, because the warnings never gate the spawn.
+func (m *Manager) recordSpawnWarnings(ctx context.Context, id domain.SessionID, warnings []string) {
+	if len(warnings) == 0 {
+		return
+	}
+	if err := m.store.SetSessionSpawnWarnings(ctx, id, warnings, m.clock()); err != nil {
+		m.logger.Warn("spawn: record spawn warnings", "sessionID", id, "error", err)
+	}
 }
 
 func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.ProjectRecord, cfg ports.SpawnConfig, id domain.SessionID, branch string, baseRefs map[string]string) (ports.WorkspaceInfo, *ports.WorkspaceProjectInfo, error) {
