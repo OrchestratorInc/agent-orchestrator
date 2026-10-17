@@ -43,6 +43,9 @@ var (
 	// did not spawn. It is forbidden, but names the reason so `ao kill` and
 	// `ao send` can say so instead of reporting an organization access error.
 	ErrNotOrchestratorChild = fmt.Errorf("not a session this orchestrator started: %w", ErrForbidden)
+	// ErrArtifactShareLimit means the user already holds their maximum number
+	// of active artifact share links.
+	ErrArtifactShareLimit = errors.New("artifact share limit reached")
 )
 
 type Store struct {

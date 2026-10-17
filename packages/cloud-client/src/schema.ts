@@ -54,6 +54,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/me/artifact-shares": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Lists the signed-in user's public artifact share links, newest first, with how many they may hold. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
+        get: operations["listArtifactShares"];
+        put?: never;
+        /** @description Publishes the request body, one file from a local session, as a new public link at <project>-<feature>-<email> under the share origin. A taken name gets a -2, -3, ... suffix. Content-Length and X-AO-Artifact-SHA256 are required. Returns 409 artifact_share_limit_reached when the user already holds their limit of links. */
+        post: operations["createArtifactShare"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/{shareId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Replaces the file an existing link serves. The link keeps its URL and does not count against the limit again. */
+        put: operations["updateArtifactShare"];
+        post?: never;
+        /** @description Revokes a link and deletes its stored file, freeing a slot. */
+        delete: operations["deleteArtifactShare"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/github/user": {
         parameters: {
             query?: never;
@@ -2891,6 +2929,31 @@ export interface components {
             /** Format: date-time */
             expiresAt: string;
         };
+        ArtifactShare: {
+            /** Format: uuid */
+            id: string;
+            /** @description The link's subdomain label. */
+            slug: string;
+            /** @description The public link, for example http://<slug>.share.localhost:8081/. */
+            url: string;
+            name: string;
+            contentType: string;
+            /** Format: int64 */
+            size: number;
+            sha256: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        ArtifactShareEnvelope: {
+            share: components["schemas"]["ArtifactShare"];
+        };
+        ArtifactShareList: {
+            shares: components["schemas"]["ArtifactShare"][];
+            limit: number;
+            used: number;
+        };
         WorkerArtifactFile: {
             path: string;
             /** Format: int64 */
@@ -3475,6 +3538,10 @@ export interface components {
         };
     };
     parameters: {
+        /** @description The file name, without a directory. */
+        ArtifactShareName: string;
+        /** @description Lowercase hex SHA-256 of the body. */
+        ArtifactShareSHA256: string;
         OrgId: string;
         ProjectId: string;
         SessionId: string;
@@ -3592,6 +3659,114 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description The personal coding-agent credential was disconnected. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listArtifactShares: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user's share links. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createArtifactShare: {
+        parameters: {
+            query: {
+                /** @description The file name, without a directory. */
+                name: components["parameters"]["ArtifactShareName"];
+                project?: string;
+                feature?: string;
+            };
+            header: {
+                /** @description Lowercase hex SHA-256 of the body. */
+                "X-AO-Artifact-SHA256": components["parameters"]["ArtifactShareSHA256"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description The new share link. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateArtifactShare: {
+        parameters: {
+            query: {
+                /** @description The file name, without a directory. */
+                name: components["parameters"]["ArtifactShareName"];
+            };
+            header: {
+                /** @description Lowercase hex SHA-256 of the body. */
+                "X-AO-Artifact-SHA256": components["parameters"]["ArtifactShareSHA256"];
+            };
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description The updated share link. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteArtifactShare: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The link was revoked. */
             204: {
                 headers: {
                     [name: string]: unknown;

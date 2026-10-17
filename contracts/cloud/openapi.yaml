@@ -101,6 +101,102 @@ paths:
           description: The personal coding-agent credential was disconnected.
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares:
+    get:
+      operationId: listArtifactShares
+      tags: [Artifacts]
+      description: >-
+        Lists the signed-in user's public artifact share links, newest first,
+        with how many they may hold. Available only when the development-only
+        AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404.
+      responses:
+        "200":
+          description: The user's share links.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareList"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createArtifactShare
+      tags: [Artifacts]
+      description: >-
+        Publishes the request body, one file from a local session, as a new
+        public link at <project>-<feature>-<email> under the share origin. A
+        taken name gets a -2, -3, ... suffix. Content-Length and
+        X-AO-Artifact-SHA256 are required. Returns 409
+        artifact_share_limit_reached when the user already holds their limit
+        of links.
+      parameters:
+        - $ref: "#/components/parameters/ArtifactShareName"
+        - name: project
+          in: query
+          schema:
+            type: string
+        - name: feature
+          in: query
+          schema:
+            type: string
+        - $ref: "#/components/parameters/ArtifactShareSHA256"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "201":
+          description: The new share link.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares/{shareId}:
+    parameters:
+      - name: shareId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      operationId: updateArtifactShare
+      tags: [Artifacts]
+      description: >-
+        Replaces the file an existing link serves. The link keeps its URL and
+        does not count against the limit again.
+      parameters:
+        - $ref: "#/components/parameters/ArtifactShareName"
+        - $ref: "#/components/parameters/ArtifactShareSHA256"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: The updated share link.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteArtifactShare
+      tags: [Artifacts]
+      description: Revokes a link and deletes its stored file, freeing a slot.
+      responses:
+        "204":
+          description: The link was revoked.
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/github/user:
     get:
       operationId: getGitHubUserConnection
@@ -2525,6 +2621,22 @@ components:
         `worker:transport` for workspace and terminal transport, and
         `worker:notification` for durable agent notification intake.
   parameters:
+    ArtifactShareName:
+      name: name
+      in: query
+      required: true
+      description: The file name, without a directory.
+      schema:
+        type: string
+        maxLength: 255
+    ArtifactShareSHA256:
+      name: X-AO-Artifact-SHA256
+      in: header
+      required: true
+      description: Lowercase hex SHA-256 of the body.
+      schema:
+        type: string
+        pattern: "^[0-9a-f]{64}$"
     OrgId:
       name: orgId
       in: path
@@ -5353,6 +5465,59 @@ components:
         expiresAt:
           type: string
           format: date-time
+    ArtifactShare:
+      type: object
+      additionalProperties: false
+      required: [id, slug, url, name, contentType, size, sha256, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+          description: The link's subdomain label.
+        url:
+          type: string
+          description: The public link, for example http://<slug>.share.localhost:8081/.
+        name:
+          type: string
+        contentType:
+          type: string
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ArtifactShareEnvelope:
+      type: object
+      additionalProperties: false
+      required: [share]
+      properties:
+        share:
+          $ref: "#/components/schemas/ArtifactShare"
+    ArtifactShareList:
+      type: object
+      additionalProperties: false
+      required: [shares, limit, used]
+      properties:
+        shares:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArtifactShare"
+        limit:
+          type: integer
+          minimum: 1
+        used:
+          type: integer
+          minimum: 0
     WorkerArtifactFile:
       type: object
       additionalProperties: false
