@@ -653,6 +653,33 @@ describe("SessionsBoard", () => {
 		expect(within(card()).getByText("ao/composer-review/root")).toBeInTheDocument();
 	});
 
+	it.each(["claude-code", "codex", "opencode"] as const)("reuses branch naming shimmer for a Cloud %s task until names are finalized", (provider) => {
+		const worker = boardSession({
+			id: "cloud-worker", title: "Cloud task", kind: "worker", provider, status: "working",
+			terminalHandleId: "cloud-worker", branch: "ao/provisional/root",
+			cloud: { orgId: "org-1", taskNamingState: "pending" },
+		});
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const show = (updated: WorkspaceSession) => workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([updated])], isError: false, isSuccess: true,
+		});
+		show(worker);
+		const view = renderBoardWithClient(queryClient, "p1");
+		const card = () => screen.getByText(worker.title).closest('[data-testid="board-session-card"]') as HTMLElement;
+		const namingText = within(card()).getByRole("status").textContent;
+		expect(within(card()).getByRole("status")).toHaveClass("chat-working-shimmer");
+		expect(namingText).not.toMatch(/…|\.\.\./);
+		expect(within(card()).queryByText(worker.branch!)).not.toBeInTheDocument();
+		const refresh = () => view.rerender(<QueryClientProvider client={queryClient}><TooltipProvider><SessionsBoard projectId="p1" /></TooltipProvider></QueryClientProvider>);
+		show({ ...worker, cloud: { ...worker.cloud!, taskNamingState: "reserved" } });
+		refresh();
+		expect(within(card()).getByRole("status").textContent).toBe(namingText);
+		show({ ...worker, branch: "ao/fix-login/root", cloud: { ...worker.cloud!, taskNamingState: "done" } });
+		refresh();
+		expect(within(card()).queryByRole("status")).not.toBeInTheDocument();
+		expect(within(card()).getByText("ao/fix-login/root")).toBeInTheDocument();
+	});
+
 	it("shows start failure instead of Awaiting PR on a failed card", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [workspaceWithSessions([boardSession({

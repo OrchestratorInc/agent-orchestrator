@@ -306,6 +306,16 @@ func ConfigureWorkerGit(
 	runner GitRunner,
 	workspace, dataDir, publicURL, sessionID, branch string,
 ) error {
+	return configureWorkerGit(ctx, runner, workspace, dataDir, publicURL, sessionID, branch, true)
+}
+
+// ConfigureWorkerGitOnBranch installs tooling after the shared workspace
+// adapter has selected the branch. It never checks out or resets a branch.
+func ConfigureWorkerGitOnBranch(ctx context.Context, runner GitRunner, workspace, dataDir, publicURL, sessionID, branch string) error {
+	return configureWorkerGit(ctx, runner, workspace, dataDir, publicURL, sessionID, branch, false)
+}
+
+func configureWorkerGit(ctx context.Context, runner GitRunner, workspace, dataDir, publicURL, sessionID, branch string, checkout bool) error {
 	if runner == nil {
 		return errors.New("git runner is required")
 	}
@@ -327,7 +337,9 @@ func ConfigureWorkerGit(
 		{"config", "--local", "--replace-all", "credential.useHttpPath", "true"},
 		{"config", "--local", "--replace-all", "user.name", cloudGitAuthorName},
 		{"config", "--local", "--replace-all", "user.email", cloudGitAuthorEmail},
-		{"checkout", "-B", branch},
+	}
+	if checkout {
+		commands = append(commands, []string{"checkout", "-B", branch})
 	}
 	for _, command := range commands {
 		if _, err := runner.Run(ctx, workspace, nil, command...); err != nil {

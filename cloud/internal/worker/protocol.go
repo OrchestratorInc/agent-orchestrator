@@ -12,6 +12,9 @@ import (
 // not overwrite the interactive agent's activity state.
 const ReviewTerminalEnv = "AO_CLOUD_REVIEW_TERMINAL"
 
+// CapabilityTaskNaming reports the worker's pre-launch task naming gate.
+const CapabilityTaskNaming = "workspace.task-naming"
+
 // BootstrapRequest is what a worker sends to redeem its one-time ticket.
 type BootstrapRequest struct {
 	BootstrapToken string   `json:"bootstrapToken"`
@@ -25,14 +28,16 @@ type LaunchContext struct {
 	ProjectID string `json:"projectId"`
 	// ProjectName is the project's display name, for the Setup and Cleanup
 	// commands' environment.
-	ProjectName    string `json:"projectName,omitempty"`
-	Kind           string `json:"kind"`
-	Harness        string `json:"harness"`
-	DisplayName    string `json:"displayName"`
-	Branch         string `json:"branch"`
-	Prompt         string `json:"prompt,omitempty"`
-	AgentSessionID string `json:"agentSessionId,omitempty"`
-	Interface      string `json:"interface"`
+	ProjectName     string `json:"projectName,omitempty"`
+	Kind            string `json:"kind"`
+	Harness         string `json:"harness"`
+	DisplayName     string `json:"displayName"`
+	Branch          string `json:"branch"`
+	TaskNamingState string `json:"taskNamingState,omitempty"`
+	TaskNameSlug    string `json:"taskNameSlug,omitempty"`
+	Prompt          string `json:"prompt,omitempty"`
+	AgentSessionID  string `json:"agentSessionId,omitempty"`
+	Interface       string `json:"interface"`
 	// ParentSessionID is the orchestrator that spawned this session; empty for
 	// top-level sessions.
 	ParentSessionID string `json:"parentSessionId,omitempty"`

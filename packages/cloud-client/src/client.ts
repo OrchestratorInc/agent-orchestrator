@@ -413,17 +413,33 @@ export class CloudClient {
     );
   }
 
-  createSession(
+  async createSession(
     orgId: string,
     input: CreateSessionInput,
     options: IdempotentRequestOptions,
   ): Promise<{ session: Session }> {
-    return this.request(this.orgPath(orgId, "/sessions"), {
-      method: "POST",
-      body: input,
+    const path = this.orgPath(orgId, "/sessions");
+    const init = {
+      method: "POST" as const,
       idempotencyKey: options.idempotencyKey,
       signal: options.signal,
-    });
+    };
+    try {
+      return await this.request(path, { ...init, body: input });
+    } catch (error) {
+      // Older control planes strictly reject the optional field before creating a session.
+      if (
+        !Object.hasOwn(input, "generateTitle") ||
+        typeof input.generateTitle !== "boolean" ||
+        init.signal?.aborted ||
+        !(error instanceof CloudApiError) ||
+        error.status !== 400 ||
+        error.code !== "invalid_request" ||
+        error.message !== "The request body is invalid."
+      ) throw error;
+      const { generateTitle: _generateTitle, ...legacyInput } = input;
+      return this.request(path, { ...init, body: legacyInput });
+    }
   }
 
   deleteSession(

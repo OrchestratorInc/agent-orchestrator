@@ -4492,6 +4492,13 @@ components:
           type: string
         branch:
           type: string
+        taskNamingState:
+          type: string
+          enum: [pending, reserved, done]
+          description: Task naming progress; absent on legacy control planes.
+        taskNameSlug:
+          type: string
+          description: Reserved task slug used for the branch and worktree name.
         mode:
           $ref: "#/components/schemas/SessionMode"
         model:
@@ -4595,7 +4602,10 @@ components:
         displayName:
           type: string
           minLength: 1
-          maxLength: 80
+          maxLength: 100
+        generateTitle:
+          type: boolean
+          description: Generate a title from the task prompt; defaults to false, preserving displayName.
         prompt:
           type: string
           maxLength: 65536

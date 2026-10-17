@@ -682,12 +682,22 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 				},
 				signal: o?.signal,
 			}),
-		createSession: (orgId, body, o) =>
-			requestJson("POST", `/orgs/${seg(orgId)}/sessions`, {
-				body,
-				signal: o?.signal,
-				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
-			}),
+		createSession: async (orgId, body, o) => {
+			const path = `/orgs/${seg(orgId)}/sessions`;
+			const init = { signal: o?.signal, idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey() };
+			try {
+				return await requestJson("POST", path, { ...init, body });
+			} catch (error) {
+				// Older control planes strictly reject the optional field before creating a session.
+				if (
+					!Object.hasOwn(body, "generateTitle") || typeof body.generateTitle !== "boolean" || init.signal?.aborted ||
+					!(error instanceof CloudCpError) || error.status !== 400 || error.code !== "invalid_request" ||
+					error.message !== "The request body is invalid."
+				) throw error;
+				const { generateTitle: _generateTitle, ...legacyBody } = body;
+				return requestJson("POST", path, { ...init, body: legacyBody });
+			}
+		},
 		getSession: (orgId, sessionId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}`, { signal: o?.signal }),
 		getInterfaceTransition: (orgId, sessionId, o) =>

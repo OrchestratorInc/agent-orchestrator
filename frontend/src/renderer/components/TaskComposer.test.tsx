@@ -1204,6 +1204,7 @@ describe("TaskComposer", () => {
 
 		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("session-1"));
 		expect(h.cloudCreateSession.mock.calls[0]?.[1]).not.toHaveProperty("provider");
+		expect(h.cloudCreateSession.mock.calls[0]?.[1]).toMatchObject({ generateTitle: true, displayName: "Fix the bug", prompt: "Fix the bug" });
 	});
 
 	it("waits for a selected file read before submitting", async () => {

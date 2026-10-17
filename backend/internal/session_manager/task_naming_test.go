@@ -14,6 +14,7 @@ import (
 	chatregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/tasknaming"
 )
 
 type taskNamingLauncher struct {
@@ -48,6 +49,9 @@ func TestTaskNamingAllShippedAgents(t *testing.T) {
 			if len(launcher.backgroundHarnesses) != 1 || launcher.backgroundHarnesses[0] != agent.Harness || launcher.background[0].Model != "selected-model" {
 				t.Fatalf("selected agent/model not preserved: %v, %+v", launcher.backgroundHarnesses, launcher.background)
 			}
+			if launcher.background[0].SystemPrompt != tasknaming.SystemPrompt || launcher.backgroundPrompts[0] != cfg.Prompt {
+				t.Fatalf("naming prompt changed: %+v, %v", launcher.background[0], launcher.backgroundPrompts)
+			}
 		})
 	}
 }
@@ -76,7 +80,7 @@ func TestTaskNamingRestartRecoversBeforeDatabaseSave(t *testing.T) {
 				t.Fatal(err)
 			}
 			m.store = taskNamingSaveFailureStore{st}
-			moved, _, err := m.nameTaskWorkspace(t.Context(), rec, root, nil, generatedTaskName{Slug: "login-redirect"})
+			moved, _, err := m.nameTaskWorkspace(t.Context(), rec, root, nil, tasknaming.Name{Slug: "login-redirect"})
 			if err == nil || moved.Path == root.Path || st.sessions[rec.ID].Metadata.WorkspacePath != "" {
 				t.Fatalf("missing simulated interruption: %+v, %v", moved, err)
 			}
@@ -109,7 +113,7 @@ func TestTaskNamingRetainsJournalUntilWorktreeProgressIsSaved(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.store = namingProgressFailureStore{st}
-	_, _, err = m.nameTaskWorkspace(t.Context(), rec, root, nil, generatedTaskName{Slug: "login-redirect"})
+	_, _, err = m.nameTaskWorkspace(t.Context(), rec, root, nil, tasknaming.Name{Slug: "login-redirect"})
 	if err == nil || st.sessions[rec.ID].ProvisionSteps[0].Status != domain.SessionProvisionStepRunning {
 		t.Fatalf("completion ignored a failed checkpoint: err=%v steps=%+v", err, st.sessions[rec.ID].ProvisionSteps)
 	}
@@ -254,6 +258,9 @@ func TestTaskNamingFallbackAndManualTitle(t *testing.T) {
 
 func TestTaskNamingDeadlineAndCapacity(t *testing.T) {
 	m, st, _ := newChatManager(&taskNamingLauncher{wait: true})
+	if cap(m.taskNamingSlots) != tasknaming.MaxConcurrent {
+		t.Fatalf("naming capacity = %d, want %d", cap(m.taskNamingSlots), tasknaming.MaxConcurrent)
+	}
 	m.dataDir = t.TempDir()
 	cfg := asyncChatSpawnConfig("Fix login redirect")
 	cfg.NameFromPrompt = true
@@ -277,23 +284,6 @@ func TestTaskNamingDeadlineAndCapacity(t *testing.T) {
 	}
 }
 
-func TestParseTaskName(t *testing.T) {
-	fallback := generatedTaskName{Slug: "fallback"}
-	for _, tt := range []struct{ raw, slug string }{
-		{`{"title":"Fix redirect","slug":"Fix / Login..Redirect"}`, "fix-login-redirect"},
-		{"```json\n{\"title\":\"Fix redirect\",\"slug\":\"fix-login\"}\n```", "fix-login"},
-		{`{"slug":"../../"}`, "fallback"},
-		{`{"slug":"one two three four five six seven"}`, "one-two-three"},
-		{`{"slug":"` + strings.Repeat("a", 100) + `"}`, strings.Repeat("a", 24)},
-		{`{"slug":"vaporwave-site-redesign"}`, "vaporwave-site-redesign"},
-		{`broken`, "fallback"},
-	} {
-		if got := parseTaskName(tt.raw, fallback); got.Slug != tt.slug {
-			t.Errorf("parse %q = %+v, want %q", tt.raw, got, tt.slug)
-		}
-	}
-}
-
 func TestTaskNamingPreservesManualRename(t *testing.T) {
 	m, st, ws, _ := newGitTaskPreparationManager(t)
 	rec, err := st.CreateSession(context.Background(), domain.SessionRecord{ProjectID: "mer", Kind: domain.KindWorker, DisplayName: "Provisional"})
@@ -307,7 +297,7 @@ func TestTaskNamingPreservesManualRename(t *testing.T) {
 	manual := rec
 	manual.DisplayName = "My title"
 	st.sessions[rec.ID] = manual
-	_, _, err = m.nameTaskWorkspace(context.Background(), rec, root, nil, generatedTaskName{Title: "Generated title", Slug: "fix-login"})
+	_, _, err = m.nameTaskWorkspace(context.Background(), rec, root, nil, tasknaming.Name{Title: "Generated title", Slug: "fix-login"})
 	if err != nil || st.sessions[rec.ID].DisplayName != "My title" {
 		t.Fatalf("manual title overwritten: %+v, %v", st.sessions[rec.ID], err)
 	}
@@ -345,13 +335,6 @@ func TestTaskNamingPersistsMultiRepoPaths(t *testing.T) {
 				t.Fatalf("actual branch = %q, durable = %q", got, row.Branch)
 			}
 		}
-	}
-}
-
-func BenchmarkTaskNameParsing(b *testing.B) {
-	fallback := generatedTaskName{Slug: "fix-login-redirect"}
-	for b.Loop() {
-		parseTaskName(`{"title":"Preserve destination after login","slug":"fix-login-redirect"}`, fallback)
 	}
 }
 
@@ -499,7 +482,7 @@ func TestTaskNamingRecoverySkipsLaunchedAgent(t *testing.T) {
 				t.Fatal(err)
 			}
 			m.store = taskNamingSaveFailureStore{st}
-			if _, _, err := m.nameTaskWorkspace(t.Context(), rec, root, nil, generatedTaskName{Slug: "login-redirect"}); err == nil {
+			if _, _, err := m.nameTaskWorkspace(t.Context(), rec, root, nil, tasknaming.Name{Slug: "login-redirect"}); err == nil {
 				t.Fatal("expected unsaved journal")
 			}
 			m.store = st

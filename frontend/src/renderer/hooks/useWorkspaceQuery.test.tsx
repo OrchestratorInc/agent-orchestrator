@@ -646,6 +646,27 @@ describe("useWorkspaceQuery", () => {
 		expect(listProjectsMock).toHaveBeenCalledWith("org-1", { limit: 100 });
 	});
 
+	it.each(["pending", "reserved", "done", undefined] as const)("maps Cloud naming metadata %s without changing startup readiness", async (taskNamingState) => {
+		cloudState.ready = true;
+		cloudState.org = { id: "org-1" };
+		listProjectsMock.mockResolvedValue({ items: [{ id: "cp-1", displayName: "Cloud app" }] });
+		listSessionsMock.mockResolvedValue({ items: [{
+			id: "cloud-worker", projectId: "cp-1", kind: "worker", harness: "codex",
+			displayName: "Fix login", branch: "ao/fix-login/root", taskNamingState, taskNameSlug: "fix-login",
+			activityState: "idle", status: "working",
+		}] });
+		respondWith({});
+		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
+		await waitFor(() => expect(result.current.data?.[0]?.sessions).toHaveLength(1));
+		const mapped = result.current.data?.[0].sessions[0];
+		expect(mapped).toMatchObject({
+			terminalHandleId: "cloud-worker", title: "Fix login", branch: "ao/fix-login/root",
+			cloud: { orgId: "org-1", taskNamingState, taskNameSlug: "fix-login" },
+		});
+		expect(mapped?.provisionState).toBeUndefined();
+		expect(mapped?.provisionSteps).toBeUndefined();
+	});
+
 	it("maps Cloud failing-check details into the shared PR facts", async () => {
 		cloudState.ready = true;
 		cloudState.org = { id: "org-1" };

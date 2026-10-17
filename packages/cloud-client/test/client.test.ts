@@ -1211,3 +1211,73 @@ function requestHeaders(
 ): Headers {
   return new Headers((fetchMock.mock.calls[call]?.[1] as RequestInit).headers);
 }
+
+
+describe("Cloud session creation across control-plane versions", () => {
+  const body = { projectId: "project", kind: "worker" as const, harness: "codex", displayName: "Task", prompt: "Fix auth", mode: "trusted" as const, deniedCommands: [] };
+  const invalidRequest = { error: "Bad Request", code: "invalid_request", message: "The request body is invalid.", requestId: "old-server" };
+  const options = { idempotencyKey: "same-create" };
+
+  it.each([true, false])("retries an old decoder once without generateTitle=%s using the same request identity", async (generateTitle) => {
+    const input = Object.freeze({ ...body, generateTitle });
+    const controller = new AbortController();
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(invalidRequest, 400)).mockResolvedValueOnce(jsonResponse({ session: { id: "created" } }));
+    const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });
+    await expect(client.createSession("org", input, { ...options, signal: controller.signal })).resolves.toEqual({ session: { id: "created" } });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const call of fetchMock.mock.calls) {
+      const init = call[1] as RequestInit;
+      expect(new Headers(init.headers).get("Idempotency-Key")).toBe(options.idempotencyKey);
+      expect(init.signal).toBe(controller.signal);
+    }
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual(input);
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual(body);
+    expect(input.generateTitle).toBe(generateTitle);
+  });
+
+  it("does not retry a second decoder rejection", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => jsonResponse(invalidRequest, 400));
+    const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });
+    await expect(client.createSession("org", { ...body, generateTitle: true }, options)).rejects.toMatchObject({ status: 400, code: "invalid_request" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([true, false, undefined])("sends only one request to a current server for generateTitle=%s", async (generateTitle) => {
+    const fetchMock = vi.fn().mockImplementation(async () => jsonResponse({ session: { id: "created" } }));
+    const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });
+    await client.createSession("org", { ...body, generateTitle }, options);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [401, invalidRequest], [403, invalidRequest], [409, invalidRequest], [422, invalidRequest], [500, invalidRequest],
+    [400, { ...invalidRequest, code: "validation_error" }], [400, { ...invalidRequest, message: "Invalid task." }],
+  ])("does not retry other server errors (%s, %j)", async (status, envelope) => {
+    const fetchMock = vi.fn().mockImplementation(async () => jsonResponse(envelope, status));
+    const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });
+    await expect(client.createSession("org", { ...body, generateTitle: true }, options)).rejects.toBeInstanceOf(CloudApiError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([body, { ...body, generateTitle: undefined }])("does not retry when the optional flag was not sent", async (input) => {
+    const fetchMock = vi.fn().mockImplementation(async () => jsonResponse(invalidRequest, 400));
+    const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });
+    await expect(client.createSession("org", input, options)).rejects.toMatchObject({ status: 400 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([new TypeError("network unavailable"), new DOMException("Timed out", "TimeoutError"), new DOMException("Aborted", "AbortError")])("does not retry transport failure %s", async (error) => {
+    const fetchMock = vi.fn().mockRejectedValue(error);
+    const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });
+    await expect(client.createSession("org", { ...body, generateTitle: true }, options)).rejects.toBe(error);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a decoder rejection after the caller aborts", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn().mockImplementation(async () => { controller.abort(); return jsonResponse(invalidRequest, 400); });
+    const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });
+    await expect(client.createSession("org", { ...body, generateTitle: true }, { ...options, signal: controller.signal })).rejects.toMatchObject({ status: 400 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

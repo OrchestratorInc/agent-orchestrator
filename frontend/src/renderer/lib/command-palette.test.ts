@@ -737,3 +737,35 @@ describe("pending branch presentation", () => {
 		expect(sessionBranchPresentation({ ...pending, ...stopped })).toEqual({ branch: undefined, naming: false });
 	});
 });
+
+
+describe("Cloud branch naming presentation", () => {
+	const cloudPending = session({
+		id: "cloud-worker", terminalHandleId: "cloud-worker",
+		cloud: { orgId: "org-1", taskNamingState: "pending" },
+	});
+	it.each(["pending", "reserved"] as const)("hides %s provisional names despite the Cloud terminal placeholder", (taskNamingState) => {
+		expect(sessionBranchPresentation({ ...cloudPending, cloud: { ...cloudPending.cloud!, taskNamingState } }))
+			.toEqual({ branch: undefined, naming: true });
+	});
+	it.each(["done", undefined] as const)("preserves final and legacy Cloud branches: %s", (taskNamingState) => {
+		expect(sessionBranchPresentation({ ...cloudPending, cloud: { orgId: "org-1", taskNamingState } }))
+			.toEqual({ branch: cloudPending.branch, naming: false });
+	});
+	it.each<Partial<WorkspaceSession>>([
+		{ isTerminated: true },
+		{ activity: { state: "exited", lastActivityAt: "2026-01-01T00:00:00Z" } },
+		{ statusReadiness: "unavailable" },
+		{ cloud: { orgId: "org-1", taskNamingState: "pending", startupError: { code: "checkout_failed", message: "Checkout failed", at: "2026-01-01T00:00:00Z" } } },
+		...(["paused", "stopped", "terminated", "failed"] as const).flatMap((state) => [
+			{ cloud: { orgId: "org-1", taskNamingState: "pending" as const, desiredState: state } },
+			{ cloud: { orgId: "org-1", taskNamingState: "pending" as const, observedState: state } },
+			{ cloud: { orgId: "org-1", taskNamingState: "pending" as const, runtimeState: state } },
+		]),
+	])("keeps unfinished names private without shimmering on a stopped Cloud session: %j", (stopped) => {
+		expect(sessionBranchPresentation({ ...cloudPending, ...stopped })).toEqual({ branch: undefined, naming: false });
+	});
+	it.each<Partial<WorkspaceSession>>([{ kind: "orchestrator" }, { workspaceId: STANDALONE_WORKSPACE_ID }])("excludes non-task Cloud sessions: %j", (excluded) => {
+		expect(sessionBranchPresentation({ ...cloudPending, ...excluded })).toEqual({ branch: cloudPending.branch, naming: false });
+	});
+});

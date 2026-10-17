@@ -84,12 +84,13 @@ type projectResponse struct {
 }
 
 type createSessionRequest struct {
-	ProjectID   string `json:"projectId"`
-	Kind        string `json:"kind"`
-	Harness     string `json:"harness"`
-	DisplayName string `json:"displayName"`
-	Prompt      string `json:"prompt"`
-	Mode        string `json:"mode,omitempty"`
+	ProjectID     string `json:"projectId"`
+	Kind          string `json:"kind"`
+	Harness       string `json:"harness"`
+	DisplayName   string `json:"displayName"`
+	GenerateTitle bool   `json:"generateTitle,omitempty"`
+	Prompt        string `json:"prompt"`
+	Mode          string `json:"mode,omitempty"`
 	// Model is the coding-agent model the session launches with (harness-native
 	// id, e.g. "anthropic/claude-opus-4-8" for opencode). Optional: empty uses
 	// the harness default.
@@ -127,6 +128,8 @@ type sessionResponse struct {
 	AutoReviewEnabled bool     `json:"autoReviewEnabled"`
 	DisplayName       string   `json:"displayName"`
 	Branch            string   `json:"branch"`
+	TaskNamingState   string   `json:"taskNamingState,omitempty"`
+	TaskNameSlug      string   `json:"taskNameSlug,omitempty"`
 	Mode              string   `json:"mode"`
 	Model             string   `json:"model,omitempty"`
 	DeniedCommands    []string `json:"deniedCommands"`
@@ -665,6 +668,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			Kind:                request.Kind,
 			Harness:             request.Harness,
 			DisplayName:         request.DisplayName,
+			GenerateTitle:       request.GenerateTitle,
 			Prompt:              request.Prompt,
 			Mode:                request.Mode,
 			Model:               request.Model,
@@ -1324,6 +1328,8 @@ func toSessionResponse(session domain.Session, prs []contract.PRFacts) sessionRe
 		AutoReviewEnabled:  session.AutoReviewEnabled,
 		DisplayName:        session.DisplayName,
 		Branch:             session.Branch,
+		TaskNamingState:    session.TaskNamingState,
+		TaskNameSlug:       session.TaskNameSlug,
 		Mode:               session.Mode,
 		Model:              session.Model,
 		DeniedCommands:     nonNilStrings(session.DeniedCommands),

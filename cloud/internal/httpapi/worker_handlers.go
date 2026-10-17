@@ -163,6 +163,12 @@ func (s *Server) workerBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	claims := worker.Claims{OrgID: ticket.OrgID, SessionID: ticket.SessionID, WorkerID: workerID, Epoch: ticket.WorkerEpoch}
+	if !s.workerNamingCompatibility(w, r, &launch, claims, slices.Contains(input.Capabilities, worker.CapabilityTaskNaming)) {
+		return
+	}
+	launchContext.TaskNamingState, launchContext.TaskNameSlug, launchContext.Branch = launch.TaskNamingState, launch.TaskNameSlug, launch.Branch
+
 	scopes := issuedWorkerScopes(ticket.Scopes, launch)
 	token, err := s.workerTokens.Issue(worker.Claims{
 		OrgID:     ticket.OrgID,
@@ -229,6 +235,9 @@ func (s *Server) workerReconnect(w http.ResponseWriter, r *http.Request) {
 	launch, err := s.store.WorkerLaunchSpec(r.Context(), claims.OrgID, claims.SessionID)
 	if err != nil {
 		s.writeStoreError(w, r, err)
+		return
+	}
+	if !s.workerNamingCompatibility(w, r, &launch, claims, headerReportsCapability(r, worker.CapabilityTaskNaming)) {
 		return
 	}
 	launchContext, err := launchContextFrom(launch, headerReportsCapability(r, worker.CapabilityWorkspacePathPlaceholder))
@@ -310,6 +319,8 @@ func launchContextFrom(launch domain.WorkerLaunch, resolvesWorkspacePath bool) (
 		Harness:         launch.Harness,
 		DisplayName:     launch.DisplayName,
 		Branch:          launch.Branch,
+		TaskNamingState: launch.TaskNamingState,
+		TaskNameSlug:    launch.TaskNameSlug,
 		Prompt:          launch.Prompt,
 		AgentSessionID:  launch.AgentSessionID,
 		Interface:       string(launch.Interface),

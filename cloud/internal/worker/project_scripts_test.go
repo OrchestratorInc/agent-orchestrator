@@ -188,3 +188,42 @@ func TestSetupRunsOnlyForTheSessionsFirstPreparation(t *testing.T) {
 		t.Fatal("Setup ran again after it succeeded")
 	}
 }
+
+func TestSetupPreparePreservesInitialEligibility(t *testing.T) {
+	workspace := t.TempDir()
+	commands := []string{"printf 'setup\\n' >> setup-runs"}
+	for _, test := range []struct {
+		name       string
+		firstStart bool
+		initial    []string
+		wantRun    bool
+	}{
+		{"pending initial Setup", true, commands, true},
+		{"initially no Setup", true, []string{" "}, false},
+		{"legacy session", false, commands, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			if err := (SetupRunner{DataDir: dataDir, FirstStart: test.firstStart}).Prepare(t.Context(), test.initial); err != nil {
+				t.Fatal(err)
+			}
+			runner := SetupRunner{DataDir: dataDir}
+			if event, ran := runner.Run(t.Context(), commands, workspace, scriptEnvironment(workspace)); ran != test.wantRun || ran && event.Status != SetupSucceeded {
+				t.Fatalf("restart Setup = %+v, ran=%v, want=%v", event, ran, test.wantRun)
+			}
+			if _, ran := runner.Run(t.Context(), commands, workspace, scriptEnvironment(workspace)); ran {
+				t.Fatal("successful Setup ran again")
+			}
+		})
+	}
+}
+
+func TestSetupPrepareReportsPersistenceFailure(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(dataDir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := (SetupRunner{DataDir: dataDir, FirstStart: true}).Prepare(t.Context(), []string{"true"}); err == nil {
+		t.Fatal("initial Setup eligibility was not persisted but startup could continue")
+	}
+}

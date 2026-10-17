@@ -226,3 +226,44 @@ processing is retried from the durable webhook queue; the control plane does
 not periodically refresh open PRs from GitHub. GitHub may initially report
 mergeability as unknown while it computes the result. Without another relevant
 webhook, that value stays unknown until the next PR action triggers an update.
+
+## Task names before worker launch
+
+New Git-backed worker sessions reserve a short task slug before their agent
+starts. The worker uses `backend/pkg/tasknaming` for the same prompt, response
+parser, 20-second deadline, and prompt-derived fallback as the local daemon.
+Cloud's `opencode` harness uses the OpenCode 2 Chat driver; Claude Code, Codex,
+and Cursor use their corresponding local Chat drivers. Naming uses a disposable
+workspace and the selected provider credential, without project hooks or worker
+control credentials. A timely result can finish while checkout is still running;
+late results cannot rename an already launched session.
+
+The deadline bounds naming, not repository checkout or total startup time.
+Codex OAuth naming receives an isolated copy without refresh authority, so an
+expired access token uses the naming fallback while the real agent retains its
+original refresh token.
+
+The control plane fences each naming request by worker ID and epoch. It reserves
+`<project-prefix>/<slug>/root` under a project lock, while workers check actual
+Git refs and directory collisions with the existing local Git workspace adapter.
+Numeric suffixes resolve collisions without overwriting a branch or directory.
+The adapter's move journal and a worker checkpoint keep filesystem changes
+recoverable until the control plane commits the actual branch and slug. Agents,
+setup scripts, and workspace transport receive the final path and branch.
+
+AO-owned checkouts keep the canonical repository at its configured root and put
+the named worktree at `.ao-task-worktrees/<project-id>/<slug>` beneath it. An
+explicit working directory or adopted template checkout keeps its directory;
+only its branch is named. Resumes preserve dirty work, branch switches, and
+detached HEAD states after naming completes. New repositories with no commits
+keep the original session branch and canonical checkout so the agent can create
+the first commit; that fallback is persisted before the agent starts. Existing
+sessions, orchestrators, scratch repositories, and empty prompts keep their prior
+behavior.
+
+Desktop task creation opts into generated titles with `generateTitle: true`.
+Other API callers omit it to preserve their explicit display name. A manual title
+edit made before naming completes wins over the generated title. The desktop
+shows its existing naming shimmer while the state is `pending` or `reserved`,
+and reveals the branch after completion. A startup failure keeps diagnostic
+workspace access available and blocks provider launch until checkout is reopened.

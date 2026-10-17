@@ -241,6 +241,9 @@ export type WorkspaceSession = {
 	 */
 	cloud?: {
 		orgId: string;
+		/** Explicit Cloud naming progress; absent on legacy sessions. */
+		taskNamingState?: "pending" | "reserved" | "done";
+		taskNameSlug?: string;
 		/** Maximum permission mode for Cloud turns in this session. */
 		permissionMode?: "read-only" | "standard" | "trusted";
 		sandboxProvider?: string;

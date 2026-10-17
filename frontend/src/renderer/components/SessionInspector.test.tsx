@@ -4751,6 +4751,32 @@ describe("SessionInspector branch summary", () => {
     expect(screen.queryByText(/^(Generating branch name|Naming branch|Preparing branch|Initializing branch|Resolving branch name)$/)).not.toBeInTheDocument();
   });
 
+  it("reuses the branch row for Cloud naming, failure, and completion without local git requests", () => {
+    mockGitState({});
+    const starting = session([], {
+      terminalHandleId: "sess-1", branch: "ao/provisional/root",
+      cloud: { orgId: "org-1", taskNamingState: "pending" },
+    });
+    const view = renderWithQuery(<SessionInspector session={starting} />);
+    const label = branch().getByRole("status");
+    const namingText = label.textContent;
+    expect(label).toHaveClass("chat-working-shimmer");
+    expect(namingText).not.toMatch(/…|\.\.\./);
+    expect(screen.queryByText(starting.branch!)).not.toBeInTheDocument();
+    const refresh = (updated: WorkspaceSession) => view.rerender(
+      <QueryClientProvider client={view.queryClient}><TooltipProvider><SessionInspector session={updated} /></TooltipProvider></QueryClientProvider>,
+    );
+    refresh({ ...starting, cloud: { ...starting.cloud!, taskNamingState: "reserved" } });
+    expect(branch().getByRole("status").textContent).toBe(namingText);
+    refresh({ ...starting, cloud: { ...starting.cloud!, runtimeState: "failed" } });
+    expect(screen.queryByText(namingText!)).not.toBeInTheDocument();
+    expect(screen.queryByText(starting.branch!)).not.toBeInTheDocument();
+    refresh({ ...starting, branch: "ao/fix-login/root", cloud: { ...starting.cloud!, taskNamingState: "done" } });
+    expect(branch().getByText("ao/fix-login/root")).toBeInTheDocument();
+    expect(branch().queryByRole("status")).not.toBeInTheDocument();
+    expect(getMock.mock.calls.some(([path]) => path === "/api/v1/sessions/{sessionId}/workspace/files")).toBe(false);
+  });
+
   beforeEach(() => {
     useSessionGitActionStore.setState({ pending: {} });
   });

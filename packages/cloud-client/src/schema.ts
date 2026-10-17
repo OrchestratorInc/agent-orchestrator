@@ -2440,6 +2440,13 @@ export interface components {
             terminateOnPrMerge: boolean;
             displayName: string;
             branch: string;
+            /**
+             * @description Task naming progress; absent on legacy control planes.
+             * @enum {string}
+             */
+            taskNamingState?: "pending" | "reserved" | "done";
+            /** @description Reserved task slug used for the branch and worktree name. */
+            taskNameSlug?: string;
             mode: components["schemas"]["SessionMode"];
             /** @description Coding-agent model the session launched with; empty means the harness default. */
             model?: string;
@@ -2481,6 +2488,8 @@ export interface components {
             kind: components["schemas"]["SessionKind"];
             harness: string;
             displayName: string;
+            /** @description Generate a title from the task prompt; defaults to false, preserving displayName. */
+            generateTitle?: boolean;
             prompt: string;
             /** @default trusted */
             mode: components["schemas"]["SessionMode"];

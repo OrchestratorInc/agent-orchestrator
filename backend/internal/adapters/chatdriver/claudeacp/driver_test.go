@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -14,6 +15,21 @@ import (
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+func TestResolveRuntimeUsesPerCallCommand(t *testing.T) {
+	t.Setenv("AO_CLAUDE_ACP_COMMAND", "/missing/global-adapter")
+	command := filepath.Join(t.TempDir(), "adapter")
+	if err := os.WriteFile(command, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	launch, err := resolveRuntime(context.Background(), map[string]string{"AO_CLAUDE_ACP_COMMAND": command})
+	if err != nil || launch.command != command {
+		t.Fatalf("launch = %+v, error = %v", launch, err)
+	}
+	if os.Getenv("AO_CLAUDE_ACP_COMMAND") != "/missing/global-adapter" {
+		t.Fatal("mutated process environment")
+	}
+}
 
 func TestClaudeACPLaunchEnvAdvertisesProviderModels(t *testing.T) {
 	t.Setenv("CLAUDE_MODEL_CONFIG", "")
@@ -259,7 +275,7 @@ func TestRuntimeCommandOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("AO_CLAUDE_ACP_COMMAND", executable)
-	launch, err := resolveRuntime(context.Background())
+	launch, err := resolveRuntime(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("resolveRuntime: %v", err)
 	}

@@ -67,7 +67,7 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 			ports.ChatCapabilityCompaction:   true,
 		},
 		Probe: func(ctx context.Context) error {
-			if _, err := resolveRuntime(ctx); err != nil {
+			if _, err := resolveRuntime(ctx, nil); err != nil {
 				return fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 			}
 			claudeBinary, err := plugin.ResolveBinary(ctx)
@@ -80,7 +80,7 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 			return nil
 		},
 		Launch: func(ctx context.Context, cfg acpdriver.LaunchConfig) (acpdriver.Launch, error) {
-			runtimeLaunch, err := resolveRuntime(ctx)
+			runtimeLaunch, err := resolveRuntime(ctx, cfg.Env)
 			if err != nil {
 				return acpdriver.Launch{}, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 			}
@@ -363,11 +363,15 @@ type runtimeLaunch struct {
 // resolveRuntime finds AO's packaged ACP runtime. Explicit command and path
 // overrides keep headless development/test installs usable without coupling the
 // backend to Electron's directory layout.
-func resolveRuntime(ctx context.Context) (runtimeLaunch, error) {
+func resolveRuntime(ctx context.Context, env map[string]string) (runtimeLaunch, error) {
 	if err := ctx.Err(); err != nil {
 		return runtimeLaunch{}, err
 	}
-	if command := strings.TrimSpace(os.Getenv("AO_CLAUDE_ACP_COMMAND")); command != "" {
+	command := os.Getenv("AO_CLAUDE_ACP_COMMAND")
+	if value, ok := env["AO_CLAUDE_ACP_COMMAND"]; ok {
+		command = value
+	}
+	if command := strings.TrimSpace(command); command != "" {
 		resolved, err := exec.LookPath(command)
 		if err != nil {
 			return runtimeLaunch{}, fmt.Errorf("resolve AO_CLAUDE_ACP_COMMAND %q: %w", command, err)

@@ -122,19 +122,21 @@ type AccessTicket struct {
 // WorkerLaunch is the durable session context a bootstrapped worker needs in
 // order to clone the repository and start a harness.
 type WorkerLaunch struct {
-	OrgID          string
-	SessionID      string
-	ProjectID      string
-	ProjectName    string
-	ProjectConfig  json.RawMessage
-	AgentConfig    json.RawMessage
-	Kind           string
-	Harness        string
-	DisplayName    string
-	Branch         string
-	Prompt         string
-	AgentSessionID string
-	Interface      SessionInterface
+	OrgID           string
+	SessionID       string
+	ProjectID       string
+	ProjectName     string
+	ProjectConfig   json.RawMessage
+	AgentConfig     json.RawMessage
+	Kind            string
+	Harness         string
+	DisplayName     string
+	Branch          string
+	TaskNamingState string
+	TaskNameSlug    string
+	Prompt          string
+	AgentSessionID  string
+	Interface       SessionInterface
 	// ParentSessionID is the orchestrator that spawned this session, empty for
 	// top-level sessions. It gates the worker:report scope and the report
 	// guidance in the worker prompt.
@@ -146,4 +148,31 @@ type WorkerLaunch struct {
 	DeniedCommands  []string
 	RepositoryURL   string
 	DefaultBranch   string
+}
+
+const (
+	TaskNamingPending  = "pending"
+	TaskNamingReserved = "reserved"
+	TaskNamingDone     = "done"
+)
+
+// TaskNameRequest reserves a worker's name before its workspace is moved, then
+// completes with the branch the workspace adapter actually selected.
+type TaskNameRequest struct {
+	Claim    bool     `json:"claim,omitempty"`
+	Skip     bool     `json:"skip,omitempty"`
+	Title    string   `json:"title,omitempty"`
+	Slug     string   `json:"slug,omitempty"`
+	Branch   string   `json:"branch,omitempty"`
+	Complete bool     `json:"complete,omitempty"`
+	Retry    bool     `json:"retry,omitempty"`
+	Occupied []string `json:"occupied,omitempty"`
+}
+
+type TaskNameResult struct {
+	Generate bool   `json:"generate,omitempty"`
+	State    string `json:"state"`
+	Title    string `json:"title"`
+	Branch   string `json:"branch"`
+	Slug     string `json:"slug"`
 }

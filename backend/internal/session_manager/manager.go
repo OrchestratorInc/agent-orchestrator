@@ -30,6 +30,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
 	"github.com/aoagents/agent-orchestrator/backend/internal/termtheme"
 	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/tasknaming"
 )
 
 // Sentinel errors returned by the Session Manager; callers match them with
@@ -855,7 +856,7 @@ func New(d Deps) *Manager {
 		reconcileWorkers:               d.ReconcileWorkers,
 		defaultBranchRefreshTimeout:    defaultBranchRefreshTimeout,
 		taskPreparations:               make(map[domain.TaskPreparationToken]*taskPreparation),
-		taskNamingSlots:                make(chan struct{}, 4),
+		taskNamingSlots:                make(chan struct{}, tasknaming.MaxConcurrent),
 		asyncChatSpawns:                make(map[domain.SessionID]*asyncChatSpawnRun),
 		taskPreparationTTL:             defaultTaskPreparationTTL,
 		openTranscriptFile:             os.Open,
@@ -1205,7 +1206,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// for it above without holding the gate, then serialize the remaining
 	// synchronous workspace lifecycle as before. Async Chat acquires it in its
 	// background half so the API response never waits on Git.
-	var taskName func() generatedTaskName
+	var taskName func() tasknaming.Name
 	var namingProgress *provisionProgress
 	if !asyncChat {
 		if cfg.NameFromPrompt && cfg.Branch == "" && cfg.Kind == domain.KindWorker && strings.TrimSpace(cfg.Prompt) != "" {

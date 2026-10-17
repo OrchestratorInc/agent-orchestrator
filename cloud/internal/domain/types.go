@@ -90,6 +90,8 @@ type Session struct {
 	TerminateOnPRMerge bool
 	DisplayName        string
 	Branch             string
+	TaskNamingState    string
+	TaskNameSlug       string
 	Mode               string
 	Model              string
 	DeniedCommands     []string
@@ -161,10 +163,13 @@ func (s Session) Status(now time.Time, prs []contract.PRFacts) contract.SessionS
 }
 
 type CreateSession struct {
-	ProjectID       string
-	Kind            string
-	Harness         string
-	DisplayName     string
+	ProjectID   string
+	Kind        string
+	Harness     string
+	DisplayName string
+	// GenerateTitle permits replacing the desktop's provisional display name.
+	// Explicit API and orchestrator titles leave this false.
+	GenerateTitle   bool `json:"generateTitle,omitempty"`
 	Prompt          string
 	Mode            string
 	Model           string

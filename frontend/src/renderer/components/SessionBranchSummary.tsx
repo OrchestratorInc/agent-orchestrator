@@ -124,7 +124,19 @@ export function SessionBranchSummary({
 	}, [clearPending, key, pending]);
 
 	const cards = pullRequests ? <div className="flex flex-col gap-2 pb-3 last:pb-0">{pullRequests}</div> : null;
-	if (!showGit) return cards ? <InspectorSection surface={false} title={title}>{cards}</InspectorSection> : null;
+	if (!showGit) {
+		const { branch, naming } = sessionBranchPresentation(session);
+		const showCloudBranch = session.cloud?.taskNamingState !== undefined && session.kind !== "orchestrator" && (branch || naming);
+		if (!showCloudBranch) return cards ? <InspectorSection surface={false} title={title}>{cards}</InspectorSection> : null;
+		return (
+			<InspectorSection surface={false} title={title}>
+				<section aria-label={t("inspector.branch")} className="flex flex-col" data-testid="inspector-branch">
+					<BranchLine branch={branch} naming={naming} />
+					{cards}
+				</section>
+			</InspectorSection>
+		);
+	}
 
 	const commitsRow = commitsRowView(facts, t);
 	const hasWork = facts.uncommitted.length > 0 || commitsRow !== null;

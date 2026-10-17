@@ -304,8 +304,10 @@ export interface CloudCpCreateSessionRequest {
 	kind: CloudCpSessionKind;
 	/** Coding-agent harness identifier (e.g. "claude-code"), 1-120 characters. */
 	harness: string;
-	/** 1-80 characters. */
+	/** 1-100 characters. */
 	displayName: string;
+	/** Generate a title from the task prompt; omitted preserves displayName. */
+	generateTitle?: boolean;
 	/** Up to 65536 bytes. */
 	prompt: string;
 	/** Defaults to "trusted" on the control plane when omitted. */
@@ -516,6 +518,8 @@ export interface CloudCpSession {
 	autoReviewEnabled?: boolean;
 	displayName: string;
 	branch: string;
+	taskNamingState?: "pending" | "reserved" | "done";
+	taskNameSlug?: string;
 	mode: string;
 	interfaceMode: CloudCpInterfaceMode;
 	deniedCommands: string[];

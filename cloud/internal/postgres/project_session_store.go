@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -715,8 +717,9 @@ func createSessionTx(
 		}
 	}
 	var projectConfig json.RawMessage
-	if err := tx.QueryRow(ctx, `SELECT config FROM ao_projects WHERE org_id = $1 AND id = $2 AND archived_at IS NULL`,
-		orgID, input.ProjectID).Scan(&projectConfig); err != nil {
+	var repositoryURL string
+	if err := tx.QueryRow(ctx, `SELECT config, repository_url FROM ao_projects WHERE org_id = $1 AND id = $2 AND archived_at IS NULL`,
+		orgID, input.ProjectID).Scan(&projectConfig, &repositoryURL); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.Session{}, ErrNotFound
 		}
@@ -743,16 +746,31 @@ func createSessionTx(
 	if err != nil {
 		return domain.Session{}, ErrInvalid
 	}
+	namingState := domain.TaskNamingDone
+	var initialTitle *string
+	var source struct {
+		Source string `json:"source"`
+	}
+	if err := json.Unmarshal(projectConfig, &source); err != nil {
+		return domain.Session{}, ErrInvalid
+	}
+	if input.Kind == "worker" && strings.TrimSpace(input.Prompt) != "" &&
+		strings.TrimSpace(repositoryURL) != "" && source.Source != "scratch" && !worker.IsScratchRepositoryURL(repositoryURL) {
+		namingState = domain.TaskNamingPending
+		if input.GenerateTitle {
+			initialTitle = &input.DisplayName
+		}
+	}
 	err = scanSession(tx.QueryRow(
 		ctx,
 		`WITH generated AS (SELECT gen_random_uuid() AS id)
 		INSERT INTO ao_sessions (
 			id, org_id, project_id, kind, harness, display_name, branch,
 			prompt, mode, model, denied_commands, interface, parent_session_id, created_by_user_id, reasoning_effort, agent_config,
-			auto_review_enabled
+			auto_review_enabled, task_naming_state, task_name_initial_title
 		)
 		SELECT id, $1, $2, $3, $4, $5, $15 || '/' || left(id::text, 8),
-			$6, $7, $8, $9, $10, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid, $13, $14, $16
+			$6, $7, $8, $9, $10, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid, $13, $14, $16, $17, $18
 		FROM generated
 		RETURNING `+sessionInsertReturning,
 		orgID,
@@ -771,6 +789,8 @@ func createSessionTx(
 		agentConfigJSON,
 		prefix,
 		autoReview,
+		namingState,
+		initialTitle,
 	), &session)
 	if err != nil {
 		return domain.Session{}, normalizeConstraintError(err)
@@ -1071,7 +1091,7 @@ func (s *Store) setCloudSessionBooleanPolicy(
 const sessionSelect = `
 	SELECT session.id, session.org_id, session.project_id, session.kind,
 		session.harness, session.reviewer_harness, session.auto_review_enabled,
-		session.display_name, session.branch,
+		session.display_name, session.branch, session.task_naming_state, session.task_name_slug,
 		session.mode, session.model, session.denied_commands, session.interface,
 		CASE
 			WHEN EXISTS (
@@ -1137,7 +1157,7 @@ const sessionSelect = `
 // joined sessionSelect used by subsequent reads.
 const sessionInsertReturning = `id, org_id, project_id, kind, harness,
 	'' AS reviewer_harness, auto_review_enabled,
-	display_name, branch, mode, model, denied_commands, interface,
+	display_name, branch, task_naming_state, task_name_slug, mode, model, denied_commands, interface,
 	activity_state, is_terminated, auto_inject_ci, auto_inject_review,
 	terminate_on_pr_merge, false, NULL::timestamptz, 0,
 	'', '', '', '', '', '', '', NULL::timestamptz, '', '', '', '', 0, created_at, updated_at`
@@ -1198,6 +1218,8 @@ func scanSession(row scanner, session *domain.Session) error {
 		&session.AutoReviewEnabled,
 		&session.DisplayName,
 		&session.Branch,
+		&session.TaskNamingState,
+		&session.TaskNameSlug,
 		&session.Mode,
 		&session.Model,
 		&session.DeniedCommands,

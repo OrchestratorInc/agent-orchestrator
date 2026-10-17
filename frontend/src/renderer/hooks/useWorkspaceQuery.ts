@@ -482,6 +482,8 @@ export function toCloudWorkspaceSession(
 		// CP (ticket + sandbox WebSocket) instead of the local daemon mux.
 		cloud: {
 			orgId,
+			taskNamingState: session.taskNamingState,
+			taskNameSlug: session.taskNameSlug,
 			permissionMode: session.mode === "read-only" || session.mode === "standard" || session.mode === "trusted" ? session.mode : undefined,
 			sandboxProvider: session.sandboxProvider,
 			desiredState: session.desiredState,

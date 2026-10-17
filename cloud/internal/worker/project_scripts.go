@@ -33,9 +33,9 @@ const (
 	// workspace stop/start keeps the prepared checkout and does not run it
 	// again.
 	setupDoneFile = "setup.done"
-	// setupAttemptedFile records that this session's Setup started running,
-	// so a worker restart after a failed Setup runs it again (and keeps the
-	// agent blocked) instead of treating the session as already set up.
+	// setupAttemptedFile records that this session's initial Setup is still
+	// due, so a restart during checkout or after a failed Setup retries it
+	// instead of treating the session as already set up.
 	setupAttemptedFile = "setup.attempted"
 	// CleanupHookFile and CleanupCommandsFile, in the worker data directory,
 	// are what the control plane runs before it deletes a Coder workspace: the
@@ -159,6 +159,27 @@ type SetupRunner struct {
 	StepTimeout time.Duration
 }
 
+// Prepare preserves initial Setup eligibility before checkout or naming can
+// fail and restart the worker after its credential has already been persisted.
+// An initially empty Setup is final, so commands added later do not run in an
+// existing session. Sessions created by older workers keep their skip behavior.
+func (r SetupRunner) Prepare(ctx context.Context, commands []string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !r.FirstStart {
+		return nil
+	}
+	marker := setupAttemptedFile
+	if len(nonEmptyCommands(commands)) == 0 {
+		marker = setupDoneFile
+	}
+	if err := os.MkdirAll(r.DataDir, 0o700); err != nil {
+		return err
+	}
+	return writeFileAtomic(filepath.Join(r.DataDir, marker), []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o600)
+}
+
 // Run runs commands in order in dir with `sh -c`, stopping at the first one
 // that fails. ran is false when there is nothing to run or Setup already
 // succeeded for this session. Only a success is recorded, so a failed Setup
@@ -177,8 +198,8 @@ func (r SetupRunner) Run(
 	attempted := filepath.Join(r.DataDir, setupAttemptedFile)
 	_, attemptErr := os.Stat(attempted)
 	if len(commands) == 0 || (!r.FirstStart && attemptErr != nil) {
-		// Nothing to run, or a restarted worker whose session never started a
-		// Setup: the workspace is already prepared, so record it as set up.
+		// Nothing to run, or a restarted worker with no pending initial Setup:
+		// the workspace is already prepared, so record it as set up.
 		r.writeMarker(marker)
 		return SetupEvent{}, false
 	}
