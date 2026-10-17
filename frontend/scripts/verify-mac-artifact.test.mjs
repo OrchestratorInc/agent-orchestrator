@@ -186,6 +186,37 @@ describe("verify-mac-artifact.sh", () => {
 		expect(existsSync(sentinel)).toBe(false);
 	});
 
+	// Rule 6: keychain-access-groups without an embedded provisioning profile
+	// passes codesign/spctl/stapler but is killed by macOS at launch.
+	it.each([
+		{ profile: false, code: 1 },
+		{ profile: true, code: 0 },
+	])("requires a provisioning profile for keychain-access-groups (profile embedded: $profile)", async ({ profile, code }) => {
+		const mockBin = join(dir, `keychain-bin-${profile}`);
+		const app = join(dir, `Passkeys-${profile}.app`);
+		const node = join(app, "Contents", "Resources", "acp-runtime", "node", "bin", "node");
+		mkdirSync(mockBin, { recursive: true });
+		mkdirSync(dirname(node), { recursive: true });
+		if (profile) writeFileSync(join(app, "Contents", "embedded.provisionprofile"), "fixture");
+
+		writeExecutable(join(mockBin, "uname"), "echo Darwin\n");
+		writeExecutable(join(mockBin, "codesign"), 'if [[ "$1" == "-d" ]]; then echo "<plist><dict></dict></plist>"; fi\n');
+		for (const tool of ["spctl", "xcrun", "ditto"]) writeExecutable(join(mockBin, tool), "exit 0\n");
+		writeExecutable(join(mockBin, "lipo"), "echo arm64\n");
+		writeExecutable(
+			join(mockBin, "plutil"),
+			"echo '  \"com.apple.security.cs.allow-jit\" => true'\n" +
+				"echo '  \"keychain-access-groups\" => ['\n",
+		);
+		writeExecutable(node, "exit 0\n");
+
+		const { code: exitCode, stderr } = await run([app], { PATH: `${mockBin}:${process.env.PATH}` });
+
+		expect(exitCode).toBe(code);
+		if (profile) expect(stderr).not.toContain("provisioning profile");
+		else expect(stderr).toContain("provisioning profile for keychain-access-groups failed");
+	});
+
 	it("encodes the verified command set (ditto, spctl -vv, stapler validate)", async () => {
 		const { readFileSync } = await import("node:fs");
 		const src = readFileSync(SCRIPT, "utf8");

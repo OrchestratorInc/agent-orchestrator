@@ -88,6 +88,9 @@ ao doctor --json
 	<Accordion title="Browser automation targets the wrong page">
 		Select the correct session and browser tab. Commands are authorized for the selected session. Temporary profiles are isolated; named profiles deliberately reuse saved browser state. Check the selected profile, and refresh snapshots after navigation. Keep the panel visible for screenshots/human pointer actions. Profile imports have platform-dependent cookie support; a missing login may require signing in again.
 	</Accordion>
+	<Accordion title="A passkey sign-in waits without a fingerprint prompt">
+		Orchestrator's Browser can't use passkeys saved in iCloud Keychain, Chrome, or another password manager, so a site that asks for one keeps waiting. Use the site's other sign-in option instead (on Google, **Try another way**). On a Mac with Touch ID, releases signed for Touch ID passkeys can also create and use passkeys inside Orchestrator: add a passkey to your account from a Browser tab, then sign in with Touch ID. Those passkeys stay on that Mac and in that browser profile; temporary profiles don't keep them.
+	</Accordion>
 </Accordions>
 
 ## Connect Mobile

@@ -82,6 +82,63 @@ a ZIP for electron-updater. The ZIP and `latest-mac.yml` must remain available:
 electron-updater cannot install an update from a DMG. Nightly and preview
 channels omit the first-install DMG.
 
+## macOS Touch ID passkeys
+
+AO's Browser can use the Touch ID platform authenticator for passkeys (#6782),
+but only in a build signed for it. Every other build behaves as before: sites
+that ask for a passkey get no platform authenticator.
+
+Touch ID needs the top-level app signed with a `keychain-access-groups`
+entitlement. macOS treats it as restricted: an app that carries it without an
+embedded provisioning profile from the same team is killed before `main`, with
+no crash report, while `codesign`, `spctl`, notarization and stapling all pass.
+Never add the entitlement without the profile.
+
+One-time setup in the release team's Apple Developer account: create a
+Developer ID provisioning profile for `dev.agent-orchestrator.desktop`. Check
+what it grants with `security cms -D -i <profile> | plutil -p -`. Its
+`Entitlements` must contain:
+
+- `com.apple.developer.team-identifier`: the release team ID;
+- `com.apple.application-identifier`: `<TEAM>.dev.agent-orchestrator.desktop`
+  or `<TEAM>.*`;
+- `keychain-access-groups`: an entry covering
+  `<TEAM>.dev.agent-orchestrator.desktop.webauthn`, such as `<TEAM>.*`.
+
+When signing, apply these to the top-level `Agent Orchestrator.app` only.
+Nested helpers keep their default entitlements, because they embed no profile.
+
+1. Write `Contents/Resources/webauthn.json` before signing, so it is sealed:
+   `{"touchIDKeychainAccessGroup":"<TEAM>.dev.agent-orchestrator.desktop.webauthn"}`.
+   The app enables Touch ID at startup only when this file is present.
+2. Embed the profile as `Contents/embedded.provisionprofile`.
+3. Sign the app with @electron/osx-sign's default app entitlements plus
+   `com.apple.application-identifier`, `com.apple.developer.team-identifier`
+   and `keychain-access-groups` set to exactly that `.webauthn` group.
+
+`frontend/forge.config.ts` is the reference implementation. With a signing
+identity configured, `AO_MAC_PROVISIONING_PROFILE=<path>` performs all three
+steps for a local signed build, and fails before packaging if the profile does
+not grant those values.
+
+To verify:
+
+- `frontend/scripts/verify-mac-artifact.sh` fails an app that carries
+  `keychain-access-groups` without `Contents/embedded.provisionprofile`.
+- Launch the signed app once. A missing or mismatched profile only shows at
+  launch: Finder reports that the app can't be opened.
+- In a Browser tab on a Mac with Touch ID,
+  `PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()`
+  resolves to `true`, and registering a passkey on a WebAuthn test site shows
+  the Touch ID prompt.
+
+Touch ID passkeys are device-bound and stored in the macOS keychain under that
+group. They need a Secure Enclave (Apple silicon or a T2 chip). Electron keeps a
+per-profile metadata secret under `~/.ao/electron`, so each Browser profile sees
+only its own passkeys. Passkeys stored in iCloud Keychain, Chrome or other
+password managers remain unavailable in AO's Browser, because Electron 44 has no
+authenticator for them.
+
 ## Isolated macOS differential v2
 
 Current AO uses full-ZIP macOS updates. It explicitly sets

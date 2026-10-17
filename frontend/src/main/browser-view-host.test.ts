@@ -154,7 +154,10 @@ function submittedAnnotationSession(
 	};
 }
 
-function setupHost(agentBrowserRuntime?: import("./agent-browser-runtime").AgentBrowserRuntime) {
+function setupHost(
+	agentBrowserRuntime?: import("./agent-browser-runtime").AgentBrowserRuntime,
+	hostOptions: Partial<Parameters<typeof createBrowserViewHost>[0]> = {},
+) {
 	let currentURL = "";
 	let browserZoomFactor = 1;
 	const webContentsListeners = new Map<string, (...args: never[]) => void>();
@@ -321,6 +324,7 @@ function setupHost(agentBrowserRuntime?: import("./agent-browser-runtime").Agent
 		rendererOrigin: "http://localhost:5173",
 		agentBrowserRuntime: runtime,
 		clipboard: { writeImage },
+		...hostOptions,
 	});
 	const rendererFrame = { processId: 5, routingId: 7 };
 	const invoke = (channel: string, ...args: unknown[]) =>
@@ -3222,6 +3226,14 @@ describe("agent browser runtime", () => {
 			undefined,
 		);
 		expect(result).toMatchObject({ text: "t1" });
+	});
+
+	it("hands each tab session to the passkey account chooser", async () => {
+		const attach = vi.fn();
+		const { host, webContents } = setupHost(undefined, { webAuthnAccountChooser: { attach } });
+		await host.execute("sess-1", "tabs");
+
+		expect(attach).toHaveBeenCalledWith(webContents.session);
 	});
 
 	it("allows browser clipboard writes while denying reads and other permissions", async () => {
