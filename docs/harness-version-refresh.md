@@ -48,7 +48,7 @@ cross-version compatibility guarantees for every historical CLI release.
 | OMP | `omp --resume ID` | Yes; does not use turn-restarting `--restore` |
 | Codewhale | `codewhale --resume ID` | Yes |
 | OpenHands | `openhands --resume ID` | Yes |
-| Cline | `cline --id ID` | Yes |
+| Cline | `cline --id ID` | Yes; durable CLI root ID and exact local history preflight |
 | Kiro | `kiro-cli chat --resume-id ID` | Yes |
 | Kilo Code | `kilo --session ID` | Yes; exact export preflight |
 | Vibe | `vibe --resume ID` | Yes |
@@ -92,6 +92,17 @@ Primary references for providers and the unsupported identity limitation:
 - [OpenHands parser](https://github.com/OpenHands/OpenHands-CLI/blob/main/openhands_cli/argparsers/util.py): native `--resume` and approval aliases.
 - [Continue initialization](https://github.com/continuedev/continue/blob/main/extensions/cli/src/commands/chat.ts): `--fork` calls `startNewSession`, while `--resume` loads latest.
 - [Aider options](https://aider.chat/docs/config/options.html): `--chat-history-file` and `--restore-chat-history` exist; AO does not incorrectly advertise exact-native-ID automation for that file-history path.
+
+Cline CLI hooks report an internal SDK conversation as `taskId`; current CLI
+hooks additionally carry the durable resume handle in
+`sessionContext.rootSessionId`. AO prefers that root ID. A real
+`3.0.72 → 3.0.73` test demonstrated that passing the internal `conv_…` task ID
+to `--id` silently creates fresh history. Before stopping an old process, AO
+therefore requires matching saved CLI manifest/message IDs, a nonempty message
+history, and the same working directory under the launch home. Missing,
+unreadable or oversized history fails closed; files above 16 MiB require manual
+recovery rather than an automatic restart. The contract is visible in
+[Cline hook serialization](https://github.com/cline/cline/blob/main/apps/cli/src/utils/hooks.ts).
 
 ## Release and recovery boundaries
 
