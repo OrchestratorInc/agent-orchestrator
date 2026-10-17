@@ -149,8 +149,11 @@ fi
 	--default-org-billing "$AO_CLOUD_DEFAULT_ORG_BILLING" \
 	--paywalled-features "$AO_CLOUD_PAYWALLED_FEATURES" \
 	--idle-pause-threshold "$AO_CLOUD_IDLE_PAUSE_THRESHOLD" \
-	--freestyle-idle-pause-threshold "$AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD"
-echo "Offering: providers=${PROVIDERS} (staging: ${staging_providers}) default=${SANDBOX_PROVIDER} gated=${AO_CLOUD_CAPABILITY_GATED_PROVIDERS:-none} default_org_capabilities=${AO_CLOUD_DEFAULT_ORG_CAPABILITIES:-none} default_org_billing=${AO_CLOUD_DEFAULT_ORG_BILLING} paywalled=${AO_CLOUD_PAYWALLED_FEATURES:-none}" >&2
+	--freestyle-idle-pause-threshold "$AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD" \
+	--artifacts "$AO_CLOUD_ARTIFACTS" \
+	--artifact-bucket "$AO_CLOUD_ARTIFACT_BUCKET" \
+	--artifact-region "$AO_CLOUD_ARTIFACT_REGION"
+echo "Offering: providers=${PROVIDERS} (staging: ${staging_providers}) default=${SANDBOX_PROVIDER} gated=${AO_CLOUD_CAPABILITY_GATED_PROVIDERS:-none} default_org_capabilities=${AO_CLOUD_DEFAULT_ORG_CAPABILITIES:-none} default_org_billing=${AO_CLOUD_DEFAULT_ORG_BILLING} paywalled=${AO_CLOUD_PAYWALLED_FEATURES:-none} artifacts=${AO_CLOUD_ARTIFACTS}" >&2
 release="${RELEASE_ARG:-$staging_release}"
 if [[ "$release" != "$staging_release" ]]; then
 	echo "Release ${release} is not the healthy staging release ${staging_release}." >&2
@@ -432,6 +435,9 @@ register_api_task() {
 		--set-environment "AO_CLOUD_PAYWALLED_FEATURES=${AO_CLOUD_PAYWALLED_FEATURES}"
 		--set-environment "AO_CLOUD_IDLE_PAUSE_THRESHOLD=${AO_CLOUD_IDLE_PAUSE_THRESHOLD}"
 		--set-environment "AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD=${AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD}"
+		--set-environment "AO_CLOUD_ARTIFACTS=${AO_CLOUD_ARTIFACTS}"
+		--set-environment "AO_CLOUD_ARTIFACT_BUCKET=${AO_CLOUD_ARTIFACT_BUCKET}"
+		--set-environment "AO_CLOUD_ARTIFACT_REGION=${AO_CLOUD_ARTIFACT_REGION}"
 	)
 	if providers_has coder; then
 		render_args+=(

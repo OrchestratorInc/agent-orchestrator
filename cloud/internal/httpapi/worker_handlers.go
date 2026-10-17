@@ -326,6 +326,7 @@ func launchContextFrom(launch domain.WorkerLaunch, resolvesWorkspacePath bool) (
 		SystemPrompt:    systemPrompt,
 		PostCreate:      postCreate,
 		PreRemove:       preRemove,
+		RequestedOutput: launch.RequestedOutput,
 	}, nil
 }
 

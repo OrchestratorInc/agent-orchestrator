@@ -114,6 +114,17 @@ type Config struct {
 	// directly from the worker stream, before the same frame is mirrored to
 	// durable replay storage.
 	TerminalRelayEnabled bool
+	// ArtifactsEnabled stores cloud session artifact files in a versioned S3
+	// bucket (AO_CLOUD_ARTIFACTS). Off by default; when on it applies to every
+	// organization.
+	ArtifactsEnabled bool
+	// ArtifactBucket and ArtifactRegion locate that bucket
+	// (AO_CLOUD_ARTIFACT_BUCKET, AO_CLOUD_ARTIFACT_REGION).
+	ArtifactBucket string
+	ArtifactRegion string
+	// ArtifactEndpoint is an S3-compatible endpoint such as local MinIO
+	// (AO_CLOUD_ARTIFACT_ENDPOINT). Empty uses AWS S3.
+	ArtifactEndpoint string
 
 	NodeOpsBaseURL       string
 	NodeOpsAPIKey        string
@@ -292,6 +303,10 @@ func Load() (Config, error) {
 		AllowAnonymousCheckout: boolEnv("AO_CLOUD_ALLOW_ANONYMOUS_GITHUB_CHECKOUT", false),
 		TerminalStreamEnabled:  boolEnv("AO_CLOUD_TERMINAL_STREAM", false),
 		TerminalRelayEnabled:   boolEnv("AO_CLOUD_TERMINAL_RELAY", false),
+		ArtifactsEnabled:       boolEnv("AO_CLOUD_ARTIFACTS", false),
+		ArtifactBucket:         strings.TrimSpace(os.Getenv("AO_CLOUD_ARTIFACT_BUCKET")),
+		ArtifactRegion:         strings.TrimSpace(os.Getenv("AO_CLOUD_ARTIFACT_REGION")),
+		ArtifactEndpoint:       strings.TrimRight(strings.TrimSpace(os.Getenv("AO_CLOUD_ARTIFACT_ENDPOINT")), "/"),
 		SandboxProvider: strings.ToLower(
 			envOrDefault("AO_CLOUD_SANDBOX_PROVIDER", defaultSandboxProvider(hosted)),
 		),
@@ -630,6 +645,9 @@ func Load() (Config, error) {
 	if cfg.TerminalRelayEnabled && !cfg.TerminalStreamEnabled {
 		return Config{}, errors.New("AO_CLOUD_TERMINAL_RELAY requires AO_CLOUD_TERMINAL_STREAM")
 	}
+	if err := cfg.validateArtifacts(); err != nil {
+		return Config{}, err
+	}
 	if cfg.IdlePauseThreshold != 0 && cfg.IdlePauseThreshold < time.Minute {
 		return Config{}, errors.New("AO_CLOUD_IDLE_PAUSE_THRESHOLD must be 0 (disabled) or at least 1m")
 	}
@@ -749,6 +767,32 @@ func Load() (Config, error) {
 		return Config{}, errors.New("repository broker configuration is required in staging")
 	}
 	return cfg, nil
+}
+
+// validateArtifacts checks the artifact bucket settings when AO_CLOUD_ARTIFACTS
+// is on. Access links are signed with a key derived from
+// AO_CLOUD_PROVIDER_SECRET_KEY, so that key is required too.
+func (c Config) validateArtifacts() error {
+	if !c.ArtifactsEnabled {
+		return nil
+	}
+	if c.ArtifactBucket == "" || c.ArtifactRegion == "" {
+		return errors.New("AO_CLOUD_ARTIFACTS requires AO_CLOUD_ARTIFACT_BUCKET and AO_CLOUD_ARTIFACT_REGION")
+	}
+	if len(c.ProviderSecretKey) != 32 {
+		return errors.New("AO_CLOUD_ARTIFACTS requires AO_CLOUD_PROVIDER_SECRET_KEY")
+	}
+	if c.ArtifactEndpoint != "" {
+		endpoint, err := url.Parse(c.ArtifactEndpoint)
+		if err != nil || endpoint.Host == "" || endpoint.User != nil ||
+			(endpoint.Scheme != "http" && endpoint.Scheme != "https") {
+			return errors.New("AO_CLOUD_ARTIFACT_ENDPOINT must be an absolute http or https URL")
+		}
+		if c.Hosted() && endpoint.Scheme != "https" {
+			return errors.New("AO_CLOUD_ARTIFACT_ENDPOINT must use HTTPS in hosted environments")
+		}
+	}
+	return nil
 }
 
 // BillingEnabled reports whether Stripe billing is configured and enforced.

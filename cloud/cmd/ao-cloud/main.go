@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/artifactstore"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/auth"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/billing"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/cifeedback"
@@ -494,6 +495,18 @@ func run(logger *slog.Logger) error {
 			break
 		}
 	}
+	var artifacts *artifactstore.Store
+	if cfg.ArtifactsEnabled {
+		artifacts, err = artifactstore.New(ctx, artifactstore.Config{
+			Bucket:   cfg.ArtifactBucket,
+			Region:   cfg.ArtifactRegion,
+			Endpoint: cfg.ArtifactEndpoint,
+		})
+		if err != nil {
+			return fmt.Errorf("build artifact store: %w", err)
+		}
+		logger.Info("cloud artifacts enabled", "bucket", cfg.ArtifactBucket, "region", cfg.ArtifactRegion)
+	}
 	apiOptions := httpapi.Options{
 		Store:                     store,
 		CoderTemplates:            coderTemplates,
@@ -529,6 +542,8 @@ func run(logger *slog.Logger) error {
 		NotificationWake:          notificationProcessor.Wake,
 		Activity:                  activityRecorder,
 		SupportToken:              cfg.SupportToken,
+		Artifacts:                 artifacts,
+		ArtifactAccessSecret:      cfg.ProviderSecretKey,
 	}
 	if cfg.Environment == "development" &&
 		os.Getenv("AO_CLOUD_DEVELOPMENT_SKIP_CREDENTIAL_VALIDATION") == "true" {

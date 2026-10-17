@@ -76,6 +76,18 @@ class ValidateHostedSettingsCLITests(unittest.TestCase):
         result = run(*offering_arguments("staging", "coder,freestyle"))
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_offering_artifacts(self):
+        ok = run(*offering_arguments(
+            "staging", "coder,freestyle",
+            artifacts="1",
+            artifact_bucket="ao-cloud-staging-tenant-artifacts",
+            artifact_region="eu-north-1",
+        ))
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        missing = run(*offering_arguments("staging", "coder,freestyle", artifacts="1"))
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("AO_CLOUD_ARTIFACT_BUCKET", missing.stderr)
+
     def test_stripe_secret(self):
         with tempfile.NamedTemporaryFile("w", suffix=".json") as handle:
             json.dump({"secret_key": "sk_test_1", "webhook_secret": "whsec_1", "price_ids": {}}, handle)

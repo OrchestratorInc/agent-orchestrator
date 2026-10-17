@@ -109,13 +109,14 @@ func TestQueuedTurnDoesNotOverrideIdleWorkerActivity(t *testing.T) {
 }
 
 func TestSessionInsertReturningMatchesScannerArity(t *testing.T) {
-	const scanSessionDestinations = 36
+	const scanSessionDestinations = 38
 	if got := strings.Count(sessionInsertReturning, ",") + 1; got != scanSessionDestinations {
 		t.Fatalf("session insert RETURNING fields = %d, want %d", got, scanSessionDestinations)
 	}
 	for _, field := range []string{
 		"reviewer_harness", "auto_review_enabled", "auto_inject_ci",
 		"auto_inject_review", "terminate_on_pr_merge",
+		"requested_output", "output_type",
 	} {
 		if !strings.Contains(sessionInsertReturning, field) {
 			t.Fatalf("session insert RETURNING is missing %s", field)

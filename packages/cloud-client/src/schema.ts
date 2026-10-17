@@ -440,6 +440,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description Lists the session's committed artifact files, sorted by path. Reads Postgres only and never wakes or resumes the sandbox. Present only when the deployment reports offering.artifacts; otherwise 404. */
+        get: operations["listSessionArtifacts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Returns a short-lived path prefix that serves this session's artifact files without a bearer header, for a sandboxed frame. Append a file's URL-escaped path to filesPrefix; relative links inside an HTML file resolve against the same prefix. Request a new prefix after expiresAt. */
+        post: operations["createSessionArtifactAccess"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pull-requests": {
         parameters: {
             query?: never;
@@ -759,6 +799,26 @@ export interface paths {
         };
         /** Upgrade to a terminal WebSocket using a short-lived ticket. */
         get: operations["connectTerminal"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/artifact-files/{token}/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one artifact file through an access prefix.
+         * @description Streams the committed version of one artifact file. The token comes from createSessionArtifactAccess and binds one organization and session. Every response carries a Content-Security-Policy sandbox without allow-same-origin, X-Content-Type-Options nosniff, and an ETag of the file's SHA-256. A listed file whose stored object is gone returns 404 with code artifact_unavailable.
+         */
+        get: operations["getSessionArtifactFile"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1148,6 +1208,71 @@ export interface paths {
          *     the sandbox. The token must never be logged or persisted.
          *      */
         post: operations["createWorkerCheckoutGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/worker/artifacts/manifest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Compares the worker's artifact directory listing against the
+         *     session's committed files and returns the paths whose size or SHA-256
+         *     differ, including new paths. Requires `worker:connect`. Absent when
+         *     the deployment does not keep artifacts.
+         *      */
+        post: operations["compareWorkerArtifactManifest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/worker/artifacts/blob/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Streams one artifact file to storage under the worker's own session.
+         *     Content-Length is required and the body's SHA-256 must match the
+         *     X-AO-Artifact-SHA256 header; storage rejects a mismatch without
+         *     keeping it. Returns the stored version for the commit. Requires
+         *     `worker:connect`.
+         *      */
+        put: operations["putWorkerArtifactBlob"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/worker/artifacts/commit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Records uploaded versions and deletions for the worker's own session
+         *     in one transaction and appends an artifact.changed event. Each
+         *     version must exist with the given size and SHA-256
+         *     (artifact_version_missing or artifact_version_mismatch otherwise).
+         *     Requires `worker:connect`.
+         *      */
+        post: operations["commitWorkerArtifacts"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1547,6 +1672,8 @@ export interface components {
             features: string[];
             /** @description The organization may connect its own Coder deployment: it holds the coder capability (WorkOS metadata capabilities=coder), or the deployment offers coder without gating it. Also true while the organization still has a stored connection, so it can inspect or clear one. Absent from older control planes. */
             customCoder?: boolean;
+            /** @description Whether cloud sessions keep artifact files. When false the artifact routes return 404 and requestedOutput "artifact" is rejected. Older control planes omit it. */
+            artifacts?: boolean;
         };
         /** @description Legacy provider selector data; the same values as offering.providers and offering.defaultProvider. */
         SandboxProviders: {
@@ -1991,6 +2118,7 @@ export interface components {
             /** Format: uri */
             repositoryUrl: string;
             defaultBranch: string;
+            requestedOutput?: components["schemas"]["RequestedOutput"];
         };
         WorkerBootstrapResponse: {
             /**
@@ -2459,10 +2587,79 @@ export interface components {
             coderWorkspaceUrl?: string;
             activeTurn?: components["schemas"]["Turn"];
             isTerminated: boolean;
+            requestedOutput?: components["schemas"]["RequestedOutput"];
+            outputType?: components["schemas"]["SessionOutputType"];
+            /** @description The session's committed artifact files, on the session read and list routes while the deployment keeps artifacts. */
+            artifactFiles?: components["schemas"]["SessionArtifact"][];
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
+        };
+        /**
+         * @description The deliverable a session was created for. artifact asks the agent for a file in its artifact directory instead of a pull request.
+         * @enum {string}
+         */
+        RequestedOutput: "artifact";
+        /**
+         * @description What the session owns, a pull request, artifact files, or both.
+         * @enum {string}
+         */
+        SessionOutputType: "none" | "pr" | "artifact" | "pr_artifact";
+        SessionArtifact: {
+            /** @description Slash-separated path in the session's artifact directory. */
+            path: string;
+            name: string;
+            /** @enum {string} */
+            kind: "html" | "markdown" | "file";
+            contentType: string;
+            /** Format: int64 */
+            size: number;
+            sha256: string;
+            /**
+             * Format: date-time
+             * @description The file's modification time in the sandbox.
+             */
+            updatedAt: string;
+        };
+        SessionArtifactList: {
+            artifacts: components["schemas"]["SessionArtifact"][];
+        };
+        SessionArtifactAccess: {
+            /** @description Path on this control plane ending in "/", for example /api/cloud/v1/artifact-files/<token>/. */
+            filesPrefix: string;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        WorkerArtifactFile: {
+            path: string;
+            /** Format: int64 */
+            size: number;
+            sha256: string;
+        };
+        WorkerArtifactManifestInput: {
+            files: components["schemas"]["WorkerArtifactFile"][];
+        };
+        WorkerArtifactManifestResponse: {
+            changed: string[];
+        };
+        WorkerArtifactBlobResponse: {
+            path: string;
+            versionId: string;
+        };
+        WorkerArtifactCommitFile: {
+            path: string;
+            versionId: string;
+            /** Format: int64 */
+            size: number;
+            sha256: string;
+            /** Format: date-time */
+            mtime?: string;
+        };
+        WorkerArtifactCommitInput: {
+            files?: components["schemas"]["WorkerArtifactCommitFile"][];
+            /** @description Paths this worker previously synced and has since removed. */
+            deleted?: string[];
         };
         /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. The worker-reported codes repository_checkout_failed, working_directory_unusable and project_setup_failed are the exception: the worker has checked in but could not prepare the workspace, so the agent does not start; they stay until the worker reports the workspace ready after the user reopens the session (a workspace checkout request). */
         SessionStartupError: {
@@ -2490,6 +2687,7 @@ export interface components {
             deniedCommands: string[];
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
+            requestedOutput?: components["schemas"]["RequestedOutput"];
         };
         UpdateSessionPreferencesInput: {
             reviewerHarness?: components["schemas"]["CloudReviewerHarness"] | string;
@@ -3876,6 +4074,54 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    listSessionArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session's artifact files. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionArtifactList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createSessionArtifactAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file access prefix. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionArtifactAccess"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     listSessionPullRequests: {
         parameters: {
             query?: never;
@@ -4350,6 +4596,49 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSessionArtifactFile: {
+        parameters: {
+            query?: never;
+            header?: {
+                "If-None-Match"?: string;
+            };
+            path: {
+                token: string;
+                /** @description The file's path in the artifact directory; may contain slashes. */
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file bytes, with Content-Type from the file extension. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": string;
+                };
+            };
+            /** @description The file has not changed since the given ETag. */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The access token is invalid or expired (artifact_access_invalid). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
             };
             default: components["responses"]["Error"];
         };
@@ -5003,6 +5292,104 @@ export interface operations {
             404: components["responses"]["WorkerRoutesDisabled"];
             502: components["responses"]["Error"];
             503: components["responses"]["Error"];
+        };
+    };
+    compareWorkerArtifactManifest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerArtifactManifestInput"];
+            };
+        };
+        responses: {
+            /** @description The changed paths. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerArtifactManifestResponse"];
+                };
+            };
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            413: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    putWorkerArtifactBlob: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-AO-Artifact-SHA256": string;
+            };
+            path: {
+                /** @description The file's path in the artifact directory; may contain slashes. */
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description The stored version. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerArtifactBlobResponse"];
+                };
+            };
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            411: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            /** @description The body does not match its SHA-256 (checksum_mismatch). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    commitWorkerArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerArtifactCommitInput"];
+            };
+        };
+        responses: {
+            /** @description The changes are committed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            default: components["responses"]["Error"];
         };
     };
     listWorkerChildren: {

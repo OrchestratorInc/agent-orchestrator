@@ -14,6 +14,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/artifactstore"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/auth"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
@@ -228,6 +229,11 @@ type Server struct {
 	handler             http.Handler
 	activity            *activity.Recorder
 	supportToken        string
+	// artifacts, artifactRows and artifactAccessKey serve cloud session
+	// artifacts; artifacts is nil when they are off.
+	artifacts         *artifactstore.Store
+	artifactRows      sessionArtifactStore
+	artifactAccessKey []byte
 }
 
 type Options struct {
@@ -286,6 +292,13 @@ type Options struct {
 	// SupportToken enables the operator support lookup route
 	// (AO_CLOUD_SUPPORT_TOKEN); empty leaves the route unregistered.
 	SupportToken string
+	// Artifacts stores cloud session artifact files (AO_CLOUD_ARTIFACTS); nil
+	// leaves the artifact routes unregistered and rejects requestedOutput
+	// "artifact".
+	Artifacts *artifactstore.Store
+	// ArtifactAccessSecret is the secret artifact file links are signed with,
+	// required with Artifacts.
+	ArtifactAccessSecret []byte
 }
 
 // ProjectSnapshotter looks up and builds a project's prepared snapshot.
@@ -392,6 +405,11 @@ func New(options Options) *Server {
 		notificationWaiters:       newNotificationWaiters(),
 		activity:                  options.Activity,
 		supportToken:              options.SupportToken,
+	}
+	if rows, ok := options.Store.(sessionArtifactStore); ok && options.Artifacts != nil {
+		server.artifacts = options.Artifacts
+		server.artifactRows = rows
+		server.artifactAccessKey = artifactAccessKeyFrom(options.ArtifactAccessSecret)
 	}
 	workerBinaries := [][]byte{options.WorkerBinary, options.WorkerHelperBinary}
 	for _, build := range options.WorkerBuilds {
@@ -526,6 +544,11 @@ func New(options Options) *Server {
 			// claim routes; the control plane wakes it the instant a turn or
 			// transport request is enqueued for its session.
 			router.Get("/worker/work/wait", server.workerWaitForWork)
+			if server.artifactsEnabled() {
+				router.Post("/worker/artifacts/manifest", server.workerArtifactManifest)
+				router.Put("/worker/artifacts/blob/*", server.workerPutArtifactBlob)
+				router.Post("/worker/artifacts/commit", server.workerCommitArtifacts)
+			}
 			router.Post("/worker/transport/{requestId}/complete", server.workerCompleteTransport)
 			router.Post("/worker/transport/{requestId}/fail", server.workerFailTransport)
 			router.Post("/worker/terminals/{terminalId}/output", server.workerTerminalOutput)
@@ -536,6 +559,12 @@ func New(options Options) *Server {
 			router.Get("/worker/agent-browser/streams/{stream}", server.workerAgentBrowserStream)
 		})
 		router.Get("/terminal", server.connectTerminal)
+		// Artifact file links authenticate with a signed, session-bound token
+		// in the path.
+		if server.artifactsEnabled() {
+			router.Get("/artifact-files/{token}/*", server.serveArtifactFile)
+			router.Head("/artifact-files/{token}/*", server.serveArtifactFile)
+		}
 		router.Route("/orgs/{orgId}", func(router chi.Router) {
 			router.Use(server.authenticate)
 			if server.github != nil {
@@ -593,6 +622,10 @@ func New(options Options) *Server {
 			router.Post("/sessions/{sessionId}/startup-retry", server.retrySessionStartup)
 			router.Post("/sessions/{sessionId}/restore", server.restoreSession)
 			router.Get("/sessions/{sessionId}/children", server.listSessionChildren)
+			if server.artifactsEnabled() {
+				router.Get("/sessions/{sessionId}/artifacts", server.listSessionArtifacts)
+				router.Post("/sessions/{sessionId}/artifacts/access", server.createArtifactAccess)
+			}
 			router.Delete("/sessions/{sessionId}", server.deleteSession)
 			router.Post("/sessions/{sessionId}/messages", server.sendMessage)
 			router.Get("/sessions/{sessionId}/chat-models", server.getChatModels)

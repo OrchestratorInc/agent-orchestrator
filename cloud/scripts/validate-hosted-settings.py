@@ -50,6 +50,9 @@ def main() -> None:
     offering.add_argument("--paywalled-features", default="")
     offering.add_argument("--idle-pause-threshold", default="")
     offering.add_argument("--freestyle-idle-pause-threshold", default="")
+    offering.add_argument("--artifacts", default="0")
+    offering.add_argument("--artifact-bucket", default="")
+    offering.add_argument("--artifact-region", default="")
     args = parser.parse_args()
 
     if args.stripe:
@@ -75,6 +78,9 @@ def main() -> None:
             idle_pause_threshold=args.idle_pause_threshold,
             freestyle_idle_pause_threshold=args.freestyle_idle_pause_threshold,
             staging_providers=staging_providers,
+            artifacts=args.artifacts,
+            artifact_bucket=args.artifact_bucket,
+            artifact_region=args.artifact_region,
         )
         return
 

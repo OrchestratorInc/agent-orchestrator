@@ -29,6 +29,9 @@ var (
 	// ErrProviderConnectionInUse refuses deleting a provider connection that a
 	// sandbox not yet fully deleted still runs on. It is a conflict.
 	ErrProviderConnectionInUse = fmt.Errorf("provider connection in use: %w", ErrConflict)
+	// ErrArtifactLimit means a commit would exceed a session's artifact file
+	// count or total size.
+	ErrArtifactLimit = errors.New("session artifact limit exceeded")
 )
 
 type Store struct {

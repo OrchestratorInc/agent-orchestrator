@@ -58,6 +58,9 @@ type LaunchContext struct {
 	// Cleanup runs before the workspace is deleted.
 	PostCreate []string `json:"postCreate,omitempty"`
 	PreRemove  []string `json:"preRemove,omitempty"`
+	// RequestedOutput is "artifact" when the session asks the agent for a file
+	// deliverable; empty for the ordinary task flow.
+	RequestedOutput string `json:"requestedOutput,omitempty"`
 }
 
 // RepoRef is one additional repository the worker clones beside the primary

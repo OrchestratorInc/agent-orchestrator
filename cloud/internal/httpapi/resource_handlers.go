@@ -101,6 +101,9 @@ type createSessionRequest struct {
 	// is optional: an empty value uses the control plane default. When set it
 	// must be one of the providers the deployment offers (see /me).
 	Provider string `json:"provider,omitempty"`
+	// RequestedOutput asks for a specific deliverable: "artifact" asks the
+	// agent for a file instead of a pull request. Requires cloud artifacts.
+	RequestedOutput string `json:"requestedOutput,omitempty"`
 }
 
 type createSessionRepo struct {
@@ -155,9 +158,16 @@ type sessionResponse struct {
 	// WorkerEpoch advances on every fresh worker connection (resume, restore,
 	// re-provision). Clients key their terminal on it so a resumed session
 	// re-attaches to the live agent instead of the dead epoch's terminal.
-	WorkerEpoch int64     `json:"workerEpoch,omitempty"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	WorkerEpoch int64 `json:"workerEpoch,omitempty"`
+	// RequestedOutput is the deliverable the session was created for.
+	RequestedOutput string `json:"requestedOutput,omitempty"`
+	// OutputType is what the session owns: none, pr, artifact or pr_artifact.
+	OutputType string `json:"outputType"`
+	// ArtifactFiles lists the session's committed artifact files on the
+	// session read and list routes while cloud artifacts are on.
+	ArtifactFiles []sessionArtifactResponse `json:"artifactFiles,omitempty"`
+	CreatedAt     time.Time                 `json:"createdAt"`
+	UpdatedAt     time.Time                 `json:"updatedAt"`
 }
 
 type pageInfo struct {
@@ -496,6 +506,13 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	request.Mode = strings.TrimSpace(request.Mode)
 	request.SandboxProviderConnectionID = strings.TrimSpace(request.SandboxProviderConnectionID)
 	request.Provider = strings.ToLower(strings.TrimSpace(request.Provider))
+	request.RequestedOutput = strings.TrimSpace(request.RequestedOutput)
+	if !domain.ValidRequestedOutput(request.RequestedOutput) ||
+		(request.RequestedOutput != "" && !s.artifactsEnabled()) {
+		writeError(w, r, http.StatusUnprocessableEntity, "invalid_requested_output",
+			"requestedOutput must be omitted or \"artifact\", and \"artifact\" requires cloud artifacts.")
+		return
+	}
 	if request.Mode == "" {
 		request.Mode = "trusted"
 	}
@@ -677,6 +694,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			Release:             s.release,
 			ParentSessionID:     parentSessionID,
 			CoderCapability:     s.orgHasCoderCapability(principalFrom(r), orgID),
+			RequestedOutput:     request.RequestedOutput,
 		},
 	)
 	if err != nil {
@@ -753,10 +771,18 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	artifactFiles, err := s.sessionArtifactFiles(r.Context(), orgID, sessionIDs)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
 	items := make([]sessionResponse, 0, len(sessions))
 	for _, session := range sessions {
 		response := toSessionResponse(session, prFacts[session.ID])
 		response.PRs = toSessionPRFactsResponses(pullRequests[session.ID], prFacts[session.ID])
+		if artifactFiles != nil {
+			response.ArtifactFiles = toSessionArtifactResponses(artifactFiles[session.ID])
+		}
 		items = append(items, response)
 	}
 	page := pageInfo{HasMore: hasMore}
@@ -916,8 +942,16 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	artifactFiles, err := s.sessionArtifactFiles(r.Context(), orgID, []string{sessionID})
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
 	response := toSessionResponse(session, prFacts[sessionID])
 	response.PRs = toSessionPRFactsResponses(pullRequests[sessionID], prFacts[sessionID])
+	if artifactFiles != nil {
+		response.ArtifactFiles = toSessionArtifactResponses(artifactFiles[sessionID])
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"session": response})
 }
 
@@ -1343,10 +1377,21 @@ func toSessionResponse(session domain.Session, prs []contract.PRFacts) sessionRe
 		AutoInjectReview:   session.AutoInjectReview,
 		TerminateOnPRMerge: session.TerminateOnPRMerge,
 		WorkerEpoch:        session.WorkerEpoch,
+		RequestedOutput:    session.RequestedOutput,
+		OutputType:         sessionOutputType(session, prs),
 		CreatedAt:          session.CreatedAt,
 		UpdatedAt:          session.UpdatedAt,
 		PRs:                []sessionPRFactsResponse{},
 	}
+}
+
+// sessionOutputType is the session's stored output type, counting a pull
+// request observed since the last artifact commit.
+func sessionOutputType(session domain.Session, prs []contract.PRFacts) string {
+	stored := session.OutputType
+	hasPR := len(prs) > 0 || stored == domain.SessionOutputPR || stored == domain.SessionOutputPRAndArtifact
+	hasArtifact := stored == domain.SessionOutputArtifact || stored == domain.SessionOutputPRAndArtifact
+	return domain.DeriveSessionOutputType(hasPR, hasArtifact)
 }
 
 func toSessionPRFactsResponses(prs []domain.PullRequest, facts []contract.PRFacts) []sessionPRFactsResponse {
