@@ -129,8 +129,8 @@ func (m *Manager) SwitchAgent(ctx context.Context, id domain.SessionID, cfg Swit
 }
 
 // RecoverAgentSwitch schedules reconciliation only for a durable source-side
-// recovery boundary. Ambiguous source restoration is retained without replay;
-// target startup is never retried.
+// recovery boundary. It is the user's Restore action: a source restore that
+// failed earlier is retried once per request; target startup is never retried.
 func (m *Manager) RecoverAgentSwitch(ctx context.Context, id domain.SessionID, switchID domain.AgentSwitchID) (domain.AgentSwitch, error) {
 	if err := m.beginAgentSwitchAttempt(); err != nil {
 		return domain.AgentSwitch{}, err
@@ -1174,7 +1174,7 @@ func (m *Manager) startAgentSwitchRecoveryWorker(store ports.AgentSwitchStore, s
 		}()
 		recoveryCtx, cancel := context.WithTimeout(m.backgroundContext, switchPostStopWait)
 		defer cancel()
-		resolved, err := m.reconcileOwnedAgentSwitchOnce(recoveryCtx, store, sw.SessionID)
+		resolved, err := m.reconcileOwnedAgentSwitchOnce(withSourceRestoreRetry(recoveryCtx), store, sw.SessionID)
 		if err != nil {
 			m.logger.Error("agent switch recovery failed", "sessionID", sw.SessionID, "switchID", sw.ID, "resolved", resolved, "error", err)
 			return
@@ -3347,9 +3347,42 @@ func sameAgentSwitchFailureFingerprint(a, b domain.AgentSwitch) bool {
 		a.FailurePoint == b.FailurePoint && a.UpdatedAt.Equal(b.UpdatedAt)
 }
 
+type sourceRestoreRetryContextKey struct{}
+
+// withSourceRestoreRetry marks the user's explicit Restore action. Only that
+// action retries a source restore that already failed once: boot and other
+// reconciliation keep the switch parked rather than retrying on their own.
+func withSourceRestoreRetry(ctx context.Context) context.Context {
+	return context.WithValue(ctx, sourceRestoreRetryContextKey{}, true)
+}
+
+func sourceRestoreRetryRequested(ctx context.Context) bool {
+	requested, _ := ctx.Value(sourceRestoreRetryContextKey{}).(bool)
+	return requested
+}
+
+// retrySourceRestore compensates a switch parked on source restore. No target
+// owns such a session, so the target is only cleaned up, never probed or
+// adopted: stop any runtime it recorded, clear its workspace state, then
+// restart the source. A failed restart leaves the switch parked.
+func (m *Manager) retrySourceRestore(ctx context.Context, store ports.AgentSwitchStore, rec domain.SessionRecord, sw domain.AgentSwitch, execution domain.AgentSwitchExecution) (bool, error) {
+	if handleID := strings.TrimSpace(sw.TargetRuntimeHandleID); handleID != "" {
+		if err := m.runtime.Destroy(ctx, ports.RuntimeHandle{ID: handleID}); err != nil {
+			return false, fmt.Errorf("restore source for agent switch %s: stop target runtime: %w", sw.ID, err)
+		}
+	}
+	if err := m.cleanupRecoveredTargetWorkspace(ctx, rec, sw); err != nil {
+		return false, err
+	}
+	return m.failRecoveredSwitchWithSourceRollback(ctx, store, rec, sw, execution)
+}
+
 func (m *Manager) reconcileAgentSwitch(ctx context.Context, store ports.AgentSwitchStore, rec domain.SessionRecord, sw domain.AgentSwitch, execution domain.AgentSwitchExecution) (bool, error) {
 	if sw.RequiresSourceRestore() {
-		return false, quarantinedAgentSwitchError(sw, fmt.Errorf("reconcile agent switch %s: source restoration remains unconfirmed", sw.ID))
+		if !sourceRestoreRetryRequested(ctx) {
+			return false, quarantinedAgentSwitchError(sw, fmt.Errorf("reconcile agent switch %s: source restoration remains unconfirmed", sw.ID))
+		}
+		return m.retrySourceRestore(ctx, store, rec, sw, execution)
 	}
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
 		return m.reconcileChatAgentSwitch(ctx, store, rec, sw, execution)

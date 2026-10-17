@@ -1032,6 +1032,17 @@ func awaitSwitchTestSignal(t *testing.T, signal <-chan struct{}, description str
 	}
 }
 
+func waitForCondition(t *testing.T, what string, done func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !done() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func waitForSwitchWorkers(t *testing.T, manager *Manager) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -3023,8 +3034,15 @@ func TestSwitchAgentRetainsRecoveryWhenSourceRollbackFails(t *testing.T) {
 		t.Fatal("failed source rollback reopened the switch input gate")
 	}
 
-	createdBefore := runtime.created
-	destroyedBefore := runtime.destroyed
+	// Each restore attempt launches a new source generation.
+	restoreLaunches := 0
+	manager.newLaunchID = func() string {
+		restoreLaunches++
+		return fmt.Sprintf("source-restore-generation-%d", restoreLaunches)
+	}
+
+	// The user's Restore action retries the source restore. While the source
+	// still cannot start, the switch stays parked and the gate stays closed.
 	accepted, err := manager.RecoverAgentSwitch(context.Background(), rec.ID, sw.ID)
 	if err != nil {
 		t.Fatalf("recover retained switch: %v", err)
@@ -3032,24 +3050,36 @@ func TestSwitchAgentRetainsRecoveryWhenSourceRollbackFails(t *testing.T) {
 	if accepted.ID != sw.ID {
 		t.Fatalf("accepted recovery switch = %q, want %q", accepted.ID, sw.ID)
 	}
-	waitCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := manager.WaitAgentSwitchWorkers(waitCtx); err != nil {
-		t.Fatalf("wait for retained recovery worker: %v", err)
-	}
-	recovered := store.switches[sw.ID]
-	if recovered.State != sw.State || recovered.ErrorCode != domain.AgentSwitchErrorSourceRestoreUnconfirmed {
-		t.Fatalf("recovered switch = state %q code %q, want retained source_restore_unconfirmed", recovered.State, recovered.ErrorCode)
-	}
-	rec = store.sessions["proj-1"]
-	if rec.Harness != domain.HarnessClaudeCode || rec.Activity.State != domain.ActivityExited {
-		t.Fatalf("retained session = harness %q activity %q, want stopped Claude ownership", rec.Harness, rec.Activity.State)
-	}
-	if runtime.created != createdBefore || runtime.destroyed != destroyedBefore {
-		t.Fatalf("retained recovery retried runtime side effects: creates %d->%d destroys %d->%d", createdBefore, runtime.created, destroyedBefore, runtime.destroyed)
+	waitForCondition(t, "failed restore retry to re-retain the gate", func() bool {
+		return manager.agentSwitchRetained("proj-1")
+	})
+	if recovered := store.switches[sw.ID]; recovered.State != sw.State || recovered.ErrorCode != domain.AgentSwitchErrorSourceRestoreUnconfirmed {
+		t.Fatalf("failed restore retry = state %q code %q, want retained source_restore_unconfirmed", recovered.State, recovered.ErrorCode)
 	}
 	if !manager.SessionMutationInProgress("proj-1") {
-		t.Fatal("retained source-restoration ambiguity reopened the input gate")
+		t.Fatal("failed restore retry reopened the input gate")
+	}
+
+	// Once the source can start again, Restore brings it back and ends the switch.
+	runtime.rollbackErr = nil
+	if _, err := manager.RecoverAgentSwitch(context.Background(), rec.ID, sw.ID); err != nil {
+		t.Fatalf("recover retained switch after source recovered: %v", err)
+	}
+	waitForCondition(t, "restored switch to settle", func() bool {
+		current, _, _ := store.GetAgentSwitch(context.Background(), sw.ID)
+		return current.State.Terminal() && !manager.SessionMutationInProgress("proj-1")
+	})
+	waitForSwitchWorkers(t, manager)
+	recovered := store.switches[sw.ID]
+	if !recovered.State.Terminal() || recovered.State != domain.AgentSwitchFailed {
+		t.Fatalf("restored switch = state %q code %q, want failed", recovered.State, recovered.ErrorCode)
+	}
+	rec = store.sessions["proj-1"]
+	if rec.Harness != domain.HarnessClaudeCode || rec.Activity.State == domain.ActivityExited {
+		t.Fatalf("restored session = harness %q activity %q, want running Claude", rec.Harness, rec.Activity.State)
+	}
+	if manager.SessionMutationInProgress("proj-1") {
+		t.Fatal("restored source left the switch input gate closed")
 	}
 }
 
