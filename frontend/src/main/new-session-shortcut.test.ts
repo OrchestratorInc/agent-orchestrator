@@ -83,6 +83,17 @@ describe("attachAppShortcuts", () => {
 		expect(target.send).toHaveBeenCalledWith(NEW_SESSION_SHORTCUT_CHANNEL);
 	});
 
+	it("forwards the Alt+N chord on Windows/Linux", () => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		attachAppShortcuts(source, false, target);
+
+		const event = source.emit({ key: "n", alt: true });
+
+		expect(target.send).toHaveBeenCalledWith(NEW_SESSION_SHORTCUT_CHANNEL);
+		expect(event.preventDefault).toHaveBeenCalledTimes(1);
+	});
+
 	it("focuses a separate shell target before forwarding", () => {
 		const source = fakeSource();
 		const target = fakeTarget();

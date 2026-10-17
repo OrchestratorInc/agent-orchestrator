@@ -2159,6 +2159,20 @@ describe("new-session shortcut forwarding", () => {
 		expect(shellFocus.mock.invocationCallOrder[0]).toBeLessThan(shellSend.mock.invocationCallOrder[0]);
 	});
 
+	it("focuses the shell before forwarding the Alt+N preview chord", async () => {
+		const { emitBeforeInput, invoke, shellFocus, shellSend } = setupHost();
+		await invoke("browser:ensure", "sess-1");
+		shellFocus.mockClear();
+		shellSend.mockClear();
+
+		const event = emitBeforeInput({ key: "n", alt: true });
+
+		expect(event.preventDefault).toHaveBeenCalledTimes(1);
+		expect(shellFocus).toHaveBeenCalledTimes(1);
+		expect(shellSend).toHaveBeenCalledWith(NEW_SESSION_SHORTCUT_CHANNEL);
+		expect(shellFocus.mock.invocationCallOrder[0]).toBeLessThan(shellSend.mock.invocationCallOrder[0]);
+	});
+
 	it("does not focus or forward auto-repeat and non-matching preview input", async () => {
 		const { emitBeforeInput, invoke, shellFocus, shellSend } = setupHost();
 		await invoke("browser:ensure", "sess-1");
