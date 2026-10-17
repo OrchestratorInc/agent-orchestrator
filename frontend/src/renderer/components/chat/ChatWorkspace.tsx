@@ -120,6 +120,7 @@ import {
 	humanVisibleText,
 	OriginMessage,
 	SteerMessage,
+	TurnActions,
 	TurnChangedFiles,
 	TurnOutcome,
 	LiveResponseStatus,
@@ -136,6 +137,7 @@ import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
+import { LiveActivityWindow } from "./LiveActivityWindow";
 import { TurnPlan } from "./TurnPlan";
 import { TurnSettingsBar } from "./TurnSettingsBar";
 import { ElicitationDock } from "./ElicitationDock";
@@ -3578,11 +3580,22 @@ export function Timeline({
 	const syncStreamedGrowth = useCallback(() => {
 		if (!pinnedRef.current || !initialLayoutDone.current) return;
 		anchorGeometry.current = null;
-		syncPromptSpacer();
 		const node = scroller.current;
+		// Something at the end shrank on its own (a finished plan folding away). The
+		// browser has already clamped scrollTop by the time this observer runs, before
+		// the spacer could grow back, so put the view back now, before paint, instead
+		// of gliding back from the clamped spot. Without a spacer the clamp is already
+		// the end and this writes nothing.
+		const clampedFrom = node && node.scrollTop < lastScrollTop.current - 1 ? lastScrollTop.current : undefined;
+		syncPromptSpacer();
+		if (node && clampedFrom !== undefined) {
+			node.scrollTop = Math.min(clampedFrom, Math.max(0, node.scrollHeight - node.clientHeight));
+			markWritten(node.scrollTop);
+			lastScrollTop.current = node.scrollTop;
+		}
 		if (node) followOrSnapToEnd(node);
 		updateScrollbar();
-	}, [syncPromptSpacer, followOrSnapToEnd, updateScrollbar]);
+	}, [syncPromptSpacer, followOrSnapToEnd, updateScrollbar, markWritten]);
 
 	// A disclosure animation changes the content box but is not new conversation
 	// content. Re-measure it without re-pinning the viewport to the bottom; doing
@@ -4175,6 +4188,7 @@ const TurnGroup = memo(function TurnGroup({
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 }) {
 	const { t } = useTranslation();
+	const reducedMotion = useReducedMotion();
 	const hasTerminalFailure =
 		group.outcome?.state === "failed" && Boolean(group.outcome.error);
 	const runs = useMemo(
@@ -4197,6 +4211,14 @@ const TurnGroup = memo(function TurnGroup({
 		? [...group.items]
 				.reverse()
 				.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id
+		: undefined;
+	// A turn that stopped or failed closes on its outcome, so the answer above it
+	// hands its copy and undo down to the outcome's action row: one row per turn.
+	const endsWithOutcome = Boolean(group.outcome && group.outcome.state !== "completed");
+	const copyableMessage = endsWithOutcome && copyableMessageId
+		? group.items.find(
+				(item): item is ConversationMessage => item.kind === "message" && item.id === copyableMessageId,
+			)
 		: undefined;
 	let finalAssistantRunIndex = -1;
 	if (group.outcome) {
@@ -4270,10 +4292,10 @@ const TurnGroup = memo(function TurnGroup({
 				busy={busy}
 				queued={queued}
 				newHumanMessageIds={newHumanMessageIds}
-				showCopy={run.items[0]?.id === copyableMessageId}
+				showCopy={!endsWithOutcome && run.items[0]?.id === copyableMessageId}
 				live={group.live}
 				onRollback={
-					canRollback && run.items[0]?.id === copyableMessageId
+					canRollback && !endsWithOutcome && run.items[0]?.id === copyableMessageId
 						? () => onRollback(group.turnId as string)
 						: undefined
 				}
@@ -4285,27 +4307,24 @@ const TurnGroup = memo(function TurnGroup({
 	// when the turn settles: the final answer leaving the worked runs, or a notice
 	// moving out from among them, does not remount it or drop the reader's selection.
 	const body: ReactNode[] = humanRuns.map(renderRun);
-	// A live provider failure replaces the Working row with its reconnect card, and a
-	// turn that stops without an outcome (cancelled) has no settled row to hand over to.
-	// The setup checklist sits exactly where the Working row will, so the handoff
-	// does not move anything.
-	if (startup || (!group.liveProviderFailure && (group.live || (group.outcome && !showSettledStatus)))) {
-		body.push(
+	// The Working row sits at the end of the live turn, under what the agent has
+	// written so far, where the reader is already looking. A live provider failure
+	// replaces it with its reconnect card, and a turn that stops without an outcome
+	// (cancelled) has no settled row to hand over to. The setup checklist shares the
+	// row, so the handoff from setup to work does not move anything.
+	const workingRow =
+		startup || (!group.liveProviderFailure && (group.live || (group.outcome && !showSettledStatus))) ? (
 			<LiveResponseStatus
-				key="turn-working"
 				startedAt={group.liveStartedAt}
 				settling={!startup && !group.live}
 				startupLabel={startup ? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : undefined}
 				failed={startup?.failed}
 			>
 				{startup ? <SessionStartup {...startup} /> : null}
-			</LiveResponseStatus>,
-		);
-	}
+			</LiveResponseStatus>
+		) : null;
 	const outcome = showSettledStatus ? group.outcome : undefined;
-	if (!outcome) {
-		body.push(...workedRuns.map(renderRun));
-	} else {
+	if (outcome) {
 		const disclosureKey = `${group.key}:worked`;
 		body.push(
 			<TurnWorkSummary
@@ -4317,6 +4336,32 @@ const TurnGroup = memo(function TurnGroup({
 				{foldedRuns.length > 0 ? foldedRuns.map(renderRun) : undefined}
 			</TurnWorkSummary>,
 		);
+	}
+	// While the agent works, and through the handoff to "Worked for", its steps scroll
+	// in a window that follows the newest one. The reply being written stays outside
+	// at full size, so streaming text is never squeezed into the window. Once the turn
+	// settles the window fades away beneath "Worked for", which holds the same work.
+	const windowed = group.live || (Boolean(group.outcome) && !showSettledStatus);
+	const tail = workedRuns.at(-1);
+	const tailIsReply = group.live && tail?.kind === "single" && tail.items[0].kind === "message" && tail.items[0].role === "assistant";
+	const windowRuns = windowed ? (tailIsReply ? workedRuns.slice(0, -1) : workedRuns) : [];
+	body.push(
+		<AnimatePresence key="live-activity" initial={false}>
+			{windowRuns.length > 0 ? (
+				<motion.div
+					key="live-activity-window"
+					exit={{ height: 0, opacity: 0 }}
+					transition={{ duration: reducedMotion ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}
+					className="overflow-hidden"
+				>
+					<LiveActivityWindow>{windowRuns.map(renderRun)}</LiveActivityWindow>
+				</motion.div>
+			) : null}
+		</AnimatePresence>,
+	);
+	if (!outcome) {
+		if (!windowed) body.push(...workedRuns.map(renderRun));
+		else if (tailIsReply) body.push(renderRun(tail));
 	}
 	if (outcome) body.push(...noticeRuns.map(renderRun));
 	if (finalRun) body.push(renderRun(finalRun));
@@ -4338,31 +4383,39 @@ const TurnGroup = memo(function TurnGroup({
 					onOpenFile={onOpenFile}
 				/>
 			) : null}
+			{/* Once the turn settles the row fades away and "Worked for" takes over at
+			    the top of the turn. */}
+			<AnimatePresence initial={false}>
+				{workingRow ? (
+					<motion.div
+						key="turn-working"
+						exit={{ height: 0, opacity: 0 }}
+						transition={{ duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}
+						className="overflow-hidden"
+					>
+						{workingRow}
+					</motion.div>
+				) : null}
+			</AnimatePresence>
 			{group.live ? <TurnLiveStatus blocked={group.blocked} providerFailure={group.liveProviderFailure} /> : null}
-			{/* No assistant prose to hang the undo / duration on — still offer them
-			    before the outcome divider so a tool-only turn is not stuck without a
-			    way back or a record of how long it took. */}
-			{!copyableMessageId && !group.live && canRollback ? (
-				<div className="flex h-7 items-center gap-0.5">
-					{canRollback ? (
-						<button
-							type="button"
-							onClick={() => onRollback(group.turnId as string)}
-							disabled={rollbackDisabled}
-							aria-label="Roll back to here"
-							title="Roll back to here"
-							className="flex items-center rounded px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-						>
-							<Undo2 aria-hidden="true" className="size-3" />
-						</button>
-					) : null}
-				</div>
+			{/* No assistant prose to hang the undo on — still offer it so a tool-only
+			    turn is not stuck without a way back. A stopped or failed turn carries
+			    it on its outcome's row instead. */}
+			{!copyableMessageId && !group.live && !endsWithOutcome && canRollback ? (
+				<TurnActions
+					onRollback={() => onRollback(group.turnId as string)}
+					rollbackDisabled={rollbackDisabled}
+				/>
 			) : null}
 			{group.outcome && group.outcome.state !== "completed" ? (
 				<TurnOutcome
 					state={group.outcome.state}
 					error={group.outcome.error}
 					retry={group.outcome.state === "failed" ? retry : undefined}
+					copyText={copyableMessage?.text}
+					onRollback={canRollback ? () => onRollback(group.turnId as string) : undefined}
+					rollbackDisabled={rollbackDisabled}
+					timestamp={copyableMessage?.createdAt}
 				/>
 			) : null}
 		</div>

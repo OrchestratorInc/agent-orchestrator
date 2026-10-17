@@ -1126,16 +1126,17 @@ describe("ChatWorkspace timeline", () => {
 
 		render(<ChatWorkspace snapshot={snapshot} />);
 
-		// Read the transcript in document order: only the prompt sits above Working, and
-		// the steer stays after the work it interrupted and before the reply to it.
+		// Read the transcript in document order: the prompt opens the turn, the steer stays
+		// after the work it interrupted and before the reply to it, and the Working row
+		// closes the turn under everything the agent has written so far.
 		const text = screen.getByRole("log").textContent ?? "";
 		const positions = [
 			"Run the unit tests",
-			"Working for",
 			"Starting with the test suite.",
 			"Ran command",
 			"Only the unit ones, please",
 			"Switching to the unit tests.",
+			"Working for",
 		].map((fragment) => text.indexOf(fragment));
 		expect(positions.every((position) => position >= 0)).toBe(true);
 		expect(positions).toEqual([...positions].sort((a, b) => a - b));
@@ -1841,7 +1842,8 @@ describe("ChatWorkspace timeline", () => {
 
 		const startup = screen.getByTestId("session-startup");
 		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Setting up session$/);
-		expect(screen.getByTestId("live-working-label").previousElementSibling?.querySelector("svg")).toBeInTheDocument();
+		const workingMark = screen.getByTestId("live-working-label").previousElementSibling as HTMLElement;
+		expect(within(workingMark).getByTestId("response-spinner")).toBeInTheDocument();
 		// It takes the Working row's slot inside the brief's turn, so the handoff moves nothing.
 		expect(startup.closest("[data-chat-scroll-anchor]")).toContainElement(screen.getByText("Fix clicking attachments"));
 		const steps = within(startup).getAllByRole("listitem");

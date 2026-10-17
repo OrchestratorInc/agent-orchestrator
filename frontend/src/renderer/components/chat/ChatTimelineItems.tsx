@@ -18,17 +18,20 @@ import {
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { ThinkingOrb as Orb } from "thinking-orbs";
 import {
 	AlertTriangle,
 	Brain,
 	ChevronDown,
 	ChevronRight,
 	CircleAlert,
+	CircleStop,
 	CornerDownLeft,
 	CornerDownRight,
 	File as FileIcon,
 	FileDiff,
 	Gauge,
+	History,
 	KeyRound,
 	Keyboard,
 	ListChecks,
@@ -36,6 +39,7 @@ import {
 	MousePointer2,
 	Pencil,
 	Plug,
+	RotateCw,
 	Shuffle,
 	ShieldCheck,
 	ShieldQuestion,
@@ -288,19 +292,15 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 function TwoRowTimelineMarker({
 	message,
 	detail,
-	tone = "text-muted-foreground/70",
 	detailTone = "text-muted-foreground/70",
-	action,
 }: {
 	message: string;
 	detail?: string;
-	tone?: string;
 	detailTone?: string;
-	action?: ReactNode;
 }) {
 	return (
 		<div className="flex min-w-0 flex-col gap-1 py-1">
-			<div className={cn("flex min-w-0 items-baseline gap-2 text-xs", tone)}>
+			<div className="flex min-w-0 items-baseline gap-2 text-xs text-muted-foreground/70">
 				<span className="shrink-0">{message}</span>
 				{detail ? (
 					<span
@@ -310,7 +310,6 @@ function TwoRowTimelineMarker({
 						{detail}
 					</span>
 				) : null}
-				{action}
 			</div>
 			<span aria-hidden="true" className="h-px w-full bg-border" />
 		</div>
@@ -344,59 +343,170 @@ export function ContinuedMarker() {
 	return <TwoRowTimelineMarker message="Continued" />;
 }
 
+const TURN_OUTCOME_COPY = {
+	recovered: {
+		label: "This turn was recovered from an earlier session",
+		icon: History,
+		tone: "text-muted-foreground",
+		iconTone: "text-muted-foreground/70",
+	},
+	interrupted: {
+		label: "The agent was interrupted by you",
+		icon: CircleStop,
+		tone: "text-muted-foreground",
+		iconTone: "text-muted-foreground/70",
+	},
+	failed: {
+		label: "The agent ran into a problem",
+		icon: CircleAlert,
+		tone: "font-medium text-destructive",
+		iconTone: "text-destructive",
+	},
+} as const;
+
+/**
+ * How a turn ended when it did not end with an answer: in the answer's place, and
+ * closing on the same action row a finished answer gets.
+ *
+ * It used to be three shapes for one ending — a status line drawn across a rule,
+ * retry off at the far right, undo floating above on a row of its own. Now it reads
+ * like a short reply (mark, what happened, the provider's reason) so a stopped or
+ * failed turn keeps the outline of every other turn.
+ */
 export function TurnOutcome({
 	state,
 	error,
 	retry,
+	copyText,
+	onRollback,
+	rollbackDisabled,
+	timestamp,
 }: {
 	state: "recovered" | "interrupted" | "failed";
 	error?: string;
-	retry?: TurnOutcomeRetryControl;
-}) {
-	const copy = {
-		recovered: {
-			label: "This turn was recovered from an earlier session",
-			tone: "text-muted-foreground/70",
-		},
-		interrupted: {
-			label: "The agent was interrupted by you",
-			tone: "text-muted-foreground/70",
-		},
-		failed: { label: "The agent ran into a problem", tone: "text-destructive" },
-	}[state];
-
-	const action = retry ? (
-		<>
-			{retry.error ? (
-				<span role="alert" className="max-w-[50%] text-pretty text-right text-xs leading-tight text-destructive">
-					{retry.error}
-				</span>
-			) : null}
-			<button
-				type="button"
-				onClick={retry.onRetry}
-				disabled={retry.pending || retry.disabled}
-				aria-label="Retry this turn"
-				title={retry.error ?? (retry.disabled ? "Wait for the current turn to finish" : "Send this prompt again as a new turn")}
-				data-testid="retry-turn"
-				className="shrink-0 rounded px-1.5 py-0.5 text-xs text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50"
-			>
-				{retry.pending ? "Retrying…" : "Retry"}
-			</button>
-		</>
-	) : undefined;
-	if (state === "failed") {
-		return (
-			<div className="flex min-w-0 flex-col gap-2 py-3">
-				<div className="flex items-baseline justify-between gap-3 text-sm font-medium text-destructive">
-					<span>{copy.label}</span>
-					{action}
+} & TurnActionsProps) {
+	const copy = TURN_OUTCOME_COPY[state];
+	const Icon = copy.icon;
+	return (
+		<div className="group/message flex min-w-0 flex-col gap-1" data-turn-outcome={state}>
+			<div className="flex min-w-0 items-start gap-2">
+				<Icon aria-hidden="true" className={cn("mt-[3px] size-3.5 shrink-0", copy.iconTone)} />
+				<div className="flex min-w-0 flex-1 flex-col gap-0.5">
+					<span className={cn("text-sm", copy.tone)}>{copy.label}</span>
+					{error ? (
+						<div className="whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-muted-foreground">
+							{linkifiedProviderErrorText(error)}
+						</div>
+					) : null}
 				</div>
-				{error ? <div className="whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-foreground">{linkifiedProviderErrorText(error)}</div> : null}
 			</div>
-		);
-	}
-	return <TwoRowTimelineMarker message={copy.label} detail={error} tone={copy.tone} action={action} />;
+			<TurnActions
+				retry={retry}
+				copyText={copyText}
+				onRollback={onRollback}
+				rollbackDisabled={rollbackDisabled}
+				timestamp={timestamp}
+			/>
+		</div>
+	);
+}
+
+interface TurnActionsProps {
+	/** Present only when this failed turn is eligible for a new attempt. */
+	retry?: TurnOutcomeRetryControl;
+	/** The answer's stored markdown, so a paste gives back what the agent wrote. */
+	copyText?: string;
+	/** Discard this turn and everything after it. */
+	onRollback?: () => void;
+	/** Keep rollback mounted but inert while another turn is active. */
+	rollbackDisabled?: boolean;
+	/** When the answer was written, revealed on hover of the enclosing `group/message`. */
+	timestamp?: string;
+}
+
+const TURN_ACTION_BUTTON =
+	"flex h-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-40 motion-reduce:transition-none motion-reduce:active:scale-100";
+
+/**
+ * The row a turn closes on: retry, copy, roll back, then the time on hover.
+ *
+ * Every ending shares it — a finished answer, a tool-only turn, a stopped or failed
+ * one — so the controls are always in the same place. The negative margin is on the
+ * row rather than its first button, so the leading glyph lines up with the text
+ * above whichever control comes first.
+ */
+export function TurnActions({
+	retry,
+	copyText,
+	onRollback,
+	rollbackDisabled = false,
+	timestamp,
+	className,
+}: TurnActionsProps & { className?: string }) {
+	if (!retry && copyText === undefined && !onRollback) return null;
+	const time = timestamp ? formatMessageTimestamp(timestamp) : "";
+	return (
+		<div className={cn("flex min-w-0 flex-col gap-1", className)}>
+			<div className="-ml-1.5 flex h-7 items-center gap-0.5" data-turn-actions="">
+				{retry ? (
+					<button
+						type="button"
+						onClick={retry.onRetry}
+						disabled={retry.pending || retry.disabled}
+						aria-label="Retry this turn"
+						title={retry.error ?? (retry.disabled ? "Wait for the current turn to finish" : "Send this prompt again as a new turn")}
+						data-testid="retry-turn"
+						className={cn(TURN_ACTION_BUTTON, "gap-1.5 px-2 text-xs")}
+					>
+						<RotateCw
+							aria-hidden="true"
+							className={cn("size-3", retry.pending && "animate-spin motion-reduce:animate-none")}
+						/>
+						{retry.pending ? "Retrying…" : "Retry"}
+					</button>
+				) : null}
+				{copyText !== undefined ? (
+					<div className="size-7 shrink-0">
+						<CopyButton
+							text={copyText}
+							label="Copy message as markdown"
+							compact
+							className={cn(TURN_ACTION_BUTTON, "size-7 px-0 py-0")}
+						/>
+					</div>
+				) : null}
+				{onRollback ? (
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<button
+								type="button"
+								onClick={onRollback}
+								disabled={rollbackDisabled}
+								aria-label="Roll back to here"
+								className={cn(TURN_ACTION_BUTTON, "size-7")}
+							>
+								<Undo2 aria-hidden="true" className="size-3" />
+							</button>
+						</TooltipTrigger>
+						<TooltipContent side="bottom">Roll back to here</TooltipContent>
+					</Tooltip>
+				) : null}
+				{time ? (
+					<span
+						className="w-auto shrink-0 px-1 text-caption tabular-nums text-muted-foreground/75 opacity-0 transition-opacity duration-150 ease-out group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none"
+						aria-label={`Sent ${time}`}
+					>
+						{time}
+					</span>
+				) : null}
+			</div>
+			{retry?.error ? (
+				<p role="alert" className="text-pretty text-xs leading-snug text-destructive">
+					{retry.error}
+				</p>
+			) : null}
+		</div>
+	);
 }
 
 function formatTokens(tokens: number): string {
@@ -509,6 +619,20 @@ export function ResponseSpinner() {
 			data-testid="response-spinner"
 			className="size-3 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
 		/>
+	);
+}
+
+/**
+ * The live turn's thinking mark: the dotted "breathing" orb from thinking-orbs (a
+ * ring slowly morphing), at its 20px inline preset. It is decorative here, since
+ * "Working for" beside it says the same thing in words, and it follows AO's
+ * `data-theme`, honours reduced motion, and pauses when scrolled offscreen.
+ */
+export function ThinkingOrb() {
+	return (
+		<span aria-hidden="true" data-testid="response-spinner" className="flex size-5 shrink-0 items-center justify-center">
+			<Orb state="breathing" size={20} aria-hidden="true" />
+		</span>
 	);
 }
 
@@ -884,44 +1008,15 @@ export function AssistantMessage({
 			<div data-chat-message-body=""><ChatMarkdown text={visibleText} streaming={renderingStreaming} /></div>
 			{showActions ? (
 				// One action row for the completed answer, not one after every prose
-				// fragment the provider emitted while working. Copy, rollback, and
-				// duration stay visible; only the wall-clock time reveals on hover.
-				<div className="mt-1 flex h-7 items-center gap-0.5">
-					{showCopy ? (
-						<div className="-ml-1.5 size-7 shrink-0">
-							{/* The stored markdown, not a re-serialization of what was rendered:
-							   pasting it into an editor has to give back what the agent wrote. */}
-							<CopyButton
-								text={message.text}
-								label="Copy message as markdown"
-								compact
-								className="size-7 justify-center rounded-md px-0 py-0 transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
-							/>
-						</div>
-					) : null}
-					{onRollback ? (
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<button
-									type="button"
-									onClick={onRollback}
-									disabled={rollbackDisabled}
-									aria-label="Roll back to here"
-									className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-40 motion-reduce:transition-none motion-reduce:active:scale-100"
-								>
-									<Undo2 aria-hidden="true" className="size-3" />
-								</button>
-							</TooltipTrigger>
-							<TooltipContent side="bottom">Roll back to here</TooltipContent>
-						</Tooltip>
-					) : null}
-					<span
-						className="w-auto shrink-0 px-1 text-caption tabular-nums text-muted-foreground/75 opacity-0 transition-opacity duration-150 ease-out group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none"
-						aria-label={`Sent ${formatMessageTimestamp(message.createdAt)}`}
-					>
-						{formatMessageTimestamp(message.createdAt)}
-					</span>
-				</div>
+				// fragment the provider emitted while working. Copy and rollback stay
+				// visible; only the wall-clock time reveals on hover.
+				<TurnActions
+					className="mt-1"
+					copyText={showCopy ? message.text : undefined}
+					onRollback={onRollback}
+					rollbackDisabled={rollbackDisabled}
+					timestamp={message.createdAt}
+				/>
 			) : null}
 		</div>
 	);
@@ -955,20 +1050,20 @@ export function LiveResponseStatus({ startedAt, settling = false, startupLabel, 
 	// Settling animates opacity and transform only, never layout, so it stays smooth
 	// even when the main thread is busy finishing the turn. These are keyframe
 	// animations rather than transitions so they also play when the row first
-	// mounts already settled. The spinner shrinks and fades in place while the label
-	// slides left by the spinner's footprint (12px + 6px gap), landing exactly where
-	// the settled "Worked for" row puts it. The label keeps its shimmer class
+	// mounts already settled. The orb shrinks and fades in place while the label
+	// slides left by the orb's footprint (20px + 6px gap), so "Worked for" ends flush
+	// with the turn's text before the row hands over. The label keeps its shimmer class
 	// throughout (only the highlight fades), so the text never changes paint
 	// technique and cannot blink.
 	return (
 		<div className="min-w-0">
-			<div className="-mx-1 flex h-7 select-none items-center gap-1.5 border-b border-border px-1 py-0">
+			<div className="-mx-1 flex h-7 select-none items-center gap-1.5 px-1 py-0">
 				<span
 					aria-hidden={settling || undefined}
 					data-settling={settling || undefined}
 					className="chat-working-spinner-slot flex shrink-0 origin-center"
 				>
-					{failed ? <X className="size-3 text-destructive" /> : <ResponseSpinner />}
+					{failed ? <X className="size-3 text-destructive" /> : <ThinkingOrb />}
 				</span>
 				<span
 					role={failed ? "alert" : "status"}
@@ -1133,6 +1228,9 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 	// bordered activity row.
 	const compactSummary =
 		activity.activityKind === "command" || activity.activityKind === "file_change";
+	// A provider retry ("Reconnecting… 4/5") is a note on the turn, not a row in a
+	// list: no rule above it and no inset, so it lines up with the turn's text.
+	const notice = activity.activityKind === "system" && activity.detail?.event === "provider.failure";
 	const singleEdit = activity.activityKind === "file_change" && files.length === 1 ? files[0] : undefined;
 
 	// Live output is only live if it is on screen, so a command that is still
@@ -1144,7 +1242,11 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 		<div
 			className={cn(
 				"min-w-0 max-w-full",
-				compactSummary ? "flex flex-col" : "group/activity border-t border-border first:border-t-0",
+				compactSummary
+					? "flex flex-col"
+					: notice
+						? "group/activity"
+						: "group/activity border-t border-border first:border-t-0",
 			)}
 		>
 			<button
@@ -1155,7 +1257,9 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 				className={cn(
 					compactSummary
 						? ACTIVITY_SUMMARY_BUTTON_CLASS
-						: "flex min-h-[35px] w-full min-w-0 select-none items-center gap-[9px] px-[11px] py-2 text-left text-xs",
+						: notice
+							? "flex min-h-7 w-full min-w-0 select-none items-center gap-2 py-1 text-left text-xs"
+							: "flex min-h-[35px] w-full min-w-0 select-none items-center gap-[9px] px-[11px] py-2 text-left text-xs",
 					"activity-row-toggle",
 					hasBody && !compactSummary && "hover:text-foreground",
 					!hasBody && "cursor-default",
@@ -1195,7 +1299,11 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 								? "activity-row-label shrink-0 text-xs font-normal text-muted-foreground group-hover/activity:text-foreground"
 								: "min-w-0 truncate font-medium",
 							!compactSummary &&
-								(activity.status === "failed" ? "text-destructive" : "text-foreground"),
+								(activity.status === "failed"
+									? "text-destructive"
+									: notice
+										? "font-normal text-muted-foreground"
+										: "text-foreground"),
 						)}
 						title={compactSummary ? undefined : label}
 					>

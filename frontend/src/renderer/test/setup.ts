@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import * as jestDomMatchers from "@testing-library/jest-dom/matchers";
-import { expect } from "vitest";
+import { createElement } from "react";
+import { expect, vi } from "vitest";
 import { appI18n } from "../i18n";
 import { appCatalogs } from "../i18n/all-messages";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
@@ -16,6 +17,14 @@ import { appShortcutBus } from "./app-shortcut-bus";
 // Vitest 4 can load the convenience entry against a different matcher
 // instance. Register the matchers on the active test runtime as well.
 expect.extend(jestDomMatchers);
+
+// thinking-orbs paints a 2D canvas every frame, and the canvas stub below hands
+// back an empty context, so the real orb would throw on its first draw. Mount a
+// plain canvas in its place: tests check where the orb sits, not its pixels.
+vi.mock("thinking-orbs", () => ({
+	ThinkingOrb: ({ state: _state, size, ...rest }: { state?: string; size?: number } & Record<string, unknown>) =>
+		createElement("canvas", { ...rest, width: size, height: size, "data-thinking-orb": "" }),
+}));
 
 // Guard: src/main/** tests run in the Node.js environment (no DOM). vitest still
 // routes setupFiles here, so only install the DOM stubs when a DOM exists.

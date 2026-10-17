@@ -23,7 +23,7 @@ export function TurnWorkSummary({
 		<Accordion
 			type="single"
 			collapsible
-			className="-mx-1 border-b border-border"
+			className="-mx-1"
 			value={open ? "worked" : ""}
 			onValueChange={(value) => onOpenChange?.(value === "worked")}
 		>
@@ -50,7 +50,7 @@ export function TurnWorkSummary({
 			</AccordionItem>
 		</Accordion>
 	) : (
-		<div className="-mx-1 flex h-7 select-none items-center border-b border-border px-1 py-0 text-sm font-normal text-muted-foreground">
+		<div className="-mx-1 flex h-7 select-none items-center px-1 py-0 text-sm font-normal text-muted-foreground">
 			<span className="inline-flex w-fit items-center gap-1">
 				{t("chat.workedFor")}
 				{durationMs !== undefined ? <TurnDuration durationMs={durationMs} inline /> : null}

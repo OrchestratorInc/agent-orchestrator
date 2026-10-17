@@ -1,4 +1,4 @@
-import { act, render as rtlRender, screen } from "@testing-library/react";
+import { act, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StrictMode, type ReactElement } from "react";
 import { ActivityRow, AssistantMessage, HumanMessage, TurnOutcome } from "./ChatTimelineItems";
@@ -92,6 +92,45 @@ describe("TurnOutcome", () => {
 			"href",
 			"https://example.com/billing",
 		);
+	});
+
+	it("closes a failed turn on one action row: retry, copy, then undo", () => {
+		const onRetry = vi.fn();
+		const onRollback = vi.fn();
+		render(
+			<TurnOutcome
+				state="failed"
+				error="unexpected status 401 Unauthorized"
+				retry={{ onRetry }}
+				copyText="The partial answer"
+				onRollback={onRollback}
+			/>,
+		);
+
+		const actions = [
+			screen.getByRole("button", { name: "Retry this turn" }),
+			screen.getByRole("button", { name: "Copy message as markdown" }),
+			screen.getByRole("button", { name: "Roll back to here" }),
+		];
+		const rows = new Set(actions.map((action) => action.closest("[data-turn-actions]")));
+		expect(rows.size).toBe(1);
+		expect(rows.has(null)).toBe(false);
+
+		fireEvent.click(actions[0]!);
+		fireEvent.click(actions[2]!);
+		expect(onRetry).toHaveBeenCalledOnce();
+		expect(onRollback).toHaveBeenCalledOnce();
+	});
+
+	it("says why a retry was refused, under the row it came from", () => {
+		render(<TurnOutcome state="failed" retry={{ onRetry: vi.fn(), error: "Stop the agent first" }} />);
+		expect(screen.getByRole("alert")).toHaveTextContent("Stop the agent first");
+	});
+
+	it("draws no action row when a stopped turn has nothing to act on", () => {
+		render(<TurnOutcome state="interrupted" />);
+		expect(screen.getByText("The agent was interrupted by you")).toBeInTheDocument();
+		expect(screen.queryByRole("button")).not.toBeInTheDocument();
 	});
 });
 

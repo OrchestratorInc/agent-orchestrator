@@ -1955,7 +1955,7 @@ textarea,
 
 @keyframes chat-working-shift {
 	from { transform: translateX(0); }
-	to { transform: translateX(-18px); }
+	to { transform: translateX(-26px); }
 }
 
 @keyframes chat-working-fade {
@@ -1976,12 +1976,56 @@ textarea,
 		color: var(--color-muted-foreground);
 	}
 	.chat-working-shimmer[data-settling] {
-		transform: translateX(-18px);
+		transform: translateX(-26px);
 	}
 	.chat-working-spinner-slot[data-settling] {
 		animation: none;
 		opacity: 0;
 		transform: scale(0);
+	}
+}
+
+/* Chat scroll windows (the plan, a live turn's activity): content fades out at
+   whichever edge still has more to scroll to, so a long list reads as continuing
+   rather than cut off. syncEdgeFade (chat/edge-fade.ts) sets the data attributes
+   from the scroll position; the lengths are registered so the fade eases in and out
+   instead of snapping. */
+@property --edge-fade-top {
+	syntax: "<length>";
+	inherits: false;
+	initial-value: 0px;
+}
+
+@property --edge-fade-bottom {
+	syntax: "<length>";
+	inherits: false;
+	initial-value: 0px;
+}
+
+.edge-fade-viewport {
+	mask-image: linear-gradient(
+		to bottom,
+		transparent,
+		#000 var(--edge-fade-top),
+		#000 calc(100% - var(--edge-fade-bottom)),
+		transparent
+	);
+	transition:
+		--edge-fade-top 150ms ease-out,
+		--edge-fade-bottom 150ms ease-out;
+}
+
+.edge-fade-viewport[data-fade-top] {
+	--edge-fade-top: 24px;
+}
+
+.edge-fade-viewport[data-fade-bottom] {
+	--edge-fade-bottom: 24px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.edge-fade-viewport {
+		transition: none;
 	}
 }
 
