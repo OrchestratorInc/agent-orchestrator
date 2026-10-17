@@ -293,6 +293,37 @@ func TestLocateAndProbeNativeSessionTranscript(t *testing.T) {
 	}
 }
 
+// Codex compresses inactive rollouts and continues long threads in segments;
+// both remain resumable by thread id.
+func TestProbeNativeSessionFindsStoredRolloutForms(t *testing.T) {
+	sessionID := "019f9f7c-53c0-7f10-8d56-a8a979dd7001"
+	for name, file := range map[string]string{
+		"compressed":         "rollout-2026-08-04T00-00-00-" + sessionID + ".jsonl.zst",
+		"segment":            "rollout-2026-08-05T00-00-00-" + sessionID + "_019f9f7c-53c0-7f10-8d56-a8a979dd7002.jsonl",
+		"compressed segment": "rollout-2026-08-05T00-00-00-" + sessionID + "_019f9f7c-53c0-7f10-8d56-a8a979dd7002.jsonl.zst",
+		"other thread":       "rollout-2026-08-04T00-00-00-" + sessionID + "0.jsonl.zst",
+	} {
+		t.Run(name, func(t *testing.T) {
+			configDir := t.TempDir()
+			path := filepath.Join(configDir, "sessions", "2026", "08", "04", file)
+			if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			availability, err := (&Plugin{}).ProbeNativeSession(context.Background(), ports.NativeSessionRef{NativeSessionID: sessionID, ConfigDir: configDir})
+			want := ports.NativeSessionAvailabilityAvailable
+			if name == "other thread" {
+				want = ports.NativeSessionAvailabilityUnavailable
+			}
+			if err != nil || availability != want {
+				t.Fatalf("availability = %q, %v; want %q", availability, err, want)
+			}
+		})
+	}
+}
+
 func TestArchivedTranscriptIsDiscoverableButNotResumable(t *testing.T) {
 	configDir := t.TempDir()
 	sessionID := "019f9f7c-53c0-7f10-8d56-a8a979dd7001"

@@ -23,6 +23,7 @@ type timeoutProbeSessionService struct {
 	uploadBudget  chan time.Duration
 	sendBudget    chan time.Duration
 	previewBudget chan time.Duration
+	resumeBudget  chan time.Duration
 }
 
 func (s *timeoutProbeSessionService) GetRecord(ctx context.Context, _ domain.SessionID) (domain.SessionRecord, error) {
@@ -42,6 +43,11 @@ func (s *timeoutProbeSessionService) recordBudget(t *testing.T) time.Duration {
 		t.Fatal("the route never read the session record")
 		return 0
 	}
+}
+
+func (s *timeoutProbeSessionService) ResumeAgent(ctx context.Context, id domain.SessionID) (sessionsvc.ResumeAgentOutcome, error) {
+	s.resumeBudget <- remainingRequestBudget(ctx)
+	return sessionsvc.ResumeAgentOutcome{Session: domain.Session{ID: id}}, nil
 }
 
 func (s *timeoutProbeSessionService) List(ctx context.Context, _ sessionsvc.ListFilter) ([]domain.Session, error) {
@@ -222,5 +228,27 @@ func TestAttachmentCapableSendUsesExtendedTimeoutOnlyForUploads(t *testing.T) {
 				t.Fatalf("plain text budget = %s, want no more than %s", budget, configuredTimeout)
 			}
 		})
+	}
+}
+
+// Resuming reads the agent's whole native history; a large imported Codex
+// thread took over a minute, past the ordinary REST budget.
+func TestResumeAgentRouteUsesExtendedTimeout(t *testing.T) {
+	svc := &timeoutProbeSessionService{resumeBudget: make(chan time.Duration, 1)}
+	router := NewRouterWithControl(
+		config.Config{RequestTimeout: 250 * time.Millisecond},
+		discardLogger(),
+		nil,
+		APIDeps{Sessions: svc},
+		ControlDeps{},
+	)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/sessions/ao-1/resume-agent", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST resume-agent status = %d, want 200; body=%s", response.Code, response.Body.String())
+	}
+	budget := <-svc.resumeBudget
+	if budget < 9*time.Minute || budget > 10*time.Minute {
+		t.Fatalf("resume-agent budget = %s, want about 10 minutes", budget)
 	}
 }
