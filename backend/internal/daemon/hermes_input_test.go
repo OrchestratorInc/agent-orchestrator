@@ -27,6 +27,7 @@ type lineInputRuntime struct {
 	sendErr    error
 	nextScreen string
 	holdScreen bool
+	sent       chan string
 }
 
 func (r *lineInputRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
@@ -41,6 +42,9 @@ func (r *lineInputRuntime) SendMessage(_ context.Context, _ ports.RuntimeHandle,
 		return r.sendErr
 	}
 	r.messages = append(r.messages, message)
+	if r.sent != nil {
+		r.sent <- message
+	}
 	if r.holdScreen {
 		return nil
 	}
@@ -109,7 +113,7 @@ func TestHermesEveryGuardedWriteRequiresCurrentEmptyComposer(t *testing.T) {
 	}
 }
 
-func TestHermesAdmissionRecoversAfterSendErrorAndFastTurn(t *testing.T) {
+func TestHermesAdmissionRecoversAfterSendErrorWithNativeWitness(t *testing.T) {
 	store, err := sqlitetest.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -130,9 +134,9 @@ func TestHermesAdmissionRecoversAfterSendErrorAndFastTurn(t *testing.T) {
 		t.Fatal("write failure ignored")
 	}
 	runtime.sendErr = nil
-	runtime.nextScreen = "turn complete\n" + idle
+	runtime.nextScreen = "☤ ❯ msg=interrupt · Ctrl+C cancel"
 	if err := messenger.Send(ctx, rec.ID, "second"); err != nil {
-		t.Fatalf("fast settled turn remained pending: %v", err)
+		t.Fatalf("native submission witness did not release admission: %v", err)
 	}
 	if len(runtime.messages) != 1 || runtime.messages[0] != "second" {
 		t.Fatalf("unexpected writes: %v", runtime.messages)
@@ -154,7 +158,7 @@ func TestHermesAdmissionDropsPriorRuntimeGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	idle := "────────────────────────────────────────\n❯ \n────────────────────────────────────────"
-	runtime := &lineInputRuntime{screen: idle, nextScreen: "new turn complete\n" + idle}
+	runtime := &lineInputRuntime{screen: idle, nextScreen: "☤ ❯ msg=interrupt · Ctrl+C cancel"}
 	messenger := newSessionMessenger(store, runtime, nil, lineAgentResolver{}).(runtimeMessenger)
 	messenger.inputLocks.Store(rec.ID, &terminalMessageAdmission{pending: "old task", baseline: idle, handleID: "old-pane", launchID: "old-launch"})
 	if err := messenger.Send(ctx, rec.ID, "new task"); err != nil {
@@ -192,12 +196,70 @@ func TestHermesAdmissionRecoversAfterEchoTimeout(t *testing.T) {
 		t.Fatalf("unchanged screen allowed another submission: %v", err)
 	}
 	runtime.screen = "first turn complete\n" + idle
+	if err := messenger.Send(ctx, rec.ID, "second"); err == nil || !strings.Contains(err.Error(), "prior terminal submission remains unconfirmed") {
+		t.Fatalf("changed idle screen released unconfirmed submission: %v", err)
+	}
+	runtime.screen = "☤ ❯ msg=interrupt · Ctrl+C cancel"
+	if err := messenger.Send(ctx, rec.ID, "second"); err == nil || strings.Contains(err.Error(), "prior terminal submission remains unconfirmed") {
+		t.Fatalf("late native witness should release pending admission but refuse a busy composer: %v", err)
+	}
+	if len(runtime.messages) != 1 {
+		t.Fatalf("recovery wrote into an unconfirmed or busy composer: %v", runtime.messages)
+	}
+	runtime.screen = "first turn complete\n" + idle
 	runtime.holdScreen = false
-	runtime.nextScreen = "second turn complete\n" + idle
+	runtime.nextScreen = "☤ ❯ msg=interrupt · Ctrl+C cancel"
 	if err := messenger.Send(ctx, rec.ID, "second"); err != nil {
-		t.Fatalf("changed idle screen did not release pending admission: %v", err)
+		t.Fatalf("confirmed prior submission blocked input after returning idle: %v", err)
 	}
 	if len(runtime.messages) != 2 || runtime.messages[1] != "second" {
 		t.Fatalf("unexpected writes after timeout recovery: %v", runtime.messages)
+	}
+}
+
+func TestHermesAdmissionRejectsIdleRedrawDuringConcurrentSend(t *testing.T) {
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := t.Context()
+	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "p", Path: "/repo/p", RegisteredAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := store.CreateSession(ctx, domain.SessionRecord{ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessHermes, Activity: domain.Activity{State: domain.ActivityIdle}, Metadata: domain.SessionMetadata{RuntimeHandleID: "pane", RuntimeLaunchID: "generation"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	idle := "────────────────────────────────────────\n❯ \n────────────────────────────────────────"
+	runtime := &lineInputRuntime{screen: idle, nextScreen: "unrelated status redraw\n" + idle, sent: make(chan string, 2)}
+	messenger := newSessionMessenger(store, runtime, nil, lineAgentResolver{})
+	firstCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- messenger.Send(firstCtx, rec.ID, "first task") }()
+	select {
+	case <-runtime.sent:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first submission was not written")
+	}
+	secondDone := make(chan error, 1)
+	secondStarted := make(chan struct{})
+	go func() {
+		close(secondStarted)
+		secondDone <- messenger.Send(ctx, rec.ID, "second task")
+	}()
+	<-secondStarted
+	cancel()
+	firstErr := <-firstDone
+	secondErr := <-secondDone
+	if firstErr == nil || !strings.Contains(firstErr.Error(), "unconfirmed") {
+		t.Fatalf("idle redraw falsely confirmed first submission: %v", firstErr)
+	}
+	if secondErr == nil || !strings.Contains(secondErr.Error(), "prior terminal submission remains unconfirmed") {
+		t.Fatalf("concurrent send crossed the unconfirmed submission: %v", secondErr)
+	}
+	if len(runtime.messages) != 1 || runtime.messages[0] != "first task" {
+		t.Fatalf("idle redraw admitted additional terminal writes: %v", runtime.messages)
 	}
 }

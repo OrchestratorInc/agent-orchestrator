@@ -443,11 +443,8 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 			if admission.pending != "" && (admission.handleID != rec.Metadata.RuntimeHandleID || admission.launchID != rec.Metadata.RuntimeLaunchID) {
 				admission.pending = ""
 			}
-			settled := func(frame string) bool {
-				return frame != admission.baseline && policy.ValidateTerminalMessage("", frame) == nil
-			}
 			if admission.pending != "" {
-				if (!hasWitness || !witness.TerminalMessageObserved(admission.pending, admission.baseline, screen)) && !settled(screen) {
+				if !hasWitness || !witness.TerminalMessageObserved(admission.pending, admission.baseline, screen) {
 					return fmt.Errorf("session %s: prior terminal submission remains unconfirmed", id)
 				}
 				admission.pending = ""
@@ -470,16 +467,16 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 				admission.pending = ""
 				return err
 			}
-			// A socket write acknowledgement precedes native echo. Hold admission until
-			// a current frame actually shows this line, so a competing send cannot see
-			// the same old empty composer and queue text into a later confirmation.
+			// A socket write acknowledgement precedes native acceptance. Hold admission
+			// until the adapter witnesses submission: an unrelated idle redraw cannot
+			// prove that the first message has left the composer.
 			deadline := time.NewTimer(2 * time.Second)
 			defer deadline.Stop()
 			ticker := time.NewTicker(20 * time.Millisecond)
 			defer ticker.Stop()
 			for {
 				frame, captureErr := reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, 40)
-				if captureErr == nil && ((hasWitness && witness.TerminalMessageObserved(message, admission.baseline, frame)) || settled(frame)) {
+				if captureErr == nil && hasWitness && witness.TerminalMessageObserved(message, admission.baseline, frame) {
 					admission.pending = ""
 					return nil
 				}
