@@ -47,9 +47,9 @@ export function UsageLimitNotice({
 	const resetAt = Number.isFinite(parsedReset) ? parsedReset : undefined;
 	const ready = resetAt === undefined || now >= resetAt;
 	const actionError = error ?? usageLimit.resumeError;
-	const scheduled = resetAt !== undefined && usageLimit.autoResume;
-	const showResume = onResume && !scheduled;
-	const showAutoResume = resetAt !== undefined && onAutoResumeChange && (!ready || usageLimit.autoResume);
+	const scheduled = !ready && usageLimit.autoResume;
+	const showResume = onResume && ready;
+	const showAutoResume = resetAt !== undefined && !ready && onAutoResumeChange;
 
 	useEffect(() => {
 		if (compact || resetAt === undefined) return;
@@ -82,7 +82,7 @@ export function UsageLimitNotice({
 				<div className="min-w-0 flex-1">
 					<div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
 						<strong className="text-balance text-xs font-medium text-foreground">{t("chat.usageLimit.title")}</strong>
-						{!compact && resetAt !== undefined && (!ready || !scheduled) ? (
+						{!compact && resetAt !== undefined ? (
 							<span className="text-pretty text-xs text-muted-foreground">
 								{ready ? <span role="status">{t("chat.usageLimit.ready")}</span> : (
 									<Trans
@@ -114,9 +114,8 @@ export function UsageLimitNotice({
 				<div className="ml-auto flex flex-wrap items-center gap-1">
 					{showResume ? (
 						<Button
-							type="button" size="sm" variant={ready ? "primary" : "ghost"} onClick={onResume}
-							disabled={pending || disabled || !ready}
-							title={!ready ? t("chat.usageLimit.resumeHint") : undefined}
+							type="button" size="sm" variant="primary" onClick={onResume}
+							disabled={pending || disabled}
 							className="focus-visible:ring-2 focus-visible:ring-ring"
 						>
 							{pending ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" /> : <Play aria-hidden="true" className="size-3.5" />}

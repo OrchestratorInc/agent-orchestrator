@@ -13,7 +13,7 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("UsageLimitNotice", () => {
-	it("shows the local reset time and enables Resume when the countdown expires", () => {
+	it("shows the local reset time and reveals Resume when the countdown expires", () => {
 		const onResume = vi.fn();
 		const onAutoResumeChange = vi.fn();
 		render(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: false }} onResume={onResume} onAutoResumeChange={onAutoResumeChange} />);
@@ -22,7 +22,9 @@ describe("UsageLimitNotice", () => {
 		expect(document.querySelector("time")).toHaveAttribute("dateTime", resetsAt);
 		expect(document.querySelector("time")).toHaveTextContent(new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(resetsAt)));
 		expect(screen.getByText("1m 5s")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Resume" })).toBeDisabled();
+		expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Auto-resume at reset" })).toBeEnabled();
+		expect(screen.getAllByRole("button")).toHaveLength(1);
 
 		act(() => vi.advanceTimersByTime(65_000));
 
@@ -46,32 +48,32 @@ describe("UsageLimitNotice", () => {
 		view.rerender(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: true }} onResume={onResume} onAutoResumeChange={onAutoResumeChange} />);
 		expect(screen.getByText(/Auto-resume is scheduled/)).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
+		expect(screen.getAllByRole("button")).toHaveLength(1);
 		fireEvent.click(screen.getByRole("button", { name: "Cancel auto-resume" }));
 		expect(onAutoResumeChange).toHaveBeenLastCalledWith(false);
 
 		view.rerender(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: false }} onResume={onResume} onAutoResumeChange={onAutoResumeChange} />);
-		expect(screen.getByRole("button", { name: "Resume" })).toBeDisabled();
+		expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Auto-resume at reset" })).toBeEnabled();
+		expect(screen.queryByRole("button", { name: "Cancel auto-resume" })).not.toBeInTheDocument();
+		expect(screen.queryByText(/Auto-resume is scheduled/)).not.toBeInTheDocument();
 		expect(onResume).not.toHaveBeenCalled();
 	});
 
-	it("keeps only cancellation after the scheduled reset and restores manual resume when cancelled", () => {
+	it("replaces scheduled cancellation with manual Resume at reset without retrying automatically", () => {
 		const onResume = vi.fn();
 		const onAutoResumeChange = vi.fn();
-		const view = render(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: true }} onResume={onResume} onAutoResumeChange={onAutoResumeChange} />);
-		expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
-		act(() => vi.advanceTimersByTime(65_000));
-
+		render(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: true }} onResume={onResume} onAutoResumeChange={onAutoResumeChange} />);
 		expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Cancel auto-resume" })).toBeEnabled();
-		expect(onResume).not.toHaveBeenCalled();
-		expect(onAutoResumeChange).not.toHaveBeenCalled();
-		fireEvent.click(screen.getByRole("button", { name: "Cancel auto-resume" }));
-		expect(onAutoResumeChange).toHaveBeenCalledWith(false);
+		act(() => vi.advanceTimersByTime(65_000));
 
-		view.rerender(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: false }} onResume={onResume} onAutoResumeChange={onAutoResumeChange} />);
+		expect(screen.getByRole("button", { name: "Resume" })).toBeEnabled();
 		expect(screen.queryByRole("button", { name: "Cancel auto-resume" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Auto-resume at reset" })).not.toBeInTheDocument();
+		expect(screen.queryByText(/Auto-resume is scheduled/)).not.toBeInTheDocument();
+		expect(onResume).not.toHaveBeenCalled();
+		expect(onAutoResumeChange).not.toHaveBeenCalled();
 		fireEvent.click(screen.getByRole("button", { name: "Resume" }));
 		expect(onResume).toHaveBeenCalledOnce();
 	});
@@ -93,7 +95,7 @@ describe("UsageLimitNotice", () => {
 		const onAutoResumeChange = vi.fn();
 		render(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: false }} onResume={onResume} onAutoResumeChange={onAutoResumeChange} {...props} />);
 
-		expect(screen.getByRole("button", { name: "Resume" })).toBeDisabled();
+		expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Auto-resume at reset" })).toBeDisabled();
 		fireEvent.click(screen.getByRole("button", { name: "Auto-resume at reset" }));
 		act(() => vi.advanceTimersByTime(65_000));
@@ -104,13 +106,19 @@ describe("UsageLimitNotice", () => {
 	});
 
 	it.each([{ pending: true }, { disabled: true }])("prevents cancelling scheduled resume while unavailable: %j", (props) => {
+		const onResume = vi.fn();
 		const onAutoResumeChange = vi.fn();
-		render(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: true }} onResume={vi.fn()} onAutoResumeChange={onAutoResumeChange} {...props} />);
+		render(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: true }} onResume={onResume} onAutoResumeChange={onAutoResumeChange} {...props} />);
 
 		expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Cancel auto-resume" })).toBeDisabled();
 		fireEvent.click(screen.getByRole("button", { name: "Cancel auto-resume" }));
+		act(() => vi.advanceTimersByTime(65_000));
+		expect(screen.queryByRole("button", { name: "Cancel auto-resume" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Resume" })).toBeDisabled();
+		fireEvent.click(screen.getByRole("button", { name: "Resume" }));
 		expect(onAutoResumeChange).not.toHaveBeenCalled();
+		expect(onResume).not.toHaveBeenCalled();
 	});
 
 	it("shows resume failures beside the actions and prefers the latest request error", () => {
