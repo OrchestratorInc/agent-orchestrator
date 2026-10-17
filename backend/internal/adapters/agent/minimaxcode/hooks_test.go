@@ -233,7 +233,7 @@ func TestOldHookKeepsItsRuntimeGeneration(t *testing.T) {
 	}
 }
 
-func TestStandingHookUsesImmutableCurrentGenerationContext(t *testing.T) {
+func TestStandingHookUsesImmutableGenerationContext(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX callback fixture")
 	}
@@ -278,11 +278,26 @@ func TestStandingHookUsesImmutableCurrentGenerationContext(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(bin, "ao"), []byte(callback), 0700); err != nil {
 		t.Fatal(err)
 	}
+	preload := filepath.Join(t.TempDir(), "callback-failure.cjs")
+	failureFixture := `const child=require('node:child_process');
+const spawn=child.spawnSync;
+child.spawnSync=(...args)=>{
+  if(process.env.FIXTURE_CALLBACK_STATUS==='timeout') return {status:null,error:Object.assign(new Error('timeout'),{code:'ETIMEDOUT'})};
+  if(process.env.FIXTURE_CALLBACK_STATUS==='throw') throw new Error('reporting failed');
+  return spawn(...args);
+};`
+	if err := os.WriteFile(preload, []byte(failureFixture), 0600); err != nil {
+		t.Fatal(err)
+	}
 	// Exercise the actual managed helper, not a mock native provider.
 	run := func(generation, event, nativeID, status string) map[string]any {
 		t.Helper()
-		cmd := exec.Command(node, filepath.Join(profile, "plugins", "ao-activity", "hook.cjs"), hookLaunchArgument(profile, generation))
-		cmd.Env = append(os.Environ(), "PATH="+bin, "FIXTURE_CALLBACK_STATUS="+status)
+		callbackPath := bin
+		if status == "missing" {
+			callbackPath = t.TempDir()
+		}
+		cmd := exec.Command(node, "--require", preload, filepath.Join(profile, "plugins", "ao-activity", "hook.cjs"), hookLaunchArgument(profile, generation))
+		cmd.Env = append(os.Environ(), "PATH="+callbackPath, "FIXTURE_CALLBACK_STATUS="+status)
 		cmd.Stdin = strings.NewReader(fmt.Sprintf(`{"hook_event_name":%q,"session_id":%q}`, event, nativeID))
 		out, err := cmd.Output()
 		if err != nil {
@@ -311,10 +326,17 @@ func TestStandingHookUsesImmutableCurrentGenerationContext(t *testing.T) {
 	if value := run("restored", "SessionStart", id, "0"); len(value) != 0 {
 		t.Fatalf("duplicate context at SessionStart: %+v", value)
 	}
-	for _, input := range []struct{ nativeID, status string }{{"mvs_00000000000000000000000000000000", "0"}, {id, "1"}} {
-		value := run("restored", "UserPromptSubmit", input.nativeID, input.status)
+	for _, status := range []string{"1", "missing", "timeout", "throw"} {
+		value := run("restored", "UserPromptSubmit", id, status)
+		output, ok := value["hookSpecificOutput"].(map[string]any)
+		if !ok || output["additionalContext"] != "NEW_PRIVATE_CONTEXT" || value["continue"] != nil {
+			t.Fatalf("activity report failure %q blocked native input: %+v", status, value)
+		}
+	}
+	for _, status := range []string{"0", "1", "missing"} {
+		value := run("restored", "UserPromptSubmit", "mvs_00000000000000000000000000000000", status)
 		if value["continue"] != false || value["hookSpecificOutput"] != nil {
-			t.Fatalf("unverified native identity/generation admitted: %+v", value)
+			t.Fatalf("replacement native identity admitted: %+v", value)
 		}
 	}
 	if err := os.Remove(filepath.Join(profile, "launches", "restored", "standing.txt")); err != nil {

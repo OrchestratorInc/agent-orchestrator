@@ -47,9 +47,14 @@ try {
   }
   const events={SessionStart:'session-start',UserPromptSubmit:'user-prompt-submit',PermissionRequest:'permission-blocked',PreToolUse:'pre-tool-use',PostToolUse:'post-tool-use',PostToolUseFailure:'post-tool-use-failure',Stop:'stop'};
   if (!events[event]) process.exit(0);
-  const callback=spawnSync('ao',['hooks','minimax-code',events[event]],{input:JSON.stringify({...payload,launch_id:launchID}),env:hookEnv,stdio:['pipe','ignore','ignore'],timeout:8000});
+  // Activity delivery is best effort: ao hooks also exits 0 on rejected posts.
+  // Its result cannot verify the runtime generation or gate native input.
+  try {
+    spawnSync('ao',['hooks','minimax-code',events[event]],{input:JSON.stringify({...payload,launch_id:launchID}),env:hookEnv,stdio:['pipe','ignore','ignore'],timeout:8000});
+  } catch {
+    // Reporting failures must not block native prompt submission.
+  }
   if(event==='UserPromptSubmit') {
-    if(callback.status!==0){refuse('AO could not verify the current MiniMax runtime generation.');process.exit(0);}
     const file=path.join(launchDir,'standing.txt');
     let context;
     try {
