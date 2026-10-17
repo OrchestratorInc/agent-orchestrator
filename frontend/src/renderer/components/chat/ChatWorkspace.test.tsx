@@ -2040,9 +2040,8 @@ describe("ChatWorkspace timeline", () => {
 			["worktree", "done"],
 			["agent", "running"],
 		]);
-		expect(steps[1]).toHaveTextContent("Create worktree");
-		expect(steps[1]).toHaveTextContent("ao/mer-1");
-		expect(steps[2]).toHaveTextContent("Start Codex");
+		expect(steps[1]).toHaveTextContent(/^Preparing your workspace$/);
+		expect(steps[2]).toHaveTextContent(/^Getting Codex ready$/);
 		expect(screen.getByText("Fix clicking attachments")).toBeInTheDocument();
 		expect(screen.queryByText("Queued · sends when the agent finishes")).not.toBeInTheDocument();
 		expect(screen.queryByTestId("queued-message-dock")).not.toBeInTheDocument();
@@ -2062,7 +2061,7 @@ describe("ChatWorkspace timeline", () => {
 				onResumeAgent={vi.fn()}
 			/>,
 		);
-		expect(screen.getByText("Codex 正在启动. 消息将按顺序发送")).toBeInTheDocument();
+		expect(screen.getByText("Codex 准备期间可先排队发送消息")).toBeInTheDocument();
 	});
 
 	// The checklist keeps the working slot until the agent is up and its first

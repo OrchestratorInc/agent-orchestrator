@@ -15,10 +15,11 @@ import { useSideChatsAvailable } from "../../lib/side-chats";
 
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useChatPermissionModes } from "../../hooks/useChatPermissionModes";
 import { useChatMessageFocus } from "../../hooks/useChatMessageFocus";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
+import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { forgetLaunchSettings, forgetOpeningStart, LaunchSettingsBar, launchSettingsFor, openingStartFor } from "./LaunchSettingsBar";
 import { rememberChatSettingsTemplate } from "../../lib/chat-settings-template";
 import {
@@ -218,6 +219,22 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const commands = useConversationCommands(session.id, hostId);
 	// Set only when this task was started from the new chat page.
 	const queryClient = useQueryClient();
+	// Whether the project has a setup script, so a start lists that step only when it
+	// runs something. Remote and cloud projects are not read here and keep the step.
+	const plansSetup = Boolean(session.provisionSteps?.some((step) => step.id === "setup"));
+	const projectScripts = useQuery({
+		queryKey: ["project", session.workspaceId],
+		enabled: plansSetup && !hostId && !session.cloud,
+		staleTime: 30_000,
+		queryFn: async () => {
+			const { data, error } = await apiClient.GET("/api/v1/projects/{id}", { params: { path: { id: session.workspaceId } } });
+			if (error) throw new Error(apiErrorMessage(error));
+			return data?.status === "ok" ? data.project : undefined;
+		},
+	});
+	const projectConfig = projectScripts.data && "config" in projectScripts.data ? projectScripts.data.config : undefined;
+	const showSetupStep = Boolean(hostId || session.cloud) ||
+		(projectConfig?.postCreate ?? []).some((command: string) => command.trim() !== "");
 	const launchSettings = launchSettingsFor(queryClient, session.id, hostId);
 	const openingStartedAt = openingStartFor(queryClient, session.id, hostId);
 	const projectPermissions = useRememberProjectPermissions(session.workspaceId, snapshot?.harness, hostId, session.kind);
@@ -615,6 +632,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			{refreshError ? <p role="alert" className="px-4 py-2 text-xs text-destructive">{refreshError}</p> : null}
 			{sideChatContainer ? createPortal(sideChats.panel, sideChatContainer) : null}
 			<ChatWorkspace
+				showSetupStep={showSetupStep}
 				onAddToSideChat={sideEnabled && (sideChats.activeId || sideCreationEnabled) ? attachToSide : undefined}
 				annotationNavigationRequest={annotationNavigationRequest}
 				key={uiSessionId}

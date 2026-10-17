@@ -588,6 +588,8 @@ export interface ChatWorkspaceProps {
 	composerTray?: ReactNode;
 	/** An empty header strip sits above: center the empty chat in the window, not below the strip. */
 	centerInWindow?: boolean;
+	/** The project has a setup script, so the start-up checklist lists that step. */
+	showSetupStep?: boolean;
 	/** Show the attach control, disabled, before there is a workspace to attach into. */
 	attachLater?: boolean;
 }
@@ -790,6 +792,7 @@ function ChatWorkspaceContent({
 	openingStartedAt,
 	composerTray,
 	centerInWindow = false,
+	showSetupStep = true,
 	attachLater,
 	draftScope,
 	draftPersistenceAvailable,
@@ -834,7 +837,14 @@ function ChatWorkspaceContent({
 			: undefined;
 	// While a session starts, its opening brief reads as sent: the setup checklist
 	// under it explains why nothing has answered yet. Later messages still queue.
-	const provisionSteps = session?.provisionSteps ?? startingSteps;
+	const plannedSteps = session?.provisionSteps ?? startingSteps;
+	// Named tasks keep a setup checkpoint even when the project has no setup script;
+	// the checklist names that step only when there is a script to run, or it failed
+	// (the step still running when the start failed).
+	const provisionSteps = useMemo(
+		() => plannedSteps?.filter((step) => step.id !== "setup" || showSetupStep || (startupState === "failed" && step.status === "running")),
+		[plannedSteps, showSetupStep, startupState],
+	);
 	// Ready can arrive before the first turn does. Keep its setup slot through
 	// that gap; selecting the first turn also never promotes a queued follow-up.
 	const hasStartup = Boolean(
@@ -1983,14 +1993,14 @@ function ChatWorkspaceContent({
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: undefined
 										}
-										// The shimmer means input is held; a session that exists queues follow-ups while it starts.
-										starting={orchestratorStarting || arrivingInChat || (openingStarting && !session)}
+										starting={orchestratorStarting || arrivingInChat}
 										disabled={(orchestratorStarting || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
 										disabledPlaceholder={
 											arrivingInChat
 												? arrivingPlaceholder
 												: openingStarting && !session
-												? t("chat.opening.starting", { agent: agentLabel(snapshot.harness) })
+												// Same words the session shows once it can queue, so nothing changes on handoff.
+												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: orchestratorStarting
 												? setupPlaceholder
 												: controllerTransitioning || newWorkDisabled
