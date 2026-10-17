@@ -7,11 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/google/uuid"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
@@ -110,7 +111,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 func validateTask(prompt string) error {
 	text := strings.TrimSpace(prompt)
 	if strings.HasPrefix(text, "/") || strings.HasPrefix(text, "!") {
-		return errors.New("Mastra Code treats tasks beginning with / or ! as native commands; start your task with a description, such as Fix /src/foo.ts, or use the terminal for native commands")
+		return errors.New("mastra-code treats tasks beginning with / or ! as native commands; start your task with a description, such as Fix /src/foo.ts, or use the terminal for native commands")
 	}
 	return nil
 }
