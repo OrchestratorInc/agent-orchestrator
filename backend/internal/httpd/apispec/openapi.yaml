@@ -10443,6 +10443,111 @@ paths:
       summary: Turn the cloud offering on or off for this machine
       tags:
       - settings
+  /api/v1/settings/gateway:
+    get:
+      operationId: getGatewayConfig
+      parameters:
+      - description: Project id; when omitted, only the app scope is reported.
+        in: query
+        name: projectId
+        schema:
+          description: Project id; when omitted, only the app scope is reported.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersGatewayConfigResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read the Anthropic-compatible gateway configuration per scope
+      tags:
+      - settings
+    put:
+      operationId: updateGatewayConfig
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersUpdateGatewayConfigRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersGatewayConfigResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Write the Anthropic-compatible gateway entry for one scope
+      tags:
+      - settings
+  /api/v1/settings/gateway/probe:
+    post:
+      operationId: probeGateway
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersGatewayProbeRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersGatewayProbeResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Validate a gateway base URL and token without saving them
+      tags:
+      - settings
   /api/v1/settings/harness-defaults/{agent}:
     patch:
       operationId: updateHarnessDefault
@@ -12820,6 +12925,45 @@ components:
         disabled:
           type: boolean
       type: object
+    ControllersGatewayConfigResponse:
+      properties:
+        app:
+          $ref: '#/components/schemas/GatewayScopeValue'
+        effective:
+          $ref: '#/components/schemas/GatewayEffective'
+        project:
+          $ref: '#/components/schemas/GatewayScopeValue'
+      required:
+      - app
+      - effective
+      type: object
+    ControllersGatewayProbeRequest:
+      properties:
+        baseUrl:
+          type: string
+        token:
+          type: string
+      required:
+      - baseUrl
+      - token
+      type: object
+    ControllersGatewayProbeResponse:
+      properties:
+        detail:
+          type: string
+        models:
+          items:
+            $ref: '#/components/schemas/GatewayModel'
+          type: array
+        state:
+          enum:
+          - valid
+          - invalid
+          - unknown
+          type: string
+      required:
+      - state
+      type: object
     ControllersKeepAwakeStatus:
       properties:
         active:
@@ -13208,6 +13352,30 @@ components:
           - boolean
       required:
       - enabled
+      type: object
+    ControllersUpdateGatewayConfigRequest:
+      properties:
+        baseUrl:
+          type:
+          - "null"
+          - string
+        model:
+          type:
+          - "null"
+          - string
+        projectId:
+          type: string
+        scope:
+          enum:
+          - app
+          - project
+          type: string
+        token:
+          type:
+          - "null"
+          - string
+      required:
+      - scope
       type: object
     ConversationAccountPayload:
       properties:
@@ -14485,6 +14653,35 @@ components:
       - name
       - path
       - gitRepo
+      type: object
+    GatewayEffective:
+      properties:
+        baseUrl:
+          type: string
+        model:
+          type: string
+        source:
+          type: string
+      type: object
+    GatewayModel:
+      properties:
+        displayName:
+          type: string
+        id:
+          type: string
+      required:
+      - id
+      type: object
+    GatewayScopeValue:
+      properties:
+        baseUrl:
+          type: string
+        model:
+          type: string
+        tokenSet:
+          type: boolean
+      required:
+      - tokenSet
       type: object
     GitHubRepo:
       properties:

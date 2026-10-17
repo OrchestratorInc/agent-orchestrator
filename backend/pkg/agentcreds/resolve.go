@@ -308,3 +308,12 @@ func claudeConfigDir(opts ResolveOptions) (string, error) {
 	}
 	return filepath.Abs(dir)
 }
+
+// ClaudeConfigDir resolves Claude Code's config directory exactly the way
+// ResolveClaudeSettings reads it: explicit override, CLAUDE_CONFIG_DIR, then
+// the platform home. Tools that write gateway configuration into the same
+// settings files must use this, so the writer and the reader can never
+// disagree about where "app scope" lives.
+func ClaudeConfigDir(opts ResolveOptions) (string, error) {
+	return claudeConfigDir(opts)
+}

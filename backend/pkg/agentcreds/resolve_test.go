@@ -99,6 +99,24 @@ func TestClaudeConfigDirIgnoresXDGConfigHome(t *testing.T) {
 	}
 }
 
+// The exported wrapper is what settings writers must use; it has to keep
+// agreeing with the reader's precedence, including CLAUDE_CONFIG_DIR.
+func TestClaudeConfigDirExportedMatchesReader(t *testing.T) {
+	envDir := t.TempDir()
+	env := envFrom(map[string]string{"CLAUDE_CONFIG_DIR": envDir})
+	exported, err := ClaudeConfigDir(ResolveOptions{Env: env, GOOS: "linux"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	internal, err := claudeConfigDir(ResolveOptions{Env: env, GOOS: "linux"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exported != internal || exported != envDir {
+		t.Fatalf("exported=%q internal=%q env=%q", exported, internal, envDir)
+	}
+}
+
 // Every env source must outrank the file, or AO validates the subscription
 // while the agent uses the env var.
 func TestEnvBeatsCredentialsFile(t *testing.T) {

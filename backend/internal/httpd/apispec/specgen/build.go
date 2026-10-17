@@ -998,6 +998,38 @@ func shellTerminalOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodGet, path: "/api/v1/settings/gateway", id: "getGatewayConfig", tag: "settings",
+			summary:    "Read the Anthropic-compatible gateway configuration per scope",
+			pathParams: []any{controllers.GatewayConfigQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.GatewayConfigResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/settings/gateway", id: "updateGatewayConfig", tag: "settings",
+			summary: "Write the Anthropic-compatible gateway entry for one scope",
+			reqBody: controllers.UpdateGatewayConfigRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.GatewayConfigResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/settings/gateway/probe", id: "probeGateway", tag: "settings",
+			summary: "Validate a gateway base URL and token without saving them",
+			reqBody: controllers.GatewayProbeRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.GatewayProbeResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/chat-view", id: "setSessionChatView", tag: "conversations",
 			summary:    "Keep a viewed chat awake or release its view lease",
 			pathParams: []any{controllers.SessionIDParam{}},
