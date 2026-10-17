@@ -199,6 +199,12 @@ func existingHeadReason(runs []domain.ReviewRun, prURL, targetSHA string) string
 		if run.Verdict == domain.VerdictChangesRequested {
 			return "changes_requested_same_sha"
 		}
+		if run.Status == domain.ReviewRunFailed && run.Body == domain.ReviewRunUnsubmittedBody {
+			// The reviewer finished its turn but AO never got the result. It has
+			// usually posted to the PR already, so another automatic pass on this
+			// head would only post a duplicate review.
+			return "unsubmitted_same_sha"
+		}
 		if run.Status == domain.ReviewRunFailed && run.TriggerSource == domain.ReviewTriggerAuto {
 			failedAutoRuns++
 		}
