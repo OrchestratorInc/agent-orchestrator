@@ -941,6 +941,7 @@ function setupTabHost(
 	loadURLHook?: (viewIndex: number, url: string) => Promise<void>,
 	browserHistoryStore?: BrowserHistoryStore,
 	clearBrowserProfileData = vi.fn(async (_partition: string) => undefined),
+	prepareBrowserPartition?: (partition: string) => void,
 ) {
 	const constructorOptions: Array<{
 		webPreferences: Electron.WebPreferences;
@@ -1167,6 +1168,7 @@ function setupTabHost(
 		browserProfileStore,
 		browserHistoryStore,
 		clearBrowserProfileData,
+		prepareBrowserPartition,
 		onNativeViewAdded,
 		// Kept only as a regression tripwire: the removed auto-send path used
 		// this option to discover the daemon before calling net.fetch.
@@ -2291,6 +2293,22 @@ describe("browser profile partitions and replacement", () => {
 		expect(firstPartition).not.toBe(secondPartition);
 		expect(firstTabPartition).toBe(firstPartition);
 		expect(constructorOptions.every(({ webPreferences }) => webPreferences.plugins === true)).toBe(true);
+	});
+
+	it("prepares each tab's partition before its page is constructed", async () => {
+		const order: string[] = [];
+		const prepare = vi.fn((partition: string) => order.push(`prepare ${partition}`));
+		const { constructorOptions, invoke } = setupTabHost(undefined, false, undefined, undefined, undefined, prepare);
+		const recordConstruction = constructorOptions.push.bind(constructorOptions);
+		constructorOptions.push = (...items) => {
+			for (const item of items) order.push(`construct ${item.webPreferences.partition}`);
+			return recordConstruction(...items);
+		};
+
+		await invoke("browser:ensure", "worker-1");
+
+		const partition = constructorOptions[0]!.webPreferences.partition!;
+		expect(order.slice(0, 2)).toEqual([`prepare ${partition}`, `construct ${partition}`]);
 	});
 
 	it("clears temporary persisted partitions when their browser session is destroyed", async () => {

@@ -85,6 +85,7 @@ import {
 	slowDaemonStartupStatus,
 } from "./shared/daemon-startup-status";
 import { toggleAppDevTools } from "./main/app-devtools";
+import { acceptLanguages, applyBrowserIdentity } from "./main/browser-identity";
 import { attachAppShortcuts } from "./main/app-shortcuts";
 import {
 	KEYBOARD_SHORTCUTS_HELP_CHANNEL,
@@ -991,6 +992,12 @@ async function createWindowInternal(): Promise<void> {
 			notify: (state) => shellWebContents.send("browser:downloadsChanged", state),
 		}),
 		clearBrowserProfileData: clearElectronBrowserProfileData,
+		prepareBrowserPartition: (partition) =>
+			applyBrowserIdentity(session.fromPartition(partition), {
+				chromeVersion: process.versions.chrome,
+				platform: process.platform,
+				languages: acceptLanguages(app.getLocale(), app.getPreferredSystemLanguages()),
+			}),
 		clipboard: { writeImage: writeClipboardImage },
 		onNativeViewAdded: () => windowComposition?.restackShell(),
 	});

@@ -465,6 +465,8 @@ export type BrowserViewHostOptions = {
   browserHistoryStore?: BrowserHistoryStore;
   browserDownloadManager?: BrowserDownloadManager;
   clearBrowserProfileData?: (partition: string) => Promise<void>;
+  // Configures a browser partition's session before its first page exists.
+  prepareBrowserPartition?: (partition: string) => void;
   // Electron 44 removed clipboard.writeImage; main.ts adapts the async
   // ClipboardItem API to this narrow image-only writer.
   clipboard?: { writeImage(image: Electron.NativeImage): void | Promise<void> };
@@ -1030,6 +1032,7 @@ export function createBrowserViewHost(
       preload: options.annotatePreloadPath,
       sandbox: true,
     };
+    options.prepareBrowserPartition?.(session.profilePartition);
     const view = new options.WebContentsView({
       webPreferences,
       ...(popupOptions?.webContents ? { webContents: popupOptions.webContents } : {}),
