@@ -5114,6 +5114,21 @@ func (m *Manager) Cleanup(ctx context.Context, project domain.ProjectID) (Cleanu
 		AlreadyGone: []domain.SessionID{},
 		Skipped:     []CleanupSkip{},
 	}
+	// Pass A: runtime teardown and grouping, no gate held. Runtime teardown is
+	// keyed on the terminated session's own handle, not the workspace path, so
+	// it runs even when the workspace is shared with a live successor —
+	// otherwise a skipped session would leak its runtime (the lingering
+	// keep-alive shell) until cleanup reruns. Deliberately run before acquiring
+	// any workspace gate so that any code path Destroy invokes synchronously
+	// (for example, a test fake or a future runtime adapter that spawns a
+	// successor during teardown) can itself call Spawn or Restore without
+	// deadlocking on the gate; such a successor commits its metadata before
+	// pass B re-lists the project.
+	type wsGroup struct {
+		recs []domain.SessionRecord
+	}
+	order := []domain.ProjectID{}
+	groups := map[domain.ProjectID]*wsGroup{}
 	for _, rec := range recs {
 		if !rec.IsTerminated {
 			continue
@@ -5124,41 +5139,69 @@ func (m *Manager) Cleanup(ctx context.Context, project domain.ProjectID) (Cleanu
 			m.cleanupSystemPromptDir(rec.ID)
 			continue
 		}
-		// Runtime teardown is keyed on the terminated session's own handle, not
-		// the workspace path, so it runs even when the workspace is shared with a
-		// live successor — otherwise a skipped session would leak its runtime
-		// (the lingering keep-alive shell) until cleanup reruns.
-		// Deliberately run before acquiring the workspace gate so that any code
-		// path Destroy invokes synchronously (for example, a test fake or a future
-		// runtime adapter that spawns a successor during teardown) can itself call
-		// Spawn or Restore without deadlocking on the gate.
 		if h := runtimeHandle(rec.Metadata); h.ID != "" {
 			_ = m.runtime.Destroy(ctx, h) // best effort; usually already gone
 		}
-		reclaim, reason := m.cleanupWorkspaceUnderGate(ctx, rec, ws)
-		if reason != "" {
-			result.Skipped = append(result.Skipped, CleanupSkip{SessionID: rec.ID, Reason: reason})
+		g := groups[rec.ProjectID]
+		if g == nil {
+			g = &wsGroup{}
+			groups[rec.ProjectID] = g
+			order = append(order, rec.ProjectID)
+		}
+		g.recs = append(g.recs, rec)
+	}
+	// Pass B: one fresh list per project group, read under that group's gate.
+	// The gate is what makes the check timely: Spawn and Restore hold the same
+	// gate while they allocate a workspace and commit metadata, so the
+	// live-workspace set below cannot race with an in-progress spawn that has
+	// not yet written WorkspacePath to the store. Listing once per group (not
+	// once per session) turns the O(N²) store traffic of a many-session
+	// project into O(P·N) for the fast path; the gate releases before any
+	// command runs — preRemove scripts and teardown must not starve
+	// Spawn/Restore — and cleanupOne rechecks ownership under the gate before
+	// each destroy, so a successor that claims the worktree mid-sweep is still
+	// honored.
+	for _, projectID := range order {
+		release := m.acquireWorkspaceGate(projectID)
+		fresh, err := m.cleanupRecords(ctx, projectID)
+		release()
+		if err != nil {
+			m.logger.Warn("cleanup: workspace ownership check failed", "projectID", projectID, "error", err)
+			for _, rec := range groups[projectID].recs {
+				result.Skipped = append(result.Skipped, CleanupSkip{SessionID: rec.ID, Reason: "workspace teardown failed"})
+			}
 			continue
 		}
-		m.cleanupSystemPromptDir(rec.ID)
-		if reclaim == ports.WorkspaceReclaimAlreadyAbsent {
-			result.AlreadyGone = append(result.AlreadyGone, rec.ID)
-			continue
+		live := liveWorkspacePaths(fresh)
+		for _, rec := range groups[projectID].recs {
+			ws := workspaceInfo(rec)
+			if live[normalizeWorkspacePath(ws.Path)] {
+				result.Skipped = append(result.Skipped, CleanupSkip{SessionID: rec.ID, Reason: "workspace in use by a live session"})
+				continue
+			}
+			reclaim, reason := m.cleanupWorkspaceUnderGate(ctx, rec, ws)
+			if reason != "" {
+				result.Skipped = append(result.Skipped, CleanupSkip{SessionID: rec.ID, Reason: reason})
+				continue
+			}
+			m.cleanupSystemPromptDir(rec.ID)
+			if reclaim == ports.WorkspaceReclaimAlreadyAbsent {
+				result.AlreadyGone = append(result.AlreadyGone, rec.ID)
+				continue
+			}
+			result.Cleaned = append(result.Cleaned, rec.ID)
 		}
-		result.Cleaned = append(result.Cleaned, rec.ID)
 	}
 	return result, nil
 }
 
-// cleanupWorkspaceUnderGate acquires the per-project workspace gate and then
-// decides whether to tear the workspace down. The gate is what makes the
-// check timely: Spawn and Restore hold the same gate while they allocate a
-// workspace and commit metadata, so isWorkspaceInUse cannot race with an
-// in-progress spawn that has not yet written WorkspacePath to the store.
-// User commands run outside the gate; cleanupOne rechecks ownership under it
-// before removal.
-// Returns an empty reason when the workspace was reclaimed; a non-empty
-// reason means it was left alone this run and the reclaim value is undefined.
+// cleanupWorkspaceUnderGate decides whether to tear one workspace down as part
+// of a cleanup sweep. The agent-operation guard keeps a concurrent Kill or
+// Restore from overlapping the sweep (a concurrent Cleanup retries later with
+// "workspace cleanup is already running"), and the tracked-cleanup ledger
+// records the disposition the same way the Kill background path does. Returns
+// an empty reason when the workspace was reclaimed; a non-empty reason means
+// it was left alone this run and the reclaim value is undefined.
 func (m *Manager) cleanupWorkspaceUnderGate(ctx context.Context, rec domain.SessionRecord, ws ports.WorkspaceInfo) (ports.WorkspaceReclaim, string) {
 	// A preceding session's cleanup commands can outlive the request deadline.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killTeardownBudget)
@@ -5192,8 +5235,10 @@ func (m *Manager) cleanupWorkspaceUnderGate(ctx context.Context, rec domain.Sess
 }
 
 // isWorkspaceInUse reports whether any non-terminated session in the project
-// references the given workspace path. Must be called under the project's
-// workspace gate; see cleanupWorkspaceUnderGate for the full invariant.
+// references the given workspace path. Spawn and Restore hold the project's
+// workspace gate while they allocate a workspace and commit metadata, and
+// cleanup holds it across the sweep, so this check cannot miss an in-progress
+// spawn that has not yet written WorkspacePath to the store.
 func (m *Manager) isWorkspaceInUse(ctx context.Context, projectID domain.ProjectID, workspacePath string, except domain.SessionID) (bool, error) {
 	if workspacePath == "" {
 		return false, nil
@@ -5219,20 +5264,10 @@ func (m *Manager) isWorkspaceInUse(ctx context.Context, projectID domain.Project
 // left alone this run (Cleanup records it in Skipped and can retry on a later
 // call) — most commonly because a scoped shell terminal could not be
 // confirmed closed, so reclaiming would pull the ground out from under it.
+// Cleanup's per-group live-set already screens out workspaces whose successor
+// is live before this runs, so the only ownership check here is the one under
+// the gate immediately before removal.
 func (m *Manager) cleanupOne(ctx context.Context, rec domain.SessionRecord, ws ports.WorkspaceInfo) (ports.WorkspaceReclaim, string) {
-	{
-		release := m.acquireWorkspaceGate(rec.ProjectID)
-
-		inUse, err := m.isWorkspaceInUse(ctx, rec.ProjectID, ws.Path, "")
-		release()
-		if err != nil {
-			m.logger.Warn("cleanup: workspace ownership check failed", "sessionID", rec.ID, "projectID", rec.ProjectID, "error", err)
-			return ports.WorkspaceReclaimRemoved, "workspace teardown failed"
-		}
-		if inUse {
-			return ports.WorkspaceReclaimRemoved, "workspace in use by a live session"
-		}
-	}
 	release, closeErr := m.beginShellTerminalTeardown(ctx, rec.ID)
 	if closeErr != nil {
 		m.logger.Warn("cleanup: shell terminal still open", "sessionID", rec.ID, "error", closeErr)
@@ -5259,7 +5294,6 @@ func (m *Manager) cleanupOne(ctx context.Context, rec domain.SessionRecord, ws p
 	} else if inUse {
 		return ports.WorkspaceReclaimRemoved, "workspace in use by a live session"
 	}
-
 	if rows, ok, rowErr := m.workspaceProjectRows(ctx, rec); rowErr != nil {
 		m.logger.Warn("cleanup: workspace rows failed", "sessionID", rec.ID, "error", rowErr)
 		return ports.WorkspaceReclaimRemoved, "workspace teardown failed"
@@ -5330,6 +5364,23 @@ func (m *Manager) cleanupRecords(ctx context.Context, project domain.ProjectID) 
 // normalizeWorkspacePath canonicalizes a workspace path for set membership so
 // two records naming the same directory (a terminated predecessor and its live
 // successor) compare equal despite trailing slashes or "." segments.
+// liveWorkspacePaths returns the set of normalized workspace paths still
+// occupied by a non-terminated session. Cleanup consults it so a terminated
+// session that shares a persistent worktree with a live successor is skipped
+// rather than reclaimed.
+func liveWorkspacePaths(recs []domain.SessionRecord) map[string]bool {
+	live := make(map[string]bool)
+	for _, rec := range recs {
+		if rec.IsTerminated {
+			continue
+		}
+		if p := rec.Metadata.WorkspacePath; p != "" {
+			live[normalizeWorkspacePath(p)] = true
+		}
+	}
+	return live
+}
+
 func normalizeWorkspacePath(p string) string {
 	return filepath.Clean(p)
 }
