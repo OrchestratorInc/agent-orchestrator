@@ -18,7 +18,8 @@ const (
 	// disk, so live sessions keep working on it until they restart.
 	UpdateWhileRunningSafe UpdateWhileRunning = "safe"
 	// UpdateWhileRunningWarn means the installer may remove files the running
-	// version still loads; the user must accept that live sessions could fail.
+	// version still loads. The effective update gate blocks these methods
+	// while sessions are live.
 	UpdateWhileRunningWarn UpdateWhileRunning = "warn"
 	// UpdateWhileRunningBlocked means live sessions must end before the update.
 	UpdateWhileRunningBlocked UpdateWhileRunning = "blocked"
@@ -69,8 +70,9 @@ func liveSession(session domain.SessionRecord) bool {
 // release in its own directory, and Homebrew formulas with cleanup deferred,
 // leave the running release in place (safe). Casks, other self-updaters and
 // package managers that rewrite a shared tree replace it (warn): the update
-// still runs, and the sessions on the old release restart on the new one once
-// idle. Windows cannot replace a running executable at all, so its updates
+// is blocked while any live process depends on those files. Managed package
+// installs are promoted to safe only after selecting the side-by-side plan.
+// Windows cannot replace a running executable at all, so its updates
 // wait for idle sessions and restart them around the install.
 func updateWhileRunningLevel(goos string, target Target, method string, cask bool) UpdateWhileRunning {
 	if goos == "windows" {
@@ -102,10 +104,11 @@ var versionedVendorInstalls = map[Target]bool{
 	TargetGrok:       true,
 }
 
-// effectiveUpdateLevel applies the AO_UPDATE_WHILE_RUNNING switch, and on
-// Windows AO_WINDOWS_UPDATE_WHEN_IDLE, which waits instead of refusing.
+// effectiveUpdateLevel applies AO_UPDATE_WHILE_RUNNING, blocks installers
+// that cannot retain live releases, and applies AO_WINDOWS_UPDATE_WHEN_IDLE
+// on Windows, which waits instead of refusing.
 func (s *Service) effectiveUpdateLevel(level UpdateWhileRunning) UpdateWhileRunning {
-	if s.updateWhileRunningDisabled || level == "" {
+	if s.updateWhileRunningDisabled || level == "" || level == UpdateWhileRunningWarn {
 		return UpdateWhileRunningBlocked
 	}
 	if level == UpdateWhileRunningBlocked && s.goos == "windows" && s.windowsUpdateWhenIdle && s.idleCoordinatorReady() {

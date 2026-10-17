@@ -274,6 +274,10 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 	cmd = []string{binary}
+	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
+	if effort := strings.TrimSpace(cfg.Config.Effort); effort != "" {
+		cmd = append(cmd, "--thinking", effort)
+	}
 	appendPermissionFlags(&cmd, cfg.Permissions)
 	if err := appendToolFlags(&cmd, cfg.AllowedTools, cfg.DisallowedTools); err != nil {
 		return nil, false, err

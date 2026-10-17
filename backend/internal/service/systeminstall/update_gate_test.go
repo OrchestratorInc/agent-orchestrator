@@ -146,7 +146,7 @@ func TestUpdateWhileRunningDecisionTable(t *testing.T) {
 	}{
 		{name: "no live sessions runs", sessions: nil, method: "homebrew", wantRun: true},
 		{name: "safe runs without asking", sessions: live, method: "homebrew", wantRun: true},
-		{name: "npm runs too", sessions: live, method: "npm", wantRun: true},
+		{name: "unmanaged npm cannot retain live releases", sessions: live, method: "npm", wantLevel: UpdateWhileRunningBlocked},
 		{name: "starting session refuses", sessions: nil, method: "homebrew", starting: true, wantStarting: true, wantLevel: UpdateWhileRunningBlocked},
 		{name: "kill switch blocks", sessions: live, method: "homebrew", disabled: true, wantLevel: UpdateWhileRunningBlocked},
 	} {
@@ -366,10 +366,30 @@ func TestLaunchesWaitForAnUpdateInsteadOfFailing(t *testing.T) {
 func TestUpdatesRunAlongsideSessionsWithoutAsking(t *testing.T) {
 	s := newTestService("darwin")
 	s.sessions = sessionListerStub{sessions: []domain.SessionRecord{{ID: "codex-1", Harness: domain.HarnessCodex}}}
-	for _, level := range []UpdateWhileRunning{UpdateWhileRunningSafe, UpdateWhileRunningWarn} {
+	for _, level := range []UpdateWhileRunning{UpdateWhileRunningSafe} {
 		plan := Plan{Target: TargetCodex, Method: "homebrew", PackageCask: true, UpdateWhileRunning: level}
 		if withSessions, err := s.gateRunningSessions(context.Background(), TargetCodex, AgentOperationUpdate, plan); err != nil || !withSessions {
 			t.Fatalf("%s update without consent = %t, %v; want it to run", level, withSessions, err)
 		}
+	}
+}
+
+func TestInPlaceUpdatesNeverRewriteLiveProcesses(t *testing.T) {
+	for _, goos := range []string{"darwin", "linux"} {
+		t.Run(goos, func(t *testing.T) {
+			s := newTestService(goos)
+			s.sessions = sessionListerStub{sessions: []domain.SessionRecord{{ID: "codex-1", Harness: domain.HarnessCodex}}}
+			plan := Plan{Target: TargetCodex, Method: "official-installer", UpdateWhileRunning: UpdateWhileRunningWarn}
+			withSessions, err := s.gateRunningSessions(context.Background(), TargetCodex, AgentOperationUpdate, plan)
+			var active *HarnessActiveError
+			if withSessions || !errors.As(err, &active) || active.Level != UpdateWhileRunningBlocked {
+				t.Fatalf("in-place update can remove files a live process needs: %t, %v", withSessions, err)
+			}
+			// Once no process uses the executable, ordinary in-place updates remain valid.
+			s.sessions = sessionListerStub{}
+			if _, err := s.gateRunningSessions(context.Background(), TargetCodex, AgentOperationUpdate, plan); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

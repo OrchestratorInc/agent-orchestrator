@@ -150,3 +150,9 @@ func (p *Plugin) InvalidateBinaryResolution() {
 	p.resolvedBinary = ""
 	p.binaryMu.Unlock()
 }
+
+// SupportsTerminalVersionRefresh opts into idle restarts using the captured
+// native session ID. Restore preserves session model and permission options.
+func (*Plugin) SupportsTerminalVersionRefresh() bool { return true }
+
+var _ ports.AgentTerminalVersionRefresher = (*Plugin)(nil)

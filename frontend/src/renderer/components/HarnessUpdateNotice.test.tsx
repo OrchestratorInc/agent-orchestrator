@@ -553,13 +553,14 @@ describe("harness updates while sessions run", () => {
 		const refresh = deferred<void>();
 		const post = vi.mocked(apiClient.POST);
 		const original = post.getMockImplementation() as unknown as (path: unknown, options: unknown) => Promise<never>;
+		jobs = [{ target: "claude-code", status: "installing" }];
+		mountNotice();
+		expect(await screen.findByRole("button", { name: /Updating/ })).toBeDisabled();
+		post.mockClear();
 		post.mockImplementation(async (path, options) => {
 			if (path === "/api/v1/agents/readiness/ensure") await refresh.promise;
 			return original(path, options);
 		});
-		jobs = [{ target: "claude-code", status: "installing" }];
-		mountNotice();
-		expect(await screen.findByRole("button", { name: /Updating/ })).toBeDisabled();
 		jobs = [{ target: "claude-code", status: "succeeded" }];
 		await waitFor(() => expect(post).toHaveBeenCalledWith("/api/v1/agents/readiness/ensure", expect.anything()), { timeout: 3000 });
 		// The cached advisory still says behind; the card must not offer Update again.

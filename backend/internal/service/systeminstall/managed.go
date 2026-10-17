@@ -79,7 +79,7 @@ func (s *Service) SetBinaryInvalidator(invalidate func(Target)) {
 // managedEligible reports whether an update through plan installs side by side.
 func (s *Service) managedEligible(plan Plan) bool {
 	return s.managedRoot != "" && s.installCommands != nil && managedMethods[plan.Method] &&
-		plan.Package != "" && plan.Target != TargetOpencodeV2 && !plan.Unsupported &&
+		plan.Package != "" && !plan.Unsupported &&
 		// A managed npm copy installs and runs with the npm and Node on PATH,
 		// the daemon's; when that Node is too old, the update keeps validating
 		// the installed copy's own Node instead.
@@ -205,6 +205,11 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 		if record, ok := s.readManagedRecord(plan.Target); ok {
 			cli = record.CLI
 		}
+	}
+	// V1 and V2 share the native executable name but have distinct managed
+	// launchers. A v2 launcher baseline must still install bin/opencode.
+	if plan.Target == TargetOpencodeV2 {
+		cli = "opencode"
 	}
 	if cli == "" {
 		return errors.New("AO could not tell which executable sessions run, so it cannot install a managed copy")
@@ -346,26 +351,64 @@ const unsettledMarker = ".unsettled"
 // the daemon died in the middle of left its mark: the release new launches
 // record is set to the one current points at, the files they run. The mark
 // stays, so launches recorded before this keep every release alive.
-func (s *Service) ReconcileManagedReleases(ctx context.Context) {
+func (s *Service) ReconcileManagedReleases(ctx context.Context) error {
 	if s.managedRoot == "" || s.releases == nil {
-		return
+		return nil
 	}
 	entries, err := os.ReadDir(s.managedRoot)
+	if os.IsNotExist(err) {
+		return nil
+	}
 	if err != nil {
-		return
+		return err
 	}
 	for _, entry := range entries {
 		if !entry.IsDir() || entry.Name() == "bin" {
 			continue
 		}
-		targetDir := s.managedTargetDir(Target(entry.Name()))
-		if _, err := os.Stat(filepath.Join(targetDir, unsettledMarker)); err != nil {
+		target := Target(entry.Name())
+		targetDir := s.managedTargetDir(target)
+		intent, err := os.ReadFile(filepath.Join(targetDir, unsettledMarker))
+		if os.IsNotExist(err) {
 			continue
 		}
-		if current := s.currentManagedRelease(targetDir); current != "" {
-			_ = s.releases.SetManagedHarnessRelease(ctx, domain.AgentHarness(entry.Name()), current, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		current := s.currentManagedRelease(targetDir)
+		if current == "" {
+			// Windows removes the old junction before mklink. A crash in that gap
+			// leaves the durable intent, but no launcher target. Prefer its intended
+			// installed release, falling back to the last published managed record.
+			intended := strings.TrimSpace(string(intent))
+			record, ok := s.readManagedRecord(target)
+			if !ok {
+				return fmt.Errorf("recover %s: missing managed record", target)
+			}
+			candidates := []string{intended, record.Dir}
+			for _, candidate := range candidates {
+				if candidate == "" || filepath.Base(candidate) != candidate || !strings.HasPrefix(candidate, "v") {
+					continue
+				}
+				binary := filepath.Join(targetDir, "versions", candidate, record.BinRel)
+				if info, err := os.Stat(binary); err != nil || !info.Mode().IsRegular() {
+					continue
+				}
+				if err := s.switchManagedCurrent(ctx, targetDir, candidate); err != nil {
+					return fmt.Errorf("recover %s junction: %w", target, err)
+				}
+				current = candidate
+				break
+			}
+			if current == "" {
+				return fmt.Errorf("recover %s: no valid release for missing current", target)
+			}
+		}
+		if err := s.releases.SetManagedHarnessRelease(ctx, domain.AgentHarness(entry.Name()), current, time.Now().UTC()); err != nil {
+			return fmt.Errorf("recover %s release: %w", target, err)
 		}
 	}
+	return nil
 }
 
 // currentManagedRelease names the release <targetDir>/current points at, or
@@ -430,12 +473,16 @@ func (s *Service) ensureManagedLauncher(target Target, record managedRecord) err
 	if err := os.MkdirAll(binDir, 0o750); err != nil {
 		return fmt.Errorf("create launcher directory: %w", err)
 	}
+	launcherCLI := record.CLI
+	if target == TargetOpencodeV2 {
+		launcherCLI = "opencode-v2"
+	}
 	if s.goos == "windows" {
-		launcher := filepath.Join(binDir, record.CLI+".cmd")
+		launcher := filepath.Join(binDir, launcherCLI+".cmd")
 		script := fmt.Sprintf("@\"%%~dp0..\\%s\\current\\%s\" %%*\r\n", target, record.BinRel)
 		return writeFileAtomic(launcher, []byte(script))
 	}
-	launcher := filepath.Join(binDir, record.CLI)
+	launcher := filepath.Join(binDir, launcherCLI)
 	want := filepath.Join("..", string(target), "current", record.BinRel)
 	if existing, err := os.Readlink(launcher); err == nil && existing == want {
 		return nil

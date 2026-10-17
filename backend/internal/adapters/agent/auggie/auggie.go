@@ -138,7 +138,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, err
 	}
-	cmd = []string{binary, "--print"}
+	cmd = []string{binary}
 	if cfg.SystemPromptFile != "" {
 		cmd = append(cmd, "--rules", cfg.SystemPromptFile)
 	}

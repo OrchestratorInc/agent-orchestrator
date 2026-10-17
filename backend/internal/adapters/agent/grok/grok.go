@@ -312,3 +312,10 @@ func (p *Plugin) InvalidateBinaryResolution() {
 	p.resolvedBinary = ""
 	p.binaryMu.Unlock()
 }
+
+// SupportsTerminalVersionRefresh opts into exact-conversation idle restarts.
+// The restore command re-applies session options and explicitly selects the
+// captured native conversation rather than selecting the latest session.
+func (*Plugin) SupportsTerminalVersionRefresh() bool { return true }
+
+var _ ports.AgentTerminalVersionRefresher = (*Plugin)(nil)

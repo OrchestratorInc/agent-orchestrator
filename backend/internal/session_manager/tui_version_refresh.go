@@ -4,20 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
-
-// tuiVersionRefreshHarnesses resume a terminal conversation natively with its
-// model, permissions and working directory intact, so restarting one on a new
-// release is invisible apart from the restart itself. Extend only after a
-// harness is shown to resume with its model, permissions and directory intact.
-var tuiVersionRefreshHarnesses = map[domain.AgentHarness]bool{
-	domain.HarnessClaudeCode: true,
-	domain.HarnessCodex:      true,
-}
 
 type staleTerminalStore interface {
 	ListVersionRefreshTerminalCandidates(ctx context.Context, idleBefore time.Time) ([]domain.SessionID, error)
@@ -99,7 +91,7 @@ func (m *Manager) refreshStaleTerminal(ctx context.Context, store staleTerminalS
 		// A command the agent started (tests, a dev server) would die with it.
 		return nil
 	}
-	if nativeID, _, err := m.nativeConversationID(operationCtx, current); err != nil || nativeID == "" {
+	if !terminalRefreshIdentityVerified(current) {
 		return nil
 	}
 	// Hold the harness like any launch, so an update cannot replace the binary
@@ -175,7 +167,7 @@ func (m *Manager) terminalIdleForRestart(ctx context.Context, rec domain.Session
 // and again after the input gate closes.
 func (m *Manager) terminalRestartEligible(rec domain.SessionRecord, minIdle time.Duration) bool {
 	if domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI || rec.IsTerminated || rec.Kind == domain.KindOrchestrator ||
-		!tuiVersionRefreshHarnesses[rec.Harness] || rec.StaleBinary == nil || rec.StaleBinary.SwitchFailedAt != nil ||
+		!m.terminalVersionRefreshSupported(rec.Harness) || rec.StaleBinary == nil || rec.StaleBinary.SwitchFailedAt != nil ||
 		rec.Activity.State != domain.ActivityIdle || rec.Activity.LastActivityAt.Add(minIdle).After(m.clock()) {
 		return false
 	}
@@ -189,4 +181,54 @@ func (m *Manager) terminalRestartEligible(rec domain.SessionRecord, minIdle time
 	viewers, ok := gate.(terminalViewers)
 	// Without a way to tell, assume someone may be watching.
 	return ok && !viewers.TerminalOnScreen(handle.ID)
+}
+
+func (m *Manager) terminalVersionRefreshSupported(harness domain.AgentHarness) bool {
+	agent, ok := m.agents.Agent(harness)
+	if !ok {
+		return false
+	}
+	capability, ok := agent.(ports.AgentTerminalVersionRefresher)
+	return ok && capability.SupportsTerminalVersionRefresh()
+}
+
+// A stored resume hint may outlive a failed or fresh launch. Only the native
+// identity reported for this exact running generation authorizes auto-refresh.
+// Terminal-only adapters need no Chat identity or Chat history bridge.
+func terminalRefreshIdentityVerified(rec domain.SessionRecord) bool {
+	return strings.TrimSpace(rec.Metadata.AgentSessionID) != "" &&
+		strings.TrimSpace(rec.Metadata.RuntimeLaunchID) != "" &&
+		rec.Metadata.AgentSessionIDLaunchID == rec.Metadata.RuntimeLaunchID
+}
+
+// verifyRefreshedTerminal waits out immediate CLI argument/history failures.
+// Seeing the supervisor spawn once is not startup success: its child can still
+// exit on invalid resume arguments. Unknown probes fail closed without treating
+// the process as dead or deleting its previous release reference.
+func (m *Manager) verifyRefreshedTerminal(ctx context.Context, handle ports.RuntimeHandle, id domain.SessionID, launchID string) error {
+	alive, err := m.waitForTargetGeneration(ctx, handle, id, domain.AgentGenerationID(launchID))
+	if err != nil || !alive {
+		return errors.Join(ErrNotResumable, err)
+	}
+	settled := time.NewTimer(time.Second)
+	defer settled.Stop()
+	ticker := time.NewTicker(switchPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-settled.C:
+			alive, err := m.exactTargetGenerationAlive(ctx, handle, id, domain.AgentGenerationID(launchID))
+			if err != nil || !alive {
+				return errors.Join(ErrNotResumable, err)
+			}
+			return nil
+		case <-ticker.C:
+			alive, err := m.exactTargetGenerationAlive(ctx, handle, id, domain.AgentGenerationID(launchID))
+			if err != nil || !alive {
+				return errors.Join(ErrNotResumable, err)
+			}
+		}
+	}
 }

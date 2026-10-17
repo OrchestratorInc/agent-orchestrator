@@ -1070,7 +1070,9 @@ func (s *Service) AgentJobs(ctx context.Context) ([]Job, error) {
 // Recover marks unfinished durable jobs interrupted and hydrates the in-memory
 // coordination map before the HTTP server starts accepting requests.
 func (s *Service) Recover(ctx context.Context) error {
-	s.ReconcileManagedReleases(ctx)
+	if err := s.ReconcileManagedReleases(ctx); err != nil {
+		return err
+	}
 	if s.jobStore == nil {
 		return nil
 	}

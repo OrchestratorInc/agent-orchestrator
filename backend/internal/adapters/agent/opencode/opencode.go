@@ -657,8 +657,10 @@ func BinaryCandidates(ctx context.Context) ([]string, error) {
 	}
 
 	// AO's managed copy, when there is one, is tried first.
-	if managed, ok := binaryutil.ManagedBinary("opencode"); ok {
-		add(managed)
+	for _, name := range []string{"opencode", "opencode-v2"} {
+		if managed, ok := binaryutil.ManagedBinary(name); ok {
+			add(managed)
+		}
 	}
 	names := []string{"opencode"}
 	if runtime.GOOS == "windows" {
@@ -753,3 +755,10 @@ func (p *Plugin) InvalidateBinaryResolution() {
 	p.resolvedBinary = ""
 	p.binaryMu.Unlock()
 }
+
+// SupportsTerminalVersionRefresh opts into exact-conversation idle restarts.
+// The restore command re-applies session options and explicitly selects the
+// captured native conversation rather than selecting the latest session.
+func (*Plugin) SupportsTerminalVersionRefresh() bool { return true }
+
+var _ ports.AgentTerminalVersionRefresher = (*Plugin)(nil)

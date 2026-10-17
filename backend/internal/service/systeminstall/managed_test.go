@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -514,5 +515,134 @@ func TestNoManagedNPMCopyWhenTheDaemonNodeIsTooOld(t *testing.T) {
 	plan.daemonRuntimeRejected = true
 	if s.managedEligible(plan) {
 		t.Fatal("a managed copy would install with a Node that is too old")
+	}
+}
+
+func TestStartupRepairsMissingWindowsJunction(t *testing.T) {
+	f := newManagedCodexFixture(t, []domain.SessionRecord{{ID: "codex-1", Harness: domain.HarnessCodex}})
+	f.update(t, "1.1.0")
+	targetDir := filepath.Join(f.root, "codex")
+	if err := os.CopyFS(filepath.Join(targetDir, "versions", "v2"), os.DirFS(filepath.Join(targetDir, "versions", "v1"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, unsettledMarker), []byte("v2"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Kill a real child at mklink entry, after switchManagedCurrent physically
+	// removed the prior junction. Recovery must repair the actual crash gap.
+	child := exec.Command(os.Args[0], "-test.run=^TestWindowsJunctionCrashHelper$")
+	child.Env = append(os.Environ(), "AO_TEST_JUNCTION_CRASH_DIR="+targetDir)
+	if err := child.Run(); err == nil {
+		t.Fatal("updater did not crash")
+	} else {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 77 {
+			t.Fatalf("unexpected child exit: %v", err)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(targetDir, "current")); !os.IsNotExist(err) {
+		t.Fatalf("crash did not remove current: %v", err)
+	}
+	f.s.goos = "windows"
+	f.s.commands = commandRunnerFunc(func(_ context.Context, argv []string, _, _ io.Writer) error {
+		if len(argv) != 6 || argv[2] != "mklink" {
+			return errors.New("unexpected junction command")
+		}
+		return os.Symlink(argv[5], argv[4])
+	})
+	if err := f.s.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.s.currentManagedRelease(targetDir); got != "v2" {
+		t.Fatalf("recovered current = %q, want v2", got)
+	}
+	if got := f.releases.current[domain.HarnessCodex]; got != "v2" {
+		t.Fatalf("recorded release = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(f.root, "bin", "codex")); err != nil {
+		t.Fatalf("stable launcher still broken: %v", err)
+	}
+	f.releases.setInUse(domain.HarnessCodex, "v1")
+	f.s.RemoveUnusedManagedReleases(context.Background())
+	if _, err := os.Stat(filepath.Join(targetDir, "versions", "v1")); err != nil {
+		t.Fatal("old process release removed")
+	}
+}
+
+func TestStartupReportsUnrepairableManagedJunction(t *testing.T) {
+	f := newManagedCodexFixture(t, nil)
+	f.update(t, "1.1.0")
+	targetDir := filepath.Join(f.root, "codex")
+	if err := os.WriteFile(filepath.Join(targetDir, unsettledMarker), []byte("v2"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(targetDir, "current")); err != nil {
+		t.Fatal(err)
+	}
+	f.s.goos = "windows"
+	f.s.commands = commandRunnerFunc(func(context.Context, []string, io.Writer, io.Writer) error {
+		return errors.New("junction permission denied")
+	})
+	if err := f.s.Recover(context.Background()); err == nil {
+		t.Fatal("startup silently accepted broken managed launcher")
+	}
+}
+
+func TestWindowsJunctionCrashHelper(t *testing.T) {
+	targetDir := os.Getenv("AO_TEST_JUNCTION_CRASH_DIR")
+	if targetDir == "" {
+		t.Skip("isolated crash subprocess")
+	}
+	s := newTestService("windows")
+	s.commands = commandRunnerFunc(func(context.Context, []string, io.Writer, io.Writer) error { os.Exit(77); return nil })
+	if err := s.switchManagedCurrent(context.Background(), targetDir, "v2"); err != nil {
+		t.Fatal(err)
+	}
+	t.Fatal("mklink boundary not reached")
+}
+
+func TestManagedOpenCodeMajorsKeepSeparateLaunchers(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX release fixtures")
+	}
+	s := newTestService("darwin", "npm")
+	s.managedRoot = t.TempDir()
+	s.releases = &releaseStoreStub{}
+	version := "1.2.27"
+	s.installCommands = installCommandRunnerFunc(func(_ context.Context, command ports.InstallCommand, _, _ io.Writer) error {
+		prefix := command.Argv[slices.Index(command.Argv, "--prefix")+1]
+		bin := filepath.Join(prefix, "bin", "opencode")
+		if err := os.MkdirAll(filepath.Dir(bin), 0755); err != nil {
+			return err
+		}
+		return os.WriteFile(bin, []byte("#!/bin/sh\necho "+version+"\n"), 0755)
+	})
+	s.commands = commandRunnerFunc(func(ctx context.Context, argv []string, out, stderr io.Writer) error {
+		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+		cmd.Stdout = out
+		cmd.Stderr = stderr
+		return cmd.Run()
+	})
+	for _, step := range []struct {
+		target            Target
+		version, baseline string
+	}{{TargetOpencode, "1.2.27", "/usr/local/bin/opencode"}, {TargetOpencodeV2, "2.0.0", "/usr/local/bin/opencode"}, {TargetOpencodeV2, "2.0.1", filepath.Join(s.ManagedBinDir(), "opencode-v2")}} {
+		version = step.version
+		plan := Plan{Target: step.target, Method: "npm", Package: "opencode-ai"}
+		if step.target == TargetOpencodeV2 {
+			plan.Package = "@opencode/cli"
+		}
+		if !s.managedEligible(plan) {
+			t.Fatalf("%s cannot install side by side", step.target)
+		}
+		if err := s.runManagedInstall(context.Background(), plan, &installedBaseline{path: step.baseline, expected: version}, nil, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, want := range map[string]string{"opencode": "1.2.27", "opencode-v2": "2.0.1"} {
+		out, err := exec.Command(filepath.Join(s.ManagedBinDir(), name), "--version").Output()
+		if err != nil || strings.TrimSpace(string(out)) != want {
+			t.Fatalf("%s launcher=%q,%v; want %s", name, out, err, want)
+		}
 	}
 }

@@ -126,7 +126,7 @@ func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig)
 	}, nil
 }
 
-// GetRestoreCommand rebuilds the argv that continues an existing Amp session
+// GetRestoreCommand uses the native threads continue command to resume Amp
 // when plugin-derived native session metadata is available. Until that metadata
 // exists, ok is false and callers fall back to fresh launch behavior.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
@@ -148,7 +148,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if mode := strings.TrimSpace(cfg.Config.Mode); mode != "" {
 		cmd = append(cmd, "--mode", mode)
 	}
-	cmd = append(cmd, "--resume", agentSessionID)
+	cmd = append(cmd, "threads", "continue", agentSessionID)
 	return cmd, true, nil
 }
 

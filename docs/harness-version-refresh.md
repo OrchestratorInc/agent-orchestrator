@@ -1,0 +1,112 @@
+# Terminal harness version refresh
+
+AO installs managed npm/Bun/uv/pipx releases side by side, switches `current`,
+and retains releases referenced by live launches. An idle terminal can move to
+the new executable only if its adapter explicitly implements
+`AgentTerminalVersionRefresher`. This capability also enables AO's process
+supervisor on future launches, supplying exact-generation workload and startup
+proof. It does not require the adapter to support Chat handoff.
+
+The scheduler retains `AO_VERSION_REFRESH_IDLE` (default ten minutes), the
+four-start concurrency limit, and the existing activity, viewer, typing and
+workload checks. Automatic retries use that same semaphore through startup.
+A native ID must belong to the current launch. Strict resume cannot replay the
+original task or fall back to a fresh conversation; failed/unknown startup
+checks retain recoverable identity and stale-version state. History probes must
+positively verify the exact ID when the CLI can otherwise open a fresh composer.
+
+## Shipped support matrix
+
+Every shipped adapter declares support explicitly. The registry contract tests
+exercise each enabled native restore builder with isolated fake executables.
+These are command/identity/option tests, not authenticated model-memory or
+cross-version compatibility guarantees for every historical CLI release.
+
+| Harness | Passive native resume | Automatic refresh |
+|---|---|---|
+| Claude Code | `claude --resume ID` | Yes |
+| Codex | `codex resume ID` | Yes |
+| OpenCode v1 | `opencode --session ID` | Yes; exact local export preflight |
+| OpenCode v2 | `opencode --standalone --session ID` | Yes; isolated v2 `session export` preflight |
+| Grok | `grok -r ID` | Yes |
+| Cursor | `cursor-agent --resume ID` | Yes |
+| Qwen | `qwen --resume ID` | Yes |
+| Gemini | `gemini --resume ID` | Yes |
+| Copilot | `copilot --resume ID` | Yes; retains native saved model |
+| Kimi | `kimi --session ID` | Yes; exact `session list --all --json` preflight |
+| Muse | `muse resume ID` | Yes |
+| Droid | `droid -r ID` | Yes |
+| Amp | `amp threads continue ID` | Yes; no latest-thread selection |
+| Agy | `agy --conversation ID` | Yes |
+| Crush | `crush --session ID` | Yes |
+| Goose | `goose session --resume --session-id ID` | Yes; interactive `session`, not headless `run` |
+| Auggie | `auggie --resume ID` | Yes; passive resume omits `--print` |
+| Devin | `devin -r ID` | Yes |
+| OMP | `omp --resume ID` | Yes; does not use turn-restarting `--restore` |
+| Codewhale | `codewhale --resume ID` | Yes |
+| OpenHands | `openhands --resume ID` | Yes |
+| Cline | `cline --id ID` | Yes |
+| Kiro | `kiro-cli chat --resume-id ID` | Yes |
+| Kilo Code | `kilo --session ID` | Yes; exact export preflight |
+| Vibe | `vibe --resume ID` | Yes |
+| Pi | `pi --session ID` | Yes; not the interactive `--resume` picker |
+| Kimchi | `kimchi --session ID` | Yes |
+| Prime Agent | `prime-agent --resume ID` | Yes |
+| Autohand | `autohand resume ID` | Yes |
+| FX | `fx --resume ID` | Yes |
+| Command Code | `cmd --resume ID` | Yes |
+| MiMo Code | `mimo --session ID` | Yes; exact export preflight |
+| Aider | History-file restoration only in AO's integration | No: no captured native identity/active-turn lifecycle proof |
+| Continue | `--resume` selects latest; `--fork ID` creates a new session | No: neither preserves the required exact native identity |
+| DeepSeek Harness | Headless `--session-id ID TASK` | No: no TUI native-ID hooks; restore also requires a new task |
+| Unreal Agent | Chat-only embedded provider | Not a terminal harness |
+
+AO reapplies pinned working directory, permission policy, model/provider and
+standing instructions through each adapter's native flags, environment or
+workspace configuration. Native saved settings are retained where the provider
+owns them. Pi, OMP, Prime and Kimchi reapply configured thinking effort. Kimi
+Code 2.2's current CLI accepts model/approval flags with `--session`; older CLI
+contracts without the positive local list probe fail closed before stopping.
+
+## Contract evidence
+
+On 2026-10-18, installed CLI help was checked using isolated homes, closed stdin
+and no provider credentials for Amp, Auggie, Agy, Autohand, Cline, Crush, Devin,
+Droid, FX, Goose, Kilo, Kimchi, Kimi, Muse, OMP, Qwen, Vibe and Prime Agent.
+Nested help was checked for Amp `threads continue`, Autohand `resume`, Goose
+`session`, FX `session resume`, and Kimi `session list`.
+
+Primary references for providers and the unsupported identity limitation:
+
+- [Amp threads](https://ampcode.com/docs/threads): `threads continue ID`.
+- [OpenCode v1 CLI](https://opencode.ai/docs/cli/) and [v2 commands](https://dev.opencode.ai/v2/docs/cli/commands/): v1 `export ID` versus v2 `session export ID`.
+- [OpenCode v1 session route](https://github.com/anomalyco/opencode/blob/v1.2.27/packages/opencode/src/cli/cmd/tui/routes/session/index.tsx): a failed session load navigates home, so liveness alone is insufficient.
+- [Grok CLI](https://docs.x.ai/build/cli/reference), [Cursor CLI](https://prod.cursor.com/docs/cli/overview), [Gemini sessions](https://geminicli.com/docs/cli/session-management/), [Copilot sessions](https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli/work-with-multiple-sessions).
+- [Factory CLI](https://github.com/Factory-AI/factory/blob/main/docs/reference/cli-reference.mdx), [Kiro session management](https://kiro.dev/docs/cli/chat/session-management/).
+- [Kimi session flags](https://moonshotai.github.io/kimi-cli/en/reference/kimi-command.html): some versions create a session for an unknown ID. The exact local list probe prevents that during automatic refresh.
+- [Prime usage](https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/usage.md), [Command Code sessions](https://commandcode.ai/docs/sessions), [MiMo CLI](https://github.com/XiaomiMiMo/MiMo-Code/blob/main/packages/web/src/content/docs/cli.mdx).
+- [OpenHands parser](https://github.com/OpenHands/OpenHands-CLI/blob/main/openhands_cli/argparsers/util.py): native `--resume` and approval aliases.
+- [Continue initialization](https://github.com/continuedev/continue/blob/main/extensions/cli/src/commands/chat.ts): `--fork` calls `startNewSession`, while `--resume` loads latest.
+- [Aider options](https://aider.chat/docs/config/options.html): `--chat-history-file` and `--restore-chat-history` exist; AO does not incorrectly advertise exact-native-ID automation for that file-history path.
+
+## Release and recovery boundaries
+
+Managed installers keep each release immutable. OpenCode v1/v2 use distinct
+managed launchers despite sharing the native executable name. Unmanaged
+in-place installers are blocked while a live session/reviewer depends on the
+files; their update remains available after those processes exit.
+
+A durable `.unsettled` intent precedes switching `current`. Startup repairs a
+missing Windows junction using the validated intended or last published release,
+then records the actual selection before allowing launches. Failed repair or
+publication is reported instead of silently accepting a broken launcher. The
+intent remains conservative about old live release references. A forced-crash
+fixture covers the remove/mklink gap; executing that Windows branch with POSIX
+junction fixtures is not a native Windows E2E test.
+
+Existing unsupervised processes cannot supply exact workload proof and are
+left alone until a manual native resume creates a supervised launch. No global
+harness installation changes or authenticated provider turns are needed by the
+regressions. The startup interval proves a surviving child, not a protocol-level
+conversation-loaded acknowledgement; later external history corruption cannot
+be made transactional with AO's database.

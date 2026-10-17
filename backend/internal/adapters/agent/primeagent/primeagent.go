@@ -125,6 +125,9 @@ func (p *Plugin) baseCommand(ctx context.Context, dataDir, systemPrompt, systemP
 		cmd = append(cmd, "--append-system-prompt", resolvedPrompt)
 	}
 	agentbase.AppendModelFlag(&cmd, cfg, "--model")
+	if effort := strings.TrimSpace(cfg.Effort); effort != "" {
+		cmd = append(cmd, "--thinking", effort)
+	}
 	return cmd, nil
 }
 

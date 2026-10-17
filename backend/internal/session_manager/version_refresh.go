@@ -241,19 +241,36 @@ func (m *Manager) RetryVersionMoves(ctx context.Context) error {
 			m.versionRetries.done(id)
 			continue
 		}
+		release, err := m.versionMoves.acquire(ctx)
+		if err != nil {
+			return errors.Join(append(errs, err)...)
+		}
 		if !m.versionRetries.attempt(id) {
+			release()
 			continue
 		}
 		if _, err := m.ResumeAgentWithMode(ctx, id); err != nil {
+			release()
 			errs = append(errs, fmt.Errorf("resume %s after a failed version move: %w", id, err))
 			continue
 		}
 		if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat && m.chat != nil {
+			if waiter, ok := m.chat.(ChatWakeWaiter); ok {
+				waitCtx, cancel := context.WithTimeout(ctx, versionMoveWakeTimeout)
+				err := waiter.WaitForWake(waitCtx, id)
+				cancel()
+				if err != nil {
+					release()
+					errs = append(errs, fmt.Errorf("wait for retry %s: %w", id, err))
+					continue
+				}
+			}
 			// Messages sent while it was stopped stayed queued for this start.
 			if err := m.chat.DrainChatQueue(ctx, id); err != nil {
 				m.logger.Warn("could not deliver messages queued while the session was stopped", "sessionID", id, "error", err)
 			}
 		}
+		release()
 		m.versionRetries.done(id)
 	}
 	return errors.Join(errs...)

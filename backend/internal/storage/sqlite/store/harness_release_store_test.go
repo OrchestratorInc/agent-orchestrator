@@ -135,3 +135,65 @@ func TestLiveClaimKeepsTheOldReleaseThroughAPrune(t *testing.T) {
 		t.Fatalf("stale mark after a live claim = %+v, want it kept on gen-2", current.StaleBinary)
 	}
 }
+
+// A failed terminal move must keep both the stale notice and its old release
+// until a successful replacement commits a different runtime launch.
+func TestFailedTerminalRefreshRetainsRelease(t *testing.T) {
+	for _, harness := range domain.AllHarnesses {
+		switch harness {
+		case domain.HarnessAider, domain.HarnessContinue, domain.HarnessDeepSeek, domain.HarnessUnreal:
+			continue
+		}
+
+		t.Run(string(harness), func(t *testing.T) {
+			ctx := context.Background()
+			s := newTestStore(t)
+			seedProject(t, s, "mer")
+			now := time.Now().UTC()
+			if err := s.SetManagedHarnessRelease(ctx, harness, "v1", now); err != nil {
+				t.Fatal(err)
+			}
+			rec := sampleRecord("mer")
+			rec.Harness, rec.Mode, rec.Metadata.RuntimeLaunchID = harness, domain.SessionModeTUI, "launch-old"
+			terminal, err := s.CreateSession(ctx, rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.SetManagedHarnessRelease(ctx, harness, "v2", now); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.MarkHarnessSessionsStale(ctx, harness, "new", now); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.SetSessionVersionSwitchFailed(ctx, terminal.ID, "new", now); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.PruneSessionHarnessReleases(ctx); err != nil {
+				t.Fatal(err)
+			}
+			releases, err := s.ListHarnessReleasesInUse(ctx, harness)
+			if err != nil || !slices.Equal(releases, []string{"v1"}) {
+				t.Fatalf("failed refresh released old binary: %v, %v", releases, err)
+			}
+			current, _, err := s.GetSession(ctx, terminal.ID)
+			if err != nil || current.StaleBinary == nil || current.StaleBinary.SwitchFailedAt == nil {
+				t.Fatalf("failure notice missing: %+v, %v", current.StaleBinary, err)
+			}
+			current.Metadata.RuntimeLaunchID = "launch-success"
+			if err := s.UpdateSession(ctx, current); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.PruneSessionHarnessReleases(ctx); err != nil {
+				t.Fatal(err)
+			}
+			releases, err = s.ListHarnessReleasesInUse(ctx, harness)
+			if err != nil || !slices.Equal(releases, []string{"v2"}) {
+				t.Fatalf("successful refresh did not release v1: %v, %v", releases, err)
+			}
+			current, _, err = s.GetSession(ctx, terminal.ID)
+			if err != nil || current.StaleBinary != nil {
+				t.Fatalf("success still marked stale: %+v, %v", current.StaleBinary, err)
+			}
+		})
+	}
+}

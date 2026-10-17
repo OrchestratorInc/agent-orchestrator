@@ -77,6 +77,9 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		return nil, err
 	}
 	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
+	if effort := strings.TrimSpace(cfg.Config.Effort); effort != "" {
+		cmd = append(cmd, "--thinking", effort)
+	}
 	if prompt := strings.TrimSpace(cfg.Prompt); prompt != "" {
 		cmd = append(cmd, prompt)
 	}
@@ -106,6 +109,9 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
+	if effort := strings.TrimSpace(cfg.Config.Effort); effort != "" {
+		cmd = append(cmd, "--thinking", effort)
+	}
 	cmd = append(cmd, "--resume", agentSessionID)
 	return cmd, true, nil
 }

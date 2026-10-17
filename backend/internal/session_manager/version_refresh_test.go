@@ -115,3 +115,68 @@ func TestRetryVersionMovesForgetsSessionsThatAreBack(t *testing.T) {
 		t.Fatalf("pending = %v; a running session needs no retry", pending)
 	}
 }
+
+func TestRetryVersionMovesWaitsForSharedPermit(t *testing.T) {
+	launcher := &recordingLauncher{startErr: fmt.Errorf("fixture startup failed")}
+	mgr, store, _ := newChatManager(launcher)
+	seedChatResumeSession(store, domain.ActivityExited)
+	mgr.versionRetries.note("mer-1")
+	var releases []func()
+	for range maxConcurrentVersionMoves {
+		release, err := mgr.versionMoves.acquire(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		releases = append(releases, release)
+	}
+	defer func() {
+		for _, release := range releases {
+			release()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	if err := mgr.RetryVersionMoves(ctx); err == nil {
+		t.Fatal("retry did not report unavailable permit")
+	}
+	if len(launcher.started) != 0 {
+		t.Fatal("retry started a provider while all four refresh permits were held")
+	}
+}
+
+func TestRetryVersionMoveHoldsPermitThroughStartup(t *testing.T) {
+	entered, finish := make(chan struct{}), make(chan struct{})
+	launcher := &recordingLauncher{beforeStart: func(ChatStart) { close(entered); <-finish }}
+	mgr, store, _ := newChatManager(launcher)
+	seedChatResumeSession(store, domain.ActivityExited)
+	mgr.versionRetries.note("mer-1")
+	done := make(chan error, 1)
+	go func() { done <- mgr.RetryVersionMoves(context.Background()) }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("retry did not start")
+	}
+	var releases []func()
+	for range maxConcurrentVersionMoves - 1 {
+		release, err := mgr.versionMoves.acquire(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		releases = append(releases, release)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	release, err := mgr.versionMoves.acquire(ctx)
+	if err == nil {
+		release()
+		t.Error("slow retry released its permit before provider startup finished")
+	}
+	for _, release := range releases {
+		release()
+	}
+	close(finish)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
