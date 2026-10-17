@@ -39,18 +39,21 @@ describe("BrowserHistoryStore", () => {
 		const stateDir = await temporaryState();
 		const store = new BrowserHistoryStore({ stateDir });
 		const entries: BrowserHistoryEntry[] = Array.from({ length: 5_100 }, (_, index) => ({
-			url: `https://example.com/${index}/${"x".repeat(900)}`,
+			// Exceed the byte limit slightly, without thousands of compaction retries.
+			url: `https://example.com/${index}/${"x".repeat(690)}`,
 			title: `Entry ${index}`,
 			lastVisited: new Date(1_800_000_000_000 - index).toISOString(),
 			visitCount: 1,
 		}));
+		expect(Buffer.byteLength(JSON.stringify({ version: 1, entries: entries.slice(0, 5_000) }, null, 2)))
+			.toBeGreaterThan(4 * 1024 * 1024);
 		const outcome = await store.mergeImportedEntries(profileId, entries);
 		const file = path.join(stateDir, "browser-history", `${profileId}.json`);
 		const metadata = await stat(file);
 		const parsed = JSON.parse(await readFile(file, "utf8")) as { entries: BrowserHistoryEntry[] };
 		expect(metadata.size).toBeLessThanOrEqual(4 * 1024 * 1024);
 		expect(parsed.entries.length).toBe(outcome.imported);
-		expect(parsed.entries.length).toBeLessThanOrEqual(5_000);
+		expect(parsed.entries.length).toBeLessThan(5_000);
 		expect(outcome.truncated).toBe(entries.length - outcome.imported);
 		expect(await store.suggest(profileId, "entry 5099")).toEqual([]);
 	});

@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toKanbanColumn } from "@aoagents/product-ui";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import type { SessionMemoryReading } from "../hooks/useSessionMemory";
@@ -51,6 +51,8 @@ vi.mock("../lib/bridge", () => ({ aoBridge: { clipboard: { writeText: clipboardM
 const GIB = 1024 ** 3;
 
 const LONG_AGO = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+
+afterEach(() => vi.useRealTimers());
 
 function session(id: string, title: string, activityState = "idle", lastActivityAt = LONG_AGO): WorkspaceSession {
 	return {
@@ -576,6 +578,10 @@ describe("AppMemoryIndicator", () => {
 	});
 
 	it("copies the whole window as a report worth pasting into a bug", async () => {
+		// Keep the reported duration stable while real interaction timers run.
+		const now = Date.now();
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(now);
 		const workspace: WorkspaceSummary = {
 			id: "p1",
 			name: "radic",
