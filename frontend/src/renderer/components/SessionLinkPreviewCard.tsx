@@ -8,6 +8,7 @@ import { FileText, Globe, LoaderCircle, Play, Sheet } from "lucide-react";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { csvPreviewRows, tabularDelimiter } from "../lib/csv-preview";
+import { formatTimeCompact } from "../lib/format-time";
 import { clampPreviewText, parseMarkdownFrontmatter } from "../lib/markdown-frontmatter";
 import { IMAGE_CHECKERBOARD, isRasterImagePath, isSvgPath } from "../lib/image-files";
 import { cn } from "../lib/utils";
@@ -33,13 +34,11 @@ const prToneClasses = {
 	error: { dot: "bg-destructive", text: "text-destructive" },
 } as const;
 
-function relativeTime(timestamp: string | undefined, format: (key: "time.justNow" | "shell.updatedAt", values?: Record<string, unknown>) => string): string {
+// Time phrase comes from formatTimeCompact (appI18n catalogs), not Intl locale
+// resolution, so the card never leaks the OS language into the app UI.
+function relativeTime(timestamp: string | undefined, format: (key: "shell.updatedAt", values?: Record<string, unknown>) => string): string {
 	if (!timestamp) return "";
-	const elapsedMinutes = Math.floor((Date.now() - Date.parse(timestamp)) / 60_000);
-	if (!Number.isFinite(elapsedMinutes) || elapsedMinutes < 1) return format("shell.updatedAt", { time: format("time.justNow") });
-	const unit: Intl.RelativeTimeFormatUnit = elapsedMinutes < 60 ? "minute" : elapsedMinutes < 1_440 ? "hour" : "day";
-	const amount = unit === "minute" ? elapsedMinutes : unit === "hour" ? Math.floor(elapsedMinutes / 60) : Math.floor(elapsedMinutes / 1_440);
-	return format("shell.updatedAt", { time: new Intl.RelativeTimeFormat(undefined, { numeric: "always" }).format(-amount, unit) });
+	return format("shell.updatedAt", { time: formatTimeCompact(timestamp) });
 }
 
 function LoadingCard() {
