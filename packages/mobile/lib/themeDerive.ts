@@ -119,7 +119,10 @@ export function deriveTerminalTheme(p: ThemePalette, scheme: ColorScheme): Termi
 	return {
 		background: p.bg,
 		foreground: p.text,
-		cursor: p.orange,
+		// Desktop's named-theme cursor (terminal-themes.ts): the primary fill on a
+		// dark plate, the foreground on a light one, where an orange block blinks
+		// as a low-contrast wash.
+		cursor: scheme === "dark" ? (p.primary ?? p.accent) : p.text,
 		black: p.bg,
 		red: p.red,
 		green: p.green,

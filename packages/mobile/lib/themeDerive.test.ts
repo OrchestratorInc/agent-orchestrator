@@ -80,4 +80,9 @@ describe("terminalTheme with a named theme", () => {
 		expect(Object.keys(terminal).sort()).toEqual(Object.keys(terminalTheme(scheme)).sort());
 		expect(terminal.black).toBe(terminal.background);
 	});
+
+	it.each(CASES)("%s %s keeps the cursor visible on the terminal background", (style, scheme) => {
+		const terminal = terminalTheme(scheme, style);
+		expect(contrastRatio(terminal.cursor, terminal.background)).toBeGreaterThanOrEqual(FAINT_CONTRAST);
+	});
 });
