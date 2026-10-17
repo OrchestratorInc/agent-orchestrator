@@ -141,6 +141,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
 		app: {
+			onScrollPhase: () => () => {},
 			onCloseShellTerminalShortcut: () => () => {},
 			onPreviousTabShortcut: () => () => {},
 			onNextTabShortcut: () => () => {},
@@ -252,6 +253,7 @@ vi.mock("../components/TitlebarNav", async () => {
 		typeof import("../stores/ui-store")
 	>("../stores/ui-store");
 	return {
+		useCanGoForward: () => false,
 		TitlebarNav: () => {
 			const isSidebarOpen = useStore(sidebarIsVisible);
 			const toggleSidebar = useStore((state) => state.toggleSidebar);

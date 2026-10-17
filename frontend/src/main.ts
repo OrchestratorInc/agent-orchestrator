@@ -86,6 +86,8 @@ import {
 } from "./shared/daemon-startup-status";
 import { toggleAppDevTools } from "./main/app-devtools";
 import { attachAppShortcuts } from "./main/app-shortcuts";
+import { startScrollPhaseRelay } from "./main/scroll-phase";
+import { SCROLL_PHASE_CHANNEL } from "./shared/scroll-phase";
 import {
 	KEYBOARD_SHORTCUTS_HELP_CHANNEL,
 	OPEN_SETTINGS_SHORTCUT_CHANNEL,
@@ -3195,6 +3197,9 @@ app.whenReady().then(async () => {
 		);
 	}
 	void refreshGitHubOwners();
+	startScrollPhaseRelay((phase) => {
+		for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(SCROLL_PHASE_CHANNEL, phase);
+	});
 	const visibilityKillSwitched = (process.env.AO_TELEMETRY_DISABLED_EVENTS ?? "").split(",").some((name) => name.trim() === "ao.agent_switch.visibility_failure");
 	// The approved release gate is intentionally closed. Tests inject the
 	// dedicated no-cache sender; the shipping composition creates no visibility

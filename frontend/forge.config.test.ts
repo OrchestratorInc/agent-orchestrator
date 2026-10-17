@@ -102,6 +102,8 @@ describe("native runtime resources", () => {
 
 	it("bundles the wake coordinator only on macOS", () => {
 		expect(extraResourcesForPlatform("darwin")).toContain("wake-helper");
+		expect(extraResourcesForPlatform("darwin")).toContain("scroll-phase");
+		expect(extraResourcesForPlatform("linux")).not.toContain("scroll-phase");
 		expect(extraResourcesForPlatform("linux")).not.toContain("wake-helper");
 		expect(extraResourcesForPlatform("win32")).not.toContain("wake-helper");
 	});

@@ -105,3 +105,4 @@ pnpm-lock.yaml
 .serena/
 
 /frontend/wake-helper/
+/frontend/scroll-phase/

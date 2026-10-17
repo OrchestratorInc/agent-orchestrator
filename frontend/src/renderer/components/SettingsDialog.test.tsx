@@ -133,6 +133,65 @@ describe("SettingsDialog", () => {
 		return render(<QueryClientProvider client={queryClient}><SettingsDialog /></QueryClientProvider>);
 	}
 
+	async function swipeSettings(direction: "back" | "forward", target = screen.getByTestId("settings-page")) {
+		fireEvent.wheel(target, { deltaX: direction === "back" ? -150 : 150, deltaMode: 0 });
+		await act(() => new Promise((resolve) => setTimeout(resolve, 160)));
+	}
+
+	it("swipes through visited global sections, then returns to the app", async () => {
+		useUiStore.getState().openGlobalSettings();
+		renderSettingsDialog();
+		await screen.findByTestId("settings-page");
+		const sections = within(screen.getByRole("navigation", { name: "Settings sections" })).getAllByRole("button");
+		await userEvent.click(sections[1]);
+		await userEvent.click(sections[2]);
+		await swipeSettings("back");
+		expect(sections[1]).toHaveAttribute("aria-current", "page");
+		await swipeSettings("forward");
+		expect(sections[2]).toHaveAttribute("aria-current", "page");
+		await swipeSettings("back");
+		await swipeSettings("back");
+		expect(sections[0]).toHaveAttribute("aria-current", "page");
+		await swipeSettings("back");
+		expect(useUiStore.getState().settingsModal).toBeNull();
+	});
+
+	it("discards forward section history after a new selection and resets on reopen", async () => {
+		useUiStore.getState().openGlobalSettings();
+		renderSettingsDialog();
+		await screen.findByTestId("settings-page");
+		const sections = within(screen.getByRole("navigation", { name: "Settings sections" })).getAllByRole("button");
+		await userEvent.click(sections[1]);
+		await userEvent.click(sections[2]);
+		await swipeSettings("back");
+		await userEvent.click(sections[3]);
+		await swipeSettings("forward");
+		expect(sections[3]).toHaveAttribute("aria-current", "page");
+		act(() => { useUiStore.getState().closeSettings(); useUiStore.getState().openGlobalSettings(); });
+		await swipeSettings("forward");
+		expect(sections[0]).toHaveAttribute("aria-current", "page");
+		await swipeSettings("back");
+		expect(useUiStore.getState().settingsModal).toBeNull();
+	});
+
+	it("swipes through project sections and waits for an in-flight save before leaving", async () => {
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderSettingsDialog();
+		const dialog = await screen.findByRole("dialog");
+		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
+		await swipeSettings("back", dialog);
+		expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("aria-current", "page");
+		await swipeSettings("forward", dialog);
+		expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("aria-current", "page");
+		await userEvent.click(screen.getByRole("button", { name: "Start pending save" }));
+		await swipeSettings("back", dialog);
+		expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("aria-current", "page");
+		await userEvent.click(screen.getByRole("button", { name: "Complete save" }));
+		await swipeSettings("back", dialog);
+		await swipeSettings("back", dialog);
+		expect(useUiStore.getState().settingsModal).toBeNull();
+	});
+
 	it("offers setup and cleanup through one local Scripts page", async () => {
 		useUiStore.getState().openProjectSettings("proj-1");
 		renderSettingsDialog();

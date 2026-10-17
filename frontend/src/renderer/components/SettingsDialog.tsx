@@ -8,6 +8,8 @@ import { useTranslation } from "react-i18next";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
+import { useSectionHistory } from "../hooks/useSectionHistory";
+import { SwipeNavigation, type SwipeNavigationActions } from "./SwipeNavigation";
 import { ensureCodexAccounts } from "../hooks/useCodexAccountsQuery";
 import { writeCodexAccounts } from "../hooks/codex-accounts-state";
 import { GlobalSettingsForm } from "./GlobalSettingsForm";
@@ -109,18 +111,21 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	}
 
 	const isProjectSettings = displaySettings?.scope === "project";
-	const [activeSection, setActiveSection] = useState<GlobalSettingsSection>("general");
+	const globalHistory = useSectionHistory<GlobalSettingsSection>("general");
+	const activeSection = globalHistory.current;
+	const globalRequestRef = useRef<{ modal: SettingsModal; section: GlobalSettingsSection } | null>(null);
 	const [focusAgentId, setFocusAgentId] = useState<string>();
 	const [harnessView, setHarnessView] = useState<"local" | "cloud">();
 	const [startLogin, setStartLogin] = useState(false);
 	const [showDiagnostics, setShowDiagnostics] = useState<HarnessDiagnosticsRequest | undefined>();
-	const [activeProjectSection, setActiveProjectSection] = useState<ProjectSettingsSection>("general");
-	const [pendingProjectSection, setPendingProjectSection] = useState<ProjectSettingsSection | null>(null);
+	const projectHistory = useSectionHistory<ProjectSettingsSection>("general");
+	const activeProjectSection = projectHistory.current;
+	const [pendingProjectSection, setPendingProjectSection] = useState<{ navigate: () => void } | null>(null);
 	const [projectSaveState, setProjectSaveState] = useState<ProjectSettingsSaveState>(initialProjectSaveState);
 	const [cueBusy, setCueBusy] = useState(false);
 	useEffect(() => {
 		if (pendingProjectSection && projectSaveState.phase === "saved" && !projectSaveState.dirty) {
-			setActiveProjectSection(pendingProjectSection);
+			pendingProjectSection.navigate();
 			setPendingProjectSection(null);
 		}
 	}, [pendingProjectSection, projectSaveState]);
@@ -178,18 +183,22 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	// it once the offering allows it.
 	useEffect(() => {
 		if (settingsModal?.scope === "global") {
-			setActiveSection(globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling }).id);
+			const section = globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling }).id;
+			if (globalRequestRef.current?.modal !== settingsModal) globalHistory.reset(section);
+			else if (globalRequestRef.current.section !== section) globalHistory.visit(section);
+			globalRequestRef.current = { modal: settingsModal, section };
 		}
-	}, [cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling, settingsModal]);
+	}, [cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling, settingsModal, globalHistory.reset, globalHistory.visit]);
 	// Project scope resets only when a project is opened, never when a gate
 	// settles, so a reported save state survives the offering loading.
 	useEffect(() => {
 		if (settingsModal?.scope === "project") {
-			setActiveProjectSection(settingsModal.cloudOrgId !== undefined && settingsModal.section === "cues" ? "general" : settingsModal.section ?? "general");
+			projectHistory.reset(settingsModal.cloudOrgId !== undefined && settingsModal.section === "cues" ? "general" : settingsModal.section ?? "general");
+			setPendingProjectSection(null);
 			setProjectSaveState(initialProjectSaveState());
 			setCueBusy(false);
 		}
-	}, [settingsModal]);
+	}, [settingsModal, projectHistory.reset]);
 
 	useEffect(() => {
 		setFocusAgentId(settingsModal?.scope === "global" ? settingsModal.focusAgentId : undefined);
@@ -222,21 +231,38 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		void queryClient.prefetchQuery({ queryKey: mobileDevicesQueryKey, queryFn: fetchDevices });
 	}, [queryClient, settingsModal?.scope]);
 
-	const selectProjectSection = (id: ProjectSettingsSection) => {
+	const selectProjectSection = (id: ProjectSettingsSection, navigate = () => projectHistory.visit(id)) => {
 		if (projectSaveState.dirty && !projectSaveState.unsaveable && id !== activeProjectSection) {
-			setPendingProjectSection(id);
+			setPendingProjectSection({ navigate });
 			(document.getElementById("project-settings-form") as HTMLFormElement | null)?.requestSubmit();
 		} else {
-			setActiveProjectSection(id);
+			navigate();
 		}
 	};
 	const selectGlobalSection = (id: GlobalSettingsSection) => {
-		setActiveSection(id);
+		globalHistory.visit(id);
 		setFocusAgentId(undefined);
 	};
 	const navItems: SettingsNavEntry[] = isProjectSettings
 		? projectSections.map(({ id, label, icon }) => ({ id, label, icon, active: activeProjectSection === id, disabled: cueBusy, onSelect: () => selectProjectSection(id) }))
 		: globalSections.map(({ id, label, icon }) => ({ id, label: label(t), icon, active: activeSection === id, onSelect: () => selectGlobalSection(id) }));
+	const navigationBlocked = isProjectSettings && (cueBusy || projectSaveState.requestPending === true || projectSaveState.phase === "pending" || projectSaveState.phase === "saving");
+	const history = isProjectSettings ? projectHistory : globalHistory;
+	const navigation: SwipeNavigationActions = {
+		canGoBack: !navigationBlocked,
+		canGoForward: !navigationBlocked && history.next !== undefined,
+		back: () => {
+			if (navigationBlocked) return;
+			if (isProjectSettings && projectHistory.previous !== undefined) selectProjectSection(projectHistory.previous, projectHistory.back);
+			else if (!isProjectSettings && globalHistory.previous !== undefined) { globalHistory.back(); setFocusAgentId(undefined); }
+			else closeSettingsDialog();
+		},
+		forward: () => {
+			if (navigationBlocked) return;
+			if (isProjectSettings && projectHistory.next !== undefined) selectProjectSection(projectHistory.next, projectHistory.forward);
+			else if (!isProjectSettings) { globalHistory.forward(); setFocusAgentId(undefined); }
+		},
+	};
 	const showSaveStatus = isProjectSettings && activeProjectSection !== "cues" &&
 		(projectSaveState.phase === "failed" ||
 			(projectSaveState.phase === "pending" && !projectSaveState.unsaveable) ||
@@ -245,6 +271,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 
 	return {
 		modal: settingsModal,
+		navigation,
 		navItems,
 		showSaveStatus,
 		projectSaveState,
@@ -503,6 +530,7 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 					}}
 					ref={contentRef}
 				>
+					<SwipeNavigation containerRef={contentRef} navigation={layer.navigation} />
 					<div className="flex h-full min-h-0">
 						<aside className="flex w-48 shrink-0 flex-col border-r border-(--color-border-settings-dialog-header) bg-card">
 							<p className="px-3 pb-1 pt-1.5 text-2xs font-medium tracking-normal text-muted-foreground/60">{t("shell.projectSettings")}</p>

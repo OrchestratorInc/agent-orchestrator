@@ -46,6 +46,13 @@ jobs:
           mkdir -p "$HOME/.ao/build-cache/wake-helper/tests"
           xcrun swiftc -module-cache-path "$HOME/.ao/build-cache/wake-helper/tests" native/wake-helper/WakePolicy.swift native/wake-helper/PolicyTests.swift -o "$HOME/.ao/build-cache/wake-helper/policy-tests"
           "$HOME/.ao/build-cache/wake-helper/policy-tests"
+      - name: Compile scroll phase addon
+        run: |
+          node --test scripts/build-scroll-phase.node-test.mjs
+          node scripts/build-scroll-phase.mjs --arch x64
+          lipo scroll-phase/ao-scroll-phase.node -verify_arch x86_64
+          node scripts/build-scroll-phase.mjs --arch arm64
+          lipo scroll-phase/ao-scroll-phase.node -verify_arch arm64
       - name: Test repair installer packaging and guards
         run: node --test scripts/build-mac-repair-installer.node-test.mjs
       - name: Compile helper for both macOS architectures
