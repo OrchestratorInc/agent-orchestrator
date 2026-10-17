@@ -529,12 +529,8 @@ export async function getSessions(cfg: ServerConfig, _projectId?: string, init?:
 
 // ---- Preview (in-app browser) ----------------------------------------------
 
-// Ask the daemon whether this session has a detectable static preview entry
-// (index.html, or dist/build/public/index.html). Returns a URL the in-app
-// WebView can load, or null when no entry exists yet - the button then reports
-// "no preview". We build the URL from our own base (httpBase honors the TLS
-// toggle) rather than the daemon's `previewUrl`, which hardcodes http:// + its
-// request host and would break over a TLS tunnel (e.g. tailscale serve).
+// Load the session's selected app preview, never a discovered repository file.
+// Build static URLs from our configured base so TLS tunnels stay on HTTPS.
 /**
  * The daemon's preview-files route for a workspace path, each segment escaped.
  * Shared by the preview button and chat attachment images so the route shape
@@ -544,15 +540,18 @@ export function previewFilePath(sessionId: string, path: string): string {
 	return `${API}/sessions/${encodeURIComponent(sessionId)}/preview/files/${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
-export async function getPreview(cfg: ServerConfig, id: string, preferredURL?: string): Promise<{ entry: string; url: string; authenticated: boolean } | null> {
+export async function getPreview(cfg: ServerConfig, id: string): Promise<{ entry: string; url: string; authenticated: boolean } | null> {
 	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/preview`);
 	const data = await res.json();
 	const entry = typeof data?.entry === "string" ? data.entry.trim() : "";
 	if (entry) {
-		const url = `${httpBase(cfg)}${previewFilePath(id, entry)}`;
+		const path = data?.source === "artifact"
+			? `${API}/sessions/${encodeURIComponent(id)}/preview/artifacts/${entry.split("/").map(encodeURIComponent).join("/")}`
+			: previewFilePath(id, entry);
+		const url = `${httpBase(cfg)}${path}`;
 		return { entry, url, authenticated: true };
 	}
-	const external = mobileReachablePreviewURL(preferredURL, cfg.host);
+	const external = mobileReachablePreviewURL(typeof data?.previewUrl === "string" ? data.previewUrl : undefined, cfg.host);
 	return external ? { entry: external.hostname, url: external.href, authenticated: false } : null;
 }
 

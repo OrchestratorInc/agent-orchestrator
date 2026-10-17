@@ -800,6 +800,7 @@ type SessionPreviewResponse struct {
 	SessionID  domain.SessionID `json:"sessionId"`
 	PreviewURL string           `json:"previewUrl,omitempty"`
 	Entry      string           `json:"entry,omitempty"`
+	Source     string           `json:"source,omitempty" enum:"workspace,artifact" description:"Root containing the selected static entry; omitted for external app URLs."`
 }
 
 // RenameSessionRequest is the body of PATCH /api/v1/sessions/{sessionId}.
@@ -2372,7 +2373,8 @@ type LinkPreviewResponse struct {
 // regenerate endpoints. Password is populated only transiently, on enable and
 // regenerate responses (empty otherwise) — it is never persisted in plaintext.
 type MobileStatusResponse struct {
-	Enabled bool `json:"enabled"`
+	Enabled             bool `json:"enabled"`
+	BrowserRemoteAccess bool `json:"browserRemoteAccess"`
 	// LoopbackOnly means direct LAN/Tailscale addresses are not listening.
 	LoopbackOnly bool `json:"loopbackOnly"`
 	// NoPublicTunnel means the user disabled the managed public connector.
@@ -2416,6 +2418,12 @@ type KeepAwakeStatus struct {
 type SetKeepAwakeRequest struct {
 	Enabled   bool  `json:"enabled"`
 	LidClosed *bool `json:"lidClosed,omitempty"`
+}
+
+// SetBrowserRemoteAccessRequest is the body of
+// POST /api/v1/mobile/browser-control.
+type SetBrowserRemoteAccessRequest struct {
+	Enabled bool `json:"enabled"`
 }
 
 // SecurePairingStatus describes the optional TLS-over-Tailscale pairing mode,

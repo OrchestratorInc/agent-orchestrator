@@ -528,6 +528,9 @@ func TestBroadcastDropsAClientThatStopsReading(t *testing.T) {
 	// (2x the buffer), so send more than that to guarantee the queue fills.
 	done := make(chan struct{})
 	go func() {
+		// writeClient batches up to one queue's worth of frames before it
+		// blocks on the stalled socket. Send one additional queue length so the
+		// broadcast path must observe a full queue and apply slowClientGrace.
 		for i := 0; i < hostClientWriteBuffer*3; i++ {
 			frame, _ := EncodeMessage(MsgTerminalData, []byte("x"))
 			h.broadcast(frame)

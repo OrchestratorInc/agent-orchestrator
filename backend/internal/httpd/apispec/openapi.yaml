@@ -2197,6 +2197,43 @@ paths:
       summary: Fetch link-preview metadata (Open Graph) for an external URL
       tags:
       - link-preview
+  /api/v1/mobile/browser-control:
+    post:
+      operationId: setMobileBrowserRemoteAccess
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetBrowserRemoteAccessRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MobileStatusResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Allow or deny paired-device access to the desktop browser
+      tags:
+      - mobile
   /api/v1/mobile/devices:
     get:
       operationId: listMobileDevices
@@ -8406,6 +8443,46 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Conflict
       summary: Send a request to the running session-owned application preview
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/preview/artifacts/*:
+    get:
+      operationId: getSessionPreviewArtifact
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            text/html:
+              schema:
+                type: string
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Serve a selected static browser preview file from the session artifact
+        directory
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/preview/files/*:
@@ -15389,6 +15466,8 @@ components:
       type: object
     MobileStatusResponse:
       properties:
+        browserRemoteAccess:
+          type: boolean
         enabled:
           type: boolean
         endpoints:
@@ -15419,6 +15498,7 @@ components:
           type: string
       required:
       - enabled
+      - browserRemoteAccess
       - loopbackOnly
       - noPublicTunnel
       - endpoints
@@ -17028,6 +17108,13 @@ components:
           type: string
         sessionId:
           type: string
+        source:
+          description: Root containing the selected static entry; omitted for external
+            app URLs.
+          enum:
+          - workspace
+          - artifact
+          type: string
       required:
       - sessionId
       type: object
@@ -17197,6 +17284,13 @@ components:
       - ok
       - sessionId
       - state
+      type: object
+    SetBrowserRemoteAccessRequest:
+      properties:
+        enabled:
+          type: boolean
+      required:
+      - enabled
       type: object
     SetChatViewRequest:
       properties:

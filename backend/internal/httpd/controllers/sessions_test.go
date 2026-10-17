@@ -2261,7 +2261,7 @@ func TestSessionsAPI_SpawnRejectsUnknownRequestedOutput(t *testing.T) {
 	}
 }
 
-func TestSessionsAPI_PreviewDiscoversAndServesStaticIndex(t *testing.T) {
+func TestSessionsAPI_PreviewServesSelectedStaticIndex(t *testing.T) {
 	svc := newFakeSessionService()
 	workspace := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, "index.html"), []byte(`<link rel="stylesheet" href="styles.css"><script src="app.js"></script>`), 0o644); err != nil {
@@ -2271,7 +2271,7 @@ func TestSessionsAPI_PreviewDiscoversAndServesStaticIndex(t *testing.T) {
 		t.Fatalf("write css: %v", err)
 	}
 	s := svc.sessions["ao-1"]
-	s.Metadata = domain.SessionMetadata{WorkspacePath: workspace}
+	s.Metadata = domain.SessionMetadata{WorkspacePath: workspace, PreviewURL: "index.html"}
 	svc.sessions["ao-1"] = s
 	srv := newSessionTestServer(t, svc)
 
@@ -2310,6 +2310,89 @@ func TestSessionsAPI_PreviewDiscoversAndServesStaticIndex(t *testing.T) {
 	}
 }
 
+func TestSessionsAPI_PreviewHonorsSelectionInsteadOfRepositoryIndex(t *testing.T) {
+	for _, selected := range []string{"", "dist/app.html", "missing.html", "http://localhost:5173/app", "https://example.com/demo"} {
+		t.Run(selected, func(t *testing.T) {
+			svc := newFakeSessionService()
+			workspace := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(workspace, "dist"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for _, file := range []string{"index.html", "dist/app.html"} {
+				if err := os.WriteFile(filepath.Join(workspace, file), []byte(file), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s := svc.sessions["ao-1"]
+			s.Metadata = domain.SessionMetadata{WorkspacePath: workspace, PreviewURL: selected}
+			svc.sessions["ao-1"] = s
+			srv := newSessionTestServer(t, svc)
+			body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/preview", "")
+			if status != http.StatusOK {
+				t.Fatalf("status=%d body=%s", status, body)
+			}
+			var result controllers.SessionPreviewResponse
+			mustJSON(t, body, &result)
+			switch selected {
+			case "dist/app.html":
+				if result.Entry != selected || !strings.HasSuffix(result.PreviewURL, "/dist/app.html") {
+					t.Fatalf("preview=%+v", result)
+				}
+			case "", "missing.html":
+				if result.Entry != "" || result.PreviewURL != "" {
+					t.Fatalf("unselected preview=%+v", result)
+				}
+			default:
+				if result.Entry != "" || result.PreviewURL != selected {
+					t.Fatalf("URL preview=%+v", result)
+				}
+			}
+		})
+	}
+}
+
+func TestSessionsAPI_PreviewArtifactOriginUsesArtifactFiles(t *testing.T) {
+	svc := newFakeSessionService()
+	workspace, artifacts := t.TempDir(), t.TempDir()
+	for root, text := range map[string]string{workspace: "workspace", artifacts: "artifact"} {
+		for _, file := range []string{"index.html", "style.css", "test page (1).html", "__ao_artifacts__/index.html"} {
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(root, file)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, file), []byte(text), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	selected, err := previewutil.ArtifactFileURL("http://127.0.0.1:3002", "ao-1", "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := svc.sessions["ao-1"]
+	s.Metadata = domain.SessionMetadata{WorkspacePath: workspace, ArtifactDir: artifacts, PreviewURL: selected}
+	svc.sessions["ao-1"] = s
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/preview", "")
+	if status != http.StatusOK {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	var result controllers.SessionPreviewResponse
+	mustJSON(t, body, &result)
+	if result.Source != "artifact" || result.Entry != "index.html" {
+		t.Fatalf("preview=%+v", result)
+	}
+	for _, file := range []string{"index.html", "style.css", "test%20page%20%281%29.html"} {
+		body, status, _ = doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/preview/artifacts/"+file, "")
+		if status != http.StatusOK || string(body) != "artifact" {
+			t.Fatalf("%s: status=%d body=%s", file, status, body)
+		}
+	}
+	body, status, _ = doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/preview/artifacts/../outside.html", "")
+	if status != http.StatusNotFound {
+		t.Fatalf("traversal: status=%d body=%s", status, body)
+	}
+}
+
 func TestSessionsAPI_PreviewRejectsSessionIDTooLongForHostname(t *testing.T) {
 	svc := newFakeSessionService()
 	id := domain.SessionID(strings.Repeat("x", 143))
@@ -2317,7 +2400,7 @@ func TestSessionsAPI_PreviewRejectsSessionIDTooLongForHostname(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "index.html"), []byte("preview"), 0o644); err != nil {
 		t.Fatalf("write index: %v", err)
 	}
-	svc.sessions[id] = domain.Session{SessionRecord: domain.SessionRecord{ID: id, Kind: domain.KindWorker, Metadata: domain.SessionMetadata{WorkspacePath: workspace}}}
+	svc.sessions[id] = domain.Session{SessionRecord: domain.SessionRecord{ID: id, Kind: domain.KindWorker, Metadata: domain.SessionMetadata{WorkspacePath: workspace, PreviewURL: "index.html"}}}
 	srv := newSessionTestServer(t, svc)
 
 	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/"+string(id)+"/preview", "")

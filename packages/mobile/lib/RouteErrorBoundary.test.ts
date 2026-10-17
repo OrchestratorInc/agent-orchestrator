@@ -17,6 +17,7 @@ const screenRoutes = [
 	"(tabs)/projects.tsx",
 	"(tabs)/prs.tsx",
 	"settings/environments.tsx",
+	"browser/[id].tsx",
 	"notifications.tsx",
 	"onboarding.tsx",
 	"pair.tsx",

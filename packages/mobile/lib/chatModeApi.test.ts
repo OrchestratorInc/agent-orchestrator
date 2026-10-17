@@ -343,8 +343,8 @@ describe("mobile Chat API boundaries", () => {
 			url: "http://ao.test:3011/api/v1/sessions/w-1/preview/files/README.md",
 			authenticated: true,
 		});
-		vi.mocked(fetch).mockResolvedValueOnce(response({}));
-		expect(await getPreview(cfg, "w-1", "https://example.com/demo")).toMatchObject({
+		vi.mocked(fetch).mockResolvedValueOnce(response({ previewUrl: "https://example.com/demo" }));
+		expect(await getPreview(cfg, "w-1")).toMatchObject({
 			url: "https://example.com/demo",
 			authenticated: false,
 		});
@@ -352,6 +352,20 @@ describe("mobile Chat API boundaries", () => {
 		expect(mobileReachablePreviewURL("http://localhost:5173", "2001:db8::5")?.href).toBe("http://[2001:db8::5]:5173/");
 		expect(mobileReachablePreviewURL("http://127.0.0.1:5173", "https://macbook.local/")?.href).toBe("http://macbook.local:5173/");
 		expect(mobileReachablePreviewURL("file:///tmp/demo.html", "ao.test")).toBeUndefined();
+	});
+
+	it("loads artifact previews through the authenticated configured host, including TLS tunnels", async () => {
+		vi.mocked(fetch).mockResolvedValueOnce(response({ entry: "pages/test page.html", source: "artifact", previewUrl: "http://ao-preview-artifact.obzg6ztjnrss2my.localhost:3002/pages/test%20page.html" }));
+		expect(await getPreview({ ...cfg, host: "ao.example.com", httpPort: "443", secure: true }, "w-1")).toEqual({
+			entry: "pages/test page.html",
+			url: "https://ao.example.com:443/api/v1/sessions/w-1/preview/artifacts/pages/test%20page.html",
+			authenticated: true,
+		});
+	});
+
+	it("does not invent an app preview when the session has no selection", async () => {
+		vi.mocked(fetch).mockResolvedValueOnce(response({ sessionId: "w-1" }));
+		expect(await getPreview(cfg, "w-1")).toBeNull();
 	});
 
 	it("maps the provider-neutral conversation wire model without inventing protocol state", async () => {

@@ -181,6 +181,9 @@ func (f *fakeLidController) Stop() { f.fakeKeepAwake.Stop(); f.lidActive = false
 func TestLidAwakeFollowsServingBridgeAndSurvivesLegacyRequests(t *testing.T) {
 	ka := &fakeLidController{supported: true}
 	b, _ := newKeepAwakeBridge(t, ka)
+	if _, err := b.SetBrowserRemoteAccess(true); err != nil {
+		t.Fatal(err)
+	}
 	res, err := b.SetKeepAwakeLid(true, true)
 	if err != nil {
 		t.Fatal(err)
@@ -193,6 +196,9 @@ func TestLidAwakeFollowsServingBridgeAndSurvivesLegacyRequests(t *testing.T) {
 	}
 	if !ka.active || !ka.lidActive {
 		t.Fatal("bridge did not activate both wake controls")
+	}
+	if st, err := mobilebridge.Load(b.ConfigPath); err != nil || !st.KeepAwakeLid || !st.BrowserRemoteAccess {
+		t.Fatalf("enable dropped browser sharing or closed-lid preference: %+v, %v", st, err)
 	}
 	// A legacy client's boolean-only request must retain the new preference.
 	if _, err := b.SetKeepAwake(false); err != nil {
