@@ -46,6 +46,10 @@ type LaunchConfig struct {
 	Permissions     ports.PermissionMode
 	SystemPrompt    string
 	ProviderScopeID string
+	// ProviderConversationID carries the stored native conversation on resume so
+	// a binding can migrate provider-side history into a fresh process home.
+	// Empty on first start.
+	ProviderConversationID string
 }
 
 // Config binds one harness to an ACP agent implementation.
@@ -414,6 +418,9 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		Model: cfg.Model, Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
 		ProviderScopeID: cfg.ProviderScopeID,
 		ReconnectOnly:   cfg.ReconnectOnly,
+		// The connect below spawns a fresh process, so a resumed conversation's
+		// provider-side history has to be reachable from the new process home.
+		ProviderConversationID: cfg.ProviderConversationID,
 	}
 	conv, init, live, err := d.connect(ctx, launchCfg, cfg.PrepareEnv)
 	if err != nil {

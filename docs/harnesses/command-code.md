@@ -77,10 +77,79 @@ this coverage partial because Command Code does not expose a permission-request
 hook, so it cannot reliably distinguish an approval prompt from other in-turn
 work.
 
-On `SessionStart`, the same hook returns Command Code's supported
-`additionalContext` response with AO's standing instructions. The prompt stays
-in AO-owned storage under `~/.ao` and AO does not modify the project's
-`AGENTS.md` or `.commandcode/AGENTS.md`.
+On `SessionStart`, the hook does not carry AO's standing instructions; see
+[Standing Instructions](#standing-instructions) below.
+
+## Standing Instructions
+
+Command Code accepts no system-prompt launch flag, and the alternatives AO tried
+are unavailable to Chat: `cmd acp` builds no mod host, so a mod's
+`appendSystemPrompt` never runs; `session/new` ignores `_meta`; and `SessionStart`
+is the one hook the ACP path never fires. The other three hooks do run under ACP,
+but their `additionalContext` arrives as tool-result material that only appears
+once a tool runs, and Command Code's own model discounts it rather than treating
+it as a standing instruction.
+
+Memory is the one surface Command Code reads in both modes, and its own
+documentation places memory in the **system prompt** rather than the
+conversation, so AO's instructions survive compaction.
+
+Each session therefore gets its own Command Code home under
+`~/.ao/harnesses/command-code/<session-id>/.commandcode/`, containing `AGENTS.md`
+with the session's standing instructions. The home lives outside the disposable
+`prompts/<session-id>` directory on purpose: a failed restore wipes that whole
+tree, and the wipe must never take the native conversation with it. AO points
+`HOME` and `USERPROFILE` at that directory for the session's process.
+
+Two consequences follow from Command Code's tier rules:
+
+- The **user** tier is used because it is additive. A repository's own
+  `AGENTS.md` still loads alongside AO's; the project tier would silently shadow
+  it, because only the first existing project-tier file is read.
+- Each session has its own home, so concurrent sessions never share a memory file
+  and each carries its own role (orchestrator or worker).
+
+The session home mirrors the user's `auth.json`, `config.json`, `providers.json`,
+`settings.json` and `mcp.json` so the session keeps its login, preferences,
+permission rules, hooks and MCP servers; Command Code has no environment variable
+for its OAuth token, so the token is copied at `0600` rather than referenced.
+The user's mods directory (`~/.commandcode/mods`, including npm-installed
+packages under `.store`) is mirrored recursively and refreshed on every launch,
+because Command Code resolves mods from `HOME` -- without the copy every mod
+the user has installed would vanish behind the redirect. `~/`-relative skill
+and mod paths and `$HOME` references in hook commands are rebased to the real
+home in the mirrored copy, since they would otherwise resolve inside the
+isolated home where those assets do not exist; absolute paths, single-quoting
+and permission rule text are left untouched. All AO-owned state stays under
+`~/.ao`, and nothing is written to the project's `AGENTS.md` or
+`.commandcode/AGENTS.md`.
+
+The redirected `HOME` is inherited by the agent's shell children, so the real
+developer's tooling is kept reachable rather than moved: `GIT_CONFIG_GLOBAL`
+aims git at the real `~/.gitconfig` (git reads the XDG config file and
+`~/.gitconfig` side by side, so this applies even when XDG is set, and the real
+`~/.config/git` is mirrored when it is not), `GH_CONFIG_DIR` points at the real
+gh config whenever no `$XDG_CONFIG_HOME` redirect covers it, and `~/.ssh` is
+linked through so git-over-SSH keeps working -- each only when its target
+exists, and the link is skipped where the platform denies symlink privilege.
+The decision about what is already configured is made against the environment
+the child actually starts from, so a pointer configured per project or simply
+inherited by the daemon is never overwritten by our defaults. No secrets move:
+keys stay live-linked so rotation is never stale.
+
+The home is retained like the prompts directory: it is never removed on spawn,
+restore, or teardown, because every one of those paths can precede a retry that
+needs the native history. Mirrored credentials refresh on every launch, so a
+stale copy self-heals the next time the session starts.
+
+Sessions created before per-session homes existed keep their native transcript
+under the real home. Restoring one copies that conversation's own files into the
+isolated home first, so `--resume` and `session/load` keep working after the
+upgrade; files the session already has are never overwritten.
+
+Because a session whose memory is empty would run with no AO role at all, a
+Command Code session fails to start rather than launching without its standing
+instructions.
 
 ## Chat Mode
 
