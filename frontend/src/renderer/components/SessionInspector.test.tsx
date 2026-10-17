@@ -4755,6 +4755,47 @@ describe("SessionInspector branch summary", () => {
     useSessionGitActionStore.setState({ pending: {} });
   });
 
+  it.each(["open", "draft"] as const)("shows the attached %s PR head and base instead of the initial session branch", async (state) => {
+    mockGitState({});
+    const initialBranch = "ao/ao-landing-4/root";
+    const prBranch = "ao/ao-landing-4/stripe-policies";
+    renderWithQuery(
+      <SessionInspector session={session([pr(52, state)], { branch: initialBranch })} />,
+      undefined,
+      (client) => seedPRSummaries(client, [prSummary(52, state, {
+        sourceBranch: prBranch,
+        targetBranch: "release",
+      })]),
+    );
+
+    await waitFor(() => {
+      const header = screen.getByTestId("inspector-branch");
+      expect(within(header).getByText("PR #52")).toBeInTheDocument();
+      expect(within(header).queryByTitle(initialBranch)).not.toBeInTheDocument();
+      expect(within(header).getByTitle(prBranch)).toBeInTheDocument();
+      expect(within(header).getByText("→ release")).toBeInTheDocument();
+    });
+  });
+
+  it("uses the open PR branch before a previously merged PR", async () => {
+    mockGitState({});
+    renderWithQuery(
+      <SessionInspector session={session([pr(1, "merged"), pr(52, "open")])} />,
+      undefined,
+      (client) => seedPRSummaries(client, [
+        prSummary(1, "merged", { sourceBranch: "feature/previous" }),
+        prSummary(52, "open", { sourceBranch: "feature/current", targetBranch: "release" }),
+      ]),
+    );
+
+    await waitFor(() => {
+      const header = screen.getByTestId("inspector-branch");
+      expect(within(header).getByTitle("feature/current")).toBeInTheDocument();
+      expect(within(header).queryByTitle("feature/previous")).not.toBeInTheDocument();
+      expect(within(header).getByText("→ release")).toBeInTheDocument();
+    });
+  });
+
   it("shows uncommitted work and commits, pushes, and opens a PR in one step", async () => {
     mockGitState({ uncommitted: [changedFile("src/a.ts", 10, 2), changedFile("src/b.ts", 3, 1)] });
     renderWithQuery(<SessionInspector session={session([])} />);
