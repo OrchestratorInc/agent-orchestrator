@@ -6,6 +6,7 @@ import { CancellationToken } from "builder-util-runtime";
 import { app, dialog, autoUpdater as nativeAutoUpdater } from "electron";
 import { startMacUpdateProgress } from "./mac-update-progress";
 import { markUpdateRelaunch } from "./update-relaunch-flag";
+import { createUpdateDiagnostics } from "./update-diagnostics";
 import { accessSync, constants as fsConstants, existsSync, lstatSync, readFileSync, readdirSync, statfsSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -261,22 +262,33 @@ function shipItStagingBytes(dir: string | undefined): number | undefined {
   if (dir === undefined) return undefined;
   let total = 0;
   let seen = 0;
+  let readErrors = 0;
+  let firstReadError: unknown;
   const budget = 20_000;
   const walk = (d: string): void => {
     let names: string[];
-    try { names = readdirSync(d); } catch { return; }
+    try { names = readdirSync(d); } catch (error) {
+      readErrors += 1;
+      firstReadError ??= error;
+      return;
+    }
     for (const name of names) {
       if (seen >= budget) return;
       seen += 1;
       const full = path.join(d, name);
       let st;
-      try { st = lstatSync(full); } catch { continue; }
+      try { st = lstatSync(full); } catch (error) {
+        readErrors += 1;
+        firstReadError ??= error;
+        continue;
+      }
       if (st.isSymbolicLink()) continue;
       if (st.isDirectory()) walk(full);
       else total += st.size;
     }
   };
   walk(dir);
+  recordUpdateDiagnostic("native-staging-probe", { entries: seen, bytes: total, readErrors, budgetReached: seen >= budget }, firstReadError);
   return seen === 0 ? undefined : total;
 }
 
@@ -320,14 +332,19 @@ export function __setStagingProbesForTesting(probes: {
 }
 
 function beginNativePreparation(version: string, archiveBytes?: number): void {
-  if (nativePreparationBlocked) return;
+  if (nativePreparationBlocked) {
+    recordUpdateDiagnostic("native-preparation-refused", { version, reason: "blocked" }, nativePreparationBlocked);
+    return;
+  }
   if (nativePreparation) {
+    recordUpdateDiagnostic("native-preparation-refused", { version, reason: "already-preparing", preparingVersion: nativePreparation.version });
     nativePreparationBlocked = new Error(STAGE_STALL_MESSAGE);
     nativePreparation.finish(nativePreparationBlocked);
     return;
   }
   // Catch a full disk before ditto fails partway with a cryptic pkzip error (#5170).
   if (stagingDiskIsFull(requiredFreeBytesToStage(archiveBytes))) {
+    recordUpdateDiagnostic("native-preparation-disk-full", { version, archiveBytes, requiredFreeBytes: requiredFreeBytesToStage(archiveBytes), ...stagingDiagnosticSnapshot() });
     blockNativePreparation(STAGE_DISK_MESSAGE);
     nativeReadyVersion = undefined;
     nativePreparationError = nativePreparationBlocked;
@@ -345,6 +362,7 @@ function beginNativePreparation(version: string, archiveBytes?: number): void {
     version, promise,
     finish(error?: Error) {
       if (nativePreparation !== preparation) return;
+      recordUpdateDiagnostic("native-preparation-finished", { version, elapsedMs: Date.now() - startedAt, succeeded: error === undefined }, error);
       clearInterval(watchdog);
       nativePreparation = undefined;
       nativePreparationError = error;
@@ -364,7 +382,18 @@ function beginNativePreparation(version: string, archiveBytes?: number): void {
   const startedAt = Date.now();
   let lastBytes = readStagingBytes(stagingDir);
   let lastProgressAt = startedAt;
-  const trip = (): void => {
+  recordUpdateDiagnostic("native-preparation-started", {
+    version, archiveBytes, initialBytes: lastBytes ?? null,
+    inactivityTimeoutMs: STAGE_INACTIVITY_TIMEOUT_MS, verifyGraceMs: STAGE_VERIFY_GRACE_MS,
+    noSignalCapMs: STAGE_NO_SIGNAL_CAP_MS, absoluteCapMs: STAGE_ABSOLUTE_CAP_MS,
+    ...stagingDiagnosticSnapshot(),
+  });
+  const trip = (reason: string): void => {
+    recordUpdateDiagnostic("native-preparation-watchdog", {
+      version, reason, elapsedMs: Date.now() - startedAt,
+      inactiveMs: Date.now() - lastProgressAt, lastProgressBytes: lastBytes ?? null,
+      ...stagingDiagnosticSnapshot(),
+    });
     // No cancel API, so never stage again on top of a stalled request even if
     // its JS transfer settles later; recovery is a clean relaunch.
     console.error(`native update preparation stalled after ${Math.round((Date.now() - startedAt) / 1000)}s with no staging progress`);
@@ -381,6 +410,11 @@ function beginNativePreparation(version: string, archiveBytes?: number): void {
       lastProgressAt = now;
     }
     const haveSignal = bytes !== undefined;
+    recordUpdateDiagnostic("native-preparation-sample", {
+      version, elapsedMs: now - startedAt, inactiveMs: now - lastProgressAt,
+      bytes: bytes ?? null, lastProgressBytes: lastBytes ?? null,
+      ...stagingDiagnosticSnapshot(),
+    });
     // A byte plateau only counts as a stall once it has outlasted the
     // signature-verification grace, so a legitimate verify phase is not mistaken
     // for a wedge.
@@ -393,7 +427,7 @@ function beginNativePreparation(version: string, archiveBytes?: number): void {
       plateauStalled ||
       (!haveSignal && now - startedAt >= STAGE_NO_SIGNAL_CAP_MS)
     ) {
-      trip();
+      trip(now - startedAt >= STAGE_ABSOLUTE_CAP_MS ? "absolute-cap" : plateauStalled ? "inactivity" : "no-signal-cap");
     }
   }, STAGE_POLL_INTERVAL_MS);
   watchdog.unref?.();
@@ -426,6 +460,50 @@ let stagedEscalated = false;
 let stagedRequestId: string | undefined;
 let escalationTimer: ReturnType<typeof setInterval> | undefined;
 let escalationStateDir: string | undefined;
+let updateDiagnostics: { stateDir: string; record: ReturnType<typeof createUpdateDiagnostics> } | undefined;
+
+export function recordUpdateDiagnostic(
+  event: string,
+  fields: Record<string, string | number | boolean | null | undefined> = {},
+  error?: unknown,
+): void {
+  try {
+    if (!escalationStateDir) return;
+    if (updateDiagnostics?.stateDir !== escalationStateDir) {
+      updateDiagnostics = { stateDir: escalationStateDir, record: createUpdateDiagnostics(escalationStateDir, app.getVersion()) };
+      updateDiagnostics.record("diagnostics-started");
+    }
+    updateDiagnostics.record(event, {
+      operation: activeUpdaterOperation, requestId: activeUpdaterRequestId,
+      phase: activeUpdaterPhase, targetVersion: nativePreparation?.version ?? pendingUpdateVersion ?? stagedVersion,
+      channel: autoUpdater.channel, stagedInCurrentProcess,
+      nativeReadyVersion, preparationBlocked: nativePreparationBlocked !== undefined,
+      status: lastStatus.state, restartRequested: macRestartRequested,
+      ...fields,
+    }, error);
+  } catch { /* Observability must not change updater behavior. */ }
+}
+
+function stagingDiagnosticSnapshot(): Record<string, number | boolean | undefined> {
+  try {
+    const directory = macShipItDir();
+    const { bavail, bsize } = statfsSync(directory ?? path.join(os.homedir(), "Library", "Caches"));
+    const updates: number[] = [];
+    if (directory !== undefined) {
+      for (const name of readdirSync(directory).filter(name => name.startsWith("update.")).slice(0, 20)) {
+        try {
+          const stat = lstatSync(path.join(directory, name));
+          if (stat.isDirectory()) updates.push(stat.birthtimeMs);
+        } catch { /* Squirrel may have moved this directory between reads. */ }
+      }
+    }
+    return {
+      freeBytes: Number(bavail) * Number(bsize), stagingDirectoryPresent: directory !== undefined,
+      updateDirectoryCount: updates.length,
+      newestUpdateDirectoryBirthtimeMs: updates.length ? Math.max(...updates) : undefined,
+    };
+  } catch { return { snapshotReadable: false }; }
+}
 // Automatic re-check cadence for a long-running session. A fresh check also
 // runs on every launch (startAutoUpdates), so most users are current the moment
 // they open the app; this interval only governs sessions left open for a long
@@ -505,6 +583,7 @@ function armDownloadStallWatchdog(): void {
     downloadStallTimer = undefined;
     downloadStalled = true;
     console.error("update download stalled; cancelling");
+    recordUpdateDiagnostic("download-watchdog", { version: pendingUpdateVersion });
     // Cancel so electron-updater releases its request and the serialized
     // operation can finish. Without this the queue stays blocked and even a
     // manual retry would just wait behind the dead download.
@@ -580,6 +659,7 @@ function activeUpdateTrigger(): UpdateTrigger {
 }
 
 function emitUpdateFailure(err: unknown): void {
+  recordUpdateDiagnostic("update-failure", {}, err);
   const message =
     err instanceof Error ? err.message : err === undefined ? undefined : String(err);
   emitUpdateOutcome(
@@ -1320,8 +1400,12 @@ async function runSerializedUpdaterOperation(
   runOperation: () => Promise<void>,
   requestId?: string,
 ): Promise<void> {
+  recordUpdateDiagnostic("operation-requested", { requestedOperation: operation, requestedRequestId: requestId });
   const run = async () => {
-    if (nativePreparationBlocked) throw nativePreparationBlocked;
+    if (nativePreparationBlocked) {
+      recordUpdateDiagnostic("operation-blocked", { requestedOperation: operation }, nativePreparationBlocked);
+      throw nativePreparationBlocked;
+    }
     // A completed proxy transfer is not completed native staging. Holding this
     // gate prevents a late native event for A being attributed to a newer B.
     if (nativePreparation) await nativePreparation.promise;
@@ -1329,6 +1413,7 @@ async function runSerializedUpdaterOperation(
     activeUpdaterRequestId = requestId;
     activeUpdaterPhase = operation === "manual-download" ? "download" : "check";
     pendingUpdateVersion = operation === "manual-download" ? offeredUpdateVersion : undefined;
+    recordUpdateDiagnostic("operation-started");
     if (operation === "automatic-check") {
       automaticCheckNetFailureCounted = false;
       automaticCheckFailureCounted = false;
@@ -1339,6 +1424,7 @@ async function runSerializedUpdaterOperation(
       if (nativePreparation) await nativePreparation.promise;
       if (nativePreparationBlocked) throw nativePreparationBlocked;
     } catch (err) {
+      recordUpdateDiagnostic("operation-failed", {}, err);
       // Recover before releasing the queue. An outer caller catch can run after
       // the next download starts and would discard that replacement's stamp.
       if ((operation === "automatic-check" || operation === "manual-check" ||
@@ -1346,6 +1432,7 @@ async function runSerializedUpdaterOperation(
         handleMacStagingFailure(err, requestId)) return;
       throw err;
     } finally {
+      recordUpdateDiagnostic("operation-finished");
       rejectNativeOperation = undefined;
       activeUpdaterOperation = undefined;
       activeUpdaterRequestId = undefined;
@@ -1747,11 +1834,16 @@ function wireUpdaterEvents(): void {
   eventsWired = true;
   if (process.platform === "darwin") {
     nativeAutoUpdater.on("update-downloaded", (_event, _notes, releaseName) => {
+      recordUpdateDiagnostic("native-update-downloaded", {
+        releaseName, accepted: !!nativePreparation && (!releaseName || releaseName === nativePreparation.version),
+        hasPendingPreparation: nativePreparation !== undefined,
+      });
       if (!nativePreparation || (releaseName && releaseName !== nativePreparation.version)) return;
       nativePreparation.finish();
       broadcast(lastStatus.state === "downloading" ? lastStatus : stagedDownloadedStatus());
     });
     nativeAutoUpdater.on("error", (error) => {
+      recordUpdateDiagnostic("native-error", { userMessage: shortStagingMessage(error) }, error);
       // Log the full detail; surface only a short line.
       console.error("native macOS updater error during staging:", error);
       const short = new Error(shortStagingMessage(error));
@@ -1868,6 +1960,7 @@ function wireUpdaterEvents(): void {
     });
   });
   autoUpdater.on("update-downloaded", (info) => {
+    recordUpdateDiagnostic("archive-downloaded", { targetVersion: info?.version });
     clearDownloadStallWatchdog();
     downloadStalled = false;
     emitUpdateOutcome({
@@ -1932,6 +2025,7 @@ function wireUpdaterEvents(): void {
     }
   });
   autoUpdater.on("error", (err) => {
+    recordUpdateDiagnostic("electron-updater-error", {}, err);
     clearDownloadStallWatchdog();
     if (handleMacStagingFailure(err)) {
       emitUpdateFailure(err);
@@ -2314,6 +2408,7 @@ async function requestAutomaticUpdateCheck(
 export async function startAutoUpdates(stateDir: string): Promise<void> {
   escalationStateDir = stateDir;
   restoreStagedBuild(stateDir);
+  recordUpdateDiagnostic("automatic-updates-started", { stagedVersion, stagedAtMs });
   startRetirementPollTimer(stateDir);
   const intervalMs = await requestAutomaticUpdateCheck(stateDir);
   if (intervalMs !== undefined)
@@ -2707,6 +2802,7 @@ export function setUpdateRestartFailureHandler(handler: () => void): void { rest
 export function isUpdateRestartRequested(): boolean { return macRestartRequested; }
 
 export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<UpdateInstallResult> {
+  recordUpdateDiagnostic("install-requested", { confirmedVersion });
   if (confirmedVersion !== undefined && (typeof confirmedVersion !== "string" || !confirmedVersion.trim())) {
     throw new Error("A valid confirmed update version is required.");
   }
@@ -2744,6 +2840,7 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
         new Promise<void>((resolve) => setTimeout(resolve, 750)),
       ]);
     }
+    recordUpdateDiagnostic("quit-and-install", { version: stagedVersion });
     autoUpdater.quitAndInstall(false, true);
     return;
   }
@@ -2790,9 +2887,11 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
         }),
         new Promise<void>((resolve) => setTimeout(resolve, 750)),
       ]);
+      recordUpdateDiagnostic("quit-and-install", { version });
       autoUpdater.quitAndInstall(false, true);
       if (!macRestartRequested) throw nativePreparationError ?? new Error("The installer could not restart AO.");
     } catch (err) {
+      recordUpdateDiagnostic("install-preparation-failed", {}, err);
       macRestartRequested = false;
       stagedInCurrentProcess = false;
       nativeReadyVersion = undefined;
