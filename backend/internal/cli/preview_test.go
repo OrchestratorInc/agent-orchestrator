@@ -355,3 +355,96 @@ func TestPreview_BlankSessionIDIsUsageError(t *testing.T) {
 		t.Fatal("daemon should not be contacted when AO_SESSION_ID is blank")
 	}
 }
+
+func TestPreviewStartRunPostsOneOffCommand(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+		want map[string]any
+	}{
+		{
+			name: "fixed port",
+			args: []string{"preview", "start", "--run", "--port", "3000", "--", "npx", "next", "dev", "-p", "${PORT}"},
+			want: map[string]any{"runtimeExecutable": "npx", "runtimeArgs": []any{"next", "dev", "-p", "${PORT}"}, "port": float64(3000)},
+		},
+		{
+			name: "auto port by default",
+			args: []string{"preview", "start", "--run", "--", "npm", "run", "dev"},
+			want: map[string]any{"runtimeExecutable": "npm", "runtimeArgs": []any{"run", "dev"}, "autoPort": true},
+		},
+		{
+			name: "explicit url, target, and cwd",
+			args: []string{"preview", "start", "--run", "--auto-port", "--url", "http://127.0.0.1:${PORT}/app", "--target", "api", "--cwd", "web", "--", "pnpm", "dev"},
+			want: map[string]any{"runtimeExecutable": "pnpm", "autoPort": true, "url": "http://127.0.0.1:${PORT}/app", "targetKind": "api", "cwd": "web"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "aa-47")
+			cfg := setConfigEnv(t)
+			srv, capture := previewLifecycleServer(
+				t,
+				http.StatusOK,
+				`{"sessionId":"aa-47","state":"ready","configuration":"run","targetKind":"app","url":"http://127.0.0.1:4173/","port":4173,"logs":[]}`,
+			)
+			writeRunFileFor(t, cfg, srv)
+
+			out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, test.args...)
+			if err != nil {
+				t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+			}
+			if capture.method != http.MethodPost || capture.path != "/api/v1/sessions/aa-47/preview/server" {
+				t.Fatalf("request = %s %s", capture.method, capture.path)
+			}
+			var body struct {
+				Configuration string         `json:"configuration"`
+				Run           map[string]any `json:"run"`
+			}
+			if err := json.Unmarshal([]byte(capture.body), &body); err != nil {
+				t.Fatalf("body %q: %v", capture.body, err)
+			}
+			if body.Configuration != "" || body.Run == nil {
+				t.Fatalf("body = %q, want only a run object", capture.body)
+			}
+			for key, want := range test.want {
+				if got := body.Run[key]; !jsonEqual(got, want) {
+					t.Fatalf("run.%s = %#v, want %#v (body %s)", key, got, want, capture.body)
+				}
+			}
+			if !strings.Contains(out, "ready run http://127.0.0.1:4173/") {
+				t.Fatalf("output = %q", out)
+			}
+		})
+	}
+}
+
+func TestPreviewStartRunMisuseIsUsageErrorWithoutDaemonCall(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+	}{
+		{name: "run without command", args: []string{"preview", "start", "--run"}},
+		{name: "run with configuration name", args: []string{"preview", "start", "--run", "web", "--", "npm", "run", "dev"}},
+		{name: "port and auto-port", args: []string{"preview", "start", "--run", "--port", "3000", "--auto-port", "--", "npm"}},
+		{name: "port out of range", args: []string{"preview", "start", "--run", "--port", "70000", "--", "npm"}},
+		{name: "run flags without run", args: []string{"preview", "start", "--port", "3000", "web"}},
+		{name: "command without run", args: []string{"preview", "start", "web", "--", "npm"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "aa-47")
+			cfg := setConfigEnv(t)
+			srv, capture := previewLifecycleServer(t, http.StatusOK, `{"sessionId":"aa-47","state":"stopped","logs":[]}`)
+			writeRunFileFor(t, cfg, srv)
+			_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, test.args...)
+			if ExitCode(err) != 2 || capture.called {
+				t.Fatalf("exit=%d daemon called=%v err=%v; want usage error without daemon call", ExitCode(err), capture.called, err)
+			}
+		})
+	}
+}
+
+// jsonEqual compares decoded JSON values, treating []any as element-wise equal.
+func jsonEqual(got, want any) bool {
+	gotJSON, errGot := json.Marshal(got)
+	wantJSON, errWant := json.Marshal(want)
+	return errGot == nil && errWant == nil && string(gotJSON) == string(wantJSON)
+}

@@ -33,9 +33,10 @@ the AO Browser panel's static-file workflow.
 
 Use a managed server only when the project genuinely has a runtime. Start an
 existing `.ao/launch.json` configuration when present. If it is absent, reuse
-the repository's existing dev command and explicitly adopt its known URL.
-Do not create `.ao/launch.json` unless the user asks for reusable launch
-configuration.
+the repository's existing dev command as a one-off managed server with
+`ao preview start --run -- <command>`. This writes nothing to the workspace, and
+it is the only managed form that works for a remote Browser panel. Do not create
+`.ao/launch.json` unless the user asks for reusable launch configuration.
 
 ## Automatic artifact handoff
 
@@ -83,8 +84,19 @@ one configuration exists.
 
 ```bash
 ao preview start [configuration] [--json]
+ao preview start --run [--url <template>] [--port N | --auto-port] [--target app|api] [--cwd <rel>] -- <command> [args...] [--json]
 ao preview status [--json]
 ao preview stop [--json]
+```
+
+`--run` starts a one-off managed server from the command after `--`. It takes
+the same safety rules as a `launch.json` entry, but the configuration is never
+written to the workspace and cannot be combined with a configuration name.
+`--url` defaults to `http://127.0.0.1:${PORT}/`, and AO picks a free port unless
+you pass `--port`. Example:
+
+```bash
+ao preview start --run -- npm run dev -- --host 127.0.0.1 --port '${PORT}'
 ```
 
 This command is for an existing, intentional project configuration. Do not

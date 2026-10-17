@@ -846,9 +846,24 @@ type SetSessionPreviewRequest struct {
 }
 
 // StartPreviewServerRequest selects one named entry from .ao/launch.json. The
-// name may be omitted when the file contains exactly one configuration.
+// name may be omitted when the file contains exactly one configuration. Run
+// starts a one-off server instead and is mutually exclusive with Configuration.
 type StartPreviewServerRequest struct {
-	Configuration string `json:"configuration,omitempty" description:"Named preview configuration. Optional when exactly one configuration exists."`
+	Configuration string                      `json:"configuration,omitempty" description:"Named preview configuration. Optional when exactly one configuration exists."`
+	Run           *InlinePreviewServerRequest `json:"run,omitempty" description:"One-off managed server that is not written to .ao/launch.json. Mutually exclusive with configuration."`
+}
+
+// InlinePreviewServerRequest describes a one-off session-owned dev server with
+// the same rules as a .ao/launch.json entry. It is never persisted to the
+// workspace.
+type InlinePreviewServerRequest struct {
+	RuntimeExecutable string   `json:"runtimeExecutable" description:"Executable to run in the session workspace."`
+	RuntimeArgs       []string `json:"runtimeArgs,omitempty" description:"Arguments. ${PORT} is expanded to the selected port."`
+	Cwd               string   `json:"cwd,omitempty" description:"Workspace-relative working directory. Defaults to the workspace root."`
+	Port              int      `json:"port,omitempty" description:"Preferred loopback port. Required unless autoPort is true."`
+	AutoPort          bool     `json:"autoPort,omitempty" description:"Choose a free loopback port automatically."`
+	URL               string   `json:"url,omitempty" description:"Loopback http URL that becomes ready. Defaults to http://127.0.0.1:${PORT}/."`
+	TargetKind        string   `json:"targetKind,omitempty" enum:"app,api" description:"app opens in the Browser panel; api is health-checked without taking over the panel."`
 }
 
 // PreviewServerStatusResponse reports the deterministic server AO owns for one

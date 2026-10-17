@@ -162,6 +162,8 @@ type fakeManagedPreviewServer struct {
 	startErr       error
 	startName      string
 	startWorkspace string
+	inlineCalls    int
+	inlineConfig   previewserver.Configuration
 	stopCalls      int
 	onStop         func()
 }
@@ -181,6 +183,24 @@ type fixedShellPreviewCapability struct {
 
 func (f *fixedShellPreviewCapability) ValidPreviewCapability(_ context.Context, id domain.SessionID, token string) (bool, error) {
 	return !f.revoked && id == "ao-1" && token == f.token, nil
+}
+
+func (f *fakeManagedPreviewServer) StartInline(
+	_ context.Context,
+	sessionID domain.SessionID,
+	workspacePath string,
+	cfg previewserver.Configuration,
+	projectEnv map[string]string,
+) (previewserver.Status, error) {
+	f.inlineCalls++
+	f.inlineConfig = cfg
+	f.startWorkspace = workspacePath
+	f.startEnv = projectEnv
+	if f.startErr != nil {
+		return previewserver.Status{}, f.startErr
+	}
+	f.status.SessionID = sessionID
+	return f.status, nil
 }
 
 func (f *fakeManagedPreviewServer) Start(
@@ -3273,6 +3293,62 @@ func TestSessionsAPI_ManagedPreviewStartsExactApplicationAndPersistsTarget(t *te
 	}
 	if got := svc.sessions["ao-1"].Metadata.PreviewURL; got != managed.status.URL {
 		t.Fatalf("persisted preview URL = %q, want %q", got, managed.status.URL)
+	}
+}
+
+func TestSessionsAPI_ManagedPreviewRunStartsInlineConfiguration(t *testing.T) {
+	svc := newFakeSessionService()
+	session := svc.sessions["ao-1"]
+	session.Metadata.WorkspacePath = t.TempDir()
+	svc.sessions["ao-1"] = session
+	managed := &fakeManagedPreviewServer{status: previewserver.Status{
+		State:         previewserver.StateReady,
+		Configuration: previewserver.InlineConfigurationName,
+		TargetKind:    previewserver.TargetApp,
+		URL:           "http://127.0.0.1:43124/",
+		Port:          43124,
+	}}
+	srv := newSessionTestServerWithPreview(t, svc, managed)
+
+	body, status, _ := doRequest(
+		t,
+		srv,
+		http.MethodPost,
+		"/api/v1/sessions/ao-1/preview/server",
+		`{"run":{"runtimeExecutable":"npx","runtimeArgs":["next","dev","-p","${PORT}"],"autoPort":true,"targetKind":"app"}}`,
+	)
+	if status != http.StatusOK || !containsAll(body, `"state":"ready"`, `"configuration":"run"`) {
+		t.Fatalf("start inline preview = %d body=%s", status, body)
+	}
+	if managed.inlineCalls != 1 || managed.startName != "" {
+		t.Fatalf("inline calls = %d, named start name = %q; want one inline start and no named start", managed.inlineCalls, managed.startName)
+	}
+	cfg := managed.inlineConfig
+	if cfg.RuntimeExecutable != "npx" || len(cfg.RuntimeArgs) != 4 || !cfg.AutoPort || cfg.TargetKind != previewserver.TargetApp {
+		t.Fatalf("inline config = %+v", cfg)
+	}
+	if got := svc.sessions["ao-1"].Metadata.PreviewURL; got != managed.status.URL {
+		t.Fatalf("persisted preview URL = %q, want %q", got, managed.status.URL)
+	}
+}
+
+func TestSessionsAPI_ManagedPreviewRunAndConfigurationAreMutuallyExclusive(t *testing.T) {
+	svc := newFakeSessionService()
+	managed := &fakeManagedPreviewServer{}
+	srv := newSessionTestServerWithPreview(t, svc, managed)
+
+	body, status, _ := doRequest(
+		t,
+		srv,
+		http.MethodPost,
+		"/api/v1/sessions/ao-1/preview/server",
+		`{"configuration":"web","run":{"runtimeExecutable":"npx"}}`,
+	)
+	if status != http.StatusBadRequest || !containsAll(body, "PREVIEW_CONFIGURATION_CONFLICT") {
+		t.Fatalf("conflicting start = %d body=%s, want 400 PREVIEW_CONFIGURATION_CONFLICT", status, body)
+	}
+	if managed.inlineCalls != 0 || managed.startName != "" {
+		t.Fatalf("conflicting request must not start a server")
 	}
 }
 

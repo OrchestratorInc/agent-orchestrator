@@ -9163,8 +9163,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Gateway Timeout
-      summary: Start a session-owned server from .ao/launch.json and open its application
-        preview
+      summary: Start a session-owned server from .ao/launch.json or a one-off run
+        request and open its application preview
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/renders:
@@ -15554,6 +15554,39 @@ components:
       required:
       - path
       type: object
+    InlinePreviewServerRequest:
+      properties:
+        autoPort:
+          description: Choose a free loopback port automatically.
+          type: boolean
+        cwd:
+          description: Workspace-relative working directory. Defaults to the workspace
+            root.
+          type: string
+        port:
+          description: Preferred loopback port. Required unless autoPort is true.
+          type: integer
+        runtimeArgs:
+          description: Arguments. ${PORT} is expanded to the selected port.
+          items:
+            type: string
+          type: array
+        runtimeExecutable:
+          description: Executable to run in the session workspace.
+          type: string
+        targetKind:
+          description: app opens in the Browser panel; api is health-checked without
+            taking over the panel.
+          enum:
+          - app
+          - api
+          type: string
+        url:
+          description: Loopback http URL that becomes ready. Defaults to http://127.0.0.1:${PORT}/.
+          type: string
+      required:
+      - runtimeExecutable
+      type: object
     InstallJob:
       properties:
         command:
@@ -18969,6 +19002,10 @@ components:
           description: Named preview configuration. Optional when exactly one configuration
             exists.
           type: string
+        run:
+          $ref: '#/components/schemas/InlinePreviewServerRequest'
+          description: One-off managed server that is not written to .ao/launch.json.
+            Mutually exclusive with configuration.
       type: object
     StartSessionInterfaceTransitionRequest:
       properties:

@@ -3041,7 +3041,7 @@ export interface paths {
         /** Get the managed preview server status for a session */
         get: operations["getSessionPreviewServer"];
         put?: never;
-        /** Start a session-owned server from .ao/launch.json and open its application preview */
+        /** Start a session-owned server from .ao/launch.json or a one-off run request and open its application preview */
         post: operations["startSessionPreviewServer"];
         /** Stop the managed preview server for a session */
         delete: operations["stopSessionPreviewServer"];
@@ -5377,6 +5377,25 @@ export interface components {
         InitializeRepositoryResult: {
             path: string;
         };
+        InlinePreviewServerRequest: {
+            /** @description Choose a free loopback port automatically. */
+            autoPort?: boolean;
+            /** @description Workspace-relative working directory. Defaults to the workspace root. */
+            cwd?: string;
+            /** @description Preferred loopback port. Required unless autoPort is true. */
+            port?: number;
+            /** @description Arguments. ${PORT} is expanded to the selected port. */
+            runtimeArgs?: string[];
+            /** @description Executable to run in the session workspace. */
+            runtimeExecutable: string;
+            /**
+             * @description app opens in the Browser panel; api is health-checked without taking over the panel.
+             * @enum {string}
+             */
+            targetKind?: "app" | "api";
+            /** @description Loopback http URL that becomes ready. Defaults to http://127.0.0.1:${PORT}/. */
+            url?: string;
+        };
         InstallJob: {
             /** @description Human-readable install command, e.g. "brew install tmux", for display even before/without output. */
             command?: string;
@@ -6710,6 +6729,8 @@ export interface components {
         StartPreviewServerRequest: {
             /** @description Named preview configuration. Optional when exactly one configuration exists. */
             configuration?: string;
+            /** @description One-off managed server that is not written to .ao/launch.json. Mutually exclusive with configuration. */
+            run?: components["schemas"]["InlinePreviewServerRequest"];
         };
         StartSessionInterfaceTransitionRequest: {
             /** @enum {string} */

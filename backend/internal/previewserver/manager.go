@@ -224,6 +224,41 @@ func (m *Manager) Start(
 	configurationName string,
 	projectEnv map[string]string,
 ) (Status, error) {
+	return m.start(ctx, sessionID, workspacePath, projectEnv, func() (Configuration, error) {
+		return loadConfiguration(workspacePath, configurationName)
+	})
+}
+
+// InlineConfigurationName labels a managed server started from a
+// request-supplied configuration rather than a named .ao/launch.json entry.
+const InlineConfigurationName = "run"
+
+// StartInline runs one request-supplied configuration as the session's managed
+// server, with the same validation and lifecycle as a launch.json entry. The
+// configuration is never written to the workspace.
+func (m *Manager) StartInline(
+	ctx context.Context,
+	sessionID domain.SessionID,
+	workspacePath string,
+	cfg Configuration,
+	projectEnv map[string]string,
+) (Status, error) {
+	return m.start(ctx, sessionID, workspacePath, projectEnv, func() (Configuration, error) {
+		cfg.Name = InlineConfigurationName
+		if err := validateConfiguration(&cfg); err != nil {
+			return Configuration{}, err
+		}
+		return cfg, nil
+	})
+}
+
+func (m *Manager) start(
+	ctx context.Context,
+	sessionID domain.SessionID,
+	workspacePath string,
+	projectEnv map[string]string,
+	load func() (Configuration, error),
+) (Status, error) {
 	releaseOperation := m.acquireOperation(sessionID)
 	operationLocked := true
 	defer func() {
@@ -232,7 +267,7 @@ func (m *Manager) Start(
 		}
 	}()
 
-	cfg, err := loadConfiguration(workspacePath, configurationName)
+	cfg, err := load()
 	if err != nil {
 		return stoppedStatus(sessionID), err
 	}

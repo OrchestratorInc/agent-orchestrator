@@ -267,7 +267,7 @@ describe("startRemoteProxy", () => {
 		});
 		expect(await request()).toBe("app conflict");
 		managed = true;
-		expect(await request()).toContain("ao preview start");
+		expect(await request()).toContain("ao preview start --run");
 	});
 
 	it("forwards a managed preview websocket on its preview-only origin", async () => {

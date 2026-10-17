@@ -162,6 +162,7 @@ type ActivityRecorder interface {
 // worker. It is separate from static file rendering and browser automation.
 type ManagedPreviewServer interface {
 	Start(ctx context.Context, sessionID domain.SessionID, workspacePath, configurationName string, projectEnv map[string]string) (previewserver.Status, error)
+	StartInline(ctx context.Context, sessionID domain.SessionID, workspacePath string, cfg previewserver.Configuration, projectEnv map[string]string) (previewserver.Status, error)
 	Stop(ctx context.Context, sessionID domain.SessionID) (previewserver.Status, error)
 	Status(sessionID domain.SessionID) previewserver.Status
 }
@@ -672,7 +673,7 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 		!isPreviewLoopback(target.Hostname()) || target.User != nil || target.Port() == "" ||
 		strconv.Itoa(status.Port) != target.Port() || sess.IsTerminated {
 		w.Header().Set("X-AO-Preview-Managed-Required", "1")
-		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "PREVIEW_MANAGED_REQUIRED", "Run ao preview start in this session to open a remote live preview", nil)
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "PREVIEW_MANAGED_REQUIRED", "Run ao preview start --run -- <dev command> (or ao preview start for a launch.json entry) in this session to open a remote live preview", nil)
 		return
 	}
 	tail, escaped, err := wildcardPath(r)
@@ -1480,6 +1481,13 @@ func (c *SessionsController) startPreviewServer(w http.ResponseWriter, r *http.R
 	if !c.authorizePreviewServer(w, r) {
 		return
 	}
+	if in.Run != nil && strings.TrimSpace(in.Configuration) != "" {
+		writePreviewServerError(w, r, previewserver.Error{
+			Code:    "PREVIEW_CONFIGURATION_CONFLICT",
+			Message: "run and configuration are mutually exclusive",
+		})
+		return
+	}
 	sess, err := c.Svc.Get(r.Context(), sessionID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
@@ -1497,13 +1505,24 @@ func (c *SessionsController) startPreviewServer(w http.ResponseWriter, r *http.R
 		}
 	}
 	previous := c.PreviewServer.Status(sessionID(r))
-	status, err := c.PreviewServer.Start(
-		r.Context(),
-		sessionID(r),
-		sess.Metadata.WorkspacePath,
-		strings.TrimSpace(in.Configuration),
-		projectEnv,
-	)
+	var status previewserver.Status
+	if in.Run != nil {
+		status, err = c.PreviewServer.StartInline(
+			r.Context(),
+			sessionID(r),
+			sess.Metadata.WorkspacePath,
+			inlinePreviewConfiguration(*in.Run),
+			projectEnv,
+		)
+	} else {
+		status, err = c.PreviewServer.Start(
+			r.Context(),
+			sessionID(r),
+			sess.Metadata.WorkspacePath,
+			strings.TrimSpace(in.Configuration),
+			projectEnv,
+		)
+	}
 	if err != nil {
 		currentStatus := c.PreviewServer.Status(sessionID(r))
 		if previous.URL != "" &&
@@ -1598,6 +1617,20 @@ func (c *SessionsController) authorizePreviewServer(w http.ResponseWriter, r *ht
 	return false
 }
 
+// inlinePreviewConfiguration maps the request DTO onto the manager's
+// configuration type. The manager applies the same validation as launch.json.
+func inlinePreviewConfiguration(in InlinePreviewServerRequest) previewserver.Configuration {
+	return previewserver.Configuration{
+		RuntimeExecutable: in.RuntimeExecutable,
+		RuntimeArgs:       in.RuntimeArgs,
+		Cwd:               in.Cwd,
+		Port:              in.Port,
+		AutoPort:          in.AutoPort,
+		URL:               in.URL,
+		TargetKind:        previewserver.TargetKind(in.TargetKind),
+	}
+}
+
 func previewServerStatusResponse(status previewserver.Status) PreviewServerStatusResponse {
 	logs := status.Logs
 	if logs == nil {
@@ -1628,7 +1661,7 @@ func writePreviewServerError(w http.ResponseWriter, r *http.Request, err error) 
 	case "PREVIEW_CONFIG_NOT_FOUND", "PREVIEW_CONFIGURATION_NOT_FOUND":
 		status = http.StatusNotFound
 		typeName = "not_found"
-	case "PREVIEW_CONFIGURATION_REQUIRED":
+	case "PREVIEW_CONFIGURATION_REQUIRED", "PREVIEW_CONFIGURATION_CONFLICT":
 		status = http.StatusBadRequest
 		typeName = "bad_request"
 	case "PREVIEW_NOT_READY":
