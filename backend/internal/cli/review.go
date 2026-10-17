@@ -363,6 +363,8 @@ opening a PR, pass --pr <url>: AO attaches it to the session if it does not
 track it yet (never taking it from another active session) and reviews only it. The reviewer defaults to the session's reviewer
 choice, then the project's reviewer config, then the project's default worker
 agent and model; --agent, --model, and --effort override it for this pass only.
+A pass-only --agent override reviewer retires from the session's pane once its
+pass ends.
 
 A head that is already being reviewed, or already has a review, is not reviewed
 again: the command fails and says why. Pass --rerun to review the same commit

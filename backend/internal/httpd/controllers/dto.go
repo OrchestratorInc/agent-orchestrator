@@ -3339,7 +3339,8 @@ func capabilityNames(caps ports.ChatCapabilities) []string {
 // TriggerReviewRequest is the optional body of the review trigger route. An
 // empty harness keeps the project's configured reviewer; setting one overrides
 // it for this pass only, without editing project config, so one session's choice
-// cannot change what another session in the project runs.
+// cannot change what another session in the project runs. A pass-only override
+// reviewer retires from the session's reviewer pane once its pass ends.
 type TriggerReviewRequest struct {
 	Harness       domain.ReviewerHarness       `json:"harness,omitempty" enum:"claude-code,codex,copilot,cursor,kilocode,opencode,opencode-v2,kiro,pi,agy,devin,droid,kimi,kimchi,muse,amp,aider,grok,crush,auggie,cline,autohand"`
 	AgentConfig   domain.AgentConfig           `json:"agentConfig,omitempty"`
