@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	agentregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -1266,6 +1269,72 @@ func TestReadinessCoordinatorTreatsConfiguredAsUnverified(t *testing.T) {
 	// Recorded as an observation, not a failure, so it is not retried as one.
 	if items[0].Authentication.CheckedAt == nil {
 		t.Fatal("a configured verdict is a definite observation and must be marked checked")
+	}
+}
+
+type readinessClaudeTokenAgent struct {
+	*claudecode.Plugin
+	t         *testing.T
+	wantToken string
+	status    ports.AgentAuthStatus
+}
+
+func (a *readinessClaudeTokenAgent) AuthStatus(context.Context) (ports.AgentAuthStatus, error) {
+	a.t.Error("readiness used an auth probe without the runtime credential environment")
+	return ports.AgentAuthStatusUnauthorized, nil
+}
+
+func (a *readinessClaudeTokenAgent) AuthStatusWithRuntimeEnv(_ context.Context, env map[string]string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
+	if env["CLAUDE_CODE_OAUTH_TOKEN"] != a.wantToken {
+		a.t.Error("readiness did not preserve the expected token fallback and native credential precedence")
+	}
+	return a.status, domain.AgentAccountIdentity{}, []domain.AgentAuthDiagnostic{domain.NewAgentAuthDiagnostic("setup token probe", "token_probe_completed")}, nil
+}
+
+func TestReadinessUsesSavedClaudeTokenWithoutShadowingNativeCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		nativeKey string
+		status    ports.AgentAuthStatus
+		want      domain.AgentAuthenticationState
+	}{
+		{"accepted setup token", "", ports.AgentAuthStatusAuthorized, domain.AgentAuthenticationAuthorized},
+		{"rejected setup token", "", ports.AgentAuthStatusUnauthorized, domain.AgentAuthenticationUnauthorized},
+		{"unverified setup token", "", ports.AgentAuthStatusConfigured, domain.AgentAuthenticationConfigured},
+		{"native credential wins", "native-key", ports.AgentAuthStatusAuthorized, domain.AgentAuthenticationAuthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, dataDir := t.TempDir(), t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+			t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+			t.Setenv("ANTHROPIC_API_KEY", tc.nativeKey)
+			t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+			// Prevent a macOS keychain helper from finding real user credentials.
+			t.Setenv("PATH", "")
+			const token = "sk-ant-oat01-readiness-token"
+			dir := filepath.Join(dataDir, "harnesses", "claude-code")
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "oauth-token"), []byte(token), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			wantToken := token
+			if tc.nativeKey != "" {
+				wantToken = ""
+			}
+			agent := &readinessClaudeTokenAgent{Plugin: claudecode.New(), t: t, wantToken: wantToken, status: tc.status}
+			coordinator := newReadinessCoordinator(readinessCoordinatorConfig{DataDir: dataDir})
+			observation, failed := coordinator.checkAuthentication(readinessHarness("claude-code", "Claude Code", agent), domain.AgentReadinessPurposeDisplay)
+			if failed || observation.State != tc.want {
+				t.Fatalf("authentication = %q, failed = %v; want %q", observation.State, failed, tc.want)
+			}
+			if len(observation.Diagnostics) == 0 || observation.Diagnostics[0].Code != "token_probe_completed" {
+				t.Fatal("runtime credential verification lost its diagnostics")
+			}
+		})
 	}
 }
 

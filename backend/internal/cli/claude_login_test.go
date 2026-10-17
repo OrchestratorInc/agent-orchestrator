@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -61,9 +63,59 @@ func TestClaudeLoginMenuListsEverySupportedMethod(t *testing.T) {
 	if err := writeClaudeLoginMenu(&stdout, codexLoginStyle{}); err != nil {
 		t.Fatalf("writeClaudeLoginMenu: %v", err)
 	}
-	for _, fragment := range []string{"Sign in to Claude Code", "Claude subscription", "Anthropic Console", "SSO", "Selection [1-3]"} {
+	for _, fragment := range []string{"Sign in to Claude Code", "Claude subscription", "Anthropic Console", "SSO", "Setup token", "Selection [1-4]"} {
 		if !strings.Contains(stdout.String(), fragment) {
 			t.Fatalf("menu missing %q:\n%s", fragment, stdout.String())
 		}
+	}
+}
+
+func TestClaudeLoginSavesSetupTokenForLocalSessions(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AO_DATA_DIR", dataDir)
+	const token = "sk-ant-oat01-local-setup-token"
+	var output bytes.Buffer
+	deps := Deps{
+		In: strings.NewReader("4\n"), Out: &output, Err: io.Discard,
+		ReadSecret: func(io.Reader) ([]byte, error) { return []byte(token), nil },
+		RunInteractiveCommand: func(context.Context, string, []string, io.Reader, io.Writer, io.Writer) error {
+			t.Fatal("setup token must not be sent to the Claude CLI")
+			return nil
+		},
+	}
+	cmd := newClaudeLoginCommand(&commandContext{deps: deps.withDefaults()})
+	cmd.SetArgs([]string{"--executable", "/managed/bin/claude"})
+	cmd.SetIn(deps.In)
+	cmd.SetOut(deps.Out)
+	cmd.SetErr(deps.Err)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dataDir, "harnesses", "claude-code", "oauth-token"))
+	if err != nil || string(got) != token {
+		t.Fatalf("saved setup token = %q, err = %v", got, err)
+	}
+	if strings.Contains(output.String(), token) {
+		t.Fatal("setup token appeared in terminal output")
+	}
+}
+
+func TestClaudeLoginRejectsInvalidSetupToken(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AO_DATA_DIR", dataDir)
+	deps := Deps{
+		In: strings.NewReader("4\n"), Out: io.Discard, Err: io.Discard,
+		ReadSecret: func(io.Reader) ([]byte, error) { return []byte("invalid token"), nil },
+	}
+	cmd := newClaudeLoginCommand(&commandContext{deps: deps.withDefaults()})
+	cmd.SetArgs([]string{"--executable", "/managed/bin/claude"})
+	cmd.SetIn(deps.In)
+	cmd.SetOut(deps.Out)
+	cmd.SetErr(deps.Err)
+	if err := cmd.Execute(); err == nil || ExitCode(err) != 2 {
+		t.Fatalf("Execute error = %v, want usage error", err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "harnesses", "claude-code", "oauth-token")); !os.IsNotExist(err) {
+		t.Fatalf("invalid token must not be saved, stat error = %v", err)
 	}
 }

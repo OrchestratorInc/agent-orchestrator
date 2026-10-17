@@ -37,6 +37,7 @@ const (
 )
 
 type readinessCoordinatorConfig struct {
+	DataDir             string
 	Agents              []agentregistry.HarnessAgent
 	Factory             func() []agentregistry.HarnessAgent
 	Context             context.Context
@@ -81,6 +82,7 @@ type readinessCallKey struct {
 }
 
 type readinessCoordinator struct {
+	dataDir             string
 	ctx                 context.Context
 	factory             func() []agentregistry.HarnessAgent
 	logger              *slog.Logger
@@ -140,7 +142,8 @@ func newReadinessCoordinator(cfg readinessCoordinatorConfig) *readinessCoordinat
 		}
 	}
 	c := &readinessCoordinator{
-		ctx: cfg.Context, factory: cfg.Factory, logger: cfg.Logger, now: cfg.Now,
+		dataDir: cfg.DataDir,
+		ctx:     cfg.Context, factory: cfg.Factory, logger: cfg.Logger, now: cfg.Now,
 		displayTTL: cfg.DisplayTTL, launchTTL: cfg.LaunchTTL,
 		installTimeout: cfg.InstallTimeout, authTimeout: cfg.AuthTimeout,
 		retryDelays: cfg.RetryDelays, workers: cfg.Workers,
@@ -603,7 +606,16 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 	var status ports.AgentAuthStatus
 	var account domain.AgentAccountIdentity
 	var err error
-	if authChecker, ok := item.Agent.(ports.AgentAuthDiagnosticsChecker); ok {
+	if launcher, ok := item.Agent.(interface {
+		AuthStatusWithRuntimeEnv(context.Context, map[string]string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error)
+		AugmentRuntimeEnv(map[string]string, string)
+	}); ok && c.dataDir != "" {
+		// Verify the same credential fallback used by local session launch.
+		// In particular, Claude's AO setup-token is not a native CLI login.
+		env := make(map[string]string)
+		launcher.AugmentRuntimeEnv(env, c.dataDir)
+		status, account, diagnostics, err = launcher.AuthStatusWithRuntimeEnv(ctx, env)
+	} else if authChecker, ok := item.Agent.(ports.AgentAuthDiagnosticsChecker); ok {
 		status, account, diagnostics, err = authChecker.AuthStatusWithDiagnostics(ctx)
 	} else {
 		status, err = checker.AuthStatus(ctx)

@@ -109,7 +109,13 @@ func (p *Plugin) authStatusFor(ctx context.Context, workingDir string, env map[s
 // account `claude auth status` names, when the CLI answered for the provider
 // the agent actually uses, and each check without running an extra probe.
 func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
-	status, report, steps, err := p.authStatusAndDiagnostics(ctx, "", nil, false)
+	return p.AuthStatusWithRuntimeEnv(ctx, nil)
+}
+
+// AuthStatusWithRuntimeEnv verifies readiness with AO's runtime credential
+// fallback while retaining the account identity, diagnostics, and verdict cache.
+func (p *Plugin) AuthStatusWithRuntimeEnv(ctx context.Context, env map[string]string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
+	status, report, steps, err := p.authStatusAndDiagnostics(ctx, "", env, false)
 	return status, report.account(), steps, err
 }
 
