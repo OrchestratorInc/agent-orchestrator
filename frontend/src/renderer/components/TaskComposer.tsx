@@ -176,6 +176,9 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	const [error, setError] = useState<string | undefined>();
 	const [fallbackAction, setFallbackAction] = useState<FallbackAction>();
 	const taskPreparationRef = useRef("");
+	// The prepared worktree's session id. It becomes the task's session id on send,
+	// so files uploaded into it before then are already where the agent reads them.
+	const [preparedSessionId, setPreparedSessionId] = useState("");
 	const requestRef = useRef<{ payload: string; id: string } | undefined>(undefined);
 	const {
 		attachments,
@@ -350,6 +353,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		}
 		let disposed = false;
 		taskPreparationRef.current = "";
+		setPreparedSessionId("");
 		void client.POST("/api/v1/projects/{id}/tasks/prepare", {
 			params: { path: { id } },
 		}).then(
@@ -361,6 +365,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 					return;
 				}
 				taskPreparationRef.current = token;
+				setPreparedSessionId(token);
 			},
 			() => undefined,
 		);
@@ -368,6 +373,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 			disposed = true;
 			const token = taskPreparationRef.current;
 			taskPreparationRef.current = "";
+			setPreparedSessionId("");
 			cancelTaskPreparation(token, hostId);
 		};
 	}, [hostId, projectQuery.data?.id]);
@@ -851,6 +857,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		// The interface a plain send starts in, including the Settings default.
 		effectiveInterface: (submitMode ?? settings?.defaultSessionMode ?? "tui") as "chat" | "tui",
 		refreshModels: refreshSelectedModels,
+		preparedSessionId,
 		submitMode,
 		isCloudProject,
 		canSubmit,

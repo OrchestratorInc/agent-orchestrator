@@ -21,7 +21,7 @@ import { useChatMessageFocus } from "../../hooks/useChatMessageFocus";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { forgetLaunchSettings, forgetOpeningStart, LaunchSettingsBar, launchSettingsFor, openingStartFor } from "./LaunchSettingsBar";
-import { rememberChatSettingsTemplate } from "../../lib/chat-settings-template";
+import { rememberChatSettingsTemplate, rememberChatSkills } from "../../lib/chat-settings-template";
 import {
 	clearConversationProviderCatalogs,
 	conversationQueryKey,
@@ -52,7 +52,6 @@ import type { ConversationSnapshot, TurnSettings } from "../../types/conversatio
 import type { TerminalTarget } from "../../types/terminal";
 import type { WorkspaceSession } from "../../types/workspace";
 import { ComposerErrorNotice, switchEffort, type PendingAgentSwitch } from "./AgentSwitchPicker";
-import { apiErrorMessage } from "../../lib/api-client";
 import { AGENT_SWITCH_FAILED } from "./ChatComposer";
 import { useUiStore } from "../../stores/ui-store";
 import { CONTINUE_STOPPED_TURN_PROMPT, ChatWorkspace, continuableTurnId } from "./ChatWorkspace";
@@ -421,6 +420,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		Boolean(controllerCatalogsEnabled && snapshot),
 		hostId,
 	);
+	// A new chat of this agent offers these "/" skills before its own session runs.
+	const skillsHarness = snapshot?.harness;
+	useEffect(() => {
+		if (session.kind !== "worker" || !skillsHarness || skills.length === 0) return;
+		rememberChatSkills(skillsHarness, hostId, skills);
+	}, [hostId, session.kind, skills, skillsHarness]);
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot), hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
 	const [annotationNavigationRequest, setAnnotationNavigationRequest] = useState<{ id: string; text: string; messageId?: string; revision?: number }>();

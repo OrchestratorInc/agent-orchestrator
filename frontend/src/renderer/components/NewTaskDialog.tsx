@@ -8,7 +8,7 @@ import { useRemoteWorkspaces, useWorkspaceQuery } from "../hooks/useWorkspaceQue
 import { labelForHost } from "../lib/host-clients";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { TaskComposer } from "./TaskComposer";
-import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, STANDALONE_PROJECT_KIND } from "../types/workspace";
+import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 
 function repositoryOwnerAvatar(repo: string): { owner: string; url: string } | null {
@@ -70,9 +70,9 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 	const localWorkspaces = useWorkspaceQuery({ subscribed: open }).data ?? [];
 	const remoteWorkspaces = useRemoteWorkspaces({ subscribed: open }).data ?? [];
 	const workspaces = hostId ? remoteWorkspaces.filter((workspace) => workspace.hostId === hostId) : localWorkspaces;
-	const projects = useMemo(() => workspaces.filter(
-		(workspace) => workspace.id !== STANDALONE_WORKSPACE_ID && workspace.kind !== STANDALONE_PROJECT_KIND,
-	), [workspaces]);
+	// This dialog serves cloud projects only for now; every other project starts
+	// from the new chat page.
+	const projects = useMemo(() => workspaces.filter((workspace) => workspace.kind === CLOUD_PROJECT_KIND), [workspaces]);
 	const localProjects = useMemo(() => hostId ? [] : projects.filter((project) => project.kind !== CLOUD_PROJECT_KIND), [hostId, projects]);
 	const localProjectDetails = useQueries({
 		queries: localProjects.map((project) => ({
@@ -113,10 +113,7 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 	const selectedProject = projects.find((project) => project.id === selectedProjectId);
 	const selectedProjectName = selectedProject?.name ?? t("standalone.workspaceName");
 	const selectedProjectAvatar = projectAvatars.get(selectedProjectId)?.[0];
-	const projectOptions = [
-		{ value: STANDALONE_WORKSPACE_ID, label: t("standalone.workspaceName") },
-		...projects.map((project) => ({ value: project.id, label: project.name })),
-	];
+	const projectOptions = projects.map((project) => ({ value: project.id, label: project.name }));
 	useEffect(() => {
 		if (!open) return;
 		for (const avatars of projectAvatars.values()) {

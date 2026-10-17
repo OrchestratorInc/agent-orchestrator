@@ -4,14 +4,14 @@ import { Folder, Plus, Smartphone, StickyNote } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
-import { seedOpeningLocalEcho, type ConversationLocalEcho } from "../hooks/useConversation";
-import { apiErrorMessage } from "../lib/api-client";
-import { readChatSessionDraft, writeChatComposerText } from "../lib/chat-drafts";
-import { labelForHost } from "../lib/host-clients";
+import { seedOpeningLocalEcho, useStageAttachments, type ConversationLocalEcho } from "../hooks/useConversation";
+import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../lib/chat-drafts";
+import { clientForHost, labelForHost } from "../lib/host-clients";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import type { ChatConfigOption, ChatConfigOptionValue, ChatModel, ConversationSnapshot, TurnSettings } from "../types/conversation";
-import { readChatSettingsTemplate } from "../lib/chat-settings-template";
+import { readChatSettingsTemplate, readChatSkills } from "../lib/chat-settings-template";
 import { agentModelDisplayLabel } from "../lib/agent-model-choices";
 import { ChatWorkspace } from "./chat/ChatWorkspace";
 import { startingConversationSnapshot } from "./chat/OrchestratorStartingChat";
@@ -65,6 +65,36 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	const [modelMenuOpen, setModelMenuOpen] = useState(false);
 	// Bumped when a saved launch is resolved, so the page re-reads it.
 	const [, setLaunchRevision] = useState(0);
+	// "@" files and attachments go through the prepared worktree's session, which
+	// becomes the task's session on send. Scratchpad has none, so it offers neither.
+	const preparedId = task.preparedSessionId || undefined;
+	const workspaceFiles = useQuery({
+		queryKey: ["new-chat-files", hostKey, preparedId ?? ""],
+		enabled: Boolean(preparedId),
+		retry: false,
+		staleTime: 30_000,
+		// The worktree is still being created when the id arrives; ask again until it exists.
+		refetchInterval: (query) => (query.state.data ? 30_000 : 1_500),
+		queryFn: async () => {
+			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).GET("/api/v1/sessions/{sessionId}/workspace/files", {
+				params: { path: { sessionId: preparedId as string } },
+			});
+			if (error) throw error;
+			return {
+				paths: (data?.files ?? []).filter((file) => file.status !== "deleted").map((file) => file.path),
+				truncated: Boolean(data?.truncated),
+			};
+		},
+	});
+	const stagePrepared = useStageAttachments(preparedId, hostId);
+	const workspaceReady = Boolean(preparedId && workspaceFiles.data);
+	// Files staged into one project's worktree do not exist in another's.
+	const attachmentsProject = useRef(projectId);
+	if (attachmentsProject.current !== projectId) {
+		attachmentsProject.current = projectId;
+		writeChatAttachments(draftScope, []);
+	}
+	const skills = useMemo(() => readChatSkills(task.agent.value, hostId), [hostId, task.agent.value]);
 	const snapshot = useMemo<ConversationSnapshot>(
 		() => ({ ...startingConversationSnapshot(draftId, task.agent.value || "claude-code"), controller: { state: "ready" } }),
 		[draftId, task.agent.value],
@@ -277,6 +307,9 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			    chat does not move when the session takes over, and drags the window. */}
 			<div aria-hidden="true" className="h-inspector-tabs w-full shrink-0" style={topbarDragStyle} />
 			<ChatWorkspace
+				// A different project is a different worktree: the composer reloads its
+				// draft (text kept, staged files dropped above).
+				key={projectId}
 				snapshot={snapshot}
 				uiSessionId={draftId}
 				// The session is titled after its brief, so the tab already reads that way.
@@ -286,7 +319,11 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				centerInWindow
 				localEchos={echo ? [echo] : undefined}
 				openingStartedAt={echo?.createdAt}
-				attachLater
+				attachLater={!workspaceReady}
+				onStageAttachments={workspaceReady ? stagePrepared : undefined}
+				filePaths={workspaceFiles.data?.paths}
+				filePathsTruncated={workspaceFiles.data?.truncated}
+				skills={skills}
 				composerTray={
 					<>
 						<NewChatProjectPicker projectId={projectId} hostId={hostId} disabled={frozen} onChange={(project) => void navigate({ to: "/new", search: { project, host: hostId }, replace: true })} />
