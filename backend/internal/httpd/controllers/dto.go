@@ -1979,10 +1979,17 @@ type CreateAutomationRequest struct {
 	Prompt      string `json:"prompt"`
 	Kind        string `json:"kind" enum:"worker,orchestrator"`
 	Harness     string `json:"harness,omitempty"`
-	RRule       string `json:"rrule,omitempty"`
-	Cron        string `json:"cron,omitempty"`
-	Timezone    string `json:"timezone"`
-	Enabled     *bool  `json:"enabled,omitempty"`
+	// Trigger defaults to schedule. A session_ended automation takes no
+	// rrule or cron.
+	Trigger string `json:"trigger,omitempty" enum:"schedule,session_ended"`
+	// Purpose "dreaming" makes the automation learn from each ended session in
+	// its project and update the standing instructions. It implies the
+	// session_ended trigger; an empty prompt or name takes the default.
+	Purpose  string `json:"purpose,omitempty" enum:"dreaming"`
+	RRule    string `json:"rrule,omitempty"`
+	Cron     string `json:"cron,omitempty"`
+	Timezone string `json:"timezone"`
+	Enabled  *bool  `json:"enabled,omitempty"`
 }
 
 // UpdateAutomationRequest is the partial body accepted when updating an automation.
@@ -1991,6 +1998,7 @@ type UpdateAutomationRequest struct {
 	Prompt      *string `json:"prompt,omitempty"`
 	Kind        *string `json:"kind,omitempty" enum:"worker,orchestrator"`
 	Harness     *string `json:"harness,omitempty"`
+	Trigger     *string `json:"trigger,omitempty" enum:"schedule,session_ended"`
 	RRule       *string `json:"rrule,omitempty"`
 	Cron        *string `json:"cron,omitempty"`
 	Timezone    *string `json:"timezone,omitempty"`
@@ -1999,13 +2007,15 @@ type UpdateAutomationRequest struct {
 
 // AutomationRunSummaryResponse is the latest-run projection attached to a definition.
 type AutomationRunSummaryResponse struct {
-	ID           string     `json:"id"`
-	Status       string     `json:"status" enum:"pending,spawning,running,completed,failed"`
-	ScheduledFor time.Time  `json:"scheduledFor"`
-	SessionID    string     `json:"sessionId,omitempty"`
-	ErrorMessage string     `json:"errorMessage,omitempty"`
-	StartedAt    *time.Time `json:"startedAt,omitempty"`
-	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
+	ID           string    `json:"id"`
+	Status       string    `json:"status" enum:"pending,spawning,running,completed,failed"`
+	ScheduledFor time.Time `json:"scheduledFor"`
+	SessionID    string    `json:"sessionId,omitempty"`
+	// TriggerSessionID is the ended session a session_ended run reviews.
+	TriggerSessionID string     `json:"triggerSessionId,omitempty"`
+	ErrorMessage     string     `json:"errorMessage,omitempty"`
+	StartedAt        *time.Time `json:"startedAt,omitempty"`
+	FinishedAt       *time.Time `json:"finishedAt,omitempty"`
 }
 
 // AutomationResponse is the API representation of an automation definition.
@@ -2016,6 +2026,8 @@ type AutomationResponse struct {
 	Prompt      string                        `json:"prompt"`
 	Kind        string                        `json:"kind" enum:"worker,orchestrator"`
 	Harness     string                        `json:"harness,omitempty"`
+	Trigger     string                        `json:"trigger" enum:"schedule,session_ended"`
+	Purpose     string                        `json:"purpose,omitempty" enum:"dreaming"`
 	RRule       string                        `json:"rrule"`
 	Timezone    string                        `json:"timezone"`
 	Enabled     bool                          `json:"enabled"`
@@ -2039,25 +2051,87 @@ type ListAutomationsResponse struct {
 
 // AutomationRunResponse is the API representation of one scheduled occurrence.
 type AutomationRunResponse struct {
-	ID             string     `json:"id"`
-	AutomationID   string     `json:"automationId"`
-	ScheduledFor   time.Time  `json:"scheduledFor"`
-	SessionID      string     `json:"sessionId,omitempty"`
-	Status         string     `json:"status" enum:"pending,spawning,running,completed,failed"`
-	AttemptCount   int64      `json:"attemptCount"`
-	ClaimedAt      *time.Time `json:"claimedAt,omitempty"`
-	LeaseExpiresAt *time.Time `json:"leaseExpiresAt,omitempty"`
-	StartedAt      *time.Time `json:"startedAt,omitempty"`
-	FinishedAt     *time.Time `json:"finishedAt,omitempty"`
-	ErrorMessage   string     `json:"errorMessage,omitempty"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	UpdatedAt      time.Time  `json:"updatedAt"`
+	ID           string    `json:"id"`
+	AutomationID string    `json:"automationId"`
+	ScheduledFor time.Time `json:"scheduledFor"`
+	SessionID    string    `json:"sessionId,omitempty"`
+	// TriggerSessionID is the ended session a session_ended run reviews.
+	TriggerSessionID string     `json:"triggerSessionId,omitempty"`
+	Status           string     `json:"status" enum:"pending,spawning,running,completed,failed"`
+	AttemptCount     int64      `json:"attemptCount"`
+	ClaimedAt        *time.Time `json:"claimedAt,omitempty"`
+	LeaseExpiresAt   *time.Time `json:"leaseExpiresAt,omitempty"`
+	StartedAt        *time.Time `json:"startedAt,omitempty"`
+	FinishedAt       *time.Time `json:"finishedAt,omitempty"`
+	ErrorMessage     string     `json:"errorMessage,omitempty"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	UpdatedAt        time.Time  `json:"updatedAt"`
 }
 
 // ListAutomationRunsResponse is one page of automation run history.
 type ListAutomationRunsResponse struct {
 	Runs       []AutomationRunResponse `json:"runs"`
 	NextCursor string                  `json:"nextCursor,omitempty"`
+}
+
+// InstructionsProjectIDParam names the project whose standing instructions are
+// read or saved.
+type InstructionsProjectIDParam struct {
+	ProjectID string `path:"projectId" description:"Project whose standing instructions are read or saved."`
+}
+
+// SaveInstructionsRequest replaces one set of standing instructions.
+type SaveInstructionsRequest struct {
+	Body string `json:"body"`
+	// Revision, when set, makes the save fail with 409 unless it is still the
+	// latest revision. Dreaming sessions must set it.
+	Revision *int64 `json:"revision,omitempty"`
+	// SessionID is the AO session saving, if any. A dreaming session must keep
+	// every line in protectedLines.
+	SessionID string `json:"sessionId,omitempty"`
+}
+
+// InstructionsChangeResponse is one saved edit to a set of instructions.
+type InstructionsChangeResponse struct {
+	At time.Time `json:"at"`
+	// Session titles the AO session that saved the edit, such as a dream;
+	// absent when the user saved it.
+	Session string   `json:"session,omitempty"`
+	Dreamed bool     `json:"dreamed"`
+	Added   []string `json:"added"`
+	Removed []string `json:"removed"`
+}
+
+// InstructionsAuthorResponse is the AO session that saved a revision.
+type InstructionsAuthorResponse struct {
+	SessionID string `json:"sessionId,omitempty"`
+	Title     string `json:"title,omitempty"`
+	Dreamed   bool   `json:"dreamed"`
+}
+
+// InstructionsResponse is one set of standing instructions: the user's own
+// (no projectId), which AO adds to every new session, or one project's.
+type InstructionsResponse struct {
+	ProjectID string `json:"projectId,omitempty"`
+	Body      string `json:"body"`
+	// Revision is 0 until the first save.
+	Revision  int64                       `json:"revision"`
+	UpdatedAt *time.Time                  `json:"updatedAt,omitempty"`
+	UpdatedBy *InstructionsAuthorResponse `json:"updatedBy,omitempty"`
+	// PreviousBody is the revision before the latest, which undo restores.
+	PreviousBody *string `json:"previousBody,omitempty"`
+	// ProtectedLines are the lines the user typed or edited. A dreaming save
+	// must keep them; it may rewrite every other line.
+	ProtectedLines []string `json:"protectedLines"`
+	// RemovedLines are lines people deleted; dreaming must not add them back.
+	RemovedLines []string `json:"removedLines"`
+	// History is the newest edits, oldest first.
+	History []InstructionsChangeResponse `json:"history"`
+}
+
+// InstructionsEnvelope wraps one set of standing instructions.
+type InstructionsEnvelope struct {
+	Instructions InstructionsResponse `json:"instructions"`
 }
 
 // AgentInstallResponse is shared by the agent harness start and status routes.

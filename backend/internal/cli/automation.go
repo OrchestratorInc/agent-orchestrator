@@ -19,6 +19,7 @@ type automationDTO struct {
 	Prompt      string                   `json:"prompt"`
 	Kind        string                   `json:"kind"`
 	Harness     string                   `json:"harness,omitempty"`
+	Trigger     string                   `json:"trigger"`
 	RRule       string                   `json:"rrule"`
 	Timezone    string                   `json:"timezone"`
 	Enabled     bool                     `json:"enabled"`
@@ -34,15 +35,16 @@ type automationRunSummaryDTO struct {
 	ScheduledFor time.Time `json:"scheduledFor"`
 }
 type automationRunDTO struct {
-	ID           string     `json:"id"`
-	AutomationID string     `json:"automationId"`
-	SessionID    string     `json:"sessionId,omitempty"`
-	Status       string     `json:"status"`
-	ErrorMessage string     `json:"errorMessage,omitempty"`
-	ScheduledFor time.Time  `json:"scheduledFor"`
-	AttemptCount int64      `json:"attemptCount"`
-	StartedAt    *time.Time `json:"startedAt,omitempty"`
-	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
+	ID               string     `json:"id"`
+	AutomationID     string     `json:"automationId"`
+	SessionID        string     `json:"sessionId,omitempty"`
+	TriggerSessionID string     `json:"triggerSessionId,omitempty"`
+	Status           string     `json:"status"`
+	ErrorMessage     string     `json:"errorMessage,omitempty"`
+	ScheduledFor     time.Time  `json:"scheduledFor"`
+	AttemptCount     int64      `json:"attemptCount"`
+	StartedAt        *time.Time `json:"startedAt,omitempty"`
+	FinishedAt       *time.Time `json:"finishedAt,omitempty"`
 }
 type automationEnvelopeDTO struct {
 	Automation automationDTO `json:"automation"`
@@ -61,6 +63,7 @@ type automationCreateDTO struct {
 	Prompt      string `json:"prompt"`
 	Kind        string `json:"kind"`
 	Harness     string `json:"harness,omitempty"`
+	Trigger     string `json:"trigger,omitempty"`
 	RRule       string `json:"rrule,omitempty"`
 	Cron        string `json:"cron,omitempty"`
 	Timezone    string `json:"timezone"`
@@ -71,6 +74,7 @@ type automationUpdateDTO struct {
 	Prompt      *string `json:"prompt,omitempty"`
 	Kind        *string `json:"kind,omitempty"`
 	Harness     *string `json:"harness,omitempty"`
+	Trigger     *string `json:"trigger,omitempty"`
 	RRule       *string `json:"rrule,omitempty"`
 	Cron        *string `json:"cron,omitempty"`
 	Timezone    *string `json:"timezone,omitempty"`
@@ -78,29 +82,38 @@ type automationUpdateDTO struct {
 }
 
 func newAutomationCommand(ctx *commandContext) *cobra.Command {
-	cmd := &cobra.Command{Use: "automation", Aliases: []string{"automations"}, Short: "Manage recurring session automations"}
+	cmd := &cobra.Command{Use: "automation", Aliases: []string{"automations"}, Short: "Manage scheduled and session-ended automations"}
 	cmd.AddCommand(newAutomationCreateCommand(ctx), newAutomationListCommand(ctx), newAutomationGetCommand(ctx), newAutomationUpdateCommand(ctx), newAutomationDeleteCommand(ctx), newAutomationRunsCommand(ctx))
 	return cmd
 }
 
 func newAutomationCreateCommand(ctx *commandContext) *cobra.Command {
-	var project, name, prompt, rrule, cron, timezone, kind, harness string
+	var project, name, prompt, trigger, rrule, cron, timezone, kind, harness string
 	var disabled, jsonOutput bool
-	cmd := &cobra.Command{Use: "create", Short: "Create a recurring automation", Args: usageArgs(cobra.NoArgs), RunE: func(cmd *cobra.Command, _ []string) error {
+	cmd := &cobra.Command{Use: "create", Short: "Create a scheduled or session-ended automation", Args: usageArgs(cobra.NoArgs), RunE: func(cmd *cobra.Command, _ []string) error {
 		if strings.TrimSpace(project) == "" || strings.TrimSpace(name) == "" || strings.TrimSpace(prompt) == "" {
 			return usageError{errors.New("--project, --name, and --prompt are required")}
 		}
-		if (strings.TrimSpace(rrule) == "") == (strings.TrimSpace(cron) == "") {
+		sessionEnded := trigger == automationTriggerSessionEnded
+		switch {
+		case trigger != automationTriggerSchedule && !sessionEnded:
+			return usageError{errors.New("--trigger must be schedule or session_ended")}
+		case sessionEnded && (strings.TrimSpace(rrule) != "" || strings.TrimSpace(cron) != ""):
+			return usageError{errors.New("--rrule and --cron do not apply to --trigger session_ended")}
+		case !sessionEnded && (strings.TrimSpace(rrule) == "") == (strings.TrimSpace(cron) == ""):
 			return usageError{errors.New("exactly one of --rrule or --cron is required")}
 		}
 		if timezone == "" {
 			timezone = ctx.deps.Now().Location().String()
 			if timezone == "Local" || timezone == "" {
-				return usageError{errors.New("--timezone is required when the local IANA timezone cannot be resolved")}
+				if !sessionEnded {
+					return usageError{errors.New("--timezone is required when the local IANA timezone cannot be resolved")}
+				}
+				timezone = ""
 			}
 		}
 		enabled := !disabled
-		body := automationCreateDTO{ProjectID: project, DisplayName: name, Prompt: prompt, Kind: kind, Harness: harness, RRule: rrule, Cron: cron, Timezone: timezone, Enabled: &enabled}
+		body := automationCreateDTO{ProjectID: project, DisplayName: name, Prompt: prompt, Kind: kind, Harness: harness, Trigger: trigger, RRule: rrule, Cron: cron, Timezone: timezone, Enabled: &enabled}
 		var response automationEnvelopeDTO
 		if err := ctx.postJSON(cmd.Context(), "automations", body, &response); err != nil {
 			return err
@@ -108,12 +121,13 @@ func newAutomationCreateCommand(ctx *commandContext) *cobra.Command {
 		if jsonOutput {
 			return writeJSON(cmd.OutOrStdout(), response)
 		}
-		_, err := fmt.Fprintf(cmd.OutOrStdout(), "created automation %s (%s), next run %s\n", response.Automation.ID, response.Automation.DisplayName, formatAutomationTime(response.Automation.NextRunAt))
+		_, err := fmt.Fprintf(cmd.OutOrStdout(), "created automation %s (%s), next run %s\n", response.Automation.ID, response.Automation.DisplayName, automationNextRun(response.Automation))
 		return err
 	}}
 	cmd.Flags().StringVar(&project, "project", "", "Project id")
 	cmd.Flags().StringVar(&name, "name", "", "Display name")
 	cmd.Flags().StringVar(&prompt, "prompt", "", "Session task prompt")
+	cmd.Flags().StringVar(&trigger, "trigger", automationTriggerSchedule, "schedule, or session_ended to run after each worker in the project is archived or its PR merges")
 	cmd.Flags().StringVar(&rrule, "rrule", "", "RFC 5545 recurrence rule")
 	cmd.Flags().StringVar(&cron, "cron", "", "Supported five-field cron expression")
 	cmd.Flags().StringVar(&timezone, "timezone", "", "IANA timezone (defaults to local zone when available)")
@@ -167,7 +181,7 @@ func newAutomationListCommand(ctx *commandContext) *cobra.Command {
 			if item.LatestRun != nil {
 				latest = item.LatestRun.Status
 			}
-			_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%t\t%s\t%s\n", item.ID, item.DisplayName, item.ProjectID, item.Enabled, formatAutomationTime(item.NextRunAt), latest)
+			_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%t\t%s\t%s\n", item.ID, item.DisplayName, item.ProjectID, item.Enabled, automationNextRun(item), latest)
 		}
 		return writer.Flush()
 	}}
@@ -188,7 +202,11 @@ func newAutomationGetCommand(ctx *commandContext) *cobra.Command {
 			return writeJSON(cmd.OutOrStdout(), response)
 		}
 		a := response.Automation
-		_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s\nProject: %s\nSchedule: %s (%s)\nEnabled: %t\nNext run: %s\nPrompt: %s\n", a.DisplayName, a.ProjectID, a.RRule, a.Timezone, a.Enabled, formatAutomationTime(a.NextRunAt), a.Prompt)
+		schedule := fmt.Sprintf("%s (%s)", a.RRule, a.Timezone)
+		if a.Trigger == automationTriggerSessionEnded {
+			schedule = "when a session ends"
+		}
+		_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s\nProject: %s\nSchedule: %s\nEnabled: %t\nNext run: %s\nPrompt: %s\n", a.DisplayName, a.ProjectID, schedule, a.Enabled, automationNextRun(a), a.Prompt)
 		return err
 	}}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Print JSON")
@@ -196,7 +214,7 @@ func newAutomationGetCommand(ctx *commandContext) *cobra.Command {
 }
 
 func newAutomationUpdateCommand(ctx *commandContext) *cobra.Command {
-	var name, prompt, rrule, cron, timezone, kind, harness string
+	var name, prompt, trigger, rrule, cron, timezone, kind, harness string
 	var enabled, jsonOutput bool
 	cmd := &cobra.Command{Use: "update <id>", Short: "Update an automation", Args: usageArgs(cobra.ExactArgs(1)), RunE: func(cmd *cobra.Command, args []string) error {
 		body := automationUpdateDTO{}
@@ -210,6 +228,7 @@ func newAutomationUpdateCommand(ctx *commandContext) *cobra.Command {
 		}
 		stringFlag("name", name, &body.DisplayName)
 		stringFlag("prompt", prompt, &body.Prompt)
+		stringFlag("trigger", trigger, &body.Trigger)
 		stringFlag("rrule", rrule, &body.RRule)
 		stringFlag("cron", cron, &body.Cron)
 		stringFlag("timezone", timezone, &body.Timezone)
@@ -237,6 +256,7 @@ func newAutomationUpdateCommand(ctx *commandContext) *cobra.Command {
 	}}
 	cmd.Flags().StringVar(&name, "name", "", "New display name")
 	cmd.Flags().StringVar(&prompt, "prompt", "", "New task prompt")
+	cmd.Flags().StringVar(&trigger, "trigger", "", "schedule (with --rrule or --cron) or session_ended")
 	cmd.Flags().StringVar(&rrule, "rrule", "", "Replace schedule with RRule")
 	cmd.Flags().StringVar(&cron, "cron", "", "Replace schedule with cron")
 	cmd.Flags().StringVar(&timezone, "timezone", "", "IANA timezone")
@@ -293,9 +313,9 @@ func newAutomationRunsCommand(ctx *commandContext) *cobra.Command {
 			return writeJSON(cmd.OutOrStdout(), response)
 		}
 		writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-		_, _ = fmt.Fprintln(writer, "SCHEDULED\tSTATUS\tSESSION\tERROR")
+		_, _ = fmt.Fprintln(writer, "SCHEDULED\tSTATUS\tSESSION\tENDED SESSION\tERROR")
 		for _, run := range response.Runs {
-			_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", formatAutomationTime(run.ScheduledFor), run.Status, emptyDash(run.SessionID), emptyDash(run.ErrorMessage))
+			_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", formatAutomationTime(run.ScheduledFor), run.Status, emptyDash(run.SessionID), emptyDash(run.TriggerSessionID), emptyDash(run.ErrorMessage))
 		}
 		if response.NextCursor != "" {
 			_, _ = fmt.Fprintf(writer, "next cursor: %s\n", response.NextCursor)
@@ -306,6 +326,21 @@ func newAutomationRunsCommand(ctx *commandContext) *cobra.Command {
 	cmd.Flags().StringVar(&cursor, "cursor", "", "Opaque page cursor")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Print JSON")
 	return cmd
+}
+
+// Automation trigger values mirrored from the daemon API.
+const (
+	automationTriggerSchedule     = "schedule"
+	automationTriggerSessionEnded = "session_ended"
+)
+
+// automationNextRun is a definition's next scheduled time, or what starts a
+// session-ended automation, which has no next time.
+func automationNextRun(a automationDTO) string {
+	if a.Trigger == automationTriggerSessionEnded {
+		return "when a session ends"
+	}
+	return formatAutomationTime(a.NextRunAt)
 }
 
 func formatAutomationTime(value time.Time) string {

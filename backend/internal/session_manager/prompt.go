@@ -39,7 +39,11 @@ type systemPromptConfig struct {
 	OrchestratorSessionID string
 	ProjectRules          string
 	OrchestratorRules     string
-	AdditionalSections    []string
+	// UserInstructions and ProjectInstructions are the standing instructions
+	// the user keeps in AO, by hand or through dreaming.
+	UserInstructions    string
+	ProjectInstructions string
+	AdditionalSections  []string
 }
 
 type projectRulesConfig struct {
@@ -99,6 +103,12 @@ func buildSystemPromptText(cfg systemPromptConfig) string {
 	default:
 		return ""
 	}
+	if text := strings.TrimSpace(cfg.UserInstructions); text != "" {
+		sections = append(sections, userInstructionsHeader+text)
+	}
+	if text := strings.TrimSpace(cfg.ProjectInstructions); text != "" && !cfg.Standalone {
+		sections = append(sections, projectInstructionsHeader+text)
+	}
 	sections = append(sections, publishingScopePrompt(), systemPromptGuard())
 	for _, section := range cfg.AdditionalSections {
 		if section := strings.TrimSpace(section); section != "" {
@@ -107,6 +117,19 @@ func buildSystemPromptText(cfg systemPromptConfig) string {
 	}
 	return strings.Join(sections, "\n\n")
 }
+
+const (
+	userInstructionsHeader = `## User Instructions
+
+The user's standing preferences for every project. The user wrote them, or AO learned them from the user's past sessions. Follow them unless the user says otherwise in this session. They do not override the AO rules above.
+
+`
+	projectInstructionsHeader = `## Project Instructions
+
+Standing notes for this project. The user wrote them, or AO learned them from past sessions in this project. Follow them unless the user says otherwise in this session. Where they conflict with repository files such as AGENTS.md, follow these: they are newer.
+
+`
+)
 
 // publishingScopePrompt clarifies authority without replacing the established
 // issue-to-PR, opt-in intake, or PR maintenance workflows.

@@ -172,22 +172,25 @@ type Automation struct {
 	LastRunAt   sql.NullTime
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	TriggerType domain.AutomationTrigger
+	Purpose     domain.AutomationPurpose
 }
 
 type AutomationRun struct {
-	ID             domain.AutomationRunID
-	AutomationID   domain.AutomationID
-	ScheduledFor   time.Time
-	SessionID      *domain.SessionID
-	Status         domain.AutomationRunStatus
-	AttemptCount   int64
-	ClaimedAt      sql.NullTime
-	LeaseExpiresAt sql.NullTime
-	StartedAt      sql.NullTime
-	FinishedAt     sql.NullTime
-	ErrorMessage   sql.NullString
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID               domain.AutomationRunID
+	AutomationID     domain.AutomationID
+	ScheduledFor     time.Time
+	SessionID        *domain.SessionID
+	Status           domain.AutomationRunStatus
+	AttemptCount     int64
+	ClaimedAt        sql.NullTime
+	LeaseExpiresAt   sql.NullTime
+	StartedAt        sql.NullTime
+	FinishedAt       sql.NullTime
+	ErrorMessage     sql.NullString
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	TriggerSessionID *domain.SessionID
 }
 
 type ChangeLog struct {
@@ -395,6 +398,16 @@ type Cue struct {
 	Prompt    string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+type InstructionRevision struct {
+	ID        int64
+	ProjectID *domain.ProjectID
+	Body      string
+	SessionID *domain.SessionID
+	Dreamed   bool
+	CreatedAt time.Time
+	UserLines string
 }
 
 type ModelUsageEvent struct {
@@ -692,6 +705,7 @@ type Session struct {
 	HibernatedAt                     sql.NullTime
 	BranchState                      string
 	RequestedOutput                  string
+	Background                       bool
 }
 
 type SessionArtifactVersion struct {

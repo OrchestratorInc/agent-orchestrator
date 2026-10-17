@@ -1,8 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ScrollArea } from "radix-ui";
-import { useTranslation } from "react-i18next";
-import { CalendarClock, ChevronRight, Clock3, History, Pencil, Plus, Trash2, TriangleAlert, X } from "lucide-react";
+import { Trans, useTranslation } from "react-i18next";
+import { Archive, CalendarClock, ChevronRight, Clock3, History, Pencil, Plus, Trash2, TriangleAlert, X } from "lucide-react";
 import { Button } from "./ui/button";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { TopbarButton, topbarProjectLabelClass } from "./TopbarButton";
@@ -14,9 +14,11 @@ import {
 	DialogTitle,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { DreamingPanel } from "./DreamingPanel";
+import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import { useAgentReadinessQuery, type AgentReadinessSnapshot } from "../hooks/useAgentReadinessQuery";
 import { useProjectDefaultWorker } from "../hooks/useProjectDefaultWorker";
@@ -71,7 +73,10 @@ export function AutomationsView() {
 	const { t } = useTranslation();
 	const query = useAutomations();
 	const showPageTitle = hidesShellTopbar();
-	const workspaces = useWorkspaceQuery().data ?? [];
+	const allWorkspaces = useWorkspaceQuery().data ?? [];
+	// Automations belong to projects; the Scratchpad groups standalone sessions
+	// (dreams run there) and is not one.
+	const workspaces = allWorkspaces.filter((workspace) => workspace.id !== STANDALONE_WORKSPACE_ID);
 	const harnesses = useAgentReadinessQuery().data?.agents ?? [];
 	const create = useCreateAutomation();
 	const update = useUpdateAutomation();
@@ -83,6 +88,7 @@ export function AutomationsView() {
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [filter, setFilter] = useState<"all" | "enabled" | "paused">("all");
 	const automations = query.data ?? [];
+	const sessionTitles = new Map(allWorkspaces.flatMap((workspace) => workspace.sessions.map((session) => [session.id, session.title] as const)));
 	const visibleAutomations = automations.filter((item) => filter === "all" || (filter === "enabled" ? item.enabled : !item.enabled));
 
 	return (
@@ -100,6 +106,7 @@ export function AutomationsView() {
 			<main className="relative min-h-0 flex-1 overflow-hidden">
 				<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60" tabIndex={0}>
 				<div className="p-4">
+				<DreamingPanel automations={automations} projects={workspaces.map((workspace) => ({ id: workspace.id, name: workspace.name }))} />
 				{actionError ? <p role="alert" className="mb-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{actionError}</p> : null}
 				{query.isLoading ? <p role="status" className="px-3 py-8 text-center text-sm text-muted-foreground">{t("automations.loading")}</p> : null}
 				{query.error ? <p role="alert" className="text-sm text-destructive">{query.error.message}</p> : null}
@@ -112,10 +119,10 @@ export function AutomationsView() {
 					</div>
 					<div className="overflow-hidden rounded-lg border border-border bg-background">
 						<div className="hidden grid-cols-[minmax(0,1fr)_180px_160px_132px] items-center gap-4 border-b border-border bg-muted/20 px-4 py-2 text-[11px] text-muted-foreground lg:grid" aria-hidden="true">
-							<span>{t("automations.field.name")}</span><span>{t("automations.field.schedule")}</span><span>{t("automations.nextRun")}</span><span className="text-right">{t("automations.status")}</span>
+							<span>{t("automations.field.name")}</span><span>{t("automations.field.runs")}</span><span>{t("automations.nextRun")}</span><span className="text-right">{t("automations.status")}</span>
 						</div>
 						{visibleAutomations.map((item) => (
-							<AutomationCard key={item.id} item={item} projectName={workspaces.find((workspace) => workspace.id === item.projectId)?.name ?? item.projectId} busy={update.isPending} expanded={expanded === item.id} onExpand={() => setExpanded(expanded === item.id ? null : item.id)} onEdit={() => setEditTarget(item)} onDelete={() => setDeleteTarget(item)} onToggle={async (enabled) => { setActionError(null); try { await update.mutateAsync({ id: item.id, body: { enabled } }); } catch (error) { setActionError(error instanceof Error ? error.message : t("automations.updateError")); } }} />
+							<AutomationCard key={item.id} item={item} projectName={workspaces.find((workspace) => workspace.id === item.projectId)?.name ?? item.projectId} sessionTitles={sessionTitles} busy={update.isPending} expanded={expanded === item.id} onExpand={() => setExpanded(expanded === item.id ? null : item.id)} onEdit={() => setEditTarget(item)} onDelete={() => setDeleteTarget(item)} onToggle={async (enabled) => { setActionError(null); try { await update.mutateAsync({ id: item.id, body: { enabled } }); } catch (error) { setActionError(error instanceof Error ? error.message : t("automations.updateError")); } }} />
 						))}
 						{visibleAutomations.length === 0 ? <p className="px-4 py-10 text-center text-xs text-muted-foreground">{t("automations.filter.empty")}</p> : null}
 					</div>
@@ -139,7 +146,7 @@ function EmptyAutomations({ onCreate }: { onCreate: () => void }) {
 	return <div className="grid min-h-64 place-items-center rounded-xl border border-dashed border-border p-8 text-center"><div><CalendarClock className="mx-auto mb-3 size-8 text-muted-foreground" /><h2 className="font-medium">{t("automations.empty.title")}</h2><p className="mt-1 text-sm text-muted-foreground">{t("automations.empty.description")}</p><Button className="mt-4" onClick={onCreate}>{t("automations.create")}</Button></div></div>;
 }
 
-function AutomationCard({ item, projectName, busy, expanded, onExpand, onEdit, onDelete, onToggle }: { item: Automation; projectName: string; busy: boolean; expanded: boolean; onExpand: () => void; onEdit: () => void; onDelete: () => void; onToggle: (enabled: boolean) => Promise<void> }) {
+function AutomationCard({ item, projectName, sessionTitles, busy, expanded, onExpand, onEdit, onDelete, onToggle }: { item: Automation; projectName: string; sessionTitles: Map<string, string>; busy: boolean; expanded: boolean; onExpand: () => void; onEdit: () => void; onDelete: () => void; onToggle: (enabled: boolean) => Promise<void> }) {
 	const runs = useAutomationRuns(expanded ? item.id : null);
 	const navigate = useNavigate();
 	const { t, i18n } = useTranslation();
@@ -160,6 +167,7 @@ function AutomationCard({ item, projectName, busy, expanded, onExpand, onEdit, o
 	const weekdayLabel = weekdays.length === 1 ? t(`automations.weekday.${weekdays[0]}`) : weekdays.join(",") === "MO,TU,WE,TH,FR" ? `${shortWeekday("MO")}–${shortWeekday("FR")}` : weekdays.map(shortWeekday).join(", ");
 	const scheduleLabel = simpleRule && frequency === "weekly" && validWeekdays ? weekdayLabel : simpleRule && frequency === "monthly" && /^[1-9]$|^[12]\d$|^3[01]$/.test(parts.BYMONTHDAY ?? "") ? t("automations.schedule.monthDay", { day: parts.BYMONTHDAY }) : schedule;
 
+	const sessionEnded = item.trigger === "session_ended";
 	const historyId = `automation-history-${item.id}`;
 	return <article className="group border-b border-border last:border-b-0">
 		<div className={cn("grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 px-4 py-3 transition-colors motion-reduce:transition-none lg:grid-cols-[minmax(0,1fr)_180px_160px_132px]", expanded ? "bg-muted/30" : "hover:bg-muted/20")}>
@@ -167,8 +175,8 @@ function AutomationCard({ item, projectName, busy, expanded, onExpand, onEdit, o
 				<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 motion-reduce:transition-none", expanded && "rotate-90")} />
 				<div className="min-w-0"><h2 className="truncate text-[13px] font-medium leading-5 text-foreground">{item.displayName}</h2><p className="truncate text-[11px] leading-5 text-muted-foreground">{projectName}</p></div>
 			</button>
-			<div className="col-start-1 flex items-start gap-2 pl-6 text-xs lg:col-start-auto lg:pl-0"><CalendarClock aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" /><div><p className="capitalize">{scheduleLabel}{clockTime ? ` · ${clockTime}` : ""}</p></div></div>
-			<div className="col-start-1 pl-6 text-xs lg:col-start-auto lg:pl-0"><span className="mr-2 text-muted-foreground lg:hidden">{t("automations.nextRun")}</span><span className={cn("tabular-nums", !item.enabled && "text-muted-foreground")}>{item.enabled ? displayTime(item.nextRunAt, i18n.resolvedLanguage) : t("automations.paused")}</span>{item.latestRun ? <p className="mt-1 text-[11px] capitalize text-muted-foreground">{item.latestRun.status}</p> : null}</div>
+			<div className="col-start-1 flex items-start gap-2 pl-6 text-xs lg:col-start-auto lg:pl-0">{sessionEnded ? <><Archive aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" /><p>{t("automations.schedule.sessionEnded")}</p></> : <><CalendarClock aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" /><div><p className="capitalize">{scheduleLabel}{clockTime ? ` · ${clockTime}` : ""}</p></div></>}</div>
+			<div className="col-start-1 pl-6 text-xs lg:col-start-auto lg:pl-0"><span className="mr-2 text-muted-foreground lg:hidden">{t("automations.nextRun")}</span><span className={cn("tabular-nums", !item.enabled && "text-muted-foreground")}>{!item.enabled ? t("automations.paused") : sessionEnded ? t("automations.waiting") : displayTime(item.nextRunAt, i18n.resolvedLanguage)}</span>{item.latestRun ? <p className="mt-1 text-[11px] capitalize text-muted-foreground">{item.latestRun.status}</p> : null}</div>
 			<div className="col-start-2 row-start-1 row-span-3 flex items-center justify-end gap-1 lg:col-start-auto lg:row-start-auto lg:row-span-1">
 				<Button variant="ghost" size="icon-sm" className="text-muted-foreground lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/60" aria-label={t("automations.edit.aria", { name: item.displayName })} onClick={onEdit}><Pencil className="size-3.5" /></Button>
 				<Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/60" aria-label={t("automations.delete.aria", { name: item.displayName })} onClick={onDelete}><Trash2 className="size-3.5" /></Button>
@@ -179,10 +187,10 @@ function AutomationCard({ item, projectName, busy, expanded, onExpand, onEdit, o
 		<AnimatePresence initial={false}>
 			{expanded ? <motion.div id={historyId} initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: reduceMotion ? 0 : 0.18, ease: "easeOut" }} className="overflow-hidden">
 				<div className="border-t border-border bg-muted/10 px-4 py-4 pl-10">
-					<div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground"><span>{t("automations.timezone", { timezone: item.timezone })}</span><span>{t("automations.agent")}: <span className="text-foreground">{item.harness || t("automations.projectDefault")} · {item.kind}</span></span><span>{t("automations.latestState")}: <span className="capitalize">{item.latestRun?.status ?? t("automations.neverRun")}</span></span></div>
+					<div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">{sessionEnded ? null : <span>{t("automations.timezone", { timezone: item.timezone })}</span>}<span>{t("automations.agent")}: <span className="text-foreground">{item.harness || t("automations.projectDefault")} · {item.kind}</span></span><span>{t("automations.latestState")}: <span className="capitalize">{item.latestRun?.status ?? t("automations.neverRun")}</span></span></div>
 					<p className="mb-1 text-[11px] font-medium text-muted-foreground">{t("automations.field.prompt")}</p><p className="mb-4 whitespace-pre-wrap text-xs leading-5 text-foreground">{item.prompt}</p>
 					<h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium"><History className="size-3.5 text-muted-foreground" aria-hidden="true" />{t("automations.runs.title")}</h3>
-					{runs.isLoading ? <p role="status" className="text-xs text-muted-foreground">{t("automations.runs.loading")}</p> : runs.error ? <p role="alert" className="text-xs text-destructive">{runs.error.message}</p> : runs.data?.length ? <div className="divide-y divide-border">{runs.data.map((run) => <div key={run.id} className="flex items-center justify-between gap-3 py-2 text-xs"><div><span className="font-medium capitalize">{run.status}</span><span className="ml-3 text-[11px] text-muted-foreground">{displayTime(run.scheduledFor, i18n.resolvedLanguage)}</span>{run.errorMessage ? <p className="mt-1 text-xs text-destructive">{run.errorMessage}</p> : null}</div>{run.sessionId ? <Button variant="outline" size="sm" onClick={() => void navigate({ to: "/sessions/$sessionId", params: { sessionId: run.sessionId! } })}>{t("automations.runs.openSession")}</Button> : null}</div>)}</div> : <p className="flex items-center gap-2 py-3 text-xs text-muted-foreground"><Clock3 className="size-3.5" aria-hidden="true" />{t("automations.runs.empty")}</p>}
+					{runs.isLoading ? <p role="status" className="text-xs text-muted-foreground">{t("automations.runs.loading")}</p> : runs.error ? <p role="alert" className="text-xs text-destructive">{runs.error.message}</p> : runs.data?.length ? <div className="divide-y divide-border">{runs.data.map((run) => <div key={run.id} className="flex items-center justify-between gap-3 py-2 text-xs"><div><span className="font-medium capitalize">{run.status}</span><span className="ml-3 text-[11px] text-muted-foreground">{displayTime(run.scheduledFor, i18n.resolvedLanguage)}</span>{run.triggerSessionId ? <p className="mt-1 text-[11px] text-muted-foreground"><Trans i18nKey="automations.runs.trigger" values={{ session: sessionTitles.get(run.triggerSessionId) || run.triggerSessionId }} components={{ session: <button type="button" className="rounded-sm text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" onClick={() => void navigate({ to: "/sessions/$sessionId", params: { sessionId: run.triggerSessionId! } })} /> }} /></p> : null}{run.errorMessage ? <p className="mt-1 text-xs text-destructive">{run.errorMessage}</p> : null}</div>{run.sessionId ? <Button variant="outline" size="sm" onClick={() => void navigate({ to: "/sessions/$sessionId", params: { sessionId: run.sessionId! } })}>{t("automations.runs.openSession")}</Button> : null}</div>)}</div> : <p className="flex items-center gap-2 py-3 text-xs text-muted-foreground"><Clock3 className="size-3.5" aria-hidden="true" />{t("automations.runs.empty")}</p>}
 				</div>
 			</motion.div> : null}
 		</AnimatePresence>
@@ -197,8 +205,10 @@ type AutomationFormSubmit = {
 	kind?: "worker" | "orchestrator";
 	harness?: string;
 	timezone?: string;
+	trigger?: AutomationTrigger;
 	rrule?: string;
 };
+type AutomationTrigger = Automation["trigger"];
 type AutomationFormDialogProps = {
 	open: boolean;
 	automation?: Automation;
@@ -241,6 +251,8 @@ function AutomationFormDialog({
 	const [name, setName] = useState("");
 	const [prompt, setPrompt] = useState("");
 	const [harness, setHarness] = useState("");
+	const [trigger, setTrigger] = useState<AutomationTrigger>("schedule");
+	const sessionEnded = trigger === "session_ended";
 	const [schedule, setSchedule] = useState<ScheduleFields>(() => ({
 		preset: "daily",
 		time: nowLocalHHMM(),
@@ -272,9 +284,10 @@ function AutomationFormDialog({
 		setName(automation?.displayName ?? "");
 		setPrompt(automation?.prompt ?? "");
 		setHarness(automation?.harness ?? "");
+		setTrigger(automation?.trigger ?? "schedule");
 		const defaultTime = nowLocalHHMM();
 		const [defaultHour, defaultMinute] = defaultTime.split(":");
-		const nextSchedule = automation
+		const nextSchedule = automation && automation.trigger !== "session_ended"
 			? scheduleFieldsFromRRule(automation.rrule)
 			: {
 					preset: "daily" as const,
@@ -321,7 +334,9 @@ function AutomationFormDialog({
 		if (!editing && !projectId) nextErrors.projectId = t("automations.validation.project");
 		if (!name.trim()) nextErrors.name = t("automations.validation.name");
 		if (!prompt.trim()) nextErrors.prompt = t("automations.validation.prompt");
-		if (schedule.preset === "daily" || schedule.preset === "weekly") {
+		if (sessionEnded) {
+			// No time fields to validate.
+		} else if (schedule.preset === "daily" || schedule.preset === "weekly") {
 			if (!parseTimeValue(schedule.time)) nextErrors.time = t("automations.validation.time");
 		} else {
 			if (!parseHourMinute(schedule.hour, schedule.minute)) {
@@ -339,13 +354,14 @@ function AutomationFormDialog({
 			return;
 		}
 		const nextRRule = buildRRuleFromSchedule(schedule);
-		const scheduleChanged = !(editing && automation && initialSchedule && schedulesEqual(schedule, initialSchedule));
+		const triggerChanged = !editing || trigger !== (automation?.trigger ?? "schedule");
+		const scheduleChanged = !sessionEnded && (triggerChanged || !(editing && automation && initialSchedule && schedulesEqual(schedule, initialSchedule)));
 		const harnessChanged = !editing || harness !== (automation?.harness ?? "");
 		const funnel = editing
 			? null
 			: {
 					project_id: projectId,
-					schedule_preset: schedule.preset,
+					schedule_preset: sessionEnded ? "session_ended" : schedule.preset,
 					prompt_length_bucket: automationPromptLengthBucket(prompt.trim()),
 				};
 		if (funnel) void captureRendererEvent("ao.renderer.automation_create_requested", funnel);
@@ -357,7 +373,9 @@ function AutomationFormDialog({
 				displayName: name,
 				prompt,
 				...(harnessChanged && selectedHarness ? { harness: selectedHarness } : {}),
-				...(scheduleChanged ? { rrule: nextRRule } : {}),
+				...(triggerChanged ? { trigger } : {}),
+				// Switching an edited automation onto a schedule also pins its timezone.
+				...(scheduleChanged ? { rrule: nextRRule, ...(editing && triggerChanged ? { timezone } : {}) } : {}),
 			});
 		} catch (error) {
 			if (!funnel) throw error;
@@ -421,6 +439,7 @@ function AutomationFormDialog({
 								required
 								maxLength={4096}
 								value={prompt}
+								placeholder={sessionEnded ? t("automations.sessionEnded.promptPlaceholder") : undefined}
 								aria-invalid={Boolean(validationErrors.prompt) || undefined}
 								aria-describedby={validationErrors.prompt ? `${AUTOMATION_FIELD_IDS.prompt}-error` : undefined}
 								onChange={(event) => { setPrompt(event.target.value); if (event.target.value.trim()) clearValidationError("prompt"); }}
@@ -441,12 +460,17 @@ function AutomationFormDialog({
 									setHarness(value);
 								}}
 							/>
-							<Field label={t("automations.field.schedule")}>
+							<Field label={t("automations.field.runs")}>
 								<AutomationSelect
-									label={t("automations.field.schedule")}
-									value={schedule.preset}
+									label={t("automations.field.runs")}
+									value={sessionEnded ? "session_ended" : schedule.preset}
 									onValueChange={(value) => {
-										patchSchedule({ preset: value as ScheduleFields["preset"] });
+										if (value === "session_ended") {
+											setTrigger("session_ended");
+										} else {
+											setTrigger("schedule");
+											patchSchedule({ preset: value as ScheduleFields["preset"] });
+										}
 										clearValidationError("time");
 										clearValidationError("hour");
 										clearValidationError("minute");
@@ -456,10 +480,11 @@ function AutomationFormDialog({
 										{ value: "daily", label: t("automations.schedule.daily") },
 										{ value: "weekly", label: t("automations.schedule.weekly") },
 										{ value: "custom", label: t("automations.schedule.custom") },
+										{ value: "session_ended", label: t("automations.schedule.sessionEnded"), separatorBefore: true },
 									]}
 								/>
 							</Field>
-							{schedule.preset === "weekly" ? (
+							{!sessionEnded && schedule.preset === "weekly" ? (
 								<Field label={t("automations.field.weekday")}>
 									<AutomationSelect
 										label={t("automations.field.weekday")}
@@ -472,7 +497,7 @@ function AutomationFormDialog({
 									/>
 								</Field>
 							) : null}
-							{schedule.preset === "daily" || schedule.preset === "weekly" ? (
+							{!sessionEnded && (schedule.preset === "daily" || schedule.preset === "weekly") ? (
 								<Field label={t("automations.field.localTime")} id={AUTOMATION_FIELD_IDS.time} error={validationErrors.time}>
 									<Input
 										id={AUTOMATION_FIELD_IDS.time}
@@ -495,7 +520,7 @@ function AutomationFormDialog({
 								</Field>
 							) : null}
 						</div>
-						{schedule.preset === "custom" ? (
+						{!sessionEnded && schedule.preset === "custom" ? (
 							<div className="grid grid-cols-2 gap-3">
 								<Field label={t("automations.field.frequency")}>
 									<AutomationSelect
@@ -587,7 +612,7 @@ function AutomationFormDialog({
 								</Field>
 							</div>
 						) : null}
-						<p className={onboardingFieldHintClass}>{t("automations.timezone", { timezone })}</p>
+						<p className={onboardingFieldHintClass}>{sessionEnded ? t("automations.sessionEnded.hint") : t("automations.timezone", { timezone })}</p>
 						{error ? <p role="alert" className={onboardingFieldErrorClass}>{error}</p> : null}
 					</div>
 					{/* Match onboarding/new-task action row: no footer hairline. */}
@@ -621,7 +646,7 @@ function AutomationSelect({
 	label: string;
 	value: string;
 	onValueChange: (value: string) => void;
-	options: Array<{ value: string; label: string; disabled?: boolean }>;
+	options: Array<{ value: string; label: string; disabled?: boolean; separatorBefore?: boolean }>;
 	placeholder?: string;
 	required?: boolean;
 	disabled?: boolean;
@@ -634,11 +659,12 @@ function AutomationSelect({
 				<SelectValue placeholder={placeholder} />
 			</SelectTrigger>
 			<SelectContent position="popper" side="bottom" align="start" sideOffset={4} className="max-h-64">
-				{options.map((option) => (
+				{options.map((option) => [
+					option.separatorBefore ? <SelectSeparator key={`${option.value}-separator`} /> : null,
 					<SelectItem key={option.value} value={option.value} disabled={option.disabled}>
 						{option.label}
-					</SelectItem>
-				))}
+					</SelectItem>,
+				])}
 			</SelectContent>
 		</Select>
 	);

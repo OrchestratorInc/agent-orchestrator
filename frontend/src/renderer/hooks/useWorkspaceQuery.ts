@@ -29,6 +29,7 @@ import {
 	toSessionStatus,
 	newestActiveOrchestrator,
 	attentionZone,
+	isHiddenBackgroundSession,
 	workerSessions,
 	type WorkspaceSession,
 	type WorkspaceSummary,
@@ -151,6 +152,7 @@ export function toWorkspaceSession(
 		prs: (session.prs ?? []).map(toPullRequestFacts),
 		outputType: session.outputType,
 		...(session.requestedOutput ? { requestedOutput: session.requestedOutput } : {}),
+		...(session.background ? { background: true } : {}),
 		artifactFiles: session.artifactFiles?.map(toSessionArtifact),
 	};
 }
@@ -254,6 +256,7 @@ function toLocalWorkspaceSession(
 		prs: (session.prs ?? []).map(toPullRequestFacts),
 		outputType: session.outputType,
 		...(session.requestedOutput ? { requestedOutput: session.requestedOutput } : {}),
+		...(session.background ? { background: true } : {}),
 		artifactFiles: session.artifactFiles?.map(toSessionArtifact),
 	};
 }
@@ -320,8 +323,11 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 			.filter((session) => !session.projectId)
 			.map((session) => toLocalWorkspaceSession(session, STANDALONE_WORKSPACE_ID, standaloneName)),
 	};
-	const workspaces =
-		standalone.sessions.length > 0 ? placeStandaloneWorkspaceLast([...projects, standalone]) : projects;
+	// Dreams run as background standalone sessions; they alone must not make the
+	// Scratchpad appear.
+	const workspaces = standalone.sessions.some((session) => !isHiddenBackgroundSession(session))
+		? placeStandaloneWorkspaceLast([...projects, standalone])
+		: projects;
 	// Pending optimistic kills must survive CDC/refetch while the daemon kill is in flight.
 	return applyOptimisticSessionKills(workspaces) ?? workspaces;
 }
@@ -375,7 +381,7 @@ function toRemoteWorkspaces(
 		...toWorkspaceSession(session, { id: STANDALONE_WORKSPACE_ID, name: standaloneWorkspaceName() }),
 		hostId,
 	}));
-	if (standalone.length > 0) projects.push({
+	if (standalone.some((session) => !isHiddenBackgroundSession(session))) projects.push({
 		hostId,
 		id: STANDALONE_WORKSPACE_ID,
 		name: standaloneWorkspaceName(),

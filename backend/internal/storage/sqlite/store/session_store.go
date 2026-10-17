@@ -837,6 +837,7 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 		ProjectID:                 projectIDValue(row.ProjectID),
 		AutomationRunID:           row.AutomationRunID,
 		AutomationLaunchCompleted: row.AutomationLaunchCompleted,
+		Background:                row.Background,
 		IssueID:                   row.IssueID,
 		Kind:                      row.Kind,
 		Harness:                   row.Harness,
@@ -1009,6 +1010,7 @@ func recordToInsert(rec domain.SessionRecord, num int64) gen.InsertSessionParams
 		IsTaskPreparation:                rec.IsTaskPreparation,
 		AutomationRunID:                  rec.AutomationRunID,
 		AutomationLaunchCompleted:        rec.AutomationLaunchCompleted,
+		Background:                       rec.Background,
 		ClientRequestID:                  rec.ClientRequestID,
 		ClientRequestHash:                rec.ClientRequestHash,
 	}
