@@ -169,6 +169,19 @@ describe("send key preference", () => {
 		expect(field.querySelector('[data-composer-token="skill"]')).toHaveTextContent("/review");
 	});
 
+	it("accepts a next-message suggestion with Tab and sends it with Cmd+Enter in newline mode", async () => {
+		useUiStore.getState().setChatSendKeyMode("mod-enter");
+		const { onSend, field } = renderComposer({ promptSuggestion: { id: "suggestion", text: "Run the tests" } });
+		await userEvent.keyboard("{Tab}");
+		expect(composerWireText(field)).toBe("Run the tests");
+		await userEvent.keyboard("{Enter}");
+		expect(onSend).not.toHaveBeenCalled();
+		expect(composerWireText(field)).toBe("Run the tests\n");
+
+		await userEvent.keyboard("{Meta>}{Enter}{/Meta}");
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith("Run the tests"));
+	});
+
 	it.each([
 		{ action: "send", button: "Send message", props: {} },
 		{ action: "queue", button: "Queue message", props: { willQueue: true } },
