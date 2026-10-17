@@ -221,6 +221,7 @@ export type SessionCardViewProps = {
 	artifacts?: ReactNode;
 	branchAction?: ReactNode;
 	branchIcon?: ReactNode;
+	branchLabel?: ReactNode;
 	error?: string;
 	externalLink: ExternalLinkComponent;
 	footer?: ReactNode;
@@ -249,6 +250,7 @@ export function SessionCardView({
 	artifacts,
 	branchAction,
 	branchIcon,
+	branchLabel,
 	error,
 	externalLink,
 	footer,
@@ -277,7 +279,7 @@ export function SessionCardView({
 				? "text-success"
 				: (session.statusPresentation?.className ?? column.titleClassName);
 	const branch = session.branch ?? "";
-	const showBranch = branch !== "" && !sameLabel(branch, session.title) && !sameLabel(branch, session.id);
+	const showBranch = Boolean(branchLabel) || (branch !== "" && !sameLabel(branch, session.title) && !sameLabel(branch, session.id));
 	const renderedStatusLabel =
 		session.statusReadiness === "checking"
 			? translateStatus("session.statusChecking")
@@ -355,7 +357,7 @@ export function SessionCardView({
 				{showBranch && (
 					<div className="mt-1.5 flex min-w-0 items-center gap-1.5 font-mono text-2xs text-muted-foreground">
 						{branchIcon ?? <GitBranchIcon aria-hidden="true" className="size-icon-2xs shrink-0" />}
-						<span className="truncate text-muted-foreground">{branch}</span>
+						{branchLabel ?? <span className="truncate text-muted-foreground">{branch}</span>}
 						{branchAction}
 					</div>
 				)}

@@ -225,6 +225,7 @@ describe("attachAppShortcuts", () => {
 		["macOS", true, "open-in-editor", { key: "o", meta: true }],
 		["macOS", true, "copy-session-path", { key: "C", meta: true, shift: true }],
 		["macOS", true, "model-picker", { key: "M", meta: true, shift: true }],
+		["macOS", true, "open-orchestrator", { key: "O", meta: true, shift: true }],
 		["macOS", true, "previous-attention-session", { key: "ArrowUp", meta: true, alt: true, shift: true }],
 		["macOS", true, "next-attention-session", { key: "ArrowDown", meta: true, alt: true, shift: true }],
 		["Windows/Linux", false, "history-back", { key: "ArrowLeft", alt: true }],
@@ -309,6 +310,7 @@ describe("attachAppShortcuts", () => {
 		["Ctrl+Shift+O", { key: "O", control: true, shift: true }, APP_SHORTCUT_CHANNEL, { id: "open-in-editor" }],
 		["Ctrl+Shift+L", { key: "L", control: true, shift: true }, APP_SHORTCUT_CHANNEL, { id: "copy-session-path" }],
 		["Ctrl+Shift+M", { key: "M", control: true, shift: true }, APP_SHORTCUT_CHANNEL, { id: "model-picker" }],
+		["Ctrl+Shift+G", { key: "G", control: true, shift: true }, APP_SHORTCUT_CHANNEL, { id: "open-orchestrator" }],
 	])("keeps %s live with a focused terminal on Windows/Linux", (_label, input, channel, payload) => {
 		const source = fakeSource();
 		const target = fakeTarget();

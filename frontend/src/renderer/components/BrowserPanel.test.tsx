@@ -262,6 +262,7 @@ describe("BrowserPanel", () => {
 		};
 		hookState.selectTab.mockReset();
 		hookState.closeTab.mockReset();
+		hookState.openTab.mockReset();
 		hookState.reopenClosedTab.mockReset();
 		hookState.closedTabs = [];
 		hookState.openDevTools.mockReset();
@@ -315,7 +316,7 @@ describe("BrowserPanel", () => {
 			return () => downloadListeners.delete(listener);
 		});
 		window.ao!.browser.selectProfile = vi.fn(async () => undefined);
-		window.ao!.browserProfiles.list = vi.fn(async () => ({ profiles: [] }));
+		window.ao!.browserProfiles.list = vi.fn(async () => ({ profiles: [], defaultProfileId: null }));
 		window.ao!.browser.notifyPanelUsed = vi.fn();
 		window.ao!.browser.notifyPanelBlur = vi.fn();
 		window.ao!.browser.onFocusLocation = vi.fn((listener: (viewId: string) => void) => {
@@ -743,6 +744,66 @@ describe("BrowserPanel", () => {
 		expect(screen.queryByRole("button", { name: /open in system browser/i })).not.toBeInTheDocument();
 	});
 
+	it("opens and copies a remote preview at the address a browser outside AO can load", async () => {
+		const url = "https://ao-preview-0123456789abcdef0123456789abcdef.localhost:41000/dash?x=1#top";
+		const external = "http://ao-preview-0123456789abcdef0123456789abcdef.localhost:5000/dash?x=1#top";
+		hookState.navState = { ...hookState.navState, url };
+		const externalUrl = vi.spyOn(window.ao!.remotes, "externalUrl").mockResolvedValue(external);
+		const openExternal = vi.spyOn(window.ao!.app, "openExternal").mockResolvedValue(undefined);
+		const writeText = vi.spyOn(window.ao!.clipboard, "writeText").mockResolvedValue(undefined);
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={{ ...session, hostId: "h_workbox" }} />);
+
+		fireEvent.click(screen.getByRole("button", { name: /open in system browser/i }));
+		await waitFor(() => expect(openExternal).toHaveBeenCalledWith(external));
+		await userEvent.click(screen.getByRole("button", { name: "Copy URL" }));
+		expect(writeText).toHaveBeenCalledExactlyOnceWith(external);
+		expect(externalUrl).toHaveBeenCalledWith("h_workbox", url);
+		externalUrl.mockRestore();
+		openExternal.mockRestore();
+		writeText.mockRestore();
+	});
+
+	it.each([
+		["a page on the host's own localhost", "http://localhost:3000/settings", "R1"],
+		["its viewer, before the first report", "https://ao-preview-0123456789abcdef0123456789abcdef.localhost:41000/v/cdp?embed=1", ""],
+	])("disables Open in System Browser on an agent tab showing %s, and says why", async (_case, url, tabId) => {
+		hookState.navState = { ...hookState.navState, url };
+		const agentTab = { id: "a1", url, title: "", active: true, remote: { tabId } };
+		hookState.tabs = [agentTab];
+		const openExternal = vi.spyOn(window.ao!.app, "openExternal").mockResolvedValue(undefined);
+		const writeText = vi.spyOn(window.ao!.clipboard, "writeText").mockResolvedValue(undefined);
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={{ ...session, hostId: "h_workbox" }} />);
+
+		const open = screen.getByRole("button", { name: /open in system browser/i });
+		expect(open).toHaveAttribute("aria-disabled", "true");
+		fireEvent.click(open);
+		fireEvent.pointerMove(open, { pointerType: "mouse" });
+		await waitFor(() =>
+			expect(document.querySelector('[data-slot="tooltip-content"]')).toHaveTextContent("This page runs on the remote host"),
+		);
+		expect(openExternal).not.toHaveBeenCalled();
+		// Copy stays: it copies the address as shown.
+		await userEvent.click(screen.getByRole("button", { name: "Copy URL" }));
+		expect(writeText).toHaveBeenCalledExactlyOnceWith(url);
+		openExternal.mockRestore();
+		writeText.mockRestore();
+	});
+
+	it("opens an agent tab's public page in the system browser", async () => {
+		const url = "https://github.com/aoagents/ao";
+		hookState.navState = { ...hookState.navState, url };
+		const agentTab = { id: "a1", url, title: "", active: true, remote: { tabId: "R1" } };
+		hookState.tabs = [agentTab];
+		const openExternal = vi.spyOn(window.ao!.app, "openExternal").mockResolvedValue(undefined);
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={{ ...session, hostId: "h_workbox" }} />);
+
+		const open = screen.getByRole("button", { name: /open in system browser/i });
+		expect(open).not.toHaveAttribute("aria-disabled");
+		fireEvent.click(open);
+		await waitFor(() => expect(openExternal).toHaveBeenCalledWith(url));
+		openExternal.mockRestore();
+	});
+
 	it("keeps secondary browser controls compact until device presets are requested", async () => {
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 
@@ -869,6 +930,7 @@ describe("BrowserPanel", () => {
 					updatedAt: "2026-01-01T00:00:00.000Z",
 				},
 			],
+			defaultProfileId: null,
 		}));
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 
@@ -1138,7 +1200,6 @@ describe("BrowserPanel", () => {
 	it("renders the complete tab chrome in the drag overlay", () => {
 		render(
 			<BrowserTopTabDragOverlay
-				onlyTab={false}
 				tab={{ id: "t1", url: "http://localhost:3000/", title: "First app", active: true }}
 			/>,
 		);
@@ -1180,6 +1241,38 @@ describe("BrowserPanel", () => {
 		await userEvent.click(within(tabList).getByRole("button", { name: "Close tab Second app" }));
 
 		expect(hookState.closeTab).toHaveBeenCalledWith("t2");
+	});
+
+	it("allows closing the final browser tab", async () => {
+		hookState.tabs = [{ id: "t1", url: "https://example.test/", title: "Last page", active: true }];
+		hookState.activeTabId = "t1";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Close tab Last page" }));
+		expect(hookState.closeTab).toHaveBeenCalledWith("t1");
+	});
+
+	it.each(["", "about:blank"])("shows the close button on an empty tab (%s)", (url) => {
+		hookState.tabs = [{ id: "t1", url, title: "", active: true }];
+		hookState.activeTabId = "t1";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
+
+		expect(screen.getByRole("tab", { name: "New tab" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Close tab New tab" })).toBeInTheDocument();
+	});
+
+	it("shows the empty tab's close icon in its drag overlay", () => {
+		render(<BrowserTopTabDragOverlay tab={{ id: "t1", url: "about:blank", title: "", active: true }} />);
+		expect(screen.getByTestId("browser-tab-drag-overlay").querySelector(".browser-panel__tab-close")).not.toBeNull();
+	});
+
+	it("shows no placeholder tab when empty and still offers the new tab button", async () => {
+		hookState.tabs = [];
+		hookState.activeTabId = "";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
+		expect(within(screen.getByRole("tablist", { name: "Browser tabs" })).queryAllByRole("tab")).toHaveLength(0);
+		await userEvent.click(screen.getByRole("button", { name: "Open new tab" }));
+		expect(hookState.openTab).toHaveBeenCalled();
 	});
 
 	it("opens a new browser tab from the horizontal tab strip", async () => {
@@ -1425,6 +1518,23 @@ describe("BrowserPanel", () => {
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 
 		expect(screen.getByRole("button", { name: /annotate/i })).toBeDisabled();
+	});
+
+	it("disables annotation mode on an agent tab, whose page is its viewer's picture", async () => {
+		hookState.navState = { ...hookState.navState, url: "https://en.wikipedia.org/wiki/Starfish" };
+		const agentTab = { id: "a1", url: "https://en.wikipedia.org/wiki/Starfish", title: "Starfish", active: true, remote: { tabId: "R1" } };
+		hookState.tabs = [agentTab];
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		const button = screen.getByRole("button", { name: /annotate/i });
+		expect(button).toBeDisabled();
+		// The tooltip says why.
+		fireEvent.pointerMove(button.closest('[data-slot="tooltip-trigger"]')!, { pointerType: "mouse" });
+		await waitFor(() =>
+			expect(document.querySelector('[data-slot="tooltip-content"]')).toHaveTextContent(
+				"Annotate works in your tabs, not the agent's",
+			),
+		);
 	});
 
 	it("adds an annotation control row below the tab row while keeping tabs visible", async () => {

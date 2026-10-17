@@ -68,6 +68,8 @@ vi.mock("../../lib/bridge", () => ({
 			setCloseShellTerminalShortcutEnabled: vi.fn(),
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
+			// ShellTopbar subscribes to the open-orchestrator shortcut on mount.
+			onShortcut: () => () => undefined,
 		},
 		clipboard: { writeText: clipboardWriteMock },
 		// CreateProjectFlow reads the cloud session (Local | Cloud gating);

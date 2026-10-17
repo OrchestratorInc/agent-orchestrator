@@ -148,6 +148,22 @@ func sourceKey(r *http.Request) string {
 	return r.RemoteAddr
 }
 
+// clientSource is the address of a request's client, which lockouts count
+// failures against. Cloudflared connects from loopback, so its visitor IP
+// stands in for it. A LAN client must not be able to spoof its source with this
+// header.
+func clientSource(r *http.Request) string {
+	src := sourceKey(r)
+	if ip := net.ParseIP(src); ip != nil && ip.IsLoopback() {
+		if forwarded := r.Header.Values("CF-Connecting-IP"); len(forwarded) == 1 {
+			if visitor := net.ParseIP(forwarded[0]); visitor != nil {
+				return visitor.String()
+			}
+		}
+	}
+	return src
+}
+
 func bearerToken(r *http.Request) string {
 	h := r.Header.Get("Authorization")
 	if strings.HasPrefix(h, "Bearer ") {
@@ -259,16 +275,7 @@ func authMiddleware(state *authState, lock *lockout, connected *mobileConnectRep
 				return
 			}
 			remoteSrc := sourceKey(r)
-			src := remoteSrc
-			// Cloudflared connects from loopback, so use its visitor IP for lockout
-			// only. A LAN client must not be able to spoof its source with this header.
-			if ip := net.ParseIP(remoteSrc); ip != nil && ip.IsLoopback() {
-				if forwarded := r.Header.Values("CF-Connecting-IP"); len(forwarded) == 1 {
-					if visitor := net.ParseIP(forwarded[0]); visitor != nil {
-						src = visitor.String()
-					}
-				}
-			}
+			src := clientSource(r) // for the lockout only
 			if lock.blocked(src) {
 				envelope.WriteAPIError(w, r, http.StatusTooManyRequests, "too_many_requests", "LOCKED_OUT",
 					"too many failed attempts; try again shortly", nil)

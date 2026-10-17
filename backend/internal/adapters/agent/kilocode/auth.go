@@ -10,8 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 
 	_ "modernc.org/sqlite" // register sqlite driver for KiloCode auth database probes
 )
@@ -26,29 +27,53 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	if status, ok, err := kilocodeLocalAuthStatus(ctx); err != nil {
-		return ports.AgentAuthStatusUnknown, err
-	} else if ok {
+	// Kilo's own stored credentials decide first, then its `auth list`, and
+	// only then a key in the environment.
+	status, ok, storedErr := kilocodeStoredAuthStatus(ctx)
+	if storedErr == nil && ok {
 		return status, nil
 	}
-
-	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	out, err := aoprocess.CommandContext(probeCtx, binary, "auth", "list").CombinedOutput()
-	if probeCtx.Err() != nil {
-		if probeCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
-			return ports.AgentAuthStatusUnknown, nil
+	if storedErr == nil {
+		listStatus, listOK, err := kilocodeAuthListAuthStatus(ctx, binary)
+		if err != nil {
+			return ports.AgentAuthStatusUnknown, err
 		}
-		return ports.AgentAuthStatusUnknown, probeCtx.Err()
-	}
-	status, ok := kilocodeAuthListStatus(string(out))
-	if ok {
-		return status, nil
-	}
-	if err != nil {
+		if listOK && listStatus == ports.AgentAuthStatusAuthorized {
+			return listStatus, nil
+		}
+		if envStatus, envOK := kilocodeEnvAuthStatus(ctx); envOK {
+			return envStatus, nil
+		}
+		if listOK {
+			return listStatus, nil
+		}
 		return ports.AgentAuthStatusUnknown, nil
 	}
-	return ports.AgentAuthStatusUnknown, nil
+	if envStatus, envOK := kilocodeEnvAuthStatus(ctx); envOK {
+		return envStatus, nil
+	}
+	return ports.AgentAuthStatusUnknown, storedErr
+}
+
+func kilocodeAuthListAuthStatus(ctx context.Context, binary string) (status ports.AgentAuthStatus, ok bool, resultErr error) {
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	started := time.Now()
+	out, err := authprobe.CmdRunner(probeCtx, binary, "auth", "list")
+	defer func() {
+		ports.RecordAuthDiagnostic(ctx, authprobe.CommandStep(binary, []string{"auth", "list"}, status, err, probeCtx.Err(), started))
+	}()
+	if probeCtx.Err() != nil {
+		if probeCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
+			return ports.AgentAuthStatusUnknown, false, nil
+		}
+		return ports.AgentAuthStatusUnknown, false, probeCtx.Err()
+	}
+	status, ok = kilocodeAuthListStatus(string(out))
+	if ok && status == ports.AgentAuthStatusAuthorized {
+		ports.RecordAuthEvidence(ctx, domain.CommandSource(binary, "auth", "list"))
+	}
+	return status, ok, nil
 }
 
 var kilocodeAPIKeyEnvVars = []string{
@@ -66,31 +91,40 @@ var kilocodeAPIKeyEnvVars = []string{
 	"COHERE_API_KEY",
 }
 
-func kilocodeLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
+func kilocodeEnvAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool) {
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, kilocodeAPIKeyEnvVars...) != "" {
+		return ports.AgentAuthStatusAuthorized, true
+	}
+	return ports.AgentAuthStatusUnknown, false
+}
+
+// kilocodeStoredAuthStatus reads Kilo's auth.json, then its database.
+func kilocodeStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
-	}
-	for _, name := range kilocodeAPIKeyEnvVars {
-		if strings.TrimSpace(os.Getenv(name)) != "" {
-			return ports.AgentAuthStatusAuthorized, true, nil
-		}
 	}
 	dataDir, ok := kilocodeDataDir()
 	if !ok {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
-	authorized, known, err := kilocodeAuthJSONStatus(filepath.Join(dataDir, "auth.json"))
+	authPath := filepath.Join(dataDir, "auth.json")
+	authorized, known, data, err := kilocodeAuthJSONStatus(ctx, authPath)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	if known && authorized {
+		evidence := authprobe.FileSource(authPath).WithMethod(authprobe.JSONProviderMethod(data))
+		evidence.Provider = authprobe.JSONProviderNames(data)
+		ports.RecordAuthEvidence(ctx, evidence)
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
-	authorized, known, err = kilocodeDBAuthStatus(ctx, filepath.Join(dataDir, "kilo.db"))
+	dbPath := filepath.Join(dataDir, "kilo.db")
+	authorized, known, err = kilocodeDBAuthStatus(ctx, dbPath)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	if known && authorized {
+		ports.RecordAuthEvidence(ctx, authprobe.FileSource(dbPath).WithMethod(domain.AgentAccountMethodAccount))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	return ports.AgentAuthStatusUnknown, false, nil
@@ -110,20 +144,23 @@ func kilocodeDataDir() (string, bool) {
 	return filepath.Join(home, ".local", "share", "kilo"), true
 }
 
-func kilocodeAuthJSONStatus(path string) (authorized, known bool, err error) {
-	data, err := os.ReadFile(path)
+// kilocodeAuthJSONStatus also returns the file's contents, so callers parse
+// it without reading it again.
+func kilocodeAuthJSONStatus(ctx context.Context, path string) (authorized, known bool, data []byte, err error) {
+	data, err = authprobe.ReadCredentialFile(ctx, path)
 	if os.IsNotExist(err) {
-		return false, false, nil
+		return false, false, nil, nil
 	}
 	if err != nil {
-		return false, false, err
+		return false, false, nil, err
 	}
 	if strings.TrimSpace(string(data)) == "" {
-		return false, false, nil
+		return false, false, nil, nil
 	}
 	var providers map[string]map[string]any
 	if err := json.Unmarshal(data, &providers); err != nil {
-		return false, false, err
+		authprobe.RecordFileDiagnostic(ctx, path, "credential_file_invalid")
+		return false, false, nil, err
 	}
 	for _, provider := range providers {
 		if len(provider) == 0 {
@@ -132,11 +169,11 @@ func kilocodeAuthJSONStatus(path string) (authorized, known bool, err error) {
 		known = true
 		for _, key := range []string{"key", "apiKey", "api_key", "access_token", "token"} {
 			if strings.TrimSpace(asString(provider[key])) != "" {
-				return true, true, nil
+				return true, true, data, nil
 			}
 		}
 	}
-	return false, known, nil
+	return false, known, data, nil
 }
 
 func asString(value any) string {

@@ -80,6 +80,13 @@ type ActivitySignal struct {
 	// LaunchID is set by AO's process supervisor. Lifecycle rejects a signal
 	// from an older process generation of the same session.
 	LaunchID string
+	// NativeEntrypoint is the provider's own process-kind marker reported by
+	// the hook (Claude's CLAUDE_CODE_ENTRYPOINT). A side `claude -p` run in the
+	// session worktree inherits AO_SESSION_ID and the current LaunchID, so the
+	// generation fence cannot tell it apart from the interactive TUI process AO
+	// launched; this field can. Empty means an older hook client or a provider
+	// that exposes no such marker.
+	NativeEntrypoint string
 	// ControllerGeneration is the required ownership fence for a runtime-less
 	// Chat controller. It is intentionally internal (provider events never call
 	// the public hook endpoint): lifecycle rejects a Chat signal without the

@@ -194,6 +194,9 @@ title = "gitleaks config"
         '''(?i)linkedinurl,\s*setlinkedinurl''',
         '''(?i)linkedin profile for the accompanying''',
         '''(?i)linkedin,\s*messagesquarequote''',
+        # The fake GitHub token the cloud redaction tests feed through
+        # checkout errors and Setup output to prove it never reaches events.
+        '''gh[ps]_abcdefghijklmnopqrstuvwxyz0123456789''',
     ]
     # Historical false positives from the ReverbCode rewrite graft (#2166).
     # All offenders are example secret-patterns in security docs and

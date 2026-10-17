@@ -2,6 +2,8 @@
 
 Operational guidance for coding agents working in this repository. Keep changes small, match the current rewrite architecture, and prefer the documented daemon/API boundaries over behavior from the old TypeScript implementation.
 
+Follow [CONTRIBUTING.md](CONTRIBUTING.md) before choosing an issue or starting work.
+
 ## Repo layout
 
 - `backend/`: Go rewrite of Agent Orchestrator with the Cobra `ao` CLI, loopback HTTP daemon, services, SQLite storage, lifecycle/reaper, runtime/workspace/agent/tracker adapters, terminal mux, and tests.

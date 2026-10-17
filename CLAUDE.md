@@ -27,9 +27,9 @@ targeted migration when an existing mismatch needs broader work.
 
 When showing or demoing frontend changes, run `ao preview [url]` from inside the
 session so the change renders in the desktop browser panel (the inspector rail's
-Browser tab); do not just describe it. `ao preview` updates the panel without
-disrupting the current view. It does not steal focus or force the Browser tab open
-if the user is looking at something else. It only badges the tab as unseen. If the
-Browser tab isn't already the one
-the user has open, say so in your reply (e.g. "check the Browser tab") so the change
-doesn't go unnoticed behind the badge.
+Browser tab); do not just describe it. A new `ao preview` target, `ao browser open`,
+or `ao browser tab new` reveals Browser for the session being viewed. Revealing
+opens the inspector and selects Browser without changing the routed session,
+project, or OS window focus. Passive browser activity (`snapshot`, `click`,
+`fill`, `errors`, etc.) only badges a hidden Browser tab as unseen. Mention
+"check the Browser tab" when passive activity is the only update.

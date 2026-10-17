@@ -1,8 +1,16 @@
 import "@testing-library/jest-dom/vitest";
 import * as jestDomMatchers from "@testing-library/jest-dom/matchers";
 import { expect } from "vitest";
-import "../i18n";
+import { appI18n } from "../i18n";
+import { appCatalogs } from "../i18n/all-messages";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
+
+// The app loads non-English catalogs on demand. Component tests read other
+// locales synchronously (getFixedT, t after changeLanguage), so give the shared
+// instance every catalog up front. instance.test.ts covers the lazy path.
+for (const [locale, catalog] of Object.entries(appCatalogs)) {
+	appI18n.addResourceBundle(locale, "translation", catalog, true, true);
+}
 import { appShortcutBus } from "./app-shortcut-bus";
 
 // Vitest 4 can load the convenience entry against a different matcher
@@ -58,6 +66,17 @@ if (typeof window !== "undefined") {
 		writable: true,
 		value: ResizeObserverStub,
 	});
+
+	// jsdom has no Web Animations API. Components that animate from a
+	// requestAnimationFrame callback (the file tree's expand slide) would
+	// otherwise throw after their test has already passed.
+	if (typeof HTMLElement.prototype.animate !== "function") {
+		Object.defineProperty(HTMLElement.prototype, "animate", {
+			configurable: true,
+			writable: true,
+			value: () => ({ cancel() {}, finish() {}, addEventListener() {}, removeEventListener() {}, finished: Promise.resolve() }),
+		});
+	}
 
 	Object.defineProperty(window, "matchMedia", {
 		configurable: true,
@@ -143,6 +162,7 @@ if (typeof window !== "undefined") {
 			set: async () => undefined,
 			persistTerminal: async () => undefined,
 			setWindowBackground: async () => undefined,
+			setWindowTranslucent: async () => undefined,
 		},
 		menu: {
 			action: async () => undefined,
@@ -151,6 +171,11 @@ if (typeof window !== "undefined") {
 		clipboard: {
 			writeText: async () => undefined,
 			readText: async () => "",
+			writeImage: async () => undefined,
+		},
+		chatImage: {
+			fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
+			save: async () => true,
 		},
 		daemon: {
 			getStatus: async () => ({ state: "stopped" }),
@@ -175,6 +200,9 @@ if (typeof window !== "undefined") {
 				if (targetId === "terminal") return { id: "terminal", name: "Terminal", kind: "terminal" };
 				return { id: targetId ?? "cursor", name: "Cursor", kind: "editor" };
 			},
+			openArtifacts: async ({ targetId }) => targetId === "terminal"
+				? { id: "terminal", name: "Terminal", kind: "terminal" }
+				: { id: "file-manager", name: "Finder", kind: "file_manager" },
 			copyWorkspacePath: async () => undefined,
 		},
 		telemetry: {
@@ -304,7 +332,7 @@ if (typeof window !== "undefined") {
 			onAnnotationState: () => () => undefined,
 		},
 		browserProfiles: {
-			list: async () => ({ profiles: [] }),
+			list: async () => ({ profiles: [], defaultProfileId: null }),
 			create: async (name: string) => {
 				const now = new Date().toISOString();
 				return { id: `test-${name}`, name, createdAt: now, updatedAt: now };
@@ -315,6 +343,7 @@ if (typeof window !== "undefined") {
 			},
 			clear: async () => undefined,
 			delete: async () => undefined,
+			setDefault: async () => undefined,
 			discoverImportSources: async () => ({ sources: [] }),
 			import: async () => ({ sourceName: "", entries: [] }),
 			onImportProgress: () => () => undefined,
@@ -334,6 +363,12 @@ if (typeof window !== "undefined") {
 		appState: {
 			getMigration: async () => ({ status: "pending" }),
 			setMigration: async () => undefined,
+		},
+		cliLink: {
+			setEnabled: async () => undefined,
+			inspect: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
+			link: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
+			unlink: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
 		},
 		updateSettings: {
 			get: async () => ({ enabled: false, channel: "latest", nightlyAck: false, feature: null, macDifferentialUpdates: false }),
@@ -376,6 +411,8 @@ if (typeof window !== "undefined") {
 			disconnect: async () => undefined,
 			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
+		agentBrowserUrl: async () => "",
+			externalUrl: async (_hostId: string, url: string) => url,
 		},
 		cloud: {
 			getSession: async () => null,
@@ -397,6 +434,7 @@ if (typeof window !== "undefined") {
 			openStream: async () => ({ streamId: "stream_test" }),
 			closeStream: () => undefined,
 			onStreamEvent: () => () => undefined,
+			agentBrowserUrl: async () => "",
 		},
 	};
 } // end if (typeof window !== "undefined")
