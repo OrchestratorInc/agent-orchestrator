@@ -21,6 +21,7 @@ import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import { buildIntake } from "./IntakeFields";
 import { ReviewerSelect, reviewerTrustWarning } from "./ReviewerSelect";
 import { ProjectSettingsEditor, type ProjectAgentPickerProps, type ProjectSettingsDraft } from "./ProjectSettingsEditor";
+import { GatewayProvidersSection } from "./settings/GatewayProvidersSection";
 import { CloudProjectSettingsAdapter } from "./CloudProjectSettingsForm";
 
 type Project = components["schemas"]["Project"];
@@ -39,7 +40,7 @@ type SettingsSaveResult = {
 	spawnError: unknown;
 };
 
-export type ProjectSettingsSection = "general" | "agents";
+export type ProjectSettingsSection = "general" | "agents" | "gateway";
 export type ProjectSettingsSaveState = {
 	phase: "idle" | "pending" | "saving" | "saved" | "failed";
 	dirty?: boolean;
@@ -330,6 +331,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		modelScope={() => projectId} defaultReviewer={(draft) => WORKER_DEFAULT_REVIEWERS[draft.workerAgent] ?? "claude-code"}
 		reviewerWarning={reviewerTrustWarning} save={save} saveUnchanged onSaveState={onSaveState}
 		modelHostId={hostId}
+		gatewayExtra={<GatewayProvidersSection projectId={projectId} />}
 		renderAgent={(props) => <LocalAgentPicker {...props} projectId={projectId} hostId={hostId} agentsQuery={agentsQuery} />} />;
 }
 

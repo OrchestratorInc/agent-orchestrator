@@ -58,6 +58,7 @@ import (
 	cuesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/cue"
 	devimportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/devimport"
 	fsbrowsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/fsbrowser"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/gateway"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/githubpat"
 	importsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/importer"
 	linkpreviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/linkpreview"
@@ -73,6 +74,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/terminal"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
 )
 
 // usageReconcileTick is the safety-net interval for the usage pipeline
@@ -648,6 +650,20 @@ func Run() error {
 	lcStack.LCM.SetSessionOperationGate(sessMgr)
 	termMgr.SetSessionInputLease(sessMgr)
 	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Logger: log, OnModelScopeChanged: agentSvc.InvalidateProjectModelCatalogs})
+
+	// Gateway settings write through the same Claude settings files the
+	// launch path reads, so the UI can never disagree with what agents run
+	// with. The project lookup resolves the project scope's workspace path;
+	// the config-dir resolver shares agentcreds' precedence.
+	gatewaySvc := gateway.New(func() (string, error) {
+		return agentcreds.ClaudeConfigDir(agentcreds.ResolveOptions{Env: os.Getenv})
+	}, func(ctx context.Context, projectID string) (string, error) {
+		result, err := projectSvc.Get(ctx, domain.ProjectID(projectID))
+		if err != nil {
+			return "", err
+		}
+		return result.Project.Path, nil
+	})
 	reportSessions, ok := sessMgr.(reportSemanticSession)
 	if !ok {
 		return errors.New("wire report delivery: session manager lacks semantic send support")
@@ -968,6 +984,7 @@ func Run() error {
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
 		Conversations:      chatSvc,
 		Settings:           settingsSvc,
+		Gateway:            gatewaySvc,
 		CDC:                store,
 		Events:             cdcPipe.Broadcaster,
 		Activity:           lcStack.LCM,

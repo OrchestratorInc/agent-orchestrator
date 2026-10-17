@@ -1,4 +1,4 @@
-import { Activity, BadgeCheck, Bot, CircleHelp, CreditCard, Globe2, Keyboard, RefreshCw, Server, Settings2, Smartphone, type LucideIcon } from "lucide-react";
+import { Activity, BadgeCheck, Bot, CircleHelp, CreditCard, Globe2, Keyboard, Network, RefreshCw, Server, Settings2, Smartphone, type LucideIcon } from "lucide-react";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
@@ -8,6 +8,7 @@ import { BrowserProfilesSection } from "./BrowserProfilesSection";
 import { CoderSettingsSection } from "./CoderSettingsSection";
 import { CodexAccountsSection } from "./CodexAccountsSection";
 import { ConnectMobileContent } from "./ConnectMobileContent";
+import { GatewayProvidersSection } from "./GatewayProvidersSection";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
 import { KeyboardShortcutsContent } from "./KeyboardShortcutsContent";
@@ -77,6 +78,12 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		icon: BadgeCheck,
 		label: (t) => t("settings.agents"),
 		render: (_t, titleHidden) => <CodexAccountsSection titleHidden={titleHidden} />,
+	},
+	{
+		id: "gateway",
+		icon: Network,
+		label: (t) => t("settings.gateway.title"),
+		render: (_t, titleHidden) => <GatewayProvidersSection titleHidden={titleHidden} />,
 	},
 	{
 		id: "billing",

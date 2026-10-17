@@ -51,7 +51,10 @@ type APIDeps struct {
 	// answers 501 rather than panicking, matching the other optional surfaces.
 	Conversations controllers.ConversationService
 	// Settings is the daemon-owned preference surface.
-	Settings                 controllers.SettingsService
+	Settings controllers.SettingsService
+	// Gateway backs the Anthropic-compatible gateway settings routes; nil
+	// leaves them answering 501 like every other unwired surface.
+	Gateway                  controllers.GatewayService
 	DevImport                controllers.DevImportService
 	CDC                      cdc.Source
 	Events                   cdcSubscriber
@@ -197,7 +200,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		cues:          &controllers.CuesController{Svc: deps.Cues},
 		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir)},
-		settings:      &controllers.SettingsController{Svc: deps.Settings},
+		settings:      &controllers.SettingsController{Svc: deps.Settings, Gateway: deps.Gateway},
 		dev:           &controllers.DevController{Import: deps.DevImport},
 		browser:       &controllers.BrowserController{Svc: deps.Browser},
 		system:        &controllers.SystemController{Checks: deps.SystemChecks},

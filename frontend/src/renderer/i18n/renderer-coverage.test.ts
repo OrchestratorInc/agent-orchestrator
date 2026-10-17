@@ -45,6 +45,10 @@ const approvedLiterals: Record<string, readonly string[]> = {
 	],
 	"components/settings/CoderSettingsSection.tsx": ["grep -q '^Ready' ~/.bootstrap-status"],
 	"components/settings/ConnectMobileSetup.tsx": ["tailscale ip -4"],
+	"components/settings/GatewayProvidersSection.tsx": [
+		"https://gateway.example.com",
+		"claude-sonnet-4-5",
+	],
 	"components/settings/UpdatesSection.tsx": ["PR #"],
 };
 

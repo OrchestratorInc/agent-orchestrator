@@ -1,4 +1,4 @@
-import { Bot, KeyRound, Loader2, MonitorCog, Play, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
+import { Bot, KeyRound, Loader2, MonitorCog, Network, Play, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -107,6 +107,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		projectSections.push({ id: "environment", label: t("settings.project.environment"), icon: KeyRound });
 		projectSections.push({ id: "cues", label: t("cues.title"), icon: Play });
 	}
+	// Gateway overrides write this machine's Claude settings files; the tab
+	// only applies to local projects.
+	if (localProjectScope) projectSections.push({ id: "gateway", label: t("settings.gateway.title"), icon: Network });
 
 	const isProjectSettings = displaySettings?.scope === "project";
 	const [activeSection, setActiveSection] = useState<GlobalSettingsSection>("general");

@@ -76,7 +76,7 @@ const roleFields: Record<ProjectSettingsRole, RoleFields> = {
 
 // Both persistence adapters render this page. Drafts, validation, autosave and
 // common controls live here so a UI change applies to local and Cloud projects.
-export function ProjectSettingsEditor({ initialValues, section, capabilities, details, workspaceRepos, repository, renderAgent, defaultReviewer = () => "", modelScope, modelHostId, reviewerWarning, autoReviewDescription, save, onSaveState, saveUnchanged = false, disabled = false, generalExtra }: {
+export function ProjectSettingsEditor({ initialValues, section, capabilities, details, workspaceRepos, repository, renderAgent, defaultReviewer = () => "", modelScope, modelHostId, reviewerWarning, autoReviewDescription, save, onSaveState, saveUnchanged = false, disabled = false, generalExtra, gatewayExtra }: {
 	initialValues: ProjectSettingsDraft;
 	section: SettingsSection;
 	capabilities: Capabilities;
@@ -95,6 +95,8 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	saveUnchanged?: boolean;
 	/** Read-only sections appended to the General page (e.g. a Cloud project's Coder template). */
 	generalExtra?: ReactNode;
+	/** Body of the Gateway section (the per-project provider override). */
+	gatewayExtra?: ReactNode;
 	/** Pauses autosave and submit, e.g. while the owning host is offline. */
 	disabled?: boolean;
 }) {
@@ -166,7 +168,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	const warning = reviewerWarning?.(draft.reviewerHarness);
 	return <ProjectSettingsFormView id="project-settings-form" className={`project-settings-form${capabilities.runtimeDefaults ? " cloud-project-settings-form" : ""}`} onSubmit={submit}>
 		<fieldset disabled={disabled || mutation.isPending} className="flex min-w-0 flex-col gap-(--size-settings-section-gap)">
-			{section === "general" ? <>
+			{section === "gateway" ? gatewayExtra : section === "general" ? <>
 				<ProjectSettingsSection title={t("settings.project.details")} grouped>
 					<ProjectSettingsInputRow id="projectName" label={t("settings.project.name")} editLabel={t("settings.field.edit", { label: t("settings.project.name") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.displayName} onChange={(displayName) => patch({ displayName })} />
 					{details.map((detail) => <ProjectSettingsValueRow key={detail.label} {...detail} externalLink={ProductExternalLink} />)}
