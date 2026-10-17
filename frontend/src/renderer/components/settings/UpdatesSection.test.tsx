@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { UpdatesSection } from "./UpdatesSection";
 import { useUiStore } from "../../stores/ui-store";
@@ -110,4 +110,31 @@ it("links PRs and commits in downloaded notes from the renamed repository", asyn
 	expect(await screen.findByRole("link", { name: "#6228" })).toHaveAttribute("href", `${repo}/pull/6228`);
 	expect(screen.getByRole("link", { name: "7b7db96" })).toHaveAttribute("href", `${repo}/commit/${commit}`);
 	expect(screen.queryByText(/@illegalcall/)).toBeNull();
+});
+
+it.each(["downloaded", "error"] as const)("shows updating feedback immediately until the update reaches %s", async (state) => {
+	let emit: (status: UpdateStatus) => void = () => undefined;
+	updOnStatus.mockImplementation((listener: typeof emit) => {
+		emit = listener;
+		return () => undefined;
+	});
+	updGetStatus.mockResolvedValue({ state: "available", version: "9.9.9" } satisfies UpdateStatus);
+	renderUpdates();
+
+	fireEvent.click(await screen.findByRole("button", { name: "Update to v9.9.9" }));
+	const updating = screen.getByRole("button", { name: "Updating…" });
+	expect(updating).toBeVisible();
+	expect(updating).toBeDisabled();
+	expect(updating).toHaveAttribute("aria-busy", "true");
+
+	act(() => emit({ state: "downloading", version: "9.9.9", percent: 42 }));
+	expect(screen.getByRole("button", { name: "Updating…" })).toBeDisabled();
+	act(() => emit({ state: "preparing", version: "9.9.9" }));
+	expect(screen.getByRole("button", { name: "Updating…" })).toBeDisabled();
+
+	act(() => emit({ state, version: "9.9.9", ...(state === "error" ? { message: "Download failed" } : {}) }));
+	expect(screen.queryByRole("button", { name: "Updating…" })).not.toBeInTheDocument();
+	if (state === "downloaded") expect(screen.getByRole("button", { name: "Restart & install" })).toBeEnabled();
+	else expect(screen.getByText("Download failed")).toBeVisible();
+	expect(screen.getByRole("button", { name: "Check for updates" })).toBeEnabled();
 });

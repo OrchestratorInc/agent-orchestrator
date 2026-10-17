@@ -517,16 +517,22 @@ function UpdateActions({
 				    the primary label used to carry the full nightly stamp and grew
 				    across the version. The target build is named in the status line. */}
 				<div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-					{status.state === "available" && (
+					{(status.state === "available" || downloading) && (
 						<Button
 							type="button"
 							variant="primary"
 							size="sm"
-							aria-label={status.version ? t("settings.updates.updateTo", { version: `v${status.version}` }) : t("settings.updates.updateToLatest")}
+							aria-label={downloading ? t("settings.updates.updating") : status.version ? t("settings.updates.updateTo", { version: `v${status.version}` }) : t("settings.updates.updateToLatest")}
+							aria-busy={downloading}
+							disabled={downloading}
 							onClick={() => void requestUpdateDownload()}
 						>
-							<Download className="size-icon-sm" aria-hidden="true" />
-							{t("settings.updates.update")}
+							{downloading ? (
+								<Loader2 className="size-icon-sm animate-spin motion-reduce:animate-none" aria-hidden="true" />
+							) : (
+								<Download className="size-icon-sm" aria-hidden="true" />
+							)}
+							{downloading ? t("settings.updates.updating") : t("settings.updates.update")}
 						</Button>
 					)}
 					{(!downloading && (status.state === "downloaded" || (status.staged && status.staged.ready !== false))) && (
