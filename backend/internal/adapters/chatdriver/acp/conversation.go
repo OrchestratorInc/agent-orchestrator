@@ -396,7 +396,7 @@ func (c *conversation) ReconnectedLive() bool { return c.proc.reconnected }
 // ActivateLiveReconnect installs the durable turn correlation before releasing
 // replayed ACP updates to the SDK. This prevents a replacement daemon from
 // attributing output to an empty turn or starting a second root prompt.
-func (c *conversation) ActivateLiveReconnect(ctx context.Context, providerTurnID string) error {
+func (c *conversation) ActivateLiveReconnect(ctx context.Context, providerTurnID string, _ func([]ports.ChatEvent) []ports.ChatEvent) error {
 	if !c.proc.reconnected || c.liveState == nil || c.proc.gate == nil {
 		return nil
 	}

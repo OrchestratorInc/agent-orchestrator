@@ -1342,6 +1342,78 @@ func reconcileNativeHistory(
 	return reconciled
 }
 
+// reconcileLiveTurnHistory keeps the pending turn's native repair on its existing
+// AO items. Only a prefix unique in both directions can correlate regenerated
+// prose IDs; ambiguous or unrelated content remains separate.
+func reconcileLiveTurnHistory(providerTurnID string, existing ConversationRows, events []ports.ChatEvent) []ports.ChatEvent {
+	var settledMessages []domain.ConversationMessage
+	for _, message := range existing.Messages {
+		if !message.Streaming {
+			settledMessages = append(settledMessages, message)
+		}
+	}
+	events = reconcileNativeHistory(events, existing.Turns, settledMessages, existing.Activities)
+	type streamedItem struct {
+		id, text     string
+		kind         ports.ChatEventKind
+		activityKind domain.ActivityKind
+	}
+	turnID := ""
+	for _, turn := range existing.Turns {
+		if turn.ProviderTurnID == providerTurnID {
+			turnID = turn.ID
+			break
+		}
+	}
+	var pending []streamedItem
+	for _, message := range existing.Messages {
+		if message.TurnID == turnID && message.Role == domain.MessageRoleAssistant && message.Streaming && message.ProviderItemID != "" && message.Text != "" {
+			pending = append(pending, streamedItem{id: message.ProviderItemID, text: message.Text, kind: ports.ChatEventMessageCompleted})
+		}
+	}
+	for _, activity := range existing.Activities {
+		if activity.TurnID == turnID && activity.Kind == domain.ActivityKindReasoning && activity.Status == domain.ActivityStatusRunning && activity.ProviderItemID != "" && activity.StreamedText != "" {
+			pending = append(pending, streamedItem{id: activity.ProviderItemID, text: activity.StreamedText, kind: ports.ChatEventActivityCompleted, activityKind: activity.Kind})
+		}
+	}
+	nativeMatches := make(map[string]int)
+	for _, event := range events {
+		if event.ProviderTurnID != providerTurnID || event.Text == "" {
+			continue
+		}
+		for _, item := range pending {
+			if item.kind == event.Kind && item.activityKind == event.ActivityKind &&
+				(item.id == event.ProviderItemID || strings.HasPrefix(event.Text, item.text)) {
+				nativeMatches[item.id]++
+			}
+		}
+	}
+	used := make(map[string]bool)
+	for i, event := range events {
+		if event.ProviderTurnID != providerTurnID || event.Text == "" {
+			continue
+		}
+		match, count, exact := "", 0, false
+		for _, item := range pending {
+			if item.kind != event.Kind || item.activityKind != event.ActivityKind {
+				continue
+			}
+			if item.id == event.ProviderItemID {
+				match, count, exact = item.id, 1, true
+				break
+			}
+			if strings.HasPrefix(event.Text, item.text) {
+				match, count = item.id, count+1
+			}
+		}
+		if count == 1 && !used[match] && (exact || nativeMatches[match] == 1) {
+			events[i].ProviderItemID = match
+			used[match] = true
+		}
+	}
+	return events
+}
+
 func knownTurnOutcome(state domain.TurnState) bool {
 	switch state {
 	case domain.TurnStateCompleted, domain.TurnStateInterrupted, domain.TurnStateFailed:

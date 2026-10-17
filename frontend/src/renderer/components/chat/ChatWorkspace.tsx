@@ -750,6 +750,8 @@ function ChatWorkspaceContent({
 	if (snapshot.controller.state === "ready" || snapshot.controller.state === "busy") wakingFromHibernate.current = false;
 	if (snapshot.controller.state === "stopped" && !resumingAgent) wakingFromHibernate.current = false;
 	const suppressStopped = wakingFromHibernate.current && snapshot.controller.state === "stopped";
+	// Startup recovery owns the resume gate until status verification finishes.
+	const recoveringAgent = session?.statusReadiness === "checking" && snapshot.controller.state === "stopped";
 	const startupState =
 		session?.provisionState === "provisioning" || session?.provisionState === "failed"
 			? session.provisionState
@@ -1689,7 +1691,7 @@ function ChatWorkspaceContent({
 						</div>
 					) : null}
 					<ControllerBanner
-						controller={snapshot.controller}
+						controller={recoveringAgent ? { state: "connecting" } : snapshot.controller}
 						provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
 						transitioning={controllerTransitioning || agentResuming}
 						automaticWakePending={suppressStopped}
@@ -1833,6 +1835,8 @@ function ChatWorkspaceContent({
 												? setupPlaceholder
 												: controllerTransitioning || newWorkDisabled
 												? ""
+												: recoveringAgent
+													? "Restoring your conversation"
 												: agentResuming
 													? (sessionRole === "orchestrator" ? "Starting the orchestrator" : "Resuming agent")
 													: undefined

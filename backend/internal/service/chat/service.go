@@ -898,7 +898,10 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	if liveReconnect {
 		providerTurnID := controller.restoreLiveTurnOwnership(liveRows.Turns)
 		if activator, ok := conv.(ports.ChatLiveReconnectActivator); ok {
-			if err := activator.ActivateLiveReconnect(ctx, providerTurnID); err != nil {
+			reconcile := func(events []ports.ChatEvent) []ports.ChatEvent {
+				return reconcileLiveTurnHistory(providerTurnID, liveRows, events)
+			}
+			if err := activator.ActivateLiveReconnect(ctx, providerTurnID, reconcile); err != nil {
 				_ = cleanupUnpublishedConversation(conv, false)
 				return nil, err
 			}

@@ -1773,6 +1773,39 @@ describe("ChatWorkspace timeline", () => {
 		expect(openShell).toHaveBeenCalledOnce();
 	});
 
+	it.each(["ready", "unavailable"] as const)("waits for startup recovery before offering resume when status becomes %s", async (statusReadiness) => {
+		const resume = vi.fn();
+		const openShell = vi.fn();
+		const snapshot = {
+			...chatFixtureSettled,
+			controller: { state: "stopped" as const, error: "Controller disconnected during update" },
+		};
+		const props = { snapshot, onResumeAgent: resume, onOpenShell: openShell, resumeError: "The agent is already being resumed" };
+		const view = render(<ChatWorkspace {...props} session={{ ...chatSession, statusReadiness: "checking" }} />);
+
+		expect(screen.getByText("Connecting to the agent…")).toBeInTheDocument();
+		expect(screen.getByText("Restoring your conversation")).toBeInTheDocument();
+		expect(screen.getByTestId("chat-conversation-panel")).not.toHaveAttribute("inert");
+		expect(screen.getAllByText(/Check the worktree state/).length).toBeGreaterThan(0);
+		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "false");
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+		expect(screen.queryByText(props.resumeError)).not.toBeInTheDocument();
+		expect(screen.queryByText(snapshot.controller.error)).not.toBeInTheDocument();
+		expect(resume).not.toHaveBeenCalled();
+
+		view.rerender(<ChatWorkspace {...props} session={{ ...chatSession, statusReadiness }} />);
+		expect(screen.queryByText("Connecting to the agent…")).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.queryByText("Restoring your conversation")).not.toBeInTheDocument());
+		expect(screen.getByRole("alert")).toHaveTextContent("The agent controller stopped");
+		expect(screen.getByText(snapshot.controller.error)).toBeInTheDocument();
+		expect(screen.getByText(props.resumeError)).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Resume agent" }));
+		await userEvent.click(screen.getByRole("button", { name: "Open shell" }));
+		expect(resume).toHaveBeenCalledOnce();
+		expect(openShell).toHaveBeenCalledOnce();
+	});
+
 	it("keeps a sleeping conversation usable without exposing wake controls", async () => {
 		const user = userEvent.setup();
 		const resume = vi.fn();

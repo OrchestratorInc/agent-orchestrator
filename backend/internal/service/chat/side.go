@@ -901,7 +901,7 @@ func (m *sideManager) restore(ctx context.Context, side domain.SideConversation)
 				break
 			}
 		}
-		if err := activator.ActivateLiveReconnect(ctx, activeProviderID); err != nil {
+		if err := activator.ActivateLiveReconnect(ctx, activeProviderID, nil); err != nil {
 			_ = conv.Close()
 			m.service.log.Warn("side provider replay activation failed", "side", side.ID, "error", err)
 			_ = m.store.SetSideFailed(context.Background(), side.ID, side.Generation,
