@@ -947,8 +947,11 @@ func usageEventReplayDisposition(existing gen.GetModelUsageEventByKeyRow, event 
 	}
 	// A stored row with no billing attribution predates this feature. Keep it
 	// token-only comparable so replay never rejects it; the legacy repairer owns
-	// filling that column in.
-	if !genericMatches || !existing.BillingProviderID.Valid {
+	// filling that column in. Symmetrically, a replay that names no route
+	// cannot contradict a stored attribution: live parsing never infers one, so
+	// a row the repairer attributed by inference replays unattributed, and
+	// rejecting that would strand the replaying source at its first chunk.
+	if !genericMatches || !existing.BillingProviderID.Valid || event.BillingProviderID == "" {
 		return genericMatches, false
 	}
 	// An inference is intentionally replaceable by the first observation. That
