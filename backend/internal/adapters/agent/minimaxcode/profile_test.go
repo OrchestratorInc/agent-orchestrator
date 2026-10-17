@@ -20,7 +20,7 @@ func writeRefreshFixture(t *testing.T, path, content string) {
 	}
 }
 
-func TestProfileRefreshPreservesSnapshotWhenSourceAuthIsMissing(t *testing.T) {
+func TestProfileRefreshPreservesPrivateAuthWhenSourceAuthIsMissing(t *testing.T) {
 	for _, mode := range []string{"tui", "chat"} {
 		t.Run(mode, func(t *testing.T) {
 			source, data := t.TempDir(), t.TempDir()
@@ -46,10 +46,6 @@ func TestProfileRefreshPreservesSnapshotWhenSourceAuthIsMissing(t *testing.T) {
 			if err := prepare(); err != nil {
 				t.Fatal(err)
 			}
-			previousConfig, err := os.ReadFile(filepath.Join(profile, "config.yaml"))
-			if err != nil {
-				t.Fatal(err)
-			}
 			writeRefreshFixture(t, filepath.Join(profile, "v2", "history-proof"), "native-history")
 			if err := os.Remove(filepath.Join(source, "auth", "token")); err != nil {
 				t.Fatal(err)
@@ -58,11 +54,18 @@ func TestProfileRefreshPreservesSnapshotWhenSourceAuthIsMissing(t *testing.T) {
 				t.Fatal(err)
 			}
 			writeRefreshFixture(t, filepath.Join(source, "config.yaml"), "defaultModel: p/replacement\n")
-			if err := prepare(); err == nil || !strings.Contains(err.Error(), "source auth is missing") {
-				t.Fatalf("missing source auth refresh = %v, want preservation error", err)
+			if err := prepare(); err != nil {
+				t.Fatalf("missing source auth prevented profile reuse: %v", err)
+			}
+			config, err := os.ReadFile(filepath.Join(profile, "config.yaml"))
+			if err != nil || !strings.Contains(string(config), "defaultModel: p/replacement") {
+				t.Fatalf("config-only provider settings were not refreshed: %q, %v", config, err)
+			}
+			if mode == "tui" && !strings.Contains(string(config), "permissionMode: auto") {
+				t.Fatalf("config refresh lost AO permission selection: %s", config)
 			}
 			for name, want := range map[string]string{
-				"config.yaml": string(previousConfig), "auth/token": "working-token", "v2/history-proof": "native-history",
+				"auth/token": "working-token", "v2/history-proof": "native-history",
 			} {
 				got, err := os.ReadFile(filepath.Join(profile, name))
 				if err != nil || string(got) != want {
@@ -135,6 +138,23 @@ func TestProfileRefreshSupportsConfigOnlyCredentials(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(target, "auth")); !os.IsNotExist(err) {
 		t.Fatalf("config-only refresh invented auth directory: %v", err)
+	}
+	// Native MiniMax creates this private directory even if the source uses
+	// only config.yaml credentials. A replacement process must still launch.
+	writeRefreshFixture(t, filepath.Join(target, "auth", "native-state"), "private-native-state")
+	updated := strings.ReplaceAll(config, "inline-key", "rotated-inline-key")
+	writeRefreshFixture(t, filepath.Join(source, "config.yaml"), updated)
+	if err := refreshProfileCredentials(context.Background(), target, source); err != nil {
+		t.Fatalf("native-created auth blocked config-only restore: %v", err)
+	}
+	for path, want := range map[string]string{
+		filepath.Join(target, "config.yaml"):          updated,
+		filepath.Join(target, "auth", "native-state"): "private-native-state",
+	} {
+		got, err := os.ReadFile(path)
+		if err != nil || string(got) != want {
+			t.Fatalf("config-only restore changed %s: %q, %v", path, got, err)
+		}
 	}
 }
 

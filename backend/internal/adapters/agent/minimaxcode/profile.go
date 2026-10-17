@@ -233,13 +233,8 @@ func refreshProfileCredentials(ctx context.Context, target, source string) error
 	auth := filepath.Join(target, "auth")
 	info, err := os.Lstat(stagedAuth)
 	if errors.Is(err, os.ErrNotExist) {
-		// An absent source is not an explicit credential replacement. Refuse
-		// to pair its new config with an existing private auth snapshot.
-		if _, err := os.Lstat(auth); err == nil {
-			return errors.New("MiniMax source auth is missing; previous credentials and config were preserved")
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
+		// Config-only providers need no source auth directory. MiniMax may
+		// create private auth state at runtime; leave it intact on restore.
 		return hookutil.AtomicWriteFile(filepath.Join(target, "config.yaml"), config, 0o600)
 	}
 	if err != nil {
