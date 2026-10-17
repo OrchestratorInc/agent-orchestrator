@@ -496,6 +496,9 @@ type Manager struct {
 	// not be removed). A later reconciliation pass may reclaim exactly these
 	// gates; an actively-running switch remains non-reentrant.
 	retainedSwitches map[domain.SessionID]struct{}
+	// queuedReconciles marks startup reconcile reservations whose health probe
+	// has not started yet. Kill may take these over instead of failing.
+	queuedReconciles map[domain.SessionID]struct{}
 	inputLeases      map[domain.SessionID]int
 	inputDrained     map[domain.SessionID]chan struct{}
 	// handoffWait bounds optional source-agent enrichment. Time spent waiting
@@ -4098,6 +4101,10 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 		go func() {
 			defer wg.Done()
 			for rec := range jobs {
+				if !m.claimQueuedReconcile(rec.ID) {
+					m.finishStatusRecovery(ctx, rec, nil)
+					continue
+				}
 				m.beginStatusRecovery(rec.ID)
 				err := func() error {
 					defer m.endAgentOperation(rec.ID, agentOperationReconcile)
