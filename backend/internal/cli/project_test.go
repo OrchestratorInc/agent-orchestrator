@@ -85,6 +85,45 @@ func TestProjectSetConfig_TrackerIntakeJSON(t *testing.T) {
 	}
 }
 
+func TestBuildProjectConfigJSONRejectsUnknownKeys(t *testing.T) {
+	for _, raw := range []string{
+		`{"typoOnly":true}`,
+		`{"worker":{"agent":"amp","agentConfgi":{"mode":"ultra"}}}`,
+		`{"sessionPrefix":"work"} {"sessionPrefix":"other"}`,
+	} {
+		_, err := buildProjectConfig(projectSetConfigOptions{configJSON: raw})
+		if err == nil {
+			t.Fatalf("buildProjectConfig(%s) succeeded; want error", raw)
+		}
+	}
+}
+
+func TestBuildProjectConfigJSONKeepsPreRemove(t *testing.T) {
+	got, err := buildProjectConfig(projectSetConfigOptions{configJSON: `{"preRemove":["make clean"]}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.PreRemove) != 1 || got.PreRemove[0] != "make clean" {
+		t.Fatalf("preRemove = %#v, want make clean", got.PreRemove)
+	}
+}
+
+func TestProjectSetConfig_UnknownJSONKeyDoesNotReplaceConfig(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, capture := projectServer(t, http.StatusOK, `{"project":{"id":"demo","path":"/repo/demo"}}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+	}, "project", "set-config", "demo", "--config-json", `{"typoOnly":true}`)
+	if err == nil || !strings.Contains(err.Error(), "typoOnly") {
+		t.Fatalf("err = %v, want unknown field error naming typoOnly", err)
+	}
+	if capture.method == http.MethodPut && strings.HasSuffix(capture.path, "/config") {
+		t.Fatalf("daemon received a config replacement for an invalid config: %s", capture.body)
+	}
+}
+
 func TestBuildProjectConfigTrackerIntakeFlags(t *testing.T) {
 	got, err := buildProjectConfig(projectSetConfigOptions{
 		trackerIntake:   true,

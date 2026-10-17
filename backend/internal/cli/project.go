@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"reflect"
 	"sort"
@@ -115,6 +116,7 @@ type projectConfig struct {
 	Env               map[string]string    `json:"env,omitempty"`
 	Symlinks          []string             `json:"symlinks,omitempty"`
 	PostCreate        []string             `json:"postCreate,omitempty"`
+	PreRemove         []string             `json:"preRemove,omitempty"`
 	AgentRules        string               `json:"agentRules,omitempty"`
 	AgentRulesFile    string               `json:"agentRulesFile,omitempty"`
 	OrchestratorRules string               `json:"orchestratorRules,omitempty"`
@@ -361,9 +363,16 @@ func buildProjectConfig(opts projectSetConfigOptions) (projectConfig, error) {
 		return projectConfig{}, nil
 	}
 	if opts.configJSON != "" {
+		// Unknown keys are rejected: a typo would otherwise be dropped and the
+		// empty remainder would replace the project's saved config.
 		var cfg projectConfig
-		if err := json.Unmarshal([]byte(opts.configJSON), &cfg); err != nil {
+		dec := json.NewDecoder(strings.NewReader(opts.configJSON))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&cfg); err != nil {
 			return projectConfig{}, usageError{fmt.Errorf("--config-json is not a valid JSON object: %w", err)}
+		}
+		if _, err := dec.Token(); err != io.EOF {
+			return projectConfig{}, usageError{errors.New("--config-json is not a valid JSON object: unexpected data after the object")}
 		}
 		return cfg, nil
 	}
