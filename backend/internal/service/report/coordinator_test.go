@@ -118,6 +118,38 @@ func TestCoordinatorUndeliverableBatchAttemptsAndBackoff(t *testing.T) {
 	}
 }
 
+// fencedClaimStore simulates the claim token evaporating between the claim
+// and the defer, as if the batch were fenced out under this token.
+type fencedClaimStore struct {
+	*coordinatorStore
+}
+
+func (s *fencedClaimStore) ClaimPendingReportBatch(ctx context.Context, project domain.ProjectID, token string, at time.Time) ([]domain.ReportRecord, error) {
+	claimed, err := s.coordinatorStore.ClaimPendingReportBatch(ctx, project, token, at)
+	for i := range s.reports {
+		if s.reports[i].ClaimToken == token {
+			s.reports[i].ClaimToken = ""
+		}
+	}
+	return claimed, err
+}
+
+func TestCoordinatorFencedOutDeferSurfacesError(t *testing.T) {
+	now := time.Date(2026, 10, 17, 11, 0, 0, 0, time.UTC)
+	store := &fencedClaimStore{newCoordinatorStore(now)}
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	store.add(reportAt("one", "worker", now, now, "unsupported"))
+	delivery := &coordinatorDelivery{submitErr: errors.New("session: semantic message acceptance unsupported")}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }, RetryDelay: time.Second})
+
+	if _, err := c.RunDue(context.Background()); err == nil || !strings.Contains(err.Error(), "semantic message acceptance unsupported") || !strings.Contains(err.Error(), "matched no claimed batch") {
+		t.Fatalf("err = %v, want the submit cause joined with the fenced-out defer", err)
+	}
+	if rec := store.reports[0]; rec.DeliveryState != domain.ReportClaimed || rec.DeliveryAttempts != 1 {
+		t.Fatalf("report = %#v, want it to stay claimed with one attempt", rec)
+	}
+}
+
 func TestCoordinatorStuckInterruptRateLimitAndCoalescing(t *testing.T) {
 	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
 	store := newCoordinatorStore(now)
