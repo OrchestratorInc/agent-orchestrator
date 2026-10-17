@@ -1187,6 +1187,20 @@ describe("controller catalogs during an interface handoff", () => {
 		}
 	});
 
+	it("keeps catalogs through a resume, except for an imported chat never opened", () => {
+		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "connecting" } };
+		const client = new QueryClient();
+		const { rerender } = render(<Wrapper client={client}><SessionChatSurface session={session} agentResuming /></Wrapper>);
+		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
+			expect(hook).toHaveBeenLastCalledWith(session.id, true, undefined);
+		}
+
+		rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session, needsResume: true }} agentResuming /></Wrapper>);
+		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
+			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
+		}
+	});
+
 	it("does not poll an unavailable controller after a failed handoff", () => {
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "stopped" } };
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);

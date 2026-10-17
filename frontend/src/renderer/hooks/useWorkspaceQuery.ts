@@ -229,6 +229,7 @@ function toLocalWorkspaceSession(
 		staleBinary: session.staleBinary ? { version: session.staleBinary.version, since: session.staleBinary.since, switchFailedAt: session.staleBinary.switchFailedAt ?? undefined } : undefined,
 		isTerminated: session.isTerminated,
 		workspaceCleanup: session.workspaceCleanup,
+		needsResume: session.needsResume,
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,
 		autoInjectReview: session.autoInjectReview ?? true,
 		autoInjectCI: session.autoInjectCI ?? true,
