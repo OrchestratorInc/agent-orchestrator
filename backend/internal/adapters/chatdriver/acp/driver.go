@@ -86,6 +86,12 @@ type Config struct {
 	SessionMode func(ports.PermissionMode) string
 	// SessionOptions maps AO's per-turn choices onto ACP config option ids.
 	SessionOptions func(ports.ChatTurnSettings) []SessionOption
+	// ResolveSessionOption optionally maps a provider-neutral selection against
+	// a snapshot of the live advertised catalog before sending it. Bindings use
+	// this when an initial model ID omits provider-owned variants. The result
+	// still passes RequireAdvertisedOptions; resolution never grants a choice
+	// the provider did not offer. Nil preserves the existing wire value.
+	ResolveSessionOption func(SessionOption, []ports.ChatConfigOption) (SessionOption, error)
 	// LaunchSessionOptions returns config options whose value is fixed for the
 	// whole session and known only from the launch, such as a persona the agent
 	// lets AO select by id but not by launch flag. They are set once after
@@ -119,6 +125,10 @@ type Config struct {
 	// into its own transcript. Replay starts no turn for it, so the agent's
 	// output after it stays in the turn before, as it did live.
 	HistoryNotice func(string) bool
+	// AfterInterrupt verifies provider quiescence before committing an interrupted
+	// turn or announcing Ready. A failed check preserves the host receipt for
+	// recovery rather than allowing another prompt. The callback must honor ctx.
+	AfterInterrupt func(context.Context, AgentRequest, string) error
 	// CanHibernate checks provider-owned work that outlives an ACP prompt.
 	CanHibernate func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 	// EncodeProviderConversationID and DecodeProviderConversationID let a binding
@@ -133,6 +143,10 @@ type Config struct {
 	// and Vertex chains AO cannot inspect at all. Optional.
 	OnAuthRejected func()
 }
+
+// AgentRequest calls a provider-owned JSON-RPC method, including legacy extension
+// names without the underscore required by the SDK. It never resends prompts.
+type AgentRequest func(context.Context, string, any) (json.RawMessage, error)
 
 // TurnSettingsValidator validates live turn settings against launch-time state.
 type TurnSettingsValidator func(ports.PermissionMode, ports.ChatTurnSettings) error
@@ -619,9 +633,11 @@ func (d *Driver) initialize(
 	conv.onAuthRejected = d.cfg.OnAuthRejected
 	conv.promptResponseFailure = d.cfg.PromptResponseFailure
 	conv.hibernationCheck = d.cfg.CanHibernate
+	conv.afterInterrupt = d.cfg.AfterInterrupt
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
 	conv.requireAdvertised = d.cfg.RequireAdvertisedOptions
+	conv.resolveOption = d.cfg.ResolveSessionOption
 	if proc.reconnected {
 		state := proc.acpState
 		if state == nil || len(state.InitializeResult) == 0 || len(state.SessionResult) == 0 || state.SessionID == "" {

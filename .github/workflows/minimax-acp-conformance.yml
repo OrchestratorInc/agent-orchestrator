@@ -1,0 +1,102 @@
+name: MiniMax ACP conformance
+
+on:
+  pull_request:
+    paths:
+      - "backend/internal/adapters/agent/minimaxcode/**"
+      - "backend/internal/adapters/chatdriver/minimaxacp/**"
+      - "backend/internal/adapters/chatdriver/acp/**"
+      - "backend/internal/adapters/chatdriver/nativeacp/**"
+      - "backend/internal/adapters/chatdriver/persistenthost/**"
+      - "backend/internal/adapters/chatdriver/registry/**"
+      - "backend/e2e/minimax_chat_native_test.go"
+      - "backend/go.mod"
+      - "backend/go.sum"
+      - ".github/workflows/minimax-acp-conformance.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minimax-acp-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  native-protocol:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GOMAXPROCS: "2"
+      GOFLAGS: "-p=2"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.21.0"
+      - name: Install the pinned official native CLI
+        shell: bash
+        run: |
+          echo "MINIMAX_DATA_DIR=$RUNNER_TEMP/minimax-acp-bootstrap" >> "$GITHUB_ENV"
+          echo "MAVIS_DATA_DIR=$RUNNER_TEMP/minimax-acp-bootstrap" >> "$GITHUB_ENV"
+          npm install --prefix "$RUNNER_TEMP/minimax-native" --include=optional --no-audit --no-fund @minimax-ai/code@0.6.5
+          echo "$RUNNER_TEMP/minimax-native/node_modules/.bin" >> "$GITHUB_PATH"
+          npm list --prefix "$RUNNER_TEMP/minimax-native" --depth=0
+      - name: Verify interruption admission and persistent replay
+        working-directory: backend
+        run: go test -race -count=1 -timeout=1m ./internal/adapters/chatdriver/acp -run '^(TestACPInterruptedTurnWaitsForNativeSettlement|TestPersistentACPInterruptedReplayCanReadSettlementResponse)$'
+      - name: Qualify native ACP against a controlled loopback provider
+        working-directory: backend
+        shell: bash
+        env:
+          AO_NATIVE_MINIMAX_ACP: "1"
+        run: |
+          set -o pipefail
+          go test -race -count=1 -v -timeout=8m ./internal/adapters/chatdriver/minimaxacp \
+            -run '^TestNativeMiniMaxACP(Conformance|ExactRestoreConformance)$' | tee "$RUNNER_TEMP/minimax-acp-conformance.log"
+      - name: Qualify candidate registration through the actual AO daemon
+        working-directory: backend
+        shell: bash
+        env:
+          AO_NATIVE_MINIMAX_ACP_E2E: "1"
+        run: |
+          python3 - <<'PYOVERLAY'
+          import hashlib, json, os
+          from pathlib import Path
+          source = Path("internal/adapters/chatdriver/registry/registry.go").resolve()
+          candidate = Path(os.environ["RUNNER_TEMP"]) / "minimax-registry-candidate.go"
+          overlay = candidate.with_suffix(".json")
+          original = source.read_text()
+          anchor = '\t"log/slog"\n'
+          constructor = "return New(\n"
+          assert original.count(anchor) == 1 and original.count(constructor) == 1
+          rewritten = original.replace(anchor, anchor + '\n\t"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/minimaxcode"\n\t"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/minimaxacp"\n')
+          rewritten = rewritten.replace(constructor, constructor + "\t\tminimaxacp.New(minimaxcode.New(), log),\n")
+          candidate.write_text(rewritten)
+          overlay.write_text(json.dumps({"Replace": {str(source): str(candidate)}}))
+          print("candidate registry SHA256=" + hashlib.sha256(rewritten.encode()).hexdigest())
+          print("original registry SHA256=" + hashlib.sha256(original.encode()).hexdigest())
+          PYOVERLAY
+          export GOFLAGS="$GOFLAGS -overlay=$RUNNER_TEMP/minimax-registry-candidate.json"
+          set -o pipefail
+          go test -count=1 -v -timeout=8m ./e2e \
+            -run '^TestNativeMiniMaxRegisteredChatAPI$' | tee "$RUNNER_TEMP/minimax-chat-api-conformance.log"
+      - name: Preserve Go formatting diagnostics
+        continue-on-error: true
+        if: always()
+        shell: bash
+        run: |
+          gofmt -d backend/e2e/minimax_chat_native_test.go backend/internal/adapters/chatdriver/acp backend/internal/adapters/chatdriver/nativeacp backend/internal/adapters/chatdriver/minimaxacp backend/internal/adapters/agent/minimaxcode > "$RUNNER_TEMP/minimax-format.patch"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: minimax-acp-conformance-log
+          path: |
+            ${{ runner.temp }}/minimax-acp-conformance.log
+            ${{ runner.temp }}/minimax-chat-api-conformance.log
+            ${{ runner.temp }}/minimax-format.patch
+          if-no-files-found: warn
+          retention-days: 14

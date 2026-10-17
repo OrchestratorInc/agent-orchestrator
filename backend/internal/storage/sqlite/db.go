@@ -2108,7 +2108,8 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsDeepSeek := !strings.Contains(schema, "'deepseek-harness'")
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
-	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
+	needsMiniMaxCode := !strings.Contains(schema, "'minimax-code'")
+	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsMiniMaxCode {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2215,6 +2216,9 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsCodewhale {
 		repairs = append(repairs, replacement{"'fake'))", "'codewhale', 'fake'))"})
 	}
+	if needsMiniMaxCode {
+		repairs = append(repairs, replacement{"'fake'))", "'minimax-code', 'fake'))"})
+	}
 	if needsCommandCode {
 		// Migration 0194 rewrites the constraint by anchoring on the retained
 		// 'fake' fixture harness, for the same reason as DeepSeek above. A
@@ -2270,6 +2274,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'openhands'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing OpenHands and did not match known pre-OpenHands schema")
+	}
+	if !strings.Contains(schema, "'minimax-code'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing MiniMax Code")
 	}
 	if !strings.Contains(schema, "'command-code'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Command Code and did not match known pre-Command-Code schema")

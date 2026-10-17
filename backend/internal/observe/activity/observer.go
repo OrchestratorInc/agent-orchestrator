@@ -133,7 +133,18 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 		session.Activity.State != domain.ActivityWaitingInput {
 		return
 	}
-	output, err := o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+	readOutput := o.runtime.GetOutput
+	if session.Harness == domain.HarnessMiniMaxCode {
+		if styled, available := o.runtime.(ports.StyledTerminalOutputReader); available {
+			// MiniMax needs the rendered footer and composer, not
+			// raw history (which can omit the current non-newline fragment).
+			// Capture failures must not fall back to stale raw output.
+			// Other harnesses retain their existing no-surface reconciliation,
+			// including on older detached hosts that cannot capture a surface.
+			readOutput = styled.GetStyledOutput
+		}
+	}
+	output, err := readOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
 	if err != nil {
 		o.logger.Debug("activity observer: terminal output unavailable", "session", session.ID, "err", err)
 		return

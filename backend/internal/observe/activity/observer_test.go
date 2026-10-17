@@ -12,6 +12,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/crush"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/droid"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/minimaxcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/muse"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -330,5 +331,92 @@ func TestPollReturnsSessionListFailure(t *testing.T) {
 	observer := New(fakeSessions{err: want}, &fakeSink{}, &fakeRuntime{}, nil, Config{Logger: testLogger()})
 	if err := observer.Poll(context.Background()); !errors.Is(err, want) {
 		t.Fatalf("error = %v, want %v", err, want)
+	}
+}
+
+// raw Tail excludes MiniMax's non-newline-terminated footer; the rendered
+// snapshot includes it and contains only the current composer.
+type styledRuntime struct {
+	fakeRuntime
+	surface      string
+	surfaceErr   error
+	surfaceCalls int
+}
+
+func (f *styledRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
+	f.surfaceCalls++
+	return f.surface, f.surfaceErr
+}
+
+func TestPollRetainsClaudeAndCodexReconciliationOnOlderHosts(t *testing.T) {
+	for _, tc := range []struct {
+		harness domain.AgentHarness
+		agent   ports.Agent
+		output  string
+		want    domain.ActivityState
+	}{
+		{domain.HarnessClaudeCode, claudecode.New(), claudeStuckActiveScreen, domain.ActivityWaitingInput},
+		{domain.HarnessCodex, codex.New(), "› Write tests for @filename\n\ngpt-5.6-sol low · ~/project\n", domain.ActivityIdle},
+	} {
+		t.Run(string(tc.harness), func(t *testing.T) {
+			now := time.Unix(500, 0).UTC()
+			sink := &fakeSink{}
+			runtime := &styledRuntime{
+				fakeRuntime: fakeRuntime{output: tc.output},
+				surfaceErr:  ports.ErrStyledTerminalOutputUnavailable,
+			}
+			observer := New(
+				fakeSessions{rows: []domain.SessionRecord{activeSession(now, tc.harness)}},
+				sink, runtime, fakeAgents{tc.harness: tc.agent},
+				Config{Clock: func() time.Time { return now }, Logger: testLogger()},
+			)
+			if err := observer.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(sink.signals) != 1 || sink.signals[0].State != tc.want {
+				t.Fatalf("reconciliation = %+v, want %s", sink.signals, tc.want)
+			}
+			if runtime.calls != 1 || runtime.surfaceCalls != 0 {
+				t.Fatalf("raw calls=%d surface calls=%d", runtime.calls, runtime.surfaceCalls)
+			}
+		})
+	}
+}
+
+func TestPollUsesCurrentMiniMaxSurface(t *testing.T) {
+	const draft = "Stopped · message restored to the Composer.\n───\n› cancelled request\n───\n"
+	const footer = "workspace │ Auto │ ✦ glm-5.3-flash"
+	for _, tt := range []struct {
+		name, raw, surface string
+		err                error
+		want               domain.ActivityState
+	}{
+		{name: "non-newline footer", raw: draft, surface: draft + footer, want: domain.ActivityIdle},
+		{name: "current active beats raw stopped", raw: draft + footer, surface: "Loading · Esc stop\n───\n› draft\n───\n" + footer},
+		{name: "unknown surface does not use old raw", raw: draft + footer, surface: "unknown screen"},
+		{name: "capture error does not use old raw", raw: draft + footer, err: errors.New("capture failed")},
+		{name: "old host does not use old raw", raw: draft + footer, err: ports.ErrStyledTerminalOutputUnavailable},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Unix(500, 0).UTC()
+			session := activeSession(now, domain.HarnessMiniMaxCode)
+			session.Activity.LastActivityAt = now.Add(-time.Second)
+			sink := &fakeSink{}
+			runtime := &styledRuntime{fakeRuntime: fakeRuntime{output: tt.raw}, surface: tt.surface, surfaceErr: tt.err}
+			observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, runtime, fakeAgents{domain.HarnessMiniMaxCode: minimaxcode.New()}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})
+			if err := observer.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if tt.want == "" {
+				if len(sink.signals) != 0 {
+					t.Fatalf("unproven surface changed activity: %+v", sink.signals)
+				}
+			} else if len(sink.signals) != 1 || sink.signals[0].State != tt.want {
+				t.Fatalf("signals=%+v want %s", sink.signals, tt.want)
+			}
+			if runtime.calls != 0 || runtime.surfaceCalls != 1 {
+				t.Fatalf("raw calls=%d surface calls=%d", runtime.calls, runtime.surfaceCalls)
+			}
+		})
 	}
 }

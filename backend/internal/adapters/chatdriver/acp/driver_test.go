@@ -5134,3 +5134,68 @@ func TestACPHistoryReplaySplitsIDLessPromptsAfterAnswers(t *testing.T) {
 		t.Fatalf("replayed turns = %+v, want %+v", turns, want)
 	}
 }
+
+// A binding may resolve an initial catalog ID to a provider-owned variant, but
+// the result still has to be offered. Bindings without a resolver keep their
+// existing exact-value behavior.
+func TestACPDriverSessionOptionResolverKeepsAdvertisedGate(t *testing.T) {
+	const native = "m:p:m:v:"
+	catalog := []acpsdk.SessionConfigOption{
+		selectConfigOption("model", "Model", "", native, native, "m:p:m:v:thinking"),
+	}
+	for _, tc := range []struct {
+		name        string
+		resolve     func(SessionOption, []ports.ChatConfigOption) (SessionOption, error)
+		wantInvalid bool
+	}{
+		{name: "nil keeps exact wire value", wantInvalid: true},
+		{name: "resolve native variant", resolve: func(option SessionOption, options []ports.ChatConfigOption) (SessionOption, error) {
+			option.Value = options[0].Current.Select
+			return option, nil
+		}},
+		{name: "resolver cannot invent a choice", wantInvalid: true, resolve: func(option SessionOption, _ []ports.ChatConfigOption) (SessionOption, error) {
+			option.Value = "not-advertised"
+			return option, nil
+		}},
+		{name: "resolver error prevents dispatch", wantInvalid: true, resolve: func(option SessionOption, _ []ports.ChatConfigOption) (SessionOption, error) {
+			return option, ports.ErrChatConfigOptionInvalid
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := &fakeAgent{newConfig: catalog}
+			driver := New(Config{
+				Harness:      domain.HarnessMiniMaxCode,
+				Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+				Probe:        func(context.Context) error { return nil },
+				Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+				SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+					return []SessionOption{{ID: "model", Value: settings.Model}}
+				},
+				ResolveSessionOption:     tc.resolve,
+				RequireAdvertisedOptions: true,
+			}, nil)
+			driver.useTestProcess(fakeSpawn(agent))
+			conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+				SessionID: "resolve-model", WorkspacePath: t.TempDir(), Model: "p/m",
+			})
+			if tc.wantInvalid {
+				if !errors.Is(err, ports.ErrChatConfigOptionInvalid) {
+					t.Fatalf("unqualified choice was not refused: %v", err)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer conv.Close()
+			}
+			agent.mu.Lock()
+			defer agent.mu.Unlock()
+			if tc.wantInvalid && agent.setCalls != 0 {
+				t.Fatal("unqualified choice reached the native setter")
+			}
+			if !tc.wantInvalid && agent.options["model"] != native {
+				t.Fatalf("wire model = %q, want %q", agent.options["model"], native)
+			}
+		})
+	}
+}
