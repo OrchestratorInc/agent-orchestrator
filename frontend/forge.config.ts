@@ -8,6 +8,12 @@ import electronPackage from "electron/package.json";
 import MakerNSIS from "./makers/maker-nsis";
 import MakerDMG, { isSigningConfigured, sealDmg, verifyDmg, verifyMacArtifact } from "./makers/maker-dmg";
 import { machoHasX86_64Slice } from "./makers/macho-archs";
+import {
+	macWebAuthnSigning,
+	readProvisioningProfileEntitlements,
+	writeEntitlementsPlist,
+} from "./makers/mac-webauthn-signing";
+import { WEBAUTHN_CONFIG_RESOURCE } from "./src/main/browser-webauthn";
 import MakerAppImage from "./makers/maker-appimage";
 import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -28,6 +34,7 @@ const DEFAULT_RELEASE_REPO = "Untrivial-ai/agent-orchestrator";
 // shortcut/launcher at the SAME name. Drift here means a broken Start menu
 // shortcut on Windows (#2414) or "could not find the Electron app binary" on deb.
 const EXECUTABLE_NAME = "agent-orchestrator";
+const APP_BUNDLE_ID = "dev.agent-orchestrator.desktop";
 const AUTH_PROTOCOL = {
 	name: "Agent Orchestrator authentication callback",
 	schemes: ["ao-app"],
@@ -62,7 +69,7 @@ async function prepareNativeDependencies(platform: NodeJS.Platform, arch: string
 	});
 }
 
-export function extraResourcesForPlatform(platform: NodeJS.Platform): string[] {
+export function extraResourcesForPlatform(platform: NodeJS.Platform, env: NodeJS.ProcessEnv = process.env): string[] {
 	return [
 		"daemon",
 		"agent-browser",
@@ -74,6 +81,8 @@ export function extraResourcesForPlatform(platform: NodeJS.Platform): string[] {
 		"assets/trayIconTemplate.png",
 		"assets/trayIconTemplate@2x.png",
 		"app-update.yml",
+		// Written in prePackage, only for a build signed with a passkey profile.
+		...(platform === "darwin" && env.AO_MAC_PROVISIONING_PROFILE ? [WEBAUTHN_CONFIG_RESOURCE] : []),
 	];
 }
 
@@ -94,7 +103,16 @@ const ACP_RUNTIME_NODE_ENTITLEMENTS = [
 	"com.apple.security.cs.allow-unsigned-executable-memory",
 ];
 
-export function macSignOptionsForFile(filePath: string): { entitlements?: string[] } {
+export function macSignOptionsForFile(
+	filePath: string,
+	appEntitlementsPath?: string,
+): { entitlements?: string | string[] } {
+	// The top-level bundle (signed last) carries the main executable's
+	// entitlements. Only a passkey-provisioned build overrides them; nested
+	// helpers keep their defaults because they embed no profile.
+	if (appEntitlementsPath && filePath.endsWith(".app") && !filePath.includes(".app/")) {
+		return { entitlements: appEntitlementsPath };
+	}
 	// Cheap gate first: optionsForFile is invoked for every Mach-O in the
 	// bundle, and only the nested Node path can need an override.
 	if (!filePath.endsWith(ACP_RUNTIME_NODE_PATH)) return {};
@@ -104,6 +122,33 @@ export function macSignOptionsForFile(filePath: string): { entitlements?: string
 	// without allow-unsigned-executable-memory is exactly the #3879 crash.
 	return machoHasX86_64Slice(filePath) ? { entitlements: ACP_RUNTIME_NODE_ENTITLEMENTS } : {};
 }
+
+// AO_MAC_PROVISIONING_PROFILE is a Developer ID provisioning profile for
+// APP_BUNDLE_ID that grants its ".webauthn" keychain access group. Signing with
+// it enables Touch ID passkeys in AO's Browser (#6782); without it the app is
+// signed exactly as before. See frontend/docs/desktop-release.md.
+const MAC_PROVISIONING_PROFILE = process.env.AO_MAC_PROVISIONING_PROFILE || undefined;
+let macWebAuthn: { keychainAccessGroup: string; entitlementsPath: string } | undefined;
+
+function resolveMacWebAuthn(profilePath: string): { keychainAccessGroup: string; entitlementsPath: string } {
+	if (!macWebAuthn) {
+		const signing = macWebAuthnSigning(profilePath, APP_BUNDLE_ID, readProvisioningProfileEntitlements(profilePath));
+		macWebAuthn = {
+			keychainAccessGroup: signing.keychainAccessGroup,
+			entitlementsPath: writeEntitlementsPlist(signing.appEntitlements),
+		};
+	}
+	return macWebAuthn;
+}
+
+function macOptionsForFile(filePath: string): ReturnType<typeof macSignOptionsForFile> {
+	return macSignOptionsForFile(
+		filePath,
+		MAC_PROVISIONING_PROFILE ? resolveMacWebAuthn(MAC_PROVISIONING_PROFILE).entitlementsPath : undefined,
+	);
+}
+
+const macProvisioningOptions = MAC_PROVISIONING_PROFILE ? { provisioningProfile: MAC_PROVISIONING_PROFILE } : {};
 
 // parseReleaseRepo turns an "owner/repo" string (from AO_RELEASE_REPO) into the
 // publisher-github { owner, name } shape, falling back to the production default
@@ -125,7 +170,7 @@ const config: ForgeConfig = {
 		// runtime dependency tree explicitly; AutoUnpackNativesPlugin then places
 		// the .node binary outside app.asar.
 		ignore: ignoreFromVitePackage,
-		appBundleId: "dev.agent-orchestrator.desktop",
+		appBundleId: APP_BUNDLE_ID,
 		name: "Agent Orchestrator",
 		executableName: EXECUTABLE_NAME,
 		protocols: [AUTH_PROTOCOL],
@@ -145,10 +190,11 @@ const config: ForgeConfig = {
 		osxSign: process.env.APPLE_SIGNING_IDENTITY
 			? {
 					identity: process.env.APPLE_SIGNING_IDENTITY,
-					optionsForFile: macSignOptionsForFile,
+					optionsForFile: macOptionsForFile,
+					...macProvisioningOptions,
 				}
 			: process.env.CSC_LINK
-				? { optionsForFile: macSignOptionsForFile }
+				? { optionsForFile: macOptionsForFile, ...macProvisioningOptions }
 				: undefined,
 		osxNotarize: process.env.AO_NOTARY_PROFILE
 			? { keychainProfile: process.env.AO_NOTARY_PROFILE }
@@ -188,6 +234,17 @@ const config: ForgeConfig = {
 				"",
 			].join("\n");
 			writeFileSync("app-update.yml", yml);
+			if (platform === "darwin" && MAC_PROVISIONING_PROFILE) {
+				// A profile on an unsigned build would ship the resource without
+				// the entitlement it promises.
+				if (!isSigningConfigured()) {
+					throw new Error("AO_MAC_PROVISIONING_PROFILE requires APPLE_SIGNING_IDENTITY or CSC_LINK");
+				}
+				// Validates the profile before anything is packaged. Sealed into
+				// the bundle like app-update.yml, so it is written before osxSign.
+				const { keychainAccessGroup } = resolveMacWebAuthn(MAC_PROVISIONING_PROFILE);
+				writeFileSync(WEBAUTHN_CONFIG_RESOURCE, `${JSON.stringify({ touchIDKeychainAccessGroup: keychainAccessGroup })}\n`);
+			}
 		},
 		packageAfterPrune: async (_forgeConfig, buildPath) => {
 			const nativeModule = path.join(
@@ -216,6 +273,12 @@ const config: ForgeConfig = {
 					const helper = path.join(resourcesPath, "update-helper", "ao-update-progress");
 					if (!existsSync(helper)) throw new Error(`packaged macOS update helper missing from ${helper}`);
 					if (!existsSync(path.join(resourcesPath, "wake-helper", "ao-wake"))) throw new Error(`packaged macOS wake helper missing from ${resourcesPath}`);
+					if (MAC_PROVISIONING_PROFILE) {
+						// keychain-access-groups without its profile is an app macOS kills at launch.
+						const profile = path.join(outputPath, appBundle, "Contents", "embedded.provisionprofile");
+						if (!existsSync(profile)) throw new Error(`packaged macOS app is missing its provisioning profile at ${profile}`);
+						if (!existsSync(path.join(resourcesPath, WEBAUTHN_CONFIG_RESOURCE))) throw new Error(`packaged macOS app is missing ${WEBAUTHN_CONFIG_RESOURCE}`);
+					}
 				}
 				const binary = path.join(resourcesPath, "tmux", "bin", "tmux");
 				if (!existsSync(binary)) throw new Error(`packaged tmux missing from ${binary}`);
