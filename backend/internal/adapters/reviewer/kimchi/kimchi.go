@@ -26,9 +26,9 @@ const HostTrustWarning = "experimental host-trusted reviewer: Kimchi tool allow/
 // The review protocol (review/prompt.go steps 1-2) stages payloads as base64
 // and posts or submits from the staged file:
 //
-//	printf '%s' '<base64>' | base64 -d > /tmp/ao-review-*.json
-//	gh api --method POST .../reviews --input /tmp/ao-review-post.json
-//	ao review submit --reviews /tmp/ao-review-results.json
+//	printf '%s' '<base64>' | base64 -d > /tmp/ao-review-<worker-session>-post.json
+//	gh api --method POST .../reviews --input /tmp/ao-review-<worker-session>-post.json
+//	ao review submit --session <worker-session> --reviews /tmp/ao-review-<worker-session>-results.json
 //
 // Kimchi's allow matcher is single-segment only, so piped commands can't be
 // auto-approved by an allow rule — they fall to the classifier under --auto.
