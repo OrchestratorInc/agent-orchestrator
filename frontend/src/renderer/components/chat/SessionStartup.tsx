@@ -18,7 +18,6 @@ export function SessionStartup({
 	steps,
 	error,
 	agentName,
-	namingBranch,
 	onRetry,
 	retrying,
 	retryError,
@@ -45,12 +44,11 @@ export function SessionStartup({
 					// The daemon leaves the stage it stopped in "running"; the failed
 					// session is what makes that stage the one that failed.
 					const status: StepStatus = failed && step.status === "running" ? "failed" : step.status;
-					// One plain-language label per step; the workspace step says so while
-					// its branch is being named.
+					// One plain-language label per step; the workspace step reports when it is done.
 					const label = step.id === "agent"
 						? t("chat.startup.step.agent", { agent: agentName })
-						: step.id === "worktree" && namingBranch && status === "running"
-							? t("chat.startup.step.naming")
+						: step.id === "worktree" && status === "done"
+							? t("chat.startup.step.worktreeDone")
 							: t(`chat.startup.step.${step.id}`);
 					return (
 						<li
