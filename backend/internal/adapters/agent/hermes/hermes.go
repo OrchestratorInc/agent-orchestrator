@@ -515,23 +515,24 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 		if strings.HasPrefix(line, nativeWarningPrompt) || strings.HasPrefix(line, nativeQuestionPrompt) {
 			return domain.ActivityBlocked, true
 		}
-		if strings.HasPrefix(line, nativeNamedPrompt) || (strings.HasPrefix(line, nativePrompt) && strings.Contains(line, "msg=interrupt")) {
+		if (strings.HasPrefix(line, nativePrompt) || strings.HasPrefix(line, nativeNamedPrompt)) && strings.Contains(line, "msg=interrupt") {
 			return domain.ActivityActive, true
 		}
-		if strings.HasPrefix(line, nativePrompt) {
+		if strings.HasPrefix(line, nativePrompt) || strings.HasPrefix(line, nativeNamedPrompt) {
 			break
 		}
 	}
 	if last >= 0 {
 		bottom := strings.TrimSpace(lines[last])
 		if len([]rune(bottom)) >= 16 && strings.Trim(bottom, "─") == "" &&
-			terminalui.LastBorderedPromptIsEmptyOrDimPlaceholder(composerOutput, nativePrompt) {
+			(terminalui.LastBorderedPromptIsEmptyOrDimPlaceholder(composerOutput, nativePrompt) ||
+				terminalui.LastBorderedPromptIsEmptyOrDimPlaceholder(composerOutput, nativeNamedPrompt)) {
 			return domain.ActivityIdle, true
 		}
 	}
 	for i := last; i >= 0 && i >= last-4; i-- {
 		line := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(line, nativePrompt) {
+		if strings.HasPrefix(line, nativePrompt) || strings.HasPrefix(line, nativeNamedPrompt) {
 			return domain.ActivityBlocked, true
 		}
 	}

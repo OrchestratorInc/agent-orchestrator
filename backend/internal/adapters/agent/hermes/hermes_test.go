@@ -83,7 +83,6 @@ func TestBorderedBusyComposerStaysActiveAndRefusesMessages(t *testing.T) {
 	for _, prompt := range []string{
 		"☤ ❯ \x1b[38;5;136;3mmsg=interrupt · /queue · Ctrl+C cancel\x1b[m",
 		"☤ ❯ \x1b[3mmsg=interrupt · /queue\x1b[m\n\x1b[3mCtrl+C cancel\x1b[m",
-		"☤ ❯ keep this busy draft",
 	} {
 		for _, prefix := range []string{"", idle + "\n"} {
 			frame := prefix + rule + "\n" + prompt + "\n" + rule
@@ -99,8 +98,14 @@ func TestBorderedBusyComposerStaysActiveAndRefusesMessages(t *testing.T) {
 			}
 		}
 	}
-	if state, ok := New().DetectTerminalActivity("☤ ❯ msg=interrupt\n" + idle); !ok || state != domain.ActivityIdle {
-		t.Fatalf("prior busy prompt overrode the current idle composer: %s/%v", state, ok)
+	for _, prompt := range []string{"❯ ", "☤ ❯ "} {
+		frame := "☤ ❯ msg=interrupt\n" + rule + "\n" + prompt + "\n" + rule
+		if state, ok := New().DetectTerminalActivity(frame); !ok || state != domain.ActivityIdle {
+			t.Fatalf("prior busy prompt overrode the current idle composer: %s/%v", state, ok)
+		}
+	}
+	if err := New().ValidateTerminalMessage("next task", rule+"\n☤ ❯ keep this draft\n"+rule); err == nil {
+		t.Fatal("composer with a draft admitted ordinary input")
 	}
 }
 
