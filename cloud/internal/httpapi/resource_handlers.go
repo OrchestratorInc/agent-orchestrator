@@ -305,6 +305,10 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if config, err = s.pinProjectProvider(r.Context(), principalFrom(r), orgID, config); err != nil {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project configuration is invalid.")
+		return
+	}
 	principal := principalFrom(r)
 	userStore, ok := s.store.(userProviderConnectionStore)
 	if !ok {
@@ -535,8 +539,8 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	providerFromProject := false
-	if projectProvider := domain.DecodeProjectSandboxProvider(project.Config); projectProvider != "" {
-		request.Provider = projectProvider
+	if provider := projectProvider(project.Config); provider != "" {
+		request.Provider = provider
 		providerFromProject = true
 	}
 	// A top-level worker created for a project that already has an active
@@ -570,7 +574,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	// provider cannot run cloud sessions at all.
 	principal := principalFrom(r)
 	if request.Provider == "" {
-		request.Provider = s.defaultProviderForOrg(principal, orgID)
+		request.Provider = s.defaultProviderForOrg(r.Context(), principal, orgID)
 		if request.Provider == "" {
 			writeProviderForbidden(w, r, "", false)
 			return
@@ -672,6 +676,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			BootstrapContext:    plan.BootstrapContext,
 			Release:             s.release,
 			ParentSessionID:     parentSessionID,
+			CoderCapability:     s.orgHasCoderCapability(principalFrom(r), orgID),
 		},
 	)
 	if err != nil {

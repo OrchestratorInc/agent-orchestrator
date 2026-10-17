@@ -20,7 +20,7 @@ func TestMastraMigrationAndBurnedHistoryRepair(t *testing.T) {
 		if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name='sessions'`).Scan(&schema); err != nil {
 			t.Fatal(err)
 		}
-		for _, harness := range []string{"mastra-code", "fx", "opencode-v2", "mimo-code", "gemini", "deepseek-harness", "openhands", "command-code"} {
+		for _, harness := range []string{"mastra-code", "mimo-code", "gemini", "deepseek-harness", "openhands", "command-code"} {
 			if !strings.Contains(schema, "'"+harness+"'") {
 				t.Fatalf("repair lost %s", harness)
 			}

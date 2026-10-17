@@ -180,7 +180,7 @@ jobs:
         run: go test -race -count=1 -run 'Test(OpenPreservesDataDirectoryCharacters|FragmentPathsKeepDatabasesIsolated|OpenRefusesToHideLegacyDatabase|OpenPrefersExistingIntendedDatabase|DatabaseURIPreservesWindowsPaths)$' ./internal/storage/sqlite
 
       - name: Test workspace teardown and session kill
-        run: go test -race -count=1 -v -run 'Destroy|Discard|Sweep|Kill|RunPostCreate' ./internal/adapters/workspace/... ./internal/session_manager/
+        run: go test -race -count=1 -v -run 'Destroy|Discard|Sweep|Kill|RunPostCreate|TaskNaming|NameTaskWorkspace' ./internal/adapters/workspace/... ./internal/session_manager/
 
       - name: Test Windows Chat environment precedence
         run: go test -race -count=1 ./internal/adapters/chatdriver/processenv/ ./internal/agentlaunch/
@@ -198,6 +198,9 @@ jobs:
 
       - name: Test Windows PowerShell installers
         run: go test -race -count=1 -v -run '^TestRunInstallScriptPowerShell' ./internal/adapters/systemexec/
+
+      - name: Test Mastra native history and Windows lock liveness
+        run: go test -race -count=1 -timeout=10m ./internal/adapters/agent/mastracode
 
       - name: Test native Goose identity
         run: go test -race -count=1 -timeout=10m ./internal/adapters/agent/binaryutil ./internal/adapters/agent/goose

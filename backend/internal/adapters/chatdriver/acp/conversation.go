@@ -91,31 +91,34 @@ type conversation struct {
 	canDeleteFork        bool
 	unadoptedForkID      string
 
-	mu                 sync.Mutex
-	sessionID          string
-	reportedSessionID  string
-	capabilities       ports.ChatCapabilities
-	prepared           *preparedTurn
-	activeTurn         string
-	settlingTurn       string
-	turnCancel         context.CancelFunc
-	interrupt          *interruptAttempt
-	pending            map[string]*parkedPermission
-	pendingInputs      map[string]*parkedInput
-	accepted           map[string]persistentInteractionCommand
-	messages           map[string]string
-	thoughts           map[string]string
-	nestedMessages     map[string]nestedMessageState
-	tools              map[string]*toolState
-	turnDiffs          *turnDiffAccumulator
-	turnDiffTurnID     string
-	providerFailure    *ports.ChatEvent
-	configOptions      []ports.ChatConfigOption
-	skills             []ports.ChatSkill
-	skillsKnown        bool
-	closed             bool
-	modeFor            func(ports.PermissionMode) string
-	optionsFor         func(ports.ChatTurnSettings) []SessionOption
+	mu                sync.Mutex
+	sessionID         string
+	reportedSessionID string
+	capabilities      ports.ChatCapabilities
+	prepared          *preparedTurn
+	activeTurn        string
+	settlingTurn      string
+	turnCancel        context.CancelFunc
+	interrupt         *interruptAttempt
+	pending           map[string]*parkedPermission
+	pendingInputs     map[string]*parkedInput
+	accepted          map[string]persistentInteractionCommand
+	messages          map[string]string
+	thoughts          map[string]string
+	nestedMessages    map[string]nestedMessageState
+	tools             map[string]*toolState
+	turnDiffs         *turnDiffAccumulator
+	turnDiffTurnID    string
+	providerFailure   *ports.ChatEvent
+	configOptions     []ports.ChatConfigOption
+	skills            []ports.ChatSkill
+	skillsKnown       bool
+	closed            bool
+	modeFor           func(ports.PermissionMode) string
+	optionsFor        func(ports.ChatTurnSettings) []SessionOption
+	// requireAdvertised refuses a config option the session did not advertise
+	// instead of sending it. See Config.RequireAdvertisedOptions.
+	requireAdvertised  bool
 	permissionMode     ports.PermissionMode
 	permissionFor      PermissionPolicy
 	initialPermission  ports.PermissionMode
@@ -125,6 +128,7 @@ type conversation struct {
 	legacyModel        bool
 	legacyMode         bool
 	liveState          *persistenthost.ACPState
+	hasDurableTurns    bool
 	detaching          bool
 	terminalEventID    string
 	ignorePromptResult bool
@@ -341,10 +345,36 @@ func (c *conversation) setReportedProviderConversationID(sessionID string) {
 // prompt replaces the original. It is consumed in StartDeferredTurn so a turn
 // that never starts leaves it armed.
 func (c *conversation) setSessionPreamble(blocks []acpsdk.ContentBlock) {
+	// Standing context is only intended to lead the first prompt of a session.
+	// A conversation that already has user turns received it then; repeating it
+	// mid-conversation would read as a new user message. AO's durable history
+	// covers a live reconnect, which replays nothing; session/load replay covers
+	// turns made in the terminal.
+	if c.hasPriorTurns() {
+		blocks = nil
+	}
 	c.mu.Lock()
 	c.preamble = blocks
 	c.preambleSpent = len(blocks) == 0
 	c.mu.Unlock()
+}
+
+func (c *conversation) hasPriorTurns() bool {
+	c.mu.Lock()
+	durable := c.hasDurableTurns
+	c.mu.Unlock()
+	return durable || c.nativeHistoryHasUserTurns()
+}
+
+func (c *conversation) nativeHistoryHasUserTurns() bool {
+	c.historyMu.Lock()
+	defer c.historyMu.Unlock()
+	for _, event := range c.historyEvents {
+		if event.Kind == ports.ChatEventUserMessageCompleted {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *conversation) Capabilities() ports.ChatCapabilities {
@@ -499,26 +529,10 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 		options = optionsFor(settings)
 	}
 	applyOption := func(option SessionOption) error {
-		if option.ID == "" || option.Value == "" {
-			return nil
-		}
 		if (option.ID == "model" && legacyModel) || (option.ID == "mode" && legacyMode) {
 			return nil
 		}
-		resp, err := c.conn.SetSessionConfigOption(ctx, acpsdk.SetSessionConfigOptionRequest{
-			ValueId: &acpsdk.SetSessionConfigOptionValueId{
-				SessionId: acpsdk.SessionId(sessionID), ConfigId: acpsdk.SessionConfigId(option.ID),
-				Value: acpsdk.SessionConfigValueId(option.Value),
-			},
-		})
-		if err != nil {
-			if isACPMethodNotFound(err) {
-				return fmt.Errorf("%w: session/set_config_option %q", ErrACPSetterUnsupported, option.ID)
-			}
-			return fmt.Errorf("set ACP session option %q: %w", option.ID, err)
-		}
-		c.replaceConfigOptions(resp.ConfigOptions)
-		return nil
+		return c.setSessionOption(ctx, sessionID, option)
 	}
 	// A model switch may change the modes an ACP agent offers. Apply a modern
 	// model config option before session/set_mode so the requested mode is
@@ -566,6 +580,65 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 		c.mu.Lock()
 		c.permissionMode = ports.NormalizePermissionMode(effectiveApproval)
 		c.mu.Unlock()
+	}
+	return nil
+}
+
+// applySessionOptions sets config options that are fixed for the whole session
+// rather than chosen per turn. See Config.LaunchSessionOptions.
+func (c *conversation) applySessionOptions(ctx context.Context, options []SessionOption) error {
+	c.mu.Lock()
+	sessionID := c.sessionID
+	c.mu.Unlock()
+	if sessionID == "" {
+		return errors.New("ACP session is not open")
+	}
+	for _, option := range options {
+		if err := c.setSessionOption(ctx, sessionID, option); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// setSessionOption sends one session/set_config_option and adopts any catalog
+// the agent returns, preserving the current catalog when it omits one.
+func (c *conversation) setSessionOption(ctx context.Context, sessionID string, option SessionOption) error {
+	if option.ID == "" || option.Value == "" {
+		return nil
+	}
+	c.mu.Lock()
+	requireAdvertised := c.requireAdvertised
+	c.mu.Unlock()
+	if requireAdvertised {
+		// An agent that acknowledges an option it never offered may simply drop
+		// it, which would leave the user believing a choice took effect.
+		offered, known := c.configOptionOffers(option.ID, option.Value)
+		if !known {
+			return fmt.Errorf("%w: ACP session does not advertise option %q",
+				ports.ErrChatConfigOptionInvalid, option.ID)
+		}
+		if !offered {
+			return fmt.Errorf("%w: ACP session option %q does not offer %q",
+				ports.ErrChatConfigOptionInvalid, option.ID, option.Value)
+		}
+	}
+	resp, err := c.conn.SetSessionConfigOption(ctx, acpsdk.SetSessionConfigOptionRequest{
+		ValueId: &acpsdk.SetSessionConfigOptionValueId{
+			SessionId: acpsdk.SessionId(sessionID), ConfigId: acpsdk.SessionConfigId(option.ID),
+			Value: acpsdk.SessionConfigValueId(option.Value),
+		},
+	})
+	if err != nil {
+		if isACPMethodNotFound(err) {
+			return fmt.Errorf("%w: session/set_config_option %q", ErrACPSetterUnsupported, option.ID)
+		}
+		return fmt.Errorf("set ACP session option %q: %w", option.ID, err)
+	}
+	if len(resp.ConfigOptions) == 0 {
+		c.applyAcceptedConfigOption(option.ID, ports.ChatConfigOptionValue{Select: option.Value})
+	} else {
+		c.replaceConfigOptions(resp.ConfigOptions)
 	}
 	return nil
 }

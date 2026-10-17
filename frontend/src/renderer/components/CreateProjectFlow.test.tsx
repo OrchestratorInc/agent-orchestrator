@@ -943,6 +943,42 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(apiMocks.POST).toHaveBeenCalledTimes(1);
 	});
 
+	it("imports a workspace without child repositories that have no remote when another child is ready", async () => {
+		const user = userEvent.setup();
+		bridgeMocks.chooseDirectory.mockResolvedValue("/repo/workspace");
+		bridgeMocks.scanImportFolder.mockResolvedValue({
+			path: "/repo/workspace",
+			repos: [
+				{ name: "api", path: "/repo/workspace/api", relativePath: "api", branch: "main", remote: "git@github.com:acme/api.git", hasRemote: true, isRepo: true, hasCommit: true, status: "ok", needsGitInit: false },
+				{ name: "warehouse", path: "/repo/workspace/warehouse", relativePath: "warehouse", branch: "main", remote: "", hasRemote: false, isRepo: true, hasCommit: true, status: "ok", needsGitInit: false },
+			],
+		});
+		apiMocks.POST.mockResolvedValueOnce({
+			data: {
+				...projectValidation("/repo/workspace", {
+					nextStep: "prepare_git",
+					root: { isRepo: false, hasCommit: false, hasOrigin: false, needsGitInit: true, requiredActions: [] },
+					childRepos: [
+						{ repoPath: "/repo/workspace/api", isRepo: true, hasCommit: true, hasOrigin: true, isEmptyFolder: false, needsGitInit: false, requiredActions: [], blockingErrors: [] },
+						{ repoPath: "/repo/workspace/warehouse", isRepo: true, hasCommit: true, hasOrigin: false, isEmptyFolder: false, needsGitInit: false, requiredActions: ["set_remote"], blockingErrors: [] },
+					],
+				}),
+				importKind: "workspace",
+			},
+		});
+
+		renderChooseFlow();
+		await openSource(user, "Open a workspace");
+		expect(screen.queryByText("Set an origin remote for the child repositories marked below before importing this workspace.")).not.toBeInTheDocument();
+		expect(screen.getByText("The repository marked below has no commit or origin remote yet. AO will import this workspace without it, and agents will not work in it.")).toBeInTheDocument();
+		expect(screen.getByText("No remote · Not included")).toBeInTheDocument();
+		expect(screen.queryByText("Setup required")).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Continue" }));
+
+		expect(await screen.findByTestId("agent-sheet")).toHaveAttribute("data-kind", "workspace");
+		expect(screen.getByTestId("agent-sheet")).toHaveAttribute("data-path", "/repo/workspace");
+	});
+
 	it("disables workspace import when no child Git repositories exist", async () => {
 		const user = userEvent.setup();
 		bridgeMocks.chooseDirectory.mockResolvedValue("/repo/workspace");
@@ -2483,17 +2519,26 @@ describe("CreateProjectFlow project import validation", () => {
 			expect(screen.queryByRole("combobox", { name: "Sandbox" })).not.toBeInTheDocument();
 		});
 
-		it("an org on both picks the sandbox, defaulting to the org default, with product labels", async () => {
+		it("an org on both gets no sandbox choice and creates on its Settings default", async () => {
 			cloudMocks.providers = ["freestyle", "coder"];
 			cloudMocks.coderTemplates = [{ id: "tpl-1", name: "dev-kit", displayName: "Dev kit" }];
 			const user = await openCloudRepo();
-			const sandbox = screen.getByRole("combobox", { name: "Sandbox" });
-			expect(sandbox).toHaveTextContent("Instant");
+			expect(screen.queryByRole("combobox", { name: "Sandbox" })).not.toBeInTheDocument();
 			expect(screen.queryByRole("combobox", { name: "Template" })).not.toBeInTheDocument();
-			await user.click(sandbox);
-			await user.click(await screen.findByRole("option", { name: "Dev workspace (Coder)" }));
-			expect(await screen.findByRole("combobox", { name: "Template" })).toBeInTheDocument();
-			await user.click(screen.getByRole("combobox", { name: "Template" }));
+			await user.click(screen.getByRole("button", { name: "Create" }));
+			await waitFor(() => expect(cloudMocks.createGitHubProject).toHaveBeenCalled());
+			const config = cloudMocks.createGitHubProject.mock.calls[0][1].config;
+			expect(config.sandboxProvider).toBe("freestyle");
+			expect(config).not.toHaveProperty("coder");
+		});
+
+		it("an org on both whose Settings default is Coder gets the template picker and creates on Coder", async () => {
+			cloudMocks.providers = ["freestyle", "coder"];
+			cloudMocks.coderDefault = true;
+			cloudMocks.coderTemplates = [{ id: "tpl-1", name: "dev-kit", displayName: "Dev kit" }];
+			const user = await openCloudRepo();
+			expect(screen.queryByRole("combobox", { name: "Sandbox" })).not.toBeInTheDocument();
+			await user.click(await screen.findByRole("combobox", { name: "Template" }));
 			await user.click(await screen.findByRole("option", { name: "Dev kit" }));
 			await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
 			await user.click(screen.getByRole("button", { name: "Create" }));

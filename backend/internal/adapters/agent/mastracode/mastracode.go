@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
@@ -71,20 +73,31 @@ func validatePolicy(mode ports.PermissionMode, allowed, denied []string) error {
 	}
 }
 
-// GetLaunchCommand delivers the first task through the native value-consuming
-// flag. A leading dash is data; slash and ! commands are refused for task input.
+// GetLaunchCommand starts a new local history database, preserving older runs.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := validatePolicy(cfg.Permissions, cfg.AllowedTools, cfg.DisallowedTools); err != nil {
 		return nil, err
 	}
 	if err := validateTask(cfg.Prompt); err != nil {
 		return nil, err
 	}
-	if err := refuseExistingWorkspaceHistory(ctx, cfg.WorkspacePath); err != nil {
-		return nil, err
-	}
 	binary, err := p.ResolveBinary(ctx)
 	if err != nil {
+		return nil, err
+	}
+	state, err := readState(cfg.WorkspacePath)
+	if err != nil {
+		return nil, err
+	}
+	if !slices.Contains(state.PreviousDatabases, state.Database) {
+		state.PreviousDatabases = append(state.PreviousDatabases, state.Database)
+	}
+	state.Database = filepath.Join(filepath.Dir(nativeStatePath(cfg.DataDir, cfg.SessionID)), "history-"+uuid.NewString()+".db")
+	state.LaunchModel = strings.TrimSpace(cfg.Config.Model)
+	if err := writeNativeState(cfg.DataDir, cfg.SessionID, cfg.WorkspacePath, state); err != nil {
 		return nil, err
 	}
 	cmd := []string{binary}
@@ -97,7 +110,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 func validateTask(prompt string) error {
 	text := strings.TrimSpace(prompt)
 	if strings.HasPrefix(text, "/") || strings.HasPrefix(text, "!") {
-		return errors.New("mastra-code dispatches slash/! startup input as native commands; AO tasks must be plain text")
+		return errors.New("Mastra Code treats tasks beginning with / or ! as native commands; start your task with a description, such as Fix /src/foo.ts, or use the terminal for native commands")
 	}
 	return nil
 }
@@ -148,9 +161,10 @@ func (*Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHook
 			return err
 		}
 	}
-	if model := strings.TrimSpace(cfg.Config.Model); model != "" {
-		cfg.Env["MASTRACODE_MODEL_ID"] = model
-	}
+	// Native resumes hydrate their own model, including in-TUI model changes.
+	// Only a fresh launch carries AO's configured model in the launch descriptor.
+	cfg.Env["MASTRACODE_MODEL_ID"] = state.LaunchModel
+	cfg.Env["MASTRA_DB_PATH"] = state.Database
 	if ports.NormalizePermissionMode(cfg.Config.Permissions) == ports.PermissionModeBypassPermissions {
 		cfg.Env["MASTRACODE_YOLO"] = "1"
 	} else {
@@ -217,11 +231,6 @@ func validateNativeSettings(profile string, mode ports.PermissionMode) error {
 func (*Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, err
-	}
-	for _, key := range []string{"DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "MASTRA_GATEWAY_API_KEY"} {
-		if strings.TrimSpace(os.Getenv(key)) != "" {
-			return ports.AgentAuthStatusConfigured, nil
-		}
 	}
 	profile := os.Getenv("MASTRA_APP_DATA_DIR")
 	if profile == "" {

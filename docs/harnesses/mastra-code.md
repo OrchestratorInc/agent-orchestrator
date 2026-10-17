@@ -19,20 +19,22 @@ preserves HOME, AGENTS.md, global and project hooks, plugins, unknown config
 fields, and disabledPlugins. Standing instructions use an additive native
 project plugin; TUI hook additionalContext is not an instruction channel.
 A conflicting or disabled `ao-runtime` plugin fails instead of overwriting or
-reenabling user configuration.
+reenabling user configuration. AO refuses to modify tracked Mastra configuration
+files; untrack the managed files before enabling this integration.
 
-Fresh tasks use `--tui-initial-prompt TEXT`; a leading dash is data. Workspaces
-with existing Mastra history are refused for fresh launch because the native CLI
-would auto-resume and skip that initial task. Slash and `!` task strings are
+Fresh tasks use `--tui-initial-prompt TEXT` with a new local native-history
+database under AO data. A durable session descriptor preserves its path across
+worktree recreation; earlier history databases are retained on fresh restart.
+A leading dash is data. Slash and `!` task strings are
 refused because Mastra interprets them as native commands. Raw terminal input
 remains available for native commands and permission decisions.
 
 Exact restore requires real messages in the local native history for the same
-workspace, an unlocked native thread, the saved model, and enabled Escape
+workspace, an unlocked native thread, the native saved model (including in-TUI changes), and enabled Escape
 cancellation. Missing, empty, foreign or uncertain history fails without a fresh
 fallback. AO additionally requires the actual current generation's native thread
 ID and initialized rendered composer before publishing the restored runtime.
-Current private instructions are installed again before restore.
+Current private instructions are refreshed after native thread hydration.
 
 Pasted messages require an empty current rendered composer, with serialized
 input admission. Native permission prompts and user drafts must be resolved in

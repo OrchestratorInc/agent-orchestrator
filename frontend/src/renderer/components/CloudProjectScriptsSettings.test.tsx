@@ -73,7 +73,11 @@ it("clears a list by saving it empty", async () => {
 });
 
 it("says Cleanup does not run for a project outside Coder", async () => {
-	mocks.defaultProvider = "freestyle";
+	// A project pinned to Freestyle, with no Coder config, runs outside Coder
+	// whatever the org default is.
+	mocks.defaultProvider = "coder";
+	const { coder: _coder, ...withoutCoder } = stored;
+	mocks.get.mockResolvedValue({ project: project({ ...withoutCoder, sandboxProvider: "freestyle" }) });
 	renderScripts();
 	await userEvent.click(await screen.findByRole("tab", { name: "Cleanup" }));
 	expect(screen.getByText(/Cleanup only runs for projects that use Coder/)).toBeInTheDocument();

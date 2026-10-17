@@ -44,9 +44,46 @@ func (*Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
 func (*Plugin) ContinuouslyDetectTerminalActivity() bool { return true }
 
 func pendingDecision(output string) bool {
-	for _, marker := range []string{"Tool Approval Required", "Allow?", "Grant sandbox access", "Enter to select", "Enter select", "Enter to confirm", "Enter to submit", "Enter to add", "Esc to skip", "Esc reject", "Thread not found:"} {
-		if strings.Contains(output, marker) {
+	lines := strings.Split(output, "\n")
+	// The active input/dialog frame is directly above the native footer.
+	footer := len(lines)
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "▐") && strings.Contains(lines[i], "▌") {
+			footer = i
+			break
+		}
+	}
+	// Native tool approval replaces the input region with an unframed panel.
+	// Match its complete chrome rather than decision words in transcript text.
+	title, tool, arguments := false, false, false
+	for _, line := range lines[max(0, footer-24):footer] {
+		text := strings.TrimSpace(line)
+		switch {
+		case text == "⚠ Tool Approval Required":
+			title = true
+		case title && strings.HasPrefix(text, "Tool: "):
+			tool = true
+		case tool && text == "Arguments:":
+			arguments = true
+		case arguments && strings.HasPrefix(text, "Allow? ") && strings.Contains(text, "Yolo"):
 			return true
+		}
+	}
+	start := -1
+	for i := footer - 1; i >= 0; i-- {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "╭─") {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return false
+	}
+	for _, line := range lines[start:footer] {
+		for _, marker := range []string{"Tool Approval Required", "Allow?", "Grant sandbox access", "Enter to select", "Enter select", "Enter to confirm", "Enter to submit", "Enter to add", "Esc to skip", "Esc reject"} {
+			if strings.Contains(line, marker) {
+				return true
+			}
 		}
 	}
 	return false

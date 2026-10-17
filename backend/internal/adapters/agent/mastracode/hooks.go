@@ -7,19 +7,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 const managedID = "ao-runtime"
 const sentinel = "agent-orchestrator: managed mastra-code"
 
 type nativeState struct {
-	Owner    string `json:"owner"`
-	Profile  string `json:"profile"`
-	Database string `json:"database"`
+	Owner             string   `json:"owner"`
+	Profile           string   `json:"profile"`
+	Database          string   `json:"database"`
+	LaunchModel       string   `json:"launchModel,omitempty"`
+	PreviousDatabases []string `json:"previousDatabases,omitempty"`
 }
 
 func configPath(workspace string, parts ...string) string {
@@ -106,6 +110,37 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if !filepath.IsAbs(database) {
 		return errors.New("mastra-code requires an absolute native database path")
 	}
+	// Refuse before writing anything: ignored files may already be tracked.
+	git := aoprocess.CommandContext(ctx, "git", "-C", cfg.WorkspacePath, "rev-parse", "--is-inside-work-tree")
+	if out, err := git.Output(); err == nil && strings.TrimSpace(string(out)) == "true" {
+		tracked, err := aoprocess.CommandContext(ctx, "git", "-C", cfg.WorkspacePath, "ls-files", "-z", "--", ".mastracode").Output()
+		if err != nil {
+			return fmt.Errorf("inspect tracked Mastra configuration: %w", err)
+		}
+		for _, name := range strings.Split(string(tracked), "\x00") {
+			switch filepath.ToSlash(name) {
+			case ".mastracode", ".mastracode/plugins", ".mastracode/plugins/ao-runtime", ".mastracode/hooks.json", ".mastracode/plugins/plugins.json", ".mastracode/ao-hook.cjs", ".mastracode/ao-runtime.json", ".mastracode/.gitignore", ".mastracode/plugins/.gitignore", ".mastracode/plugins/ao-runtime/index.ts", ".mastracode/plugins/ao-runtime/.gitignore":
+				return fmt.Errorf("mastra-code cannot modify tracked configuration %s; untrack it before enabling AO hooks", name)
+			}
+		}
+	} else if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	// The durable descriptor survives worktree removal and re-creation.
+	durable := nativeStatePath(cfg.DataDir, cfg.SessionID)
+	var previousDatabases []string
+	if saved, err := readNativeState(durable); err == nil {
+		if !sameWorkspace(saved.Profile, profile) {
+			return errors.New("mastra-code native profile changed; preserve the original profile for history restore")
+		}
+		if database != filepath.Join(profile, "mastra.db") && database != saved.Database && !slices.Contains(saved.PreviousDatabases, database) {
+			return errors.New("mastra-code database override conflicts with session history")
+		}
+		database = saved.Database
+		previousDatabases = saved.PreviousDatabases
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	root := configPath(cfg.WorkspacePath)
 	pluginDir := configPath(cfg.WorkspacePath, "plugins", managedID)
 	if err := os.MkdirAll(pluginDir, 0o700); err != nil {
@@ -190,7 +225,8 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := writeObject(statePath, nativeState{Owner: sentinel, Profile: profile, Database: database}); err != nil {
+	state := nativeState{Owner: sentinel, Profile: profile, Database: database, PreviousDatabases: previousDatabases}
+	if err := writeNativeState(cfg.DataDir, cfg.SessionID, cfg.WorkspacePath, state); err != nil {
 		return err
 	}
 	hooksPath := configPath(cfg.WorkspacePath, "hooks.json")
@@ -234,8 +270,30 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 
 func userHome() string { home, _ := os.UserHomeDir(); return home }
 
+func nativeStatePath(dataDir, sessionID string) string {
+	return filepath.Join(dataDir, adapterID, "sessions", sessionID, "state.json")
+}
+
+func writeNativeState(dataDir, sessionID, workspace string, state nativeState) error {
+	if !filepath.IsAbs(dataDir) || sessionID == "" || sessionID == "." || sessionID == ".." || filepath.Base(sessionID) != sessionID {
+		return errors.New("mastra-code requires an absolute AO data directory and a session ID")
+	}
+	durable := nativeStatePath(dataDir, sessionID)
+	if err := os.MkdirAll(filepath.Dir(durable), 0o700); err != nil {
+		return err
+	}
+	if err := writeObject(configPath(workspace, "ao-runtime.json"), state); err != nil {
+		return err
+	}
+	return writeObject(durable, state)
+}
+
 func readState(workspace string) (nativeState, error) {
-	data, err := os.ReadFile(configPath(workspace, "ao-runtime.json"))
+	return readNativeState(configPath(workspace, "ao-runtime.json"))
+}
+
+func readNativeState(path string) (nativeState, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nativeState{}, fmt.Errorf("mastra-code native state has not been prepared: %w", err)
 	}
@@ -258,36 +316,50 @@ if (event === "UserPromptSubmit") payload.prompt = payload.user_message;
 if (names[event]) spawnSync("ao", ["hooks", "mastra-code", names[event]], {input:JSON.stringify(payload), stdio:["pipe","ignore","ignore"], timeout:4000, windowsHide:true});
 `
 
-// The released native SessionStart hook can retain its bootstrap session-init ID
-// on passive resume. Use the supported plugin runtime getter, without modifying
-// native state or sending a prompt, to observe the actual active thread instead.
+// The native thread ID becomes visible before saved metadata finishes loading.
+// Refresh only AO's instruction contribution after each thread hydration and
+// publish the generation witness once that update has completed.
 const pluginWitnessSource = `import fs from "node:fs";
 let identityObserver;
 function observeNativeIdentity(context, instructions) {
   const path = process.env.AO_MASTRA_RECEIPT_PATH;
   if (!path || identityObserver) return;
+  const canonical = value => { try { return fs.realpathSync(value); } catch { return value; } };
+  const workspace = canonical(context.cwd);
+  const marker = "The actual AO workspace for this session is ";
+  const isOwned = text => {
+    const index = text.lastIndexOf(marker);
+    return index >= 0 && text.endsWith(".") && canonical(text.slice(index + marker.length, -1)) === workspace;
+  };
   const deadline = Date.now() + 60000;
-  let updating = false;
   identityObserver = setInterval(async () => {
-    if (updating) return;
     if (Date.now() >= deadline) { clearInterval(identityObserver); return; }
     const session = context.getActiveSession?.();
-    const nativeId = session?.thread.getId();
-    if (!nativeId || nativeId === "session-init") return;
-    updating = true;
-    try {
-      // Native resume hydrates pluginInstructions from saved thread state. Only
-      // replace this plugin's prior workspace-scoped contribution; retain every
-      // other plugin and all native/system/repository instruction layers.
-      const suffix = "The actual AO workspace for this session is " + context.cwd + ".";
+    if (!session) return;
+    clearInterval(identityObserver);
+    let updates = Promise.resolve();
+    const refresh = async () => {
+      const nativeId = session.thread.getId();
+      if (!nativeId || nativeId === "session-init") return;
+      try { fs.unlinkSync(path); } catch (error) { if (error.code !== "ENOENT") throw error; }
       const current = session.state.get()?.pluginInstructions ?? [];
-      const others = current.filter(text => !text.endsWith(suffix));
-      await session.state.set({pluginInstructions:[...others, instructions]});
-      const receipt = {nativeId:session.thread.getId(), cwd:process.cwd(), generation:process.env.AO_RUNTIME_LAUNCH_ID};
+      const next = [...current.filter(text => !isOwned(text)), instructions];
+      if (JSON.stringify(current) !== JSON.stringify(next)) {
+        await session.state.set({pluginInstructions:next});
+      }
+      if (nativeId !== session.thread.getId()) return;
+      const receipt = {nativeId, cwd:process.cwd(), generation:process.env.AO_RUNTIME_LAUNCH_ID};
       fs.writeFileSync(path+".tmp", JSON.stringify(receipt), {mode:0o600});
       fs.renameSync(path+".tmp", path);
-      clearInterval(identityObserver);
-    } catch { updating = false; /* Missing receipt fails closed in the supervisor. */ }
+    };
+    const schedule = () => {
+      updates = updates.then(refresh).catch(() => { try { fs.unlinkSync(path); } catch {} });
+      return updates;
+    };
+    session.subscribe(event => {
+      if (event.type === "thread_changed" || event.type === "thread_created") void schedule();
+    });
+    await schedule();
   }, 250);
   identityObserver.unref();
 }

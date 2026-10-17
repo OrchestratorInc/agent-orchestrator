@@ -2108,10 +2108,8 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsDeepSeek := !strings.Contains(schema, "'deepseek-harness'")
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
 	needsMastraCode := !strings.Contains(schema, "'mastra-code'")
-	needsFX := !strings.Contains(schema, "'fx'")
-	needsOpenCodeV2 := !strings.Contains(schema, "'opencode-v2'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
-	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsMastraCode && !needsFX && !needsOpenCodeV2 {
+	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsMastraCode {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2226,12 +2224,6 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		repairs = append(repairs, replacement{"'fake'))", "'command-code', 'fake'))"})
 	}
 	// Preserve exact legacy repair recognizers above before appending new tails.
-	if needsFX {
-		repairs = append(repairs, replacement{"'fake'))", "'fx', 'fake'))"})
-	}
-	if needsOpenCodeV2 {
-		repairs = append(repairs, replacement{"'fake'))", "'opencode-v2', 'fake'))"})
-	}
 	if needsMastraCode {
 		repairs = append(repairs, replacement{"'fake'))", "'mastra-code', 'fake'))"})
 	}

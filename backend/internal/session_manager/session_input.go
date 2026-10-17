@@ -70,6 +70,12 @@ func (m *Manager) enableSerializedInput(id domain.SessionID) bool {
 	return m.inputLeases[id] <= 1
 }
 
+func (m *Manager) forgetSerializedInput(id domain.SessionID) {
+	m.agentOpMu.Lock()
+	defer m.agentOpMu.Unlock()
+	delete(m.serializedInput, id)
+}
+
 // ValidateSessionMessageInput runs while the shared input lease excludes native
 // keystrokes and runtime replacement for an opted-in harness.
 func (m *Manager) ValidateSessionMessageInput(ctx context.Context, rec domain.SessionRecord, message string) error {
@@ -331,6 +337,23 @@ func (m *Manager) retainAgentSwitch(id domain.SessionID) {
 		m.retainedSwitches = make(map[domain.SessionID]struct{})
 	}
 	m.retainedSwitches[id] = struct{}{}
+}
+
+// claimRetainedAgentSwitchForKill hands a retained switch gate to Kill. Kill
+// tears down every controller the session has, so it resolves the ownership
+// question the gate was holding; without this a switch whose source restore
+// failed leaves the session impossible to archive or remove.
+func (m *Manager) claimRetainedAgentSwitchForKill(id domain.SessionID) bool {
+	id = domain.SessionID(strings.TrimSpace(string(id)))
+	m.agentOpMu.Lock()
+	defer m.agentOpMu.Unlock()
+	if _, retained := m.retainedSwitches[id]; !retained || m.agentOperations[id] != agentOperationSwitch {
+		return false
+	}
+	delete(m.retainedSwitches, id)
+	delete(m.switchDecisionInput, id)
+	m.agentOperations[id] = agentOperationKill
+	return true
 }
 
 func (m *Manager) agentSwitchRetained(id domain.SessionID) bool {

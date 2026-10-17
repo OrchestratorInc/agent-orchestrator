@@ -123,7 +123,11 @@ func TestHistoryRejectsMissingForeignEmptyLockedAndUnsafeThreads(t *testing.T) {
 	db := history(t, cfg)
 	ctx := context.Background()
 	check := func(id string) error {
-		return validateHistory(ctx, cfg.WorkspacePath, id, "deepseek/deepseek-chat", ports.PermissionModeDefault)
+		state, err := readState(cfg.WorkspacePath)
+		if err != nil {
+			return err
+		}
+		return validateHistory(ctx, cfg.WorkspacePath, id, ports.PermissionModeDefault, state)
 	}
 	if err := check(testThread); err != nil {
 		t.Fatal(err)
@@ -214,7 +218,7 @@ func TestComposerAdmissionAndUnsupportedPolicies(t *testing.T) {
 	if err := p.ValidateTerminalMessage(emptyComposer, "-ordinary task"); err != nil {
 		t.Fatal(err)
 	}
-	for _, screen := range []string{"", "old history", strings.Replace(emptyComposer, "› ", "› draft", 1), "Tool Approval Required\n" + emptyComposer} {
+	for _, screen := range []string{"", "old history", strings.Replace(emptyComposer, "› ", "› draft", 1), "╭────────────╮\n│ Allow?     │\n╰────────────╯\n▐ Mastra Code ▌"} {
 		if err := p.ValidateTerminalMessage(screen, "new task"); err == nil {
 			t.Fatalf("unsafe screen accepted: %q", screen)
 		}

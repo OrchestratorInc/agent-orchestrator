@@ -217,3 +217,18 @@ func eventuallySessionInput(t *testing.T, timeout time.Duration, fn func() bool)
 	}
 	t.Fatal("condition was not met before timeout")
 }
+
+func TestKillReleasesSerializedInputState(t *testing.T) {
+	m, store, _, _ := newManager()
+	store.sessions["mer-1"] = mkLive("mer-1")
+	m.enableSerializedInput("mer-1")
+	if _, err := m.Kill(context.Background(), "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	m.agentOpMu.Lock()
+	retained := m.serializedInput["mer-1"]
+	m.agentOpMu.Unlock()
+	if retained {
+		t.Fatal("terminated session retained its input serialization entry")
+	}
+}
