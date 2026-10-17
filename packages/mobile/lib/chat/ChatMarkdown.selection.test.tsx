@@ -168,6 +168,17 @@ it("uses the spawn prompt's translucent selection gray on Android", () => {
 	}
 });
 
+it.each([false, true])("colors Markdown links with the theme highlight, not the hue-less accent (pressable: %s)", (pressable) => {
+	let renderer!: ReactTestRenderer;
+	const markdown = <ChatMarkdown text="Read the [docs](https://example.com/docs) first." />;
+	act(() => { renderer = create(pressable ? <ChatLinkProvider onLinkOpen={vi.fn()}>{markdown}</ChatLinkProvider> : markdown); });
+	const links = renderer.root.findAll((node) => typeof node.type === "string" && (node.props.style as { textDecorationLine?: string } | undefined)?.textDecorationLine === "underline");
+	expect(links.map(textOf)).toEqual(["docs"]);
+	expect(links[0].props.style.color).toBe(theme.highlight);
+	expect(links[0].props.style.color).not.toBe(theme.accent);
+	act(() => renderer.unmount());
+});
+
 it("keeps inline links accessible on iOS while plain prose remains range-selectable", () => {
 	let renderer!: ReactTestRenderer;
 	act(() => {
