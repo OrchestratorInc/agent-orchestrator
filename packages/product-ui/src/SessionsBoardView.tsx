@@ -67,6 +67,8 @@ export type BoardSessionPresentation = {
 	statusPresentation?: BoardSessionStatusPresentation;
 	title: string;
 	trackerIssueId?: string;
+	/** One-line card summary; no line renders when absent. */
+	summary?: string;
 	updatedAt: string;
 	lastUserMessageAt?: string;
 };
@@ -204,7 +206,7 @@ function BoardColumnView<TSession extends BoardSessionPresentation>({
 				</span>
 				<span className="ml-auto tabular-nums text-xs leading-none text-passive">{ordered.length}</span>
 			</div>
-			<div className="board-scrollbar min-h-0 flex-1 overflow-y-auto pl-3 pr-2 pb-3 pt-3">
+			<div className="board-scrollbar min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-3">
 				<div className="flex min-h-full flex-col gap-2.5">
 					{ordered.map((session) => (
 						<Fragment key={session.id}>{renderSessionCard(session)}</Fragment>
@@ -338,22 +340,28 @@ export function SessionCardView({
 					type="button"
 				/>
 			) : null}
+			{overlay || action ? (
+				// Over the title, not beside it: the title keeps its full width.
+				<div className="absolute right-1.5 top-1.5 z-10">
+					{overlay}
+					{action}
+				</div>
+			) : null}
 			<div className="px-3.5 pb-2.5 pt-2.5">
 				<div className="flex min-w-0 items-center gap-2.5">
 					{renderAvatar(session.provider)}
 					<div
-						className="min-w-0 flex-1 line-clamp-2 overflow-hidden text-balance text-sm-md font-semibold leading-tight tracking-tight text-foreground"
+						className="min-w-0 flex-1 truncate text-sm font-semibold leading-tight tracking-tight text-foreground"
 						title={session.title}
 					>
 						{session.title}
 					</div>
-					{overlay || action ? (
-						<div className="relative z-10 -mr-1 shrink-0 self-center">
-							{overlay}
-							{action}
-						</div>
-					) : null}
 				</div>
+				{session.summary ? (
+					<div className="mt-1 line-clamp-3 overflow-hidden text-xs leading-snug text-muted-foreground" data-testid="board-session-summary">
+						{session.summary}
+					</div>
+				) : null}
 				{showBranch && (
 					<div className="mt-1.5 flex min-w-0 items-center gap-1.5 font-mono text-2xs text-muted-foreground">
 						{branchIcon ?? <GitBranchIcon aria-hidden="true" className="size-icon-2xs shrink-0" />}

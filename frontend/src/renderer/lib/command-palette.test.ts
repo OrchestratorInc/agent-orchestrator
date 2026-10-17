@@ -730,6 +730,24 @@ describe("pending branch presentation", () => {
 	it("keeps synchronous provisional names hidden while naming", () => {
 		expect(sessionBranchPresentation(pending)).toEqual({ branch: undefined, naming: true });
 	});
+	describe("a worker created with an explicit branch", () => {
+		// No provisioning steps, ready, but the branch is not recorded yet.
+		const unrecorded = session({ id: "explicit", provisionState: "ready", provisionSteps: [], branch: undefined });
+		it("shimmers until the branch is recorded", () => {
+			expect(sessionBranchPresentation(unrecorded)).toEqual({ branch: undefined, naming: true });
+			expect(sessionBranchPresentation({ ...unrecorded, branch: "design/explicit-test" }))
+				.toEqual({ branch: "design/explicit-test", naming: false });
+		});
+		it("stops shimmering once the worker has launched, even without a branch", () => {
+			expect(sessionBranchPresentation({ ...unrecorded, chatProviderPreserved: true })).toEqual({ branch: undefined, naming: false });
+		});
+		it.each<Partial<WorkspaceSession>>([
+			{ kind: "orchestrator" }, { workspaceId: STANDALONE_WORKSPACE_ID }, { isTerminated: true },
+			{ activity: { state: "exited", lastActivityAt: "2026-01-01T00:00:00Z" } }, { statusReadiness: "unavailable" },
+		])("never shimmers for a session that has no branch to wait for: %j", (other) => {
+			expect(sessionBranchPresentation({ ...unrecorded, ...other }).naming).toBe(false);
+		});
+	});
 	it.each([{ terminalHandleId: "terminal" }, { chatProviderPreserved: true }])("reveals a launched worker's branch despite stale progress: %j", (launched) => {
 		expect(sessionBranchPresentation({ ...pending, ...launched })).toEqual({ branch: pending.branch, naming: false });
 	});

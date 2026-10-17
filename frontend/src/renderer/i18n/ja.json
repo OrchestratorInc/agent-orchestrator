@@ -1469,6 +1469,8 @@
 	"settings.sessionInterface.unavailable": "新しいセッションに適用されます。チャットに対応するインストール済みエージェントはまだありません。",
 	"settings.soundNotifications": "サウンド通知",
 	"settings.soundNotifications.saveFailed": "サウンド通知設定を保存できませんでした。",
+	"settings.cardSummaries": "現在の作業を表示",
+	"settings.cardSummariesHint": "セッションを開かずに、各エージェントが取り組んでいる作業を確認できます。",
 	"settings.project.trackerIntake": "トラッカーインテーク",
 	"settings.project.workspaceRepos": "ワークスペースのリポジトリ",
 	"settings.project.worktrees": "ワークツリー",

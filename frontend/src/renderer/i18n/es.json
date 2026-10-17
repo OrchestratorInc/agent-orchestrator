@@ -1496,6 +1496,8 @@
 	"settings.sessionInterface.unavailable": "Se aplica a sesiones nuevas. Ningún agente instalado admite chat todavía.",
 	"settings.soundNotifications": "Notificaciones de sonido",
 	"settings.soundNotifications.saveFailed": "No se pudo guardar la preferencia de notificaciones de sonido.",
+	"settings.cardSummaries": "Mostrar actividad actual",
+	"settings.cardSummariesHint": "Ve en qué está trabajando cada agente sin abrir su sesión.",
 	"settings.project.trackerIntake": "Captación del tracker",
 	"settings.project.workspaceRepos": "Repos del espacio de trabajo",
 	"settings.project.worktrees": "Worktrees",

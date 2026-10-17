@@ -254,6 +254,39 @@ func TestGeneratedTaskTitleDoesNotOverwriteManualRename(t *testing.T) {
 	}
 }
 
+func TestDirectSpawnRefinesPlaceholderTitleButKeepsChosenName(t *testing.T) {
+	for _, tt := range []struct {
+		name, displayName string
+		wantCalls         int
+		wantName          string
+	}{
+		{name: "placeholder from prompt", displayName: "Research release options", wantCalls: 1, wantName: "Release Research"},
+		{name: "name chosen by the caller", displayName: "My own name", wantCalls: 0, wantName: "My own name"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			st := newFakeStore()
+			cmd := &fakeCommander{backgroundResult: "Release Research"}
+			cmd.spawnFunc = func(cfg ports.SpawnConfig) domain.SessionRecord {
+				rec := domain.SessionRecord{ID: "standalone-1", Kind: cfg.Kind, Harness: cfg.Harness, DisplayName: tt.displayName}
+				st.sessions[rec.ID] = rec
+				return rec
+			}
+			svc := &Service{store: st, manager: cmd, runBackground: runInline}
+			if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{
+				Kind: domain.KindWorker, Harness: domain.HarnessCodex, Prompt: "Research release options",
+			}); err != nil {
+				t.Fatalf("Spawn: %v", err)
+			}
+			if len(cmd.backgroundCalls) != tt.wantCalls {
+				t.Fatalf("background title calls = %d, want %d", len(cmd.backgroundCalls), tt.wantCalls)
+			}
+			if got := st.sessions["standalone-1"].DisplayName; got != tt.wantName {
+				t.Fatalf("display name = %q, want %q", got, tt.wantName)
+			}
+		})
+	}
+}
+
 func TestDelegateTaskKeepsSpawnSuccessWhenBackgroundTitleFails(t *testing.T) {
 	st := newFakeStore()
 	st.projects["ao"] = domain.ProjectRecord{ID: "ao", Kind: domain.ProjectKindScratch}

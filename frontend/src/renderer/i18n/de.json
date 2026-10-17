@@ -1469,6 +1469,8 @@
 	"settings.sessionInterface.unavailable": "Gilt für neue Sitzungen. Noch unterstützt kein installierter Agent Chat.",
 	"settings.soundNotifications": "Tonbenachrichtigungen",
 	"settings.soundNotifications.saveFailed": "Einstellung für Tonbenachrichtigungen konnte nicht gespeichert werden.",
+	"settings.cardSummaries": "Aktuelle Aktivität anzeigen",
+	"settings.cardSummariesHint": "Sieh, woran die einzelnen Agenten arbeiten, ohne ihre Sitzungen zu öffnen.",
 	"settings.project.trackerIntake": "Tracker-Intake",
 	"settings.project.workspaceRepos": "Workspace-Repos",
 	"settings.project.worktrees": "Worktrees",

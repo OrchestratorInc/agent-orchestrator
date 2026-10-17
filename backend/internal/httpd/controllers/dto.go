@@ -3273,6 +3273,8 @@ type SettingsResponse struct {
 	// CloudOffering is the user's persisted cloud toggle (Settings, Developer
 	// Mode). Distinct from CloudEnabled, which is the effective gate.
 	CloudOffering bool `json:"cloudOffering"`
+	// CardSummaries is the user's opt-in for model-written kanban card summaries.
+	CardSummaries bool `json:"cardSummaries"`
 	// ChatHibernationEnabled is the developer-mode gate for idle Chat process shutdown.
 	ChatHibernationEnabled bool `json:"chatHibernationEnabled"`
 	// CloudEnabled reports whether the cloud offering is effectively available:
@@ -3306,6 +3308,11 @@ type UpdateHarnessDefaultRequest struct {
 // UpdateCloudOfferingRequest flips the user's cloud toggle.
 type UpdateCloudOfferingRequest struct {
 	// Enabled turns the cloud offering on or off for this machine's user.
+	Enabled *bool `json:"enabled"`
+}
+
+// UpdateCardSummariesRequest turns model-written card summaries on or off.
+type UpdateCardSummariesRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 

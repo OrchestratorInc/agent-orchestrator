@@ -122,6 +122,7 @@ export function toWorkspaceSession(
 		scmStatus,
 		kanbanColumn,
 		displayStatus: session.displayStatus || undefined,
+		summary: session.summary || undefined,
 		statusReadiness,
 		provisionState: session.provisionState,
 		provisionError: session.provisionError || undefined,
@@ -227,6 +228,7 @@ function toLocalWorkspaceSession(
 		scmStatus,
 		kanbanColumn,
 		displayStatus: session.displayStatus || undefined,
+		summary: session.summary || undefined,
 		provisionState: session.provisionState,
 		provisionError: session.provisionError || undefined,
 		provisionSteps: session.provisionSteps?.map((step) => ({

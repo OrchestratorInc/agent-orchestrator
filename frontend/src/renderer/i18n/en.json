@@ -1685,6 +1685,8 @@
 	"settings.sessionInterface.unavailable": "Applies to new sessions. No installed agent supports chat yet.",
 	"settings.soundNotifications": "Sound notifications",
 	"settings.soundNotifications.saveFailed": "Could not save the sound notifications preference.",
+	"settings.cardSummaries": "Show current activity",
+	"settings.cardSummariesHint": "See what each agent is working on without opening its session.",
 	"settings.project.trackerIntake": "Tracker intake",
 	"settings.project.workspaceRepos": "Workspace repos",
 	"settings.project.worktrees": "Worktrees",

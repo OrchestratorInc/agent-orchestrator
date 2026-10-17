@@ -1469,6 +1469,8 @@
 	"settings.sessionInterface.unavailable": "새 세션에 적용됩니다. 아직 채팅을 지원하는 설치된 에이전트가 없습니다.",
 	"settings.soundNotifications": "소리 알림",
 	"settings.soundNotifications.saveFailed": "소리 알림 설정을 저장할 수 없습니다.",
+	"settings.cardSummaries": "현재 작업 표시",
+	"settings.cardSummariesHint": "세션을 열지 않고 각 에이전트가 어떤 작업을 하고 있는지 확인하세요.",
 	"settings.project.trackerIntake": "트래커 인테이크",
 	"settings.project.workspaceRepos": "워크스페이스 저장소",
 	"settings.project.worktrees": "워크트리",

@@ -27,6 +27,8 @@ type AppSettings struct {
 	// CloudOffering is the user's cloud toggle (Settings, Developer Mode). The
 	// daemon gate combines it with the deployment's control-plane URL.
 	CloudOffering bool
+	// CardSummaries is the user's opt-in for model-written kanban card summaries.
+	CardSummaries bool
 	UpdatedAt     time.Time
 }
 
@@ -46,6 +48,7 @@ func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 		// one does not must still resolve to something dispatchable.
 		DefaultSessionMode: domain.NormalizeSessionMode(row.DefaultSessionMode),
 		CloudOffering:      row.CloudOffering,
+		CardSummaries:      row.CardSummaries,
 		UpdatedAt:          row.UpdatedAt,
 	}, nil
 }
@@ -62,6 +65,16 @@ func (s *Store) SetDefaultSessionMode(ctx context.Context, mode domain.SessionMo
 		UpdatedAt:          now,
 	}); err != nil {
 		return fmt.Errorf("set session mode: %w", err)
+	}
+	return nil
+}
+
+// SetCardSummaries persists the user's card-summaries toggle.
+func (s *Store) SetCardSummaries(ctx context.Context, enabled bool, now time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetCardSummaries(ctx, gen.SetCardSummariesParams{CardSummaries: enabled, UpdatedAt: now}); err != nil {
+		return fmt.Errorf("set card summaries: %w", err)
 	}
 	return nil
 }

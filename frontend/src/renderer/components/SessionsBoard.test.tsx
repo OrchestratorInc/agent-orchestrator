@@ -467,7 +467,7 @@ describe("SessionsBoard", () => {
 		expect(terminateButton).toHaveClass("opacity-0", "group-hover:opacity-100", "group-focus-within:opacity-100");
 		expect(terminateButton.querySelector("svg")).toHaveClass("lucide-archive");
 		expect(within(idleCard).getByText("Idle").parentElement?.parentElement).toHaveClass("flex");
-		expect(within(idleCard).getByText("brand-font-pipeline")).toHaveClass("font-semibold", "line-clamp-2");
+		expect(within(idleCard).getByText("brand-font-pipeline")).toHaveClass("font-semibold", "truncate", "text-sm");
 	});
 
 	it("styles a working card from its building lane without inferring from runtime activity", () => {
@@ -626,14 +626,14 @@ describe("SessionsBoard", () => {
 		expect(within(card).queryByText("Exited")).not.toBeInTheDocument();
 	});
 
-	it("shows naming shimmer on a synchronous orchestrator-created worker until its worktree is ready", () => {
+	it.each(["generated", "explicit"] as const)("shows naming shimmer on an orchestrator-created worker with a %s branch until its worktree is ready", (branchKind) => {
 		const worker = boardSession({
 			id: "s-delegated",
 			title: "Review: composer correctness",
 			status: "idle",
 			provisionState: "ready",
 			branch: undefined,
-			provisionSteps: [{ id: "worktree", status: "running" }],
+			provisionSteps: branchKind === "generated" ? [{ id: "worktree", status: "running" }] : [],
 		});
 		workspaceQueryMock.mockReturnValue({
 			data: [workspaceWithSessions([worker])], isError: false, isSuccess: true,
@@ -644,13 +644,14 @@ describe("SessionsBoard", () => {
 		expect(within(card()).getByRole("status")).toHaveClass("chat-working-shimmer");
 		expect(within(card()).getByRole("status").textContent).not.toMatch(/…|\.\.\./);
 
+		const branch = branchKind === "generated" ? "ao/composer-review/root" : "design/composer-review";
 		workspaceQueryMock.mockReturnValue({
-			data: [workspaceWithSessions([{ ...worker, branch: "ao/composer-review/root", provisionSteps: [{ id: "worktree", status: "done" }] }])],
+			data: [workspaceWithSessions([{ ...worker, branch, provisionSteps: branchKind === "generated" ? [{ id: "worktree", status: "done" }] : [], terminalHandleId: "worker-terminal" }])],
 			isError: false, isSuccess: true,
 		});
 		view.rerender(<QueryClientProvider client={queryClient}><TooltipProvider><SessionsBoard projectId="p1" /></TooltipProvider></QueryClientProvider>);
 		expect(within(card()).queryByRole("status")).not.toBeInTheDocument();
-		expect(within(card()).getByText("ao/composer-review/root")).toBeInTheDocument();
+		expect(within(card()).getByText(branch)).toBeInTheDocument();
 	});
 
 	it("shows start failure instead of Awaiting PR on a failed card", () => {

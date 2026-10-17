@@ -46,3 +46,23 @@ func TestHarnessDefaultsPersistIndependentlyAndReset(t *testing.T) {
 		t.Fatal("harness defaults changed unrelated settings")
 	}
 }
+
+func TestCardSummariesPreferenceIsOffByDefaultAndPersists(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if got, err := s.GetAppSettings(ctx); err != nil || got.CardSummaries {
+		t.Fatalf("default: card summaries = %v, err = %v", got.CardSummaries, err)
+	}
+	if err := s.SetCardSummaries(ctx, true, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetAppSettings(ctx); err != nil || !got.CardSummaries {
+		t.Fatalf("after enabling: card summaries = %v, err = %v", got.CardSummaries, err)
+	}
+	if err := s.SetCardSummaries(ctx, false, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetAppSettings(ctx); err != nil || got.CardSummaries {
+		t.Fatalf("after disabling: card summaries = %v, err = %v", got.CardSummaries, err)
+	}
+}

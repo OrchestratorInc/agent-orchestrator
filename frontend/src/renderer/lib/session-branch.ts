@@ -8,7 +8,10 @@ export function sessionBranchPresentation(session?: WorkspaceSession): { branch?
 	const unfinished = session && !launched && !session.cloud && session.kind !== "orchestrator"
 		&& session.workspaceId !== STANDALONE_WORKSPACE_ID
 		&& (session.provisionSteps?.some((step) => step.id === "worktree" && step.status !== "done")
-			|| (!session.provisionSteps?.length && (session.provisionState === "provisioning" || session.provisionState === "failed")));
+			|| (!session.provisionSteps?.length && (session.provisionState === "provisioning" || session.provisionState === "failed"))
+			// A worker created with an explicit branch has no provisioning steps, but its
+			// branch is still unrecorded for a moment. That gap is loading too.
+			|| !session.branch);
 	return {
 		branch: unfinished ? undefined : session?.branch,
 		naming: Boolean(unfinished && session?.provisionState !== "failed" && !session?.isTerminated

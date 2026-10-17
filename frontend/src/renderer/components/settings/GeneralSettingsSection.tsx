@@ -17,7 +17,7 @@ import { SettingsSection } from "./SettingsSection";
 import { ThemePaletteSwatch } from "./ThemePaletteSwatch";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
-import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface } from "../../hooks/useSettings";
+import { useSettings, useUpdateCardSummaries, useUpdateCloudOffering, useUpdateSessionInterface } from "../../hooks/useSettings";
 import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
 import { isMacPlatform, isWindowsPlatform } from "../../lib/platform";
@@ -54,6 +54,34 @@ function SessionInterfaceRow() {
 				options={interfaceOptions}
 				onChange={(mode) => update(mode)}
 				disabled={isLoading || saving || !chatAvailable}
+			/>
+		</SettingsRow>
+	);
+}
+
+/**
+ * Opt-in for model-written kanban card summaries. Daemon-owned so the model
+ * calls stop when it is off, not just the text on the card.
+ */
+function CardSummariesRow() {
+	const { t } = useTranslation();
+	const { settings, isLoading } = useSettings();
+	const { update, saving, error } = useUpdateCardSummaries();
+	return (
+		<SettingsRow
+			label={t("settings.cardSummaries")}
+			description={
+				<>
+					{t("settings.cardSummariesHint")}
+					{error ? <span role="alert" className="block text-error">{error}</span> : null}
+				</>
+			}
+		>
+			<Switch
+				aria-label={t("settings.cardSummaries")}
+				checked={settings?.cardSummaries ?? false}
+				disabled={isLoading || saving}
+				onCheckedChange={update}
 			/>
 		</SettingsRow>
 	);
@@ -212,6 +240,7 @@ export function GeneralSettingsSection({
 			{/* Sessions */}
 			<SettingsSection title={t("settings.sessions")} grouped>
 				<SessionInterfaceRow />
+				<CardSummariesRow />
 				{isWindowsPlatform() ? <TerminalShellRows /> : null}
 				<SettingsRow label={t("settings.terminalCopyOnSelect")}>
 					<Switch

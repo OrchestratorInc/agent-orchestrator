@@ -196,6 +196,9 @@ type SessionMetadata struct {
 	// before any internal agent-switch coordination turn.
 	LatestAssistantUpdate   string    `json:"latestAssistantUpdate,omitempty"`
 	LatestAssistantUpdateAt time.Time `json:"-"`
+	// CardSummary is the one-line card text the summarizer wrote. It is
+	// stored apart from LatestAssistantUpdate, which lifecycle hooks rewrite.
+	CardSummary string `json:"-"`
 	// ConversationCheckpointState and its owner provenance are internal replay
 	// safety facts. They survive daemon restart but are not part of the session
 	// presentation model.
@@ -492,7 +495,11 @@ type Session struct {
 	// important current fact about the session at the stage it sits in. It is
 	// derived after the column, from the facts that column reads, and ships in
 	// renderable form so clients print it without a mapping table of their own.
-	DisplayStatus     DisplayStatus         `json:"displayStatus" enum:"Working,Blocked,Exited,No signal,Awaiting PR,Fixing CI failures,Addressing comments,Needs review,Review scheduled,Reviewing,Review failed,Review pending,Draft,CI failing,Commented,Changes requested,Needs human review,Mergeable,Approved,Merged,Closed without merge,Terminated"`
+	DisplayStatus DisplayStatus `json:"displayStatus" enum:"Working,Blocked,Exited,No signal,Awaiting PR,Fixing CI failures,Addressing comments,Needs review,Review scheduled,Reviewing,Review failed,Review pending,Draft,CI failing,Commented,Changes requested,Needs human review,Mergeable,Approved,Merged,Closed without merge,Terminated"`
+	// Summary is the generic activity line for the Kanban card. It is derived at
+	// read time from lifecycle/PR facts, or from an AO-prefixed activity-derived
+	// card summary stored in Metadata. Empty means the card renders no line.
+	Summary           string                `json:"summary,omitempty"`
 	TerminalHandleID  string                `json:"terminalHandleId,omitempty"`
 	ArtifactFiles     []SessionArtifactFile `json:"-"`
 	ActiveAgentSwitch *AgentSwitch          `json:"-"`

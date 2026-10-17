@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -405,6 +406,10 @@ func Run() error {
 	// registered driver cannot start in chat mode, so an unsupported request fails
 	// loudly instead of silently becoming a TUI session.
 	var sessMgr sessionLifecycle
+	// The session service does not exist yet when the chat service is built, so
+	// card signals reach it through a pointer set once it is. A signal that
+	// arrives before that is dropped; the next one carries the same evidence.
+	var cardSignals atomic.Pointer[func(context.Context, domain.SessionID, domain.CardSignal)]
 	chatSvc := chatsvc.New(chatsvc.Options{
 		Store:               store,
 		Sessions:            store,
@@ -488,6 +493,11 @@ func Run() error {
 			if err := sessMgr.PersistChatModel(ctx, sessionID, model); err != nil {
 				log.Warn("persist ChatUI model on session failed; a TUI rebuild may resume with a different model",
 					"sessionID", sessionID, "model", model, "error", err)
+			}
+		},
+		OnCardSignal: func(ctx context.Context, sessionID domain.SessionID, signal domain.CardSignal) {
+			if observe := cardSignals.Load(); observe != nil {
+				(*observe)(ctx, sessionID, signal)
 			}
 		},
 	})
@@ -583,6 +593,13 @@ func Run() error {
 		return fmt.Errorf("wire session service: %w", err)
 	}
 	sessionSvc.SetChatProviderPreserver(chatSvc.PreservesProviderOnRestart)
+	// Read the stored opt-in once so card summaries respect it from the first signal.
+	if _, err := settingsSvc.Get(ctx); err != nil {
+		log.Warn("read settings for card summaries failed", "error", err)
+	}
+	sessionSvc.SetCardSummariesEnabled(settingsSvc.CardSummariesEnabled)
+	observeCard := sessionSvc.ObserveCardSignal
+	cardSignals.Store(&observeCard)
 	memoryReader := usagesvc.NewMemoryReader(usagesvc.MemoryReaderDeps{
 		Store: store, Runtime: runtimeAdapter, Reviewers: store, CacheTTL: 2 * time.Second,
 		ChatHostPID: func(id domain.SessionID) (int, bool) {
@@ -970,7 +987,7 @@ func Run() error {
 		Settings:           settingsSvc,
 		CDC:                store,
 		Events:             cdcPipe.Broadcaster,
-		Activity:           lcStack.LCM,
+		Activity:           cardSignalActivity{ActivityRecorder: lcStack.LCM, observe: observeCard},
 		NativeSessions:     nativeSessions,
 		UsageHooks:         usageCollector,
 		UsageSummary:       usagesvc.NewSummaryReader(store),

@@ -214,6 +214,59 @@ func TestSessionRoundTripsOpenCodeHarnessVersions(t *testing.T) {
 	}
 }
 
+func TestCardSummaryIsIndependentOfLifecycleWrites(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "card-summary")
+	created, err := s.CreateSession(ctx, sampleRecord("card-summary"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := created // a lifecycle writer holding the record from before the summary
+
+	if updated, err := s.UpdateSessionCardSummary(ctx, created.ID, "Inspecting navigation routes"); err != nil || !updated {
+		t.Fatalf("update card summary = %v, %v", updated, err)
+	}
+	got, _, _ := s.GetSession(ctx, created.ID)
+	if got.Metadata.CardSummary != "Inspecting navigation routes" {
+		t.Fatalf("card summary = %q", got.Metadata.CardSummary)
+	}
+	if !got.UpdatedAt.Equal(created.UpdatedAt) {
+		t.Fatalf("a summary write moved updated_at %v -> %v and would reorder the board", created.UpdatedAt, got.UpdatedAt)
+	}
+	if got.Metadata.LatestAssistantUpdate != "" {
+		t.Fatalf("summary leaked into latest_assistant_update: %q", got.Metadata.LatestAssistantUpdate)
+	}
+
+	// A full-record write from a stale copy, as every lifecycle hook does, must
+	// neither erase the summary nor be affected by it.
+	stale.Metadata.LatestAssistantUpdate = "Done. Tests pass."
+	if err := s.UpdateSession(ctx, stale); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ = s.GetSession(ctx, created.ID)
+	if got.Metadata.CardSummary != "Inspecting navigation routes" {
+		t.Fatalf("lifecycle write erased the card summary: %q", got.Metadata.CardSummary)
+	}
+	if got.Metadata.LatestAssistantUpdate != "Done. Tests pass." {
+		t.Fatalf("latest assistant update = %q", got.Metadata.LatestAssistantUpdate)
+	}
+
+	events, err := s.EventsAfter(ctx, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidations := 0
+	for _, e := range events {
+		if string(e.Type) == "session_updated" && e.SessionID == string(created.ID) {
+			invalidations++
+		}
+	}
+	if invalidations == 0 {
+		t.Fatalf("summary update did not emit a session invalidation: %+v", events)
+	}
+}
+
 func TestTaskPreparationPromotionPreservesWorkspace(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

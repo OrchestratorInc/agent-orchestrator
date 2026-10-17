@@ -87,6 +87,7 @@ export function toBoardSessionPresentation(
 				: undefined),
 		title: session.title,
 		trackerIssueId: canonicalTrackerIssueId(session.issueId),
+		summary: session.summary,
 		updatedAt: session.updatedAt,
 		lastUserMessageAt: session.lastUserMessageAt,
 	};
@@ -230,7 +231,7 @@ function DesktopSessionCard({
 										: t("shell.archiveNamed", { title: session.title })
 								}
 								className={cn(
-									"inline-flex size-control-md items-center justify-center rounded-sm text-passive transition-[color,background-color,opacity] hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+									"inline-flex size-control-md items-center justify-center rounded-sm bg-surface/90 text-passive transition-[color,background-color,opacity] hover:bg-[color-mix(in_srgb,color-mix(in_srgb,var(--color-foreground)_8%,var(--color-surface))_90%,transparent)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
 									keepTerminateVisible || termination.isPending
 										? "opacity-100"
 										: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100",

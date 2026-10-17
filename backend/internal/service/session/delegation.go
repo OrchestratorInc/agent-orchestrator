@@ -120,6 +120,7 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 	// stays idle with its provisional title until the user supplies instructions.
 	if prompt != "" && project.Kind.WithDefault() == domain.ProjectKindScratch && !worker.ClientRequestCommitted {
 		s.refineDelegatedTaskTitleInBackground(worker.ID, in)
+		s.requestFirstCardSummary(worker.ID)
 	}
 	return DelegateTaskOutcome{WorkerID: worker.ID}, nil
 }

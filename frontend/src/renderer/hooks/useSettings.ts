@@ -29,6 +29,8 @@ export interface Settings {
 	localEnabled: boolean;
 	/** The user's persisted cloud toggle (Settings, Developer Mode). */
 	cloudOffering: boolean;
+	/** Whether model-written kanban card summaries are switched on. Off by default. */
+	cardSummaries: boolean;
 	/** Whether the cloud offering is available (flag + entitled client + control plane). */
 	cloudEnabled: boolean;
 	/** Cloud control plane base URL; empty when cloud is not configured. */
@@ -60,6 +62,7 @@ export function useSettings(hostId?: string, enabled = true) {
 				// that predates them behaves like a plain local install.
 				localEnabled: data?.localEnabled ?? true,
 				cloudOffering: data?.cloudOffering ?? false,
+				cardSummaries: data?.cardSummaries ?? false,
 				cloudEnabled: data?.cloudEnabled ?? false,
 				cloudControlPlaneUrl: data?.cloudControlPlaneUrl ?? "",
 				trackerIntakeEnabled: data?.trackerIntakeEnabled ?? false,
@@ -109,6 +112,43 @@ export function useUpdateCloudOffering() {
 		// Refetch rather than writing the value in locally: the daemon is the source
 		// of truth, and the control must not claim a change it did not persist.
 		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsQueryKey }),
+	});
+
+	return {
+		update: (enabled: boolean) => mutation.mutate(enabled),
+		saving: mutation.isPending,
+		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
+	};
+}
+
+export function useUpdateCardSummaries() {
+	const queryClient = useQueryClient();
+	const mutation = useMutation({
+		mutationFn: async (enabled: boolean) => {
+			const { data, error } = await apiClient.PATCH("/api/v1/settings/card-summaries", { body: { enabled } });
+			if (error) throw error;
+			return data?.cardSummaries ?? enabled;
+		},
+		onMutate: async (enabled) => {
+			await queryClient.cancelQueries({ queryKey: settingsQueryKey, exact: true });
+			const previous = queryClient.getQueryData<Settings>(settingsQueryKey)?.cardSummaries;
+			queryClient.setQueryData<Settings>(settingsQueryKey, (current) => current ? { ...current, cardSummaries: enabled } : current);
+			return { previous };
+		},
+		onError: (_error, _enabled, context) => {
+			const previous = context?.previous;
+			if (previous === undefined) return;
+			queryClient.setQueryData<Settings>(settingsQueryKey, (current) => current ? { ...current, cardSummaries: previous } : current);
+		},
+		onSuccess: (enabled) => {
+			queryClient.setQueryData<Settings>(settingsQueryKey, (current) => current ? { ...current, cardSummaries: enabled } : current);
+			// Summary visibility comes from the session list; do not wait for its next poll.
+			void queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+		},
+		onSettled: () => {
+			// Reconcile in the background without holding the switch disabled for a second round trip.
+			void queryClient.invalidateQueries({ queryKey: settingsQueryKey, exact: true });
+		},
 	});
 
 	return {

@@ -25,6 +25,7 @@ type Store interface {
 	GetAppSettings(ctx context.Context) (Snapshot, error)
 	SetDefaultSessionMode(ctx context.Context, mode domain.SessionMode, now time.Time) error
 	SetCloudOffering(ctx context.Context, enabled bool, now time.Time) error
+	SetCardSummaries(ctx context.Context, enabled bool, now time.Time) error
 	SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault, now time.Time) error
 }
 
@@ -33,7 +34,9 @@ type Snapshot struct {
 	HarnessDefaults    map[string]domain.HarnessDefault
 	DefaultSessionMode domain.SessionMode
 	// CloudOffering is the user's cloud toggle (Settings, Developer Mode).
-	CloudOffering          bool
+	CloudOffering bool
+	// CardSummaries is the opt-in for model-written kanban card summaries.
+	CardSummaries          bool
 	ChatHibernationEnabled bool
 	UpdatedAt              time.Time
 }
@@ -92,6 +95,9 @@ type Service struct {
 	offering        Offering
 	now             func() time.Time
 	chatHibernation atomic.Bool
+	// cardSummaries mirrors the stored preference so the summarizer can check it
+	// on every signal without a database read.
+	cardSummaries atomic.Bool
 }
 
 // New builds the service.
@@ -111,7 +117,22 @@ func (s *Service) Offering() Offering {
 func (s *Service) Get(ctx context.Context) (Snapshot, error) {
 	snapshot, err := s.store.GetAppSettings(ctx)
 	snapshot.ChatHibernationEnabled = s.chatHibernation.Load()
+	if err == nil {
+		s.cardSummaries.Store(snapshot.CardSummaries)
+	}
 	return snapshot, err
+}
+
+// CardSummariesEnabled reports the last value read or written. It is false until
+// Get or SetCardSummaries has run, so the daemon primes it at boot.
+func (s *Service) CardSummariesEnabled() bool { return s.cardSummaries.Load() }
+
+// SetCardSummaries turns model-written card summaries on or off.
+func (s *Service) SetCardSummaries(ctx context.Context, enabled bool) (Snapshot, error) {
+	if err := s.store.SetCardSummaries(ctx, enabled, s.now()); err != nil {
+		return Snapshot{}, err
+	}
+	return s.Get(ctx)
 }
 
 // DefaultSessionMode resolves the default for a spawn that named no mode. A read

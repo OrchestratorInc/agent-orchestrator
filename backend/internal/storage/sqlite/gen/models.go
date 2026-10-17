@@ -156,6 +156,7 @@ type AppSetting struct {
 	UpdatedAt          time.Time
 	CloudOffering      bool
 	HarnessDefaults    string
+	CardSummaries      bool
 }
 
 type Automation struct {
@@ -692,6 +693,7 @@ type Session struct {
 	HibernatedAt                     sql.NullTime
 	BranchState                      string
 	RequestedOutput                  string
+	CardSummary                      string
 }
 
 type SessionArtifactVersion struct {

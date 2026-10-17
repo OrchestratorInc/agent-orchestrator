@@ -19,6 +19,7 @@ func (*hibernationSettingsStore) SetDefaultSessionMode(context.Context, domain.S
 	return nil
 }
 func (*hibernationSettingsStore) SetCloudOffering(context.Context, bool, time.Time) error { return nil }
+func (*hibernationSettingsStore) SetCardSummaries(context.Context, bool, time.Time) error { return nil }
 
 func TestChatHibernationGateResetsOnDaemonBoot(t *testing.T) {
 	ctx := context.Background()
@@ -108,4 +109,42 @@ func TestOfferingBakedURLDoesNotEnableCloud(t *testing.T) {
 
 func (*hibernationSettingsStore) SetHarnessDefault(context.Context, domain.AgentHarness, domain.HarnessDefault, time.Time) error {
 	return nil
+}
+
+// cardSummariesStore keeps the preference in memory, as the real store does on disk.
+type cardSummariesStore struct {
+	hibernationSettingsStore
+	on bool
+}
+
+func (s *cardSummariesStore) GetAppSettings(context.Context) (Snapshot, error) {
+	return Snapshot{CardSummaries: s.on}, nil
+}
+func (s *cardSummariesStore) SetCardSummaries(_ context.Context, enabled bool, _ time.Time) error {
+	s.on = enabled
+	return nil
+}
+
+func TestCardSummariesAreOffUntilEnabledAndSurviveRestart(t *testing.T) {
+	ctx := context.Background()
+	store := &cardSummariesStore{}
+	svc := New(store, nil, Offering{}, nil)
+	if svc.CardSummariesEnabled() {
+		t.Fatal("card summaries are on before anyone enabled them")
+	}
+	snapshot, err := svc.SetCardSummaries(ctx, true)
+	if err != nil || !snapshot.CardSummaries || !svc.CardSummariesEnabled() {
+		t.Fatalf("enable: snapshot=%+v err=%v", snapshot, err)
+	}
+	// A restarted daemon starts false and learns the stored value on its first read.
+	restarted := New(store, nil, Offering{}, nil)
+	if restarted.CardSummariesEnabled() {
+		t.Fatal("a new service reported the preference before reading it")
+	}
+	if _, err := restarted.Get(ctx); err != nil || !restarted.CardSummariesEnabled() {
+		t.Fatalf("after Get: enabled=%v err=%v", restarted.CardSummariesEnabled(), err)
+	}
+	if snapshot, err := svc.SetCardSummaries(ctx, false); err != nil || snapshot.CardSummaries || svc.CardSummariesEnabled() {
+		t.Fatalf("disable: snapshot=%+v err=%v", snapshot, err)
+	}
 }

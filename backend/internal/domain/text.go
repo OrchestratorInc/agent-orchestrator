@@ -3,6 +3,7 @@ package domain
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // SanitizeControlChars removes control characters that are unsafe to deliver
@@ -23,4 +24,27 @@ func SanitizeControlChars(s string) string {
 		}
 		return r
 	}, s)
+}
+
+// MaxCardSummaryRunes bounds the one-line summary an agent sets on its card.
+const MaxCardSummaryRunes = 200
+
+// NormalizeCardSummary returns s as a single clean line, or "" when nothing
+// usable is left or it exceeds MaxCardSummaryRunes. The CLI, HTTP endpoint and
+// event stream all go through it, so the same text is accepted or rejected
+// however the agent delivered it.
+func NormalizeCardSummary(s string) string {
+	// Bidi overrides and zero-width characters can make a card read differently
+	// from what it says, so they go too.
+	s = strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029' {
+			return -1
+		}
+		return r
+	}, SanitizeControlChars(s))
+	s = strings.Join(strings.Fields(s), " ")
+	if utf8.RuneCountInString(s) > MaxCardSummaryRunes {
+		return ""
+	}
+	return s
 }

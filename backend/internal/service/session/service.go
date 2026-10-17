@@ -228,6 +228,12 @@ type Service struct {
 	titleRefinementSlots   chan struct{}
 	titleRefinementMu      sync.Mutex
 	titleRefinementCancels map[domain.SessionID]context.CancelFunc
+	// cardSummaries keeps each worker's kanban card line current from a separate
+	// read-only model call; see card_summary.go.
+	cardSummaries *cardSummarizer
+	// cardSummariesEnabled is the user's Settings opt-in. Nil means enabled, so
+	// tests and embedders that do not wire it keep the feature.
+	cardSummariesEnabled func() bool
 	// outputTypeReconciler lets ClaimPR persist the pr OutputType immediately
 	// instead of waiting for the next artifact-output poll tick, so raising a
 	// PR on a session that already produced artifacts flips its Kanban
@@ -238,6 +244,13 @@ type Service struct {
 	// artifactDeleter deletes a session's artifact files and version rows. Nil
 	// makes DeleteArtifacts fail rather than delete outside the capture lock.
 	artifactDeleter artifactDeleter
+}
+
+// SetCardSummariesEnabled wires the Settings opt-in after daemon construction.
+func (s *Service) SetCardSummariesEnabled(enabled func() bool) { s.cardSummariesEnabled = enabled }
+
+func (s *Service) cardSummariesOn() bool {
+	return s.cardSummariesEnabled == nil || s.cardSummariesEnabled()
 }
 
 // SetChatProviderPreserver wires the live Chat lifetime observation after both
@@ -302,6 +315,7 @@ func NewWithDeps(d Deps) *Service {
 	if s.clock == nil {
 		s.clock = time.Now
 	}
+	s.cardSummaries = newCardSummarizer(s)
 	s.workspaceCache = newWorkspaceCache(workspaceCacheTTL, s.clock)
 	s.workspaceManifests = newWorkspaceManifestIndex()
 	s.workspaceManifests.now = s.clock
@@ -386,6 +400,14 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	if err != nil {
 		s.invalidateAgentReadinessAfterLaunchFailure(cfg.Harness, err)
 		return domain.Session{}, 0, 0, toSpawnAPIError(err)
+	}
+	// A direct spawn skips DelegateTask, so a worker still carrying the
+	// placeholder name taken from its prompt gets the same background title.
+	if rec.Kind == domain.KindWorker && strings.TrimSpace(cfg.Prompt) != "" {
+		if rec.DisplayName == delegatedTaskDisplayName(cfg.Prompt) {
+			s.refineDelegatedTaskTitleInBackground(rec.ID, DelegateTaskInput{Brief: cfg.Prompt})
+		}
+		s.requestFirstCardSummary(rec.ID)
 	}
 	sess, err := s.toSession(ctx, rec)
 	if err != nil {
@@ -855,6 +877,7 @@ func restoreModeView(mode sessionmanager.RestoreMode) RestoreModeView {
 // Kill delegates terminal intent and teardown to the internal manager.
 func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	s.cancelTitleRefinement(id)
+	s.forgetCardSummary(id)
 	freed, err := s.manager.Kill(ctx, id)
 	return freed, toAPIError(err)
 }
@@ -862,6 +885,7 @@ func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 // RequestKill acknowledges terminal intent without waiting for cleanup scripts.
 func (s *Service) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
 	s.cancelTitleRefinement(id)
+	s.forgetCardSummary(id)
 	result, err := s.manager.RequestKill(ctx, id)
 	return result, toAPIError(err)
 }
@@ -914,6 +938,7 @@ func (s *Service) DeleteArtifacts(ctx context.Context, id domain.SessionID) erro
 // Kill would leave behind.
 func (s *Service) RollbackSpawn(ctx context.Context, id domain.SessionID) (RollbackOutcome, error) {
 	s.cancelTitleRefinement(id)
+	s.forgetCardSummary(id)
 	deleted, killed, err := s.manager.RollbackSpawn(ctx, id)
 	if err != nil {
 		return RollbackOutcome{}, toAPIError(err)
@@ -1356,6 +1381,7 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 		SCMStatus:        deriveSCMStatus(prs),
 		KanbanColumn:     presentation.Column,
 		DisplayStatus:    presentation.DisplayStatus,
+		Summary:          s.cardSummaryText(rec),
 		TerminalHandleID: rec.Metadata.RuntimeHandleID,
 		ArtifactFiles:    artifactFiles,
 		PRs:              prs,

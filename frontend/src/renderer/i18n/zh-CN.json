@@ -1451,6 +1451,8 @@
 	"settings.sessionInterface.unavailable": "适用于新会话。目前没有已安装的代理支持聊天。",
 	"settings.soundNotifications": "声音通知",
 	"settings.soundNotifications.saveFailed": "无法保存声音通知偏好设置。",
+	"settings.cardSummaries": "显示当前活动",
+	"settings.cardSummariesHint": "无需打开会话，即可查看每个智能体正在处理的工作。",
 	"settings.project.trackerIntake": "议题接入",
 	"settings.project.workspaceRepos": "工作区仓库",
 	"settings.project.worktrees": "工作树",

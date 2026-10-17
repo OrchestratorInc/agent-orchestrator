@@ -26,6 +26,7 @@ func (s settingsStore) GetAppSettings(ctx context.Context) (settingssvc.Snapshot
 		DefaultSessionMode: row.DefaultSessionMode,
 		HarnessDefaults:    row.HarnessDefaults,
 		CloudOffering:      row.CloudOffering,
+		CardSummaries:      row.CardSummaries,
 		UpdatedAt:          row.UpdatedAt,
 	}, nil
 }
@@ -36,6 +37,10 @@ func (s settingsStore) SetDefaultSessionMode(
 	now time.Time,
 ) error {
 	return s.store.SetDefaultSessionMode(ctx, mode, now)
+}
+
+func (s settingsStore) SetCardSummaries(ctx context.Context, enabled bool, now time.Time) error {
+	return s.store.SetCardSummaries(ctx, enabled, now)
 }
 
 func (s settingsStore) SetCloudOffering(ctx context.Context, enabled bool, now time.Time) error {

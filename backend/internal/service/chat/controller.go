@@ -210,6 +210,7 @@ type Controller struct {
 	now                    Clock
 	onAccountChanged       func(domain.SessionID, string, domain.AgentHarness)
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
+	onCardSignal           func(context.Context, domain.SessionID, domain.CardSignal)
 
 	// sendMu serializes command dispatch so only one operation mutates the
 	// provider conversation at a time.
@@ -368,6 +369,7 @@ func newController(
 	onAccountChanged func(domain.SessionID, string, domain.AgentHarness),
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation),
 	reader SnapshotReader,
+	onCardSignal func(context.Context, domain.SessionID, domain.CardSignal),
 ) *Controller {
 	c := &Controller{
 		sessionID:              sessionID,
@@ -384,6 +386,7 @@ func newController(
 		now:                    now,
 		onAccountChanged:       onAccountChanged,
 		onCodexCapacityChanged: onCodexCapacityChanged,
+		onCardSignal:           onCardSignal,
 		state:                  ports.ChatControllerReady,
 		settings:               conversation.Settings,
 		mcpServers:             map[string]domain.ConversationMCPServer{},
@@ -3374,6 +3377,38 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 	}
 }
 
+// signalCard forwards card-summary evidence. A reviewer's conversation never
+// feeds the reviewed task's card.
+func (c *Controller) signalCard(ctx context.Context, signal domain.CardSignal) {
+	if c.onCardSignal == nil || c.reviewID != "" {
+		return
+	}
+	c.onCardSignal(ctx, c.sessionID, signal)
+}
+
+// cardSignalFromActivity turns an activity event into card evidence. Reasoning,
+// usage, approvals and the like say nothing about progress, so they are skipped.
+func cardSignalFromActivity(event ports.ChatEvent) (domain.CardSignal, bool) {
+	text := strings.TrimSpace(event.Summary)
+	switch event.ActivityKind {
+	case domain.ActivityKindCommand, domain.ActivityKindMCPTool, domain.ActivityKindPlan,
+		domain.ActivityKindFileChange, domain.ActivityKindError:
+	default:
+		return domain.CardSignal{}, false
+	}
+	if text == "" {
+		return domain.CardSignal{}, false
+	}
+	if event.Kind == ports.ChatEventActivityCompleted {
+		// A completion only adds information when the work failed.
+		if event.ActivityStatus != domain.ActivityStatusFailed {
+			return domain.CardSignal{}, false
+		}
+		text = "Failed: " + text
+	}
+	return domain.CardSignal{Kind: domain.CardSignalActivity, Text: text}, true
+}
+
 // afterProject performs effects that intentionally live outside the SQLite
 // archive/projection transaction. Lifecycle writes touch the sessions table and
 // draining may call the provider, so either one inside the store transaction
@@ -3381,9 +3416,18 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, primaryTurn bool) {
 	now := c.now()
 	switch event.Kind {
+	case ports.ChatEventActivityStarted, ports.ChatEventActivityCompleted:
+		if signal, ok := cardSignalFromActivity(event); ok {
+			c.signalCard(ctx, signal)
+		}
+	case ports.ChatEventMessageCompleted:
+		if text := strings.TrimSpace(event.Text); text != "" {
+			c.signalCard(ctx, domain.CardSignal{Kind: domain.CardSignalAssistant, Text: text})
+		}
 	case ports.ChatEventTurnStarted:
 		if primaryTurn {
 			c.reportActivity(ctx, domain.ActivityActive, "chat.turn.started", now)
+			c.signalCard(ctx, domain.CardSignal{Kind: domain.CardSignalTurnStarted})
 		}
 	case ports.ChatEventTurnCompleted:
 		reauthRequired := errors.Is(event.Err, ports.ErrChatAuthRequired)
@@ -3393,6 +3437,10 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		if !primaryTurn {
 			return
 		}
+		c.signalCard(ctx, domain.CardSignal{
+			Kind:    domain.CardSignalTurnCompleted,
+			Stopped: reauthRequired || settledTurnState(event) != domain.TurnStateCompleted,
+		})
 		activityState := domain.ActivityIdle
 		activityEvent := "chat.turn.completed"
 		if reauthRequired {

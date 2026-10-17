@@ -90,6 +90,26 @@ describe("SessionsBoardView", () => {
 		expect(screen.getByText(statusReadiness === "checking" ? "Checking…" : "Unable to verify")).toBeInTheDocument();
 	});
 
+	it("prints the agent summary under the title only when one is set", () => {
+		const labels = { formatTime: () => "now", intakeIssue: (id: string) => id, pr: progressLabels, updatedAt: (at: string) => at };
+		const { rerender } = render(<SessionCardView externalLink={ExternalLink} labels={labels}
+			renderAvatar={() => null} session={{ ...baseSession, summary: "Fixing the auth callback" }} />);
+		expect(screen.getByTestId("board-session-summary")).toHaveTextContent("Fixing the auth callback");
+		rerender(<SessionCardView externalLink={ExternalLink} labels={labels}
+			renderAvatar={() => null} session={baseSession} />);
+		expect(screen.queryByTestId("board-session-summary")).toBeNull();
+	});
+
+	it("lays the card action over the title instead of beside it", () => {
+		render(<SessionCardView action={<button type="button">Archive</button>} externalLink={ExternalLink}
+			labels={{ formatTime: () => "now", intakeIssue: (id) => id, pr: progressLabels, updatedAt: (at) => at }}
+			renderAvatar={() => null} session={baseSession} />);
+		const action = screen.getByRole("button", { name: "Archive" });
+		expect(action.parentElement).toHaveClass("absolute");
+		// The title row no longer holds the action, so it cannot reserve space for it.
+		expect(screen.getByText(baseSession.title).parentElement).not.toContainElement(action);
+	});
+
 	it("renders one lane per Kanban column, newest first, with one scroller each", () => {
 		const sessions: BoardSessionPresentation[] = [
 			baseSession,
