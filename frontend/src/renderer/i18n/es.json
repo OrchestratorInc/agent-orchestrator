@@ -2890,7 +2890,7 @@
 	"chat.action.status.resolved": "Resuelto",
 	"chat.startup.step.fetch": "Obteniendo el código más reciente",
 	"chat.startup.step.worktree": "Preparando tu espacio de trabajo",
-	"chat.startup.step.naming": "Nombrando tu rama",
+	"chat.startup.step.worktreeDone": "Espacio de trabajo creado",
 	"chat.startup.step.setup": "Ejecutando tu script de configuración",
 	"chat.startup.step.agent": "Preparando {{agent}}",
 	"chat.startup.status.pending": "Pendiente",

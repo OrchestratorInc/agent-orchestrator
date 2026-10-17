@@ -2834,7 +2834,7 @@
 	"chat.action.status.resolved": "해결됨",
 	"chat.startup.step.fetch": "최신 코드 가져오는 중",
 	"chat.startup.step.worktree": "작업 공간 준비 중",
-	"chat.startup.step.naming": "브랜치 이름 정하는 중",
+	"chat.startup.step.worktreeDone": "작업 공간 생성됨",
 	"chat.startup.step.setup": "설정 스크립트 실행 중",
 	"chat.startup.step.agent": "{{agent}} 준비 중",
 	"chat.startup.status.pending": "대기 중",

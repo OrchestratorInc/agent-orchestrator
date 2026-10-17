@@ -2843,7 +2843,7 @@
 	"chat.action.status.resolved": "Resolved",
 	"chat.startup.step.fetch": "Getting the latest code",
 	"chat.startup.step.worktree": "Preparing your workspace",
-	"chat.startup.step.naming": "Naming your branch",
+	"chat.startup.step.worktreeDone": "Workspace created",
 	"chat.startup.step.setup": "Running your setup script",
 	"chat.startup.step.agent": "Getting {{agent}} ready",
 	"chat.startup.status.pending": "Pending",

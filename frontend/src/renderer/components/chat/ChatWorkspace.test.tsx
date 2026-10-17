@@ -2040,7 +2040,7 @@ describe("ChatWorkspace timeline", () => {
 			["worktree", "done"],
 			["agent", "running"],
 		]);
-		expect(steps[1]).toHaveTextContent(/^Preparing your workspace$/);
+		expect(steps[1]).toHaveTextContent(/^Workspace created$/);
 		expect(steps[2]).toHaveTextContent(/^Getting Codex ready$/);
 		expect(screen.getByText("Fix clicking attachments")).toBeInTheDocument();
 		expect(screen.queryByText("Queued · sends when the agent finishes")).not.toBeInTheDocument();

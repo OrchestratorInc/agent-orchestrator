@@ -2816,7 +2816,7 @@
 	"chat.action.status.resolved": "已解决",
 	"chat.startup.step.fetch": "正在获取最新代码",
 	"chat.startup.step.worktree": "正在准备工作区",
-	"chat.startup.step.naming": "正在命名分支",
+	"chat.startup.step.worktreeDone": "工作区已创建",
 	"chat.startup.step.setup": "正在运行设置脚本",
 	"chat.startup.step.agent": "正在准备 {{agent}}",
 	"chat.startup.status.pending": "等待中",
