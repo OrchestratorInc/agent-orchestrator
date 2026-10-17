@@ -146,7 +146,9 @@ func (c *conversation) HandleExtensionMethod(
 			// The synchronous replay reader must remain free to receive the
 			// provider settlement RPC's reply. activeTurn stays fenced until
 			// this single worker verifies settlement and commits the receipt.
-			go c.finishPrompt(turnID, response, promptErr)
+			// The notification's request lifetime ends on return; keep its
+			// values while the bounded durable settlement finishes independently.
+			go c.finishPromptContext(context.WithoutCancel(ctx), turnID, response, promptErr)
 		} else {
 			c.finishPrompt(turnID, response, promptErr)
 		}

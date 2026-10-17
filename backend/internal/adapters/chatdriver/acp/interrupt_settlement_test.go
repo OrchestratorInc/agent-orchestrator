@@ -138,8 +138,12 @@ func TestPersistentACPInterruptedReplayCanReadSettlementResponse(t *testing.T) {
 				SessionID string `json:"sessionId"`
 			} `json:"params"`
 		}
-		if err := json.Unmarshal(frame, &request); err != nil || request.Method != "mcode/session/delegation/stop" || request.Params.SessionID != "native-session" {
-			server <- fmt.Errorf("unexpected settlement request: %s (%v)", frame, err)
+		if err := json.Unmarshal(frame, &request); err != nil {
+			server <- fmt.Errorf("decode settlement request: %w", err)
+			return
+		}
+		if request.Method != "mcode/session/delegation/stop" || request.Params.SessionID != "native-session" {
+			server <- fmt.Errorf("unexpected settlement request: %s", frame)
 			return
 		}
 		if _, err := fmt.Fprintf(host, `{"jsonrpc":"2.0","id":%s,"result":{}}`+"\n", request.ID); err != nil {

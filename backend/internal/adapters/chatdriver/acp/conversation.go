@@ -724,6 +724,15 @@ func (c *conversation) finishPrompt(
 	resp acpsdk.PromptResponse,
 	err error,
 ) {
+	c.finishPromptContext(context.Background(), turnID, resp, err)
+}
+
+func (c *conversation) finishPromptContext(
+	ctx context.Context,
+	turnID string,
+	resp acpsdk.PromptResponse,
+	err error,
+) {
 	eventID, _ := resp.Meta[persistenthost.ACPEventIDMetaKey].(string)
 	var requestErr *acpsdk.RequestError
 	if eventID == "" && errors.As(err, &requestErr) {
@@ -792,8 +801,8 @@ func (c *conversation) finishPrompt(
 		c.mu.Lock()
 		sessionID := c.sessionID
 		c.mu.Unlock()
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		fenceErr := c.afterInterrupt(ctx, c.legacyWire.request, sessionID)
+		settleCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		fenceErr := c.afterInterrupt(settleCtx, c.legacyWire.request, sessionID)
 		cancel()
 		if fenceErr != nil {
 			// Do not commit/ACK the native terminal receipt or release activeTurn.
