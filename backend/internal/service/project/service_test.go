@@ -558,6 +558,23 @@ func TestManager_CloneRejectsUnsafeURLsAndExistingDestination(t *testing.T) {
 	}
 }
 
+func TestManager_CloneProgressReportsIdleAndInvalidQueries(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(t)
+
+	_, err := m.CloneProgress(ctx, project.CloneProgressQuery{
+		RemoteURL:         "https://github.com/acme/repository.git",
+		DestinationParent: t.TempDir(),
+	})
+	wantCode(t, err, "CLONE_PROGRESS_NOT_FOUND")
+
+	_, err = m.CloneProgress(ctx, project.CloneProgressQuery{
+		RemoteURL:         "not a url",
+		DestinationParent: t.TempDir(),
+	})
+	wantCode(t, err, "INVALID_GIT_URL")
+}
+
 func TestManager_CloneCleansUpFailedAndEmptyCheckouts(t *testing.T) {
 	ctx := context.Background()
 	m := newManager(t)

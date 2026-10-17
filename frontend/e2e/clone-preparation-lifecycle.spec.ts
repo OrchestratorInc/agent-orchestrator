@@ -93,3 +93,90 @@ for (const destinationMode of ["picker", "typed"] as const) {
 		expect(cleanupRequests).toEqual([{ path: "/repos/example", preparationId: "prep-1" }]);
 	});
 }
+
+test("renderer: clone dialog shows live git progress while the prepare call runs @T0", async ({ page }) => {
+	await installFakeAgent(page);
+	let releasePrepare: (() => void) | undefined;
+	const prepareHeld = new Promise<void>((resolve) => {
+		releasePrepare = resolve;
+	});
+	let progressPolls = 0;
+	let addRequest: Record<string, unknown> | null = null;
+
+	await page.route("http://127.0.0.1:8080/api/v1/**", async (route) => {
+		const pathname = new URL(route.request().url()).pathname;
+		if (pathname.startsWith("/api/v1/agents/readiness")) {
+			await route.fulfill({ json: { agents: [agentReadiness("codex", "Codex")] } });
+			return;
+		}
+		if (pathname === "/api/v1/projects/clone/prepare") {
+			// Hold the clone open so the progress polling has time to paint.
+			await prepareHeld;
+			await route.fulfill({ json: {
+				path: "/repos/example", remoteUrl: "https://example.com/example.git",
+				preparationId: "prep-1",
+			} });
+			return;
+		}
+		if (pathname === "/api/v1/projects/clone/progress") {
+			progressPolls += 1;
+			await route.fulfill({ json: {
+				phase: "receiving",
+				percent: 45,
+				itemsDone: 1234,
+				itemsTotal: 2748,
+				transferredBytes: 2 * 1024 * 1024,
+				speedBytesPerSecond: 1.5 * 1024 * 1024,
+				startedAt: "2026-10-12T00:00:00Z",
+				updatedAt: "2026-10-12T00:00:01Z",
+			} });
+			return;
+		}
+		if (pathname === "/api/v1/imports/validate") {
+			await route.fulfill({ json: {
+				importKind: "project", isValid: true, blockingErrors: [], nextStep: "continue",
+				root: { repoPath: "/repos/example", isRepo: true, hasCommit: true, hasOrigin: true, isEmptyFolder: false, needsGitInit: false, requiredActions: [], blockingErrors: [] },
+			} });
+			return;
+		}
+		if (pathname === "/api/v1/projects" && route.request().method() === "POST") {
+			addRequest = route.request().postDataJSON();
+			await route.fulfill({ status: 201, json: { project: {
+				id: "example", name: "example", kind: "single_repo", path: "/repos/example", config: {},
+			} } });
+			return;
+		}
+		if (pathname === "/api/v1/sessions" && route.request().method() === "POST") {
+			await route.fulfill({ status: 422, json: { error: "invalid", code: "START_FAILED", message: "test stop" } });
+			return;
+		}
+		await route.fulfill({ json: {} });
+	});
+
+	await page.goto("/#/");
+	await page.evaluate(() => {
+		const bridge = (window as unknown as { ao: AoBridge }).ao;
+		bridge.app.chooseDirectory = async () => "/repos";
+		bridge.app.checkGitRepository = async () => true;
+	});
+
+	await page.getByRole("button", { name: "New project", exact: true }).first().click();
+	await page.getByRole("button", { name: "Clone a repo", exact: true }).click();
+	await page.getByRole("textbox", { name: "Repository URL" }).fill("https://example.com/example.git");
+	await page.getByRole("button", { name: "Choose where to clone the repository", exact: true }).click();
+	await page.getByRole("button", { name: "Continue", exact: true }).click();
+
+	const progress = page.getByTestId("clone-progress");
+	await expect(progress).toBeVisible();
+	await expect(page.getByRole("progressbar", { name: "Cloning example" })).toHaveAttribute("aria-valuenow", "45");
+	await expect(progress).toContainText("Receiving objects");
+	await expect(progress).toContainText("2.0 MB transferred · 1.5 MB/s · 2s left");
+	expect(progressPolls).toBeGreaterThan(0);
+
+	releasePrepare?.();
+	await page.getByRole("button", { name: "Clone", exact: true }).click();
+	await expect.poll(() => addRequest).toMatchObject({
+		path: "/repos/example",
+		clonePreparationId: "prep-1",
+	});
+});

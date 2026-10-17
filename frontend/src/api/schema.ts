@@ -1295,6 +1295,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/clone/progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report the progress of the clone started by the matching prepare call */
+        get: operations["getCloneProgress"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/initialize": {
         parameters: {
             query?: never;
@@ -4113,6 +4130,21 @@ export interface components {
             path: string;
             preparationId: string;
             remoteUrl: string;
+        };
+        CloneProgress: {
+            itemsDone?: number;
+            itemsTotal?: number;
+            /** Format: double */
+            percent: number;
+            /** @enum {string} */
+            phase: "connecting" | "enumerating" | "counting" | "compressing" | "receiving" | "resolving" | "updating" | "finalizing";
+            /** Format: double */
+            speedBytesPerSecond?: number;
+            /** Format: date-time */
+            startedAt: string;
+            transferredBytes?: number;
+            /** Format: date-time */
+            updatedAt: string;
         };
         CloneProjectInput: {
             config?: components["schemas"]["ProjectConfig"];
@@ -11274,6 +11306,58 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getCloneProgress: {
+        parameters: {
+            query?: {
+                /** @description Repository URL the clone was started with. */
+                remoteUrl?: string;
+                /** @description Parent folder the checkout is created in. */
+                destinationParent?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloneProgress"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
