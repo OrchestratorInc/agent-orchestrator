@@ -1984,12 +1984,12 @@ function ChatWorkspaceContent({
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat || openingStarting}
-										disabled={(orchestratorStarting || openingStarting || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorStarting || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
 										disabledPlaceholder={
 											arrivingInChat
 												? arrivingPlaceholder
-												: openingStarting
-												? `Starting ${agentLabel(snapshot.harness)}`
+												: openingStarting && !session
+												? t("chat.opening.starting", { agent: agentLabel(snapshot.harness) })
 												: orchestratorStarting
 												? setupPlaceholder
 												: controllerTransitioning || newWorkDisabled
@@ -4182,7 +4182,7 @@ export function Timeline({
 					    whose brief is not in the timeline. */}
 					{rowStartup && (openingSetup || showStartup) && !startupGroupKey ? (
 						<LiveResponseStatus startupLabel={t(rowStartup.failed ? "chat.startup.failed" : "chat.startup.running")} failed={rowStartup.failed}>
-							{rowStartup.steps.length > 0 ? <SessionStartup {...rowStartup} /> : null}
+							{rowStartup.steps.length > 0 || rowStartup.failed ? <SessionStartup {...rowStartup} /> : null}
 						</LiveResponseStatus>
 					) : turn?.state === "running" && !groups.some((group) => group.turnId === turn.id) ? (
 						<LiveResponseStatus startedAt={turn.startedAt ?? turn.requestedAt} />
@@ -4572,7 +4572,7 @@ const TurnGroup = memo(function TurnGroup({
 				startupLabel={startup ? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : undefined}
 				failed={startup?.failed}
 			>
-				{startup && startup.steps.length > 0 ? <SessionStartup {...startup} /> : null}
+				{startup && (startup.steps.length > 0 || startup.failed) ? <SessionStartup {...startup} /> : null}
 			</LiveResponseStatus>,
 		);
 	}

@@ -1,7 +1,7 @@
 import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
 import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
-import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNavigate, useParams, useRouter } from "@tanstack/react-router";
+import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
 import { isCancelledError, useQueryClient } from "@tanstack/react-query";
 import { lazy, memo, Suspense, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderPlus } from "lucide-react";
@@ -556,6 +556,10 @@ function ShellLayout() {
 	// The new chat page is a session that does not exist yet, so it takes the
 	// session frame and the session view replaces it without the chrome moving.
 	const isNewChatRoute = Boolean(matchRoute({ to: "/new" }));
+	// The new chat page keeps its host in the search, not the path.
+	const newChatHost = useRouterState({
+		select: (state) => (isNewChatRoute ? (state.location.search as { host?: string }).host : undefined),
+	});
 	useEffect(() => {
 		if (!routeParams.hostId && routeParams.projectId) recordProjectOpened(routeParams.projectId);
 	}, [routeParams.hostId, routeParams.projectId]);
@@ -1263,6 +1267,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	useEffect(
 		() =>
 			aoBridge.app.onNewSessionShortcut(() => {
+			// The last project is remembered for this machine only; a remote new chat stays on its host.
+			if (newChatHost) {
+				requestNewTask(STANDALONE_WORKSPACE_ID, newChatHost);
+				return;
+			}
 			if (routeParams.hostId) {
 				if (routeParams.projectId) requestNewTask(routeParams.projectId, routeParams.hostId);
 				else requestNewTask(STANDALONE_WORKSPACE_ID, routeParams.hostId);
@@ -1274,7 +1283,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					requestNewTask(lastProjectId(workspaces) ?? STANDALONE_WORKSPACE_ID);
 				}
 			}),
-		[routeParams.hostId, routeParams.projectId, scopedProjectId, requestNewTask, workspaces],
+		[newChatHost, routeParams.hostId, routeParams.projectId, scopedProjectId, requestNewTask, workspaces],
 	);
 
 	// ⌘/ toggles: a second press closes the sheet.

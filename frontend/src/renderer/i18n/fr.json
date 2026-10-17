@@ -2800,6 +2800,7 @@
 		"Configurez la journalisation structurée avec des identifiants de corrélation sur tous les services"
 	],
 	"newTask.model": "Model",
+	"newTask.selectProject": "Choisir un projet",
 	"newTask.createNew": "Créer",
 	"newTask.modelCheckUnavailable": "Impossible de confirmer les modèles de {{agent}} pour le moment. Réessayez dans un instant.",
 	"newTask.phoneConnected_one": "Téléphone connecté",
@@ -2836,6 +2837,8 @@
 	"chat.startup.label": "Configuration de la session",
 	"chat.startup.steps": "Étapes de configuration",
 	"chat.startup.running": "Configuration de la session",
+	"chat.opening.starting": "Démarrage de {{agent}}",
+	"chat.composer.attachLater": "Vous pourrez joindre des fichiers une fois la tâche démarrée",
 	"chat.startup.failed": "Échec de la configuration de la session",
 	"chat.action.session.spawned": "A lancé un agent",
 	"chat.action.session.terminated": "A terminé un agent",

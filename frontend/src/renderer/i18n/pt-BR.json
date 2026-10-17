@@ -2800,6 +2800,7 @@
 		"Configure o registro de logs estruturado com IDs de correlação em todos os serviços"
 	],
 	"newTask.model": "Model",
+	"newTask.selectProject": "Selecionar projeto",
 	"newTask.createNew": "Criar novo",
 	"newTask.modelCheckUnavailable": "Não foi possível confirmar os modelos de {{agent}} agora. Tente novamente em instantes.",
 	"newTask.phoneConnected_one": "Celular conectado",
@@ -2836,6 +2837,8 @@
 	"chat.startup.label": "Configuração da sessão",
 	"chat.startup.steps": "Etapas de configuração",
 	"chat.startup.running": "Configurando a sessão",
+	"chat.opening.starting": "Iniciando {{agent}}",
+	"chat.composer.attachLater": "Você poderá anexar arquivos quando a tarefa começar",
 	"chat.startup.failed": "Falha na configuração da sessão",
 	"chat.action.session.spawned": "Gerou um agente",
 	"chat.action.session.terminated": "Encerrou um agente",

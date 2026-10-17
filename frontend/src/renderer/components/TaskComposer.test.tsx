@@ -2133,7 +2133,8 @@ describe("TaskComposer", () => {
 		expect(task()).toHaveValue("Use the native model");
 	});
 
-	it.each([false, true])("keeps FX's native provider when no default is reported (unrelated model hidden: %s)", async (hideUnrelated) => {
+	// A model is always selected: with no reported default, FX starts on its first offered model.
+	it.each([false, true])("selects FX's first offered model when no default is reported (unrelated model hidden: %s)", async (hideUnrelated) => {
 		h.agentCatalog = { agents: [agentReadiness("fx", "FX")] };
 		h.get.mockImplementation(async (path: string) => {
 			if (path === "/api/v1/settings") {
@@ -2163,13 +2164,12 @@ describe("TaskComposer", () => {
 			expect(screen.getByRole("menuitem", { name: "Gateway Beta" })).toBeInTheDocument();
 		}
 		await userEvent.keyboard("{Escape}");
-		expect(picker).toHaveTextContent("Select model");
-		fireEvent.change(task(), { target: { value: "Use FX native Gateway selection" } });
+		expect(picker).toHaveTextContent("Codex Alpha");
+		fireEvent.change(task(), { target: { value: "Start FX on its first model" } });
 		await waitForTaskReady();
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(1));
-		expect(h.post.mock.calls[0][1].body).toMatchObject({ agent: "fx" });
-		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("model");
+		expect(h.post.mock.calls[0][1].body).toMatchObject({ agent: "fx", model: "fx:codex:alpha" });
 	});
 
 	it("keeps the catalog default when Settings switches off no model", async () => {

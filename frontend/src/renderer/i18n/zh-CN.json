@@ -2735,6 +2735,7 @@
 		"在所有服务中设置带有关联 ID 的结构化日志"
 	],
 	"newTask.model": "Model",
+	"newTask.selectProject": "选择项目",
 	"newTask.createNew": "新建",
 	"newTask.modelCheckUnavailable": "暂时无法确认 {{agent}} 的模型。请稍后再试。",
 	"newTask.phoneConnected_one": "手机已连接",
@@ -2770,6 +2771,8 @@
 	"chat.startup.label": "会话设置",
 	"chat.startup.steps": "设置步骤",
 	"chat.startup.running": "正在设置会话",
+	"chat.opening.starting": "正在启动 {{agent}}",
+	"chat.composer.attachLater": "任务开始后即可附加文件",
 	"chat.startup.failed": "会话设置失败",
 	"chat.action.session.spawned": "已启动一个代理",
 	"chat.action.session.terminated": "已终止一个代理",

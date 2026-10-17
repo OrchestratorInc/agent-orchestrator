@@ -606,7 +606,8 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		(!hostId || Boolean(agentCatalog?.agents.some((candidate) => candidate.id === selectedAgent && isLaunchableAgent(candidate)))) &&
 		(isCloudProject || isStandalone || projectQuery.data !== undefined) &&
 		(!hostId || (agentsQuery.isSuccess && settings !== undefined));
-	const remoteLoadError = !hostId ? undefined : !hostConnected ? t("remote.hostOffline") :
+	// Named for its remote origins; a local project that failed to load reports here too.
+	const remoteLoadError = !hostId ? (projectQuery.error instanceof Error ? projectQuery.error.message : undefined) : !hostConnected ? t("remote.hostOffline") :
 		[projectQuery.error, agentsQuery.error].find((cause): cause is Error => cause instanceof Error)?.message ?? settingsError ??
 			(agentsQuery.isSuccess && !agentCatalog?.agents.some(isLaunchableAgent) ? t("remote.noReadyAgent") : undefined);
 	const refreshSelectedModels = useCallback(async () => {

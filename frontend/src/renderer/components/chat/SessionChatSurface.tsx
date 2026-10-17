@@ -19,7 +19,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useChatPermissionModes } from "../../hooks/useChatPermissionModes";
 import { useChatMessageFocus } from "../../hooks/useChatMessageFocus";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
-import { forgetLaunchSettings, LaunchSettingsBar, launchSettingsFor, openingStartFor } from "./LaunchSettingsBar";
+import { forgetLaunchSettings, forgetOpeningStart, LaunchSettingsBar, launchSettingsFor, openingStartFor } from "./LaunchSettingsBar";
 import { rememberChatSettingsTemplate } from "../../lib/chat-settings-template";
 import {
 	clearConversationProviderCatalogs,
@@ -381,10 +381,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const providerOptions = configOptions.options ?? [];
 	// Keep this agent's settings so the new chat page can draw the very bar a
 	// session of it will show, before that session exists.
+	// Keyed by the raw harness: the provider label folds unknown harnesses into one.
+	const templateHarness = snapshot?.harness;
 	useEffect(() => {
-		if (session.kind !== "worker" || !configOptions.loaded || providerOptions.length === 0) return;
-		rememberChatSettingsTemplate(session.provider, hostId, { options: providerOptions });
-	}, [configOptions.loaded, hostId, providerOptions, session.kind, session.provider]);
+		if (session.kind !== "worker" || !templateHarness || !configOptions.loaded || providerOptions.length === 0) return;
+		rememberChatSettingsTemplate(templateHarness, hostId, { options: providerOptions });
+	}, [configOptions.loaded, hostId, providerOptions, session.kind, templateHarness]);
 	const hasProviderMode = hasProviderPermissionMode(providerOptions);
 	const hasProviderModel = providerOptions.some(
 		(option) => option.category === "model" || option.id === "model",
@@ -559,6 +561,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	useEffect(() => {
 		if (settingsReady && !settingsLoading && launchSettings) forgetLaunchSettings(queryClient, session.id, hostId);
 	}, [hostId, launchSettings, queryClient, session.id, settingsLoading, settingsReady]);
+	// Once the opening brief's turn has settled the chat is an ordinary one; a later
+	// Undo of that turn must not bring the start-up state back.
+	const openingSettled = Boolean(snapshot?.turns[0] && snapshot.turns[0].state !== "queued" && snapshot.turns[0].state !== "running");
+	useEffect(() => {
+		if (openingStartedAt && openingSettled) forgetOpeningStart(queryClient, session.id, hostId);
+	}, [hostId, openingSettled, openingStartedAt, queryClient, session.id]);
 
 	if (isLoading && !renderShellFallback && !optimisticChat) {
 		return (

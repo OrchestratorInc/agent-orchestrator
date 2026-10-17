@@ -2800,6 +2800,7 @@
 		"Configura el registro estructurado con ID de correlación en todos los servicios"
 	],
 	"newTask.model": "Model",
+	"newTask.selectProject": "Seleccionar proyecto",
 	"newTask.createNew": "Crear nuevo",
 	"newTask.modelCheckUnavailable": "No se pudieron confirmar los modelos de {{agent}} en este momento. Inténtalo de nuevo en un momento.",
 	"newTask.phoneConnected_one": "Teléfono conectado",
@@ -2836,6 +2837,8 @@
 	"chat.startup.label": "Configuración de la sesión",
 	"chat.startup.steps": "Pasos de configuración",
 	"chat.startup.running": "Configurando la sesión",
+	"chat.opening.starting": "Iniciando {{agent}}",
+	"chat.composer.attachLater": "Podrás adjuntar archivos cuando la tarea haya empezado",
 	"chat.startup.failed": "Falló la configuración de la sesión",
 	"chat.action.session.spawned": "Generó un agente",
 	"chat.action.session.terminated": "Terminó un agente",

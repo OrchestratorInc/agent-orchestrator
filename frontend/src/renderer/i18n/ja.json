@@ -2753,6 +2753,7 @@
 		"すべてのサービスで相関 ID を使用した構造化ロギングを設定してください"
 	],
 	"newTask.model": "Model",
+	"newTask.selectProject": "プロジェクトを選択",
 	"newTask.createNew": "新規作成",
 	"newTask.modelCheckUnavailable": "{{agent}} のモデルを今は確認できませんでした。少し待ってからもう一度お試しください。",
 	"newTask.phoneConnected_one": "スマートフォン接続中",
@@ -2788,6 +2789,8 @@
 	"chat.startup.label": "セッションのセットアップ",
 	"chat.startup.steps": "セットアップ手順",
 	"chat.startup.running": "セッションをセットアップ中",
+	"chat.opening.starting": "{{agent}} を起動中",
+	"chat.composer.attachLater": "タスクの開始後にファイルを添付できます",
 	"chat.startup.failed": "セッションのセットアップに失敗しました",
 	"chat.action.session.spawned": "エージェントを起動しました",
 	"chat.action.session.terminated": "エージェントを終了しました",

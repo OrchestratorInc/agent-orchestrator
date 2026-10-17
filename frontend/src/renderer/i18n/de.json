@@ -2753,6 +2753,7 @@
 		"Richte strukturiertes Logging mit Korrelations-IDs über alle Dienste hinweg ein"
 	],
 	"newTask.model": "Model",
+	"newTask.selectProject": "Projekt auswählen",
 	"newTask.createNew": "Neu erstellen",
 	"newTask.modelCheckUnavailable": "Die Modelle von {{agent}} konnten gerade nicht bestätigt werden. Versuche es gleich noch einmal.",
 	"newTask.phoneConnected_one": "Telefon verbunden",
@@ -2788,6 +2789,8 @@
 	"chat.startup.label": "Sitzungseinrichtung",
 	"chat.startup.steps": "Einrichtungsschritte",
 	"chat.startup.running": "Sitzung wird eingerichtet",
+	"chat.opening.starting": "{{agent}} wird gestartet",
+	"chat.composer.attachLater": "Dateien können angehängt werden, sobald die Aufgabe gestartet ist",
 	"chat.startup.failed": "Einrichtung der Sitzung fehlgeschlagen",
 	"chat.action.session.spawned": "Agent gestartet",
 	"chat.action.session.terminated": "Agent beendet",
