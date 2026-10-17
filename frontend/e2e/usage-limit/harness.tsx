@@ -28,16 +28,23 @@ const initial: ConversationSnapshot = {
 
 function RecoveryFixture() {
 	const [snapshot, setSnapshot] = useState(initial);
-	return <ChatWorkspace snapshot={snapshot} sessionTitle="Usage-limit recovery" retryControl={{
-		retry: (turnId) => setSnapshot((current) => ({
-			...current, controller: { state: "busy" },
-			turns: [...current.turns, { id: "resumed", retryOfTurnId: turnId, state: "running", requestedAt: new Date().toISOString() }],
-		})),
-		setAutoResume: (turnId, enabled) => setSnapshot((current) => ({
-			...current, turns: current.turns.map((turn) => turn.id === turnId
-				? { ...turn, usageLimit: { ...turn.usageLimit, autoResume: enabled } } : turn),
-		})),
-	}} />;
+	return <div className="flex h-full flex-col">
+		<p role="note" className="border-b border-border bg-sidebar px-3 py-2 text-xs text-muted-foreground">
+			UI-only simulation. No daemon runs here; auto-resume does not execute.
+		</p>
+		<div className="min-h-0 flex-1">
+			<ChatWorkspace snapshot={snapshot} sessionTitle="Usage-limit recovery" retryControl={{
+				retry: (turnId) => setSnapshot((current) => ({
+					...current, controller: { state: "busy" },
+					turns: [...current.turns, { id: "resumed", retryOfTurnId: turnId, state: "running", requestedAt: new Date().toISOString() }],
+				})),
+				setAutoResume: (turnId, enabled) => setSnapshot((current) => ({
+					...current, turns: current.turns.map((turn) => turn.id === turnId
+						? { ...turn, usageLimit: { ...turn.usageLimit, autoResume: enabled } } : turn),
+				})),
+			}} />
+		</div>
+	</div>;
 }
 
 createRoot(document.getElementById("root")!).render(

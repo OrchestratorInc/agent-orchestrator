@@ -11,6 +11,7 @@ for (const { harness, providerLabel } of [
 		test("offers opt-in, cancellation, then Resume when reset time arrives", async ({ page }) => {
 			await page.clock.install();
 			await page.goto(`/e2e/usage-limit/harness.html?harness=${harness}&delay=60000`);
+			await expect(page.getByRole("note")).toHaveText("UI-only simulation. No daemon runs here; auto-resume does not execute.");
 			await expect(page.getByRole("tab", { name: `Usage-limit recovery · ${providerLabel}`, exact: true })).toBeVisible();
 			const recoveryNotice = page.getByTestId("usage-limit-notice").filter({ has: page.locator("time") });
 			await expect(recoveryNotice).toBeVisible();
@@ -35,6 +36,7 @@ for (const { harness, providerLabel } of [
 			await page.setViewportSize({ width: 390, height: 844 });
 			await page.clock.install();
 			await page.goto(`/e2e/usage-limit/harness.html?harness=${harness}&delay=60000`);
+			await expect(page.getByRole("note")).toHaveText("UI-only simulation. No daemon runs here; auto-resume does not execute.");
 			await expect(page.getByRole("tab", { name: `Usage-limit recovery · ${providerLabel}`, exact: true })).toBeVisible();
 			const recoveryNotice = page.getByTestId("usage-limit-notice").filter({ has: page.locator("time") });
 			await page.getByRole("button", { name: "Auto-resume at reset" }).click();
@@ -65,6 +67,7 @@ for (const { harness, providerLabel } of [
 		test("keeps controls usable on a narrow screen and never guesses a reset", async ({ page }) => {
 			await page.setViewportSize({ width: 390, height: 844 });
 			await page.goto(`/e2e/usage-limit/harness.html?harness=${harness}&unknown=1`);
+			await expect(page.getByRole("note")).toHaveText("UI-only simulation. No daemon runs here; auto-resume does not execute.");
 			await expect(page.getByRole("tab", { name: `Usage-limit recovery · ${providerLabel}`, exact: true })).toBeVisible();
 			await expect(page.getByText("The provider did not supply a reset time.")).toBeVisible();
 			await expect(page.getByRole("button", { name: "Resume", exact: true })).toBeEnabled();
