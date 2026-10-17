@@ -594,6 +594,69 @@ func TestLoadHarnessUpdateChecksToggle(t *testing.T) {
 	}
 }
 
+func TestLoadUpdateWhileRunningToggle(t *testing.T) {
+	t.Setenv("AO_UPDATE_WHILE_RUNNING", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.UpdateWhileRunning {
+		t.Fatal("update while running is off by default")
+	}
+	t.Setenv("AO_UPDATE_WHILE_RUNNING", "off")
+	if cfg, err = Load(); err != nil || cfg.UpdateWhileRunning {
+		t.Fatalf("AO_UPDATE_WHILE_RUNNING=off: enabled=%t err=%v", cfg.UpdateWhileRunning, err)
+	}
+	t.Setenv("AO_UPDATE_WHILE_RUNNING", "maybe")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid AO_UPDATE_WHILE_RUNNING value was accepted")
+	}
+}
+
+func TestLoadVersionRefreshSettings(t *testing.T) {
+	t.Setenv("AO_VERSION_REFRESH", "")
+	t.Setenv("AO_VERSION_REFRESH_IDLE", "")
+	cfg, err := Load()
+	if err != nil || !cfg.VersionRefresh || cfg.VersionRefreshIdle != DefaultVersionRefreshIdle {
+		t.Fatalf("defaults: refresh=%t idle=%s err=%v", cfg.VersionRefresh, cfg.VersionRefreshIdle, err)
+	}
+	t.Setenv("AO_VERSION_REFRESH", "off")
+	t.Setenv("AO_VERSION_REFRESH_IDLE", "30m")
+	if cfg, err = Load(); err != nil || cfg.VersionRefresh || cfg.VersionRefreshIdle != 30*time.Minute {
+		t.Fatalf("overrides: refresh=%t idle=%s err=%v", cfg.VersionRefresh, cfg.VersionRefreshIdle, err)
+	}
+	t.Setenv("AO_VERSION_REFRESH_IDLE", "soon")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid AO_VERSION_REFRESH_IDLE was accepted")
+	}
+}
+
+func TestLoadPhaseThreeToggles(t *testing.T) {
+	t.Setenv("AO_TUI_VERSION_REFRESH", "")
+	t.Setenv("AO_WINDOWS_UPDATE_WHEN_IDLE", "")
+	cfg, err := Load()
+	if err != nil || !cfg.TUIVersionRefresh || !cfg.WindowsUpdateWhenIdle {
+		t.Fatalf("defaults: tui=%t windows=%t err=%v", cfg.TUIVersionRefresh, cfg.WindowsUpdateWhenIdle, err)
+	}
+	t.Setenv("AO_TUI_VERSION_REFRESH", "off")
+	t.Setenv("AO_WINDOWS_UPDATE_WHEN_IDLE", "off")
+	if cfg, err = Load(); err != nil || cfg.TUIVersionRefresh || cfg.WindowsUpdateWhenIdle {
+		t.Fatalf("off: tui=%t windows=%t err=%v", cfg.TUIVersionRefresh, cfg.WindowsUpdateWhenIdle, err)
+	}
+}
+
+func TestLoadManagedHarnessInstallsToggle(t *testing.T) {
+	t.Setenv("AO_MANAGED_HARNESS_INSTALLS", "")
+	cfg, err := Load()
+	if err != nil || !cfg.ManagedHarnessInstalls {
+		t.Fatalf("default managed installs = %t, %v", cfg.ManagedHarnessInstalls, err)
+	}
+	t.Setenv("AO_MANAGED_HARNESS_INSTALLS", "off")
+	if cfg, err = Load(); err != nil || cfg.ManagedHarnessInstalls {
+		t.Fatalf("off: managed installs = %t, %v", cfg.ManagedHarnessInstalls, err)
+	}
+}
+
 func TestLoadHarnessUpdateInterval(t *testing.T) {
 	t.Setenv("AO_HARNESS_UPDATE_INTERVAL", "")
 	cfg, err := Load()

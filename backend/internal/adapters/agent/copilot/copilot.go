@@ -182,6 +182,9 @@ func ResolveCopilotBinary(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if managed, ok := binaryutil.ManagedBinary("copilot"); ok {
+		return managed, nil
+	}
 
 	if runtime.GOOS == "windows" {
 		for _, name := range []string{"copilot.cmd", "copilot.exe", "copilot"} {
@@ -377,4 +380,12 @@ func appendModelFlag(cmd *[]string, cfg ports.AgentConfig) {
 	if trimmed := strings.TrimSpace(cfg.Model); trimmed != "" {
 		*cmd = append(*cmd, "--model", trimmed)
 	}
+}
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
 }

@@ -1087,6 +1087,16 @@ retryProjection:
 	resolutions := needsInputResolutions(rec, next, now)
 	waitingEvents := m.waitingInputEvents(next, prevState, prevAt, now)
 	m.mu.Unlock()
+	if prevState != domain.ActivityIdle && next.Activity.State == domain.ActivityIdle {
+		m.operationGateMu.RLock()
+		gate := m.operationGate
+		m.operationGateMu.RUnlock()
+		// A session manager that moves sessions to a new release hears of every
+		// turn that ends. It must not block.
+		if ender, ok := gate.(interface{ SessionTurnEnded(domain.SessionRecord) }); ok {
+			ender.SessionTurnEnded(next)
+		}
+	}
 	if err := m.acknowledgeAgentSwitchTarget(ctx, id, s, now); err != nil {
 		return err
 	}
