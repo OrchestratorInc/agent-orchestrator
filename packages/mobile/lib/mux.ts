@@ -1,13 +1,14 @@
 import { authHeaders, muxUrl, type ServerConfig } from "./config";
 import { space } from "./tokens";
 
-// Mirrors AO's mux-protocol.ts (the bits we use).
-export type SessionPatch = {
-	id: string;
-	status: string;
-	activity: string | null;
-	attentionLevel: string;
-	lastActivityAt: string;
+// One change the daemon reports on the "sessions" channel: a change_log row, not session
+// state, so a client refetches detail over REST (backend/internal/terminal/protocol.go,
+// sessionUpdate). `sessionId` is absent for a project-level change.
+export type SessionUpdate = {
+	seq: number;
+	projectId: string;
+	sessionId?: string;
+	eventType: string;
 };
 
 export type MuxStatus = "connecting" | "open" | "closed" | "error";
@@ -22,7 +23,8 @@ type Handlers = {
 	// actually using, driven by the largest/primary client) so this follower can
 	// render that exact grid scaled to fit, instead of its own fitted size.
 	onTerminalResize?: (id: string, cols: number, rows: number) => void;
-	onSessions?: (sessions: SessionPatch[]) => void;
+	// Once per frame the daemon pushes after subscribeSessions().
+	onSessionUpdate?: (update: SessionUpdate) => void;
 };
 
 // Encode a JS string (already UTF-8 decoded by the server) back to UTF-8 bytes
@@ -96,9 +98,14 @@ export function bytesToBase64(bytes: Uint8Array): string {
 	return out;
 }
 
+// The daemon routes on `ch`, then on `type`: handleSubscribe returns unless
+// type is "subscribe" (backend/internal/terminal/manager.go), so a frame without
+// it is dropped with no error. The daemon does not read `topics`.
+const SUBSCRIBE_FRAME = { ch: "subscribe", type: "subscribe", topics: ["sessions", "notifications"] };
+
 /**
- * Thin client over AO's mux WebSocket. One socket multiplexes session-status
- * snapshots and per-session terminal I/O. Auto-reconnects with backoff.
+ * Thin client over AO's mux WebSocket. One socket multiplexes session change
+ * events and per-session terminal I/O. Auto-reconnects with backoff.
  */
 export class MuxClient {
 	private ws: WebSocket | null = null;
@@ -148,7 +155,7 @@ export class MuxClient {
 		ws.onopen = () => {
 			this.backoff = 1000;
 			this.handlers.onStatus?.("open");
-			if (this.subscribed) this.send({ ch: "subscribe", topics: ["sessions", "notifications"] });
+			if (this.subscribed) this.send(SUBSCRIBE_FRAME);
 			// Re-open any terminals that were active before a reconnect (with projectId).
 			for (const [id, projectId] of this.openTerminals) {
 				this.send({ ch: "terminal", id, type: "open", projectId, role: "secondary" });
@@ -188,7 +195,7 @@ export class MuxClient {
 		const msg = raw as {
 			ch?: string;
 			type?: string;
-			sessions?: SessionPatch[];
+			session?: Partial<SessionUpdate>;
 			id?: string;
 			data?: string;
 			code?: number;
@@ -199,7 +206,10 @@ export class MuxClient {
 			message?: string;
 		};
 		if (msg.ch === "sessions" && msg.type === "snapshot") {
-			this.handlers.onSessions?.(msg.sessions ?? []);
+			const s = msg.session;
+			if (s && typeof s.seq === "number" && typeof s.projectId === "string" && typeof s.eventType === "string") {
+				this.handlers.onSessionUpdate?.({ seq: s.seq, projectId: s.projectId, sessionId: s.sessionId, eventType: s.eventType });
+			}
 		} else if (msg.ch === "terminal") {
 			const id = msg.id ?? "";
 			switch (msg.type) {
@@ -255,7 +265,7 @@ export class MuxClient {
 
 	subscribeSessions() {
 		this.subscribed = true;
-		this.send({ ch: "subscribe", topics: ["sessions", "notifications"] });
+		this.send(SUBSCRIBE_FRAME);
 	}
 
 	openTerminal(id: string, projectId?: string) {

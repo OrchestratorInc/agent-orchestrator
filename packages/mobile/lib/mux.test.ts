@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // mux.ts imports ./config, which reaches React Native's Flow-typed sources
 // through these two. Same preamble as lib/chat/eventCursor.test.ts.
@@ -9,7 +9,8 @@ vi.mock("expo-secure-store", () => ({
 	getItemAsync: vi.fn(), setItemAsync: vi.fn(), deleteItemAsync: vi.fn(),
 }));
 
-import { base64ToBytes, bytesToBase64 } from "./mux";
+import type { ServerConfig } from "./config";
+import { base64ToBytes, bytesToBase64, MuxClient } from "./mux";
 
 /**
  * Every literal below was produced by Go's `base64.StdEncoding`, the daemon's
@@ -91,5 +92,155 @@ describe("bytesToBase64", () => {
 	it("round-trips arbitrary non-UTF8 bytes", () => {
 		const bytes = new Uint8Array([0x00, 0x1b, 0x5b, 0xff, 0xfe, 0x7f, 0x41]);
 		expect(base64ToBytes(bytesToBase64(bytes))).toEqual(bytes);
+	});
+});
+
+/**
+ * Client frames, as the literal JSON the daemon decodes. The daemon routes on
+ * `ch` and then on `type`, and its subscribe handler returns without a word
+ * unless `type` is "subscribe" (backend/internal/terminal/manager.go,
+ * handleSubscribe), so a subscribe frame without `type` is dropped silently.
+ * TestClientMsgDecodesMobileFrames (terminal/protocol_test.go) decodes the same
+ * literals with the daemon's own struct.
+ */
+const SUBSCRIBE = { ch: "subscribe", type: "subscribe", topics: ["sessions", "notifications"] };
+
+/**
+ * Frames the daemon pushes on the "sessions" channel: one change_log row per frame,
+ * carried as `session` (backend/internal/terminal/protocol.go, sessionUpdate), never
+ * as a `sessions` list. The literals are the ones the daemon's own golden tests
+ * produce (TestServerMsgSessionFrameWireShape and TestServerMsgProjectEventFrameWireShape
+ * in terminal/protocol_test.go). The daemon omits `sessionId` for a project-level change.
+ */
+const DAEMON_SESSION_FRAME =
+	'{"ch":"sessions","type":"snapshot","session":{"seq":7,"projectId":"p1","sessionId":"s1","eventType":"session_updated"}}';
+const DAEMON_PROJECT_FRAME =
+	'{"ch":"sessions","type":"snapshot","session":{"seq":8,"projectId":"p1","eventType":"pr_updated"}}';
+
+const config: ServerConfig = { host: "127.0.0.1", httpPort: "3011", muxPort: "14801", password: "" };
+
+class FakeSocket {
+	static OPEN = 1;
+	static instances: FakeSocket[] = [];
+	readyState = 0;
+	sent: string[] = [];
+	onopen: (() => void) | null = null;
+	onclose: (() => void) | null = null;
+	onmessage: ((ev: { data: unknown }) => void) | null = null;
+	constructor(public url: string) {
+		FakeSocket.instances.push(this);
+	}
+	send(frame: string) {
+		this.sent.push(frame);
+	}
+	close() {}
+	open() {
+		this.readyState = FakeSocket.OPEN;
+		this.onopen?.();
+	}
+	receive(frame: string) {
+		this.onmessage?.({ data: frame });
+	}
+	frames(): unknown[] {
+		return this.sent.map((s) => JSON.parse(s));
+	}
+}
+
+describe("MuxClient", () => {
+	beforeEach(() => {
+		FakeSocket.instances = [];
+		vi.useFakeTimers();
+		vi.stubGlobal("WebSocket", FakeSocket);
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
+	});
+
+	function connected(handlers: ConstructorParameters<typeof MuxClient>[1] = {}) {
+		const mux = new MuxClient(config, handlers);
+		mux.connect();
+		const socket = FakeSocket.instances[FakeSocket.instances.length - 1];
+		socket.open();
+		return { mux, socket };
+	}
+
+	describe("frames it sends", () => {
+		it("subscribes with the typed frame the daemon accepts", () => {
+			const { mux, socket } = connected();
+			mux.subscribeSessions();
+			expect(socket.frames()).toEqual([SUBSCRIBE]);
+		});
+
+		it("subscribes again with the same frame after a reconnect", () => {
+			const { mux, socket } = connected();
+			mux.subscribeSessions();
+			socket.onclose?.();
+			vi.advanceTimersByTime(1000); // first reconnect backoff
+			const next = FakeSocket.instances[FakeSocket.instances.length - 1];
+			expect(next).not.toBe(socket);
+			next.open();
+			expect(next.frames()).toEqual([SUBSCRIBE]);
+		});
+
+		it("gives every frame a channel and a type", () => {
+			const { mux, socket } = connected();
+			mux.subscribeSessions();
+			mux.openTerminal("s1", "p1");
+			mux.sendInput("s1", "ls\n", "p1");
+			mux.resize("s1", 80, 24, "p1");
+			vi.advanceTimersByTime(20_000); // the keep-alive ping
+			mux.closeTerminal("s1", "p1");
+			expect(socket.frames()).toEqual([
+				SUBSCRIBE,
+				{ ch: "terminal", id: "s1", type: "open", projectId: "p1", role: "secondary" },
+				{ ch: "terminal", id: "s1", type: "data", data: "bHMK", projectId: "p1" },
+				{ ch: "terminal", id: "s1", type: "resize", cols: 80, rows: 24, projectId: "p1" },
+				{ ch: "system", type: "ping" },
+				{ ch: "terminal", id: "s1", type: "close", projectId: "p1" },
+			]);
+		});
+	});
+
+	describe("session frames it receives", () => {
+		function subscribed() {
+			const onSessionUpdate = vi.fn();
+			const { mux, socket } = connected({ onSessionUpdate });
+			mux.subscribeSessions();
+			return { onSessionUpdate, socket };
+		}
+
+		it("reports the change the daemon sends for a session", () => {
+			const { onSessionUpdate, socket } = subscribed();
+			socket.receive(DAEMON_SESSION_FRAME);
+			expect(onSessionUpdate.mock.calls).toEqual([
+				[{ seq: 7, projectId: "p1", sessionId: "s1", eventType: "session_updated" }],
+			]);
+		});
+
+		it("reports a project-level change, which has no session id", () => {
+			const { onSessionUpdate, socket } = subscribed();
+			socket.receive(DAEMON_PROJECT_FRAME);
+			expect(onSessionUpdate.mock.calls).toEqual([[{ seq: 8, projectId: "p1", eventType: "pr_updated" }]]);
+			expect(onSessionUpdate.mock.calls[0][0].sessionId).toBeUndefined();
+		});
+
+		it("reports one update per frame, in order", () => {
+			const { onSessionUpdate, socket } = subscribed();
+			socket.receive(DAEMON_SESSION_FRAME);
+			socket.receive(DAEMON_PROJECT_FRAME);
+			expect(onSessionUpdate.mock.calls.map(([u]) => u.seq)).toEqual([7, 8]);
+		});
+
+		it("drops a sessions frame it cannot read", () => {
+			const { onSessionUpdate, socket } = subscribed();
+			socket.receive('{"ch":"sessions","type":"snapshot"}');
+			socket.receive('{"ch":"sessions","type":"snapshot","session":{"projectId":"p1","eventType":"session_updated"}}');
+			socket.receive('{"ch":"sessions","type":"snapshot","session":{"seq":"7","projectId":"p1","eventType":"session_updated"}}');
+			socket.receive('{"ch":"sessions","type":"snapshot","session":{"seq":7,"eventType":"session_updated"}}');
+			socket.receive('{"ch":"sessions","type":"snapshot","session":{"seq":7,"projectId":"p1"}}');
+			expect(onSessionUpdate).not.toHaveBeenCalled();
+		});
 	});
 });
