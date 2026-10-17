@@ -48,8 +48,13 @@ const (
 	MaxReportTextCharacters = 1000
 	// ReportBatchFallback is the fixed informational-report fallback deadline.
 	ReportBatchFallback = time.Hour
-	// ReportSettlementWindow is the fixed window opened by a done report.
+	// ReportSettlementWindow is the upper bound a done report waits for other
+	// workers of its project before its batch is delivered.
 	ReportSettlementWindow = 5 * time.Minute
+	// ReportEarlyFlushDebounce delays an early done-batch flush after the
+	// newest done report or worker stop, so completions within seconds of each
+	// other still land in one batch.
+	ReportEarlyFlushDebounce = 15 * time.Second
 )
 
 // ReportState is an optional worker-originated coordination claim.
