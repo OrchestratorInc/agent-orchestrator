@@ -1360,7 +1360,7 @@ function TerminalInput({ text, truncated }: { text: string; truncated?: boolean 
 				<Keyboard aria-hidden="true" className="size-3" />
 				Agent typed
 			</span>
-			<pre className="scrollbar-none overflow-x-auto border border-dashed border-border-strong bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-accent">
+			<pre className="scrollbar-none overflow-x-auto border border-dashed border-border-strong bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-accent-strong">
 				{shown}
 			</pre>
 			{truncated ? (
@@ -2843,7 +2843,7 @@ function resolvedApprovalOutcome(
 /** Single letter per change kind, which is how a diff list is normally read. */
 const diffStatusMark: Record<DiffStatus, { mark: string; tone: string; label: string }> = {
 	added: { mark: "A", tone: "text-success", label: "added" },
-	modified: { mark: "M", tone: "text-accent", label: "modified" },
+	modified: { mark: "M", tone: "text-accent-strong", label: "modified" },
 	deleted: { mark: "D", tone: "text-destructive", label: "deleted" },
 	renamed: { mark: "R", tone: "text-muted-foreground", label: "renamed" },
 };

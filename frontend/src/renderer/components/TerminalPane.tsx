@@ -800,7 +800,7 @@ export function TerminalPane({
 				style={{ fontSize }}
 			>
 				<span className="text-terminal-dim">~/{session?.workspaceName ?? "reverbcode"}</span>{" "}
-				{session?.branch ? <span className="text-accent">{session.branch}</span> : null}
+				{session?.branch ? <span className="text-accent-strong">{session.branch}</span> : null}
 				{session?.branch ? " " : ""}$ {provider}
 				{"\n"}
 				{lines.map((line, index) => (
@@ -812,7 +812,7 @@ export function TerminalPane({
 								: line.startsWith("WARN") || line.startsWith("TODO")
 									? "text-warning"
 									: line.startsWith("$") || line.startsWith("▲")
-										? "text-accent"
+										? "text-accent-strong"
 										: "text-terminal-foreground"
 						}
 					>

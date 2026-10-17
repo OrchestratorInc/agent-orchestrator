@@ -171,7 +171,7 @@ export function IntakeFields({
 									href={`https://${repoPreview.host ?? "github.com"}/${repoPreview.value}`}
 									target="_blank"
 									rel="noopener noreferrer"
-									className="text-control text-accent hover:underline"
+									className="text-control text-accent-strong hover:underline"
 								>
 									{repoPreview.value}
 								</AppLink>

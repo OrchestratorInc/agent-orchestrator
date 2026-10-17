@@ -896,7 +896,7 @@ function AgentSwitchTerminalOverlay({
 						<SwitchingAgentMark harness={agentSwitch.fromHarness} />
 						<div
 							aria-hidden="true"
-							className="relative h-4 w-20 shrink-0 text-accent sm:w-28"
+							className="relative h-4 w-20 shrink-0 text-accent-strong sm:w-28"
 							data-testid="agent-switch-transfer-arrow"
 						>
 							<ArrowRight
