@@ -87,6 +87,9 @@ export function describeHarness(input: HarnessDescribeInput) {
 	// Unknown inventory is not proof that installing is safe. Preserve the
 	// existing cached-readiness fallback when fetching the snapshot fails.
 	const installationPending = !input.readinessFailed && (input.readinessPending || readinessAgent?.installation.state === "unknown");
+	const unsupportedInstallation = readinessAgent?.installation.reasonCode === "install_platform_unsupported"
+		? readinessAgent.installation.reason
+		: undefined;
 	const isSetupAction = authPlan?.action === "setup";
 	const isDocumentationAction = isSetupAction && authPlan?.launchMode === "documentation";
 	const authStatus = readinessAgent?.authentication.state;
@@ -129,13 +132,13 @@ export function describeHarness(input: HarnessDescribeInput) {
 		: rowAuthWorkflow && rowAuthWorkflow.phase !== "running" ? rowAuthWorkflow.reason ?? t("settings.harness.loginUnknown")
 		: t(rowAuthWorkflow?.action === "logout" ? "settings.harness.logoutInProgress" : "settings.harness.loginInProgress");
 	// Why a harness is not installed (or cannot be), without repeating the error alert.
-	const installNote = isInstalled || installationPending ? undefined
+	const installNote = isInstalled ? undefined : unsupportedInstallation ?? (installationPending ? undefined
 		: job?.status === "interrupted" ? t("settings.harness.interrupted")
-		: installMethod && availableMethodsLabel ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : plan?.reason ?? t("settings.harness.manualRequired");
+		: installMethod && availableMethodsLabel ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : plan?.reason ?? t("settings.harness.manualRequired"));
 	const statusLabel = isInstalled ? rowError ?? (authBusy ? authProgress : authSummary)
-		: installationPending ? t("settings.harness.installationUnknown")
+		: unsupportedInstallation ?? (installationPending ? t("settings.harness.installationUnknown")
 		: job?.status === "interrupted" ? t("settings.harness.interrupted")
-		: rowError ?? installNote;
+		: rowError ?? installNote);
 	const versionText = currentVersion ? versionLabel(currentVersion) : t("settings.harness.versionUnavailable");
 	const versionUnverified = Boolean(advisoryQuery?.isError || job?.status === "verifying" || (currentOperation === "update" && (busy || failed)));
 	const canRelogin = Boolean(authPlan?.available && authPlan.action !== "instructions" && (authStatus === "authorized" || authStatus === "configured"));
@@ -143,7 +146,7 @@ export function describeHarness(input: HarnessDescribeInput) {
 		agentId, plan, job, isInstalled, availableMethods, installMethod, methodId, maintenanceMethod, canUpdate, manualOnly, updateReason,
 		advisoryQuery, advisory, updateUnknown, updateAvailable, currentVersion, busy, failed, jobFailed, currentOperation, readinessAgent,
 		authPlan, authState, authStatus, authSummary, accountDescription, rowAuthWorkflow, authBusy, needsLogin, isSetupAction, isDocumentationAction, canRelogin,
-		showUpdate, hasDiagnostics, installWarning, rowError, versionText, versionUnverified, updatedAt: input.updatedAt, progressLabel, installationPending, installNote, listTone, statusLabel,
+		showUpdate, hasDiagnostics, installWarning, rowError, versionText, versionUnverified, updatedAt: input.updatedAt, progressLabel, installationPending, unsupportedInstallation, installNote, listTone, statusLabel,
 	};
 }
 

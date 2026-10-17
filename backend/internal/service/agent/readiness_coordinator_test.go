@@ -196,6 +196,45 @@ func TestReadinessCoordinatorEnsureNormalizesInstalledAndAuthorized(t *testing.T
 	}
 }
 
+func TestReadinessCoordinatorReportsUnsupportedPlatform(t *testing.T) {
+	t.Parallel()
+	agent := &readinessTestAgent{
+		resolve: func(context.Context) (string, error) { return "", ports.ErrAgentBinaryLinuxOnly },
+	}
+	item := readinessHarness("hermes", "Hermes Agent", agent)
+	coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+		Agents:  []agentregistry.HarnessAgent{item},
+		Factory: func() []agentregistry.HarnessAgent { return []agentregistry.HarnessAgent{item} },
+	})
+	got, err := coordinator.Ensure(context.Background(), []string{"hermes"}, domain.AgentReadinessPurposeLaunch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installation := got[0].Installation
+	if installation.State != domain.AgentInstallationUnknown || installation.Freshness != domain.AgentReadinessFresh || installation.ReasonCode != domain.AgentReadinessReasonPlatformUnsupported || installation.Reason != "Hermes Agent is supported on Linux only." {
+		t.Fatalf("installation = %#v", installation)
+	}
+}
+
+func TestReadinessCoordinatorKeepsUnsupportedInstallationChecksDistinct(t *testing.T) {
+	t.Parallel()
+	// Expose the core agent contract without its optional binary resolver.
+	agent := struct{ ports.Agent }{&readinessTestAgent{}}
+	item := readinessHarness("custom", "Custom", agent)
+	coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+		Agents:  []agentregistry.HarnessAgent{item},
+		Factory: func() []agentregistry.HarnessAgent { return []agentregistry.HarnessAgent{item} },
+	})
+	got, err := coordinator.Ensure(context.Background(), []string{"custom"}, domain.AgentReadinessPurposeLaunch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installation := got[0].Installation
+	if installation.State != domain.AgentInstallationUnknown || installation.Freshness != domain.AgentReadinessFresh || installation.ReasonCode != domain.AgentReadinessReasonInstallCheckUnsupported || installation.Reason != "Installation checks are not supported for this harness." {
+		t.Fatalf("installation = %#v", installation)
+	}
+}
+
 func TestReadinessCoordinatorNormalizesConfiguredAuthentication(t *testing.T) {
 	t.Parallel()
 	agent := &readinessTestAgent{

@@ -81,8 +81,8 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 		<HarnessDetailGroup title={t("settings.harness.installation")}>
 			<HarnessDetailRow
 				label={isInstalled ? t(details.versionUnverified ? "settings.harness.lastObservedVersion" : "settings.harness.installedVersion")
-					: details.installationPending ? t("settings.harness.installationUnknown") : t("settings.harness.notInstalled")}
-				description={isInstalled ? (details.maintenanceMethod?.label ? t("settings.harness.installedWith", { method: details.maintenanceMethod.label }) : undefined) : details.installNote}
+					: details.unsupportedInstallation ?? (details.installationPending ? t("settings.harness.installationUnknown") : t("settings.harness.notInstalled"))}
+				description={isInstalled ? (details.maintenanceMethod?.label ? t("settings.harness.installedWith", { method: details.maintenanceMethod.label }) : undefined) : details.unsupportedInstallation ? undefined : details.installNote}
 			>
 				{isInstalled ? <span className="break-all font-mono text-xs text-settings-label">{details.currentVersion ? <MiddleTruncatedText className="whitespace-nowrap" text={details.versionText} /> : details.versionText}{details.versionUnverified && details.currentVersion ? ` · ${t("settings.harness.unverified")}` : ""}</span> : null}
 				{isInstalled && details.updateAvailable ? <MiddleTruncatedText className="whitespace-nowrap text-xs font-medium text-settings-accent" text={versionLabel(details.advisory!.latestVersion!)} format={(version) => t("settings.harness.versionAvailable", { version })} /> : null}

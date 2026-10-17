@@ -10,6 +10,7 @@ export type AgentInfo = {
 	installation: {
 		state: "installed" | "not_installed" | "unknown";
 		freshness: "fresh" | "stale" | "checking";
+		reasonCode?: string;
 	};
 	label: string;
 	lastUsedAt?: string | null;
@@ -104,6 +105,9 @@ function isRoleSession(session: RoleSession, role: "worker" | "orchestrator"): b
 }
 
 function agentStatus(agent: AgentInfo): Pick<RankedAgentOption, "status" | "statusTone"> {
+	if (agent.installation.reasonCode === "install_platform_unsupported") {
+		return { status: "Unsupported OS", statusTone: "muted" };
+	}
 	if (agent.installation.state === "not_installed") {
 		return { status: "Needs install", statusTone: "muted" };
 	}
@@ -135,7 +139,7 @@ export function isReadyAgent(agent: AgentInfo): boolean {
 
 /** Unknown readiness is not a rejection; only definite failures block launch. */
 export function isLaunchableAgent(agent: AgentInfo): boolean {
-	return agent.installation.state !== "not_installed" && agent.authentication.state !== "unauthorized";
+	return agent.installation.state !== "not_installed" && agent.installation.reasonCode !== "install_platform_unsupported" && agent.authentication.state !== "unauthorized";
 }
 
 export function buildRankedAgentOptions({
@@ -161,7 +165,7 @@ export function buildRankedAgentOptions({
 			const isAuthorized =
 				agent.authentication.state === "authorized" || agent.authentication.state === "not_applicable";
 			const isDefinitelyUnavailable =
-				agent.installation.state === "not_installed" || agent.authentication.state === "unauthorized";
+				agent.installation.state === "not_installed" || agent.installation.reasonCode === "install_platform_unsupported" || agent.authentication.state === "unauthorized";
 			const isSelectable = !isDefinitelyUnavailable;
 			const rank =
 				isAuthorized && agent.installation.state === "installed"

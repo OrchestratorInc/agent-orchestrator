@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-12T23:58:06.553075+00:00",
+  "pr": 6536,
+  "previousHead": "854f42e2ce31cc29d3904796a5be18263a195a24",
+  "sharedFixHead": "c5a6dda2f38d36148bdd3157385a3ce69be3e5db",
+  "sharedFixPR": "https://github.com/OrchestratorInc/agent-orchestrator/pull/6617",
+  "canonicalMain": "b92eb51d754cf705cf38568a7e136faf51f5206b",
+  "change": "Bounded10-minute race-instrumented ACP replay fixture context; full20543-frame burst/exact-once assertions retained",
+  "ancestry": "Normal merge preserving all previous source and harness-owned evidence commits; existing report/JSON/PNG bytes and adapter/driver registrations unchanged",
+  "runtimeProof": "No new provider/native/AO execution is implied. Historical/focused receipts retain their original source/native scope. Canonical main runtime changes remain distinct from those old proof binaries.",
+  "validation": "Shared fix had21 green applicable exact-head CI checks. New integration heads require their own current-head PR CI; no local suites run."
+}

@@ -32,6 +32,9 @@ var ErrAgentBinaryNotFound = errors.New("agent: binary not found on PATH")
 // callers must not present an unverified name-only match as installed.
 var ErrAgentBinaryIdentityUnknown = errors.New("agent: binary identity unknown")
 
+// ErrAgentBinaryLinuxOnly means the adapter cannot run on this OS.
+var ErrAgentBinaryLinuxOnly = errors.New("agent: supported on Linux only")
+
 // ErrAgentModelDiscoverySignInRequired is returned by model discovery when the
 // agent's model-list command would start an interactive sign-in because the
 // CLI is not confirmed as signed in. It is not a discovery failure: callers
@@ -219,6 +222,18 @@ type AgentRuntimeLaunchEnv interface {
 // durable conversation id accepted by their resume command.
 type AgentNativeSessionResolver interface {
 	ResolveNativeSessionID(ctx context.Context, cfg NativeSessionResolveConfig) (sessionID string, ok bool, err error)
+}
+
+// AgentContinuousNativeSessionResolver opts into identity checks when the
+// terminal activity state has not changed, such as after a native /new.
+type AgentContinuousNativeSessionResolver interface {
+	ContinuouslyResolveNativeSessionID() bool
+}
+
+// AgentNativeSessionPersister records adapter-owned restore evidence after AO
+// has accepted the corresponding native identity in an activity signal.
+type AgentNativeSessionPersister interface {
+	PersistNativeSessionID(ctx context.Context, cfg NativeSessionResolveConfig, nativeID string) error
 }
 
 // NativeSessionResolveConfig identifies one supervised agent launch. DataDir
