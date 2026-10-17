@@ -33,6 +33,7 @@ func TestShippedChatDrivers(t *testing.T) {
 		domain.HarnessOMP,
 		domain.HarnessQwen,
 		domain.HarnessUnreal,
+		domain.HarnessDockerAgent,
 		domain.HarnessCopilot,
 		domain.HarnessAgy,
 	} {

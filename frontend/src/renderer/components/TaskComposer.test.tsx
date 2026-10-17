@@ -1494,6 +1494,23 @@ describe("TaskComposer", () => {
 		});
 	});
 
+	it("starts Docker Agent in Chat without a terminal fallback", async () => {
+		h.agentCatalog = { agents: [agentReadiness("docker-agent", "Docker Agent")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/settings") return { data: { defaultSessionMode: "tui", chatHarnesses: ["docker-agent"] } };
+			if (path.includes("/models")) return { data: { agent: "docker-agent", selectionMode: "catalog", models: [], allowCustom: false } };
+			return { data: { status: "ok", project: { config: {} } } };
+		});
+		h.post.mockResolvedValueOnce({ error: { code: "CHAT_DRIVER_UNAVAILABLE", message: "Docker Agent unavailable" } });
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "docker-agent"));
+		fireEvent.change(task(), { target: { value: "Edit workspace" } });
+		fireEvent.click(startTask());
+		await screen.findByText("Docker Agent unavailable");
+		expect(h.post.mock.calls[0][1].body).toMatchObject({ harness: "docker-agent", mode: "chat" });
+		expect(screen.queryByRole("button", { name: "Start in terminal" })).not.toBeInTheDocument();
+	});
+
 	it("reports dirty then clears it on unmount", () => {
 		const onDirtyChange = vi.fn();
 		const { unmount } = render(

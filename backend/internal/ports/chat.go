@@ -1151,6 +1151,14 @@ type ChatDriver interface {
 	Resume(ctx context.Context, cfg ChatResumeConfig) (ChatConversation, error)
 }
 
+// ChatEnvironmentValidator checks provider prerequisites against the environment
+// overrides that a new session will inherit over the daemon environment. It must
+// not mutate the environment, create files, or launch a provider. These checks
+// are per request and must not be cached with global Chat capabilities.
+type ChatEnvironmentValidator interface {
+	ValidateEnvironment(ctx context.Context, env map[string]string) error
+}
+
 // ChatDriverReconnector attaches only to a surviving provider. Implementations
 // must never create a provider process or fall back to native history resume.
 type ChatDriverReconnector interface {

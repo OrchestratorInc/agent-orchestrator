@@ -51,6 +51,7 @@ The current daemon registers the following capabilities. Availability still depe
 | `autohand` | Yes | — | Yes |
 | `fx` | Yes | — | — |
 | `unreal-agent` | No | Yes | — |
+| `docker-agent` | No | Yes | — |
 | `mimo-code` | Yes | — | — |
 | `deepseek-harness` | Yes | Yes | — |
 | `openhands` | Yes | — | — |
@@ -93,6 +94,7 @@ Unreal Agent is Chat-only; the other worker adapters provide a terminal interfac
 | `omp` | Native ACP |
 | `qwen` | Native ACP |
 | `unreal-agent` | Built into Orchestrator |
+| `docker-agent` | [Docker Agent v1.150.0 standalone binary](https://github.com/docker/docker-agent/releases/tag/v1.150.0); native config required |
 | `deepseek-harness` | Native ACP (`dsh --profile acp`) |
 | `command-code` | Native ACP (`cmd acp`) |
 
@@ -119,3 +121,5 @@ To make Codex the default worker, use `ao project set-config my-app --worker-age
 	<Card title="Cursor" description="Terminal UI and native ACP Chat." href="/plugins/agents/cursor" />
 	<Card title="Aider" description="Built-in terminal harness." href="/plugins/agents/aider" />
 </Cards>
+
+Docker Agent supports native ACP Chat on Unix. Set `AO_DOCKER_AGENT_CONFIG` to an absolute existing YAML config path before launching Orchestrator. Its native provider credentials and hooks are preserved. Terminal mode, accept-edits, and reasoning-effort overrides are unavailable. Use the native configured model choices; local authentication remains unknown until a provider turn succeeds.
