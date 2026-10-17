@@ -18,6 +18,8 @@ func TestParseConversationUsageLimit(t *testing.T) {
 		{"explicit tomorrow", "Usage limit reached\n\nResets tomorrow 10:20pm (Asia/Kolkata)", "2026-10-15T16:50:00Z", true},
 		{"absolute", "Usage limit reached. Resets at 2026-10-15T12:00:00+05:30", "2026-10-15T06:30:00Z", true},
 		{"unknown deadline", "Usage limit reached\n\nResets tomorrow.", "", true},
+		{"Claude individual spend", "You've hit your individual spend limit · run /usage-credits to ask your admin for a higher limit", "", true},
+		{"Claude no quota", "The Claude account has no available quota.", "", true},
 		{"no timezone", "You've hit your session limit · resets 10:20pm", "", true},
 		{"unknown timezone", "You've hit your limit · resets 10:20pm (Mars/Olympus)", "", true},
 		{"ambient timezone", "You've hit your limit · resets 10:20pm (Local)", "", true},
@@ -25,6 +27,7 @@ func TestParseConversationUsageLimit(t *testing.T) {
 		{"transport error", "Connection lost", "", false},
 		{"ordinary rate limiting", "Too many requests. Retry after 30 seconds.", "", false},
 		{"quoted prose", "The tool says You've hit your session limit · resets 10:20pm (Asia/Calcutta)", "", false},
+		{"quoted Claude quota", "The tool says The Claude account has no available quota.", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			limit := ParseConversationUsageLimit(tc.message, &failedAt)

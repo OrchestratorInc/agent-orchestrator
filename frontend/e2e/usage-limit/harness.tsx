@@ -10,10 +10,11 @@ import type { ConversationSnapshot } from "../../src/renderer/types/conversation
 import "../../src/renderer/styles.css";
 
 const params = new URLSearchParams(window.location.search);
+const harness = params.get("harness") === "codex" ? "codex" : "claude-code";
 const now = new Date().toISOString();
 const reset = params.has("unknown") ? undefined : new Date(Date.now() + Number(params.get("delay") ?? 3_600_000)).toISOString();
 const initial: ConversationSnapshot = {
-	conversationId: "usage-limit", sessionId: "usage-limit", harness: "claude-code", mode: "chat",
+	conversationId: "usage-limit", sessionId: "usage-limit", harness, mode: "chat",
 	controller: { state: "ready" }, latestSequence: 1, oldestSequence: 1, hasMoreBefore: false, settings: {},
 	turns: [{
 		id: "limited", providerTurnId: "provider-limited", state: "failed", requestedAt: now, completedAt: now,
