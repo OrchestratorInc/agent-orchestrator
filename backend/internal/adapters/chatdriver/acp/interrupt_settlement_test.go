@@ -18,6 +18,111 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+func TestACPCancelledRequestFencesOnlyAcceptedLocalStop(t *testing.T) {
+	for _, localStop := range []bool{false, true} {
+		t.Run(map[bool]string{false: "request-context-cancelled", true: "accepted-local-stop"}[localStop], func(t *testing.T) {
+			invoked := false
+			conv := &conversation{
+				sessionID: "native-session", activeTurn: "turn-1",
+				events: make(chan ports.ChatEvent, 8), legacyWire: &legacyACPTransport{},
+				afterInterrupt: func(context.Context, AgentRequest, string) error {
+					invoked = true
+					return nil
+				},
+			}
+			if localStop {
+				done := make(chan struct{})
+				close(done)
+				conv.interrupt = &interruptAttempt{turnID: "turn-1", done: done}
+			}
+			conv.finishPrompt("turn-1", acpsdk.PromptResponse{}, fmt.Errorf("prompt cancelled: %w", context.Canceled))
+			if invoked != localStop {
+				t.Fatalf("native stop fence invoked=%v, accepted local stop=%v", invoked, localStop)
+			}
+			event := nextEvent(t, conv.Events())
+			if event.Kind != ports.ChatEventTurnCompleted || event.TurnState != domain.TurnStateInterrupted || event.Err != nil {
+				t.Fatalf("cancelled request outcome = %+v", event)
+			}
+			if event := nextEvent(t, conv.Events()); event.ControllerState != ports.ChatControllerReady || event.Err != nil {
+				t.Fatalf("cancelled request emitted recovery failure: %+v", event)
+			}
+		})
+	}
+}
+
+func TestACPClosedConversationDoesNotFencePromptResult(t *testing.T) {
+	conv := &conversation{
+		sessionID: "native-session", activeTurn: "turn-1", closed: true,
+		events: make(chan ports.ChatEvent, 8), legacyWire: &legacyACPTransport{},
+		afterInterrupt: func(context.Context, AgentRequest, string) error {
+			t.Fatal("shutdown invoked the native stop fence")
+			return nil
+		},
+	}
+	conv.finishPrompt("turn-1", acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, context.Canceled)
+	select {
+	case event := <-conv.Events():
+		t.Fatalf("shutdown emitted a prompt settlement event: %+v", event)
+	default:
+	}
+}
+
+func TestACPCloseCancelsInFlightInterruptSettlement(t *testing.T) {
+	for _, persistent := range []bool{false, true} {
+		t.Run(map[bool]string{false: "shutdown", true: "persistent-detach"}[persistent], func(t *testing.T) {
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			t.Cleanup(func() { close(release) })
+			proc := &process{stop: func() error { return nil }}
+			if persistent {
+				proc.terminate = func() error { return nil }
+			}
+			conv := &conversation{
+				sessionID: "native-session", activeTurn: "turn-1", proc: proc,
+				events: make(chan ports.ChatEvent, 8), closing: make(chan struct{}), legacyWire: &legacyACPTransport{},
+				afterInterrupt: func(ctx context.Context, _ AgentRequest, _ string) error {
+					close(entered)
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-release:
+						return errors.New("test cleanup")
+					}
+				},
+			}
+			done := make(chan struct{})
+			go func() {
+				conv.finishPrompt("turn-1", acpsdk.PromptResponse{
+					StopReason: acpsdk.StopReasonCancelled,
+					Meta:       map[string]any{persistenthost.ACPEventIDMetaKey: "terminal-1"},
+				}, nil)
+				close(done)
+			}()
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				t.Fatal("native stop fence did not start")
+			}
+			if err := conv.Close(); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("shutdown left native settlement waiting for its timeout")
+			}
+			select {
+			case event := <-conv.Events():
+				t.Fatalf("shutdown emitted a misleading settlement event: %+v", event)
+			default:
+			}
+			if conv.terminalEventID != "" || conv.activeTurn != "turn-1" {
+				t.Fatal("shutdown committed a cancelled receipt instead of preserving recovery state")
+			}
+		})
+	}
+}
+
 // Removing the provider fence must make this fail: a cancelled ACP result
 // alone is not proof that the native runtime released its root turn.
 func TestACPInterruptedTurnWaitsForNativeSettlement(t *testing.T) {
