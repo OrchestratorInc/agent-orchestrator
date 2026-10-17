@@ -28,12 +28,28 @@ func TestReviewTextsIncludesMultiPRQueue(t *testing.T) {
 		"* 2. https://github.com/o/r/pull/2 (head commit sha2, run run-2)",
 		"After every PR has its own GitHub review from step 1",
 		"printf '%s'",
-		"do not use a heredoc",
-		"ao review submit --session mer-1 --reviews -",
+		"not use a heredoc",
 		`"reviews": [`,
+		"base64-encode",
+		// #6021: payloads are staged via base64 to fixed /tmp paths and posted
+		// or submitted from the files. These exact lines are the shapes the
+		// cli permission hook auto-allows (hooks_test.go pins the same shapes),
+		// so the two sides must change together.
+		"printf '%s' '<BASE64 OF THE COMPLETE JSON PAYLOAD>' | base64 -d > /tmp/ao-review-post.json",
+		"gh api --method POST repos/{owner}/{repo}/pulls/{number}/reviews --input /tmp/ao-review-post.json --jq '.id'",
+		"printf '%s' '<BASE64 OF THE COMPLETE JSON PAYLOAD>' | base64 -d > /tmp/ao-review-results.json",
+		"ao review submit --session mer-1 --reviews /tmp/ao-review-results.json",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	// The inline stdin shapes and the apostrophe-escaping instruction are what
+	// #6021 replaced: a model that cannot emit multi-KB quoted arguments must
+	// never be pointed back at them.
+	for _, stale := range []string{"--reviews -", "shell-escape any single quotes"} {
+		if strings.Contains(prompt, stale) {
+			t.Fatalf("prompt still dictates the shape #6021 replaced (%q):\n%s", stale, prompt)
 		}
 	}
 }

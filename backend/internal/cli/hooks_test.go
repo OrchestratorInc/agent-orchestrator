@@ -2250,6 +2250,19 @@ func TestHooks_ReviewerPermissionRequestAnswersInsteadOfBlocking(t *testing.T) {
 	}{
 		{"ao review submit pipe", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' ` + submitJSON + ` | ao review submit --session worker-7 --reviews -"}}`, "allow"},
 		{"gh api review post", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{ \"event\": \"COMMENT\", \"body\": \"ok\" }' | gh api --method POST repos/acme/app/pulls/12/reviews --input - --jq '.id'"}}`, "allow"},
+		// #6021 staged shapes: the base64 payload cannot quote or expand, the
+		// staging target is a fixed /tmp path, and the consuming commands carry
+		// no payload at all. The staged submit keeps the session-id check.
+		{"staged results staging", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' 'eyJyZXZpZXdzIjpbXX0=' | base64 -d > /tmp/ao-review-results.json"}}`, "allow"},
+		{"staged post staging", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' 'eyJldmVudCI6IkNPTU1FTlQifQ==' | base64 -d > /tmp/ao-review-post.json"}}`, "allow"},
+		{"staged gh api post", `{"tool_name":"Bash","tool_input":{"command":"gh api --method POST repos/acme/app/pulls/12/reviews --input /tmp/ao-review-post.json --jq '.id'"}}`, "allow"},
+		{"staged review submit", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --reviews /tmp/ao-review-results.json"}}`, "allow"},
+		{"staged submit other worker session", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-9 --reviews /tmp/ao-review-results.json"}}`, "deny"},
+		{"staged submit with unset worker session id", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --reviews /tmp/ao-review-results.json"}}`, "deny"},
+		{"staged payload with embedded quote", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' 'ab'c' | base64 -d > /tmp/ao-review-results.json"}}`, "deny"},
+		{"staged payload with command substitution", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' 'abc$(id)' | base64 -d > /tmp/ao-review-results.json"}}`, "deny"},
+		{"staging to another path", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' 'abc=' | base64 -d > /tmp/other.json"}}`, "deny"},
+		{"staged submit from another file", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --reviews /tmp/ao-review-results.json.bak"}}`, "deny"},
 		{"other worker session", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-9 --reviews -"}}`, "deny"},
 		{"unset worker session id", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-7 --reviews -"}}`, "deny"},
 		{"command substitution in operand", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}'$(id) | ao review submit --session worker-7 --reviews -"}}`, "deny"},
@@ -2261,7 +2274,7 @@ func TestHooks_ReviewerPermissionRequestAnswersInsteadOfBlocking(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("AO_REVIEW_SESSION_ID", "review-7")
 			t.Setenv("AO_REVIEW_WORKER_SESSION_ID", "worker-7")
-			if tc.name == "unset worker session id" {
+			if tc.name == "unset worker session id" || tc.name == "staged submit with unset worker session id" {
 				t.Setenv("AO_REVIEW_WORKER_SESSION_ID", "")
 			}
 			t.Setenv("AO_REVIEW_HARNESS", "claude-code")

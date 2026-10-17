@@ -493,14 +493,17 @@ type claudePermissionHookOutput struct {
 	} `json:"hookSpecificOutput"`
 }
 
-// reviewerSubmitCommandPattern matches the exact command shapes the review
-// prompt dictates: a single-quoted JSON literal fed through `printf '%s'` into
-// either the GitHub review POST or `ao review submit`. Claude Code ≥ 2.1.257
+// reviewerSubmitCommandPattern matches the legacy single-submit shapes from
+// before the base64-staged task (#6021): a single-quoted JSON literal fed
+// through `printf '%s'` into either the GitHub review POST or `ao review
+// submit`. Task prompts persist in the data dir across daemon upgrades, so an
+// in-flight reviewer can still be working through the old task; keep these
+// shapes allowed until that generation has drained. Claude Code ≥ 2.1.257
 // prompts on any Bash command its analyzer cannot verify statically, and allow
 // rules never match such commands, so the headless reviewer would hang. The
 // shape is safe to auto-allow: `printf '%s'` performs no format interpretation
 // and a single-quoted operand (quote-backslash-quote-quote for embedded single
-// quotes, as the prompt instructs) cannot expand or run anything. The
+// quotes, as the old prompt instructed) cannot expand or run anything. The
 // captured session id is checked against AO_REVIEW_WORKER_SESSION_ID after the
 // match.
 const reviewerSubmitJSONLiteral = `'[^']*(?:'\\''[^']*)*'`
@@ -509,9 +512,27 @@ var reviewerSubmitCommandPattern = regexp.MustCompile(`^printf '%s' ` + reviewer
 	`gh api --method POST repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pulls/[0-9]+/reviews --input - --jq '\.id'` +
 	`|ao review submit --session (?P<session>[A-Za-z0-9_-]+) --reviews -)$`)
 
+// reviewerBase64Literal matches a single-quoted base64 payload. The encoding's
+// alphabet (letters, digits, +, /, =) cannot quote, expand, or terminate a
+// single-quoted literal, so the shape stays statically verifiable at any
+// payload length — that property is why the review task stages bodies as
+// base64 instead of inline JSON (#6021).
+const reviewerBase64Literal = `'[A-Za-z0-9+/=]*'`
+
+// reviewerStagedSubmitCommandPattern matches the base64-staged shapes the
+// current review task dictates: the payload is staged with `printf '%s'
+// '<base64>' | base64 -d` to a fixed /tmp path, then posted to GitHub or
+// submitted to AO from that file. The fixed paths keep every shape statically
+// verifiable, and the consuming commands carry no payload at all. The staged
+// submit still carries the worker session id, checked like the legacy shape.
+var reviewerStagedSubmitCommandPattern = regexp.MustCompile(
+	`^printf '%s' ` + reviewerBase64Literal + ` \| base64 -d > /tmp/ao-review-(?:post|results)\.json$` +
+		`|^gh api --method POST repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pulls/[0-9]+/reviews --input /tmp/ao-review-post\.json --jq '\.id'$` +
+		`|^ao review submit --session (?P<session>[A-Za-z0-9_-]+) --reviews /tmp/ao-review-results\.json$`)
+
 const reviewerPermissionDenyMessage = "AO headless reviewer: no human can answer permission prompts. " +
 	"Use only the allowlisted read commands (git diff/log/show/status, gh pr view/diff/checks, Read, Grep, Glob) " +
-	"and the exact single-line `printf '%s' '<json>' | ...` submit commands from the review task."
+	"and the exact staged commands from the review task: `printf '%s' '<base64>' | base64 -d > /tmp/ao-review-post.json` (or -results.json), then `gh api ... --input /tmp/ao-review-post.json` or `ao review submit ... --reviews /tmp/ao-review-results.json`."
 
 // reviewerPermissionDecision answers a Claude Code reviewer's PermissionRequest:
 // allow the exact submit shapes, deny everything else so the session degrades
@@ -531,11 +552,17 @@ func reviewerPermissionDecision(payload []byte, workerSessionID string) claudePe
 	if p.ToolName != "Bash" {
 		return out
 	}
-	m := reviewerSubmitCommandPattern.FindStringSubmatch(strings.TrimSpace(p.ToolInput.Command))
+	command := strings.TrimSpace(p.ToolInput.Command)
+	pattern := reviewerSubmitCommandPattern
+	m := pattern.FindStringSubmatch(command)
+	if m == nil {
+		pattern = reviewerStagedSubmitCommandPattern
+		m = pattern.FindStringSubmatch(command)
+	}
 	if m == nil {
 		return out
 	}
-	if session := m[reviewerSubmitCommandPattern.SubexpIndex("session")]; workerSessionID == "" || (session != "" && session != workerSessionID) {
+	if session := m[pattern.SubexpIndex("session")]; workerSessionID == "" || (session != "" && session != workerSessionID) {
 		// An unset AO_REVIEW_WORKER_SESSION_ID means a broken launch (the
 		// launcher always sets it); admit nothing rather than any worker.
 		return out
