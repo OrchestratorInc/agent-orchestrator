@@ -150,7 +150,15 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 		return err
 	}
 	if !ok {
-		return fmt.Errorf("project %s has no active orchestrator", projectID)
+		// No orchestrator can receive this project's batch. Claim it so the
+		// attempt counts, then back it off so one dead project cannot
+		// head-of-line block the rest of the schedule (#6119).
+		cause := fmt.Errorf("project %s has no active orchestrator", projectID)
+		batch, claimErr := c.claim(ctx, projectID)
+		if claimErr != nil {
+			return errors.Join(cause, claimErr)
+		}
+		return c.backOffBatch(ctx, batch, cause)
 	}
 	batch, err := c.claim(ctx, projectID)
 	if err != nil || len(batch.Reports) == 0 {
@@ -162,12 +170,12 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 		for _, worker := range batch.stuckWorkers() {
 			acquired, next, acquireErr := c.store.AcquireReportInterrupt(ctx, worker, c.now().UTC(), ReportInterruptWindow)
 			if acquireErr != nil {
-				return c.release(ctx, batch, acquireErr)
+				return c.backOffBatch(ctx, batch, acquireErr)
 			}
 			if acquired {
 				interrupted = true
 				if interruptErr := c.delivery.Interrupt(ctx, target.ID); interruptErr != nil {
-					return c.release(ctx, batch, interruptErr)
+					return c.backOffBatch(ctx, batch, interruptErr)
 				}
 			} else if nextInterrupt.IsZero() || next.Before(nextInterrupt) {
 				nextInterrupt = next
@@ -179,10 +187,37 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 		}
 	}
 	if err := c.delivery.Submit(ctx, target.ID, batch.Render(), batch.IdempotencyKey()); err != nil {
-		return c.release(ctx, batch, err)
+		return c.backOffBatch(ctx, batch, err)
 	}
 	_, err = c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
 	return err
+}
+
+// backOffBatch returns a claimed batch to pending with exponential backoff so
+// the schedule advances past it instead of leaving it at the head (#6119).
+// It reports success once deferred; an empty batch or a defer that lost its
+// claim token keeps the cause so the anomaly is visible to the caller instead
+// of silently stranding a claimed batch.
+func (c *Coordinator) backOffBatch(ctx context.Context, batch PreparedBatch, cause error) error {
+	if len(batch.Reports) == 0 {
+		return cause
+	}
+	shift := batch.Reports[0].DeliveryAttempts - 1
+	if shift > 6 {
+		shift = 6
+	}
+	if shift < 0 {
+		shift = 0
+	}
+	deferAt := c.now().UTC().Add(c.retryDelay << uint(shift))
+	deferred, err := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, deferAt, cause.Error())
+	if err != nil {
+		return errors.Join(cause, err)
+	}
+	if deferred == 0 {
+		return errors.Join(cause, errors.New("report delivery defer matched no claimed batch"))
+	}
+	return nil
 }
 
 func (c *Coordinator) activeOrchestrator(ctx context.Context, projectID domain.ProjectID) (domain.SessionRecord, bool, error) {

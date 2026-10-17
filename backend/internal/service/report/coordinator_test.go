@@ -2,6 +2,7 @@ package report
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -50,21 +51,70 @@ func TestCoordinatorRoutesAtAttemptAndLeavesPendingWithoutOrchestrator(t *testin
 	store.add(reportAt("need", "worker", now, now, "decision"))
 	delivery := &coordinatorDelivery{}
 	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }, RetryDelay: time.Second})
-	if delay, err := c.RunDue(context.Background()); err == nil || delay != time.Second {
+	if delay, err := c.RunDue(context.Background()); err != nil || delay != time.Second {
 		t.Fatalf("no orchestrator delay = %v, err = %v", delay, err)
 	}
 	if store.reports[0].DeliveryState != domain.ReportPending {
 		t.Fatalf("state = %s, want pending", store.reports[0].DeliveryState)
 	}
+	if store.reports[0].DeliveryAttempts != 1 || !store.reports[0].AvailableAt.Equal(now.Add(time.Second)) {
+		t.Fatalf("backed-off report = %#v, want one attempt and a later deadline", store.reports[0])
+	}
 	store.sessions = []domain.SessionRecord{
 		{ID: "old", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat, IsTerminated: true, CreatedAt: now},
 		{ID: "replacement", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat, CreatedAt: now.Add(time.Second)},
 	}
+	now = now.Add(time.Second)
 	if _, err := c.RunDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(delivery.submissions) != 1 || delivery.submissions[0].target != "replacement" {
 		t.Fatalf("submissions = %#v", delivery.submissions)
+	}
+}
+
+func TestCoordinatorDeadProjectDoesNotStarveNewerProject(t *testing.T) {
+	now := time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	dead := reportAt("dead", "zombie", now, now, "done on a dead project")
+	dead.ProjectID = "zombie-project"
+	store.add(dead)
+	store.add(reportAt("live", "worker", now.Add(-time.Second), now, "fresh done"))
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	delivery := &coordinatorDelivery{}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }, RetryDelay: time.Second})
+
+	if delay, err := c.RunDue(context.Background()); err != nil || delay != time.Second {
+		t.Fatalf("delay = %v, err = %v, want the dead project's backoff", delay, err)
+	}
+	if len(delivery.submissions) != 1 || !strings.Contains(delivery.submissions[0].message, "fresh done") {
+		t.Fatalf("submissions = %#v, want the newer project delivered", delivery.submissions)
+	}
+	if dead := store.reports[0]; dead.DeliveryState != domain.ReportPending || dead.DeliveryAttempts != 1 || !dead.AvailableAt.Equal(now.Add(time.Second)) {
+		t.Fatalf("dead report = %#v, want pending with one attempt and backoff", dead)
+	}
+}
+
+func TestCoordinatorUndeliverableBatchAttemptsAndBackoff(t *testing.T) {
+	now := time.Date(2026, 10, 17, 10, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	store.add(reportAt("one", "worker", now, now, "unsupported"))
+	delivery := &coordinatorDelivery{submitErr: errors.New("session: semantic message acceptance unsupported")}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }, RetryDelay: time.Second})
+
+	if delay, err := c.RunDue(context.Background()); err != nil || delay != time.Second {
+		t.Fatalf("first cycle = %v, %v, want 1s backoff", delay, err)
+	}
+	if rec := store.reports[0]; rec.DeliveryAttempts != 1 || !rec.AvailableAt.Equal(now.Add(time.Second)) {
+		t.Fatalf("first attempt = %#v", rec)
+	}
+	now = now.Add(time.Second)
+	if delay, err := c.RunDue(context.Background()); err != nil || delay != 2*time.Second {
+		t.Fatalf("second cycle = %v, %v, want doubled backoff", delay, err)
+	}
+	if rec := store.reports[0]; rec.DeliveryAttempts != 2 || !rec.AvailableAt.Equal(now.Add(2*time.Second)) {
+		t.Fatalf("second attempt = %#v", rec)
 	}
 }
 
@@ -164,8 +214,14 @@ func reportAt(id string, worker domain.SessionID, created, available time.Time, 
 func (s *coordinatorStore) add(records ...domain.ReportRecord) {
 	s.reports = append(s.reports, records...)
 }
-func (s *coordinatorStore) ListSessions(context.Context, domain.ProjectID) ([]domain.SessionRecord, error) {
-	return append([]domain.SessionRecord(nil), s.sessions...), nil
+func (s *coordinatorStore) ListSessions(_ context.Context, project domain.ProjectID) ([]domain.SessionRecord, error) {
+	var out []domain.SessionRecord
+	for _, rec := range s.sessions {
+		if rec.ProjectID == project {
+			out = append(out, rec)
+		}
+	}
+	return out, nil
 }
 func (s *coordinatorStore) GetSession(_ context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
 	for _, rec := range s.sessions {
@@ -211,6 +267,7 @@ func (s *coordinatorStore) ClaimPendingReportBatch(_ context.Context, project do
 			}
 			s.reports[i].DeliveryBatchID = batchID
 			s.reports[i].DeliveryState, s.reports[i].ClaimToken, s.reports[i].ClaimedAt = domain.ReportClaimed, token, at
+			s.reports[i].DeliveryAttempts++
 			claimed = append(claimed, s.reports[i])
 		}
 	}
@@ -242,16 +299,20 @@ func (s *coordinatorStore) ReleaseReportBatch(_ context.Context, project domain.
 	}
 	return count, nil
 }
-func (s *coordinatorStore) DeferReportBatch(ctx context.Context, project domain.ProjectID, token string, at time.Time, reason string) (int, error) {
-	count, err := s.ReleaseReportBatch(ctx, project, token, at, reason)
-	if err != nil {
-		return count, err
-	}
+
+// DeferReportBatch mirrors the real token-scoped UPDATE: only reports still
+// claimed by this token return to pending, and only they move later.
+func (s *coordinatorStore) DeferReportBatch(_ context.Context, project domain.ProjectID, token string, at time.Time, _ string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	count := 0
 	for i := range s.reports {
-		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportPending && s.reports[i].DeliveryBatchID != "" && s.reports[i].AvailableAt.Before(at) {
-			s.reports[i].AvailableAt = at
+		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportClaimed && s.reports[i].ClaimToken == token {
+			s.reports[i].DeliveryState, s.reports[i].ClaimToken = domain.ReportPending, ""
+			if s.reports[i].AvailableAt.Before(at) {
+				s.reports[i].AvailableAt = at
+			}
+			count++
 		}
 	}
 	return count, nil
