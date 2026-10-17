@@ -45,6 +45,9 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/minimax-native" --include=optional --no-audit --no-fund @minimax-ai/code@0.6.5
           echo "$RUNNER_TEMP/minimax-native/node_modules/.bin" >> "$GITHUB_PATH"
           npm list --prefix "$RUNNER_TEMP/minimax-native" --depth=0
+      - name: Verify interruption admission and persistent replay
+        working-directory: backend
+        run: go test -race -count=1 -timeout=1m ./internal/adapters/chatdriver/acp -run '^(TestACPInterruptedTurnWaitsForNativeSettlement|TestPersistentACPInterruptedReplayCanReadSettlementResponse)$'
       - name: Qualify native ACP against a controlled loopback provider
         working-directory: backend
         shell: bash
