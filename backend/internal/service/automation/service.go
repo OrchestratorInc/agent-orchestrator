@@ -2,6 +2,7 @@ package automation
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -15,6 +16,15 @@ import (
 const (
 	maxDisplayNameRunes = 120
 	maxPromptBytes      = 4096
+)
+
+var (
+	errInvalidTrigger       = apierr.Invalid("INVALID_AUTOMATION_TRIGGER", "Automation trigger must be schedule or session_ended", nil)
+	errSessionEndedSchedule = apierr.Invalid("INVALID_AUTOMATION_SCHEDULE", "Session-ended automations have no schedule", nil)
+	errInvalidPurpose       = apierr.Invalid("INVALID_AUTOMATION_PURPOSE", "Automation purpose must be empty or dreaming", nil)
+	errDreamingTrigger      = apierr.Invalid("INVALID_AUTOMATION_TRIGGER", "Dreaming starts when a session ends", nil)
+	errDreamingKind         = apierr.Invalid("INVALID_AUTOMATION_KIND", "Dreaming runs as a worker", nil)
+	errDreamingExists       = apierr.Conflict("DREAMING_EXISTS", "This project already has a dreaming automation", nil)
 )
 
 // Store is the persistence surface needed for definition management.
@@ -65,10 +75,16 @@ type CreateInput struct {
 	Prompt      string
 	Kind        domain.SessionKind
 	Harness     domain.AgentHarness
-	RRule       string
-	Cron        string
-	Timezone    string
-	Enabled     *bool
+	// Trigger defaults to schedule. Session-ended definitions take no
+	// schedule.
+	Trigger domain.AutomationTrigger
+	// Purpose dreaming fills an empty name, prompt, kind and trigger with
+	// the dreaming defaults, and requires the session_ended trigger.
+	Purpose  domain.AutomationPurpose
+	RRule    string
+	Cron     string
+	Timezone string
+	Enabled  *bool
 }
 
 // UpdateInput distinguishes omitted fields from explicit false/empty values.
@@ -78,6 +94,7 @@ type UpdateInput struct {
 	Prompt      *string
 	Kind        *domain.SessionKind
 	Harness     *domain.AgentHarness
+	Trigger     *domain.AutomationTrigger
 	RRule       *string
 	Cron        *string
 	Timezone    *string
@@ -96,6 +113,19 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automat
 	if !ok || !project.ArchivedAt.IsZero() {
 		return domain.Automation{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
 	}
+	switch input.Purpose {
+	case domain.AutomationPurposeNone:
+	case domain.AutomationPurposeDreaming:
+		input = withDreamingDefaults(input)
+		if input.Trigger != domain.AutomationTriggerSessionEnded {
+			return domain.Automation{}, errDreamingTrigger
+		}
+		if input.Kind != domain.KindWorker {
+			return domain.Automation{}, errDreamingKind
+		}
+	default:
+		return domain.Automation{}, errInvalidPurpose
+	}
 	displayName := strings.TrimSpace(input.DisplayName)
 	if displayName == "" || utf8.RuneCountInString(displayName) > maxDisplayNameRunes {
 		return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_NAME", "Automation name must be between 1 and 120 characters", nil)
@@ -111,11 +141,27 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automat
 		return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_HARNESS", "Unknown automation harness", nil)
 	}
 	now := s.clock().UTC()
-	schedule, err := CanonicalizeSchedule(ScheduleInput{
-		RRule: input.RRule, Cron: input.Cron, Timezone: input.Timezone,
-	}, now)
-	if err != nil {
-		return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_SCHEDULE", err.Error(), nil)
+	trigger := input.Trigger
+	if trigger == "" {
+		trigger = domain.AutomationTriggerSchedule
+	}
+	var schedule Schedule
+	switch trigger {
+	case domain.AutomationTriggerSchedule:
+		schedule, err = CanonicalizeSchedule(ScheduleInput{
+			RRule: input.RRule, Cron: input.Cron, Timezone: input.Timezone,
+		}, now)
+		if err != nil {
+			return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_SCHEDULE", err.Error(), nil)
+		}
+	case domain.AutomationTriggerSessionEnded:
+		if strings.TrimSpace(input.RRule) != "" || strings.TrimSpace(input.Cron) != "" {
+			return domain.Automation{}, errSessionEndedSchedule
+		}
+		// NextRunAt is unused: ListDueAutomations only reads schedule rows.
+		schedule = Schedule{Timezone: strings.TrimSpace(input.Timezone), NextRunAt: now}
+	default:
+		return domain.Automation{}, errInvalidTrigger
 	}
 	enabled := true
 	if input.Enabled != nil {
@@ -128,6 +174,8 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automat
 		Prompt:      prompt,
 		Kind:        input.Kind,
 		Harness:     input.Harness,
+		Trigger:     trigger,
+		Purpose:     input.Purpose,
 		RRuleText:   schedule.RRuleText,
 		Timezone:    schedule.Timezone,
 		Enabled:     enabled,
@@ -136,6 +184,9 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automat
 		UpdatedAt:   now,
 	}
 	created, err := s.store.CreateAutomation(ctx, rec)
+	if errors.Is(err, domain.ErrDreamingAutomationExists) {
+		return domain.Automation{}, errDreamingExists
+	}
 	if err != nil {
 		return domain.Automation{}, apierr.Internal("AUTOMATION_CREATE_FAILED", "Failed to create automation")
 	}
@@ -222,7 +273,36 @@ func (s *Service) Update(ctx context.Context, id domain.AutomationID, input Upda
 		rec.Harness = *input.Harness
 	}
 	now := s.clock().UTC()
-	scheduleChanged := input.RRule != nil || input.Cron != nil || input.Timezone != nil
+	if input.Trigger != nil {
+		switch *input.Trigger {
+		case domain.AutomationTriggerSchedule:
+			if rec.Trigger == domain.AutomationTriggerSessionEnded && input.RRule == nil && input.Cron == nil {
+				return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_SCHEDULE", "A schedule is required", nil)
+			}
+		case domain.AutomationTriggerSessionEnded:
+			rec.RRuleText = ""
+		default:
+			return domain.Automation{}, errInvalidTrigger
+		}
+		rec.Trigger = *input.Trigger
+	}
+	if rec.Purpose == domain.AutomationPurposeDreaming {
+		if rec.Trigger != domain.AutomationTriggerSessionEnded {
+			return domain.Automation{}, errDreamingTrigger
+		}
+		if rec.Kind != domain.KindWorker {
+			return domain.Automation{}, errDreamingKind
+		}
+	}
+	if rec.Trigger == domain.AutomationTriggerSessionEnded {
+		if (input.RRule != nil && strings.TrimSpace(*input.RRule) != "") || (input.Cron != nil && strings.TrimSpace(*input.Cron) != "") {
+			return domain.Automation{}, errSessionEndedSchedule
+		}
+		if input.Timezone != nil {
+			rec.Timezone = strings.TrimSpace(*input.Timezone)
+		}
+	}
+	scheduleChanged := rec.Trigger != domain.AutomationTriggerSessionEnded && (input.RRule != nil || input.Cron != nil || input.Timezone != nil)
 	if scheduleChanged {
 		rruleText, cronText, timezone := "", "", rec.Timezone
 		if input.RRule != nil {
@@ -247,7 +327,7 @@ func (s *Service) Update(ctx context.Context, id domain.AutomationID, input Upda
 	if input.Enabled != nil {
 		wasEnabled := rec.Enabled
 		rec.Enabled = *input.Enabled
-		if !wasEnabled && rec.Enabled && !scheduleChanged {
+		if !wasEnabled && rec.Enabled && !scheduleChanged && rec.Trigger != domain.AutomationTriggerSessionEnded {
 			next, nextErr := NextOccurrence(rec.RRuleText, rec.Timezone, now)
 			if nextErr != nil {
 				return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_SCHEDULE", nextErr.Error(), nil)

@@ -13,6 +13,7 @@ import {
 	toAgentProvider,
 	toSessionActivity,
 	toSessionStatus,
+	isHiddenBackgroundSession,
 	openPRs,
 	mergedPRCount,
 	primaryPR,
@@ -411,5 +412,24 @@ describe("attentionZone", () => {
 	it("prioritizes merge as the highest-ROI zone", () => {
 		// merge is checked before action/pending so an approved PR always surfaces.
 		expect(attentionZone(sessionWith({ status: "approved" }))).toBe("merge");
+	});
+});
+
+describe("isHiddenBackgroundSession", () => {
+	const base = { background: true, prs: [] as WorkspaceSession["prs"], status: "working" as SessionStatus };
+
+	it("hides a background session until it needs the user or opens a PR", () => {
+		expect(isHiddenBackgroundSession(base)).toBe(true);
+		expect(isHiddenBackgroundSession({ ...base, status: "terminated" })).toBe(true);
+		// AO stops a finished run's agent just before marking it ended.
+		expect(isHiddenBackgroundSession({ ...base, status: "exited" })).toBe(true);
+		for (const status of ["needs_input", "no_signal"] as const) {
+			expect(isHiddenBackgroundSession({ ...base, status })).toBe(false);
+		}
+		expect(isHiddenBackgroundSession({ ...base, prs: [{ url: "https://github.com/acme/app/pull/7" }] as WorkspaceSession["prs"] })).toBe(false);
+	});
+
+	it("never hides an ordinary session", () => {
+		expect(isHiddenBackgroundSession({ ...base, background: undefined })).toBe(false);
 	});
 });

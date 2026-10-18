@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -81,6 +82,7 @@ type commander interface {
 	ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (sessionmanager.RestoreResult, error)
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
 	RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error)
+	TranscriptPath(ctx context.Context, id domain.SessionID) string
 	RetireForReplacement(ctx context.Context, id domain.SessionID) error
 	WaitForMessageDeliveryReady(ctx context.Context, id domain.SessionID) error
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
@@ -238,6 +240,47 @@ type Service struct {
 	// artifactDeleter deletes a session's artifact files and version rows. Nil
 	// makes DeleteArtifacts fail rather than delete outside the capture lock.
 	artifactDeleter artifactDeleter
+	// endedHook runs after an archive or a merged PR ends a session. Daemon
+	// wiring sets it after the automation service exists.
+	endedHook atomic.Pointer[func(context.Context, domain.SessionID)]
+}
+
+// SetEndedHook registers fn to run after RequestKill (archive or `ao session
+// kill`) or MergedTerminator ends a session. Internal teardown, daemon
+// shutdown, agent switching and crashes never call it.
+func (s *Service) SetEndedHook(fn func(context.Context, domain.SessionID)) {
+	s.endedHook.Store(&fn)
+}
+
+func (s *Service) notifyEnded(ctx context.Context, id domain.SessionID) {
+	if fn := s.endedHook.Load(); fn != nil && *fn != nil {
+		(*fn)(context.WithoutCancel(ctx), id)
+	}
+}
+
+// TranscriptPath returns the native transcript of a session's current agent,
+// or "" when its harness cannot locate one.
+func (s *Service) TranscriptPath(ctx context.Context, id domain.SessionID) string {
+	return s.manager.TranscriptPath(ctx, id)
+}
+
+// MergedTerminator is the lifecycle completion terminator: a session whose PRs
+// merged ends through the same teardown as Kill, and notifies the ended hook
+// like an archive.
+func (s *Service) MergedTerminator() interface {
+	Kill(context.Context, domain.SessionID) (bool, error)
+} {
+	return mergedTerminator{s}
+}
+
+type mergedTerminator struct{ s *Service }
+
+func (t mergedTerminator) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
+	freed, err := t.s.manager.Kill(ctx, id)
+	if err == nil {
+		t.s.notifyEnded(ctx, id)
+	}
+	return freed, err
 }
 
 // SetChatProviderPreserver wires the live Chat lifetime observation after both
@@ -863,6 +906,9 @@ func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 func (s *Service) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
 	s.cancelTitleRefinement(id)
 	result, err := s.manager.RequestKill(ctx, id)
+	if err == nil {
+		s.notifyEnded(ctx, id)
+	}
 	return result, toAPIError(err)
 }
 

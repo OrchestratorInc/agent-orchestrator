@@ -21,6 +21,9 @@ type SpawnConfig struct {
 	// AutomationRunID makes one scheduled occurrence idempotent across daemon
 	// restarts. Ordinary interactive spawns leave this unset.
 	AutomationRunID *domain.AutomationRunID
+	// Background starts the session out of sight: the desktop's session lists
+	// leave it out until it needs the user. Dreams set it.
+	Background bool
 	// ClientRequestID and hash identify one optional interactive create request.
 	ClientRequestID   string
 	ClientRequestHash string

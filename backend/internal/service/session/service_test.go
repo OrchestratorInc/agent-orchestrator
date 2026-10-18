@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -5817,6 +5818,8 @@ func (f *fakeStore) GetSessionCleanupFacts(_ context.Context, id domain.SessionI
 	rec, ok := f.cleanupFacts[id]
 	return rec, ok, nil
 }
+func (f *fakeCommander) TranscriptPath(context.Context, domain.SessionID) string { return "" }
+
 func (f *fakeCommander) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
 	freed, err := f.Kill(ctx, id)
 	return sessionmanager.KillResult{Freed: freed}, err
@@ -5944,5 +5947,31 @@ func TestDeleteArtifactsAcceptsTheCanonicalArtifactDir(t *testing.T) {
 	}
 	if len(deleter.deleted) != 1 {
 		t.Fatalf("deleted = %v, want [mer-1]", deleter.deleted)
+	}
+}
+
+// Archive and merge completion must notify the ended hook; an internal Kill
+// (project teardown, spawn rollback, automation rollback) and a failed kill
+// must not, or session-ended automations would review sessions nobody ended.
+func TestEndedHookFiresOnlyForArchiveAndMerge(t *testing.T) {
+	fc := &fakeCommander{}
+	svc := NewWithDeps(Deps{Manager: fc, Store: newFakeStore()})
+	var ended []domain.SessionID
+	svc.SetEndedHook(func(_ context.Context, id domain.SessionID) { ended = append(ended, id) })
+	ctx := context.Background()
+
+	if _, err := svc.RequestKill(ctx, "archived"); err != nil {
+		t.Fatalf("RequestKill: %v", err)
+	}
+	if _, err := svc.MergedTerminator().Kill(ctx, "merged"); err != nil {
+		t.Fatalf("merged Kill: %v", err)
+	}
+	if _, err := svc.Kill(ctx, "torn-down"); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	fc.killErr = errors.New("teardown failed")
+	_, _ = svc.RequestKill(ctx, "failed")
+	if want := []domain.SessionID{"archived", "merged"}; !slices.Equal(ended, want) {
+		t.Fatalf("ended = %v, want %v", ended, want)
 	}
 }

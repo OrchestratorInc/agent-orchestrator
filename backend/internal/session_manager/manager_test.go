@@ -37,10 +37,39 @@ func TestSeedRecordPreservesAutomationRunIdentity(t *testing.T) {
 	runID := domain.AutomationRunID("run-1")
 	rec := seedRecord(ports.SpawnConfig{
 		ProjectID: "scheduled", Kind: domain.KindWorker,
-		AutomationRunID: &runID,
+		AutomationRunID: &runID, Background: true,
 	}, domain.ProjectConfig{}, time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC))
 	if rec.AutomationRunID == nil || *rec.AutomationRunID != runID {
 		t.Fatalf("automation run id = %v, want %q", rec.AutomationRunID, runID)
+	}
+	// A dream's row must be created out of sight, not hidden after it appears.
+	if !rec.Background {
+		t.Fatalf("seed record dropped the background flag")
+	}
+}
+
+// An agent nobody watches must know how its session ends: in chat AO closes
+// it after the turn, while a terminal agent has to end it itself. Either way
+// it must attach a PR it opens, or AO could close the session before its PR
+// poll sees the PR.
+func TestBackgroundSpawnsTellTheAgentHowTheSessionEnds(t *testing.T) {
+	m, _, _, _ := newManager()
+	for mode, want := range map[domain.SessionMode]string{
+		domain.SessionModeChat: "AO closes the session after your turn",
+		domain.SessionModeTUI:  "end the session with `ao session kill \"$AO_SESSION_ID\"`",
+	} {
+		cfg := ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "Review it.", RequestedMode: mode, Background: true}
+		prompt, _, err := m.buildSpawnTexts(ctx, cfg, "mer-1")
+		if err != nil {
+			t.Fatalf("%s: buildSpawnTexts: %v", mode, err)
+		}
+		if !strings.Contains(prompt, "Review it.") || !strings.Contains(prompt, want) || !strings.Contains(prompt, "ao session claim-pr <pr-url>") {
+			t.Fatalf("%s background prompt = %q, want %q and the PR claim", mode, prompt, want)
+		}
+		cfg.Background = false
+		if prompt, _, _ := m.buildSpawnTexts(ctx, cfg, "mer-1"); strings.Contains(prompt, "in the background") {
+			t.Fatalf("%s visible prompt mentions the background: %q", mode, prompt)
+		}
 	}
 }
 
@@ -6155,6 +6184,42 @@ func TestSystemPrompt_AppendsConfidentialityGuard(t *testing.T) {
 				t.Fatalf("%s: system prompt missing automatic artifact handoff guidance:\n%s", tc.name, sp)
 			}
 		})
+	}
+}
+
+// instructionsStore adds the standing-instructions lookup the SQLite store has.
+type instructionsStore struct {
+	*fakeStore
+	byProject map[domain.ProjectID]string
+}
+
+func (s instructionsStore) CurrentInstructions(_ context.Context, projectID domain.ProjectID) (string, error) {
+	return s.byProject[projectID], nil
+}
+
+// A new session must start with the instructions saved in AO at launch time,
+// so what dreaming learned reaches the next session without a restart.
+func TestSystemPrompt_ReadsStandingInstructionsFromTheStore(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: t.TempDir(), Config: testRoleAgents()}
+	m := New(Deps{
+		Runtime:   &fakeRuntime{},
+		Agents:    singleAgent{agent: &recordingAgent{}},
+		Workspace: &fakeWorkspace{},
+		Store:     instructionsStore{fakeStore: st, byProject: map[domain.ProjectID]string{"": "Answer first.", "mer": "Run focused tests."}},
+		Messenger: &fakeMessenger{},
+		Lifecycle: &fakeLCM{store: st},
+		DataDir:   t.TempDir(),
+		LookPath:  func(string) (string, error) { return "/bin/true", nil },
+	})
+	for _, kind := range []domain.SessionKind{domain.KindWorker, domain.KindOrchestrator} {
+		sp, err := m.buildSystemPrompt(ctx, kind, "mer", "mer-7", "", false)
+		if err != nil {
+			t.Fatalf("buildSystemPrompt(%s): %v", kind, err)
+		}
+		if !strings.Contains(sp, "## User Instructions") || !strings.Contains(sp, "Answer first.") || !strings.Contains(sp, "## Project Instructions") || !strings.Contains(sp, "Run focused tests.") {
+			t.Fatalf("%s system prompt is missing the standing instructions:\n%s", kind, sp)
+		}
 	}
 }
 

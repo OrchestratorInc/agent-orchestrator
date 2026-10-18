@@ -176,7 +176,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     requested_output,
-    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed, background,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, client_request_id, client_request_hash, client_request_committed
 FROM sessions WHERE id = ?
@@ -248,6 +248,7 @@ type GetSessionRow struct {
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
+	Background                       bool
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
 	HibernatedAt                     sql.NullTime
@@ -325,6 +326,7 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.IsTaskPreparation,
 		&i.AutomationRunID,
 		&i.AutomationLaunchCompleted,
+		&i.Background,
 		&i.ClaudeActivityFacts,
 		&i.CodexActivityFacts,
 		&i.HibernatedAt,
@@ -350,7 +352,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     requested_output,
-    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed, background,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, client_request_id, client_request_hash, client_request_committed
 FROM sessions WHERE automation_run_id = ?
@@ -422,6 +424,7 @@ type GetSessionByAutomationRunIDRow struct {
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
+	Background                       bool
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
 	HibernatedAt                     sql.NullTime
@@ -499,6 +502,7 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.IsTaskPreparation,
 		&i.AutomationRunID,
 		&i.AutomationLaunchCompleted,
+		&i.Background,
 		&i.ClaudeActivityFacts,
 		&i.CodexActivityFacts,
 		&i.HibernatedAt,
@@ -524,7 +528,7 @@ INSERT INTO sessions (
     session_mode, provider_conversation_id, controller_generation, model, effort, session_permissions,
     requested_output,
     created_at, updated_at, is_pinned, pinned_at, auto_inject_review, auto_inject_ci,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed, background,
     client_request_id, client_request_hash
 ) VALUES (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -533,7 +537,7 @@ INSERT INTO sessions (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-    ?, ?, ?
+    ?, ?, ?, ?
 )
 `
 
@@ -599,6 +603,7 @@ type InsertSessionParams struct {
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
+	Background                       bool
 	ClientRequestID                  string
 	ClientRequestHash                string
 }
@@ -666,6 +671,7 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) er
 		arg.IsTaskPreparation,
 		arg.AutomationRunID,
 		arg.AutomationLaunchCompleted,
+		arg.Background,
 		arg.ClientRequestID,
 		arg.ClientRequestHash,
 	)
@@ -687,7 +693,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     requested_output,
-    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed, background,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, client_request_id, client_request_hash, client_request_committed
 FROM sessions ORDER BY project_id, num
@@ -759,6 +765,7 @@ type ListAllSessionsRow struct {
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
+	Background                       bool
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
 	HibernatedAt                     sql.NullTime
@@ -842,6 +849,7 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.IsTaskPreparation,
 			&i.AutomationRunID,
 			&i.AutomationLaunchCompleted,
+			&i.Background,
 			&i.ClaudeActivityFacts,
 			&i.CodexActivityFacts,
 			&i.HibernatedAt,
@@ -910,7 +918,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     requested_output,
-    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
+    provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed, background,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, client_request_id, client_request_hash, client_request_committed
 FROM sessions WHERE project_id IS ? ORDER BY num
@@ -982,6 +990,7 @@ type ListSessionsByProjectRow struct {
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
+	Background                       bool
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
 	HibernatedAt                     sql.NullTime
@@ -1065,6 +1074,7 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.IsTaskPreparation,
 			&i.AutomationRunID,
 			&i.AutomationLaunchCompleted,
+			&i.Background,
 			&i.ClaudeActivityFacts,
 			&i.CodexActivityFacts,
 			&i.HibernatedAt,

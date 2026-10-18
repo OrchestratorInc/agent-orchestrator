@@ -203,6 +203,10 @@ var shippedMigrations = map[int64]string{
 	198: "0198_harness_defaults.sql",
 	199: "0199_conversation_message_continuation.sql",
 	200: "0200_session_artifact_version_source.sql",
+	201: "0201_automation_session_ended_trigger.sql",
+	202: "0202_dreaming_instructions.sql",
+	203: "0203_background_sessions.sql",
+	204: "0204_instruction_user_lines.sql",
 	206: "0206_awake.sql",
 }
 

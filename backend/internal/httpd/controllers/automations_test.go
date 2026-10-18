@@ -17,13 +17,15 @@ import (
 
 type fakeAutomationService struct {
 	created automationsvc.CreateInput
+	updated automationsvc.UpdateInput
 	items   []domain.Automation
+	runs    []domain.AutomationRun
 	deleted domain.AutomationID
 }
 
 func (f *fakeAutomationService) Create(_ context.Context, input automationsvc.CreateInput) (domain.Automation, error) {
 	f.created = input
-	return domain.Automation{ID: "automation-1", ProjectID: input.ProjectID, DisplayName: input.DisplayName, Prompt: input.Prompt, Kind: input.Kind, Timezone: input.Timezone, Enabled: true, NextRunAt: time.Date(2026, 8, 26, 9, 0, 0, 0, time.UTC)}, nil
+	return domain.Automation{ID: "automation-1", ProjectID: input.ProjectID, DisplayName: input.DisplayName, Prompt: input.Prompt, Kind: input.Kind, Trigger: input.Trigger, Timezone: input.Timezone, Enabled: true, NextRunAt: time.Date(2026, 8, 26, 9, 0, 0, 0, time.UTC)}, nil
 }
 func (f *fakeAutomationService) Get(_ context.Context, id domain.AutomationID) (domain.Automation, error) {
 	return f.items[0], nil
@@ -32,6 +34,7 @@ func (f *fakeAutomationService) List(_ context.Context, filter domain.Automation
 	return domain.AutomationPage{Items: f.items, Total: int64(len(f.items))}, nil
 }
 func (f *fakeAutomationService) Update(_ context.Context, id domain.AutomationID, input automationsvc.UpdateInput) (domain.Automation, error) {
+	f.updated = input
 	return f.items[0], nil
 }
 func (f *fakeAutomationService) Delete(_ context.Context, id domain.AutomationID) error {
@@ -39,7 +42,7 @@ func (f *fakeAutomationService) Delete(_ context.Context, id domain.AutomationID
 	return nil
 }
 func (f *fakeAutomationService) Runs(_ context.Context, filter domain.AutomationRunFilter) (domain.AutomationRunPage, error) {
-	return domain.AutomationRunPage{}, nil
+	return domain.AutomationRunPage{Items: f.runs, Total: int64(len(f.runs))}, nil
 }
 
 func automationTestRouter(service AutomationService) http.Handler {
@@ -75,5 +78,38 @@ func TestAutomationsDeleteReturnsNoContent(t *testing.T) {
 	automationTestRouter(service).ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent || service.deleted != "automation-1" {
 		t.Fatalf("status=%d deleted=%q body=%s", rec.Code, service.deleted, rec.Body.String())
+	}
+}
+
+// The trigger must survive decoding in both directions, and a review run must
+// name the session whose end started it.
+func TestAutomationsSessionEndedTriggerRoundTrips(t *testing.T) {
+	ended := domain.SessionID("worker-1")
+	service := &fakeAutomationService{
+		items: []domain.Automation{{ID: "automation-1", Trigger: domain.AutomationTriggerSessionEnded}},
+		runs:  []domain.AutomationRun{{ID: "run-1", AutomationID: "automation-1", TriggerSessionID: &ended, Status: domain.AutomationRunPending}},
+	}
+	router := automationTestRouter(service)
+	serve := func(method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
+		if rec.Code >= 300 {
+			t.Fatalf("%s %s status=%d body=%s", method, path, rec.Code, rec.Body.String())
+		}
+		return rec
+	}
+
+	created := serve(http.MethodPost, "/automations", `{"projectId":"demo","displayName":"Session review","prompt":"Review","kind":"worker","trigger":"session_ended","timezone":"UTC"}`)
+	if service.created.Trigger != domain.AutomationTriggerSessionEnded || !strings.Contains(created.Body.String(), `"trigger":"session_ended"`) {
+		t.Fatalf("create input=%#v body=%s", service.created, created.Body.String())
+	}
+	serve(http.MethodPatch, "/automations/automation-1", `{"trigger":"schedule","rrule":"FREQ=DAILY"}`)
+	if service.updated.Trigger == nil || *service.updated.Trigger != domain.AutomationTriggerSchedule {
+		t.Fatalf("update trigger = %v, want schedule", service.updated.Trigger)
+	}
+	runs := serve(http.MethodGet, "/automations/automation-1/runs", "")
+	if !strings.Contains(runs.Body.String(), `"triggerSessionId":"worker-1"`) {
+		t.Fatalf("runs body = %s, want the ended session", runs.Body.String())
 	}
 }

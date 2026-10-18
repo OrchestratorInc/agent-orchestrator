@@ -139,6 +139,11 @@ export type WorkspaceSession = {
 	 * Only the daemon's durable interface-transition coordinator may change it.
 	 */
 	mode?: SessionMode;
+	/**
+	 * Set for sessions that run out of sight, such as dreams. Session lists
+	 * leave them out until they need the user; see isHiddenBackgroundSession.
+	 */
+	background?: boolean;
 	branch?: string;
 	status: SessionStatus;
 	/** Stack-aware PR context derived by the daemon independently of runtime activity. */
@@ -389,8 +394,22 @@ function validTimestamp(value?: string): number | undefined {
 	return Number.isNaN(parsed) ? undefined : parsed;
 }
 
+// A background session comes into view when it needs the user. "exited" is
+// not one: AO stops a finished run's agent a moment before marking it ended,
+// and a run whose agent crashes fails and shows its error on its automation.
+const BACKGROUND_ATTENTION_STATUSES: ReadonlySet<SessionStatus> = new Set<SessionStatus>(["needs_input", "no_signal"]);
+
+/**
+ * A background session, such as a dream, stays out of every session list,
+ * the Archive included, unless it needs the user or opened a PR. Opening it
+ * directly (View session, run history) still works.
+ */
+export function isHiddenBackgroundSession(session: Pick<WorkspaceSession, "background" | "prs" | "status">): boolean {
+	return session.background === true && session.prs.length === 0 && !BACKGROUND_ATTENTION_STATUSES.has(session.status);
+}
+
 export function workerSessions(sessions: WorkspaceSession[]): WorkspaceSession[] {
-	return sessions.filter((s) => !isOrchestratorSession(s));
+	return sessions.filter((s) => !isOrchestratorSession(s) && !isHiddenBackgroundSession(s));
 }
 
 /** Worker sessions ordered by the user's latest message (else creation), newest first. */

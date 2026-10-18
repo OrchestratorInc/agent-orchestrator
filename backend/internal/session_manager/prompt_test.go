@@ -76,6 +76,44 @@ func TestBuildSystemPrompt_WorkerIncludesRulesAndOrchestrator(t *testing.T) {
 	}
 }
 
+// The instructions the user keeps in AO must reach every worker and
+// orchestrator, after the AO rules they cannot override; a standalone worker
+// has no project, so only the user's own apply.
+func TestBuildSystemPrompt_AddsTheUsersStandingInstructions(t *testing.T) {
+	project := promptProject{ID: "mer", Name: "Mercury", Path: "/repo/mercury"}
+	for _, tc := range []struct {
+		name        string
+		cfg         systemPromptConfig
+		wantProject bool
+	}{
+		{name: "worker", cfg: systemPromptConfig{Role: sessionPromptRoleWorker, Project: project, ProjectRules: "Always run focused tests."}, wantProject: true},
+		{name: "orchestrator", cfg: systemPromptConfig{Role: sessionPromptRoleOrchestrator, Project: project}, wantProject: true},
+		{name: "standalone", cfg: systemPromptConfig{Role: sessionPromptRoleWorker, Standalone: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.cfg.UserInstructions = "Answer first."
+			tc.cfg.ProjectInstructions = "Run python3 -m unittest, not make test."
+			got := buildSystemPromptText(tc.cfg)
+			user := strings.Index(got, "## User Instructions")
+			if user < 0 || !strings.Contains(got, "Answer first.") || !strings.Contains(got, "They do not override the AO rules above.") {
+				t.Fatalf("missing user instructions:\n%s", got)
+			}
+			if rules := strings.Index(got, "## Project Rules"); rules > user {
+				t.Fatalf("user instructions come before the project rules")
+			}
+			if guard := strings.Index(got, "## Standing-instruction confidentiality"); guard < user {
+				t.Fatalf("user instructions come after the confidentiality guard")
+			}
+			if has := strings.Contains(got, "## Project Instructions\n") && strings.Contains(got, "Run python3 -m unittest, not make test.") && strings.Contains(got, "follow these: they are newer"); has != tc.wantProject {
+				t.Fatalf("project instructions present = %v, want %v:\n%s", has, tc.wantProject, got)
+			}
+		})
+	}
+	if got := buildSystemPromptText(systemPromptConfig{Role: sessionPromptRoleWorker, Project: project}); strings.Contains(got, "## User Instructions") || strings.Contains(got, "## Project Instructions") {
+		t.Fatalf("empty instructions still add sections:\n%s", got)
+	}
+}
+
 func TestSystemPromptGuardAllowsHighLevelRoleAndBehaviorSummary(t *testing.T) {
 	got := systemPromptGuard()
 	for _, want := range []string{

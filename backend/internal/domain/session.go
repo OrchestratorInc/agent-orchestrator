@@ -270,6 +270,10 @@ type SessionRecord struct {
 	// commit. A seed carrying AutomationRunID alone is not proof that its
 	// workspace/controller launch completed.
 	AutomationLaunchCompleted bool `json:"-"`
+	// Background marks a session that runs out of sight, such as a dream. The
+	// desktop's session lists leave it out until it needs the user. It is set
+	// at spawn and never changes.
+	Background bool `json:"background,omitempty"`
 	// ClientRequestID binds one manual task creation attempt to its durable row.
 	// A retry may return this row only after ClientRequestCommitted is set.
 	ClientRequestID        string       `json:"-"`

@@ -29,3 +29,27 @@ func TestPollDelegatesUTCNowToService(t *testing.T) {
 		t.Fatalf("poll times = %#v, want one UTC instant %s", poller.times, local.UTC())
 	}
 }
+
+type signalingPoller struct{ polls chan struct{} }
+
+func (s signalingPoller) Tick(context.Context, time.Time) error {
+	s.polls <- struct{}{}
+	return nil
+}
+
+// A wake must poll right away instead of waiting a whole tick; an archived
+// session's review would otherwise start up to fifteen seconds late.
+func TestWakePollsBeforeTheNextTick(t *testing.T) {
+	poller := signalingPoller{polls: make(chan struct{}, 4)}
+	observer := New(poller, Config{Tick: time.Hour})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := observer.Start(ctx)
+	t.Cleanup(func() { cancel(); <-done })
+	<-poller.polls // initial poll
+	observer.Wake()
+	select {
+	case <-poller.polls:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Wake did not poll before the hourly tick")
+	}
+}
