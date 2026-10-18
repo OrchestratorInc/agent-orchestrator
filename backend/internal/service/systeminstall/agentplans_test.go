@@ -245,6 +245,25 @@ func TestGeminiMacInstallUsesSupportedNPMRelease(t *testing.T) {
 	}
 }
 
+func TestCodeBuddyInstallPinsCommandButUsesPackageNameForReleaseFeed(t *testing.T) {
+	s := newTestService("windows", "npm")
+	s.installCapabilities = installCapabilitiesStub{prefix: "C:/npm", writable: true}
+	planner, err := s.newRequestPlanner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plans := planner.agentMethodPlans(TargetCodeBuddy, AgentOperationInstall)
+	if len(plans) != 1 || plans[0].Unsupported {
+		t.Fatalf("CodeBuddy install plans = %+v, want one available plan", plans)
+	}
+	if got := plans[0].Package; got != "@tencent-ai/codebuddy-code" {
+		t.Fatalf("release-feed package = %q, want unversioned package name", got)
+	}
+	if got := strings.Join(plans[0].Command, " "); got != "npm install -g @tencent-ai/codebuddy-code@2.164.0" {
+		t.Fatalf("install command = %q, want pinned qualified release", got)
+	}
+}
+
 func TestOfficialInstallerPlansAreAutomaticAndServerOwned(t *testing.T) {
 	tests := []struct {
 		goos        string

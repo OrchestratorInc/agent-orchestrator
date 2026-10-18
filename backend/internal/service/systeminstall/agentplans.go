@@ -54,7 +54,11 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 	var plans []Plan
 	switch target {
 	case TargetCodeBuddy:
-		plans = []Plan{s.planNPM(target, "@tencent-ai/codebuddy-code@2.164.0")}
+		plan := s.planNPM(target, "@tencent-ai/codebuddy-code")
+		if len(plan.Command) > 0 {
+			plan.Command[len(plan.Command)-1] = "@tencent-ai/codebuddy-code@2.164.0"
+		}
+		plans = []Plan{plan}
 	case TargetClaudeCode:
 		official := s.officialByOS(target, "https://claude.ai/install.sh", "bash", "https://claude.ai/install.ps1", agentDocumentationURLs[target])
 		if s.goos == "darwin" {
