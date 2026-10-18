@@ -204,6 +204,7 @@ type sessionLifecycle interface {
 	ReconnectAwakeAgent(ctx context.Context, target domain.AwakeAgentTarget) error
 	ReconcileBackground(ctx context.Context) error
 	HibernateIdleChats(ctx context.Context) error
+	ReconcileOrphanedPtyHosts(ctx context.Context) error
 	RestoreAll(ctx context.Context) error
 	WaitBackgroundWorkers(ctx context.Context) error
 	WaitAgentSwitchWorkers(ctx context.Context) error
