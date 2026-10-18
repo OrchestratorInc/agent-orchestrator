@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
@@ -32,6 +33,7 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		return ports.AgentAuthStatusUnknown, nil
 	}
 	if status, ok := providerListStatus(string(out)); ok && status == ports.AgentAuthStatusConfigured {
+		ports.RecordAuthEvidence(ctx, domain.CommandSource(binary, "auth", "list"))
 		return status, nil
 	}
 	// MiMo Auto is usable without a login, so it is absent from `auth list`.
@@ -45,6 +47,8 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		return ports.AgentAuthStatusUnknown, nil
 	}
 	if err == nil && freeModelListed(string(models)) {
+		// The free MiMo Auto channel needs no login.
+		ports.RecordAuthEvidence(ctx, domain.CommandSource(binary, "models", "mimo"))
 		return ports.AgentAuthStatusConfigured, nil
 	}
 	return ports.AgentAuthStatusUnknown, nil

@@ -65,6 +65,12 @@ export interface CloudCpOffering {
 	kind: CloudCpOfferingKind;
 	/** Plan feature flags; empty when none. */
 	features: string[];
+	/**
+	 * The org holds the coder capability (WorkOS metadata capabilities=coder):
+	 * it may connect its own Coder deployment, and its Coder sessions are not
+	 * billed. Absent from older control planes.
+	 */
+	customCoder?: boolean;
 }
 
 /** GET /me */
@@ -202,11 +208,60 @@ export type CloudCpProjectReviewer = ProjectReviewer;
  * `parameters` (template parameter overrides, merged key by key); the rest of
  * a project's coder config is fixed at creation.
  */
-export type CloudCpProjectSettingsRequest = ProjectSettingsInput & {
-	config?: NonNullable<ProjectSettingsInput["config"]> & {
+export type CloudCpProjectSettingsRequest = Omit<ProjectSettingsInput, "config"> & {
+	config?: Omit<NonNullable<ProjectSettingsInput["config"]>, "coder" | "postCreate" | "preRemove"> & {
 		coder?: { workspaceNamePrefix?: string; parameters?: Record<string, string> };
+		/** Setup and Cleanup steps; arrays replace the stored list and [] clears it. */
+		postCreate?: CloudCpProjectScriptStep[];
+		preRemove?: CloudCpProjectScriptStep[];
+		/** The project's additional repositories; replaces the stored list, [] clears it. */
+		repos?: CloudCpProjectRepo[];
+		agentStartsIn?: CloudCpAgentStartsIn;
+		/** Bring-your-own Coder working directory for this project; "" uses the connection's. */
+		workingDirectory?: string;
+		/** Instructions added to every worker's prompt (16 KB at most). */
+		agentRules?: string;
+		/** Instructions added to the orchestrator's prompt (16 KB at most). */
+		orchestratorRules?: string;
 	};
 };
+
+/**
+ * One additional repository of a project (config.repos). Every session clones
+ * it beside the main repository's checkout, in the folder named after it, and
+ * checks out the session branch there too.
+ */
+export interface CloudCpProjectRepo {
+	/** https://github.com/<owner>/<name> */
+	url: string;
+	branch?: string;
+}
+
+/**
+ * A Setup or Cleanup step: a plain command runs in the main repository; an
+ * object with `repository` (the canonical URL of one of the project's
+ * repositories) runs in that repository's folder.
+ */
+/**
+ * A stored Setup or Cleanup step: the command, or for a step in another
+ * repository the command wrapped to run from that repository's folder (see
+ * repoScriptCommand). The control plane also accepts {command, repository} and
+ * stores it in the wrapped form.
+ */
+export type CloudCpProjectScriptStep = string | { command: string; repository?: string };
+
+/** Where a project's coding agent starts: its main repository, or the folder holding every repository. */
+export type CloudCpAgentStartsIn = "repository" | "parent";
+
+/**
+ * POST /orgs/{orgId}/projects/standalone (requires an Idempotency-Key header):
+ * a project without a repository. Its sessions start in an empty folder.
+ */
+export interface CloudCpCreateStandaloneProjectRequest {
+	/** 1-120 characters. */
+	displayName: string;
+	config?: Record<string, unknown>;
+}
 
 export interface CloudCpProject {
 	id: string;
@@ -351,9 +406,18 @@ export interface CloudCpCoderTemplateParameterOption {
 	description?: string;
 }
 
+/** A problem Coder found with a parameter's value. */
+export interface CloudCpCoderTemplateParameterDiagnostic {
+	/** "error" or "warning". */
+	severity: string;
+	summary: string;
+	detail?: string;
+}
+
 /**
  * One rich parameter of a Coder template's active version
- * (GET /orgs/{orgId}/coder-templates/{templateId}/parameters).
+ * (GET /orgs/{orgId}/coder-templates/{templateId}/parameters, or POST
+ * .../parameters/evaluate with draft values).
  */
 export interface CloudCpCoderTemplateParameter {
 	name: string;
@@ -369,6 +433,8 @@ export interface CloudCpCoderTemplateParameter {
 	defaultValue?: string;
 	options?: CloudCpCoderTemplateParameterOption[];
 	order?: number;
+	/** Coder's problems with the value; only set when evaluated against draft values. */
+	diagnostics?: CloudCpCoderTemplateParameterDiagnostic[];
 }
 
 export interface CloudCpCoderTemplateParametersResponse {
@@ -424,13 +490,28 @@ export interface CloudCpOrgCoderConfig {
 	readyProbeTimeoutSeconds?: number;
 	/** Reuse a matching checkout under ~/work; absent means true with the workspace user. */
 	reuseExistingCheckout?: boolean;
+	/**
+	 * Where the session works: absolute, or starting with `~/` or `$HOME/`, and may
+	 * name the repository as `{repo}`. Requires the workspace user.
+	 */
+	workingDirectory?: string;
+	/** Keep the agent from reading or editing secret env files (.env, .env.*); absent means true. */
+	protectSecretFiles?: boolean;
 	/** True when an API token is stored. The token itself is never returned. */
 	tokenSet: boolean;
+	/**
+	 * False when the org may no longer save a connection (it lacks the coder
+	 * capability) but still has this one, which it can read and remove.
+	 * Absent means true.
+	 */
+	editable?: boolean;
 }
 
 export interface CloudCpOrgCoderConfigResponse {
 	/** The stored config, or null when the org has none configured yet. */
 	coderConfig: CloudCpOrgCoderConfig | null;
+	/** The org may save a connection; absent from older control planes (true). */
+	editable?: boolean;
 }
 
 /**
@@ -468,6 +549,10 @@ export interface CloudCpPutOrgCoderConfigRequest {
 	/** 30..3600; omit for the default 900. */
 	readyProbeTimeoutSeconds?: number;
 	reuseExistingCheckout?: boolean;
+	/** Only with workerUser "workspace". */
+	workingDirectory?: string;
+	/** Omit for the default true. */
+	protectSecretFiles?: boolean;
 }
 
 export interface CloudCpSession {
@@ -695,6 +780,25 @@ export interface CloudCpWorkspaceReviewResponse {
 	summary: { files: number; additions: number; deletions: number };
 	ahead?: number;
 	behind?: number;
+	/**
+	 * Every repository of a multi-repository session, the main one first. The
+	 * workspace endpoints take a sibling's `name` as their `repository`
+	 * parameter. Absent for a single-repository session.
+	 */
+	repositories?: CloudCpWorkspaceRepository[];
+}
+
+/** One repository checked out in a cloud session's workspace. */
+export interface CloudCpWorkspaceRepository {
+	/** The folder it is checked out into; the `repository` parameter for a sibling. */
+	name: string;
+	/** owner/name on GitHub, when known. */
+	repository?: string;
+	branch?: string;
+	/** True for the project's main repository. */
+	main?: boolean;
+	/** False while (or when) its checkout is missing from the workspace. */
+	present: boolean;
 }
 
 export interface CloudCpWorkspaceReviewFileQuery {

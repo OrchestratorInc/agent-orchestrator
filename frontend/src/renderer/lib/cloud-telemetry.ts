@@ -226,6 +226,14 @@ export function instrumentCloudClient(client: CloudCpClient): CloudCpClient {
 		});
 		return response;
 	};
+	instrumented.createStandaloneProject = async (orgId, body, options) => {
+		const response = await client.createStandaloneProject(orgId, body, options);
+		void captureRendererEvent("ao.renderer.cloud_project_created", {
+			project_id: response.project.id,
+			provider: projectProvider(body.config),
+		});
+		return response;
+	};
 	instrumented.createSession = async (orgId, body, options) => {
 		const requestedAt = Date.now();
 		const provider = body.provider || defaultProvider || "default";

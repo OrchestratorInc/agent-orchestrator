@@ -62,7 +62,7 @@ function isViewedRecord(file: CloudCpWorkspaceReviewFileSummary, records: Viewed
 }
 
 export function CloudWorkspaceReviewPane({
-	annotation, baseUrl, client, data, filter, onBrowseAll, onOpenFile, orgId, sessionId, split,
+	annotation, baseUrl, client, data, filter, onBrowseAll, onOpenFile, orgId, repository, sessionId, split,
 }: {
 	annotation: FileAnnotationModel;
 	baseUrl: string;
@@ -72,6 +72,8 @@ export function CloudWorkspaceReviewPane({
 	onBrowseAll: () => void;
 	onOpenFile?: (path: string, options?: CloudFileOpenOptions) => void;
 	orgId: string;
+	/** The sibling repository under review in a multi-repository session; undefined for the main one. */
+	repository?: string;
 	sessionId: string;
 	split: boolean;
 }) {
@@ -93,7 +95,7 @@ export function CloudWorkspaceReviewPane({
 		[allFiles, normalizedFilter],
 	);
 	const selectionKey = selectedCommit ? `commit:${selectedCommit.sha}` : scope;
-	const storageKey = `ao.cloud.files.viewed.${sessionId}.${selectionKey}`;
+	const storageKey = `ao.cloud.files.viewed.${sessionId}.${repository ? `${repository}.` : ""}${selectionKey}`;
 	const [viewedRecords, setViewedRecords] = useState<ViewedRecords>(() => readViewedRecords(storageKey));
 	useEffect(() => {
 		setViewedRecords(readViewedRecords(storageKey));

@@ -171,7 +171,12 @@ type CreateSession struct {
 	ReasoningEffort string
 	DeniedCommands  []string
 	Interface       SessionInterface
-	Provider        string
+	// Branch is the session's git branch. Empty means a generated
+	// <prefix>/<short id>; a named branch that already exists on the remote is
+	// continued from its commits. Omitted when empty so the idempotency payload
+	// of every other create is unchanged.
+	Branch   string `json:",omitempty"`
+	Provider string
 	// SandboxConnectionID names a bring-your-own provider credential. It is
 	// empty for sandboxes that run on the platform's own account.
 	SandboxConnectionID string
@@ -187,6 +192,13 @@ type CreateSession struct {
 	// orchestrator, a standalone worker, or a worker created for a project that
 	// has no active orchestrator.
 	ParentSessionID string
+	// CoderCapability: the caller's organization holds the coder capability
+	// (WorkOS metadata capabilities=coder), so its Coder sessions are not
+	// billed. Set by the HTTP layer, which owns the capability rule; a worker
+	// an orchestrator spawns inherits its parent's billing instead. It is read
+	// from a cache, so it stays out of the create's idempotency payload: a
+	// retry after the cache changed still replays the first create.
+	CoderCapability bool `json:"-"`
 }
 
 // RepoRef is one additional repository (beyond the project's primary repo) to
@@ -237,6 +249,39 @@ func ValidateCoderWorkspaceNamePrefix(prefix string) error {
 		return errors.New("Coder workspace name prefix must be 1-20 lowercase letters, digits, or single hyphens, starting with a letter")
 	}
 	return nil
+}
+
+// CoderWorkspaceNamePrefixFor derives a workspace name prefix from a project
+// name: lower-cased, every run of other characters a single hyphen, starting
+// with a letter, at most MaxCoderWorkspaceNamePrefix characters, so it
+// always passes ValidateCoderWorkspaceNamePrefix. A name with no letters gives
+// "ao", the default prefix.
+func CoderWorkspaceNamePrefixFor(projectName string) string {
+	var slug strings.Builder
+	hyphen := false
+	for _, character := range strings.ToLower(projectName) {
+		switch {
+		case character >= 'a' && character <= 'z', character >= '0' && character <= '9' && slug.Len() > 0:
+			if hyphen && slug.Len() > 0 {
+				slug.WriteByte('-')
+			}
+			hyphen = false
+			slug.WriteRune(character)
+		default:
+			hyphen = true
+		}
+		if slug.Len() >= MaxCoderWorkspaceNamePrefix {
+			break
+		}
+	}
+	prefix := strings.TrimRight(slug.String(), "-")
+	if len(prefix) > MaxCoderWorkspaceNamePrefix {
+		prefix = strings.TrimRight(prefix[:MaxCoderWorkspaceNamePrefix], "-")
+	}
+	if prefix == "" || ValidateCoderWorkspaceNamePrefix(prefix) != nil {
+		return "ao"
+	}
+	return prefix
 }
 
 // DecodeProjectCoderConfig extracts the coder dev-kit config from a project's
@@ -358,6 +403,18 @@ type OrgCoderConfig struct {
 	// applies with the workspace worker user, where it defaults to true;
 	// normalization pins it to false for the ao-worker user.
 	ReuseExistingCheckout *bool `json:"reuseExistingCheckout,omitempty"`
+	// WorkingDirectory names the directory a session works in: an absolute
+	// path, or one under the workspace user's home ("~/" or "$HOME/"), which
+	// may contain {repo} for the repository name, for example ~/work/{repo}.
+	// An existing checkout of the session repository there is adopted, a
+	// missing directory gets a fresh clone, and anything else fails the
+	// checkout. It replaces the ReuseExistingCheckout search and requires the
+	// workspace worker user.
+	WorkingDirectory string `json:"workingDirectory,omitempty"`
+	// ProtectSecretFiles stops the coding agent's own file tools from reading
+	// or editing secret environment files (.env, .env.*). It defaults to true;
+	// normalization makes the effective value explicit.
+	ProtectSecretFiles *bool `json:"protectSecretFiles,omitempty"`
 }
 
 // Bounds for OrgCoderConfig.StartupTimeoutSeconds.

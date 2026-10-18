@@ -5,6 +5,7 @@ import path from "node:path";
 import { app, BrowserWindow, WebContentsView } from "electron";
 import type { AgentBrowserRuntime } from "./agent-browser-runtime";
 import { createBrowserViewHost } from "./browser-view-host";
+import type { BrowserTabsState } from "./browser-view-host";
 
 function requiredEnvironmentVariable(name: string): string {
 	const value = process.env[name];
@@ -19,7 +20,25 @@ app.setPath("userData", userDataPath);
 async function run(): Promise<void> {
 	await app.whenReady();
 	const fixture = await readFile(fixturePath, "utf8");
+	const dragFixture = await readFile(path.join(path.dirname(fixturePath), "drag-regions.html"), "utf8");
 	const server = createServer((request, response) => {
+		if (request.url === "/drag-regions") {
+			response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+			response.end(dragFixture);
+			return;
+		}
+		if (request.url === "/popup") {
+			response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+			response.end(`<!doctype html><title>OAuth popup</title><script>
+				window.opener?.postMessage({kind: 'popup-ready', hasOpener: !!window.opener}, '*');
+				addEventListener('message', event => {
+					if (event.data !== 'complete') return;
+					window.opener.postMessage({kind: 'auth-complete'}, '*');
+					window.close();
+				});
+			</script>`);
+			return;
+		}
 		if (request.url === "/fixture") {
 			response.writeHead(200, {
 				"content-type": "text/html; charset=utf-8",
@@ -104,6 +123,19 @@ async function run(): Promise<void> {
 		return view;
 	} as unknown as typeof WebContentsView;
 
+	async function waitForFirstFrame(contents: WebContentsView["webContents"]): Promise<void> {
+		const deadline = Date.now() + 10_000;
+		for (;;) {
+			try {
+				if (!(await contents.capturePage()).isEmpty()) return;
+			} catch (error) {
+				if (Date.now() >= deadline) throw error;
+			}
+			if (Date.now() >= deadline) throw new Error("browser view did not produce a frame");
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+	}
+
 	function activeWebContents(): WebContentsView["webContents"] {
 		if (!browserView) throw new Error("AO integration fixture has no active browser view");
 		return browserView.webContents;
@@ -124,7 +156,10 @@ async function run(): Promise<void> {
 				case "snapshot":
 					// A real provider snapshot cannot complete before Chromium has produced
 					// a frame. Force the same readiness before dispatching native input.
-					await activeWebContents().capturePage();
+					// Electron 44 rejects capturePage() with UnknownVizError until the
+					// first frame exists (Electron 33 resolved an empty image), so retry
+					// briefly until a non-empty frame is captured.
+					await waitForFirstFrame(activeWebContents());
 					return {
 						snapshot: [
 							'- button "Continue" [ref=e1]',
@@ -229,6 +264,42 @@ async function run(): Promise<void> {
 	});
 
 	try {
+		// Exercise Chromium's actual CSS cascade: a mock of insertCSS cannot
+		// prove that user-origin rules defeat author !important and inline styles.
+		const dragURL = `http://127.0.0.1:${address.port}/drag-regions`;
+		for (const zoom of [1, 2]) {
+			await host.execute("integration-session", "open", { url: dragURL });
+			const contents = activeWebContents();
+			contents.setZoomFactor(zoom);
+			await contents.executeJavaScript(`
+				const dynamic = document.createElement('div');
+				dynamic.id = 'dynamic';
+				dynamic.style.setProperty('app-region', 'drag', 'important');
+				document.body.append(dynamic);
+			`);
+			const deadline = Date.now() + 5_000;
+			for (;;) {
+				const regions = await contents.executeJavaScript(`
+					[
+						...[document.documentElement, document.body,
+							document.querySelector('#page'), document.querySelector('#button'),
+							document.querySelector('#dynamic')]
+							.map(element => getComputedStyle(element).getPropertyValue('app-region')),
+						getComputedStyle(document.querySelector('#page'), '::before').getPropertyValue('app-region'),
+						getComputedStyle(document.querySelector('#page'), '::after').getPropertyValue('app-region'),
+					]
+				`) as string[];
+				if (regions.every(region => region === "no-drag") || Date.now() >= deadline) {
+					assert.deepEqual(regions, Array(7).fill("no-drag"),
+						"page drag regions must be disabled, including inline, dynamic and pseudo-element rules");
+					break;
+				}
+				await new Promise(resolve => setTimeout(resolve, 25));
+			}
+		}
+		activeWebContents().setZoomFactor(1);
+		process.stdout.write("browser native CSS drag-region override integration passed\n");
+
 		await host.execute("integration-session", "open", { url: fixtureURL });
 		const satisfied = (await host.execute("integration-session", "act", {
 			instruction: "continue",
@@ -264,6 +335,74 @@ async function run(): Promise<void> {
 		await host.execute("integration-session", "snapshot", {
 			interactive: true,
 		});
+
+		// Exercise the production host with real Chromium window handles. Unit
+		// fakes cannot prove that the child retains its native opener linkage.
+		const opener = activeWebContents();
+		await opener.executeJavaScript("guardEnabled = false");
+		await opener.loadURL(`http://127.0.0.1:${address.port}/destination`);
+		const popupURL = `http://localhost:${address.port}/popup`;
+		async function deadline<T>(pending: Promise<T>): Promise<T> {
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			try {
+				return await Promise.race([
+					pending,
+					new Promise<never>((_resolve, reject) => {
+						timer = setTimeout(() => reject(new Error("popup integration timed out")), 10_000);
+					}),
+				]);
+			} finally {
+				if (timer) clearTimeout(timer);
+			}
+		}
+		for (const bootstrapBlank of [false, true]) {
+			const hasHandle = await opener.executeJavaScript(`
+				window.popupReady = new Promise(resolve => addEventListener('message', event => {
+					if (event.data?.kind === 'popup-ready') resolve(event.data);
+				}));
+				window.authPopup = window.open(${JSON.stringify(bootstrapBlank ? "about:blank" : popupURL)}, '_blank');
+				${bootstrapBlank ? `window.authPopup.location = ${JSON.stringify(popupURL)};` : ""}
+				!!window.authPopup;
+			`, true);
+			assert.equal(hasHandle, true, "window.open must return a real WindowProxy");
+			assert.deepEqual(await deadline(opener.executeJavaScript("window.popupReady")), {
+				kind: "popup-ready",
+				hasOpener: true,
+			});
+			const popup = activeWebContents();
+			assert.notEqual(popup, opener);
+			assert.equal(popup.session, opener.session, "popup must share its opener's browser profile");
+			assert.deepEqual(await popup.executeJavaScript("({require: typeof require, process: typeof process})"),
+				{require: "undefined", process: "undefined"});
+			const tabs = await host.execute("integration-session", "tabs") as BrowserTabsState;
+			assert.equal(tabs.tabs.length, 2);
+			const closed = new Promise<void>(resolve => popup.once("destroyed", () => resolve()));
+			await opener.executeJavaScript(`
+				window.authComplete = new Promise(resolve => addEventListener('message', event => {
+					if (event.data?.kind === 'auth-complete') resolve(true);
+				}));
+				window.authPopup.postMessage('complete', '*');
+				undefined;
+			`);
+			assert.equal(await deadline(opener.executeJavaScript("window.authComplete")), true);
+			await deadline(closed);
+			// Main can observe destruction before the opener updates its WindowProxy.
+			assert.equal(await deadline(opener.executeJavaScript(`
+				new Promise(resolve => {
+					const checkClosed = () => {
+						if (window.authPopup.closed) resolve(true);
+						else setTimeout(checkClosed, 25);
+					};
+					checkClosed();
+				})
+			`)), true);
+			const remaining = await host.execute("integration-session", "tabs") as BrowserTabsState;
+			assert.equal(remaining.tabs.length, 1, "self-closed guest must leave AO's tab registry");
+			assert.equal(remaining.activeTabId, remaining.tabs[0].id);
+		}
+		assert.equal(await opener.executeJavaScript("window.open('file:///etc/passwd') === null", true), true);
+		assert.equal((await host.execute("integration-session", "tabs") as BrowserTabsState).tabs.length, 1);
+		process.stdout.write("browser popup handle, cross-origin messaging, shared browser profile and self-close integration passed\n");
 
 		process.stdout.write("browser action postcondition integration passed\n");
 	} finally {

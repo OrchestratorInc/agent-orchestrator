@@ -1,5 +1,6 @@
 import { StyleSheet, TextInput } from "react-native";
 import { useTheme, useThemeState } from "./ThemeProvider";
+import { textSelectionColors } from "./textSelection";
 import type { SpawnPromptInputProps } from "./spawn-prompt-input.android";
 import { space, type } from "./tokens";
 
@@ -14,7 +15,7 @@ export function SpawnPromptInput({ value, onChangeText, height = 112 }: SpawnPro
 			onChangeText={onChangeText}
 			placeholder="What should this worker do?"
 			placeholderTextColor={t.textTertiary}
-			selectionColor={t.accent}
+			{...textSelectionColors(t)}
 			keyboardAppearance={scheme}
 			multiline
 			scrollEnabled

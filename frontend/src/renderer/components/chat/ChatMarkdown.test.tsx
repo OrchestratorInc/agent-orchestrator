@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { renderMermaidDiagram } from "../../lib/mermaid-diagram";
-import { ActivityTitle, ChatLinkProvider, ChatMarkdown } from "./ChatMarkdown";
+import { ActivityTitle, ChatLinkProvider, ChatMarkdown, ChatOpeningRef } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
 
 const sessionPreview = vi.hoisted(() => vi.fn());
@@ -816,6 +816,23 @@ describe("ChatMarkdown streaming fade", () => {
 	it("never wraps a reply that mounts settled", () => {
 		const { container } = render(<ChatMarkdown text="from history" />);
 		expect(fading(container)).toBe(0);
+	});
+
+	it("does not fade text already on screen when a chat opens mid-stream", () => {
+		const opening = { current: true };
+		const reply = (text: string) => (
+			<ChatOpeningRef.Provider value={opening}>
+				<ChatMarkdown text={text} streaming />
+			</ChatOpeningRef.Provider>
+		);
+		const { container, rerender } = render(reply("already shown"));
+		opening.current = false;
+		expect(fading(container)).toBe(0);
+		expect(container.textContent).toBe("already shown");
+
+		rerender(reply("already shown and more"));
+		expect(fading(container)).toBe(" and more".length);
+		expect(container.textContent).toBe("already shown and more");
 	});
 
 	it("fades while streaming and sheds the spans shortly after it settles", () => {

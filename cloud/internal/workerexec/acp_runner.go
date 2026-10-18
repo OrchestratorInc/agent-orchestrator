@@ -119,11 +119,18 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 			"type": "preset", "preset": "claude_code", "append": command.SystemPrompt,
 		}}
 	}
+	// Claude opens the sibling checkouts as additional directories, so it
+	// loads their CLAUDE.md as a terminal's --add-dir does. An agent that does
+	// not advertise the capability keeps the settings' directory access only.
+	var additionalDirectories []string
+	if turn.Harness == "claude-code" && initialized.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil {
+		additionalDirectories = command.AdditionalDirectories
+	}
 	var sessionID acp.SessionId
 	var configOptions []acp.SessionConfigOption
 	var modes *acp.SessionModeState
 	if turn.AgentSessionID != "" {
-		loaded, loadErr := conn.LoadSession(handshakeCtx, acp.LoadSessionRequest{Meta: meta, Cwd: command.Dir, McpServers: []acp.McpServer{}, SessionId: acp.SessionId(turn.AgentSessionID)})
+		loaded, loadErr := conn.LoadSession(handshakeCtx, acp.LoadSessionRequest{Meta: meta, Cwd: command.Dir, AdditionalDirectories: additionalDirectories, McpServers: []acp.McpServer{}, SessionId: acp.SessionId(turn.AgentSessionID)})
 		if loadErr != nil {
 			var requestErr *acp.RequestError
 			// The CLI builder's missing-transcript check only changes CLI args;
@@ -138,7 +145,7 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 		}
 	}
 	if sessionID == "" {
-		created, createErr := conn.NewSession(handshakeCtx, acp.NewSessionRequest{Meta: meta, Cwd: command.Dir, McpServers: []acp.McpServer{}})
+		created, createErr := conn.NewSession(handshakeCtx, acp.NewSessionRequest{Meta: meta, Cwd: command.Dir, AdditionalDirectories: additionalDirectories, McpServers: []acp.McpServer{}})
 		if createErr != nil {
 			return fmt.Errorf("create ACP session: %w: %s", createErr, boundedError(stderr.String()))
 		}
@@ -184,6 +191,11 @@ func acpLaunch(ctx context.Context, turn worker.Turn, command Command) (string, 
 	}
 	switch turn.Harness {
 	case "claude-code":
+		if command.Path == claudeCodeBinary {
+			ensureCtx, cancel := context.WithTimeout(ctx, claudeCodeTurnWait)
+			command.Path = EnsureClaudeCode(ensureCtx)
+			cancel()
+		}
 		env = claudeModelEnvironment(command, turn.Model, nil)
 		adapter, err := EnsureClaudeACPAdapter(ctx)
 		if err != nil {
@@ -222,7 +234,7 @@ func configureACPSession(ctx context.Context, conn *acp.ClientSideConnection, se
 		return nil
 	}
 	// A model change can alter the available permission modes and effort levels.
-	if err := setOption("model", turn.Model); err != nil {
+	if err := setOption("model", acpModelValue(options, turn.Model)); err != nil {
 		return err
 	}
 	if turn.Harness == "claude-code" {
@@ -250,6 +262,53 @@ func configureACPSession(ctx context.Context, conn *acp.ClientSideConnection, se
 		}
 	}
 	return setOption("effort", turn.ReasoningEffort)
+}
+
+// acpModelValue maps a model alias to the choice the session lists for it.
+// Once a session runs an alias, Claude ACP lists that model under its full ID
+// ("claude-fable-5-1", described "Fable 5.1 · ...") instead of the alias
+// ("fable"), so a later turn that names the alias would otherwise be refused.
+// Any other value, including one with no single match, is returned unchanged.
+func acpModelValue(options []acp.SessionConfigOption, value string) string {
+	if value == "" || acpOptionOffered(options, "model", value) {
+		return value
+	}
+	match := ""
+	for _, option := range options {
+		if option.Select == nil || option.Select.Id != "model" {
+			continue
+		}
+		var choices []acp.SessionConfigSelectOption
+		if option.Select.Options.Ungrouped != nil {
+			choices = append(choices, *option.Select.Options.Ungrouped...)
+		}
+		if option.Select.Options.Grouped != nil {
+			for _, group := range *option.Select.Options.Grouped {
+				choices = append(choices, group.Options...)
+			}
+		}
+		for _, choice := range choices {
+			if choice.Description == nil || choice.Value == "default" {
+				continue
+			}
+			resolved, _, described := strings.Cut(*choice.Description, "·")
+			if !described {
+				continue
+			}
+			family, _, _ := strings.Cut(strings.TrimSpace(resolved), " ")
+			if !strings.EqualFold(family, value) {
+				continue
+			}
+			if match != "" && match != string(choice.Value) {
+				return value
+			}
+			match = string(choice.Value)
+		}
+	}
+	if match == "" {
+		return value
+	}
+	return match
 }
 
 func acpOptionOffered(options []acp.SessionConfigOption, id, value string) bool {

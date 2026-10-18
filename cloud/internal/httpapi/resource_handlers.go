@@ -72,15 +72,18 @@ type updateProjectRequest struct {
 }
 
 type projectResponse struct {
-	ID                 string         `json:"id"`
-	OrgID              string         `json:"orgId"`
-	DisplayName        string         `json:"displayName"`
-	RepositoryURL      string         `json:"repositoryUrl"`
-	DefaultBranch      string         `json:"defaultBranch"`
-	GitHubRepositoryID string         `json:"githubRepositoryId,omitempty"`
-	Config             map[string]any `json:"config"`
-	CreatedAt          time.Time      `json:"createdAt"`
-	UpdatedAt          time.Time      `json:"updatedAt"`
+	ID                 string `json:"id"`
+	OrgID              string `json:"orgId"`
+	DisplayName        string `json:"displayName"`
+	RepositoryURL      string `json:"repositoryUrl"`
+	DefaultBranch      string `json:"defaultBranch"`
+	GitHubRepositoryID string `json:"githubRepositoryId,omitempty"`
+	// Standalone marks a project with no repository; its repositoryUrl is a
+	// placeholder (https://scratch.ao.local/<id>) that is never cloned.
+	Standalone bool           `json:"standalone,omitempty"`
+	Config     map[string]any `json:"config"`
+	CreatedAt  time.Time      `json:"createdAt"`
+	UpdatedAt  time.Time      `json:"updatedAt"`
 }
 
 type createSessionRequest struct {
@@ -290,10 +293,10 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		coderConfig = s.sanitizeCoderConfig(r.Context(), coderConfig, requestID(r))
 		// Template parameters must be ones the chosen template declares (best
 		// effort: only a readable parameter list can reject a name).
-		if unknown := s.unknownCoderTemplateParameters(
+		if problem := s.coderTemplateParameterProblem(
 			r.Context(), orgID, coderConfig.TemplateID, coderConfig.Parameters, requestID(r),
-		); len(unknown) > 0 {
-			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", unknownCoderTemplateParametersMessage(unknown))
+		); problem != "" {
+			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", problem)
 			return
 		}
 		config, err = domain.MergeProjectCoderConfig(config, coderConfig)
@@ -301,6 +304,15 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project coder configuration is invalid.")
 			return
 		}
+	}
+	// Checked on the merged config, so the coder dev kit's extra repositories
+	// sent as the separate coder input are admin-gated like "repos".
+	if !s.requireAdminForProjectScripts(w, r, orgID, config) {
+		return
+	}
+	if config, err = s.pinProjectProvider(r.Context(), principalFrom(r), orgID, config); err != nil {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project configuration is invalid.")
+		return
 	}
 	principal := principalFrom(r)
 	userStore, ok := s.store.(userProviderConnectionStore)
@@ -339,6 +351,26 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 	owner, repo, _ := parseGitHubRepo(request.RepositoryURL)
 	canonicalURL := fmt.Sprintf("https://github.com/%s/%s", owner, repo)
+	config, problem := normalizeNewProjectRepoConfig(canonicalURL, config)
+	if problem != nil {
+		problem.write(w, r)
+		return
+	}
+	// This project reaches GitHub through the creator's personal access token,
+	// so every additional repository must be reachable with it too.
+	for _, extra := range domain.ProjectAdditionalRepos(config) {
+		reachable, _, err := s.probeRepositoryAccess(r.Context(), extra.URL, string(secret))
+		if err != nil {
+			s.logger.Error("probe additional repository access", "error", err, "request_id", requestID(r))
+			writeError(w, r, http.StatusBadGateway, "provider_unavailable", "GitHub is temporarily unavailable. Please try again later.")
+			return
+		}
+		if !reachable {
+			writeError(w, r, http.StatusUnprocessableEntity, "repository_unreachable",
+				fmt.Sprintf("Can't reach %s with your GitHub token. It may be private, or the URL may be wrong.", extra.URL))
+			return
+		}
+	}
 
 	project, err := s.store.CreateProject(
 		r.Context(),
@@ -532,8 +564,8 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	providerFromProject := false
-	if projectProvider := domain.DecodeProjectSandboxProvider(project.Config); projectProvider != "" {
-		request.Provider = projectProvider
+	if provider := projectProvider(project.Config); provider != "" {
+		request.Provider = provider
 		providerFromProject = true
 	}
 	// A top-level worker created for a project that already has an active
@@ -567,7 +599,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	// provider cannot run cloud sessions at all.
 	principal := principalFrom(r)
 	if request.Provider == "" {
-		request.Provider = s.defaultProviderForOrg(principal, orgID)
+		request.Provider = s.defaultProviderForOrg(r.Context(), principal, orgID)
 		if request.Provider == "" {
 			writeProviderForbidden(w, r, "", false)
 			return
@@ -609,6 +641,9 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		coderOpts, coderOverride = placement.options, placement.override
+		if coderOverride != nil {
+			coderOverride.DefaultWorkspaceNamePrefix = domain.CoderWorkspaceNamePrefixFor(project.DisplayName)
+		}
 		if placement.connectionID != "" {
 			request.SandboxProviderConnectionID = placement.connectionID
 		}
@@ -666,6 +701,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			BootstrapContext:    plan.BootstrapContext,
 			Release:             s.release,
 			ParentSessionID:     parentSessionID,
+			CoderCapability:     s.orgHasCoderCapability(principalFrom(r), orgID),
 		},
 	)
 	if err != nil {
@@ -1080,6 +1116,11 @@ func (s *Server) sanitizeCoderConfig(ctx context.Context, cfg domain.ProjectCode
 // settings carry a workspace name prefix Coder would refuse: every session of
 // the project would otherwise fail to provision.
 func validateProjectCoderConfig(config json.RawMessage) error {
+	// The project's Setup and Cleanup commands are checked here too, so both
+	// project create paths reject them in the wrong shape.
+	if err := domain.ValidateProjectScriptsConfig(config); err != nil {
+		return err
+	}
 	if cfg, ok := domain.DecodeProjectCoderConfig(config); ok {
 		if err := domain.ValidateCoderWorkspaceNamePrefix(cfg.WorkspaceNamePrefix); err != nil {
 			return err
@@ -1275,6 +1316,7 @@ func toProjectResponse(project domain.Project) projectResponse {
 		RepositoryURL:      project.RepositoryURL,
 		DefaultBranch:      project.DefaultBranch,
 		GitHubRepositoryID: decimalID(project.GitHubRepositoryID),
+		Standalone:         domain.IsStandaloneRepositoryURL(project.RepositoryURL),
 		Config:             config,
 		CreatedAt:          project.CreatedAt,
 		UpdatedAt:          project.UpdatedAt,

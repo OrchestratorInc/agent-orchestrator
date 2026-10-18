@@ -138,7 +138,9 @@ func (s *Store) ClaimPullRequestRecord(
 }
 
 // SessionForGitHubPullRequestHead resolves only an unambiguous live worker
-// session whose configured branch belongs to the repository in the webhook.
+// session whose configured branch belongs to the repository in the webhook:
+// the project's main repository or one of its additional repositories, which
+// every session checks out on the same session branch.
 func (s *Store) SessionForGitHubPullRequestHead(ctx context.Context, orgID string, repositoryID int64, branch, headSHA string) (string, error) {
 	var sessions []string
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
@@ -155,7 +157,8 @@ func (s *Store) SessionForGitHubPullRequestHead(ctx context.Context, orgID strin
 			  ))
 			  AND (project.github_repository_id = repository.github_repository_id
 			       OR lower(trim(trailing '/' from project.repository_url)) = lower(repository.html_url)
-			       OR lower(project.repository_url) = lower(repository.clone_url))
+			       OR lower(project.repository_url) = lower(repository.clone_url)
+			       OR `+projectDeclaresRepositorySQL+`)
 			LIMIT 2`, orgID, repositoryID, branch, headSHA)
 		if err != nil {
 			return err

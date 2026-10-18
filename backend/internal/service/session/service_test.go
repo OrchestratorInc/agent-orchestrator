@@ -153,6 +153,28 @@ func TestTaskPreparationsStayOutOfSessionReads(t *testing.T) {
 	}
 }
 
+func TestGetRecordReadsOnlyTheStoredRow(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Metadata: domain.SessionMetadata{PreviewURL: "http://localhost:5173/"}}
+	st.sessions["mer-2"] = domain.SessionRecord{ID: "mer-2", ProjectID: "mer", IsTaskPreparation: true}
+	svc := &Service{store: st}
+
+	rec, err := svc.GetRecord(context.Background(), "mer-1")
+	if err != nil || rec.Metadata.PreviewURL != "http://localhost:5173/" {
+		t.Fatalf("GetRecord = %+v, %v", rec, err)
+	}
+	if st.listPRFactsCalls != 0 || st.listReviewRunsCalls != 0 {
+		t.Fatalf("GetRecord read PR facts %d times and review runs %d times, want none", st.listPRFactsCalls, st.listReviewRunsCalls)
+	}
+	for _, id := range []domain.SessionID{"mer-2", "missing"} {
+		_, err = svc.GetRecord(context.Background(), id)
+		var apiError *apierr.Error
+		if !errors.As(err, &apiError) || apiError.Code != "SESSION_NOT_FOUND" {
+			t.Fatalf("GetRecord(%s) error = %v, want SESSION_NOT_FOUND", id, err)
+		}
+	}
+}
+
 func (f *fakeStore) GetActiveAgentSwitch(_ context.Context, id domain.SessionID) (domain.AgentSwitch, bool, error) {
 	if f.activeSwitchGetErr != nil {
 		return domain.AgentSwitch{}, false, f.activeSwitchGetErr

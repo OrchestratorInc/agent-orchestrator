@@ -78,6 +78,8 @@ type Store interface {
 	WorkerAgentSessionID(ctx context.Context, orgID, sessionID, workerID string, epoch int64) (string, error)
 	MarkWorkerSeen(ctx context.Context, orgID, sessionID, workerID, version string, epoch int64, capabilities []string) error
 	SetWorkerActivity(ctx context.Context, orgID, sessionID, workerID string, epoch int64, activity worker.ActivityEvent) error
+	RecordWorkspaceStartupError(ctx context.Context, orgID, sessionID, workerID string, epoch int64, code, message, detail string) error
+	ClearWorkspaceStartupError(ctx context.Context, orgID, sessionID, workerID string, epoch int64) error
 	AppendSessionEvent(ctx context.Context, orgID, sessionID, eventType string, payload json.RawMessage) (domain.ClientEvent, error)
 	AppendInteractiveConversationFacts(context.Context, string, string, string, string, string, string) error
 	RecordPullRequestOpened(ctx context.Context, orgID string, pr domain.PullRequest, deliveryID string) error
@@ -180,9 +182,6 @@ type Server struct {
 	// its own (AO_CLOUD_DEFAULT_ORG_CAPABILITIES): personal organizations, and
 	// WorkOS organizations whose metadata has no capabilities key.
 	defaultOrgCapabilities []string
-	// defaultOrgBilling is the billing arrangement of an organization whose
-	// WorkOS metadata sets none (AO_CLOUD_DEFAULT_ORG_BILLING).
-	defaultOrgBilling string
 	// coderTemplates lists the Coder templates a client may pick from. Nil when
 	// the deployment does not offer the coder provider.
 	coderTemplates   CoderTemplateLister
@@ -213,6 +212,7 @@ type Server struct {
 	terminalStreamEnabled   bool
 	terminalRelayEnabled    bool
 	terminalStreams         *terminalStreams
+	agentBrowserRelays      *agentBrowserRelays
 	workWaiters             *workWaiters
 	notificationWake        func()
 	sandboxWake             func()
@@ -242,9 +242,6 @@ type Options struct {
 	// DefaultOrgCapabilities are the capabilities of an organization that has
 	// none of its own; see Server.defaultOrgCapabilities.
 	DefaultOrgCapabilities []string
-	// DefaultOrgBilling is domain.OrgBillingSelfServe (the default when blank)
-	// or domain.OrgBillingContract.
-	DefaultOrgBilling string
 	// CoderTemplates lists templates available from the configured Coder provider.
 	CoderTemplates CoderTemplateLister
 	// CoderTemplateIDs limits the configured Coder's templates the picker
@@ -351,10 +348,6 @@ func New(options Options) *Server {
 			defaultOrgCapabilities = append(defaultOrgCapabilities, capability)
 		}
 	}
-	defaultOrgBilling := domain.NormalizeOrgBilling(options.DefaultOrgBilling)
-	if defaultOrgBilling == "" {
-		defaultOrgBilling = domain.OrgBillingSelfServe
-	}
 	server := &Server{
 		store:                     options.Store,
 		transcripts:               options.Transcripts,
@@ -366,7 +359,6 @@ func New(options Options) *Server {
 		availableSandboxProviders: availableSandboxProviders,
 		capabilityGatedProviders:  capabilityGatedProviders,
 		defaultOrgCapabilities:    defaultOrgCapabilities,
-		defaultOrgBilling:         defaultOrgBilling,
 		coderTemplates:            options.CoderTemplates,
 		coderTemplateIDs:          options.CoderTemplateIDs,
 		provisioning:              options.Provisioning,
@@ -391,6 +383,7 @@ func New(options Options) *Server {
 		terminalStreamEnabled:     options.TerminalStreamEnabled,
 		terminalRelayEnabled:      options.TerminalRelayEnabled,
 		terminalStreams:           newTerminalStreams(),
+		agentBrowserRelays:        newAgentBrowserRelays(),
 		workWaiters:               newWorkWaiters(),
 		notificationWake:          options.NotificationWake,
 		sandboxWake:               options.SandboxWake,
@@ -436,6 +429,7 @@ func New(options Options) *Server {
 	if server.github != nil {
 		router.Get("/api/cloud/v1/github/install/setup", server.githubSetupCallback)
 		router.Get("/api/cloud/v1/github/oauth/callback", server.githubOAuthCallback)
+		router.Post("/api/cloud/v1/github/oauth/connect-others", server.githubConnectOthers)
 		router.Get("/api/cloud/v1/github/user/callback", server.githubUserCallback)
 		router.Post("/api/cloud/v1/github/webhooks", server.githubWebhook)
 		if server.brokerAuthToken != "" {
@@ -538,6 +532,8 @@ func New(options Options) *Server {
 			router.Get("/worker/terminals/{terminalId}/stream", server.workerTerminalStream)
 			router.Post("/worker/terminals/{terminalId}/exit", server.workerTerminalExit)
 			router.Post("/worker/terminals/agent", server.workerEnsureAgentTerminal)
+			router.Get("/worker/agent-browser", server.workerAgentBrowserControl)
+			router.Get("/worker/agent-browser/streams/{stream}", server.workerAgentBrowserStream)
 		})
 		router.Get("/terminal", server.connectTerminal)
 		router.Route("/orgs/{orgId}", func(router chi.Router) {
@@ -562,6 +558,7 @@ func New(options Options) *Server {
 			router.Patch("/notifications/{notificationId}", server.markNotificationRead)
 			router.Post("/notifications/read-all", server.markAllNotificationsRead)
 			router.Post("/projects", server.createProject)
+			router.Post("/projects/standalone", server.createStandaloneProject)
 			router.Get("/projects/{projectId}", server.getProject)
 			router.Patch("/projects/{projectId}/settings", server.updateProjectSettings)
 			router.Patch("/projects/{projectId}", server.updateProject)
@@ -580,10 +577,12 @@ func New(options Options) *Server {
 			router.Get("/coder-config", server.getOrgCoderConfig)
 			router.Put("/coder-config", server.putOrgCoderConfig)
 			router.Delete("/coder-config", server.deleteOrgCoderConfig)
+			router.Put("/sandbox-provider", server.putOrgSandboxProvider)
 			router.Get("/sessions", server.listSessions)
 			router.Post("/sessions", server.createSession)
 			router.Get("/sandbox/coder/templates", server.listCoderTemplates)
 			router.Get("/coder-templates/{templateId}/parameters", server.getCoderTemplateParameters)
+			router.Post("/coder-templates/{templateId}/parameters/evaluate", server.evaluateCoderTemplateParameters)
 			router.Get("/sessions/{sessionId}", server.getSession)
 			router.Patch("/sessions/{sessionId}/preferences", server.updateSessionPreferences)
 			router.Patch("/sessions/{sessionId}/auto-inject-ci", server.setCloudSessionAutoInjectCI)
@@ -608,6 +607,8 @@ func New(options Options) *Server {
 				router.MethodFunc(method, "/sessions/{sessionId}/browser/{origin}", server.proxyBrowser)
 				router.MethodFunc(method, "/sessions/{sessionId}/browser/{origin}/*", server.proxyBrowser)
 			}
+			router.Get("/sessions/{sessionId}/agent-browser/*", server.proxyAgentBrowser)
+			router.Post("/sessions/{sessionId}/agent-browser/*", server.proxyAgentBrowser)
 			router.Get("/sessions/{sessionId}/workspace/files", server.listWorkspaceFiles)
 			router.Post("/sessions/{sessionId}/workspace/checkout", server.requestWorkspaceCheckout)
 			router.Get("/sessions/{sessionId}/workspace/file", server.readWorkspaceFile)
@@ -615,6 +616,7 @@ func New(options Options) *Server {
 			router.Put("/sessions/{sessionId}/workspace/file", server.writeWorkspaceFile)
 			router.Get("/sessions/{sessionId}/workspace/diff", server.getWorkspaceDiff)
 			router.Get("/sessions/{sessionId}/workspace/review", server.getWorkspaceReview)
+			router.Get("/sessions/{sessionId}/workspace/repositories", server.getWorkspaceRepositories)
 			router.Get("/sessions/{sessionId}/workspace/tree", server.getWorkspaceReviewTree)
 			router.Get("/sessions/{sessionId}/workspace/search", server.getWorkspaceReviewSearch)
 			router.Get("/sessions/{sessionId}/workspace/review/file", server.getWorkspaceReviewFile)

@@ -125,6 +125,46 @@ func TestClientRequestSessionBindsOneWorkerAndPreparedPromotionCannotStealKey(t 
 	}
 }
 
+func TestClientRequestIdentitySurvivesNormalSessionReads(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec := sampleRecord("mer")
+	rec.ClientRequestID, rec.ClientRequestHash = "retry-key", "v1:payload"
+	created, _, err := s.CreateClientRequestSession(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, committed := range []bool{false, true} {
+		if committed {
+			if err := s.CommitClientRequestSession(ctx, created.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, found, err := s.GetSession(ctx, created.ID)
+		if err != nil || !found {
+			t.Fatalf("get session: found=%v err=%v", found, err)
+		}
+		project, err := s.ListSessions(ctx, "mer")
+		if err != nil {
+			t.Fatal(err)
+		}
+		all, err := s.ListAllSessions(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(project) != 1 || len(all) != 1 {
+			t.Fatalf("session counts: project=%d all=%d", len(project), len(all))
+		}
+		for _, read := range []domain.SessionRecord{got, project[0], all[0]} {
+			if read.ID != created.ID || read.ClientRequestID != rec.ClientRequestID ||
+				read.ClientRequestHash != rec.ClientRequestHash || read.ClientRequestCommitted != committed {
+				t.Fatalf("request identity lost: got %+v, committed=%v", read, committed)
+			}
+		}
+	}
+}
+
 func TestSessionCreateAllowsPrimeAgentHarness(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

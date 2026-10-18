@@ -21,8 +21,11 @@ type BootstrapRequest struct {
 
 // LaunchContext is the durable session context handed to a bootstrapped worker.
 type LaunchContext struct {
-	SessionID      string `json:"sessionId"`
-	ProjectID      string `json:"projectId"`
+	SessionID string `json:"sessionId"`
+	ProjectID string `json:"projectId"`
+	// ProjectName is the project's display name, for the Setup and Cleanup
+	// commands' environment.
+	ProjectName    string `json:"projectName,omitempty"`
 	Kind           string `json:"kind"`
 	Harness        string `json:"harness"`
 	DisplayName    string `json:"displayName"`
@@ -43,12 +46,24 @@ type LaunchContext struct {
 	DeniedCommands  []string                  `json:"deniedCommands"`
 	RepositoryURL   string                    `json:"repositoryUrl"`
 	DefaultBranch   string                    `json:"defaultBranch"`
-	// ExtraRepos are additional repositories the worker clones alongside the
-	// primary repo (multi-repo dev kit). Empty for a single-repo session.
+	// ExtraRepos are the project's additional repositories, which the worker
+	// clones beside the main repository's checkout (domain.RepoDirName) and
+	// checks out on the session branch. Empty for a single-repo session.
 	ExtraRepos []RepoRef `json:"extraRepos,omitempty"`
+	// AgentStartsIn is where the coding agent starts: "" or
+	// domain.ProjectAgentStartsInRepository for the main repository's
+	// checkout, domain.ProjectAgentStartsInParent for the folder holding every
+	// repository's checkout.
+	AgentStartsIn string `json:"agentStartsIn,omitempty"`
 	// SystemPrompt carries control-plane-authored project context and rules. It
 	// remains separate from Prompt, which is the user's visible task input.
 	SystemPrompt string `json:"systemPrompt"`
+	// PostCreate and PreRemove are the project's Setup and Cleanup commands
+	// (Project settings > Scripts), read from the project when the worker
+	// boots. Setup runs after the checkout and before the coding agent starts;
+	// Cleanup runs before the workspace is deleted.
+	PostCreate []string `json:"postCreate,omitempty"`
+	PreRemove  []string `json:"preRemove,omitempty"`
 }
 
 // RepoRef is one additional repository the worker clones beside the primary
@@ -118,6 +133,10 @@ type RaisePullRequestRequest struct {
 	Body       string `json:"body"`
 	HeadBranch string `json:"headBranch"`
 	BaseBranch string `json:"baseBranch,omitempty"`
+	// Repository is the owner/name of the project repository the branch was
+	// pushed to; empty means the main repository. Any other value must be one
+	// of the project's additional repositories.
+	Repository string `json:"repository,omitempty"`
 }
 
 // RaisePullRequestResponse describes the pull request the control plane
