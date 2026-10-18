@@ -326,6 +326,29 @@ func TestReadIgnoresRecordsAppendedDuringRead(t *testing.T) {
 	}
 }
 
+// A relative path remote resolves from the worktree, as Git resolves it.
+func TestSameRepositoryResolvesLocalRemotes(t *testing.T) {
+	root := t.TempDir()
+	repo := func(name, origin string) string {
+		dir := filepath.Join(root, name)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		runGit(t, dir, "init", "-q")
+		runGit(t, dir, "remote", "add", "origin", origin)
+		return dir
+	}
+	upstream := filepath.Join(root, "up.git")
+	runGit(t, root, "init", "-q", "--bare", upstream)
+	relative := repo("relative", "../up.git")
+	absolute := repo("absolute", upstream)
+	fileURL := repo("file", "file://"+upstream+"/")
+	other := repo("other", "../other.git")
+	if !SameRepository(context.Background(), relative, absolute) || !SameRepository(context.Background(), fileURL, absolute) || SameRepository(context.Background(), other, absolute) {
+		t.Fatal("local remotes")
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)

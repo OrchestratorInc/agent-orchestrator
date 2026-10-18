@@ -145,7 +145,7 @@ func gitIdentity(path string) (common, remote string) {
 				}
 			}
 			common = canonical(common)
-			return common, originURL(filepath.Join(common, "config"))
+			return common, originURL(filepath.Join(common, "config"), dir)
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -156,7 +156,9 @@ func gitIdentity(path string) (common, remote string) {
 	return "", ""
 }
 
-func originURL(config string) string {
+// originURL normalizes the origin so clones of one repository compare equal. Git
+// resolves a relative path remote from the worktree folder, so this does too.
+func originURL(config, worktree string) string {
 	body, err := os.ReadFile(config)
 	if err != nil {
 		return ""
@@ -170,7 +172,17 @@ func originURL(config string) string {
 		}
 		if key, value, ok := strings.Cut(line, "="); inOrigin && ok && strings.TrimSpace(key) == "url" {
 			// GitHub SSH and HTTPS URLs identify the same repository. Other remotes match exactly.
-			remote := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(value), "/"), ".git")
+			remote := strings.TrimSuffix(strings.TrimSpace(value), "/")
+			if path, ok := strings.CutPrefix(remote, "file://"); ok {
+				remote = path
+			}
+			if colon, slash := strings.Index(remote, ":"), strings.Index(remote, "/"); !strings.Contains(remote, "://") && (colon < 0 || slash >= 0 && slash < colon) {
+				if !filepath.IsAbs(remote) {
+					remote = filepath.Join(worktree, remote)
+				}
+				remote = canonical(remote)
+			}
+			remote = strings.TrimSuffix(remote, ".git")
 			for _, prefix := range []string{"git@github.com:", "https://github.com/", "ssh://git@github.com/"} {
 				remote = strings.TrimPrefix(remote, prefix)
 			}
