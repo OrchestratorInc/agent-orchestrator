@@ -59,7 +59,6 @@ export function agentModelsQueryOptions(agentId: string, projectId: string, host
 		queryKey: catalogOnly ? [...key, "catalog"] as const : key,
 		initialData: () => readCachedAgentModels(agentId, projectId, hostId),
 		initialDataUpdatedAt: 0,
-		refetchOnMount: catalogOnly ? true : "always",
 		queryFn: async ({ client }): Promise<AgentModelCatalog> => {
 			if (catalogOnly) return requestAgentModels(agentId, projectId, "cached", hostId, true);
 			const catalogKey = [...key, "catalog"] as const;
@@ -71,11 +70,19 @@ export function agentModelsQueryOptions(agentId: string, projectId: string, host
 			}
 			// Read the DB even when the UI has a saved snapshot. Deduplicate reads
 			// shared with Settings, but never wait for recency to publish the result.
+			const beforeDBRead = client.getQueryData<AgentModelCatalog>(key);
 			const catalog = await client.fetchQuery({
 				queryKey: catalogKey,
 				queryFn: () => requestAgentModels(agentId, projectId, "cached", hostId, true),
 				staleTime: 0,
 			});
+			// A manual refresh may finish while this older DB read is pending.
+			// Preserve that update in both memory and the saved snapshot.
+			const afterDBRead = client.getQueryData<AgentModelCatalog>(key);
+			if (afterDBRead && afterDBRead !== beforeDBRead) {
+				cacheAgentModels(afterDBRead, agentId, projectId, hostId);
+				return afterDBRead;
+			}
 			const withUsage = withCachedModelUsage(catalog, client.getQueryData<AgentModelCatalog>(key));
 			cacheAgentModels(withUsage, agentId, projectId, hostId);
 			const published = client.setQueryData(key, withUsage);

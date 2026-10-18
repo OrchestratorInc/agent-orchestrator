@@ -765,7 +765,6 @@ export function TaskComposer({
 				mode: selectedMode,
 				catalog: modelCatalog,
 				fetching: modelCatalogQuery.isFetching,
-				loading: false,
 				onModelChange: (value) => {
 					setModel(value);
 					setMode("");

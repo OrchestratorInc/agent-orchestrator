@@ -97,6 +97,53 @@ describe("cached model loading", () => {
 		client.clear();
 	});
 
+	it("reuses fresh in-memory models on remount and revalidates after ten minutes", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		vi.mocked(apiClient.GET).mockResolvedValue({ data: catalog } as never);
+		const options = agentModelsQueryOptions("codex", "project-one");
+		await client.fetchQuery(options);
+		expect(apiClient.GET).toHaveBeenCalledTimes(2);
+		const freshObserver = new QueryObserver(client, options);
+		const unsubscribeFresh = freshObserver.subscribe(() => {});
+		try {
+			expect(freshObserver.getCurrentResult().data).toEqual(catalog);
+			expect(freshObserver.getCurrentResult().isFetching).toBe(false);
+			expect(apiClient.GET).toHaveBeenCalledTimes(2);
+		} finally {
+			unsubscribeFresh();
+		}
+		client.setQueryData(options.queryKey, catalog, { updatedAt: Date.now() - 10 * 60 * 1_000 - 1 });
+		const staleObserver = new QueryObserver(client, options);
+		const unsubscribeStale = staleObserver.subscribe(() => {});
+		try {
+			expect(staleObserver.getCurrentResult().data).toEqual(catalog);
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(4));
+			await vi.waitFor(() => expect(staleObserver.getCurrentResult().isFetching).toBe(false));
+		} finally {
+			unsubscribeStale();
+			client.clear();
+		}
+	});
+
+	it("does not let a slow DB read overwrite a manual refresh in memory or storage", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		let finishDB!: (value: { data: AgentModelCatalog }) => void;
+		const dbResponse = new Promise<{ data: AgentModelCatalog }>((resolve) => { finishDB = resolve; });
+		vi.mocked(apiClient.GET).mockReturnValueOnce(dbResponse as never);
+		const options = agentModelsQueryOptions("codex", "project-one");
+		const pending = client.fetchQuery(options);
+		await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(1));
+		const fresh = { ...catalog, models: [{ id: "new-model", label: "New model" }] };
+		client.setQueryData(options.queryKey, fresh);
+		cacheAgentModels(fresh, "codex", "project-one");
+		finishDB({ data: catalog });
+		expect(await pending).toEqual(fresh);
+		expect(client.getQueryData(options.queryKey)).toEqual(fresh);
+		expect(readCachedAgentModels("codex", "project-one")?.models).toEqual(fresh.models);
+		expect(apiClient.GET).toHaveBeenCalledTimes(1);
+		client.clear();
+	});
+
 	it("does not let a slow recency response overwrite a newer background catalog", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		let finish!: (value: { data: AgentModelCatalog }) => void;
@@ -120,6 +167,7 @@ describe("cached model loading", () => {
 		client.setQueryData(options.queryKey, { ...catalog, models: [
 			{ ...catalog.models[0], lastUsedAt }, { id: "removed-model", label: "Removed model", lastUsedAt },
 		] });
+		await client.invalidateQueries({ queryKey: options.queryKey });
 		const dbCatalog = { ...catalog, models: [
 			{ ...catalog.models[0], label: "Renamed model" }, { id: "new-default", label: "New default", isDefault: true },
 		] };
