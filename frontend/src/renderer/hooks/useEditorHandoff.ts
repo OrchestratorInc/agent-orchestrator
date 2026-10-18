@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
-import { isEditorId, type EditorHandoffState, type OpenSessionArtifactsInput, type OpenTargetId } from "../../shared/editor-handoff";
+import { isEditorId, isTerminalId, type EditorHandoffState, type OpenSessionArtifactsInput, type OpenTargetId } from "../../shared/editor-handoff";
 import { aoBridge } from "../lib/bridge";
 import { captureRendererEvent } from "../lib/telemetry";
 
@@ -65,7 +65,8 @@ export function workspaceCheckFailed(state: EditorHandoffState | undefined): boo
 export function useEditorHandoffState(sessionId: string, readiness: EditorHandoffReadiness = {}) {
 	const awaitWorkspace = shouldAwaitWorkspace(readiness);
 	const failedChecks = useRef(0);
-	return useQuery<EditorHandoffState>({
+	const queryClient = useQueryClient();
+	const query = useQuery<EditorHandoffState>({
 		queryKey: editorHandoffQueryKey(sessionId),
 		enabled: Boolean(sessionId),
 		staleTime: 10_000,
@@ -91,6 +92,14 @@ export function useEditorHandoffState(sessionId: string, readiness: EditorHandof
 			}
 		},
 	});
+	return {
+		...query,
+		async refreshTargets() {
+			await queryClient.cancelQueries({ queryKey: editorHandoffQueryKey(sessionId), exact: true });
+			const state = await aoBridge.editorHandoff.getState(sessionId, { refreshTerminals: true });
+			queryClient.setQueryData(editorHandoffQueryKey(sessionId), state);
+		},
+	};
 }
 
 export type OpenSessionTargetMutationInput = {
@@ -105,7 +114,7 @@ export function useOpenSessionTarget() {
 		mutationFn: async ({ sessionId, projectId, targetId }: OpenSessionTargetMutationInput) => {
 			void captureRendererEvent("ao.renderer.open_in_editor_requested", {
 				project_id: projectId,
-				target_kind: targetId === "file-manager" ? "file_manager" : targetId === "terminal" ? "terminal" : "editor",
+				target_kind: targetId === "file-manager" ? "file_manager" : isTerminalId(targetId) ? "terminal" : "editor",
 				...(targetId && isEditorId(targetId) ? { editor_id: targetId } : {}),
 			});
 			try {

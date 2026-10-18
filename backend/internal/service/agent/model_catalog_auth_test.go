@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -145,62 +147,39 @@ func TestInvalidateModelCatalogsClearsAuthWarningAndRediscovers(t *testing.T) {
 	t.Fatal("invalidation did not clear the auth warning and rediscover the catalog")
 }
 
-// When discovery falls back to Claude Code's bare aliases, the versions a
-// previous discovery resolved (in any scope) label them.
-func TestFallbackAliasesCarryVersionsFromAPreviousDiscovery(t *testing.T) {
-	previous := ports.AgentModelCatalog{
-		AgentID: "claude-code", SelectionMode: ports.ModelSelectionCatalog, Source: "provider",
-		Models: []ports.AgentModelInfo{
-			{ID: "claude-opus-5-5-20260901", Label: "Claude Opus 5.5"},
-			{ID: "claude-opus-5-1-20260301", Label: "Claude Opus 5.1"},
-			{ID: "claude-sonnet-5-5-20260901", Label: "Claude Sonnet 5.5"},
-		},
-	}
-	data, err := json.Marshal(previous)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{
-		"claude-code\x00other-project": {AgentID: "claude-code", ProjectID: "other-project", CatalogJSON: string(data), BinaryVersion: "old", LastSuccessAt: time.Now()},
+// Exercise the real discoverer and shared cache together: a failure supplies
+// no replacement list, so the last provider catalog must survive and persist.
+func TestClaudeDiscoveryFailureUsesCachedModelsWithoutStaticFallback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	t.Setenv("ANTHROPIC_MODEL", "")
+	var fail atomic.Bool
+	discoverer := modelcatalog.Discoverer{ClaudeModels: func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
+		if fail.Load() {
+			return nil, wrapAuthError(ports.ErrAgentModelDiscoveryCredentialExpired, "login token expired")
+		}
+		return []ports.AgentModelInfo{{ID: "claude-opus-5-5", Label: "Claude Opus 5.5"}}, nil
 	}}
-	discoverer := &aliasLabelingDiscoverer{fakeModelDiscoverer: &fakeModelDiscoverer{
-		version: "v1",
-		err:     wrapAuthError(ports.ErrAgentModelDiscoveryCredentialExpired, "login token expired"),
-		catalog: ports.AgentModelCatalog{SelectionMode: ports.ModelSelectionCatalog, Source: "catalog", Models: []ports.AgentModelInfo{
-			{ID: "sonnet", Label: "Sonnet"},
-			{ID: "fable", Label: "Fable 5.1"},
-			{ID: "opus", Label: "Opus"},
-			{ID: "haiku", Label: "Haiku"},
-			{ID: "opus[1m]", Label: "Opus (1M context)"},
-		}},
-	}}
+	cache := &fakeModelCache{}
 	svc := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, cache, nil, discoverer)
-	catalog, err := svc.Models(context.Background(), "claude-code", "", true)
-	if err != nil {
-		t.Fatal(err)
+	fresh, err := svc.Models(context.Background(), "claude-code", "", true)
+	if err != nil || len(fresh.Models) != 1 || fresh.Source != "provider" {
+		t.Fatalf("initial discovery = %#v, %v", fresh, err)
 	}
-	labels := map[string]string{}
-	for _, item := range catalog.Models {
-		labels[item.ID] = item.Label
-	}
-	want := map[string]string{
-		"sonnet": "Sonnet 5.5", "fable": "Fable 5.1", "opus": "Opus 5.5",
-		"haiku": "Haiku", "opus[1m]": "Opus 5.5 (1M context)",
-	}
-	for id, label := range want {
-		if labels[id] != label {
-			t.Fatalf("label for %s = %q, want %q (all: %v)", id, labels[id], label, labels)
+	fail.Store(true)
+	for _, refresh := range []bool{true, false} {
+		got, err := svc.Models(context.Background(), "claude-code", "", refresh)
+		if err != nil || !reflect.DeepEqual(got.Models, fresh.Models) || !got.Stale || got.WarningCode != ports.ModelCatalogWarningAuthExpired {
+			t.Fatalf("refresh=%v: catalog = %#v, %v; want cached provider models and auth warning", refresh, got, err)
 		}
 	}
-	if catalog.WarningCode != ports.ModelCatalogWarningAuthExpired {
-		t.Fatalf("warningCode = %q, want auth_expired", catalog.WarningCode)
+	// A scope with no cache remains empty and permits manual entry.
+	emptyService := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, &fakeModelCache{}, nil, discoverer)
+	got, err := emptyService.Models(context.Background(), "claude-code", "", true)
+	if err != nil || len(got.Models) != 0 || !got.AllowCustom || got.WarningCode != ports.ModelCatalogWarningAuthExpired {
+		t.Fatalf("uncached catalog = %#v, %v; want manual entry with the auth warning", got, err)
 	}
-}
-
-type aliasLabelingDiscoverer struct{ *fakeModelDiscoverer }
-
-func (d *aliasLabelingDiscoverer) LabelAliases(agentID string, models, reference []ports.AgentModelInfo) []ports.AgentModelInfo {
-	return modelcatalog.Discoverer{}.LabelAliases(agentID, models, reference)
 }
 
 type testAuthError struct {

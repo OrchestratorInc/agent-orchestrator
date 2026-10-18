@@ -575,7 +575,7 @@ function terminalInterfacePhaseLabel(phase?: string): string {
  */
 export default function TerminalScreen({ session: resolved }: { session?: RouteSession }) {
 	const t = useTheme();
-	const { scheme } = useThemeState();
+	const { scheme, style } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
 	const params = useLocalSearchParams<{ id?: string; handleId?: string; projectId?: string; sessionId?: string; title?: string; kind?: string; hostId?: string }>();
 	const shellOnly = Boolean(params.handleId);
@@ -865,7 +865,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 
 	useLayoutEffect(() => {
 		xtermReadyRef.current = false;
-	}, [scheme]);
+	}, [scheme, style]);
 
 	// Poll the daemon's on-demand preview detector while the terminal is open, just
 	// to keep `preview` current for the globe button. We never auto-open the overlay
@@ -1300,7 +1300,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			fastScrollSensitivity: 8,
 			// The terminal's own palette, not the product one: agent TUIs own the
 			// meaning of the ANSI slots.
-			theme: terminalTheme(scheme),
+			theme: terminalTheme(scheme, style),
 			// Agent TUIs pick their colours assuming a dark canvas, so on the light
 			// theme they can land white-on-white — the prompt row is exactly that
 			// once its background band is collapsed away. xterm nudges any pair that
@@ -1308,9 +1308,9 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			// more reliable than trying to anticipate every colour a TUI might emit.
 			minimumContrastRatio: 4.5,
 		}),
-		// `scheme` matters: without it the terminal keeps the palette it was built
-		// with and stays dark after a theme switch.
-		[scheme],
+		// `scheme` and `style` matter: without them the terminal keeps the palette
+		// it was built with and stays dark after a theme switch.
+		[scheme, style],
 	);
 
 	// Adjust only the phone's CSS viewport. The xterm renderer, mux attachment,
@@ -1461,7 +1461,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				<XtermJsWebView
 					// Remount only on theme changes: xterm applies its palette at
 					// construction, so already-painted rows otherwise keep old colours.
-					key={`term-${scheme}`}
+					key={`term-${style}-${scheme}`}
 					ref={xtermRef}
 					autoFit={false}
 					xtermOptions={xtermOptions}

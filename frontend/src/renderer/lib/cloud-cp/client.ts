@@ -10,6 +10,7 @@
 import { CloudCpAuthError, CloudCpError } from "./errors";
 import { createSseFrameParser } from "./sse";
 import type {
+	CloudCpOffering,
 	CloudCpAgentProvider,
 	CloudCpCancelTurnResponse,
 	CloudCpChatEventsQuery,
@@ -21,6 +22,7 @@ import type {
 	CloudCpCreateOrganizationRequest,
 	CloudCpCreateOrganizationResponse,
 	CloudCpCreateGitHubProjectRequest,
+	CloudCpCreateStandaloneProjectRequest,
 	CloudCpCreateProjectRequest,
 	CloudCpCreateSessionRequest,
 	CloudCpErrorEnvelope,
@@ -113,6 +115,16 @@ export interface CloudCpClientOptions {
 
 export interface CloudCpRequestOptions {
 	signal?: AbortSignal;
+}
+
+/**
+ * Options for a session workspace call (/sessions/{id}/workspace/*). In a
+ * multi-repository session, `repository` is the folder name of one of the
+ * session's additional repositories (from the review summary's
+ * `repositories`); absent means the main repository.
+ */
+export interface CloudCpWorkspaceRequestOptions extends CloudCpRequestOptions {
+	repository?: string;
 }
 
 /**
@@ -260,6 +272,11 @@ export interface CloudCpClient {
 	resetBillingUsage(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingSummary>;
 	/** Heartbeat while a session is on screen, so reading it keeps it awake. */
 	touchSessionPresence(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<void>;
+	/**
+	 * Set the org's default sandbox provider (org admins; only an org offered
+	 * more than one provider). "" clears it. Returns the org's updated offering.
+	 */
+	putOrgSandboxProvider(orgId: string, defaultProvider: string, options?: CloudCpRequestOptions): Promise<CloudCpOffering>;
 	/** Saves the org's bring-your-own-Coder connection. Omit the token to keep the stored one. */
 	putOrgCoderConfig(
 		orgId: string,
@@ -316,13 +333,13 @@ export interface CloudCpClient {
 		path: string,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpWorkspaceDiffFileDetail>;
-	getWorkspaceReview(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewResponse>;
-	getWorkspaceReviewTree(orgId: string, sessionId: string, path?: string, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewTreeResponse>;
-	searchWorkspaceReview(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewSearchQuery, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewSearchResponse>;
-	getWorkspaceReviewFile(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewFileQuery, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewFileResponse>;
-	getWorkspaceReviewDiffs(orgId: string, sessionId: string, body: CloudCpWorkspaceReviewDiffsRequest, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewDiffsResponse>;
-	getWorkspaceReviewRevision(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewRevisionQuery, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewRevisionResponse>;
-	updateWorkspaceReviewFile(orgId: string, sessionId: string, body: CloudCpWorkspaceReviewWriteRequest, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewWriteResponse>;
+	getWorkspaceReview(orgId: string, sessionId: string, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewResponse>;
+	getWorkspaceReviewTree(orgId: string, sessionId: string, path?: string, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewTreeResponse>;
+	searchWorkspaceReview(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewSearchQuery, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewSearchResponse>;
+	getWorkspaceReviewFile(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewFileQuery, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewFileResponse>;
+	getWorkspaceReviewDiffs(orgId: string, sessionId: string, body: CloudCpWorkspaceReviewDiffsRequest, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewDiffsResponse>;
+	getWorkspaceReviewRevision(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewRevisionQuery, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewRevisionResponse>;
+	updateWorkspaceReviewFile(orgId: string, sessionId: string, body: CloudCpWorkspaceReviewWriteRequest, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewWriteResponse>;
 	/** Re-provision a deleted session, keeping its conversation and work intact. */
 	restoreSession(
 		orgId: string,
@@ -430,6 +447,12 @@ export interface CloudCpClient {
 		body: CloudCpCreateGitHubProjectRequest,
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpProjectResponse>;
+	/** A project without a repository (POST /orgs/{orgId}/projects/standalone). */
+	createStandaloneProject(
+		orgId: string,
+		body: CloudCpCreateStandaloneProjectRequest,
+		options?: CloudCpMutationOptions,
+	): Promise<CloudCpProjectResponse>;
 }
 
 type QueryParams = Record<string, string | number | undefined>;
@@ -453,6 +476,12 @@ function buildUrl(baseUrl: string, path: string, query?: QueryParams): string {
 		if (search !== "") url += `?${search}`;
 	}
 	return url;
+}
+
+/** The `repository` query parameter of a workspace call; undefined for the main repository. */
+function repositoryQuery(options: CloudCpWorkspaceRequestOptions | undefined): QueryParams | undefined {
+	const repository = options?.repository?.trim();
+	return repository ? { repository } : undefined;
 }
 
 /** Build one path segment from a caller-supplied identifier. */
@@ -736,6 +765,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("POST", `/orgs/${seg(orgId)}/billing/usage/reset`, { body: {}, signal: o?.signal }),
 		touchSessionPresence: (orgId, sessionId, o) =>
 			requestVoid("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/presence`, { signal: o?.signal }),
+		putOrgSandboxProvider: (orgId, defaultProvider, o) =>
+			requestJson("PUT", `/orgs/${seg(orgId)}/sandbox-provider`, { body: { defaultProvider }, signal: o?.signal }),
 		putOrgCoderConfig: (orgId, body, o) =>
 			requestJson("PUT", `/orgs/${seg(orgId)}/coder-config`, { body, signal: o?.signal }),
 		deleteOrgCoderConfig: (orgId, o) =>
@@ -781,33 +812,35 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 				signal: o?.signal,
 			}),
 		getWorkspaceReview: (orgId, sessionId, o) =>
-			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review`, { signal: o?.signal }),
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review`, {
+				query: repositoryQuery(o), signal: o?.signal,
+			}),
 		getWorkspaceReviewTree: (orgId, sessionId, path, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/tree`, {
-				query: { path }, signal: o?.signal,
+				query: { path, ...repositoryQuery(o) }, signal: o?.signal,
 			}),
 		searchWorkspaceReview: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/search`, {
-				query: { query: query.query, cursor: query.cursor, limit: query.limit }, signal: o?.signal,
+				query: { query: query.query, cursor: query.cursor, limit: query.limit, ...repositoryQuery(o) }, signal: o?.signal,
 			}),
 		getWorkspaceReviewFile: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/file`, {
-				query: { path: query.path, scope: query.scope, commitSha: query.commitSha }, signal: o?.signal,
+				query: { path: query.path, scope: query.scope, commitSha: query.commitSha, ...repositoryQuery(o) }, signal: o?.signal,
 			}),
 		getWorkspaceReviewDiffs: (orgId, sessionId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/diffs`, {
-				body, signal: o?.signal,
+				body, query: repositoryQuery(o), signal: o?.signal,
 			}),
 		getWorkspaceReviewRevision: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/revision`, {
 				query: {
 					path: query.path, scope: query.scope, side: query.side, workspaceVersion: query.workspaceVersion,
-					expectedRevision: query.expectedRevision, commitSha: query.commitSha,
+					expectedRevision: query.expectedRevision, commitSha: query.commitSha, ...repositoryQuery(o),
 				}, signal: o?.signal,
 			}),
 		updateWorkspaceReviewFile: (orgId, sessionId, body, o) =>
 			requestJson("PUT", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/file`, {
-				body, signal: o?.signal,
+				body, query: repositoryQuery(o), signal: o?.signal,
 			}),
 		restoreSession: (orgId, sessionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/restore`, {
@@ -889,6 +922,12 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 		createGitHubProject: (orgId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/github/projects`, {
+				body,
+				signal: o?.signal,
+				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
+			}),
+		createStandaloneProject: (orgId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/projects/standalone`, {
 				body,
 				signal: o?.signal,
 				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),

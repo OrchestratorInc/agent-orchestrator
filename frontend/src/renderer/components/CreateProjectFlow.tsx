@@ -30,6 +30,9 @@ import { CoderTemplatePicker } from "./CoderTemplatePicker";
 import { CoderTemplateOptions } from "./CoderTemplateOptions";
 import { useCoderTemplates } from "../hooks/useCoderTemplates";
 import { SearchablePicker } from "./SearchablePicker";
+import { CloudAdditionalReposEditor } from "./CloudAdditionalReposEditor";
+import { useCloudGitHubAppRepositories } from "../hooks/useCloudGitHubAppRepositories";
+import { additionalReposProblem, canonicalGitHubUrl, sameRepository } from "../lib/cloud-project-repos";
 import { buildCoderRequestOptions, useCoderSessionOptionsStore } from "../stores/coder-session-options-store";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudOrg } from "../hooks/useCloudOrg";
@@ -45,7 +48,6 @@ import { CloudCpError } from "../lib/cloud-cp";
 import { CODER_PROVIDER } from "../lib/cloud-offering";
 import { coderWorkspaceNamePrefixFor, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
 import { useOrgCoderConfig } from "../hooks/useOrgCoderConfig";
-import type { CloudCpGitHubAppRepository } from "../lib/cloud-cp/types";
 import { useCloudSession } from "../lib/cloud-session";
 import { useUiStore } from "../stores/ui-store";
 import { useShellMaybe } from "../lib/shell-context";
@@ -1388,19 +1390,29 @@ function CloudProjectCard({
 	const { client, baseUrl } = useCloudCp();
 	const { org } = useCloudOrg();
 	const queryClient = useQueryClient();
-	// The org's offering decides where the project's sessions run. With more
-	// than one provider the project picks one (config.sandboxProvider, default
-	// the org's default provider) and every session of the project runs there;
-	// with one there is nothing to pick. The coder template picker, size and
-	// workspace prefix appear only when that provider is coder.
+	// The org's offering decides where the project's sessions run: the org's
+	// default provider, chosen in Settings. With more than one provider the
+	// project records it (config.sandboxProvider), so changing the default later
+	// moves no existing project. The coder template picker, size and workspace
+	// prefix appear only when that provider is coder.
 	const offering = useCloudOffering();
 	const offersSandboxChoice = offering.offersProviderChoice;
-	const [projectSandboxProvider, setProjectSandboxProvider] = useState<string | null>(null);
-	const effectiveSandboxProvider =
-		projectSandboxProvider !== null && offering.providers.includes(projectSandboxProvider)
-			? projectSandboxProvider
-			: offering.defaultProvider;
+	const effectiveSandboxProvider = offering.defaultProvider;
 	const usesCoder = effectiveSandboxProvider === CODER_PROVIDER;
+	// A project is either made from repositories (one main repository plus any
+	// additional ones every session clones beside it) or standalone: no
+	// repository at all, so its sessions start in an empty folder (the cloud
+	// counterpart of a local standalone agent).
+	const [projectSource, setProjectSource] = useState<"repositories" | "standalone">("repositories");
+	const standalone = projectSource === "standalone";
+	const chooseProjectSource = (source: "repositories" | "standalone") => {
+		setProjectSource(source);
+		setSubmitError(null);
+	};
+	const [standaloneName, setStandaloneName] = useState("");
+	const standaloneNameTrimmed = standaloneName.trim();
+	const standaloneNameInvalid = standalone && (standaloneNameTrimmed === "" || [...standaloneNameTrimmed].length > 120);
+	const [extraRepoUrls, setExtraRepoUrls] = useState<string[]>([]);
 	// A coder project must pick a concrete template before it is created. With no
 	// template, session start fails later with a 422 (coder_template_required) —
 	// there is no implicit org-default for a bring-your-own-Coder deployment. So
@@ -1478,28 +1490,29 @@ function CloudProjectCard({
 		.sort()
 		.join(":");
 
-	const githubAppRepos = useQuery({
-		queryKey: ["cloud-github-app-repos", baseUrl, org?.id],
-		enabled: appRepositoriesReady && org !== undefined,
-		staleTime: 30_000,
-		queryFn: async ({ signal }) => {
-			if (!org) return [];
-			const repositories: CloudCpGitHubAppRepository[] = [];
-			let cursor: string | undefined;
-			for (;;) {
-				const response = await client.listGitHubRepositories(org.id, { limit: 100, cursor }, { signal });
-				repositories.push(...response.items.filter((repo) => repo.revokedAt === undefined && !repo.isArchived));
-				if (!response.page.hasMore) return repositories;
-				if (!response.page.nextCursor || response.page.nextCursor === cursor) throw new Error("GitHub repository pagination stopped unexpectedly");
-				cursor = response.page.nextCursor;
-			}
-		},
-	});
+	const githubAppRepos = useCloudGitHubAppRepositories(org?.id, appRepositoriesReady);
 	useEffect(() => {
 		if (readyInstallationKey === "") return;
 		void queryClient.invalidateQueries({ queryKey: ["cloud-github-app-repos", baseUrl, org?.id] });
 	}, [baseUrl, org?.id, queryClient, readyInstallationKey]);
 	const selectedRepo = githubAppRepos.data?.find((repo) => repo.githubRepositoryId === selectedRepoId);
+	const mainRepoUrl = selectedRepo ? canonicalGitHubUrl(selectedRepo.fullName) : undefined;
+	const extraReposInvalid = !standalone && additionalReposProblem(mainRepoUrl, extraRepoUrls) !== undefined;
+	const selectMainRepo = (nextId: string) => {
+		setSelectedRepoId(nextId);
+		setSubmitError(null);
+		// The new main repository is no longer an additional one.
+		const next = githubAppRepos.data?.find((repo) => repo.githubRepositoryId === nextId);
+		if (next) setExtraRepoUrls((current) => current.filter((url) => !sameRepository(url, canonicalGitHubUrl(next.fullName))));
+	};
+	// "Make main" swaps an additional repository with the main one.
+	const makeMainRepo = (url: string) => {
+		const next = githubAppRepos.data?.find((repo) => sameRepository(canonicalGitHubUrl(repo.fullName), url));
+		if (!next) return;
+		setExtraRepoUrls((current) => current.map((item) => (sameRepository(item, url) ? mainRepoUrl ?? "" : item)).filter((item) => item !== ""));
+		setSelectedRepoId(next.githubRepositoryId);
+		setSubmitError(null);
+	};
 	// GitHub is connected but grants no repositories yet: same next step as a
 	// fresh start, so show the same "Connect repository" card.
 	const noRepositoriesShared = appConnected && allActiveInstallationsReady && githubAppRepos.isSuccess && githubAppRepos.data.length === 0;
@@ -1617,7 +1630,7 @@ function CloudProjectCard({
 	};
 
 	const createProject = async (selection: { workerAgent: string; orchestratorAgent: string }) => {
-		if (isCreating || org === undefined || selectedRepo === undefined) return;
+		if (isCreating || org === undefined || (!standalone && selectedRepo === undefined)) return;
 		setSubmitError(null);
 		setIsCreating(true);
 		try {
@@ -1630,24 +1643,31 @@ function CloudProjectCard({
 				setIsCreating(false);
 				return;
 			}
-			// The field shows its own error; create stays blocked until it is valid.
-			if (coderWorkspaceNamePrefixInvalid) {
+			// The fields show their own errors; create stays blocked until they are valid.
+			if (coderWorkspaceNamePrefixInvalid || extraReposInvalid || standaloneNameInvalid) {
 				setIsCreating(false);
 				return;
 			}
+			const additionalRepos = standalone ? [] : extraRepoUrls.filter((url) => url !== "");
+			const config = {
+				worker: { agent: selection.workerAgent },
+				orchestrator: { agent: selection.orchestratorAgent },
+				...(coder ? { coder } : {}),
+				...(offersSandboxChoice && effectiveSandboxProvider ? { sandboxProvider: effectiveSandboxProvider } : {}),
+				// Every session clones these beside the main repository.
+				...(additionalRepos.length > 0 ? { repos: additionalRepos.map((url) => ({ url })) } : {}),
+			};
 			// The App path authorizes by repository id and derives the default
 			// branch server-side. Coder config nests under `config.coder`, which
-			// the control plane reads for the dev-kit template and extra repos.
-			const { project } = await client.createGitHubProject(org.id, {
-				githubRepositoryId: selectedRepo.githubRepositoryId,
-				displayName: selectedRepo.name,
-				config: {
-					worker: { agent: selection.workerAgent },
-					orchestrator: { agent: selection.orchestratorAgent },
-					...(coder ? { coder } : {}),
-					...(offersSandboxChoice && effectiveSandboxProvider ? { sandboxProvider: effectiveSandboxProvider } : {}),
-				},
-			});
+			// the control plane reads for the dev-kit template. A standalone
+			// project has no repository to authorize.
+			const { project } = standalone || selectedRepo === undefined
+				? await client.createStandaloneProject(org.id, { displayName: standaloneNameTrimmed, config })
+				: await client.createGitHubProject(org.id, {
+					githubRepositoryId: selectedRepo.githubRepositoryId,
+					displayName: selectedRepo.name,
+					config,
+				});
 			await queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
 			onCreated(project.id);
 		} catch (err) {
@@ -1660,6 +1680,7 @@ function CloudProjectCard({
 			if (
 				err instanceof CloudCpError &&
 				err.code === "project_repository_exists" &&
+				!standalone &&
 				org !== undefined &&
 				selectedRepo !== undefined
 			) {
@@ -1722,10 +1743,41 @@ function CloudProjectCard({
 			) : null}
 
 			<div className={cn(onboardingPanelBodyClass, "pt-4")}>
-				{/* Repository: the project is created from, and named after, it. */}
+				{standalone ? (
+					<div className="flex flex-col gap-2 text-sm">
+						<Label htmlFor="cloudStandaloneName" className={onboardingFormLabelClass}>
+							{t("createProject.projectName", { defaultValue: "Project name" })}
+						</Label>
+						<Input
+							id="cloudStandaloneName"
+							value={standaloneName}
+							onChange={(event) => {
+								setStandaloneName(event.target.value);
+								setSubmitError(null);
+							}}
+							maxLength={120}
+							disabled={isCreating}
+							autoComplete="off"
+							aria-describedby="cloudStandaloneNameHint"
+						/>
+						<p id="cloudStandaloneNameHint" className={onboardingFieldHintClass}>
+							{t("createProject.cloudStandaloneHint", {
+								defaultValue: "Sessions start in an empty folder",
+							})}
+						</p>
+						<button
+							type="button"
+							className="self-start text-[12px] font-medium text-muted-foreground underline decoration-dotted decoration-muted-foreground/60 underline-offset-4 transition-colors hover:text-foreground hover:decoration-foreground disabled:opacity-50"
+							disabled={isCreating}
+							onClick={() => chooseProjectSource("repositories")}
+						>
+							{t("createProject.cloudUseRepositories", { defaultValue: "Use a repo instead" })}
+						</button>
+					</div>
+				) : (
 				<div className="space-y-2">
 					<Label className={onboardingFormLabelClass}>
-						{t("createProject.cloudRepository", { defaultValue: "Repository" })}
+						{t("createProject.cloudMainRepository", { defaultValue: "Main repository" })}
 					</Label>
 
 					{!appConnected || noRepositoriesShared ? (
@@ -1765,10 +1817,7 @@ function CloudProjectCard({
 							disabled={isCreating || !appRepositoriesReady || githubAppRepos.isLoading}
 							value={selectedRepoId}
 							options={(githubAppRepos.data ?? []).map((repo) => ({ value: repo.githubRepositoryId, label: repo.fullName, private: repo.isPrivate }))}
-							onChange={(nextId) => {
-								setSelectedRepoId(nextId);
-								setSubmitError(null);
-							}}
+							onChange={selectMainRepo}
 							action={{
 								label: t("createProject.connectMoreRepositories", { defaultValue: "Connect more repositories" }),
 								disabled: isCreating || githubOAuthBusy,
@@ -1776,16 +1825,26 @@ function CloudProjectCard({
 							}}
 						/>
 					)}
-					{appConnected && (githubAppRepos.data?.length ?? 0) > 0 ? (
+					<div className="flex items-center justify-between gap-3">
 						<button
 							type="button"
-							className="ml-auto block text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
-							disabled={isCreating || githubOAuthBusy}
-							onClick={() => void connectGitHub()}
+							className="text-[12px] font-medium text-muted-foreground underline decoration-dotted decoration-muted-foreground/60 underline-offset-4 transition-colors hover:text-foreground hover:decoration-foreground disabled:opacity-50"
+							disabled={isCreating}
+							onClick={() => chooseProjectSource("standalone")}
 						>
-							{t("createProject.reconnectGitHub", { defaultValue: "Reconnect GitHub" })}
+							{t("createProject.cloudStartWithoutRepository", { defaultValue: "Start without a repo" })}
 						</button>
-					) : null}
+						{appConnected && (githubAppRepos.data?.length ?? 0) > 0 ? (
+							<button
+								type="button"
+								className="text-[12px] font-medium text-muted-foreground underline decoration-dotted decoration-muted-foreground/60 underline-offset-4 transition-colors hover:text-foreground hover:decoration-foreground disabled:opacity-50"
+								disabled={isCreating || githubOAuthBusy}
+								onClick={() => void connectGitHub()}
+							>
+								{t("createProject.reconnectGitHub", { defaultValue: "Reconnect GitHub" })}
+							</button>
+						) : null}
+					</div>
 
 					{/* While GitHub is open in the browser: what to do there, and a way out. */}
 					{githubOAuthBusy ? (
@@ -1838,29 +1897,37 @@ function CloudProjectCard({
 					{githubOAuthError ? (
 						<p className="text-[12px] leading-5 text-destructive" role="alert">{githubOAuthError}</p>
 					) : null}
-				</div>
 
-				{/* Where the project's sessions run, when the control plane offers a choice. */}
-				{offersSandboxChoice && selectedRepo !== undefined ? (
-					<div className="flex items-center justify-between gap-3">
-						<Label htmlFor="create-project-sandbox" className={onboardingFormLabelClass}>
-							{t("createProject.cloudSandbox")}
-						</Label>
-						<Select value={effectiveSandboxProvider} disabled={isCreating} onValueChange={setProjectSandboxProvider}>
-							<SelectTrigger id="create-project-sandbox" className="max-w-[65%]"><SelectValue /></SelectTrigger>
-							<SelectContent position="popper" side="bottom" align="end" sideOffset={4}>
-								{offering.providers.map((provider) => (
-									<SelectItem key={provider} value={provider}>
-										{t(`createProject.sandboxProvider.${provider}`, { defaultValue: provider })}
-									</SelectItem>
-								))}
-							</SelectContent>
-						</Select>
-					</div>
-				) : null}
+					{/* More repositories every session clones beside the main one. */}
+					{selectedRepo !== undefined ? (
+						<div className="space-y-2 pt-2">
+							<Label className={onboardingFormLabelClass}>
+								{t("createProject.cloudAdditionalRepositories", { defaultValue: "Additional repositories" })}
+							</Label>
+							<p className={onboardingFieldHintClass}>
+								{t("createProject.cloudAdditionalRepositoriesHint", {
+									defaultValue: "Each session clones these beside the main repository, on the same branch, so one task can change them together. The agent starts in the main repository.",
+								})}
+							</p>
+							<CloudAdditionalReposEditor
+								available={githubAppRepos.data ?? []}
+								mainUrl={mainRepoUrl}
+								value={extraRepoUrls}
+								onChange={(next) => {
+									setExtraRepoUrls(next);
+									setSubmitError(null);
+								}}
+								onMakeMain={makeMainRepo}
+								disabled={isCreating}
+								loading={githubAppRepos.isLoading}
+							/>
+						</div>
+					) : null}
+				</div>
+				)}
 
 				{/* Coder template and size are inherited by every session. */}
-				{usesCoder && selectedRepo !== undefined ? (
+				{usesCoder && (standalone || selectedRepo !== undefined) ? (
 					<div className="space-y-4">
 						<CoderTemplatePicker orgId={org?.id} />
 						{coderTemplateId.trim() !== "" ? (
@@ -1880,7 +1947,7 @@ function CloudProjectCard({
 								id="coderWorkspaceNamePrefix"
 								value={coderWorkspaceNamePrefix}
 								onChange={(event) => setCoderWorkspaceNamePrefix(event.target.value)}
-								placeholder={coderWorkspaceNamePrefixFor(selectedRepo?.name ?? "")}
+								placeholder={coderWorkspaceNamePrefixFor(standalone ? standaloneNameTrimmed : selectedRepo?.name ?? "")}
 								maxLength={20}
 								spellCheck={false}
 								autoCapitalize="off"
@@ -1900,20 +1967,20 @@ function CloudProjectCard({
 					</div>
 				) : null}
 
-				{/* Agents, once a repository is chosen. */}
-				{selectedRepo !== undefined && org !== undefined ? (
+				{/* Agents, once a repository is chosen (a standalone project needs none). */}
+				{(standalone || selectedRepo !== undefined) && org !== undefined ? (
 					<CloudAgentSetupStep
 						onBack={onBack}
 						onCreate={(selection) => void createProject(selection)}
 						isCreating={isCreating}
 						createError={submitError}
 						templateMissing={coderTemplateMissing}
-						createBlocked={coderWorkspaceNamePrefixInvalid}
+						createBlocked={coderWorkspaceNamePrefixInvalid || extraReposInvalid || standaloneNameInvalid}
 					/>
 				) : null}
 
 				{/* The agent step carries its own Back; show one here until it appears. */}
-				{selectedRepo === undefined ? (
+				{!standalone && selectedRepo === undefined ? (
 					<div className={onboardingFooterActionsClass}>
 						<Button type="button" variant="outline" onClick={onBack} disabled={isCreating}>
 							{t("createProject.back", { defaultValue: "Back" })}
@@ -2510,7 +2577,12 @@ function CreateProjectFolderDialog({
 	const workspaceHasNoChildGitRepos = isWorkspace && validation?.blockingErrors.includes("WORKSPACE_CHILD_REPO_REQUIRED");
 	const workspaceRootIsProject = isWorkspace && validation?.root.isRepo === true && validation.root.hasOrigin === true;
 	const workspaceValidationBlocked = isWorkspace && validation !== null && (!validation.isValid || validation.nextStep === "error") && !workspaceHasNoChildGitRepos;
-	const workspaceReposNeedSetup = isWorkspace && displayRepos.some((repo) => repo.isRepo && repo.requiredActions.length > 0);
+	const workspaceExcludedRepos = isWorkspace ? displayRepos.filter((repo) => repo.isRepo && repo.requiredActions.length > 0) : [];
+	// The daemon registers children without a commit or origin as not set up and
+	// leaves them out of sessions, so only block when no child repo is ready.
+	const workspaceHasReadyRepo = displayRepos.some((repo) => repo.isRepo && repo.requiredActions.length === 0 && repo.status !== "error" && repo.blockingErrors.length === 0);
+	const workspaceReposNeedSetup = workspaceExcludedRepos.length > 0 && !workspaceHasReadyRepo;
+	const workspaceReposExcluded = workspaceExcludedRepos.length > 0 && workspaceHasReadyRepo;
 	const workspaceSetupReady = !isWorkspace || (!workspaceHasNoChildGitRepos && !workspaceReposNeedSetup);
 	const failedRepos =
 		displayRepos.filter(
@@ -2592,8 +2664,9 @@ function CreateProjectFolderDialog({
 								{workspaceHasNoChildGitRepos && !error ? <p className="text-[14px] leading-6 text-[var(--color-text-import-muted)]">{t("createProject.workspaceRequiresInitializedChildRepo")}</p> : null}
 								{workspaceRootIsProject && !error ? <p className="text-[14px] leading-6 text-[var(--color-text-import-muted)]">{t("createProject.workspaceRootIsProject")}</p> : null}
 								{workspaceReposNeedSetup && !error ? <p className="text-[13px] leading-5 text-destructive">{t("createProject.workspaceRemoteSetupRequired")}</p> : null}
+								{workspaceReposExcluded && !error ? <p className="text-[13px] leading-5 text-[var(--color-text-import-muted)]">{t("createProject.workspaceReposExcluded", { count: workspaceExcludedRepos.length })}</p> : null}
 
-							{workspaceRootIsProject || workspaceHasNoChildGitRepos ? null : isWorkspace ? <WorkspaceImportRepoList repos={displayRepos} /> : displayRepos.length > 0 ? <div className="divide-y divide-border/50 overflow-hidden rounded-sm bg-[var(--color-bg-import-card)]">
+							{workspaceRootIsProject || workspaceHasNoChildGitRepos ? null : isWorkspace ? <WorkspaceImportRepoList excludeUnready={workspaceReposExcluded} repos={displayRepos} /> : displayRepos.length > 0 ? <div className="divide-y divide-border/50 overflow-hidden rounded-sm bg-[var(--color-bg-import-card)]">
 								{displayRepos.map((repo) => <ImportRepoRow key={repo.path} repo={repo} />)}
 							</div> : null}
 
@@ -2631,7 +2704,7 @@ function CreateProjectFolderDialog({
 	);
 }
 
-function ImportRepoRow({ failed = false, onSetup, repo, setupExpanded = false }: { failed?: boolean; onSetup?: () => void; repo: DisplayImportRepo; setupExpanded?: boolean }) {
+function ImportRepoRow({ excluded = false, failed = false, onSetup, repo, setupExpanded = false }: { excluded?: boolean; failed?: boolean; onSetup?: () => void; repo: DisplayImportRepo; setupExpanded?: boolean }) {
 	const { t } = useTranslation();
 	const repositoryAvatar = repo.hasRemote ? repositoryAvatarFromGitUrl(repo.remote) : null;
 	const needsSetup = repo.requiredActions.length > 0;
@@ -2644,7 +2717,7 @@ function ImportRepoRow({ failed = false, onSetup, repo, setupExpanded = false }:
 			</div>
 			<div className="min-w-0 flex-1 truncate text-[13px] font-semibold text-[var(--color-text-import-title)]">{repo.name}</div>
 			<div className="flex max-w-[220px] shrink-0 items-center gap-1 truncate text-right text-[11px] text-[var(--color-text-import-muted)]">
-				{needsSetup ? onSetup ? <button type="button" aria-expanded={setupExpanded} className="rounded-sm border border-orange-400/40 bg-orange-500/15 px-2 py-0.5 text-orange-300 hover:bg-orange-500/25" onClick={onSetup}>{setupExpanded ? "Hide setup" : `${workspaceSetupLabel(repo)} · Set up`}</button> : <span className="rounded-sm border border-orange-400/40 bg-orange-500/15 px-2 py-0.5 text-orange-300">{t("createProject.setupRequired")}</span> : repositoryUrl ? <><GitBranch className="size-3.5 shrink-0" aria-hidden="true" /><AppLink className="truncate underline decoration-border underline-offset-2 hover:text-foreground" href={repositoryUrl} rel="noreferrer" target="_blank">{repo.branch}</AppLink></> : <><span className={cn("truncate", isPlainFolder && "rounded-sm bg-orange-500/15 px-2 py-0.5 text-orange-300")}>{isPlainFolder ? "Needs git init" : failed ? (repo.reason ?? t("createProject.repoCannotImport")) : repo.branch}</span></>}
+				{needsSetup ? onSetup ? <button type="button" aria-expanded={setupExpanded} className="rounded-sm border border-orange-400/40 bg-orange-500/15 px-2 py-0.5 text-orange-300 hover:bg-orange-500/25" onClick={onSetup}>{setupExpanded ? "Hide setup" : `${workspaceSetupLabel(repo)} · Set up`}</button> : <span className="rounded-sm border border-orange-400/40 bg-orange-500/15 px-2 py-0.5 text-orange-300">{excluded ? t("createProject.repoNotIncluded", { reason: workspaceSetupLabel(repo) }) : t("createProject.setupRequired")}</span> : repositoryUrl ? <><GitBranch className="size-3.5 shrink-0" aria-hidden="true" /><AppLink className="truncate underline decoration-border underline-offset-2 hover:text-foreground" href={repositoryUrl} rel="noreferrer" target="_blank">{repo.branch}</AppLink></> : <><span className={cn("truncate", isPlainFolder && "rounded-sm bg-orange-500/15 px-2 py-0.5 text-orange-300")}>{isPlainFolder ? "Needs git init" : failed ? (repo.reason ?? t("createProject.repoCannotImport")) : repo.branch}</span></>}
 			</div>
 		</div>
 	);
@@ -2662,10 +2735,10 @@ function normalizeImportRepos(repos: ImportFolderScan["repos"]): DisplayImportRe
 	return repos.map((repo) => ({ ...repo, requiredActions: [], blockingErrors: [] }));
 }
 
-function WorkspaceImportRepoList({ repos }: { repos: DisplayImportRepo[] }) {
+function WorkspaceImportRepoList({ excludeUnready, repos }: { excludeUnready: boolean; repos: DisplayImportRepo[] }) {
 	const orderedRepos = [...repos].sort((left, right) => (Number(right.requiredActions.length > 0) - Number(left.requiredActions.length > 0)) || left.name.localeCompare(right.name));
 	return <div className="divide-y divide-border/50 overflow-hidden rounded-sm bg-[var(--color-bg-import-card)]">
-		{orderedRepos.map((repo) => <ImportRepoRow key={repo.path} repo={repo} />)}
+		{orderedRepos.map((repo) => <ImportRepoRow excluded={excludeUnready && repo.requiredActions.length > 0} key={repo.path} repo={repo} />)}
 	</div>;
 }
 

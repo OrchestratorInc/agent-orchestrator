@@ -1,8 +1,9 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
-import { Archive, CalendarClock, FileText, Folder, LayoutDashboard, Plus } from "lucide-react";
+import { Archive, CalendarClock, File, Folder, LayoutDashboard, Plus } from "lucide-react";
 import { useState, type ReactNode } from "react";
+import { AwakeControl } from "./AwakeControl";
 import { NotificationCenter } from "./NotificationCenter";
 import { ProjectBoardActions } from "./ProjectBoardActions";
 import { useBoardPresentation } from "../hooks/useBoardPresentation";
@@ -146,6 +147,13 @@ export function ShellTopbar({
 		hostId,
 	});
 	const { isSpawning, isProjectRestarting, isProvisioning, openNewTask, openOrchestrator } = projectActions;
+	// ⌘⇧O / Ctrl+Shift+G does what the Orchestrator button does for the
+	// project in scope: open, resume, or spawn. Only one topbar is mounted at
+	// a time, so the shortcut fires once. No-op without a project (root board).
+	useSessionShortcut("open-orchestrator", () => {
+		if (!supportsProjectActions || startingOrchestrator) return;
+		openOrchestrator();
+	});
 	const { showProjectEmpty } = useBoardPresentation({
 		projectId,
 		isSuccess: workspaceQuery.isSuccess,
@@ -190,7 +198,7 @@ export function ShellTopbar({
 				) : isArtifactsRoute ? (
 					<div className="inline-flex min-w-0 items-center gap-1.5" data-testid="artifacts-topbar-label">
 						<span className={cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5")}>
-							<FileText aria-hidden="true" className="size-icon-md" />
+							<File aria-hidden="true" className="size-icon-md" />
 							{t("artifacts.title")}
 						</span>
 					</div>
@@ -219,6 +227,7 @@ export function ShellTopbar({
 				data-compact-actions={compactActions ? "true" : "false"}
 				data-testid="workspace-topbar-actions"
 			>
+				<AwakeControl compact />
 				{isProjectBoardRoute || isOrchestrator ? <ProjectTerminationFeedback projectId={projectId} hostId={hostId} /> : null}
 				{!boardActionsInPanel && isProjectBoardRoute ? (
 					<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={project?.kind === CLOUD_PROJECT_KIND} style={noDragStyle} />

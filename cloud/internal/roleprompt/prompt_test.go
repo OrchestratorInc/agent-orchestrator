@@ -71,18 +71,23 @@ func TestBuildNamesExtraRepositoriesForEveryRole(t *testing.T) {
 	// can coordinate across them and a worker knows they belong to the project.
 	for _, role := range []string{RoleOrchestrator, RoleWorker} {
 		prompt := Build(Config{
-			Role:          role,
-			ProjectID:     "project-1",
-			RepositoryURL: "https://github.com/acme/mercury",
+			Role:              role,
+			ProjectID:         "project-1",
+			RepositoryURL:     "https://github.com/acme/mercury",
+			MainRepositoryDir: "repository",
+			MultiRepoWorker:   true,
 			ExtraRepos: []RepoRef{
-				{URL: "https://github.com/acme/mercury-lib"},
-				{URL: "https://github.com/acme/mercury-docs", Branch: "draft"},
+				{URL: "https://github.com/acme/mercury-lib", Dir: "mercury-lib"},
+				{URL: "https://github.com/acme/mercury-docs", Branch: "draft", Dir: "mercury-docs"},
 			},
 		})
 		for _, want := range []string{
-			"Additional repositories",
-			"https://github.com/acme/mercury-lib",
-			"https://github.com/acme/mercury-docs (branch draft)",
+			"- Repositories (all part of this project",
+			"https://github.com/acme/mercury (main, folder repository)",
+			"https://github.com/acme/mercury-lib (folder mercury-lib)",
+			"https://github.com/acme/mercury-docs (folder mercury-docs, cloned from branch draft)",
+			"starts in the main repository's checkout",
+			`"repository": "owner/name"`,
 		} {
 			if !strings.Contains(prompt, want) {
 				t.Fatalf("%s prompt missing %q:\n%s", role, want, prompt)
@@ -97,7 +102,47 @@ func TestBuildOmitsExtraRepositoriesSectionWhenNone(t *testing.T) {
 		ProjectID:     "project-1",
 		RepositoryURL: "https://github.com/acme/mercury",
 	})
-	if strings.Contains(prompt, "Additional repositories") {
+	if strings.Contains(prompt, "Repositories (") {
 		t.Fatalf("single-repo project should not list additional repositories:\n%s", prompt)
+	}
+}
+
+func TestBuildSaysWhereTheAgentStarts(t *testing.T) {
+	prompt := Build(Config{
+		Role:                RoleWorker,
+		RepositoryURL:       "https://github.com/acme/mercury",
+		ExtraRepos:          []RepoRef{{URL: "https://github.com/acme/mercury-lib", Dir: "mercury-lib"}},
+		AgentStartsInParent: true,
+		MultiRepoWorker:     true,
+	})
+	if !strings.Contains(prompt, "starts in the folder that holds every repository's checkout") {
+		t.Fatalf("parent start mode missing from the prompt:\n%s", prompt)
+	}
+}
+
+// A worker without the multi-repo capability keeps the earlier wording: it
+// clones the additional repositories but does not put them on the session
+// branch, start elsewhere or open pull requests in them.
+func TestBuildKeepsTheEarlierWordingForAnOlderWorker(t *testing.T) {
+	prompt := Build(Config{
+		Role:                RoleWorker,
+		RepositoryURL:       "https://github.com/acme/mercury",
+		ExtraRepos:          []RepoRef{{URL: "https://github.com/acme/mercury-lib", Branch: "draft", Dir: "mercury-lib"}},
+		AgentStartsInParent: true,
+	})
+	if !strings.Contains(prompt, "- Additional repositories (part of this project, checked out alongside the primary):\n  - https://github.com/acme/mercury-lib (branch draft)") {
+		t.Fatalf("older worker prompt:\n%s", prompt)
+	}
+	for _, unwanted := range []string{"session branch", `"repository"`, "starts in the folder"} {
+		if strings.Contains(prompt, unwanted) {
+			t.Fatalf("older worker prompt promises %q:\n%s", unwanted, prompt)
+		}
+	}
+}
+
+func TestBuildDescribesAStandaloneProject(t *testing.T) {
+	prompt := Build(Config{Role: RoleOrchestrator, RepositoryURL: "https://scratch.ao.local/p1", Standalone: true})
+	if !strings.Contains(prompt, "- Repository: none (a standalone project") || strings.Contains(prompt, "scratch.ao.local") {
+		t.Fatalf("standalone project context:\n%s", prompt)
 	}
 }

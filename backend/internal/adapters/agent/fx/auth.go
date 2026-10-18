@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
@@ -48,7 +49,11 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		}
 		return ports.AgentAuthStatusUnknown, probeCtx.Err()
 	}
-	return authStatusFromJSON(output), nil
+	status := authStatusFromJSON(output)
+	if status == ports.AgentAuthStatusAuthorized {
+		ports.RecordAuthEvidence(ctx, domain.CommandSource(binary, "status", "--json"))
+	}
+	return status, nil
 }
 
 func authStatusFromJSON(output []byte) ports.AgentAuthStatus {

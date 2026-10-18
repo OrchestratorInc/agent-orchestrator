@@ -59,7 +59,7 @@ export function ArtifactsView() {
 			    each other: half the gap between the toolbar and a control. */}
 			<header className="workspace-topbar-container center-panel-titlebar flex h-toolbar shrink-0 items-center justify-between gap-3 border-b border-border-strong pr-[calc((var(--size-toolbar)-var(--size-topbar-control))/2)]">
 				<h1 className={showPageTitle ? cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5") : "sr-only"}>
-					{showPageTitle ? <FileText className="size-icon-md" aria-hidden="true" /> : null}
+					{showPageTitle ? <File className="size-icon-md" aria-hidden="true" /> : null}
 					{t("artifacts.title")}
 				</h1>
 				<div className="workspace-topbar-actions flex shrink-0 items-center gap-[calc((var(--size-toolbar)-var(--size-topbar-control))/2)]">

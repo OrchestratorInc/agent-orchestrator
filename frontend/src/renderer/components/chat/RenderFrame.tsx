@@ -1,4 +1,4 @@
-import { Code2, Download, ExternalLink, FilePlus, FileText, Globe2, Loader2, Maximize2 } from "lucide-react";
+import { Code2, Download, ExternalLink, FilePlus, FileText, Globe2, Loader2, Maximize2, WrapText } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { useOpenArtifactPreview } from "../../hooks/useOpenArtifactPreview";
@@ -84,23 +84,27 @@ function useRenderTheme(): RenderTheme {
 function RenderDocument({
 	page,
 	displayMode,
+	wrapContent,
 	className,
 }: {
 	page: FramePage;
 	displayMode: RenderDisplayMode;
+	wrapContent: boolean;
 	className?: string;
 }) {
 	const theme = useRenderTheme();
 	const frameRef = useRef<HTMLIFrameElement>(null);
 	const themeRef = useRef(theme);
 	themeRef.current = theme;
+	const wrapContentRef = useRef(wrapContent);
+	wrapContentRef.current = wrapContent;
 	// The daemon can come back on another port, so the src follows the API base
-	// (a frame not yet loaded would otherwise point at a dead port). The theme
-	// rides in the fragment only for the first paint; later flips are posted, so
-	// they never reload the page.
+	// (a frame not yet loaded would otherwise point at a dead port). Theme and
+	// wrapping ride in the fragment only for the first paint; later changes are
+	// posted, so they never reload the page.
 	const baseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
 	const src = useMemo(
-		() => `${page.frameUrl ?? `${baseUrl}${page.path}`}${renderThemeFragment(themeRef.current, displayMode, page.scrollable)}`,
+		() => `${page.frameUrl ?? `${baseUrl}${page.path}`}${renderThemeFragment(themeRef.current, displayMode, page.scrollable, wrapContentRef.current)}`,
 		[baseUrl, page.path, page.frameUrl, displayMode, page.scrollable],
 	);
 	const [contentHeight, setContentHeight] = useState<number>();
@@ -119,10 +123,10 @@ function RenderDocument({
 		return () => observer.disconnect();
 	}, [heights]);
 	const postTheme = () =>
-		frameRef.current?.contentWindow?.postMessage(renderThemeMessage(themeRef.current, displayMode, page.scrollable), "*");
+		frameRef.current?.contentWindow?.postMessage(renderThemeMessage(themeRef.current, displayMode, page.scrollable, wrapContent), "*");
 	useEffect(() => {
 		postTheme();
-	}, [theme]);
+	}, [theme, wrapContent]);
 	// Layout effect: a fast page can post its height before a passive effect runs.
 	useLayoutEffect(() => {
 		const onMessage = (event: MessageEvent) => {
@@ -272,6 +276,7 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 					frameUrl: links?.inlineUrl,
 				};
 	const [expanded, setExpanded] = useState(false);
+	const [wrapContent, setWrapContent] = useState(false);
 	const [showSource, setShowSource] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const [savingArtifact, setSavingArtifact] = useState(false);
@@ -304,6 +309,16 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 			})
 			.finally(() => setSavingArtifact(false));
 	};
+	const wrapAction = (
+		<RenderAction
+			label={t("chat.render.wrapContent")}
+			aria-pressed={wrapContent}
+			className="aria-pressed:bg-muted"
+			onClick={() => setWrapContent((current) => !current)}
+		>
+			<WrapText aria-hidden="true" className="size-3.5" />
+		</RenderAction>
+	);
 	return (
 		<div className="group/render relative min-w-0">
 			{"artifact" in props ? (
@@ -316,20 +331,24 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 					) : null}
 				</div>
 			) : null}
-			<RenderDocument page={page} displayMode="inline" />
-			<RenderAction
-				label={t("chat.render.expand")}
+			<RenderDocument page={page} displayMode="inline" wrapContent={wrapContent} />
+			<div
 				className={cn(
-					"absolute end-1 opacity-0 transition-opacity group-hover/render:opacity-100 focus-visible:opacity-100",
+					"absolute end-1 flex gap-1 opacity-0 transition-opacity group-hover/render:opacity-100 focus-within:opacity-100",
 					"artifact" in props ? "top-9" : "top-1",
 				)}
-				onClick={() => {
-					setShowSource(false);
-					setExpanded(true);
-				}}
 			>
-				<Maximize2 className="size-3.5" />
-			</RenderAction>
+				{wrapAction}
+				<RenderAction
+					label={t("chat.render.expand")}
+					onClick={() => {
+						setShowSource(false);
+						setExpanded(true);
+					}}
+				>
+					<Maximize2 className="size-3.5" />
+				</RenderAction>
+			</div>
 			<Dialog open={expanded} onOpenChange={setExpanded}>
 				<DialogContent
 					aria-describedby={undefined}
@@ -345,6 +364,7 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 					{/* pe-9 keeps the actions clear of the dialog's own close button. */}
 					<div className="flex h-8 shrink-0 items-center gap-1 ps-2 pe-9">
 						<DialogTitle className="min-w-0 flex-1 truncate text-subtitle">{page.title}</DialogTitle>
+						{wrapAction}
 						<RenderAction
 							label={t("chat.render.viewSource")}
 							aria-pressed={showSource}
@@ -372,7 +392,7 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 							label={t("chat.render.openInBrowser")}
 							onClick={() =>
 								window.open(
-									`${getApiBaseUrl()}${page.path}${renderThemeFragment(readRenderTheme(), "fullscreen")}`,
+									`${getApiBaseUrl()}${page.path}${renderThemeFragment(readRenderTheme(), "fullscreen", false, wrapContent)}`,
 									"_blank",
 									"noopener,noreferrer",
 								)
@@ -384,7 +404,7 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 					{!expanded ? null : showSource ? (
 						<RenderSource path={page.path} />
 					) : (
-						<RenderDocument page={page} displayMode="fullscreen" className="max-h-[calc(100svh-8rem)]" />
+						<RenderDocument page={page} displayMode="fullscreen" wrapContent={wrapContent} className="max-h-[calc(100svh-8rem)]" />
 					)}
 				</DialogContent>
 			</Dialog>
