@@ -103,13 +103,13 @@ func TestModelDoesNotPretendFlagOverridesNativeSelection(t *testing.T) {
 	_ = os.MkdirAll(filepath.Join(workspace, ".memcode"), 0700)
 	_ = os.WriteFile(filepath.Join(workspace, ".memcode", "config.json"), []byte(`{"endpoints":[{"name":"local","base_url":"http://127.0.0.1:9","last_model":"actual"}]}`), 0600)
 	t.Setenv("MEMCODE_ENDPOINT_URL", "")
-	if err := validateModel(workspace, "actual"); err == nil {
+	if err := validateModel(context.Background(), workspace, "actual"); err == nil {
 		t.Fatal("partial native provider selection accepted")
 	}
-	if err := validateModel(workspace, ""); err != nil {
+	if err := validateModel(context.Background(), workspace, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateModel(workspace, "ignored-override"); err == nil {
+	if err := validateModel(context.Background(), workspace, "ignored-override"); err == nil {
 		t.Fatal("model silently ignored")
 	}
 }

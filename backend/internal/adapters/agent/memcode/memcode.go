@@ -60,7 +60,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if len(cfg.AllowedTools) > 0 || len(cfg.DisallowedTools) > 0 {
 		return nil, errors.New("memcode per-launch tool restrictions are unsupported")
 	}
-	if err := validateModel(cfg.WorkspacePath, cfg.Config.Model); err != nil {
+	if err := validateModel(ctx, cfg.WorkspacePath, cfg.Config.Model); err != nil {
 		return nil, err
 	}
 	binary, err := p.ResolveBinary(ctx)
@@ -102,36 +102,16 @@ func (*Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	return agentbase.ModelConfigSpec(ctx, "Memcode selects the chosen model in its native TUI and remembers it for this project. Custom endpoints keep their own model selection.")
 }
 
-func validateModel(workspace, model string) error {
+func validateModel(ctx context.Context, workspace, model string) error {
 	if model == "" {
 		return nil
 	}
-	if os.Getenv("MEMCODE_ENDPOINT_URL") != "" {
-		return errors.New("memcode custom endpoint models must be selected in the native TUI")
-	}
-	settings, err := readMemcodeAuthEnv(memcodeAuthEnvPath())
+	customEndpoint, err := UsesCustomEndpoint(ctx, workspace, nil)
 	if err != nil {
 		return err
 	}
-	if settings["MEMCODE_ENDPOINT_URL"] != "" {
+	if customEndpoint {
 		return errors.New("memcode custom endpoint models must be selected in the native TUI")
-	}
-	if workspace != "" {
-		data, err := os.ReadFile(filepath.Join(workspace, ".memcode", "config.json"))
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if len(data) > 0 {
-			var native struct {
-				Endpoints []json.RawMessage `json:"endpoints"`
-			}
-			if err := json.Unmarshal(data, &native); err != nil {
-				return fmt.Errorf("read memcode model configuration: %w", err)
-			}
-			if len(native.Endpoints) > 0 {
-				return errors.New("memcode custom endpoint models must be selected in the native TUI")
-			}
-		}
 	}
 	for _, choice := range modelcatalog.Base("memcode").Models {
 		if model == choice.ID {
@@ -141,13 +121,49 @@ func validateModel(workspace, model string) error {
 	return errors.New("memcode model is not in the supported native catalog")
 }
 
+// UsesCustomEndpoint checks the native endpoint sources used by model validation,
+// including session launch overrides that are absent from the daemon environment.
+func UsesCustomEndpoint(ctx context.Context, workspace string, env map[string]string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if env["MEMCODE_ENDPOINT_URL"] != "" || os.Getenv("MEMCODE_ENDPOINT_URL") != "" {
+		return true, nil
+	}
+	settings, err := readMemcodeAuthEnv(memcodeAuthEnvPath())
+	if err != nil {
+		return false, err
+	}
+	if settings["MEMCODE_ENDPOINT_URL"] != "" {
+		return true, nil
+	}
+	if workspace != "" {
+		data, err := os.ReadFile(filepath.Join(workspace, ".memcode", "config.json"))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+		if len(data) > 0 {
+			var native struct {
+				Endpoints []json.RawMessage `json:"endpoints"`
+			}
+			if err := json.Unmarshal(data, &native); err != nil {
+				return false, fmt.Errorf("read memcode model configuration: %w", err)
+			}
+			if len(native.Endpoints) > 0 {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 // AfterStartCommand applies an AO model choice through Memcode's real TUI
 // command. The task is held until the terminal confirms the selected model.
 func (*Plugin) AfterStartCommand(ctx context.Context, cfg ports.LaunchConfig) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if err := validateModel(cfg.WorkspacePath, cfg.Config.Model); err != nil {
+	if err := validateModel(ctx, cfg.WorkspacePath, cfg.Config.Model); err != nil {
 		return "", err
 	}
 	if cfg.Config.Model == "" {

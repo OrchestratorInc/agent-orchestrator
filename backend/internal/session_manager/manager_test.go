@@ -3039,33 +3039,85 @@ func TestNativeModelConfirmationIgnoresRawScrollback(t *testing.T) {
 	}
 }
 
-func TestRestoreMemcodeDropsUnsupportedSavedModel(t *testing.T) {
+type modelCheckingMemcodeAgent struct{ recordingAgent }
+
+func (a *modelCheckingMemcodeAgent) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
+	// Exercise Memcode's real launch validation without requiring its executable.
+	if _, err := memcode.New().AfterStartCommand(ctx, cfg); err != nil {
+		return nil, err
+	}
+	return a.recordingAgent.GetLaunchCommand(ctx, cfg)
+}
+
+func TestRestoreMemcodeModelFollowsNativeEndpointConfiguration(t *testing.T) {
 	for _, test := range []struct {
-		model    string
-		endpoint string
-		want     string
+		name            string
+		model           string
+		endpoint        string
+		globalEndpoint  bool
+		daemonEndpoint  bool
+		workspaceConfig string
+		want            string
+		wantError       bool
 	}{
-		{model: "claude-opus-4-1"},
-		{model: "opus", want: "opus"},
-		{model: "opus", endpoint: "http://127.0.0.1:11434/v1"},
+		{name: "unsupported saved model", model: "claude-opus-4-1"},
+		{name: "native catalog model", model: "opus", want: "opus"},
+		{name: "project endpoint", model: "opus", endpoint: "http://127.0.0.1:11434/v1"},
+		{name: "daemon endpoint", model: "opus", daemonEndpoint: true},
+		{name: "global endpoint", model: "opus", globalEndpoint: true},
+		{name: "workspace endpoint", model: "opus", workspaceConfig: `{"endpoints":[{"name":"local","base_url":"http://127.0.0.1:11434/v1","last_model":"local-model"}]}`},
+		{name: "workspace without endpoints", model: "opus", workspaceConfig: `{"endpoints":[]}`, want: "opus"},
+		{name: "malformed workspace config", model: "opus", workspaceConfig: `{`, wantError: true},
 	} {
-		st := newFakeStore()
-		config := testRoleAgents()
-		config.Env = map[string]string{"MEMCODE_ENDPOINT_URL": test.endpoint}
-		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: config}
-		st.sessions["mer-1"] = domain.SessionRecord{
-			ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessMemcode, IsTerminated: true,
-			Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", Model: test.model, Prompt: "saved task"},
-		}
-		agent := &recordingAgent{}
-		m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
-			Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
-		if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
-			t.Fatal(err)
-		}
-		if agent.lastConfig.Model != test.want {
-			t.Fatalf("restored model = %q, want %q (saved %q, endpoint %q)", agent.lastConfig.Model, test.want, test.model, test.endpoint)
-		}
+		t.Run(test.name, func(t *testing.T) {
+			configHome := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", configHome)
+			t.Setenv("MEMCODE_ENDPOINT_URL", "")
+			if test.daemonEndpoint {
+				t.Setenv("MEMCODE_ENDPOINT_URL", "http://127.0.0.1:11434/v1")
+			}
+			if test.globalEndpoint {
+				if err := os.MkdirAll(filepath.Join(configHome, "memcode"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(configHome, "memcode", ".env"), []byte("MEMCODE_ENDPOINT_URL=http://127.0.0.1:11434/v1\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			workspace := t.TempDir()
+			if test.workspaceConfig != "" {
+				if err := os.MkdirAll(filepath.Join(workspace, ".memcode"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(workspace, ".memcode", "config.json"), []byte(test.workspaceConfig), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			st := newFakeStore()
+			config := testRoleAgents()
+			config.Env = map[string]string{"MEMCODE_ENDPOINT_URL": test.endpoint}
+			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: config}
+			st.sessions["mer-1"] = domain.SessionRecord{
+				ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessMemcode, IsTerminated: true,
+				Metadata: domain.SessionMetadata{WorkspacePath: workspace, Branch: "b", Model: test.model, Prompt: "saved task"},
+			}
+			agent := &modelCheckingMemcodeAgent{}
+			m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{path: workspace}, Store: st,
+				Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
+			_, err := m.RestoreWithMode(ctx, "mer-1")
+			if test.wantError {
+				if err == nil || !strings.Contains(err.Error(), "read memcode model configuration") || agent.launchCalls != 0 {
+					t.Fatalf("malformed configuration reached launch: err=%v, launches=%d", err, agent.launchCalls)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if agent.launchCalls != 1 || agent.lastConfig.Model != test.want {
+				t.Fatalf("restored model = %q, want %q (saved %q, endpoint %q)", agent.lastConfig.Model, test.want, test.model, test.endpoint)
+			}
+		})
 	}
 }
 
