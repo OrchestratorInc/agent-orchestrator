@@ -59,17 +59,47 @@ type Config struct {
 	// invoking an adapter-specific version flag, which many stdio agents do not
 	// implement and which can emit protocol bytes instead of a version string.
 	ValidateInitialize func(acpsdk.InitializeResponse) error
+	// AfterInitialize runs once on a freshly initialized provider connection,
+	// before any session is created. It is for bindings whose agent needs a
+	// one-time ACP call on the connection, such as authenticating with a method
+	// the user has already completed elsewhere. It does not run when AO
+	// reattaches to a persistent host, whose provider is already set up.
+	AfterInitialize func(context.Context, *acpsdk.ClientSideConnection, acpsdk.InitializeResponse, LaunchConfig) error
 	// SessionMeta carries adapter-defined ACP extensions whenever AO creates the
 	// provider-side session object: session/new, session/load, or
 	// session/resume. Standing context such as a system prompt is process input,
 	// not transcript history, so a resumed native conversation must receive it
 	// again even though the provider recovers the messages itself.
+	//
+	// Only use this for extensions the provider's session handlers actually read.
+	// An agent that ignores _meta on session/new needs SessionPreamble instead.
 	SessionMeta func(LaunchConfig) map[string]any
+	// SessionPreamble returns standing context to attach to the first prompt of a
+	// session as an embedded ACP resource. It is for agents that accept no
+	// system-prompt launch flag and ignore session/new _meta, but do execute
+	// prompt content blocks. It leads the first prompt of a new session. A
+	// resumed conversation that already has turns received it then, so it is not
+	// repeated (see conversation.setSessionPreamble).
+	SessionPreamble func(LaunchConfig) []acpsdk.ContentBlock
 	// SessionMode maps AO's approval vocabulary onto this ACP agent's mode ids.
 	// Empty means "leave the provider/user default unchanged".
 	SessionMode func(ports.PermissionMode) string
 	// SessionOptions maps AO's per-turn choices onto ACP config option ids.
 	SessionOptions func(ports.ChatTurnSettings) []SessionOption
+	// LaunchSessionOptions returns config options whose value is fixed for the
+	// whole session and known only from the launch, such as a persona the agent
+	// lets AO select by id but not by launch flag. They are set once after
+	// session/new or session/load, before the launch's turn settings.
+	LaunchSessionOptions func(LaunchConfig) []SessionOption
+	// RequireAdvertisedOptions refuses to send a config option, or a value, the
+	// session did not advertise. Set it for agents that acknowledge an unknown
+	// option without applying it, so the choice fails visibly instead.
+	RequireAdvertisedOptions bool
+	// CloseSessionBeforeReload closes the session before a history refresh
+	// reloads it on the same connection. Set it for agents that answer a second
+	// session/load with "already loaded". It applies only when the agent
+	// advertises session/close.
+	CloseSessionBeforeReload bool
 	// PermissionPolicy lets a provider binding resolve permission requests that
 	// have an exact AO policy mapping before the generic client parks them for a
 	// human. Returning handled=false preserves the ordinary approval flow.
@@ -85,6 +115,10 @@ type Config struct {
 	// PromptResponseFailure lets a provider binding interpret its own structured
 	// terminal metadata after a nominally successful ACP prompt response.
 	PromptResponseFailure func(acpsdk.PromptResponse) error
+	// HistoryNotice reports a replayed user message chunk that the agent wrote
+	// into its own transcript. Replay starts no turn for it, so the agent's
+	// output after it stays in the turn before, as it did live.
+	HistoryNotice func(string) bool
 	// CanHibernate checks provider-owned work that outlives an ACP prompt.
 	CanHibernate func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 	// EncodeProviderConversationID and DecodeProviderConversationID let a binding
@@ -293,6 +327,10 @@ func (d *Driver) openNewSession(
 	if d.cfg.EncodeProviderConversationID != nil {
 		conv.setReportedProviderConversationID(d.cfg.EncodeProviderConversationID(string(resp.SessionId)))
 	}
+	conv.setSessionPreamble(d.sessionPreamble(launchCfg))
+	if err := d.applyLaunchSessionOptions(ctx, conv, launchCfg); err != nil {
+		return fmt.Errorf("configure ACP session: %w", err)
+	}
 	settingsStarted := time.Now()
 	err = conv.applyTurnSettings(ctx, settings)
 	d.logStartStage(launchCfg.SessionID, "initial_settings", settingsStarted, err)
@@ -306,6 +344,22 @@ func (d *Driver) openNewSession(
 		}
 	}
 	return nil
+}
+
+// applyLaunchSessionOptions sets the binding's session-scoped config options.
+// A persistent-host reconnect skips it: that provider session already has them.
+func (d *Driver) applyLaunchSessionOptions(ctx context.Context, conv *conversation, cfg LaunchConfig) error {
+	if d.cfg.LaunchSessionOptions == nil {
+		return nil
+	}
+	return conv.applySessionOptions(ctx, d.cfg.LaunchSessionOptions(cfg))
+}
+
+func (d *Driver) sessionPreamble(cfg LaunchConfig) []acpsdk.ContentBlock {
+	if d.cfg.SessionPreamble == nil {
+		return nil
+	}
+	return d.cfg.SessionPreamble(cfg)
 }
 
 func (d *Driver) logStartStage(sessionID domain.SessionID, stage string, started time.Time, err error) {
@@ -393,6 +447,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 			}
 		}
 		conv.liveState = live
+		conv.hasDurableTurns = cfg.HasPriorTurns
 		conv.start(
 			cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init),
 			d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,
@@ -401,8 +456,20 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		)
 		conv.setReportedProviderConversationID(reportedProviderConversationID)
 		conv.initialPermission = ports.PermissionMode(live.InitialPermissions)
+		conv.setSessionPreamble(d.sessionPreamble(launchCfg))
 		return conv, nil
 	}
+	return d.resumeSession(ctx, conv, init, launchCfg, cfg, reportedProviderConversationID)
+}
+
+func (d *Driver) resumeSession(
+	ctx context.Context,
+	conv *conversation,
+	init acpsdk.InitializeResponse,
+	launchCfg LaunchConfig,
+	cfg ports.ChatResumeConfig,
+	reportedProviderConversationID string,
+) (ports.ChatConversation, error) {
 	if !supportsSessionRestore(init) {
 		conv.discard()
 		return nil, fmt.Errorf("%w: ACP agent supports neither session/load nor session/resume", ports.ErrChatResumeFailed)
@@ -439,7 +506,11 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 			AdditionalDirectories: additional,
 			McpServers:            mcpServers,
 		})
+		historyConversation.closeBeforeReload = d.cfg.CloseSessionBeforeReload &&
+			init.AgentCapabilities.SessionCapabilities.Close != nil
+		loadStarted := time.Now()
 		resp, err := historyConversation.loadHistory(resumeCtx)
+		d.logStartStage(launchCfg.SessionID, "session_load", loadStarted, err)
 		if err != nil {
 			if cfg.FreshIfMissing && !cfg.ReconnectOnly && isACPResourceNotFound(err) {
 				return d.resumeFresh(ctx, conv, init, launchCfg, cfg, additional, mcpServers)
@@ -450,6 +521,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		configOptions = resp.ConfigOptions
 		modes = resp.Modes
 	} else {
+		resumeStarted := time.Now()
 		resp, err := conv.conn.ResumeSession(resumeCtx, acpsdk.ResumeSessionRequest{
 			Meta:                  meta,
 			SessionId:             acpsdk.SessionId(cfg.ProviderConversationID),
@@ -457,6 +529,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 			AdditionalDirectories: additional,
 			McpServers:            mcpServers,
 		})
+		d.logStartStage(launchCfg.SessionID, "session_resume", resumeStarted, err)
 		if err != nil {
 			if cfg.FreshIfMissing && !cfg.ReconnectOnly && isACPResourceNotFound(err) {
 				return d.resumeFresh(ctx, conv, init, launchCfg, cfg, additional, mcpServers)
@@ -467,6 +540,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		configOptions = resp.ConfigOptions
 		modes = resp.Modes
 	}
+	conv.hasDurableTurns = cfg.HasPriorTurns
 	conv.start(
 		cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init),
 		d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,
@@ -474,6 +548,14 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		conv.legacyWire.modelState(), modes,
 	)
 	conv.setReportedProviderConversationID(reportedProviderConversationID)
+	// Standing context is process input, not transcript history, so a resumed
+	// conversation must receive it again even though the provider recovers the
+	// messages itself.
+	conv.setSessionPreamble(d.sessionPreamble(launchCfg))
+	if err := d.applyLaunchSessionOptions(ctx, conv, launchCfg); err != nil {
+		conv.discard()
+		return nil, fmt.Errorf("%w: configure ACP session: %w", ports.ErrChatResumeFailed, err)
+	}
 	if err := conv.applyTurnSettings(ctx, ports.ChatTurnSettings{Model: cfg.Model, Effort: cfg.Effort, Approval: cfg.Permissions}); err != nil {
 		if !errors.Is(err, ErrACPSetterUnsupported) {
 			conv.discard()
@@ -541,6 +623,9 @@ func (d *Driver) initialize(
 	conv.onAuthRejected = d.cfg.OnAuthRejected
 	conv.promptResponseFailure = d.cfg.PromptResponseFailure
 	conv.hibernationCheck = d.cfg.CanHibernate
+	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
+	conv.historyNotice = d.cfg.HistoryNotice
+	conv.requireAdvertised = d.cfg.RequireAdvertisedOptions
 	if proc.reconnected {
 		state := proc.acpState
 		if state == nil || len(state.InitializeResult) == 0 || len(state.SessionResult) == 0 || state.SessionID == "" {
@@ -560,6 +645,7 @@ func (d *Driver) initialize(
 				return nil, acpsdk.InitializeResponse{}, nil, fmt.Errorf("%w: %w", ports.ErrChatDriverIncompatible, err)
 			}
 		}
+		conv.canDeleteFork = init.AgentCapabilities.SessionCapabilities.Delete != nil
 		return conv, init, state, nil
 	}
 
@@ -609,6 +695,13 @@ func (d *Driver) initialize(
 		if err := d.cfg.ValidateInitialize(init); err != nil {
 			conv.discard()
 			return nil, acpsdk.InitializeResponse{}, nil, fmt.Errorf("%w: %w", ports.ErrChatDriverIncompatible, err)
+		}
+	}
+	conv.canDeleteFork = init.AgentCapabilities.SessionCapabilities.Delete != nil
+	if d.cfg.AfterInitialize != nil {
+		if err := d.cfg.AfterInitialize(ctx, conv.conn, init, cfg); err != nil {
+			conv.discard()
+			return nil, acpsdk.InitializeResponse{}, nil, normalizeACPError("ACP after initialize", err)
 		}
 	}
 	return conv, init, nil, nil
@@ -693,6 +786,9 @@ func conversationCapabilities(
 		caps[ports.ChatCapabilityResume] = false
 	}
 	caps[ports.ChatCapabilityHistory] = init.AgentCapabilities.LoadSession
+	caps[ports.ChatCapabilityFork] = false // ACP has no turn-anchored fork in the pinned SDK.
+	caps[ports.ChatCapabilityForkCurrent] = init.AgentCapabilities.SessionCapabilities.Fork != nil &&
+		supportsSessionRestore(init)
 	if extensionSupported(init.Meta, "steering") {
 		caps[ports.ChatCapabilitySteer] = true
 	}

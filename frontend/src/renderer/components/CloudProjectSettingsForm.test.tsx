@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CloudCpProject, CloudCpProjectSettingsRequest } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpProject, type CloudCpProjectSettingsRequest } from "../lib/cloud-cp";
 import { CloudProjectCoderSettings } from "./CloudProjectSettingsForm";
 import { ProjectSettingsForm } from "./ProjectSettingsForm";
 import { SettingsDialog } from "./SettingsPageTestHarness";
@@ -10,11 +10,11 @@ import { useUiStore } from "../stores/ui-store";
 import { TooltipProvider } from "./ui/tooltip";
 
 const mocks = vi.hoisted(() => ({
-	get: vi.fn(), patch: vi.fn(), localGet: vi.fn(), connections: vi.fn(), me: vi.fn(), ready: true,
+	get: vi.fn(), patch: vi.fn(), localGet: vi.fn(), connections: vi.fn(), me: vi.fn(), templateParameters: vi.fn(), ready: true,
 	templates: [] as Array<{ id: string; name: string; displayName: string }>,
 	orgCoderConfig: null as { baseUrl: string; templateId?: string } | null,
 }));
-vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ client: { getProject: mocks.get, updateProjectSettings: mocks.patch, listUserProviderConnections: mocks.connections, me: mocks.me }, ready: mocks.ready, baseUrl: "https://cloud.test" }) }));
+vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ client: { getProject: mocks.get, updateProjectSettings: mocks.patch, listUserProviderConnections: mocks.connections, me: mocks.me, getCoderTemplateParameters: mocks.templateParameters, evaluateCoderTemplateParameters: (orgId: string, templateId: string, _values: unknown, options: unknown) => mocks.templateParameters(orgId, templateId, options) }, ready: mocks.ready, baseUrl: "https://cloud.test" }) }));
 vi.mock("../hooks/useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled: true }) }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKey: ["workspaces"], cloudProjectsQueryKey: ["cloud-projects"], useWorkspaceQuery: () => ({ data: [] }),
@@ -43,8 +43,11 @@ beforeEach(() => {
 	mocks.localGet.mockReset();
 	mocks.connections.mockReset();
 	mocks.connections.mockResolvedValue({ providerConnections: [] });
+	mocks.templateParameters.mockReset();
+	mocks.templateParameters.mockResolvedValue({ parameters: [] });
 	mocks.me.mockReset();
-	mocks.me.mockResolvedValue({ sandboxProviders: { available: ["nodeops"], default: "nodeops" } });
+	// A B2B org by default: its projects run on Coder.
+	mocks.me.mockResolvedValue({ organizations: [], offering: { providers: ["coder"], defaultProvider: "coder", billingMode: "contract", kind: "b2b", features: [] } });
 	mocks.localGet.mockImplementation(async (_path: string, options: { params: { path: { agent: string } } }) => ({ data: {
 		agent: options.params.path.agent, selectionMode: "catalog", allowCustom: true,
 		models: ["worker-model", "orchestrator-model", "reviewer-model", "review-codex"].map((id) => ({ id, label: id, efforts: ["low", "high", "max"] })),
@@ -74,7 +77,7 @@ beforeEach(() => {
 			return { agent, agentConfig: { ...previous?.agentConfig, ...update.agentConfig } };
 		};
 		const coder = patch.config?.coder ? { ...(project.config.coder as object | undefined), ...patch.config.coder } : project.config.coder;
-		project = { ...project, ...(patch.displayName ? { displayName: patch.displayName } : {}), ...(patch.defaultBranch ? { defaultBranch: patch.defaultBranch } : {}), config: { ...project.config, ...patch.config, coder, worker: mergeRole("worker"), orchestrator: mergeRole("orchestrator") } };
+		project = { ...project, ...(patch.displayName ? { displayName: patch.displayName } : {}), ...(patch.defaultBranch ? { defaultBranch: patch.defaultBranch } : {}), config: { ...project.config, ...patch.config, coder, worker: mergeRole("worker"), orchestrator: mergeRole("orchestrator") } as CloudCpProject["config"] };
 		if (project.config.coder === undefined) delete project.config.coder;
 		for (const role of ["worker", "orchestrator"] as const) if (project.config[role] === undefined) delete project.config[role];
 		return { project };
@@ -312,7 +315,7 @@ describe("Cloud project Coder template", () => {
 		project.config.coder = { templateId: "tpl-1" };
 		mount("general");
 		await userEvent.click(await screen.findByRole("button", { name: "Edit Workspace name prefix" }));
-		expect(screen.getByText("Applies to new sessions. Workspaces are named <prefix>-<id>; empty uses ao.")).toBeInTheDocument();
+		expect(screen.getByText("Applies to new sessions. Workspaces are named <prefix>-<id>; empty uses the project name.")).toBeInTheDocument();
 		const prefix = screen.getByRole("textbox", { name: "Workspace name prefix" });
 		await userEvent.type(prefix, "acme");
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { coder: { workspaceNamePrefix: "acme" } } }));
@@ -339,16 +342,47 @@ describe("Cloud project Coder template", () => {
 		expect(mocks.patch).not.toHaveBeenCalled();
 	});
 
-	it("shows the workspace name prefix only for a Coder project", async () => {
+	it("shows no Coder settings at all to a B2C org", async () => {
 		mocks.orgCoderConfig = { baseUrl: "https://coder.acme.test" };
-		renderCoder();
+		mocks.me.mockResolvedValue({ organizations: [], offering: { providers: ["freestyle"], defaultProvider: "freestyle", billingMode: "self_serve", kind: "b2c", features: [] } });
+		project.config.coder = { templateId: "tpl-1", workspaceNamePrefix: "legacy" };
+		mount("general");
+		expect(await screen.findByRole("button", { name: "Edit Project name" })).toBeInTheDocument();
 		await waitFor(() => expect(mocks.me).toHaveBeenCalled());
+		expect(screen.queryByText("Coder template")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Edit Workspace name prefix" })).not.toBeInTheDocument();
 	});
 
-	it("shows the workspace name prefix when new sessions run on Coder", async () => {
+	it("shows Coder settings for a project set up on Coder before projects recorded their provider", async () => {
+		mocks.me.mockResolvedValue({ organizations: [], offering: { providers: ["freestyle", "coder"], defaultProvider: "freestyle", billingMode: "contract", kind: "both", features: [] } });
+		mount("general");
+		expect(await screen.findByText("Coder template")).toBeInTheDocument();
+	});
+
+	it("shows Coder settings for a project stored on Coder when the org offers both", async () => {
+		mocks.me.mockResolvedValue({ organizations: [], offering: { providers: ["freestyle", "coder"], defaultProvider: "freestyle", billingMode: "contract", kind: "both", features: [] } });
+		project.config.sandboxProvider = "coder";
+		mount("general");
+		expect(await screen.findByText("Coder template")).toBeInTheDocument();
+	});
+
+	it("hides Coder settings for a project recorded on Freestyle when the org offers both", async () => {
+		mocks.me.mockResolvedValue({ organizations: [], offering: { providers: ["freestyle", "coder"], defaultProvider: "freestyle", billingMode: "contract", kind: "both", features: [] } });
+		project.config.sandboxProvider = "freestyle";
+		mount("general");
+		expect(await screen.findByRole("button", { name: "Edit Project name" })).toBeInTheDocument();
+		await waitFor(() => expect(mocks.me).toHaveBeenCalled());
+		expect(screen.queryByText("Coder template")).not.toBeInTheDocument();
+	});
+
+	it("falls back to /me sandboxProviders on an older control plane", async () => {
+		mocks.me.mockResolvedValue({ organizations: [], sandboxProviders: { available: ["coder"], default: "coder" } });
+		mount("general");
+		expect(await screen.findByText("Coder template")).toBeInTheDocument();
+	});
+
+	it("shows the workspace name prefix for a bring-your-own-Coder org", async () => {
 		mocks.orgCoderConfig = { baseUrl: "https://coder.acme.test" };
-		mocks.me.mockResolvedValue({ sandboxProviders: { available: ["coder"], default: "coder" } });
 		renderCoder();
 		expect(await screen.findByRole("button", { name: "Edit Workspace name prefix" })).toBeInTheDocument();
 	});
@@ -364,5 +398,63 @@ describe("Cloud project Coder template", () => {
 		project.config.coder = { templateId: "tpl-1", workspaceNamePrefix: "legacy" };
 		mount("general");
 		expect(await screen.findByRole("button", { name: "Edit Workspace name prefix" })).toBeInTheDocument();
+	});
+});
+
+describe("Cloud project Coder template options", () => {
+	const templateParameters = [
+		{ name: "region", displayName: "Region", type: "string", mutable: true, required: false, defaultValue: "eu" },
+		{ name: "docker", displayName: "Docker", type: "bool", mutable: true, required: false, defaultValue: "false" },
+	];
+	// The shared cloud-client schema predates `coder.parameters`.
+	const withSavedParameters = { templateId: "tpl-1", parameters: { region: "us" } } as CloudCpProject["config"]["coder"];
+
+	it("edits saved template options, sending the whole map so saved values survive", async () => {
+		mocks.templateParameters.mockResolvedValue({ parameters: templateParameters });
+		project.config.coder = withSavedParameters;
+		mount("general");
+		expect(await screen.findByText("Template options")).toBeInTheDocument();
+		expect(mocks.templateParameters).toHaveBeenCalledWith("org", "tpl-1", expect.anything());
+		expect(screen.getByText("Changes apply to new sessions.")).toBeInTheDocument();
+		// The saved override wins over the template default.
+		expect(screen.getByRole("textbox", { name: "Region" })).toHaveValue("us");
+		expect(mocks.patch).not.toHaveBeenCalled();
+
+		await userEvent.click(screen.getByRole("switch", { name: "Docker" }));
+		// The endpoint replaces coder.parameters, so the saved region goes too.
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { coder: { parameters: { region: "us", docker: "true" } } } }));
+		expect(mocks.patch).toHaveBeenCalledTimes(1);
+	});
+
+	it("resets a saved option to the template default", async () => {
+		mocks.templateParameters.mockResolvedValue({ parameters: templateParameters });
+		project.config.coder = withSavedParameters;
+		mount("general");
+		const region = await screen.findByRole("textbox", { name: "Region" });
+		await userEvent.clear(region);
+		await userEvent.type(region, "eu");
+		// Back at the default, region is simply left out of the map.
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { coder: { parameters: {} } } }));
+	});
+
+	it("hides template options when the control plane has no parameters route", async () => {
+		mocks.templateParameters.mockRejectedValue(new CloudCpError("Not found", { status: 404 }));
+		project.config.coder = { templateId: "tpl-1" };
+		mount("general");
+		expect(await screen.findByText("Coder template")).toBeInTheDocument();
+		await waitFor(() => expect(mocks.templateParameters).toHaveBeenCalled());
+		expect(screen.queryByText("Template options")).not.toBeInTheDocument();
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("never asks for template options on a non-Coder project", async () => {
+		mocks.me.mockResolvedValue({ organizations: [], offering: { providers: ["freestyle", "coder"], defaultProvider: "freestyle", billingMode: "contract", kind: "both", features: [] } });
+		project.config.coder = { templateId: "tpl-1" };
+		project.config.sandboxProvider = "freestyle";
+		mount("general");
+		expect(await screen.findByRole("button", { name: "Edit Project name" })).toBeInTheDocument();
+		await waitFor(() => expect(mocks.me).toHaveBeenCalled());
+		expect(mocks.templateParameters).not.toHaveBeenCalled();
+		expect(screen.queryByText("Template options")).not.toBeInTheDocument();
 	});
 });

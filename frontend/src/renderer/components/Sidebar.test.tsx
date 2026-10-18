@@ -54,6 +54,7 @@ const {
 	downloadUpdateMock,
 	getMock,
 	navigateMock,
+	mockLocation,
 	mockParams,
 	postMock,
 	renameSessionMock,
@@ -77,6 +78,7 @@ const {
 		getMock: vi.fn(),
 		postMock: vi.fn(),
 		navigateMock: vi.fn(),
+		mockLocation: { pathname: "/" },
 		mockParams: { hostId: undefined as string | undefined, projectId: undefined as string | undefined, sessionId: undefined as string | undefined },
 		renameSessionMock: vi.fn().mockResolvedValue(undefined),
 		spawnMock: vi.fn(),
@@ -113,6 +115,19 @@ vi.mock("../lib/spawn-orchestrator", () => ({
 	spawnOrchestrator: spawnMock,
 	resumeOrchestrator: resumeOrchestratorMock,
 }));
+// Counts session-row renders by id; every SessionRow calls this hook once.
+const sessionRowRenders = vi.hoisted(() => new Map<string, number>());
+vi.mock("../hooks/useSessionRename", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../hooks/useSessionRename")>();
+	return {
+		...actual,
+		useSessionRename: (...args: Parameters<typeof actual.useSessionRename>) => {
+			const id = args[0]?.id;
+			if (id) sessionRowRenders.set(id, (sessionRowRenders.get(id) ?? 0) + 1);
+			return actual.useSessionRename(...args);
+		},
+	};
+});
 vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => cloudSessionState }));
 vi.mock("../hooks/useCloudGate", () => ({ useCloudGate: () => cloudGateState }));
 // Local (dev-only) cloud sign-in is off in these tests; mock it like its cloud
@@ -146,7 +161,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 		useNavigate: () => navigateMock,
 		useParams: () => ({ ...mockParams }),
 		useRouterState: ({ select }: { select: (state: { location: { pathname: string } }) => unknown }) =>
-			select({ location: { pathname: "/" } }),
+			select({ location: { pathname: mockLocation.pathname } }),
 	};
 });
 
@@ -543,6 +558,7 @@ beforeEach(() => {
 	mockParams.projectId = undefined;
 	mockParams.sessionId = undefined;
 	mockParams.hostId = undefined;
+	mockLocation.pathname = "/";
 });
 
 afterEach(() => {
@@ -646,6 +662,49 @@ describe("Sidebar", () => {
 		expect(screen.getAllByLabelText("Sign in to AO Cloud")).toHaveLength(2);
 	});
 
+	it("shows the Artifacts row under Automations with a count of live artifacts", async () => {
+		const user = userEvent.setup();
+		const withArtifacts: WorkspaceSummary = {
+			...workspace,
+			sessions: [
+				{
+					...session,
+					outputType: "artifact",
+					artifactFiles: [
+						{ kind: "html", name: "flow.html", path: "flow.html", size: 1, updatedAt: "2026-10-11T10:00:00Z" },
+						{ kind: "markdown", name: "plan.md", path: "plan.md", size: 1, updatedAt: "2026-10-10T10:00:00Z" },
+					],
+				},
+				{
+					...session,
+					id: "proj-1-2",
+					isTerminated: true,
+					outputType: "artifact",
+					artifactFiles: [{ kind: "markdown", name: "old.md", path: "old.md", size: 1, updatedAt: "2026-10-01T10:00:00Z" }],
+				},
+			],
+		};
+		renderSidebar({ workspaces: [withArtifacts] });
+
+		const automations = screen.getByRole("button", { name: "Automations" });
+		const artifacts = screen.getByRole("button", { name: "Artifacts" });
+		expect(automations.compareDocumentPosition(artifacts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(artifacts).toHaveTextContent("2");
+		expect(artifacts).not.toHaveAttribute("aria-current");
+
+		await user.click(artifacts);
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/artifacts" });
+	});
+
+	it("omits the Artifacts count when there are none and marks the row active on its route", () => {
+		mockLocation.pathname = "/artifacts";
+		renderSidebar();
+
+		const artifacts = screen.getByRole("button", { name: "Artifacts" });
+		expect(artifacts).toHaveAttribute("aria-current", "page");
+		expect(artifacts.textContent).toBe("Artifacts");
+	});
+
 	it("navigates home from the brand row", async () => {
 		const user = userEvent.setup();
 		mockParams.projectId = "proj-1";
@@ -702,7 +761,12 @@ describe("Sidebar", () => {
 		// the footer content while the sidebar slides away and leave its border behind.
 		expect(expandedButton?.closest("[hidden]")).toBeNull();
 		expect(collapsedButton).toHaveAttribute("tabindex", "0");
-		expect(collapsedButton?.closest('[aria-hidden="true"]')).toBeNull();
+		// The sidebar content is off-screen while collapsed: inert + aria-hidden, but the
+		// edge rail that reopens it stays live.
+		const inertRegion = collapsedButton?.closest("[inert]");
+		expect(inertRegion).toHaveAttribute("aria-hidden", "true");
+		expect(inertRegion?.closest('[data-slot="sidebar-container"]')).not.toBeNull();
+		expect(document.querySelector('[data-sidebar="rail"]')?.closest("[inert]")).toBeNull();
 	});
 
 	it("keeps sidebar scrolling functional without a layout gutter", () => {
@@ -974,7 +1038,7 @@ describe("Sidebar", () => {
 		expect(document.querySelector(`li[data-project-id="${STANDALONE_WORKSPACE_ID}"]`)).toBeNull();
 		const section = document.querySelector("[data-scratchpad-section]")!;
 		expect(section).toContainElement(screen.getByText("baby"));
-		expect(section).toHaveClass("mb-2", "shrink-0");
+		expect(section).toHaveClass("mb-2", "min-h-0");
 		expect(screen.queryByRole("button", { name: /show (more|fewer) agents/i })).not.toBeInTheDocument();
 		expect(screen.getByTestId("sidebar-projects-scroller")).not.toContainElement(screen.getByText("baby"));
 	});
@@ -1072,7 +1136,7 @@ describe("Sidebar", () => {
 		expect(scroller).toHaveClass("overflow-y-auto");
 		expect(scroller.style.height).toBe("");
 		expect(scroller.style.maxHeight).toBe("");
-		expect(document.querySelector("[data-scratchpad-section]")).toHaveStyle({ maxHeight: "calc(50cqh - var(--space-2))" });
+		expect(document.querySelector<HTMLElement>("[data-scratchpad-section]")!.style.maxHeight).toBe("");
 
 		await user.click(screen.getByRole("button", { name: "Show 3 more agents" }));
 
@@ -1170,12 +1234,13 @@ describe("Sidebar", () => {
 		expect(screen.getByLabelText("Project actions for Project One")).toBeInTheDocument();
 	});
 
-	it("keeps project disclosure and row actions in the keyboard tab order", () => {
+	it("keeps project row actions in the keyboard tab order without a duplicate disclosure stop", () => {
 		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
 
-		const disclosure = screen.getByRole("button", { name: "Toggle Project One sessions" });
+		const disclosure = screen.getByLabelText("Toggle Project One sessions");
 		expect(disclosure.tagName).toBe("BUTTON");
-		expect(disclosure).toHaveProperty("tabIndex", 0);
+		// The overlay folder button duplicates the project row's tab stop.
+		expect(disclosure).toHaveProperty("tabIndex", -1);
 		expect(screen.getByLabelText("Spawn Project One orchestrator")).toHaveProperty("tabIndex", 0);
 		expect(screen.getByLabelText("Project actions for Project One")).toHaveProperty("tabIndex", 0);
 		expect(screen.getByLabelText("Pin session")).toHaveProperty("tabIndex", 0);
@@ -1260,7 +1325,7 @@ describe("Sidebar", () => {
 		expect(screen.getByText("fix login")).toBeInTheDocument();
 		expect(screen.getByText("other task")).toBeInTheDocument();
 
-		const folder = screen.getByRole("button", { name: "Toggle Project Two sessions" });
+		const folder = screen.getByLabelText("Toggle Project Two sessions");
 		expect(folder).toBeTruthy();
 		await user.click(folder);
 
@@ -1433,7 +1498,7 @@ describe("Sidebar", () => {
 			workspaces: [{ ...workspace, sessions: [orchestrator, session] }],
 		});
 
-		await user.click(screen.getByRole("button", { name: "Toggle Project One sessions" }));
+		await user.click(screen.getByLabelText("Toggle Project One sessions"));
 		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
 		expect(screen.getByText("Project One").closest("button")).toHaveAttribute("aria-expanded", "false");
 
@@ -1856,7 +1921,7 @@ describe("Sidebar", () => {
 		expect(onCreateProject).not.toHaveBeenCalled();
 	});
 
-	it("shows initialized workspace repositories that need fixes", async () => {
+	it("imports a workspace without initialized repositories that need fixes", async () => {
 		const user = userEvent.setup();
 		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/workspace");
 		window.ao!.app.checkAncestorRepo = vi.fn().mockResolvedValue(undefined);
@@ -1891,9 +1956,12 @@ describe("Sidebar", () => {
 		await screen.findByRole("dialog", { name: "Import workspace" });
 
 		expect(screen.getByText("unborn")).toBeInTheDocument();
-		expect(screen.getByText("Set an origin remote for the child repositories marked below before importing this workspace.")).toBeInTheDocument();
+		expect(screen.queryByText("Set an origin remote for the child repositories marked below before importing this workspace.")).not.toBeInTheDocument();
+		expect(screen.getByText("The 2 repositories marked below have no commit or origin remote yet. AO will import this workspace without them, and agents will not work in them.")).toBeInTheDocument();
+		expect(screen.getByText("Git setup needed · Not included")).toBeInTheDocument();
+		expect(screen.getByText("No remote · Not included")).toBeInTheDocument();
 		expect(screen.queryByRole("dialog", { name: "Prepare project" })).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
 		expect(screen.queryByRole("button", { name: /Set up|Hide setup/i })).not.toBeInTheDocument();
 		expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
 	});
@@ -2454,14 +2522,14 @@ describe("Sidebar", () => {
 		expect(section).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Scratchpad" })).toBeVisible();
 		expect(section).toContainElement(screen.getByText("adhoc one"));
-		// Scratchpad keeps a bounded, non-shrinking slot; Projects flexes into the rest
-		// and scrolls itself, so neither section can hide the other.
-		expect(section).toHaveClass("shrink-0");
-		expect(section.style.maxHeight).toBe("calc(50cqh - var(--space-2))");
+		// Both sections sit in auto-sized grid rows: each takes its content height,
+		// spare space goes to whichever needs it, and a tie splits the column evenly.
+		expect(section).not.toHaveClass("shrink-0");
+		expect(section.style.maxHeight).toBe("");
 		const projects = screen.getByTestId("sidebar-projects-scroller");
 		expect(projects).toHaveClass("min-h-0", "flex-1", "overflow-y-auto");
 		expect(projects.style.maxHeight).toBe("");
-		expect(section.parentElement).toHaveClass("flex", "flex-col", "min-h-0");
+		expect(section.parentElement).toHaveClass("grid", "min-h-0", "auto-rows-[minmax(0,auto)]");
 		expect(section.parentElement?.style.getPropertyValue("--sidebar-scratchpad-reserved-height")).toBe("");
 	});
 
@@ -2519,7 +2587,7 @@ describe("Sidebar", () => {
 		// The sidebar slides away (offcanvas); it has no icon rail, so its lists
 		// must not lift their caps just because it is collapsed.
 		expect(screen.queryByText("Project 11")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: /more projects/ })).toBeInTheDocument();
+		expect(screen.getByRole("button", { hidden: true, name: /more projects/ })).toBeInTheDocument();
 	});
 
 	it("does not reopen a closed Projects section when the sidebar is toggled off and on", async () => {
@@ -2533,7 +2601,7 @@ describe("Sidebar", () => {
 		await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
 		// While the sidebar is off, the closed section must not be forced open.
 		expect(screen.queryByText(workspace.name)).not.toBeInTheDocument();
-		await user.click(screen.getAllByRole("button", { name: "Expand sidebar" })[0]);
+		await user.click(screen.getAllByRole("button", { hidden: true, name: "Expand sidebar" })[0]);
 
 		expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-expanded", "false");
 		expect(screen.queryByText(workspace.name)).not.toBeInTheDocument();
@@ -2750,7 +2818,7 @@ describe("Sidebar", () => {
 		expect(screen.getByLabelText("Open second task")).toBeInTheDocument();
 
 		// Collapse via folder icon
-		const folder = screen.getByRole("button", { name: "Toggle Project One sessions" });
+		const folder = screen.getByLabelText("Toggle Project One sessions");
 		expect(folder).toBeTruthy();
 		await user.click(folder);
 
@@ -2765,7 +2833,7 @@ describe("Sidebar", () => {
 		});
 
 		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Toggle Project One sessions" })).toHaveAttribute(
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute(
 			"aria-expanded",
 			"false",
 		);
@@ -2781,14 +2849,14 @@ describe("Sidebar", () => {
 		});
 
 		expect(screen.getByLabelText("Open fix login")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Toggle Project One sessions" })).toHaveAttribute(
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute(
 			"aria-expanded",
 			"true",
 		);
 
-		await user.click(screen.getByRole("button", { name: "Toggle Project One sessions" }));
+		await user.click(screen.getByLabelText("Toggle Project One sessions"));
 		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Toggle Project One sessions" })).toHaveAttribute(
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute(
 			"aria-expanded",
 			"false",
 		);
@@ -2810,7 +2878,7 @@ describe("Sidebar", () => {
 		expect(screen.getByLabelText("Open fix login")).toBeInTheDocument();
 		expect(screen.queryByLabelText("Open second task")).not.toBeInTheDocument();
 
-		await user.click(screen.getByRole("button", { name: "Toggle Project One sessions" }));
+		await user.click(screen.getByLabelText("Toggle Project One sessions"));
 		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.expanded-projects") ?? "null")).toEqual([]);
 	});
 
@@ -2834,7 +2902,7 @@ describe("Sidebar", () => {
 		expect(projectRow).toHaveAttribute("aria-expanded", "true");
 
 		// Collapse via folder icon
-		const folder = screen.getByRole("button", { name: "Toggle Project One sessions" });
+		const folder = screen.getByLabelText("Toggle Project One sessions");
 		expect(folder).toBeTruthy();
 		await user.click(folder);
 
@@ -3483,5 +3551,140 @@ describe("resolveNextNavigationAfterSessionKill", () => {
 	it("falls back to project board if workspace is undefined", () => {
 		const route = resolveNextNavigationAfterSessionKill(undefined, "s-1");
 		expect(route).toEqual({ target: "project" });
+	});
+});
+
+describe("Sidebar session switch rendering", () => {
+	it("re-renders only the rows whose active state changed when switching across projects", () => {
+		const noop = () => vi.fn().mockResolvedValue(undefined);
+		const p1 = { ...workspace, sessions: [{ ...session, id: "p1-a", title: "one a" }, { ...session, id: "p1-b", title: "one b" }] };
+		const p2: WorkspaceSummary = {
+			...workspace,
+			id: "proj-2",
+			name: "Project Two",
+			path: "/repo/project-two",
+			sessions: [
+				{ ...session, id: "p2-a", workspaceId: "proj-2", workspaceName: "Project Two", title: "two a" },
+				{ ...session, id: "p2-b", workspaceId: "proj-2", workspaceName: "Project Two", title: "two b" },
+			],
+		};
+		let workspaces = [p1, p2];
+		window.localStorage.setItem("ao.sidebar.expanded-projects", JSON.stringify([p1.id, p2.id]));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const handlers = {
+			onCloneProject: noop(),
+			onCreateProject: noop(),
+			onInitializeProject: noop(),
+			onRemoveProject: noop(),
+			onCreateRemoteProject: noop(),
+			onInitializeRemoteProject: noop(),
+		};
+		const tree = () => (
+			<QueryClientProvider client={client}>
+				<TooltipProvider>
+					<SidebarProvider>
+						<Sidebar workspaces={workspaces} {...handlers} />
+					</SidebarProvider>
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+		mockParams.projectId = p1.id;
+		mockParams.sessionId = "p1-a";
+		const view = render(tree());
+		expect(screen.getByLabelText("Open two b")).toBeInTheDocument();
+
+		sessionRowRenders.clear();
+		mockParams.projectId = p2.id;
+		mockParams.sessionId = "p2-a";
+		view.rerender(tree());
+
+		expect([...sessionRowRenders.keys()].sort()).toEqual(["p1-a", "p2-a"]);
+
+		// Opening a session refreshes its project (its viewed state changes). Only
+		// the changed row may re-render, not every sortable row in that project.
+		const refreshed = { ...p2, sessions: [{ ...p2.sessions[0]!, updatedAt: "2026-07-01T00:00:00Z" }, p2.sessions[1]!] };
+		workspaces = [p1, refreshed];
+		sessionRowRenders.clear();
+		view.rerender(tree());
+
+		expect([...sessionRowRenders.keys()]).toEqual(["p2-a"]);
+	});
+});
+
+describe("Sidebar active-session reveal", () => {
+	const noop = () => vi.fn().mockResolvedValue(undefined);
+	const other: WorkspaceSession = { ...session, id: "proj-1-2", title: "second task" };
+
+	function mount(expandedProjectIds: string[]) {
+		window.localStorage.setItem("ao.sidebar.expanded-projects", JSON.stringify(expandedProjectIds));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const tree = () => (
+			<QueryClientProvider client={client}>
+				<TooltipProvider>
+					<SidebarProvider>
+						<Sidebar
+							workspaces={[{ ...workspace, sessions: [session, other] }]}
+							onCloneProject={noop()}
+							onCreateProject={noop()}
+							onInitializeProject={noop()}
+							onRemoveProject={noop()}
+							onCreateRemoteProject={noop()}
+							onInitializeRemoteProject={noop()}
+						/>
+					</SidebarProvider>
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+		const view = render(tree());
+		return {
+			go: (sessionId: string | undefined) => {
+				mockParams.projectId = sessionId ? workspace.id : undefined;
+				mockParams.sessionId = sessionId;
+				view.rerender(tree());
+			},
+		};
+	}
+
+	it("expands the collapsed project and scrolls the active row into view when the session changes", async () => {
+		const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+		const { go } = mount([]);
+		expect(screen.queryByLabelText("Open second task")).not.toBeInTheDocument();
+
+		go(other.id);
+
+		const row = await screen.findByLabelText("Open second task");
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute("aria-expanded", "true");
+		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.expanded-projects") ?? "null")).toEqual([workspace.id]);
+		await waitFor(() => expect(scroll).toHaveBeenCalledWith({ block: "nearest" }));
+		expect(scroll.mock.contexts.at(-1)).toBe(row);
+	});
+
+	it("reopens a closed Projects section to reveal the active session", async () => {
+		const user = userEvent.setup();
+		const { go } = mount([workspace.id]);
+		await user.click(screen.getByRole("button", { name: "Projects" }));
+		expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-expanded", "false");
+
+		go(session.id);
+
+		await waitFor(() => expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-expanded", "true"));
+		expect(await screen.findByLabelText("Open fix login")).toHaveAttribute("aria-current", "page");
+	});
+
+	it("does not re-expand a project the user collapses while staying on the same session", async () => {
+		const user = userEvent.setup();
+		const { go } = mount([workspace.id]);
+		go(session.id);
+		await screen.findByLabelText("Open fix login");
+
+		await user.click(screen.getByLabelText("Toggle Project One sessions"));
+		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
+
+		go(session.id);
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		});
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
 	});
 });

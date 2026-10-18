@@ -85,6 +85,19 @@ const (
 	SessionOutputPRAndArtifact SessionOutputType = "pr_artifact"
 )
 
+// RequestedOutput is the deliverable a spawn asks for. Empty is the ordinary
+// task flow; it does not change derived status or the Kanban column.
+type RequestedOutput string
+
+// RequestedOutputArtifact asks the agent to deliver a file in the session's
+// artifact directory instead of a pull request.
+const RequestedOutputArtifact RequestedOutput = "artifact"
+
+// Valid reports whether k is empty or a known output kind.
+func (k RequestedOutput) Valid() bool {
+	return k == "" || k == RequestedOutputArtifact
+}
+
 // HasPR reports whether a session's output includes a claimed/observed PR.
 func (t SessionOutputType) HasPR() bool {
 	return t == SessionOutputPR || t == SessionOutputPRAndArtifact
@@ -115,6 +128,39 @@ type SessionArtifactFile struct {
 	UpdatedAt time.Time           `json:"updatedAt"`
 }
 
+// SessionArtifactVersion is one immutable snapshot of a session artifact file.
+// Its content is the blob named by SHA256 in the session's version store;
+// ModTime is the file's observed modification time when it was captured.
+type SessionArtifactVersion struct {
+	SessionID   SessionID
+	Path        string
+	Version     int64
+	SHA256      string
+	Size        int64
+	ContentType string
+	ModTime     time.Time
+	CreatedAt   time.Time
+	// Source is who wrote the version: the agent, or the user through an
+	// artifact save or restore.
+	Source ArtifactVersionSource
+	// Harness is the agent that was running the session when the version was
+	// recorded; empty for a version recorded before this was kept.
+	Harness AgentHarness
+	// RestoredFrom is the version number whose content a restore wrote back;
+	// zero for a version that is not a restore.
+	RestoredFrom int64
+}
+
+// ArtifactVersionSource names who wrote an artifact version.
+type ArtifactVersionSource string
+
+const (
+	// ArtifactVersionSourceAgent marks a version the session's agent wrote.
+	ArtifactVersionSourceAgent ArtifactVersionSource = "agent"
+	// ArtifactVersionSourceUser marks a version saved or restored in the app.
+	ArtifactVersionSourceUser ArtifactVersionSource = "user"
+)
+
 // SessionMetadata is the typed, off-status metadata for a session: operational
 // handles and seed inputs used by Session Manager and reaper.
 type SessionMetadata struct {
@@ -128,7 +174,11 @@ type SessionMetadata struct {
 	DiffBaseRef       string `json:"diffBaseRef,omitempty"`
 	RuntimeHandleID   string `json:"runtimeHandleId,omitempty"`
 	RuntimeLaunchID   string `json:"runtimeLaunchId,omitempty"`
-	AgentSessionID    string `json:"agentSessionId,omitempty"`
+	// RuntimeReleasedLaunchID is the launch whose terminal AO destroyed on
+	// purpose while keeping the session (an agent exit). Its runtime's death is
+	// then not a crash. It names one launch, so a new launch is never covered.
+	RuntimeReleasedLaunchID string `json:"-"`
+	AgentSessionID          string `json:"agentSessionId,omitempty"`
 	// AgentSessionIDLaunchID identifies the terminal runtime generation proven to
 	// own AgentSessionID. Usually that proof comes from a provider hook. A
 	// coordinated Chat-to-TUI handoff may also establish it by launching the
@@ -261,7 +311,10 @@ type SessionRecord struct {
 	AutoInjectReview   bool              `json:"autoInjectReview"`
 	AutoInjectCI       bool              `json:"autoInjectCI"`
 	OutputType         SessionOutputType `json:"outputType" enum:"none,pr,artifact,pr_artifact"`
-	Metadata           SessionMetadata   `json:"-"`
+	// RequestedOutput is the deliverable requested at spawn. It is fixed after
+	// insertion so restore and agent switching rebuild the same worker prompt.
+	RequestedOutput RequestedOutput `json:"requestedOutput,omitempty" enum:"artifact"`
+	Metadata        SessionMetadata `json:"-"`
 	// CleanupGeneration is a monotonic counter bumped each time the session is
 	// un-terminated (spawn/restore). The terminal-resource reconciler stamps its
 	// durable cleanup facts with the generation they were written for so a

@@ -62,3 +62,86 @@ func TestProjectSettingsHandlerPartialPatchAndErrors(t *testing.T) {
 		})
 	}
 }
+
+// projectScriptsAdminStore answers the admin check for the scripts test.
+type projectScriptsAdminStore struct {
+	projectSettingsFakeStore
+	adminErr    error
+	adminChecks int
+}
+
+func (s *projectScriptsAdminStore) RequireOrgAdmin(context.Context, domain.Principal, string) error {
+	s.adminChecks++
+	return s.adminErr
+}
+
+// Setup and Cleanup commands run in every member's later sessions, so only an
+// admin may set or clear them; other settings stay open to members.
+func TestProjectSettingsScriptsRequireAnAdmin(t *testing.T) {
+	for _, test := range []struct {
+		name, body            string
+		adminErr              error
+		status, calls, checks int
+	}{
+		{"member sets setup", `{"config":{"postCreate":["make up"]}}`, postgres.ErrForbidden, http.StatusForbidden, 0, 1},
+		{"member clears cleanup", `{"config":{"preRemove":[]}}`, postgres.ErrForbidden, http.StatusForbidden, 0, 1},
+		{"admin sets setup", `{"config":{"postCreate":["make up"],"preRemove":["make down"]}}`, nil, http.StatusOK, 1, 1},
+		{"member changes other settings", `{"config":{"autoReview":true}}`, postgres.ErrForbidden, http.StatusOK, 1, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &projectScriptsAdminStore{adminErr: test.adminErr}
+			s := New(Options{Store: store})
+			router := chi.NewRouter()
+			router.Patch("/orgs/{orgId}/projects/{projectId}/settings", s.updateProjectSettings)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodPatch, "/orgs/00000000-0000-0000-0000-000000000001/projects/00000000-0000-0000-0000-000000000002/settings", strings.NewReader(test.body)))
+			if response.Code != test.status || store.calls != test.calls || store.adminChecks != test.checks {
+				t.Fatalf("status=%d calls=%d admin checks=%d body=%s", response.Code, store.calls, store.adminChecks, response.Body.String())
+			}
+		})
+	}
+}
+
+// Instructions, repositories, the agent's start folder and the working
+// directory act in every member's later sessions like Setup and Cleanup, so
+// they are admin settings too.
+func TestProjectSettingsAgentAndRepositorySettingsRequireAnAdmin(t *testing.T) {
+	for _, body := range []string{
+		`{"config":{"agentRules":"Read AGENTS.md first."}}`,
+		`{"config":{"orchestratorRules":""}}`,
+		`{"config":{"repos":[]}}`,
+		`{"config":{"agentStartsIn":"parent"}}`,
+		`{"config":{"workingDirectory":"~/work/{repo}"}}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			store := &projectScriptsAdminStore{adminErr: postgres.ErrForbidden}
+			s := New(Options{Store: store})
+			router := chi.NewRouter()
+			router.Patch("/orgs/{orgId}/projects/{projectId}/settings", s.updateProjectSettings)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodPatch, "/orgs/00000000-0000-0000-0000-000000000001/projects/00000000-0000-0000-0000-000000000002/settings", strings.NewReader(body)))
+			if response.Code != http.StatusForbidden || store.calls != 0 || store.adminChecks != 1 {
+				t.Fatalf("status=%d calls=%d admin checks=%d body=%s", response.Code, store.calls, store.adminChecks, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestConfigSetsAdminProjectSettings(t *testing.T) {
+	for config, want := range map[string]bool{
+		``:                                       false,
+		`{"autoReview":true,"worker":{}}`:        false,
+		`{"coder":{"templateId":"t"}}`:           false,
+		`{"coder":{"extraRepos":[]}}`:            false,
+		`{"coder":{"extraRepos":[{"url":"x"}]}}`: true,
+		`{"postCreate":[]}`:                      true,
+		`{"agentRules":"x"}`:                     true,
+		`{"repos":[{"url":"x"}]}`:                true,
+		`{"agentStartsIn":"repository"}`:         true,
+		`{"workingDirectory":""}`:                true,
+	} {
+		if got := configSetsAdminProjectSettings(json.RawMessage(config)); got != want {
+			t.Errorf("%s = %v, want %v", config, got, want)
+		}
+	}
+}

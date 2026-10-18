@@ -46,9 +46,14 @@ func openProvisioningStore(t *testing.T, state domain.SessionProvisionState) (*s
 
 func provisioningService(t *testing.T, st *sqlite.Store) *chatsvc.Service {
 	t.Helper()
+	return provisioningServiceOver(t, st, st)
+}
+
+func provisioningServiceOver(t *testing.T, store chatsvc.Store, st *sqlite.Store) *chatsvc.Service {
+	t.Helper()
 	next := 0
 	return chatsvc.New(chatsvc.Options{
-		Store: st, Sessions: st, Reader: fullSnapshotReader(st),
+		Store: store, Sessions: st, Reader: fullSnapshotReader(st),
 		Drivers: fakeRegistry{driver: fakeDriver{conv: newFakeConversation()}},
 		Log:     slog.New(slog.DiscardHandler),
 		NewID: func() string {
@@ -288,6 +293,214 @@ func TestDrainWithoutControllerKeepsOpeningPromptForLaterStart(t *testing.T) {
 	}
 	if len(snapshot.Turns) != 1 || snapshot.Turns[0].State != domain.TurnStateRunning {
 		t.Fatalf("opening brief after retry = %+v, want running", snapshot.Turns)
+	}
+}
+
+func provisioningOrchestrator(t *testing.T, st *sqlite.Store, id domain.SessionID) {
+	t.Helper()
+	record, found, err := st.GetSession(context.Background(), id)
+	if err != nil || !found {
+		t.Fatalf("read session: found=%v err=%v", found, err)
+	}
+	record.Kind = domain.KindOrchestrator
+	if err := st.UpdateSession(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func startOrchestratorController(t *testing.T, svc *chatsvc.Service, id domain.SessionID) {
+	t.Helper()
+	if _, err := svc.Start(context.Background(), chatsvc.StartConfig{
+		SessionID: id, ProjectID: testProject, Kind: domain.KindOrchestrator,
+		Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
+		ControllerReady: func(chatsvc.StartResult) (chatsvc.ControllerCommit, error) {
+			return chatsvc.ControllerCommit{}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = svc.Stop(context.Background(), id) })
+}
+
+// An orchestrator's controller runs on the project conversation, but what the
+// user types while it provisions is queued before that controller exists
+// (#6523). The opening prompt must drain in the project conversation and stay
+// visible after the context boundary a fresh controller records there, both for
+// a new project and for a replacement orchestrator inheriting earlier history.
+func TestOrchestratorOpeningPromptDrainsInProjectConversation(t *testing.T) {
+	for _, inherited := range []bool{false, true} {
+		name := "new_project"
+		if inherited {
+			name = "replacement"
+		}
+		t.Run(name, func(t *testing.T) {
+			st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
+			ctx := context.Background()
+			provisioningOrchestrator(t, st, id)
+			if inherited {
+				previous, err := st.CreateSession(ctx, domain.SessionRecord{
+					ProjectID: testProject, Kind: domain.KindOrchestrator,
+					Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+					CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+				})
+				if err != nil {
+					t.Fatalf("seed earlier orchestrator: %v", err)
+				}
+				project, err := st.CreateConversation(ctx, "project-narrative",
+					domain.ConversationScopeProject, testProject, previous.ID, time.Now().UTC())
+				if err != nil {
+					t.Fatalf("seed project conversation: %v", err)
+				}
+				if err := st.UpsertActivity(ctx, project.ID, "", domain.ConversationActivity{
+					ID: "earlier-work", Kind: domain.ActivityKindSystem,
+					Status: domain.ActivityStatusCompleted, Summary: "earlier orchestrator work",
+				}, time.Now().UTC()); err != nil {
+					t.Fatalf("seed project history: %v", err)
+				}
+			}
+			svc := provisioningService(t, st)
+			if _, err := svc.Send(ctx, id, ports.ChatUserMessage{Text: "opening brief", Origin: domain.MessageOriginHuman}); err != nil {
+				t.Fatal(err)
+			}
+
+			startOrchestratorController(t, svc, id)
+			if err := svc.DrainQueued(ctx, id); err != nil {
+				t.Fatalf("drain after controller start: %v", err)
+			}
+
+			snapshot, err := svc.Snapshot(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.Conversation.Scope != domain.ConversationScopeProject {
+				t.Fatalf("orchestrator conversation scope = %q, want project", snapshot.Conversation.Scope)
+			}
+			if inherited && snapshot.Conversation.ID != "project-narrative" {
+				t.Fatalf("orchestrator conversation = %s, want inherited project-narrative", snapshot.Conversation.ID)
+			}
+			if len(snapshot.Turns) != 1 || snapshot.Turns[0].State != domain.TurnStateRunning {
+				t.Fatalf("opening brief after start = %+v, want one running turn", snapshot.Turns)
+			}
+			page, err := st.LoadConversationSnapshotPage(ctx, snapshot.Conversation.ID, 0, 50)
+			if err != nil {
+				t.Fatal(err)
+			}
+			visible := false
+			for _, message := range page.Messages {
+				visible = visible || message.Text == "opening brief"
+			}
+			if !visible {
+				t.Fatalf("opening brief hidden from the project timeline: %+v", page.Messages)
+			}
+		})
+	}
+}
+
+// Older builds left an orchestrator bound to both a provisioning row holding the
+// stranded opening prompt and the project row it actually ran on (#6523). That
+// prompt is stale once the session has run, so a restart shows the project
+// transcript and must not replay it.
+func TestStrandedPromptFromEarlierRunIsNotReplayed(t *testing.T) {
+	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
+	ctx := context.Background()
+	provisioningOrchestrator(t, st, id)
+	svc := provisioningService(t, st)
+	if _, err := svc.Send(ctx, id, ports.ChatUserMessage{Text: "stale brief", Origin: domain.MessageOriginHuman}); err != nil {
+		t.Fatal(err)
+	}
+	project, err := st.CreateConversation(ctx, "live-project",
+		domain.ConversationScopeProject, testProject, id, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("seed split project conversation: %v", err)
+	}
+	record, found, err := st.GetSession(ctx, id)
+	if err != nil || !found {
+		t.Fatalf("read session: found=%v err=%v", found, err)
+	}
+	record.ProvisionState = domain.SessionProvisionReady
+	record.Metadata.ControllerGeneration = "earlier-generation"
+	if err := st.UpdateSession(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+
+	startOrchestratorController(t, svc, id)
+	if err := svc.DrainQueued(ctx, id); err != nil {
+		t.Fatalf("drain after restart: %v", err)
+	}
+
+	snapshot, err := svc.Snapshot(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Conversation.ID != project.ID {
+		t.Fatalf("orchestrator conversation = %s, want project row %s", snapshot.Conversation.ID, project.ID)
+	}
+	if len(snapshot.Turns) != 0 {
+		t.Fatalf("stale provisioning prompt replayed into project conversation: %+v", snapshot.Turns)
+	}
+}
+
+// staleLookupStore returns, once, the conversation a Send read before the
+// orchestrator's first controller moved the queue out of it.
+type staleLookupStore struct {
+	*sqlite.Store
+	stale *domain.ConversationRecord
+}
+
+func (s *staleLookupStore) ConversationForSession(ctx context.Context, id domain.SessionID) (domain.ConversationRecord, error) {
+	if s.stale != nil {
+		stale := *s.stale
+		s.stale = nil
+		return stale, nil
+	}
+	return s.Store.ConversationForSession(ctx, id)
+}
+
+// A Send can read the provisioning row just before the orchestrator's first
+// controller moves the queue to the project conversation (#6523). The prompt
+// must still be delivered: it lands in the project conversation after the
+// prompts that moved, not in the row nothing reads any more.
+func TestQueuedSendRacingFirstStartLandsInProjectConversation(t *testing.T) {
+	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
+	ctx := context.Background()
+	provisioningOrchestrator(t, st, id)
+	racing := &staleLookupStore{Store: st}
+	svc := provisioningServiceOver(t, racing, st)
+	if _, err := svc.Send(ctx, id, ports.ChatUserMessage{Text: "opening brief", Origin: domain.MessageOriginHuman}); err != nil {
+		t.Fatal(err)
+	}
+	provisioningRow, err := st.ConversationForSession(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	startOrchestratorController(t, svc, id)
+	if err := svc.DrainQueued(ctx, id); err != nil {
+		t.Fatalf("drain after controller start: %v", err)
+	}
+	racing.stale = &provisioningRow
+	turn, err := svc.QueueUserMessage(ctx, id, ports.ChatUserMessage{Text: "sent during start", Origin: domain.MessageOriginHuman})
+	if err != nil {
+		t.Fatalf("queue against the moved-out row: %v", err)
+	}
+
+	project, err := st.ConversationForSession(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if project.Scope != domain.ConversationScopeProject || turn.ConversationID != project.ID {
+		t.Fatalf("racing prompt queued in %s, want project conversation %s", turn.ConversationID, project.ID)
+	}
+	snapshot, err := svc.Snapshot(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var texts []string
+	for _, message := range snapshot.Messages {
+		texts = append(texts, message.Text)
+	}
+	if strings.Join(texts, "|") != "opening brief|sent during start" {
+		t.Fatalf("project timeline = %q, want the moved prompt before the racing one", texts)
 	}
 }
 

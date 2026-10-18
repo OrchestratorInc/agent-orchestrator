@@ -69,12 +69,21 @@ func (m *Manager) releaseSessionInput(id domain.SessionID) {
 
 // SessionMutationInProgress is consumed by observation-driven lifecycle paths
 // that must not independently terminate a session while AO is replacing or
-// relaunching its provider process.
+// relaunching its provider process. A live interface or account transition is
+// one: between its source stop and the target's spawn the session's runtime is
+// dead by design, and a same-mode move stays probeable all through it.
 func (m *Manager) SessionMutationInProgress(id domain.SessionID) bool {
 	id = domain.SessionID(strings.TrimSpace(string(id)))
 	m.agentOpMu.Lock()
-	defer m.agentOpMu.Unlock()
-	return m.agentOperationActiveLocked(id)
+	active := m.agentOperationActiveLocked(id)
+	m.agentOpMu.Unlock()
+	if active {
+		return true
+	}
+	m.transitionMu.Lock()
+	defer m.transitionMu.Unlock()
+	_, live := m.transitions[id]
+	return live
 }
 
 func (m *Manager) agentOperationActiveLocked(id domain.SessionID) bool {
@@ -285,6 +294,23 @@ func (m *Manager) retainAgentSwitch(id domain.SessionID) {
 		m.retainedSwitches = make(map[domain.SessionID]struct{})
 	}
 	m.retainedSwitches[id] = struct{}{}
+}
+
+// claimRetainedAgentSwitchForKill hands a retained switch gate to Kill. Kill
+// tears down every controller the session has, so it resolves the ownership
+// question the gate was holding; without this a switch whose source restore
+// failed leaves the session impossible to archive or remove.
+func (m *Manager) claimRetainedAgentSwitchForKill(id domain.SessionID) bool {
+	id = domain.SessionID(strings.TrimSpace(string(id)))
+	m.agentOpMu.Lock()
+	defer m.agentOpMu.Unlock()
+	if _, retained := m.retainedSwitches[id]; !retained || m.agentOperations[id] != agentOperationSwitch {
+		return false
+	}
+	delete(m.retainedSwitches, id)
+	delete(m.switchDecisionInput, id)
+	m.agentOperations[id] = agentOperationKill
+	return true
 }
 
 func (m *Manager) agentSwitchRetained(id domain.SessionID) bool {

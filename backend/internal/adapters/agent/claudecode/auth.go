@@ -7,10 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
@@ -56,6 +60,39 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return p.authStatusFor(ctx, "", nil, false)
 }
 
+// credentialEvidence names where the credential the agent uses came from and
+// how it signs in. A token or key supplied directly carries no account
+// profile, so its method replaces the CLI's "claude.ai" report.
+func credentialEvidence(credential agentcreds.Credential) domain.AgentAccountIdentity {
+	method := domain.AgentAccountMethodAccount
+	switch credential.Kind {
+	case agentcreds.KindAPIKey:
+		method = domain.AgentAccountMethodAPIKey
+	case agentcreds.KindOAuthToken, agentcreds.KindAuthToken:
+		method = domain.AgentAccountMethodToken
+	}
+	switch source := strings.TrimSpace(credential.Source); {
+	case source == "keychain":
+		return domain.KeychainSource().WithMethod(domain.AgentAccountMethodAccount)
+	case source == "credentials-file":
+		return authprobe.FileSource(filepath.Join(claudeConfigDir(), ".credentials.json")).WithMethod(domain.AgentAccountMethodAccount)
+	case envVarName.MatchString(source):
+		return domain.EnvironmentSource(source).WithMethod(method)
+	default:
+		return domain.AgentAccountIdentity{Method: method}
+	}
+}
+
+var envVarName = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+
+func claudeConfigDir() string {
+	if dir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); dir != "" {
+		return dir
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".claude")
+}
+
 // ValidateLaunchAuth checks the credential in the exact cwd/environment that
 // will be handed to Claude. Launch validation always bypasses the success cache:
 // a provider can revoke a credential without changing anything on disk.
@@ -64,14 +101,30 @@ func (p *Plugin) ValidateLaunchAuth(ctx context.Context, workingDir string, env 
 }
 
 func (p *Plugin) authStatusFor(ctx context.Context, workingDir string, env map[string]string, fresh bool) (ports.AgentAuthStatus, error) {
+	status, _, _, err := p.authStatusAndDiagnostics(ctx, workingDir, env, fresh)
+	return status, err
+}
+
+// AuthStatusWithDiagnostics reports the same verdict as AuthStatus plus the
+// account `claude auth status` names, when the CLI answered for the provider
+// the agent actually uses, and each check without running an extra probe.
+func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
+	status, report, steps, err := p.authStatusAndDiagnostics(ctx, "", nil, false)
+	return status, report.account(), steps, err
+}
+
+// authStatusAndDiagnostics runs the ladder and also returns the CLI report
+// when it describes the credential the agent uses; otherwise the report is
+// empty.
+func (p *Plugin) authStatusAndDiagnostics(ctx context.Context, workingDir string, env map[string]string, fresh bool) (ports.AgentAuthStatus, claudeAuthReport, []domain.AgentAuthDiagnostic, error) {
 	// Rung 0 — installed? A missing binary is not an auth failure; saying so
 	// would point the user at a login when they need an install.
 	binary, err := p.claudeBinary(ctx)
 	if err != nil {
 		if errors.Is(err, ports.ErrAgentBinaryNotFound) {
-			return ports.AgentAuthStatusUnknown, nil
+			return ports.AgentAuthStatusUnknown, claudeAuthReport{}, nil, nil
 		}
-		return ports.AgentAuthStatusUnknown, err
+		return ports.AgentAuthStatusUnknown, claudeAuthReport{}, nil, err
 	}
 
 	// Rung 3 runs first among the evidence rungs, even though rung 2 outranks
@@ -80,30 +133,59 @@ func (p *Plugin) authStatusFor(ctx context.Context, workingDir string, env map[s
 	// provider from environment variables instead would risk pointing a
 	// Bedrock credential at api.anthropic.com.
 	//
-	resolved := p.resolveProviderContext(ctx, binary, workingDir, env, p.claudeCLIAuthReport)
+	var steps []domain.AgentAuthDiagnostic
+	resolved := p.resolveProviderContext(ctx, binary, workingDir, env, func(ctx context.Context, binary, cwd string, env map[string]string) (claudeAuthReport, bool) {
+		report, ok, step := p.claudeCLIAuthReportDiagnostic(ctx, binary, cwd, env)
+		steps = append(steps, step)
+		return report, ok
+	})
+	reportedProvider, _ := agentcreds.ParseProvider(resolved.report.APIProvider)
+	// The CLI report speaks for the agent's credential only when it answered
+	// for the same provider.
+	reportApplies := resolved.cliOK && (resolved.provider == agentcreds.ProviderFirstParty || resolved.provider == reportedProvider)
+	report := claudeAuthReport{}
+	if reportApplies {
+		report = resolved.report
+	}
+
+	if resolved.found {
+		// The credential the verdict is about; a token or key overrides the
+		// CLI's account wording, a stored login keeps its email and plan.
+		evidence := credentialEvidence(resolved.credential)
+		if evidence.Method != domain.AgentAccountMethodAccount {
+			report.AuthMethod = ""
+		}
+		ports.RecordAuthEvidence(ctx, evidence)
+	} else if reportApplies {
+		ports.RecordAuthEvidence(ctx, domain.CommandSource(binary, "auth", "status"))
+	}
 
 	// Rungs 1 and 2 — the provider gate and the network probe. This is the
 	// only rung that can prove a credential works, so it is the only one
 	// allowed to return Authorized.
-	if status, ok := p.probeResolvedAuthStatus(ctx, resolved, fresh); ok {
-		return status, nil
+	status, ok, step := p.probeResolvedAuthDiagnostics(ctx, resolved, fresh)
+	steps = append(steps, step)
+	if ok {
+		return status, report, steps, nil
 	}
 
 	// Rung 3's own verdict. It cannot prove success, but it is the only local
 	// check that can observe a definite "signed out".
 	// A first-party account report cannot reject a configured gateway or cloud
 	// provider when its own probe was inconclusive.
-	reportedProvider, _ := agentcreds.ParseProvider(resolved.report.APIProvider)
-	if resolved.cliOK && (resolved.provider == agentcreds.ProviderFirstParty || resolved.provider == reportedProvider) {
+	if reportApplies {
 		status := resolved.report.status()
 		if status != ports.AgentAuthStatusUnknown {
-			return status, nil
+			return status, report, steps, nil
 		}
 	}
 
 	// Rung 4 — local heuristic. Lowest confidence, and the last word only
 	// because it never blocks anything.
-	return claudeLocalAuthStatus(ctx, resolved.opts)
+	// A configured local credential is reported once, from the evidence it
+	// records.
+	status, err = claudeLocalAuthStatus(ctx, resolved.opts)
+	return status, report, steps, err
 }
 
 type claudeProviderContext struct {
@@ -155,44 +237,58 @@ func (p *Plugin) resolveProviderContext(
 // which is what keeps the whole check additive — it can convert an Unknown
 // into a real verdict, and can never manufacture a worse one.
 func (p *Plugin) probeResolvedAuthStatus(ctx context.Context, resolved claudeProviderContext, fresh bool) (ports.AgentAuthStatus, bool) {
-	if !resolved.providerOK {
-		return ports.AgentAuthStatusUnknown, false
-	}
+	status, ok, _ := p.probeResolvedAuthDiagnostics(ctx, resolved, fresh)
+	return status, ok
+}
 
-	// A stored login whose access token is past its recorded expiry would be
-	// rejected by the provider, but that rejection is not a sign-out: Claude
-	// Code renews the token from its refresh token the next time it runs. AO
-	// does not perform that refresh itself (Claude Code serializes it behind a
-	// cross-process lock and rotates the refresh token), so the honest verdict
-	// is "configured" — present, not verified — and nothing is sent.
+func (p *Plugin) probeResolvedAuthDiagnostics(ctx context.Context, resolved claudeProviderContext, fresh bool) (ports.AgentAuthStatus, bool, domain.AgentAuthDiagnostic) {
+	diagnostic := func(code string) domain.AgentAuthDiagnostic {
+		d := domain.NewAgentAuthDiagnostic("provider_validation", code)
+		d.Provider = string(resolved.provider)
+		// Source labels are owned by the credential resolver, never credential values.
+		d.Source = resolved.credential.Source
+		return d
+	}
+	if !resolved.providerOK || !agentcreds.ValidatesProvider(resolved.provider) {
+		return ports.AgentAuthStatusUnknown, false, diagnostic("provider_unsupported")
+	}
 	if resolved.found && resolved.credential.ExpiredButRenewable(claudeNow()) {
-		return ports.AgentAuthStatusConfigured, true
+		return ports.AgentAuthStatusConfigured, true, diagnostic("token_renewal_pending")
 	}
-
-	// The cache is read before anything is sent, and is keyed on the
-	// credential's fingerprint: a verdict about a credential the agent no
-	// longer uses is not evidence about anything.
-	if !fresh && resolved.found {
-		if cached, hit := p.authCache().get(resolved.credential.Fingerprint(), resolved.provider); hit {
-			if cached.State == agentcreds.StateUnknown {
-				return ports.AgentAuthStatusUnknown, false
-			}
-			return authStatusFromResult(cached), true
-		}
+	if !resolved.found {
+		return ports.AgentAuthStatusUnknown, false, diagnostic("credential_missing")
 	}
-
-	probeCtx, cancel := context.WithTimeout(ctx, agentcreds.DefaultTimeout)
-	defer cancel()
-	result := claudeValidator().ValidateResolvedLocal(
-		probeCtx, resolved.provider, resolved.credential, resolved.found, resolved.opts,
-	)
-	// Cache only decisive verdicts. An inconclusive probe must be retried later
-	// instead of turning one transient failure into minutes of stale silence.
-	p.authCache().put(result)
-	if result.State == agentcreds.StateUnknown {
-		return ports.AgentAuthStatusUnknown, false
+	var result agentcreds.Result
+	cached := false
+	if !fresh {
+		result, cached = p.authCache().get(resolved.credential.Fingerprint(), resolved.provider)
 	}
-	return authStatusFromResult(result), true
+	started := time.Now()
+	if !cached {
+		probeCtx, cancel := context.WithTimeout(ctx, agentcreds.DefaultTimeout)
+		defer cancel()
+		result = claudeValidator().ValidateResolvedLocal(probeCtx, resolved.provider, resolved.credential, resolved.found, resolved.opts)
+		p.authCache().put(result)
+	}
+	code := "provider_inconclusive"
+	switch {
+	case result.State == agentcreds.StateValid:
+		code = "provider_accepted"
+	case result.State == agentcreds.StateInvalid:
+		code = "provider_rejected"
+	case errors.Is(result.Err, context.DeadlineExceeded):
+		code = "probe_timeout"
+	case errors.Is(result.Err, context.Canceled):
+		code = "probe_cancelled"
+	case result.Err != nil && result.HTTPStatus == 0:
+		code = "provider_unreachable"
+	}
+	step := diagnostic(code)
+	step.CheckedAt = result.CheckedAt
+	step.HTTPStatus = result.HTTPStatus
+	step.Cached = cached
+	step.DurationMs = time.Since(started).Milliseconds()
+	return authStatusFromResult(result), result.State != agentcreds.StateUnknown, step
 }
 
 // probeAuthStatus keeps focused tests at the provider-validation boundary.
@@ -248,8 +344,29 @@ func InvalidateAuthCache() { claudeAuthCache.invalidate() }
 // claudeAuthReport is the parsed shape of `claude auth status --json`. Only
 // LoggedIn drives the verdict; the rest is diagnostics.
 type claudeAuthReport struct {
-	LoggedIn    *bool  `json:"loggedIn"`
-	APIProvider string `json:"apiProvider"`
+	LoggedIn         *bool  `json:"loggedIn"`
+	APIProvider      string `json:"apiProvider"`
+	AuthMethod       string `json:"authMethod"`
+	Email            string `json:"email"`
+	OrgName          string `json:"orgName"`
+	SubscriptionType string `json:"subscriptionType"`
+}
+
+// account is the display identity of a signed-in report. A signed-out or
+// unparsed report names no account.
+func (r claudeAuthReport) account() domain.AgentAccountIdentity {
+	if r.LoggedIn == nil || !*r.LoggedIn {
+		return domain.AgentAccountIdentity{}
+	}
+	identity := domain.AgentAccountIdentity{Email: r.Email, Organization: r.OrgName, Plan: r.SubscriptionType}
+	method := strings.ToLower(strings.TrimSpace(r.AuthMethod))
+	switch {
+	case method == "claude.ai" || strings.Contains(method, "oauth"):
+		identity.Method = domain.AgentAccountMethodAccount
+	case strings.Contains(method, "key"):
+		identity.Method = domain.AgentAccountMethodAPIKey
+	}
+	return identity
 }
 
 // verdict maps a CLI report onto a verdict. loggedIn:true is credentials
@@ -270,17 +387,20 @@ func (r claudeAuthReport) status() ports.AgentAuthStatus {
 // the probe could not answer — a timeout, an exec failure, or a version whose
 // output this build cannot parse — and the caller falls to the next rung.
 func (p *Plugin) claudeCLIAuthReport(ctx context.Context, binary, workingDir string, env map[string]string) (claudeAuthReport, bool) {
+	report, ok, _ := p.claudeCLIAuthReportDiagnostic(ctx, binary, workingDir, env)
+	return report, ok
+}
+
+func (p *Plugin) claudeCLIAuthReportDiagnostic(ctx context.Context, binary, workingDir string, env map[string]string) (claudeAuthReport, bool, domain.AgentAuthDiagnostic) {
 	probeCtx, cancel := context.WithTimeout(ctx, claudeAuthProbeTimeout)
 	defer cancel()
-
+	started := time.Now()
 	out, err := claudeAuthCommand(probeCtx, binary, workingDir, env)
+	report, ok := claudeAuthReportFromOutput(out.Stdout)
 	if probeCtx.Err() != nil {
-		return claudeAuthReport{}, false
+		report, ok = claudeAuthReport{}, false
 	}
-	// An unfamiliar non-zero result is not affirmative evidence of missing
-	// credentials, so the exit code is not consulted: only parsable output is.
-	_ = err
-	return claudeAuthReportFromOutput(out.Stdout)
+	return report, ok, authprobe.CommandStep(binary, []string{"auth", "status"}, report.status(), err, probeCtx.Err(), started)
 }
 
 type claudeCommandOutput struct {
@@ -330,13 +450,22 @@ func claudeLocalAuthStatus(ctx context.Context, opts agentcreds.ResolveOptions) 
 		if value == "" {
 			continue
 		}
+		method := domain.AgentAccountMethodToken
+		if name == "ANTHROPIC_API_KEY" {
+			method = domain.AgentAccountMethodAPIKey
+		}
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(method))
 		return ports.AgentAuthStatusConfigured, nil
 	}
 	cfgPath, err := claudeConfigPath()
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	return claudeConfigAuthStatus(ctx, cfgPath)
+	status, err := claudeConfigAuthStatus(ctx, cfgPath)
+	if status == ports.AgentAuthStatusConfigured {
+		ports.RecordAuthEvidence(ctx, authprobe.FileSource(cfgPath).WithMethod(domain.AgentAccountMethodAccount))
+	}
+	return status, err
 }
 
 // claudeConfigAuthStatus reads the durable markers Claude Code writes into

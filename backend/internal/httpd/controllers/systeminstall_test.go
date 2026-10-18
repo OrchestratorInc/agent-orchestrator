@@ -3,6 +3,7 @@ package controllers_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,19 +17,22 @@ import (
 )
 
 type fakeInstaller struct {
-	startJob      systeminstall.Job
-	startErr      error
-	statusJob     systeminstall.Job
-	statusErr     error
-	plans         []systeminstall.AgentPlan
-	plansErr      error
-	startCalls    int
-	lastTarget    systeminstall.Target
-	lastMethod    string
-	lastOperation systeminstall.AgentOperation
-	agentJobs     []systeminstall.Job
-	verifyJob     systeminstall.Job
-	verifyErr     error
+	startJob        systeminstall.Job
+	startErr        error
+	statusJob       systeminstall.Job
+	statusErr       error
+	plans           []systeminstall.AgentPlan
+	plansErr        error
+	startCalls      int
+	lastTarget      systeminstall.Target
+	lastMethod      string
+	lastOperation   systeminstall.AgentOperation
+	agentJobs       []systeminstall.Job
+	verifyJob       systeminstall.Job
+	verifyErr       error
+	advisory        systeminstall.UpdateAdvisory
+	refreshAdvisory bool
+	expectedVersion string
 }
 
 func (f *fakeInstaller) Start(_ context.Context, target systeminstall.Target) (systeminstall.Job, error) {
@@ -46,11 +50,12 @@ func (f *fakeInstaller) AgentPlans(context.Context) ([]systeminstall.AgentPlan, 
 	return f.plans, f.plansErr
 }
 
-func (f *fakeInstaller) StartAgentOperation(_ context.Context, target systeminstall.Target, method string, operation systeminstall.AgentOperation) (systeminstall.Job, error) {
+func (f *fakeInstaller) StartAgentOperation(_ context.Context, target systeminstall.Target, method string, operation systeminstall.AgentOperation, expectedVersion string) (systeminstall.Job, error) {
 	f.startCalls++
 	f.lastTarget = target
 	f.lastMethod = method
 	f.lastOperation = operation
+	f.expectedVersion = expectedVersion
 	return f.startJob, f.startErr
 }
 
@@ -61,6 +66,12 @@ func (f *fakeInstaller) AgentJobs(context.Context) ([]systeminstall.Job, error) 
 func (f *fakeInstaller) Verify(_ context.Context, target systeminstall.Target) (systeminstall.Job, error) {
 	f.lastTarget = target
 	return f.verifyJob, f.verifyErr
+}
+
+func (f *fakeInstaller) UpdateAdvisory(_ context.Context, target systeminstall.Target, refresh bool) (systeminstall.UpdateAdvisory, error) {
+	f.lastTarget = target
+	f.refreshAdvisory = refresh
+	return f.advisory, nil
 }
 
 func TestAgentInstallRoutes(t *testing.T) {
@@ -88,6 +99,10 @@ func TestAgentInstallRoutes(t *testing.T) {
 	if status != http.StatusOK || !strings.Contains(string(body), `"status":"interrupted"`) {
 		t.Fatalf("GET /agents/install-jobs = %d, body=%s", status, body)
 	}
+	_, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/agents/codex/install", `{"method":"npm","operation":"update","expectedVersion":"1.3.0"}`)
+	if status != http.StatusAccepted || installer.expectedVersion != "1.3.0" {
+		t.Fatalf("expected version not forwarded: status=%d version=%q", status, installer.expectedVersion)
+	}
 	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/agents/codex/verify", "")
 	if status != http.StatusAccepted || !strings.Contains(string(body), `"status":"verifying"`) {
 		t.Fatalf("POST /agents/codex/verify = %d, body=%s", status, body)
@@ -95,6 +110,34 @@ func TestAgentInstallRoutes(t *testing.T) {
 	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/agents/not-real/install", "")
 	if status != http.StatusBadRequest || !strings.Contains(string(body), `"code":"UNKNOWN_AGENT_INSTALL_TARGET"`) {
 		t.Fatalf("POST /agents/not-real/install = %d, body=%s", status, body)
+	}
+}
+
+func TestAgentUpdateAdvisoryRoute(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	installer := &fakeInstaller{advisory: systeminstall.UpdateAdvisory{AgentID: "codex", Status: systeminstall.UpdateStatusBehindLatest, CurrentVersion: "1.2.3", LatestVersion: "1.3.0", Source: "npm"}}
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Installer: installer}, httpd.ControlDeps{}))
+	defer srv.Close()
+	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/agents/codex/update-advisory", "")
+	if status != http.StatusOK || installer.lastTarget != systeminstall.TargetCodex || !strings.Contains(string(body), `"status":"behind_latest"`) || !strings.Contains(string(body), `"latestVersion":"1.3.0"`) || strings.Contains(string(body), `"reason"`) {
+		t.Fatalf("status=%d target=%q body=%s", status, installer.lastTarget, body)
+	}
+	installer.advisory = systeminstall.UpdateAdvisory{AgentID: "codex", Status: systeminstall.UpdateStatusUnknown, Reason: "lookup_failed"}
+	_, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/agents/codex/update-advisory?refresh=true", "")
+	if status != http.StatusOK || !installer.refreshAdvisory {
+		t.Fatalf("refresh not forwarded: status=%d refresh=%v", status, installer.refreshAdvisory)
+	}
+	_, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/agents/codex/update-advisory?refresh=maybe", "")
+	if status != http.StatusBadRequest {
+		t.Fatalf("invalid refresh status=%d", status)
+	}
+	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/agents/codex/update-advisory", "")
+	if status != http.StatusOK || !strings.Contains(string(body), `"reason":"lookup_failed"`) || strings.Contains(string(body), "/Users/") {
+		t.Fatalf("unknown advisory status=%d body=%s", status, body)
+	}
+	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/agents/not-real/update-advisory", "")
+	if status != http.StatusBadRequest || !strings.Contains(string(body), `"code":"UNKNOWN_AGENT_INSTALL_TARGET"`) {
+		t.Fatalf("invalid target status=%d body=%s", status, body)
 	}
 }
 
@@ -133,6 +176,8 @@ func TestAgentInstallMapsMethodAndActiveHarnessErrors(t *testing.T) {
 		{name: "invalid method", err: systeminstall.ErrInstallMethod, wantStatus: http.StatusBadRequest, wantCode: "INSTALL_METHOD_UNAVAILABLE"},
 		{name: "active droid", err: systeminstall.ErrHarnessActive, wantStatus: http.StatusConflict, wantCode: "HARNESS_ACTIVE"},
 		{name: "install active", err: systeminstall.ErrInstallActive, wantStatus: http.StatusConflict, wantCode: "INSTALL_ACTIVE"},
+		{name: "owner unconfirmed", err: fmt.Errorf("%w: installed with Homebrew", systeminstall.ErrInstallOwner), wantStatus: http.StatusConflict, wantCode: "INSTALL_OWNER_UNCONFIRMED"},
+		{name: "invalid update version", err: systeminstall.ErrUpdateVersion, wantStatus: http.StatusBadRequest, wantCode: "INVALID_UPDATE_VERSION"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			installer := &fakeInstaller{startErr: tt.err}

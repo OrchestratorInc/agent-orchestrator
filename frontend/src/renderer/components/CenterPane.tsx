@@ -5,7 +5,8 @@ import {
 	TriangleAlert,
 	X,
 } from "lucide-react";
-import { Reorder, useDragControls } from "motion/react";
+import { isSettingsPageOpen } from "../hooks/useAppShortcut";
+import { motion, Reorder, useDragControls } from "motion/react";
 import {
 	useCallback,
 	useEffect,
@@ -25,6 +26,7 @@ import {
 } from "../hooks/useAgentSwitches";
 import { useObservedAgentSwitchLifecycle } from "../hooks/useObservedAgentSwitchLifecycle";
 import { useAgentSwitchPresentationVisibility, useAgentSwitchRouteVisibility } from "../hooks/useAgentSwitchVisibility";
+import { useTabListTabStop } from "../hooks/useTabListTabStop";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useHostConnection } from "../hooks/useHostConnection";
@@ -102,6 +104,8 @@ type CenterPaneProps = {
 	agentInputDisabled?: boolean;
 	/** The agent terminal is coming up after an interface switch. */
 	terminalBooting?: boolean;
+	/** An account move is restarting the worker agent; see TerminalPane. */
+	terminalSwitchingLabel?: string;
 	/** Reports attachment of the session's own agent terminal. */
 	onSessionTerminalAttached?: (attached: boolean) => void;
 };
@@ -140,6 +144,9 @@ function DraggableWorkspaceTab({ children, value }: { children: ReactNode; value
 			dragControls={dragControls}
 			dragListener={false}
 			onPointerDown={startDrag}
+			// Reorder needs layout measurement, but tabs should snap into place
+			// when a sibling opens or closes rather than slide.
+			transition={{ layout: { duration: 0 } }}
 			value={value}
 		>
 			{children}
@@ -178,10 +185,12 @@ export function CenterPane({
 	onAuxiliaryTabOrderChange,
 	agentInputDisabled = false,
 	terminalBooting = false,
+	terminalSwitchingLabel,
 	onSessionTerminalAttached,
 }: CenterPaneProps) {
 	const { t } = useTranslation();
 	const paneRef = useRef<HTMLDivElement | null>(null);
+	const tabListRef = useTabListTabStop<HTMLDivElement>();
 	const wheelZoomRemainderRef = useRef(0);
 	const lastWheelZoomAtRef = useRef(0);
 	const [fontSize, setFontSize] = useState(initialTerminalFontSize);
@@ -237,7 +246,7 @@ export function CenterPane({
 		scrollToEnd: scrollTabsToEnd,
 		showLeftFade,
 		showRightFade,
-	} = useTabScrollEdges([tabOverflowWatch]);
+	} = useTabScrollEdges([isFullscreen, tabOverflowWatch]);
 	const previousTabCountRef = useRef(availableAuxiliaryKeys.length);
 	const agentSwitchesQuery = useAgentSwitches(session?.id ?? "", hostId ?? !session?.cloud);
 	const agentSwitches = agentSwitchesQuery.data ?? [];
@@ -500,8 +509,8 @@ export function CenterPane({
 	);
 
 	useEffect(() => {
-		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => selectAdjacentTab(-1));
-		const disposeNext = aoBridge.app.onNextTabShortcut(() => selectAdjacentTab(1));
+		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(-1));
+		const disposeNext = aoBridge.app.onNextTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(1));
 		return () => {
 			disposePrevious();
 			disposeNext();
@@ -516,32 +525,24 @@ export function CenterPane({
 	}, [activeWorkspaceTab, target.kind, onCloseShellTerminal]);
 
 	useEffect(() => {
-		const element = tabsOverflowRef.current;
-		if (!element) return;
-		const handleWheel = (event: globalThis.WheelEvent) => {
-			if (event.ctrlKey || event.metaKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
-			if (event.deltaY === 0 || element.scrollWidth <= element.clientWidth) return;
-			event.preventDefault();
-			element.scrollBy({ left: event.deltaY });
-		};
-		element.addEventListener("wheel", handleWheel, { passive: false });
-		return () => element.removeEventListener("wheel", handleWheel);
-	}, [isFullscreen, tabOverflowWatch]);
-
-	useEffect(() => {
 		if (availableAuxiliaryKeys.length > previousTabCountRef.current) scrollTabsToEnd();
 		previousTabCountRef.current = availableAuxiliaryKeys.length;
 	}, [availableAuxiliaryKeys.length, scrollTabsToEnd]);
 
+	const activeAuxiliaryTabKey =
+		reviewerChatSelected && reviewerChat
+			? `reviewer-chat:${reviewerChat.reviewId}`
+			: workspaceActiveTabKey ?? (target.kind === "shell"
+				? target.handleId
+				: target.kind === "reviewer"
+					? `reviewer:${target.handleId}`
+					: undefined);
+	const orderedAuxiliaryTabKeys = orderedAuxiliaryTabs.map((tab) => tab.key).join("|");
+	// Reveal the active tab only when the selection or tab set changes. Keyed on
+	// strings, not the tab objects, which are rebuilt on every render and would
+	// otherwise yank a manually scrolled strip back to the active tab.
 	useEffect(() => {
-		const activeKey =
-			reviewerChatSelected && reviewerChat
-				? `reviewer-chat:${reviewerChat.reviewId}`
-				: workspaceActiveTabKey ?? (target.kind === "shell"
-					? target.handleId
-					: target.kind === "reviewer"
-						? `reviewer:${target.handleId}`
-						: undefined);
+		const activeKey = activeAuxiliaryTabKey;
 		if (!activeKey) return;
 		const scrollRegion = tabsOverflowRef.current;
 		if (!scrollRegion) return;
@@ -556,7 +557,7 @@ export function CenterPane({
 		if (tabRect.right > scrollRect.right) nextScrollLeft += tabRect.right - scrollRect.right;
 		if (nextScrollLeft === scrollRegion.scrollLeft) return;
 		scrollRegion.scrollTo({ behavior: "smooth", left: Math.max(0, nextScrollLeft) });
-	}, [orderedAuxiliaryTabs, reviewerChat, reviewerChatSelected, target, workspaceActiveTabKey]);
+	}, [activeAuxiliaryTabKey, orderedAuxiliaryTabKeys]);
 
 	useEffect(() => {
 		const pane = paneRef.current;
@@ -650,12 +651,14 @@ export function CenterPane({
 							aria-label={t("terminal.tabsAria")}
 							className="flex h-full min-w-0 flex-1 items-stretch"
 							onKeyDown={handleTerminalTabListKeyDown}
+							ref={tabListRef}
 							role="tablist"
 						>
 							<div className="relative min-w-0 flex-1 self-stretch overflow-hidden">
-								<div
+								<motion.div
 									ref={tabsOverflowRef}
 									className="session-tab-scroll-region scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto"
+									layoutScroll
 								>
 								<div className="flex w-max items-stretch">
 									{/* The owning session scrolls with its auxiliary terminals, but remains fixed in order. */}
@@ -721,7 +724,7 @@ export function CenterPane({
 									</Reorder.Group>
 									{workspaceTabActions}
 								</div>
-							</div>
+							</motion.div>
 								{showLeftFade ? <div aria-hidden="true" className="session-tab-scroll-fade session-tab-scroll-fade--left" /> : null}
 								{showRightFade ? <div aria-hidden="true" className="session-tab-scroll-fade" /> : null}
 							</div>
@@ -773,6 +776,7 @@ export function CenterPane({
 							isFullscreen={isFullscreen}
 							inputDisabled={workerInputDisabled}
 							booting={terminalBooting && target.kind === "worker"}
+							switchingLabel={target.kind === "worker" ? terminalSwitchingLabel : undefined}
 							onChangeFontSize={updateFontSize}
 							onTerminalContentReadyChange={target.kind === "worker" && session?.cloud ? onSessionTerminalAttached : undefined}
 							onToggleFullscreen={toggleFullscreen}

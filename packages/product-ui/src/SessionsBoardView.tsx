@@ -217,8 +217,11 @@ function BoardColumnView<TSession extends BoardSessionPresentation>({
 
 export type SessionCardViewProps = {
 		action?: ReactNode;
+	/** Latest session artifacts, shown as evidence below the PRs. */
+	artifacts?: ReactNode;
 	branchAction?: ReactNode;
 	branchIcon?: ReactNode;
+	branchLabel?: ReactNode;
 	error?: string;
 	externalLink: ExternalLinkComponent;
 	footer?: ReactNode;
@@ -244,8 +247,10 @@ export type SessionCardViewProps = {
 
 export function SessionCardView({
 	action,
+	artifacts,
 	branchAction,
 	branchIcon,
+	branchLabel,
 	error,
 	externalLink,
 	footer,
@@ -274,7 +279,7 @@ export function SessionCardView({
 				? "text-success"
 				: (session.statusPresentation?.className ?? column.titleClassName);
 	const branch = session.branch ?? "";
-	const showBranch = branch !== "" && !sameLabel(branch, session.title) && !sameLabel(branch, session.id);
+	const showBranch = Boolean(branchLabel) || (branch !== "" && !sameLabel(branch, session.title) && !sameLabel(branch, session.id));
 	const renderedStatusLabel =
 		session.statusReadiness === "checking"
 			? translateStatus("session.statusChecking")
@@ -352,7 +357,7 @@ export function SessionCardView({
 				{showBranch && (
 					<div className="mt-1.5 flex min-w-0 items-center gap-1.5 font-mono text-2xs text-muted-foreground">
 						{branchIcon ?? <GitBranchIcon aria-hidden="true" className="size-icon-2xs shrink-0" />}
-						<span className="truncate text-muted-foreground">{branch}</span>
+						{branchLabel ?? <span className="truncate text-muted-foreground">{branch}</span>}
 						{branchAction}
 					</div>
 				)}
@@ -380,6 +385,7 @@ export function SessionCardView({
 					)}
 				</div>
 			)}
+			{artifacts ? <div className="relative z-10 min-w-0 px-3.5 pb-2">{artifacts}</div> : null}
 			<div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 border-t border-border px-3.5 py-2.5">
 				<div className="flex min-w-0 flex-1">
 					<span

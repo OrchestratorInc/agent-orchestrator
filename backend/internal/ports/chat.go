@@ -190,8 +190,11 @@ const (
 	ChatCapabilityCompaction ChatCapability = "compaction"
 	// ChatCapabilityRollback means history can be discarded back to a turn.
 	ChatCapabilityRollback ChatCapability = "rollback"
-	// ChatCapabilityFork means a conversation can be branched.
+	// ChatCapabilityFork means a conversation can be branched at a completed turn.
 	ChatCapabilityFork ChatCapability = "fork"
+	// ChatCapabilityForkCurrent copies the current provider context only; it
+	// must not enable historical edits that require an exact turn cutoff.
+	ChatCapabilityForkCurrent ChatCapability = "fork_current"
 	// ChatCapabilityPromptReplay means AO can open a fresh provider session with
 	// a durable textual transcript supplied as context. This is an approximation
 	// of fork for providers whose protocol cannot fork from a historical turn.
@@ -294,6 +297,11 @@ type ChatStartConfig struct {
 	// until they know a new provider process is required; live adoption must keep
 	// the verifier for the bearer already held by the surviving process.
 	PrepareEnv func(context.Context) (map[string]string, error)
+	// AcquireForkSource locks a current-context source immediately before the
+	// provider copies it. Fork drivers release it before loading the child.
+	AcquireForkSource func(context.Context) (copyCtx context.Context, release func(), err error)
+	// RecordFork records an independent child before loading or activating it.
+	RecordFork func(context.Context, string) error
 	// Model is optional; empty defers to the provider's configured default.
 	Model string
 	// Effort is an optional provider-advertised model tuning value; empty
@@ -305,6 +313,9 @@ type ChatStartConfig struct {
 	// ReadOnly requires a provider-enforced sandbox that cannot modify the
 	// workspace. It is used for review-owned conversations.
 	ReadOnly bool
+	// DisableNetwork requests tool network isolation for read-only background
+	// conversations. Supporting drivers must not inherit reviewer network access.
+	DisableNetwork bool
 	// SystemPrompt carries AO's standing instructions for the session.
 	SystemPrompt string
 	// ProviderScopeID identifies the AO ownership boundary for opaque provider
@@ -351,6 +362,10 @@ type ChatResumeConfig struct {
 	// SystemPrompt is recomputed by the session manager on restore and reapplied
 	// to the provider process. It is not persisted in the conversation transcript.
 	SystemPrompt string
+	// HasPriorTurns indicates whether the conversation already contains turns
+	// (durable or provider history), so reconnection/restore does not re-send
+	// standing instructions or session preamble intended only for the first turn.
+	HasPriorTurns bool
 	// ProviderScopeID identifies AO's provider ownership boundary. A fresh
 	// approximate branch must never inherit the parent's opaque-id scope.
 	ProviderScopeID       string
@@ -457,6 +472,9 @@ type ChatUserMessage struct {
 	// Settings are the per-turn provider choices for this message. Zero means the
 	// conversation's own defaults.
 	Settings ChatTurnSettings
+	// Continuation marks the user's one-click "continue" after stopping a turn,
+	// so the timeline can show a marker instead of a message bubble.
+	Continuation bool
 }
 
 // MessageDeliveryOptions describes facts about the message independent of the
@@ -498,6 +516,7 @@ func (s ChatTurnSettings) IsZero() bool {
 // is wrong within a week: models are added, renamed, hidden per account, and
 // gated by entitlement the provider knows about and AO does not.
 type ChatModel struct {
+	Inputs      []string
 	ID          string
 	DisplayName string
 	Description string
@@ -732,6 +751,21 @@ type (
 	// non-nil provider turn id copies through that turn, inclusive.
 	ChatForker interface {
 		Fork(ctx context.Context, lastProviderTurnID *string) (providerConversationID string, err error)
+	}
+	// ChatIsolatedForker creates the fork in the destination provider host. The
+	// source host and its active writer remain untouched. An empty turn id
+	// copies current context; the caller must keep the source quiescent.
+	ChatIsolatedForker interface {
+		ForkIntoHost(ctx context.Context, sourceProviderConversationID, lastProviderTurnID string, cfg ChatStartConfig) (ChatConversation, error)
+	}
+	// ChatNativeTurnID resolves a completed provider turn to its native turn ID.
+	ChatNativeTurnID interface {
+		NativeTurnID(providerTurnID string) string
+	}
+	// ChatForkDeleter removes only a provider fork ID positively registered to
+	// an AO side conversation. The caller must never pass a main thread ID.
+	ChatForkDeleter interface {
+		DeleteFork(ctx context.Context, providerConversationID string) error
 	}
 	// ChatInheritedHistory proves native ancestry and expresses the supplied
 	// replay in an ancestor's ID namespace. Nil means ancestry is unverified.

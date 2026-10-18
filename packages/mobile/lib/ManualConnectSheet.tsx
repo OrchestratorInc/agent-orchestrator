@@ -4,7 +4,7 @@ import { Linking, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, Tex
 import { ApiError, pingServer } from "./api";
 import { DEFAULT_CONFIG, saveConfig, type ServerConfig } from "./config";
 import { saveHost, setActiveHost, renameHost, type Host } from "./hosts";
-import { adoptManualConnection, editedManualHost } from "./manualConnect";
+import { AccountManagedHostError, adoptManualConnection, DifferentMachineError, persistManualHostEdit } from "./manualConnect";
 import { configForEndpoint } from "./connect";
 import { normalizeServerHost } from "./endpoints";
 import { probeEndpoint, probeIdentity } from "./connectRuntime";
@@ -19,6 +19,7 @@ import type { Theme } from "./theme";
 import { haptics } from "./haptics";
 import { Button, SHEET_SCROLL_CONTENT, SheetHeader, SheetScreen } from "./ui";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
+import { textSelectionColors } from "./textSelection";
 import { MOBILE_EVENTS } from "./telemetry/events";
 import { mobileTelemetry } from "./telemetry/runtime";
 import { iconSize, space, touchTarget, type } from "./tokens";
@@ -50,29 +51,12 @@ export function ManualConnectSheet({ onConnected, editingHost, editingEndpointIn
 		const target = { ...cfg, host: normalizeServerHost(cfg.host), httpPort: cfg.httpPort.trim() };
 		try {
 			if (editingHost) {
-				const edited = editedManualHost(editingHost, target, machineName, editingEndpointIndex);
-				const before = editingHost.endpoints[editingEndpointIndex];
-				const after = edited.endpoints[editingEndpointIndex];
-				const connectionChanged = !before || before.host !== after.host || before.port !== after.port ||
-					before.secure !== after.secure || editingHost.token !== target.password;
-				if (connectionChanged) {
-					// Check identity before presenting a stored password to a new address.
-					const { hostId } = await probeEndpoint(after, new AbortController().signal);
-					if (editingHost.id && hostId !== editingHost.id) {
-						setFailure({
-							title: "Different machine",
-							message: "That address belongs to another machine. This pairing was not changed.",
-							icon: "alert-circle",
-							showLocalNetworkHint: false,
-						});
-						haptics.warning();
-						return;
-					}
-					await pingServer({ ...target, hostId: editingHost.id || hostId });
-					await saveHost(edited);
-				} else if (edited.name !== editingHost.name) {
-					await renameHost(editingHost.id, edited.name);
-				}
+				await persistManualHostEdit(editingHost, target, machineName, editingEndpointIndex, {
+					probe: (endpoint) => probeEndpoint(endpoint, new AbortController().signal),
+					ping: pingServer,
+					saveHost,
+					renameHost,
+				});
 				haptics.success();
 				onConnected();
 				return;
@@ -102,6 +86,15 @@ export function ManualConnectSheet({ onConnected, editingHost, editingEndpointIn
 			onConnected();
 		} catch (e) {
 			haptics.warning();
+			if (e instanceof DifferentMachineError || e instanceof AccountManagedHostError) {
+				setFailure({
+					title: e instanceof AccountManagedHostError ? "Managed by Orchestrator Cloud" : "Different machine",
+					message: e.message,
+					icon: "alert-circle",
+					showLocalNetworkHint: false,
+				});
+				return;
+			}
 			const status = e instanceof IncompatibleHostVersionError ? 426 : e instanceof ApiError ? e.status : undefined;
 			const copy = describeConnectionFailure(classifyConnectionFailure(status), {
 				host: target.host,
@@ -120,11 +113,11 @@ export function ManualConnectSheet({ onConnected, editingHost, editingEndpointIn
 	const title = editingHost ? "Edit connection" : "Connect manually";
 	const subtitle = editingHost
 		? "Update this machine's name, address, port, password, or TLS setting."
-		: "Enter the address and password from Connect Mobile or ao remote-host enable.";
+		: "Name this machine, then enter the address and password from Connect Mobile or ao remote-host enable.";
 	const form = (
 		<>
 			<Field
-				label={editingHost ? "MACHINE NAME" : "MACHINE NAME (OPTIONAL)"}
+				label="MACHINE NAME"
 				value={machineName}
 				onChangeText={setMachineName}
 				placeholder="AzureLinux"
@@ -149,7 +142,7 @@ export function ManualConnectSheet({ onConnected, editingHost, editingEndpointIn
 						onChangeText={set("password")}
 						placeholder="Connection password"
 						placeholderTextColor={t.textFaint}
-						selectionColor={t.accent}
+						{...textSelectionColors(t)}
 						autoCapitalize="none"
 						autoCorrect={false}
 						secureTextEntry={!showPassword}
@@ -203,7 +196,7 @@ export function ManualConnectSheet({ onConnected, editingHost, editingEndpointIn
 				title={editingHost ? "Save changes" : "Connect"}
 				icon={editingHost ? "check" : "link"}
 				loading={busy}
-				disabled={!cfg.host.trim() || !validPort || (!!editingHost && !machineName.trim())}
+				disabled={!machineName.trim() || !cfg.host.trim() || !validPort}
 				onPress={connect}
 				style={{ marginTop: space.lg }}
 			/>
@@ -244,7 +237,7 @@ function Field({ label, ...input }: { label: string } & React.ComponentProps<typ
 	return (
 		<View style={styles.field}>
 			<Text style={styles.fieldLabel}>{label}</Text>
-			<TextInput {...input} style={styles.input} placeholderTextColor={t.textFaint} selectionColor={t.accent} />
+			<TextInput {...input} style={styles.input} placeholderTextColor={t.textFaint} {...textSelectionColors(t)} />
 		</View>
 	);
 }

@@ -353,13 +353,12 @@ export function AgentModelCombobox({
 							</div>
 						)}
 						{showManualRefresh && (
-							<button
-								type="button"
+							<DropdownMenuItem
 								className="flex size-8 shrink-0 items-center justify-center rounded-md text-settings-muted hover:bg-settings-menu-selected hover:text-settings-label disabled:cursor-not-allowed disabled:opacity-50"
 								aria-label={refreshBusy ? t("settings.models.refreshing") : t("settings.models.refresh")}
 								disabled={refreshBusy}
-								onClick={(event) => {
-									event.stopPropagation();
+								onSelect={(event) => {
+									event.preventDefault();
 									runRefresh();
 								}}
 							>
@@ -368,18 +367,17 @@ export function AgentModelCombobox({
 								) : (
 									<RefreshCw className="size-icon-sm" aria-hidden="true" />
 								)}
-							</button>
+							</DropdownMenuItem>
 						)}
 					</div>
 				)}
 				{(refreshError || refreshFailed) && (
 					<div className="flex items-center gap-2 px-2 pb-1 text-xs text-settings-muted" aria-live="polite">
-						<button
-							type="button"
+						<DropdownMenuItem
 							className="truncate text-warning underline underline-offset-2"
 							title={refreshError}
-							onClick={(event) => {
-								event.stopPropagation();
+							onSelect={(event) => {
+								event.preventDefault();
 								runRefresh();
 							}}
 							disabled={refreshBusy}
@@ -388,7 +386,7 @@ export function AgentModelCombobox({
 							{retryAt
 								? ` · ${new Date(retryAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
 								: ""}
-						</button>
+						</DropdownMenuItem>
 					</div>
 				)}
 
@@ -471,17 +469,16 @@ export function AgentModelCombobox({
 											: t("settings.models.unavailable")}
 									</p>
 									{onRefresh && !refreshError && !showManualRefresh && (
-										<button
-											type="button"
+										<DropdownMenuItem
 											className="text-settings-label underline underline-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-											onClick={(event) => {
-												event.stopPropagation();
+											onSelect={(event) => {
+												event.preventDefault();
 												runRefresh();
 											}}
 											disabled={refreshBusy}
 										>
 											{refreshBusy ? t("settings.models.refreshing") : t("settings.models.refresh")}
-										</button>
+										</DropdownMenuItem>
 									)}
 								</div>
 							</>

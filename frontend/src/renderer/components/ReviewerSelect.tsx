@@ -4,6 +4,7 @@ import { Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { agentModelsQueryOptions, type AgentModelCatalog } from "../hooks/useAgentModelsQuery";
+import { useOfferedModels } from "../hooks/useOfferedModels";
 import { agentLabel } from "../lib/agent-options";
 import { isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
 import {
@@ -230,7 +231,11 @@ function ReviewerHarnessOption({
 	const effectivePersistHarness = persistHarness || resolvedHarness;
 	const isCurrentHarness = effectiveCurrentHarness !== "" && effectiveCurrentHarness === effectivePersistHarness;
 	const isCurrentDefaultSelection = isCurrentHarness && currentModel === "" && currentMode === "";
-	const options = modelOptions(catalog);
+	const { models: offeredModels } = useOfferedModels(resolvedHarness, catalog?.models, {
+		hostId,
+		keep: isCurrentHarness ? [currentModel, currentMode] : [],
+	});
+	const options = modelOptions(catalog, offeredModels);
 	const catalogKnown = catalogQuery.data !== undefined || catalogQuery.isFetched;
 	const defaultModel = catalog?.models?.find((item) => item.isDefault && isConcreteModelID(item.id))?.id;
 	const selectDefault = () => onSelect(persistHarness, {});
@@ -280,14 +285,14 @@ function ReviewerHarnessOption({
 				/>
 			</OptionMenuSubTrigger>
 			<OptionMenuSubContent className="w-[15rem]">
-				{!catalogKnown ? (
-					<OptionMenuItem disabled>{t("common.loading", { defaultValue: "Loading…" })}</OptionMenuItem>
-				) : null}
-				{isCurrentHarness && !isCurrentDefaultSelection && !defaultModel && (
+				{(!isCurrentHarness || (!isCurrentDefaultSelection && !defaultModel)) && (
 					<OptionMenuItem onSelect={selectDefault}>
 						{t(catalog?.selectionMode === "mode" ? "settings.models.useAgentMode" : "settings.models.useAgentModel")}
 					</OptionMenuItem>
 				)}
+				{!catalogKnown ? (
+					<OptionMenuItem disabled>{t("common.loading", { defaultValue: "Loading…" })}</OptionMenuItem>
+				) : null}
 				{options.map((option) => {
 					const config = option.value === defaultModel ? {} : option.kind === "mode" ? { mode: option.value } : { model: option.value };
 					const selected =
@@ -313,10 +318,10 @@ function ReviewerHarnessOption({
 	);
 }
 
-function modelOptions(catalog?: AgentModelCatalog): Array<{ kind: "model" | "mode"; label: string; value: string }> {
+function modelOptions(catalog?: AgentModelCatalog, models = catalog?.models ?? []): Array<{ kind: "model" | "mode"; label: string; value: string }> {
 	if (!catalog) return [];
 	if (catalog.selectionMode !== "catalog" && catalog.selectionMode !== "mode" && catalog.selectionMode !== "text") return [];
-	return (catalog.models ?? []).filter((item) => isConcreteModelID(item.id)).map((item) => ({
+	return models.filter((item) => isConcreteModelID(item.id)).map((item) => ({
 		kind: catalog.selectionMode === "mode" ? "mode" : "model",
 		label: modelChoiceLabel(item),
 		value: item.id,

@@ -139,6 +139,11 @@ func (s *Store) RestoreSession(
 	orgID, sessionID string,
 ) error {
 	return s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+		// Serialize with session creates (createSessionTx takes the same lock)
+		// so a restore and a create cannot both take one requested branch.
+		if err := lockOrgTx(ctx, tx, orgID); err != nil {
+			return err
+		}
 		// Restore reverses a delete, so it is only valid on a TERMINATED session.
 		// Gating on is_terminated=true (with the row lock this UPDATE takes) makes
 		// restore idempotent: once the first restore un-terminates the session, a
@@ -160,6 +165,31 @@ func (s *Store) RestoreSession(
 			// one-active-orchestrator unique index) surfaces as ErrConflict.
 			return normalizeConstraintError(err)
 		}
+		if tag.RowsAffected() == 1 {
+			// A requested branch is one live session's at a time: a session
+			// that took over this one's branch while it was deleted keeps it.
+			var otherID, otherName, branch string
+			err := tx.QueryRow(ctx,
+				`SELECT other.id::text, other.display_name, restored.branch
+				FROM ao_sessions restored
+				JOIN ao_sessions other
+				  ON other.org_id = restored.org_id
+				 AND other.project_id = restored.project_id
+				 AND other.id <> restored.id
+				 AND other.is_terminated = false
+				 AND lower(other.branch) = lower(restored.branch)
+				 AND `+sessionHoldsBranchSQL("other")+`
+				WHERE restored.id = $1 AND restored.org_id = $2
+				ORDER BY other.created_at LIMIT 1`,
+				sessionID, orgID,
+			).Scan(&otherID, &otherName, &branch)
+			if err == nil {
+				return &BranchRefusedError{Reason: BranchReasonInUse, Branch: branch, SessionID: otherID, SessionName: otherName}
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+		}
 		if tag.RowsAffected() == 0 {
 			// Either the session does not exist, or it is already active (a restore
 			// is already in progress, or it was never deleted). Restoring an
@@ -176,6 +206,12 @@ func (s *Store) RestoreSession(
 				return err
 			}
 			return nil
+		}
+		// A restore provisions a new VM: for a billed session that is a new
+		// sandbox under the plan (total VMs, a running slot, usage), checked
+		// here so it commits or fails with the restore.
+		if err := s.billing.forPrincipal(principal, orgID).wakeAdmissionTx(ctx, tx, orgID, sessionID, wakeAny); err != nil {
+			return err
 		}
 		// Re-arm the sandbox for reconciliation. A deleted sandbox row survives
 		// with observed_state='deleted' and reconcile_after ~100 years out, so

@@ -1,37 +1,33 @@
-import { Bot, KeyRound, Loader2, MonitorCog, Play, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
+import { Bot, Coffee, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { aoBridge } from "../lib/bridge";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudGate } from "../hooks/useCloudGate";
-import { useCloudSession } from "../lib/cloud-session";
+import { useCloudOffering } from "../hooks/useCloudOffering";
+import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { ensureCodexAccounts } from "../hooks/useCodexAccountsQuery";
 import { writeCodexAccounts } from "../hooks/codex-accounts-state";
 import { GlobalSettingsForm } from "./GlobalSettingsForm";
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection as ProjectFormSection } from "./ProjectSettingsForm";
-import { ProjectScriptsSettings } from "./ProjectScriptsSettings";
+import { CloudProjectScriptsSettings, ProjectScriptsSettings } from "./ProjectScriptsSettings";
+import { CloudProjectInstructionsSettings, CloudProjectRepositoriesSettings } from "./CloudProjectLayoutSettings";
 import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { CuesSettings } from "./CuesDialog";
-import { motion } from "motion/react";
-import { topbarHeaderClass } from "./TopbarButton";
-import { topbarDragStyle, useTopbarPaddingLeft } from "./ShellTopbar";
-import { type GlobalSettingsSection, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
+import { topbarDragStyle } from "./ShellTopbar";
+import { useAppShortcut } from "../hooks/useAppShortcut";
+import { type GlobalSettingsSection, type HarnessDiagnosticsRequest, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
 import { DialogHeader, settingsDialogBodyClass, settingsDialogHeaderClass, settingsDialogSurfaceClass } from "./ui/dialog";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { globalSettingsItem, visibleGlobalSettings } from "./settings/settingsCatalog";
-
-// Internal testers who see the Coder (bring-your-own) settings page in addition
-// to @11x.ai users, so the flow can be exercised on non-11x accounts.
-const CODER_PAGE_TEST_EMAILS = new Set([
-	"prateekkarnal77@gmail.com",
-	"pritommazumdar1995@gmail.com",
-	"c.mohak2004@gmail.com",
-]);
+import { fetchMobileStatus, mobileStatusQueryKey } from "./settings/ConnectMobileContent";
+import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
 
 function initialProjectSaveState(): ProjectSettingsSaveState {
 	return { phase: "idle" };
@@ -46,10 +42,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const diagnostics = useUiStore((state) => state.developerMode && state.diagnostics);
 	// Reads the daemon settings the dialog tree already queries; no extra fetch.
 	const { cloudEnabled } = useCloudGate();
-	// The bring-your-own-Coder page is for @11x.ai users, plus a small allowlist
-	// of internal testers so the flow can be exercised on non-11x accounts.
-	const email = (useCloudSession().session?.user.email ?? "").toLowerCase();
-	const is11x = email.endsWith("@11x.ai") || CODER_PAGE_TEST_EMAILS.has(email);
+	// The org's offering decides the cloud pages: the bring-your-own-Coder page
+	// only when it includes coder, Upgrade only for self-serve billing.
+	const { customCoder, selfServeBilling } = useCloudOffering();
 
 	const displaySettings = settingsModal;
 	// The selected page includes several store/query subscribers. Mount it one
@@ -73,7 +68,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	}, [deferSettingsBody, settingsModal]);
 	const isBodyReady = bodySettings === displaySettings;
 
-	const globalSections = visibleGlobalSettings({ cloudEnabled, developerMode, diagnostics, is11x });
+	const globalSections = visibleGlobalSettings({ cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling });
 	const remoteHostId = displaySettings?.scope === "project" ? displaySettings.hostId : undefined;
 	// A cloud project lives only in the control plane; the local daemon has no
 	// record of it. Resolve it here so its settings load from the control plane.
@@ -105,9 +100,17 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		{ id: "general", label: t("settings.project.general"), icon: MonitorCog },
 		{ id: "agents", label: t("settings.project.agents"), icon: Bot },
 	];
-	// Scripts, environment, and cues are local-daemon features; remote hosts and Cloud projects do not expose them.
+	// Scripts are project settings on local and Cloud projects alike (a Cloud
+	// session's worker runs them). Environment and cues are local-daemon
+	// features; remote hosts expose none of these.
+	// A Cloud project's repositories, where its agent starts, and the
+	// instructions added to its agents' prompts live on the control plane.
+	if (isCloudProjectSettings) {
+		projectSections.push({ id: "repositories", label: t("settings.project.repositories", { defaultValue: "Repositories" }), icon: FolderGit2 });
+		projectSections.push({ id: "instructions", label: t("settings.project.instructions", { defaultValue: "Instructions" }), icon: ScrollText });
+	}
+	if (!remoteHostId) projectSections.push({ id: "scripts", label: t("settings.project.scripts"), icon: Wrench });
 	if (!remoteHostId && !isCloudProjectSettings) {
-		projectSections.push({ id: "scripts", label: t("settings.project.scripts"), icon: Wrench });
 		projectSections.push({ id: "environment", label: t("settings.project.environment"), icon: KeyRound });
 		projectSections.push({ id: "cues", label: t("cues.title"), icon: Play });
 	}
@@ -117,6 +120,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const [focusAgentId, setFocusAgentId] = useState<string>();
 	const [harnessView, setHarnessView] = useState<"local" | "cloud">();
 	const [startLogin, setStartLogin] = useState(false);
+	const [showDiagnostics, setShowDiagnostics] = useState<HarnessDiagnosticsRequest | undefined>();
 	const [activeProjectSection, setActiveProjectSection] = useState<ProjectSettingsSection>("general");
 	const [pendingProjectSection, setPendingProjectSection] = useState<ProjectSettingsSection | null>(null);
 	const [projectSaveState, setProjectSaveState] = useState<ProjectSettingsSaveState>(initialProjectSaveState);
@@ -132,7 +136,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 
 	const activeLabel = !settingsModal ? "" : isProjectSettings
 		? (projectSections.find((s) => s.id === activeProjectSection)?.label ?? t("settings.project.general"))
-		: globalSettingsItem(activeSection, { cloudEnabled, developerMode, diagnostics, is11x }).label(t);
+		: globalSettingsItem(activeSection, { cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling }).label(t);
 
 	const closeSettingsDialog = () => {
 		if (!settingsModal) return;
@@ -176,21 +180,29 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			closeSettings();
 		}
 	}, [closeSettings, projectSaveState]);
+	// Re-resolves the requested page as the gates settle: the org's offering
+	// loads after the dialog opens, so a deep link to Upgrade or Coder lands on
+	// it once the offering allows it.
 	useEffect(() => {
 		if (settingsModal?.scope === "global") {
-			setActiveSection(globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, developerMode, diagnostics, is11x }).id);
+			setActiveSection(globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling }).id);
 		}
+	}, [cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling, settingsModal]);
+	// Project scope resets only when a project is opened, never when a gate
+	// settles, so a reported save state survives the offering loading.
+	useEffect(() => {
 		if (settingsModal?.scope === "project") {
 			setActiveProjectSection(settingsModal.cloudOrgId !== undefined && settingsModal.section === "cues" ? "general" : settingsModal.section ?? "general");
 			setProjectSaveState(initialProjectSaveState());
 			setCueBusy(false);
 		}
-	}, [cloudEnabled, developerMode, diagnostics, is11x, settingsModal]);
+	}, [settingsModal]);
 
 	useEffect(() => {
 		setFocusAgentId(settingsModal?.scope === "global" ? settingsModal.focusAgentId : undefined);
 		setHarnessView(settingsModal?.scope === "global" ? settingsModal.harnessView : undefined);
 		setStartLogin(settingsModal?.scope === "global" && settingsModal.startLogin === true);
+		setShowDiagnostics(settingsModal?.scope === "global" ? settingsModal.showDiagnostics : undefined);
 	}, [settingsModal]);
 
 	useEffect(() => {
@@ -211,6 +223,10 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		})
 			.then((next) => writeCodexAccounts(queryClient, next, "replace"))
 			.catch(() => undefined);
+		// Same for Mobile: its pairing state and Keep awake are known before the
+		// page is first drawn, so nothing pops in or flips after it opens.
+		void queryClient.prefetchQuery({ queryKey: mobileStatusQueryKey, queryFn: fetchMobileStatus });
+		void queryClient.prefetchQuery({ queryKey: mobileDevicesQueryKey, queryFn: fetchDevices });
 	}, [queryClient, settingsModal?.scope]);
 
 	const selectProjectSection = (id: ProjectSettingsSection) => {
@@ -244,7 +260,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		cueBusy,
 		close: closeSettingsDialog,
 		title: activeLabel,
-		rootLabel: t("settings.title"),
+		titleIcon: !isProjectSettings && activeSection === "stayAwake",
 		isBodyReady,
 		bodyKey: displaySettings?.scope === "project" ? refKey({ host: displaySettings.hostId ?? LOCAL_HOST, id: displaySettings.projectId }) : "global",
 		body: () => {
@@ -261,8 +277,16 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "cues") {
 				return <CuesSettings projectId={displaySettings.projectId} onBusyChange={setCueBusy} />;
 			}
-			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "scripts") {
-				return <ProjectScriptsSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />;
+			if (displaySettings?.scope === "project" && isCloudProjectSettings && cloudOrgId !== undefined && activeProjectSection === "repositories") {
+				return <CloudProjectRepositoriesSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />;
+			}
+			if (displaySettings?.scope === "project" && isCloudProjectSettings && cloudOrgId !== undefined && activeProjectSection === "instructions") {
+				return <CloudProjectInstructionsSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />;
+			}
+			if (displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "scripts") {
+				return isCloudProjectSettings && cloudOrgId !== undefined
+					? <CloudProjectScriptsSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />
+					: <ProjectScriptsSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />;
 			}
 			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "environment") {
 				return <ProjectEnvironmentSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />;
@@ -270,7 +294,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			if (displaySettings?.scope === "project") {
 				return <ProjectSettingsForm projectId={displaySettings.projectId} hostId={remoteHostId} cloudOrgId={cloudOrgId} section={activeProjectSection as ProjectFormSection} onSaveState={setProjectSaveState} />;
 			}
-			return <GlobalSettingsForm cloudEnabled={cloudEnabled} is11x={is11x} focusAgentId={focusAgentId} hostId={displaySettings?.scope === "global" ? displaySettings.hostId : undefined} harnessView={harnessView} startLogin={startLogin} section={activeSection} />;
+			return <GlobalSettingsForm cloudEnabled={cloudEnabled} customCoder={customCoder} selfServeBilling={selfServeBilling} focusAgentId={focusAgentId} hostId={displaySettings?.scope === "global" ? displaySettings.hostId : undefined} harnessView={harnessView} startLogin={startLogin} showDiagnostics={showDiagnostics} section={activeSection} />;
 		},
 	};
 }
@@ -317,6 +341,34 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 		const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 		return () => { if (opener?.isConnected) opener.focus({ preventScroll: true }); };
 	}, [isOpen]);
+	// Settings sections follow the app's navigation chords while the page is
+	// open: previous/next (⌘⇧[ ⌘⇧], ⌃Tab, ⌘⌥←/→) step through the section list and
+	// ⌘1-9 jumps to the Nth section. The shell stands down for these meanwhile.
+	const stepSection = useCallback((direction: -1 | 1) => {
+		const items = activeRef.current?.navItems.filter((item) => !item.disabled) ?? [];
+		if (items.length === 0) return;
+		const current = items.findIndex((item) => item.active);
+		const next = items[(current + direction + items.length) % items.length];
+		next?.onSelect();
+	}, []);
+	useEffect(() => {
+		if (!isOpen) return;
+		const disposers = [
+			aoBridge.app.onPreviousSessionShortcut(() => stepSection(-1)),
+			aoBridge.app.onNextSessionShortcut(() => stepSection(1)),
+			aoBridge.app.onPreviousTabShortcut(() => stepSection(-1)),
+			aoBridge.app.onNextTabShortcut(() => stepSection(1)),
+		];
+		return () => disposers.forEach((dispose) => dispose());
+	}, [isOpen, stepSection]);
+	useAppShortcut(
+		"jump-to-session",
+		({ index }) => {
+			const items = activeRef.current?.navItems.filter((item) => !item.disabled) ?? [];
+			if (index !== undefined) items[index]?.onSelect();
+		},
+		isOpen,
+	);
 	useEffect(() => {
 		if (!isOpen) return;
 		const onKeyDown = (event: KeyboardEvent) => {
@@ -346,36 +398,41 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
 /**
  * Settings page rendered inside the center panel, in place of the routed page:
- * the standard app topbar carrying a "Settings / <page>" breadcrumb above a
- * centered, scrolling content column on the normal page background.
+ * no top bar, just one centered, scrolling content column on the normal page
+ * background, headed by the page's sentence-case title.
  */
 export function SettingsPane() {
-	const { t } = useTranslation();
 	const page = useContext(SettingsPageContext);
-	const paddingLeft = useTopbarPaddingLeft();
 	if (!page) return null;
 	const layer = page.active;
 	return (
-		<div className="flex min-h-0 flex-1 flex-col" data-testid="settings-page">
-			<motion.header className={cn(topbarHeaderClass, "workspace-topbar-container")} style={{ ...topbarDragStyle, paddingLeft }}>
-				<h1 className="text-brand flex min-w-0 items-center gap-2 font-medium leading-none tracking-tight">
-					<span className="text-muted-foreground">{layer.rootLabel}</span>
-					<span aria-hidden="true" className="text-muted-foreground/50">/</span>
-					<span className="min-w-0 truncate text-foreground">{layer.title}</span>
-					{layer.remoteHostId && <span className="truncate text-xs font-normal text-muted-foreground">· {labelForHost(layer.remoteHostId) ?? layer.remoteHostId}</span>}
-				</h1>
-				<button aria-label={t("settings.close")} className="settings-close-button ml-auto shrink-0" disabled={layer.cueBusy} onClick={layer.close} style={{ WebkitAppRegion: "no-drag" } as CSSProperties} type="button">
-					<X aria-hidden="true" className="size-4" />
-				</button>
-			</motion.header>
+		<div className="relative flex min-h-0 flex-1 flex-col" data-testid="settings-page">
+			{/* Transparent toolbar-height strip laid over the scroller: keeps the macOS
+			  * window-drag region while content scrolls up under it to the panel edge.
+			  * The body's top padding clears it (and the fixed titlebar controls that
+			  * sit over the panel when the sidebar is closed) at rest. Controls that
+			  * scroll beneath it are no-drag (styles.css). The strip itself never takes
+			  * pointer events (the native drag region does not need them), so a click
+			  * there reaches the control under it, and it stops short of the scrollbar
+			  * so the top of the track can still be grabbed. */}
+			<div aria-hidden="true" className="pointer-events-none absolute left-0 right-2 top-0 z-10 h-toolbar" style={topbarDragStyle} />
 			{/* A covered project layer stays mounted so its draft survives recovery settings above it. */}
 			{page.layers.map((entry) => (
+				// `relative` makes the scroller the containing block for absolutely
+				// positioned content (sr-only labels, menu triggers). Without it they
+				// escape to the shell's overflow-x-hidden wrapper, which then scrolls
+				// the whole center panel away.
 				<div
 					aria-busy={!entry.isBodyReady}
-					className={cn("settings-thin-scrollbar min-h-0 flex-1 overflow-y-auto", entry !== layer && "hidden")}
+					className={cn("settings-thin-scrollbar relative min-h-0 flex-1 overflow-y-auto", entry !== layer && "hidden")}
 					key={entry.bodyKey}
 				>
-					<div className="settings-dialog-body flex w-full flex-col gap-4 px-[18px] pb-12 pt-[18px]">
+					<div className="settings-dialog-body mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 pb-12 pt-[calc(var(--spacing-toolbar)+--spacing(4))]">
+						<h1 className="mb-8 flex items-center gap-2 px-(--settings-row-inset) text-heading font-medium leading-7 text-foreground">
+							{entry.titleIcon && <Coffee aria-hidden="true" className="size-6" />}
+							{entry.title}
+							{entry.remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(entry.remoteHostId) ?? entry.remoteHostId}</span>}
+						</h1>
 						{entry.body()}
 					</div>
 				</div>
@@ -416,7 +473,7 @@ type SettingsLayerState = ReturnType<typeof useSettingsLayer>;
 function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; covered: boolean }) {
 	const { t } = useTranslation();
 	const contentRef = useRef<HTMLDivElement>(null);
-	const closeButtonRef = useRef<HTMLButtonElement>(null);
+	const restoreFocusOnClose = useRestoreFocusOnClose(!covered);
 	// The body renders into a detached host so it stays mounted (and keeps its draft)
 	// while recovery settings cover the dialog, then is re-attached when it returns.
 	const [bodyHost] = useState(() => document.createElement("div"));
@@ -437,7 +494,16 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 						settingsDialogSurfaceClass,
 						"fixed left-1/2 top-1/2 z-overlay h-[min(40rem,calc(100vh-3rem))] w-(--size-settings-dialog-wide) max-h-none -translate-x-1/2 -translate-y-1/2 origin-center overflow-hidden p-0 animate-modal-in motion-reduce:animate-none sm:rounded-lg",
 					)}
-					onOpenAutoFocus={(event) => { event.preventDefault(); closeButtonRef.current?.focus({ preventScroll: true }); }}
+					onOpenAutoFocus={(event) => {
+						// Land on the current section (or the first field), not the close button.
+						const root = contentRef.current;
+						const target = root?.querySelector<HTMLElement>('nav button[aria-current="page"]:not(:disabled)')
+							?? root?.querySelector<HTMLElement>('.settings-dialog-body :is(input, textarea, select, button):not(:disabled)');
+						if (!target) return;
+						event.preventDefault();
+						target.focus({ preventScroll: true });
+					}}
+					onCloseAutoFocus={restoreFocusOnClose}
 					onEscapeKeyDown={(event) => {
 						const target = event.target instanceof Element ? event.target : null;
 						// In-place edits and login flows take Escape themselves.
@@ -481,7 +547,7 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 							<DialogHeader className={cn(settingsDialogHeaderClass, "flex h-auto shrink-0 flex-row items-center justify-between border-b-0 py-3 pl-(--size-modal-padding) pr-3")}>
 								<Dialog.Title className="settings-dialog-title">{layer.title}{layer.remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(layer.remoteHostId) ?? layer.remoteHostId}</span>}</Dialog.Title>
 								<Dialog.Description className="sr-only">{t("settings.project.dialogDescription")}</Dialog.Description>
-								<button aria-label={t("settings.close")} className="settings-close-button" disabled={layer.cueBusy} onClick={layer.close} ref={closeButtonRef} type="button">
+								<button aria-label={t("settings.close")} className="settings-close-button" disabled={layer.cueBusy} onClick={layer.close} type="button">
 									<X aria-hidden="true" className="size-4" />
 								</button>
 							</DialogHeader>

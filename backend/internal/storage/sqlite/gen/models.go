@@ -12,6 +12,20 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+type AgentAccount struct {
+	ID        string
+	Provider  string
+	Home      string
+	Email     string
+	Plan      string
+	CreatedAt time.Time
+}
+
+type AgentAccountDefault struct {
+	Provider  string
+	AccountID string
+}
+
 type AgentInstallJob struct {
 	Target              string
 	Status              string
@@ -155,6 +169,7 @@ type AppSetting struct {
 	DefaultSessionMode domain.SessionMode
 	UpdatedAt          time.Time
 	CloudOffering      bool
+	HarnessDefaults    string
 }
 
 type Automation struct {
@@ -187,6 +202,11 @@ type AutomationRun struct {
 	ErrorMessage   sql.NullString
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+}
+
+type AwakeState struct {
+	ID       int64
+	Document string
 }
 
 type ChangeLog struct {
@@ -329,6 +349,7 @@ type ConversationMessage struct {
 	SenderSessionID     string
 	SenderProjectID     string
 	SenderDisplayName   string
+	Continuation        int64
 }
 
 type ConversationProviderEvent struct {
@@ -689,6 +710,29 @@ type Session struct {
 	LatestInteractionAt              sql.NullTime
 	HibernatedAt                     sql.NullTime
 	BranchState                      string
+	RequestedOutput                  string
+	RuntimeReleasedLaunchID          string
+}
+
+type SessionAgentAccount struct {
+	SessionID string
+	Provider  string
+	AccountID string
+	BoundAt   time.Time
+}
+
+type SessionArtifactVersion struct {
+	SessionID    domain.SessionID
+	Path         string
+	Version      int64
+	Sha256       string
+	Size         int64
+	ContentType  string
+	Mtime        int64
+	CreatedAt    time.Time
+	Source       string
+	Harness      string
+	RestoredFrom int64
 }
 
 type SessionCleanupFact struct {
@@ -717,6 +761,8 @@ type SessionInterfaceTransition struct {
 	CompletedAt          sql.NullTime
 	NoticeAcknowledgedAt sql.NullTime
 	HistoryPolicy        domain.SessionInterfaceTransitionHistoryPolicy
+	SourceAccountID      string
+	TargetAccountID      string
 }
 
 type SessionInterfaceTransitionMessage struct {

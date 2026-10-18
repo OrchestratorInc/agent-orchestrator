@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WorkspaceSession } from "../types/workspace";
-import { cloudLifecycleStage, cloudStartupProblem } from "./cloud-lifecycle";
+import { cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage } from "./cloud-lifecycle";
 
 function session(
 	desiredState: string,
@@ -39,6 +39,15 @@ describe("cloudLifecycleStage", () => {
 		},
 	);
 
+	it("names Coder only for a paused Coder sandbox", () => {
+		const freestyle = session("paused", "stopped");
+		freestyle.cloud = { ...freestyle.cloud!, sandboxProvider: "freestyle" };
+		expect(cloudLifecycleStage(freestyle)).toBe("paused");
+		expect(isCloudPausedStage("paused")).toBe(true);
+		expect(isCloudPausedStage("paused_by_coder")).toBe(true);
+		expect(isCloudPausedStage("connected")).toBe(false);
+	});
+
 	it("does not invent lifecycle state for local sessions", () => {
 		const local = session("running", "running", true);
 		delete local.cloud;
@@ -54,8 +63,38 @@ describe("cloudStartupProblem", () => {
 		return value;
 	}
 
+	it("reports a workspace the worker could not prepare even though the worker is connected", () => {
+		const setupError = {
+			code: "project_setup_failed",
+			message: "Setup step 1 failed: exit status 3.",
+			at: "2026-10-13T18:31:39Z",
+			detail: "missing secret\n",
+		};
+		expect(cloudStartupProblem(withRuntime("running", { startupError: setupError }, true))).toEqual({
+			phase: "failed",
+			message: setupError.message,
+			code: "project_setup_failed",
+			detail: "missing secret",
+			at: "2026-10-13T18:31:39Z",
+		});
+		// A control-plane startup error still disappears once the worker connects.
+		expect(cloudStartupProblem(withRuntime("running", { startupError }, true))).toBeUndefined();
+	});
+
 	it("reports a final startup failure once AO gives up", () => {
-		expect(cloudStartupProblem(withRuntime("terminated", { startupError }))).toEqual({ phase: "failed", message: startupError.message });
+		expect(cloudStartupProblem(withRuntime("terminated", { startupError }))).toEqual({
+			phase: "failed",
+			message: startupError.message,
+			code: startupError.code,
+		});
+	});
+
+	it("carries bring-your-own diagnostics with a final failure", () => {
+		const withDetail = { ...startupError, detail: "coder build log:\nterraform: quota exceeded\n" };
+		expect(cloudStartupProblem(withRuntime("terminated", { startupError: withDetail }))).toMatchObject({
+			phase: "failed",
+			detail: "coder build log:\nterraform: quota exceeded",
+		});
 	});
 
 	it.each(["bootstrapping", "provisioning", "failed"])("keeps a startup error as a retrying note while AO is still trying (%s)", (runtimeState) => {

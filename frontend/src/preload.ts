@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, FOCUS_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, type KeybindingOverrides } from "./shared/shortcuts";
+import { APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, type AppShortcutEvent, type KeybindingOverrides } from "./shared/shortcuts";
 import {
 	SET_CHAT_DRAFT_RISK_CHANNEL,
 	type ChatDraftBoundaryKind,
@@ -30,6 +30,8 @@ import type { ConnectedHostView } from "./main/remote-registry";
 import type { RemoteHealth } from "./main/remote-request";
 import type {
 	EditorHandoffState,
+	EditorHandoffStateOptions,
+	OpenSessionArtifactsInput,
 	OpenSessionTargetInput,
 	OpenSessionTargetResult,
 } from "./shared/editor-handoff";
@@ -255,8 +257,8 @@ const api = {
 		setChatDraftRisk: (risks: readonly ChatDraftBoundaryKind[], copy?: ChatDraftDialogCopy) => {
 			ipcRenderer.send(SET_CHAT_DRAFT_RISK_CHANNEL, risks, copy);
 		},
-		onOpenSettingsShortcut: (listener: () => void) => {
-			const wrapped = () => listener();
+		onOpenSettingsShortcut: (listener: (section?: string) => void) => {
+			const wrapped = (_event: unknown, section?: unknown) => listener(typeof section === "string" ? section : undefined);
 			ipcRenderer.on(OPEN_SETTINGS_SHORTCUT_CHANNEL, wrapped);
 			return () => {
 				ipcRenderer.off(OPEN_SETTINGS_SHORTCUT_CHANNEL, wrapped);
@@ -290,18 +292,19 @@ const api = {
 				ipcRenderer.off(NEXT_TAB_SHORTCUT_CHANNEL, wrapped);
 			};
 		},
-		onFocusTerminalShortcut: (listener: () => void) => {
-			const wrapped = () => listener();
-			ipcRenderer.on(FOCUS_TERMINAL_SHORTCUT_CHANNEL, wrapped);
+		onShortcut: (listener: (event: AppShortcutEvent) => void) => {
+			const wrapped = (_event: unknown, shortcut: AppShortcutEvent) => listener(shortcut);
+			ipcRenderer.on(APP_SHORTCUT_CHANNEL, wrapped);
 			return () => {
-				ipcRenderer.off(FOCUS_TERMINAL_SHORTCUT_CHANNEL, wrapped);
+				ipcRenderer.off(APP_SHORTCUT_CHANNEL, wrapped);
 			};
 		},
 	},
 	terminal: {
 		saveDroppedFile: (input: { name: string; bytes: Uint8Array }) =>
 			ipcRenderer.invoke("terminal:saveDroppedFile", input) as Promise<string>,
-		setFocused: (focused: boolean) => ipcRenderer.send(SET_TERMINAL_FOCUSED_CHANNEL, focused),
+		setFocused: (focused: boolean, handlesFontSize = false) =>
+			ipcRenderer.send(SET_TERMINAL_FOCUSED_CHANNEL, focused, handlesFontSize),
 		onFontSizeShortcut: (listener: (delta: -1 | 1) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, delta: -1 | 1) => listener(delta);
 			ipcRenderer.on(TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, wrapped);
@@ -344,6 +347,10 @@ const api = {
 		// The shell goes transparent over a live native browser page, so whatever
 		// shows through its unpainted gutters is the native window background.
 		setWindowBackground: (color: string) => ipcRenderer.invoke("theme:set-window-background", color) as Promise<void>,
+		// macOS only: swap the painted window background for native vibrancy so
+		// the translucent shell blurs the desktop behind it.
+		setWindowTranslucent: (enabled: boolean) =>
+			ipcRenderer.invoke("theme:set-window-translucent", enabled) as Promise<void>,
 	},
 	menu: {
 		action: (action: string) => ipcRenderer.invoke("menu:action", action) as Promise<void>,
@@ -352,6 +359,11 @@ const api = {
 	clipboard: {
 		writeText: (text: string) => ipcRenderer.invoke("clipboard:writeText", text) as Promise<void>,
 		readText: () => ipcRenderer.invoke("clipboard:readText") as Promise<string>,
+		writeImage: (bytes: Uint8Array) => ipcRenderer.invoke("clipboard:writeImage", bytes) as Promise<void>,
+	},
+	chatImage: {
+		fetch: (url: string) => ipcRenderer.invoke("chatImage:fetch", url) as Promise<{ bytes: Uint8Array; mimeType: string }>,
+		save: (input: { name: string; bytes: Uint8Array }) => ipcRenderer.invoke("chatImage:save", input) as Promise<boolean>,
 	},
 	daemon: {
 		getStatus: () => ipcRenderer.invoke("daemon:getStatus") as Promise<DaemonStatus>,
@@ -366,11 +378,18 @@ const api = {
 			};
 		},
 	},
+	sideChats: {
+		capture: (closedSideId?: string, cancelClose = false) => ipcRenderer.invoke("sideChats:capture", closedSideId, cancelClose) as Promise<void>,
+	},
 	editorHandoff: {
-		getState: (sessionId: string) =>
-			ipcRenderer.invoke("editorHandoff:getState", sessionId) as Promise<EditorHandoffState>,
+		getState: (sessionId: string, options?: EditorHandoffStateOptions) =>
+			ipcRenderer.invoke("editorHandoff:getState", sessionId, options) as Promise<EditorHandoffState>,
 		open: (input: OpenSessionTargetInput) =>
 			ipcRenderer.invoke("editorHandoff:open", input) as Promise<OpenSessionTargetResult>,
+		openArtifacts: (input: OpenSessionArtifactsInput) =>
+			ipcRenderer.invoke("editorHandoff:openArtifacts", input) as Promise<OpenSessionTargetResult>,
+		copyWorkspacePath: (sessionId: string) =>
+			ipcRenderer.invoke("editorHandoff:copyWorkspacePath", sessionId) as Promise<void>,
 	},
 	telemetry: {
 		getBootstrap: async () => {
@@ -401,7 +420,7 @@ const api = {
 		reconnectRuntime: () => ipcRenderer.invoke("browser:runtime:reconnect") as Promise<void>,
 		getRuntimeState: () => ipcRenderer.invoke("browser:runtime:state") as Promise<BrowserRuntimeState>,
 		nativeCompositionEnabled: true,
-		ensure: (sessionId: string) => ipcRenderer.invoke("browser:ensure", sessionId) as Promise<BrowserNavState>,
+		ensure: (sessionId: string, createInitialTab = true) => ipcRenderer.invoke("browser:ensure", sessionId, createInitialTab) as Promise<BrowserNavState>,
 		setBounds: (input: BrowserBoundsInput) => ipcRenderer.send("browser:setBounds", input),
 		onBoundsApplied: (listener: (result: BrowserBoundsApplied) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, result: BrowserBoundsApplied) => listener(result);
@@ -590,6 +609,7 @@ const api = {
 			ipcRenderer.invoke("browserProfiles:rename", input) as Promise<BrowserProfile>,
 		clear: (id: string) => ipcRenderer.invoke("browserProfiles:clear", { id }) as Promise<void>,
 		delete: (id: string) => ipcRenderer.invoke("browserProfiles:delete", { id }) as Promise<void>,
+		setDefault: (id: string | null) => ipcRenderer.invoke("browserProfiles:setDefault", { id }) as Promise<void>,
 		discoverImportSources: (input?: BrowserImportDiscoveryRequest) =>
 			(input === undefined
 				? ipcRenderer.invoke("browserProfiles:import:discover")
@@ -640,6 +660,14 @@ const api = {
 		getMigration: () => ipcRenderer.invoke("appState:getMigration") as Promise<MigrationState>,
 		setMigration: (migration: MigrationState) =>
 			ipcRenderer.invoke("appState:setMigration", migration) as Promise<void>,
+	},
+	cliLink: {
+		setEnabled: (enabled: boolean) => ipcRenderer.invoke("cliLink:setEnabled", enabled) as Promise<void>,
+		inspect: () => ipcRenderer.invoke("cliLink:inspect") as Promise<import("./shared/cli-link").CliLinkView>,
+		link: (confirmReplacement: boolean, expectedTarget?: string | null) =>
+			ipcRenderer.invoke("cliLink:link", confirmReplacement, expectedTarget) as Promise<import("./shared/cli-link").CliLinkResult>,
+		unlink: (confirmReplacement: boolean, expectedTarget?: string | null) =>
+			ipcRenderer.invoke("cliLink:unlink", confirmReplacement, expectedTarget) as Promise<import("./shared/cli-link").CliLinkResult>,
 	},
 	updateSettings: {
 		get: () => ipcRenderer.invoke("updateSettings:get") as Promise<UpdateSettings>,
@@ -711,6 +739,12 @@ const api = {
 			ipcRenderer.invoke("remotes:previewUrl", hostId, sessionId, sourceUrl) as Promise<string>,
 		resolvePreviewUrl: (hostId: string, sessionId: string, viewedUrl: string) =>
 			ipcRenderer.invoke("remotes:resolvePreviewUrl", hostId, sessionId, viewedUrl) as Promise<string>,
+		// The host's agent browser for the session's agent tab ("" when none).
+		agentBrowserUrl: (hostId: string, sessionId: string) =>
+			ipcRenderer.invoke("remotes:agentBrowserUrl", hostId, sessionId) as Promise<string>,
+		// A preview's address for a browser outside AO; any other URL unchanged.
+		externalUrl: (hostId: string, url: string) =>
+			ipcRenderer.invoke("remotes:externalUrl", hostId, url) as Promise<string>,
 	},
 	cloud: {
 		getSession: () => ipcRenderer.invoke("cloud:getSession") as Promise<CloudAccount | null>,
@@ -752,6 +786,9 @@ const api = {
 		closeStream: (streamId: string) => {
 			ipcRenderer.send("cloudCp:closeStream", streamId);
 		},
+		/** A cloud session's agent browser for its agent tab; "" when its sandbox has none. */
+		agentBrowserUrl: (baseUrl: string, orgId: string, sessionId: string) =>
+			ipcRenderer.invoke("cloudCp:agentBrowserUrl", baseUrl, orgId, sessionId) as Promise<string>,
 		onStreamEvent: (streamId: string, listener: (event: CloudCpStreamEvent) => void) => {
 			const channel = `cloudCp:stream:${streamId}`;
 			const wrapped = (_event: Electron.IpcRendererEvent, event: CloudCpStreamEvent) => listener(event);

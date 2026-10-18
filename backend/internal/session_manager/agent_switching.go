@@ -1362,7 +1362,7 @@ func (m *Manager) prepareTargetActivation(ctx context.Context, store ports.Agent
 			return preparedTargetActivation{}, ErrTargetAgentUnauthorized
 		}
 	}
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat)
 	if err != nil {
 		return preparedTargetActivation{}, fmt.Errorf("system prompt: %w", err)
 	}
@@ -3488,6 +3488,40 @@ func (m *Manager) cleanupRecoveredTargetWorkspace(ctx context.Context, rec domai
 		return fmt.Errorf("agent switch recovery: clean target workspace state: %w", err)
 	}
 	return nil
+}
+
+// sourceRestoreQuarantined reports a session whose agent switch is parked on an
+// unconfirmed source restore: the source stopped, the target never took
+// ownership, and no controller runs for the switch.
+func (m *Manager) sourceRestoreQuarantined(ctx context.Context, id domain.SessionID) bool {
+	store, ok := m.store.(ports.AgentSwitchStore)
+	if !ok {
+		return false
+	}
+	sw, ok, err := store.GetActiveAgentSwitch(ctx, id)
+	return err == nil && ok && sw.RequiresSourceRestore()
+}
+
+// settleSourceRestoreQuarantineOnKill closes a switch parked on an unconfirmed
+// source restore once Kill has stopped the session's controllers, like a kill
+// that wins the source-stop race. Left active, the switch would quarantine the
+// session again at the next startup.
+func (m *Manager) settleSourceRestoreQuarantineOnKill(ctx context.Context, rec domain.SessionRecord) error {
+	store, ok := m.store.(ports.AgentSwitchStore)
+	if !ok {
+		return nil
+	}
+	sw, ok, err := store.GetActiveAgentSwitch(ctx, rec.ID)
+	if err != nil {
+		return err
+	}
+	if !ok || !sw.RequiresSourceRestore() {
+		return nil
+	}
+	recorder := newAgentSwitchFlightRecorder(sw, domain.NormalizeSessionMode(rec.Mode), domain.AgentSwitchExecutionExplicitRecovery)
+	recorder.boundary(domain.AgentSwitchFailureRecoverySettlement)
+	_, err = m.failAgentSwitchWithRecorder(ctx, store, sw, domain.AgentSwitchErrorSourceSessionTerminated, recorder)
+	return err
 }
 
 func (m *Manager) reconcileStoppingSource(ctx context.Context, store ports.AgentSwitchStore, rec domain.SessionRecord, sw domain.AgentSwitch, execution domain.AgentSwitchExecution) (bool, error) {

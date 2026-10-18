@@ -12,9 +12,13 @@ import {
 } from "@expo/ui/swift-ui/modifiers";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { iconSize, type } from "./tokens";
+import { workerActionSymbol } from "./worker-action-model";
 
 const ACTION_WIDTH = 64;
 const CONTROL_SIZE = 44;
+// The glass button hugs its label, so each glyph gets the same box. Without
+// it the taller `pin` symbol drew a larger circle than the archive box.
+const GLYPH_BOX = 24;
 
 export function WorkerRowActions({
 	title,
@@ -34,7 +38,7 @@ export function WorkerRowActions({
 		<Host style={{ width: ACTION_WIDTH * 2, height: 76 }} colorScheme={scheme}>
 			{/* Deliberately not a `GlassEffectContainer`. That is the right wrapper
 			    when two glass controls should read as one surface, but inside one the
-			    system blends their material as they approach, so pin and delete
+			    system blends their material as they approach, so pin and archive
 			    morphed into a single blob mid-swipe. Each button keeps its own glass
 			    here, and the 16pt gap is what separates them. */}
 			<HStack spacing={16} modifiers={[frame({ width: ACTION_WIDTH * 2, height: 76 })]}>
@@ -59,6 +63,7 @@ export function WorkerRowActions({
 						systemName={pinned ? "pin.fill" : "pin"}
 						size={iconSize.lg}
 						color={t.textPrimary}
+						modifiers={[frame({ width: GLYPH_BOX, height: GLYPH_BOX })]}
 					/>
 				</Button>
 				<Button
@@ -68,13 +73,18 @@ export function WorkerRowActions({
 						buttonBorderShape("circle"),
 						controlSize("large"),
 						labelStyle("iconOnly"),
-						tint(t.red),
+						tint(t.textPrimary),
 						frame({ width: CONTROL_SIZE, height: CONTROL_SIZE }),
-						accessibilityLabel(`Delete ${title}`),
-						accessibilityIdentifier("worker-delete"),
+						accessibilityLabel(`Archive ${title}`),
+						accessibilityIdentifier("worker-archive"),
 					]}
 				>
-					<Image systemName="trash" size={iconSize.lg} color={t.red} />
+					<Image
+						systemName={workerActionSymbol("delete")}
+						size={iconSize.lg}
+						color={t.textPrimary}
+						modifiers={[frame({ width: GLYPH_BOX, height: GLYPH_BOX })]}
+					/>
 				</Button>
 			</HStack>
 		</Host>

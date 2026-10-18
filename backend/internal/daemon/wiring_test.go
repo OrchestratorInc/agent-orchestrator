@@ -191,6 +191,7 @@ func TestWiring_AgentResolverResolvesRealAdapters(t *testing.T) {
 		{domain.HarnessFX, "fx"},
 		{domain.HarnessUnreal, "unreal-agent"},
 		{domain.HarnessCommandCode, "command-code"},
+		{domain.HarnessMemcode, "memcode"},
 	} {
 		agent, ok := resolver.Agent(tc.harness)
 		if !ok {
@@ -321,7 +322,7 @@ func TestWiring_StartSessionBuildsSessionService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildAgentResolver: %v", err)
 	}
-	svc, reviewSvc, lc, err := startSession(context.Background(), cfg, rt, store, lcm, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
+	svc, reviewSvc, lc, err := startSession(context.Background(), cfg, rt, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("startSession: %v", err)
 	}
@@ -382,7 +383,7 @@ func TestWiring_StartSessionSpawnsScratchWithoutGitRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildAgentResolver: %v", err)
 	}
-	svc, _, _, err := startSession(context.Background(), cfg, runtime, store, lcm, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
+	svc, _, _, err := startSession(context.Background(), cfg, runtime, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("startSession: %v", err)
 	}
@@ -439,7 +440,7 @@ func TestStartSession_SpawnDoesNotPanicWhenNoTrackerToken(t *testing.T) {
 	if agentsErr != nil {
 		t.Fatalf("buildAgentResolver: %v", agentsErr)
 	}
-	svc, _, _, err := startSession(context.Background(), cfg, rt, store, lcm, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
+	svc, _, _, err := startSession(context.Background(), cfg, rt, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("startSession: %v", err)
 	}
@@ -473,7 +474,7 @@ func TestStartTrackerIntake_RunsEvenWithoutEnabledProjects(t *testing.T) {
 	if agentsErr != nil {
 		t.Fatalf("buildAgentResolver: %v", agentsErr)
 	}
-	svc, _, _, err := startSession(context.Background(), cfg, rt, store, lcm, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
+	svc, _, _, err := startSession(context.Background(), cfg, rt, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("startSession: %v", err)
 	}
@@ -970,6 +971,10 @@ func (f *fakeSessionLifecycle) Reconcile(_ context.Context) error {
 func (f *fakeSessionLifecycle) ReconcileStartupSafety(_ context.Context) error {
 	f.reconcileSafetyCalled = true
 	return f.reconcileErr
+}
+
+func (f *fakeSessionLifecycle) ReconnectAwakeAgent(context.Context, domain.AwakeAgentTarget) error {
+	return nil
 }
 
 func (f *fakeSessionLifecycle) ReconcileBackground(_ context.Context) error {

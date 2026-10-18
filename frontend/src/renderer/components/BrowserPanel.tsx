@@ -65,6 +65,7 @@ import {
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useBrowserView, type BrowserViewModel } from "../hooks/useBrowserView";
+import { useBrowserRuntimeState } from "../hooks/useBrowserRuntimeState";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
 import { formatBrowserAnnotationMessage, type BrowserAnnotationSubmitPayload } from "../../shared/browser-annotations";
 import type { BrowserProfile } from "../../shared/browser-profiles";
@@ -90,6 +91,7 @@ import { useBrowserDownloads } from "../hooks/useBrowserDownloads";
 import { BrowserDownloadsList } from "./BrowserDownloadsList";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { aoBridge } from "../lib/bridge";
+import { isHostLocalWebLink } from "../lib/loopback";
 
 // One-click viewport width presets for responsive testing — height is shown
 // for reference but not enforced (only width drives CSS breakpoints, and
@@ -403,6 +405,7 @@ export function BrowserPanel({
 }
 
 export function BrowserPanelView({
+	session,
 	active,
 	poppedOut,
 	onTogglePopOut,
@@ -436,8 +439,6 @@ export function BrowserPanelView({
 		reopenClosedTab,
 		agentBrowserActive,
 		agentBrowserActivity,
-		browserRuntimeConnected,
-		reconnectBrowserRuntime = async () => undefined,
 		devtoolsState = { viewId: "", open: false, activeTabId: "" },
 		profileState = { viewId: "", profileId: null, temporary: true },
 		openDevTools = async () => undefined,
@@ -457,10 +458,17 @@ export function BrowserPanelView({
 		annotationQueue;
 	const hasNativeBrowser = Boolean(window.ao?.browser);
 	const showStaticPreview = !hasNativeBrowser && navState.url !== "";
-	const canAnnotate = Boolean(window.ao?.browser && viewId && navState.url);
+	// Not on an agent tab: its page is its viewer's picture of the agent's page.
+	const onAgentTab = Boolean(tabs.find((tab) => tab.active)?.remote);
+	const canAnnotate = Boolean(window.ao?.browser && viewId && navState.url && !onAgentTab);
+	// An agent tab's localhost page is the host's: opened here it would be this
+	// computer's own. Before the viewer's first report the tab shows the viewer
+	// itself, an ao-preview-….localhost address, so that is held back too.
+	const agentPageOnHost = onAgentTab && isHostLocalWebLink(navState.url);
 	const canRetryAnnotation = status === "error" && queuedCount > 0;
 	const [devicePreset, setDevicePreset] = useState<string | null>(null);
 	const [customDeviceWidth, setCustomDeviceWidth] = useState("390");
+	const customWidthInputRef = useRef<HTMLInputElement>(null);
 	const [controlsView, setControlsView] = useState<"root" | "devices" | "profiles">("root");
 	const [controlsOpen, setControlsOpen] = useState(false);
 	const [runtimeReconnectPending, setRuntimeReconnectPending] = useState(false);
@@ -492,20 +500,6 @@ export function BrowserPanelView({
 		showRightFade: showTabsRightFade,
 	} = useTabScrollEdges([tabs.length]);
 	const previousTabCountRef = useRef(tabs.length);
-	// Vertical wheel scrolls the horizontal tab strip when it overflows — same
-	// affordance as the session terminal tabs (CenterPane.tsx).
-	useEffect(() => {
-		const element = tabScrollRef.current;
-		if (!element) return;
-		const handleWheel = (event: WheelEvent) => {
-			if (event.ctrlKey || event.metaKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
-			if (event.deltaY === 0 || element.scrollWidth <= element.clientWidth) return;
-			event.preventDefault();
-			element.scrollBy({ left: event.deltaY });
-		};
-		element.addEventListener("wheel", handleWheel, { passive: false });
-		return () => element.removeEventListener("wheel", handleWheel);
-	}, [tabScrollRef]);
 
 	// Opening a tab (or a popup adding one) appends it, so reveal the newest.
 	useEffect(() => {
@@ -856,15 +850,23 @@ export function BrowserPanelView({
 		setUrlEditing(true);
 	};
 
-	const openCurrentPageExternally = () => {
-		if (!isWebLink(navState.url)) return;
-		void openLinkInSystemBrowser(navState.url);
+	// A remote preview's address works only in this panel, which trusts its
+	// certificate: outside AO it goes by its plain-http address.
+	const externalURL = async (url: string): Promise<string> => {
+		if (!session.hostId) return url;
+		// A disconnected host has no other address for it: keep the one shown.
+		return aoBridge.remotes.externalUrl(session.hostId, url).catch(() => url);
+	};
+
+	const openCurrentPageExternally = async () => {
+		if (!isWebLink(navState.url) || agentPageOnHost) return;
+		await openLinkInSystemBrowser(await externalURL(navState.url));
 	};
 
 	const copyCurrentURL = async () => {
 		if (!navState.url) return;
 		try {
-			await aoBridge.clipboard.writeText(navState.url);
+			await aoBridge.clipboard.writeText(await externalURL(navState.url));
 			setUrlCopied(true);
 			clearTimeout(copyFeedbackTimeoutRef.current);
 			copyFeedbackTimeoutRef.current = setTimeout(() => setUrlCopied(false), 1_200);
@@ -932,15 +934,20 @@ export function BrowserPanelView({
 							? error
 							: "";
 	const agentStatusLabel = agentActivityLabel(agentBrowserActivity, agentBrowserActive);
-	const runtimeDisconnected = hasNativeBrowser && browserRuntimeConnected === false;
+	const runtimeState = useBrowserRuntimeState();
+	// A handshake in flight (launch, Reconnect, a daemon restart's first redial) is
+	// not a disconnect yet; alarming then would flash the alert on every relink.
+	const runtimeDisconnected =
+		hasNativeBrowser && runtimeState !== null && !runtimeState.connected && !runtimeState.connecting;
+	const runtimeRejectedMessage = runtimeState?.rejected ? t(browserRuntimeRejectedKey(runtimeState.rejectionCode)) : null;
 	const reconnectRuntime = useCallback(async () => {
 		setRuntimeReconnectPending(true);
 		try {
-			await reconnectBrowserRuntime();
+			await window.ao?.browser.reconnectRuntime();
 		} finally {
 			setRuntimeReconnectPending(false);
 		}
-	}, [reconnectBrowserRuntime]);
+	}, []);
 	const suggestionsOpen = urlEditing && historySuggestions.length > 0;
 	const currentURLIsWeb = isWebLink(navState.url);
 	const copyURLLabel = t(urlCopied ? "browser.urlCopied" : "browser.copyUrl");
@@ -1019,17 +1026,20 @@ export function BrowserPanelView({
 								</Button>
 							</BrowserControlTooltip>
 						) : null}
+						{/* On an agent's host page, aria-disabled rather than disabled: a
+						    disabled button would lose the tooltip that says why. */}
 						{currentURLIsWeb ? (
-							<BrowserControlTooltip label={t("inspector.openInSystemBrowser")}>
+							<BrowserControlTooltip label={agentPageOnHost ? t("browser.agentPageOnHost") : t("inspector.openInSystemBrowser")}>
 									<Button
+										aria-disabled={agentPageOnHost || undefined}
 										aria-label={t("inspector.openInSystemBrowser")}
 										className="browser-panel__url-external"
-										onClick={openCurrentPageExternally}
+										onClick={() => void openCurrentPageExternally()}
 										size="icon-sm"
 										type="button"
 										variant="ghost"
 									>
-										<ExternalLink aria-hidden="true" className="size-icon-base" />
+										<ExternalLink aria-hidden="true" className={cn("size-icon-base", agentPageOnHost && "opacity-50")} />
 									</Button>
 							</BrowserControlTooltip>
 						) : null}
@@ -1106,7 +1116,6 @@ export function BrowserPanelView({
 									key={tab.id}
 									onClose={handleCloseTab}
 									onSelect={handleSelectTab}
-									onlyTab={tabs.length === 1}
 									selected={tab.id === activeTabId}
 									tab={tab}
 								/>
@@ -1119,7 +1128,7 @@ export function BrowserPanelView({
 					</div>
 				</SortableContext>
 				<DragOverlay adjustScale={false} dropAnimation={null} modifiers={browserTopTabDragModifiers}>
-					{draggedTopTab ? <BrowserTopTabDragOverlay onlyTab={tabs.length === 1} tab={draggedTopTab} /> : null}
+					{draggedTopTab ? <BrowserTopTabDragOverlay tab={draggedTopTab} /> : null}
 				</DragOverlay>
 			</DndContext>
 				<BrowserControlTooltip label={t("browser.openNewTab")}>
@@ -1197,6 +1206,15 @@ export function BrowserPanelView({
 							aria-label={t("browser.annotationOriginalPage")}
 							disabled={annotationIdle}
 							onBlur={() => void annotationAction("restore-preview")}
+							onKeyDown={(event) => {
+								if ((event.key !== "Enter" && event.key !== " ") || event.repeat) return;
+								event.preventDefault();
+								void annotationAction("preview-original");
+							}}
+							onKeyUp={(event) => {
+								if (event.key !== "Enter" && event.key !== " ") return;
+								void annotationAction("restore-preview");
+							}}
 							onPointerCancel={() => void annotationAction("restore-preview")}
 							onPointerDown={() => void annotationAction("preview-original")}
 							onPointerLeave={() => void annotationAction("restore-preview")}
@@ -1277,17 +1295,22 @@ export function BrowserPanelView({
 				<div className="browser-panel__toolbar" data-testid="browser-toolbar">
 							{runtimeDisconnected ? (
 								<div className="flex min-w-0 items-center gap-1.5 text-2xs text-destructive" data-testid="browser-runtime-alert" role="alert">
-									<span className="truncate">{t("browser.runtimeDisconnected")}</span>
-									<Button
-										className="shrink-0"
-										disabled={runtimeReconnectPending}
-										onClick={() => void reconnectRuntime()}
-										size="sm"
-										type="button"
-										variant="outline"
-									>
-										{t("browser.reconnectRuntime")}
-									</Button>
+									<span className="truncate" title={runtimeRejectedMessage ?? undefined}>
+										{runtimeRejectedMessage ?? t("browser.runtimeDisconnected")}
+									</span>
+									{/* Reconnecting sends the same token, which the daemon would refuse again. */}
+									{runtimeState.rejected ? null : (
+										<Button
+											className="shrink-0"
+											disabled={runtimeReconnectPending}
+											onClick={() => void reconnectRuntime()}
+											size="sm"
+											type="button"
+											variant="outline"
+										>
+											{t("browser.reconnectRuntime")}
+										</Button>
+									)}
 								</div>
 							) : null}
 							<BrowserControlTooltip label={t("browser.back")}>
@@ -1351,7 +1374,15 @@ export function BrowserPanelView({
 					</span>
 				) : null}
 				<BrowserControlTooltip
-					label={annotationStatusLabel || agentStatusLabel || (canRetryAnnotation ? t("browser.retryAnnotation") : t("browser.annotate"))}
+					label={
+						annotationStatusLabel ||
+						agentStatusLabel ||
+						(canRetryAnnotation
+							? t("browser.retryAnnotation")
+							: onAgentTab
+								? t("browser.annotateAgentTab")
+								: t("browser.annotate"))
+					}
 				>
 					<span className="inline-flex">
 							<Button
@@ -1504,12 +1535,24 @@ export function BrowserPanelView({
 							})}
 						</div>
 						<div className="my-1 h-px bg-border" role="separator" />
-						<label className="flex items-center gap-1.5 px-2 py-1.5 text-body">
+						<DropdownMenuItem
+							className="gap-1.5"
+							// Radix re-focuses an item on pointer move/leave, which would pull focus
+							// out of the width field while the mouse drifts over the row.
+							onPointerMove={(event) => event.preventDefault()}
+							onPointerLeave={(event) => event.preventDefault()}
+							onSelect={(event) => {
+								event.preventDefault();
+								customWidthInputRef.current?.focus();
+							}}
+						>
 							<span className="flex size-4 shrink-0 items-center justify-center">
 								{devicePreset === CUSTOM_DEVICE_PRESET_ID ? <Check aria-hidden="true" className="text-accent" /> : null}
 							</span>
 							<span className="flex-1">{t("browser.deviceCustomWidth")}</span>
 							<Input
+								aria-label={t("browser.deviceCustomWidth")}
+								ref={customWidthInputRef}
 								className="h-6 w-16 shrink-0 px-1.5 text-right font-mono text-caption"
 								inputMode="numeric"
 								max={MAX_DEVICE_FRAME_WIDTH}
@@ -1519,10 +1562,14 @@ export function BrowserPanelView({
 									setDevicePreset(CUSTOM_DEVICE_PRESET_ID);
 								}}
 								onClick={(event) => event.stopPropagation()}
+								onKeyDown={(event) => {
+									// Escape still closes the menu; everything else is typing.
+									if (event.key !== "Escape") event.stopPropagation();
+								}}
 								type="number"
 								value={customDeviceWidth}
 							/>
-						</label>
+						</DropdownMenuItem>
 							</>
 						) : controlsView === "profiles" ? (
 							<>
@@ -1799,13 +1846,11 @@ function BrowserControlTooltip({
 const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 	tab,
 	selected,
-	onlyTab,
 	onSelect,
 	onClose,
 }: {
 	tab: BrowserViewModel["tabs"][number];
 	selected: boolean;
-	onlyTab: boolean;
 	onSelect: (tabId: string) => void;
 	onClose: (tabId: string) => void;
 }) {
@@ -1843,11 +1888,10 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 					<span className="browser-panel__tab-title">{label.title}</span>
 				</button>
 			</BrowserControlTooltip>
-			<BrowserControlTooltip label={onlyTab ? t("browser.onlyTab") : closeLabel}>
+			<BrowserControlTooltip label={closeLabel}>
 				<button
 					aria-label={closeLabel}
 					className="browser-panel__tab-close"
-					disabled={onlyTab}
 					onClick={() => onClose(tab.id)}
 					type="button"
 				>
@@ -1860,10 +1904,8 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 
 export const BrowserTopTabDragOverlay = memo(function BrowserTopTabDragOverlay({
 	tab,
-	onlyTab,
 }: {
 	tab: BrowserViewModel["tabs"][number];
-	onlyTab: boolean;
 }) {
 	const label = browserTabLabel(tab.title, tab.url);
 	return (
@@ -1880,11 +1922,9 @@ export const BrowserTopTabDragOverlay = memo(function BrowserTopTabDragOverlay({
 				)}
 				<span className="browser-panel__tab-title">{label.title}</span>
 			</div>
-			{onlyTab ? null : (
-				<span className="browser-panel__tab-close">
-					<X aria-hidden="true" className="size-icon-base" />
-				</span>
-			)}
+			<span className="browser-panel__tab-close">
+				<X aria-hidden="true" className="size-icon-base" />
+			</span>
 		</div>
 	);
 });
@@ -1894,6 +1934,19 @@ function agentActivityLabel(activity: BrowserViewModel["agentBrowserActivity"], 
 	const action = activity?.active ? activity.action : "";
 	if (!action) return appI18n.t("browser.agentUsing");
 	return appI18n.t("browser.agentAction", { verb: browserActionVerb(action) });
+}
+
+// The daemon's refusal codes (backend/internal/browserruntime/broker.go). Name a
+// cause only for a code that identifies one; any other refusal stays generic.
+function browserRuntimeRejectedKey(code: string | undefined): MessageKey {
+	switch (code) {
+		case "BROWSER_RUNTIME_TOKEN_REJECTED":
+			return "browser.runtimeRejectedToken";
+		case "BROWSER_RUNTIME_PROTOCOL_MISMATCH":
+			return "browser.runtimeRejectedVersion";
+		default:
+			return "browser.runtimeRejected";
+	}
 }
 
 function browserActionVerb(action: string): string {
@@ -1947,6 +2000,7 @@ function getDisplayUrl(url: string): string {
 		return url;
 	}
 }
+
 
 function webOrigin(url: string): string | undefined {
 	try {

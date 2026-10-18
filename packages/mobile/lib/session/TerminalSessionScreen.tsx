@@ -43,6 +43,7 @@ import { isRuntimeGone, type RouteSession } from "./sessionRoute";
 import { iconSize, press, space, type } from "../tokens";
 import { backOr } from "../backNavigation";
 import { userFacingError } from "../connectionError";
+import { archiveSessionMessage } from "../worker-action-model";
 import { isTerminalGoneError, TERMINAL_STATUS_LABEL, terminalErrorCopy, terminalExitedCopy } from "./terminalCopy";
 
 const FONT_SIZE = 12;
@@ -552,7 +553,7 @@ const statusColorFor = (t: Theme): Record<MuxStatus, string> => ({
 function terminalInterfacePhaseLabel(phase?: string): string {
 	switch (phase) {
 		case "draining":
-			return "Waiting for the current terminal turn to finish. New AO messages are queued safely.";
+			return "Waiting for the current terminal turn to finish. New messages are queued safely.";
 		case "source_stopping":
 			return "Stopping the terminal controller before Chat starts.";
 		case "source_stopped":
@@ -574,7 +575,7 @@ function terminalInterfacePhaseLabel(phase?: string): string {
  */
 export default function TerminalScreen({ session: resolved }: { session?: RouteSession }) {
 	const t = useTheme();
-	const { scheme } = useThemeState();
+	const { scheme, style } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
 	const params = useLocalSearchParams<{ id?: string; handleId?: string; projectId?: string; sessionId?: string; title?: string; kind?: string; hostId?: string }>();
 	const shellOnly = Boolean(params.handleId);
@@ -687,7 +688,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const interfaceTransitionNoticeText =
 		interfaceTransitionNotice?.errorDetail ||
 		(interfaceTransitionRecovered
-			? "AO restored the session in its last committed interface."
+			? "Orchestrator restored the session in its last committed interface."
 			: interfaceTransitionNotice?.phase === "recovery_required"
 				? "The interface switch needs recovery before more work is sent."
 				: "The interface switch failed; Terminal UI remains available.");
@@ -864,7 +865,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 
 	useLayoutEffect(() => {
 		xtermReadyRef.current = false;
-	}, [scheme]);
+	}, [scheme, style]);
 
 	// Poll the daemon's on-demand preview detector while the terminal is open, just
 	// to keep `preview` current for the globe button. We never auto-open the overlay
@@ -1145,7 +1146,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			"Switch to Chat?",
 			known?.activity === "waiting_input" || known?.activity === "blocked"
 				? "This turn is waiting for your input. Finish waits for your answer; stop cancels it and switches now."
-				: "Keep the same AO session, worktree, and native agent conversation.",
+				: "Keep the same Orchestrator session, worktree, and native agent conversation.",
 			[
 				{ text: "Keep Terminal UI", style: "cancel" },
 				{ text: "Finish, then switch", onPress: () => void startInterfaceSwitch("drain") },
@@ -1243,25 +1244,25 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				leave();
 			} catch (e) {
 				haptics.error();
-				setBanner(`Couldn't stop the session. ${userFacingError(e)}`);
+				setBanner(`${reviewerPane ? "Couldn't stop the reviewer" : shellOnly ? "Couldn't close the shell" : "Couldn't archive the session"}. ${userFacingError(e)}`);
 			}
 		};
 		if (Platform.OS === "web") {
 			doKill();
 			return;
 		}
-		// Cautionary buzz as the destructive confirmation dialog is raised.
-		haptics.warning();
 		if (reviewerPane) {
+			haptics.warning();
 			Alert.alert("Stop reviewer session?", "This closes the persistent reviewer and cancels any review it is currently running. Review history is preserved.", [
 				{ text: "Keep reviewer", style: "cancel" },
 				{ text: "Stop reviewer", style: "destructive", onPress: doKill },
 			]);
 			return;
 		}
-		Alert.alert(shellOnly ? "Close shell?" : "Kill session?", shellOnly ? "This stops the worktree shell." : `This stops ${id}.`, [
+		haptics.warning();
+		Alert.alert(shellOnly ? "Close shell?" : "Archive session?", shellOnly ? "This stops the worktree shell." : archiveSessionMessage(id), [
 			{ text: "Cancel", style: "cancel" },
-			{ text: shellOnly ? "Close" : "Kill", style: "destructive", onPress: doKill },
+			{ text: shellOnly ? "Close" : "Archive session", style: "destructive", onPress: doKill },
 		]);
 	}, [activeConfig, id, leave, params.sessionId, reviewerPane, shellOnly]);
 
@@ -1299,7 +1300,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			fastScrollSensitivity: 8,
 			// The terminal's own palette, not the product one: agent TUIs own the
 			// meaning of the ANSI slots.
-			theme: terminalTheme(scheme),
+			theme: terminalTheme(scheme, style),
 			// Agent TUIs pick their colours assuming a dark canvas, so on the light
 			// theme they can land white-on-white — the prompt row is exactly that
 			// once its background band is collapsed away. xterm nudges any pair that
@@ -1307,9 +1308,9 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			// more reliable than trying to anticipate every colour a TUI might emit.
 			minimumContrastRatio: 4.5,
 		}),
-		// `scheme` matters: without it the terminal keeps the palette it was built
-		// with and stays dark after a theme switch.
-		[scheme],
+		// `scheme` and `style` matter: without them the terminal keeps the palette
+		// it was built with and stays dark after a theme switch.
+		[scheme, style],
 	);
 
 	// Adjust only the phone's CSS viewport. The xterm renderer, mux attachment,
@@ -1399,15 +1400,15 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 						<Text style={styles.restoreText}>{restoring ? "Restoring…" : "Restore"}</Text>
 					</Pressable>
 				) : (
-					// Icon-only: the trash glyph reads as "destroy this session" on its
-					// own, so the label would only cost width. Hence accessibilityLabel.
+					// Icon-only: the archive glyph matches the restorable action on the
+					// workers board. The accessible label carries the full operation.
 					<Pressable
 						hitSlop={8}
-						accessibilityLabel={shellOnly ? "Close shell" : "Kill session"}
+						accessibilityLabel={shellOnly ? "Close shell" : "Archive session"}
 						onPress={confirmKill}
 						style={({ pressed }) => [styles.killBtn, pressed && { opacity: press.opacity }]}
 					>
-						<Feather name={shellOnly ? "x" : "trash-2"} size={iconSize.sm} color={t.red} />
+						<Feather name={shellOnly ? "x" : "archive"} size={iconSize.sm} color={shellOnly ? t.red : t.textSecondary} />
 					</Pressable>
 				)}
 			</View>
@@ -1460,7 +1461,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				<XtermJsWebView
 					// Remount only on theme changes: xterm applies its palette at
 					// construction, so already-painted rows otherwise keep old colours.
-					key={`term-${scheme}`}
+					key={`term-${style}-${scheme}`}
 					ref={xtermRef}
 					autoFit={false}
 					xtermOptions={xtermOptions}

@@ -1,3 +1,4 @@
+import { AwakeControl } from "./AwakeControl";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -6,10 +7,6 @@ import { Archive, Plus } from "lucide-react";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../types/workspace";
 import { archivedStandaloneSessions } from "../lib/standalone-archive";
 import { useRestoreSession } from "../hooks/useRestoreSession";
-import {
-	useSessionUsageSummaries,
-	type SessionUsageSummary,
-} from "../hooks/useSessionUsageSummaries";
 import {
 	useWorkspaceQuery,
 	workspaceQueryKey,
@@ -28,15 +25,12 @@ const dragStyle = isMac
 const noDragStyle = isMac
 	? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties)
 	: undefined;
-const emptyUsageBySession: ReadonlyMap<string, SessionUsageSummary> = new Map();
 
 export function StandaloneArchiveView() {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 	const workspaceQuery = useWorkspaceQuery();
-	const usageBySession =
-		useSessionUsageSummaries(undefined).data ?? emptyUsageBySession;
 	const restoreSessionById = useRestoreSession();
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	const [restoringSessionId, setRestoringSessionId] = useState<
@@ -118,6 +112,7 @@ export function StandaloneArchiveView() {
 					</span>
 					<div className="min-w-0 flex-1" />
 					<div className="workspace-topbar-actions flex shrink-0 items-center" style={noDragStyle}>
+						<AwakeControl compact />
 						<TopbarButton
 							className="topbar-control--labeled"
 							onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
@@ -156,7 +151,6 @@ export function StandaloneArchiveView() {
 								}
 								restoreError={restoreErrors[session.id]}
 								session={session}
-								usage={usageBySession.get(session.id)}
 							/>
 						))}
 					</div>

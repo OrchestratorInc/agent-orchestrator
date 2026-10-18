@@ -7,6 +7,10 @@ in the approved template image, launches it through the workspace's existing
 provider-neutral reconciler used by NodeOps. Older templates remain compatible:
 AO verifies the baked binaries and falls back to the PTY upload on a hash miss.
 
+For customers connecting their own Coder, the setup guide (workspace user,
+working directory, ready check, and the project's Setup and Cleanup scripts) is
+[bring-your-own-coder.md](bring-your-own-coder.md).
+
 The first implementation is deployment-scoped: every AO organization on that
 control plane uses the same Coder connection and approved template. It does not
 yet decrypt a separate Coder connection per AO organization.

@@ -8,7 +8,7 @@ import { DarkTheme, DefaultTheme, Stack, ThemeProvider as NavigationThemeProvide
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useFonts } from "expo-font";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Platform, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
@@ -23,6 +23,7 @@ import { glassHeaderControl } from "../lib/native-header-items";
 import { LayoutGrid } from "../lib/layoutGrid";
 import { AppProvider } from "../lib/store";
 import { ThemeProvider, useTheme, useThemeState } from "../lib/ThemeProvider";
+import { loadThemeSettings, type ThemeSettings } from "../lib/themeStore";
 
 // Sheet routes, and how tall each is allowed to be.
 //
@@ -30,8 +31,8 @@ import { ThemeProvider, useTheme, useThemeState } from "../lib/ThemeProvider";
 // explicit detents — `fitToContents` cannot measure a scroll view. The theme
 // sheet renders a plain view, so it wraps its content exactly.
 //
-// `sheets/connect` is registered separately below: it is the only one with text
-// inputs, so its heights are chosen around the keyboard.
+// Input sheets are registered separately below so their heights can respond to
+// the keyboard.
 const SHEET_ROUTES = [
 	{ name: "sheets/project", detents: [0.5, 0.95] },
 	{ name: "sheets/agent", detents: [0.5, 0.95] },
@@ -82,10 +83,25 @@ export default function RootLayout() {
 	// losing to a system fallback; it is not worth losing the app to.
 	const [fontsReady, fontError] = useFonts({ Geist_400Regular, Geist_500Medium, Geist_600SemiBold, GeistMono_400Regular });
 	const fontsSettled = fontsReady || fontError != null;
+	// The stored theme is read under the splash too, for the same reason as the
+	// fonts: the first frame should already be the user's palette, not the default
+	// one swapped out a tick later. The read never rejects (each half falls back
+	// to its default), so it cannot hold the splash forever.
+	const [themeSettings, setThemeSettings] = useState<ThemeSettings | null>(null);
 	useEffect(() => {
-		if (fontsSettled) void SplashScreen.hideAsync().catch(() => {});
-	}, [fontsSettled]);
-	if (!fontsSettled) return null;
+		let active = true;
+		void loadThemeSettings().then((settings) => {
+			if (active) setThemeSettings(settings);
+		});
+		return () => {
+			active = false;
+		};
+	}, []);
+	const ready = fontsSettled && themeSettings !== null;
+	useEffect(() => {
+		if (ready) void SplashScreen.hideAsync().catch(() => {});
+	}, [ready]);
+	if (!ready) return null;
 
 	// ThemeProvider sits outside everything that reads a colour, including the
 	// Stack's own screenOptions below — hence the inner component: a hook cannot
@@ -98,7 +114,7 @@ export default function RootLayout() {
 			    animating, so every dock and composer arrived a beat late. */}
 			<KeyboardProvider>
 				<SafeAreaProvider>
-					<ThemeProvider>
+					<ThemeProvider initial={themeSettings}>
 						<AppProvider>
 							<Shell />
 						</AppProvider>
@@ -174,9 +190,19 @@ function Shell() {
 					options={{
 						presentation: "formSheet",
 						headerShown: false,
-						sheetAllowedDetents: Platform.OS === "ios" ? [0.92] : [0.9, 1],
+						// Settings contains long, dynamically collapsing forms. Letting the
+						// native sheet own vertical gestures means a scroll released near the
+						// bottom can dismiss the whole flow after an editor collapses. Settings
+						// already has an explicit close control, so keep list gestures inside it.
+						gestureEnabled: false,
+						// Android measures this nested stack at the largest detent, so
+						// opening at 90% translates its fixed Save/Cancel footer below
+						// the visible screen. Match iOS with one 92% detent so the
+						// measured and visible heights agree without a swipe. The
+						// editor handles the keyboard itself inside that viewport.
+						sheetAllowedDetents: [0.92],
 						sheetInitialDetentIndex: 0,
-						sheetGrabberVisible: true,
+						sheetGrabberVisible: false,
 						sheetCornerRadius: 24,
 						contentStyle: { backgroundColor: t.bgBase },
 					}}
@@ -251,6 +277,19 @@ function Shell() {
 				<Stack.Screen
 					name="sheets/connect"
 					options={{ ...CONNECT_SHEET_OPTIONS, contentStyle: { backgroundColor: t.bgSurface } }}
+				/>
+				<Stack.Screen
+					name="sheets/machine-name"
+					options={Platform.OS === "android" ? {
+						presentation: "transparentModal",
+						animation: "none",
+						headerShown: false,
+						contentStyle: { backgroundColor: "transparent" },
+					} : {
+						...CONNECT_SHEET_OPTIONS,
+						sheetAllowedDetents: "fitToContents",
+						contentStyle: { backgroundColor: t.bgSurface },
+					}}
 				/>
 			</Stack>
 			</NavigationThemeProvider>

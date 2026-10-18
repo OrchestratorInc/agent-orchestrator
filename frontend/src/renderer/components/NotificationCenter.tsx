@@ -965,7 +965,7 @@ const NotificationItem = memo(function NotificationItem({
 				)}
 				onClick={openRow}
 				onKeyDown={(event) => {
-					if (!canOpenSession) return;
+					if (!canOpenSession || event.target !== event.currentTarget) return;
 					if (event.key !== "Enter" && event.key !== " ") return;
 					event.preventDefault();
 					openRow();
@@ -1151,7 +1151,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 				)}
 				onClick={openRow}
 				onKeyDown={(event) => {
-					if (!canOpenSession) return;
+					if (!canOpenSession || event.target !== event.currentTarget) return;
 					if (event.key !== "Enter" && event.key !== " ") return;
 					event.preventDefault();
 					openRow();

@@ -7,7 +7,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
@@ -171,5 +174,224 @@ func TestListCoderTemplatesEmptyWhenNothingConfigured(t *testing.T) {
 	templates := decodeTemplatesResponse(t, rec)
 	if len(templates) != 0 {
 		t.Fatalf("templates = %+v, want empty", templates)
+	}
+}
+
+// Every Coder-only endpoint is 403 provider_forbidden for an organization whose
+// effective providers exclude coder: either the gate refuses it, or the
+// deployment does not offer coder at all.
+func TestCoderOnlyEndpointsForbiddenWithoutCoder(t *testing.T) {
+	t.Parallel()
+	gated := func() *Server {
+		return New(Options{
+			Store:                     &coderConfigFakeStore{},
+			SecretCipher:              newTestCipher(t),
+			SandboxProvider:           sandbox.ProviderCoder,
+			AvailableSandboxProviders: []string{sandbox.ProviderCoder, sandbox.ProviderFreestyle},
+			CapabilityGatedProviders:  []string{sandbox.ProviderCoder, sandbox.ProviderFreestyle},
+			Logger:                    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		})
+	}
+	noCoder := func() *Server {
+		return New(Options{
+			Store:                     &coderConfigFakeStore{},
+			SecretCipher:              newTestCipher(t),
+			SandboxProvider:           sandbox.ProviderFreestyle,
+			AvailableSandboxProviders: []string{sandbox.ProviderFreestyle},
+			Logger:                    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		})
+	}
+	// Bring-your-own Coder needs the coder capability; the shared deployment's
+	// templates are open to every organization that may run on Coder.
+	customCoder := map[string]func(*Server, http.ResponseWriter, *http.Request){
+		"PUT coder-config": (*Server).putOrgCoderConfig,
+	}
+	refused := func(t *testing.T, rec *httptest.ResponseRecorder) {
+		t.Helper()
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "provider_forbidden") {
+			t.Fatalf("status = %d, body = %s; want 403 provider_forbidden", rec.Code, rec.Body.String())
+		}
+	}
+	for endpointName, handler := range customCoder {
+		t.Run("org without the coder capability/"+endpointName, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			handler(gated(), rec, coderConfigRequest(t, http.MethodGet, validCoderConfigBody(), []string{sandbox.ProviderFreestyle}))
+			refused(t, rec)
+		})
+	}
+	// Desktop releases from before managed Coder opened to every org read the
+	// connection for any org that runs on Coder; one without a connection has
+	// none, not a refusal.
+	t.Run("org without the coder capability reads no connection", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		gated().getOrgCoderConfig(rec, coderConfigRequest(t, http.MethodGet, "", []string{sandbox.ProviderFreestyle}))
+		var body orgCoderConfigResponse
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &body) != nil || body.Configured || body.CoderConfig != nil {
+			t.Fatalf("status = %d, body = %s; want 200 with no connection", rec.Code, rec.Body.String())
+		}
+	})
+	// An org that lost the capability keeps running sessions on a connection it
+	// still has, so it must see that connection and be able to remove it.
+	t.Run("org without the coder capability sees and clears a leftover connection", func(t *testing.T) {
+		server := gated()
+		store := server.store.(*coderConfigFakeStore)
+		store.connections = []domain.ProviderConnection{{
+			Provider: sandbox.ProviderCoder, Label: defaultAgentConnectionLabel, Config: json.RawMessage(`{"baseUrl":"https://coder.example"}`),
+		}}
+		rec := httptest.NewRecorder()
+		server.getOrgCoderConfig(rec, coderConfigRequest(t, http.MethodGet, "", []string{sandbox.ProviderFreestyle}))
+		var body orgCoderConfigResponse
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &body) != nil || !body.Configured || body.CoderConfig == nil {
+			t.Fatalf("status = %d, body = %s; want the leftover connection", rec.Code, rec.Body.String())
+		}
+		if body.Editable {
+			t.Fatalf("body = %s; want a read-only connection without the coder capability", rec.Body.String())
+		}
+		rec = httptest.NewRecorder()
+		server.deleteOrgCoderConfig(rec, coderConfigRequest(t, http.MethodDelete, "", []string{sandbox.ProviderFreestyle}))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("delete status = %d, body = %s; want 204", rec.Code, rec.Body.String())
+		}
+	})
+	endpoints := map[string]func(*Server, http.ResponseWriter, *http.Request){
+		"GET coder templates": (*Server).listCoderTemplates,
+		"GET coder-config":    (*Server).getOrgCoderConfig,
+	}
+	for name, handler := range customCoder {
+		endpoints[name] = handler
+	}
+	endpoints["DELETE coder-config"] = (*Server).deleteOrgCoderConfig
+	for endpointName, handler := range endpoints {
+		t.Run("deployment without coder/"+endpointName, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			handler(noCoder(), rec, coderConfigRequest(t, http.MethodGet, validCoderConfigBody(), []string{sandbox.ProviderCoder}))
+			refused(t, rec)
+		})
+	}
+	t.Run("org without the coder capability lists the shared templates", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		gated().listCoderTemplates(rec, coderConfigRequest(t, http.MethodGet, validCoderConfigBody(), []string{sandbox.ProviderFreestyle}))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s; want the shared deployment's templates", rec.Code, rec.Body.String())
+		}
+	})
+}
+
+// nonMemberCoderConnStore is an organization's Coder connection seen by a caller
+// who is not a member of that organization.
+type nonMemberCoderConnStore struct {
+	fakeCoderConnStore
+	connectionRead bool
+}
+
+func (s *nonMemberCoderConnStore) RequireOrgMember(context.Context, domain.Principal, string) error {
+	return postgres.ErrForbidden
+}
+
+func (s *nonMemberCoderConnStore) CoderConnectionForService(
+	ctx context.Context, orgID string,
+) (encrypted, nonce, config []byte, connectionID string, err error) {
+	s.connectionRead = true
+	return s.fakeCoderConnStore.CoderConnectionForService(ctx, orgID)
+}
+
+// A caller outside the organization never reaches its Coder connection: the
+// template list and a template's parameters are both refused before the
+// organization's stored token is read.
+func TestCoderTemplateEndpointsRefuseNonMembers(t *testing.T) {
+	t.Parallel()
+	store := &nonMemberCoderConnStore{fakeCoderConnStore: fakeCoderConnStore{err: postgres.ErrNotFound}}
+	deployment := &fakeDeploymentTemplateLister{templates: []coder.Template{{ID: "deployment-tpl", Name: "deployment"}}}
+	srv := newCoderTemplatesServer(t, newTestCipher(t), store, deployment)
+
+	rec := httptest.NewRecorder()
+	srv.listCoderTemplates(rec, coderConfigRequest(t, http.MethodGet, "", []string{sandbox.ProviderCoder}))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("list status = %d, want 403; body = %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req := coderConfigRequest(t, http.MethodGet, "", []string{sandbox.ProviderCoder})
+	chi.RouteContext(req.Context()).URLParams.Add("templateId", coderCfgTemplate)
+	srv.getCoderTemplateParameters(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("parameters status = %d, want 403; body = %s", rec.Code, rec.Body.String())
+	}
+	if store.connectionRead {
+		t.Fatal("read the organization's Coder connection for a non-member")
+	}
+}
+
+// Project creation validates Coder template parameters with the organization's
+// stored token; for a caller outside the organization that validation never
+// reads the connection, so it cannot probe the template or drive the token.
+func TestProjectCoderParameterValidationRefusesNonMembers(t *testing.T) {
+	t.Parallel()
+	store := &nonMemberCoderConnStore{fakeCoderConnStore: fakeCoderConnStore{err: postgres.ErrNotFound}}
+	srv := newCoderTemplatesServer(t, newTestCipher(t), store, &fakeDeploymentTemplateLister{})
+	req := coderConfigRequest(t, http.MethodPost, "", []string{sandbox.ProviderCoder})
+	if problem := srv.coderTemplateParameterProblem(
+		req.Context(), coderCfgOrgID, coderCfgTemplate, map[string]string{"guess": "x"}, "req-1",
+	); problem != "" {
+		t.Fatalf("problem = %q, want none reported to a non-member", problem)
+	}
+	if store.connectionRead {
+		t.Fatal("read the organization's Coder connection for a non-member")
+	}
+}
+
+// fakeDeploymentTemplateReader is the deployment lister with template options.
+type fakeDeploymentTemplateReader struct {
+	fakeDeploymentTemplateLister
+}
+
+func (f *fakeDeploymentTemplateReader) TemplateParameters(context.Context, string) ([]coder.TemplateParameter, error) {
+	return []coder.TemplateParameter{{Name: "size"}}, nil
+}
+
+// The deployment's Coder offers only its allowed templates: the shared Coder's
+// test and bring-your-own templates are neither listed nor readable.
+func TestDeploymentCoderOffersOnlyAllowedTemplates(t *testing.T) {
+	t.Parallel()
+	deployment := &fakeDeploymentTemplateReader{fakeDeploymentTemplateLister{templates: []coder.Template{
+		{ID: "00000000-0000-4000-8000-0000000000d1", Name: "ao-azure-vm"}, {ID: "00000000-0000-4000-8000-0000000000e1", Name: "ao-11x-replica"}, {ID: "00000000-0000-4000-8000-0000000000f1", Name: "ao-devkit"},
+	}}}
+	srv := New(Options{
+		Store:                     &fakeCoderConnStore{err: postgres.ErrNotFound},
+		SecretCipher:              newTestCipher(t),
+		SandboxProvider:           sandbox.ProviderCoder,
+		AvailableSandboxProviders: []string{sandbox.ProviderCoder},
+		CoderTemplates:            deployment,
+		CoderTemplateIDs:          []string{"00000000-0000-4000-8000-0000000000d1", "00000000-0000-4000-8000-0000000000f1"},
+		Logger:                    slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+
+	rec := httptest.NewRecorder()
+	srv.listCoderTemplates(rec, coderConfigRequest(t, http.MethodGet, "", []string{sandbox.ProviderCoder}))
+	templates := decodeTemplatesResponse(t, rec)
+	if len(templates) != 2 || templates[0].ID != "00000000-0000-4000-8000-0000000000d1" || templates[1].ID != "00000000-0000-4000-8000-0000000000f1" {
+		t.Fatalf("templates = %+v, want only the allowed ones", templates)
+	}
+
+	for templateID, want := range map[string]int{"00000000-0000-4000-8000-0000000000f1": http.StatusOK, "00000000-0000-4000-8000-0000000000e1": http.StatusNotFound} {
+		rec := httptest.NewRecorder()
+		req := coderConfigRequest(t, http.MethodGet, "", []string{sandbox.ProviderCoder})
+		chi.RouteContext(req.Context()).URLParams.Add("templateId", templateID)
+		srv.getCoderTemplateParameters(rec, req)
+		if rec.Code != want {
+			t.Fatalf("%s parameters: status = %d, want %d", templateID, rec.Code, want)
+		}
+	}
+}
+
+// A session refused for a template the deployment's Coder does not offer gets
+// a clear, user-fixable 422 rather than a 500.
+func TestSessionPlanErrorForUnavailableCoderTemplate(t *testing.T) {
+	t.Parallel()
+	srv := newCoderTemplatesServer(t, newTestCipher(t), &fakeCoderConnStore{}, nil)
+	rec := httptest.NewRecorder()
+	srv.writeSessionPlanError(rec, coderConfigRequest(t, http.MethodPost, "", nil), coderCfgOrgID, "project-1", sandbox.ErrCoderTemplateUnavailable)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "coder_template_unavailable") {
+		t.Fatalf("status = %d, body = %s; want 422 coder_template_unavailable", rec.Code, rec.Body.String())
 	}
 }

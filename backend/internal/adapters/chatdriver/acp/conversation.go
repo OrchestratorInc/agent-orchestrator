@@ -82,37 +82,43 @@ type nestedMessageState struct {
 }
 
 type conversation struct {
-	conn            *acpsdk.ClientSideConnection
-	legacyWire      *legacyACPTransport
-	proc            *process
-	log             *slog.Logger
-	providerScopeID string
+	conn                 *acpsdk.ClientSideConnection
+	legacyWire           *legacyACPTransport
+	proc                 *process
+	log                  *slog.Logger
+	providerScopeID      string
+	decodeConversationID func(string) (string, error)
+	canDeleteFork        bool
+	unadoptedForkID      string
 
-	mu                 sync.Mutex
-	sessionID          string
-	reportedSessionID  string
-	capabilities       ports.ChatCapabilities
-	prepared           *preparedTurn
-	activeTurn         string
-	settlingTurn       string
-	turnCancel         context.CancelFunc
-	interrupt          *interruptAttempt
-	pending            map[string]*parkedPermission
-	pendingInputs      map[string]*parkedInput
-	accepted           map[string]persistentInteractionCommand
-	messages           map[string]string
-	thoughts           map[string]string
-	nestedMessages     map[string]nestedMessageState
-	tools              map[string]*toolState
-	turnDiffs          *turnDiffAccumulator
-	turnDiffTurnID     string
-	providerFailure    *ports.ChatEvent
-	configOptions      []ports.ChatConfigOption
-	skills             []ports.ChatSkill
-	skillsKnown        bool
-	closed             bool
-	modeFor            func(ports.PermissionMode) string
-	optionsFor         func(ports.ChatTurnSettings) []SessionOption
+	mu                sync.Mutex
+	sessionID         string
+	reportedSessionID string
+	capabilities      ports.ChatCapabilities
+	prepared          *preparedTurn
+	activeTurn        string
+	settlingTurn      string
+	turnCancel        context.CancelFunc
+	interrupt         *interruptAttempt
+	pending           map[string]*parkedPermission
+	pendingInputs     map[string]*parkedInput
+	accepted          map[string]persistentInteractionCommand
+	messages          map[string]string
+	thoughts          map[string]string
+	nestedMessages    map[string]nestedMessageState
+	tools             map[string]*toolState
+	turnDiffs         *turnDiffAccumulator
+	turnDiffTurnID    string
+	providerFailure   *ports.ChatEvent
+	configOptions     []ports.ChatConfigOption
+	skills            []ports.ChatSkill
+	skillsKnown       bool
+	closed            bool
+	modeFor           func(ports.PermissionMode) string
+	optionsFor        func(ports.ChatTurnSettings) []SessionOption
+	// requireAdvertised refuses a config option the session did not advertise
+	// instead of sending it. See Config.RequireAdvertisedOptions.
+	requireAdvertised  bool
 	permissionMode     ports.PermissionMode
 	permissionFor      PermissionPolicy
 	initialPermission  ports.PermissionMode
@@ -122,6 +128,7 @@ type conversation struct {
 	legacyModel        bool
 	legacyMode         bool
 	liveState          *persistenthost.ACPState
+	hasDurableTurns    bool
 	detaching          bool
 	terminalEventID    string
 	ignorePromptResult bool
@@ -130,6 +137,14 @@ type conversation struct {
 	onAuthRejected        func()
 	promptResponseFailure func(acpsdk.PromptResponse) error
 	hibernationCheck      func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
+	historyNotice         func(string) bool
+	// preamble is standing context attached to the first prompt that actually
+	// reaches the provider. It is the delivery channel for agents that accept no
+	// system-prompt launch flag and ignore session/new _meta but do execute
+	// prompt content blocks. It is consumed in StartDeferredTurn, not SendTurn,
+	// so a rejected or discarded turn leaves it armed for the next one.
+	preamble      []acpsdk.ContentBlock
+	preambleSpent bool
 
 	contextTokens     int64
 	contextWindow     int64
@@ -142,6 +157,7 @@ type conversation struct {
 	events       chan ports.ChatEvent
 	eventsClosed bool
 	closeOnce    sync.Once
+	closing      chan struct{}
 
 	historyMu     sync.Mutex
 	history       *historyCapture
@@ -197,15 +213,17 @@ func newConversation(
 		nestedMessages:   make(map[string]nestedMessageState),
 		tools:            make(map[string]*toolState),
 		events:           make(chan ports.ChatEvent, eventBuffer),
+		closing:          make(chan struct{}),
 		extensionFor:     extensionFor,
 		extensionMethods: reverseAliases,
 	}
-	legacyWire, sdkWriter, sdkReader := newLegacyACPTransport(proc.stdin, proc.stdout)
+	legacyWire, sdkWriter, sdkReader := newLegacyACPTransport(proc.stdin)
 	c.legacyWire = legacyWire
 	c.conn = acpsdk.NewClientSideConnection(
 		c, sdkWriter, newExtensionMethodReader(sdkReader, extensionAliases),
 	)
 	c.conn.SetLogger(log)
+	go legacyWire.forward(proc.stdout, c.handleNotification)
 	go c.watchConnection()
 	return c
 }
@@ -319,6 +337,44 @@ func (c *conversation) setReportedProviderConversationID(sessionID string) {
 	c.mu.Lock()
 	c.reportedSessionID = sessionID
 	c.mu.Unlock()
+}
+
+// setSessionPreamble arms standing context for the next prompt that actually
+// reaches the provider. Any earlier preamble is dropped: the newest launch
+// context is the one that should be delivered, which is how a recomputed system
+// prompt replaces the original. It is consumed in StartDeferredTurn so a turn
+// that never starts leaves it armed.
+func (c *conversation) setSessionPreamble(blocks []acpsdk.ContentBlock) {
+	// Standing context is only intended to lead the first prompt of a session.
+	// A conversation that already has user turns received it then; repeating it
+	// mid-conversation would read as a new user message. AO's durable history
+	// covers a live reconnect, which replays nothing; session/load replay covers
+	// turns made in the terminal.
+	if c.hasPriorTurns() {
+		blocks = nil
+	}
+	c.mu.Lock()
+	c.preamble = blocks
+	c.preambleSpent = len(blocks) == 0
+	c.mu.Unlock()
+}
+
+func (c *conversation) hasPriorTurns() bool {
+	c.mu.Lock()
+	durable := c.hasDurableTurns
+	c.mu.Unlock()
+	return durable || c.nativeHistoryHasUserTurns()
+}
+
+func (c *conversation) nativeHistoryHasUserTurns() bool {
+	c.historyMu.Lock()
+	defer c.historyMu.Unlock()
+	for _, event := range c.historyEvents {
+		if event.Kind == ports.ChatEventUserMessageCompleted {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *conversation) Capabilities() ports.ChatCapabilities {
@@ -473,26 +529,10 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 		options = optionsFor(settings)
 	}
 	applyOption := func(option SessionOption) error {
-		if option.ID == "" || option.Value == "" {
-			return nil
-		}
 		if (option.ID == "model" && legacyModel) || (option.ID == "mode" && legacyMode) {
 			return nil
 		}
-		resp, err := c.conn.SetSessionConfigOption(ctx, acpsdk.SetSessionConfigOptionRequest{
-			ValueId: &acpsdk.SetSessionConfigOptionValueId{
-				SessionId: acpsdk.SessionId(sessionID), ConfigId: acpsdk.SessionConfigId(option.ID),
-				Value: acpsdk.SessionConfigValueId(option.Value),
-			},
-		})
-		if err != nil {
-			if isACPMethodNotFound(err) {
-				return fmt.Errorf("%w: session/set_config_option %q", ErrACPSetterUnsupported, option.ID)
-			}
-			return fmt.Errorf("set ACP session option %q: %w", option.ID, err)
-		}
-		c.replaceConfigOptions(resp.ConfigOptions)
-		return nil
+		return c.setSessionOption(ctx, sessionID, option)
 	}
 	// A model switch may change the modes an ACP agent offers. Apply a modern
 	// model config option before session/set_mode so the requested mode is
@@ -544,6 +584,65 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 	return nil
 }
 
+// applySessionOptions sets config options that are fixed for the whole session
+// rather than chosen per turn. See Config.LaunchSessionOptions.
+func (c *conversation) applySessionOptions(ctx context.Context, options []SessionOption) error {
+	c.mu.Lock()
+	sessionID := c.sessionID
+	c.mu.Unlock()
+	if sessionID == "" {
+		return errors.New("ACP session is not open")
+	}
+	for _, option := range options {
+		if err := c.setSessionOption(ctx, sessionID, option); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// setSessionOption sends one session/set_config_option and adopts any catalog
+// the agent returns, preserving the current catalog when it omits one.
+func (c *conversation) setSessionOption(ctx context.Context, sessionID string, option SessionOption) error {
+	if option.ID == "" || option.Value == "" {
+		return nil
+	}
+	c.mu.Lock()
+	requireAdvertised := c.requireAdvertised
+	c.mu.Unlock()
+	if requireAdvertised {
+		// An agent that acknowledges an option it never offered may simply drop
+		// it, which would leave the user believing a choice took effect.
+		offered, known := c.configOptionOffers(option.ID, option.Value)
+		if !known {
+			return fmt.Errorf("%w: ACP session does not advertise option %q",
+				ports.ErrChatConfigOptionInvalid, option.ID)
+		}
+		if !offered {
+			return fmt.Errorf("%w: ACP session option %q does not offer %q",
+				ports.ErrChatConfigOptionInvalid, option.ID, option.Value)
+		}
+	}
+	resp, err := c.conn.SetSessionConfigOption(ctx, acpsdk.SetSessionConfigOptionRequest{
+		ValueId: &acpsdk.SetSessionConfigOptionValueId{
+			SessionId: acpsdk.SessionId(sessionID), ConfigId: acpsdk.SessionConfigId(option.ID),
+			Value: acpsdk.SessionConfigValueId(option.Value),
+		},
+	})
+	if err != nil {
+		if isACPMethodNotFound(err) {
+			return fmt.Errorf("%w: session/set_config_option %q", ErrACPSetterUnsupported, option.ID)
+		}
+		return fmt.Errorf("set ACP session option %q: %w", option.ID, err)
+	}
+	if len(resp.ConfigOptions) == 0 {
+		c.applyAcceptedConfigOption(option.ID, ports.ChatConfigOptionValue{Select: option.Value})
+	} else {
+		c.replaceConfigOptions(resp.ConfigOptions)
+	}
+	return nil
+}
+
 func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	c.mu.Lock()
 	if c.closed {
@@ -556,6 +655,17 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	}
 	turn := *c.prepared
 	c.prepared = nil
+	// Standing context leads the first prompt so the provider reads it as
+	// context rather than as part of what the user asked. It is consumed here,
+	// not in SendTurn, because this is the first point at which a prompt is
+	// guaranteed to reach the provider: settings validation, a busy conversation
+	// and a discarded prepared turn all fail in SendTurn, and spending the
+	// preamble on any of them would silently drop AO's instructions from the
+	// session's first real turn.
+	if !c.preambleSpent && len(c.preamble) > 0 {
+		turn.prompt = append(append([]acpsdk.ContentBlock(nil), c.preamble...), turn.prompt...)
+		c.preambleSpent = true
+	}
 	c.activeTurn = turn.id
 	c.settlingTurn = ""
 	turnCtx, cancel := context.WithCancel(context.Background())
@@ -600,6 +710,18 @@ func (c *conversation) finishPrompt(
 	resp acpsdk.PromptResponse,
 	err error,
 ) {
+	eventID, _ := resp.Meta[persistenthost.ACPEventIDMetaKey].(string)
+	var requestErr *acpsdk.RequestError
+	if eventID == "" && errors.As(err, &requestErr) {
+		if data, ok := requestErr.Data.(map[string]any); ok {
+			eventID, _ = data[persistenthost.ACPEventIDMetaKey].(string)
+		}
+	}
+	// A transport error may win the race with watchConnection. The host still
+	// owns this prompt; its journal, not an SDK disconnect, supplies the outcome.
+	if err != nil && eventID == "" && c.providerDetaching() {
+		return
+	}
 	c.mu.Lock()
 	if c.detaching {
 		c.mu.Unlock()
@@ -617,13 +739,6 @@ func (c *conversation) finishPrompt(
 		// cannot look interrupted and an accepted one cannot look failed.
 		<-interrupt.done
 		interruptedLocally = interrupt.err == nil
-	}
-	eventID, _ := resp.Meta[persistenthost.ACPEventIDMetaKey].(string)
-	var requestErr *acpsdk.RequestError
-	if eventID == "" && errors.As(err, &requestErr) {
-		if data, ok := requestErr.Data.(map[string]any); ok {
-			eventID, _ = data[persistenthost.ACPEventIDMetaKey].(string)
-		}
 	}
 	var state domain.TurnState
 	var turnErr error
@@ -937,6 +1052,15 @@ func (c *conversation) ResolveRequest(
 // discard rolls back setup without leaving a newly created host behind.
 // A failed adoption has no authority to terminate an existing provider.
 func (c *conversation) discard() {
+	if c.unadoptedForkID != "" && c.canDeleteFork {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err := c.conn.UnstableDeleteSession(ctx, acpsdk.UnstableDeleteSessionRequest{SessionId: acpsdk.SessionId(c.unadoptedForkID)})
+		if err != nil {
+			c.log.Warn("failed to delete unadopted ACP fork", "error", err)
+		}
+		cancel()
+		c.unadoptedForkID = ""
+	}
 	if c.proc.reconnected {
 		_ = c.Close()
 	} else {
@@ -975,6 +1099,7 @@ func (c *conversation) closeProvider(terminate, closeSession bool) error {
 	c.closeOnce.Do(func() {
 		c.mu.Lock()
 		c.closed = true
+		close(c.closing)
 		persistent := c.proc.terminate != nil
 		c.detaching = persistent && !terminate
 		cancel := c.turnCancel
@@ -1021,14 +1146,29 @@ func (c *conversation) watchConnection() {
 	<-c.conn.Done()
 	c.mu.Lock()
 	detaching := c.detaching
+	preserve := !c.closed && c.proc.terminate != nil
 	c.mu.Unlock()
-	if !detaching {
+	// SDK Done cancels only its logical connection. Release both the forwarding
+	// pipe and the actual socket, including a host blocked writing replay under
+	// its ownership lock. Stopping this transport must not terminate the host.
+	_ = c.legacyWire.reader.Close()
+	_ = c.proc.stop()
+	if !detaching && !preserve {
 		c.failPendingPermissions()
 		c.failPendingInputs()
 	}
-	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerStopped})
+	event := ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerStopped}
+	if preserve {
+		event.Err = ports.ErrChatRecoveryInconclusive
+	}
 	c.eventMu.Lock()
 	if !c.eventsClosed {
+		// Deliver the recovery boundary even though conn.Done is already closed;
+		// emit's disconnect select could otherwise drop this ownership signal.
+		select {
+		case c.events <- event:
+		case <-c.closing:
+		}
 		c.eventsClosed = true
 		close(c.events)
 	}
@@ -1050,6 +1190,7 @@ func (c *conversation) emit(event ports.ChatEvent) {
 		select {
 		case c.events <- event:
 		case <-c.conn.Done():
+		case <-c.closing:
 		}
 		return
 	}

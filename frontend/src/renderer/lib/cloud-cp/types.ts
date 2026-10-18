@@ -29,14 +29,48 @@ export interface CloudCpOrganization {
 	slug: string;
 	displayName: string;
 	role: string;
+	/** This org's own offering (`/me` organizations[i].offering); absent on an older control plane. */
+	offering?: CloudCpOffering;
 }
 
 /** Sandbox providers a control plane offers (`/me` sandboxProviders). */
 export interface CloudCpSandboxProviders {
 	/** Every provider a session may select on this control plane. */
 	available: string[];
-	/** The provider used when a session does not specify one. */
+	/** The org's default provider for a session that does not specify one; may be "". */
 	default: string;
+}
+
+/**
+ * How an organization pays for AO Cloud (`/me` offering.billingMode and
+ * `/billing` billingMode): "self_serve" orgs buy plans through Stripe,
+ * "contract" orgs are billed outside the app, and "off" means the deployment
+ * has no Stripe configured.
+ */
+export type CloudCpBillingMode = "self_serve" | "contract" | "off";
+
+/**
+ * Which product an organization is on, derived from its allowed providers:
+ * coder only is "b2b", freestyle only is "b2c", both is "both", none is "none".
+ */
+export type CloudCpOfferingKind = "b2b" | "b2c" | "both" | "none";
+
+/** The active organization's effective offering (`/me` offering). */
+export interface CloudCpOffering {
+	/** Sandbox providers the organization may run sessions on. */
+	providers: string[];
+	/** The provider a project uses when it does not pick one; "" for no cloud. */
+	defaultProvider: string;
+	billingMode: CloudCpBillingMode;
+	kind: CloudCpOfferingKind;
+	/** Plan feature flags; empty when none. */
+	features: string[];
+	/**
+	 * The org holds the coder capability (WorkOS metadata capabilities=coder):
+	 * it may connect its own Coder deployment, and its Coder sessions are not
+	 * billed. Absent from older control planes.
+	 */
+	customCoder?: boolean;
 }
 
 /** GET /me */
@@ -48,6 +82,18 @@ export interface CloudCpMeResponse {
 	 * deployment lists exactly one available provider (the default).
 	 */
 	sandboxProviders?: CloudCpSandboxProviders;
+	/**
+	 * The organization the app works in: the one the sign-in token's WorkOS
+	 * organization maps to, else organizations[0]. Absent on an older control
+	 * plane.
+	 */
+	activeOrganizationId?: string;
+	/**
+	 * The offering of the active organization (each org also carries its own). Absent
+	 * on a control plane that predates it; the renderer then derives it (see
+	 * hooks/useCloudOffering).
+	 */
+	offering?: CloudCpOffering;
 }
 
 // ---------------------------------------------------------------------------
@@ -158,14 +204,64 @@ export type CloudCpProjectRoleConfig = ProjectRoleConfig;
 export type CloudCpProjectReviewer = ProjectReviewer;
 /**
  * PATCH /orgs/{orgId}/projects/{projectId}/settings. `config.coder` accepts
- * only `workspaceNamePrefix` (an empty string returns to the default `ao`);
- * the rest of a project's coder config is fixed at creation.
+ * `workspaceNamePrefix` (an empty string returns to the default `ao`) and
+ * `parameters` (template parameter overrides, merged key by key); the rest of
+ * a project's coder config is fixed at creation.
  */
-export type CloudCpProjectSettingsRequest = ProjectSettingsInput & {
-	config?: NonNullable<ProjectSettingsInput["config"]> & {
-		coder?: { workspaceNamePrefix: string };
+export type CloudCpProjectSettingsRequest = Omit<ProjectSettingsInput, "config"> & {
+	config?: Omit<NonNullable<ProjectSettingsInput["config"]>, "coder" | "postCreate" | "preRemove"> & {
+		coder?: { workspaceNamePrefix?: string; parameters?: Record<string, string> };
+		/** Setup and Cleanup steps; arrays replace the stored list and [] clears it. */
+		postCreate?: CloudCpProjectScriptStep[];
+		preRemove?: CloudCpProjectScriptStep[];
+		/** The project's additional repositories; replaces the stored list, [] clears it. */
+		repos?: CloudCpProjectRepo[];
+		agentStartsIn?: CloudCpAgentStartsIn;
+		/** Bring-your-own Coder working directory for this project; "" uses the connection's. */
+		workingDirectory?: string;
+		/** Instructions added to every worker's prompt (16 KB at most). */
+		agentRules?: string;
+		/** Instructions added to the orchestrator's prompt (16 KB at most). */
+		orchestratorRules?: string;
 	};
 };
+
+/**
+ * One additional repository of a project (config.repos). Every session clones
+ * it beside the main repository's checkout, in the folder named after it, and
+ * checks out the session branch there too.
+ */
+export interface CloudCpProjectRepo {
+	/** https://github.com/<owner>/<name> */
+	url: string;
+	branch?: string;
+}
+
+/**
+ * A Setup or Cleanup step: a plain command runs in the main repository; an
+ * object with `repository` (the canonical URL of one of the project's
+ * repositories) runs in that repository's folder.
+ */
+/**
+ * A stored Setup or Cleanup step: the command, or for a step in another
+ * repository the command wrapped to run from that repository's folder (see
+ * repoScriptCommand). The control plane also accepts {command, repository} and
+ * stores it in the wrapped form.
+ */
+export type CloudCpProjectScriptStep = string | { command: string; repository?: string };
+
+/** Where a project's coding agent starts: its main repository, or the folder holding every repository. */
+export type CloudCpAgentStartsIn = "repository" | "parent";
+
+/**
+ * POST /orgs/{orgId}/projects/standalone (requires an Idempotency-Key header):
+ * a project without a repository. Its sessions start in an empty folder.
+ */
+export interface CloudCpCreateStandaloneProjectRequest {
+	/** 1-120 characters. */
+	displayName: string;
+	config?: Record<string, unknown>;
+}
 
 export interface CloudCpProject {
 	id: string;
@@ -211,6 +307,12 @@ export interface CloudCpProjectCoderConfig {
 	 * without a trailing `-` or a `--` run.
 	 */
 	workspaceNamePrefix?: string;
+	/**
+	 * Coder template parameter overrides (name -> value), only the values the
+	 * user changed from the template default. A `list(string)` value is a JSON
+	 * array string and a `bool` value is "true" or "false".
+	 */
+	parameters?: Record<string, string>;
 }
 
 /** PATCH /orgs/{orgId}/projects/{projectId} */
@@ -295,6 +397,56 @@ export interface CloudCpCoderTemplatesResponse {
 	templates: CloudCpCoderTemplate[];
 }
 
+/** The value types a Coder template parameter declares. */
+export type CloudCpCoderTemplateParameterType = "string" | "number" | "bool" | "list(string)";
+
+export interface CloudCpCoderTemplateParameterOption {
+	name: string;
+	value: string;
+	description?: string;
+}
+
+/** A problem Coder found with a parameter's value. */
+export interface CloudCpCoderTemplateParameterDiagnostic {
+	/** "error" or "warning". */
+	severity: string;
+	summary: string;
+	detail?: string;
+}
+
+/**
+ * One rich parameter of a Coder template's active version
+ * (GET /orgs/{orgId}/coder-templates/{templateId}/parameters, or POST
+ * .../parameters/evaluate with draft values).
+ */
+export interface CloudCpCoderTemplateParameter {
+	name: string;
+	displayName?: string;
+	description?: string;
+	type: CloudCpCoderTemplateParameterType;
+	/** Coder's form hint (e.g. "dropdown", "radio", "multi-select"); informational. */
+	formType?: string;
+	/** False when the value is fixed once a workspace is created. */
+	mutable: boolean;
+	required: boolean;
+	/** Encoded like a project override: JSON array string for list(string), "true"/"false" for bool. */
+	defaultValue?: string;
+	options?: CloudCpCoderTemplateParameterOption[];
+	order?: number;
+	/** Coder's problems with the value; only set when evaluated against draft values. */
+	diagnostics?: CloudCpCoderTemplateParameterDiagnostic[];
+}
+
+export interface CloudCpCoderTemplateParametersResponse {
+	parameters: CloudCpCoderTemplateParameter[];
+}
+
+/**
+ * Who runs the worker and the agent inside a bring-your-own Coder workspace:
+ * AO's own `ao-worker` user (the default) or the workspace's login user.
+ */
+export type CloudCpCoderWorkerUser = "ao-worker" | "workspace";
+
 /**
  * GET /orgs/{orgId}/coder-config — an org's bring-your-own-Coder connection.
  * Non-secret fields only: the stored API token is never echoed back, surfaced
@@ -313,6 +465,8 @@ export interface CloudCpOrgCoderConfig {
 	 * bring-your-own org leaves it empty and picks the template per project.
 	 */
 	defaultTemplateId?: string;
+	/** The org-default template id as the control plane names it on the wire. */
+	templateId?: string;
 	/** Optional agent name the sandbox connects through. */
 	agentName?: string;
 	/**
@@ -323,13 +477,41 @@ export interface CloudCpOrgCoderConfig {
 	endpointServiceName?: string;
 	/** Optional AWS region for the PrivateLink endpoint (e.g. eu-north-1). */
 	region?: string;
+	/** Org-level Coder template parameter values, set by AO ops. */
+	parameters?: Record<string, string>;
+	durableRoot?: string;
+	requireMountedDurableRoot?: boolean;
+	startupTimeoutSeconds?: number;
+	/** Absent means "ao-worker". */
+	workerUser?: CloudCpCoderWorkerUser;
+	/** Shell command polled as the workspace user until it exits 0, before the worker starts. */
+	readyProbe?: string;
+	/** How long to poll `readyProbe` (30..3600); absent means 900. */
+	readyProbeTimeoutSeconds?: number;
+	/** Reuse a matching checkout under ~/work; absent means true with the workspace user. */
+	reuseExistingCheckout?: boolean;
+	/**
+	 * Where the session works: absolute, or starting with `~/` or `$HOME/`, and may
+	 * name the repository as `{repo}`. Requires the workspace user.
+	 */
+	workingDirectory?: string;
+	/** Keep the agent from reading or editing secret env files (.env, .env.*); absent means true. */
+	protectSecretFiles?: boolean;
 	/** True when an API token is stored. The token itself is never returned. */
 	tokenSet: boolean;
+	/**
+	 * False when the org may no longer save a connection (it lacks the coder
+	 * capability) but still has this one, which it can read and remove.
+	 * Absent means true.
+	 */
+	editable?: boolean;
 }
 
 export interface CloudCpOrgCoderConfigResponse {
 	/** The stored config, or null when the org has none configured yet. */
 	coderConfig: CloudCpOrgCoderConfig | null;
+	/** The org may save a connection; absent from older control planes (true). */
+	editable?: boolean;
 }
 
 /**
@@ -350,6 +532,27 @@ export interface CloudCpPutOrgCoderConfigRequest {
 	endpointServiceName?: string;
 	/** Optional AWS region for the PrivateLink endpoint. */
 	region?: string;
+	// The fields below are org settings the form carries through so a save does
+	// not drop them (the PUT replaces the whole config). Send each only when set:
+	// the control plane rejects unknown fields, so an older one refuses a body
+	// that names a field it predates.
+	/** The org-default template id (the control plane's field name). */
+	templateId?: string;
+	parameters?: Record<string, string>;
+	durableRoot?: string;
+	requireMountedDurableRoot?: boolean;
+	startupTimeoutSeconds?: number;
+	/** Omit for the default "ao-worker". */
+	workerUser?: CloudCpCoderWorkerUser;
+	/** Max 1000 characters. */
+	readyProbe?: string;
+	/** 30..3600; omit for the default 900. */
+	readyProbeTimeoutSeconds?: number;
+	reuseExistingCheckout?: boolean;
+	/** Only with workerUser "workspace". */
+	workingDirectory?: string;
+	/** Omit for the default true. */
+	protectSecretFiles?: boolean;
 }
 
 export interface CloudCpSession {
@@ -379,6 +582,13 @@ export interface CloudCpSession {
 	 * cleared once the worker connects. `message` is user-facing text.
 	 */
 	startupError?: CloudCpSessionStartupError;
+	/**
+	 * The session's workspace page on the organization's own (bring-your-own)
+	 * Coder deployment, from the session's creation (the workspace may not
+	 * exist yet). Absent for AO's managed
+	 * Coder, other providers, and older control planes.
+	 */
+	coderWorkspaceUrl?: string;
 	isTerminated: boolean;
 	autoInjectCI?: boolean;
 	autoInjectReview?: boolean;
@@ -406,6 +616,11 @@ export interface CloudCpSessionStartupError {
 	message: string;
 	/** RFC 3339 time the failure was recorded. */
 	at: string;
+	/**
+	 * Redacted diagnostics (build and agent log tails) for bring-your-own
+	 * compute, where the customer can act on them. Absent otherwise.
+	 */
+	detail?: string;
 }
 
 /** POST /orgs/{orgId}/sessions/{sessionId}/startup-retry responds 202. */
@@ -565,6 +780,25 @@ export interface CloudCpWorkspaceReviewResponse {
 	summary: { files: number; additions: number; deletions: number };
 	ahead?: number;
 	behind?: number;
+	/**
+	 * Every repository of a multi-repository session, the main one first. The
+	 * workspace endpoints take a sibling's `name` as their `repository`
+	 * parameter. Absent for a single-repository session.
+	 */
+	repositories?: CloudCpWorkspaceRepository[];
+}
+
+/** One repository checked out in a cloud session's workspace. */
+export interface CloudCpWorkspaceRepository {
+	/** The folder it is checked out into; the `repository` parameter for a sibling. */
+	name: string;
+	/** owner/name on GitHub, when known. */
+	repository?: string;
+	branch?: string;
+	/** True for the project's main repository. */
+	main?: boolean;
+	/** False while (or when) its checkout is missing from the workspace. */
+	present: boolean;
 }
 
 export interface CloudCpWorkspaceReviewFileQuery {
@@ -1108,4 +1342,68 @@ export interface CloudCpCreateGitHubProjectRequest {
 	githubRepositoryId: string;
 	displayName?: string;
 	config?: Record<string, unknown>;
+}
+
+/** A billing plan's limits, from the plan's Stripe product metadata. */
+export interface CloudCpPlanLimits {
+	plan: string;
+	maxActiveSandboxes: number;
+	maxRunningSandboxes?: number;
+	orchestratorSlots: number;
+	windowHours: number;
+	windowSessionHours: number;
+	weeklySessionHours: number;
+	manualResetsPerMonth: number;
+}
+
+/** Usage against the plan, in session-minutes of running sandbox time. */
+export interface CloudCpBillingUsage {
+	windowUsedMinutes: number;
+	windowLimitMinutes: number;
+	windowHours: number;
+	windowResetsAt?: string;
+	weeklyUsedMinutes: number;
+	weeklyLimitMinutes: number;
+	weeklyResetsAt?: string;
+	manualResetsAllowed: number;
+	manualResetsUsed: number;
+	manualResetsRenewAt?: string;
+	activeOrchestrators: number;
+	activeWorkers: number;
+	runningOrchestrators: number;
+	runningWorkers: number;
+}
+
+/** GET /orgs/{orgId}/billing */
+export interface CloudCpBillingSummary {
+	/** Stripe is configured on this deployment. */
+	enabled: boolean;
+	exempt: boolean;
+	/** How the org pays; absent on a control plane that predates it. */
+	billingMode?: CloudCpBillingMode;
+	plan: string;
+	subscriptionStatus?: string;
+	entitled: boolean;
+	currentPeriodEnd?: string;
+	/** When a plan set to cancel ends and the org moves to Free; absent while it renews. */
+	cancelAt?: string;
+	limits?: CloudCpPlanLimits;
+	usage?: CloudCpBillingUsage;
+	/** Plans available for checkout, cheapest first. */
+	plans?: CloudCpPlanOffer[];
+}
+
+/** A plan the org can choose, priced from Stripe. Price fields are absent when Stripe could not be read. */
+export interface CloudCpPlanOffer {
+	name: string;
+	id: string;
+	unitAmount?: number;
+	currency?: string;
+	interval?: string;
+	limits?: CloudCpPlanLimits;
+}
+
+/** POST /orgs/{orgId}/billing/checkout and /billing/portal */
+export interface CloudCpBillingLinkResponse {
+	url: string;
 }

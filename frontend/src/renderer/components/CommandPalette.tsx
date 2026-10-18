@@ -31,7 +31,6 @@ import {
 } from "../lib/command-palette-file-search";
 import { iconForCommand } from "../lib/command-palette-icons";
 import { isDialogOrMenuOpen } from "../lib/dom-selectors";
-import { isMacPlatform } from "../lib/platform";
 import { sessionReviewsQueryOptions, type PRReviewState } from "../lib/session-reviews";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
 import { useShell } from "../lib/shell-context";
@@ -43,7 +42,7 @@ import {
 	workerSessions,
 } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
-import { matchesRendererShortcut } from "../stores/keybindings-store";
+import { useAppShortcut } from "../hooks/useAppShortcut";
 import { Button } from "./ui/button";
 import { CreateProjectFlow } from "./CreateProjectFlow";
 import { TaskComposer } from "./TaskComposer";
@@ -60,12 +59,6 @@ type PaletteView =
 	| { mode: "new-task"; projectId: string }
 	| { mode: "file-session-picker"; projectId: string }
 	| { mode: "file-search"; target: WorkspaceFileSearchTarget; parent: "root" | "picker" };
-
-function terminalHasFocus(): boolean {
-	if (typeof document === "undefined") return false;
-	const active = document.activeElement;
-	return active instanceof Element && active.closest(".xterm") !== null;
-}
 
 export function CommandPalette() {
 	const { i18n, t } = useTranslation();
@@ -99,6 +92,15 @@ export function CommandPalette() {
 	const [createProjectFlowPendingOpen, setCreateProjectFlowPendingOpen] = useState(false);
 	const [pendingDismiss, setPendingDismiss] = useState<null | "pop" | "close">(null);
 	const pendingRef = useRef(false);
+	const composerWrapRef = useRef<HTMLDivElement>(null);
+	const keepEditingRef = useRef<HTMLButtonElement>(null);
+	const hadPendingDismissRef = useRef(false);
+	useEffect(() => {
+		const had = hadPendingDismissRef.current;
+		hadPendingDismissRef.current = pendingDismiss !== null;
+		if (pendingDismiss !== null) keepEditingRef.current?.focus();
+		else if (had) composerWrapRef.current?.querySelector<HTMLElement>("input, textarea, [contenteditable='true']")?.focus();
+	}, [pendingDismiss]);
 	const runGenerationRef = useRef(0);
 	const composerDirtyRef = useRef(false);
 	const composerBusyRef = useRef(false);
@@ -625,42 +627,50 @@ export function CommandPalette() {
 		[queryClient, closePalette, navigateToTarget, sessionRoute],
 	);
 
-	useEffect(() => {
-		if (!enabled) return;
-		const handleKeyDown = (event: KeyboardEvent) => {
-			if (isOpen && (event.metaKey || event.ctrlKey) && /^[1-9]$/.test(event.key)) {
-				event.preventDefault();
-				event.stopPropagation();
-				return;
-			}
-
-			if (!matchesRendererShortcut("command-palette", event)) return;
-
+	// ⌘K / ⌘⇧P and ⌘P arrive from the main process (it also yields plain Ctrl+K and
+	// Ctrl+P to a focused terminal on Windows/Linux), so they work from xterm and
+	// the Browser view alike.
+	useAppShortcut(
+		"command-palette",
+		() => {
 			if (isOpen) {
-				event.preventDefault();
 				requestDismiss("close");
 				return;
 			}
-			// Preserve the default Ctrl+K readline command in terminals. A user
-			// who deliberately assigns a different palette binding expects it to
-			// work there too.
-			if (
-				!isMacPlatform() &&
-				terminalHasFocus() &&
-				event.key.toLowerCase() === "k" &&
-				event.ctrlKey &&
-				!event.metaKey &&
-				!event.altKey &&
-				!event.shiftKey
-			)
-				return;
 			if (isDialogOrMenuOpen()) return;
-			event.preventDefault();
 			setOpen(true);
+		},
+		enabled,
+	);
+	// Quick open: the palette's file search for the session on screen. Pressed
+	// again while it is showing, it closes, like ⌘K.
+	useAppShortcut(
+		"quick-open-file",
+		() => {
+			if (isOpen) {
+				requestDismiss("close");
+				return;
+			}
+			if (isDialogOrMenuOpen()) return;
+			resetTransient();
+			setView(currentFileTarget ? { mode: "file-search", target: currentFileTarget, parent: "root" } : { mode: "root" });
+			setOpen(true);
+		},
+		enabled,
+	);
+
+	// Digits belong to the palette's own list while it is open.
+	useEffect(() => {
+		if (!enabled || !isOpen) return;
+		const swallowIndexedChords = (event: KeyboardEvent) => {
+			if ((event.metaKey || event.ctrlKey) && /^[1-9]$/.test(event.key)) {
+				event.preventDefault();
+				event.stopPropagation();
+			}
 		};
-		window.addEventListener("keydown", handleKeyDown, true);
-		return () => window.removeEventListener("keydown", handleKeyDown, true);
-	}, [enabled, isOpen, setOpen, requestDismiss]);
+		window.addEventListener("keydown", swallowIndexedChords, true);
+		return () => window.removeEventListener("keydown", swallowIndexedChords, true);
+	}, [enabled, isOpen]);
 
 	if (!enabled) return null;
 
@@ -733,12 +743,16 @@ export function CommandPalette() {
 				)}
 
 				{view.mode === "new-task" ? (
-					<div onKeyDown={(event) => event.stopPropagation()}>
+					<div
+						ref={composerWrapRef}
+						// cmdk must not see composer keystrokes, but Tab has to reach the dialog's focus trap.
+						onKeyDown={(event) => { if (event.key !== "Tab") event.stopPropagation(); }}
+					>
 						{pendingDismiss !== null && (
-							<div className="mx-3 mt-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-foreground">
+							<div role="alert" className="mx-3 mt-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-foreground">
 								<p className="text-muted-foreground">{t("command.discardDraft")}</p>
 								<div className="mt-2 flex justify-end gap-3">
-									<Button type="button" variant="footer" onClick={() => setPendingDismiss(null)}>
+									<Button ref={keepEditingRef} type="button" variant="footer" onClick={() => setPendingDismiss(null)}>
 										{t("command.keepEditing")}
 									</Button>
 									<Button type="button" variant="footer" className="text-destructive" onClick={confirmDiscard}>

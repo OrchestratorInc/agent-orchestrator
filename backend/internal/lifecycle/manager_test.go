@@ -837,6 +837,42 @@ func TestRuntimeObservation_AliveWorkloadCannotResurrectExitedSession(t *testing
 	}
 }
 
+// ExitAgent destroys a terminal on purpose and keeps the session; Resume
+// builds a new one. That runtime's death must leave the session live. A release
+// names one launch only: a later launch that dies after its agent exited is a
+// crash like any other (the exit hook can win the race with the reaper).
+func TestRuntimeObservation_ReleasedRuntimeDeathKeepsSessionLive(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		released  string
+		terminate bool
+	}{
+		{name: "released launch", released: "launch-1", terminate: false},
+		{name: "earlier launch released", released: "launch-0", terminate: true},
+		{name: "nothing released", released: "", terminate: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, _ := newManager()
+			rec := working("mer-1")
+			rec.Activity = domain.Activity{State: domain.ActivityExited, LastActivityAt: time.Now().Add(-2 * time.Minute)}
+			rec.Metadata.RuntimeLaunchID = "launch-1"
+			rec.Metadata.RuntimeReleasedLaunchID = tc.released
+			st.sessions["mer-1"] = rec
+
+			if err := m.ApplyRuntimeObservation(ctx, "mer-1", ports.RuntimeFacts{
+				Runtime:  ports.ProbeDead,
+				Workload: ports.ProbeFailed,
+				LaunchID: "launch-1",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if got := st.sessions["mer-1"]; got.IsTerminated != tc.terminate {
+				t.Fatalf("terminated = %v, want %v", got.IsTerminated, tc.terminate)
+			}
+		})
+	}
+}
+
 func TestRuntimeObservation_StaleLaunchIsIgnored(t *testing.T) {
 	m, st, _ := newManager()
 	rec := working("mer-1")
@@ -1251,6 +1287,33 @@ func TestActivity_CurrentChatControllerResumesExitedWorkload(t *testing.T) {
 		if got := st.sessions["mer-1"].Activity.State; got != signal.State {
 			t.Fatalf("event %q left state %q, want %q", signal.Event, got, signal.State)
 		}
+	}
+}
+
+func TestActivity_LivenessProbeResumesExitedWorkload(t *testing.T) {
+	m, st, _ := newManager()
+	rec := working("mer-1")
+	rec.Activity.State = domain.ActivityExited
+	rec.Metadata.RuntimeLaunchID = "launch-2"
+	st.sessions["mer-1"] = rec
+	signalAt := time.Unix(123, 0).UTC()
+
+	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{
+		Valid:     true,
+		State:     domain.ActivityIdle,
+		Event:     "liveness-probe",
+		Timestamp: signalAt,
+		LaunchID:  "launch-2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := st.sessions["mer-1"]
+	if got.IsTerminated || got.Activity.State != domain.ActivityIdle {
+		t.Fatalf("liveness probe did not reconcile exited workload: %+v", got)
+	}
+	if !got.Activity.LastActivityAt.Equal(signalAt) {
+		t.Fatalf("last activity = %v, want %v", got.Activity.LastActivityAt, signalAt)
 	}
 }
 
@@ -1708,6 +1771,38 @@ func TestActivity_StopWithoutCurrentPromptNeverPairsWithPriorTurn(t *testing.T) 
 	}
 }
 
+func TestActivity_AgyTUIStopRetainsCheckpointForNativeHistoryReplay(t *testing.T) {
+	m, store, _ := newManager()
+	rec := working("mer-1")
+	rec.Harness = domain.HarnessAgy
+	rec.Mode = domain.SessionModeTUI
+	rec.Metadata.RuntimeLaunchID = "launch-current"
+	rec.Metadata.AgentSessionID = "native-current"
+	rec.Metadata.AgentSessionIDLaunchID = "launch-current"
+	rec.Metadata.LatestUserPrompt = "prior Chat prompt"
+	rec.Metadata.LatestUserPromptAt = time.Unix(122, 0).UTC()
+	rec.Metadata.LatestAssistantUpdate = "prior Chat answer"
+	rec.Metadata.ConversationCheckpointState = domain.ConversationCheckpointComplete
+	rec.Metadata.ConversationCheckpointGeneration = "old-chat-generation"
+	rec.Metadata.ConversationCheckpointNativeID = "native-current"
+	store.sessions[rec.ID] = rec
+
+	if err := m.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
+		Valid: true, State: domain.ActivityIdle, Event: "stop",
+		LaunchID: "launch-current", AgentSessionID: "native-current",
+		LatestAssistantUpdate: "TUI answer without a prompt-boundary hook",
+	}); err != nil {
+		t.Fatalf("ApplyActivitySignal stop: %v", err)
+	}
+	got := store.sessions[rec.ID].Metadata
+	if got.LatestUserPrompt != rec.Metadata.LatestUserPrompt ||
+		got.LatestAssistantUpdate != rec.Metadata.LatestAssistantUpdate ||
+		got.ConversationCheckpointState != rec.Metadata.ConversationCheckpointState ||
+		got.ConversationCheckpointUnsettled {
+		t.Fatalf("Agy Stop changed the trusted checkpoint or marked it unsettled: %+v", got)
+	}
+}
+
 func TestActivity_NonBoundaryEventCannotReplaceConversationCheckpoint(t *testing.T) {
 	m, store, _ := newManager()
 	rec := working("mer-1")
@@ -1927,6 +2022,55 @@ func TestActivity_UntaggedTUIHookCannotMutateLaunchedRuntime(t *testing.T) {
 	}
 	if got := store.sessions[rec.ID]; !reflect.DeepEqual(got, rec) {
 		t.Fatalf("untagged callback mutated launched runtime: got %+v, want %+v", got, rec)
+	}
+}
+
+func TestActivity_SideHeadlessClaudeRunCannotHijackTUIIdentity(t *testing.T) {
+	m, store, _ := newManager()
+	rec := working("mer-1")
+	rec.Mode = domain.SessionModeTUI
+	rec.Harness = domain.HarnessClaudeCode
+	rec.Metadata.RuntimeLaunchID = "launch-current"
+	rec.Metadata.AgentSessionID = "native-main"
+	rec.Metadata.AgentSessionIDLaunchID = "launch-current"
+	rec.Metadata.NativeTranscriptPath = "/claude/projects/wt/native-main.jsonl"
+	store.sessions[rec.ID] = rec
+
+	// A summarizer's `claude -p` in the same worktree inherits AO_SESSION_ID and
+	// the current AO_RUNTIME_LAUNCH_ID, so the generation fence accepts it. Its
+	// sdk-cli entrypoint proves it is not the interactive runtime AO launched:
+	// its identity must not replace the main conversation and its SessionEnd
+	// must not mark the live session exited (#6454).
+	side := []ports.ActivitySignal{
+		{Event: "session-start", LaunchID: "launch-current", AgentSessionID: "native-side",
+			TranscriptPath: "/claude/projects/wt/native-side.jsonl", NativeEntrypoint: "sdk-cli"},
+		{Valid: true, State: domain.ActivityActive, Event: "user-prompt-submit", LaunchID: "launch-current",
+			AgentSessionID: "native-side", LatestUserPrompt: "Summarize this agent result", NativeEntrypoint: "sdk-cli"},
+		{Valid: true, State: domain.ActivityIdle, Event: "stop", LaunchID: "launch-current",
+			AgentSessionID: "native-side", LatestAssistantUpdate: "one line", NativeEntrypoint: "sdk-cli"},
+		{Valid: true, State: domain.ActivityExited, Event: "session-end", LaunchID: "launch-current",
+			AgentSessionID: "native-side", NativeEntrypoint: "sdk-cli"},
+	}
+	for _, s := range side {
+		s.Timestamp = time.Now().Add(time.Hour)
+		if err := m.ApplyActivitySignal(ctx, rec.ID, s); err != nil {
+			t.Fatalf("ApplyActivitySignal(%s): %v", s.Event, err)
+		}
+	}
+	if got := store.sessions[rec.ID]; !reflect.DeepEqual(got, rec) {
+		t.Fatalf("headless side run mutated TUI session: got %+v, want %+v", got, rec)
+	}
+
+	// The interactive runtime's own hooks keep their existing semantics.
+	if err := m.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
+		Valid: true, State: domain.ActivityIdle, Event: "stop", LaunchID: "launch-current",
+		AgentSessionID: "native-main-cleared", NativeEntrypoint: "cli", Timestamp: time.Now().Add(2 * time.Hour),
+	}); err != nil {
+		t.Fatalf("ApplyActivitySignal(cli): %v", err)
+	}
+	got := store.sessions[rec.ID]
+	if got.Metadata.AgentSessionID != "native-main-cleared" || got.Activity.State != domain.ActivityIdle {
+		t.Fatalf("interactive runtime hook rejected: id=%q state=%q", got.Metadata.AgentSessionID, got.Activity.State)
 	}
 }
 

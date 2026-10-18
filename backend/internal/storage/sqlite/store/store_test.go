@@ -125,6 +125,46 @@ func TestClientRequestSessionBindsOneWorkerAndPreparedPromotionCannotStealKey(t 
 	}
 }
 
+func TestClientRequestIdentitySurvivesNormalSessionReads(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec := sampleRecord("mer")
+	rec.ClientRequestID, rec.ClientRequestHash = "retry-key", "v1:payload"
+	created, _, err := s.CreateClientRequestSession(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, committed := range []bool{false, true} {
+		if committed {
+			if err := s.CommitClientRequestSession(ctx, created.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, found, err := s.GetSession(ctx, created.ID)
+		if err != nil || !found {
+			t.Fatalf("get session: found=%v err=%v", found, err)
+		}
+		project, err := s.ListSessions(ctx, "mer")
+		if err != nil {
+			t.Fatal(err)
+		}
+		all, err := s.ListAllSessions(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(project) != 1 || len(all) != 1 {
+			t.Fatalf("session counts: project=%d all=%d", len(project), len(all))
+		}
+		for _, read := range []domain.SessionRecord{got, project[0], all[0]} {
+			if read.ID != created.ID || read.ClientRequestID != rec.ClientRequestID ||
+				read.ClientRequestHash != rec.ClientRequestHash || read.ClientRequestCommitted != committed {
+				t.Fatalf("request identity lost: got %+v, committed=%v", read, committed)
+			}
+		}
+	}
+}
+
 func TestSessionCreateAllowsPrimeAgentHarness(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -2286,6 +2326,45 @@ func TestRememberProjectPermissionsPinsExistingSessions(t *testing.T) {
 		if got.Metadata.Permissions != want.Metadata.Permissions {
 			t.Fatalf("repinned existing session: %q", got.Metadata.Permissions)
 		}
+	}
+}
+
+func TestSessionRequestedOutputRoundTripsAndSurvivesUpdate(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "outputs")
+	rec := sampleRecord("outputs")
+	rec.RequestedOutput = domain.RequestedOutputArtifact
+	created, err := s.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.GetSession(ctx, created.ID)
+	if err != nil || !ok {
+		t.Fatalf("load: %v %v", ok, err)
+	}
+	if got.RequestedOutput != domain.RequestedOutputArtifact {
+		t.Fatalf("RequestedOutput = %q, want artifact", got.RequestedOutput)
+	}
+	// A generic update from a record without the field must not clear it.
+	got.RequestedOutput = ""
+	got.DisplayName = "renamed"
+	if err := s.UpdateSession(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, _, err := s.GetSession(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.RequestedOutput != domain.RequestedOutputArtifact {
+		t.Fatalf("RequestedOutput after update = %q, want artifact", reloaded.RequestedOutput)
+	}
+	plain, err := s.CreateSession(ctx, sampleRecord("outputs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.RequestedOutput != "" {
+		t.Fatalf("default RequestedOutput = %q, want empty", plain.RequestedOutput)
 	}
 }
 

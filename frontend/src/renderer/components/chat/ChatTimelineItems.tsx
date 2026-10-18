@@ -1,4 +1,5 @@
 import { AppLink } from "../AppLink";
+import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
 /**
  * Timeline entries for the Chat surface.
  *
@@ -291,20 +292,23 @@ function TwoRowTimelineMarker({
 	tone = "text-muted-foreground/70",
 	detailTone = "text-muted-foreground/70",
 	action,
+	wrapDetail = false,
 }: {
 	message: string;
 	detail?: string;
 	tone?: string;
 	detailTone?: string;
 	action?: ReactNode;
+	/** The detail is an instruction the reader needs whole, so it wraps instead of truncating. */
+	wrapDetail?: boolean;
 }) {
 	return (
 		<div className="flex min-w-0 flex-col gap-1 py-1">
-			<div className={cn("flex min-w-0 items-baseline gap-2 text-xs", tone)}>
+			<div className={cn("flex min-w-0 items-baseline gap-x-2 gap-y-0.5 text-xs", wrapDetail && "flex-wrap", tone)}>
 				<span className="shrink-0">{message}</span>
 				{detail ? (
 					<span
-						className={cn("min-w-0 truncate", detailTone)}
+						className={cn("min-w-0", wrapDetail ? "text-pretty" : "truncate", detailTone)}
 						title={detail}
 					>
 						{detail}
@@ -337,6 +341,11 @@ export interface TurnOutcomeRetryControl {
 	pending?: boolean;
 	error?: string;
 	disabled?: boolean;
+}
+
+/** Where the user continued a stopped turn: a marker in place of the continue message. */
+export function ContinuedMarker() {
+	return <TwoRowTimelineMarker message="Continued" />;
 }
 
 export function TurnOutcome({
@@ -642,7 +651,8 @@ export function HumanMessage({
 						<ChatAnnotationSummary
 							annotations={excerptReferences.map((excerpt) => ({
 								text: excerpt.text ?? "",
-								messageId: excerpt.sourceMessageId,
+								conversationId: excerpt.sourceConversationId,
+ messageId: excerpt.sourceMessageId,
 								revision: excerpt.sourceRevision,
 							}))}
 							onSelect={onSelectAnnotation}
@@ -1046,6 +1056,8 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 	else if (activity.activityKind === "error") content = <ErrorActivityRow activity={activity} />;
 	else if (activity.detail?.event === "model.rerouted") content = <RerouteRow activity={activity} />;
 	else if (activity.detail?.event === "auth.reauth_required") content = <ReauthRow activity={activity} />;
+	else if (activity.detail?.event === "workspace.setup") content = <ProjectSetupRow activity={activity} />;
+	else if (activity.detail?.event === "account.switched") content = <AccountSwitchedRow accountId={activity.detail.accountId} />;
 	else if (renderRef) content = <RenderFrame render={renderRef} />;
 	else if (artifactRef) content = <RenderFrame artifact={artifactRef} />;
 	else content = <GenericActivityRow activity={activity} />;
@@ -2324,6 +2336,72 @@ function parseJsonObjectSuffix(raw: string): Record<string, unknown> | undefined
  * when it happened, so a turn that failed for this reason is not left looking like an
  * ordinary failure.
  */
+/** Whole seconds for a short duration, minutes and seconds past a minute. */
+function setupDuration(durationMs: number): { minutes: number; seconds: number } {
+	const total = Math.max(0, Math.round(durationMs / 1000));
+	return { minutes: Math.floor(total / 60), seconds: total % 60 };
+}
+
+/**
+ * How the project's Setup commands (Project settings > Scripts) ended, before
+ * the agent started. Compact like the other system rows; the failed step's
+ * output (the tail the worker kept, already redacted) opens below it in
+ * monospace.
+ */
+function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
+	const { t } = useTranslation();
+	const [expanded, setExpanded] = useState(false);
+	const detail = activity.detail;
+	const status = detail?.setupStatus ?? (activity.status === "completed" ? "succeeded" : "failed");
+	const step = detail?.setupStep ?? 1;
+	const duration = typeof detail?.durationMs === "number" ? setupDuration(detail.durationMs) : undefined;
+	const durationText = duration
+		? duration.minutes > 0
+			? t("chat.projectSetup.durationMinutes", { minutes: duration.minutes, seconds: duration.seconds })
+			: t("chat.projectSetup.durationSeconds", { seconds: duration.seconds })
+		: undefined;
+	const headline = status === "succeeded"
+		? durationText ? t("chat.projectSetup.succeededIn", { duration: durationText }) : t("chat.projectSetup.succeeded")
+		: status === "timed_out"
+			? t("chat.projectSetup.timedOut", { step })
+			: typeof detail?.exitCode === "number" && detail.exitCode >= 0
+				? t("chat.projectSetup.failedWithCode", { step, code: detail.exitCode })
+				: t("chat.projectSetup.failed", { step });
+	const output = detail?.output?.trim() ? stripAnsi(detail.output) : undefined;
+	const failed = status !== "succeeded";
+	const Icon = failed ? CircleAlert : SquareTerminal;
+	return (
+		<div className={cn("flex flex-col gap-1.5 rounded-md border bg-surface/60 px-3 py-2", failed ? "border-destructive/40" : "border-border")} data-testid="project-setup-row">
+			<div className="flex items-center gap-2.5">
+				<Icon aria-hidden="true" className={cn("size-3.5 shrink-0", failed ? "text-destructive" : "text-muted-foreground")} />
+				<span className={cn("min-w-0 flex-1 text-xs", failed ? "text-destructive" : "text-foreground")}>{headline}</span>
+				{output ? (
+					<button
+						type="button"
+						aria-expanded={expanded}
+						className="inline-flex shrink-0 items-center gap-1 rounded text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						onClick={() => setExpanded((value) => !value)}
+					>
+						{expanded ? <ChevronDown aria-hidden="true" className="size-3.5" /> : <ChevronRight aria-hidden="true" className="size-3.5" />}
+						{expanded ? t("chat.projectSetup.hideOutput") : t("chat.projectSetup.showOutput")}
+					</button>
+				) : null}
+			</div>
+			{output && expanded ? (
+				<pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/60 px-2.5 py-2 font-mono text-[12px] leading-5 text-muted-foreground">{output}</pre>
+			) : null}
+		</div>
+	);
+}
+
+/** Where an account switch stopped the turn: not a failure, the conversation
+ * continues on the new account with the next message. */
+function AccountSwitchedRow({ accountId }: { accountId?: string }) {
+	const { t } = useTranslation();
+	const label = useAgentAccountLabel();
+	return <TwoRowTimelineMarker message={t("chat.accountSwitched", { email: label(accountId) })} detail={t("chat.accountSwitchedDetail")} wrapDetail />;
+}
+
 function ReauthRow({ activity }: { activity: ConversationActivity }) {
 	return (
 		<div className="flex items-start gap-2.5 rounded-md border border-destructive/40 bg-surface px-3 py-2">
@@ -2508,6 +2586,15 @@ export function ApprovalCard({
 			decision !== allowOnceDecision &&
 			!alternateAllowDecisions.includes(decision),
 	);
+	// Some agents ask a question through a permission request, offering each
+	// answer as its own option of the same kind. A generic per-kind label would
+	// render identical buttons, so a kind offered more than once keeps the
+	// provider's own wording.
+	const repeatedKinds = repeatedDecisionKinds(decisions);
+	const decisionLabel = (decision: DecisionOption) =>
+		repeatedKinds.has(approvalDecisionKind(decision) ?? "") && decision.label.trim()
+			? decision.label
+			: approvalDecisionLabel(decision, subjectKind);
 	const requestId = activity.requestId ?? "";
 	const cardRef = useRef<HTMLDivElement>(null);
 
@@ -2565,7 +2652,7 @@ export function ApprovalCard({
 							disabled={busy}
 							onClick={() => onDecide?.(requestId, denyDecision.id)}
 						>
-							{approvalDecisionLabel(denyDecision, subjectKind)}
+							{decisionLabel(denyDecision)}
 							{denyDecision === rejectOnceDecision ? (
 								<kbd className="rounded-full bg-foreground/10 px-1.5 py-0.5 font-sans text-caption leading-none text-muted-foreground">
 									Esc
@@ -2582,7 +2669,7 @@ export function ApprovalCard({
 								disabled={busy}
 								onClick={() => onDecide?.(requestId, allowOnceDecision.id)}
 							>
-								Allow once
+								{decisionLabel(allowOnceDecision)}
 								<kbd className="rounded-full bg-logo-accent-foreground/15 p-0.5" aria-label="Press Return">
 									<CornerDownLeft aria-hidden="true" className="size-3" />
 								</kbd>
@@ -2612,7 +2699,7 @@ export function ApprovalCard({
 												disabled={busy}
 												onSelect={() => onDecide?.(activity.requestId ?? "", decision.id)}
 											>
-												{approvalDecisionLabel(decision, subjectKind)}
+												{decisionLabel(decision)}
 											</DropdownMenuItem>
 										))}
 									</DropdownMenuContent>
@@ -2628,7 +2715,7 @@ export function ApprovalCard({
 							disabled={busy}
 							onClick={() => onDecide?.(requestId, decision.id)}
 						>
-							{approvalDecisionLabel(decision, subjectKind)}
+							{decisionLabel(decision)}
 						</button>
 					))}
 					{decisions.length === 0 ? (
@@ -2689,6 +2776,18 @@ function approvalDecisionLabel(decision: DecisionOption, subjectKind?: ActivityK
 		default:
 			return decision.label;
 	}
+}
+
+function repeatedDecisionKinds(decisions: DecisionOption[]): Set<string> {
+	const seen = new Set<string>();
+	const repeated = new Set<string>();
+	for (const decision of decisions) {
+		const kind = approvalDecisionKind(decision);
+		if (!kind) continue;
+		if (seen.has(kind)) repeated.add(kind);
+		seen.add(kind);
+	}
+	return repeated;
 }
 
 function orderedApprovalDecisions(decisions: DecisionOption[]): DecisionOption[] {

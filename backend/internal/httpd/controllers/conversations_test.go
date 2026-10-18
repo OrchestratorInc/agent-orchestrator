@@ -72,6 +72,28 @@ func (f *fakeConversationService) SetChatView(_ context.Context, sessionID domai
 	return nil
 }
 
+func TestConversationAdvertisesVerifiedExcerpts(t *testing.T) {
+	service := &fakeConversationService{}
+	server := conversationTestServer(t, service)
+	response, err := http.Get(server.URL + "/api/v1/sessions/p1-1/conversation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+	var body struct {
+		SupportsExcerpts bool `json:"supportsExcerpts"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.SupportsExcerpts {
+		t.Fatal("daemon did not advertise verified excerpt support")
+	}
+}
+
 func TestChatViewRouteValidatesAndForwardsLease(t *testing.T) {
 	service := &fakeConversationService{}
 	server := conversationTestServer(t, service)
@@ -727,5 +749,56 @@ func TestSnapshotKeepsAggregateWhenNoStreamArrived(t *testing.T) {
 	}
 	if _, present := detail["outputTruncated"]; present {
 		t.Error("untruncated output still carried the truncation flag")
+	}
+}
+
+func TestSendConversationCarriesContinuation(t *testing.T) {
+	service := &fakeConversationService{}
+	server := conversationTestServer(t, service)
+	response, err := http.Post(server.URL+"/api/v1/sessions/p1-1/conversation/messages", "application/json",
+		bytes.NewReader([]byte(`{"text":"Continue from where you stopped.","continuation":true}`)))
+	if err != nil {
+		t.Fatalf("POST message: %v", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusAccepted {
+		got, _ := io.ReadAll(response.Body)
+		t.Fatalf("status = %d, body = %s", response.StatusCode, got)
+	}
+	if !service.sent.Continuation || service.sent.Origin != domain.MessageOriginHuman {
+		t.Fatalf("sent = %#v, want a human continuation", service.sent)
+	}
+}
+
+func TestConversationSnapshotMarksContinuation(t *testing.T) {
+	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	body := conversationSnapshotBody(t, chatsvc.Snapshot{
+		Conversation: domain.ConversationRecord{ID: "conversation-1"},
+		SessionID:    domain.SessionID("p1-1"),
+		Messages: []domain.ConversationMessage{
+			{ID: "asked", TurnID: "turn-asked", Sequence: 1, Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman, Text: "write the migration", CreatedAt: now},
+			{ID: "continued", TurnID: "turn-continued", Sequence: 2, Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman, Text: "Continue from where you stopped.", Continuation: true, CreatedAt: now},
+		},
+	})
+	messages := body["messages"].([]any)
+	if _, present := messages[0].(map[string]any)["continuation"]; present {
+		t.Fatalf("ordinary message carries continuation: %#v", messages[0])
+	}
+	if messages[1].(map[string]any)["continuation"] != true {
+		t.Fatalf("continuation message = %#v, want continuation: true", messages[1])
+	}
+}
+
+func TestContinuationUnavailableIsAConflict(t *testing.T) {
+	service := &fakeConversationService{sendErr: chatsvc.ErrContinuationUnavailable}
+	server := conversationTestServer(t, service)
+	body, status, _ := doRequest(t, server, http.MethodPost,
+		"/api/v1/sessions/p1-1/conversation/messages", `{"text":"Continue","continuation":true}`)
+	var response struct {
+		Code string `json:"code"`
+	}
+	mustJSON(t, body, &response)
+	if status != http.StatusConflict || response.Code != "CHAT_CONTINUATION_UNAVAILABLE" {
+		t.Fatalf("stale Continue response: %d %s", status, body)
 	}
 }

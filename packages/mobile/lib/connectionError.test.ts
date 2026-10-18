@@ -3,6 +3,7 @@ import {
 	classifyConnectionFailure,
 	daemonDetail,
 	describeConnectionFailure,
+	describeUnreachableCode,
 	isDesktopUnreachable,
 	isLocalNetworkHost,
 	isUnreachableError,
@@ -35,7 +36,7 @@ describe("classifyConnectionFailure", () => {
 	});
 	it("names an incompatible host and stops polling it", () => {
 		expect(classifyConnectionFailure(426)).toBe("incompatible-host");
-		expect(describeConnectionFailure("incompatible-host", target()).message).toContain("Update AO");
+		expect(describeConnectionFailure("incompatible-host", target()).message).toContain("Update Orchestrator");
 		expect(shouldKeepPolling(426)).toBe(false);
 	});
 
@@ -147,12 +148,12 @@ describe("describeConnectionFailure", () => {
 
 	it("points at the machine logs on a server error", () => {
 		const d = describeConnectionFailure("server-error", target());
-		expect(d.message).toContain("AO logs");
+		expect(d.message).toContain("Orchestrator logs");
 	});
 
 	it("rejects a non-AO QR code without mentioning the network", () => {
 		const d = describeConnectionFailure("not-ao-qr", target());
-		expect(d.message).toContain("isn't an AO pairing code");
+		expect(d.message).toContain("isn't an Orchestrator pairing code");
 		expect(d.showLocalNetworkHint).toBe(false);
 	});
 
@@ -184,6 +185,55 @@ describe("describeConnectionFailure", () => {
 			const d = describeConnectionFailure("auth", target({ platform: "ios", host: "192.168.1.5" }));
 			expect(d.showLocalNetworkHint).toBe(false);
 		});
+	});
+});
+
+// The field report: a code photographed before remote access was ready held
+// only LAN and Tailscale addresses, and the phone on mobile data was told to
+// check its Wi-Fi with nothing saying the code itself was the limit.
+describe("describeUnreachableCode", () => {
+	const lan = { kind: "lan" as const, host: "192.168.88.7", port: 3011, secure: false };
+	const tailscale = { kind: "tailscale" as const, host: "100.72.46.7", port: 3011, secure: false };
+	const tunnel = { kind: "tunnel" as const, host: "abc.trycloudflare.com", port: 443, secure: true };
+
+	it("names Tailscale as the remote path when the code has no public tunnel", () => {
+		const copy = describeUnreachableCode([lan, tailscale], "ios");
+		expect(copy.title).toBe("This code has no public tunnel");
+		expect(copy.message).toContain("Reached nothing at 192.168.88.7:3011 or over Tailscale at 100.72.46.7:3011.");
+		expect(copy.message).toContain("only works over Tailscale");
+		expect(copy.message).toContain("wait for the code to update with remote access");
+		expect(copy.message).not.toMatch(/no remote address|same Wi-Fi/);
+		// Still possibly at home with the Local Network prompt denied.
+		expect(copy.showLocalNetworkHint).toBe(true);
+	});
+
+	it("keeps Tailscale as the remote path when it is the only endpoint", () => {
+		const copy = describeUnreachableCode([tailscale], "ios");
+		expect(copy.title).toBe("This code has no public tunnel");
+		expect(copy.message).toContain("Reached nothing over Tailscale at 100.72.46.7:3011.");
+		expect(copy.message).toContain("Make sure Tailscale is connected");
+		expect(copy.showLocalNetworkHint).toBe(false);
+	});
+
+	it("says a LAN-only code works only on the same Wi-Fi", () => {
+		const copy = describeUnreachableCode([lan], "android");
+		expect(copy.title).toBe("This code only works nearby");
+		expect(copy.message).toContain("no public tunnel");
+		expect(copy.message).not.toContain("Tailscale");
+	});
+
+	it("does not blame Wi-Fi when the internet path failed too", () => {
+		const copy = describeUnreachableCode([lan, tunnel], "ios");
+		expect(copy.message).toContain("over the internet");
+		expect(copy.message).not.toMatch(/same Wi-Fi/);
+		// A briefly-down tunnel plus a denied Local Network prompt fails both
+		// probes, and granting the permission is what recovers the LAN path.
+		expect(copy.showLocalNetworkHint).toBe(true);
+	});
+
+	it("shows the Local Network hint for a tunnel code only where it can help", () => {
+		expect(describeUnreachableCode([lan, tunnel], "android").showLocalNetworkHint).toBe(false);
+		expect(describeUnreachableCode([tunnel], "ios").showLocalNetworkHint).toBe(false);
 	});
 });
 

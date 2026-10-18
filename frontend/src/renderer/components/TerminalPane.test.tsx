@@ -518,6 +518,36 @@ describe("TerminalPane empty states", () => {
 		}
 	});
 
+	it("covers a terminal an account move restarts until the agent draws", () => {
+		const previousAO = window.ao;
+		window.ao = {} as typeof window.ao;
+		terminalState.value = "attached";
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const pane = (switchingLabel?: string) => (
+			<QueryClientProvider client={client}>
+				<TerminalPane
+					daemonReady
+					fontSize={12}
+					session={{ ...worker, terminalHandleId: "term-2" }}
+					switchingLabel={switchingLabel}
+					terminalTarget={{ kind: "worker" }}
+					theme="dark"
+				/>
+			</QueryClientProvider>
+		);
+		try {
+			const { rerender } = render(pane("Switching to b@example.com…"));
+			expect(screen.getByRole("status")).toHaveTextContent("Switching to b@example.com…");
+			// The move commits before the restarted agent has drawn: still covered.
+			rerender(pane());
+			expect(screen.getByRole("status")).toHaveTextContent("Switching to b@example.com…");
+			act(() => visibleContentCallback.value?.());
+			expect(screen.queryByRole("status")).not.toBeInTheDocument();
+		} finally {
+			window.ao = previousAO;
+		}
+	});
+
 	it("refreshes cloud review state without showing a false terminal-ended banner", async () => {
 		const previousAO = window.ao;
 		window.ao = {} as typeof window.ao;
@@ -835,6 +865,11 @@ describe("TerminalCacheProvider", () => {
 		try {
 			await waitFor(() => expect(terminalSessionOptions.find((options) => options.shellTerminalHandleId === shell.handleId)?.createMux).toBe(createMux));
 			expect(document.querySelector("[data-terminal-cache-key]")).toBeNull();
+			const unmounts = xtermUnmounts.value;
+			act(() => { view.queryClient.setQueryData(shellTerminalsQueryKey, []); });
+			// Transient auth commands may exit before attachment; list pruning must
+			// leave the caller-owned pane mounted to receive the mux exit event.
+			expect(xtermUnmounts.value).toBe(unmounts);
 		} finally {
 			view.restore();
 		}

@@ -193,13 +193,15 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 		}
 		if (cuesQuery.isError) {
 			return (
-				<div className="flex flex-col items-center gap-3 py-8 text-center">
-					<p role="alert" className="text-sm text-error">
-						{apiErrorMessage(cuesQuery.error, t("cues.loadFailed"))}
-					</p>
-					<Button type="button" variant="outline" size="sm" onClick={() => void cuesQuery.refetch()}>
-						{t("cues.retry")}
-					</Button>
+				<div className="settings-grouped-rows flex w-full flex-col">
+					<div className="settings-row-bar">
+						<p role="alert" className="min-w-0 text-sm text-error">
+							{apiErrorMessage(cuesQuery.error, t("cues.loadFailed"))}
+						</p>
+						<Button type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" onClick={() => void cuesQuery.refetch()}>
+							{t("cues.retry")}
+						</Button>
+					</div>
 				</div>
 			);
 		}
@@ -211,7 +213,7 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 						<div className="settings-grouped-rows flex w-full flex-col">
 							<div className="settings-row-bar">
 								<span className="text-sm leading-5 text-settings-label">{t("cues.empty")}</span>
-								<Button type="button" variant="ghost" disabled={busy} onClick={openNew}>
+								<Button type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" disabled={busy} onClick={openNew}>
 									<Plus aria-hidden="true" />
 									{t("cues.newCue")}
 								</Button>
@@ -334,22 +336,22 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 	const empty = !formOpen && !cuesQuery.isError && (!cuesQuery.isFetchedAfterMount || (cuesQuery.data ?? []).length === 0);
 	return (
 		<div className="flex flex-col gap-(--size-settings-section-inner-gap)">
-			<p className="text-sm leading-5 text-settings-muted">{t("cues.settingsDescription")}</p>
-			<fieldset className="min-w-0" disabled={busy}>{formOpen ? renderForm() : renderList()}</fieldset>
+			<p className="px-(--settings-row-inset) text-sm leading-5 text-settings-muted">{t("cues.settingsDescription")}</p>
+			<fieldset className="min-w-0" disabled={busy}>{formOpen ? createOnly ? renderForm() : <div className="settings-grouped-rows flex w-full flex-col"><div className="settings-content-row">{renderForm()}</div></div> : renderList()}</fieldset>
 			{empty ? null : (
 			<div className="flex items-center justify-end gap-2">
 				{formOpen ? (
 					<>
-						<Button type="button" variant="outline" disabled={saving} onClick={() => createOnly ? onCancel?.() : setFormOpen(null)}>
+						<Button type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" disabled={saving} onClick={() => createOnly ? onCancel?.() : setFormOpen(null)}>
 							{t("cues.cancel")}
 						</Button>
-						<Button type="button" disabled={saving} onClick={() => void handleSave()}>
+						<Button type="button" size="sm" disabled={saving} onClick={() => void handleSave()}>
 							{saving ? <Loader2 className="animate-spin" aria-hidden="true" /> : null}
 							{formOpen === "new" ? t("cues.create") : t("cues.save")}
 						</Button>
 					</>
 				) : (
-					<Button type="button" disabled={busy} onClick={openNew}>
+					<Button type="button" size="sm" disabled={busy} onClick={openNew}>
 						<Plus aria-hidden="true" />
 						{t("cues.newCue")}
 					</Button>

@@ -187,6 +187,34 @@ func TestPiReadyStatesMatchRenderedPiScreens(t *testing.T) {
 	}
 }
 
+func TestStartOpensKimchiPTYAndAutomaticallyRunsLogin(t *testing.T) {
+	t.Parallel()
+
+	opener := &recordingTerminalOpener{}
+	svc := New(foundExecutable("kimchi"), opener)
+
+	got, err := svc.Start(context.Background(), "kimchi")
+	if err != nil {
+		t.Fatalf("Start(kimchi): %v", err)
+	}
+	wantStates := []shellterm.InitialInputReadyState{
+		{Text: "Select authentication method:", SkipInput: true},
+		{Text: "/ for commands"},
+	}
+	wantInput := shellterm.OpenCommandTerminalInput{
+		Argv:                    []string{"/test/bin/kimchi"},
+		Title:                   "Log in to Kimchi",
+		InitialInput:            "/login",
+		InitialInputReadyStates: wantStates,
+	}
+	if !reflect.DeepEqual(opener.input, wantInput) {
+		t.Fatalf("OpenCommandTerminal input = %#v, want %#v", opener.input, wantInput)
+	}
+	if got.TerminalInput != "" {
+		t.Fatalf("TerminalInput = %q, want empty because Kimchi login is automatic inside the PTY", got.TerminalInput)
+	}
+}
+
 func TestStartFallsBackToAgentResolvedBinaryOutsidePATH(t *testing.T) {
 	t.Parallel()
 
@@ -356,4 +384,53 @@ func (o *recordingTerminalOpener) OpenCommandTerminal(_ context.Context, in shel
 	o.calls++
 	o.input = in
 	return o.terminal, nil
+}
+
+func TestLogoutUsesAdapterExecutableAndNeverLoginLauncher(t *testing.T) {
+	for _, tc := range []struct {
+		agent string
+		args  []string
+	}{
+		{"claude-code", []string{"auth", "logout"}},
+		{"codex", []string{"logout"}},
+		{"cursor", []string{"logout"}},
+		{"opencode", []string{"auth", "logout"}},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			opener := &recordingTerminalOpener{terminal: shellterm.ShellTerminal{HandleID: "logout-terminal"}}
+			resolver := managedExecutableResolver{agentID: tc.agent, path: "/managed/agent"}
+			svc := NewWithAgentResolver(nil, resolver, opener, "")
+			result, err := svc.Logout(context.Background(), tc.agent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := append([]string{"/managed/agent"}, tc.args...)
+			if !reflect.DeepEqual(opener.input.Argv, want) {
+				t.Fatalf("argv = %v, want %v", opener.input.Argv, want)
+			}
+			if result.Action != "logout" || result.Terminal.HandleID != "logout-terminal" || result.TerminalInput != "" || opener.input.InitialInput != "" {
+				t.Fatalf("unexpected logout: %+v, input %+v", result, opener.input)
+			}
+		})
+	}
+}
+
+func TestLogoutRejectsUnknownUnsupportedAndMissingExecutable(t *testing.T) {
+	for _, tc := range []struct{ agent, code string }{
+		{"not-a-harness", "AGENT_AUTH_TARGET_UNKNOWN"},
+		{"aider", "AGENT_LOGOUT_UNSUPPORTED"},
+		{"codex", "AGENT_AUTH_UNAVAILABLE"},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			opener := &recordingTerminalOpener{}
+			_, err := New(foundExecutables(nil), opener).Logout(context.Background(), tc.agent)
+			var apiErr *apierr.Error
+			if !errors.As(err, &apiErr) || apiErr.Code != tc.code {
+				t.Fatalf("error = %v, want %s", err, tc.code)
+			}
+			if opener.calls != 0 {
+				t.Fatal("rejected logout opened a terminal")
+			}
+		})
+	}
 }

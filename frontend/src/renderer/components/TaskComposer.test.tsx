@@ -19,7 +19,6 @@ const h = vi.hoisted(() => ({
 	agentCatalog: undefined as { agents: ReturnType<typeof import("../test/agent-readiness-fixtures").agentReadiness>[] } | undefined,
 	cloudProjects: [] as Array<{ id: string; displayName: string; repositoryUrl: string; defaultBranch: string; config: Record<string, unknown> }>,
 	cloudCreateSession: vi.fn(),
-	cloudProviders: ["docker"] as string[],
 }));
 
 vi.mock("../hooks/useAgentReadinessQuery", async (importOriginal) => {
@@ -95,15 +94,10 @@ vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ client: { createSession: h.cloudCreateSession } }),
 }));
 
-vi.mock("../hooks/useCloudSandboxProviders", () => ({
-	useCloudSandboxProviders: () => ({ available: h.cloudProviders }),
-}));
-
-
 import { TaskComposer } from "./TaskComposer";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
-import { useSandboxProviderStore } from "../stores/sandbox-provider-store";
+import { providerConnectionsQueryKey } from "../hooks/useProviderConnections";
 import { useUiStore } from "../stores/ui-store";
 
 function Wrap({ children, queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }) }: {
@@ -153,9 +147,6 @@ afterEach(() => {
 	h.agentCatalog = undefined;
 	h.cloudProjects.length = 0;
 	h.cloudCreateSession.mockReset();
-	h.cloudProviders = ["docker"];
-	window.localStorage.removeItem("ao.cloud.sandboxProvider");
-	useSandboxProviderStore.setState({ selectedProvider: null });
 	vi.unstubAllGlobals();
 	h.agentValues.length = 0;
 	window.localStorage.removeItem("ao.taskComposer.preferences.v1");
@@ -557,6 +548,113 @@ describe("TaskComposer", () => {
 		);
 		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("projectId");
 		expect(h.get.mock.calls.some(([path]) => path === "/api/v1/projects/{id}")).toBe(false);
+	});
+
+	it("sends the visible default model when starting a standalone worker", async () => {
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) {
+				return {
+					data: {
+						agent: "codex",
+						selectionMode: "catalog",
+						models: [
+							{ id: "gpt-6-astra", label: "GPT-6 Astra", isDefault: true },
+							{ id: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
+						],
+						allowCustom: true,
+						refreshRecommended: false,
+					},
+				};
+			}
+			return { data: { status: "ok", project: { config: {} } } };
+		});
+		h.post.mockResolvedValueOnce({ data: { session: { id: "standalone-1" } } });
+
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+
+		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("GPT-6 Astra");
+		fireEvent.click(screen.getByText("Start task"));
+
+		await waitFor(() =>
+			expect(h.post).toHaveBeenCalledWith(
+				"/api/v1/sessions",
+				expect.objectContaining({ body: expect.objectContaining({ model: "gpt-6-astra" }) }),
+			),
+		);
+	});
+
+	it("sends the visible default mode when starting a standalone mode-list worker", async () => {
+		h.agentCatalog = { agents: [agentReadiness("amp", "Amp")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) {
+				return {
+					data: {
+						agent: "amp",
+						selectionMode: "mode",
+						models: [
+							{ id: "high", label: "High", isDefault: true },
+							{ id: "low", label: "Low" },
+						],
+						allowCustom: false,
+						refreshRecommended: false,
+					},
+				};
+			}
+			return { data: { status: "ok", project: { config: {} } } };
+		});
+		h.post.mockResolvedValueOnce({ data: { session: { id: "standalone-1" } } });
+
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+
+		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("High");
+		fireEvent.click(screen.getByText("Start task"));
+
+		await waitFor(() =>
+			expect(h.post).toHaveBeenCalledWith(
+				"/api/v1/sessions",
+				expect.objectContaining({ body: expect.objectContaining({ model: "high" }) }),
+			),
+		);
+	});
+
+	it("sends the visible default effort when starting a standalone worker", async () => {
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) {
+				return {
+					data: {
+						agent: "codex",
+						selectionMode: "catalog",
+						models: [{
+							id: "gpt-5.6-sol",
+							label: "GPT-5.6 Sol",
+							isDefault: true,
+							efforts: ["low", "high"],
+							defaultEffort: "high",
+						}],
+						allowCustom: true,
+						refreshRecommended: false,
+					},
+				};
+			}
+			return { data: { status: "ok", project: { config: {} } } };
+		});
+		h.post.mockResolvedValueOnce({ data: { session: { id: "standalone-1" } } });
+
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+
+		expect(await screen.findByRole("button", { name: "Effort" })).toHaveTextContent("High");
+		fireEvent.click(screen.getByText("Start task"));
+
+		await waitFor(() =>
+			expect(h.post).toHaveBeenCalledWith(
+				"/api/v1/sessions",
+				expect.objectContaining({
+					body: expect.objectContaining({ model: "gpt-5.6-sol", effort: "high" }),
+				}),
+			),
+		);
 	});
 
 	it("sends the selected effort when starting a standalone worker", async () => {
@@ -1094,9 +1192,8 @@ describe("TaskComposer", () => {
 		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenLastCalledWith("org-1", expect.objectContaining({ reasoningEffort: "high" })));
 	});
 
-	it("uses the control plane default when a saved sandbox provider is unavailable", async () => {
-		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: {} });
-		useSandboxProviderStore.getState().setSelectedProvider("coder");
+	it("leaves the sandbox provider to the project and org default on the control plane", async () => {
+		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { sandboxProvider: "coder" } });
 		h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
 		const onCreated = vi.fn();
 		render(<Wrap><TaskComposer projectId="cloud-1" onCreated={onCreated} /></Wrap>);
@@ -1106,7 +1203,7 @@ describe("TaskComposer", () => {
 		fireEvent.click(startTask());
 
 		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("session-1"));
-		expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.not.objectContaining({ provider: "coder" }));
+		expect(h.cloudCreateSession.mock.calls[0]?.[1]).not.toHaveProperty("provider");
 	});
 
 	it("waits for a selected file read before submitting", async () => {
@@ -1677,6 +1774,27 @@ describe("TaskComposer", () => {
 		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("model");
 	});
 
+	it("shows Memcode's native model list and sends an explicit choice", async () => {
+		h.agentCatalog = { agents: [agentReadiness("memcode", "memcode", { authentication: "configured" })] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) return { data: { agentId: "memcode", selectionMode: "catalog", models: [{ id: "sonnet", label: "Sonnet 5" }, { id: "opus", label: "Opus 5.5" }], customModelEntry: "none", allowCustom: false } };
+			return { data: { status: "ok", project: { agent: "memcode", config: { worker: { agent: "memcode" } } } } };
+		});
+
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await userEvent.click(picker);
+		expect(await screen.findByRole("menuitem", { name: "Sonnet 5" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitem", { name: "Opus 5.5" }));
+		expect(picker).toHaveTextContent("Opus 5.5");
+		h.post.mockResolvedValueOnce({ data: { workerId: "memcode-task" } });
+		fireEvent.change(task(), { target: { value: "Use the native model" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalled());
+		expect(h.post.mock.calls[0][1].body).toHaveProperty("model", "opus");
+	});
+
 	it("inherits the project worker model without saving it as a task override", async () => {
 		h.get.mockImplementation(async (path: string) => {
 			if (path.includes("/models")) {
@@ -1828,6 +1946,108 @@ describe("TaskComposer", () => {
 		);
 	});
 
+	function mockDisabledModels(disabledModels: string[]) {
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/settings") {
+				return { data: { defaultSessionMode: "tui", chatHarnesses: [], harnessDefaults: { codex: { disabledModels } } } };
+			}
+			if (path.includes("/models")) {
+				return {
+					data: {
+						agent: "codex",
+						selectionMode: "catalog",
+						models: [
+							{ id: "gpt-default", label: "GPT Default", isDefault: true },
+							{ id: "gpt-other", label: "GPT Other" },
+						],
+						allowCustom: false,
+						refreshRecommended: false,
+					},
+				};
+			}
+			return { data: { status: "ok", project: { config: { worker: { agent: "codex" } } } } };
+		});
+	}
+
+	it("opens on an offered model when Settings hides the catalog default", async () => {
+		mockDisabledModels(["gpt-default"]);
+		h.post.mockResolvedValue({ data: { workerId: "sess-offered" } });
+
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		const model = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(model).toHaveTextContent("GPT Other"));
+		await userEvent.click(model);
+		expect(screen.queryByRole("menuitem", { name: "GPT Default" })).not.toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		fireEvent.change(task(), { target: { value: "Use an offered model" } });
+		fireEvent.click(screen.getByText("Start task"));
+		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(1));
+		expect(h.post.mock.calls[0][1].body).toMatchObject({ model: "gpt-other" });
+	});
+
+	it("keeps the composer usable when the catalog response has no model list", async () => {
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { status: "ok" } }
+			: { data: { status: "ok", project: { config: { worker: { agent: "codex" } } } } });
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(h.get).toHaveBeenCalledWith("/api/v1/agents/{agent}/models", expect.anything()));
+		expect(task()).toBeVisible();
+		fireEvent.change(task(), { target: { value: "Use the native model" } });
+		expect(task()).toHaveValue("Use the native model");
+	});
+
+	it.each([false, true])("keeps FX's native provider when no default is reported (unrelated model hidden: %s)", async (hideUnrelated) => {
+		h.agentCatalog = { agents: [agentReadiness("fx", "FX")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/settings") {
+				return { data: { defaultSessionMode: "tui", chatHarnesses: [], harnessDefaults: { fx: {
+					disabledModels: hideUnrelated ? ["fx:gateway:beta"] : [],
+				} } } };
+			}
+			if (path.includes("/models")) {
+				return { data: { agent: "fx", selectionMode: "catalog", allowCustom: true, refreshRecommended: false, models: [
+					{ id: "fx:codex:alpha", label: "Codex Alpha", provider: "codex" },
+					{ id: "fx:gateway:beta", label: "Gateway Beta", provider: "gateway" },
+					{ id: "fx:gateway:zeta", label: "Gateway Zeta", provider: "gateway" },
+				] } };
+			}
+			return { data: { status: "ok", project: { config: { worker: { agent: "fx" } } } } };
+		});
+		h.post.mockResolvedValue({ data: { workerId: "sess-fx-native" } });
+
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "fx"));
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await userEvent.click(picker);
+		expect(await screen.findByRole("menuitem", { name: "Gateway Zeta" })).toBeInTheDocument();
+		if (hideUnrelated) {
+			expect(screen.queryByRole("menuitem", { name: "Gateway Beta" })).not.toBeInTheDocument();
+		} else {
+			expect(screen.getByRole("menuitem", { name: "Gateway Beta" })).toBeInTheDocument();
+		}
+		await userEvent.keyboard("{Escape}");
+		expect(picker).toHaveTextContent("Select model");
+		fireEvent.change(task(), { target: { value: "Use FX native Gateway selection" } });
+		await waitForTaskReady();
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(1));
+		expect(h.post.mock.calls[0][1].body).toMatchObject({ agent: "fx" });
+		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("model");
+	});
+
+	it("keeps the catalog default when Settings switches off no model", async () => {
+		mockDisabledModels([]);
+		h.post.mockResolvedValue({ data: { workerId: "sess-all" } });
+
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		const model = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(model).toHaveTextContent("GPT Default"));
+		fireEvent.change(task(), { target: { value: "Use the default model" } });
+		fireEvent.click(screen.getByText("Start task"));
+		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(1));
+		expect(h.post.mock.calls[0][1].body).toMatchObject({ model: "gpt-default" });
+	});
+
 	it("inherits worker effort visually but sends only explicit task overrides", async () => {
 		h.get.mockImplementation(async (path: string) => {
 			if (path.includes("/models")) {
@@ -1936,9 +2156,9 @@ describe("TaskComposer", () => {
 	});
 
 	it.each([
-		{ selectionMode: "catalog", preferred: "GPT New", alternative: "GPT Old", preferenceField: "model" },
-		{ selectionMode: "mode", preferred: "Plan", alternative: "Fast", preferenceField: "mode" },
-	] as const)("returns $selectionMode to the provider's choice after a custom selection", async ({ selectionMode, preferred, alternative, preferenceField }) => {
+		{ selectionMode: "catalog", preferred: "GPT New", alternative: "GPT Old", preferenceField: "model", expectedModel: "preferred" },
+		{ selectionMode: "mode", preferred: "Plan", alternative: "Fast", preferenceField: "mode", expectedModel: undefined },
+	] as const)("returns $selectionMode to the provider's choice after a custom selection", async ({ selectionMode, preferred, alternative, preferenceField, expectedModel }) => {
 		h.get.mockImplementation(async (path: string) => path.includes("/models")
 			? { data: { agent: "codex", selectionMode, models: [
 				{ id: "preferred", label: preferred, isDefault: true },
@@ -1961,9 +2181,9 @@ describe("TaskComposer", () => {
 		expect(picker).toHaveTextContent(preferred);
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(2));
-		expect(h.post.mock.calls[1][1].body).not.toHaveProperty("model");
+		expect(h.post.mock.calls[1][1].body.model).toBe(expectedModel);
 		const saved = JSON.parse(window.localStorage.getItem("ao.taskComposer.preferences.v1") ?? "{}")["proj-1"].agents.codex;
-		expect(saved[preferenceField]).toBe("");
+		expect(saved[preferenceField]).toBe(expectedModel ?? "");
 	});
 
 	it("overrides an explicitly configured project model when choosing the provider's model", async () => {
@@ -2097,6 +2317,20 @@ describe("TaskComposer", () => {
 			await waitForTaskReady();
 			fireEvent.click(startTask());
 			await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalled());
+		});
+
+		it("shows no local-login notice on a cloud project whose agent is connected for cloud", async () => {
+			h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "claude-code" } } });
+			h.agentCatalog = { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "unauthorized" })] };
+			h.get.mockImplementation(async () => ({ data: claudeCatalog({ warning: expiredDetail, warningCode: "auth_required" }) }));
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			queryClient.setQueryData(providerConnectionsQueryKey, [
+				{ id: "c-1", provider: "claude-code", label: "default", validationState: "valid", config: { credentialType: "oauth" } },
+			]);
+			render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+			await screen.findByRole("textbox", { name: "Task" });
+			await waitFor(() => expect(h.get).toHaveBeenCalled());
+			expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument();
 		});
 
 		it("re-reads the catalog by itself once the agent reads as logged in", async () => {

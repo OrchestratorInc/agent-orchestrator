@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { orchestratorProjectSections, projectDetailSessions, projectPageStats } from "../../lib/orchestratorView";
-import { ProjectPageHeader } from "../../lib/project-card";
+import { ProjectMachineIndicator, ProjectPageHeader } from "../../lib/project-card";
 import { StaleBanner } from "../../lib/StaleBanner";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
@@ -15,6 +15,8 @@ import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader }
 import { WorkerBoardList } from "../../lib/worker-board-list";
 import { backOr } from "../../lib/backNavigation";
 import { hostedRowKey } from "../../lib/hostedRows";
+import { SpawnFab } from "../../lib/spawn-fab";
+import { workerDockRestingBottom, workerListBottomInset } from "../../lib/worker-dock-layout";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -34,7 +36,7 @@ function ProjectScreenContent() {
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
 	const { id, hostId: routeHostId } = useLocalSearchParams<{ id: string; hostId?: string }>();
-	const { config, currentHostId, connection, loading, error, refresh, projects, sessions, orchestrators } = useApp();
+	const { config, currentHostId, hostStates, connection, loading, error, refresh, projects, sessions, orchestrators } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const { busyProjects, openOrchestrator } = useOrchestratorLauncher();
 	const [refreshing, setRefreshing] = useState(false);
@@ -65,6 +67,9 @@ function ProjectScreenContent() {
 		haptics.tap();
 		router.push({ pathname: "/spawn", params: { projectId: id, hostId: routeHostId } });
 	};
+	// Same corner and height as the Workers dock, so the spawn button does not
+	// move between the two screens.
+	const fabBottom = workerDockRestingBottom(insets.bottom);
 
 	return (
 		<View style={styles.screen}>
@@ -80,6 +85,7 @@ function ProjectScreenContent() {
 						onPress={() => backOr(router, "/projects")}
 					/>
 				}
+				right={<ProjectMachineIndicator hostId={currentHostId} hosts={hostStates} />}
 			/>
 			{hostMatches ? <StaleBanner error={!!error} onRetry={onRefresh} /> : null}
 
@@ -104,13 +110,13 @@ function ProjectScreenContent() {
 				) : connection !== "open" ? (
 					<EmptyState icon="wifi-off" title="Machine offline" message="This project loads once the app reconnects." />
 				) : (
-					<EmptyState icon="folder" title="Project not found" message="It may have been removed from AO." />
+					<EmptyState icon="folder" title="Project not found" message="It may have been removed from Orchestrator." />
 				)
 			) : (
 				<WorkerBoardList
 					sessions={projectSessions}
 					showProject={false}
-					contentBottomInset={insets.bottom + 32}
+					contentBottomInset={workerListBottomInset(fabBottom)}
 					refreshing={refreshing}
 					onRefresh={onRefresh}
 					ListHeaderComponent={
@@ -134,6 +140,11 @@ function ProjectScreenContent() {
 					}
 				/>
 			)}
+			{hostMatches && row ? (
+				<View style={[styles.fab, { bottom: fabBottom }]}>
+					<SpawnFab onPress={startTask} testID="project-spawn-worker" />
+				</View>
+			) : null}
 		</View>
 	);
 }
@@ -142,4 +153,5 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		screen: { flex: 1, backgroundColor: t.bgBase },
 		center: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 60 },
+		fab: { position: "absolute", right: 16 },
 	});

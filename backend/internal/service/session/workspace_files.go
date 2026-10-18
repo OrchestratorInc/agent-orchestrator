@@ -218,6 +218,7 @@ type WorkspaceFileDetail struct {
 	WorkspaceVersion   string
 	FileFingerprint    string
 	Historical         bool
+	fileModTime        time.Time
 }
 
 // UpdateWorkspaceFileInput replaces one existing text file. The fingerprint is
@@ -541,6 +542,11 @@ type workspaceFileTarget struct {
 // and that worktree's compare state. Shared by the file detail read model and
 // the raw blob route so both resolve a path the same way.
 func (s *Service) resolveWorkspaceFileTarget(ctx context.Context, id domain.SessionID, rawPath string) (workspaceFileTarget, error) {
+	return s.resolveWorkspaceFileTargetWithCompare(ctx, id, rawPath, true)
+}
+
+// Plain working-tree reads need path confinement, not a repository-wide Git scan.
+func (s *Service) resolveWorkspaceFileTargetWithCompare(ctx context.Context, id domain.SessionID, rawPath string, withCompare bool) (workspaceFileTarget, error) {
 	rec, err := s.sessionWorkspaceRecord(ctx, id)
 	if err != nil {
 		return workspaceFileTarget{}, err
@@ -564,7 +570,10 @@ func (s *Service) resolveWorkspaceFileTarget(ctx context.Context, id domain.Sess
 		return workspaceFileTarget{root: rec.Metadata.WorkspacePath, rel: rel, scratch: true}, nil
 	}
 	if projectKind == domain.ProjectKindWorkspace {
-		return s.resolveWorkspaceProjectFileTarget(ctx, rec, project, rel)
+		return s.resolveWorkspaceProjectFileTarget(ctx, rec, project, rel, withCompare)
+	}
+	if !withCompare {
+		return workspaceFileTarget{root: rec.Metadata.WorkspacePath, rel: rel}, nil
 	}
 	prs, err := s.workspaceComparePRs(ctx, rec.ID)
 	if err != nil {
@@ -1077,12 +1086,15 @@ func (s *Service) listWorkspaceProjectFiles(ctx context.Context, rec domain.Sess
 	}, nil
 }
 
-func (s *Service) resolveWorkspaceProjectFileTarget(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord, rel string) (workspaceFileTarget, error) {
+func (s *Service) resolveWorkspaceProjectFileTarget(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord, rel string, withCompare bool) (workspaceFileTarget, error) {
 	rows, err := s.store.ListSessionWorktrees(ctx, rec.ID)
 	if err != nil {
 		return workspaceFileTarget{}, fmt.Errorf("list workspace project rows: %w", err)
 	}
 	if len(rows) == 0 {
+		if !withCompare {
+			return workspaceFileTarget{root: rec.Metadata.WorkspacePath, rel: rel}, nil
+		}
 		prs, err := s.workspaceComparePRs(ctx, rec.ID)
 		if err != nil {
 			return workspaceFileTarget{}, err
@@ -1099,6 +1111,9 @@ func (s *Service) resolveWorkspaceProjectFileTarget(ctx context.Context, rec dom
 	row, prefix, repoRel, ok := workspaceProjectFileTarget(rec.Metadata.WorkspacePath, rows, rel)
 	if !ok {
 		return workspaceFileTarget{}, apierr.NotFound("WORKSPACE_FILE_NOT_FOUND", "Workspace file not found")
+	}
+	if !withCompare {
+		return workspaceFileTarget{root: row.WorktreePath, prefix: prefix, rel: repoRel}, nil
 	}
 	defaultBranch := defaultBranchForProject(project, true)
 	baseRef := row.BaseRef
@@ -1149,7 +1164,7 @@ func (s *Service) workspaceFileSummariesCached(
 		return err
 	})
 	g.Go(func() (err error) {
-		lsParts, err = gitLsFilesParts(gctx, root)
+		lsParts, err = s.workspacePaths(gctx, id, root)
 		return err
 	})
 	if err := g.Wait(); err != nil {
@@ -1254,6 +1269,7 @@ func workspaceFileDetail(ctx context.Context, id domain.SessionID, root, prefix,
 			return WorkspaceFileDetail{}, err
 		}
 		detail.Size = info.Size()
+		detail.fileModTime = info.ModTime()
 		content, binary, truncated, err := readWorkspaceTextFile(file, maxWorkspaceFileBytes)
 		if err != nil {
 			return WorkspaceFileDetail{}, err
@@ -1674,6 +1690,7 @@ func scratchWorkspaceFile(root string, id domain.SessionID, rel string) (Workspa
 		Binary:           binary,
 		ContentTruncated: truncated,
 		ImageMediaType:   workspaceImageDetailMediaType(rel, binary, false),
+		fileModTime:      info.ModTime(),
 	}
 	if !binary {
 		detail.Content = content

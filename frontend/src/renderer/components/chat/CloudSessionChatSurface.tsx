@@ -11,6 +11,12 @@ import { ChatWorkspace } from "./ChatWorkspace";
 
 type EventPayload = {
 	attempt?: unknown;
+	/** workspace.setup */
+	status?: unknown;
+	step?: unknown;
+	exitCode?: unknown;
+	durationMs?: unknown;
+	output?: unknown;
 	clientMessageId?: unknown;
 	requestId?: unknown;
 	decision?: unknown;
@@ -116,6 +122,26 @@ function cloudTurnDiff(patch: string): (DiffFile & { patch: string })[] {
 	return files;
 }
 
+/**
+ * The outcome of the project's Setup commands (Project settings > Scripts), as
+ * a system row: Setup runs before the agent starts, so it belongs to no turn.
+ */
+function projectSetupActivity(event: CloudCpClientEvent): ConversationActivity {
+	const payload = eventPayload(event);
+	const status = payload.status === "succeeded" || payload.status === "timed_out" ? payload.status : "failed";
+	const step = typeof payload.step === "number" && payload.step > 0 ? payload.step : undefined;
+	const exitCode = typeof payload.exitCode === "number" ? payload.exitCode : undefined;
+	const durationMs = typeof payload.durationMs === "number" ? payload.durationMs : undefined;
+	const output = typeof payload.output === "string" && payload.output.trim() !== "" ? payload.output : undefined;
+	return {
+		kind: "activity", id: `cloud-project-setup-${event.sequence}`, sequence: event.sequence, revision: 1,
+		activityKind: "system", status: status === "succeeded" ? "completed" : "failed",
+		summary: status === "succeeded" ? "Setup finished" : status === "timed_out" ? "Setup timed out" : "Setup failed",
+		detail: { event: "workspace.setup", setupStatus: status, setupStep: step, exitCode, durationMs, output },
+		createdAt: event.createdAt,
+	};
+}
+
 export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent[]): ConversationSnapshot {
 	const turns = new Map<string, ConversationTurn>();
 	const assistant = new Map<string, ConversationMessage>();
@@ -214,6 +240,10 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 				activities.set(key, activity);
 				items.push(activity);
 			}
+			continue;
+		}
+		if (event.type === "workspace.setup") {
+			items.push(projectSetupActivity(event));
 			continue;
 		}
 		const text = eventText(event);

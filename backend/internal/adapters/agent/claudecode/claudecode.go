@@ -76,6 +76,7 @@ func (p *Plugin) EmitsBlockedActivity() bool { return true }
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
+var _ ports.AgentAuthDiagnosticsChecker = (*Plugin)(nil)
 var _ ports.EmptyComposerDetector = (*Plugin)(nil)
 var _ ports.AgentInterfaceHandoff = (*Plugin)(nil)
 var _ ports.AgentInterfaceHandoffHistoryProbe = (*Plugin)(nil)
@@ -238,6 +239,10 @@ func (p *Plugin) PreLaunch(ctx context.Context, cfg ports.LaunchConfig) error {
 	}
 	if cfg.WorkspacePath == "" {
 		return nil
+	}
+	// An account launch reads its own folder's config, not ~/.claude.json.
+	if dir := strings.TrimSpace(cfg.Env[claudeConfigDirEnv]); dir != "" {
+		return ensureWorkspaceTrusted(filepath.Join(dir, ".claude.json"), cfg.WorkspacePath)
 	}
 	cfgPath, err := claudeConfigPath()
 	if err != nil {

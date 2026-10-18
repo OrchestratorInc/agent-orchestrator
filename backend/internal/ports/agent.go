@@ -3,6 +3,7 @@ package ports
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -16,6 +17,9 @@ var (
 	// ErrAgentAuthRequired means a launch-fresh provider check rejected the
 	// credential selected by the session's cwd and environment.
 	ErrAgentAuthRequired = errors.New("agent requires authentication")
+	// ErrNativeHistoryUnavailable means an interactive native restorer has no
+	// saved conversation yet; ordinary restore may launch fresh in its workspace.
+	ErrNativeHistoryUnavailable = errors.New("agent native history unavailable")
 )
 
 // ErrAgentBinaryNotFound is returned by agent adapters when neither PATH nor
@@ -70,6 +74,93 @@ const (
 	// configured instead, and must never render as a ready state.
 	AgentAuthStatusConfigured AgentAuthStatus = "configured"
 )
+
+// HasCredential reports whether a check found a credential, verified or only
+// configured.
+func (s AgentAuthStatus) HasCredential() bool {
+	return s == AgentAuthStatusAuthorized || s == AgentAuthStatusConfigured
+}
+
+// AuthEvidence collects what an authentication check relied on, so readiness
+// can say why a harness reads as signed in. Adapters record through
+// RecordAuthEvidence; without a collector in the context it does nothing.
+type AuthEvidence struct {
+	mu          sync.Mutex
+	identity    domain.AgentAccountIdentity
+	diagnostics []domain.AgentAuthDiagnostic
+}
+
+type authEvidenceKey struct{}
+
+// WithAuthEvidence returns a context that collects authentication evidence.
+func WithAuthEvidence(ctx context.Context) (context.Context, *AuthEvidence) {
+	evidence := &AuthEvidence{}
+	return context.WithValue(ctx, authEvidenceKey{}, evidence), evidence
+}
+
+// RecordAuthEvidence records what made a check succeed. A later record
+// replaces an earlier one, so adapters record at the point they decide.
+func RecordAuthEvidence(ctx context.Context, identity domain.AgentAccountIdentity) {
+	evidence, ok := ctx.Value(authEvidenceKey{}).(*AuthEvidence)
+	if !ok || evidence == nil {
+		return
+	}
+	evidence.mu.Lock()
+	evidence.identity = identity
+	evidence.mu.Unlock()
+}
+
+// AddAuthEvidence fills fields the recorded evidence leaves empty, such as
+// an email learned after the deciding file or variable was recorded.
+func AddAuthEvidence(ctx context.Context, identity domain.AgentAccountIdentity) {
+	evidence, ok := ctx.Value(authEvidenceKey{}).(*AuthEvidence)
+	if !ok || evidence == nil {
+		return
+	}
+	evidence.mu.Lock()
+	evidence.identity = evidence.identity.Merge(identity)
+	evidence.mu.Unlock()
+}
+
+// Identity returns the recorded evidence.
+func (e *AuthEvidence) Identity() domain.AgentAccountIdentity {
+	if e == nil {
+		return domain.AgentAccountIdentity{}
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.identity
+}
+
+// RecordAuthDiagnostic retains an adapter-authored check outcome, including
+// unsuccessful attempts. Never pass raw errors, credential values or CLI output.
+func RecordAuthDiagnostic(ctx context.Context, diagnostic domain.AgentAuthDiagnostic) {
+	evidence, ok := ctx.Value(authEvidenceKey{}).(*AuthEvidence)
+	if !ok || evidence == nil {
+		return
+	}
+	evidence.mu.Lock()
+	defer evidence.mu.Unlock()
+	if len(evidence.diagnostics) < 64 {
+		evidence.diagnostics = append(evidence.diagnostics, diagnostic)
+	}
+}
+
+// Diagnostics returns an independent snapshot of the recorded check outcomes.
+func (e *AuthEvidence) Diagnostics() []domain.AgentAuthDiagnostic {
+	if e == nil {
+		return nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]domain.AgentAuthDiagnostic(nil), e.diagnostics...)
+}
+
+// AgentAuthDiagnosticsChecker adds the signed-in account and evidence from the
+// same check as the verdict, so neither needs a second probe.
+type AgentAuthDiagnosticsChecker interface {
+	AuthStatusWithDiagnostics(context.Context) (AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error)
+}
 
 // Agent is the contract every CLI coding agent adapter (claude-code, codex, …)
 // must satisfy. It supplies the argv and process configuration the Session
@@ -206,6 +297,19 @@ type AgentInterfaceHandoffHistoryProbe interface {
 	) (bool, error)
 }
 
+// AgentInterfaceHandoffStorageBridge is an OPTIONAL capability for adapters
+// whose native conversation files live in interface-specific storage roots.
+// Session Manager calls it only after the source controller is stopped.
+type AgentInterfaceHandoffStorageBridge interface {
+	PrepareInterfaceHandoffStorage(
+		ctx context.Context,
+		session SessionRef,
+		from, to domain.SessionMode,
+		nativeConversationID string,
+		env map[string]string,
+	) error
+}
+
 // ModelSelectionMode tells clients how to render an agent's model control.
 type ModelSelectionMode string
 
@@ -234,10 +338,14 @@ const (
 
 // AgentModelInfo is one model or mode that an adapter reports as selectable.
 type AgentModelInfo struct {
-	ID        string `json:"id"`
-	Label     string `json:"label"`
-	Provider  string `json:"provider,omitempty"`
-	IsDefault bool   `json:"isDefault,omitempty"`
+	// ContextWindow and Inputs are populated only from provider catalog metadata.
+	// Zero/nil means unknown, not an inferred capability.
+	ContextWindow int64    `json:"contextWindow,omitempty"`
+	Inputs        []string `json:"inputs,omitempty"`
+	ID            string   `json:"id"`
+	Label         string   `json:"label"`
+	Provider      string   `json:"provider,omitempty"`
+	IsDefault     bool     `json:"isDefault,omitempty"`
 	// Efforts are the reasoning levels this specific model accepts, in the
 	// provider's own ascending order. Empty means the model takes no effort
 	// setting, which is a real answer rather than a missing one — Sonnet 4.5
@@ -253,10 +361,16 @@ type AgentModelInfo struct {
 
 // AgentModelCatalog is AO's normalized model-picker response.
 type AgentModelCatalog struct {
-	AgentID          string               `json:"agentId"`
-	SelectionMode    ModelSelectionMode   `json:"selectionMode" enum:"catalog,text,mode"`
-	Models           []AgentModelInfo     `json:"models"`
-	CustomModelEntry CustomModelEntryMode `json:"customModelEntry" enum:"none,direct,configured"`
+	// Providers includes reported provider IDs even when they currently have no models.
+	Providers []string `json:"providers,omitempty"`
+	// ConfiguredProviders names providers with credential configuration observed
+	// during discovery. Presence is not proof of authorization; absence is unknown.
+	// Only provider IDs are exposed, never credential values or source paths.
+	ConfiguredProviders []string             `json:"configuredProviders,omitempty"`
+	AgentID             string               `json:"agentId"`
+	SelectionMode       ModelSelectionMode   `json:"selectionMode" enum:"catalog,text,mode"`
+	Models              []AgentModelInfo     `json:"models"`
+	CustomModelEntry    CustomModelEntryMode `json:"customModelEntry" enum:"none,direct,configured"`
 	// AllowCustom is retained for compatibility and is true only for direct entry.
 	AllowCustom bool   `json:"allowCustom"`
 	Source      string `json:"source"`
@@ -356,15 +470,6 @@ type AgentModelDiscoverer interface {
 	Manual(agentID string) AgentModelCatalog
 }
 
-// AgentModelAliasLabeler is an optional AgentModelDiscoverer capability. When a
-// discovery fails and AO falls back to an agent's static alias list, it labels
-// those aliases with the versions a previous successful discovery reported
-// (reference), so "opus" can read "Opus 5.5" instead of a bare family name.
-// Implementations return models unchanged when reference cannot resolve them.
-type AgentModelAliasLabeler interface {
-	LabelAliases(agentID string, models, reference []AgentModelInfo) []AgentModelInfo
-}
-
 // AgentExitDetectionMode describes how AO learns that an agent CLI process
 // ended while its terminal runtime remains alive.
 type AgentExitDetectionMode string
@@ -398,9 +503,29 @@ type AgentAfterStartPromptBuilder interface {
 	BuildAfterStartPrompt(ctx context.Context, cfg LaunchConfig) (string, error)
 }
 
+// AgentAfterStartCommand selects native TUI state before AO delivers the first
+// task. Confirmation must come from the current terminal output, so an ignored
+// command cannot silently launch a task with the wrong model.
+type AgentAfterStartCommand interface {
+	AfterStartCommand(ctx context.Context, cfg LaunchConfig) (string, error)
+	AfterStartCommandApplied(cfg LaunchConfig, output string) bool
+}
+
 // TerminalActivityDetector derives activity only from authoritative terminal UI markers.
 type TerminalActivityDetector interface {
 	DetectTerminalActivity(output string) (domain.ActivityState, bool)
+}
+
+// TerminalActivityOptions lets an adapter declare how the shared observer
+// should read its terminal and which native decision states it can report.
+type TerminalActivityOptions struct {
+	PreferStyledOutput bool
+	SupportsBlocked    bool
+}
+
+// TerminalActivityOptionsProvider exposes an adapter's terminal observation needs.
+type TerminalActivityOptionsProvider interface {
+	TerminalActivityOptions() TerminalActivityOptions
 }
 
 // EmptyComposerDetector is an opt-in safety capability for unsolicited
@@ -533,6 +658,10 @@ type ActiveTurnSteerer interface {
 // either side hard-coding the other's vocabulary.
 const MetadataKeyAgentSessionID = "agentSessionId"
 
+// MetadataKeySessionMode is the SessionRef.Metadata key that carries the
+// current session mode (e.g. "chat" or "tui").
+const MetadataKeySessionMode = "sessionMode"
+
 // MetadataKeyTitle and MetadataKeySummary are the SessionRef.Metadata keys
 // carrying a session's human title and one-line summary. They are the shared
 // vocabulary every adapter reports under, so the dashboard renders agents
@@ -600,6 +729,9 @@ type LaunchConfig struct {
 	SystemPrompt     string
 	SystemPromptFile string
 	WorkspacePath    string
+	// Env is the launch environment, for steps that must follow it (such as
+	// the provider config folder an account selects).
+	Env map[string]string
 }
 
 // WorkspaceHookConfig carries inputs needed to install workspace-local agent hooks.
@@ -693,3 +825,23 @@ const (
 	PromptDeliveryAfterStart  PromptDeliveryStrategy = "after_start"
 	PromptDeliveryCustomAgent PromptDeliveryStrategy = "custom_agent"
 )
+
+// AgentInteractiveNativeRestorer requires a strict, taskless initialization after
+// runtime launch. It never exposes fresh argv as a successful ordinary resume.
+type AgentInteractiveNativeRestorer interface {
+	PrepareNativeRestore(context.Context, RestoreConfig) (NativeRestoreInitialization, error)
+}
+
+// NativeRestoreInitialization is private to one restore attempt. The manager
+// requires StyledTerminalOutputReader current viewport evidence, never raw history.
+// The adapter
+// validates native history and interprets current terminal/witness evidence;
+// the manager alone owns runtime I/O, deadlines, publication and cleanup.
+type NativeRestoreInitialization interface {
+	Argv() []string
+	LaunchEnv() map[string]string
+	ResumeInput() string
+	TargetID() string
+	Ready(context.Context, string, string) (bool, error)
+	Restored(context.Context, string, string) (bool, error)
+}

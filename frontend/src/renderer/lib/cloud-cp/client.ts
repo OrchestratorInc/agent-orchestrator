@@ -10,16 +10,19 @@
 import { CloudCpAuthError, CloudCpError } from "./errors";
 import { createSseFrameParser } from "./sse";
 import type {
+	CloudCpOffering,
 	CloudCpAgentProvider,
 	CloudCpCancelTurnResponse,
 	CloudCpChatEventsQuery,
 	CloudCpChatEventsResponse,
 	CloudCpChatModelsResponse,
+	CloudCpCoderTemplateParametersResponse,
 	CloudCpCoderTemplatesResponse,
 	CloudCpClientEvent,
 	CloudCpCreateOrganizationRequest,
 	CloudCpCreateOrganizationResponse,
 	CloudCpCreateGitHubProjectRequest,
+	CloudCpCreateStandaloneProjectRequest,
 	CloudCpCreateProjectRequest,
 	CloudCpCreateSessionRequest,
 	CloudCpErrorEnvelope,
@@ -31,6 +34,8 @@ import type {
 	CloudCpNotificationListQuery,
 	CloudCpNotificationListResponse,
 	CloudCpOrgCoderConfigResponse,
+	CloudCpBillingLinkResponse,
+	CloudCpBillingSummary,
 	CloudCpPutOrgCoderConfigRequest,
 	CloudCpProjectDeletedResponse,
 	CloudCpProjectListResponse,
@@ -104,10 +109,22 @@ export interface CloudCpClientOptions {
 	 * re-resolve the current org so callers stop hammering a dead org.
 	 */
 	onForbidden?: () => void;
+	/** Called when the control plane refuses work for plan reasons (no plan, slots full, usage limit). */
+	onPlanRefused?: (code: string) => void;
 }
 
 export interface CloudCpRequestOptions {
 	signal?: AbortSignal;
+}
+
+/**
+ * Options for a session workspace call (/sessions/{id}/workspace/*). In a
+ * multi-repository session, `repository` is the folder name of one of the
+ * session's additional repositories (from the review summary's
+ * `repositories`); absent means the main repository.
+ */
+export interface CloudCpWorkspaceRequestOptions extends CloudCpRequestOptions {
+	repository?: string;
 }
 
 /**
@@ -220,8 +237,46 @@ export interface CloudCpClient {
 	setSessionMergePolicy(orgId: string, sessionId: string, terminateOnPrMerge: boolean, options?: CloudCpRequestOptions): Promise<CloudCpSessionResponse>;
 	/** Lists the Coder templates the picker offers (empty when coder is unavailable/unentitled). */
 	listCoderTemplates(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpCoderTemplatesResponse>;
+	/**
+	 * Lists the rich parameters of a Coder template's active version. An older
+	 * control plane without the route answers 404.
+	 */
+	getCoderTemplateParameters(
+		orgId: string,
+		templateId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpCoderTemplateParametersResponse>;
+	/**
+	 * A Coder template's parameters with draft values applied, so a parameter
+	 * the template declares only for some value of another appears once it
+	 * applies. An older control plane without the route answers 404 or 405.
+	 */
+	evaluateCoderTemplateParameters(
+		orgId: string,
+		templateId: string,
+		values: Readonly<Record<string, string>>,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpCoderTemplateParametersResponse>;
 	/** Reads the org's bring-your-own-Coder connection (non-secret fields only; the API token is never returned). */
 	getOrgCoderConfig(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpOrgCoderConfigResponse>;
+	/** The org's plan, its limits, and usage against them. */
+	getBilling(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingSummary>;
+	/** A Stripe Checkout URL that subscribes the org to `plan`. Admins only. */
+	createBillingCheckout(orgId: string, plan: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingLinkResponse>;
+	/**
+	 * A Stripe Customer Portal URL for changing plan, card, or cancelling. Admins only.
+	 * `flow: "cancel"` opens the portal straight on cancelling the plan (downgrading to Free).
+	 */
+	createBillingPortal(orgId: string, flow?: "cancel", options?: CloudCpRequestOptions): Promise<CloudCpBillingLinkResponse>;
+	/** Spend one of the plan's manual resets of the weekly usage limit. Admins only. */
+	resetBillingUsage(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingSummary>;
+	/** Heartbeat while a session is on screen, so reading it keeps it awake. */
+	touchSessionPresence(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<void>;
+	/**
+	 * Set the org's default sandbox provider (org admins; only an org offered
+	 * more than one provider). "" clears it. Returns the org's updated offering.
+	 */
+	putOrgSandboxProvider(orgId: string, defaultProvider: string, options?: CloudCpRequestOptions): Promise<CloudCpOffering>;
 	/** Saves the org's bring-your-own-Coder connection. Omit the token to keep the stored one. */
 	putOrgCoderConfig(
 		orgId: string,
@@ -278,13 +333,13 @@ export interface CloudCpClient {
 		path: string,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpWorkspaceDiffFileDetail>;
-	getWorkspaceReview(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewResponse>;
-	getWorkspaceReviewTree(orgId: string, sessionId: string, path?: string, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewTreeResponse>;
-	searchWorkspaceReview(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewSearchQuery, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewSearchResponse>;
-	getWorkspaceReviewFile(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewFileQuery, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewFileResponse>;
-	getWorkspaceReviewDiffs(orgId: string, sessionId: string, body: CloudCpWorkspaceReviewDiffsRequest, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewDiffsResponse>;
-	getWorkspaceReviewRevision(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewRevisionQuery, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewRevisionResponse>;
-	updateWorkspaceReviewFile(orgId: string, sessionId: string, body: CloudCpWorkspaceReviewWriteRequest, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewWriteResponse>;
+	getWorkspaceReview(orgId: string, sessionId: string, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewResponse>;
+	getWorkspaceReviewTree(orgId: string, sessionId: string, path?: string, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewTreeResponse>;
+	searchWorkspaceReview(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewSearchQuery, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewSearchResponse>;
+	getWorkspaceReviewFile(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewFileQuery, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewFileResponse>;
+	getWorkspaceReviewDiffs(orgId: string, sessionId: string, body: CloudCpWorkspaceReviewDiffsRequest, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewDiffsResponse>;
+	getWorkspaceReviewRevision(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewRevisionQuery, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewRevisionResponse>;
+	updateWorkspaceReviewFile(orgId: string, sessionId: string, body: CloudCpWorkspaceReviewWriteRequest, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewWriteResponse>;
 	/** Re-provision a deleted session, keeping its conversation and work intact. */
 	restoreSession(
 		orgId: string,
@@ -392,6 +447,12 @@ export interface CloudCpClient {
 		body: CloudCpCreateGitHubProjectRequest,
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpProjectResponse>;
+	/** A project without a repository (POST /orgs/{orgId}/projects/standalone). */
+	createStandaloneProject(
+		orgId: string,
+		body: CloudCpCreateStandaloneProjectRequest,
+		options?: CloudCpMutationOptions,
+	): Promise<CloudCpProjectResponse>;
 }
 
 type QueryParams = Record<string, string | number | undefined>;
@@ -417,10 +478,26 @@ function buildUrl(baseUrl: string, path: string, query?: QueryParams): string {
 	return url;
 }
 
+/** The `repository` query parameter of a workspace call; undefined for the main repository. */
+function repositoryQuery(options: CloudCpWorkspaceRequestOptions | undefined): QueryParams | undefined {
+	const repository = options?.repository?.trim();
+	return repository ? { repository } : undefined;
+}
+
 /** Build one path segment from a caller-supplied identifier. */
 function seg(value: string): string {
 	return encodeURIComponent(value);
 }
+
+/** Error codes the control plane uses when a plan does not allow the request. */
+export const PLAN_REFUSAL_CODES: ReadonlySet<string> = new Set([
+	"PLAN_REQUIRED",
+	"ORCHESTRATOR_SLOTS_FULL",
+	"WORKER_SLOTS_FULL",
+	"SESSION_LIMIT_REACHED",
+	"WINDOW_LIMIT_REACHED",
+	"WEEKLY_LIMIT_REACHED",
+]);
 
 async function errorFromResponse(response: Response): Promise<CloudCpError> {
 	let message = `Cloud control plane request failed with status ${response.status}.`;
@@ -457,7 +534,7 @@ function newIdempotencyKey(): string {
 }
 
 export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClient {
-	const { baseUrl, getToken, onForbidden } = options;
+	const { baseUrl, getToken, onForbidden, onPlanRefused } = options;
 	// Wrap the default so the global fetch is never invoked detached from its
 	// realm (Chromium throws "Illegal invocation" for a bare fetch reference).
 	const doFetch: typeof fetch = options.fetchImpl ?? ((input, init) => fetch(input, init));
@@ -487,7 +564,9 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			// the renderer re-resolves the current org instead of stranding every
 			// org-scoped call. Fire before throwing so callers still see the error.
 			if (response.status === 403) onForbidden?.();
-			throw await errorFromResponse(response);
+			const error = await errorFromResponse(response);
+			if (error.code && PLAN_REFUSAL_CODES.has(error.code)) onPlanRefused?.(error.code);
+			throw error;
 		}
 		return response;
 	}
@@ -668,8 +747,26 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 		listCoderTemplates: (orgId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sandbox/coder/templates`, { signal: o?.signal }),
+		getCoderTemplateParameters: (orgId, templateId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/coder-templates/${seg(templateId)}/parameters`, { signal: o?.signal }),
+		evaluateCoderTemplateParameters: (orgId, templateId, values, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/coder-templates/${seg(templateId)}/parameters/evaluate`, {
+				body: { values },
+				signal: o?.signal,
+			}),
 		getOrgCoderConfig: (orgId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/coder-config`, { signal: o?.signal }),
+		getBilling: (orgId, o) => requestJson("GET", `/orgs/${seg(orgId)}/billing`, { signal: o?.signal }),
+		createBillingCheckout: (orgId, plan, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/billing/checkout`, { body: { plan }, signal: o?.signal }),
+		createBillingPortal: (orgId, flow, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/billing/portal`, { body: flow ? { flow } : {}, signal: o?.signal }),
+		resetBillingUsage: (orgId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/billing/usage/reset`, { body: {}, signal: o?.signal }),
+		touchSessionPresence: (orgId, sessionId, o) =>
+			requestVoid("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/presence`, { signal: o?.signal }),
+		putOrgSandboxProvider: (orgId, defaultProvider, o) =>
+			requestJson("PUT", `/orgs/${seg(orgId)}/sandbox-provider`, { body: { defaultProvider }, signal: o?.signal }),
 		putOrgCoderConfig: (orgId, body, o) =>
 			requestJson("PUT", `/orgs/${seg(orgId)}/coder-config`, { body, signal: o?.signal }),
 		deleteOrgCoderConfig: (orgId, o) =>
@@ -715,33 +812,35 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 				signal: o?.signal,
 			}),
 		getWorkspaceReview: (orgId, sessionId, o) =>
-			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review`, { signal: o?.signal }),
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review`, {
+				query: repositoryQuery(o), signal: o?.signal,
+			}),
 		getWorkspaceReviewTree: (orgId, sessionId, path, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/tree`, {
-				query: { path }, signal: o?.signal,
+				query: { path, ...repositoryQuery(o) }, signal: o?.signal,
 			}),
 		searchWorkspaceReview: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/search`, {
-				query: { query: query.query, cursor: query.cursor, limit: query.limit }, signal: o?.signal,
+				query: { query: query.query, cursor: query.cursor, limit: query.limit, ...repositoryQuery(o) }, signal: o?.signal,
 			}),
 		getWorkspaceReviewFile: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/file`, {
-				query: { path: query.path, scope: query.scope, commitSha: query.commitSha }, signal: o?.signal,
+				query: { path: query.path, scope: query.scope, commitSha: query.commitSha, ...repositoryQuery(o) }, signal: o?.signal,
 			}),
 		getWorkspaceReviewDiffs: (orgId, sessionId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/diffs`, {
-				body, signal: o?.signal,
+				body, query: repositoryQuery(o), signal: o?.signal,
 			}),
 		getWorkspaceReviewRevision: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/revision`, {
 				query: {
 					path: query.path, scope: query.scope, side: query.side, workspaceVersion: query.workspaceVersion,
-					expectedRevision: query.expectedRevision, commitSha: query.commitSha,
+					expectedRevision: query.expectedRevision, commitSha: query.commitSha, ...repositoryQuery(o),
 				}, signal: o?.signal,
 			}),
 		updateWorkspaceReviewFile: (orgId, sessionId, body, o) =>
 			requestJson("PUT", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/file`, {
-				body, signal: o?.signal,
+				body, query: repositoryQuery(o), signal: o?.signal,
 			}),
 		restoreSession: (orgId, sessionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/restore`, {
@@ -823,6 +922,12 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 		createGitHubProject: (orgId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/github/projects`, {
+				body,
+				signal: o?.signal,
+				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
+			}),
+		createStandaloneProject: (orgId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/projects/standalone`, {
 				body,
 				signal: o?.signal,
 				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),

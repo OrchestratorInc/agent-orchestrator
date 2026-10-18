@@ -8,7 +8,9 @@ import { useSoundNotificationsStore } from "../../stores/sound-notifications-sto
 import { useUiStore } from "../../stores/ui-store";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { CliLinkSettings } from "./CliLinkSettingsRow";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
+import { DefaultCloudSandboxSection } from "./DefaultCloudSandboxRow";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { SettingsInputRow, SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
@@ -18,7 +20,7 @@ import { cn } from "../../lib/utils";
 import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface } from "../../hooks/useSettings";
 import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
-import { isWindowsPlatform } from "../../lib/platform";
+import { isMacPlatform, isWindowsPlatform } from "../../lib/platform";
 
 /**
  * Default interface for new sessions. Daemon-owned so `ao spawn` and mobile
@@ -39,28 +41,21 @@ function SessionInterfaceRow() {
 	// (no chat-capable agent installed) or a save failed.
 	const note = saveError ?? error ?? (!chatAvailable ? t("settings.sessionInterface.unavailable") : null);
 
+	const failed = Boolean(saveError || error);
+
 	return (
-		<div className="flex w-full flex-col">
-			<SettingsRow className="rounded-none" label={t("settings.sessionInterface.label")}>
-				<SettingsOptionMenu
-					aria-label={t("settings.sessionInterface.label")}
-					value={settings?.defaultSessionMode ?? "tui"}
-					options={interfaceOptions}
-					onChange={(mode) => update(mode)}
-					disabled={isLoading || saving || !chatAvailable}
-				/>
-			</SettingsRow>
-			{note ? (
-				<p
-					className={cn(
-						"px-3 pt-0 pb-4 text-xs leading-relaxed",
-						saveError || error ? "text-destructive" : "text-muted-foreground",
-					)}
-				>
-					{note}
-				</p>
-			) : null}
-		</div>
+		<SettingsRow
+			label={t("settings.sessionInterface.label")}
+			description={note ? <span className={cn(failed && "text-error")} role={failed ? "alert" : undefined}>{note}</span> : undefined}
+		>
+			<SettingsOptionMenu
+				aria-label={t("settings.sessionInterface.label")}
+				value={settings?.defaultSessionMode ?? "tui"}
+				options={interfaceOptions}
+				onChange={(mode) => update(mode)}
+				disabled={isLoading || saving || !chatAvailable}
+			/>
+		</SettingsRow>
 	);
 }
 
@@ -92,7 +87,10 @@ function TerminalShellRows() {
 
 	return (
 		<>
-			<SettingsRow label={t("settings.terminalShell.label")}>
+			<SettingsRow
+				label={t("settings.terminalShell.label")}
+				description={saveError ? <span role="alert" className="text-error">{t("settings.terminalShell.saveFailed")}</span> : undefined}
+			>
 				<SettingsOptionMenu
 					aria-label={t("settings.terminalShell.label")}
 					value={preference.kind}
@@ -113,11 +111,6 @@ function TerminalShellRows() {
 					onCancel={() => setCustomPath(preference.path ?? "")}
 					placeholder={t("settings.terminalShell.customPathPlaceholder")}
 				/>
-			) : null}
-			{saveError ? (
-				<p role="alert" className="px-3 text-caption leading-4 text-error">
-					{t("settings.terminalShell.saveFailed")}
-				</p>
 			) : null}
 		</>
 	);
@@ -199,7 +192,11 @@ export function GeneralSettingsSection({
 						/>
 					</div>
 				</SettingsRow>
-				<SettingsRow label={t("settings.language")}>
+				{isMacPlatform() && <WindowTranslucencyRow />}
+				<SettingsRow
+					label={t("settings.language")}
+					description={localeSaveError ? <span role="alert" className="text-error">{t("settings.language.saveFailed")}</span> : undefined}
+				>
 					<SettingsOptionMenu
 						aria-label={t("settings.language")}
 						disabled={localeSaving}
@@ -210,11 +207,6 @@ export function GeneralSettingsSection({
 						}}
 					/>
 				</SettingsRow>
-				{localeSaveError ? (
-					<p role="alert" className="px-3 text-caption leading-4 text-error">
-						{t("settings.language.saveFailed")}
-					</p>
-				) : null}
 			</SettingsSection>
 
 			{/* Sessions */}
@@ -228,7 +220,10 @@ export function GeneralSettingsSection({
 						onCheckedChange={setTerminalCopyOnSelect}
 					/>
 				</SettingsRow>
-				<SettingsRow label={t("settings.soundNotifications")}>
+				<SettingsRow
+					label={t("settings.soundNotifications")}
+					description={soundNotificationsSaveError ? <span role="alert" className="text-error">{t("settings.soundNotifications.saveFailed")}</span> : undefined}
+				>
 					<Switch
 						aria-label={t("settings.soundNotifications")}
 						checked={soundNotificationsEnabled}
@@ -238,12 +233,9 @@ export function GeneralSettingsSection({
 						}}
 					/>
 				</SettingsRow>
-				{soundNotificationsSaveError ? (
-					<p role="alert" className="px-3 text-caption leading-4 text-error">
-						{t("settings.soundNotifications.saveFailed")}
-					</p>
-				) : null}
 			</SettingsSection>
+
+			<DefaultCloudSandboxSection />
 
 			<SettingsSection title={t("settings.privacy")} grouped>
 				<TelemetryEventsRow />
@@ -260,6 +252,8 @@ export function GeneralSettingsSection({
 				</SettingsRow>
 				{developerMode && <CloudOfferingRow />}
 				{developerMode && <DiagnosticsRow />}
+				<CliLinkSettings enabled={developerMode} />
+				{developerMode && <SideChatsRow />}
 			</SettingsSection>
 		</>
 	);
@@ -281,14 +275,18 @@ function TelemetryEventsRow() {
 		: view.reason === "environment_veto" ? "veto"
 		: view.reason === "release_blocked" ? "releaseBlocked"
 		: null;
-	return <div className="flex w-full flex-col">
-		<SettingsRow label={t("settings.telemetryEvents.label")}>
+	return (
+		<SettingsRow
+			label={t("settings.telemetryEvents.label")}
+			description={
+				<span className={cn(status === "failed" && "text-error")} role={status === "failed" ? "alert" : undefined}>
+					{t(status ? `settings.telemetryEvents.${status}` : "settings.telemetryEvents.description")}
+				</span>
+			}
+		>
 			<Switch aria-label={t("settings.telemetryEvents.label")} checked={checked} disabled={saving || !view || blockedEnable} onCheckedChange={(enabled) => { void setEnabled(enabled); }} />
 		</SettingsRow>
-		<p className={cn("pb-2 text-xs leading-relaxed", status === "failed" ? "text-destructive" : "text-muted-foreground")} role={status === "failed" ? "alert" : undefined}>
-			{t(status ? `settings.telemetryEvents.${status}` : "settings.telemetryEvents.description")}
-		</p>
-	</div>;
+	);
 }
 
 /**
@@ -301,12 +299,43 @@ function DiagnosticsRow() {
 	const diagnostics = useUiStore((state) => state.diagnostics);
 	const setDiagnostics = useUiStore((state) => state.setDiagnostics);
 	return (
-		<div className="flex w-full flex-col">
-			<SettingsRow label={t("settings.diagnostics")}>
-				<Switch aria-label={t("settings.diagnostics")} checked={diagnostics} onCheckedChange={setDiagnostics} />
-			</SettingsRow>
-			<p className="px-3 pb-2 text-xs leading-relaxed text-muted-foreground">{t("settings.diagnosticsToggleHint")}</p>
-		</div>
+		<SettingsRow label={t("settings.diagnostics")} description={t("settings.diagnosticsToggleHint")}>
+			<Switch aria-label={t("settings.diagnostics")} checked={diagnostics} onCheckedChange={setDiagnostics} />
+		</SettingsRow>
+	);
+}
+
+/**
+ * Developer Mode-only toggle for side chats. Renderer state like Diagnostics:
+ * off hides the inspector tab, /btw and /side, and "Add to side chat".
+ */
+function SideChatsRow() {
+	const { t } = useTranslation();
+	const sideChats = useUiStore((state) => state.sideChats);
+	const setSideChats = useUiStore((state) => state.setSideChats);
+	return (
+		<SettingsRow label={t("settings.sideChats")} description={t("settings.sideChatsHint")}>
+			<Switch aria-label={t("settings.sideChats")} checked={sideChats} onCheckedChange={setSideChats} />
+		</SettingsRow>
+	);
+}
+
+/**
+ * macOS Appearance toggle for window translucency: native
+ * vibrancy blurs the desktop behind a translucent shell. Renderer state.
+ */
+function WindowTranslucencyRow() {
+	const { t } = useTranslation();
+	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
+	const setWindowTranslucency = useUiStore((state) => state.setWindowTranslucency);
+	return (
+		<SettingsRow label={t("settings.windowTranslucency")} description={t("settings.windowTranslucencyHint")}>
+			<Switch
+				aria-label={t("settings.windowTranslucency")}
+				checked={windowTranslucency}
+				onCheckedChange={setWindowTranslucency}
+			/>
+		</SettingsRow>
 	);
 }
 
@@ -325,7 +354,15 @@ function CloudOfferingRow() {
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	return (
 		<div className="flex w-full flex-col">
-			<SettingsRow label={t("settings.cloud")}>
+			<SettingsRow
+				label={t("settings.cloud")}
+				description={
+					<>
+						{t("settings.cloudToggleHint")}
+						{error ? <span role="alert" className="block text-error">{error}</span> : null}
+					</>
+				}
+			>
 				<Switch
 					aria-label={t("settings.cloud")}
 					checked={settings?.cloudOffering ?? false}
@@ -352,12 +389,6 @@ function CloudOfferingRow() {
 				}}
 				onOpenChange={setConfirmOpen}
 			/>
-			<p className="px-3 pb-2 text-xs leading-relaxed text-muted-foreground">{t("settings.cloudToggleHint")}</p>
-			{error ? (
-				<p role="alert" className="px-3 pb-2 text-caption leading-4 text-error">
-					{error}
-				</p>
-			) : null}
 		</div>
 	);
 }

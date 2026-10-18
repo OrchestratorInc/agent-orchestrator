@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"time"
 
+	acpsdk "github.com/coder/acp-go-sdk"
+
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -41,11 +43,22 @@ type VersionProbe func(ctx context.Context, bin string) error
 
 // Config describes the small provider-specific portion of a native ACP binding.
 type Config struct {
-	Harness                      domain.AgentHarness
-	Capabilities                 ports.ChatCapabilities
-	Configure                    Configure
-	SessionMode                  func(ports.PermissionMode) string
-	SessionOptions               func(ports.ChatTurnSettings) []acpdriver.SessionOption
+	Harness        domain.AgentHarness
+	Capabilities   ports.ChatCapabilities
+	Configure      Configure
+	SessionMode    func(ports.PermissionMode) string
+	SessionOptions func(ports.ChatTurnSettings) []acpdriver.SessionOption
+	// LaunchSessionOptions, RequireAdvertisedOptions, and
+	// CloseSessionBeforeReload: see acpdriver.Config.
+	LaunchSessionOptions     func(acpdriver.LaunchConfig) []acpdriver.SessionOption
+	RequireAdvertisedOptions bool
+	CloseSessionBeforeReload bool
+	// ValidateInitialize optionally admits only the ACP agent and version the
+	// handshake identifies. See acpdriver.Config.ValidateInitialize.
+	ValidateInitialize func(acpsdk.InitializeResponse) error
+	// SessionPreamble delivers standing context on the first prompt. See
+	// acpdriver.Config.SessionPreamble for when a binding needs it.
+	SessionPreamble              func(acpdriver.LaunchConfig) []acpsdk.ContentBlock
 	PermissionPolicy             acpdriver.PermissionPolicy
 	ClientExtension              acpdriver.ClientExtensionHandler
 	ClientExtensionAliases       map[string]string
@@ -138,6 +151,11 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		},
 		SessionMode:                  cfg.SessionMode,
 		SessionOptions:               cfg.SessionOptions,
+		LaunchSessionOptions:         cfg.LaunchSessionOptions,
+		RequireAdvertisedOptions:     cfg.RequireAdvertisedOptions,
+		CloseSessionBeforeReload:     cfg.CloseSessionBeforeReload,
+		ValidateInitialize:           cfg.ValidateInitialize,
+		SessionPreamble:              cfg.SessionPreamble,
 		PermissionPolicy:             cfg.PermissionPolicy,
 		ClientExtension:              cfg.ClientExtension,
 		ClientExtensionAliases:       cfg.ClientExtensionAliases,

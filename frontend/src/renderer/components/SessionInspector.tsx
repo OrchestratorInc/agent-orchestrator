@@ -1,8 +1,9 @@
+import { File, FileText, FolderClosed, MessageSquare } from "lucide-react";
 import { AppLink } from "./AppLink";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
-import { memo, useCallback, useEffect, useId, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useState, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -26,9 +27,6 @@ import {
 import {
 	Archive,
 	ArrowUpRight,
-	ChevronDown,
-	ChevronRight,
-	Files as FilesIcon,
 	GitPullRequest,
 	GitMerge,
 	Globe,
@@ -39,6 +37,7 @@ import {
 	X,
 } from "lucide-react";
 import type { components } from "../../api/schema";
+import { interfaceTransitionIsActive, useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
@@ -50,25 +49,25 @@ import { useOpenArtifactPreview } from "../hooks/useOpenArtifactPreview";
 import { captureRendererEvent } from "../lib/telemetry";
 import { formatTimeCompact } from "../lib/format-time";
 import { AgentAvatar } from "./AgentAvatar";
+import { SessionArtifactsView, type ArtifactOpenRequest } from "./SessionArtifactsView";
 import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { CopyButton } from "./chat/CopyButton";
 import { ResumeAgentControl } from "./ResumeAgentControl";
+import { AwakeControl } from "./AwakeControl";
 import { SessionBranchSummary } from "./SessionBranchSummary";
+import { SessionAccountSummary } from "./SessionAccountSummary";
 import {
 	sessionScmSummaryQueryKey,
 	useSessionScmSummary,
 	type SessionPRReference,
 	type SessionPRSummary,
 } from "../hooks/useSessionScmSummary";
-import { useSessionUsage, type SessionUsage } from "../hooks/useSessionUsage";
 import { sessionWorkspaceFilesQueryKey, sessionWorkspaceHistoryQueryOptions, useSessionWorkspaceFilesChangedCount } from "../hooks/useSessionWorkspaceFiles";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { clearTerminateSessionState, useTerminateSession } from "../hooks/useTerminateSession";
-import { formatEstimatedCost, type EstimatedCost } from "../lib/format-cost";
-import { prBrowserUrl, prCanMerge, prCardPresentation, prNounKeys, sessionPRDisplaySummaries } from "../lib/pr-display";
-import { formatTokenCount } from "../lib/format-token-count";
+import { prBrowserUrl, prCanMerge, prCardPresentation, prNounKeys, prRepositoryFromUrl, prsSpanRepositories, sessionPRDisplaySummaries } from "../lib/pr-display";
 import type { SessionArtifact, WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import {
 	openPRs,
@@ -85,7 +84,7 @@ import { useUiStore } from "../stores/ui-store";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { SessionArchiveDialog } from "./SessionArchiveDialog";
+import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
 import { ReviewerSelect } from "./ReviewerSelect";
 import { agentLabel } from "../lib/agent-options";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
@@ -116,7 +115,7 @@ export type { InspectorView } from "@aoagents/product-ui";
 
 const VIEW_DEFS: {
 	id: InspectorView;
-	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.files";
+	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.files" | "artifacts.title";
 	icon: ReactNode;
 }[] = [
 	{
@@ -149,25 +148,13 @@ const VIEW_DEFS: {
 			</svg>
 		),
 	},
+	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <MessageSquare aria-hidden="true" /> },
 	{
 		id: "files",
 		labelKey: "inspector.files",
-		icon: (
-			<svg
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.7"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-				aria-hidden="true"
-				data-testid="files-viewer-icon"
-			>
-				<path d="M3.5 7.5V5.75A1.75 1.75 0 0 1 5.25 4h4l2 2h7.5a1.75 1.75 0 0 1 1.75 1.75V18a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2V7.5Z" />
-				<path d="M7 10h10M7 13.5h8M7 17h6" />
-			</svg>
-		),
+		icon: <FolderClosed aria-hidden="true" data-testid="files-viewer-icon" />,
 	},
+	{ id: "artifacts", labelKey: "artifacts.title", icon: <File aria-hidden="true" /> },
 ];
 
 const prStateLabelKeys: Record<SessionPRSummary["state"], MessageKey> = {
@@ -178,7 +165,7 @@ const prStateLabelKeys: Record<SessionPRSummary["state"], MessageKey> = {
 };
 
 /**
- * Tabbed inspector rail beside the terminal (Summary · Reviews · Browser · Files).
+ * Tabbed inspector rail beside the terminal (Summary · Reviews · Browser · Side chat · Files · Artifacts).
  */
 export const SessionInspector = memo(function SessionInspector({
 	browserOnly = false,
@@ -189,6 +176,8 @@ export const SessionInspector = memo(function SessionInspector({
 	browserAnnotationQueue,
 	isInspectorVisible = true,
 	onToggleBrowserPopOut,
+	artifactRequest,
+	onArtifactRequestConsumed,
 	onOpenArtifact,
 	onOpenFiles,
 	onOpenReviewFile,
@@ -196,6 +185,7 @@ export const SessionInspector = memo(function SessionInspector({
 	onWorkerMessageSent,
 	filesView,
 	browserView,
+	sideChatView,
 	view: viewProp,
 	onViewChange,
 }: {
@@ -207,6 +197,9 @@ export const SessionInspector = memo(function SessionInspector({
 	browserAnnotationQueue?: BrowserAnnotationQueueModel;
 	isInspectorVisible?: boolean;
 	onToggleBrowserPopOut?: (next: boolean) => void;
+	/** The artifact the Artifacts view should show, e.g. one clicked in the Summary. */
+	artifactRequest?: ArtifactOpenRequest | null;
+	onArtifactRequestConsumed?: (key: number) => void;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
 	onOpenFiles?: () => void;
 	onOpenReviewFile?: (target: { line?: number; path: string }) => void;
@@ -214,6 +207,7 @@ export const SessionInspector = memo(function SessionInspector({
 	onWorkerMessageSent?: () => void;
 	filesView?: ReactNode;
 	browserView?: BrowserViewModel;
+	sideChatView?: ReactNode;
 	/** Controlled active tab. Omit to let the inspector own its own selection. */
 	view?: InspectorView;
 	onViewChange?: (view: InspectorView) => void;
@@ -246,24 +240,41 @@ export const SessionInspector = memo(function SessionInspector({
 	const cloudFilesChangedCount = cloudReview.data?.summary.files;
 	const filesChangedCount = session?.cloud ? (cloudFilesChangedCount ? cloudFilesChangedCount : undefined) : localFilesChangedCount;
 	const hasWorkspaceInventory = session?.cloud ? Boolean(cloudReview.data?.files.length) : Boolean(localWorkspaceData?.files?.length);
+	// An artifact link can open the Artifacts tab before a session refresh lists
+	// the file. The request keeps the tab available until the file is listed or
+	// another tab is picked.
+	const [settledArtifactRequestKey, setSettledArtifactRequestKey] = useState<number>();
+	const artifactRequestPending = artifactRequest != null && artifactRequest.key !== settledArtifactRequestKey;
+	useEffect(() => {
+		if (artifactRequest && session?.artifactFiles?.some((file) => file.path === artifactRequest.path)) {
+			setSettledArtifactRequestKey(artifactRequest.key);
+		}
+	}, [artifactRequest, session?.artifactFiles]);
 	const setView = useCallback((next: InspectorView) => {
 		setInternalView(next);
 		onViewChange?.(next);
 		if (next === "files") onOpenFiles?.();
-	}, [onOpenFiles, onViewChange]);
+		if (next !== "artifacts" && artifactRequest) setSettledArtifactRequestKey(artifactRequest.key);
+	}, [artifactRequest, onOpenFiles, onViewChange]);
 	const openReviews = useCallback(() => setView("reviews"), [setView]);
 	const openFilesView = useCallback(() => setView("files"), [setView]);
 	// A persisted/controlled Reviews selection can outlive the last reviewable PR.
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
 	const availableViewDefs = onlyBrowser ? VIEW_DEFS.filter((entry) => entry.id === "browser")
-		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews"));
+		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews")
+			// The host passes a side chat view only where side chats can run.
+			&& (entry.id !== "sideChat" || sideChatView !== undefined)
+			// The Artifacts tab shows only when the session has artifact files to list.
+			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending));
 	const view: InspectorView = onlyBrowser ? "browser" : availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
+	const sessionLoaded = session !== undefined;
 	useEffect(() => {
-		if (view === requestedView) return;
+		// Until the session loads, its tabs are unknown: keep the requested view.
+		if (view === requestedView || (!sessionLoaded && !onlyBrowser)) return;
 		setInternalView(view);
 		onViewChange?.(view);
-	}, [onViewChange, requestedView, view]);
+	}, [onViewChange, onlyBrowser, requestedView, sessionLoaded, view]);
 	const tabs = availableViewDefs.map((entry) => {
 		const label = t(entry.labelKey);
 		return {
@@ -286,8 +297,14 @@ export const SessionInspector = memo(function SessionInspector({
 		// layout/flex entirely — it exists purely as a CSS selector anchor.
 		<div className="session-inspector contents">
 			<SessionInspectorShellView
+				sideChatView={sideChatView ?? <p className="p-4 text-xs text-muted-foreground">{t("sideChat.unavailable")}</p>}
 				activeView={view}
 				ariaLabel={t("inspector.aria")}
+				artifactsView={
+					session ? (
+						<SessionArtifactsView hostId={hostId} key={sessionUiKey(session.id, hostId)} onRequestConsumed={onArtifactRequestConsumed} request={artifactRequest} session={session} />
+					) : undefined
+				}
 				browserPoppedOut={browserPoppedOut}
 				browserView={
 					session && (!hostId || browserView) ? (
@@ -309,21 +326,18 @@ export const SessionInspector = memo(function SessionInspector({
 						</FilesTopbarHostContext.Provider>
 					) : undefined
 				}
-						headerActions={
-							view === "browser" && !browserPoppedOut ? (
-								<>
-									<div className="browser-panel__topbar-host min-w-0 flex-1" ref={setBrowserTopbarHost} />
-									<span aria-hidden="true" className="session-inspector-actions-spacer" />
-								</>
-							) : view === "files" && filesView ? (
-								<>
-									<div className="files-panel__topbar-host min-w-0 flex-1" ref={setFilesTopbarHost} />
-									<span aria-hidden="true" className="session-inspector-actions-spacer" />
-								</>
-							) : (
-								<span aria-hidden="true" className="session-inspector-actions-spacer" />
-							)
-						}
+				headerActions={
+					<>
+						{view === "browser" && !browserPoppedOut ? (
+							<div className="browser-panel__topbar-host min-w-0 flex-1" ref={setBrowserTopbarHost} />
+						) : view === "files" && filesView ? (
+							<div className="files-panel__topbar-host min-w-0 flex-1" ref={setFilesTopbarHost} />
+						) : null}
+						<div className="session-inspector__trailing flex shrink-0 items-center">
+							<span aria-hidden="true" className="session-inspector-actions-spacer" />
+						</div>
+					</>
+				}
 				isVisible={isInspectorVisible}
 				loadingText={session ? undefined : t("inspector.loadingSession")}
 				onViewChange={setView}
@@ -396,14 +410,6 @@ const SummaryView = memo(function SummaryView({
 			return data?.status === "ok" && "repo" in data.project ? data.project : undefined;
 		},
 	});
-	const developerMode = useUiStore((state) => state.developerMode);
-	const usageQuery = useSessionUsage(session.id, developerMode, hostId);
-	const showUsage =
-		developerMode &&
-		!usageQuery.isLoading &&
-		!usageQuery.isError &&
-		hasMeaningfulSessionUsage(usageQuery.data);
-	const showUsageError = developerMode && usageQuery.isError;
 	const prSummaries = sessionPRDisplaySummaries(session, query.data?.prs);
 	const prCount = prSummaries.length + linkedPRs.length;
 	const hasPRs = prCount > 0;
@@ -421,11 +427,14 @@ const SummaryView = memo(function SummaryView({
 	// have no parent/child model and every other session has no children.
 	const showWorkers =
 		session.kind === "orchestrator" && (session.cloud !== undefined || usePreviewData);
+	// Subscription accounts are a developer-mode preview.
+	const accountsPreview = useUiStore((state) => state.developerMode);
 	return (
 		<SessionInspectorSummaryView
 			activity={
 				<>
 					<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />
+					{hostId || !accountsPreview ? null : <SessionAccountSummary session={session} />}
 					<ResumeAgentControl
 						className="w-full"
 						containerClassName="mt-3 border-t border-(--color-border-settings-input) pt-3"
@@ -459,6 +468,7 @@ const SummaryView = memo(function SummaryView({
 								<PRSummaryCard
 									canOpenReviews={canOpenReviews}
 									key={pr.url || pr.htmlUrl || pr.number}
+									showRepository={prsSpanRepositories(prSummaries)}
 									onOpenReviews={onOpenReviews}
 									pr={pr}
 									hostId={hostId}
@@ -475,19 +485,6 @@ const SummaryView = memo(function SummaryView({
 			}
 			completion={showSessionControls ? <SessionControls hostId={hostId} session={session} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
-			usage={
-				showUsageError ? (
-					<Section title={t("inspector.usage.title")}>
-						<p className={inspectorEmptyClass} role="alert">
-							{t("inspector.usage.processedTokensUnavailable")}
-						</p>
-					</Section>
-				) : showUsage && usageQuery.data ? (
-					<Section title={t("inspector.usage.title")}>
-						<UsageCostTelemetry usage={usageQuery.data} />
-					</Section>
-				) : null
-			}
 		/>
 	);
 });
@@ -610,141 +607,6 @@ function LinkedPRCard({ external, pr }: { external: boolean; pr: SessionPRRefere
 	);
 }
 
-function UsageCostTelemetry({ usage }: { usage: SessionUsage }) {
-	const { t } = useTranslation();
-	const processedTokens = usageProcessedTokens(usage.totals);
-	const exactProcessed = processedTokens?.toLocaleString("en-US");
-	const estimatedCost = formatEstimatedCost(usage.totals.estimatedCost);
-	const showsAgentCost = usage.harnesses.some((harness) => harness.totals.estimatedCost !== null);
-
-	return (
-		<div>
-			<div className="grid grid-cols-2 gap-4">
-				<div className="min-w-0">
-					<p className="text-xs text-settings-muted">{t("inspector.usage.processedTokens")}</p>
-					<p
-						aria-label={
-							processedTokens === null
-								? t("inspector.usage.processedTokensUnavailable")
-								: t("inspector.usage.processedTokensAria", { count: exactProcessed })
-						}
-						className="mt-0.5 truncate font-mono text-md-sm font-medium text-settings-label"
-						title={processedTokens === null ? undefined : t("inspector.usage.processedTokensAria", { count: exactProcessed })}
-					>
-						{processedTokens === null ? t("inspector.usage.noUsageYet") : formatTelemetryTokenValue(processedTokens)}
-					</p>
-				</div>
-				<div className="min-w-0 text-right">
-					<div className="flex items-center justify-end gap-1">
-						<p className="text-xs text-settings-muted">{t("inspector.usage.estimatedCost")}</p>
-						<EstimatedCostInfo cost={usage.totals.estimatedCost} />
-					</div>
-					<p className="mt-0.5 truncate font-mono text-sm-md font-medium text-settings-label">
-						{estimatedCost ?? t("usage.unavailable")}
-					</p>
-				</div>
-			</div>
-
-			<div className="mt-3">
-				<div
-					className="rounded-lg border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-2.5 py-2.5"
-					data-testid="session-usage-metrics"
-				>
-					<UsageMetrics totals={usage.totals} />
-				</div>
-			</div>
-
-			{usage.harnesses.length === 1 ? (
-				<UsageAgentAttribution harness={usage.harnesses[0]} />
-			) : usage.harnesses.length > 1 ? (
-				<div className="mt-2 border-t border-(--color-border-settings-input) pt-1.5">
-					<div
-						className={`grid ${usageRowColumns(showsAgentCost)} items-center gap-2 px-1 pb-0.5 text-xs text-settings-muted`}
-					>
-						<span>{t("inspector.usage.agent")}</span>
-						<span className="text-right">{t("inspector.usage.tokens")}</span>
-						{showsAgentCost ? <span className="text-right">{t("inspector.usage.cost")}</span> : null}
-					</div>
-					{usage.harnesses.map((harness, index) => (
-						<UsageProviderRow
-							harness={harness}
-							key={`${harness.harness}:${index}`}
-							showCost={showsAgentCost}
-						/>
-					))}
-				</div>
-			) : null}
-		</div>
-	);
-}
-
-function UsageAgentAttribution({ harness }: { harness: SessionUsage["harnesses"][number] }) {
-	const { t } = useTranslation();
-	const [open, setOpen] = useState(false);
-	const detailID = useId();
-	const harnessName = formatHarnessName(harness.harness);
-	const canExpand = harness.models.length > 1;
-	const modelSummary =
-		harness.models.length === 1
-			? formatModelName(harness.models[0].modelId)
-			: harness.models.length > 1
-				? t("inspector.usage.models", { count: harness.models.length })
-				: null;
-	const modelSummaryTitle = harness.models.length === 1 ? harness.models[0].modelId : modelSummary;
-	const attribution = (
-		<>
-			<AgentAvatar className="size-4" decorative provider={harness.harness} />
-			<span className="shrink-0 text-sm text-settings-label">{harnessName}</span>
-			{modelSummary ? (
-				<>
-					<span aria-hidden="true" className="text-settings-muted">
-						·
-					</span>
-					<span className="truncate text-xs text-settings-muted" title={modelSummaryTitle ?? undefined}>
-						{modelSummary}
-					</span>
-				</>
-			) : null}
-		</>
-	);
-
-	return (
-		<div className="mt-2 border-t border-(--color-border-settings-input) pt-1.5">
-			{canExpand ? (
-				<>
-					<button
-						aria-controls={detailID}
-						aria-expanded={open}
-						aria-label={t("inspector.usage.providerDetails", { name: harnessName })}
-						className="flex w-full min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-left outline-none transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover focus-visible:ring-1 focus-visible:ring-ring"
-						onClick={() => setOpen((current) => !current)}
-						type="button"
-					>
-						{open ? (
-							<ChevronDown aria-hidden="true" className="size-3 shrink-0 text-settings-muted" />
-						) : (
-							<ChevronRight aria-hidden="true" className="size-3 shrink-0 text-settings-muted" />
-						)}
-						{attribution}
-					</button>
-					{open ? (
-						<div
-							aria-label={t("inspector.usage.providerPeek", { name: harnessName })}
-							className="mx-1 my-0.5 border-l border-(--color-border-settings-input) py-0.5 pl-2"
-							id={detailID}
-							role="region"
-						>
-							<ProviderUsageDetails harness={harness} />
-						</div>
-					) : null}
-				</>
-			) : (
-				<div className="flex min-w-0 items-center gap-1.5 px-1 py-0.5">{attribution}</div>
-			)}
-		</div>
-	);
-}
-
 function AutoInjectCIPolicyControl({ session, hostId }: { session: WorkspaceSession; hostId?: string }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -805,52 +667,6 @@ function AutoInjectCIPolicyControl({ session, hostId }: { session: WorkspaceSess
 				</p>
 			) : null}
 		</>
-	);
-}
-
-function UsageProviderRow({
-	harness,
-	showCost,
-}: {
-	harness: SessionUsage["harnesses"][number];
-	showCost: boolean;
-}) {
-	const { t } = useTranslation();
-	const harnessName = formatHarnessName(harness.harness);
-
-	return (
-		<UsageDisclosureRow
-			detailsLabel={t("inspector.usage.providerDetails", { name: harnessName })}
-			icon={<AgentAvatar className="size-4" decorative provider={harness.harness} />}
-			name={harnessName}
-			nameClassName="text-sm"
-			regionLabel={t("inspector.usage.providerPeek", { name: harnessName })}
-			showCost={showCost}
-			totals={harness.totals}
-		>
-			<ProviderUsageDetails harness={harness} />
-		</UsageDisclosureRow>
-	);
-}
-
-function ProviderUsageDetails({ harness }: { harness: SessionUsage["harnesses"][number] }) {
-	const { t } = useTranslation();
-	const showCost = harness.models.some((model) => model.totals.estimatedCost !== null);
-
-	return (
-		<div>
-			{harness.models.length > 0 ? (
-				harness.models.map((model, index) => (
-					<UsageModelRow
-						key={`${model.modelId}:${index}`}
-						model={model}
-						showCost={showCost}
-					/>
-				))
-			) : (
-				<p className="px-1 py-1 text-xs text-settings-muted">{t("inspector.usage.noModelTelemetry")}</p>
-			)}
-		</div>
 	);
 }
 
@@ -921,316 +737,6 @@ function updateSessionAutoInjectCI(
 	}));
 }
 
-function UsageModelRow({
-	model,
-	showCost,
-}: {
-	model: SessionUsage["harnesses"][number]["models"][number];
-	showCost: boolean;
-}) {
-	const { t } = useTranslation();
-	const modelName = formatModelName(model.modelId);
-
-	return (
-		<UsageDisclosureRow
-			detailsLabel={t("inspector.usage.modelDetails", { name: modelName })}
-			name={modelName}
-			nameClassName="text-xs"
-			nameTitle={model.modelId}
-			regionLabel={t("inspector.usage.modelPeek", { name: modelName })}
-			showCost={showCost}
-			totals={model.totals}
-		>
-			<UsageMetrics totals={model.totals} />
-		</UsageDisclosureRow>
-	);
-}
-
-// usageRowColumns keeps the disclosure rows aligned with their header. The cost
-// column is dropped entirely when no row in the list has an estimate, so an
-// install without pricing shows no empty column at all.
-function usageRowColumns(showCost: boolean): string {
-	return showCost ? "grid-cols-[minmax(0,1fr)_4.5rem_5.5rem]" : "grid-cols-[minmax(0,1fr)_4.5rem]";
-}
-
-function UsageDisclosureRow({
-	children,
-	detailsLabel,
-	icon,
-	name,
-	nameClassName,
-	nameTitle,
-	regionLabel,
-	showCost,
-	totals,
-}: {
-	children: ReactNode;
-	detailsLabel: string;
-	icon?: ReactNode;
-	name: string;
-	nameClassName: string;
-	nameTitle?: string;
-	regionLabel: string;
-	showCost: boolean;
-	totals: SessionUsage["totals"];
-}) {
-	const { t } = useTranslation();
-	const [open, setOpen] = useState(false);
-	const detailID = useId();
-	const processedTokens = usageProcessedTokens(totals);
-	const exactProcessed = processedTokens?.toLocaleString("en-US");
-
-	return (
-		<div className="px-1 py-0.5">
-			<button
-				aria-controls={detailID}
-				aria-expanded={open}
-				aria-label={detailsLabel}
-				className={`grid w-full ${usageRowColumns(showCost)} items-center gap-2 rounded-md px-1 py-1 text-left outline-none transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover focus-visible:ring-1 focus-visible:ring-ring`}
-				onClick={() => setOpen((current) => !current)}
-				type="button"
-			>
-				<span className={`flex min-w-0 items-center gap-1 text-settings-label ${nameClassName}`}>
-					{open ? (
-						<ChevronDown aria-hidden="true" className="size-3 shrink-0 text-settings-muted" />
-					) : (
-						<ChevronRight aria-hidden="true" className="size-3 shrink-0 text-settings-muted" />
-					)}
-					{icon}
-					<span className="truncate" title={nameTitle}>{name}</span>
-				</span>
-				<span
-					className="text-right font-mono text-xs text-settings-label"
-					title={processedTokens === null ? undefined : t("inspector.usage.processedTokensAria", { count: exactProcessed })}
-				>
-					{processedTokens === null ? "—" : formatTelemetryTokenValue(processedTokens)}
-				</span>
-				{showCost ? <UsageCostValue cost={totals.estimatedCost} /> : null}
-			</button>
-			{open ? (
-				<div
-					aria-label={regionLabel}
-					className="mx-1 mb-0.5 border-l border-(--color-border-settings-input) py-0.5 pl-2"
-					id={detailID}
-					role="region"
-				>
-					{children}
-				</div>
-			) : null}
-		</div>
-	);
-}
-
-// UsageCostValue renders one row's cost inside a column that some sibling row
-// already justified. Once the column is on screen the absence is a real answer
-// about that agent, so it says so in words — a dash beside a priced neighbour
-// reads as a rendering gap rather than "this one could not be priced".
-function UsageCostValue({ cost }: { cost: EstimatedCost | null }) {
-	const { t } = useTranslation();
-	const value = formatEstimatedCost(cost);
-	const label = value ?? t("inspector.usage.metricUnavailable", { label: t("inspector.usage.cost") });
-	return (
-		<span aria-label={label} className="text-right font-mono text-xs text-settings-label" title={label}>
-			{value ?? t("usage.unavailable")}
-		</span>
-	);
-}
-
-/**
- * Contextual disclosure for the estimated-cost heading.
- *
- * Coverage never reaches the presented value as a qualifier, so this is where a
- * partial estimate says so — in words, next to the heading, rather than as a `≥`
- * the reader has to decode. Hover and keyboard focus both open it.
- */
-function EstimatedCostInfo({ cost }: { cost: EstimatedCost | null }) {
-	const { t } = useTranslation();
-	const label = t("usage.estimatedCostInfoLabel");
-	const providerInfoKey = cost?.providerAttribution === "inferred"
-		? "usage.estimatedCostInfoInferred"
-		: cost?.providerAttribution === "mixed"
-			? "usage.estimatedCostInfoMixed"
-			: "usage.estimatedCostInfo";
-	return (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<button
-					aria-label={label}
-					className="rounded-sm text-settings-muted outline-none transition-colors hover:text-settings-label focus-visible:ring-1 focus-visible:ring-ring"
-					type="button"
-				>
-					<Info aria-hidden="true" className="size-3" />
-				</button>
-			</TooltipTrigger>
-			{/* Opens upward: the figure it explains sits directly under the heading,
-			    so a downward tooltip covers the very number the reader came for. */}
-			<TooltipContent className="max-w-64 text-left" side="top">
-				<p>{t(providerInfoKey)}</p>
-				{cost?.coverage === "partial" ? (
-					<p className="mt-1.5">{t("usage.estimatedCostInfoPartial")}</p>
-				) : null}
-			</TooltipContent>
-		</Tooltip>
-	);
-}
-
-function UsageMetrics({ totals }: { totals: SessionUsage["totals"] }) {
-	const { t } = useTranslation();
-	const cacheHitRate = formatCacheHitRate(totals.cachedInputTokens, totals.inputTokens);
-	return (
-		<dl className="grid grid-cols-2 gap-x-4 gap-y-2 @max-[300px]/inspector:grid-cols-1" data-testid="session-usage-metrics">
-			<UsageMetric label={t("inspector.usage.uncachedInputTokens")} metric={totals.uncachedInputTokens} />
-			<UsageMetric label={t("inspector.usage.cachedInputTokens")} metric={totals.cachedInputTokens} />
-			<UsageMetric label={t("inspector.usage.outputTokens")} metric={totals.outputTokens} />
-			<UsageRateMetric rate={cacheHitRate} />
-		</dl>
-	);
-}
-
-function UsageRateMetric({ rate }: { rate: string | null }) {
-	const { t } = useTranslation();
-	const label = t("inspector.usage.cacheHitRate");
-	const description =
-		rate === null
-			? t("inspector.usage.metricUnavailable", { label })
-			: t("inspector.usage.cacheHitRateDescription", { rate });
-	return (
-		<div className="min-w-0">
-			<dt className="truncate text-xs text-settings-muted">{label}</dt>
-			<dd
-				aria-label={description}
-				className="mt-0.5 truncate font-mono text-sm-md text-settings-label"
-				title={description}
-			>
-				{rate === null ? "—" : `${rate}%`}
-			</dd>
-		</div>
-	);
-}
-
-function UsageMetric({ label, metric }: { label: string; metric: number | null | undefined }) {
-	const { t } = useTranslation();
-	const value = typeof metric === "number" && Number.isFinite(metric) ? metric : null;
-	const exactValue = value?.toLocaleString("en-US");
-	const accessibleLabel =
-		value === null
-			? t("inspector.usage.metricUnavailable", { label })
-			: t("inspector.usage.metricAria", { label, count: exactValue });
-	return (
-		<div className="min-w-0">
-			<dt className="truncate text-xs text-settings-muted">{label}</dt>
-			<dd
-				aria-label={accessibleLabel}
-				className="mt-0.5 truncate font-mono text-sm-md text-settings-label"
-				title={
-					value === null
-						? t("inspector.usage.metricUnavailable", { label })
-						: t("inspector.usage.tokensExact", { count: exactValue })
-				}
-			>
-				{value === null ? "—" : formatTelemetryTokenValue(value)}
-			</dd>
-		</div>
-	);
-}
-
-function formatCacheHitRate(
-	cachedInputTokens: number | null | undefined,
-	inputTokens: number | null | undefined,
-): string | null {
-	if (
-		typeof cachedInputTokens !== "number" ||
-		!Number.isFinite(cachedInputTokens) ||
-		typeof inputTokens !== "number" ||
-		!Number.isFinite(inputTokens) ||
-		inputTokens <= 0
-	) {
-		return null;
-	}
-	const percentage = Math.min(100, Math.max(0, (cachedInputTokens / inputTokens) * 100));
-	return percentage.toFixed(1).replace(/\.0$/, "");
-}
-
-const usageMetricKeys = [
-	"processedTokens",
-	"inputTokens",
-	"cachedInputTokens",
-	"uncachedInputTokens",
-	"outputTokens",
-] as const;
-
-function usageScopes(usage: SessionUsage): SessionUsage["totals"][] {
-	return [
-		usage.totals,
-		...usage.harnesses.flatMap((harness) => [
-			harness.totals,
-			...harness.models.map((model) => model.totals),
-		]),
-	];
-}
-
-function hasMeaningfulSessionUsage(usage?: SessionUsage): usage is SessionUsage {
-	if (!usage) return false;
-	return usageScopes(usage).some((totals) =>
-		totals.estimatedCost !== null || usageMetricKeys.some((key) => (totals[key] ?? 0) > 0),
-	);
-}
-
-function formatTelemetryTokenValue(totalTokens: number): string {
-	return formatTokenCount(totalTokens).replace(/ tok$/, "");
-}
-
-function usageProcessedTokens(totals: SessionUsage["totals"]): number | null {
-	return totals.processedTokens;
-}
-
-function formatHarnessName(harness: string): string {
-	const knownNames: Record<string, string> = {
-		"claude-code": "Claude",
-		claude: "Claude",
-		codex: "Codex",
-		glm: "GLM",
-		kimi: "Kimi",
-	};
-	if (knownNames[harness]) return knownNames[harness];
-	return harness
-		.split(/[-_]/)
-		.filter(Boolean)
-		.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-		.join(" ");
-}
-
-// The billing provider stays out of the display name: the row already sits
-// under its agent, so the prefix only repeats context the reader has. The exact
-// model id remains available as the title.
-function formatModelName(modelID: string): string {
-	let parts = modelID.trim().split(/[-_]+/).filter(Boolean);
-	const isClaude = parts[0]?.toLowerCase() === "claude";
-	if (isClaude) {
-		parts = parts.slice(1);
-		if (/^\d{8}$/.test(parts.at(-1) ?? "")) parts = parts.slice(0, -1);
-		const familyIndex = parts.findIndex((part) => ["haiku", "sonnet", "opus"].includes(part.toLowerCase()));
-		if (familyIndex >= 0) {
-			const family = parts[familyIndex];
-			parts = [family, ...parts.slice(0, familyIndex), ...parts.slice(familyIndex + 1)];
-		}
-	}
-
-	const formatted: string[] = [];
-	for (let index = 0; index < parts.length; index += 1) {
-		const part = parts[index];
-		const next = parts[index + 1];
-		if (/^\d+$/.test(part) && /^\d+$/.test(next ?? "")) {
-			formatted.push(`${part}.${next}`);
-			index += 1;
-			continue;
-		}
-		const normalized = part.toLowerCase();
-		formatted.push(normalized === "gpt" || normalized === "glm" ? normalized.toUpperCase() : `${part.charAt(0).toUpperCase()}${part.slice(1)}`);
-	}
-	return formatted.join(" ") || modelID;
-}
-
 function SessionControls({ session, hostId }: { session: WorkspaceSession; hostId?: string }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
@@ -1271,13 +777,13 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 	const canTerminateNow = session.status === "merged";
 	const isStandaloneSession = session.workspaceId === STANDALONE_WORKSPACE_ID;
 
-	const confirmTermination = () => {
+	const confirmTermination = ({ deleteArtifacts }: SessionArchiveChoice) => {
 		const workspaces = queryClient.getQueryData<WorkspaceSummary[]>(workspaceKey) ?? [];
 		const workspace = workspaces.find((w) => w.id === session.workspaceId);
 		const nextNav = resolveNextNavigationAfterSessionKill(workspace, session.id);
 		
 		setConfirmOpen(false);
-		terminate.mutate(hostId ? { ...session, hostId } : session);
+		terminate.mutate(hostId ? { ...session, hostId, deleteArtifacts } : { ...session, deleteArtifacts });
 		
 		if (nextNav.target === "session") {
 			void navigate(sessionNavigateTarget(session.workspaceId, nextNav.sessionId, hostId));
@@ -1326,7 +832,12 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 	);
 
 	if (isStandaloneSession) {
-		return <Section title={t("inspector.sessionControls")}>{terminateAction}</Section>;
+		return (
+			<Section title={t("inspector.sessionControls")}>
+				{terminateAction}
+				{!session.cloud && (!hostId || hostId === "local") ? <AwakeControl sessionId={session.id} /> : null}
+			</Section>
+		);
 	}
 
 	return (
@@ -1354,6 +865,7 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 					) : null}
 				</>
 			)}
+			{!session.cloud && (!hostId || hostId === "local") ? <AwakeControl sessionId={session.id} /> : null}
 		</Section>
 	);
 }
@@ -1378,6 +890,7 @@ function PRSummaryCard({
 	onOpenReviews,
 	pr,
 	sessionId,
+	showRepository = false,
 }: {
 	canOpenReviews: boolean;
 	hostId?: string;
@@ -1385,6 +898,8 @@ function PRSummaryCard({
 	onOpenReviews: () => void;
 	pr: SessionPRSummary;
 	sessionId: string;
+	/** Label the card with its repository: the session has PRs on several. */
+	showRepository?: boolean;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -1418,6 +933,7 @@ function PRSummaryCard({
 		card: presentation,
 		href: prBrowserUrl(pr),
 		stateLabel: t(prStateLabelKeys[pr.state]),
+		repositoryLabel: showRepository ? pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url) : undefined,
 		reviewDetailsAction: canOpenReviews && pr.review.decision !== "none" ? (
 			<button className="whitespace-nowrap text-settings-muted underline-offset-2 hover:underline" onClick={onOpenReviews} type="button">
 				<span className="text-xs">{t("pr.review.viewDetails")} ↗</span>
@@ -1458,9 +974,8 @@ function PRSummaryCard({
 
 /**
  * One row in the Summary panel's Artifacts list. HTML artifacts open in the
- * Browser panel; markdown/file artifacts open in a dedicated read-only
- * viewer in the Files inspector, since artifact files live outside the git
- * workspace and the workspace-diff Files flow can't resolve them.
+ * Browser panel; markdown/file artifacts open in the inspector's Artifacts view,
+ * since artifact files live outside the git workspace.
  */
 function ArtifactSummaryCard({
 	artifact,
@@ -1489,7 +1004,7 @@ function ArtifactSummaryCard({
 				{artifact.kind === "html" ? (
 					<Globe aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
 				) : (
-					<FilesIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
+					<FileText aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
 				)}
 				<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
 			</button>
@@ -1588,7 +1103,14 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		);
 	}
 
-	const activityView = getAgentActivityView(session.activity);
+	// An account move stops the old agent before the new one starts. That stop
+	// is not the session ending, so the move stands in for "Exited" meanwhile.
+	// The session's own host: a remote session's id means nothing to the local daemon.
+	const { transition } = useSessionInterfaceTransitionStatus(session.cloud ? undefined : session.id, hostId);
+	const accountMoving = Boolean(transition?.targetAccountId) && interfaceTransitionIsActive(transition);
+	const activityView = accountMoving
+		? { ...getAgentActivityView({ state: "active", lastActivityAt: transition?.updatedAt ?? "" }), label: appI18n.t("settings.agentAccounts.switchingAccount") }
+		: getAgentActivityView(session.activity);
 	const activityAt = session.activity?.lastActivityAt ?? session.updatedAt ?? session.createdAt;
 	pushEvent(
 		{
@@ -1596,7 +1118,7 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 			content: (
 				<span className="inline-flex flex-wrap items-center gap-1.5">
 					<span className="inline-flex align-middle">
-						<InspectorActivityPill activity={session.activity} />
+						{accountMoving ? <TimelinePill {...activityView} /> : <InspectorActivityPill activity={session.activity} />}
 					</span>
 					{session.status === "no_signal" ? (
 						<span className="inline-flex align-middle">
@@ -2312,15 +1834,28 @@ function MergedReviewsSection({
 	const runsByPR = runsByPRFrom(openReviewStates, runs);
 	const aoStates = triggeredReviewStatesFrom(openReviewStates, runs);
 
-	// Union by PR number, newest PR first. A PR can appear on either side alone.
-	const byNumber = new Map<number, { ao?: PRReviewState; github?: SessionPRSummary }>();
+	// Union by PR, newest PR first. A PR can appear on either side alone. A
+	// multi-repository session can have the same number in two repositories, so
+	// there a PR is its repository and number; a single-repository session
+	// matches by number alone, as before.
+	const prRepositories = new Set([
+		...aoStates.map((state) => prRepositoryFromUrl(state.prUrl)),
+		...githubPRs.map((pr) => pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url)),
+	].filter((repository): repository is string => Boolean(repository)).map((repository) => repository.toLowerCase()));
+	const keyByRepository = prRepositories.size > 1;
+	const prKey = (url: string | undefined, number: number, repo?: string) =>
+		keyByRepository ? `${(repo || prRepositoryFromUrl(url) || "").toLowerCase()}#${number}` : `#${number}`;
+	const byPR = new Map<string, { number: number; repository?: string; ao?: PRReviewState; github?: SessionPRSummary }>();
 	for (const state of aoStates) {
-		byNumber.set(state.prNumber, { ...byNumber.get(state.prNumber), ao: state });
+		const key = prKey(state.prUrl, state.prNumber);
+		byPR.set(key, { number: state.prNumber, repository: prRepositoryFromUrl(state.prUrl), ...byPR.get(key), ao: state });
 	}
 	for (const pr of githubPRs) {
-		byNumber.set(pr.number, { ...byNumber.get(pr.number), github: pr });
+		const key = prKey(pr.htmlUrl || pr.url, pr.number, pr.repo);
+		byPR.set(key, { number: pr.number, repository: pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url), ...byPR.get(key), github: pr });
 	}
-	const rows = [...byNumber.entries()].sort(([a], [b]) => b - a);
+	const severalRepositories = keyByRepository;
+	const rows = [...byPR.entries()].sort(([, a], [, b]) => b.number - a.number);
 	const labels = reviewLabels(t);
 	const requestRereview = async (review: InspectorGithubReview) => {
 		const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/rerequest", {
@@ -2379,7 +1914,8 @@ function MergedReviewsSection({
 		await sendMessageToWorker(formatReviewSummaryMessage(summary), "Unable to send review summary to worker agent");
 		onWorkerMessageSent?.();
 	};
-	const groups: InspectorReviewGroup[] = rows.map(([number, { ao, github }]) => {
+	const groups: InspectorReviewGroup[] = rows.map(([key, { number, repository, ao, github }]) => {
+		const prLabel = severalRepositories && repository ? `${repository} #${number}` : `#${number}`;
 		const aoRuns = ao ? [...(runsByPR.get(ao.prUrl) ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : [];
 		const entries = (github?.review?.reviews ?? []).filter(
 			(entry) => !externalReviewActorMatchesPRAuthor(entry.reviewerId, github?.author),
@@ -2490,7 +2026,7 @@ function MergedReviewsSection({
 			externalEntries.push({
 				body: undefined,
 				canRequestRereview: canRequestPRRereview("changes_requested", github?.url),
-				id: `unresolved:${reviewer.reviewerId}:${number}`,
+				id: `unresolved:${reviewer.reviewerId}:${key}`,
 				pullRequestUrl: github?.url,
 				inlineComments: reviewer.links.map((link) => ({
 					autoInjectReview: link.autoInjectReview,
@@ -2521,7 +2057,7 @@ function MergedReviewsSection({
 			externalEntries.push({
 				body: undefined,
 				canRequestRereview: false,
-				id: `resolved:${reviewer.reviewerId}:${number}`,
+				id: `resolved:${reviewer.reviewerId}:${key}`,
 				pullRequestUrl: github?.url,
 				inlineComments: [],
 				resolvedComments: reviewer.links.map((link) => ({
@@ -2579,13 +2115,14 @@ function MergedReviewsSection({
 					}
 				: undefined,
 			meta: [
-				ao ? aoReviewMeta(ao) : `#${number}`,
+				ao ? aoReviewMeta(ao) : prLabel,
 				unresolved > 0 ? t("inspector.unresolvedCount", { count: unresolved }) : null,
 			]
 				.filter(Boolean)
 				.join(" · "),
 			number,
-			title: (ao?.title ?? github?.title)?.trim() || `PR #${number}`,
+			key,
+			title: (ao?.title ?? github?.title)?.trim() || `PR ${prLabel}`,
 			verdict: ao ? reviewVerdict(ao) : undefined,
 		};
 	}).filter((group) =>

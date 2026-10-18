@@ -1,7 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
+import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { Button } from "./ui/button";
 import {
 	Dialog,
@@ -26,7 +27,10 @@ type ConfirmDialogProps = {
 	/** Defaults to "Cancel"; reversible actions can soften it to "No". */
 	cancelLabel?: string;
 	destructive?: boolean;
+	/** Options shown between the description and the buttons. */
+	children?: React.ReactNode;
 	busy?: boolean;
+	confirmDisabled?: boolean;
 	error?: string | null;
 	onConfirm: () => void;
 	onOpenChange: (open: boolean) => void;
@@ -44,20 +48,17 @@ export function ConfirmDialog({
 	confirmAriaLabel,
 	cancelLabel,
 	destructive,
+	children,
 	busy,
+	confirmDisabled,
 	error,
 	onConfirm,
 	onOpenChange,
 }: ConfirmDialogProps) {
 	const { t } = useTranslation();
-	// Radix aims its close-time focus at a DialogTrigger, but these confirms are
-	// opened programmatically, so that ref is null and the keyboard user is
-	// dropped on <body> — several tab stops away from the control they came
-	// from. Remember whatever had focus when the dialog opened and put it back.
-	const returnFocusRef = useRef<HTMLElement | null>(null);
-	useEffect(() => {
-		if (open) returnFocusRef.current = document.activeElement as HTMLElement | null;
-	}, [open]);
+	const restoreFocusOnClose = useRestoreFocusOnClose(open);
+	const cancelRef = useRef<HTMLButtonElement>(null);
+	const confirmRef = useRef<HTMLButtonElement>(null);
 
 	// Sized for a two-line prompt, not a settings form: the shared settings
 	// frame (575px, 38px footer pills) reads oversized around one question, so
@@ -65,7 +66,7 @@ export function ConfirmDialog({
 	// settings family's colors, borders, and typography.
 	const compactButtonClass = "h-8 rounded-[10px] px-4 text-sm";
 	return (
-		<Dialog open={open} onOpenChange={onOpenChange}>
+		<Dialog open={open} onOpenChange={(next) => { if (busy && !next) return; onOpenChange(next); }}>
 			<DialogContent
 				showCloseButton={false}
 				className={cn(settingsDialogContentClass, "w-[min(420px,calc(100vw-24px))]")}
@@ -75,20 +76,21 @@ export function ConfirmDialog({
 				// session being confirmed). The modal — dimmed backdrop included — owns
 				// its own clicks. Radix still dismisses on the native pointerdown.
 				onClick={(event) => event.stopPropagation()}
-				onCloseAutoFocus={(event) => {
-					const target = returnFocusRef.current;
-					// A confirmed action often removes its own trigger (the archived row
-					// disappears); fall back to Radix's handling when it is gone.
-					if (!target?.isConnected) return;
+				onOpenAutoFocus={(event) => {
+					// Destructive confirms start on the safe choice, not the close X.
+					const target = destructive ? cancelRef.current : confirmRef.current;
+					if (!target) return;
 					event.preventDefault();
 					target.focus();
 				}}
+				onCloseAutoFocus={restoreFocusOnClose}
 				overlay={<DialogOverlay onClick={(event) => event.stopPropagation()} />}
 			>
 				<DialogClose asChild>
 					<button
 						type="button"
 						disabled={busy}
+						tabIndex={-1}
 						className="settings-dialog-close-button settings-close-button"
 						aria-label={t("confirm.close")}
 						title={t("confirm.closeEsc")}
@@ -97,33 +99,36 @@ export function ConfirmDialog({
 					</button>
 				</DialogClose>
 
-				<div className={cn(settingsDialogHeaderClass, "p-5 pr-12")}>
+				<div className={cn(settingsDialogHeaderClass, "border-b-0 p-5 pr-12")}>
 					<DialogTitle className="settings-dialog-title text-base">{title}</DialogTitle>
 					<DialogDescription asChild>
 						<div className="text-control leading-5 text-settings-muted">{description}</div>
 					</DialogDescription>
 				</div>
 
+				{children ? <div className={cn(settingsDialogBodyClass, "px-5 pt-0 pb-3")}>{children}</div> : null}
+
 				{error ? (
-					<div className={cn(settingsDialogBodyClass, "p-5 py-3")}>
+					<div className={cn(settingsDialogBodyClass, "px-5 pt-0 pb-3")}>
 						<p role="alert" className="text-caption leading-4 text-error">
 							{error}
 						</p>
 					</div>
 				) : null}
 
-				<div className={cn(settingsDialogFooterClass, "gap-2 p-4")}>
+				<div className={cn(settingsDialogFooterClass, "gap-2 border-t-0 p-4 pt-1")}>
 					<DialogClose asChild>
-						<Button type="button" variant="footer" className={compactButtonClass} disabled={busy}>
+						<Button ref={cancelRef} type="button" variant="footer" className={compactButtonClass} disabled={busy}>
 							{cancelLabel ?? t("confirm.cancel")}
 						</Button>
 					</DialogClose>
 					<Button
+						ref={confirmRef}
 						aria-label={confirmAriaLabel}
 						type="button"
 						variant="footer-primary"
 						className={cn(compactButtonClass, destructive && "bg-danger-strong hover:bg-danger-strong")}
-						disabled={busy}
+						disabled={busy || confirmDisabled}
 						onClick={onConfirm}
 					>
 						{confirmLabel}

@@ -305,6 +305,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly
+	conv.disableNetwork = cfg.DisableNetwork
 	conv.launchMode = cfg.Permissions
 	params := map[string]any{
 		"cwd":               cfg.WorkspacePath,
@@ -631,6 +632,9 @@ func approvalReviewer(mode ports.PermissionMode) string {
 // no network (AO never grants it), while full access and the read-only
 // reviewer sandbox do.
 func (c *conversation) SandboxAllowsNetwork(turnMode ports.PermissionMode) bool {
+	if c.disableNetwork {
+		return false
+	}
 	if c.readOnly {
 		return true
 	}
@@ -734,4 +738,72 @@ func codexProcessEnv(ctx context.Context, bin string, env map[string]string) []s
 	}
 	agentlaunch.AugmentRuntimePATHForLaunchBinary(ctx, overlay, []string{bin}, exec.LookPath, agentlaunch.PinnedDir(os.Executable, overlay["AO_DATA_DIR"]))
 	return envSlice(overlay)
+}
+
+// ForkIntoHost starts an inclusive native fork in an independent provider host.
+func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID, lastProviderTurnID string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+	if sourceProviderConversationID == "" || lastProviderTurnID == "" {
+		return nil, errors.New("source thread and exact turn anchor are required")
+	}
+	if !filepath.IsAbs(cfg.WorkspacePath) {
+		return nil, fmt.Errorf("workspace path must be absolute, got %q", cfg.WorkspacePath)
+	}
+	conv, reconnected, err := d.connectSession(ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, false)
+	if err != nil {
+		return nil, err
+	}
+	if reconnected {
+		_ = conv.Close()
+		return nil, errors.New("side provider host already owns a conversation")
+	}
+	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
+	conv.readOnly = cfg.ReadOnly
+	conv.disableNetwork = cfg.DisableNetwork
+	conv.launchMode = cfg.Permissions
+	params := map[string]any{
+		"threadId":          sourceProviderConversationID,
+		"cwd":               cfg.WorkspacePath,
+		"approvalPolicy":    policy,
+		"approvalsReviewer": reviewer,
+		"sandbox":           sandbox,
+	}
+	params["lastTurnId"] = conv.nativeID(lastProviderTurnID)
+	// The child retains native context; copied turns are not needed in this response.
+	params["excludeTurns"] = true
+	if cfg.Model != "" {
+		params["model"] = cfg.Model
+	}
+	// Same overrides as thread/start and thread/resume: without the MCP servers
+	// a fresh fork has no AO tools until a restart resumes it.
+	if config := threadConfig(cfg.Effort, cfg.MCPServers); len(config) > 0 {
+		params["config"] = config
+	}
+	if cfg.SystemPrompt != "" {
+		params["developerInstructions"] = cfg.SystemPrompt
+	}
+	openCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
+	defer cancel()
+	var resp struct {
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+		Model           string `json:"model"`
+		ReasoningEffort string `json:"reasoningEffort"`
+	}
+	if err := conv.conn.request(openCtx, "thread/fork", params, &resp); err != nil {
+		_ = conv.Terminate()
+		return nil, fmt.Errorf("thread/fork in side host: %w", err)
+	}
+	if resp.Thread.ID == "" || resp.Thread.ID == sourceProviderConversationID {
+		_ = conv.Terminate()
+		return nil, errors.New("thread/fork returned no independent thread id")
+	}
+	if cfg.RecordFork != nil {
+		if err := cfg.RecordFork(context.WithoutCancel(ctx), resp.Thread.ID); err != nil {
+			_ = conv.Terminate()
+			return nil, fmt.Errorf("record Codex fork: %w", err)
+		}
+	}
+	conv.start(resp.Thread.ID, resp.Model, resp.ReasoningEffort)
+	return conv, nil
 }
