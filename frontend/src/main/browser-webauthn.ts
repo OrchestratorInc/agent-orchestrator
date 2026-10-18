@@ -73,12 +73,14 @@ export function configureBrowserWebAuthn({
 	return true;
 }
 
-type WebAuthnSessionLike = Pick<Session, "on">;
+type WebAuthnSessionLike = Pick<Session, "on" | "removeListener">;
 type SelectAccountDetails = { relyingPartyId: string; accounts: WebAuthnAccount[] };
 type SelectAccountCallback = (credentialId?: string) => void;
+type SelectAccountListener = (event: unknown, details: SelectAccountDetails, callback: SelectAccountCallback) => void;
 
 export type WebAuthnAccountChooser = {
 	attach(session: WebAuthnSessionLike | undefined): void;
+	dispose(): void;
 };
 
 type WebAuthnAccountChooserOptions = {
@@ -97,12 +99,17 @@ function accountLabel(account: WebAuthnAccount, index: number): string {
  * Lets the user pick a passkey when a site's request matches several. Electron
  * cancels the request when no listener handles the event, and it fires for the
  * Touch ID authenticator and for a USB security key holding several passkeys.
+ *
+ * Electron reuses a persistent partition's Session across windows, so the host
+ * disposes the chooser with its window; otherwise a recreated window would add
+ * a second listener and answer the same request twice.
  */
 export function createWebAuthnAccountChooser({
 	showMessageBox,
 	log = (message, error) => console.warn(message, error ?? ""),
 }: WebAuthnAccountChooserOptions): WebAuthnAccountChooser {
-	const attachedSessions = new WeakSet<WebAuthnSessionLike>();
+	const attachedSessions = new Map<WebAuthnSessionLike, SelectAccountListener>();
+	let disposed = false;
 
 	const choose = async (details: SelectAccountDetails, callback: SelectAccountCallback): Promise<void> => {
 		let credentialId: string | undefined;
@@ -130,11 +137,20 @@ export function createWebAuthnAccountChooser({
 
 	return {
 		attach(session) {
-			if (!session || attachedSessions.has(session)) return;
-			attachedSessions.add(session);
-			session.on("select-webauthn-account", (_event, details, callback) => {
+			if (!session || disposed || attachedSessions.has(session)) return;
+			const listener: SelectAccountListener = (_event, details, callback) => {
 				void choose(details, callback);
-			});
+			};
+			attachedSessions.set(session, listener);
+			session.on("select-webauthn-account", listener);
+		},
+		dispose() {
+			if (disposed) return;
+			disposed = true;
+			for (const [session, listener] of attachedSessions) {
+				session.removeListener("select-webauthn-account", listener);
+			}
+			attachedSessions.clear();
 		},
 	};
 }

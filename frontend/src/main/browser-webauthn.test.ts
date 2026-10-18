@@ -166,4 +166,15 @@ describe("createWebAuthnAccountChooser", () => {
 
 		expect(session.listenerCount("select-webauthn-account")).toBe(1);
 	});
+
+	it("stops listening when disposed, so a window's replacement chooser is the only one", () => {
+		const { chooser, session } = setup();
+
+		chooser.dispose();
+		chooser.attach(session as never);
+		expect(session.listenerCount("select-webauthn-account")).toBe(0);
+
+		createWebAuthnAccountChooser({ showMessageBox: vi.fn() }).attach(session as never);
+		expect(session.listenerCount("select-webauthn-account")).toBe(1);
+	});
 });

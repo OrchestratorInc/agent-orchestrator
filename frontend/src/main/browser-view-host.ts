@@ -4444,6 +4444,7 @@ export function createBrowserViewHost(
       disposePromise = (async () => {
         ipcDisposers.splice(0).forEach((dispose) => dispose());
         options.browserDownloadManager?.dispose();
+        options.webAuthnAccountChooser?.dispose();
         for (const viewId of [...entries.keys()]) {
           destroy(viewId);
         }
