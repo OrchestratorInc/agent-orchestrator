@@ -193,6 +193,12 @@ describe("ChatWorkspace retry", () => {
 		expect(retry).toHaveBeenCalledTimes(1);
 	});
 
+	it("says the chat is resuming while its agent starts", () => {
+		render(<ChatWorkspace snapshot={{ ...chatFixture, controller: { state: "stopped" } }} resumingAgent />);
+		expect(screen.getByText("Resuming chat…")).toBeVisible();
+		expect(screen.queryByText("This is open elsewhere")).not.toBeInTheDocument();
+	});
+
 	it("keeps checking while another app holds the chat", () => {
 		vi.useFakeTimers();
 		try {

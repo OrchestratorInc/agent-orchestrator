@@ -2524,7 +2524,7 @@ function ControllerBanner({
 			tone: "text-warning",
 		},
 		stopped: {
-			title: waking ? "Waking agent…" : restarting ? "Reconnecting to the agent…" : openElsewhere ? "This is open elsewhere" : needsResume ? "Could not connect to the agent" : "The agent controller stopped",
+			title: waking ? "Resuming chat…" : restarting ? "Reconnecting to the agent…" : openElsewhere ? "This is open elsewhere" : needsResume ? "Could not connect to the agent" : "The agent controller stopped",
 			tone: waking || restarting || needsResume ? "text-muted-foreground" : "text-destructive",
 		},
 	};
