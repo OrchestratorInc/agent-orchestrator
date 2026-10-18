@@ -6,7 +6,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -121,7 +120,7 @@ func TestReleasedNeovateACPAdditiveInstructions(t *testing.T) {
 			}
 			return
 		}
-		t.Fatal(fmt.Errorf("%s: ACP ended before response: %v (context: %v)", method, scanner.Err(), ctx.Err()))
+		t.Fatalf("%s: ACP ended before response: %v (context: %v)", method, scanner.Err(), ctx.Err())
 	}
 	var initialized map[string]any
 	call(1, "initialize", map[string]any{"protocolVersion": 1, "clientCapabilities": map[string]any{}}, &initialized)
@@ -132,12 +131,11 @@ func TestReleasedNeovateACPAdditiveInstructions(t *testing.T) {
 	if session.ID == "" {
 		t.Fatal("native ACP returned no session identity")
 	}
-	var turn struct {
-		StopReason string `json:"stopReason"`
-	}
-	call(3, "session/prompt", map[string]any{"sessionId": session.ID, "prompt": []any{map[string]string{"type": "text", "text": "Summarize this project."}}}, &turn)
-	if turn.StopReason != "end_turn" {
-		t.Fatalf("stop reason = %q", turn.StopReason)
+	// This test stops at provider request construction. Stock 0.28.5 also
+	// prints plain assistant prose to stdout at completion, so it is not a
+	// protocol-conformance test and must not imply a clean completed ACP turn.
+	if err := json.NewEncoder(stdin).Encode(map[string]any{"jsonrpc": "2.0", "id": 3, "method": "session/prompt", "params": map[string]any{"sessionId": session.ID, "prompt": []any{map[string]string{"type": "text", "text": "Summarize this project."}}}}); err != nil {
+		t.Fatal(err)
 	}
 	select {
 	case request := <-requests:
