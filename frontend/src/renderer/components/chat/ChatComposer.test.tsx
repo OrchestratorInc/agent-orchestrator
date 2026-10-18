@@ -228,6 +228,19 @@ describe("send keys", () => {
 		expect(field).toHaveClass("min-h-[4.5rem]");
 	});
 
+	it("holds a send while the agent resumes and sends it once ready", async () => {
+		const onSend = vi.fn();
+		const { rerender } = render(<ChatComposer onSend={onSend} waitingForAgent />);
+		const field = screen.getByLabelText("Message the agent") as HTMLElement;
+		await typeInComposer(field, "what was the code word?");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await act(async () => {});
+		expect(onSend).not.toHaveBeenCalled();
+		rerender(<ChatComposer onSend={onSend} />);
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+		expect(onSend.mock.calls[0][0]).toBe("what was the code word?");
+	});
+
 	it("uses a muted circular send control that lights up when armed", async () => {
 		const { field } = renderComposer();
 		const send = screen.getByRole("button", { name: "Send message" });
