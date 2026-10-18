@@ -518,6 +518,244 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/awake": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Manage desktop Stay Awake */
+        get: operations["getAwake"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/downloads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manage desktop Stay Awake */
+        post: operations["awakeDownloads"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Manage desktop Stay Awake */
+        delete: operations["clearAwakeHistory"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/low-power/authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manage desktop Stay Awake */
+        post: operations["authorizeAwakeLowPower"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/low-power/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manage desktop Stay Awake */
+        post: operations["revokeAwakeLowPower"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/observations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Manage desktop Stay Awake */
+        get: operations["observeAwake"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/recover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manage desktop Stay Awake */
+        post: operations["recoverAwake"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manage desktop Stay Awake */
+        post: operations["resumeAwake"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Manage desktop Stay Awake */
+        put: operations["setAwakeRules"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manage desktop Stay Awake */
+        post: operations["startAwake"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/sessions/{awakeId}/end": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manage desktop Stay Awake */
+        post: operations["endAwake"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/sessions/{awakeId}/extend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manage desktop Stay Awake */
+        post: operations["extendAwake"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Manage desktop Stay Awake */
+        put: operations["setAwakeSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manage desktop Stay Awake */
+        post: operations["stopAwake"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/browser/commands": {
         parameters: {
             query?: never;
@@ -4044,6 +4282,116 @@ export interface components {
             /** @enum {string} */
             status: "pending" | "spawning" | "running" | "completed" | "failed";
         };
+        AwakeApplication: {
+            id: string;
+            identity: string;
+            name: string;
+            protected: boolean;
+        };
+        AwakeCapability: {
+            available: boolean;
+            id: string;
+            reason: string;
+        };
+        AwakeCondition: {
+            end: string;
+            /** @enum {string} */
+            kind: "agent_activity" | "schedule" | "power" | "battery" | "network" | "device" | "display" | "app" | "uptime" | "download";
+            start: string;
+            threshold: number;
+            timezone: string;
+            value: string;
+        };
+        AwakeDownloadsRequest: {
+            activeIds: string[];
+        };
+        AwakeObservation: {
+            agentActive?: null | boolean;
+            appPause: boolean;
+            applications: components["schemas"]["AwakeApplication"][];
+            audioControl: boolean;
+            batteryPercent?: null | number;
+            browsers: components["schemas"]["AwakeApplication"][];
+            devices: string[];
+            displayControl: boolean;
+            externalDisplays: number;
+            keyboardControl: boolean;
+            knownNetworks: string[];
+            lowPowerAuthorized: boolean;
+            lowPowerControl: boolean;
+            lowPowerMode: boolean;
+            networkAddresses: string[];
+            networkConnected?: null | boolean;
+            /** Format: date-time */
+            observedAt: string;
+            onBattery?: null | boolean;
+            thermal: string;
+            /** Format: double */
+            uptimeSeconds: number;
+        };
+        AwakeRule: {
+            conditions: components["schemas"]["AwakeCondition"][];
+            enabled: boolean;
+            id: string;
+            lidClosed: boolean;
+            /** @enum {string} */
+            match: "all" | "any";
+            name: string;
+            suppressed: boolean;
+        };
+        AwakeRulesRequest: {
+            rules: components["schemas"]["AwakeRule"][];
+        };
+        AwakeSession: {
+            boundId: string;
+            boundIdentity: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            deadline?: null | string;
+            endReason: string;
+            /** Format: date-time */
+            endedAt?: null | string;
+            id: string;
+            label: string;
+            lidClosed: boolean;
+            /** @enum {string} */
+            mode: "indefinite" | "duration" | "until" | "app" | "download";
+            /** @enum {string} */
+            scope: "ao" | "session";
+            sessionId: string;
+        };
+        AwakeSettings: {
+            agentReconnect: boolean;
+            browserActions: boolean;
+            darkenKeyboard: boolean;
+            displayAwake: boolean;
+            hotspotName: string;
+            hotspotRecovery: boolean;
+            lidClosed: boolean;
+            lowPowerBatteryPercent: number;
+            lowPowerOnSeriousHeat: boolean;
+            muteAudio: boolean;
+            pauseApps: string[];
+            restoreDisplay: boolean;
+            stopBatteryPercent: number;
+        };
+        AwakeState: {
+            active: boolean;
+            activeRules: string[];
+            agentOutcome: string;
+            capabilities: components["schemas"]["AwakeCapability"][];
+            lidActive: boolean;
+            networkOutcome: string;
+            observation: components["schemas"]["AwakeObservation"];
+            paused: boolean;
+            reason: string;
+            rules: components["schemas"]["AwakeRule"][];
+            sessions: components["schemas"]["AwakeSession"][];
+            settings: components["schemas"]["AwakeSettings"];
+            /** Format: date-time */
+            startedAt?: null | string;
+        };
         BrowserCommandRequest: {
             action: string;
             args?: {
@@ -4928,6 +5276,9 @@ export interface components {
             ok: boolean;
             session: components["schemas"]["ControllersSessionView"];
             sessionId: string;
+        };
+        ExtendAwakeRequest: {
+            durationSeconds: number;
         };
         FSEntry: {
             /** @description True when the directory carries a .git entry (clone or worktree checkout). */
@@ -6336,6 +6687,19 @@ export interface components {
              * @enum {string}
              */
             operation?: "install" | "reinstall" | "update";
+        };
+        StartAwakeRequest: {
+            boundId: string;
+            boundIdentity?: string;
+            durationSeconds: number;
+            lidClosed: boolean;
+            /** @enum {string} */
+            mode: "indefinite" | "duration" | "until" | "app" | "download";
+            /** @enum {string} */
+            scope: "ao" | "session";
+            sessionId: string;
+            /** Format: date-time */
+            until?: null | string;
         };
         StartCodexAccountSwitchRequest: {
             /** @deprecated */
@@ -8465,6 +8829,688 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getAwake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    awakeDownloads: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AwakeDownloadsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    clearAwakeHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    authorizeAwakeLowPower: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    revokeAwakeLowPower: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    observeAwake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    recoverAwake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    resumeAwake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setAwakeRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AwakeRulesRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    startAwake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartAwakeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    endAwake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                awakeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    extendAwake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                awakeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExtendAwakeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setAwakeSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AwakeSettings"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    stopAwake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

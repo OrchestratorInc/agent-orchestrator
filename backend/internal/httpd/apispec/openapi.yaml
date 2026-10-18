@@ -1353,6 +1353,482 @@ paths:
       summary: List durable automation run history
       tags:
       - automations
+  /api/v1/awake:
+    get:
+      operationId: getAwake
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/downloads:
+    post:
+      operationId: awakeDownloads
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AwakeDownloadsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/history:
+    delete:
+      operationId: clearAwakeHistory
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/low-power/authorize:
+    post:
+      operationId: authorizeAwakeLowPower
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/low-power/revoke:
+    post:
+      operationId: revokeAwakeLowPower
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/observations:
+    get:
+      operationId: observeAwake
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/recover:
+    post:
+      operationId: recoverAwake
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/resume:
+    post:
+      operationId: resumeAwake
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/rules:
+    put:
+      operationId: setAwakeRules
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AwakeRulesRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/sessions:
+    post:
+      operationId: startAwake
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartAwakeRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/sessions/{awakeId}/end:
+    post:
+      operationId: endAwake
+      parameters:
+      - in: path
+        name: awakeId
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/sessions/{awakeId}/extend:
+    post:
+      operationId: extendAwake
+      parameters:
+      - in: path
+        name: awakeId
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExtendAwakeRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/settings:
+    put:
+      operationId: setAwakeSettings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AwakeSettings'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/stop:
+    post:
+      operationId: stopAwake
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
   /api/v1/browser/commands:
     post:
       operationId: executeBrowserCommand
@@ -12054,6 +12530,348 @@ components:
       - status
       - scheduledFor
       type: object
+    AwakeApplication:
+      properties:
+        id:
+          type: string
+        identity:
+          type: string
+        name:
+          type: string
+        protected:
+          type: boolean
+      required:
+      - protected
+      - id
+      - name
+      - identity
+      type: object
+    AwakeCapability:
+      properties:
+        available:
+          type: boolean
+        id:
+          type: string
+        reason:
+          type: string
+      required:
+      - id
+      - available
+      - reason
+      type: object
+    AwakeCondition:
+      properties:
+        end:
+          type: string
+        kind:
+          enum:
+          - agent_activity
+          - schedule
+          - power
+          - battery
+          - network
+          - device
+          - display
+          - app
+          - uptime
+          - download
+          type: string
+        start:
+          type: string
+        threshold:
+          type: integer
+        timezone:
+          type: string
+        value:
+          type: string
+      required:
+      - kind
+      - value
+      - threshold
+      - start
+      - end
+      - timezone
+      type: object
+    AwakeDownloadsRequest:
+      properties:
+        activeIds:
+          items:
+            type: string
+          type: array
+      required:
+      - activeIds
+      type: object
+    AwakeObservation:
+      properties:
+        agentActive:
+          type:
+          - "null"
+          - boolean
+        appPause:
+          type: boolean
+        applications:
+          items:
+            $ref: '#/components/schemas/AwakeApplication'
+          type: array
+        audioControl:
+          type: boolean
+        batteryPercent:
+          type:
+          - "null"
+          - integer
+        browsers:
+          items:
+            $ref: '#/components/schemas/AwakeApplication'
+          type: array
+        devices:
+          items:
+            type: string
+          type: array
+        displayControl:
+          type: boolean
+        externalDisplays:
+          type: integer
+        keyboardControl:
+          type: boolean
+        knownNetworks:
+          items:
+            type: string
+          type: array
+        lowPowerAuthorized:
+          type: boolean
+        lowPowerControl:
+          type: boolean
+        lowPowerMode:
+          type: boolean
+        networkAddresses:
+          items:
+            type: string
+          type: array
+        networkConnected:
+          type:
+          - "null"
+          - boolean
+        observedAt:
+          format: date-time
+          type: string
+        onBattery:
+          type:
+          - "null"
+          - boolean
+        thermal:
+          type: string
+        uptimeSeconds:
+          format: double
+          type: number
+      required:
+      - displayControl
+      - keyboardControl
+      - observedAt
+      - thermal
+      - uptimeSeconds
+      - externalDisplays
+      - networkAddresses
+      - devices
+      - lowPowerControl
+      - lowPowerAuthorized
+      - lowPowerMode
+      - applications
+      - audioControl
+      - appPause
+      - browsers
+      - knownNetworks
+      type: object
+    AwakeRule:
+      properties:
+        conditions:
+          items:
+            $ref: '#/components/schemas/AwakeCondition'
+          type: array
+        enabled:
+          type: boolean
+        id:
+          type: string
+        lidClosed:
+          type: boolean
+        match:
+          enum:
+          - all
+          - any
+          type: string
+        name:
+          type: string
+        suppressed:
+          type: boolean
+      required:
+      - id
+      - name
+      - enabled
+      - match
+      - conditions
+      - lidClosed
+      - suppressed
+      type: object
+    AwakeRulesRequest:
+      properties:
+        rules:
+          items:
+            $ref: '#/components/schemas/AwakeRule'
+          type: array
+      required:
+      - rules
+      type: object
+    AwakeSession:
+      properties:
+        boundId:
+          type: string
+        boundIdentity:
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        deadline:
+          format: date-time
+          type:
+          - "null"
+          - string
+        endReason:
+          type: string
+        endedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        id:
+          type: string
+        label:
+          type: string
+        lidClosed:
+          type: boolean
+        mode:
+          enum:
+          - indefinite
+          - duration
+          - until
+          - app
+          - download
+          type: string
+        scope:
+          enum:
+          - ao
+          - session
+          type: string
+        sessionId:
+          type: string
+      required:
+      - id
+      - scope
+      - sessionId
+      - label
+      - mode
+      - createdAt
+      - boundId
+      - boundIdentity
+      - endReason
+      - lidClosed
+      type: object
+    AwakeSettings:
+      properties:
+        agentReconnect:
+          type: boolean
+        browserActions:
+          type: boolean
+        darkenKeyboard:
+          type: boolean
+        displayAwake:
+          type: boolean
+        hotspotName:
+          type: string
+        hotspotRecovery:
+          type: boolean
+        lidClosed:
+          type: boolean
+        lowPowerBatteryPercent:
+          type: integer
+        lowPowerOnSeriousHeat:
+          type: boolean
+        muteAudio:
+          type: boolean
+        pauseApps:
+          items:
+            type: string
+          type: array
+        restoreDisplay:
+          type: boolean
+        stopBatteryPercent:
+          type: integer
+      required:
+      - lidClosed
+      - displayAwake
+      - stopBatteryPercent
+      - lowPowerBatteryPercent
+      - lowPowerOnSeriousHeat
+      - muteAudio
+      - darkenKeyboard
+      - restoreDisplay
+      - pauseApps
+      - hotspotName
+      - hotspotRecovery
+      - agentReconnect
+      - browserActions
+      type: object
+    AwakeState:
+      properties:
+        active:
+          type: boolean
+        activeRules:
+          items:
+            type: string
+          type: array
+        agentOutcome:
+          type: string
+        capabilities:
+          items:
+            $ref: '#/components/schemas/AwakeCapability'
+          type: array
+        lidActive:
+          type: boolean
+        networkOutcome:
+          type: string
+        observation:
+          $ref: '#/components/schemas/AwakeObservation'
+        paused:
+          type: boolean
+        reason:
+          type: string
+        rules:
+          items:
+            $ref: '#/components/schemas/AwakeRule'
+          type: array
+        sessions:
+          items:
+            $ref: '#/components/schemas/AwakeSession'
+          type: array
+        settings:
+          $ref: '#/components/schemas/AwakeSettings'
+        startedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+      required:
+      - agentOutcome
+      - settings
+      - sessions
+      - rules
+      - activeRules
+      - capabilities
+      - observation
+      - active
+      - lidActive
+      - reason
+      - paused
+      - networkOutcome
+      type: object
     BrowserCommandRequest:
       properties:
         action:
@@ -14469,6 +15287,13 @@ components:
       - ok
       - sessionId
       - session
+      type: object
+    ExtendAwakeRequest:
+      properties:
+        durationSeconds:
+          type: integer
+      required:
+      - durationSeconds
       type: object
     FSEntry:
       properties:
@@ -18084,6 +18909,44 @@ components:
           - reinstall
           - update
           type: string
+      type: object
+    StartAwakeRequest:
+      properties:
+        boundId:
+          type: string
+        boundIdentity:
+          type: string
+        durationSeconds:
+          type: integer
+        lidClosed:
+          type: boolean
+        mode:
+          enum:
+          - indefinite
+          - duration
+          - until
+          - app
+          - download
+          type: string
+        scope:
+          enum:
+          - ao
+          - session
+          type: string
+        sessionId:
+          type: string
+        until:
+          format: date-time
+          type:
+          - "null"
+          - string
+      required:
+      - scope
+      - sessionId
+      - mode
+      - durationSeconds
+      - boundId
+      - lidClosed
       type: object
     StartCodexAccountSwitchRequest:
       properties:

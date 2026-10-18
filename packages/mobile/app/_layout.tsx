@@ -8,7 +8,7 @@ import { DarkTheme, DefaultTheme, Stack, ThemeProvider as NavigationThemeProvide
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useFonts } from "expo-font";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Platform, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
@@ -23,6 +23,7 @@ import { glassHeaderControl } from "../lib/native-header-items";
 import { LayoutGrid } from "../lib/layoutGrid";
 import { AppProvider } from "../lib/store";
 import { ThemeProvider, useTheme, useThemeState } from "../lib/ThemeProvider";
+import { loadThemeSettings, type ThemeSettings } from "../lib/themeStore";
 
 // Sheet routes, and how tall each is allowed to be.
 //
@@ -82,10 +83,25 @@ export default function RootLayout() {
 	// losing to a system fallback; it is not worth losing the app to.
 	const [fontsReady, fontError] = useFonts({ Geist_400Regular, Geist_500Medium, Geist_600SemiBold, GeistMono_400Regular });
 	const fontsSettled = fontsReady || fontError != null;
+	// The stored theme is read under the splash too, for the same reason as the
+	// fonts: the first frame should already be the user's palette, not the default
+	// one swapped out a tick later. The read never rejects (each half falls back
+	// to its default), so it cannot hold the splash forever.
+	const [themeSettings, setThemeSettings] = useState<ThemeSettings | null>(null);
 	useEffect(() => {
-		if (fontsSettled) void SplashScreen.hideAsync().catch(() => {});
-	}, [fontsSettled]);
-	if (!fontsSettled) return null;
+		let active = true;
+		void loadThemeSettings().then((settings) => {
+			if (active) setThemeSettings(settings);
+		});
+		return () => {
+			active = false;
+		};
+	}, []);
+	const ready = fontsSettled && themeSettings !== null;
+	useEffect(() => {
+		if (ready) void SplashScreen.hideAsync().catch(() => {});
+	}, [ready]);
+	if (!ready) return null;
 
 	// ThemeProvider sits outside everything that reads a colour, including the
 	// Stack's own screenOptions below — hence the inner component: a hook cannot
@@ -98,7 +114,7 @@ export default function RootLayout() {
 			    animating, so every dock and composer arrived a beat late. */}
 			<KeyboardProvider>
 				<SafeAreaProvider>
-					<ThemeProvider>
+					<ThemeProvider initial={themeSettings}>
 						<AppProvider>
 							<Shell />
 						</AppProvider>

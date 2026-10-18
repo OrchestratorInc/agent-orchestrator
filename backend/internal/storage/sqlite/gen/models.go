@@ -190,6 +190,11 @@ type AutomationRun struct {
 	UpdatedAt      time.Time
 }
 
+type AwakeState struct {
+	ID       int64
+	Document string
+}
+
 type ChangeLog struct {
 	Seq       int64
 	ProjectID *domain.ProjectID

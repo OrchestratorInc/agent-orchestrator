@@ -912,6 +912,10 @@ func (c *SessionsController) serveRootedPreviewFile(w http.ResponseWriter, r *ht
 
 func serveOpenedPreviewFile(w http.ResponseWriter, r *http.Request, file *os.File, info fs.FileInfo, clean string) {
 	if !previewutil.IsMarkdownPath(clean) || previewRawRequested(r) {
+		// Last-Modified alone cannot distinguish replacements within one second.
+		w.Header().Set("ETag", fmt.Sprintf(`"%d-%d"`, info.Size(), info.ModTime().UnixNano()))
+		w.Header().Set("Access-Control-Expose-Headers", "ETag")
+		w.Header().Set("Cache-Control", "private, no-cache")
 		http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 		return
 	}

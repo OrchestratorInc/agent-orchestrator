@@ -158,6 +158,7 @@ import {
 } from "./main/browser-view-host";
 import { createBrowserProfileStore } from "./main/browser-profile-store";
 import { BrowserHistoryStore } from "./main/browser-history-store";
+import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
@@ -171,7 +172,11 @@ import { createWindowComposition, type WindowComposition } from "./main/window-c
 import { AgentBrowserRuntime } from "./main/agent-browser-runtime";
 import { sameBrowserRuntimeIdentity, type BrowserRuntimeIdentity } from "./main/browser-runtime-identity";
 import { connectSupervisor, type SupervisorLinkHandle } from "./main/supervisor-link";
-import { connectBrowserRuntime, type BrowserRuntimeLinkHandle } from "./main/browser-runtime-link";
+import {
+	BROWSER_RUNTIME_DISCONNECTED,
+	connectBrowserRuntime,
+	type BrowserRuntimeLinkHandle,
+} from "./main/browser-runtime-link";
 import { checkRender, measureRender } from "./main/render-check";
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
 import { readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
@@ -326,6 +331,12 @@ let daemonRestartAfterExitProcess: ChildProcess | null = null;
 let daemonStartPromise: Promise<DaemonStatus> | null = null;
 let daemonStartEpoch = 0;
 let daemonStatus: DaemonStatus = { state: "stopped" };
+const awakeDownloads = createAwakeDownloadBridge({
+ baseURL: () => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null,
+ request: (url, init) => net.fetch(url, init),
+});
+app.once("will-quit", () => awakeDownloads.dispose());
+
 let daemonAttachmentGeneration = 0;
 let daemonOutput = "";
 let browserViewHost: BrowserViewHost | null = null;
@@ -988,7 +999,7 @@ async function createWindowInternal(): Promise<void> {
 			downloadsDirectory: app.getPath("downloads"),
 			historyPath: path.join(desktopDataDir, "browser-downloads.json"),
 			shell,
-			notify: (state) => shellWebContents.send("browser:downloadsChanged", state),
+			notify: (state) => { awakeDownloads.update(state); shellWebContents.send("browser:downloadsChanged", state); },
 		}),
 		clearBrowserProfileData: clearElectronBrowserProfileData,
 		clipboard: { writeImage: writeClipboardImage },
@@ -1545,19 +1556,28 @@ function supervisorPipeFromRunFile(rfp: string | null): string {
 	return "\\\\.\\pipe\\ao-supervise-" + dir.replace(/[^a-zA-Z0-9-]/g, "-");
 }
 
-function disposeBrowserRuntimeLink(): void {
+function dropBrowserRuntimeLink(): void {
 	browserRuntimeLink?.dispose();
 	browserRuntimeLink = null;
 	browserRuntimeLinkIdentity = null;
 }
 
-function publishBrowserRuntimeState(connected: boolean): void {
-	getShellWebContents()?.send("browser:runtimeState", { connected } satisfies BrowserRuntimeState);
+function disposeBrowserRuntimeLink(): void {
+	const hadLink = browserRuntimeLink !== null;
+	dropBrowserRuntimeLink();
+	if (hadLink) publishBrowserRuntimeState(BROWSER_RUNTIME_DISCONNECTED);
 }
 
+function publishBrowserRuntimeState(state: BrowserRuntimeState): void {
+	getShellWebContents()?.send("browser:runtimeState", state);
+}
+
+// A replacement link reports "connecting" itself, so dropping the old one first
+// does not flash a disconnect in the Browser panel.
 function reconnectBrowserRuntimeLink(): void {
-	disposeBrowserRuntimeLink();
+	dropBrowserRuntimeLink();
 	establishBrowserRuntimeLink();
+	if (!browserRuntimeLink) publishBrowserRuntimeState(BROWSER_RUNTIME_DISCONNECTED);
 }
 
 function establishBrowserRuntimeLink(): void {
@@ -1588,7 +1608,7 @@ function establishBrowserRuntimeLink(): void {
 	if (browserRuntimeLink && browserRuntimeLinkIdentity && sameBrowserRuntimeIdentity(browserRuntimeLinkIdentity, identity)) {
 		return;
 	}
-	if (browserRuntimeLink) disposeBrowserRuntimeLink();
+	if (browserRuntimeLink) dropBrowserRuntimeLink();
 	browserRuntimeLink = connectBrowserRuntime(address, {
 		token,
 		execute: (command, signal) => {
@@ -1743,8 +1763,49 @@ function daemonLaunchEnv(): NodeJS.ProcessEnv {
 	return process.env;
 }
 
+// `npm run dev` builds resources/acp-runtime in predev, but a cache cleaner or a
+// plain `electron .` launch can leave it missing and every chat resume then fails
+// with "entrypoint ... no such file". Rebuild it here. The script is idempotent
+// and a no-op when the runtime is intact. Dev only: a packaged runtime is signed.
+async function repairDevAcpRuntime(): Promise<void> {
+	if (app.isPackaged || process.env.AO_ACP_RUNTIME_DIR) return;
+	const runtimeDir = path.join(app.getAppPath(), "resources", "acp-runtime");
+	const adapter = path.join(
+		runtimeDir,
+		"node_modules",
+		"@agentclientprotocol",
+		"claude-agent-acp",
+		"dist",
+		"index.js",
+	);
+	if (existsSync(adapter)) return;
+	const script = path.join(app.getAppPath(), "scripts", "build-acp-runtime.mjs");
+	if (!existsSync(script)) return;
+	console.warn(`[ao] ACP runtime missing at ${runtimeDir}; rebuilding`);
+	await new Promise<void>((resolve) => {
+		const child = spawn(process.execPath, [script], {
+			cwd: app.getAppPath(),
+			env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+			stdio: "inherit",
+		});
+		child.once("error", (err) => {
+			console.error("[ao] ACP runtime rebuild failed to start:", err);
+			resolve();
+		});
+		child.once("exit", (code) => {
+			if (code !== 0) console.error(`[ao] ACP runtime rebuild exited with ${code}`);
+			resolve();
+		});
+	});
+}
+
 async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	if (daemonProcess) {
+		return daemonStatus;
+	}
+
+	await repairDevAcpRuntime();
+	if (startEpoch !== daemonStartEpoch) {
 		return daemonStatus;
 	}
 
@@ -2413,7 +2474,7 @@ ipcMain.handle("browser:runtime:reconnect", (event) => {
 
 ipcMain.handle("browser:runtime:state", (event): BrowserRuntimeState => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted browser runtime request.");
-	return { connected: browserRuntimeLink?.connected ?? false };
+	return browserRuntimeLink?.state ?? BROWSER_RUNTIME_DISCONNECTED;
 });
 
 ipcMain.on("browser:overlay", (event, open: unknown) => {

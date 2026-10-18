@@ -217,7 +217,7 @@ if (typeof window !== "undefined") {
 		browser: {
 			nativeCompositionEnabled: true,
 			reconnectRuntime: async () => undefined,
-			getRuntimeState: async () => ({ connected: false }),
+			getRuntimeState: async () => ({ connected: false, connecting: false, rejected: false }),
 			ensure: async (sessionId: string) => ({
 				viewId: `test:${sessionId}`,
 				url: "",

@@ -1,4 +1,4 @@
-import { Bot, KeyRound, Loader2, MonitorCog, Play, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
+import { Bot, Coffee, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -13,6 +13,7 @@ import { writeCodexAccounts } from "../hooks/codex-accounts-state";
 import { GlobalSettingsForm } from "./GlobalSettingsForm";
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection as ProjectFormSection } from "./ProjectSettingsForm";
 import { CloudProjectScriptsSettings, ProjectScriptsSettings } from "./ProjectScriptsSettings";
+import { CloudProjectInstructionsSettings, CloudProjectRepositoriesSettings } from "./CloudProjectLayoutSettings";
 import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { CuesSettings } from "./CuesDialog";
@@ -102,6 +103,12 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	// Scripts are project settings on local and Cloud projects alike (a Cloud
 	// session's worker runs them). Environment and cues are local-daemon
 	// features; remote hosts expose none of these.
+	// A Cloud project's repositories, where its agent starts, and the
+	// instructions added to its agents' prompts live on the control plane.
+	if (isCloudProjectSettings) {
+		projectSections.push({ id: "repositories", label: t("settings.project.repositories", { defaultValue: "Repositories" }), icon: FolderGit2 });
+		projectSections.push({ id: "instructions", label: t("settings.project.instructions", { defaultValue: "Instructions" }), icon: ScrollText });
+	}
 	if (!remoteHostId) projectSections.push({ id: "scripts", label: t("settings.project.scripts"), icon: Wrench });
 	if (!remoteHostId && !isCloudProjectSettings) {
 		projectSections.push({ id: "environment", label: t("settings.project.environment"), icon: KeyRound });
@@ -253,6 +260,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		cueBusy,
 		close: closeSettingsDialog,
 		title: activeLabel,
+		titleIcon: !isProjectSettings && activeSection === "stayAwake",
 		isBodyReady,
 		bodyKey: displaySettings?.scope === "project" ? refKey({ host: displaySettings.hostId ?? LOCAL_HOST, id: displaySettings.projectId }) : "global",
 		body: () => {
@@ -268,6 +276,12 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			}
 			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "cues") {
 				return <CuesSettings projectId={displaySettings.projectId} onBusyChange={setCueBusy} />;
+			}
+			if (displaySettings?.scope === "project" && isCloudProjectSettings && cloudOrgId !== undefined && activeProjectSection === "repositories") {
+				return <CloudProjectRepositoriesSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />;
+			}
+			if (displaySettings?.scope === "project" && isCloudProjectSettings && cloudOrgId !== undefined && activeProjectSection === "instructions") {
+				return <CloudProjectInstructionsSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />;
 			}
 			if (displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "scripts") {
 				return isCloudProjectSettings && cloudOrgId !== undefined
@@ -414,7 +428,8 @@ export function SettingsPane() {
 					key={entry.bodyKey}
 				>
 					<div className="settings-dialog-body mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 pb-12 pt-[calc(var(--spacing-toolbar)+--spacing(4))]">
-						<h1 className="mb-8 px-(--settings-row-inset) text-heading font-medium leading-7 text-foreground">
+						<h1 className="mb-8 flex items-center gap-2 px-(--settings-row-inset) text-heading font-medium leading-7 text-foreground">
+							{entry.titleIcon && <Coffee aria-hidden="true" className="size-6" />}
 							{entry.title}
 							{entry.remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(entry.remoteHostId) ?? entry.remoteHostId}</span>}
 						</h1>

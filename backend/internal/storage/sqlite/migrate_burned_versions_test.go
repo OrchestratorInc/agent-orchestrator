@@ -203,7 +203,8 @@ var shippedMigrations = map[int64]string{
 	198: "0198_harness_defaults.sql",
 	199: "0199_conversation_message_continuation.sql",
 	200: "0200_session_artifact_version_source.sql",
-	206: "0206_allow_mastra_code_harness.sql",
+	206: "0206_awake.sql",
+	207: "0207_allow_mastra_code_harness.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

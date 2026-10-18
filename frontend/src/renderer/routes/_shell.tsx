@@ -5,7 +5,9 @@ import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNav
 import { isCancelledError, useQueryClient } from "@tanstack/react-query";
 import { lazy, memo, Suspense, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderPlus } from "lucide-react";
+import { motion, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
+import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
 import { CommandPalette } from "../components/CommandPalette";
 import { CenterPanelShell } from "../components/CenterPanelShell";
 import { DaemonFailureBanner } from "../components/DaemonFailureBanner";
@@ -321,6 +323,7 @@ function ShellLayout() {
 	const [workspaceStartupState, setWorkspaceStartupState] = useState<"loading" | "ready" | "error">("loading");
 	const workspaceStartupBaselineRef = useRef(0);
 	const sidebarDragStripRef = useRef<HTMLDivElement>(null);
+	const prefersReducedMotion = useReducedMotion();
 	const themePreference = useUiStore((state) => state.themePreference);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const themeStyle = useUiStore((state) => state.themeStyle);
@@ -1457,10 +1460,11 @@ function ShellLayout() {
 							aria-hidden="true"
 							data-slot="titlebar-drag-region"
 							className={cn(
-								// Own opaque fill: the shell root goes transparent while a live native
-								// browser page shows, so this strip would otherwise reveal the darker
-								// native window background.
-								"fixed top-0 left-0 z-chrome bg-sidebar transition-[height] duration-200 ease-out motion-reduce:transition-none",
+								// The strip itself only carries the drag region and its sizing; the
+								// opaque fills are the two child layers below. The shell root goes
+								// transparent while a live native browser page shows, so the fills
+								// must stay opaque rather than reveal the darker native window.
+								"fixed top-0 left-0 z-chrome transition-[height] duration-200 ease-out motion-reduce:transition-none",
 								sidebarHasLayout ? "w-(--ao-sidebar-w,var(--size-sidebar-default))" : "w-titlebar-content-offset",
 								isFullScreen ? "pointer-events-none h-0" : "h-traffic-light-clearance",
 							)}
@@ -1469,7 +1473,20 @@ function ShellLayout() {
 								...(sidebarHasLayout && sidebarWidthPx ? { width: sidebarWidthPx } : null),
 								...(trafficLightDragActive ? ({ WebkitAppRegion: "drag" } as CSSProperties) : null),
 							}}
-						/>
+						>
+							{/* Closed-sidebar band: the page's topbar color behind the traffic
+							    lights and history arrows. Always present; the sidebar-colored
+							    layer slides over it. */}
+							<div className="pointer-events-none absolute inset-y-0 left-0 w-titlebar-content-offset bg-background" />
+							{/* Sidebar-colored top of the sidebar. Rides the sidebar's own spring,
+							    so the fake top and the real sidebar slide in and out together. */}
+							<motion.div
+								animate={{ x: sidebarHasLayout ? "0%" : "-100%" }}
+								className="pointer-events-none absolute inset-y-0 left-0 w-(--ao-sidebar-w,var(--size-sidebar-default)) bg-sidebar"
+								initial={false}
+								transition={prefersReducedMotion ? { duration: 0 } : SHELL_PANEL_SPRING}
+							/>
+						</div>
 					) : null}
 					{/* Fixed macOS titlebar cluster beside the traffic lights — rendered
               once here so the toggle/history buttons never move when the

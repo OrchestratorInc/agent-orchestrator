@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -50,6 +51,57 @@ func workspaceReviewService(t *testing.T, repo string) *Service {
 	store := newFakeStore()
 	store.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{WorkspacePath: repo}}
 	return &Service{store: store}
+}
+
+func TestWorkspaceBinaryFingerprintTracksSameSizeRewrites(t *testing.T) {
+	for _, kind := range []string{"untracked", "scratch"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			if kind == "untracked" {
+				root = newWorkspaceRepo(t)
+			}
+			store := newFakeStore()
+			store.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{WorkspacePath: root}}
+			if kind == "scratch" {
+				store.projects["scratch"] = domain.ProjectRecord{ID: "scratch", Kind: domain.ProjectKindScratch}
+				record := store.sessions["ao-1"]
+				record.ProjectID = "scratch"
+				store.sessions["ao-1"] = record
+			}
+			svc := &Service{store: store}
+			file := filepath.Join(root, "clip.wav")
+			modified := time.Date(2026, time.October, 17, 12, 0, 0, 100_000_000, time.UTC)
+			writeAndRead := func(content string, stamp time.Time) WorkspaceFileDetail {
+				t.Helper()
+				if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chtimes(file, stamp, stamp); err != nil {
+					t.Fatal(err)
+				}
+				detail, err := svc.GetWorkspaceFile(context.Background(), "ao-1", "clip.wav", "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				return detail
+			}
+			before := writeAndRead("first\x00clip", modified)
+			after := writeAndRead("other\x00clip", modified.Add(time.Millisecond))
+			if !before.Binary || !after.Binary || before.Size != after.Size || before.Status != after.Status {
+				t.Fatalf("expected same-size binary rewrite: before=%+v after=%+v", before, after)
+			}
+			if before.FileFingerprint == after.FileFingerprint {
+				t.Fatal("same-size binary rewrite kept the old fingerprint")
+			}
+			unchanged, err := svc.GetWorkspaceFile(context.Background(), "ao-1", "clip.wav", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if unchanged.FileFingerprint != after.FileFingerprint || unchanged.WorkspaceVersion != after.WorkspaceVersion {
+				t.Fatal("unchanged refetch changed the media version")
+			}
+		})
+	}
 }
 
 func TestWorkspaceFileRevisionUsesSectionSpecificSides(t *testing.T) {

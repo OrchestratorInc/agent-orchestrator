@@ -24,6 +24,7 @@ import (
 
 // APIDeps bundles every service the API layer's controllers depend on.
 type APIDeps struct {
+	Awake              controllers.AwakeService
 	Agents             controllers.AgentCatalog
 	CodexAccounts      controllers.CodexAccountService
 	Projects           projectsvc.Manager
