@@ -214,6 +214,55 @@ func TestHermesAdmissionRecoversAfterEchoTimeout(t *testing.T) {
 	}
 }
 
+func TestHermesAdmissionRecoversWhenEchoCannotBeCaptured(t *testing.T) {
+	rule := strings.Repeat("─", 40)
+	idle := rule + "\n❯ \n" + rule
+	longMessage := strings.Repeat("a long task prompt ", 10)
+	tests := []struct {
+		name   string
+		screen string
+		allow  bool
+	}{
+		{name: "wrapped echo", screen: rule + "\n● a long task prompt a long task prompt\n  a long task prompt\n" + rule + "\n" + idle, allow: true},
+		{name: "echo scrolled away", screen: strings.Repeat("completed output\n", 40) + idle, allow: true},
+		{name: "unchanged screen", screen: idle},
+		{name: "text remains in composer", screen: "completed output\n" + rule + "\n❯ still composing\n" + rule},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, err := sqlitetest.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			ctx := t.Context()
+			if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "p", Path: "/repo/p", RegisteredAt: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			rec, err := store.CreateSession(ctx, domain.SessionRecord{ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessHermes, Activity: domain.Activity{State: domain.ActivityIdle}, Metadata: domain.SessionMetadata{RuntimeHandleID: "pane", RuntimeLaunchID: "generation"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtime := &lineInputRuntime{screen: tt.screen, nextScreen: "☤ ❯ msg=interrupt · Ctrl+C cancel"}
+			messenger := newSessionMessenger(store, runtime, nil, lineAgentResolver{}).(runtimeMessenger)
+			messenger.inputLocks.Store(rec.ID, &terminalMessageAdmission{
+				pending: longMessage, pendingSince: time.Now().Add(-terminalIdleRecoveryDelay),
+				baseline: idle, handleID: "pane", launchID: "generation",
+			})
+			err = messenger.Send(ctx, rec.ID, "next task")
+			if tt.allow && err != nil {
+				t.Fatalf("completed turn left admission blocked: %v", err)
+			}
+			if !tt.allow && (err == nil || len(runtime.messages) != 0) {
+				t.Fatalf("unconfirmed submission admitted another write: err=%v messages=%v", err, runtime.messages)
+			}
+			if tt.allow && (len(runtime.messages) != 1 || runtime.messages[0] != "next task") {
+				t.Fatalf("unexpected writes after recovery: %v", runtime.messages)
+			}
+		})
+	}
+}
+
 func TestHermesAdmissionConfirmsFastTurnWithoutBusyFrame(t *testing.T) {
 	for _, message := range []string{"first task", "/help"} {
 		t.Run(message, func(t *testing.T) {
