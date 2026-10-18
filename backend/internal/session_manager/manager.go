@@ -3146,6 +3146,12 @@ func (m *Manager) WakeHibernatedChat(ctx context.Context, id domain.SessionID) e
 // identity and never changes the durable terminated flag as an intermediate
 // step.
 func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (result RestoreResult, err error) {
+	return m.resumeAgentWithMode(ctx, id, false)
+}
+
+// resumeAgentWithMode preserves strict native-history intent for automatic
+// retries, including update stops that have no stale-binary failure marker.
+func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, requireNativeHistory bool) (result RestoreResult, err error) {
 	if err := m.beginAgentResume(ctx, id); err != nil {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, err)
 	}
@@ -3279,7 +3285,7 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 		}
 	}
 	result, err = m.resumeAgentRecordWithPolicy(ctx, "resume agent", rec,
-		rec.StaleBinary != nil && rec.StaleBinary.SwitchFailedAt != nil)
+		requireNativeHistory || (rec.StaleBinary != nil && rec.StaleBinary.SwitchFailedAt != nil))
 	if err == nil && m.chat != nil && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat &&
 		rec.StaleBinary != nil && rec.StaleBinary.SwitchFailedAt != nil {
 		// A failed move to a new release kept the user's queued messages for

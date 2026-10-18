@@ -261,7 +261,9 @@ func (m *Manager) RetryVersionMoves(ctx context.Context) error {
 			release()
 			continue
 		}
-		if _, err := m.ResumeAgentWithMode(ctx, id); err != nil {
+		// Automatic terminal restarts must never replace missing native history
+		// with a fresh task, even when an update stop has no stale-binary mark.
+		if _, err := m.resumeAgentWithMode(ctx, id, domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI); err != nil {
 			release()
 			errs = append(errs, fmt.Errorf("resume %s after a failed version move: %w", id, err))
 			continue

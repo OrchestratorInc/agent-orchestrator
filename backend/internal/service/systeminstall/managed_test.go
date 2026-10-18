@@ -610,6 +610,78 @@ func TestStartupReportsUnrepairableManagedJunction(t *testing.T) {
 	}
 }
 
+func TestFailedWindowsSwitchAndRollbackPreserveRecoveryIntent(t *testing.T) {
+	s := newTestService("windows")
+	s.managedRoot = t.TempDir()
+	s.releases = &releaseStoreStub{}
+	targetDir := s.managedTargetDir(TargetCodex)
+	record := managedRecord{Method: "npm", Package: "@openai/codex", CLI: "codex", Version: "1.1.0", Dir: "v1", BinRel: "codex.cmd"}
+	oldBinary := filepath.Join(targetDir, "versions", record.Dir, record.BinRel)
+	if err := os.MkdirAll(filepath.Dir(oldBinary), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(oldBinary, []byte("old release"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileAtomic(filepath.Join(targetDir, "managed.json"), mustJSON(record)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ensureManagedLauncher(TargetCodex, record); err != nil {
+		t.Fatal(err)
+	}
+	failLinks := 0
+	s.commands = commandRunnerFunc(func(ctx context.Context, argv []string, out, stderr io.Writer) error {
+		if len(argv) == 2 && argv[1] == "--version" {
+			_, err := io.WriteString(out, "codex 1.2.0\n")
+			return err
+		}
+		if len(argv) != 6 || argv[2] != "mklink" {
+			return errors.New("unexpected command")
+		}
+		if failLinks > 0 {
+			failLinks--
+			return errors.New("junction creation unavailable")
+		}
+		if runtime.GOOS == "windows" {
+			cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+			cmd.Stdout, cmd.Stderr = out, stderr
+			return cmd.Run()
+		}
+		return os.Symlink(argv[5], argv[4])
+	})
+	if err := s.switchManagedCurrent(context.Background(), targetDir, record.Dir); err != nil {
+		t.Fatal(err)
+	}
+	s.installCommands = installCommandRunnerFunc(func(_ context.Context, command ports.InstallCommand, _, _ io.Writer) error {
+		prefix := command.Argv[slices.Index(command.Argv, "--prefix")+1]
+		return os.WriteFile(filepath.Join(prefix, record.BinRel), []byte("new release"), 0o600)
+	})
+	failLinks = 2
+	plan := Plan{Target: TargetCodex, Method: "npm", Package: record.Package}
+	baseline := &installedBaseline{path: "codex.cmd", expected: "1.2.0"}
+	if err := s.runManagedInstall(context.Background(), plan, baseline, nil, io.Discard); err == nil {
+		t.Fatal("failed replacement and rollback reported success")
+	}
+	if _, err := os.Lstat(filepath.Join(targetDir, "current")); !os.IsNotExist(err) {
+		t.Fatalf("fixture must leave current absent: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(targetDir, unsettledMarker)); err != nil {
+		t.Fatalf("failed rollback discarded recovery intent: %v", err)
+	}
+	recovered := NewWithDeps(s.executables, s.commands, Deps{ManagedRoot: s.managedRoot, Releases: s.releases})
+	recovered.goos = "windows"
+	t.Cleanup(func() { _ = recovered.Close(context.Background()) })
+	if err := recovered.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := recovered.currentManagedRelease(targetDir); got != "v2" {
+		t.Fatalf("recovered current = %q, want preserved v2", got)
+	}
+	if _, err := os.Stat(filepath.Join(targetDir, "current", record.BinRel)); err != nil {
+		t.Fatalf("recovered launcher target is broken: %v", err)
+	}
+}
+
 func TestWindowsJunctionCrashHelper(t *testing.T) {
 	targetDir := os.Getenv("AO_TEST_JUNCTION_CRASH_DIR")
 	if targetDir == "" {

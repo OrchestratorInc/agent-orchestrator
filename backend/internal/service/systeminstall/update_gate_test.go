@@ -55,6 +55,27 @@ func TestLiveSession(t *testing.T) {
 	}
 }
 
+func TestOMPUpdateIgnoresArchivedAndExitedSessions(t *testing.T) {
+	s := newTestService("windows")
+	records := []domain.SessionRecord{
+		{ID: "archived", Harness: domain.HarnessOMP, IsTerminated: true, Activity: domain.Activity{State: domain.ActivityIdle}},
+		{ID: "exited", Harness: domain.HarnessOMP, Activity: domain.Activity{State: domain.ActivityExited}},
+	}
+	s.sessions = sessionListerStub{sessions: records}
+	plan := Plan{Target: TargetOMP, UpdateWhileRunning: UpdateWhileRunningBlocked}
+	if _, err := s.gateRunningSessions(context.Background(), TargetOMP, AgentOperationUpdate, plan); err != nil {
+		t.Fatalf("archived or exited OMP session blocked update: %v", err)
+	}
+	// A live idle process still uses the executable and must be counted.
+	s.sessions = sessionListerStub{sessions: append(records,
+		domain.SessionRecord{ID: "live", Harness: domain.HarnessOMP, Activity: domain.Activity{State: domain.ActivityIdle}})}
+	_, err := s.gateRunningSessions(context.Background(), TargetOMP, AgentOperationUpdate, plan)
+	var active *HarnessActiveError
+	if !errors.As(err, &active) || active.Count() != 1 || !slices.Equal(active.SessionIDs, []domain.SessionID{"live"}) {
+		t.Fatalf("update blocker = %v, want only the live OMP session", err)
+	}
+}
+
 func TestUpdateWhileRunningLevelMatrix(t *testing.T) {
 	for _, tt := range []struct {
 		goos   string

@@ -126,3 +126,28 @@ func TestFailedResumeAfterUpdateIsRetriedWithoutTheUser(t *testing.T) {
 		t.Fatalf("starts=%d retries=%v, want a second start and nothing left to retry", len(launcher.started), mgr.versionRetries.pending())
 	}
 }
+
+func TestRetryAfterUpdateNeverFallsBackToFreshTerminal(t *testing.T) {
+	rt := &fakeRuntime{}
+	agent := lostConversationAgent{recordingAgent: &recordingAgent{}}
+	mgr, store, _ := newExitedResumeManager(t, rt, agent)
+	rec := store.sessions["mer-1"]
+	// An in-place update stopped this launch before marking live sessions stale.
+	rec.StaleBinary = nil
+	store.sessions[rec.ID] = rec
+	ctx := context.Background()
+	if err := mgr.ResumeHarnessSessions(ctx, []domain.SessionID{rec.ID}); !errors.Is(err, ErrNotResumable) {
+		t.Fatalf("initial strict resume = %v, want ErrNotResumable", err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := mgr.RetryVersionMoves(ctx); !errors.Is(err, ErrNotResumable) {
+			t.Fatalf("retry %d = %v, want ErrNotResumable", attempt+1, err)
+		}
+		if rt.created != 0 {
+			t.Fatalf("retry launched %d fresh terminals after losing native history", rt.created)
+		}
+		if pending := mgr.versionRetries.pending(); len(pending) != 1 || pending[0] != rec.ID {
+			t.Fatalf("retry intent lost: %v", pending)
+		}
+	}
+}

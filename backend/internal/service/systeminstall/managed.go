@@ -283,7 +283,13 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 		}
 	}
 	if err := s.switchManagedCurrent(ctx, targetDir, name); err != nil {
-		settle()
+		if s.currentManagedRelease(targetDir) == previous {
+			settle()
+		} else {
+			// Windows may have removed current and failed both mklink attempts.
+			// Keep the intent and candidate so startup can repair the junction.
+			keep = true
+		}
 		return err
 	}
 	if s.releases != nil {
