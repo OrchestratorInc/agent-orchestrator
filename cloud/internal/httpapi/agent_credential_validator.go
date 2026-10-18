@@ -15,6 +15,7 @@ const (
 	defaultAnthropicAPIURL = "https://api.anthropic.com"
 	defaultOpenAIAPIURL    = "https://api.openai.com/v1"
 	defaultCursorAPIURL    = "https://api.cursor.com"
+	defaultGitHubAPIURL    = "https://api.github.com"
 )
 
 type agentCredentialValidator struct {
@@ -22,6 +23,7 @@ type agentCredentialValidator struct {
 	anthropicBaseURL string
 	openAIBaseURL    string
 	cursorBaseURL    string
+	githubBaseURL    string
 }
 
 func newAgentCredentialValidator(client *http.Client) *agentCredentialValidator {
@@ -33,6 +35,7 @@ func newAgentCredentialValidator(client *http.Client) *agentCredentialValidator 
 		anthropicBaseURL: defaultAnthropicAPIURL,
 		openAIBaseURL:    defaultOpenAIAPIURL,
 		cursorBaseURL:    defaultCursorAPIURL,
+		githubBaseURL:    defaultGitHubAPIURL,
 	}
 }
 
@@ -45,32 +48,24 @@ func (v *agentCredentialValidator) Validate(
 	agent, credentialType string,
 	secret []byte,
 ) error {
-	switch agent {
-	case "claude-code":
-		return v.validateClaude(ctx, credentialType, secret)
-	case "codex":
-		if credentialType != "api_key" && credentialType != "access_token" {
+	// GitHub is validated here (it is a PAT provider, not a coding-agent harness).
+	if agent == "github" {
+		if credentialType != "personal_access_token" {
 			return errInvalidAgentCredential
 		}
 		return v.validateBearerEndpoint(
 			ctx,
-			"OpenAI",
-			strings.TrimRight(v.openAIBaseURL, "/")+"/models",
+			"GitHub",
+			strings.TrimRight(v.githubBaseURL, "/")+"/user",
 			secret,
 		)
-	case "cursor":
-		if credentialType != "api_key" {
-			return errInvalidAgentCredential
-		}
-		return v.validateBearerEndpoint(
-			ctx,
-			"Cursor",
-			strings.TrimRight(v.cursorBaseURL, "/")+"/v1/me",
-			secret,
-		)
-	default:
+	}
+	// Every coding-agent harness carries its own validation business logic.
+	spec, ok := agentCredentialSpecFor(agent)
+	if !ok {
 		return errInvalidAgentCredential
 	}
+	return spec.validate(ctx, credentialType, secret, v)
 }
 
 func (v *agentCredentialValidator) validateClaude(

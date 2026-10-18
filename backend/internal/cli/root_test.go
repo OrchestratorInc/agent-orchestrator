@@ -178,8 +178,10 @@ func TestTelemetryMetaClassifiesRegisteredCommandPaths(t *testing.T) {
 		"ao completion":              {},
 		"ao daemon":                  {},
 		"ao help":                    {},
+		"ao mcp":                     {},
 		"ao pty-host":                {},
 		"ao start":                   {},
+		"ao unreal-provider":         {},
 	}
 
 	var failures []string
@@ -446,6 +448,9 @@ func setConfigEnv(t *testing.T) testConfig {
 	t.Setenv("AO_PROJECT_ID", "")
 	t.Setenv("AO_REQUEST_TIMEOUT", "")
 	t.Setenv("AO_SHUTDOWN_TIMEOUT", "")
+	// Claude hooks forward this ambient marker; a suite run from inside Claude
+	// Code must not leak it into exact hook-body assertions.
+	t.Setenv("CLAUDE_CODE_ENTRYPOINT", "")
 	return cfg
 }
 

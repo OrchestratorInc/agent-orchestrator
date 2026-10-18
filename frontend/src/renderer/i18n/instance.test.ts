@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { APP_LOCALES, coerceLocale, DEFAULT_LOCALE } from "./locales";
-import { createAppI18n, type TranslationCatalogs } from "./instance";
+import { createAppI18n as createBaseAppI18n, createLazyAppI18n, loadLocaleCatalog, type TranslationCatalogs } from "./instance";
+import { createFullAppI18n as createAppI18n } from "./all-messages";
 import {
 	deMessages,
 	enMessages,
@@ -10,7 +11,7 @@ import {
 	koMessages,
 	ptBRMessages,
 	zhCNMessages,
-} from "./messages";
+} from "./all-messages";
 
 const allCatalogs = {
 	en: enMessages,
@@ -48,6 +49,23 @@ describe("coerceLocale", () => {
 });
 
 describe("app i18next instance", () => {
+	it("explains side-chat restrictions as behavior while files remain shared", () => {
+		const explanation = createAppI18n("en").t("sideChat.isolationPolicy");
+		expect(explanation).toContain("Files and Git are shared");
+		expect(explanation).toContain("Read-only is behavioral");
+		expect(explanation).toContain("Sub-agent interaction is prohibited by instruction");
+		expect(explanation).not.toContain("disabled");
+	});
+
+	it("provides agent management and readiness labels for every supported locale", () => {
+		for (const locale of APP_LOCALES) {
+			const catalog = allCatalogs[locale] as unknown as Record<string, string>;
+			for (const key of ["agentSelector.manage", "agentSelector.noneReady", "agentSelector.needsSetup"]) {
+				expect(catalog[key], `${locale} is missing ${key}`).toBeTruthy();
+			}
+		}
+	});
+
 	it("uses English by default and Chinese when selected", () => {
 		expect(createAppI18n().t("settings.general")).toBe("General");
 		expect(createAppI18n("zh-CN").t("settings.general")).toBe("通用");
@@ -177,7 +195,7 @@ describe("app i18next instance", () => {
 		};
 		for (const locale of APP_LOCALES) {
 			if (locale === "en") continue;
-			const catalog = allCatalogs[locale] as Record<keyof typeof enMessages, string | string[]>;
+			const catalog = allCatalogs[locale] as unknown as Record<keyof typeof enMessages, string | string[]>;
 			for (const key of Object.keys(enMessages) as (keyof typeof enMessages)[]) {
 				expect(variables(catalog[key]), `${locale} placeholder mismatch for ${key}`).toEqual(
 					variables(enMessages[key]),
@@ -204,5 +222,28 @@ describe("app i18next instance", () => {
 				}
 			}
 		}
+	});
+});
+
+describe("lazy locale catalogs", () => {
+	it("loads a locale's catalog when the app instance changes language", async () => {
+		const instance = createLazyAppI18n();
+		expect(instance.getResource("ja", "translation", "settings.general")).toBeUndefined();
+		await instance.changeLanguage("ja");
+		expect(instance.t("settings.general")).toBe(jaMessages["settings.general"]);
+		expect(instance.language).toBe("ja");
+	});
+
+	it("can warm a catalog before switching", async () => {
+		const instance = createLazyAppI18n();
+		await loadLocaleCatalog("fr", instance);
+		expect(instance.getResource("fr", "translation", "settings.general")).toBe(frMessages["settings.general"]);
+	});
+
+	it("loads into an instance without the lazy backend", async () => {
+		const instance = createBaseAppI18n("en");
+		await loadLocaleCatalog("ja", instance);
+		await instance.changeLanguage("ja");
+		expect(instance.t("settings.general")).toBe(jaMessages["settings.general"]);
 	});
 });

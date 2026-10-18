@@ -163,7 +163,7 @@ func (m *Manager) executeChatAgentSwitch(
 	if err := m.chat.PreflightChat(
 		ctx,
 		cfg.TargetHarness,
-		effectiveAgentConfig(rec.Kind, project.Config).Permissions,
+		effectiveAgentConfig(cfg.TargetHarness, rec.Kind, project.Config).Permissions,
 	); err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: target preflight: %w", id, err)
 	}
@@ -171,13 +171,8 @@ func (m *Manager) executeChatAgentSwitch(
 	if !ok {
 		return result, fmt.Errorf("switch Chat agent %s: %w", id, ErrInterfaceHandoffUnsupported)
 	}
-	baseAgentConfig := effectiveAgentConfig(rec.Kind, project.Config)
-	if roleOverride(rec.Kind, project.Config).Harness != cfg.TargetHarness {
-		baseAgentConfig.Model = ""
-		baseAgentConfig.Effort = ""
-		baseAgentConfig.Mode = ""
-	}
-	agentConfig, err := m.resolveChatAgentConfig(ctx, ports.SpawnConfig{
+	baseAgentConfig := effectiveAgentConfig(cfg.TargetHarness, rec.Kind, project.Config)
+	agentConfig, err := m.resolveAgentConfig(ctx, ports.SpawnConfig{
 		ProjectID: rec.ProjectID,
 		Kind:      rec.Kind,
 		Harness:   cfg.TargetHarness,
@@ -189,7 +184,7 @@ func (m *Manager) executeChatAgentSwitch(
 		return result, fmt.Errorf("switch Chat agent %s: target config: %w", id, err)
 	}
 
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, true)
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: system prompt: %w", id, err)
 	}
@@ -400,6 +395,7 @@ func (m *Manager) executeChatAgentSwitch(
 		Permissions:             agentConfig.Permissions,
 		SystemPrompt:            finalSystemPrompt,
 		AdditionalDirectories:   additionalDirectories,
+		MCPServers:              m.aoMCPServers(cfg.TargetHarness, targetLaunchEnv),
 		ExpectedControllerOwner: credentialRecord.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
@@ -546,8 +542,8 @@ func (m *Manager) executeChatAgentSwitch(
 	}
 	recorder.durable(result)
 	recorder.boundary(domain.AgentSwitchFailureChatContinuationRelay)
-	if _, err := m.chat.RelayChatTurnWithID(
-		ctx, id, aoTargetActivationPrompt, chatSwitchActivationMessageID(result.ID)); err != nil {
+	if _, err := m.chat.RelaySessionChatTurn(
+		ctx, id, aoTargetActivationPrompt, chatSwitchActivationMessageID(result.ID), ports.MessageDeliveryOptions{}); err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: deliver continuation: %w", id, err)
 	}
 	acknowledgedAt := m.clock()
@@ -622,7 +618,7 @@ func (m *Manager) rollbackStoppedChatAgentSwitchSource(
 	if !ok {
 		return ErrUnknownHarness
 	}
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, true)
 	if err != nil {
 		return err
 	}
@@ -630,7 +626,7 @@ func (m *Manager) rollbackStoppedChatAgentSwitchSource(
 	if err != nil {
 		return err
 	}
-	agentConfig := effectiveAgentConfig(rec.Kind, project.Config)
+	agentConfig := effectiveAgentConfig(rec.Harness, rec.Kind, project.Config)
 	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
 	m.augmentAgentRuntimeEnv(sourceAgent, env)
 	if err := m.prepareWorkspace(
@@ -639,9 +635,15 @@ func (m *Manager) rollbackStoppedChatAgentSwitchSource(
 	); err != nil {
 		return err
 	}
+	// A target that failed to start can leave its provider host behind. The
+	// session has one host, so the source cannot reopen while the target's
+	// host still owns it under another protocol. Stop it first.
+	if err := m.stopSourceControllerConclusive(current); err != nil {
+		return fmt.Errorf("stop failed target controller: %w", err)
+	}
 	_, err = m.resumeChatController(
 		ctx, "restore failed agent switch", current, project,
-		workspaceInfo(current), false, "", domain.SessionInterfaceTransitionHistoryStrict,
+		workspaceInfo(current), false, false, "", domain.SessionInterfaceTransitionHistoryStrict,
 	)
 	return err
 }
@@ -749,7 +751,7 @@ func (m *Manager) recoverActivatedChatAgentSwitch(
 			return false, fmt.Errorf("reconcile Chat agent switch %s: target project: %w", sw.ID, err)
 		}
 		if _, err := m.resumeChatController(
-			ctx, "recover Chat agent switch", rec, project, workspaceInfo(rec), false,
+			ctx, "recover Chat agent switch", rec, project, workspaceInfo(rec), false, execution == domain.AgentSwitchExecutionStartupReconcile,
 			string(sw.TargetGenerationID), domain.SessionInterfaceTransitionHistoryStrict,
 		); err != nil {
 			return false, err
@@ -780,8 +782,8 @@ func (m *Manager) recoverActivatedChatAgentSwitch(
 		return false, err
 	}
 	recorder.boundary(domain.AgentSwitchFailureChatContinuationRelay)
-	if _, err := m.chat.RelayChatTurnWithID(
-		ctx, rec.ID, aoTargetActivationPrompt, chatSwitchActivationMessageID(current.ID)); err != nil {
+	if _, err := m.chat.RelaySessionChatTurn(
+		ctx, rec.ID, aoTargetActivationPrompt, chatSwitchActivationMessageID(current.ID), ports.MessageDeliveryOptions{}); err != nil {
 		recorder.userImpact = domain.AgentSwitchUserImpactDeliveryUnknown
 		_, failErr := m.failAgentSwitchWithRecorder(ctx, store, current, domain.AgentSwitchErrorDeliveryUnconfirmed, recorder)
 		return failErr == nil, failErr

@@ -1,6 +1,8 @@
+import { UITextView as Text } from "@bsky.app/react-native-uitextview";
 import { memo, useMemo } from "react";
-import { Text, type StyleProp, type TextStyle } from "react-native";
+import type { StyleProp, TextStyle } from "react-native";
 import { useTheme } from "../ThemeProvider";
+import { textSelectionColors } from "../textSelection";
 import { highlightCode, type SyntaxTokenKind } from "./syntaxHighlight";
 
 /**
@@ -25,7 +27,7 @@ export const HighlightedCodeText = memo(function HighlightedCodeText({
 		[code, language, streaming],
 	);
 	return (
-		<Text selectable style={style}>
+		<Text selectable uiTextView selectionColor={textSelectionColors(t).selectionColor} style={style}>
 			{tokens?.map((token, index) => (
 				<Text key={`${index}:${token.text.length}`} style={{ color: tokenColor(token.kind, t) }}>
 					{token.text}
@@ -41,9 +43,9 @@ function tokenColor(kind: SyntaxTokenKind, t: ReturnType<typeof useTheme>): stri
 		case "string":
 		case "addition": return t.green;
 		case "number": return t.orange;
-		case "keyword": return t.purple;
+		case "keyword": return t.amber;
 		case "type":
-		case "meta": return t.blue;
+		case "meta": return t.textSecondary;
 		case "deletion": return t.red;
 		default: return t.textPrimary;
 	}

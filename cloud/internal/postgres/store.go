@@ -11,10 +11,14 @@ import (
 )
 
 var (
-	ErrNotFound             = errors.New("not found")
-	ErrForbidden            = errors.New("forbidden")
-	ErrConflict             = errors.New("conflict")
-	ErrInvalid              = errors.New("invalid")
+	ErrNotFound      = errors.New("not found")
+	ErrForbidden     = errors.New("forbidden")
+	ErrConflict      = errors.New("conflict")
+	ErrInvalid       = errors.New("invalid")
+	ErrInvalidBranch = errors.New("invalid session branch")
+	// ErrBranchInUse refuses a requested session branch a live session of the
+	// project already works on (BranchRefusedError carries which one).
+	ErrBranchInUse          = errors.New("session branch in use")
 	ErrIdempotencyMismatch  = errors.New("idempotency key belongs to a different operation")
 	ErrSandboxQuotaExceeded = errors.New("sandbox quota exceeded")
 	ErrWorkerUnavailable    = errors.New("worker unavailable")
@@ -26,10 +30,17 @@ var (
 	ErrTerminalSessionExited = errors.New("terminal session exited")
 	ErrTransportExpired      = errors.New("worker request expired")
 	ErrWorkspaceReadOnly     = errors.New("workspace is read-only")
+	// ErrProviderConnectionInUse refuses deleting a provider connection that a
+	// sandbox not yet fully deleted still runs on. It is a conflict.
+	ErrProviderConnectionInUse = fmt.Errorf("provider connection in use: %w", ErrConflict)
 )
 
 type Store struct {
-	pool *pgxpool.Pool
+	pool    *pgxpool.Pool
+	billing billingPolicy
+	// activityLog is told about activity rows the store writes itself, inside
+	// the transaction they describe (see commitWithActivity).
+	activityLog func(context.Context, domain.ActivityEvent)
 }
 
 func Open(ctx context.Context, databaseURL string) (*Store, error) {
@@ -72,10 +83,9 @@ func (s *Store) ValidateRuntimeRole(ctx context.Context) error {
 type tenantFn func(pgx.Tx) error
 
 // withService runs fn in a transaction that carries the control-plane service
-// context. Only ao_sandboxes grants this context, and only so the reconciler
-// can scan due sandboxes across organizations. Every write that follows a claim
-// must run through withOrg instead, so row-level security still confines it to
-// a single tenant.
+// context. It is used to scan due sandboxes and to locate registrations for a
+// host-authenticated address update. Writes after either lookup run under the
+// specific organization or user RLS identity.
 func (s *Store) withService(ctx context.Context, fn tenantFn) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {

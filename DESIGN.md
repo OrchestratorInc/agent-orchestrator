@@ -27,7 +27,7 @@ Use these files to inspect the approved references. They show current behavior a
 | Home landing | [HomePage](frontend/src/renderer/components/HomePage.tsx), [NavRowHighlight](frontend/src/renderer/components/NavRowHighlight.tsx) |
 | Sidebar, sidebar buttons, project rows | [Sidebar](frontend/src/renderer/components/Sidebar.tsx), [sidebar primitive](frontend/src/renderer/components/ui/sidebar.tsx), [topbar button](frontend/src/renderer/components/TopbarButton.tsx), [NavRowHighlight](frontend/src/renderer/components/NavRowHighlight.tsx) |
 | Shell resize grips | [ResizeHandle](frontend/src/renderer/components/ResizeHandle.tsx), [useResizable](frontend/src/renderer/hooks/useResizable.ts) |
-| Tokens, themes, typography | [tokens](frontend/src/styles/tokens.css), [renderer semantic styles](frontend/src/renderer/styles.css), [site-theme tokens](frontend/src/site-theme/tokens.css) |
+| Tokens, themes, typography | [tokens](frontend/src/styles/tokens.css), [renderer semantic styles](frontend/src/renderer/styles.css), [docs tokens](frontend/src/docs/src/styles/tokens.css) |
 | Tooltips, icons, buttons | [Tooltip](frontend/src/renderer/components/ui/tooltip.tsx), [Button](frontend/src/renderer/components/ui/button.tsx), [icon usage](frontend/src/renderer/components/icons.tsx) |
 | Shared dialog and field primitives | [Dialog](frontend/src/renderer/components/ui/dialog.tsx), [Input](frontend/src/renderer/components/ui/input.tsx), [Label](frontend/src/renderer/components/ui/label.tsx) |
 | New Task and its selectors | [New Task dialog](frontend/src/renderer/components/NewTaskDialog.tsx), [Task composer](frontend/src/renderer/components/TaskComposer.tsx), [settings option menu](frontend/src/renderer/components/settings/SettingsOptionMenu.tsx) |
@@ -95,8 +95,8 @@ The layout is desktop-first. On constrained widths, preserve task content first,
 - **Home:** intentionally minimal. It introduces the next meaningful action, not a fake dashboard.
   - One centered column (`max-w-[640px]`); no decorative upward translate.
   - "Star us" is a quiet text link with dashed underline on hover — never a TopbarButton, accent pill, or bordered card.
-  - Primary actions are a 2×2 grid; standalone agent is a grid cell, not a full-width hero CTA above. Connect Mobile stays in settings — not on home.
-  - Recent project rows use shared `NavRowHighlight` (same growing pill as sidebar), not a flat `hover:bg-interactive-hover` wash.
+  - Primary actions are a 2×2 grid; standalone agent is a grid cell (Clone to the cloud takes that cell when Developer Mode and Cloud are on), never a full-width extra row. Card labels follow verb + source: Clone a repo, Open a local folder, Open a workspace, Clone to the cloud, Start a standalone agent. Connect Mobile stays in settings — not on home.
+  - Recent project rows use shared `NavRowHighlight` (same growing pill as sidebar), not a flat `hover:bg-interactive-hover` wash. On home the pill fills with `bg-card` so a hovered row matches the action cards.
 - **Board:** the operational overview. Each lane has a semantic reason to exist and derived status determines placement.
 - **Session:** the working room. The conversation or terminal is primary; tabs, files, PRs, and inspector are supporting context.
 - **Terminals:** a dedicated surface for standalone shells; do not accidentally route users here from unrelated project-board shortcuts.
@@ -106,10 +106,10 @@ The layout is desktop-first. On constrained widths, preserve task content first,
 
 Sidebar and inspector share `ResizeHandle`. Do not regress:
 
-- Grip is a fixed, hover/active-only pill on the **center-pane border** (sidebar: `.center-panel-surface` left; inspector: panel `border-l`) — not inset into the panel, not a CSS `::after` on the hit strip, not always-visible.
-- Height is **80vh**, vertically centered — not full inset-y / not titlebar-tall.
-- While dragging, the grip moves 1:1 with width delta and **must stop at the same min/max as the panel**. Never follow raw `clientX` past limits. Inspector also clamps against computed CSS `max-width` (`--session-inspector-max-width`); prop/`rangeRef` max alone is insufficient.
-- Call sites must pass the same `minWidth`/`maxWidth` as `useResizable`. No unclamped grip fallback.
+- On hover only, a 2px line is drawn over the **center-pane border** (sidebar: `.center-panel-surface` left; inspector: panel `border-l`), fading out at the top and bottom, with a short opacity fade in/out. No pill, nothing painted on click/drag, not always-visible.
+- The line is pure CSS inside the hit strip (no JS positioning); `useResizable` stays the only width integrator.
+- While dragging, width **must stop at the same min/max as the panel**. Never follow raw `clientX` past limits. Inspector also clamps against computed CSS `max-width` (`--session-inspector-max-width`); prop/`rangeRef` max alone is insufficient.
+- Call sites must pass the same `minWidth`/`maxWidth` as `useResizable`.
 
 ### Brand → home
 
@@ -187,10 +187,10 @@ Do not introduce one-off hex values, arbitrary radius, or unreviewed spacing. Us
 
 ## 7. Typography
 
-Use the loaded Geist families. Do not add a new web font or substitute a generic font for visual novelty.
+Use the font tokens. On macOS they resolve to the system faces (SF Pro / SF Mono); elsewhere to the bundled Geist families. Do not add a new web font or substitute a generic font for visual novelty.
 
-- **UI and body:** `--font-family-base` (`Geist Variable` first).
-- **Code, terminal, compact labels:** `--font-family-mono` (`Geist Mono Variable` first).
+- **UI and body:** `--font-family-base` (`-apple-system` on macOS, `Geist Variable` elsewhere).
+- **Code, terminal, compact labels:** `--font-family-mono` (`SF Mono` on macOS, `Geist Mono Variable` elsewhere).
 - **Weights:** 500 medium for controls and small hierarchy; 600 only for headings, selected values, and genuinely primary emphasis.
 - **Numbers:** use tabular figures for metrics, timestamps, diffs, and columns where alignment matters.
 
@@ -279,7 +279,7 @@ Every modal is one composed, elevated surface: a restrained overlay, one clear t
 - **New Task:** a single title line and the composer. The task input is the visual center; agent/model/mode controls are compact supporting choices. Do not repeat instructions the composer itself makes obvious. Submission feedback must stay in place and not rearrange the composer.
 - **Clone Repository:** compact back, title, and close controls establish its place in the Add Project sequence. Repository URL is code-like and uses mono; owner/provider identity may be an unobtrusive visual cue. Destination is one full-width chooser row with its action embedded at the trailing edge. Validate after intent to continue and place field errors directly below the field; do not turn errors into a large alarm card.
 - **Add Project:** present one decision at a time. The source picker is a shared container of adjacent choices with dividers—not three floating cards. Each row has a modest icon, a concise source name, and only the one line of detail needed to distinguish Clone, Local, and Workspace. Local/Cloud is a compact segmented choice; show the one decision-relevant hint below it only while the choice is ambiguous. Cloud sign-in and project creation remain part of this same flow rather than a competing dashboard.
-- **Settings:** use one modal split into a quiet navigation rail and a content pane. The rail is a list of compact icon-and-text rows with a restrained selected surface; it is not a collection of pills. The content pane gives the active section one sentence-case title, fields in logical groups, and no redundant introduction. For project settings, keep the persistent save action anchored in the rail/footer position so it is predictable and does not float beside every field.
+- **Settings:** use one modal split into a quiet navigation rail and a content pane. The rail is a list of compact icon-and-text rows with a restrained selected surface; it is not a collection of pills. The content pane gives the active section one sentence-case title, fields in logical groups, and no redundant introduction. Each group is one card with no outline: a filled background groups it and hairline dividers separate its items (rows fit their content with 10px vertical padding); the page title and section headings share the rows' 16px text inset. For project settings, keep the persistent save action anchored in the rail/footer position so it is predictable and does not float beside every field.
 - **Errors and status:** show error text close to the failed action or field. Reserve a full-width alert region for a blocking, form-level failure; it is a state treatment, not a permanently outlined component.
 
 #### Settings language and agent-management rules
@@ -287,7 +287,7 @@ Every modal is one composed, elevated surface: a restrained overlay, one clear t
 - Settings names describe the user's job, not internal vocabulary. Use **Agents** for installing and configuring agent tools, and **Accounts** for signing in and managing Codex accounts. Do not use “Harness” or “Subscriptions” as navigation labels for these surfaces.
 - Remove introductory copy when the title, control, or nearby status already explains the task. Keep only text that changes a decision, explains a failure, or provides a required next step.
 - Use concise, sentence-case labels and ordinary search placeholders such as “Search agents”. Avoid trailing ellipses in simple search fields and avoid repeating the same context in a label, placeholder, and subtext.
-- Agent installation rows use one shared install control. The installed state is terminal: show a disabled **Installed** button, hide installation details, and do not show a separate check icon or retry/details affordance.
+- Agent installation rows use one shared install control: a ghost **Install · <method>** button with a borderless chevron menu for other methods. The installed state is terminal: show muted **Installed** text (not a button), hide installation details, and do not show a separate check icon or retry/details affordance.
 - When a completed install method is trustworthy, the secondary line may say “Installed via Homebrew”, “Installed via npm”, or “Installed via Official”. Never display internal cache fingerprints, hashes, or other implementation identifiers as user-facing versions.
 - Installation details are an expandable disclosure below the row's primary controls. Animate the details region between collapsed and expanded states, keep the disclosure control below the details, and align the content with the agent icon/list edge.
 - Icon-only actions must have an accessible name and a tooltip when their meaning is not obvious. If a text action already fits naturally, prefer the text action over an icon-only control.
@@ -304,7 +304,7 @@ Every modal is one composed, elevated surface: a restrained overlay, one clear t
 
 ### Shared-list rule
 
-When several peer objects are primarily chosen or scanned—projects, settings sections, source choices, dropdown options—use a shared surface with adjacent rows and subtle dividers where necessary. Use individual cards only when each object carries a distinct, actionable operational payload, as board sessions do.
+When several peer objects are primarily chosen or scanned—projects, settings sections, source choices, dropdown options—use a shared surface with adjacent rows and subtle dividers where necessary. Use individual cards only when each object carries a distinct, actionable operational payload, as board sessions do. Settings cards follow this with no outline: the filled background groups them and hairline dividers separate the items (rows fit their content with 10px vertical padding).
 
 ### Terminal and conversation
 
@@ -412,6 +412,7 @@ Approve only when the answer to every applicable check is yes. Otherwise classif
 | --- | --- | --- |
 | 2026-09-03 | Dark-first, token-led, compact operational UI | Matches AO's long-running desktop workflow and renderer source of truth. |
 | 2026-09-03 | Geist/Geist Mono remain the typographic system | They are bundled, legible at dense sizes, and already define renderer hierarchy. |
+| 2026-10-09 | macOS uses SF Pro / SF Mono; Geist stays the bundled default elsewhere | System faces match native macOS chrome and get optical sizing for free. |
 | 2026-09-03 | Color is reserved for semantics and active focus | Parallel-agent supervision depends on fast, trustworthy scanning. |
 | 2026-09-03 | Shared list containers with dividers are preferred over spaced sibling cards | Better density and clearer grouping for projects and sessions. |
 | 2026-09-03 | Existing platform shell behavior is part of the design system | macOS traffic lights, Windows titlebar, and collapsible inspector are product behavior, not incidental CSS. |
@@ -424,3 +425,7 @@ Approve only when the answer to every applicable check is yes. Otherwise classif
 | 2026-09-16 | Home: quiet Star-us link; 2×2 action grid with standalone in-grid; recent rows use NavRowHighlight | Rejected accent CTAs, Connect Mobile on home, and flat hover washes — keep home minimal and aligned with sidebar row chrome. |
 | 2026-09-16 | Brand mark clicks to home with no hover/focus fill | Separate home affordance and sidebar focus wash on the brand were rejected. |
 | 2026-09-16 | Resize grips: fixed 80vh hover pill on center-pane border; clamp to panel min/max ∩ CSS max-width | Rejected always-on/`::after`/inset grips and unclamped pointer-following (inspector flew past both limits). |
+| 2026-10-08 | Resize grips: replaced the 80vh pill with a hover-only 2px line on the edge that fades out at both ends | The pill (including active/click state and cursor-following variants) looked bad; JS border tracking removed. |
+| 2026-10-09 | Home: with Developer Mode and Cloud on, Clone to the cloud replaces the standalone cell; card labels use verb + source; cards rest on `bg-card` and hover to `bg-accent`; recent rows sit under the grid with no heading of their own, one 40px line each (no path), hover pill on `bg-card` | A fifth full-width row broke the 2×2 grid; the old translucent hover made cards darker instead of lifting them; the separate recent-projects title and two-line rows made home taller than it needs to be. |
+| 2026-10-14 | Installed agent rows show muted "Installed" text; install is one ghost "Install · <method>" with a borderless chevron menu | A disabled filled button read as a control, and the bordered split pill broke the settings rule that only inputs, selects and switches carry an edge or fill. Supersedes the 2026-09-04 disabled-button row. |
+| 2026-10-14 | Settings cards: no outline, filled background groups them, hairline dividers between items, rows fit their content with 10px vertical padding | The person asked for borders only between items, not around containers. Rows sit 16px in from the card edge and the page title and section headings follow that inset. |

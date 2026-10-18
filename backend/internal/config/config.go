@@ -32,6 +32,12 @@ const (
 	// DefaultShutdownTimeout is the hard cap on graceful shutdown. After this
 	// the process exits even if connections are still draining.
 	DefaultShutdownTimeout = 10 * time.Second
+	// DefaultHarnessUpdateInterval is how often the daemon re-checks installed
+	// harnesses for updates after its startup check. A full pass probes each
+	// harness CLI, so it runs a few times a day rather than continuously.
+	DefaultHarnessUpdateInterval = 6 * time.Hour
+	// MinHarnessUpdateInterval is the shortest AO_HARNESS_UPDATE_INTERVAL accepted.
+	MinHarnessUpdateInterval = time.Hour
 	// DefaultAgent is the compatibility value used when AO_AGENT is unset. The
 	// daemon validates it at startup, but worker/orchestrator spawns resolve from
 	// explicit requests or project role config instead of falling back to it.
@@ -39,14 +45,11 @@ const (
 	// DefaultTelemetryPostHogHost is the default PostHog ingestion host when
 	// remote telemetry is enabled and AO_TELEMETRY_POSTHOG_HOST is unset.
 	DefaultTelemetryPostHogHost = "https://us.i.posthog.com"
-	// ClientElevenX is the AO_CLIENT value entitled to the cloud offering. It is
-	// the single place the identity is spelled out; gating logic must compare
-	// against this constant, never a string literal.
-	ClientElevenX = "eleven_x"
 
 	// defaultCloudControlPlaneURL is the control plane a build talks to when no
-	// override is set. Staging while the offering is in its dogfooding phase.
-	defaultCloudControlPlaneURL = "https://staging-api.aoagents.dev"
+	// override is set. Production, now that the hosted offering is live;
+	// AO_CLOUD_CONTROL_PLANE_URL still overrides it (e.g. staging-api for dev).
+	defaultCloudControlPlaneURL = "https://api.aoagents.dev"
 )
 
 // TelemetryRemote selects the remote telemetry exporter.
@@ -148,6 +151,14 @@ type Config struct {
 	AllowedOrigins []string
 	// Telemetry controls local/remote telemetry sinks.
 	Telemetry TelemetryConfig
+	// HarnessUpdateChecks lets the daemon compare installed harnesses with their
+	// release sources over the network. AO_HARNESS_UPDATE_CHECKS=off disables
+	// it for offline or policy-restricted machines.
+	HarnessUpdateChecks bool
+	// HarnessUpdateInterval is how often the daemon re-checks installed
+	// harnesses after its startup check. AO_HARNESS_UPDATE_INTERVAL overrides
+	// it; values below MinHarnessUpdateInterval are rejected.
+	HarnessUpdateInterval time.Duration
 	// StartupWorkingDirectory is the daemon process cwd before startup
 	// normalizes it. The desktop uses this to identify dev daemons after the
 	// process cwd is moved to the stable data dir.
@@ -155,13 +166,17 @@ type Config struct {
 	// GitLab carries the self-managed GitLab host allowlist and per-host
 	// token overrides, loaded once at boot from environment variables.
 	GitLab GitLabConfig
-	// Client identifies which client this deployment serves (AO_CLIENT). Empty
-	// means no client identity, which keeps client-gated offerings off.
+	// TrackerIntake gates the issue-intake observer daemon-wide
+	// (AO_TRACKER_INTAKE).
+	TrackerIntake bool
+	// Client identifies which client this deployment serves (AO_CLIENT). It is
+	// reported to clients through the settings API and gates nothing in the
+	// daemon: the cloud offering (B2B/B2C, providers, billing) is decided per
+	// organization by the cloud control plane.
 	Client string
 	// CloudOffering reports whether the cloud offering flag is switched on
-	// (AO_CLOUD_OFFERING). The flag alone does not surface cloud in clients:
-	// the settings service also requires the entitled client (ClientElevenX)
-	// and a configured control plane.
+	// (AO_CLOUD_OFFERING). It forces the cloud gate on regardless of the user's
+	// toggle; the settings service still requires a configured control plane.
 	CloudOffering bool
 	// LocalOffering reports whether the local offering is available
 	// (AO_LOCAL_OFFERING). It defaults to true; only an explicit false/0
@@ -171,6 +186,14 @@ type Config struct {
 	// (AO_CLOUD_CONTROL_PLANE_URL). When set it must be an http(s) URL; empty
 	// means no control plane is configured, which keeps the cloud offering off.
 	CloudControlPlaneURL string
+	// AgentBrowserURL is the host's agent browser (AO_AGENT_BROWSER_URL): the
+	// Chromium its sessions' agents drive, which clients show as the agent's
+	// tab through /sessions/{id}/agent-browser. A loopback http URL; empty
+	// means this host has none.
+	AgentBrowserURL string
+	// AgentBrowserToken is the agent browser's own credential
+	// (AO_AGENT_BROWSER_TOKEN). The daemon adds it; clients never see it.
+	AgentBrowserToken string
 }
 
 // Addr returns the host:port the HTTP server binds. It uses net.JoinHostPort so
@@ -201,10 +224,12 @@ func (c Config) Addr() string {
 //	AO_TELEMETRY_POSTHOG_HOST  PostHog host (default DefaultTelemetryPostHogHost)
 //	AO_GITLAB_ALLOWED_HOSTS    comma-separated self-managed GitLab hosts (each may include :port)
 //	AO_GITLAB_HOST_TOKENS      host=token,host=token per-host token overrides
-//	AO_CLIENT                  client identity for offering gates (trimmed, default empty)
+//	AO_CLIENT                  client identity reported to clients (trimmed, default empty)
 //	AO_CLOUD_OFFERING          cloud offering flag off|on (default off)
 //	AO_LOCAL_OFFERING          local offering off|on (default on)
 //	AO_CLOUD_CONTROL_PLANE_URL cloud control plane base URL (trimmed, must be http(s))
+//	AO_AGENT_BROWSER_URL       the host's agent browser (loopback http URL, default none)
+//	AO_AGENT_BROWSER_TOKEN     that browser's credential (trimmed, required with AO_AGENT_BROWSER_URL)
 //
 // The bind host is not configurable: the daemon is loopback-only by design.
 func Load() (Config, error) {
@@ -219,7 +244,9 @@ func Load() (Config, error) {
 			Remote:      TelemetryRemoteOff,
 			PostHogHost: DefaultTelemetryPostHogHost,
 		},
-		LocalOffering: true,
+		LocalOffering:         true,
+		HarnessUpdateChecks:   true,
+		HarnessUpdateInterval: DefaultHarnessUpdateInterval,
 	}
 
 	if raw := os.Getenv("AO_PORT"); raw != "" {
@@ -281,6 +308,23 @@ func Load() (Config, error) {
 		cfg.AllowedOrigins = origins
 	}
 
+	if raw, present := os.LookupEnv("AO_HARNESS_UPDATE_CHECKS"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_HARNESS_UPDATE_CHECKS", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.HarnessUpdateChecks = v
+	}
+	if raw, present := os.LookupEnv("AO_HARNESS_UPDATE_INTERVAL"); present && strings.TrimSpace(raw) != "" {
+		d, err := parsePositiveDuration("AO_HARNESS_UPDATE_INTERVAL", strings.TrimSpace(raw))
+		if err != nil {
+			return Config{}, err
+		}
+		if d < MinHarnessUpdateInterval {
+			return Config{}, fmt.Errorf("invalid AO_HARNESS_UPDATE_INTERVAL %q: must be at least %s", raw, MinHarnessUpdateInterval)
+		}
+		cfg.HarnessUpdateInterval = d
+	}
 	if raw, present := os.LookupEnv("AO_TELEMETRY_EVENTS"); present && strings.TrimSpace(raw) != "" {
 		v, err := parseToggleEnv("AO_TELEMETRY_EVENTS", raw)
 		if err != nil {
@@ -339,6 +383,14 @@ func Load() (Config, error) {
 		cfg.GitLab.HostTokens = tokens
 	}
 
+	if raw, ok := os.LookupEnv("AO_TRACKER_INTAKE"); ok && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_TRACKER_INTAKE", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.TrackerIntake = v
+	}
+
 	if raw := os.Getenv("AO_CLIENT"); raw != "" {
 		cfg.Client = strings.TrimSpace(raw)
 	}
@@ -367,6 +419,18 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 		cfg.CloudControlPlaneURL = u
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("AO_AGENT_BROWSER_URL")); raw != "" {
+		u, err := parseAgentBrowserURL(raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.AgentBrowserURL = u
+		cfg.AgentBrowserToken = strings.TrimSpace(os.Getenv("AO_AGENT_BROWSER_TOKEN"))
+		if cfg.AgentBrowserToken == "" {
+			return Config{}, fmt.Errorf("AO_AGENT_BROWSER_URL is set but AO_AGENT_BROWSER_TOKEN is empty: the agent browser refuses every request without its token")
+		}
 	}
 
 	runFile, err := resolveRunFilePath()
@@ -471,6 +535,22 @@ func parseCloudControlPlaneURL(raw string) (string, error) {
 		return "", fmt.Errorf("invalid AO_CLOUD_CONTROL_PLANE_URL %q: must be an http(s) URL", raw)
 	}
 	return trimmed, nil
+}
+
+// parseAgentBrowserURL accepts only a loopback http URL: the daemon proxies
+// to it with clients' requests, so it must never reach another machine.
+func parseAgentBrowserURL(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid AO_AGENT_BROWSER_URL %q: %w", raw, err)
+	}
+	host := u.Hostname()
+	ip := net.ParseIP(host)
+	loopback := strings.EqualFold(host, "localhost") || ip != nil && ip.IsLoopback()
+	if u.Scheme != "http" || u.User != nil || u.RawQuery != "" || !loopback {
+		return "", fmt.Errorf("invalid AO_AGENT_BROWSER_URL %q: must be a loopback http URL without credentials or query", raw)
+	}
+	return strings.TrimRight(raw, "/"), nil
 }
 
 // parsePositiveDuration rejects zero and negative durations: a zero

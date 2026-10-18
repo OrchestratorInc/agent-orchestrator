@@ -57,9 +57,7 @@ func TestBrokerExecuteRoundTrip(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 	enc := json.NewEncoder(conn)
 	dec := json.NewDecoder(conn)
-	if err := enc.Encode(wireMessage{Type: "hello", Version: ProtocolVersion}); err != nil {
-		t.Fatal(err)
-	}
+	handshake(t, enc, dec, "")
 	waitConnected(t, broker)
 
 	resultCh := make(chan Result, 1)
@@ -102,6 +100,68 @@ func TestBrokerExecuteRoundTrip(t *testing.T) {
 	}
 }
 
+func TestBrokerExecuteWaitsForRuntimeReconnect(t *testing.T) {
+	broker := New(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = broker.Serve(ctx, ln) }()
+
+	resultCh := make(chan Result, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := broker.Execute(context.Background(), "session-1", "snapshot", nil)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		resultCh <- result
+	}()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	enc := json.NewEncoder(conn)
+	dec := json.NewDecoder(conn)
+	handshake(t, enc, dec, "")
+	var command wireMessage
+	if err := dec.Decode(&command); err != nil {
+		t.Fatal(err)
+	}
+	if command.Type != "command" || command.Action != "snapshot" {
+		t.Fatalf("command = %#v", command)
+	}
+	if err := enc.Encode(wireMessage{Type: "result", RequestID: command.RequestID, OK: true, Result: json.RawMessage(`{"ok":true}`)}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-errCh:
+		t.Fatal(err)
+	case result := <-resultCh:
+		if result.Value.(map[string]interface{})["ok"] != true {
+			t.Fatalf("result = %#v", result.Value)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for result")
+	}
+}
+
+func TestBrokerExecuteHonorsContextWhileWaitingForRuntime(t *testing.T) {
+	broker := New(nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err := broker.Execute(ctx, "session-1", "snapshot", nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want context deadline", err)
+	}
+}
+
 func TestBrokerMapsRuntimeError(t *testing.T) {
 	broker := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -118,7 +178,7 @@ func TestBrokerMapsRuntimeError(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 	enc := json.NewEncoder(conn)
 	dec := json.NewDecoder(conn)
-	_ = enc.Encode(wireMessage{Type: "hello", Version: ProtocolVersion})
+	handshake(t, enc, dec, "")
 	waitConnected(t, broker)
 
 	errCh := make(chan error, 1)
@@ -149,8 +209,10 @@ func TestBrokerMapsRuntimeError(t *testing.T) {
 
 func TestBrokerUnavailableWithoutElectron(t *testing.T) {
 	broker := New(nil)
-	if _, err := broker.Execute(context.Background(), "session-1", "snapshot", nil); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("error = %v, want ErrUnavailable", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := broker.Execute(ctx, "session-1", "snapshot", nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want context deadline", err)
 	}
 }
 
@@ -164,24 +226,44 @@ func TestBrokerRejectsInvalidRuntimeToken(t *testing.T) {
 	}
 	go func() { _ = broker.Serve(ctx, ln) }()
 
-	invalid, err := net.Dial("tcp", ln.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.NewEncoder(invalid).Encode(wireMessage{
-		Type:    "hello",
-		Version: ProtocolVersion,
-		Token:   "wrong-token",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	_ = invalid.SetReadDeadline(time.Now().Add(time.Second))
-	if _, err := invalid.Read(make([]byte, 1)); err == nil {
-		t.Fatal("invalid runtime connection remained open")
-	}
-	_ = invalid.Close()
-	if broker.Status().Connected {
-		t.Fatal("broker accepted an invalid runtime token")
+	for _, tc := range []struct {
+		name  string
+		hello string
+		code  string
+	}{
+		{"wrong token", `{"type":"hello","version":2,"token":"wrong-token"}`, "BROWSER_RUNTIME_TOKEN_REJECTED"},
+		{"missing token", `{"type":"hello","version":2}`, "BROWSER_RUNTIME_TOKEN_REJECTED"},
+		{"other protocol", `{"type":"hello","version":3,"token":"expected-token"}`, "BROWSER_RUNTIME_PROTOCOL_MISMATCH"},
+		{"not a hello", `{"type":"result","requestId":"r1"}`, "BROWSER_RUNTIME_BAD_HELLO"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			invalid, err := net.Dial("tcp", ln.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = invalid.Close() }()
+			if _, err := io.WriteString(invalid, tc.hello+"\n"); err != nil {
+				t.Fatal(err)
+			}
+			// The runtime learns it was refused, and why, before the daemon closes.
+			_ = invalid.SetReadDeadline(time.Now().Add(browserRuntimeTestTimeout()))
+			dec := json.NewDecoder(invalid)
+			var reply wireMessage
+			if err := dec.Decode(&reply); err != nil {
+				t.Fatal(err)
+			}
+			if reply.Type != "hello-rejected" || reply.Error == nil || reply.Error.Code != tc.code {
+				t.Fatalf("reply = %#v, want hello-rejected with %s", reply, tc.code)
+			}
+			// Only EOF proves the daemon closed the connection; a deadline timeout
+			// would mean it stayed open.
+			if err := dec.Decode(&reply); !errors.Is(err, io.EOF) {
+				t.Fatalf("read after hello-rejected: err = %v, reply = %#v; want io.EOF from the daemon closing", err, reply)
+			}
+			if broker.Status().Connected {
+				t.Fatal("broker accepted an invalid hello")
+			}
+		})
 	}
 
 	valid, err := net.Dial("tcp", ln.Addr().String())
@@ -189,13 +271,7 @@ func TestBrokerRejectsInvalidRuntimeToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = valid.Close() }()
-	if err := json.NewEncoder(valid).Encode(wireMessage{
-		Type:    "hello",
-		Version: ProtocolVersion,
-		Token:   "expected-token",
-	}); err != nil {
-		t.Fatal(err)
-	}
+	handshake(t, json.NewEncoder(valid), json.NewDecoder(valid), "expected-token")
 	waitConnected(t, broker)
 }
 
@@ -294,6 +370,21 @@ func TestBrokerWriteObservesContext(t *testing.T) {
 	}
 	if time.Since(started) > time.Second {
 		t.Fatal("context cancellation did not bound browser write")
+	}
+}
+
+// handshake sends a hello and requires hello-ok as the daemon's first frame.
+func handshake(t *testing.T, enc *json.Encoder, dec *json.Decoder, token string) {
+	t.Helper()
+	if err := enc.Encode(wireMessage{Type: "hello", Version: ProtocolVersion, Token: token}); err != nil {
+		t.Fatal(err)
+	}
+	var reply wireMessage
+	if err := dec.Decode(&reply); err != nil {
+		t.Fatal(err)
+	}
+	if reply.Type != "hello-ok" {
+		t.Fatalf("first daemon frame = %#v, want hello-ok", reply)
 	}
 }
 

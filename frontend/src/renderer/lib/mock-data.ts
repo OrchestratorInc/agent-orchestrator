@@ -480,11 +480,11 @@ export const mockSessionScmSummaries: Record<string, SessionPRSummary[]> = {
 				conflictFiles: [
 					{
 						path: "src/render/texture-cache.ts",
-						url: "https://github.com/me/webgl-preview/pull/51/conflicts#src-render-texture-cache-ts",
+						url: "https://github.com/me/webgl-preview/pull/51",
 					},
 					{
 						path: "src/render/webgl-context.ts",
-						url: "https://github.com/me/webgl-preview/pull/51/conflicts#src-render-webgl-context-ts",
+						url: "https://github.com/me/webgl-preview/pull/51",
 					},
 				],
 			},
@@ -613,6 +613,7 @@ const demoChild = (
 	displayName,
 	branch: `ao/${id.slice(0, 8)}`,
 	mode: "trusted",
+	interfaceMode: "tui",
 	deniedCommands: [],
 	activityState,
 	status,

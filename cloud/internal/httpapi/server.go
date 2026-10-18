@@ -13,10 +13,13 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/auth"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/logctx"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/projectsnapshot"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/secrets"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
@@ -50,28 +53,46 @@ type Store interface {
 	AcceptOrgInvitation(context.Context, domain.Principal, string, string) (domain.Membership, error)
 	DeclineOrgInvitation(context.Context, domain.Principal, string, string) error
 	CreateProject(context.Context, domain.Principal, string, string, domain.CreateProject) (domain.Project, error)
+	GetProject(context.Context, domain.Principal, string, string) (domain.Project, error)
 	ListProjects(context.Context, domain.Principal, string, *domain.Cursor, int) ([]domain.Project, bool, error)
 	UpdateProject(context.Context, domain.Principal, string, string, domain.UpdateProject) (domain.Project, error)
 	ArchiveProject(context.Context, domain.Principal, string, string) error
 	CreateSession(context.Context, domain.Principal, string, string, int, domain.CreateSession) (domain.Session, error)
 	ListSessions(context.Context, domain.Principal, string, string, *domain.Cursor, int) ([]domain.Session, bool, error)
 	GetSession(context.Context, domain.Principal, string, string) (domain.Session, error)
-	SendMessage(context.Context, domain.Principal, string, string, string, string) (domain.ClientEvent, error)
+	CheckSessionWriteAccess(context.Context, domain.Principal, string, string) error
+	SetCloudSessionAutoInjectCI(context.Context, domain.Principal, string, string, bool) (domain.Session, error)
+	SetCloudSessionAutoInjectReview(context.Context, domain.Principal, string, string, bool) (domain.Session, error)
+	SetCloudSessionTerminateOnPRMerge(context.Context, domain.Principal, string, string, bool) (domain.Session, error)
+	SendMessage(context.Context, domain.Principal, string, string, string, string, domain.ChatTurnSettings) (domain.ClientEvent, error)
 	ListClientEvents(context.Context, domain.Principal, string, string, int64, int) ([]domain.ClientEvent, bool, error)
 	SetSandboxDesiredState(ctx context.Context, principal domain.Principal, orgID, sessionID, desiredState string) error
+	TerminateSession(ctx context.Context, principal domain.Principal, orgID, sessionID string) error
+	RestoreSession(ctx context.Context, principal domain.Principal, orgID, sessionID string) error
 	ResumeSession(context.Context, domain.Principal, string, string) (domain.SandboxLifecycle, error)
 	WakePausedSessions(context.Context, domain.Principal, string) (int64, error)
 	RedeemWorkerBootstrapTicket(context.Context, string) (domain.AccessTicket, error)
 	WorkerLaunchSpec(context.Context, string, string) (domain.WorkerLaunch, error)
 	RegisterWorkerBootstrap(ctx context.Context, orgID, sessionID, workerID, version string, epoch int64, capabilities []string) error
 	WorkerConnectionCurrent(ctx context.Context, orgID, sessionID, workerID string, epoch int64) (bool, error)
+	WorkerAgentSessionID(ctx context.Context, orgID, sessionID, workerID string, epoch int64) (string, error)
 	MarkWorkerSeen(ctx context.Context, orgID, sessionID, workerID, version string, epoch int64, capabilities []string) error
 	SetWorkerActivity(ctx context.Context, orgID, sessionID, workerID string, epoch int64, activity worker.ActivityEvent) error
+	RecordWorkspaceStartupError(ctx context.Context, orgID, sessionID, workerID string, epoch int64, code, message, detail string) error
+	ClearWorkspaceStartupError(ctx context.Context, orgID, sessionID, workerID string, epoch int64) error
 	AppendSessionEvent(ctx context.Context, orgID, sessionID, eventType string, payload json.RawMessage) (domain.ClientEvent, error)
+	AppendInteractiveConversationFacts(context.Context, string, string, string, string, string, string) error
+	RecordPullRequestOpened(ctx context.Context, orgID string, pr domain.PullRequest, deliveryID string) error
 	ClaimWorkerTurn(ctx context.Context, orgID, sessionID, workerID string, epoch int64) (domain.WorkerTurn, bool, error)
 	RequestTurnCancellation(ctx context.Context, principal domain.Principal, orgID, sessionID, turnID string) error
+	SteerTurn(context.Context, domain.Principal, string, string, string, string, string) (domain.ClientEvent, error)
+	CreateWorkerChatApproval(context.Context, string, string, string, int64, worker.ChatApproval) error
+	WorkerChatApprovalDecision(context.Context, string, string, string, int64, string, int, string) (string, error)
+	DecideChatApproval(context.Context, domain.Principal, string, string, string, string) error
 	WorkerTurnCancellationRequested(ctx context.Context, orgID, sessionID, workerID, turnID string, epoch int64, attempt int) (bool, error)
-	AppendWorkerTurnOutput(ctx context.Context, orgID, sessionID, workerID, turnID string, epoch int64, attempt int, stream, text string) error
+	AppendWorkerTurnOutput(ctx context.Context, orgID, sessionID, workerID, turnID string, epoch int64, attempt int, stream, text, itemID string) error
+	AppendWorkerTurnActivity(ctx context.Context, orgID, sessionID, workerID, turnID string, epoch int64, attempt int, activity worker.ChatActivity) error
+	AppendWorkerTurnCapabilities(context.Context, string, string, string, string, int64, int, bool) error
 	FinishWorkerTurn(ctx context.Context, orgID, sessionID, workerID, turnID string, epoch int64, attempt int, outcome, errorMessage string) (bool, error)
 	WorkerAgentCredential(ctx context.Context, orgID, sessionID, workerID string, epoch int64) (domain.WorkerCredential, error)
 	ListOrchestratorChildren(context.Context, string, string, bool, *domain.Cursor, int) ([]domain.Session, bool, error)
@@ -86,8 +107,8 @@ type Store interface {
 	ClaimWorkerRequest(context.Context, string, string, string, int64, time.Duration) (domain.WorkerRequest, bool, error)
 	CompleteWorkerRequest(context.Context, string, string, string, string, int64, int, json.RawMessage) error
 	FailWorkerRequest(context.Context, string, string, string, string, int64, int, string, string) error
-	IssueTerminalTicket(context.Context, domain.Principal, string, string, string, time.Duration) (string, []string, error)
-	OpenTerminal(context.Context, string, string, time.Duration) (domain.TerminalSession, error)
+	IssueTerminalTicket(context.Context, domain.Principal, string, string, string, string, time.Duration) (string, []string, error)
+	OpenTerminal(context.Context, string, string, string, time.Duration) (domain.TerminalSession, error)
 	RefreshTerminalInteraction(context.Context, domain.TerminalSession, time.Duration) error
 	QueueTerminalInput(context.Context, domain.TerminalSession, string, []byte) error
 	QueueTerminalResize(context.Context, domain.TerminalSession, uint16, uint16) error
@@ -95,10 +116,13 @@ type Store interface {
 	AppendTerminalOutput(context.Context, string, string, string, string, int64, []byte) (int64, error)
 	AppendTerminalOutputAt(context.Context, string, string, string, string, int64, int64, []byte) (int64, error)
 	ClaimTerminalInput(context.Context, string, string, string, int64, string, time.Duration) (domain.WorkerRequest, bool, error)
-	MarkTerminalExited(context.Context, string, string, string, string, int64, int) error
+	MarkTerminalExited(context.Context, string, string, string, string, int64, int, bool) error
 	EnsureWorkerAgentTerminal(context.Context, string, string, string, int64, time.Duration) (domain.TerminalSession, error)
 	ListTerminalOutput(context.Context, domain.TerminalSession, int64, int) ([]domain.TerminalOutput, string, error)
 	ListPullRequestsBySession(context.Context, domain.Principal, string, string) ([]domain.PullRequest, error)
+	GitHubInstallationForRepository(context.Context, string, string) (int64, int64, error)
+	PullRequestForMerge(context.Context, domain.Principal, string, string, int, string) (domain.PullRequest, error)
+	PullRequestSnapshot(context.Context, string, string) (domain.PullRequestSnapshot, error)
 	ListReviewRunsBySession(context.Context, domain.Principal, string, string) ([]domain.ReviewRunPullRequest, error)
 	PRFactsBySession(ctx context.Context, orgID string, sessionIDs []string) (map[string][]contract.PRFacts, error)
 	PullRequestsBySessions(ctx context.Context, orgID string, sessionIDs []string) (map[string][]domain.PullRequest, error)
@@ -111,6 +135,15 @@ type Store interface {
 	RedeemProjectShareLink(context.Context, domain.Principal, string, string) (domain.SharedProject, error)
 	ListSharedProjects(context.Context, domain.Principal) ([]domain.SharedProject, error)
 	ListSharedProjectSessions(context.Context, domain.Principal, string, string) ([]domain.Session, error)
+	StartSessionInterfaceTransition(context.Context, domain.Principal, string, string, domain.SessionInterface, domain.SessionInterface, domain.SessionInterfaceTransitionPolicy, string, ...domain.ChatTurnSettings) (domain.SessionInterfaceTransition, error)
+	GetActiveSessionInterfaceTransition(context.Context, domain.Principal, string, string) (domain.SessionInterfaceTransition, bool, error)
+	GetLatestRelevantSessionInterfaceTransition(context.Context, domain.Principal, string, string) (domain.SessionInterfaceTransition, bool, error)
+	AdvanceSessionInterfaceTransition(context.Context, domain.Principal, string, string, domain.SessionInterfaceTransitionPhase, domain.SessionInterfaceTransitionPhase, string, string, string) error
+	AcknowledgeSessionInterfaceTransitionNotice(context.Context, domain.Principal, string, string, string) error
+	AcceptNotificationEvent(context.Context, string, string, string, int64, domain.AgentNotificationEvent) (domain.NotificationAcceptance, error)
+	ListNotifications(context.Context, domain.Principal, string, domain.NotificationFilter) (domain.NotificationPage, error)
+	ListNotificationEvents(context.Context, domain.Principal, string, int64, int) ([]domain.NotificationEvent, bool, error)
+	MarkNotificationsRead(context.Context, domain.Principal, string, []string) (int64, error)
 }
 
 // WorkerTokens issues and verifies the short-lived credentials sandbox workers
@@ -124,6 +157,7 @@ type WorkerTokens interface {
 type CheckoutBroker interface {
 	IssueCheckoutGrant(context.Context, string, string) (githubapp.CheckoutGrant, error)
 	IssuePushGrant(context.Context, string, string) (githubapp.CheckoutGrant, error)
+	IssuePushGrantForRepo(context.Context, string, string, string) (githubapp.CheckoutGrant, error)
 	RaisePullRequest(context.Context, string, string, domain.RaisePullRequest) (domain.PullRequest, error)
 	ClaimPullRequest(context.Context, string, string, string) (domain.PullRequest, error)
 	SubmitReview(context.Context, string, string, string, domain.SubmitReviewResult) (domain.ReviewRun, error)
@@ -131,6 +165,7 @@ type CheckoutBroker interface {
 
 type Server struct {
 	store            Store
+	transcripts      TranscriptStore
 	workos           auth.WorkOSVerifier
 	localAuthEnabled bool
 	localSessionTTL  time.Duration
@@ -140,8 +175,19 @@ type Server struct {
 	// session, always including sandboxProvider (the default). It gates the
 	// per-session provider override and is reported to clients via /me.
 	availableSandboxProviders []string
-	provisioning              sandbox.ProvisioningDefaults
-	workerTokens              WorkerTokens
+	// capabilityGatedProviders is the set of providers that additionally require
+	// a matching organization capability. Empty by default (no gating).
+	capabilityGatedProviders map[string]bool
+	// defaultOrgCapabilities apply to any organization without capabilities of
+	// its own (AO_CLOUD_DEFAULT_ORG_CAPABILITIES): personal organizations, and
+	// WorkOS organizations whose metadata has no capabilities key.
+	defaultOrgCapabilities []string
+	// coderTemplates lists the Coder templates a client may pick from. Nil when
+	// the deployment does not offer the coder provider.
+	coderTemplates   CoderTemplateLister
+	coderTemplateIDs []string
+	provisioning     sandbox.ProvisioningDefaults
+	workerTokens     WorkerTokens
 	// workerTokenLifetime is zero when the deployment does not override the
 	// protocol default; workerTokenTTL() resolves that.
 	workerTokenLifetime     time.Duration
@@ -154,50 +200,98 @@ type Server struct {
 	drain                   chan struct{}
 	logger                  *slog.Logger
 	github                  *githubapp.Service
+	reviewService           *githubapp.Service
 	checkoutBroker          CheckoutBroker
 	patWrites               *githubapp.PATWriteService
 	brokerAuthToken         string
 	environmentControlToken string
 	secretCipher            *secrets.Cipher
 	credentialValidator     credentialValidator
+	repositoryProbeClient   *http.Client
 	webhookMaxBody          int64
 	terminalStreamEnabled   bool
 	terminalRelayEnabled    bool
 	terminalStreams         *terminalStreams
+	agentBrowserRelays      *agentBrowserRelays
 	workWaiters             *workWaiters
+	notificationWake        func()
+	sandboxWake             func()
+	projectSnapshots        ProjectSnapshotter
+	billingOptions          *BillingOptions
+	billingStore            billingStore
+	offerCache              planOfferCache
+	presenceLimiter         presenceLimiter
+	notificationWaiters     *notificationWaiters
 	// workerBinariesBySHA serves the content-addressed worker/helper binaries
 	// so a worker with a stale baked copy can heal itself to this exact build.
 	workerBinariesBySHA map[string][]byte
 	handler             http.Handler
+	activity            *activity.Recorder
+	supportToken        string
 }
 
 type Options struct {
 	Store                     Store
+	Transcripts               TranscriptStore
 	WorkOS                    auth.WorkOSVerifier
 	LocalAuthEnabled          bool
 	LocalSessionTTL           time.Duration
 	SandboxProvider           string
 	AvailableSandboxProviders []string
-	Provisioning              sandbox.ProvisioningDefaults
-	WorkerTokens              WorkerTokens
-	WorkerTokenTTL            time.Duration
-	WorkerBinary              []byte
-	WorkerHelperBinary        []byte
-	WorkerRequestTimeout      time.Duration
-	MaxSandboxes              int
-	Environment               string
-	Release                   string
-	Logger                    *slog.Logger
-	GitHub                    *githubapp.Service
-	CheckoutBroker            CheckoutBroker
-	PATWrites                 *githubapp.PATWriteService
-	BrokerAuthToken           string
-	EnvironmentControlToken   string
-	SecretCipher              *secrets.Cipher
-	CredentialValidator       credentialValidator
-	WebhookMaxBody            int64
-	TerminalStreamEnabled     bool
-	TerminalRelayEnabled      bool
+	CapabilityGatedProviders  []string
+	// DefaultOrgCapabilities are the capabilities of an organization that has
+	// none of its own; see Server.defaultOrgCapabilities.
+	DefaultOrgCapabilities []string
+	// CoderTemplates lists templates available from the configured Coder provider.
+	CoderTemplates CoderTemplateLister
+	// CoderTemplateIDs limits the configured Coder's templates the picker
+	// offers; empty offers all. Bring-your-own connections are not limited.
+	CoderTemplateIDs   []string
+	Provisioning       sandbox.ProvisioningDefaults
+	WorkerTokens       WorkerTokens
+	WorkerTokenTTL     time.Duration
+	WorkerBinary       []byte
+	WorkerHelperBinary []byte
+	// WorkerBuilds are additional architectures' worker/helper binaries served
+	// from the same content-addressed self-update route.
+	WorkerBuilds            map[string]sandbox.WorkerBuild
+	WorkerRequestTimeout    time.Duration
+	MaxSandboxes            int
+	Environment             string
+	Release                 string
+	Logger                  *slog.Logger
+	GitHub                  *githubapp.Service
+	ReviewService           *githubapp.Service
+	CheckoutBroker          CheckoutBroker
+	PATWrites               *githubapp.PATWriteService
+	BrokerAuthToken         string
+	EnvironmentControlToken string
+	SecretCipher            *secrets.Cipher
+	CredentialValidator     credentialValidator
+	RepositoryProbeClient   *http.Client
+	WebhookMaxBody          int64
+	TerminalStreamEnabled   bool
+	TerminalRelayEnabled    bool
+	NotificationWake        func()
+	// SandboxWake asks the sandbox reconciler for an immediate pass; nil when
+	// this control plane runs no reconciler.
+	SandboxWake func()
+	// ProjectSnapshots prepares per-project Freestyle snapshots; nil disables
+	// them and every session boots from its harness snapshot.
+	ProjectSnapshots ProjectSnapshotter
+	// Billing configures Stripe billing; nil leaves it off.
+	Billing *BillingOptions
+	// Activity records the per-organization support trail; nil records nothing.
+	Activity *activity.Recorder
+	// SupportToken enables the operator support lookup route
+	// (AO_CLOUD_SUPPORT_TOKEN); empty leaves the route unregistered.
+	SupportToken string
+}
+
+// ProjectSnapshotter looks up and builds a project's prepared snapshot.
+type ProjectSnapshotter interface {
+	Lookup(context.Context, projectsnapshot.Request) (string, bool)
+	Ensure(projectsnapshot.Request)
 }
 
 func New(options Options) *Server {
@@ -241,14 +335,32 @@ func New(options Options) *Server {
 	if maxSandboxes <= 0 {
 		maxSandboxes = DefaultMaxSandboxesPerOrg
 	}
+	capabilityGatedProviders := make(map[string]bool, len(options.CapabilityGatedProviders))
+	for _, provider := range options.CapabilityGatedProviders {
+		if provider = strings.ToLower(strings.TrimSpace(provider)); provider != "" {
+			capabilityGatedProviders[provider] = true
+		}
+	}
+	defaultOrgCapabilities := make([]string, 0, len(options.DefaultOrgCapabilities))
+	for _, capability := range options.DefaultOrgCapabilities {
+		if capability = strings.ToLower(strings.TrimSpace(capability)); capability != "" &&
+			!slices.Contains(defaultOrgCapabilities, capability) {
+			defaultOrgCapabilities = append(defaultOrgCapabilities, capability)
+		}
+	}
 	server := &Server{
 		store:                     options.Store,
+		transcripts:               options.Transcripts,
 		workos:                    options.WorkOS,
 		localAuthEnabled:          options.LocalAuthEnabled,
 		localSessionTTL:           options.LocalSessionTTL,
 		localAuthLimiter:          newFixedWindowLimiter(10, time.Minute, 4096),
 		sandboxProvider:           sandboxProvider,
 		availableSandboxProviders: availableSandboxProviders,
+		capabilityGatedProviders:  capabilityGatedProviders,
+		defaultOrgCapabilities:    defaultOrgCapabilities,
+		coderTemplates:            options.CoderTemplates,
+		coderTemplateIDs:          options.CoderTemplateIDs,
 		provisioning:              options.Provisioning,
 		workerTokens:              options.WorkerTokens,
 		workerTokenLifetime:       options.WorkerTokenTTL,
@@ -259,24 +371,47 @@ func New(options Options) *Server {
 		drain:                     make(chan struct{}),
 		logger:                    logger,
 		github:                    options.GitHub,
+		reviewService:             options.ReviewService,
 		checkoutBroker:            options.CheckoutBroker,
 		patWrites:                 options.PATWrites,
 		brokerAuthToken:           options.BrokerAuthToken,
 		environmentControlToken:   options.EnvironmentControlToken,
 		secretCipher:              options.SecretCipher,
 		credentialValidator:       options.CredentialValidator,
+		repositoryProbeClient:     options.RepositoryProbeClient,
 		webhookMaxBody:            webhookMaxBody,
 		terminalStreamEnabled:     options.TerminalStreamEnabled,
 		terminalRelayEnabled:      options.TerminalRelayEnabled,
 		terminalStreams:           newTerminalStreams(),
+		agentBrowserRelays:        newAgentBrowserRelays(),
 		workWaiters:               newWorkWaiters(),
+		notificationWake:          options.NotificationWake,
+		sandboxWake:               options.SandboxWake,
+		projectSnapshots:          options.ProjectSnapshots,
+		billingOptions:            options.Billing,
+		notificationWaiters:       newNotificationWaiters(),
+		activity:                  options.Activity,
+		supportToken:              options.SupportToken,
 	}
-	server.workerBinariesBySHA = indexWorkerBinaries(options.WorkerBinary, options.WorkerHelperBinary)
+	workerBinaries := [][]byte{options.WorkerBinary, options.WorkerHelperBinary}
+	for _, build := range options.WorkerBuilds {
+		workerBinaries = append(workerBinaries, build.Binary, build.HelperBinary)
+	}
+	server.workerBinariesBySHA = indexWorkerBinaries(workerBinaries...)
+	if store, ok := options.Store.(billingStore); ok {
+		server.billingStore = store
+	}
 	if server.credentialValidator == nil {
 		server.credentialValidator = newAgentCredentialValidator(nil)
 	}
+	if server.repositoryProbeClient == nil {
+		server.repositoryProbeClient = &http.Client{Timeout: 5 * time.Second}
+	}
 	if server.checkoutBroker == nil && options.GitHub != nil {
 		server.checkoutBroker = options.GitHub
+	}
+	if server.reviewService == nil && options.GitHub != nil {
+		server.reviewService = options.GitHub
 	}
 	server.provisioning.Provider = sandboxProvider
 	if server.provisioning.Release == "" {
@@ -288,9 +423,13 @@ func New(options Options) *Server {
 	router.Get("/healthz", server.health)
 	router.Get("/readyz", server.ready)
 	router.Get("/github/healthz", server.githubHealth)
+	// Public HTTPS bounce page for the desktop sign-in flow: WorkOS redirects the
+	// browser here, and it hands the OAuth result off to the ao-app:// deep link.
+	router.Get("/app/auth/return", server.appAuthReturn)
 	if server.github != nil {
 		router.Get("/api/cloud/v1/github/install/setup", server.githubSetupCallback)
 		router.Get("/api/cloud/v1/github/oauth/callback", server.githubOAuthCallback)
+		router.Post("/api/cloud/v1/github/oauth/connect-others", server.githubConnectOthers)
 		router.Get("/api/cloud/v1/github/user/callback", server.githubUserCallback)
 		router.Post("/api/cloud/v1/github/webhooks", server.githubWebhook)
 		if server.brokerAuthToken != "" {
@@ -309,11 +448,22 @@ func New(options Options) *Server {
 	if server.environmentControlToken != "" {
 		router.Post("/api/cloud/v1/control/github/scratch-projects", server.createEnvironmentScratchProject)
 	}
+	// Operator-only support lookup (cloud/docs/support-runbook.md).
+	if server.supportToken != "" {
+		router.Get("/api/cloud/v1/control/support/lookup", server.supportLookup)
+	}
+	// Stripe signs its webhooks; the handler verifies the signature.
+	router.Post("/api/cloud/v1/billing/stripe/webhook", server.stripeWebhook)
+	router.Get("/billing/return", server.billingReturn)
 	router.Route("/api/cloud/v1", func(router chi.Router) {
+		router.Post("/remote-hosts/{hostId}/address", server.updateRemoteHostAddress)
 		router.Post("/auth/local/register", server.registerLocal)
 		router.Post("/auth/local/login", server.loginLocal)
 		router.With(server.authenticate).Post("/auth/local/logout", server.logoutLocal)
 		router.With(server.authenticate).Get("/me", server.me)
+		router.With(server.authenticate).Get("/me/hosts", server.listRemoteHosts)
+		router.With(server.authenticate).Put("/me/hosts/{hostId}", server.putRemoteHost)
+		router.With(server.authenticate).Delete("/me/hosts/{hostId}", server.deleteRemoteHost)
 		router.With(server.authenticate).Post("/orgs", server.createOrganization)
 		router.With(server.authenticate).Get("/invitations", server.listMyInvitations)
 		router.With(server.authenticate).Get("/me/providers", server.listUserProviderConnections)
@@ -321,6 +471,7 @@ func New(options Options) *Server {
 		router.With(server.authenticate).Delete("/me/providers/{agent}", server.deleteUserAgentConnection)
 		router.With(server.authenticate).Put("/me/github-pat", server.putGitHubPAT)
 		router.With(server.authenticate).Delete("/me/github-pat", server.deleteGitHubPAT)
+		router.With(server.authenticate).Post("/me/github-pat/validate-saved-repository", server.validateSavedRepository)
 		router.With(server.authenticate).Post("/share-links/redeem", server.redeemProjectShareLink)
 		router.With(server.authenticate).Get("/shared/projects", server.listSharedProjects)
 		if server.github != nil {
@@ -345,8 +496,13 @@ func New(options Options) *Server {
 			// ticket for a sandbox it is already registered on.
 			router.Get("/worker/reconnect", server.workerReconnect)
 			router.Post("/worker/events", server.workerEvent)
+			router.Get("/worker/session", server.workerSession)
+			router.Post("/worker/notification-events", server.workerNotificationEvent)
 			router.Post("/worker/turns/claim", server.workerClaimTurn)
 			router.Get("/worker/turns/{turnId}/cancellation", server.workerTurnCancellation)
+			router.Post("/worker/turns/{turnId}/approvals", server.workerCreateChatApproval)
+			router.Post("/worker/turns/{turnId}/capabilities", server.workerTurnCapabilities)
+			router.Get("/worker/turns/{turnId}/approvals/{requestId}", server.workerChatApprovalDecision)
 			router.Post("/worker/turns/{turnId}/complete", server.workerCompleteTurn)
 			router.Post("/worker/turns/{turnId}/fail", server.workerFailTurn)
 			router.Get("/worker/credential", server.workerCredential)
@@ -355,12 +511,16 @@ func New(options Options) *Server {
 			router.Post("/worker/github-token", server.workerGitHubToken)
 			router.Post("/worker/pull-requests", server.workerRaisePullRequest)
 			router.Post("/worker/pull-requests/claim", server.workerClaimPullRequest)
+			router.Post("/worker/pull-requests/refs", server.workerReportGitRefs)
+			router.Post("/worker/reviews/trigger", server.workerTriggerReviews)
 			router.Post("/worker/reviews/{reviewRunId}/submit", server.workerSubmitReview)
 			router.Get("/worker/children", server.listWorkerChildren)
 			router.Post("/worker/children", server.createWorkerChild)
 			router.Post("/worker/children/{sessionId}/messages", server.sendWorkerChildMessage)
 			router.Delete("/worker/children/{sessionId}", server.deleteWorkerChild)
 			router.Post("/worker/parent/messages", server.reportToParent)
+			router.Put("/worker/transcript", server.workerPutTranscript)
+			router.Get("/worker/transcript", server.workerGetTranscript)
 			router.Post("/worker/transport/claim", server.workerClaimTransport)
 			// The worker blocks here (long-poll) instead of busy-polling the
 			// claim routes; the control plane wakes it the instant a turn or
@@ -372,6 +532,8 @@ func New(options Options) *Server {
 			router.Get("/worker/terminals/{terminalId}/stream", server.workerTerminalStream)
 			router.Post("/worker/terminals/{terminalId}/exit", server.workerTerminalExit)
 			router.Post("/worker/terminals/agent", server.workerEnsureAgentTerminal)
+			router.Get("/worker/agent-browser", server.workerAgentBrowserControl)
+			router.Get("/worker/agent-browser/streams/{stream}", server.workerAgentBrowserStream)
 		})
 		router.Get("/terminal", server.connectTerminal)
 		router.Route("/orgs/{orgId}", func(router chi.Router) {
@@ -387,7 +549,18 @@ func New(options Options) *Server {
 				router.Post("/projects/scratch", server.createGitHubScratchProject)
 			}
 			router.Get("/projects", server.listProjects)
+			router.Get("/billing", server.getBilling)
+			router.Post("/billing/checkout", server.createBillingCheckout)
+			router.Post("/billing/portal", server.createBillingPortal)
+			router.Post("/billing/usage/reset", server.resetBillingUsage)
+			router.Get("/notifications", server.listNotifications)
+			router.Get("/notification-events", server.notificationEvents)
+			router.Patch("/notifications/{notificationId}", server.markNotificationRead)
+			router.Post("/notifications/read-all", server.markAllNotificationsRead)
 			router.Post("/projects", server.createProject)
+			router.Post("/projects/standalone", server.createStandaloneProject)
+			router.Get("/projects/{projectId}", server.getProject)
+			router.Patch("/projects/{projectId}/settings", server.updateProjectSettings)
 			router.Patch("/projects/{projectId}", server.updateProject)
 			router.Delete("/projects/{projectId}", server.deleteProject)
 			router.Get("/projects/{projectId}/shares", server.listProjectShareLinks)
@@ -401,15 +574,32 @@ func New(options Options) *Server {
 			router.Put("/provider-connections/agents/{agent}", server.putAgentConnection)
 			router.Delete("/provider-connections/agents/{agent}", server.deleteAgentConnection)
 			router.Post("/provider-connections/agents/{agent}/promote", server.promoteAgentConnection)
+			router.Get("/coder-config", server.getOrgCoderConfig)
+			router.Put("/coder-config", server.putOrgCoderConfig)
+			router.Delete("/coder-config", server.deleteOrgCoderConfig)
+			router.Put("/sandbox-provider", server.putOrgSandboxProvider)
 			router.Get("/sessions", server.listSessions)
 			router.Post("/sessions", server.createSession)
+			router.Get("/sandbox/coder/templates", server.listCoderTemplates)
+			router.Get("/coder-templates/{templateId}/parameters", server.getCoderTemplateParameters)
+			router.Post("/coder-templates/{templateId}/parameters/evaluate", server.evaluateCoderTemplateParameters)
 			router.Get("/sessions/{sessionId}", server.getSession)
+			router.Patch("/sessions/{sessionId}/preferences", server.updateSessionPreferences)
+			router.Patch("/sessions/{sessionId}/auto-inject-ci", server.setCloudSessionAutoInjectCI)
+			router.Patch("/sessions/{sessionId}/auto-inject-review", server.setCloudSessionAutoInjectReview)
+			router.Patch("/sessions/{sessionId}/merge-policy", server.setCloudSessionMergePolicy)
 			router.Post("/sessions/wake", server.wakePausedSessions)
 			router.Post("/sessions/{sessionId}/resume", server.resumeSession)
+			router.Post("/sessions/{sessionId}/presence", server.touchSessionPresence)
+			router.Post("/sessions/{sessionId}/startup-retry", server.retrySessionStartup)
+			router.Post("/sessions/{sessionId}/restore", server.restoreSession)
 			router.Get("/sessions/{sessionId}/children", server.listSessionChildren)
 			router.Delete("/sessions/{sessionId}", server.deleteSession)
 			router.Post("/sessions/{sessionId}/messages", server.sendMessage)
+			router.Get("/sessions/{sessionId}/chat-models", server.getChatModels)
 			router.Post("/sessions/{sessionId}/turns/{turnId}/cancel", server.cancelTurn)
+			router.Post("/sessions/{sessionId}/turns/{turnId}/steer", server.steerTurn)
+			router.Post("/sessions/{sessionId}/approvals/{requestId}/decide", server.decideChatApproval)
 			router.Get("/sessions/{sessionId}/chat-events", server.replayClientEvents)
 			router.Get("/sessions/{sessionId}/events", server.streamClientEvents)
 			router.Post("/sessions/{sessionId}/terminal-ticket", server.createTerminalTicket)
@@ -417,12 +607,34 @@ func New(options Options) *Server {
 				router.MethodFunc(method, "/sessions/{sessionId}/browser/{origin}", server.proxyBrowser)
 				router.MethodFunc(method, "/sessions/{sessionId}/browser/{origin}/*", server.proxyBrowser)
 			}
+			router.Get("/sessions/{sessionId}/agent-browser/*", server.proxyAgentBrowser)
+			router.Post("/sessions/{sessionId}/agent-browser/*", server.proxyAgentBrowser)
 			router.Get("/sessions/{sessionId}/workspace/files", server.listWorkspaceFiles)
+			router.Post("/sessions/{sessionId}/workspace/checkout", server.requestWorkspaceCheckout)
 			router.Get("/sessions/{sessionId}/workspace/file", server.readWorkspaceFile)
+			router.Get("/sessions/{sessionId}/workspace/file/diff", server.readWorkspaceDiffFile)
 			router.Put("/sessions/{sessionId}/workspace/file", server.writeWorkspaceFile)
 			router.Get("/sessions/{sessionId}/workspace/diff", server.getWorkspaceDiff)
+			router.Get("/sessions/{sessionId}/workspace/review", server.getWorkspaceReview)
+			router.Get("/sessions/{sessionId}/workspace/repositories", server.getWorkspaceRepositories)
+			router.Get("/sessions/{sessionId}/workspace/tree", server.getWorkspaceReviewTree)
+			router.Get("/sessions/{sessionId}/workspace/search", server.getWorkspaceReviewSearch)
+			router.Get("/sessions/{sessionId}/workspace/review/file", server.getWorkspaceReviewFile)
+			router.Post("/sessions/{sessionId}/workspace/review/diffs", server.postWorkspaceReviewDiffs)
+			router.Get("/sessions/{sessionId}/workspace/review/revision", server.getWorkspaceReviewRevision)
+			router.Put("/sessions/{sessionId}/workspace/review/file", server.putWorkspaceReviewFile)
 			router.Get("/sessions/{sessionId}/pull-requests", server.listSessionPullRequests)
+			router.Post("/sessions/{sessionId}/pull-requests/{number}/merge", server.mergeSessionPullRequest)
 			router.Get("/sessions/{sessionId}/reviews", server.getSessionReviewState)
+			router.Post("/sessions/{sessionId}/reviews/trigger", server.triggerSessionReviews)
+			router.Post("/sessions/{sessionId}/reviews/cancel", server.cancelSessionReviews)
+			router.Post("/sessions/{sessionId}/reviews/{reviewRunId}/send", server.sendReviewToWorker)
+			router.Get("/sessions/{sessionId}/reviewer-harnesses", server.inspectSessionReviewerHarnesses)
+			router.Post("/sessions/{sessionId}/reviewer-harnesses/{harness}/install", server.installSessionReviewerHarness)
+			router.Get("/sessions/{sessionId}/interface-transition", server.getSessionInterfaceTransition)
+			router.Post("/sessions/{sessionId}/interface-transition", server.startSessionInterfaceTransition)
+			router.Delete("/sessions/{sessionId}/interface-transition", server.cancelSessionInterfaceTransition)
+			router.Put("/sessions/{sessionId}/interface-transition/{transitionId}/notice-acknowledgement", server.acknowledgeSessionInterfaceTransitionNotice)
 			router.Get("/members", server.listOrgMembers)
 			router.Patch("/members/{userId}", server.updateOrgMemberRole)
 			router.Get("/invitations", server.listOrgInvitations)
@@ -466,7 +678,12 @@ func (s *Server) requestID(next http.Handler) http.Handler {
 		}
 		w.Header().Set("X-Request-ID", requestID)
 		w.Header().Set("X-AO-Release", s.release)
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestIDKey, requestID)))
+		ctx := context.WithValue(r.Context(), requestIDKey, requestID)
+		// One log scope per request: middleware and handlers annotate it with the
+		// user, organization, session and provider as they learn them, and the
+		// access-log line and every *Context log call carry them.
+		ctx = logctx.Begin(ctx, logctx.Fields{RequestID: requestID})
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -493,6 +710,15 @@ func (w *statusResponseWriter) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
 }
 
+func (w *statusResponseWriter) Flush() {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
 func (s *Server) requestLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
@@ -512,23 +738,26 @@ func (s *Server) requestLog(next http.Handler) http.Handler {
 		case "/api/cloud/v1/worker/transport/claim", "/api/cloud/v1/worker/turns/claim":
 			level = slog.LevelDebug
 		}
-		s.logger.Log(
-			r.Context(),
-			level,
-			"HTTP request complete",
-			"method",
-			r.Method,
-			"route",
-			route,
-			"status",
-			status,
-			"duration_ms",
-			time.Since(started).Milliseconds(),
-			"request_id",
-			requestID(r),
-			"release",
-			s.release,
-		)
+		attrs := []any{
+			"method", r.Method,
+			"route", route,
+			"status", status,
+			"duration_ms", time.Since(started).Milliseconds(),
+			"request_id", requestID(r),
+			"release", s.release,
+		}
+		// Stamp the URL-scoped organization and session so the access log is
+		// greppable by tenant for fast RCA (empty on non-org routes like
+		// worker/health), plus everything the request scope learned: the
+		// authenticated user, a worker's session, the sandbox provider.
+		logctx.Annotate(r.Context(), logctx.Fields{
+			OrgID:     chi.URLParam(r, "orgId"),
+			SessionID: chi.URLParam(r, "sessionId"),
+		})
+		fields := logctx.From(r.Context())
+		fields.RequestID = "" // already stamped above
+		attrs = append(attrs, fields.Args()...)
+		s.logger.Log(r.Context(), level, "HTTP request complete", attrs...)
 	})
 }
 
@@ -551,6 +780,7 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			writeError(w, r, http.StatusServiceUnavailable, "authentication_unavailable", "Authentication is temporarily unavailable.")
 			return
 		}
+		logctx.Annotate(r.Context(), logctx.Fields{UserID: principal.UserID})
 		ctx := context.WithValue(r.Context(), principalKey, principal)
 		ctx = context.WithValue(ctx, bearerKey, token)
 		next.ServeHTTP(w, r.WithContext(ctx))

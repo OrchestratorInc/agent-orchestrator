@@ -3,12 +3,15 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -270,13 +273,34 @@ func TestEffectiveHarnessAndAgentConfig(t *testing.T) {
 	}
 
 	// Role override merges over the base agent config (set fields win; unset keep base).
-	got := effectiveAgentConfig(domain.KindWorker, cfg)
+	got := effectiveAgentConfig(domain.HarnessCodex, domain.KindWorker, cfg)
 	if got.Model != "worker" || got.Effort != "high" || got.Mode != "high" || got.Permissions != domain.PermissionModeAuto {
 		t.Fatalf("merged worker config = %#v, want model=worker mode=high permissions=auto", got)
 	}
 	// Orchestrator has no agent-config override, so the base config is used as-is.
-	if got := effectiveAgentConfig(domain.KindOrchestrator, cfg); got.Model != "base" {
+	if got := effectiveAgentConfig(domain.HarnessClaudeCode, domain.KindOrchestrator, cfg); got.Model != "base" {
 		t.Fatalf("orchestrator config = %#v, want base", got)
+	}
+	// A launch harness that differs from the role's configured harness drops the
+	// role's model/mode — they were tuned for the other agent — but keeps the
+	// harness-neutral permissions.
+	if got := effectiveAgentConfig(domain.HarnessAider, domain.KindWorker, cfg); got.Model != "base" || got.Mode != "low" || got.Permissions != domain.PermissionModeAuto {
+		t.Fatalf("mismatched-harness worker config = %#v, want model=base mode=low permissions=auto", got)
+	}
+	// A role override with no harness pinned is deliberately treated as
+	// "applies to any harness", so its model/mode are inherited whichever
+	// harness the session launches with. This is a behavior decision, not a
+	// side effect: assert it across two unrelated harnesses so it cannot
+	// silently flip back to the old drop-on-every-switch behavior.
+	unpinned := domain.ProjectConfig{
+		AgentConfig: domain.AgentConfig{Model: "base", Mode: "low"},
+		Worker:      domain.RoleOverride{AgentConfig: domain.AgentConfig{Model: "worker", Mode: "high"}},
+	}
+	for _, harness := range []domain.AgentHarness{domain.HarnessAider, domain.HarnessCodex} {
+		got := effectiveAgentConfig(harness, domain.KindWorker, unpinned)
+		if got.Model != "worker" || got.Mode != "high" {
+			t.Fatalf("unpinned worker config for %q = %#v, want model=worker mode=high", harness, got)
+		}
 	}
 }
 
@@ -299,7 +323,7 @@ func TestResolveChatAgentConfigValidatesAndResetsDependentTuning(t *testing.T) {
 		{ID: "new", Efforts: []string{"low"}},
 	}}}}
 	project := domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Model: "old", Effort: "high"}}}
-	resolved, err := m.resolveChatAgentConfig(context.Background(), ports.SpawnConfig{
+	resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
 		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
 		AgentConfig: ports.AgentConfig{Model: "new"},
 	}, project)
@@ -309,7 +333,7 @@ func TestResolveChatAgentConfigValidatesAndResetsDependentTuning(t *testing.T) {
 	if resolved.Model != "new" || resolved.Effort != "" {
 		t.Fatalf("resolved = %#v, want new model with provider defaults", resolved)
 	}
-	resolved, err = m.resolveChatAgentConfig(context.Background(), ports.SpawnConfig{
+	resolved, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
 		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
 		AgentConfig: ports.AgentConfig{Model: "old"}, EffortOverride: true,
 	}, project)
@@ -317,7 +341,7 @@ func TestResolveChatAgentConfigValidatesAndResetsDependentTuning(t *testing.T) {
 		t.Fatalf("explicit provider defaults did not clear role tuning: %#v, %v", resolved, err)
 	}
 
-	_, err = m.resolveChatAgentConfig(context.Background(), ports.SpawnConfig{
+	_, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
 		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
 		AgentConfig: ports.AgentConfig{Model: "new", Effort: "high"},
 	}, project)
@@ -325,7 +349,7 @@ func TestResolveChatAgentConfigValidatesAndResetsDependentTuning(t *testing.T) {
 		t.Fatalf("error = %v, want ErrUnsupportedEffort", err)
 	}
 
-	resolved, err = m.resolveChatAgentConfig(context.Background(), ports.SpawnConfig{
+	resolved, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
 		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
 		AgentConfig: ports.AgentConfig{Model: "custom"},
 	}, project)
@@ -334,14 +358,14 @@ func TestResolveChatAgentConfigValidatesAndResetsDependentTuning(t *testing.T) {
 	}
 
 	m.modelCatalog = tuningCatalog{err: errors.New("discovery failed")}
-	resolved, err = m.resolveChatAgentConfig(context.Background(), ports.SpawnConfig{
+	resolved, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
 		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
 		AgentConfig: ports.AgentConfig{Model: "new"},
 	}, domain.ProjectConfig{})
 	if err != nil || resolved.Model != "new" {
 		t.Fatalf("provider defaults should survive discovery failure: %#v, %v", resolved, err)
 	}
-	_, err = m.resolveChatAgentConfig(context.Background(), ports.SpawnConfig{
+	_, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
 		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
 		AgentConfig: ports.AgentConfig{Model: "new", Effort: "high"},
 	}, domain.ProjectConfig{})
@@ -350,23 +374,220 @@ func TestResolveChatAgentConfigValidatesAndResetsDependentTuning(t *testing.T) {
 	}
 }
 
-func TestResolveChatAgentConfigDropsEffortForNonCodexHarnesses(t *testing.T) {
+func TestResolveChatAgentConfigValidatesClaudeEffort(t *testing.T) {
 	catalogCalls := 0
 	m := &Manager{modelCatalog: tuningCatalog{calls: &catalogCalls, catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
-		{ID: "sonnet", IsDefault: true},
+		{ID: "sonnet", IsDefault: true, Efforts: []string{"high"}},
 	}}}}
-	resolved, err := m.resolveChatAgentConfig(context.Background(), ports.SpawnConfig{
+	resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
 		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
 		AgentConfig: ports.AgentConfig{Model: "sonnet", Effort: "high"}, EffortOverride: true,
 	}, domain.ProjectConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved.Effort != "" {
-		t.Fatalf("Claude Code effort = %q, want provider default", resolved.Effort)
+	if resolved.Effort != "high" {
+		t.Fatalf("Claude Code effort = %q, want high", resolved.Effort)
 	}
-	if catalogCalls != 0 {
-		t.Fatalf("Claude Code model catalog calls = %d, want 0", catalogCalls)
+	if catalogCalls != 1 {
+		t.Fatalf("Claude Code model catalog calls = %d, want 1", catalogCalls)
+	}
+
+	resolved, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		AgentConfig: ports.AgentConfig{Model: "sonnet"}, EffortOverride: true,
+	}, domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Effort: "high"}}})
+	if err != nil || resolved.Effort != "" {
+		t.Fatalf("explicit Claude provider default did not clear role tuning: %#v, %v", resolved, err)
+	}
+	if catalogCalls != 2 {
+		t.Fatalf("provider default did not validate the selected model: %d catalog calls", catalogCalls)
+	}
+}
+
+func TestResolveClaudeTUIAgentConfigRejectsUnsupportedEffort(t *testing.T) {
+	m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+		{ID: "sonnet", IsDefault: true, Efforts: []string{"low", "high"}},
+	}}}}
+
+	_, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		RequestedMode:  domain.SessionModeTUI,
+		AgentConfig:    ports.AgentConfig{Model: "sonnet", Effort: "max"},
+		EffortOverride: true,
+	}, domain.ProjectConfig{})
+	if !errors.Is(err, ports.ErrUnsupportedEffort) {
+		t.Fatalf("error = %v, want ErrUnsupportedEffort", err)
+	}
+}
+
+func TestResolveAgentConfigRejectsExplicitEffortForUnsupportedHarness(t *testing.T) {
+	m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+		{ID: "gemini-2.5-pro", IsDefault: true, Efforts: []string{"low", "high"}},
+	}}}}
+	for _, harness := range []domain.AgentHarness{domain.HarnessDroid, domain.HarnessAider, domain.HarnessAmp} {
+		// A flagged explicit effort override must fail loudly instead of being
+		// silently discarded: the caller asked for something the harness cannot
+		// honor.
+		_, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+			ProjectID: "p", Kind: domain.KindWorker, Harness: harness,
+			AgentConfig: ports.AgentConfig{Model: "gemini-2.5-pro", Effort: "high"}, EffortOverride: true,
+		}, domain.ProjectConfig{})
+		if !errors.Is(err, ports.ErrUnsupportedEffort) {
+			t.Fatalf("harness %q override error = %v, want ErrUnsupportedEffort", harness, err)
+		}
+		if !strings.Contains(err.Error(), "only supported for codex, claude-code, and command-code") {
+			t.Fatalf("harness %q error = %v, want support hint", harness, err)
+		}
+		// Unflagged request-carried effort still clears silently, matching the
+		// long-standing contract for harnesses without effort support.
+		resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+			ProjectID: "p", Kind: domain.KindWorker, Harness: harness,
+			AgentConfig: ports.AgentConfig{Model: "gemini-2.5-pro", Effort: "high"},
+		}, domain.ProjectConfig{})
+		if err != nil {
+			t.Fatalf("harness %q unflagged error = %v, want silent clear", harness, err)
+		}
+		if resolved.Effort != "" {
+			t.Fatalf("harness %q unflagged effort = %q, want cleared", harness, resolved.Effort)
+		}
+	}
+
+	// Inherited project/role effort still clears silently: nothing explicit was
+	// requested, so there is nothing to reject.
+	resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessDroid,
+		AgentConfig: ports.AgentConfig{Model: "gemini-2.5-pro"},
+	}, domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Effort: "high"}}})
+	if err != nil {
+		t.Fatalf("inherited effort error = %v, want silent clear", err)
+	}
+	if resolved.Effort != "" {
+		t.Fatalf("inherited effort = %q, want provider default", resolved.Effort)
+	}
+}
+
+func TestResolveClaudeModelWithoutEffortStillRequiresCatalog(t *testing.T) {
+	m := &Manager{modelCatalog: tuningCatalog{err: errors.New("gateway does not list models")}}
+
+	_, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		AgentConfig: ports.AgentConfig{Model: "provider/model-vNext"},
+	}, domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{
+		Model: "sonnet", Effort: "high",
+	}}})
+	if !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) {
+		t.Fatalf("error = %v, want ErrModelCapabilitiesUnavailable", err)
+	}
+}
+
+func TestResolveClaudeModelWithoutEffortRejectsUnknownAndStaleCatalogs(t *testing.T) {
+	cfg := ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		RequestedMode: domain.SessionModeTUI, AgentConfig: ports.AgentConfig{Model: "provider/old"},
+	}
+	m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{
+		CustomModelEntry: ports.CustomModelEntryDirect,
+		Models:           []ports.AgentModelInfo{{ID: "provider/current"}},
+	}}}
+	if _, err := m.resolveAgentConfig(context.Background(), cfg, domain.ProjectConfig{}); !errors.Is(err, ErrUnsupportedModel) {
+		t.Fatalf("unknown model error = %v, want ErrUnsupportedModel", err)
+	}
+
+	m.modelCatalog = tuningCatalog{catalog: ports.AgentModelCatalog{
+		CustomModelEntry: ports.CustomModelEntryDirect,
+		Models:           []ports.AgentModelInfo{{ID: "provider/old"}},
+		Stale:            true,
+	}}
+	if _, err := m.resolveAgentConfig(context.Background(), cfg, domain.ProjectConfig{}); !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) {
+		t.Fatalf("stale catalog error = %v, want ErrModelCapabilitiesUnavailable", err)
+	}
+}
+
+func TestResolveCodexTUIAgentConfigFallsBackWhenCatalogCannotValidate(t *testing.T) {
+	cfg := ports.SpawnConfig{ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
+		AgentConfig: domain.AgentConfig{Model: "gpt-custom", Effort: "xhigh"}}
+	unvalidated := domain.AgentConfig{Model: "gpt-custom", Effort: "xhigh"}
+	for name, catalog := range map[string]tuningCatalog{
+		"lookup failed":   {err: errors.New("not logged in")},
+		"stale":           {catalog: ports.AgentModelCatalog{Stale: true, Models: []ports.AgentModelInfo{{ID: "gpt-custom", Efforts: []string{"xhigh"}}}}},
+		"custom model":    {catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "gpt-5", Efforts: []string{"low"}}}}},
+		"unlisted effort": {catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "gpt-custom", Efforts: []string{"low"}}}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := &Manager{modelCatalog: catalog, logger: slog.New(slog.DiscardHandler)}
+			got, err := m.resolveTUIAgentConfig(context.Background(), cfg, domain.ProjectConfig{}, unvalidated)
+			if err != nil || got != unvalidated {
+				t.Fatalf("got %+v, %v; want unvalidated launch", got, err)
+			}
+		})
+	}
+}
+
+func TestResolveClaudeTUIAgentConfigStillRequiresCatalog(t *testing.T) {
+	m := &Manager{modelCatalog: tuningCatalog{err: errors.New("not logged in")}, logger: slog.New(slog.DiscardHandler)}
+	cfg := ports.SpawnConfig{ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		AgentConfig: domain.AgentConfig{Model: "opus", Effort: "high"}}
+	if _, err := m.resolveTUIAgentConfig(context.Background(), cfg, domain.ProjectConfig{}, cfg.AgentConfig); !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) {
+		t.Fatalf("err = %v, want ErrModelCapabilitiesUnavailable", err)
+	}
+}
+
+func TestResolveCodexTUIAgentConfigFallsBackWhenCatalogLookupTimesOut(t *testing.T) {
+	cfg := ports.SpawnConfig{ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
+		AgentConfig: domain.AgentConfig{Model: "gpt-custom", Effort: "xhigh"}}
+	m := &Manager{modelCatalog: tuningCatalog{err: fmt.Errorf("codex model/list: %w", context.DeadlineExceeded)}, logger: slog.New(slog.DiscardHandler)}
+	got, err := m.resolveTUIAgentConfig(context.Background(), cfg, domain.ProjectConfig{}, cfg.AgentConfig)
+	if err != nil || got != cfg.AgentConfig {
+		t.Fatalf("got %+v, %v; want unvalidated launch", got, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	m.modelCatalog = tuningCatalog{err: context.Canceled}
+	if _, err := m.resolveTUIAgentConfig(ctx, cfg, domain.ProjectConfig{}, cfg.AgentConfig); err == nil {
+		t.Fatal("cancelled spawn launched")
+	}
+}
+
+func TestResolveCommandCodeTUIAgentConfigPassesEffortThrough(t *testing.T) {
+	// Command Code's catalog advertises no effort levels, so resolution must
+	// forward the raw level without consulting the catalog at all — even a
+	// discovery failure must not clear it or fail the spawn.
+	m := &Manager{modelCatalog: tuningCatalog{err: errors.New("discovery failed")}}
+
+	resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCommandCode,
+		RequestedMode: domain.SessionModeTUI,
+		AgentConfig:   ports.AgentConfig{Model: "deepseek/deepseek-v4-flash", Effort: "high"},
+	}, domain.ProjectConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Model != "deepseek/deepseek-v4-flash" || resolved.Effort != "high" {
+		t.Fatalf("resolved = %#v, want model deepseek/deepseek-v4-flash effort high", resolved)
+	}
+
+	resolved, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCommandCode,
+		RequestedMode: domain.SessionModeTUI,
+	}, domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Effort: "medium"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Effort != "medium" {
+		t.Fatalf("project effort = %q, want medium", resolved.Effort)
+	}
+
+	resolved, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessOpenCode,
+		RequestedMode: domain.SessionModeTUI,
+		AgentConfig:   ports.AgentConfig{Effort: "high"},
+	}, domain.ProjectConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Effort != "" {
+		t.Fatalf("non-effort harness effort = %q, want cleared", resolved.Effort)
 	}
 }
 
@@ -408,15 +629,36 @@ func TestApplySymlinksRejectsParentTraversal(t *testing.T) {
 
 func TestRunPostCreate(t *testing.T) {
 	workspace := t.TempDir()
-	if err := runPostCreate(context.Background(), workspace, []string{"echo hi > out.txt"}); err != nil {
+	source := t.TempDir()
+	command := `printf '%s|%s|%s' "$PROJECT_TOKEN" "$AO_SOURCE_TREE_PATH" "$AO_WORKTREE_PATH" > out.txt`
+	if runtime.GOOS == "windows" {
+		command = `echo %PROJECT_TOKEN%^|%AO_SOURCE_TREE_PATH%^|%AO_WORKTREE_PATH%> out.txt`
+	}
+	if err := runPostCreate(context.Background(), workspace, source, []string{command}, map[string]string{"PROJECT_TOKEN": "setup-value"}); err != nil {
 		t.Fatalf("runPostCreate: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(workspace, "out.txt")); err != nil {
+	output, err := os.ReadFile(filepath.Join(workspace, "out.txt"))
+	if err != nil {
 		t.Fatalf("post-create command did not run in workspace: %v", err)
 	}
+	if !strings.Contains(string(output), "setup-value|"+source+"|"+workspace) {
+		t.Fatalf("post-create environment = %q", output)
+	}
 	// A failing command surfaces an error.
-	if err := runPostCreate(context.Background(), workspace, []string{"exit 3"}); err == nil {
+	if err := runPostCreate(context.Background(), workspace, source, []string{"exit 3"}, nil); err == nil {
 		t.Fatal("expected error from failing post-create command")
+	}
+}
+
+func TestRunPostCreateReceivesAndRedactsProjectEnv(t *testing.T) {
+	command := `echo "$PROJECT_TOKEN" && exit 3`
+	if runtime.GOOS == "windows" {
+		command = `echo %PROJECT_TOKEN% && exit /b 3`
+	}
+	secret := "project-secret-123"
+	err := runPostCreate(context.Background(), t.TempDir(), t.TempDir(), []string{command}, map[string]string{"PROJECT_TOKEN": secret})
+	if err == nil || !strings.Contains(err.Error(), "[REDACTED]") || strings.Contains(err.Error(), secret) {
+		t.Fatalf("postCreate error did not redact project value: %v", err)
 	}
 }
 
@@ -433,14 +675,78 @@ func TestSpawnPermissionPrecedence(t *testing.T) {
 		} {
 			t.Run(string(kind)+"/"+tc.name, func(t *testing.T) {
 				cfg := domain.ProjectConfig{AgentConfig: domain.AgentConfig{Permissions: tc.base}, Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Permissions: tc.role}}, Orchestrator: domain.RoleOverride{AgentConfig: domain.AgentConfig{Permissions: tc.role}}}
-				got := applySpawnAgentConfig(effectiveAgentConfig(kind, cfg), domain.AgentConfig{Permissions: tc.spawn})
+				got := applySpawnAgentConfig(effectiveAgentConfig(domain.HarnessCodex, kind, cfg), domain.AgentConfig{Permissions: tc.spawn})
 				if got.Permissions != tc.want {
 					t.Fatalf("got %q want %q", got.Permissions, tc.want)
 				}
 			})
 		}
 	}
-	if got := effectiveAgentConfig(domain.KindWorker, domain.ProjectConfig{}); got.Permissions != "" {
+	if got := effectiveAgentConfig(domain.HarnessCodex, domain.KindWorker, domain.ProjectConfig{}); got.Permissions != "" {
 		t.Fatalf("non-spawn resolution changed: %q", got.Permissions)
+	}
+}
+
+func TestRunPostCreateStopsLaterStepsAfterCancellation(t *testing.T) {
+	workspace := t.TempDir()
+	command := "while :; do :; done"
+	if runtime.GOOS == "windows" {
+		command = "for /L %i in (1,0,2) do @rem waiting"
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	err := runPostCreate(ctx, workspace, t.TempDir(), []string{"", command, "echo unexpected > later.txt"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "setup step 2 failed") {
+		t.Fatalf("cancellation error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "later.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("later setup step ran after cancellation: %v", err)
+	}
+}
+
+// A configured family alias has no capabilities of its own; it must accept
+// exactly the efforts of the family's newest concrete model.
+func TestResolveClaudeFamilyAliasUsesNewestModelEfforts(t *testing.T) {
+	models := []ports.AgentModelInfo{
+		{ID: "opus", Label: "Opus", IsDefault: true},
+		{ID: "sonnet", Label: "Sonnet"},
+		{ID: "haiku", Label: "Haiku"},
+		{ID: "fable", Label: "Fable"},
+		{ID: "claude-opus-4-1", Label: "Claude Opus 4.1", Efforts: []string{"low", "medium"}},
+		{ID: "claude-opus-5-5", Label: "Claude Opus 5.5", Efforts: []string{"low", "medium", "high", "xhigh", "max"}},
+		{ID: "claude-sonnet-5-5", Label: "Claude Sonnet 5.5", Efforts: []string{"low", "medium", "high"}},
+		{ID: "claude-haiku-4-5-20251001", Label: "Claude Haiku 4.5", Efforts: []string{"low"}},
+		{ID: "claude-fable-5-1", Label: "Claude Fable 5.1", Efforts: []string{"medium", "high", "max"}},
+	}
+	m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: models}}}
+	all := []string{"low", "medium", "high", "xhigh", "max"}
+	cases := map[string][]string{
+		"opus":             {"low", "medium", "high", "xhigh", "max"},
+		"opus[1m]":         nil,
+		"sonnet":           {"low", "medium", "high"},
+		"haiku":            {"low"},
+		"fable":            {"medium", "high", "max"},
+		"claude-opus-5-5":  {"low", "medium", "high", "xhigh", "max"},
+		"claude-opus-4-1":  {"low", "medium"},
+		"claude-fable-5-1": {"medium", "high", "max"},
+	}
+	for model, allowed := range cases {
+		for _, effort := range all {
+			_, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+				ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+				AgentConfig:    ports.AgentConfig{Model: model, Effort: effort},
+				EffortOverride: true,
+			}, domain.ProjectConfig{})
+			want := containsString(allowed, effort)
+			if model == "opus[1m]" {
+				continue // not in catalog: rejected before effort is checked
+			}
+			if want && err != nil {
+				t.Errorf("model %q effort %q: unexpected error %v", model, effort, err)
+			}
+			if !want && !errors.Is(err, ports.ErrUnsupportedEffort) {
+				t.Errorf("model %q effort %q: error = %v, want ErrUnsupportedEffort", model, effort, err)
+			}
+		}
 	}
 }

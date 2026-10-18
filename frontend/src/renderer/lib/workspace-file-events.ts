@@ -1,9 +1,15 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
+import { baseUrlForHost, subscribeConnectedHosts } from "./host-clients";
+import { sessionUiKey } from "./hosts";
+import { probeRemoteSse } from "./remote-sse-probe";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 
 const INVALIDATE_DEBOUNCE_MS = 150;
 const EVENTSOURCE_CLOSED = 2;
+const CONTENT_QUERY_NAMES = ["session-workspace-history", "session-workspace-file", "session-workspace-file-revision", "session-workspace-diffs", "files-review-end-of-file"] as const;
+const INVENTORY_QUERY_NAMES = ["workspace-file-paths", "session-workspace-files", "session-workspace-search", "session-workspace-tree"] as const;
+const ALL_QUERY_NAMES = [...CONTENT_QUERY_NAMES, ...INVENTORY_QUERY_NAMES] as const;
 
 export type WorkspaceFileConnectionState = "connecting" | "connected" | "degraded";
 type ConnectionPhase = "idle" | "connecting" | "open" | "waiting";
@@ -20,9 +26,13 @@ type WorkspaceStream = {
 	 * so would inflate the backoff exponent past what we actually retried.
 	 */
 	retries: number;
+	lastVersion?: string;
 	source?: EventSource;
+	poll?: ReturnType<typeof setInterval>;
+	stopRemote?: () => void;
 	sourceBaseUrl?: string;
 	debounce?: ReturnType<typeof setTimeout>;
+	pendingInvalidations: Set<string>;
 	retry?: ReturnType<typeof setTimeout>;
 	disconnectBaseUrl: () => void;
 	ensureConnected: () => void;
@@ -33,66 +43,73 @@ const streams = new Map<string, WorkspaceStream>();
 const connectionStates = new Map<string, WorkspaceFileConnectionState>();
 const connectionStateListeners = new Map<string, Set<() => void>>();
 
-export function getWorkspaceFileConnectionState(sessionId: string): WorkspaceFileConnectionState {
-	return connectionStates.get(sessionId) ?? "connecting";
+export function getWorkspaceFileConnectionState(sessionId: string, hostId?: string): WorkspaceFileConnectionState {
+	return connectionStates.get(sessionUiKey(sessionId, hostId)) ?? "connecting";
 }
 
-export function subscribeWorkspaceFileConnectionState(sessionId: string, listener: () => void): () => void {
-	let listeners = connectionStateListeners.get(sessionId);
+export function subscribeWorkspaceFileConnectionState(sessionId: string, listener: () => void, hostId?: string): () => void {
+	const key = sessionUiKey(sessionId, hostId);
+	let listeners = connectionStateListeners.get(key);
 	if (!listeners) {
 		listeners = new Set();
-		connectionStateListeners.set(sessionId, listeners);
+		connectionStateListeners.set(key, listeners);
 	}
 	listeners.add(listener);
 	return () => {
 		listeners?.delete(listener);
-		if (listeners?.size === 0) connectionStateListeners.delete(sessionId);
-		if (!streams.has(sessionId) && !connectionStateListeners.has(sessionId)) connectionStates.delete(sessionId);
+		if (listeners?.size === 0) connectionStateListeners.delete(key);
+		if (!streams.has(key) && !connectionStateListeners.has(key)) connectionStates.delete(key);
 	};
 }
 
-function setWorkspaceFileConnectionState(sessionId: string, next: WorkspaceFileConnectionState): void {
-	if (connectionStates.get(sessionId) === next) return;
-	connectionStates.set(sessionId, next);
-	connectionStateListeners.get(sessionId)?.forEach((listener) => listener());
+function setWorkspaceFileConnectionState(key: string, next: WorkspaceFileConnectionState): void {
+	if (connectionStates.get(key) === next) return;
+	connectionStates.set(key, next);
+	connectionStateListeners.get(key)?.forEach((listener) => listener());
 }
 
 // Shares one daemon watcher between the rail and maximized copies of a Files
 // view. The daemon sends only invalidation edges; Git status and visible diffs
 // are then refetched through the existing typed queries.
-export function subscribeWorkspaceFileChanges(sessionId: string, queryClient: QueryClient): () => void {
-	let stream = streams.get(sessionId);
+export function subscribeWorkspaceFileChanges(sessionId: string, queryClient: QueryClient, hostId?: string): () => void {
+	const key = sessionUiKey(sessionId, hostId);
+	let stream = streams.get(key);
 	if (!stream) {
-		stream = createWorkspaceStream(sessionId, queryClient);
-		streams.set(sessionId, stream);
+		stream = createWorkspaceStream(sessionId, queryClient, hostId);
+		streams.set(key, stream);
 	}
 	stream.refs += 1;
 
 	return () => {
-		const current = streams.get(sessionId);
+		const current = streams.get(key);
 		if (!current) return;
 		current.refs -= 1;
 		if (current.refs > 0) return;
 		current.dispose();
-		streams.delete(sessionId);
-		if (!connectionStateListeners.has(sessionId)) connectionStates.delete(sessionId);
+		streams.delete(key);
+		if (!connectionStateListeners.has(key)) connectionStates.delete(key);
 	};
 }
 
-function createWorkspaceStream(sessionId: string, queryClient: QueryClient): WorkspaceStream {
+function createWorkspaceStream(sessionId: string, queryClient: QueryClient, hostId?: string): WorkspaceStream {
 	const stream = {} as WorkspaceStream;
-	const invalidate = () => {
-		if (stream.debounce) clearTimeout(stream.debounce);
+	const key = sessionUiKey(sessionId, hostId);
+	const queryPrefix = (name: string) => hostId ? [name, hostId, sessionId] : [name, sessionId];
+	const scheduleInvalidation = (names: readonly string[]) => {
+		for (const name of names) stream.pendingInvalidations.add(name);
+		// Bound the wait from the first event: continuous agent writes must not
+		// postpone visible content refresh until the workspace becomes quiet.
+		if (stream.debounce) return;
 		stream.debounce = setTimeout(() => {
-			void queryClient.invalidateQueries({ queryKey: ["workspace-file-paths", sessionId] });
-			void queryClient.invalidateQueries({ queryKey: ["session-workspace-files", sessionId] });
-			void queryClient.invalidateQueries({ queryKey: ["session-workspace-file", sessionId] });
-			void queryClient.invalidateQueries({ queryKey: ["session-workspace-file-revision", sessionId] });
-			void queryClient.invalidateQueries({ queryKey: ["session-workspace-diffs", sessionId] });
-			void queryClient.invalidateQueries({ queryKey: ["session-workspace-search", sessionId] });
-			void queryClient.invalidateQueries({ queryKey: ["session-workspace-tree", sessionId] });
+			stream.debounce = undefined;
+			const pending = [...stream.pendingInvalidations];
+			stream.pendingInvalidations.clear();
+			for (const name of pending) {
+				void queryClient.invalidateQueries({ queryKey: queryPrefix(hostId && name === "workspace-file-paths" ? "remote-workspace-file-paths" : name) });
+			}
 		}, INVALIDATE_DEBOUNCE_MS);
 	};
+	const invalidate = () => scheduleInvalidation(ALL_QUERY_NAMES);
 	const scheduleRetry = (generation: number) => {
 		if (stream.disposed || stream.retry) return;
 		stream.phase = "waiting";
@@ -109,6 +126,10 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient): Wor
 		stream.generation += 1;
 		if (stream.retry) clearTimeout(stream.retry);
 		stream.retry = undefined;
+		if (stream.poll !== undefined) clearInterval(stream.poll);
+		stream.poll = undefined;
+		stream.stopRemote?.();
+		stream.stopRemote = undefined;
 		stream.source?.close();
 		stream.source = undefined;
 		stream.sourceBaseUrl = undefined;
@@ -119,7 +140,7 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient): Wor
 		stream.source?.close();
 		stream.source = undefined;
 		stream.failures += 1;
-		setWorkspaceFileConnectionState(sessionId, stream.failures >= 3 ? "degraded" : "connecting");
+		setWorkspaceFileConnectionState(key, stream.failures >= 3 ? "degraded" : "connecting");
 		scheduleRetry(generation);
 	};
 	stream.refs = 0;
@@ -128,24 +149,49 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient): Wor
 	stream.generation = 0;
 	stream.failures = 0;
 	stream.retries = 0;
-	setWorkspaceFileConnectionState(sessionId, "connecting");
+	stream.pendingInvalidations = new Set();
+	setWorkspaceFileConnectionState(key, "connecting");
 	stream.ensureConnected = () => {
 		if (stream.disposed) return;
-		if (typeof EventSource === "undefined") {
-			setWorkspaceFileConnectionState(sessionId, "degraded");
-			return;
-		}
-		if (!hasTrustedApiBaseUrl()) {
+		if (hostId && !baseUrlForHost(hostId)) {
 			resetConnection();
-			setWorkspaceFileConnectionState(sessionId, "connecting");
+			setWorkspaceFileConnectionState(key, "degraded");
 			return;
 		}
-		const baseUrl = getApiBaseUrl();
+		if (!hostId && !hasTrustedApiBaseUrl()) {
+			resetConnection();
+			setWorkspaceFileConnectionState(key, "connecting");
+			return;
+		}
+		const baseUrl = hostId ? baseUrlForHost(hostId)! : getApiBaseUrl();
 		if (stream.sourceBaseUrl && stream.sourceBaseUrl !== baseUrl) {
 			resetConnection();
 			stream.failures = 0;
 			stream.retries = 0;
-			setWorkspaceFileConnectionState(sessionId, "connecting");
+			setWorkspaceFileConnectionState(key, "connecting");
+		}
+		if (hostId) {
+			if (stream.sourceBaseUrl === baseUrl) return;
+			stream.sourceBaseUrl = baseUrl;
+			invalidate();
+			stream.poll = setInterval(invalidate, 2_000);
+			setWorkspaceFileConnectionState(key, "connected");
+			stream.stopRemote = probeRemoteSse(
+				`${baseUrl.replace(/\/+$/, "")}/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace/events`,
+				["workspace_changed"],
+				invalidate,
+				() => {
+					if (stream.poll !== undefined) clearInterval(stream.poll);
+					stream.poll = undefined;
+					invalidate();
+				},
+				invalidate,
+			);
+			return;
+		}
+		if (typeof EventSource === "undefined") {
+			setWorkspaceFileConnectionState(key, "degraded");
+			return;
 		}
 		if (stream.phase !== "idle") return;
 
@@ -162,7 +208,7 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient): Wor
 				stream.phase = "open";
 				stream.failures = 0;
 				stream.retries = 0;
-				setWorkspaceFileConnectionState(sessionId, "connected");
+				setWorkspaceFileConnectionState(key, "connected");
 				invalidate();
 			};
 			source.onerror = () => {
@@ -172,20 +218,39 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient): Wor
 					return;
 				}
 				stream.failures += 1;
-				setWorkspaceFileConnectionState(sessionId, stream.failures >= 3 ? "degraded" : "connecting");
+				setWorkspaceFileConnectionState(key, stream.failures >= 3 ? "degraded" : "connecting");
 			};
-			source.addEventListener("workspace_changed", () => {
-				if (!stream.disposed && generation === stream.generation && stream.source === source) invalidate();
+			source.addEventListener("workspace_changed", (event) => {
+				if (stream.disposed || generation !== stream.generation || stream.source !== source) return;
+				let payload: { kind?: string; workspaceVersion?: string } = {};
+				try {
+					payload = JSON.parse((event as MessageEvent<string>).data || "{}") as typeof payload;
+				} catch {
+					// Older daemons emitted an untyped invalidation edge. Preserve that
+					// compatibility path instead of dropping the refresh.
+				}
+				// File contents and parsed diffs can change without changing the
+				// metadata-derived manifest version. Never deduplicate these queries.
+				scheduleInvalidation(CONTENT_QUERY_NAMES);
+				if (payload.kind === "dirty") return;
+				if (payload.kind === "version" && payload.workspaceVersion) {
+					if (stream.lastVersion === payload.workspaceVersion) return;
+					stream.lastVersion = payload.workspaceVersion;
+					const cached = queryClient.getQueryData<{ workspaceVersion?: string }>(queryPrefix("session-workspace-files"));
+					if (cached?.workspaceVersion === payload.workspaceVersion) return;
+				}
+				scheduleInvalidation(INVENTORY_QUERY_NAMES);
 			});
 		} catch {
 			stream.source = undefined;
 			handleTerminalFailure(generation);
 		}
 	};
-	stream.disconnectBaseUrl = subscribeApiBaseUrl(stream.ensureConnected);
+	stream.disconnectBaseUrl = hostId ? subscribeConnectedHosts(stream.ensureConnected) : subscribeApiBaseUrl(stream.ensureConnected);
 	stream.dispose = () => {
 		stream.disposed = true;
 		if (stream.debounce) clearTimeout(stream.debounce);
+		stream.pendingInvalidations.clear();
 		stream.disconnectBaseUrl();
 		resetConnection();
 	};

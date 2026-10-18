@@ -53,12 +53,16 @@ export function feedFilename(channel, platform) {
 //          cannot run at all and every client falls back to a full download.
 //          The linux .blockmap sidecars we publish are consumed by nothing (see
 //          the note in generateFeeds).
-//   mac:   no sidecar is generated at all (see hashFile), so MacUpdater always
-//          takes the full-download path. Settled permanent baseline, #3151/#3267.
+//   mac:   no sidecar is generated on any channel. Absence is the global
+//          barrier protecting older clients (#3034/#3151/#3267).
 //
 // When important is true, emits `important: true` after releaseDate so the
 // in-app update prompt is escalated.
-export function buildYml(version, files, releaseDate, important = false) {
+//
+// minimumSystemVersion, when given, makes electron-updater skip the update on
+// older systems. It compares against os.release(), so on macOS this is the
+// Darwin kernel version, not the marketing version.
+export function buildYml(version, files, releaseDate, important = false, minimumSystemVersion = null) {
 	const lines = [`version: ${version}`, "files:"];
 	for (const f of files) {
 		lines.push(`  - url: ${f.url}`);
@@ -69,12 +73,20 @@ export function buildYml(version, files, releaseDate, important = false) {
 	lines.push(`sha512: ${files[0].sha512}`);
 	lines.push(`releaseDate: '${releaseDate}'`);
 	if (important) lines.push("important: true");
+	if (minimumSystemVersion) lines.push(`minimumSystemVersion: ${minimumSystemVersion}`);
 	return lines.join("\n") + "\n";
 }
 
+// Electron 44 requires macOS 13 (Ventura, Darwin 22); the packaged app declares
+// LSMinimumSystemVersion 13.0. Without this, Macs on 11 or 12 would download an
+// update that cannot launch. Raise it with the Electron major that raises the floor.
+export const MAC_MINIMUM_DARWIN_VERSION = "22.0.0";
+
 // generateFeeds writes the yml + sidecar blockmaps for every platform present in
 // dir. version may carry +build metadata (nightly); strip it for the yml.
-// mac zips skip the blockmap sidecar entirely (see hashFile); see #3034/#3151.
+// mac zips never produce sidecars, including Nightly. The release conductor
+// must independently suppress them while delivery isolation and runtime safety
+// are unresolved. Local client flags cannot protect older binaries.
 //
 // The linux sidecars this still writes are dead weight: AppImageUpdater reads
 // its blockmap from the AppImage tail, never from a sidecar, and needs a
@@ -96,10 +108,16 @@ export async function generateFeeds(dir, rawVersion, channel, releaseDate, impor
 		const files = [];
 		for (const name of names) {
 			const { sha512, size } =
-				platform === "mac" ? hashFile(join(dir, name)) : await writeBlockmap(join(dir, name));
+				platform === "mac"
+					? hashFile(join(dir, name))
+					: await writeBlockmap(join(dir, name));
 			files.push({ url: name, sha512, size });
 		}
-		writeFileSync(join(dir, feedFilename(channel, platform)), buildYml(version, files, releaseDate, important));
+		const minimumSystemVersion = platform === "mac" ? MAC_MINIMUM_DARWIN_VERSION : null;
+		writeFileSync(
+			join(dir, feedFilename(channel, platform)),
+			buildYml(version, files, releaseDate, important, minimumSystemVersion),
+		);
 	}
 }
 
@@ -118,7 +136,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 }
 
 // hashFile computes the same {sha512, size} shape writeBlockmap returns, but
-// without writing a .blockmap sidecar file. Used for mac zips specifically:
+// without writing a .blockmap sidecar file. Used for mac zips on every channel:
 // Squirrel.Mac's ShipIt install step runs `ditto` against the extracted update
 // cache and fails on a corrupt one, which is the #3034 failure signature.
 //
@@ -128,10 +146,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 // nightly-to-stable channel switch reproduced the same corruption against a
 // target zip that was already correctly ditto-built with its full AppleDouble
 // set. The defect is in the differential download/patch-apply mechanism itself,
-// not in the zip format (#3267 decision 4). Skipping the sidecar for mac is
-// therefore the actual fix, not a workaround: it forces MacUpdater onto a full
-// zip download every time. Permanent baseline, #3151; #3267 decision 4 records
-// the evidence bar for ever revisiting it.
+// not in the zip format (#3267 decision 4). Skipping the sidecar for mac
+// therefore remains the baseline on every channel. #3267 decision 4 records
+// the safety boundary for any future rollout.
 export function hashFile(filePath) {
 	const data = readFileSync(filePath);
 	const sha512 = createHash("sha512").update(data).digest("base64");

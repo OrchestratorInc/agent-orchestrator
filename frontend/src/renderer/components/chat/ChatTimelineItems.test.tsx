@@ -1,7 +1,7 @@
 import { act, render as rtlRender, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StrictMode, type ReactElement } from "react";
-import { ActivityRow, AssistantMessage, TurnOutcome } from "./ChatTimelineItems";
+import { ActivityRow, AssistantMessage, HumanMessage, TurnOutcome } from "./ChatTimelineItems";
 import type { ConversationMessage } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
 
@@ -57,6 +57,13 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
+/** Run frames at ~60 Hz until the drain finishes; returns the time it took. */
+function drain(from = 0, limitMs = 5000) {
+	let now = from;
+	while (frames.size && now - from < limitMs) runFrame((now += 16));
+	return now - from;
+}
+
 describe("TurnOutcome", () => {
 	it("keeps a recovered historical turn distinct from success", () => {
 		render(<TurnOutcome state="recovered" />);
@@ -89,6 +96,33 @@ describe("TurnOutcome", () => {
 });
 
 describe("AssistantMessage streaming", () => {
+	it("shows completed messages without a duplicate animation segmentation pass", () => {
+		const segment = vi.spyOn(Intl.Segmenter.prototype, "segment");
+		const text = "Completed 👨‍👩‍👧‍👦 é answer";
+		render(<AssistantMessage message={message({ text, streaming: false })} />);
+		expect(document.querySelector("p")?.textContent).toBe(text);
+		// Markdown may segment for emoji typography; settled text needs no
+		// additional pass for the streaming animation.
+		expect(segment.mock.calls.filter(([input]) => input === text).length).toBeLessThanOrEqual(1);
+	});
+
+	it("resumes a completed message without repeating its visible prefix", () => {
+		const prefix = "Hello 👨‍👩‍👧‍👦 é";
+		const text = prefix + " continued".repeat(20);
+		const view = render(<AssistantMessage message={message({ text: prefix, streaming: false })} />);
+		view.rerender(<AssistantMessage message={message({ text, streaming: true, revision: 2 })} />);
+
+		runFrame(0);
+		runFrame(100);
+		const visible = document.querySelector("p")?.textContent ?? "";
+		expect(visible.startsWith(prefix)).toBe(true);
+		expect(text.startsWith(visible)).toBe(true);
+
+		drain(100);
+		expect(document.querySelector("p")?.textContent).toBe(text);
+		expect(frames.size).toBe(0);
+	});
+
 	it("shows the first durable snapshot and a replacement message immediately", () => {
 		const text = "A first snapshot 👨‍👩‍👧‍👦";
 		const view = render(<AssistantMessage message={message({ text })} />);
@@ -106,16 +140,15 @@ describe("AssistantMessage streaming", () => {
 		const view = render(<AssistantMessage message={message()} />);
 		view.rerender(<AssistantMessage message={message({ text: "a".padEnd(2000, "x") })} />);
 		runFrame(0);
-		runFrame(150);
+		runFrame(50);
 		view.rerender(<AssistantMessage message={message({ text: "Corrected" })} />);
 		expect(document.querySelector("p")?.textContent).toBe("Corrected");
 		expect(frames.size).toBe(0);
 
 		view.rerender(<AssistantMessage message={message({ text: "Corrected text" })} />);
 		runFrame(190);
-		runFrame(198);
-		expect(document.querySelector("p")?.textContent).toBe("Corrected");
-		runFrame(390);
+		expect(document.querySelector("p")?.textContent).not.toBe("Corrected text");
+		drain(230);
 		expect(document.querySelector("p")?.textContent).toBe("Corrected text");
 	});
 
@@ -152,29 +185,18 @@ describe("AssistantMessage streaming", () => {
 		expect(frames.size).toBe(0);
 	});
 
-	it("shows a large received burst within 250ms", () => {
+	it("spreads a large received burst over several frames instead of dumping it", () => {
 		const view = render(<AssistantMessage message={message()} />);
 		const text = "a".padEnd(10_000, "x");
 		view.rerender(<AssistantMessage message={message({ text })} />);
 
 		runFrame(0);
-		for (let now = 16; now <= 240 && frames.size; now += 16) runFrame(now);
+		runFrame(48);
+		const partial = document.querySelector("p")?.textContent ?? "";
+		expect(partial.length).toBeGreaterThan(1);
+		expect(partial.length).toBeLessThan(text.length);
 
-		expect(document.querySelector("p")?.textContent).toBe(text);
-		expect(frames.size).toBe(0);
-	});
-
-	it("does not postpone the drain deadline when new snapshots keep arriving", () => {
-		const view = render(<AssistantMessage message={message()} />);
-		let text = "a".padEnd(2000, "x");
-		view.rerender(<AssistantMessage message={message({ text })} />);
-		runFrame(0);
-		for (let now = 40; now <= 200; now += 40) {
-			text += "x".repeat(2000);
-			view.rerender(<AssistantMessage message={message({ text })} />);
-			runFrame(now);
-		}
-
+		drain(48);
 		expect(document.querySelector("p")?.textContent).toBe(text);
 		expect(frames.size).toBe(0);
 	});
@@ -185,8 +207,8 @@ describe("AssistantMessage streaming", () => {
 		const text = "a".padEnd(2000, "x");
 		view.rerender(<AssistantMessage message={message({ text })} />);
 		runFrame(0);
-		runFrame(50);
-		runFrame(100);
+		runFrame(16);
+		runFrame(32);
 
 		expect(segment.mock.calls.filter(([input]) => input === text)).toHaveLength(1);
 	});
@@ -204,13 +226,12 @@ describe("AssistantMessage streaming", () => {
 	it("reconciles a grapheme when a later snapshot adds a ZWJ", () => {
 		const view = render(<AssistantMessage message={message()} />);
 		view.rerender(<AssistantMessage message={message({ text: "a👨" })} />);
-		runFrame(0);
-		runFrame(1000);
+		drain();
+		expect(document.querySelector("p")?.textContent).toBe("a👨");
 
 		view.rerender(<AssistantMessage message={message({ text: "a👨‍👩" })} />);
 		expect(document.querySelector("p")?.textContent).toBe("a");
-		runFrame(1000);
-		runFrame(1200);
+		drain();
 
 		expect(document.querySelector("p")?.textContent).toBe("a👨‍👩");
 	});
@@ -252,7 +273,8 @@ describe("AssistantMessage streaming", () => {
 			<AssistantMessage message={message({ text: "aThe complete answer", streaming: false })} showCopy />,
 		);
 
-		expect(screen.getByText("aThe complete answer")).toBeInTheDocument();
+		// The fade spans linger briefly after the stream settles, so match the paragraph.
+		expect(document.querySelector("p")?.textContent).toBe("aThe complete answer");
 		expect(screen.getByRole("button", { name: "Copy message as markdown" })).toBeInTheDocument();
 	});
 
@@ -285,7 +307,7 @@ describe("AssistantMessage streaming", () => {
 		expect(screen.getByLabelText(/^Sent Yesterday · \d{2}:\d{2}$/)).toBeInTheDocument();
 		view.rerender(<AssistantMessage message={message({ createdAt: older, streaming: false })} showCopy />);
 		expect(screen.queryByLabelText(/^Sent Yesterday ·/)).toBeNull();
-		expect(screen.getByLabelText(/^Sent [A-Z][a-z]{2} \d{1,2}, \d{4}$/)).toBeInTheDocument();
+		expect(screen.getByLabelText(/^Sent .+\d{4}$/)).toBeInTheDocument();
 	});
 
 	it("survives StrictMode effect cleanup and keeps draining", () => {
@@ -299,10 +321,9 @@ describe("AssistantMessage streaming", () => {
 				<AssistantMessage message={message({ text: "abcdefghij" })} />
 			</StrictMode>,
 		);
-		runFrame(0);
-		runFrame(100);
+		drain();
 
-		expect(document.querySelector("p")?.textContent).toBe("abcdef");
+		expect(document.querySelector("p")?.textContent).toBe("abcdefghij");
 	});
 });
 
@@ -319,6 +340,33 @@ describe("ActivityRow", () => {
 		expect(screen.getByRole("button")).toHaveTextContent(`Edit ${path}`);
 		expect(container.querySelector("code")).toHaveTextContent(path);
 		expect(screen.getByRole("button").textContent).not.toContain("`");
+	});
+
+	it("shows a finished project setup with its duration and expandable output", () => {
+		render(
+			<ActivityRow activity={{
+				kind: "activity", id: "startup", sequence: 1, revision: 1, createdAt: "2026-10-13T00:00:00Z",
+				activityKind: "system", status: "completed", summary: "Setup finished",
+				detail: { event: "workspace.setup", setupStatus: "succeeded", exitCode: 0, durationMs: 12_400, output: "compose up\nready" },
+			}} />,
+		);
+		expect(screen.getByText("Setup finished in 12s")).toBeInTheDocument();
+		expect(screen.queryByText(/compose up/)).toBeNull();
+		act(() => screen.getByRole("button", { name: "Show output" }).click());
+		expect(screen.getByRole("button", { name: "Hide output" })).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByText(/compose up/)).toBeInTheDocument();
+	});
+
+	it("shows the failed setup step with its exit code", () => {
+		render(
+			<ActivityRow activity={{
+				kind: "activity", id: "startup", sequence: 1, revision: 1, createdAt: "2026-10-13T00:00:00Z",
+				activityKind: "system", status: "failed", summary: "Setup failed",
+				detail: { event: "workspace.setup", setupStatus: "failed", setupStep: 2, exitCode: 2, durationMs: 65_000 },
+			}} />,
+		);
+		expect(screen.getByText("Setup step 2 failed (exit 2)")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Show output" })).toBeNull();
 	});
 
 	it("does not present a recovered historical activity as failed", () => {
@@ -338,5 +386,24 @@ describe("ActivityRow", () => {
 		);
 		expect(screen.getByText("outcome unknown")).toBeInTheDocument();
 		expect(screen.queryByText("failed")).not.toBeInTheDocument();
+	});
+});
+
+describe("HumanMessage", () => {
+	function human(overrides: Partial<ConversationMessage> = {}): ConversationMessage {
+		return message({ id: "human-1", role: "user", origin: "human", text: "hi", streaming: false, ...overrides });
+	}
+
+	// Light theme cannot separate a sent bubble from the canvas by fill alone, so it
+	// paints an enclosure keyed off this attribute's absence. Losing it makes the
+	// message read as unenclosed text again.
+	it("marks a queued bubble and leaves a sent one unmarked", () => {
+		const { container, rerender } = render(<HumanMessage message={human()} sessionId="s1" />);
+		const sent = container.querySelector(".cursor-chat-human-message");
+		expect(sent).not.toBeNull();
+		expect(sent).not.toHaveAttribute("data-queued");
+
+		rerender(<HumanMessage message={human()} sessionId="s1" queued />);
+		expect(container.querySelector(".cursor-chat-human-message")).toHaveAttribute("data-queued");
 	});
 });

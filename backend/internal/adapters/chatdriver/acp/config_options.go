@@ -123,12 +123,14 @@ func (c *conversation) SetConfigOption(
 	// instead would be just as wrong in the other direction — the agent applied
 	// the value, so a UI that snaps back to the old one is lying about state the
 	// provider already changed. Record the accepted value against the catalog we
-	// hold and let a later ConfigOptionUpdate deliver any rebuild.
+	// hold and let a later ConfigOptionUpdate deliver any rebuild. Callers that
+	// specifically require an authoritative provider-reported post-change catalog
+	// (such as safety guards during handoff) receive nil so they can fail closed.
 	if len(resp.ConfigOptions) == 0 {
 		c.applyAcceptedConfigOption(id, value)
-	} else {
-		c.replaceConfigOptions(resp.ConfigOptions)
+		return nil, nil
 	}
+	c.replaceConfigOptions(resp.ConfigOptions)
 	return c.ListConfigOptions(ctx)
 }
 
@@ -168,6 +170,22 @@ func (c *conversation) applyAcceptedConfigOption(id string, value ports.ChatConf
 		}
 		return
 	}
+}
+
+// configOptionOffers reports whether the live provider-owned catalog offers a
+// select value. known=false means the provider did not advertise that option,
+// so callers must preserve the existing compatibility path instead of guessing.
+func (c *conversation) configOptionOffers(id, value string) (offered, known bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.configOptions {
+		option := &c.configOptions[i]
+		if option.ID != id || option.Type != ports.ChatConfigOptionSelect {
+			continue
+		}
+		return choiceOffered(option.Choices, value), true
+	}
+	return false, false
 }
 
 func normalizeConfigOptions(options []acpsdk.SessionConfigOption) []ports.ChatConfigOption {

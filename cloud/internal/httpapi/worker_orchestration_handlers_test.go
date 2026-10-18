@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -33,13 +34,21 @@ const (
 // test honest about what the handler touches.
 type stubChildStore struct {
 	Store
-	credentialAvailable bool
-	credentialErr       error
-	parentProvider      string
-	parentProviderErr   error
-	created             bool
-	captured            domain.CreateSession
-	createErr           error
+	credentialAvailable  bool
+	credentialErr        error
+	parentProvider       string
+	parentProviderErr    error
+	parentWorkerAgent    string
+	parentWorkerAgentErr error
+	created              bool
+	captured             domain.CreateSession
+	createErr            error
+}
+
+func (s *stubChildStore) OrchestratorProjectWorkerAgent(
+	_ context.Context, _, _ string,
+) (string, error) {
+	return s.parentWorkerAgent, s.parentWorkerAgentErr
 }
 
 func (s *stubChildStore) AgentCredentialAvailable(
@@ -108,12 +117,77 @@ func newChildServer(store Store, provisioning sandbox.ProvisioningDefaults, defa
 
 func childRequest(t *testing.T, scopes []string) *http.Request {
 	t.Helper()
-	body := `{"harness":"claude-code","displayName":"add-logger","prompt":"do the work","mode":"trusted"}`
+	return childRequestBody(t, scopes, `{"harness":"claude-code","displayName":"add-logger","prompt":"do the work","mode":"trusted"}`)
+}
+
+func childRequestBody(t *testing.T, scopes []string, body string) *http.Request {
+	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/api/cloud/v1/worker/children", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", "11111111-1111-1111-1111-111111111111")
 	claims := worker.Claims{OrgID: childOrgID, SessionID: parentSessionID, Scopes: scopes}
 	return req.WithContext(context.WithValue(req.Context(), workerContextKey{}, claims))
+}
+
+// An orchestrator that spawns a worker without naming an agent must get the
+// worker agent the project was configured with (config.worker.agent), not a
+// hardcoded default. This is the "worker came up claude though the project said
+// codex" regression.
+func TestCreateWorkerChildInheritsProjectWorkerAgentWhenUnspecified(t *testing.T) {
+	t.Parallel()
+	store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderNodeOps, parentWorkerAgent: "codex"}
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+
+	rec := httptest.NewRecorder()
+	body := `{"displayName":"add-logger","prompt":"do the work","mode":"trusted"}`
+	srv.createWorkerChild(rec, childRequestBody(t, []string{"worker:orchestrate"}, body))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
+	}
+	if store.captured.Harness != "codex" {
+		t.Fatalf("child harness = %q, want codex", store.captured.Harness)
+	}
+}
+
+// When the project configured no worker agent, an unspecified harness falls back
+// to claude-code (the prior default) rather than erroring.
+func TestCreateWorkerChildFallsBackToClaudeWhenNoWorkerAgent(t *testing.T) {
+	t.Parallel()
+	store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderNodeOps, parentWorkerAgent: ""}
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+
+	rec := httptest.NewRecorder()
+	body := `{"displayName":"add-logger","prompt":"do the work","mode":"trusted"}`
+	srv.createWorkerChild(rec, childRequestBody(t, []string{"worker:orchestrate"}, body))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
+	}
+	if store.captured.Harness != "claude-code" {
+		t.Fatalf("child harness = %q, want claude-code", store.captured.Harness)
+	}
+}
+
+// The project's configured worker agent is authoritative: it overrides an
+// explicit harness the orchestrator names (e.g. a Codex orchestrator that spawns
+// codex children), so the worker matches what was set at project creation.
+func TestCreateWorkerChildForcesProjectWorkerAgentOverExplicit(t *testing.T) {
+	t.Parallel()
+	store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderNodeOps, parentWorkerAgent: "claude-code"}
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+
+	rec := httptest.NewRecorder()
+	// Orchestrator explicitly asks for codex, but the project configured claude-code.
+	body := `{"harness":"codex","displayName":"add-logger","prompt":"do the work","mode":"trusted"}`
+	srv.createWorkerChild(rec, childRequestBody(t, []string{"worker:orchestrate"}, body))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
+	}
+	if store.captured.Harness != "claude-code" {
+		t.Fatalf("child harness = %q, want claude-code (project config must win)", store.captured.Harness)
+	}
 }
 
 func resourceProfileProvider(t *testing.T, raw json.RawMessage) string {
@@ -194,6 +268,92 @@ func TestCreateWorkerChildRequiresOrchestratorScope(t *testing.T) {
 	}
 }
 
+// An orchestrator can start a worker on a named branch (for example one an
+// earlier worker already pushed); the branch reaches the session create.
+func TestCreateWorkerChildPassesRequestedBranch(t *testing.T) {
+	t.Parallel()
+	store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderNodeOps}
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+
+	rec := httptest.NewRecorder()
+	body := `{"displayName":"resume","prompt":"continue the work","branch":" ao/1a2b3c4d "}`
+	srv.createWorkerChild(rec, childRequestBody(t, []string{"worker:orchestrate"}, body))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
+	}
+	if store.captured.Branch != "ao/1a2b3c4d" {
+		t.Fatalf("child branch = %q, want ao/1a2b3c4d", store.captured.Branch)
+	}
+}
+
+// The store refuses a branch it cannot use; the orchestrator gets a specific
+// error rather than a generic constraint violation.
+func TestCreateWorkerChildReportsInvalidBranch(t *testing.T) {
+	t.Parallel()
+	store := &stubChildStore{
+		credentialAvailable: true, parentProvider: sandbox.ProviderNodeOps, createErr: postgres.ErrInvalidBranch,
+	}
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+
+	rec := httptest.NewRecorder()
+	body := `{"displayName":"resume","prompt":"work","branch":"main"}`
+	srv.createWorkerChild(rec, childRequestBody(t, []string{"worker:orchestrate"}, body))
+
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "invalid_branch") {
+		t.Fatalf("status = %d, body = %s; want 422 invalid_branch", rec.Code, rec.Body.String())
+	}
+}
+
+// Each refusal says why: the reason reaches the orchestrator's error message,
+// and a branch a live session already works on is a 409 naming that session.
+func TestCreateWorkerChildExplainsARefusedBranch(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		refused *postgres.BranchRefusedError
+		status  int
+		code    string
+		message string
+	}{
+		{"default branch", &postgres.BranchRefusedError{Reason: domain.SessionBranchDefault, Branch: "main"},
+			http.StatusUnprocessableEntity, "invalid_branch", "is the project's default branch"},
+		{"session prefix", &postgres.BranchRefusedError{Reason: domain.SessionBranchPrefix, Branch: "ao"},
+			http.StatusUnprocessableEntity, "invalid_branch", "is the project's session prefix"},
+		{"repository base", &postgres.BranchRefusedError{Reason: domain.SessionBranchRepositoryBase, Branch: "develop", Repository: "acme/julian"},
+			http.StatusUnprocessableEntity, "invalid_branch", "base branch of the project's repository acme/julian"},
+		{"invalid name", &postgres.BranchRefusedError{Reason: domain.SessionBranchInvalidName, Branch: "origin/main"},
+			http.StatusUnprocessableEntity, "invalid_branch", "must not read as another ref"},
+		{"in use", &postgres.BranchRefusedError{Reason: postgres.BranchReasonInUse, Branch: "ao/1a2b3c4d", SessionID: "s-1", SessionName: "fix login"},
+			http.StatusConflict, "branch_in_use", "live session fix login (s-1)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderNodeOps, createErr: tc.refused}
+			srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+			rec := httptest.NewRecorder()
+			body := `{"displayName":"resume","prompt":"work","branch":"` + tc.refused.Branch + `"}`
+			srv.createWorkerChild(rec, childRequestBody(t, []string{"worker:orchestrate"}, body))
+			var envelope struct {
+				Code    string         `json:"code"`
+				Message string         `json:"message"`
+				Details map[string]any `json:"details"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if rec.Code != tc.status || envelope.Code != tc.code || !strings.Contains(envelope.Message, tc.message) ||
+				envelope.Details["reason"] != tc.refused.Reason {
+				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+	if !errors.Is(&postgres.BranchRefusedError{Reason: postgres.BranchReasonInUse}, postgres.ErrBranchInUse) ||
+		!errors.Is(&postgres.BranchRefusedError{Reason: domain.SessionBranchDefault}, postgres.ErrInvalidBranch) {
+		t.Fatal("BranchRefusedError does not match its sentinel")
+	}
+}
+
 // A parent that is not an active orchestrator (terminated or missing) surfaces
 // ErrForbidden from the provider lookup, which the handler maps to 403 and does
 // not provision a child.
@@ -218,7 +378,9 @@ func TestCreateWorkerChildForbiddenWhenParentNotActiveOrchestrator(t *testing.T)
 // falling back to another provider.
 func TestCreateWorkerChildMisconfiguredInheritedProvider(t *testing.T) {
 	t.Parallel()
-	// Provisioning has no Coder config, so building a Coder plan fails validation.
+	// Provisioning's Coder config names a template but no deployment, so building
+	// a Coder plan fails validation. (A config with no template at all is the
+	// user-fixable coder_template_required case instead.)
 	provisioning := sandbox.ProvisioningDefaults{
 		Provider: sandbox.ProviderNodeOps,
 		Release:  "test",
@@ -227,6 +389,7 @@ func TestCreateWorkerChildMisconfiguredInheritedProvider(t *testing.T) {
 			DefaultShape: "s-1vcpu-1gb", DefaultRootFS: "devbox:1",
 			WorkerTokenTTL: 15 * time.Minute,
 		},
+		Coder: sandbox.CoderConfig{TemplateID: "2a2e262c-b31c-4202-946d-a19ad45d1fd2"},
 	}
 	store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderCoder}
 	srv := newChildServer(store, provisioning, sandbox.ProviderNodeOps)

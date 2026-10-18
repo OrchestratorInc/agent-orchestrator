@@ -49,13 +49,42 @@ type Client struct {
 	webBaseURL   string
 	httpClient   *http.Client
 	now          func() time.Time
+	// readTokens reuses contents:read checkout tokens (see readTokenCache).
+	readTokens readTokenCache
 }
 
 type HTTPError struct {
 	StatusCode int
+	Message    string
+	// RateLimited is a 403 or 429 GitHub sent because a rate limit ran out,
+	// not because the caller lacks access; it says nothing about access.
+	RateLimited bool
+}
+
+// ErrUserAuthorizationRejected is GitHub refusing a user token exchange or
+// refresh outright (for example an expired, revoked or already used refresh
+// token), as opposed to failing to answer.
+var ErrUserAuthorizationRejected = errors.New("GitHub user authorization was rejected")
+
+// githubRateLimited reports whether a failed GitHub response is a rate limit
+// (primary: X-RateLimit-Remaining 0; secondary: Retry-After or the message).
+func githubRateLimited(response *http.Response, message string) bool {
+	switch response.StatusCode {
+	case http.StatusTooManyRequests:
+		return true
+	case http.StatusForbidden:
+	default:
+		return false
+	}
+	return response.Header.Get("X-RateLimit-Remaining") == "0" ||
+		response.Header.Get("Retry-After") != "" ||
+		strings.Contains(strings.ToLower(message), "rate limit")
 }
 
 func (e *HTTPError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("GitHub request returned status %d: %s", e.StatusCode, e.Message)
+	}
 	return fmt.Sprintf("GitHub request returned status %d", e.StatusCode)
 }
 
@@ -259,7 +288,13 @@ func (c *Client) ExchangeOAuthCode(ctx context.Context, code, verifier string) (
 		"client_secret": c.clientSecret,
 		"code":          code,
 		"redirect_uri":  c.OAuthCallbackURL(),
-		"code_verifier": verifier,
+	}
+	// Only send code_verifier when we actually issued a PKCE challenge. The
+	// bundled installation+OAuth flow (CompleteInstallationOAuth) has no verifier
+	// because GitHub authorized during installation without our code_challenge;
+	// sending an empty code_verifier would make GitHub reject the exchange.
+	if verifier = strings.TrimSpace(verifier); verifier != "" {
+		payload["code_verifier"] = verifier
 	}
 	var response struct {
 		AccessToken string `json:"access_token"`
@@ -279,6 +314,23 @@ func (c *Client) ExchangeOAuthCode(ctx context.Context, code, verifier string) (
 		return "", errors.New("GitHub OAuth exchange was rejected")
 	}
 	return response.AccessToken, nil
+}
+
+// ExchangeOAuthCodeForUser is ExchangeOAuthCode returning the whole user token
+// (with its refresh token and expiries), so the installation callback can keep
+// the user's GitHub authorization. verifier is omitted when empty, as in the
+// bundled installation-and-authorization flow.
+func (c *Client) ExchangeOAuthCodeForUser(ctx context.Context, code, verifier string) (UserAccessToken, error) {
+	payload := map[string]string{
+		"client_id":     c.clientID,
+		"client_secret": c.clientSecret,
+		"code":          strings.TrimSpace(code),
+		"redirect_uri":  c.OAuthCallbackURL(),
+	}
+	if verifier = strings.TrimSpace(verifier); verifier != "" {
+		payload["code_verifier"] = verifier
+	}
+	return c.exchangeUserToken(ctx, payload)
 }
 
 func (c *Client) ExchangeUserCode(
@@ -334,7 +386,7 @@ func (c *Client) exchangeUserToken(
 	}
 	response.AccessToken = strings.TrimSpace(response.AccessToken)
 	if response.Error != "" || response.AccessToken == "" {
-		return UserAccessToken{}, errors.New("GitHub user authorization was rejected")
+		return UserAccessToken{}, ErrUserAuthorizationRejected
 	}
 	token := UserAccessToken{
 		value:        response.AccessToken,
@@ -481,6 +533,11 @@ type PullRequestResponse struct {
 	Base struct {
 		Ref string `json:"ref"`
 	} `json:"base"`
+	// Mergeable and MergeableState come from the REST pulls endpoint, which — unlike
+	// GraphQL — triggers GitHub's async mergeability computation. They resolve the
+	// GraphQL "UNKNOWN" that otherwise strands a PR at mergeability=unknown.
+	Mergeable      *bool  `json:"mergeable"`
+	MergeableState string `json:"mergeable_state"`
 }
 
 // GetPullRequestRecord fetches the full pull request fields required to
@@ -511,6 +568,17 @@ func (c *Client) GetPullRequestRecord(
 		return PullRequestResponse{}, errors.New("GitHub returned an incomplete pull request response")
 	}
 	return pullRequest, nil
+}
+
+// MergePullRequest asks GitHub to squash the exact head the user reviewed.
+// GitHub rejects a moved head or unmet branch protection atomically.
+func (c *Client) MergePullRequest(ctx context.Context, token, owner, repo string, number int, expectedHeadSHA string) error {
+	if owner == "" || repo == "" || number <= 0 || expectedHeadSHA == "" {
+		return errors.New("pull request identity and expected head are required")
+	}
+	return c.userJSON(ctx, token, http.MethodPut,
+		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/pulls/"+strconv.Itoa(number)+"/merge",
+		map[string]string{"sha": expectedHeadSHA, "merge_method": "squash"}, nil)
 }
 
 // CreatePullRequestInput is the request to open a pull request.
@@ -693,6 +761,69 @@ func (c *Client) ListRepositories(ctx context.Context, installationID int64) ([]
 	return nil, errors.New("GitHub repository pagination exceeded limit")
 }
 
+// ListUserInstallationRepositories lists the repositories of an installation
+// that the user behind token can access: GitHub's intersection of the
+// installation's repository selection and the user's own permissions. A
+// user-scoped installation connection is synced from this list.
+func (c *Client) ListUserInstallationRepositories(
+	ctx context.Context,
+	token string,
+	installationID int64,
+) ([]Repository, error) {
+	if installationID <= 0 {
+		return nil, errors.New("GitHub installation id is invalid")
+	}
+	var repositories []Repository
+	for page := 1; page <= 100; page++ {
+		var response struct {
+			Repositories []Repository `json:"repositories"`
+		}
+		path := fmt.Sprintf("/user/installations/%d/repositories?per_page=100&page=%d", installationID, page)
+		if err := c.userJSON(ctx, token, http.MethodGet, path, nil, &response); err != nil {
+			return nil, err
+		}
+		repositories = append(repositories, response.Repositories...)
+		if len(response.Repositories) < 100 {
+			return repositories, nil
+		}
+	}
+	return nil, errors.New("GitHub repository pagination exceeded limit")
+}
+
+// UserRepositoryAccess reports whether the user behind token can read and push
+// to a repository, addressed by its stable ID. A repository the user cannot see
+// is (false, false, nil): GitHub answers 404 (or 403) rather than revealing it.
+// A rate-limited answer is an error, not a denial.
+func (c *Client) UserRepositoryAccess(
+	ctx context.Context,
+	token string,
+	repositoryID int64,
+) (pull, push bool, err error) {
+	if repositoryID <= 0 {
+		return false, false, errors.New("GitHub repository id is invalid")
+	}
+	var repository struct {
+		Permissions struct {
+			Admin    bool `json:"admin"`
+			Maintain bool `json:"maintain"`
+			Push     bool `json:"push"`
+			Pull     bool `json:"pull"`
+		} `json:"permissions"`
+	}
+	path := fmt.Sprintf("/repositories/%d", repositoryID)
+	if err := c.userJSON(ctx, token, http.MethodGet, path, nil, &repository); err != nil {
+		var httpError *HTTPError
+		if errors.As(err, &httpError) && !httpError.RateLimited &&
+			(httpError.StatusCode == http.StatusNotFound || httpError.StatusCode == http.StatusForbidden) {
+			return false, false, nil
+		}
+		return false, false, err
+	}
+	permissions := repository.Permissions
+	push = permissions.Push || permissions.Maintain || permissions.Admin
+	return permissions.Pull || push, push, nil
+}
+
 func (c *Client) installationToken(ctx context.Context, installationID int64) (string, error) {
 	response, err := c.createInstallationToken(ctx, installationID, map[string]any{})
 	if err != nil {
@@ -708,8 +839,34 @@ func (c *Client) repositoryToken(
 	if installationID <= 0 || repositoryID <= 0 {
 		return installationAccessToken{}, errors.New("GitHub installation token scope is invalid")
 	}
+	return c.readToken(ctx, installationID, []int64{repositoryID})
+}
+
+// readToken returns a contents:read installation token for exactly the given
+// repositories, reusing a cached one for the same scope while it has enough
+// lifetime left.
+func (c *Client) readToken(
+	ctx context.Context,
+	installationID int64,
+	repositoryIDs []int64,
+) (installationAccessToken, error) {
+	return c.readTokens.get(ctx, readTokenKey(installationID, repositoryIDs), c.now,
+		func(ctx context.Context) (installationAccessToken, error) {
+			return c.mintReadToken(ctx, installationID, repositoryIDs)
+		})
+}
+
+// mintReadToken always asks GitHub for a new contents:read token. Callers that
+// use the mint as a live permission check (is this repository still granted to
+// the installation?) call it directly so a cached token cannot vouch for
+// access that has since been removed.
+func (c *Client) mintReadToken(
+	ctx context.Context,
+	installationID int64,
+	repositoryIDs []int64,
+) (installationAccessToken, error) {
 	response, err := c.createInstallationToken(ctx, installationID, map[string]any{
-		"repository_ids": []int64{repositoryID},
+		"repository_ids": repositoryIDs,
 		"permissions": map[string]string{
 			"contents": "read",
 		},
@@ -721,6 +878,150 @@ func (c *Client) repositoryToken(
 		return installationAccessToken{}, errors.New("GitHub returned an expired installation token")
 	}
 	return response, nil
+}
+
+// resolveInstallationRepositoryIDs maps declared extra-repository full names
+// ("owner/repo") to their numeric IDs, but only for repositories the
+// installation can actually mint a token for. It first enumerates the
+// installation's repositories; any declared name the enumeration does not cover
+// is retried with a direct GET /repos/{owner}/{repo} and then confirmed grantable
+// by minting a single-repo token. The GET matters because the installation
+// listing is eventually consistent: a repository the App can access may not
+// appear in the paginated list for a short window after it is granted or flipped
+// to private, and without the retry a (typically private) extra would be dropped
+// from the checkout scope even though the App can read it. The mint confirmation
+// matters because GET /repos answers 200 for ANY public repository, including ones
+// outside this installation that it cannot scope a token to; adding such an ID
+// would 422 the whole broadened checkout token and fail the primary clone too. A
+// repository that is not grantable (404 on the GET, or a failed confirming mint)
+// is reported as unresolved rather than force-added, so every returned ID is still
+// one the installation can mint a token for and a broadened checkout token never
+// 422s. The result preserves input order, contains no duplicates, and returns the
+// declared names that could not be resolved.
+func (c *Client) resolveInstallationRepositoryIDs(
+	ctx context.Context,
+	installationID int64,
+	fullNames []string,
+) (ids []int64, unresolved []string, err error) {
+	if installationID <= 0 || len(fullNames) == 0 {
+		return nil, nil, nil
+	}
+	repositories, err := c.ListRepositories(ctx, installationID)
+	if err != nil {
+		return nil, nil, err
+	}
+	byName := make(map[string]int64, len(repositories))
+	for _, repository := range repositories {
+		byName[strings.ToLower(strings.Trim(repository.FullName, "/"))] = repository.ID
+	}
+	// The fallback token is minted at most once, and only if a declared name is
+	// missing from the listing. A failure to mint it leaves matched extras intact
+	// and marks the rest unresolved, so a hiccup here never regresses the repos
+	// that already resolved from the listing.
+	var (
+		fallbackToken    string
+		fallbackTokenErr error
+		fallbackMinted   bool
+	)
+	ids = make([]int64, 0, len(fullNames))
+	seen := make(map[int64]bool, len(fullNames))
+	for _, fullName := range fullNames {
+		normalized := strings.ToLower(strings.Trim(strings.TrimSpace(fullName), "/"))
+		if normalized == "" {
+			continue
+		}
+		id, ok := byName[normalized]
+		if !ok {
+			if !fallbackMinted {
+				fallbackToken, fallbackTokenErr = c.installationToken(ctx, installationID)
+				fallbackMinted = true
+			}
+			if fallbackTokenErr != nil {
+				unresolved = append(unresolved, normalized)
+				continue
+			}
+			resolvedID, resolveErr := c.installationRepositoryID(ctx, fallbackToken, normalized)
+			if resolveErr != nil {
+				unresolved = append(unresolved, normalized)
+				continue
+			}
+			// GET /repos returns 200 for any public repo, including one outside
+			// this installation, but the installation can only scope a token to a
+			// repo it was granted. Confirm the repo is grantable before adding it,
+			// so a declared public extra outside the installation is dropped here
+			// instead of 422ing the whole checkout token mint (which would fail the
+			// primary clone). This keeps every returned ID one the installation can
+			// mint, exactly as the listing-only path guaranteed.
+			// A live check, so never from the read-token cache.
+			if _, mintErr := c.mintReadToken(ctx, installationID, []int64{resolvedID}); mintErr != nil {
+				unresolved = append(unresolved, normalized)
+				continue
+			}
+			id = resolvedID
+		}
+		if id <= 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids, unresolved, nil
+}
+
+// installationRepositoryID resolves a single "owner/repo" to its numeric ID via a
+// direct GET /repos/{owner}/{repo} with the installation token. It backs
+// resolveInstallationRepositoryIDs' fallback for repositories missing from the
+// eventually-consistent installation listing. A repository the installation
+// cannot access returns an *HTTPError with StatusCode 404, which the caller treats
+// as unresolved; the token minted here is the installation's own, so this never
+// widens access beyond what the App is already granted.
+func (c *Client) installationRepositoryID(
+	ctx context.Context,
+	installationToken, fullName string,
+) (int64, error) {
+	owner, name, ok := strings.Cut(strings.Trim(strings.TrimSpace(fullName), "/"), "/")
+	owner = strings.TrimSpace(owner)
+	name = strings.TrimSpace(name)
+	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+		return 0, errors.New("GitHub repository full name is invalid")
+	}
+	var repository Repository
+	if err := c.userJSON(
+		ctx,
+		installationToken,
+		http.MethodGet,
+		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(name),
+		nil,
+		&repository,
+	); err != nil {
+		return 0, err
+	}
+	if repository.ID <= 0 {
+		return 0, errors.New("GitHub returned a repository without an ID")
+	}
+	return repository.ID, nil
+}
+
+// repositoryReadTokenForRepos mints a short-lived installation token scoped to a
+// set of repositories with read-only contents access. It backs a checkout that
+// clones the project's primary repository plus any declared extra repositories;
+// repositoryToken remains the single-repository path used by capability
+// redemption. The scope is exactly the given IDs — nothing is granted
+// installation-wide.
+func (c *Client) repositoryReadTokenForRepos(
+	ctx context.Context,
+	installationID int64,
+	repositoryIDs []int64,
+) (installationAccessToken, error) {
+	if installationID <= 0 || len(repositoryIDs) == 0 {
+		return installationAccessToken{}, errors.New("GitHub installation token scope is invalid")
+	}
+	for _, id := range repositoryIDs {
+		if id <= 0 {
+			return installationAccessToken{}, errors.New("GitHub installation token scope is invalid")
+		}
+	}
+	return c.readToken(ctx, installationID, repositoryIDs)
 }
 
 // repositoryWriteToken mints a short-lived installation token scoped to one
@@ -752,10 +1053,46 @@ func (c *Client) repositoryWriteToken(
 	return response, nil
 }
 
+// repositoryWriteTokenForRepos is repositoryWriteToken's multi-repository
+// counterpart: it mints one short-lived installation token scoped to a set of
+// repositories with write access to their contents and pull requests. It backs
+// a worker's push and gh-CLI pull-request creation across the project's primary
+// repository plus any declared extra repositories that resolve within the same
+// installation — the write-side mirror of repositoryReadTokenForRepos. The
+// scope is exactly the given IDs; nothing is granted installation-wide.
+func (c *Client) repositoryWriteTokenForRepos(
+	ctx context.Context,
+	installationID int64,
+	repositoryIDs []int64,
+) (installationAccessToken, error) {
+	if installationID <= 0 || len(repositoryIDs) == 0 {
+		return installationAccessToken{}, errors.New("GitHub installation token scope is invalid")
+	}
+	for _, id := range repositoryIDs {
+		if id <= 0 {
+			return installationAccessToken{}, errors.New("GitHub installation token scope is invalid")
+		}
+	}
+	response, err := c.createInstallationToken(ctx, installationID, map[string]any{
+		"repository_ids": repositoryIDs,
+		"permissions": map[string]string{
+			"contents":      "write",
+			"pull_requests": "write",
+		},
+	})
+	if err != nil {
+		return installationAccessToken{}, err
+	}
+	if response.ExpiresAt.IsZero() || !response.ExpiresAt.After(c.now()) {
+		return installationAccessToken{}, errors.New("GitHub returned an expired installation token")
+	}
+	return response, nil
+}
+
 // statusReadToken mints a short-lived installation token scoped to one
-// repository with read access to pull requests and checks — the permissions
-// GitHub's fine-grained token model requires to fetch PR/review/check-run
-// detail, distinct from repositoryToken's contents:read (used for checkout).
+// repository with read access to contents, pull requests, checks and commit
+// statuses. The snapshot GraphQL query traverses commit and branch fields in
+// private repos, including status-only CI such as CodeRabbit.
 func (c *Client) statusReadToken(
 	ctx context.Context,
 	installationID, repositoryID int64,
@@ -763,13 +1100,34 @@ func (c *Client) statusReadToken(
 	if installationID <= 0 || repositoryID <= 0 {
 		return installationAccessToken{}, errors.New("GitHub installation token scope is invalid")
 	}
-	response, err := c.createInstallationToken(ctx, installationID, map[string]any{
+	permissions := map[string]string{
+		"contents": "read", "pull_requests": "read", "checks": "read", "statuses": "read",
+	}
+	request := map[string]any{
 		"repository_ids": []int64{repositoryID},
-		"permissions": map[string]string{
-			"pull_requests": "read",
-			"checks":        "read",
-		},
-	})
+		"permissions":    permissions,
+	}
+	response, err := c.createInstallationToken(ctx, installationID, request)
+	var permissionErr *HTTPError
+	if errors.As(err, &permissionErr) && permissionErr.StatusCode == http.StatusUnprocessableEntity &&
+		strings.Contains(permissionErr.Message, "The permissions requested are not granted to this installation") {
+		// Installations may not have approved newer optional check permissions.
+		// Keep the same repository scope and never request write access or an
+		// unrestricted token when retrying with their actual grants.
+		installation, lookupErr := c.GetInstallation(ctx, installationID)
+		if lookupErr != nil {
+			return installationAccessToken{}, lookupErr
+		}
+		for name := range permissions {
+			if granted := installation.Permissions[name]; granted != "read" && granted != "write" {
+				delete(permissions, name)
+			}
+		}
+		if permissions["contents"] == "" || permissions["pull_requests"] == "" {
+			return installationAccessToken{}, errors.New("GitHub installation requires Contents and Pull requests read access to refresh PR status")
+		}
+		response, err = c.createInstallationToken(ctx, installationID, request)
+	}
 	if err != nil {
 		return installationAccessToken{}, err
 	}
@@ -823,8 +1181,11 @@ func (c *Client) GetPullRequest(
 
 // CheckRun is one GitHub Checks API run against a commit.
 type CheckRun struct {
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
+	HTMLURL    string `json:"html_url"`
 }
 
 // ListCheckRuns returns every check run GitHub has recorded against ref
@@ -861,6 +1222,7 @@ type PullRequestReview struct {
 	ID          int64     `json:"id"`
 	User        User      `json:"user"`
 	State       string    `json:"state"`
+	Body        string    `json:"body"`
 	SubmittedAt time.Time `json:"submitted_at"`
 }
 
@@ -884,6 +1246,36 @@ func (c *Client) ListPullRequestReviews(
 		return nil, err
 	}
 	return reviews, nil
+}
+
+// FindPullRequestReviewByMarker scans every available page before a retry
+// decides whether an earlier, response-lost POST reached GitHub. Exhausting
+// the scan without a definitive result fails closed: it must not post again.
+func (c *Client) FindPullRequestReviewByMarker(
+	ctx context.Context, token, owner, repo string, number int, marker string,
+) (int64, error) {
+	if owner == "" || repo == "" || number <= 0 || marker == "" {
+		return 0, errors.New("pull request review identity and marker are required")
+	}
+	const pageSize = 100
+	const maxPages = 100
+	for page := 1; page <= maxPages; page++ {
+		var reviews []PullRequestReview
+		path := "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) +
+			"/pulls/" + strconv.Itoa(number) + "/reviews?per_page=100&page=" + strconv.Itoa(page)
+		if err := c.userJSON(ctx, token, http.MethodGet, path, nil, &reviews); err != nil {
+			return 0, err
+		}
+		for _, review := range reviews {
+			if strings.Contains(review.Body, marker) && review.ID > 0 {
+				return review.ID, nil
+			}
+		}
+		if len(reviews) < pageSize {
+			return 0, nil
+		}
+	}
+	return 0, errors.New("pull request review history exceeded reconciliation limit")
 }
 
 // pullRequestReviewResponse is the subset of GitHub's create-review response
@@ -952,6 +1344,11 @@ func (c *Client) userJSON(ctx context.Context, token, method, path string, body,
 	return c.jsonRequest(ctx, method, c.apiBaseURL+path, "Bearer "+token, body, destination)
 }
 
+func (c *Client) graphQL(ctx context.Context, token, query string, variables map[string]any, destination any) error {
+	return c.jsonRequest(ctx, http.MethodPost, c.apiBaseURL+"/graphql", "Bearer "+token,
+		map[string]any{"query": query, "variables": variables}, destination)
+}
+
 func (c *Client) jsonRequest(
 	ctx context.Context,
 	method, endpoint, authorization string,
@@ -990,7 +1387,15 @@ func (c *Client) jsonRequest(
 		return errors.New("GitHub response exceeded size limit")
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return &HTTPError{StatusCode: response.StatusCode}
+		var failure struct {
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(raw, &failure)
+		return &HTTPError{
+			StatusCode:  response.StatusCode,
+			Message:     failure.Message,
+			RateLimited: githubRateLimited(response, failure.Message),
+		}
 	}
 	if destination == nil {
 		return nil

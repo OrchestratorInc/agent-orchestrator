@@ -60,6 +60,11 @@ export function setApiDaemonStatus(nextStatus: DaemonStatus): void {
 // still normalizes IDs for every resource, including ones a segment heuristic
 // would miss (orchestrators/{id}). Keep in sync with schema.ts.
 const ROUTE_TEMPLATES = [
+    "/api/v1/awake/observations", "/api/v1/awake", "/api/v1/awake/sessions", "/api/v1/awake/settings",
+    "/api/v1/awake/rules", "/api/v1/awake/stop", "/api/v1/awake/resume",
+    "/api/v1/awake/recover", "/api/v1/awake/history", "/api/v1/awake/downloads",
+    "/api/v1/awake/low-power/authorize", "/api/v1/awake/low-power/revoke", "/api/v1/awake/sessions/{awakeId}/end",
+    "/api/v1/awake/sessions/{awakeId}/extend",
 	"/api/v1/agents",
 	"/api/v1/agents/install-jobs",
 	"/api/v1/agents/auth-plans",
@@ -68,6 +73,8 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/agents/readiness",
 	"/api/v1/agents/readiness/ensure",
 	"/api/v1/agents/{agent}/auth",
+	"/api/v1/agents/{agent}/logout",
+	"/api/v1/settings/harness-defaults/{agent}",
 	"/api/v1/agents/{agent}/install",
 	"/api/v1/agents/codex/accounts",
 	"/api/v1/agents/codex/accounts/{accountId}",
@@ -81,6 +88,15 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/agents/codex/accounts/login-operations/{operationId}/cancel",
 	"/api/v1/agents/codex/account-switches",
 	"/api/v1/agents/codex/account-switches/{switchId}",
+	"/api/v1/agents/accounts",
+	"/api/v1/agents/accounts/usage",
+	"/api/v1/agents/accounts/login",
+	"/api/v1/agents/accounts/login/{operationId}/verify",
+	"/api/v1/agents/accounts/login/{operationId}/cancel",
+	"/api/v1/agents/accounts/sessions/{sessionId}",
+	"/api/v1/agents/accounts/{accountId}",
+	"/api/v1/agents/accounts/{accountId}/default",
+	"/api/v1/agents/accounts/{accountId}/reset-credit",
 	"/api/v1/agents/{agent}/models",
 	"/api/v1/agents/{agent}/models/refresh",
 	"/api/v1/agents/{agent}/probe",
@@ -119,6 +135,7 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/sessions/{sessionId}/preview",
 	"/api/v1/sessions/{sessionId}/preview/files/*",
 	"/api/v1/sessions/{sessionId}/preview/server",
+	"/api/v1/sessions/{sessionId}/renders/{renderId}/artifact",
 	"/api/v1/sessions/{sessionId}/resume-agent",
 	"/api/v1/sessions/{sessionId}/restore",
 	"/api/v1/sessions/{sessionId}/switch-agent",
@@ -325,6 +342,29 @@ export const apiClient = createClient<paths>({
 	baseUrl: initialApiBaseUrl,
 	fetch: runtimeFetch,
 });
+
+// Build each request against the daemon's current address, so runtimeFetch
+// passes it straight to fetch. Rebasing a request built against the
+// placeholder base has to buffer its body asynchronously, which held every
+// POST back behind whatever React rendered in the same click (a new terminal
+// waited ~20 ms for its own tab to render). runtimeFetch still rebases a
+// request built before the daemon's address changed.
+type RequestInit = { baseUrl?: string } | undefined;
+const withRuntimeBase = (init: RequestInit): RequestInit =>
+	runtimeApiBaseUrl && !init?.baseUrl ? { ...init, baseUrl: runtimeApiBaseUrl } : init;
+const HTTP_METHODS = ["GET", "PUT", "POST", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE"] as const;
+// The client's methods are generic over every path; this untyped view only
+// forwards their arguments, so callers keep the client's own signatures.
+const clientMethods = apiClient as unknown as Record<
+	(typeof HTTP_METHODS)[number],
+	(url: unknown, init?: RequestInit) => unknown
+> & { request: (method: unknown, url: unknown, init?: RequestInit) => unknown };
+for (const method of HTTP_METHODS) {
+	const send = clientMethods[method];
+	clientMethods[method] = (url, init) => send(url, withRuntimeBase(init));
+}
+const sendRequest = clientMethods.request;
+clientMethods.request = (method, url, init) => sendRequest(method, url, withRuntimeBase(init));
 
 /**
  * Human-readable message from an openapi-fetch `error` value. The daemon's

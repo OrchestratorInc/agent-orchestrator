@@ -9,21 +9,41 @@ with `SCOPE_REQUIRED`.
 ## ao spawn — create a worker session
 
 ```
-ao spawn --name "<label>" --prompt "<clear worker task>" [--agent claude-code] [--mode standard|trusted]
+ao spawn --name "<label>" --prompt "<clear worker task>" [--agent <harness>] [--mode standard|trusted] [--branch <branch>]
 ```
 
 - `--name` (required): the label the human sees in the sidebar. Keep it short
-  and specific — 20 characters or fewer is ideal (80 is the hard cap). Count it
-  before running the command; an over-long label wastes a turn on a rejection.
+  and specific. Twenty characters or fewer is ideal; 100 characters is the
+  hard cap. Count it before running the command; an over-long label wastes a
+  turn on a rejection.
 - `--prompt` (required): the worker's complete task. Write it like a brief for
   a competent engineer with no other context: goal, constraints, and the
-  expected outcome (usually a pull request).
-- `--agent` / `--harness`: `claude-code` (default), `codex`, or `cursor`.
+  expected outcome (usually a pull request). Before you name a specific file,
+  class, or path, confirm it exists in the checked-out repository (`ls`,
+  `find`, `grep`). A prompt pointing at a file that does not exist wastes the
+  whole worker.
+- `--agent` / `--harness`: `claude-code`, `codex`, `cursor`, or `opencode`. If
+  omitted, the project-configured worker harness is used; when the project has
+  no worker harness, the control plane falls back to `claude-code`.
 - `--mode`: `trusted` (default) or `standard`.
+- `--branch`: the git branch the worker works on. Use it only when the human
+  asks for a specific branch, or to resume work a stopped worker already
+  pushed (`ao list --all` shows each worker's branch). A branch that already
+  exists on the remote is checked out with its commits; a new name starts from
+  the default branch. It cannot be the project's default branch, the session
+  prefix, a base branch of one of the project's repositories, or a name that
+  reads as another ref (`refs/...`, `origin/...`, `FETCH_HEAD`); a refused
+  name fails with `invalid_branch` and says why. Omit it for ordinary tasks.
+  A branch belongs to one live worker at a time. To resume another worker's
+  branch, first ask that worker to commit and push its work (unpushed work is
+  lost when it is killed), then `ao kill` it; spawning on a branch a live
+  worker still holds fails with `branch_in_use` naming that worker. If it
+  already opened a pull request, tell the new worker to run
+  `ao claim-pr <number>` instead of opening another one.
 
 Prints `spawned <session-id> (<status>)`. The worker provisions its own
-sandbox, checks out the project repository on a fresh branch, and starts on the
-prompt — typically live within ~10 seconds. You do not need to wait: a `send`
+sandbox, checks out the project repository on a fresh branch (or the
+`--branch` you named), and starts on the prompt — typically live within ~10 seconds. You do not need to wait: a `send`
 issued before it is ready is queued and delivered on startup.
 
 Errors: `agent_provider_required` means the org has no validated credential for
@@ -45,8 +65,10 @@ and CI state) once one exists. Terminated workers are hidden unless `--all`.
 mergeability, source/target branch) plus `activityState` and `isTerminated`.
 
 Status vocabulary: `working`, `idle`, `needs_input`, `pr_open`, `draft`,
-`ci_failed`, `review_pending`, `changes_requested`, `approved`, `mergeable`,
-`merged`, `exited`, `terminated`.
+`ci_failed`, `review_pending`, `changes_requested`, `commented`, `approved`,
+`mergeable`, `merged`, `exited`, `terminated`, and `no_signal`. These are
+derived session and pull-request states, so a worker can move between them as
+activity and repository facts change.
 
 ## ao send — message a worker
 
@@ -68,9 +90,12 @@ ao report <message...>
 
 Sends a message to the orchestrator session that spawned this worker. Use it
 when the task is done (say what was delivered and the PR number), or when
-blocked on a decision only the orchestrator or human can make. Keep it short;
-the orchestrator sees it in its own conversation prefixed with this session's
-id. A session that was not spawned by an orchestrator gets `SCOPE_REQUIRED`.
+blocked on a decision only the orchestrator or human can make. Keep it to one
+or two sentences: the outcome and PR number, or the single blocking reason.
+Never paste diffs, logs, or file contents — a long report reads like an
+injected prompt in the orchestrator's conversation, where it appears prefixed
+with this session's id. A session that was not spawned by an orchestrator gets
+`SCOPE_REQUIRED`.
 
 ## ao kill — terminate a worker
 

@@ -1,26 +1,21 @@
 import { expect, test, type Page } from "@playwright/test";
+import { openInspector } from "./support/open-inspector";
 
-async function expectAddressCentered(page: Page) {
+async function expectAddressCentered(page: Page, compact = false) {
 	await expect
 		.poll(async () => {
 			const inspectorTopbar = await page.locator("#inspector .session-inspector__topbar").boundingBox();
 			const address = await page.getByTestId("browser-address-bar").boundingBox();
 			if (!inspectorTopbar || !address) return Number.POSITIVE_INFINITY;
-			return Math.abs(address.x + address.width / 2 - (inspectorTopbar.x + inspectorTopbar.width / 2));
+			if (compact) {
+				return Math.abs(address.x + address.width / 2 - (inspectorTopbar.x + inspectorTopbar.width / 2));
+			}
+			const tabs = await page.locator("#inspector .session-inspector__tablist").boundingBox();
+			const actions = await page.locator("#inspector .session-inspector__trailing").boundingBox();
+			if (!tabs || !actions) return Number.POSITIVE_INFINITY;
+			return Math.abs(address.x + address.width / 2 - (tabs.x + tabs.width + actions.x) / 2);
 		})
 		.toBeLessThanOrEqual(1);
-}
-
-async function expectAddressShiftedRight(page: Page) {
-	await expect
-		.poll(async () => {
-			const inspectorTopbar = await page.locator("#inspector .session-inspector__topbar").boundingBox();
-			const address = await page.getByTestId("browser-address-bar").boundingBox();
-			if (!inspectorTopbar || !address) return false;
-			const offset = address.x + address.width / 2 - (inspectorTopbar.x + inspectorTopbar.width / 2);
-			return offset >= 32 && offset <= 48;
-		})
-		.toBe(true);
 }
 
 async function expectAddressWidth(page: Page, width: number) {
@@ -28,6 +23,22 @@ async function expectAddressWidth(page: Page, width: number) {
 		.poll(async () => {
 			const measuredWidth = (await page.getByTestId("browser-address-bar").boundingBox())?.width;
 			return measuredWidth !== undefined && Math.abs(measuredWidth - width) <= 0.1;
+		})
+		.toBe(true);
+}
+
+async function expectAddressClearOfTabs(page: Page) {
+	await expect
+		.poll(async () => {
+			const address = await page.getByTestId("browser-address-bar").boundingBox();
+			if (!address) return false;
+			for (const tab of await page.locator("#inspector .session-inspector__tablist").getByRole("tab").all()) {
+				const box = await tab.boundingBox();
+				if (!box || box.x < address.x + address.width) {
+					if (box && box.x + box.width > address.x) return false;
+				}
+			}
+			return true;
 		})
 		.toBe(true);
 }
@@ -43,19 +54,41 @@ async function expectAddressBelowInspectorTabs(page: Page) {
 		.toBe(true);
 }
 
-test("@P0 browser address shifts clear of wide tabs and remains centered in the compact inspector", async ({ page }) => {
+test("@P0 browser address stays centered, clear of the tabs, and drops below them in the compact inspector", async ({ page }) => {
 	await page.goto("/#/projects/ao-demo/sessions/demo-working");
+	await openInspector(page);
 	await page.locator("#inspector").getByRole("tab", { name: "Browser" }).click();
 	await expect(page.getByTestId("browser-address-bar")).toBeVisible();
 
-	await expectAddressShiftedRight(page);
+	await expectAddressCentered(page);
+	await expectAddressClearOfTabs(page);
 	await expectAddressWidth(page, 240);
 	await page.setViewportSize({ width: 1100, height: 720 });
-	await expectAddressCentered(page);
+	await expectAddressCentered(page, true);
 	await expectAddressWidth(page, 180);
 	await expectAddressBelowInspectorTabs(page);
 	await page.setViewportSize({ width: 960, height: 720 });
-	await expectAddressCentered(page);
+	await expectAddressCentered(page, true);
 	await expectAddressWidth(page, 180);
 	await expectAddressBelowInspectorTabs(page);
+});
+
+// Exercise the CSS with future tab counts as well as today's tabs. Clones only
+// change the occupied space; no tab navigation behavior is under test here.
+test("@P0 browser address re-centers as inspector tabs are added", async ({ page }) => {
+	await page.setViewportSize({ width: 1800, height: 900 });
+	await page.goto("/#/projects/ao-demo/sessions/demo-working");
+	await openInspector(page);
+	await page.locator("#inspector").getByRole("tab", { name: "Browser" }).click();
+	await expect(page.getByTestId("browser-address-bar")).toBeVisible();
+	const tabs = page.locator("#inspector .session-inspector__tablist").getByRole("tab");
+	const initialCount = await tabs.count();
+	for (let count = initialCount; count <= 6; count++) {
+		await expect(tabs).toHaveCount(count);
+		await expectAddressCentered(page);
+		await expectAddressClearOfTabs(page);
+		if (count < 6) {
+			await tabs.last().evaluate((tab) => tab.parentElement!.appendChild(tab.cloneNode(true)));
+		}
+	}
 });

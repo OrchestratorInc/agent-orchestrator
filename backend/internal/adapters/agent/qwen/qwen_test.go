@@ -725,3 +725,183 @@ func countQwenHookCommand(entries []hooksjson.MatcherGroup, command string) int 
 	}
 	return count
 }
+
+func TestNativeConversationIDRequiresCapturedQwenSessionForTUI(t *testing.T) {
+	p := &Plugin{}
+	if id, ok, err := p.NativeConversationID(context.Background(), ports.SessionRef{
+		ID: "ao-session-1", Metadata: map[string]string{},
+	}, domain.SessionModeTUI, ""); err != nil || ok || id != "" {
+		t.Fatalf("uncaptured TUI native id = %q ok=%v err=%v", id, ok, err)
+	}
+	tuiID, ok, err := p.NativeConversationID(context.Background(), ports.SessionRef{
+		ID:       "ao-session-1",
+		Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "f194dbbc-f28a-4449-b885-09dcec9b5b7f"},
+	}, domain.SessionModeTUI, "")
+	if err != nil || !ok || tuiID != "f194dbbc-f28a-4449-b885-09dcec9b5b7f" {
+		t.Fatalf("captured TUI native id = %q ok=%v err=%v", tuiID, ok, err)
+	}
+	chatID, ok, err := p.NativeConversationID(context.Background(), ports.SessionRef{},
+		domain.SessionModeChat, tuiID)
+	if err != nil || !ok || chatID != tuiID {
+		t.Fatalf("Chat native id = %q ok=%v err=%v", chatID, ok, err)
+	}
+}
+
+func TestNativeConversationExistsRequiresPersistedQwenTranscript(t *testing.T) {
+	p := &Plugin{}
+	id := "f194dbbc-f28a-4449-b885-09dcec9b5b7f"
+	qwenHome := t.TempDir()
+	env := map[string]string{"QWEN_HOME": qwenHome}
+
+	exists, err := p.NativeConversationExists(context.Background(), ports.SessionRef{}, id, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists {
+		t.Fatal("reserved Qwen session without a transcript reported as persisted")
+	}
+
+	projectDir := filepath.Join(qwenHome, "projects", "-test-proj", "chats")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transcript := filepath.Join(projectDir, id+".jsonl")
+	if err := os.WriteFile(transcript, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	exists, err = p.NativeConversationExists(context.Background(), ports.SessionRef{}, id, env)
+	if err != nil || exists {
+		t.Fatalf("empty transcript: exists=%v err=%v", exists, err)
+	}
+	if err := os.WriteFile(transcript, []byte("{\"sessionId\":1}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	exists, err = p.NativeConversationExists(context.Background(), ports.SessionRef{}, id, env)
+	if err != nil || !exists {
+		t.Fatalf("persisted transcript: exists=%v err=%v", exists, err)
+	}
+
+	exists, err = p.NativeConversationExists(context.Background(), ports.SessionRef{}, "not-a-uuid", env)
+	if err != nil || exists {
+		t.Fatalf("non-UUID id: exists=%v err=%v", exists, err)
+	}
+}
+
+func TestInvalidateBinaryResolutionClearsCachedPath(t *testing.T) {
+	p := &Plugin{resolvedBinary: "old-qwen"}
+
+	p.InvalidateBinaryResolution()
+
+	if p.resolvedBinary != "" {
+		t.Fatalf("resolvedBinary = %q, want empty after invalidation", p.resolvedBinary)
+	}
+}
+
+func TestGetLaunchCommandAppliesToolRestrictions(t *testing.T) {
+	p := &Plugin{resolvedBinary: "qwen"}
+
+	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		Permissions: ports.PermissionModeDefault,
+		AllowedTools: []string{
+			" read_file ", "search_file_content", "glob",
+		},
+		DisallowedTools: []string{
+			"run_shell_command", "write_file", "edit", "",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"--core-tools", "read_file"},
+		{"--core-tools", "search_file_content"},
+		{"--core-tools", "glob"},
+		{"--exclude-tools", "run_shell_command"},
+		{"--exclude-tools", "write_file"},
+		{"--exclude-tools", "edit"},
+	}
+	for _, pair := range want {
+		if !containsSubsequence(cmd, pair) {
+			t.Fatalf("command %#v missing %#v", cmd, pair)
+		}
+	}
+}
+
+// TestGetLaunchCommandKeepsReadOnlyToolsOutOfAutoApproval guards the read-only
+// contract: an allowlisted tool must reach Qwen's fail-closed allowlist, never
+// `--allowed-tools`, which only auto-approves and would leave the tool set
+// unrestricted.
+func TestGetLaunchCommandKeepsReadOnlyToolsOutOfAutoApproval(t *testing.T) {
+	p := &Plugin{resolvedBinary: "qwen"}
+
+	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		Permissions:     ports.PermissionModeAcceptEdits,
+		AllowedTools:    []string{"read_file", "search_file_content"},
+		DisallowedTools: []string{"run_shell_command", "write_file", "edit"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsSubsequence(cmd, []string{"--allowed-tools"}) {
+		t.Fatalf("command %#v used --allowed-tools, which auto-approves instead of restricting", cmd)
+	}
+	for _, tool := range []string{"run_shell_command", "write_file", "edit"} {
+		if !containsSubsequence(cmd, []string{"--exclude-tools", tool}) {
+			t.Fatalf("command %#v does not exclude %s", cmd, tool)
+		}
+	}
+	for _, tool := range []string{"read_file", "search_file_content"} {
+		if !containsSubsequence(cmd, []string{"--core-tools", tool}) {
+			t.Fatalf("command %#v does not allowlist %s", cmd, tool)
+		}
+		if containsSubsequence(cmd, []string{"--exclude-tools", tool}) {
+			t.Fatalf("command %#v excludes %s while allowing it", cmd, tool)
+		}
+	}
+}
+
+func TestGetLaunchCommandOmitsToolFlagsWhenUnrestricted(t *testing.T) {
+	p := &Plugin{resolvedBinary: "qwen"}
+
+	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		Permissions: ports.PermissionModeAcceptEdits,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, flag := range []string{"--core-tools", "--exclude-tools", "--allowed-tools"} {
+		if containsSubsequence(cmd, []string{flag}) {
+			t.Fatalf("command %#v emitted %s with no restrictions configured", cmd, flag)
+		}
+	}
+}
+
+func TestGetRestoreCommandAppliesToolRestrictions(t *testing.T) {
+	p := &Plugin{resolvedBinary: "qwen"}
+
+	cmd, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		Permissions:     ports.PermissionModeDefault,
+		AllowedTools:    []string{"read_file"},
+		DisallowedTools: []string{"run_shell_command", "write_file", "edit"},
+		Session:         ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "sess-1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected a restorable session")
+	}
+	for _, pair := range [][]string{
+		{"--core-tools", "read_file"},
+		{"--exclude-tools", "run_shell_command"},
+		{"--exclude-tools", "write_file"},
+		{"--exclude-tools", "edit"},
+	} {
+		if !containsSubsequence(cmd, pair) {
+			t.Fatalf("restore command %#v missing %#v", cmd, pair)
+		}
+	}
+	if containsSubsequence(cmd, []string{"--allowed-tools"}) {
+		t.Fatalf("restore command %#v used --allowed-tools, which auto-approves instead of restricting", cmd)
+	}
+}

@@ -33,7 +33,7 @@ export const aoBridge: AoBridge =
 			onNextSessionShortcut: () => () => undefined,
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
-			onFocusTerminalShortcut: () => () => undefined,
+			onShortcut: () => () => undefined,
 		},
 		terminal: {
 			saveDroppedFile: async () => "",
@@ -41,6 +41,8 @@ export const aoBridge: AoBridge =
 			onFontSizeShortcut: () => () => undefined,
 		},
 		window: {
+			getZoomFactor: async () => 1,
+			onZoomFactor: () => () => undefined,
 			isMaximized: async () => false,
 			onMaximized: () => () => undefined,
 			isFullScreen: async () => false,
@@ -49,6 +51,8 @@ export const aoBridge: AoBridge =
 		theme: {
 			set: async () => undefined,
 			persistTerminal: async () => undefined,
+			setWindowBackground: async () => undefined,
+			setWindowTranslucent: async () => undefined,
 		},
 		menu: {
 			action: async () => undefined,
@@ -61,6 +65,26 @@ export const aoBridge: AoBridge =
 				}
 			},
 			readText: async () => (navigator.clipboard?.readText ? navigator.clipboard.readText() : ""),
+			writeImage: async (bytes: Uint8Array) => {
+				await navigator.clipboard.write([new ClipboardItem({ "image/png": new Blob([new Uint8Array(bytes)], { type: "image/png" }) })]);
+			},
+		},
+		chatImage: {
+			fetch: async (url: string) => {
+				const response = await fetch(url);
+				if (!response.ok) throw new Error(`Image request failed (${response.status})`);
+				const blob = await response.blob();
+				return { bytes: new Uint8Array(await blob.arrayBuffer()), mimeType: blob.type };
+			},
+			save: async ({ name, bytes }: { name: string; bytes: Uint8Array }) => {
+				const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)]));
+				const link = document.createElement("a");
+				link.href = url;
+				link.download = name;
+				link.click();
+				setTimeout(() => URL.revokeObjectURL(url), 0);
+				return true;
+			},
 		},
 		daemon: {
 			getStatus: async () => ({
@@ -72,6 +96,7 @@ export const aoBridge: AoBridge =
 			restart: async () => ({ state: "starting" }),
 			onStatus: () => () => undefined,
 		},
+		sideChats: { capture: async () => undefined },
 		editorHandoff: {
 			getState: async () => ({
 				targets: [],
@@ -81,6 +106,12 @@ export const aoBridge: AoBridge =
 			}),
 			open: async () => {
 				throw new Error("Desktop app is required to open a workspace.");
+			},
+			openArtifacts: async () => {
+				throw new Error("Desktop app is required to open artifacts.");
+			},
+			copyWorkspacePath: async () => {
+				throw new Error("Desktop app is required to copy a workspace path.");
 			},
 		},
 		telemetry: {
@@ -94,6 +125,8 @@ export const aoBridge: AoBridge =
 		},
 		browser: {
 			nativeCompositionEnabled: false,
+			reconnectRuntime: async () => undefined,
+			getRuntimeState: async () => ({ connected: false, connecting: false, rejected: false }),
 			ensure: async (sessionId: string) => ({
 				viewId: `preview:${sessionId}`,
 				url: "",
@@ -103,6 +136,7 @@ export const aoBridge: AoBridge =
 				isLoading: false,
 			}),
 			setBounds: () => undefined,
+			onBoundsApplied: () => () => undefined,
 			setOverlayOpen: () => undefined,
 			navigate: async ({ viewId, url }) => ({
 				viewId,
@@ -154,6 +188,30 @@ export const aoBridge: AoBridge =
 				canGoForward: false,
 				isLoading: false,
 			}),
+			getFindState: async (viewId: string) => ({
+				viewId,
+				tabId: "t1",
+				query: "",
+				activeMatchOrdinal: 0,
+				matches: 0,
+				finalUpdate: true,
+			}),
+			findInPage: async ({ viewId, query }) => ({
+				viewId,
+				tabId: "t1",
+				query,
+				activeMatchOrdinal: 0,
+				matches: 0,
+				finalUpdate: true,
+			}),
+			stopFindInPage: async ({ viewId }) => ({
+				viewId,
+				tabId: "t1",
+				query: "",
+				activeMatchOrdinal: 0,
+				matches: 0,
+				finalUpdate: true,
+			}),
 			captureScreenshot: async () => {
 				throw new Error("Desktop app is required to take a browser screenshot.");
 			},
@@ -173,7 +231,9 @@ export const aoBridge: AoBridge =
 			notifyPanelUsed: () => undefined,
 			notifyPanelBlur: () => undefined,
 			onFocusLocation: () => () => undefined,
+			onFindOpen: () => () => undefined,
 			onReopenClosedTab: () => () => undefined,
+			onClosePanel: () => () => undefined,
 			devtools: async ({ viewId, operation }) => ({
 				viewId,
 				open: operation !== "close",
@@ -185,9 +245,11 @@ export const aoBridge: AoBridge =
 			discardAnnotations: async () => undefined,
 			annotationAction: async () => undefined,
 			onNavState: () => () => undefined,
+			onFindState: () => () => undefined,
 			onPageFocus: () => () => undefined,
 			onTabsState: () => () => undefined,
 			onAgentActivity: () => () => undefined,
+			onRuntimeState: () => () => undefined,
 			onDevToolsState: () => () => undefined,
 			onProfileState: () => () => undefined,
 			onProfileManage: () => () => undefined,
@@ -196,7 +258,7 @@ export const aoBridge: AoBridge =
 			onAnnotationState: () => () => undefined,
 		},
 		browserProfiles: {
-			list: async () => ({ profiles: [] }),
+			list: async () => ({ profiles: [], defaultProfileId: null }),
 			create: async (name: string) => {
 				const now = new Date().toISOString();
 				return { id: `preview-${name}`, name, createdAt: now, updatedAt: now };
@@ -207,6 +269,7 @@ export const aoBridge: AoBridge =
 			},
 			clear: async () => undefined,
 			delete: async () => undefined,
+			setDefault: async () => undefined,
 			discoverImportSources: async () => ({ sources: [] }),
 			import: async () => ({ sourceName: "", entries: [] }),
 			onImportProgress: () => () => undefined,
@@ -216,6 +279,8 @@ export const aoBridge: AoBridge =
 			setBadge: async () => undefined,
 			devBounce: async () => undefined,
 			onClick: () => () => undefined,
+			onPlaySound: () => () => undefined,
+			reportSoundFailure: () => undefined,
 		},
 		tray: {
 			setAttentionState: () => undefined,
@@ -225,9 +290,16 @@ export const aoBridge: AoBridge =
 			getMigration: async () => ({ status: "pending" }),
 			setMigration: async () => undefined,
 		},
+		cliLink: {
+			setEnabled: async () => undefined,
+			inspect: async () => ({ ok: false as const, code: "unsupported" as const, message: "The desktop app is required to link the global ao command." }),
+			link: async () => ({ ok: false as const, code: "unsupported" as const, message: "The desktop app is required to link the global ao command." }),
+			unlink: async () => ({ ok: false as const, code: "unsupported" as const, message: "The desktop app is required to link the global ao command." }),
+		},
 		updateSettings: {
-			get: async () => ({ enabled: false, channel: "latest", nightlyAck: false, feature: null }),
+			get: async () => ({ enabled: false, channel: "latest", nightlyAck: false, feature: null, macDifferentialUpdates: false }),
 			set: async () => undefined,
+			setMacDifferentialUpdates: async () => undefined,
 		},
 		uiSettings: {
 			get: async () => ({ ...DEFAULT_UI_SETTINGS }),
@@ -253,10 +325,32 @@ export const aoBridge: AoBridge =
 			list: async () => [],
 			getActive: async () => null,
 		},
+		// The daemon-served web build has no Electron bridge and so no access to
+		// ~/.ao/remotes.json. Reporting no hosts leaves the UI showing local only,
+		// which is the truth there.
+		remotes: {
+			list: async () => [],
+			importAccountHost: async () => undefined,
+			pruneAccountHosts: async () => undefined,
+			issueAccountToken: async () => { throw new Error("remote hosts need the desktop app"); },
+			add: async () => "offline" as const,
+			update: async () => "offline" as const,
+			remove: async () => undefined,
+			connect: async () => { throw new Error("remote hosts need the desktop app"); },
+			disconnect: async () => undefined,
+			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
+			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
+			agentBrowserUrl: async () => "",
+			externalUrl: async (_hostId: string, url: string) => url,
+		},
 		cloud: {
 			getSession: async () => null,
 			signIn: async () => undefined,
 			signOut: async () => undefined,
+			cancelProviderAuth: async () => undefined,
+			connectProviderAuth: async () => {
+				throw new Error("Cloud provider sign-in requires the desktop app.");
+			},
 			localAuthAvailable: async () => false,
 			localRegister: async () => {
 				throw new Error("AO Cloud sign-in requires the desktop app.");
@@ -275,5 +369,6 @@ export const aoBridge: AoBridge =
 			},
 			closeStream: () => undefined,
 			onStreamEvent: () => () => undefined,
+			agentBrowserUrl: async () => "",
 		},
 	} satisfies AoBridge);

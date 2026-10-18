@@ -1,5 +1,5 @@
 import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 
 const ROOT_BUILD_TOOLS = ["corepack", "corepack.cmd", "npm", "npm.cmd", "npx", "npx.cmd"];
 const BIN_BUILD_TOOLS = ["corepack", "npm", "npx"];
@@ -82,6 +82,292 @@ export function patchClaudeRetryDetails(adapterPath) {
 	return true;
 }
 
+/**
+ * claude-agent-acp 0.70 reports the last assistant message's token usage as
+ * context occupancy. The SDK's getContextUsage returns its current retained
+ * context estimate. Publish that snapshot after each result so AO's existing
+ * usage_update projection receives the provider's own estimate.
+ */
+export function patchClaudeContextUsage(adapterPath) {
+	const source = readFileSync(adapterPath, "utf8");
+	const start = source.indexOf("// Send usage_update notification");
+	const end = source.indexOf("if (session.cancelled) {", start);
+	if (start < 0 || end < 0 || source.indexOf("// Send usage_update notification", start + 1) >= 0) {
+		throw new Error("claude-agent-acp result usage block no longer matches AO's context patch");
+	}
+	const block = source.slice(start, end);
+	if (source.includes("// AO: use the SDK's context snapshot.")) return false;
+	if (!block.includes("used: lastAssistantTotalUsage,") || !block.includes("size: session.contextWindowSize,")) {
+		throw new Error("claude-agent-acp result usage block no longer matches AO's context patch");
+	}
+
+	const snapshot = [
+		"// AO: use the SDK's context snapshot.",
+		"                            let contextUsageTimer;",
+		"                            try {",
+		"                                const contextUsage = await Promise.race([",
+		"                                    session.query.getContextUsage(),",
+		"                                    new Promise((_, reject) => {",
+		"                                        contextUsageTimer = setTimeout(() => reject(new Error('Claude SDK context usage timed out')), 2000);",
+		"                                    }),",
+		"                                ]);",
+		"                                if (Number.isFinite(contextUsage.totalTokens) && contextUsage.totalTokens > 0 &&",
+		"                                    Number.isFinite(contextUsage.rawMaxTokens) && contextUsage.rawMaxTokens > 0) {",
+		"                                    lastAssistantTotalUsage = contextUsage.totalTokens;",
+		"                                    session.contextWindowSize = contextUsage.rawMaxTokens;",
+		"                                    session.contextWindowAuthoritative = true;",
+		"                                }",
+		"                            } catch (error) {",
+		"                                this.logger.error('Failed to fetch Claude SDK context usage:', error);",
+		"                            } finally {",
+		"                                clearTimeout(contextUsageTimer);",
+		"                            }",
+		"                            ",
+	].join("\n");
+	writeFileSync(adapterPath, source.slice(0, start) + snapshot + source.slice(start));
+	return true;
+}
+
+// Reuse the pinned bridge's native task registry. Ending its process loses the
+// task monitor even when a background shell's process group survives. Claude
+// Code also starts cycles on its own after an AO turn, for example to answer a
+// finished task's notification. AO has no turn for those, and the finished
+// task has already left the registry, so the SDK's last reported state is the
+// only signal that the agent is still working. A query that never reports idle
+// again keeps its host awake, which is the safe side.
+export function patchClaudeHibernationCheck(adapterPath) {
+	let source = readFileSync(adapterPath, "utf8");
+	const method = '"_ao/session/can_hibernate"';
+	if (source.includes(method)) return false;
+	const marker = ".onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params))";
+	// task_updated and task_notification both drop a finished task.
+	const ended = "session.liveBackgroundTasks.delete(message.task_id);";
+	if (!source.includes(marker) || !source.includes("session.liveBackgroundTasks.set(message.task_id") ||
+		!source.includes("session.lastSessionState = message.state;") || source.split(ended).length !== 3) {
+		throw new Error("claude-agent-acp no longer matches AO's native-task hibernation check");
+	}
+	source = source.replaceAll(ended, `${ended} session.aoTaskEndedAt = Date.now();`);
+	const registration = `.onRequest(${method}, { parse: params => params }, (ctx) => {
+            const id = ctx.params?.sessionId;
+            const session = typeof id === "string" && Object.hasOwn(agent.sessions, id) ? agent.sessions[id] : undefined;
+            if (!session || session.queryClosed || !(session.liveBackgroundTasks instanceof Map)) {
+                throw RequestError.invalidParams(undefined, "Live Claude session unavailable.");
+            }
+            const sdkIdle = session.lastSessionState === undefined || session.lastSessionState === "idle";
+            // The SDK reports the notification cycle as running 79 ms after the
+            // task leaves the registry (measured on Claude Code 2.1.296).
+            // ponytail: a fixed hold; a slower CLI needs a pending-cycle signal.
+            const cyclePending = Date.now() - (session.aoTaskEndedAt ?? 0) < 10000;
+            return { canHibernate: sdkIdle && !cyclePending && !Array.from(session.liveBackgroundTasks.values()).some(task => !task.endedPerLevel) };
+        })
+        `;
+	writeFileSync(adapterPath, source.replace(marker, registration + marker));
+	return true;
+}
+
+/**
+ * Settle a prompt that Claude Code folded into a task-notification cycle.
+ *
+ * When a prompt arrives while Claude Code runs a cycle it started itself (for
+ * example after a background command finished), the CLI adds the prompt to
+ * that cycle. The cycle's single result keeps its task-notification origin, so
+ * claude-agent-acp 0.70 treats it as autonomous and never answers the prompt:
+ * the session stays "Working" until the user sends something else. The result
+ * names the prompts it answered in user_message_uuid(s); route it through the
+ * user lane when it names a pending, not held-open turn. Port of upstream
+ * agentclientprotocol/claude-agent-acp#1233 for issue #1145.
+ */
+export function patchClaudeFoldedPromptSettlement(adapterPath) {
+	const source = readFileSync(adapterPath, "utf8");
+	if (source.includes("// AO: a result naming a pending prompt answers it.")) return false;
+	const original = "const isAutonomousResult = message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind);";
+	const at = source.indexOf(original);
+	if (at < 0 || source.indexOf(original, at + 1) >= 0 || !source.includes("const findUnsettledTurn = (uuid) =>")) {
+		throw new Error("claude-agent-acp autonomous result classification no longer matches AO's folded-prompt patch");
+	}
+	const replacement = [
+		"// AO: a result naming a pending prompt answers it.",
+		"                        const answeredPromptUuids = Array.isArray(message.user_message_uuids)",
+		"                            ? message.user_message_uuids",
+		'                            : typeof message.user_message_uuid === "string" ? [message.user_message_uuid] : [];',
+		"                        const answersPendingPrompt = answeredPromptUuids.some((uuid) => {",
+		"                            const turn = findUnsettledTurn(uuid);",
+		"                            return turn !== undefined && !isHeldOpen(turn);",
+		"                        });",
+		"                        const isAutonomousResult = message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind) && !answersPendingPrompt;",
+	].join("\n");
+	writeFileSync(adapterPath, source.slice(0, at) + replacement + source.slice(at + original.length));
+	return true;
+}
+
+/**
+ * Drop trailing-idle debt that can no longer be paid.
+ *
+ * claude-agent-acp 0.70 counts one owed `idle` per result and absorbs that many
+ * idles before treating one as a turn-over signal. Claude Code 2.1.270+ emits a
+ * single idle for a turn plus the task-notification cycle that follows it, so
+ * one unit is never paid. The leftover then swallows the idle a steered turn
+ * settles on, leaving that turn "Working" forever. A transition into `running`
+ * proves every earlier idle was already emitted, so reset the debt there. Port
+ * of the sweep upstream shipped in claude-agent-acp 0.79.
+ */
+export function patchClaudeStaleIdleDebt(adapterPath) {
+	const source = readFileSync(adapterPath, "utf8");
+	if (source.includes("// AO: drop idle debt that can no longer be paid.")) return false;
+	const original = [
+		'case "session_state_changed": {',
+		"                                session.lastSessionState = message.state;",
+		'                                if (message.state === "idle") {',
+	].join("\n");
+	const at = source.indexOf(original);
+	if (at < 0 || source.indexOf(original, at + 1) >= 0 || !source.includes("session.owedTrailingIdles--;")) {
+		throw new Error("claude-agent-acp session state handling no longer matches AO's idle-debt patch");
+	}
+	const replacement = [
+		'case "session_state_changed": {',
+		"                                // AO: drop idle debt that can no longer be paid.",
+		"                                const previousState = session.lastSessionState;",
+		"                                session.lastSessionState = message.state;",
+		'                                if (message.state === "running" && previousState !== "running") {',
+		"                                    session.owedTrailingIdles = 0;",
+		"                                }",
+		'                                if (message.state === "idle") {',
+	].join("\n");
+	writeFileSync(adapterPath, source.slice(0, at) + replacement + source.slice(at + original.length));
+	return true;
+}
+
+/**
+ * Settle steered turns the way upstream claude-agent-acp#1166 does.
+ *
+ * A steer aborts the running cycle and runs the steered message as a second
+ * cycle, so 0.70 parks a steered turn's results and settles it at an idle. An
+ * owed idle can absorb that idle (the "Working forever" stall), or the turn
+ * waits for an echo the CLI never replays. #1166 settles the turn at a result
+ * that names the steer in user_message_uuid(s). That result still owes its
+ * trailing idle. Unstamped results settle at the first idle after a result
+ * that followed the steered echo (`steeredAwaitingResult`), ahead of idle
+ * debt. AO adds one rule: a result that names a steer answers it, whatever its
+ * origin. Claude Code folds a steer sent during a task-notification cycle into
+ * that cycle's result. Drop this patch when AO moves to claude-agent-acp
+ * 0.86 or later.
+ */
+export function patchClaudeSteerSettlement(adapterPath) {
+	let source = readFileSync(adapterPath, "utf8");
+	if (source.includes("// AO: port of claude-agent-acp#1166.")) return false;
+	const patches = [
+		[
+			"function isSteering(turn) {\n    return turn != null && turn.steeredEchoes !== undefined && !turn.settled;\n}",
+			[
+				"function isSteering(turn) {",
+				"    return turn != null && turn.steeredEchoes !== undefined && !turn.settled;",
+				"}",
+				"// AO: port of claude-agent-acp#1166.",
+				"function isSteeredSettleReady(turn) {",
+				"    return isSteering(turn) && turn.steeredEchoes.size === 0 && turn.steeredSettle !== undefined && !turn.steeredAwaitingResult;",
+				"}",
+				"function leaveSteerLane(turn) {",
+				"    turn.steeredEchoes = undefined;",
+				"    turn.steeredUuids = undefined;",
+				"    turn.steeredAwaitingResult = undefined;",
+				"    turn.steeredSettle = undefined;",
+				"}",
+			].join("\n"),
+		],
+		[
+			"(turnInFlight.steeredEchoes ??= new Set()).add(steeredUuid);",
+			"(turnInFlight.steeredEchoes ??= new Set()).add(steeredUuid);\n        (turnInFlight.steeredUuids ??= new Set()).add(steeredUuid);",
+		],
+		[
+			"session.activeTurn.steeredSettle = outcome;",
+			"session.activeTurn.steeredSettle = outcome;\n                session.activeTurn.steeredAwaitingResult = false;",
+		],
+		[
+			"session.activeTurn.steeredEchoes.delete(message.uuid);",
+			[
+				"if (session.activeTurn.steeredEchoes.delete(message.uuid)) {",
+				"                                        // The recorded outcome predates the steered cycle.",
+				"                                        session.activeTurn.steeredAwaitingResult = true;",
+				"                                    }",
+			].join("\n"),
+		],
+		[
+			[
+				"// Plain Turn so the fields can be cleared below; isSteering",
+				"                                        // narrows steeredEchoes to non-optional.",
+				"                                        const steered = session.activeTurn;",
+				"                                        if (steered.steeredEchoes?.size === 0 && steered.steeredSettle !== undefined) {",
+				"                                            // Via the subagent gate, not settleActive: a steered turn",
+				"                                            // can also have spawned background subagents, which own it",
+				"                                            // from here (settles now if none is live, holds otherwise).",
+				"                                            steered.deferredSettle = steered.steeredSettle;",
+				"                                            steered.steeredEchoes = undefined;",
+				"                                            steered.steeredSettle = undefined;",
+				"                                            settleDeferredIfDrained();",
+				"                                        }",
+			].join("\n"),
+			"// AO: the ready lane above settles a steered turn; this one swallows the idle.",
+		],
+		[
+			"else if (session.owedTrailingIdles > 0) {",
+			[
+				"else if (isSteeredSettleReady(session.activeTurn)) {",
+				"                                        // Ahead of idle debt: the outcome is final, and debt",
+				"                                        // absorption could swallow the only idle this turn gets.",
+				"                                        // Via the subagent gate, not settleActive: a steered turn",
+				"                                        // can also have spawned background subagents.",
+				"                                        const steered = session.activeTurn;",
+				"                                        steered.deferredSettle = steered.steeredSettle;",
+				"                                        leaveSteerLane(steered);",
+				"                                        settleDeferredIfDrained();",
+				"                                    }",
+				"                                    else if (session.owedTrailingIdles > 0) {",
+			].join("\n"),
+		],
+		[
+			"const isAutonomousResult = message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind)",
+			[
+				"const resultUuids = message.user_message_uuids ??",
+				"                            (message.user_message_uuid !== undefined ? [message.user_message_uuid] : []);",
+				"                        // AO: a result that names a steer answers it, whatever its origin.",
+				"                        const namesSteer = !session.cancelled && resultUuids.some((uuid) =>",
+				"                            (session.turnQueue ?? []).some((turn) => isSteering(turn) && turn.steeredUuids?.has(uuid)));",
+				"                        const isAutonomousResult = message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind) && !namesSteer",
+			].join("\n"),
+		],
+		[
+			"recordResultForOrphanCommands();\n                                ensureActiveTurn();",
+			[
+				"recordResultForOrphanCommands();",
+				"                                ensureActiveTurn();",
+				"                                // A result naming a steer consumed it: retire its echo and,",
+				"                                // with no other steer outstanding, leave the steer lane so",
+				"                                // this result settles the turn and owes its trailing idle.",
+				"                                const steeredTurn = session.activeTurn;",
+				"                                if (!session.cancelled && isSteering(steeredTurn)) {",
+				"                                    let answersSteer = false;",
+				"                                    for (const uuid of resultUuids) {",
+				"                                        steeredTurn.steeredEchoes.delete(uuid);",
+				"                                        if (steeredTurn.steeredUuids?.has(uuid)) answersSteer = true;",
+				"                                    }",
+				"                                    if (answersSteer && steeredTurn.steeredEchoes.size === 0) {",
+				"                                        leaveSteerLane(steeredTurn);",
+				"                                    }",
+				"                                }",
+			].join("\n"),
+		],
+	];
+	for (const [original, replacement] of patches) {
+		const at = source.indexOf(original);
+		if (at < 0 || source.indexOf(original, at + 1) >= 0) {
+			throw new Error("claude-agent-acp no longer matches AO's steer settlement patch");
+		}
+		source = source.slice(0, at) + replacement + source.slice(at + original.length);
+	}
+	writeFileSync(adapterPath, source);
+	return true;
+}
+
 export function pruneNodeDistribution(nodeRoot) {
 	// The Unix archives expose npm/corepack as bin/ symlinks into lib/. Remove
 	// the entry points before their targets so packagers never see dangling
@@ -104,4 +390,23 @@ function removeFile(path) {
 	} catch (error) {
 		if (error?.code !== "ENOENT") throw error;
 	}
+}
+
+export function archiveExtraction(
+	archivePath,
+	workDir,
+	{ platform = process.platform, systemRoot = process.env.SystemRoot } = {},
+) {
+	// Windows ships bsdtar as System32\tar.exe and it reads zip. PowerShell's
+	// Expand-Archive is the obvious alternative but is bound by MAX_PATH: with
+	// LongPathsEnabled=0 and a deep checkout, Node's bundled npm tree exceeds
+	// 260 characters and extraction fails without a non-zero exit, so the build
+	// only discovers it later, as a missing directory. bsdtar handles the same
+	// archive at the same depth.
+	if (platform === "win32") {
+		if (!systemRoot) throw new Error("SystemRoot is required for Windows archive extraction");
+		// Git Bash can put GNU tar ahead of System32 on PATH.
+		return { command: win32.join(systemRoot, "System32", "tar.exe"), args: ["-xf", archivePath, "-C", workDir] };
+	}
+	return { command: "tar", args: ["-xzf", archivePath, "-C", workDir] };
 }

@@ -8,12 +8,13 @@ import { useUiStore } from "../../stores/ui-store";
 import { TooltipProvider } from "../ui/tooltip";
 import { CodexAccountsSection } from "./CodexAccountsSection";
 
-const { deleteMock, getMock, postMock, scrollIntoViewMock, terminalStateCallback, terminalTarget } = vi.hoisted(() => ({
+const { deleteMock, getMock, postMock, scrollIntoViewMock, terminalFocusRequested, terminalStateCallback, terminalTarget } = vi.hoisted(() => ({
 	deleteMock: vi.fn(),
 	getMock: vi.fn(),
 	postMock: vi.fn(),
 	scrollIntoViewMock: vi.fn(),
-	terminalStateCallback: { value: undefined as ((state: "exited" | "error") => void) | undefined },
+	terminalFocusRequested: { value: false },
+	terminalStateCallback: { value: undefined as ((state: "attached" | "exited" | "error") => void) | undefined },
 	terminalTarget: { value: undefined as { handleId: string; generation: string; title: string } | undefined },
 }));
 
@@ -23,7 +24,8 @@ vi.mock("../../lib/api-client", () => ({
 }));
 
 vi.mock("../TerminalPane", () => ({
-	TerminalPane: ({ onTerminalStateChange, terminalTarget: target }: { onTerminalStateChange?: (state: "exited" | "error") => void; terminalTarget: { handleId: string; generation: string; title: string } }) => {
+	TerminalPane: ({ focusRequested, onTerminalStateChange, terminalTarget: target }: { focusRequested?: boolean; onTerminalStateChange?: (state: "attached" | "exited" | "error") => void; terminalTarget: { handleId: string; generation: string; title: string } }) => {
+		terminalFocusRequested.value = focusRequested === true;
 		terminalStateCallback.value = onTerminalStateChange;
 		terminalTarget.value = target;
 		return <div data-testid="inline-terminal-body" />;
@@ -57,6 +59,7 @@ function renderSection() {
 beforeEach(() => {
 	Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoViewMock });
 	scrollIntoViewMock.mockReset();
+	terminalFocusRequested.value = false;
 	terminalStateCallback.value = undefined;
 	terminalTarget.value = undefined;
 	useUiStore.setState({ settingsModal: { scope: "global", section: "agents" } });
@@ -145,8 +148,9 @@ it("shows a simple empty state when Codex is signed out on the device", async ()
 	expect(useButton).toBeEnabled();
 	expect(useButton).toHaveTextContent(/^Use$/);
 	expect(firstRow.querySelector('button[aria-expanded="false"]')).toBeInTheDocument();
-	expect(firstRow.firstElementChild).toHaveClass("items-start");
-	expect(firstRow.querySelector(".lucide-chevron-down")).toHaveClass("mt-1.5");
+	// The header is the shared settings row: identity, chevron and Use all sit on its centre line.
+	expect(firstRow.firstElementChild).toHaveClass("settings-row-bar");
+	expect(firstRow.querySelector(".lucide-chevron-down")).not.toHaveClass("mt-1.5");
 });
 
 it("does not offer an empty provider expand interaction when no accounts exist", async () => {
@@ -618,6 +622,9 @@ it("starts account login immediately with no name prompt and auto-scrolls the in
 	expect(scrollIntoViewMock).toHaveBeenCalledWith({ behavior: "smooth", block: "nearest" });
 	expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "agents" });
 	expect(screen.getByRole("button", { name: "Add account" })).toBeDisabled();
+	expect(terminalFocusRequested.value).toBe(false);
+	act(() => terminalStateCallback.value?.("attached"));
+	await waitFor(() => expect(terminalFocusRequested.value).toBe(true));
 });
 
 it("reattaches a daemon-projected login terminal across remounts without opening or cancelling it", async () => {

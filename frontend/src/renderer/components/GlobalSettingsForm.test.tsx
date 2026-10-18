@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../i18n";
@@ -10,6 +10,21 @@ import { useTerminalShellStore } from "../stores/terminal-shell-store";
 import { useUiStore } from "../stores/ui-store";
 import { useTelemetryPolicyStore } from "../stores/telemetry-policy-store";
 import { TooltipProvider } from "./ui/tooltip";
+
+const { harnessSettingsSectionMock } = vi.hoisted(() => ({ harnessSettingsSectionMock: vi.fn() }));
+
+vi.mock("./settings/HarnessSettingsSection", () => ({
+	HarnessSettingsSection: (props: { focusAgentId?: string; hostId?: string; titleHidden?: boolean }) => {
+		harnessSettingsSectionMock(props);
+		return <div data-testid="harness-settings-section" />;
+	},
+}));
+
+// The real section reads the cloud gate and /me; here it only marks where the
+// General page places it.
+vi.mock("./settings/DefaultCloudSandboxRow", () => ({
+	DefaultCloudSandboxSection: () => <div data-testid="default-cloud-sandbox-section" />,
+}));
 
 const {
 	getUpdate,
@@ -32,9 +47,12 @@ const {
 	getKeybindings,
 	setKeybindings,
 	setKeybindingRecording,
+	setMacDifferentialUpdates,
 	getTelemetryPolicy,
 	setTelemetryEvents,
 	onTelemetryPolicy,
+	isMacPlatform,
+	isWindowsPlatform,
 } = vi.hoisted(() => ({
 	getUpdate: vi.fn(),
 	setUpdate: vi.fn(),
@@ -56,12 +74,15 @@ const {
 	getKeybindings: vi.fn(),
 	setKeybindings: vi.fn(),
 	setKeybindingRecording: vi.fn(),
+	setMacDifferentialUpdates: vi.fn().mockResolvedValue(undefined),
 	// agent-switch visibility initializes at module load, before beforeEach can
 	// install the per-test policy response. Preserve the bridge's Promise
 	// contract for that initial read as well.
 	getTelemetryPolicy: vi.fn().mockResolvedValue(undefined),
 	setTelemetryEvents: vi.fn(),
 	onTelemetryPolicy: vi.fn(),
+	isMacPlatform: vi.fn(() => false),
+	isWindowsPlatform: vi.fn(() => true),
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
@@ -74,7 +95,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 
 vi.mock("../lib/platform", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../lib/platform")>();
-	return { ...actual, isWindowsPlatform: () => true };
+	return { ...actual, isMacPlatform, isWindowsPlatform };
 });
 
 vi.mock("../lib/bridge", () => ({
@@ -82,7 +103,18 @@ vi.mock("../lib/bridge", () => ({
 		app: { getVersion, openExternal },
 		clipboard: { writeText },
 		daemon: { getStatus: getDaemonStatus },
-		updateSettings: { get: getUpdate, set: setUpdate },
+		remotes: { list: vi.fn(async () => []) },
+		cliLink: {
+			setEnabled: vi.fn(async () => undefined),
+			inspect: vi.fn(async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" })),
+			link: vi.fn(async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" })),
+			unlink: vi.fn(async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" })),
+		},
+		updateSettings: {
+			get: getUpdate,
+			set: setUpdate,
+			setMacDifferentialUpdates,
+		},
 		uiSettings: { get: getUiSettings, set: setUiSettings },
 		keybindings: {
 			get: getKeybindings,
@@ -102,12 +134,16 @@ vi.mock("../lib/bridge", () => ({
 	},
 }));
 
-function renderForm(section: GlobalSettingsSection = "all") {
+vi.mock("../lib/cloud-session", () => ({
+	useCloudSession: () => ({ status: "authenticated", session: { user: { id: "test-user" } } }),
+}));
+
+function renderForm(section: GlobalSettingsSection = "all", focusAgentId?: string, hostId?: string) {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	render(
 		<QueryClientProvider client={qc}>
 			<TooltipProvider>
-				<GlobalSettingsForm section={section} />
+				<GlobalSettingsForm focusAgentId={focusAgentId} hostId={hostId} section={section} />
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
@@ -115,6 +151,7 @@ function renderForm(section: GlobalSettingsSection = "all") {
 }
 
 beforeEach(async () => {
+	harnessSettingsSectionMock.mockReset();
 	for (const m of [
 		getUpdate,
 		setUpdate,
@@ -136,12 +173,16 @@ beforeEach(async () => {
 		getKeybindings,
 		setKeybindings,
 		setKeybindingRecording,
+		setMacDifferentialUpdates,
 		getTelemetryPolicy,
 		setTelemetryEvents,
 		onTelemetryPolicy,
+		isMacPlatform,
+		isWindowsPlatform,
 	]) {
 		m.mockReset();
 	}
+	isWindowsPlatform.mockReturnValue(true);
 	getUpdate.mockResolvedValue({ enabled: true, channel: "latest", nightlyAck: false, feature: null });
 	setUpdate.mockResolvedValue(undefined);
 	getUiSettings.mockResolvedValue({ locale: "en", soundNotificationsEnabled: true, terminalShell: { kind: "auto" } });
@@ -166,6 +207,7 @@ beforeEach(async () => {
 	getKeybindings.mockResolvedValue({});
 	setKeybindings.mockImplementation(async (overrides) => overrides);
 	setKeybindingRecording.mockResolvedValue(undefined);
+	setMacDifferentialUpdates.mockResolvedValue(undefined);
 	getTelemetryPolicy.mockResolvedValue({ eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true });
 	setTelemetryEvents.mockResolvedValue({ eventsEnabled: true, consentGeneration: "generation-on", updatedAt: "2026-08-28T10:15:31.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true });
 	onTelemetryPolicy.mockReturnValue(() => undefined);
@@ -179,16 +221,46 @@ beforeEach(async () => {
 		saving: false,
 		saveError: false,
 	});
-	useUiStore.setState({ developerMode: false });
+	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, sideChats: false, windowTranslucency: false });
 	useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true, saving: false, saveError: false });
 	document.documentElement.lang = "en";
 });
 
 describe("GlobalSettingsForm", () => {
+	it("keeps window transparency in Appearance when Developer Mode changes", async () => {
+		isMacPlatform.mockReturnValue(true);
+		const user = userEvent.setup();
+		renderForm("general");
+		const appearance = screen.getByRole("heading", { name: "Appearance" }).closest("section")!;
+		const transparency = within(appearance).getByRole("switch", { name: "Window transparency" });
+		await user.click(transparency);
+		expect(window.localStorage.getItem("ao.windowTranslucency")).toBe("true");
+		const developerMode = screen.getByRole("switch", { name: "Developer mode" });
+		await user.click(developerMode);
+		await user.click(developerMode);
+		expect(transparency).toHaveAttribute("aria-checked", "true");
+		expect(useUiStore.getState().windowTranslucency).toBe(true);
+	});
+
+	it("hides window transparency on platforms without native vibrancy", async () => {
+		renderForm("general");
+		await screen.findByRole("switch", { name: "Developer mode" });
+		expect(screen.queryByRole("switch", { name: "Window transparency" })).not.toBeInTheDocument();
+	});
+
+	it("propagates a Harness focus target through the settings catalog", async () => {
+		renderForm("harness", "cursor");
+
+		expect(await screen.findByTestId("harness-settings-section")).toBeInTheDocument();
+		// Headings that repeat the page title are now hidden by SettingsSection, not this flag.
+		expect(harnessSettingsSectionMock).toHaveBeenCalledWith({ focusAgentId: "cursor", titleHidden: false });
+	});
+
 	it("keeps Browser in its dedicated settings page", async () => {
 		renderForm("general");
 		expect(await screen.findByLabelText("Settings")).toBeInTheDocument();
 		expect(document.querySelector('[data-section="browserProfiles"]')).not.toBeInTheDocument();
+		expect(document.querySelector('[data-section="remoteHosts"]')).not.toBeInTheDocument();
 	});
 
 	it("keeps download history inside the Browser settings page", async () => {
@@ -203,7 +275,10 @@ describe("GlobalSettingsForm", () => {
 		expect(await screen.findByLabelText("Settings")).toBeInTheDocument();
 		expect(screen.getByText("Appearance")).toBeInTheDocument();
 		expect(screen.getByText("Language")).toBeInTheDocument();
-		expect(await screen.findByText("Updates")).toBeInTheDocument();
+		// UpdatesSection is lazy-loaded and can take longer than the default async query timeout.
+		// Its sections are "Version" and "Preferences" ("Updates" is the page title).
+		expect(await screen.findByRole("heading", { name: "Version" }, { timeout: 5_000 })).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: "Preferences" })).toBeInTheDocument();
 		expect(screen.getByText("Advanced")).toBeInTheDocument();
 		expect(screen.getByText("Report a problem")).toBeInTheDocument();
 		// Report form is inline — no dialog, fields directly present.
@@ -218,8 +293,60 @@ describe("GlobalSettingsForm", () => {
 
 		await user.click(toggle);
 		expect(window.localStorage.getItem("ao.developerMode")).toBe("true");
-		await user.click(screen.getByLabelText("Updates channel"));
+		expect(setMacDifferentialUpdates).toHaveBeenCalledWith(true);
+		await user.click(await screen.findByLabelText("Updates channel", {}, { timeout: 5_000 }));
 		expect(await screen.findByRole("menuitem", { name: "Feature Releases" })).toBeInTheDocument();
+	});
+
+	// Admins pick the org's cloud sandbox without turning on Developer Mode or
+	// the preview Cloud toggle, which builds that force cloud leave off.
+	it("shows the default cloud sandbox outside Developer mode", async () => {
+		renderForm("general");
+		expect(await screen.findByRole("switch", { name: "Developer mode" })).toHaveAttribute("aria-checked", "false");
+		expect(screen.getByTestId("default-cloud-sandbox-section")).toBeInTheDocument();
+	});
+
+	it("reveals the Side chats toggle only in Developer mode and persists it", async () => {
+		const user = userEvent.setup();
+		renderForm("general");
+		await screen.findByRole("switch", { name: "Developer mode" });
+		expect(screen.queryByRole("switch", { name: "Side chats" })).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("switch", { name: "Developer mode" }));
+		const toggle = await screen.findByRole("switch", { name: "Side chats" });
+		expect(toggle).toHaveAttribute("aria-checked", "false");
+
+		await user.click(toggle);
+		expect(window.localStorage.getItem("ao.sideChats")).toBe("true");
+		expect(useUiStore.getState().sideChats).toBe(true);
+	});
+
+	it("reveals the Diagnostics toggle only in Developer mode and persists it", async () => {
+		const user = userEvent.setup();
+		renderForm("general");
+		await screen.findByRole("switch", { name: "Developer mode" });
+		expect(screen.queryByRole("switch", { name: "Diagnostics" })).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("switch", { name: "Developer mode" }));
+		const toggle = await screen.findByRole("switch", { name: "Diagnostics" });
+		expect(toggle).toHaveAttribute("aria-checked", "false");
+
+		await user.click(toggle);
+		expect(window.localStorage.getItem("ao.diagnostics")).toBe("true");
+		expect(useUiStore.getState().diagnostics).toBe(true);
+	});
+
+	it("keeps Remote hosts in its own page and persists the enable switch", async () => {
+		const user = userEvent.setup();
+		useUiStore.getState().setDeveloperMode(true);
+		renderForm("remoteHosts");
+		const remoteHosts = await screen.findByRole("switch", { name: "Connect to remote hosts" });
+		expect(remoteHosts).toHaveAttribute("aria-checked", "false");
+		expect(screen.queryByRole("switch", { name: "Developer mode" })).not.toBeInTheDocument();
+
+		await user.click(remoteHosts);
+		expect(window.localStorage.getItem("ao.remoteHosts")).toBe("true");
+		expect(useUiStore.getState().remoteHosts).toBe(true);
 	});
 
 	it("shows the available feature builds after choosing Feature Releases", async () => {
@@ -228,7 +355,7 @@ describe("GlobalSettingsForm", () => {
 		useUiStore.getState().setDeveloperMode(true);
 		renderForm();
 
-		await user.click(await screen.findByLabelText("Updates channel"));
+		await user.click(await screen.findByLabelText("Updates channel", {}, { timeout: 5_000 }));
 		await user.click(await screen.findByRole("menuitem", { name: "Feature Releases" }));
 		expect(await screen.findByText("No live feature releases.")).toBeInTheDocument();
 		expect(featListBuilds).toHaveBeenCalled();
@@ -294,7 +421,7 @@ describe("GlobalSettingsForm", () => {
 	it("selects Git Bash as the default Windows terminal", async () => {
 		const user = userEvent.setup();
 		renderForm();
-		const selector = await screen.findByLabelText("Default terminal");
+		const selector = await screen.findByLabelText("Terminal shell");
 
 		await user.click(selector);
 		await user.click(await screen.findByRole("menuitem", { name: "Git Bash" }));
@@ -306,7 +433,7 @@ describe("GlobalSettingsForm", () => {
 		const user = userEvent.setup();
 		renderForm();
 
-		await user.click(await screen.findByLabelText("Default terminal"));
+		await user.click(await screen.findByLabelText("Terminal shell"));
 		await user.click(await screen.findByRole("menuitem", { name: "Custom path" }));
 		await waitFor(() => expect(setUiSettings).toHaveBeenCalledWith({ terminalShell: { kind: "custom" } }));
 
@@ -374,7 +501,7 @@ describe("GlobalSettingsForm", () => {
 
 	it("auto-saves the updates channel while automatic updates are disabled", async () => {
 		renderForm();
-		await userEvent.click(await screen.findByRole("switch", { name: "Automatic Updates" }));
+		await userEvent.click(await screen.findByRole("switch", { name: "Automatic updates" }));
 		await waitFor(() =>
 			expect(setUpdate).toHaveBeenCalledWith(expect.objectContaining({ enabled: false, channel: "latest" })),
 		);
@@ -386,7 +513,9 @@ describe("GlobalSettingsForm", () => {
 				expect.objectContaining({ channel: "nightly", enabled: false, nightlyAck: true, feature: null }),
 			),
 		);
-		expect(screen.getByTestId("installed-update-channel")).toHaveTextContent("Stable");
+		// The installed build stays the stable one: no nightly stamp under the version.
+		expect(screen.getByTestId("app-version")).toHaveTextContent("v1.4.0");
+		expect(screen.queryByText(/^1\.4\.0-nightly/)).toBeNull();
 		expect(await screen.findByText(/Nightly updates daily and may be unstable or cause data loss/i)).toBeInTheDocument();
 	});
 
@@ -417,7 +546,7 @@ describe("GlobalSettingsForm", () => {
 
 	it("auto-saves when automatic updates are toggled", async () => {
 		renderForm();
-		await userEvent.click(await screen.findByRole("switch", { name: "Automatic Updates" }));
+		await userEvent.click(await screen.findByRole("switch", { name: "Automatic updates" }));
 		await waitFor(() =>
 			expect(setUpdate).toHaveBeenCalledWith(expect.objectContaining({ enabled: false, channel: "latest" })),
 		);
@@ -426,22 +555,22 @@ describe("GlobalSettingsForm", () => {
 
 	it("hides the nightly warning on the stable channel", async () => {
 		renderForm();
-		await screen.findByText("Updates");
+		await screen.findByRole("heading", { name: "Version" });
 		expect(screen.queryByText(/Nightly updates daily and may be unstable or cause data loss/i)).not.toBeInTheDocument();
 	});
 
 	it("shows the current app version", async () => {
 		renderForm();
 		await waitFor(() => expect(screen.getByTestId("app-version")).toHaveTextContent("v1.4.0"));
-		await waitFor(() => expect(screen.getByTestId("installed-update-channel")).toHaveTextContent("Stable"));
 	});
 
-	it("shows the installed Nightly channel separately from the selected update feed", async () => {
+	it("shows the installed Nightly build separately from the selected update feed", async () => {
 		getVersion.mockResolvedValue("1.4.0-nightly.202608271030");
 		renderForm();
-		// The badge labels which channel is installed, so it uses the short name;
-		// "(Pre-release)" belongs in the picker where the choice is made.
-		await waitFor(() => expect(screen.getByTestId("installed-update-channel")).toHaveTextContent("Nightly"));
+		// The channel badge is gone (it repeated the channel picker); an installed
+		// nightly is identified by its full stamp under the base version.
+		await waitFor(() => expect(screen.getByTestId("app-version")).toHaveTextContent("v1.4.0"));
+		expect(await screen.findByText("1.4.0-nightly.202608271030")).toBeInTheDocument();
 	});
 
 	it("shows a repeated timeout once and keeps manual retry available", async () => {
@@ -498,7 +627,8 @@ describe("GlobalSettingsForm", () => {
 		const statusLine = screen.getByTestId("update-status-line");
 		expect(statusLine).not.toHaveTextContent("Checking for updates…");
 		expect(statusLine.querySelector("svg")).toBeNull();
-		expect(statusLine).toHaveClass("min-h-5");
+		// The slot keeps one description line while the button owns the feedback.
+		expect(statusLine).toHaveClass("min-h-4");
 
 		act(() => finishCheck());
 		await waitFor(() => expect(button).toBeEnabled(), { timeout: 1_500 });
@@ -686,7 +816,7 @@ describe("GlobalSettingsForm", () => {
 		expect(screen.getByLabelText("What happened?")).toHaveValue("");
 	});
 
-	it("opens Discord with an official invite and email with the support mailbox", async () => {
+	it("opens Discord support and lets Windows users choose an email provider", async () => {
 		const user = userEvent.setup();
 		const open = vi.spyOn(window, "open").mockReturnValue(null);
 		getVersion.mockRejectedValue(new Error("version unavailable"));
@@ -710,14 +840,29 @@ describe("GlobalSettingsForm", () => {
 		expect(screen.queryByText("Discord draft copied.")).not.toBeInTheDocument();
 		await user.type(screen.getByLabelText("What happened?"), "The setup flow stalls after the first prompt.");
 		await user.click(screen.getByRole("button", { name: /copy & open email/i }));
+		await user.click(await screen.findByRole("menuitem", { name: "Gmail" }));
 
 		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
 		expect(writeText.mock.calls[0][0]).toContain("Daemon: unknown");
 		expect(writeText.mock.calls[1][0]).toContain("To: prasad@untrivial.ai");
 		expect(writeText.mock.calls[1][0]).toContain("AO feedback");
-		expect(openExternal).toHaveBeenCalledWith("https://discord.com/invite/UZv7JjxbwG");
-		expect(openExternal).toHaveBeenCalledWith(expect.stringContaining("mailto:prasad@untrivial.ai"));
+		expect(openExternal).toHaveBeenCalledWith("https://discord.gg/WjKNa7EbB8");
+		expect(openExternal).toHaveBeenCalledWith(expect.stringContaining("https://mail.google.com/mail/"));
 		expect(open).not.toHaveBeenCalled();
+	});
+
+	it("keeps the direct system email handoff outside Windows", async () => {
+		const user = userEvent.setup();
+		isWindowsPlatform.mockReturnValue(false);
+		renderForm();
+
+		await user.type(await screen.findByLabelText("Title"), "Need help with setup");
+		await user.type(screen.getByLabelText("What happened?"), "The setup flow stalls after the first prompt.");
+		await user.click(screen.getByRole("button", { name: /copy & open email/i }));
+
+		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+		expect(openExternal).toHaveBeenCalledWith(expect.stringContaining("mailto:prasad@untrivial.ai"));
+		expect(screen.queryByRole("menuitem", { name: "Gmail" })).not.toBeInTheDocument();
 	});
 
 	it("keeps the report form to title and details while tailoring placeholder guidance", async () => {
@@ -766,7 +911,7 @@ describe("GlobalSettingsForm", () => {
 		});
 		renderForm();
 
-		const returnBtn = await screen.findByRole("button", { name: "Return to Stable" });
+		const returnBtn = await screen.findByRole("button", { name: "Return to Stable" }, { timeout: 5_000 });
 		await userEvent.click(returnBtn);
 
 		await waitFor(() => expect(updReturnHome).toHaveBeenCalledWith(expect.any(String)));
@@ -784,16 +929,18 @@ it("keeps running version separate while live download progress becomes install 
 	updOnStatus.mockImplementation((listener) => { emit = listener; return () => undefined; });
 	renderForm("updates");
 	await screen.findByTestId("app-version");
+	// Assert detailed progress in the status row, independently of the action label.
+	const statusLine = within(screen.getByTestId("update-status-line"));
 	act(() => emit({ state: "downloading", version: "2.0.0" }));
-	expect(screen.getByText("Starting download…")).toBeVisible();
+	expect(statusLine.getByText("Starting download…")).toBeVisible();
 	expect(screen.queryByRole("button", { name: "Update to v2.0.0" })).toBeNull();
 	act(() => emit({ state: "downloading", version: "2.0.0", percent: 42, transferred: 42_000_000, total: 100_000_000 }));
-	expect(screen.getByText("Downloading… 42%")).toBeVisible();
+	expect(statusLine.getByText("Downloading… 42%")).toBeVisible();
 	expect(screen.getByText("42.0 / 100.0 MB")).toBeVisible();
 	expect(screen.getByText("Updating to v2.0.0")).toBeVisible();
 	expect(screen.getByTestId("app-version")).toHaveTextContent("v1.4.0");
 	act(() => emit({ state: "preparing", version: "2.0.0", percent: 100, staged: { version: "2.0.0", stagedAt: 10, escalated: false, ready: false } }));
-	expect(screen.getByText("Preparing update…")).toBeVisible();
+	expect(statusLine.getByText("Preparing update…")).toBeVisible();
 	expect(screen.queryByRole("button", { name: "Restart & install" })).toBeNull();
 	act(() => emit({ state: "downloaded", version: "2.0.0" }));
 	expect(screen.getByRole("button", { name: "Restart & install" })).toBeEnabled();

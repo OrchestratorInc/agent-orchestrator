@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -170,7 +171,8 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 		return ports.RuntimeHandle{}, conptyCreateFailure(fmt.Errorf("conpty: reserve pty-host ownership for %q: %w", id, err))
 	}
 
-	addr, pid, err := r.spawner(ctx, id, cfg.WorkspacePath, cfg.Argv, cfg.Env)
+	addr, pid, err := r.spawner(ctx, id, cfg.WorkspacePath, cfg.Argv, cfg.Env,
+		HostOptions{StartOnAttach: cfg.StartOnAttach, LazySurface: cfg.LazyStyledOutput})
 	if err != nil {
 		cause := fmt.Errorf("conpty: spawn pty-host for %q: %w", id, err)
 		handle := ports.RuntimeHandle{ID: id}
@@ -397,6 +399,12 @@ func (r *Runtime) IsChildAlive(ctx context.Context, handle ports.RuntimeHandle) 
 	return status.Alive, nil
 }
 
+// IsUnsupervisedReviewerAlive uses the PTY host's child status for legacy
+// reviewers that predate the AO supervisor wrapper.
+func (r *Runtime) IsUnsupervisedReviewerAlive(ctx context.Context, handle ports.RuntimeHandle) (bool, error) {
+	return r.IsChildAlive(ctx, handle)
+}
+
 // ProbeFencedRuntime returns liveness evidence for the exact fenced runtime identity.
 func (r *Runtime) ProbeFencedRuntime(ctx context.Context, ref ports.FencedRuntimeRef) ports.FencedProbeResult {
 	if ref.Handle.ID == "" || ref.SessionID == "" || ref.Generation == "" || ref.Handle.ID != string(ref.SessionID) {
@@ -472,6 +480,36 @@ func (r *Runtime) IsExactSupervisedProcessAlive(ctx context.Context, handle port
 		return false, errors.New("conpty: exact supervisor session and launch are required")
 	}
 	return r.IsSupervisedProcessAlive(ctx, handle, ref)
+}
+
+// ProcessRootPIDs returns the PTY host pid so memory accounting can walk the
+// agent process tree it supervises. An unregistered session yields no pids.
+func (r *Runtime) ProcessRootPIDs(ctx context.Context, handle ports.RuntimeHandle) ([]int, error) {
+	sess, err := r.resolveWithEvidence(ctx, handle.ID)
+	if err != nil {
+		return nil, fmt.Errorf("conpty: resolve runtime %q: %w", handle.ID, err)
+	}
+	if sess == nil || sess.pid <= 0 {
+		return nil, nil
+	}
+	return []int{sess.pid}, nil
+}
+
+// ServerPID has no equivalent here: ConPTY hosts one pty per session rather
+// than sharing a detached server the way tmux does.
+func (r *Runtime) ServerPID(ctx context.Context) (int, bool) {
+	return 0, false
+}
+
+// HasSupervisedProcessRecord reports whether this handle was created with an
+// AO-managed launch generation. An empty generation identifies pre-supervisor
+// sessions that still need the legacy child-liveness probe.
+func (r *Runtime) HasSupervisedProcessRecord(ctx context.Context, handle ports.RuntimeHandle) (bool, error) {
+	sess, err := r.resolveWithEvidence(ctx, handle.ID)
+	if err != nil {
+		return false, fmt.Errorf("conpty: resolve supervised runtime %q: %w", handle.ID, err)
+	}
+	return sess != nil && strings.TrimSpace(sess.launchID) != "", nil
 }
 
 // SendMessage chunks message and writes it to the pty-host followed by Enter.

@@ -5,21 +5,25 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	agentregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 const (
-	defaultDisplayReadinessTTL = 5 * time.Minute
-	defaultLaunchReadinessTTL  = 30 * time.Second
-	defaultInstallCheckTimeout = 2 * time.Second
-	defaultAuthCheckTimeout    = 10 * time.Second
-	defaultReadinessWorkers    = 4
+	defaultDisplayReadinessTTL  = 5 * time.Minute
+	defaultLaunchReadinessTTL   = 30 * time.Second
+	defaultInstallCheckTimeout  = 2 * time.Second
+	opencodeInstallCheckTimeout = 12 * time.Second
+	opencodeV2MigrationTimeout  = 30 * time.Minute
+	defaultAuthCheckTimeout     = 10 * time.Second
+	defaultReadinessWorkers     = 4
 )
 
 var defaultReadinessRetryDelays = []time.Duration{15 * time.Second, time.Minute, 5 * time.Minute}
@@ -45,6 +49,11 @@ type readinessCoordinatorConfig struct {
 	RetryDelays         []time.Duration
 	Workers             int
 	AuthenticationCheck func(context.Context, string, domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool)
+	// OnAuthenticationRecovered runs (asynchronously) when a check observes an
+	// agent that was signed out become signed in or configured, however the
+	// login happened: AO's login terminal, the agent's own CLI, or a renewed
+	// token. Caches derived from the signed-out state hook in here.
+	OnAuthenticationRecovered func(agentID string)
 }
 
 type readinessEntry struct {
@@ -83,6 +92,7 @@ type readinessCoordinator struct {
 	retryDelays         []time.Duration
 	workers             int
 	authenticationCheck func(context.Context, string, domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool)
+	onAuthRecovered     func(agentID string)
 
 	mu      sync.Mutex
 	entries map[string]*readinessEntry
@@ -135,6 +145,7 @@ func newReadinessCoordinator(cfg readinessCoordinatorConfig) *readinessCoordinat
 		installTimeout: cfg.InstallTimeout, authTimeout: cfg.AuthTimeout,
 		retryDelays: cfg.RetryDelays, workers: cfg.Workers,
 		authenticationCheck: cfg.AuthenticationCheck,
+		onAuthRecovered:     cfg.OnAuthenticationRecovered,
 		entries:             make(map[string]*readinessEntry, len(cfg.Agents)), calls: make(map[readinessCallKey]*readinessCall),
 	}
 	for _, item := range cfg.Agents {
@@ -460,6 +471,7 @@ func (c *readinessCoordinator) runCheck(id string, purpose domain.AgentReadiness
 		}
 	}
 
+	recovered := false
 	c.mu.Lock()
 	entry := c.entries[id]
 	if needed&readinessInvalidateInstallation != 0 {
@@ -479,6 +491,8 @@ func (c *readinessCoordinator) runCheck(id string, purpose domain.AgentReadiness
 		if authFailed {
 			preserveAuthenticationFailure(&entry.snapshot.Authentication, auth)
 		} else {
+			recovered = entry.snapshot.Authentication.State == domain.AgentAuthenticationUnauthorized &&
+				(auth.State == domain.AgentAuthenticationAuthorized || auth.State == domain.AgentAuthenticationConfigured)
 			entry.snapshot.Authentication = auth
 			if entry.authVersion == call.authVersion {
 				entry.invalidated &^= readinessInvalidateAuthentication
@@ -511,11 +525,18 @@ func (c *readinessCoordinator) runCheck(id string, purpose domain.AgentReadiness
 	close(call.done)
 	c.mu.Unlock()
 	c.logDecision(id, purpose, "new_check", duration, snapshot, failureCode, nextRetry)
+	if recovered && c.onAuthRecovered != nil {
+		go c.onAuthRecovered(id)
+	}
 }
 
 func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent, presenceOnly bool) (domain.AgentInstallationObservation, bool) {
 	attempted := c.now()
-	ctx, cancel := context.WithTimeout(c.ctx, c.installTimeout)
+	timeout := c.installTimeout
+	if timeout == defaultInstallCheckTimeout && (item.Harness == domain.HarnessOpenCode || item.Harness == domain.HarnessOpenCodeV2) {
+		timeout = opencodeInstallCheckTimeout
+	}
+	ctx, cancel := context.WithTimeout(c.ctx, timeout)
 	defer cancel()
 	var path string
 	var err error
@@ -535,16 +556,32 @@ func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent
 	if errors.Is(err, ports.ErrAgentBinaryNotFound) {
 		return successfulInstallation(attempted, domain.AgentInstallationNotInstalled, domain.AgentReadinessReasonNotInstalled, item.Manifest.Name+" is not installed."), false
 	}
+	var incompatibleVersion *opencode.IncompatibleVersionError
+	if errors.As(err, &incompatibleVersion) {
+		return successfulInstallation(attempted, domain.AgentInstallationNotInstalled, domain.AgentReadinessReasonNotInstalled, item.Manifest.Name+" is not installed."), false
+	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return failedInstallation(attempted, domain.AgentReadinessReasonInstallCheckTimeout, "Installation check timed out."), true
 	}
 	return failedInstallation(attempted, domain.AgentReadinessReasonInstallCheckFailed, "Installation check failed."), true
 }
 
-func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAgent, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
+func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAgent, purpose domain.AgentReadinessPurpose) (observation domain.AgentAuthenticationObservation, failed bool) {
+	var diagnostics []domain.AgentAuthDiagnostic
+	evidenceCtx, evidence := ports.WithAuthEvidence(c.ctx)
+	defer func() {
+		observation.Diagnostics = append(observation.Diagnostics, diagnostics...)
+		observation.Diagnostics = append(observation.Diagnostics, evidence.Diagnostics()...)
+		if source := evidence.Identity().Sanitized(); source != nil && source.Source != "" {
+			step := domain.NewAgentAuthDiagnostic("selected_credential", "credential_present")
+			step.Source, step.Provider = source.Source, source.Provider
+			observation.Diagnostics = append(observation.Diagnostics, step)
+		}
+		completeAuthenticationDiagnostics(&observation)
+	}()
 	attempted := c.now()
 	if c.authenticationCheck != nil {
-		ctx, cancel := context.WithTimeout(c.ctx, c.authTimeout)
+		ctx, cancel := context.WithTimeout(evidenceCtx, c.authTimeout)
 		observation, handled := c.authenticationCheck(ctx, string(item.Harness), purpose)
 		cancel()
 		if handled {
@@ -556,20 +593,48 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 	if !ok {
 		return successfulAuthentication(attempted, domain.AgentAuthenticationUnknown, domain.AgentReadinessReasonAuthCheckUnsupported, "Authentication checks are not supported for this harness."), false
 	}
-	ctx, cancel := context.WithTimeout(c.ctx, c.authTimeout)
+	timeout := c.authTimeout
+	if timeout == defaultAuthCheckTimeout && item.Harness == domain.HarnessOpenCodeV2 {
+		// First-use migration needs its own budget; the adapter bounds its auth CLI separately.
+		timeout = opencodeV2MigrationTimeout
+	}
+	ctx, cancel := context.WithTimeout(evidenceCtx, timeout)
 	defer cancel()
-	status, err := checker.AuthStatus(ctx)
+	var status ports.AgentAuthStatus
+	var account domain.AgentAccountIdentity
+	var err error
+	if authChecker, ok := item.Agent.(ports.AgentAuthDiagnosticsChecker); ok {
+		status, account, diagnostics, err = authChecker.AuthStatusWithDiagnostics(ctx)
+	} else {
+		status, err = checker.AuthStatus(ctx)
+	}
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return failedAuthentication(attempted, domain.AgentReadinessReasonAuthCheckTimeout, "Authentication check timed out."), true
 		}
 		return failedAuthentication(attempted, domain.AgentReadinessReasonAuthCheckFailed, "Authentication check failed."), true
 	}
+	// What the adapter reported about the account, completed by the evidence
+	// it recorded for the decision (an environment variable, file or command).
+	account = account.Merge(evidence.Identity())
 	switch status {
 	case ports.AgentAuthStatusAuthorized:
-		return successfulAuthentication(attempted, domain.AgentAuthenticationAuthorized, domain.AgentReadinessReasonAuthorized, item.Manifest.Name+" appears signed in."), false
+		observation := successfulAuthentication(attempted, domain.AgentAuthenticationAuthorized, domain.AgentReadinessReasonAuthorized, item.Manifest.Name+" appears signed in.")
+		observation.Account = account.Sanitized()
+		return observation, false
 	case ports.AgentAuthStatusUnauthorized:
 		return successfulAuthentication(attempted, domain.AgentAuthenticationUnauthorized, domain.AgentReadinessReasonUnauthorized, item.Manifest.Name+" needs authentication."), false
+	case ports.AgentAuthStatusConfigured:
+		// A definite observation — a credential exists — but not a verified
+		// one. It is recorded as a success so the coordinator does not retry
+		// it as a failure, and it derives to unknown readiness, not ready.
+		reason := item.Manifest.Name + " has credentials configured, but AO could not verify them."
+		if slices.ContainsFunc(diagnostics, func(d domain.AgentAuthDiagnostic) bool { return d.Code == "token_renewal_pending" }) {
+			reason = item.Manifest.Name + " is signed in; its access token renews the next time it runs."
+		}
+		observation := successfulAuthentication(attempted, domain.AgentAuthenticationConfigured, domain.AgentReadinessReasonAuthConfigured, reason)
+		observation.Account = account.Sanitized()
+		return observation, false
 	default:
 		return failedAuthentication(attempted, domain.AgentReadinessReasonAuthCheckInconclusive, "Authentication check was inconclusive."), true
 	}
@@ -594,8 +659,10 @@ func (c *readinessCoordinator) Invalidate(agentID string, invalidation readiness
 	entry.nextRetryAt = time.Time{}
 }
 
-func (c *readinessCoordinator) Warm() {
+func (c *readinessCoordinator) Warm() <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		// Warm installation through the process-free capability first. Goose's
 		// normal resolver validates identity by running --help, so startup must
 		// not accidentally turn this background cache fill into an execution
@@ -607,6 +674,7 @@ func (c *readinessCoordinator) Warm() {
 		// inconclusive auth observation until an explicit normal refresh.
 		_, _ = c.ensureMode(c.ctx, nil, domain.AgentReadinessPurposeDisplay, readinessInvalidateAuthentication, false)
 	}()
+	return done
 }
 
 func (c *readinessCoordinator) normalizeIDs(ids []string) ([]string, error) {

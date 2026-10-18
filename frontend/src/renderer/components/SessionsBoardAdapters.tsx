@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
 	scmUserAvatarUrl,
 	SessionCardView,
-	SessionUsageMetricView,
 	type BoardPullRequestLabels,
 	type BoardPullRequestProgress,
 	type BoardSessionPresentation,
@@ -13,23 +12,23 @@ import {
 	type BoardUsagePresentation,
 	type ProductUITranslator,
 } from "@aoagents/product-ui";
-import { Check, Copy, GitBranch, LoaderCircle, RotateCcw, Trash2 } from "lucide-react";
+import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw } from "lucide-react";
 import type { MessageKey } from "../i18n";
 import { aoBridge } from "../lib/bridge";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
-import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { sessionBranchPresentation } from "../lib/session-branch";
+import { BranchNamingLabel } from "./BranchNamingLabel";
 import { formatTimeCompact } from "../lib/format-time";
-import { formatEstimatedCost } from "../lib/format-cost";
-import { formatTokenCount } from "../lib/format-token-count";
 import { prBrowserUrl, sessionPRDisplaySummaries } from "../lib/pr-display";
 import {
 	agentSwitchStatusVisual,
 	deriveSessionAgentSwitchPresentation,
 } from "../lib/agent-switch-presentation";
-import type { WorkspaceSession } from "../types/workspace";
-import { canonicalTrackerIssueId } from "../types/workspace";
+import { agentLabel } from "../lib/agent-options";
+import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
+import { canonicalTrackerIssueId, sessionArtifacts } from "../types/workspace";
+import { formatCPU, formatMemory, type SessionMemoryReading } from "../hooks/useSessionMemory";
+import type { ChipTone } from "@aoagents/product-ui";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
-import type { SessionUsageSummary } from "../hooks/useSessionUsageSummaries";
 import {
 	clearTerminateSessionState,
 	useTerminateSessionState,
@@ -37,7 +36,9 @@ import {
 import { cn } from "../lib/utils";
 import { AgentAvatar } from "./AgentAvatar";
 import { ProductExternalLink } from "./ProductExternalLink";
-import { SessionTerminationPopover } from "./SessionTerminationPopover";
+import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
+import { ArtifactPreviewCard } from "./SessionLinkPreviewCard";
+import { HoverCard, HoverCardTrigger } from "./ui/hover-card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 export function toBoardSessionPresentation(
@@ -46,25 +47,44 @@ export function toBoardSessionPresentation(
 ): BoardSessionPresentation {
 	const switchPresentation = deriveSessionAgentSwitchPresentation(session);
 	const switchVisual = switchPresentation ? agentSwitchStatusVisual(switchPresentation) : undefined;
+	const provisioningStatus =
+		session.provisionState === "provisioning"
+			? {
+					className: "text-status-working",
+					indicatorClassName: "bg-status-working animate-status-pulse",
+					label: `Starting ${agentLabel(session.provider)}…`,
+					tone: "var(--color-status-working)",
+				}
+			: undefined;
+	const failedStartStatus =
+		session.provisionState === "failed"
+			? {
+					className: "text-status-exited",
+					indicatorClassName: "bg-status-exited",
+					label: "Start failed",
+					tone: "var(--color-status-exited)",
+				}
+			: undefined;
 	return {
 		activity: session.activity,
-		branch: session.branch,
+		branch: sessionBranchPresentation(session).branch,
 		id: session.id,
 		isTerminated: session.isTerminated,
 		kanbanColumn: session.kanbanColumn,
 		displayStatus: session.displayStatus,
-		statusReadiness: session.statusReadiness,
 		provider: session.provider,
 		status: session.status,
+		statusReadiness: session.statusReadiness,
 		statusPresentation:
-			t && switchPresentation && switchVisual
+			provisioningStatus ?? failedStartStatus ??
+			(t && switchPresentation && switchVisual
 				? {
 						className: switchVisual.className,
 						indicatorClassName: `${switchVisual.indicatorClassName}${switchVisual.breathe ? " animate-status-pulse" : ""}`,
 						label: t(switchPresentation.compactLabelKey, switchPresentation.values),
 						tone: switchVisual.tone,
 					}
-				: undefined,
+				: undefined),
 		title: session.title,
 		trackerIssueId: canonicalTrackerIssueId(session.issueId),
 		updatedAt: session.updatedAt,
@@ -79,57 +99,75 @@ export function sessionsBoardLabels(t: TFunction): BoardColumnLabels {
 }
 
 export function BoardSessionCardAdapter({
+	memory,
+	memoryTone,
 	onOpen,
+	onOpenArtifact,
 	onTerminate,
 	session,
-	usage,
 }: {
+	/** Live reading of the session's process tree, for the card's resource chip. */
+	memory?: SessionMemoryReading;
+	/** Colour for the chip; neutral unless this card is part of the fix. */
+	memoryTone?: ChipTone;
 	onOpen: () => void;
-	onTerminate: () => void;
+	/** Opens the session with this artifact (by path) shown in the inspector. */
+	onOpenArtifact?: (path: string) => void;
+	onTerminate?: (choice: SessionArchiveChoice) => void;
 	session: WorkspaceSession;
-	usage?: SessionUsageSummary;
 }) {
 	return (
 		<DesktopSessionCard
+			memory={memory}
+			memoryTone={memoryTone}
 			onOpen={onOpen}
+			onOpenArtifact={onOpenArtifact}
 			onTerminate={onTerminate}
 			session={session}
-			usage={usage}
 		/>
 	);
 }
 
 export function ArchivedSessionCardAdapter({
+	hideTerminatedStatus = false,
 	isRestoreDisabled,
 	isRestoring,
 	restoreAction,
 	restoreError,
 	session,
-	usage,
 }: {
+	hideTerminatedStatus?: boolean;
 	isRestoreDisabled: boolean;
 	isRestoring: boolean;
 	restoreAction: (event: MouseEvent<HTMLButtonElement>) => void;
 	restoreError?: string;
 	session: WorkspaceSession;
-	usage?: SessionUsageSummary;
 }) {
-	const branch = session.branch ?? "";
+	const { t } = useTranslation();
+	const branch = sessionBranchPresentation(session).branch ?? "";
 	return (
 		<DesktopSessionCard
+			hideTerminatedStatus={hideTerminatedStatus}
 			action={
 				<ArchiveRestoreButton
 					isDisabled={isRestoreDisabled}
 					isRestoring={isRestoring}
-					label={`Restore ${session.title}`}
+					label={t("shell.restoreNamed", { title: session.title })}
 					onClick={restoreAction}
 				/>
 			}
-			branchAction={branch ? <CopyActionButton label={`branch ${branch}`} value={branch} /> : undefined}
+			branchAction={
+				branch ? (
+					<CopyActionButton
+						copiedLabel={t("shell.copiedBranchNamed", { branch })}
+						copyLabel={t("shell.copyBranchNamed", { branch })}
+						value={branch}
+					/>
+				) : undefined
+			}
 			footer={<ArchiveRestoreError message={restoreError} />}
 			interactive={false}
 			session={session}
-			usage={usage}
 		/>
 	);
 }
@@ -138,48 +176,48 @@ function DesktopSessionCard({
 	action,
 	branchAction,
 	footer,
+	hideTerminatedStatus = false,
 	interactive = true,
+	memory,
+	memoryTone,
 	onOpen,
+	onOpenArtifact,
 	onTerminate,
 	session,
-	usage,
 }: {
 	action?: ReactNode;
 	branchAction?: ReactNode;
 	footer?: ReactNode;
+	hideTerminatedStatus?: boolean;
 	interactive?: boolean;
+	memory?: SessionMemoryReading;
+	memoryTone?: ChipTone;
 	onOpen?: () => void;
-	onTerminate?: () => void;
+	onOpenArtifact?: (path: string) => void;
+	onTerminate?: (choice: SessionArchiveChoice) => void;
 	session: WorkspaceSession;
-	usage?: SessionUsageSummary;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
-	const retryStatus = useMutation({
-		mutationFn: async () => {
-			const { error } = await apiClient.POST("/api/v1/sessions/{sessionId}/resume-agent", {
-				params: { path: { sessionId: session.id } },
-			});
-			if (error) throw new Error(apiErrorMessage(error, t("session.statusUnavailable")));
-		},
-		onSettled: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKey }),
-	});
 	const [confirmOpen, setConfirmOpen] = useState(false);
-	const summaries = sessionPRDisplaySummaries(session, useSessionScmSummary(session.id).data);
-	const termination = useTerminateSessionState(session.id);
+	const summaries = sessionPRDisplaySummaries(
+		session,
+		useSessionScmSummary(session.id, true, session.cloud?.orgId, session.cloud?.orgId ? session.autoInjectCI === true : false, session.hostId).data?.prs,
+	);
+	const termination = useTerminateSessionState(session.id, session.hostId);
 	const showTerminate = interactive && session.isTerminated !== true && onTerminate;
 	const keepTerminateVisible = session.status === "merged";
-	const usagePresentation = toUsagePresentation(usage, t);
+	const resourcePresentation = toResourcePresentation(memory, session.activity?.state === "active", memoryTone, t);
 	const translate: ProductUITranslator = (key, values) => t(key as MessageKey, values);
 
 	const terminationOverlay = showTerminate ? (
 		<Tooltip>
 			<TooltipTrigger asChild>
 				<span className="inline-flex">
-					<SessionTerminationPopover
-						onConfirm={() => {
+					<SessionArchiveDialog
+						onConfirm={(choice) => {
 							setConfirmOpen(false);
-							onTerminate();
+							onTerminate(choice);
 						}}
 						onOpenChange={setConfirmOpen}
 						open={confirmOpen}
@@ -188,18 +226,20 @@ function DesktopSessionCard({
 							<button
 								aria-label={
 									termination.isPending
-										? t("shell.killingNamedAria", { title: session.title })
-										: t("shell.terminateNamed", { title: session.title })
+										? t("shell.archivingNamedAria", { title: session.title })
+										: t("shell.archiveNamed", { title: session.title })
 								}
 								className={cn(
-									"inline-flex size-control-md items-center justify-center rounded-sm text-passive transition-[color,background-color,opacity] hover:bg-error/10 hover:text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+									"inline-flex size-control-md items-center justify-center rounded-sm text-passive transition-[color,background-color,opacity] hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
 									keepTerminateVisible || termination.isPending
 										? "opacity-100"
 										: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100",
 								)}
 								onClick={(event) => {
 									event.stopPropagation();
-									clearTerminateSessionState(queryClient, session.id);
+									clearTerminateSessionState(queryClient, session.id, session.hostId);
+									// Always open the confirm; the modal owns its own dismissal.
+									setConfirmOpen(true);
 								}}
 								disabled={termination.isPending}
 								type="button"
@@ -207,7 +247,7 @@ function DesktopSessionCard({
 								{termination.isPending ? (
 									<LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />
 								) : (
-									<Trash2 className="size-icon-sm" aria-hidden="true" />
+									<Archive className="size-icon-sm" aria-hidden="true" />
 								)}
 							</button>
 						}
@@ -215,7 +255,7 @@ function DesktopSessionCard({
 				</span>
 			</TooltipTrigger>
 			<TooltipContent side="bottom">
-				{termination.isPending ? t("shell.killingSession") : t("shell.terminateSession")}
+				{termination.isPending ? t("shell.archivingSession") : t("shell.archiveSession")}
 			</TooltipContent>
 		</Tooltip>
 	) : undefined;
@@ -223,26 +263,19 @@ function DesktopSessionCard({
 	return (
 		<SessionCardView
 			action={action}
+			artifacts={
+				interactive && onOpenArtifact ? (
+					<BoardArtifactLinks artifacts={sessionArtifacts(session)} onOpen={onOpenArtifact} session={session} />
+				) : undefined
+			}
 			branchAction={branchAction}
+			branchLabel={sessionBranchPresentation(session).naming ? <BranchNamingLabel /> : undefined}
 			branchIcon={<GitBranch aria-hidden="true" className="size-icon-2xs shrink-0" />}
-			error={termination.error ?? retryStatus.error?.message ?? undefined}
+			error={termination.error ?? undefined}
 			externalLink={ProductExternalLink}
 			footer={
 				<>
 					{footer}
-					{interactive && session.statusReadiness === "unavailable" && (
-						<button
-							type="button"
-							disabled={retryStatus.isPending}
-							className="px-3 py-2 text-xs text-secondary hover:text-primary disabled:opacity-50"
-							onClick={(event) => {
-								event.stopPropagation();
-								retryStatus.mutate();
-							}}
-						>
-							{retryStatus.isPending ? t("session.statusChecking") : t("session.retryStatus")}
-						</button>
-					)}
 				</>
 			}
 			interactive={interactive}
@@ -254,6 +287,7 @@ function DesktopSessionCard({
 					t("shell.lastMessageAt", { time: formatTimeCompact(timestamp) }),
 			}}
 			onOpen={onOpen}
+			resource={resourcePresentation}
 			overlay={terminationOverlay}
 			prs={summaries.map((pr) => ({
 				commentCount: pr.review.unresolvedBy.reduce((count, reviewer) => count + reviewer.count, 0),
@@ -270,19 +304,86 @@ function DesktopSessionCard({
 				url: prBrowserUrl(pr),
 			}))}
 			renderAvatar={(provider) => <AgentAvatar provider={provider} />}
-			session={toBoardSessionPresentation(session, t)}
+			session={
+				hideTerminatedStatus
+					? hideTerminatedCardStatus(toBoardSessionPresentation(session, t))
+					: toBoardSessionPresentation(session, t)
+			}
 			translate={translate}
-			renderUsage={(usage) => (
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<SessionUsageMetricView usage={usage} />
-					</TooltipTrigger>
-					<TooltipContent side="top">{usage.accessibleLabel}</TooltipContent>
-				</Tooltip>
-			)}
-			usage={usagePresentation}
 		/>
 	);
+}
+
+const BOARD_ARTIFACT_LIMIT = 2;
+
+/** The session's most recently updated artifacts, newest first. */
+export function latestSessionArtifacts(artifacts: SessionArtifact[], limit = BOARD_ARTIFACT_LIMIT): SessionArtifact[] {
+	return [...artifacts]
+		.sort(
+			(a, b) =>
+				(Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0) || a.path.localeCompare(b.path),
+		)
+		.slice(0, limit);
+}
+
+function BoardArtifactLinks({
+	artifacts,
+	onOpen,
+	session,
+}: {
+	artifacts: SessionArtifact[];
+	onOpen: (path: string) => void;
+	session: WorkspaceSession;
+}) {
+	const { t } = useTranslation();
+	if (artifacts.length === 0) return null;
+	const latest = latestSessionArtifacts(artifacts);
+	const hidden = artifacts.length - latest.length;
+	return (
+		<div className="flex min-w-0 flex-col gap-0.5" data-testid="board-session-artifacts">
+			{latest.map((artifact) => (
+				<HoverCard key={artifact.path}>
+					<HoverCardTrigger asChild>
+						<button
+							aria-label={t("shell.openArtifactNamed", { name: artifact.name })}
+							className="flex min-w-0 max-w-full items-center gap-1.5 self-start rounded-sm py-0.5 text-left text-2xs text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+							onClick={(event) => {
+								event.stopPropagation();
+								onOpen(artifact.path);
+							}}
+							type="button"
+						>
+							<File aria-hidden="true" className="size-icon-2xs shrink-0 text-muted-foreground" />
+							<span className="truncate">{artifact.name}</span>
+						</button>
+					</HoverCardTrigger>
+					<ArtifactPreviewCard artifact={artifact} session={session} />
+				</HoverCard>
+			))}
+			{hidden > 0 ? (
+				<span className="pl-[18px] text-2xs text-muted-foreground">
+					{t("shell.moreArtifacts", { count: hidden })}
+				</span>
+			) : null}
+		</div>
+	);
+}
+
+function hideTerminatedCardStatus(session: BoardSessionPresentation): BoardSessionPresentation {
+	const terminated =
+		session.displayStatus === "Terminated" ||
+		(session.status === "terminated" && !session.displayStatus);
+	if (!terminated) return session;
+	return {
+		...session,
+		displayStatus: undefined,
+		statusPresentation: {
+			className: "hidden",
+			indicatorClassName: "hidden",
+			label: "",
+			tone: "transparent",
+		},
+	};
 }
 
 function pullRequestLabels(t: TFunction): BoardPullRequestLabels {
@@ -312,39 +413,24 @@ function pullRequestProgressLabel(
 		.join(" · ");
 }
 
-// Keep the board metric scannable by showing cost only. The full cost/token
-// summary remains available from the hover tooltip and to screen readers.
-function toUsagePresentation(
-	usage: SessionUsageSummary | undefined,
+/** "1.4 GB · 82%" while working, just "240 MB" while idle: an idle agent is
+ * always at 0% and printing it is noise. */
+function toResourcePresentation(
+	memory: SessionMemoryReading | undefined,
+	working: boolean,
+	tone: ChipTone | undefined,
 	t: TFunction,
-): BoardUsagePresentation | undefined {
-	const processedTokens = usage?.processedTokens ?? null;
-	if (!usage) {
-		return undefined;
+): (BoardUsagePresentation & { tone?: ChipTone }) | undefined {
+	if (!memory || memory.rssBytes <= 0) return undefined;
+	const size = formatMemory(memory.rssBytes);
+	if (!working) {
+		return { accessibleLabel: t("shell.sessionMemoryAria", { size }), compactLabel: size, tone };
 	}
-	const cost = formatEstimatedCost(usage.estimatedCost);
-	if (!cost) {
-		if (processedTokens === null || processedTokens <= 0) {
-			return undefined;
-		}
-		const compactTokens = formatTokenCount(processedTokens).replace(/ tok$/, "");
-		const accessibleTokens = t("shell.usageTokens", {
-			count: processedTokens.toLocaleString("en-US"),
-		});
-		return {
-			accessibleLabel: accessibleTokens,
-			compactLabel: compactTokens,
-		};
-	}
-	if (processedTokens === null) {
-		return { accessibleLabel: cost, compactLabel: cost };
-	}
-	const accessibleTokens = t("shell.usageTokens", {
-		count: processedTokens.toLocaleString("en-US"),
-	});
+	const cpu = formatCPU(memory.cpuPercent);
 	return {
-		accessibleLabel: `${cost} · ${accessibleTokens}`,
-		compactLabel: cost,
+		accessibleLabel: t("shell.sessionResourceAria", { size, cpu }),
+		compactLabel: `${size} · ${cpu}`,
+		tone,
 	};
 }
 
@@ -390,7 +476,15 @@ function ArchiveRestoreError({ message }: { message?: string }) {
 	) : null;
 }
 
-function CopyActionButton({ label, value }: { label: string; value: string }) {
+function CopyActionButton({
+	copiedLabel,
+	copyLabel,
+	value,
+}: {
+	copiedLabel: string;
+	copyLabel: string;
+	value: string;
+}) {
 	const [copied, setCopied] = useState(false);
 	const copiedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	useEffect(
@@ -399,7 +493,7 @@ function CopyActionButton({ label, value }: { label: string; value: string }) {
 		},
 		[],
 	);
-	const buttonLabel = copied ? `Copied ${label}` : `Copy ${label}`;
+	const buttonLabel = copied ? copiedLabel : copyLabel;
 	const copyValue = async (event: MouseEvent<HTMLButtonElement>) => {
 		event.stopPropagation();
 		try {

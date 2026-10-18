@@ -113,7 +113,7 @@ describe("session presentation", () => {
 		["idle", "bg-status-idle"],
 		["working", "bg-status-working"],
 		["needs_input", "bg-status-needs-you"],
-		["exited", "bg-status-needs-you"],
+		["exited", "bg-passive"],
 		["no_signal", "bg-status-needs-you"],
 		["ci_failed", "bg-status-needs-you"],
 		["changes_requested", "bg-status-needs-you"],

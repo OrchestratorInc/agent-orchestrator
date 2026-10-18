@@ -54,10 +54,10 @@ const (
 	gooseIdentityWaitDelay = 100 * time.Millisecond
 )
 
-// gooseIdentityProbeTimeout bounds the adapter-owned --help identity probe.
-// ResolveBinary's caller can impose a shorter deadline, including the
-// readiness coordinator's installation-check timeout.
-var gooseIdentityProbeTimeout = time.Second
+// gooseIdentityProbeTimeout allows a freshly installed binary to finish its
+// first launch while macOS assesses it. ResolveBinary's caller can impose a
+// shorter deadline, including the readiness coordinator's two-second check.
+var gooseIdentityProbeTimeout = time.Minute
 
 // gooseIdentityCommand is kept injectable so identity tests never need to
 // launch a real CLI. Production uses direct native execution; in particular,

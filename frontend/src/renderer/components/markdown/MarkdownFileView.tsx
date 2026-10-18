@@ -37,6 +37,7 @@ import { useTranslation } from "react-i18next";
 import { canonicalLanguage } from "../../lib/code-highlight";
 import { fenceOf } from "../../lib/markdown-fence";
 import { isWebLink } from "../../lib/external-link-policy";
+import { CopyButton } from "../chat/CopyButton";
 import { HighlightedCode } from "../chat/HighlightedCode";
 import { MermaidBlock } from "../chat/MermaidBlock";
 import "../chat/code-theme.css";
@@ -66,22 +67,27 @@ const REHYPE_PLUGINS: PluggableList = [
 
 export function MarkdownFileView({
 	sessionId,
+	hostId,
 	filePath,
 	content,
 	truncated,
 	version,
+	artifactOrigin,
 }: {
 	sessionId: string;
+	hostId?: string;
 	filePath: string;
 	content: string;
 	/** The daemon capped the file it sent; what renders below is a prefix of it. */
 	truncated: boolean;
 	/** The file detail's load timestamp, for cache-busting relative images. */
 	version: number;
+	/** Origin serving the artifact directory, for artifact markdown images. */
+	artifactOrigin?: string;
 }) {
 	const { t } = useTranslation();
 	const bodyRef = useRef<HTMLDivElement>(null);
-	const contextValue = useMemo(() => ({ sessionId, filePath, version }), [sessionId, filePath, version]);
+	const contextValue = useMemo(() => ({ sessionId, hostId, filePath, version, artifactOrigin }), [sessionId, hostId, filePath, version, artifactOrigin]);
 
 	// Heading slugs are unique per rendered file, not per document, and the Files
 	// tab expands many files at once — two open READMEs both containing
@@ -110,11 +116,20 @@ export function MarkdownFileView({
 					return <MermaidBlock code={fence.code} />;
 				}
 				return (
-					<pre className="markdown-code">
-						<code>
-							<HighlightedCode code={fence.code} language={canonicalLanguage(fence.language)} />
-						</code>
-					</pre>
+					<div className="group/md-code relative">
+						<pre className="markdown-code">
+							<code>
+								<HighlightedCode code={fence.code} language={canonicalLanguage(fence.language)} />
+							</code>
+						</pre>
+						{/* Hover-revealed, and focus-revealed so the keyboard can reach it. */}
+						<CopyButton
+							compact
+							className="absolute right-2 top-2 bg-background opacity-0 transition-opacity focus-visible:opacity-100 group-hover/md-code:opacity-100"
+							label={t("files.copyCode")}
+							text={fence.code}
+						/>
+					</div>
 				);
 			},
 
@@ -148,7 +163,7 @@ export function MarkdownFileView({
 				return <span>{children}</span>;
 			},
 		}),
-		[onFragmentClick],
+		[onFragmentClick, t],
 	);
 	return (
 		<MarkdownFileContext.Provider value={contextValue}>
@@ -158,7 +173,10 @@ export function MarkdownFileView({
 						{t("files.contentTruncated")}
 					</div>
 				) : null}
-				<div className="markdown-body p-4" ref={bodyRef}>
+				{/* github-markdown-css hangs each heading's `.anchor` link icon 20px
+				    into the left gutter (`margin-left: -20px`), so the inline padding
+				    must be wider than that or the scroll container clips the icon. */}
+				<div className="markdown-body px-6 py-4" ref={bodyRef}>
 					<Markdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={components}>
 						{content}
 					</Markdown>

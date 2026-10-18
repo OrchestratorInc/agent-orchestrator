@@ -1,9 +1,13 @@
+import { motion, useReducedMotion } from "motion/react";
 import { useCanGoBack, useRouter } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight, PanelLeft } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
-import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
+import { sidebarIsVisible, useUiStore } from "../stores/ui-store";
+import { AOMascot } from "./AOMascot";
+import { BuildInfoTooltip } from "./BuildInfoTooltip";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const isMac = isMacPlatform();
@@ -41,29 +45,29 @@ export function useCanGoForward(): boolean {
 
 export function TitlebarNav({
   historyLocked = false,
-  hasSessionTopbar = false,
   isFullScreen = false,
 }: {
   historyLocked?: boolean;
-  hasSessionTopbar?: boolean;
   isFullScreen?: boolean;
 }) {
   const { t } = useTranslation();
   const toggleSidebar = useUiStore((state) => state.toggleSidebar);
   const isSidebarOpen = useUiStore(sidebarIsVisible);
-  const sidebarHasLayout = useUiStore(sidebarOccupiesLayout);
   const router = useRouter();
   const canGoBack = useCanGoBack();
   const canGoForward = useCanGoForward();
+  // The brand and the arrows swap instantly with the sidebar toggle.
+  const showBrand = isSidebarOpen;
+  // The sidebar's minimum width is measured from the brand label, which only
+  // exists once this mounts it. Nudge the sidebar's resize re-clamp so a stored
+  // or default width narrower than the label grows to fit it.
+  useEffect(() => {
+    if (showBrand) window.dispatchEvent(new Event("resize"));
+  }, [showBrand]);
 
   if (!isMac && !isLinux) return null;
-  // macOS: pinned beside the traffic lights. Native dots sit at y: 12 with a
-  // 12px hit target (centerline 18); the 40px clearance band is items-centered,
-  // so top: -2px puts the toggle/arrows on that same centerline. Linux: no
-  // traffic lights, so it sits at the sidebar's top-left within the reserved
-  // titlebar band (cluster-left-linux, not flush to the window edge) — and when
-  // the sidebar is off-canvas it shifts right to clear the framed centre
-  // panel's left border instead of straddling it.
+  // Native fullscreen changes only the horizontal traffic-light reserve.
+  // Sidebar and route state must never move the navigation centerline.
   const leftClass = !isMac
     ? isSidebarOpen
       ? "left-titlebar-cluster-left-linux"
@@ -71,25 +75,47 @@ export function TitlebarNav({
     : isFullScreen
       ? "left-titlebar-cluster-left-fullscreen"
       : "left-titlebar-cluster-left";
-  // Linux: match the framed board titlebar's y (mac inset 2px + surface border
-  // 1px) so the cluster shares its centerline with the project title.
-  const topClass = !isMac
-    ? "top-0.75"
-    : isFullScreen && hasSessionTopbar && !sidebarHasLayout
-      ? "top-1.5"
-      : isFullScreen
-        ? "top-0"
-        : "-top-0.6";
-  const heightClass =
-    isMac && isFullScreen
-      ? "h-traffic-light-clearance-fullscreen"
-      : "h-traffic-light-clearance";
+  // macOS traffic lights centre at y = 18; top-0 puts this row on that centreline.
+  const topClass = isMac ? "top-0" : "top-0.75";
+  const heightClass = "h-traffic-light-clearance";
+
+  // With the sidebar open the brand sits where the history arrows would be;
+  // collapsed, the arrows take its place.
+  const arrowsVisible = !showBrand;
+  const prefersReducedMotion = useReducedMotion();
+  const transition = prefersReducedMotion ? { duration: 0 } : SHELL_PANEL_SPRING;
+
+  // The brand sits in this fixed row, not inside the sidebar, so it does not
+  // shrink when a small window caps the sidebar narrower than the label. Cap it
+  // to the sidebar's right edge so it truncates instead of overlapping the tabs.
+  const brandRef = useRef<HTMLSpanElement>(null);
+  const [brandMaxWidth, setBrandMaxWidth] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    if (!showBrand) return;
+    const sidebar = document.querySelector<HTMLElement>('[data-slot="sidebar-container"]');
+    if (!sidebar) return;
+    const fit = () => {
+      const brand = brandRef.current;
+      if (!brand) return;
+      // Layout width, not its painted right edge: the sidebar may still be sliding
+      // in from off-canvas when this runs, and the slide leaves offsetWidth alone.
+      const available = sidebar.offsetWidth - brand.getBoundingClientRect().left - 12;
+      setBrandMaxWidth(Math.max(24, Math.floor(available)));
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(sidebar);
+    window.addEventListener("resize", fit);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", fit);
+    };
+  }, [showBrand]);
 
   return (
     <div
       className={`fixed ${topClass} ${leftClass} z-titlebar flex ${heightClass} items-center gap-1`}
       data-slot="titlebar-nav"
-      style={noDragStyle}
     >
       <TitlebarButton
         label={
@@ -104,22 +130,65 @@ export function TitlebarNav({
       >
         <PanelLeft className="size-icon-lg" aria-hidden="true" />
       </TitlebarButton>
-      <TitlebarButton
-        disabled={historyLocked || !canGoBack}
-        label={t("titlebar.goBack")}
-        onClick={() => router.history.back()}
-        title={t("titlebar.goBack")}
-      >
-        <ArrowLeft className="size-icon-lg" aria-hidden="true" />
-      </TitlebarButton>
-      <TitlebarButton
-        disabled={historyLocked || !canGoForward}
-        label={t("titlebar.goForward")}
-        onClick={() => router.history.forward()}
-        title={t("titlebar.goForward")}
-      >
-        <ArrowRight className="size-icon-lg" aria-hidden="true" />
-      </TitlebarButton>
+      {/* The brand and the history arrows trade places by animating width, on the
+          same spring as the sidebar, so the brand closes with the sidebar edge.
+          The hidden side collapses to width 0 and is inert, so it never leaves an
+          invisible no-drag hole in the window-drag region. */}
+      <div className="flex items-center">
+        <motion.div
+          animate={{ width: showBrand ? "auto" : 0, opacity: showBrand ? 1 : 0 }}
+          aria-hidden={showBrand ? undefined : true}
+          className="overflow-hidden"
+          data-slot="titlebar-brand"
+          initial={false}
+          inert={!showBrand}
+          transition={transition}
+        >
+          {/* Not a button on purpose. Only the label opts out of window drag (for
+              the build-info tooltip); the rest of the row stays draggable. */}
+          <span
+            className="inline-flex select-none items-center gap-1.5 translate-y-0.5 whitespace-nowrap text-base font-semibold leading-tight tracking-tight-lg text-foreground"
+            data-sidebar-brand=""
+            ref={brandRef}
+            style={{ maxWidth: brandMaxWidth }}
+          >
+            <BuildInfoTooltip>
+              <span className="inline-flex min-w-0 items-center gap-1.5">
+                <AOMascot className="h-5.5 w-5.5 shrink-0" />
+                <span className="min-w-0 truncate" data-brand-label="">Orchestrator.inc</span>
+              </span>
+            </BuildInfoTooltip>
+          </span>
+        </motion.div>
+        <motion.div
+          animate={{ width: arrowsVisible ? "auto" : 0, opacity: arrowsVisible ? 1 : 0 }}
+          aria-hidden={arrowsVisible ? undefined : true}
+          className="overflow-hidden"
+          data-slot="titlebar-history"
+          initial={false}
+          inert={!arrowsVisible}
+          transition={transition}
+        >
+          <div className="flex items-center gap-1">
+            <TitlebarButton
+              disabled={historyLocked || !canGoBack}
+              label={t("titlebar.goBack")}
+              onClick={() => router.history.back()}
+              title={t("titlebar.goBack")}
+            >
+              <ArrowLeft className="size-icon-lg" aria-hidden="true" />
+            </TitlebarButton>
+            <TitlebarButton
+              disabled={historyLocked || !canGoForward}
+              label={t("titlebar.goForward")}
+              onClick={() => router.history.forward()}
+              title={t("titlebar.goForward")}
+            >
+              <ArrowRight className="size-icon-lg" aria-hidden="true" />
+            </TitlebarButton>
+          </div>
+        </motion.div>
+      </div>
     </div>
   );
 }

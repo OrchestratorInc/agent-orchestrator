@@ -3,6 +3,7 @@ import type {
 	BrowserAgentActivityState,
 	BrowserDevToolsPlacement,
 	BrowserDevToolsState,
+	BrowserFindState,
 	BrowserNavState,
 	BrowserRect,
 	BrowserTabState,
@@ -15,7 +16,8 @@ import type {
 	BrowserAnnotationSubmitPayload,
 } from "../../shared/browser-annotations";
 import type { BrowserProfileViewState } from "../../shared/browser-profiles";
-import { OPEN_BROWSER_OVERLAY_SELECTOR } from "../lib/dom-selectors";
+import { aoBridge } from "../lib/bridge";
+import { subscribeBrowserOverlaySync } from "../lib/browser-overlay-sync";
 
 export type { BrowserNavState };
 
@@ -50,8 +52,20 @@ function sameBrowserURL(left: string, right: string): boolean {
 	}
 }
 
+function sameBrowserOrigin(left: string, right: string): boolean {
+	try {
+		return new URL(left).origin === new URL(right).origin;
+	} catch {
+		return false;
+	}
+}
+
 type UseBrowserViewOptions = {
 	sessionId: string;
+	/** Source daemon for preview URLs; omitted for the local daemon. */
+	origin?: { hostId: string; sessionId: string; proxyBase: string };
+	/** A cloud session, whose agent browser the control plane serves. */
+	cloudAgentBrowser?: { baseUrl: string; orgId: string; sessionId: string };
 	active: boolean;
 	poppedOut: boolean;
 	/**
@@ -83,6 +97,10 @@ export type BrowserViewModel = {
 	goForward: () => Promise<void>;
 	reload: () => Promise<void>;
 	stop: () => Promise<void>;
+	findState: BrowserFindState;
+	findOpenRequest: number;
+	findInPage: (query: string, forward: boolean, newSession: boolean) => Promise<void>;
+	stopFindInPage: (focusPage?: boolean) => Promise<void>;
 	tabs: BrowserTabState[];
 	activeTabId: string;
 	tabNotice: string;
@@ -129,13 +147,22 @@ const EMPTY_DEVTOOLS_STATE: BrowserDevToolsState = {
 	placement: "undocked",
 };
 
+const EMPTY_FIND_STATE: BrowserFindState = {
+	viewId: "",
+	tabId: "",
+	query: "",
+	activeMatchOrdinal: 0,
+	matches: 0,
+	finalUpdate: true,
+};
+
 const EMPTY_PROFILE_STATE: BrowserProfileViewState = {
 	viewId: "",
 	profileId: null,
 	temporary: true,
 };
 
-type PreviewTrigger = { revision: number | null; target: string };
+type PreviewTrigger = { revision: number | null; target: string; origin: string };
 
 // The native view survives React session switches, so remember which preview
 // trigger was already consumed for each session. This prevents switching back
@@ -158,6 +185,39 @@ export function resetClosedTabsForTest(): void {
 }
 
 const HIDDEN_RECT: BrowserRect = { x: 0, y: 0, width: 0, height: 0 };
+
+// Keep revisions monotonic across hook remounts. performance.timeOrigin gives a
+// newly loaded shell a newer range while staying below Number.MAX_SAFE_INTEGER.
+let nextLayoutRevision = Math.floor(globalThis.performance?.timeOrigin ?? Date.now()) * 1_000;
+
+function claimLayoutRevision(): number {
+	nextLayoutRevision += 1;
+	return nextLayoutRevision;
+}
+
+// The macOS translucent window tints the shell over the vibrancy blur. The live
+// page sits below the shell, so styles.css cuts the tint out over this rect
+// rather than tinting the page. Last visible view owns the hole.
+let browserHoleOwner: string | null = null;
+
+function publishBrowserHole(viewId: string, rect: BrowserRect | null): void {
+	const root = document.documentElement;
+	// Custom properties on :root restyle the whole document, so only write them
+	// while the translucent window actually needs the hole.
+	if (rect && root.dataset.windowTranslucent !== "true") rect = null;
+	if (!rect) {
+		if (browserHoleOwner !== viewId) return;
+		browserHoleOwner = null;
+		delete root.dataset.browserHole;
+		return;
+	}
+	browserHoleOwner = viewId;
+	root.dataset.browserHole = "true";
+	root.style.setProperty("--browser-hole-x", `${rect.x}px`);
+	root.style.setProperty("--browser-hole-y", `${rect.y}px`);
+	root.style.setProperty("--browser-hole-w", `${rect.width}px`);
+	root.style.setProperty("--browser-hole-h", `${rect.height}px`);
+}
 
 // ResizeHandle.tsx sits at the inspector panel's left edge with a
 // `--size-resize-handle-offset` (6px) negative inset, so only its right half
@@ -217,6 +277,8 @@ function hiddenByFullscreen(node: HTMLElement): boolean {
 
 export function useBrowserView({
 	sessionId,
+	origin,
+	cloudAgentBrowser,
 	active,
 	poppedOut,
 	terminated,
@@ -233,6 +295,8 @@ export function useBrowserView({
 	// authoritative and browser:tabsState pushes on every nav/title event.
 	const [tabOrder, setTabOrder] = useState<string[]>([]);
 	const [devtoolsState, setDevtoolsState] = useState<BrowserDevToolsState>(EMPTY_DEVTOOLS_STATE);
+	const [findState, setFindState] = useState<BrowserFindState>(EMPTY_FIND_STATE);
+	const [findOpenRequest, setFindOpenRequest] = useState(0);
 	const [profileState, setProfileState] = useState<BrowserProfileViewState>(EMPTY_PROFILE_STATE);
 	const [tabNotice, setTabNotice] = useState("");
 	const [closedTabs, setClosedTabs] = useState<ClosedBrowserTab[]>([]);
@@ -245,13 +309,10 @@ export function useBrowserView({
 	const activeRef = useRef(active);
 	const poppedOutRef = useRef(poppedOut);
 	const frameRef = useRef<number | null>(null);
+	const appliedLayoutRevisionRef = useRef(0);
 	const settleTimerRef = useRef<number | null>(null);
 	const observerRef = useRef<ResizeObserver | null>(null);
-	const previewTriggerRef = useRef<{
-		revision: number | null;
-		target: string;
-	} | null>(null);
-	const overlayOpenRef = useRef(false);
+	const previewTriggerRef = useRef<PreviewTrigger | null>(null);
 	const tabNoticeTimerRef = useRef<number | null>(null);
 	const tabsStateRef = useRef(tabsState);
 	const hasNativeBrowser = Boolean(window.ao?.browser);
@@ -292,8 +353,10 @@ export function useBrowserView({
 
 	const sendHiddenBounds = useCallback((id = viewIdRef.current) => {
 		if (!id) return;
+		publishBrowserHole(id, null);
 		window.ao?.browser.setBounds({
 			viewId: id,
+			revision: claimLayoutRevision(),
 			rect: HIDDEN_RECT,
 			visible: false,
 		});
@@ -321,9 +384,11 @@ export function useBrowserView({
 		const rect = visibleSlotRect(node);
 		const payload = {
 			viewId: id,
+			revision: claimLayoutRevision(),
 			rect,
 			visible: rect.width > 0 && rect.height > 0,
 		};
+		publishBrowserHole(id, payload.visible ? rect : null);
 		window.ao?.browser.setBounds(payload);
 	}, [sendHiddenBounds]);
 
@@ -389,6 +454,13 @@ export function useBrowserView({
 	);
 
 	useEffect(() => {
+		return window.ao?.browser.onBoundsApplied((result) => {
+			if (result.viewId !== viewIdRef.current || result.revision <= appliedLayoutRevisionRef.current) return;
+			appliedLayoutRevisionRef.current = result.revision;
+		});
+	}, []);
+
+	useEffect(() => {
 		let disposed = false;
 		// Preview revisions are scoped to a session. A native view survives session
 		// switches, so seed from the per-session consumed trigger to avoid
@@ -402,6 +474,8 @@ export function useBrowserView({
 		// previous session could otherwise silently reapply to the new one.
 		setTabOrder([]);
 		setDevtoolsState(EMPTY_DEVTOOLS_STATE);
+		setFindState(EMPTY_FIND_STATE);
+		setFindOpenRequest(0);
 		setProfileState(EMPTY_PROFILE_STATE);
 		setTabNotice("");
 		// Restore this session's own Recently Closed list rather than wiping it —
@@ -439,7 +513,7 @@ export function useBrowserView({
 				viewIdRef.current = "";
 			};
 		}
-		window.ao?.browser.ensure(sessionId).then((state) => {
+		window.ao?.browser.ensure(sessionId, false).then((state) => {
 			if (disposed) return;
 			viewIdRef.current = state.viewId;
 			setViewId(state.viewId);
@@ -454,6 +528,12 @@ export function useBrowserView({
 				.getTabs(state.viewId)
 				.then((tabs) => {
 					if (!disposed && viewIdRef.current === tabs.viewId) setTabsState(tabs);
+				})
+				.catch(() => undefined);
+			void window.ao?.browser
+				.getFindState(state.viewId)
+				.then((find) => {
+					if (!disposed && viewIdRef.current === find.viewId) setFindState(find);
 				})
 				.catch(() => undefined);
 			scheduleSettleMeasure();
@@ -484,6 +564,21 @@ export function useBrowserView({
 		return window.ao?.browser.onNavState((state) => {
 			if (state.viewId !== viewIdRef.current) return;
 			setNavState(state);
+		});
+	}, []);
+
+	useEffect(() => {
+		return window.ao?.browser.onFindState((state) => {
+			if (state.viewId !== viewIdRef.current) return;
+			setFindState(state);
+		});
+	}, []);
+
+	useEffect(() => {
+		return window.ao?.browser.onFindOpen((state) => {
+			if (state.viewId !== viewIdRef.current) return;
+			setFindState(state);
+			setFindOpenRequest((current) => current + 1);
 		});
 	}, []);
 
@@ -579,56 +674,27 @@ export function useBrowserView({
 	useEffect(() => {
 		if (!hasNativeBrowser) return;
 		let isResizing = document.body.classList.contains("is-resizing-x");
-		const update = () => {
+		const updateResize = () => {
 			const wasResizing = isResizing;
 			isResizing = document.body.classList.contains("is-resizing-x");
-			const open = document.querySelector(OPEN_BROWSER_OVERLAY_SELECTOR) !== null;
-			if (open !== overlayOpenRef.current) {
-				overlayOpenRef.current = open;
-				// The live page never moves or becomes a bitmap. Reordering the explicit
-				// transparent shell is the complete overlay handoff for menus/dialogs.
-				window.ao?.browser.setOverlayOpen(open);
-			}
-			if (!wasResizing && isResizing) {
-				// Sidebar resize started: measure bounds to track the animation
-				scheduleSettleMeasure();
-			} else if (wasResizing && !isResizing) {
-				// Sidebar resize ended: measure bounds immediately and after animation settles
-				scheduleSettleMeasure();
-			}
+			if (wasResizing !== isResizing) scheduleSettleMeasure();
 		};
-		update();
-		const observer = new MutationObserver(update);
-		// Radix reuses its portal node and flips `data-state` in place rather than
-		// adding/removing a body child, so a `childList`-only observer misses the
-		// open/close transition under rapid toggling and the overlay state desyncs.
-		// Watch subtree attribute flips on `data-state` too so the transition is
-		// always observed. This widens the firing rate a lot — `data-state` is used
-		// across Radix (tooltips, accordions, selects, switches, …), so `update()`
-		// now runs a document-wide querySelector on activity anywhere in the app
-		// before it can bail. Cheap enough in practice, but not free.
-		observer.observe(document.body, {
-			childList: true,
-			subtree: true,
-			attributes: true,
-			attributeFilter: ["data-state"],
-		});
+		const unsubscribeOverlay = subscribeBrowserOverlaySync();
+		updateResize();
 		// useResizable.ts toggles `is-resizing-x` on <body> (outside React) while the
 		// inspector's own drag handle is held. The handle captures its pointer in
 		// useResizable, so we only need to keep the native bounds synchronized here.
-		// A dedicated, non-subtree observer keeps this cheap: unlike `data-state` above,
+		// A dedicated, non-subtree observer keeps this cheap: unlike the overlay observer's `data-state`,
 		// `class` churns on nearly every render throughout the app, so watching it
 		// subtree-wide would run `update()` far more often than the dialog/menu case.
-		const resizeObserver = new MutationObserver(update);
+		const resizeObserver = new MutationObserver(updateResize);
 		resizeObserver.observe(document.body, {
 			attributes: true,
 			attributeFilter: ["class"],
 		});
 		return () => {
-			observer.disconnect();
+			unsubscribeOverlay();
 			resizeObserver.disconnect();
-			window.ao?.browser.setOverlayOpen(false);
-			overlayOpenRef.current = false;
 		};
 	}, [hasNativeBrowser, scheduleSettleMeasure]);
 
@@ -705,13 +771,14 @@ export function useBrowserView({
 				const state = await window.ao!.browser.selectTab({ viewId, tabId });
 				if (viewIdRef.current === state.viewId) setTabsState(state);
 			} catch {
-				// Fire-and-forget from the rail (`void onSelectTab(...)`) — without
-				// this the click just silently does nothing, with no way to tell a
-				// slow response from a dead button.
-				showTabNotice("Couldn't switch to that tab");
+				// The native view may already have switched before automation
+				// synchronization fails. Read the actual selection back instead of
+				// showing a misleading switch-failure notice in the toolbar.
+				const state = await window.ao!.browser.getTabs(viewId).catch(() => undefined);
+				if (state && viewIdRef.current === state.viewId) setTabsState(state);
 			}
 		},
-		[hasNativeBrowser, showTabNotice],
+		[hasNativeBrowser],
 	);
 
 	const closeTab = useCallback(
@@ -733,8 +800,9 @@ export function useBrowserView({
 				// while it's still sitting right there in the live tab list. Only real,
 				// distinguishable tabs are worth keeping — a blank tab has nothing to
 				// reopen.
+				// An agent tab's page lives on the remote host, so it is not the person's to reopen.
 				const stillOpen = state.tabs.some((tab) => tab.id === tabId);
-				if (closing && !stillOpen && !isBlankTabUrl(closing.url)) {
+				if (closing && !stillOpen && !closing.remote && !isBlankTabUrl(closing.url)) {
 					const { id, title, url, favicon } = closing;
 					updateClosedTabs((current) => [{ id, title, url, favicon }, ...current.filter((t) => t.id !== id)].slice(0, MAX_CLOSED_TABS));
 				}
@@ -762,7 +830,7 @@ export function useBrowserView({
 			if (!hasNativeBrowser) return;
 			let viewId = viewIdRef.current;
 			if (!viewId) {
-				const ensured = await window.ao!.browser.ensure(sessionId);
+				const ensured = await window.ao!.browser.ensure(sessionId, false);
 				viewId = ensured.viewId;
 				viewIdRef.current = viewId;
 				setViewId(viewId);
@@ -778,7 +846,7 @@ export function useBrowserView({
 			if (!hasNativeBrowser) return;
 			let id = viewIdRef.current;
 			if (!id) {
-				const ensured = await window.ao!.browser.ensure(sessionId);
+				const ensured = await window.ao!.browser.ensure(sessionId, false);
 				id = ensured.viewId;
 				viewIdRef.current = id;
 				setViewId(id);
@@ -796,13 +864,14 @@ export function useBrowserView({
 				// Keep the last known tabs as a fallback if the native host is briefly
 				// unavailable; opening the link remains better than dropping the click.
 			}
-			const existingTab = tabs.find((tab) => !isBlankTabUrl(tab.url) && sameBrowserURL(tab.url, url));
+			// A link is the person's: it never selects or loads into an agent tab.
+			const existingTab = tabs.find((tab) => !tab.remote && !isBlankTabUrl(tab.url) && sameBrowserURL(tab.url, url));
 			if (existingTab) {
 				await selectTab(existingTab.id);
 				return;
 			}
 			const activeTab = tabs.find((tab) => tab.active);
-			if (activeTab && isBlankTabUrl(activeTab.url)) {
+			if (activeTab && !activeTab.remote && isBlankTabUrl(activeTab.url)) {
 				const state = await window.ao!.browser.navigate({ viewId: id, url });
 				if (viewIdRef.current === state.viewId) setNavState(state);
 				return;
@@ -896,6 +965,61 @@ export function useBrowserView({
 		[hasNativeBrowser, withView],
 	);
 
+	// A preview never lands in an agent tab: it goes to the person's preview
+	// tab (one on its origin or another preview's), else to a new tab.
+	const showPreview = useCallback(
+		async (url: string) => {
+			const id = viewIdRef.current;
+			const tabs = hasNativeBrowser && id ? (await window.ao!.browser.getTabs(id).catch(() => null))?.tabs : undefined;
+			if (!tabs?.find((tab) => tab.active)?.remote) return navigate(url);
+			const preview = /^https:\/\/ao-preview-[0-9a-f]{32}\.localhost(?::\d+)?\//;
+			const own = tabs.find((tab) => !tab.remote && (sameBrowserOrigin(tab.url, url) || preview.test(tab.url)));
+			if (!own) return openTab(url);
+			await selectTab(own.id);
+			return navigate(url);
+		},
+		[hasNativeBrowser, navigate, openTab, selectTab],
+	);
+
+	// A remote or cloud session's agent browser (the host's or sandbox's
+	// Chromium its agent drives, streamed) is part of the session's surface:
+	// main shows it as one tab per agent page. It is derived from the host
+	// whenever the view is built or the host reconnects, not remembered: a
+	// reopened window brings it back. A host with no agent browser to show yet
+	// (starting, asleep, redeploying, not set up, or an agent that has not
+	// used it) is asked again, backing off, for as long as the view stays.
+	useEffect(() => {
+		const agentBrowserUrl = origin
+			? () => aoBridge.remotes.agentBrowserUrl(origin.hostId, origin.sessionId)
+			: cloudAgentBrowser
+				? () => aoBridge.cloudCp.agentBrowserUrl(cloudAgentBrowser.baseUrl, cloudAgentBrowser.orgId, cloudAgentBrowser.sessionId)
+				: undefined;
+		if (!hasNativeBrowser || !agentBrowserUrl || !viewId || viewIdRef.current !== viewId || terminated) return;
+		let cancelled = false;
+		let retry = 0;
+		// ponytail: polls every 15 s at most while nothing shows; main could
+		// instead say when the agent browser comes up.
+		const again = (attempt: number) => {
+			if (!cancelled) retry = window.setTimeout(() => ask(attempt + 1), Math.min(2_000 * 2 ** attempt, 15_000));
+		};
+		const ask = (attempt: number) => {
+			void agentBrowserUrl().then(async (url) => {
+				if (cancelled || viewIdRef.current !== viewId) return;
+				if (!url) return again(attempt);
+				const state = await window.ao!.browser.openTab({ viewId, url });
+				if (viewIdRef.current === viewId) setTabsState(state);
+			}).catch((error) => {
+				if (attempt === 0) console.warn("Unable to open the agent browser", error);
+				again(attempt);
+			});
+		};
+		ask(0);
+		return () => {
+			cancelled = true;
+			window.clearTimeout(retry);
+		};
+	}, [hasNativeBrowser, origin?.hostId, origin?.sessionId, origin?.proxyBase, cloudAgentBrowser?.baseUrl, cloudAgentBrowser?.orgId, cloudAgentBrowser?.sessionId, terminated, viewId]);
+
 	const clear = useCallback(() => {
 		if (!hasNativeBrowser) {
 			setNavState((current) => ({
@@ -909,6 +1033,44 @@ export function useBrowserView({
 		return withView((id) => window.ao!.browser.clear(id));
 	}, [hasNativeBrowser, withView]);
 
+	const findInPage = useCallback(
+		(query: string, forward: boolean, newSession: boolean) => {
+			if (!hasNativeBrowser) {
+				setFindState((current) => ({ ...current, query, activeMatchOrdinal: 0, matches: 0, finalUpdate: true }));
+				return Promise.resolve();
+			}
+			return withView(async (id) => {
+				const state = await window.ao!.browser.findInPage({ viewId: id, query, forward, newSession });
+				if (viewIdRef.current === state.viewId) setFindState(state);
+			});
+		},
+		[hasNativeBrowser, withView],
+	);
+
+	const stopFindInPage = useCallback(
+		(focusPage = false) => {
+			if (!hasNativeBrowser) {
+				setFindState(EMPTY_FIND_STATE);
+				return Promise.resolve();
+			}
+			return withView(async (id) => {
+				const state = await window.ao!.browser.stopFindInPage({ viewId: id, focusPage });
+				if (viewIdRef.current === state.viewId) setFindState(state);
+			});
+		},
+		[hasNativeBrowser, withView],
+	);
+
+	// Clearing or terminating a remote preview must also retire its viewer-only
+	// origin, even when the native browser view has already been destroyed.
+	useEffect(() => {
+		if (!origin || (!terminated && previewUrl?.trim())) return;
+		void aoBridge.remotes.previewUrl(origin.hostId, origin.sessionId, "").catch(() => {
+			// A disconnected proxy is already closed, so there is nothing to revoke.
+		});
+		return undefined;
+	}, [origin?.hostId, origin?.sessionId, origin?.proxyBase, previewUrl, terminated]);
+
 	// Drive the view from the daemon-set preview target. Current daemons key
 	// this on previewRevision (bumped on every `ao preview` call); older daemons
 	// did not send it, so fall back to URL changes for compatibility.
@@ -918,19 +1080,28 @@ export function useBrowserView({
 		// consume the new session's preview revision against that stale view.
 		if (!viewId || viewIdRef.current !== viewId || terminated) return;
 		const target = previewUrl?.trim() ?? "";
+		const source = origin ? `${origin.hostId}:${origin.sessionId}:${origin.proxyBase}` : "local";
 		const revision = typeof previewRevision === "number" ? previewRevision : null;
 		const previous = previewTriggerRef.current;
-		if (previous?.revision === revision && previous.target === target) return;
-		if (revision !== null && previous?.revision === revision) return;
-		const consumed: PreviewTrigger = { revision, target };
+		if (previous?.revision === revision && previous.target === target && previous.origin === source) return;
+		if (revision !== null && previous?.revision === revision && previous.origin === source) return;
+		const consumed: PreviewTrigger = { revision, target, origin: source };
 		previewTriggerRef.current = consumed;
 		if (hasNativeBrowser) consumedPreviewTriggers.set(sessionId, consumed);
 		if (target) {
-			void navigate(target);
+			let cancelled = false;
+			const resolved = origin
+				? aoBridge.remotes.previewUrl(origin.hostId, origin.sessionId, target)
+				: Promise.resolve(target);
+			void resolved.then((url) => {
+				return cancelled ? undefined : showPreview(url);
+			}).catch((error) => console.warn("Unable to open browser preview", error));
+			return () => { cancelled = true; };
 		} else if ((revision !== null && revision > 0) || previous?.target) {
 			void clear();
 		}
-	}, [clear, hasNativeBrowser, navigate, previewRevision, previewUrl, sessionId, terminated, viewId]);
+		return undefined;
+	}, [clear, hasNativeBrowser, origin?.hostId, origin?.sessionId, origin?.proxyBase, previewRevision, previewUrl, sessionId, showPreview, terminated, viewId]);
 
 	const destroy = useCallback(() => {
 		const id = viewIdRef.current;
@@ -939,13 +1110,13 @@ export function useBrowserView({
 			void window.ao?.browser.setAnnotationMode({ viewId: id, enabled: false });
 			setAnnotationModeState(false);
 		}
-		overlayOpenRef.current = false;
 		sendHiddenBounds(id);
 		window.ao?.browser.destroy(id);
 		viewIdRef.current = "";
 		setViewId("");
 		setNavState(EMPTY_NAV_STATE);
 		setTabsState(EMPTY_TABS_STATE);
+		setFindState(EMPTY_FIND_STATE);
 		setClosedTabs([]);
 	}, [sendHiddenBounds]);
 
@@ -974,6 +1145,10 @@ export function useBrowserView({
 		goForward: () => (hasNativeBrowser ? withView((id) => window.ao!.browser.goForward(id)) : Promise.resolve()),
 		reload: () => (hasNativeBrowser ? withView((id) => window.ao!.browser.reload(id)) : Promise.resolve()),
 		stop: () => (hasNativeBrowser ? withView((id) => window.ao!.browser.stop(id)) : Promise.resolve()),
+		findState: stateBelongsToSession ? findState : EMPTY_FIND_STATE,
+		findOpenRequest: stateBelongsToSession ? findOpenRequest : 0,
+		findInPage,
+		stopFindInPage,
 		tabs: stateBelongsToSession ? tabs : [],
 		activeTabId: stateBelongsToSession ? tabsState.activeTabId : "",
 		tabNotice: stateBelongsToSession ? tabNotice : "",

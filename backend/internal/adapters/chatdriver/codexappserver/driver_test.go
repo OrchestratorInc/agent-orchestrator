@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -232,6 +233,7 @@ func TestStartCompletesHandshakeAndOpensThread(t *testing.T) {
 		Effort:        "high",
 		Permissions:   ports.PermissionModeDefault,
 		SystemPrompt:  "standing rules",
+		Ephemeral:     true,
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -253,6 +255,7 @@ func TestStartCompletesHandshakeAndOpensThread(t *testing.T) {
 		DeveloperInstructions string            `json:"developerInstructions"`
 		Model                 string            `json:"model"`
 		Config                map[string]string `json:"config"`
+		Ephemeral             bool              `json:"ephemeral"`
 	}
 	if err := json.Unmarshal(start.Params, &params); err != nil {
 		t.Fatalf("thread/start params: %v", err)
@@ -265,6 +268,9 @@ func TestStartCompletesHandshakeAndOpensThread(t *testing.T) {
 	}
 	if params.Model != "gpt-test" || params.Config["model_reasoning_effort"] != "high" {
 		t.Errorf("model tuning = %#v", params)
+	}
+	if !params.Ephemeral {
+		t.Error("thread/start did not mark the background conversation ephemeral")
 	}
 	var rawParams map[string]json.RawMessage
 	if err := json.Unmarshal(start.Params, &rawParams); err != nil {
@@ -279,7 +285,7 @@ func TestStartCompletesHandshakeAndOpensThread(t *testing.T) {
 	}
 }
 
-func TestResumeReconnectsInitializedHostWithoutNativeResume(t *testing.T) {
+func TestReconnectAdoptsInitializedHostWithoutNativeResume(t *testing.T) {
 	d, srv := newTestDriver(t)
 	prepareCalls := 0
 	proc, err := d.spawn(context.Background(), "codex", "/tmp/ws", nil)
@@ -287,13 +293,16 @@ func TestResumeReconnectsInitializedHostWithoutNativeResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.persistent = true
-	d.connectHost = func(context.Context, persistenthost.Config) (*persistenthost.Transport, error) {
+	d.connectHost = func(_ context.Context, cfg persistenthost.Config) (*persistenthost.Transport, error) {
+		if !cfg.ReconnectOnly {
+			t.Fatal("startup reconnect allowed a provider launch")
+		}
 		return &persistenthost.Transport{
 			Stdin: proc.stdin, Stdout: proc.stdout, Reconnected: true, NextRequestID: 41,
 		}, nil
 	}
 
-	conv, err := d.Resume(context.Background(), ports.ChatResumeConfig{
+	conv, err := d.Reconnect(context.Background(), ports.ChatResumeConfig{
 		SessionID: "ao-reconnect", ProviderConversationID: "thread-survived",
 		DataDir: t.TempDir(), WorkspacePath: "/tmp/ws",
 		PrepareEnv: func(context.Context) (map[string]string, error) {
@@ -323,6 +332,67 @@ func TestResumeReconnectsInitializedHostWithoutNativeResume(t *testing.T) {
 	request := srv.awaitFrame(func(f frame) bool { return f.Method == "model/list" })
 	if request.ID == nil || string(*request.ID) != "42" {
 		t.Fatalf("first request id after reconnect = %v, want 42", request.ID)
+	}
+}
+
+func TestCodexHibernateStopsAppServerAndNativeResumesThread(t *testing.T) {
+	d, firstServer := newTestDriver(t)
+	workspace := t.TempDir()
+	first, err := d.Start(context.Background(), ports.ChatStartConfig{
+		SessionID: "hibernate-codex", WorkspacePath: workspace,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadID := first.ProviderConversationID()
+	if _, err := first.SendTurn(context.Background(), ports.ChatUserMessage{Text: "first turn"}); err != nil {
+		t.Fatal(err)
+	}
+	firstServer.push(`{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"inProgress","items":[]}}}`)
+	firstServer.push(`{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed","items":[]}}}`)
+	if completed := nextEvent(t, first.Events(), ports.ChatEventTurnCompleted); completed.TurnState != domain.TurnStateCompleted {
+		t.Fatalf("first turn state = %q", completed.TurnState)
+	}
+	stopped := false
+	provider := first.(*conversation)
+	provider.proc.terminate = func() error {
+		stopped = true
+		return provider.proc.stop()
+	}
+	if err := first.(ports.ChatProviderHibernator).Hibernate(); err != nil {
+		t.Fatal(err)
+	}
+	if !stopped {
+		t.Fatal("hibernate detached the controller but left app-server alive")
+	}
+
+	replacement, server := newTestDriver(t)
+	server.reply("turn/start", `{"turn":{"id":"turn-2","status":"inProgress","items":[]}}`)
+	resumed, err := replacement.Resume(context.Background(), ports.ChatResumeConfig{
+		SessionID: "hibernate-codex", WorkspacePath: workspace, ProviderConversationID: threadID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resumed.Close() }()
+	if resumed.ProviderConversationID() != threadID || !server.sentMethod("thread/resume") {
+		t.Fatal("replacement app-server did not resume the same Codex thread")
+	}
+	second, err := resumed.SendTurn(context.Background(), ports.ChatUserMessage{Text: "second turn", ClientMessageID: "after-hibernate"})
+	if err != nil || second.ProviderTurnID != "turn-2" {
+		t.Fatalf("second turn = %+v, %v", second, err)
+	}
+	request := server.awaitFrame(func(f frame) bool { return f.Method == "turn/start" })
+	var params struct {
+		ThreadID            string `json:"threadId"`
+		ClientUserMessageID string `json:"clientUserMessageId"`
+	}
+	if err := json.Unmarshal(request.Params, &params); err != nil {
+		t.Fatal(err)
+	}
+	if params.ThreadID != threadID || params.ClientUserMessageID != "after-hibernate" || server.sentMethod("thread/start") {
+		t.Fatalf("second turn targeted %q with key %q; fresh thread started=%v",
+			params.ThreadID, params.ClientUserMessageID, server.sentMethod("thread/start"))
 	}
 }
 
@@ -616,6 +686,81 @@ func TestNotificationsBecomeNeutralEvents(t *testing.T) {
 	}
 	if ev := nextEvent(t, conv.Events(), ports.ChatEventTurnCompleted); ev.TurnState != domain.TurnStateCompleted {
 		t.Fatalf("turn state = %q", ev.TurnState)
+	}
+}
+
+func TestReloadMCPServersReturnsCompletePagedInventory(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.respondTo(codexproto.MethodConfigMcpServerReload, `{}`)
+	srv.respondSequence(codexproto.MethodMcpServerStatusList,
+		`{"data":[{"name":"github","authStatus":"notLoggedIn","serverInfo":{"name":"github","version":"1"},"resourceTemplates":[],"resources":[],"tools":{}},{"name":"failed","authStatus":"unknown","resourceTemplates":[],"resources":[],"tools":{}}],"nextCursor":"page-2"}`,
+		`{"data":[{"name":"playwright","authStatus":"notLoggedIn","serverInfo":{"name":"playwright","version":"1"},"resourceTemplates":[],"resources":[],"tools":{}}]}`,
+	)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+
+	result, err := conv.(ports.ChatMCPReloader).ReloadMCPServers(context.Background())
+	if err != nil {
+		t.Fatalf("ReloadMCPServers: %v", err)
+	}
+	if !result.Authoritative {
+		t.Fatal("successful complete inventory was not authoritative")
+	}
+	if len(result.Servers) != 2 || result.Servers[0].Name != "github" || result.Servers[1].Name != "playwright" {
+		t.Fatalf("servers = %+v, want both pages in order", result.Servers)
+	}
+
+	srv.mu.Lock()
+	var requests []frame
+	for _, request := range srv.seen {
+		if request.Method == codexproto.MethodMcpServerStatusList {
+			requests = append(requests, request)
+		}
+	}
+	srv.mu.Unlock()
+	if len(requests) != 2 {
+		t.Fatalf("inventory requests = %d, want 2", len(requests))
+	}
+	var first, second codexproto.ListMcpServerStatusParams
+	if err := json.Unmarshal(requests[0].Params, &first); err != nil {
+		t.Fatalf("decode first inventory params: %v", err)
+	}
+	if err := json.Unmarshal(requests[1].Params, &second); err != nil {
+		t.Fatalf("decode second inventory params: %v", err)
+	}
+	if first.Detail == nil || *first.Detail != codexproto.McpServerStatusDetailToolsAndAuthOnly {
+		t.Fatalf("detail = %v, want toolsAndAuthOnly", first.Detail)
+	}
+	if first.ThreadID == nil || *first.ThreadID != "thread-1" {
+		t.Fatalf("threadId = %v, want thread-1", first.ThreadID)
+	}
+	if first.Cursor != nil {
+		t.Fatalf("first cursor = %v, want absent", first.Cursor)
+	}
+	if second.Cursor == nil || *second.Cursor != "page-2" {
+		t.Fatalf("second cursor = %v, want page-2", second.Cursor)
+	}
+}
+
+func TestReloadMCPServersMarksFailedInventoryUnavailable(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.respondTo(codexproto.MethodConfigMcpServerReload, `{}`)
+	srv.replyError(codexproto.MethodMcpServerStatusList, -32602, "inventory unavailable")
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+
+	result, err := conv.(ports.ChatMCPReloader).ReloadMCPServers(context.Background())
+	if err != nil {
+		t.Fatalf("ReloadMCPServers: %v", err)
+	}
+	if result.Authoritative || len(result.Servers) != 0 {
+		t.Fatalf("result = %+v, want unavailable inventory", result)
 	}
 }
 
@@ -990,22 +1135,109 @@ func TestProbeReportsMissingBinary(t *testing.T) {
 }
 
 // Chat must not be quietly stricter than the terminal path for the same setting.
+// AO's own tools that load agent pages ask this before they use the network.
+func TestSandboxAllowsNetworkFollowsTheCodexSandbox(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		readOnly       bool
+		disableNetwork bool
+		launchMode     ports.PermissionMode
+		turnMode       ports.PermissionMode
+		want           bool
+	}{
+		{"full access at launch", false, false, ports.PermissionModeDefault, "", true},
+		{"accept edits at launch", false, false, ports.PermissionModeAcceptEdits, "", false},
+		{"auto at launch", false, false, ports.PermissionModeAuto, "", false},
+		{"turn narrows full access", false, false, ports.PermissionModeDefault, ports.PermissionModeAcceptEdits, false},
+		{"turn widens accept edits", false, false, ports.PermissionModeAcceptEdits, ports.PermissionModeDefault, true},
+		{"read-only reviewer", true, false, ports.PermissionModeAcceptEdits, "", true},
+		{"read-only background", true, true, ports.PermissionModeAcceptEdits, "", false},
+		{"background cannot widen access", true, true, ports.PermissionModeAcceptEdits, ports.PermissionModeBypassPermissions, false},
+	} {
+		conv := &conversation{readOnly: tc.readOnly, disableNetwork: tc.disableNetwork, launchMode: tc.launchMode}
+		if got := conv.SandboxAllowsNetwork(tc.turnMode); got != tc.want {
+			t.Errorf("%s: SandboxAllowsNetwork = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestApprovalSettingsMirrorTUIPosture(t *testing.T) {
 	for _, tc := range []struct {
+		readOnly                  bool
 		mode                      ports.PermissionMode
 		policy, sandbox, reviewer string
 	}{
-		{ports.PermissionModeDefault, "never", "danger-full-access", "user"},
-		{ports.PermissionModeBypassPermissions, "never", "danger-full-access", "user"},
-		{ports.PermissionModeAcceptEdits, "on-request", "workspace-write", "user"},
-		{ports.PermissionModeAuto, "on-request", "workspace-write", "auto_review"},
-		{ports.PermissionMode("nonsense"), "never", "danger-full-access", "user"},
+		{false, ports.PermissionModeDefault, "never", "danger-full-access", "user"},
+		{false, ports.PermissionModeBypassPermissions, "never", "danger-full-access", "user"},
+		{false, ports.PermissionModeAcceptEdits, "on-request", "workspace-write", "user"},
+		{false, ports.PermissionModeAuto, "on-request", "workspace-write", "auto_review"},
+		{false, ports.PermissionMode("nonsense"), "never", "danger-full-access", "user"},
+		{true, ports.PermissionModeAuto, "never", "read-only", "user"},
 	} {
-		policy, sandbox := approvalSettings(tc.mode)
-		reviewer := approvalReviewer(tc.mode)
+		policy, sandbox, reviewer := launchApprovalSettings(tc.mode, tc.readOnly)
 		if policy != tc.policy || sandbox != tc.sandbox || reviewer != tc.reviewer {
-			t.Errorf("approval settings(%q) = %q/%q/%q, want %q/%q/%q", tc.mode, policy, sandbox, reviewer, tc.policy, tc.sandbox, tc.reviewer)
+			t.Errorf("approval settings(%q, readOnly=%t) = %q/%q/%q, want %q/%q/%q", tc.mode, tc.readOnly, policy, sandbox, reviewer, tc.policy, tc.sandbox, tc.reviewer)
 		}
+	}
+}
+
+func TestReadOnlyTurnCannotOverrideSandbox(t *testing.T) {
+	params := map[string]any{}
+	applyTurnSettings(params, ports.ChatTurnSettings{Approval: ports.PermissionModeAuto}, true, false)
+	if params["approvalPolicy"] != "never" || params["approvalsReviewer"] != "user" ||
+		!reflect.DeepEqual(params["sandboxPolicy"], map[string]any{"type": "readOnly", "networkAccess": true}) {
+		t.Fatalf("read-only turn settings = %#v", params)
+	}
+}
+
+func TestBackgroundReadOnlySandboxPersistsAcrossTurnOverrides(t *testing.T) {
+	d, srv := newTestDriver(t)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: "/tmp/ws", Permissions: ports.PermissionModeAuto,
+		ReadOnly: true, DisableNetwork: true, Ephemeral: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conv.Close() }()
+	start := srv.awaitFrame(func(f frame) bool { return f.Method == "thread/start" })
+	var startParams map[string]any
+	if err := json.Unmarshal(start.Params, &startParams); err != nil {
+		t.Fatal(err)
+	}
+	if startParams["sandbox"] != "read-only" || startParams["approvalPolicy"] != "never" || startParams["approvalsReviewer"] != "user" || startParams["ephemeral"] != true {
+		t.Fatalf("background thread settings = %#v", startParams)
+	}
+	if _, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "Write a title", Settings: ports.ChatTurnSettings{Approval: ports.PermissionModeBypassPermissions}}); err != nil {
+		t.Fatal(err)
+	}
+	turn := srv.awaitFrame(func(f frame) bool { return f.Method == "turn/start" })
+	var turnParams map[string]any
+	if err := json.Unmarshal(turn.Params, &turnParams); err != nil {
+		t.Fatal(err)
+	}
+	if turnParams["approvalPolicy"] != "never" || turnParams["approvalsReviewer"] != "user" || !reflect.DeepEqual(turnParams["sandboxPolicy"], map[string]any{"type": "readOnly", "networkAccess": false}) {
+		t.Fatalf("background turn settings = %#v", turnParams)
+	}
+}
+
+func TestBackgroundRefusesNetworkPermissionAndApprovalRequests(t *testing.T) {
+	for _, method := range []string{
+		"item/permissions/requestApproval",
+		"item/commandExecution/requestApproval",
+		"item/fileChange/requestApproval",
+		"item/tool/requestUserInput",
+	} {
+		t.Run(method, func(t *testing.T) {
+			conv := &conversation{readOnly: true, disableNetwork: true}
+			result, err := conv.handleServerRequest(context.Background(), serverRequest{
+				Method: method, ID: json.RawMessage(`42`),
+				Params: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","permissions":{"network":{"enabled":true}},"availableDecisions":["accept","cancel"]}`),
+			})
+			if result != nil || err == nil || !strings.Contains(err.Error(), "does not permit") || len(conv.pending) != 0 {
+				t.Fatalf("background request = %#v, %v, pending = %#v", result, err, conv.pending)
+			}
+		})
 	}
 }
 
@@ -1485,5 +1717,63 @@ func TestEnvSliceWithNoOverlayStillInheritsTheEnvironment(t *testing.T) {
 	}
 	if !sawHome {
 		t.Error("an empty overlay produced an environment with no HOME")
+	}
+}
+
+func TestReconnectMissingHostNeverLaunchesProvider(t *testing.T) {
+	driver := New(fakePlugin{binErr: errors.New("provider installation is unavailable")}, nil)
+	_, err := driver.Reconnect(context.Background(), ports.ChatResumeConfig{
+		SessionID: "stopped", ProviderConversationID: "thread", DataDir: t.TempDir(), WorkspacePath: t.TempDir(),
+		PrepareEnv: func(context.Context) (map[string]string, error) {
+			t.Fatal("health check rotated launch credentials")
+			return nil, nil
+		},
+	})
+	if !errors.Is(err, ports.ErrChatHostNotRunning) {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestStartAndResumePassAOToolServersInThreadConfig(t *testing.T) {
+	servers := []ports.ChatMCPServerConfig{{
+		Name: "ao", Type: "stdio", Command: "/opt/ao/bin/ao", Args: []string{"mcp"},
+		Env: map[string]string{"AO_SESSION_ID": "ao-1"},
+	}, {
+		Name: "docs", Type: "http", URL: "http://127.0.0.1:9/mcp",
+	}}
+	// Only AO's own server is pre-approved.
+	want := `{"mcp_servers":{"ao":{"args":["mcp"],"command":"/opt/ao/bin/ao",` +
+		`"default_tools_approval_mode":"approve","env":{"AO_SESSION_ID":"ao-1"}},` +
+		`"docs":{"url":"http://127.0.0.1:9/mcp"}},"model_reasoning_effort":"high"}`
+	for _, method := range []string{"thread/start", "thread/resume"} {
+		t.Run(method, func(t *testing.T) {
+			d, srv := newTestDriver(t)
+			var conv ports.ChatConversation
+			var err error
+			if method == "thread/start" {
+				conv, err = d.Start(context.Background(), ports.ChatStartConfig{
+					SessionID: "ao-1", WorkspacePath: "/tmp/ws", Effort: "high", MCPServers: servers,
+				})
+			} else {
+				conv, err = d.Resume(context.Background(), ports.ChatResumeConfig{
+					SessionID: "ao-1", ProviderConversationID: "thread-1", WorkspacePath: "/tmp/ws", Effort: "high", MCPServers: servers,
+				})
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", method, err)
+			}
+			defer func() { _ = conv.Close() }()
+
+			f := srv.awaitFrame(func(f frame) bool { return f.Method == method })
+			var params struct {
+				Config json.RawMessage `json:"config"`
+			}
+			if err := json.Unmarshal(f.Params, &params); err != nil {
+				t.Fatal(err)
+			}
+			if string(params.Config) != want {
+				t.Fatalf("config = %s\nwant     %s", params.Config, want)
+			}
+		})
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/jackc/pgx/v5"
@@ -102,16 +103,12 @@ func (s *Store) OrchestratorAgentCredentialAvailable(
 		}
 		return tx.QueryRow(
 			ctx,
-			`SELECT EXISTS (
-				SELECT 1 FROM ao_provider_connections
-				WHERE org_id = $1 AND provider = $2 AND label = 'default'
-				  AND validation_state = 'valid'
-			) OR ($3::uuid IS NOT NULL AND EXISTS (
+			`SELECT $1::uuid IS NOT NULL AND EXISTS (
 				SELECT 1 FROM ao_user_provider_connections
-				WHERE user_id = $3::uuid AND provider = $2 AND label = 'default'
+				WHERE user_id = $1::uuid AND provider = $2 AND label = 'default'
 				  AND validation_state = 'valid'
-			))`,
-			orgID, provider, createdByUserID,
+			)`,
+			createdByUserID, provider,
 		).Scan(&available)
 	})
 	return available, err
@@ -218,19 +215,50 @@ func (s *Store) DeleteProviderConnection(
 		if err := requireOrgAdmin(ctx, tx, orgID, principal.UserID); err != nil {
 			return err
 		}
-		command, err := tx.Exec(
+		// Lock the connection first. A session create that binds it holds a key
+		// share lock from its sandbox insert until it commits, so this waits for
+		// it and the count below sees its sandbox; a create that starts later
+		// fails its foreign key once the row is gone.
+		var connectionID string
+		err := tx.QueryRow(
 			ctx,
-			`DELETE FROM ao_provider_connections
-			WHERE org_id = $1 AND provider = $2 AND label = $3`,
+			`SELECT id::text FROM ao_provider_connections
+			WHERE org_id = $1 AND provider = $2 AND label = $3
+			FOR UPDATE`,
 			orgID,
 			provider,
 			label,
-		)
+		).Scan(&connectionID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
 		if err != nil {
 			return err
 		}
-		if command.RowsAffected() == 0 {
-			return ErrNotFound
+		// ao_sandboxes.provider_connection_id is ON DELETE SET NULL, which would
+		// silently move a live sandbox onto the deployment's own provider. Refuse
+		// while any sandbox that is not fully deleted still runs on it.
+		var live int
+		if err := tx.QueryRow(
+			ctx,
+			`SELECT count(*) FROM ao_sandboxes
+			WHERE org_id = $1 AND provider_connection_id = $2::uuid
+				AND (observed_state <> 'deleted' OR desired_state <> 'deleted')`,
+			orgID,
+			connectionID,
+		).Scan(&live); err != nil {
+			return err
+		}
+		if live > 0 {
+			return fmt.Errorf("%w: %d sandboxes still run on it", ErrProviderConnectionInUse, live)
+		}
+		if _, err := tx.Exec(
+			ctx,
+			`DELETE FROM ao_provider_connections WHERE org_id = $1 AND id = $2::uuid`,
+			orgID,
+			connectionID,
+		); err != nil {
+			return err
 		}
 		_, err = tx.Exec(
 			ctx,
@@ -247,6 +275,36 @@ func (s *Store) DeleteProviderConnection(
 		)
 		return err
 	})
+}
+
+// CoderConnectionForService returns an organization's Coder provider connection
+// (provider='coder', label='default') for a service-context caller that holds no
+// request principal — the sandbox resolver, which needs the encrypted token to
+// build a per-organization Coder client during reconciliation. It scopes through
+// withOrg rather than withService: ao_provider_connections grants no
+// service-context RLS policy (only its tenant policy), so a withService read
+// would return zero rows; withOrg sets ao.org_id so the forced row-level
+// security still confines the read to the one organization without needing to
+// authorize a membership.
+func (s *Store) CoderConnectionForService(
+	ctx context.Context,
+	orgID string,
+) (encrypted, nonce, config []byte, connectionID string, err error) {
+	err = s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		scanErr := tx.QueryRow(
+			ctx,
+			`SELECT id, encrypted_secret, secret_nonce, config
+			FROM ao_provider_connections
+			WHERE org_id = $1 AND provider = 'coder' AND label = 'default'
+			  AND validation_state = 'valid'`,
+			orgID,
+		).Scan(&connectionID, &encrypted, &nonce, &config)
+		if errors.Is(scanErr, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return scanErr
+	})
+	return encrypted, nonce, config, connectionID, err
 }
 
 func (s *Store) ProviderConnectionSecret(

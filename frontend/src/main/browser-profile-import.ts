@@ -8,6 +8,7 @@ import {
 	readFile,
 	readdir,
 	realpath,
+	rename,
 	rmdir,
 	rm,
 	stat,
@@ -24,6 +25,7 @@ import {
 	BROWSER_IMPORT_MAX_SOURCE_PROFILES,
 	type BrowserImportCookieSupportReason,
 	type BrowserImportDiscovery,
+	type BrowserImportDiscoveryRequest,
 	type BrowserImportProgress,
 	type BrowserImportRequest,
 	type BrowserImportResult,
@@ -79,6 +81,11 @@ type InternalSource = {
 	descriptor: BrowserDescriptor;
 	root: string;
 	profiles: InternalSourceProfile[];
+};
+
+type InternalDiscoveryOptions = {
+	sourceId?: string;
+	includeProtectedSource?: boolean;
 };
 
 type ImportedCookie = CookiesSetDetails & {
@@ -302,6 +309,10 @@ function safariAccessError(): Error {
 }
 
 async function readSmallJSON(file: string, maxBytes: number): Promise<unknown> {
+	return JSON.parse(await readSmallText(file, maxBytes));
+}
+
+async function readSmallText(file: string, maxBytes: number): Promise<string> {
 	const metadata = await lstat(file);
 	if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > maxBytes) {
 		throw new Error("Browser metadata exceeds the size limit.");
@@ -311,7 +322,15 @@ async function readSmallJSON(file: string, maxBytes: number): Promise<unknown> {
 	try {
 		const opened = await handle.stat();
 		if (!opened.isFile() || opened.size > maxBytes) throw new Error("Browser metadata exceeds the size limit.");
-		return JSON.parse(await handle.readFile("utf8"));
+		const bytes = Buffer.alloc(maxBytes + 1);
+		let length = 0;
+		while (length < bytes.length) {
+			const { bytesRead } = await handle.read(bytes, length, bytes.length - length, null);
+			if (bytesRead === 0) break;
+			length += bytesRead;
+		}
+		if (length > maxBytes) throw new Error("Browser metadata exceeds the size limit.");
+		return bytes.subarray(0, length).toString("utf8");
 	} finally {
 		await handle.close().catch(() => undefined);
 	}
@@ -357,19 +376,67 @@ async function discoverChromiumProfiles(descriptor: BrowserDescriptor, root: str
 }
 
 async function discoverFirefoxProfiles(descriptor: BrowserDescriptor, root: string): Promise<InternalSourceProfile[]> {
+	const registered = new Map<string, { name: string; default: boolean }>();
+	const installDefaults = new Set<string>();
+	try {
+		const text = await readSmallText(path.join(root, "profiles.ini"), LOCAL_STATE_MAX_BYTES);
+		const sections: Array<{ section: string; values: Map<string, string> }> = [];
+		let current: typeof sections[number] | undefined;
+		for (const raw of text.split(/\r?\n/)) {
+			const line = raw.trim();
+			if (!line || line.startsWith(";") || line.startsWith("#")) continue;
+			if (line.startsWith("[")) {
+				current = /^\[[^\[\]]+\]$/.test(line) ? { section: line.slice(1, -1), values: new Map() } : undefined;
+				if (current) sections.push(current);
+				continue;
+			}
+			const equals = line.indexOf("=");
+			if (current && equals > 0) current.values.set(line.slice(0, equals).trim(), line.slice(equals + 1).trim());
+		}
+		for (const { section, values } of sections) {
+			if (/^Install[0-9a-f]+$/i.test(section)) {
+				const directory = values.get("Default");
+				if (!directory) continue;
+				const candidate = path.resolve(root, directory);
+				const profileRoot = await existingRealDirectory(candidate);
+				if (profileRoot && contained(root, profileRoot)) installDefaults.add(profileRoot);
+				continue;
+			}
+			if (!/^Profile\d+$/.test(section)) continue;
+			const name = values.get("Name");
+			const directory = values.get("Path");
+			const relative = values.get("IsRelative");
+			if (!name || !directory || !["0", "1"].includes(relative ?? "")) continue;
+			if (path.isAbsolute(directory) !== (relative === "0")) continue;
+			const candidate = path.resolve(root, directory);
+			const profileRoot = await existingRealDirectory(candidate);
+			if (!profileRoot || !contained(root, profileRoot)) continue;
+			registered.set(profileRoot, { name, default: values.get("Default") === "1" });
+		}
+	} catch {
+		registered.clear();
+		installDefaults.clear();
+	}
 	const profileParent = (await existingRealDirectory(path.join(root, "Profiles"))) ?? root;
-	const entries = await readdir(profileParent, { withFileTypes: true }).catch(() => []);
+	const entries = contained(root, profileParent) ? await readdir(profileParent, { withFileTypes: true }).catch(() => []) : [];
+	const directories = new Set([
+		...registered.keys(),
+		...entries.filter((entry) => entry.isDirectory()).map((entry) => path.join(profileParent, entry.name)),
+	]);
 	const profiles: InternalSourceProfile[] = [];
-	for (const entry of entries) {
-		if (!entry.isDirectory()) continue;
-		const profileRoot = await existingRealDirectory(path.join(profileParent, entry.name));
+	for (const directory of directories) {
+		const profileRoot = await existingRealDirectory(directory);
 		if (!profileRoot || !contained(root, profileRoot) || !(await hasImportableDatabase(profileRoot, "firefox"))) continue;
-		const dot = entry.name.indexOf(".");
-		const suffix = dot >= 0 ? entry.name.slice(dot + 1) : entry.name;
+		const basename = path.basename(profileRoot);
+		const dot = basename.indexOf(".");
+		const suffix = dot >= 0 ? basename.slice(dot + 1) : basename;
+		const metadata = registered.get(profileRoot);
 		profiles.push({
 			id: opaqueSourceId(`${descriptor.id}:profile`, profileRoot),
-			name: suffix || entry.name,
-			default: /default|release/i.test(suffix),
+			name: metadata?.name ?? (suffix || basename),
+			default: installDefaults.size > 0
+				? installDefaults.has(profileRoot)
+				: metadata?.default ?? /default|release/i.test(suffix),
 			root: profileRoot,
 		});
 	}
@@ -541,18 +608,47 @@ export class BrowserProfileImportService {
 		return path.join(this.stagingBase(), this.stagingInstanceId);
 	}
 
-	async discover(): Promise<BrowserImportDiscovery> {
+	async discover(request: BrowserImportDiscoveryRequest = {}): Promise<BrowserImportDiscovery> {
 		const warnings: NonNullable<BrowserImportDiscovery["warnings"]> = [];
-		const sources = await this.discoverInternal(warnings);
+		const sourceId = typeof request.sourceId === "string" && SOURCE_ID_PATTERN.test(request.sourceId)
+			? request.sourceId
+			: undefined;
+		const sources = await this.discoverInternal(warnings, {
+			...(sourceId ? { sourceId, includeProtectedSource: true } : {}),
+		});
 		return { sources: sources.map((source) => source.public), ...(warnings.length ? { warnings } : {}) };
 	}
 
-	private async discoverInternal(warnings: NonNullable<BrowserImportDiscovery["warnings"]> = []): Promise<InternalSource[]> {
+	private async discoverInternal(
+		warnings: NonNullable<BrowserImportDiscovery["warnings"]> = [],
+		options: InternalDiscoveryOptions = {},
+	): Promise<InternalSource[]> {
 		const sources: InternalSource[] = [];
 		for (const descriptor of DESCRIPTORS) {
 			for (const candidate of descriptor.roots(this.context)) {
 				const root = await existingRealDirectory(candidate);
 				if (!root) continue;
+				const publicSourceId = opaqueSourceId(`${descriptor.id}:source`, root);
+				if (options.sourceId && publicSourceId !== options.sourceId) continue;
+				const capability = cookieCapability(descriptor.family, this.context.platform);
+				if (descriptor.family === "safari" && !options.includeProtectedSource) {
+					sources.push({
+						descriptor,
+						root,
+						profiles: [],
+						public: {
+							id: publicSourceId,
+							name: descriptor.name,
+							family: descriptor.family,
+							profiles: [],
+							profilesDeferred: true,
+							cookieSupport: capability.support,
+							cookieSupportReason: capability.reason,
+							historySupport: true,
+						},
+					});
+					break;
+				}
 				let profiles: InternalSourceProfile[];
 				try {
 					profiles = descriptor.family === "chromium"
@@ -566,13 +662,12 @@ export class BrowserProfileImportService {
 					continue;
 				}
 				if (profiles.length === 0) continue;
-				const capability = cookieCapability(descriptor.family, this.context.platform);
 				sources.push({
 					descriptor,
 					root,
 					profiles,
 					public: {
-						id: opaqueSourceId(`${descriptor.id}:source`, root),
+						id: publicSourceId,
 						name: descriptor.name,
 						family: descriptor.family,
 						profiles: profiles.map(({ id, name, default: isDefault }) => ({ id, name, default: isDefault })),
@@ -616,7 +711,12 @@ export class BrowserProfileImportService {
 		let sourceRoots: string[] = [];
 		try {
 			throwIfImportAborted(signal);
-			const sources = await this.discoverInternal();
+			const sourceId = isRecord(rawRequest) && typeof rawRequest.sourceId === "string" && SOURCE_ID_PATTERN.test(rawRequest.sourceId)
+				? rawRequest.sourceId
+				: undefined;
+			const sources = await this.discoverInternal(undefined, {
+				...(sourceId ? { sourceId, includeProtectedSource: true } : {}),
+			});
 			throwIfImportAborted(signal);
 			sourceRoots = sources.map((source) => source.root);
 			const request = validateRequest(rawRequest, sources, this.options.profileStore.profiles);
@@ -825,7 +925,7 @@ async function readProfileData(
 			const outcome = source.descriptor.family === "safari"
 				? readSafariCookies(await readFile(await snapshotFile(cookieDatabase, profile.root, staging, budget)), now)
 				: source.descriptor.family === "chromium"
-					? readChromiumCookies(await snapshotSQLite(cookieDatabase, profile.root, staging, budget), decryptor, now)
+					? readChromiumCookies(await snapshotSQLite(cookieDatabase, profile.root, staging, budget, source.public.name), decryptor, now)
 					: readFirefoxCookies(await snapshotSQLite(cookieDatabase, profile.root, staging, budget), now);
 			if (!outcome) {
 				warnings.push({ code: "cookie-database-missing" });
@@ -843,7 +943,13 @@ async function readProfileData(
 		if (!historyDatabase) {
 			warnings.push({ code: "history-database-missing" });
 		} else {
-			const snapshot = await snapshotSQLite(historyDatabase, profile.root, staging, budget);
+			const snapshot = await snapshotSQLite(
+				historyDatabase,
+				profile.root,
+				staging,
+				budget,
+				source.descriptor.family === "chromium" ? source.public.name : undefined,
+			);
 			const outcome = source.descriptor.family === "chromium"
 				? readChromiumHistory(snapshot)
 				: source.descriptor.family === "firefox"
@@ -909,6 +1015,7 @@ async function snapshotSQLite(
 	profileRoot: string,
 	staging: string,
 	budget: SourceBudget,
+	browserName?: string,
 ): Promise<string> {
 	const destination = path.join(staging, `${randomUUID()}-${path.basename(database)}`);
 	const canonical = await preflightContainedFile(database, profileRoot, SOURCE_FILE_MAX_BYTES, budget);
@@ -920,26 +1027,55 @@ async function snapshotSQLite(
 		}
 	}
 	const source = new Database(canonical, { readonly: true, fileMustExist: true, timeout: 5_000 });
+	const temporarySnapshots: string[] = [];
 	try {
 		source.pragma("query_only = ON");
-		await source.backup(destination);
-		const output = await stat(destination).catch((error) => {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-				throw new Error("AO's temporary browser data snapshot disappeared before it could be read. Restart AO and retry the import.");
+		for (let attempt = 0; attempt < 2; attempt += 1) {
+			await mkdir(staging, { recursive: true, mode: 0o700 });
+			const temporary = path.join(staging, `${randomUUID()}-${path.basename(database)}.tmp`);
+			temporarySnapshots.push(temporary);
+			try {
+				await source.backup(temporary);
+			} catch (error) {
+				await rm(temporary, { force: true }).catch(() => undefined);
+				if (attempt === 0) continue;
+				if (browserName) throw temporarySnapshotError(browserName);
+				throw error;
 			}
-			throw error;
-		});
-		if (!output.isFile() || output.size > SOURCE_FILE_MAX_BYTES + SOURCE_SIDECAR_MAX_BYTES) {
-			throw new Error("Browser source database exceeds the snapshot size limit.");
+			const output = await stat(temporary).catch((error) => {
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+				throw error;
+			});
+			if (!output) {
+				await rm(temporary, { force: true }).catch(() => undefined);
+				continue;
+			}
+			if (!output.isFile() || output.size > SOURCE_FILE_MAX_BYTES + SOURCE_SIDECAR_MAX_BYTES) {
+				throw new Error("Browser source database exceeds the snapshot size limit.");
+			}
+			await chmod(temporary, 0o600);
+			await rename(temporary, destination);
+			return destination;
 		}
-		await chmod(destination, 0o600);
-		return destination;
+		if (browserName) throw temporarySnapshotError(browserName);
+		throw new Error("AO's temporary browser data snapshot disappeared before it could be read. Restart AO and retry the import.");
 	} catch (error) {
 		await rm(destination, { force: true }).catch(() => undefined);
 		throw error;
 	} finally {
+		for (const temporary of temporarySnapshots) {
+			await rm(temporary, { force: true }).catch(() => undefined);
+		}
 		source.close();
 	}
+}
+
+function temporarySnapshotError(browserName: string): Error {
+	return new Error(
+		`AO couldn't create a temporary copy of ${browserName}'s profile database. `
+		+ `Fully close ${browserName}, including background processes, then retry the import. `
+		+ "If this keeps happening, restart AO and try again.",
+	);
 }
 
 async function preflightContainedFile(
@@ -1186,7 +1322,9 @@ function normalizeCookieRows(
 				url,
 				name,
 				value,
-				domain,
+				// Passing domain turns a host-only cookie into a domain cookie.
+				// Electron also rejects __Host- cookies when domain is set.
+				...(domain.startsWith(".") ? { domain } : {}),
 				path: cookiePath,
 				secure,
 				httpOnly: row.httpOnly === true,

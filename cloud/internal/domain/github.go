@@ -59,6 +59,29 @@ type GitHubInstallation struct {
 	InstalledByUserID    string
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
+	// AccessScope is GitHubAccessScopeInstallation (the installation's whole
+	// repository selection) or GitHubAccessScopeUser (only what ScopeUserID can
+	// access on GitHub within the installation).
+	AccessScope string
+	ScopeUserID string
+}
+
+// GitHub installation access scopes; see GitHubInstallation.AccessScope.
+const (
+	GitHubAccessScopeInstallation = "installation"
+	GitHubAccessScopeUser         = "user"
+)
+
+// UserScoped reports whether the connection covers only one user's access.
+func (i GitHubInstallation) UserScoped() bool { return i.AccessScope == GitHubAccessScopeUser }
+
+// GitHubInstallationRoute maps a GitHub App installation to one AO
+// organization's installation record. A single github_installation_id may have
+// several routes — one per organization that has connected the installation —
+// so a webhook delivery fans out to every connected organization.
+type GitHubInstallationRoute struct {
+	OrgID          string
+	InstallationID string
 }
 
 type GitHubInstallAttempt struct {
@@ -103,6 +126,11 @@ type GitHubCheckoutContext struct {
 	FullName             string
 	CloneURL             string
 	DefaultBranch        string
+	// AccessScope and ScopeUserID come from the organization's installation
+	// connection. A user-scoped connection's grants are re-checked against
+	// ScopeUserID's GitHub access before any token is minted.
+	AccessScope string
+	ScopeUserID string
 }
 
 type GitHubRepositoryCapability struct {
@@ -166,6 +194,14 @@ type GitHubWebhookDelivery struct {
 	Action               string
 	GitHubInstallationID int64
 	GitHubRepositoryID   int64
+	PullRequestNumber    int
 	Payload              []byte
 	AttemptCount         int
+}
+
+// WorkerGitRef is a branch head observed in one worker's checked-out repo.
+// Verified PR webhooks use it to associate custom branches with that session.
+type WorkerGitRef struct {
+	Branch string `json:"branch"`
+	SHA    string `json:"sha"`
 }

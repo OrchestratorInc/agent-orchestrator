@@ -23,11 +23,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+
+	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
@@ -51,6 +54,9 @@ func New() *Plugin {
 
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
+var _ ports.AgentBinaryResolutionInvalidator = (*Plugin)(nil)
+var _ ports.AgentInterfaceHandoff = (*Plugin)(nil)
+var _ ports.AgentInterfaceHandoffHistoryProbe = (*Plugin)(nil)
 
 // GetConfigSpec reports the per-project agent config keys Qwen Code
 // understands.
@@ -97,6 +103,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	cmd = []string{binary}
 	appendApprovalFlags(&cmd, cfg.Permissions)
 	appendModelFlag(&cmd, cfg.Config)
+	appendToolRestrictionFlags(&cmd, cfg.AllowedTools, cfg.DisallowedTools)
 
 	systemPrompt, err := launchSystemPromptText(cfg)
 	if err != nil {
@@ -151,6 +158,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	cmd = append(cmd, binary)
 	appendApprovalFlags(&cmd, cfg.Permissions)
 	appendModelFlag(&cmd, cfg.Config)
+	appendToolRestrictionFlags(&cmd, cfg.AllowedTools, cfg.DisallowedTools)
 	systemPrompt, err := restoreSystemPromptText(cfg)
 	if err != nil {
 		return nil, false, err
@@ -160,6 +168,95 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	}
 	cmd = append(cmd, "--resume", agentSessionID)
 	return cmd, true, nil
+}
+
+// NativeConversationID bridges Qwen's terminal session id and ACP session id:
+// both surfaces share the chats store keyed by session UUID.
+func (p *Plugin) NativeConversationID(
+	ctx context.Context,
+	session ports.SessionRef,
+	currentMode domain.SessionMode,
+	providerConversationID string,
+) (string, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
+	if currentMode == domain.SessionModeChat {
+		id := strings.TrimSpace(providerConversationID)
+		return id, id != "", nil
+	}
+	id := strings.TrimSpace(session.Metadata[ports.MetadataKeyAgentSessionID])
+	return id, id != "", nil
+}
+
+// NativeConversationExists reports whether a Qwen session UUID has a
+// non-empty chats/<id>.jsonl transcript.
+func (p *Plugin) NativeConversationExists(
+	ctx context.Context,
+	_ ports.SessionRef,
+	nativeConversationID string,
+	env map[string]string,
+) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	id, valid := canonicalQwenSessionID(nativeConversationID)
+	if !valid {
+		return false, nil
+	}
+	qwenHome := strings.TrimSpace(env["QWEN_HOME"])
+	if qwenHome == "" {
+		qwenHome = strings.TrimSpace(os.Getenv("QWEN_HOME"))
+	}
+	if qwenHome == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return false, fmt.Errorf("qwen: resolve chats root: %w", err)
+		}
+		qwenHome = filepath.Join(home, ".qwen")
+	}
+
+	found := false
+	projectsDir := filepath.Join(qwenHome, "projects")
+	err := filepath.WalkDir(projectsDir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry.IsDir() || !qwenTranscriptNameMatches(entry.Name(), id) {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() && info.Size() > 0 {
+			found = true
+			return fs.SkipAll
+		}
+		return nil
+	})
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("qwen: inspect chats root %s: %w", projectsDir, err)
+	}
+	return found, nil
+}
+
+func canonicalQwenSessionID(value string) (string, bool) {
+	parsed, err := uuid.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return "", false
+	}
+	return parsed.String(), true
+}
+
+func qwenTranscriptNameMatches(name, nativeConversationID string) bool {
+	return name == nativeConversationID+".jsonl"
 }
 
 // Qwen Code's append-system-prompt flag accepts inline text only. The manager
@@ -232,6 +329,14 @@ func (p *Plugin) qwenBinary(ctx context.Context) (string, error) {
 	return binary, nil
 }
 
+// InvalidateBinaryResolution makes the next operation resolve Qwen again, so
+// a reinstall or upgrade that relocates the binary is picked up.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
+}
+
 // appendApprovalFlags maps AO's four permission modes onto Qwen Code's
 // `--approval-mode` choices (plan|default|auto-edit|auto|yolo). Default emits no
 // flag so Qwen resolves its starting mode from the user's own config.
@@ -253,6 +358,45 @@ func appendModelFlag(cmd *[]string, cfg ports.AgentConfig) {
 	if model := strings.TrimSpace(cfg.Model); model != "" {
 		*cmd = append(*cmd, "--model", model)
 	}
+}
+
+// appendToolRestrictionFlags maps AO's tool allow/deny lists onto Qwen Code's
+// repeatable restriction options.
+//
+// AllowedTools maps to `--core-tools`, Qwen's allowlist over its core tool set
+// (file, shell, search and related built-ins): a core tool the list omits is
+// disabled, not merely left unmentioned. It deliberately does not map to
+// `--allowed-tools`, which is pure auto-approval and leaves every other tool
+// registered, so an allowlist forwarded there would keep write_file, edit and
+// run_shell_command callable in a session meant to be read-only.
+//
+// DisallowedTools maps to `--exclude-tools`, which drops the named tool from the
+// registry. Qwen deliberately lets tools outside the core set (MCP and skill
+// tools, and synthetic built-ins such as task_stop, send_message, tool_search
+// and tool_call) bypass `--core-tools`, so a denylist is the only restriction
+// that still reaches them; callers that need those blocked must name them.
+//
+// Both options are repeatable in Qwen Code, so each entry becomes its own flag
+// and blank entries are dropped. Entries are still trimmed, because Qwen
+// matches tool names exactly.
+func appendToolRestrictionFlags(cmd *[]string, allowed, disallowed []string) {
+	for _, tool := range allowed {
+		if tool = strings.TrimSpace(tool); tool != "" {
+			*cmd = append(*cmd, "--core-tools", tool)
+		}
+	}
+	for _, tool := range disallowed {
+		if tool = strings.TrimSpace(tool); tool != "" {
+			*cmd = append(*cmd, "--exclude-tools", tool)
+		}
+	}
+}
+
+// AppendSessionFlags adds the TUI-equivalent approval and model flags so Chat
+// launches the same Qwen process the terminal adapter would, plus ACP.
+func AppendSessionFlags(cmd *[]string, permissions ports.PermissionMode, model string) {
+	appendApprovalFlags(cmd, permissions)
+	appendModelFlag(cmd, ports.AgentConfig{Model: model})
 }
 
 type qwenSubmitCommand struct {
