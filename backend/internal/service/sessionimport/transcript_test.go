@@ -2,6 +2,7 @@ package sessionimport
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -384,47 +385,8 @@ func TestScanDestinations(t *testing.T) {
 	}
 }
 
-func TestScanBudgetPrefersNewestPerProvider(t *testing.T) {
-	files, bytes := maxScanFiles, maxScanBytes
-	t.Cleanup(func() { maxScanFiles, maxScanBytes = files, bytes })
-	maxScanFiles = 2
-	claude, codex := t.TempDir(), t.TempDir()
-	now := time.Now()
-	for i, name := range []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"} {
-		at := now.AddDate(0, 0, -recentDays-1).Add(time.Duration(-i) * time.Hour)
-		path := writeClaude(t, claude, name, "", "claude "+name[:1], at)
-		if err := os.Chtimes(path, at, at); err != nil {
-			t.Fatal(err)
-		}
-		thread := "01a0000" + name[:1] + "-0000-7000-8000-000000000000"
-		rollout := writeFile(t, filepath.Join(codex, "sessions", "rollout-2026-10-01T00-00-0"+name[:1]+"-"+thread+".jsonl"), `{"type":"session_meta","payload":{"id":"`+thread+`","cwd":"","source":"cli"}}
-{"timestamp":"`+at.UTC().Format(time.RFC3339Nano)+`","type":"event_msg","payload":{"type":"user_message","message":"codex `+name[:1]+`"}}
-`)
-		if err := os.Chtimes(rollout, at, at); err != nil {
-			t.Fatal(err)
-		}
-	}
-	svc := New(&importStore{}, "")
-	svc.roots = map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex}
-	preview, err := svc.Scan(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var titles []string
-	for _, c := range preview.Candidates {
-		titles = append(titles, c.Title)
-	}
-	sort.Strings(titles)
-	if !preview.Truncated || strings.Join(titles, ",") != "claude 1,claude 2,codex 1,codex 2" {
-		t.Fatalf("truncated=%v titles=%q", preview.Truncated, titles)
-	}
-}
-
-// The budget never hides the window the dialog preselects.
-func TestScanBudgetKeepsRecentWindow(t *testing.T) {
-	files := maxScanFiles
-	t.Cleanup(func() { maxScanFiles = files })
-	maxScanFiles = 1
+// Every readable conversation is listed; only the recent window is preselected.
+func TestScanListsOlderConversations(t *testing.T) {
 	claude := t.TempDir()
 	now := time.Now()
 	for i, name := range []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"} {
@@ -445,10 +407,10 @@ func TestScanBudgetKeepsRecentWindow(t *testing.T) {
 	}
 	var titles []string
 	for _, c := range preview.Candidates {
-		titles = append(titles, c.Title)
+		titles = append(titles, fmt.Sprintf("%s %v", c.Title, c.Suggested))
 	}
 	sort.Strings(titles)
-	if !preview.Truncated || strings.Join(titles, ",") != "claude 1,claude 2" {
-		t.Fatalf("truncated=%v titles=%q", preview.Truncated, titles)
+	if strings.Join(titles, ",") != "claude 1 true,claude 2 true,claude 3 false" {
+		t.Fatalf("titles=%q", titles)
 	}
 }

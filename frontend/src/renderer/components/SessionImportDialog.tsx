@@ -5,8 +5,8 @@ import { Download, Loader2 } from "lucide-react";
 import { agentLabel } from "../lib/agent-options";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { useUiStore } from "../stores/ui-store";
 import { Button } from "./ui/button";
-import { Input } from "./ui/input";
 import {
 	Dialog,
 	DialogContent,
@@ -20,7 +20,7 @@ import type { components } from "../../api/schema";
 type Candidate = components["schemas"]["SessionImportCandidate"];
 type ImportResult = components["schemas"]["SessionImportResult"];
 
-/** Both project selection and individual search use the daemon's validated preview. */
+/** Project selection filters the daemon's validated preview. */
 export function SessionImportDialog({
 	projects,
 	className,
@@ -33,12 +33,12 @@ export function SessionImportDialog({
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const [project, setProject] = useState("all");
-	const [search, setSearch] = useState("");
 	const [selected, setSelected] = useState(new Set<string>());
 	const [results, setResults] = useState<ImportResult[]>([]);
 	const [importing, setImporting] = useState(false);
 	const [error, setError] = useState<string>();
 	const queryClient = useQueryClient();
+	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const preview = useQuery({
 		queryKey: ["session-import-preview"],
 		enabled: open,
@@ -70,15 +70,10 @@ export function SessionImportDialog({
 		() =>
 			candidates.filter(
 				(c) =>
-					(project === "all" ||
-						(project === "standalone"
-							? !c.projectId
-							: c.projectId === project)) &&
-					`${c.title} ${c.harness} ${agentLabel(c.harness)}`
-						.toLowerCase()
-						.includes(search.toLowerCase()),
+					project === "all" ||
+					(project === "standalone" ? !c.projectId : c.projectId === project),
 			),
-		[candidates, project, search],
+		[candidates, project],
 	);
 	const selectedVisible = visible.filter(
 		(c) =>
@@ -118,6 +113,11 @@ export function SessionImportDialog({
 				),
 			);
 			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+			// Close on success so the imported chats show in the sidebar; failures stay listed here.
+			if (!response.data.results.some((r) => r.status === "failed")) {
+				setOpen(false);
+				showGlobalToast(summarize(response.data.results));
+			}
 		} catch (err) {
 			setError(
 				err instanceof Error ? err.message : t("sessionImport.failed"),
@@ -126,12 +126,16 @@ export function SessionImportDialog({
 			setImporting(false);
 		}
 	};
-	const count = (status: ImportResult["status"]) => results.filter((r) => r.status === status).length;
-	const summary = [
-		[count("created"), "sessionImport.result"],
-		[count("already_imported"), "sessionImport.resultExisting"],
-		[count("failed"), "sessionImport.resultFailed"],
-	] as const;
+	const summarize = (items: ImportResult[]) =>
+		([
+			["created", "sessionImport.result"],
+			["already_imported", "sessionImport.resultExisting"],
+			["failed", "sessionImport.resultFailed"],
+		] as const)
+			.map(([status, key]) => [items.filter((r) => r.status === status).length, key] as const)
+			.filter(([n]) => n > 0)
+			.map(([n, key]) => t(key, { count: n }))
+			.join(" ");
 	return (
 		<Dialog
 			open={open}
@@ -171,15 +175,6 @@ export function SessionImportDialog({
 							))}
 						</select>
 					</label>
-					<label className="flex min-w-48 flex-1 flex-col gap-1 text-xs">
-						{t("sessionImport.searchLabel")}
-						<Input
-							value={search}
-							onChange={(e) => setSearch(e.target.value)}
-							placeholder={t("sessionImport.searchPlaceholder")}
-							disabled={importing}
-						/>
-					</label>
 				</div>
 				<p className="text-xs text-muted-foreground">
 					{t("sessionImport.selectionHelp")}
@@ -193,11 +188,6 @@ export function SessionImportDialog({
 				{preview.error || error ? (
 					<p role="alert" className="text-sm text-destructive">
 						{error ?? preview.error?.message}
-					</p>
-				) : null}
-				{preview.data?.truncated ? (
-					<p role="status" className="text-xs text-warning">
-						{t("sessionImport.truncated")}
 					</p>
 				) : null}
 				<div className="min-h-0 overflow-auto rounded-md border border-border">
@@ -241,7 +231,7 @@ export function SessionImportDialog({
 				</div>
 				{results.length ? (
 					<p role="status" className="text-sm">
-						{summary.filter(([n]) => n > 0).map(([n, key]) => t(key, { count: n })).join(" ")}
+						{summarize(results)}
 					</p>
 				) : null}
 				<div className="flex items-center justify-between gap-3">

@@ -1,17 +1,19 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
+import { useUiStore } from "../stores/ui-store";
 import { SessionImportDialog } from "./SessionImportDialog";
 const api = vi.hoisted(() => ({ GET: vi.fn(), POST: vi.fn() }));
 vi.mock("../lib/api-client", () => ({
 	apiClient: api,
 	apiErrorMessage: () => "Import failed",
 }));
+const toast = vi.fn();
 beforeEach(() => {
 	vi.clearAllMocks();
+	useUiStore.setState({ showGlobalToast: toast });
 	api.GET.mockResolvedValue({
 		data: {
-			truncated: false,
 			candidates: [
 				{
 					id: "recent",
@@ -73,10 +75,9 @@ it("preselects recent histories, lets older standalone work be selected and impo
 			body: { ids: ["older"] },
 		}),
 	);
-	expect(await screen.findByText("Already in AO")).toBeInTheDocument();
-	expect(screen.getByText("1 conversation imported.")).toBeInTheDocument();
-	expect(screen.queryByText(/could not be imported/)).not.toBeInTheDocument();
-	expect(screen.getByText(/Standalone · Codex ·/)).toBeInTheDocument();
+	// A clean import closes the dialog; the chats appear in the sidebar.
+	await waitFor(() => expect(toast).toHaveBeenCalledWith("1 conversation imported."));
+	expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 	expect(api.GET).toHaveBeenCalledTimes(1);
 });
 
@@ -99,4 +100,6 @@ it("reports new, existing and failed imports separately", async () => {
 	fireEvent.click(screen.getByRole("button", { name: "Import 2 conversations" }));
 	expect(await screen.findByText("1 already in AO. 1 could not be imported.")).toBeInTheDocument();
 	expect(screen.queryByText(/conversations? imported\./)).not.toBeInTheDocument();
+	expect(screen.getByRole("dialog")).toBeInTheDocument();
+	expect(toast).not.toHaveBeenCalled();
 });

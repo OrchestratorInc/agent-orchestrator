@@ -21,14 +21,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// Per-provider discovery budget, newest first, so one large history cannot hide
-// another. It never cuts the recent window the dialog preselects.
-var (
-	maxScanFiles       = 2000
-	maxScanBytes int64 = 1 << 30
-)
-
-// recentDays is the window that is always scanned and preselected.
+// recentDays is the window the dialog preselects.
 const recentDays = 30
 
 // Store keeps registration and the readable copy atomic. It never launches a controller.
@@ -56,7 +49,6 @@ type Candidate struct {
 // Preview is a bounded, explicit scan of this host, independent of normal board reads.
 type Preview struct {
 	Candidates []Candidate `json:"candidates"`
-	Truncated  bool        `json:"truncated"`
 }
 
 // Result is one selected conversation's outcome; successful neighbors survive a failed item.
@@ -410,17 +402,9 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 		if err != nil {
 			return Preview{}, err
 		}
-		var bytes int64
-		// ponytail: a recent window over the budget is read whole (measured 1.2 GiB in 42 s); add a persistent index if that grows.
+		// ponytail: every scan reads all histories (4 GiB took 27 s cold, under 1 s once
+		// cached by size and mtime). Add a persistent index if that first scan grows.
 		recent := time.Now().AddDate(0, 0, -recentDays)
-		for i, file := range files {
-			if file.modTime.Before(recent) && (i >= maxScanFiles || bytes+file.size > maxScanBytes) {
-				preview.Truncated = true
-				files = files[:i]
-				break
-			}
-			bytes += file.size
-		}
 		results := make([]parsed, len(files))
 		group, groupCtx := errgroup.WithContext(ctx)
 		group.SetLimit(max(1, runtime.GOMAXPROCS(0)/2))

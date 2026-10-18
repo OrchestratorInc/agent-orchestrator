@@ -16,6 +16,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
+	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 )
 
 func remainingRequestBudget(ctx context.Context) time.Duration {
@@ -293,5 +295,28 @@ func TestResumeAgentRouteUsesExtendedTimeout(t *testing.T) {
 	budget := <-svc.resumeBudget
 	if budget < 9*time.Minute || budget > 10*time.Minute {
 		t.Fatalf("resume-agent budget = %s, want about 10 minutes", budget)
+	}
+}
+
+type scanBudgetProbe struct{ budget time.Duration }
+
+func (p *scanBudgetProbe) Scan(ctx context.Context) (sessionimport.Preview, error) {
+	deadline, _ := ctx.Deadline()
+	p.budget = time.Until(deadline)
+	return sessionimport.Preview{}, nil
+}
+
+func (p *scanBudgetProbe) Import(context.Context, []string) ([]sessionimport.Result, error) {
+	return nil, nil
+}
+
+// An import scan reads every local history, so it gets the long budget.
+func TestImportScanUsesExtendedTimeout(t *testing.T) {
+	probe := &scanBudgetProbe{}
+	router := NewRouterWithControl(config.Config{RequestTimeout: 250 * time.Millisecond}, discardLogger(), nil, APIDeps{SessionImport: probe}, ControlDeps{})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/session-import", nil))
+	if response.Code != http.StatusOK || probe.budget < 9*time.Minute {
+		t.Fatalf("scan status = %d, budget = %s", response.Code, probe.budget)
 	}
 }
