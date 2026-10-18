@@ -155,6 +155,15 @@ func checkoutStartupFailure(err error) worker.WorkspaceStartupEvent {
 				". Fix the directory or the connection's working directory, then reopen this session.",
 		}
 	}
+	if errors.Is(err, worker.ErrSessionBranchSwitch) {
+		return worker.WorkspaceStartupEvent{
+			Status: worker.WorkspaceStartupFailed,
+			Code:   domain.WorkspaceStartupErrorCheckout,
+			Message: "AO couldn't put the repository on this session's branch, so the session did not start on a branch cut from somewhere else. " +
+				"Move or commit the local files git names below, then reopen this session to retry.",
+			Detail: activity.Excerpt(err.Error(), setupMessageOutputLimit),
+		}
+	}
 	return worker.WorkspaceStartupEvent{
 		Status:  worker.WorkspaceStartupFailed,
 		Code:    domain.WorkspaceStartupErrorCheckout,

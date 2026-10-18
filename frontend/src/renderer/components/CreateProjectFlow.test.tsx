@@ -106,6 +106,7 @@ const cloudMocks = vi.hoisted(() => ({
 	syncGitHubInstallation: vi.fn(),
 	listGitHubRepositories: vi.fn(),
 	createGitHubProject: vi.fn(),
+	createStandaloneProject: vi.fn(),
 	getCoderTemplateParameters: vi.fn(),
 	listProjects: vi.fn(),
 	signIn: vi.fn(),
@@ -162,6 +163,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 			syncGitHubInstallation: cloudMocks.syncGitHubInstallation,
 			listGitHubRepositories: cloudMocks.listGitHubRepositories,
 			createGitHubProject: cloudMocks.createGitHubProject,
+			createStandaloneProject: cloudMocks.createStandaloneProject,
 			getCoderTemplateParameters: cloudMocks.getCoderTemplateParameters,
 			evaluateCoderTemplateParameters: (orgId: string, templateId: string, _values: unknown, options: unknown) =>
 				cloudMocks.getCoderTemplateParameters(orgId, templateId, options),
@@ -395,6 +397,7 @@ beforeEach(() => {
 	cloudMocks.syncGitHubInstallation.mockReset().mockResolvedValue({ installation: {} });
 	cloudMocks.listGitHubRepositories.mockReset().mockResolvedValue({ items: [], page: { hasMore: false } });
 	cloudMocks.createGitHubProject.mockReset().mockResolvedValue({ project: { id: "cp-app" } });
+	cloudMocks.createStandaloneProject.mockReset().mockResolvedValue({ project: { id: "cp-standalone" } });
 	cloudMocks.getCoderTemplateParameters.mockReset().mockResolvedValue({ parameters: [] });
 	githubDaemonMocks.getGitHubStatus.mockReset().mockResolvedValue({ connected: false });
 	githubDaemonMocks.listGitHubRepos.mockReset().mockResolvedValue({ repos: [] });
@@ -2786,7 +2789,117 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(cloudMocks.createGitHubProject.mock.calls[0][1].config.coder).toEqual({ templateId: "tpl-devkit" });
 	});
 
-	it("does not offer additional coder session repositories", async () => {
+	it("adds additional repositories, on any sandbox, as config.repos", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.sessionStatus = "authenticated";
+		cloudMocks.listGitHubInstallations.mockResolvedValue({ installations: [{
+			id: "inst-1", githubInstallationId: "100", accountLogin: "acme", accountType: "Organization",
+			status: "active", repositorySelection: "all", syncStatus: "ready", createdAt: "", updatedAt: "",
+		}] });
+		const repository = (id: string, name: string) => ({
+			githubRepositoryId: id, name, fullName: `acme/${name}`, htmlUrl: `https://github.com/acme/${name}`,
+			defaultBranch: "main", visibility: "private", isPrivate: true, isArchived: false, access: "write", grantedAt: "",
+		});
+		cloudMocks.listGitHubRepositories.mockResolvedValue({
+			items: [repository("1", "alice"), repository("2", "11x"), repository("3", "voice-calling-ai")],
+			page: { hasMore: false },
+		});
+		cloudMocks.createGitHubProject.mockResolvedValue({ project: { id: "cp-multi" } });
+		const user = userEvent.setup();
+		render(<CreateProjectFlow embedded mode="choose" {...noop} />, { wrapper: CloudTestProviders });
+		await user.click(screen.getByRole("button", { name: "Clone to the cloud" }));
+		await user.click(await screen.findByRole("combobox", { name: "Select a repository" }));
+		await user.click(await screen.findByRole("option", { name: /acme\/alice/ }));
+		expect(screen.getByText("Additional repositories")).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Add a repository" }));
+		await user.click(screen.getByRole("combobox", { name: "Additional repository 1" }));
+		// The main repository is not offered again.
+		expect(screen.queryByRole("option", { name: /acme\/alice/ })).not.toBeInTheDocument();
+		await user.click(await screen.findByRole("option", { name: /acme\/11x/ }));
+		await user.click(screen.getByRole("button", { name: "Add a repository" }));
+		await user.click(screen.getByRole("combobox", { name: "Additional repository 2" }));
+		await user.click(await screen.findByRole("option", { name: /acme\/voice-calling-ai/ }));
+		// Each additional repository shows the folder it checks out into beside the main one.
+		expect(screen.getByText("../11x")).toBeInTheDocument();
+		expect(screen.getByText("../voice-calling-ai")).toBeInTheDocument();
+
+		await user.click(await screen.findByRole("button", { name: "Create" }));
+		await waitFor(() => expect(cloudMocks.createGitHubProject).toHaveBeenCalled());
+		expect(cloudMocks.createGitHubProject.mock.calls[0][1]).toEqual({
+			githubRepositoryId: "1",
+			displayName: "alice",
+			config: {
+				worker: { agent: "claude-code" },
+				orchestrator: { agent: "claude-code" },
+				repos: [{ url: "https://github.com/acme/11x" }, { url: "https://github.com/acme/voice-calling-ai" }],
+			},
+		});
+	});
+
+	it("swaps an additional repository with the main one", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.sessionStatus = "authenticated";
+		cloudMocks.listGitHubInstallations.mockResolvedValue({ installations: [{
+			id: "inst-1", githubInstallationId: "100", accountLogin: "acme", accountType: "Organization",
+			status: "active", repositorySelection: "all", syncStatus: "ready", createdAt: "", updatedAt: "",
+		}] });
+		const repository = (id: string, name: string) => ({
+			githubRepositoryId: id, name, fullName: `acme/${name}`, htmlUrl: `https://github.com/acme/${name}`,
+			defaultBranch: "main", visibility: "private", isPrivate: true, isArchived: false, access: "write", grantedAt: "",
+		});
+		cloudMocks.listGitHubRepositories.mockResolvedValue({ items: [repository("1", "alice"), repository("2", "11x")], page: { hasMore: false } });
+		const user = userEvent.setup();
+		render(<CreateProjectFlow embedded mode="choose" {...noop} />, { wrapper: CloudTestProviders });
+		await user.click(screen.getByRole("button", { name: "Clone to the cloud" }));
+		await user.click(await screen.findByRole("combobox", { name: "Select a repository" }));
+		await user.click(await screen.findByRole("option", { name: /acme\/alice/ }));
+		await user.click(screen.getByRole("button", { name: "Add a repository" }));
+		await user.click(screen.getByRole("combobox", { name: "Additional repository 1" }));
+		await user.click(await screen.findByRole("option", { name: /acme\/11x/ }));
+		await user.click(screen.getByRole("button", { name: "Make main" }));
+		await user.click(await screen.findByRole("button", { name: "Create" }));
+		await waitFor(() => expect(cloudMocks.createGitHubProject).toHaveBeenCalled());
+		const body = cloudMocks.createGitHubProject.mock.calls[0][1];
+		expect(body.githubRepositoryId).toBe("2");
+		expect(body.config.repos).toEqual([{ url: "https://github.com/acme/alice" }]);
+	});
+
+	it("creates a project without a repository, with no GitHub connection needed", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.sessionStatus = "authenticated";
+		cloudMocks.coderAvailable = true;
+		cloudMocks.coderDefault = true;
+		cloudMocks.providers = ["coder"];
+		cloudMocks.coderTemplates = [{ id: "tpl-1", name: "dev-kit", displayName: "Dev kit" }];
+		cloudMocks.createStandaloneProject.mockResolvedValue({ project: { id: "cp-standalone" } });
+		const user = userEvent.setup();
+		const openProject = vi.fn();
+		render(
+			<ShellProvider value={{ openProject } as unknown as ShellContextValue}>
+				<CreateProjectFlow embedded mode="choose" {...noop} />
+			</ShellProvider>,
+			{ wrapper: CloudTestProviders },
+		);
+		await user.click(screen.getByRole("button", { name: "Clone to the cloud" }));
+		await user.click(await screen.findByRole("button", { name: "Start without a repo" }));
+		expect(screen.queryByRole("button", { name: /^Connect repository/ })).not.toBeInTheDocument();
+		await user.type(screen.getByLabelText("Project name"), "Platform template");
+		await user.click(await screen.findByRole("combobox", { name: "Template" }));
+		await user.click(await screen.findByRole("option", { name: "Dev kit" }));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
+		await user.click(screen.getByRole("button", { name: "Create" }));
+		await waitFor(() => expect(cloudMocks.createStandaloneProject).toHaveBeenCalled());
+		const [orgId, body] = cloudMocks.createStandaloneProject.mock.calls[0];
+		expect(orgId).toBe("org-1");
+		expect(body.displayName).toBe("Platform template");
+		expect(body.config).toMatchObject({ worker: { agent: "claude-code" }, coder: { templateId: "tpl-1" } });
+		expect(body.config).not.toHaveProperty("repos");
+		expect(cloudMocks.createGitHubProject).not.toHaveBeenCalled();
+		await waitFor(() => expect(openProject).toHaveBeenCalledWith("cp-standalone"));
+	});
+
+	it("does not offer additional coder session repositories in the Coder dev-kit rows", async () => {
 		cloudMocks.cloudEnabled = true;
 		cloudMocks.sessionStatus = "authenticated";
 		cloudMocks.coderAvailable = true;
@@ -2808,8 +2921,9 @@ describe("CreateProjectFlow project import validation", () => {
 		await user.click(await screen.findByRole("option", { name: /acme\/app/ }));
 		// The template still applies, but additional session repositories are hidden for now.
 		expect(await screen.findByRole("combobox", { name: "Template" })).toBeInTheDocument();
+		// The old Coder-only extra-repository carousel stays hidden; additional
+		// repositories are a project setting on every sandbox now.
 		expect(screen.queryByRole("button", { name: "Add another repository" })).not.toBeInTheDocument();
-		expect(screen.queryByText("Additional repositories")).not.toBeInTheDocument();
 		expect(cloudMocks.startGitHubInstallation).not.toHaveBeenCalled();
 	});
 

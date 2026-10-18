@@ -6135,9 +6135,11 @@ html[data-window-translucent="true"] body {
 }
 
 /* Floating surfaces sit above the material: back to solid theme values.
- * `.z-overlay` covers custom floating menus built on the shared menu recipe. */
+ * `.z-overlay` covers custom floating menus; update notices also need solid
+ * fills so the decorative stack stays behind the front card. */
 html[data-window-translucent="true"] :is(
 	.z-overlay,
+	.harness-update-notice,
 	[data-radix-popper-content-wrapper],
 	[role="dialog"],
 	[role="alertdialog"],
@@ -6158,6 +6160,7 @@ html[data-window-translucent="true"] :is(
 html[data-window-translucent="true"] :is(
 	body,
 	.z-overlay,
+	.harness-update-notice,
 	[data-radix-popper-content-wrapper],
 	[role="dialog"],
 	[role="alertdialog"],

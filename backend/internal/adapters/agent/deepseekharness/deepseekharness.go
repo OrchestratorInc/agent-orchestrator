@@ -45,6 +45,8 @@ package deepseekharness
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 
@@ -114,9 +116,15 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 // therefore lets Harness mint its own id, which GetRestoreCommand resumes by
 // once AO has captured it.
 //
-// AO standing instructions have no DeepSeek Harness surface to attach to (no
-// system-prompt flag and no workspace hook file), so a system prompt file is
-// ignored here rather than passed as a task argument that would be read as work.
+// AO standing instructions have no native DeepSeek Harness surface (no
+// system-prompt flag and no workspace hook file), so they are prepended to the
+// headless task with a delimiter rather than passed as a separate argument.
+// The headless profile takes a single positional task, which is the only
+// channel that reaches the model on this path.
+// The resolved binary may be the npm `.cmd` batch shim on Windows, which
+// cmd.exe caps near 8,191 characters — shorter than a task that carries the
+// standing instructions. resolveWindowsShimArgv rewrites that argv to start the
+// shim's Node target directly so the longer CreateProcess limit applies.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -125,11 +133,15 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if err != nil {
 		return nil, err
 	}
-	task, err := headlessTask(cfg.Prompt)
+	standing, err := standingInstructions(cfg.SystemPrompt, cfg.SystemPromptFile)
 	if err != nil {
 		return nil, err
 	}
-	return []string{binary, "--profile", headlessProfile, task}, nil
+	task, err := headlessTask(cfg.Prompt, standing)
+	if err != nil {
+		return nil, err
+	}
+	return resolveWindowsShimArgv([]string{binary, "--profile", headlessProfile, task}, exec.LookPath), nil
 }
 
 // GetRestoreCommand rebuilds the argv that continues a persisted DeepSeek
@@ -154,11 +166,15 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, err
 	}
-	task, err := headlessTask(cfg.Prompt)
+	standing, err := standingInstructions(cfg.SystemPrompt, cfg.SystemPromptFile)
 	if err != nil {
 		return nil, false, err
 	}
-	return []string{binary, "--profile", headlessProfile, "--session-id", agentSessionID, task}, true, nil
+	task, err := headlessTask(cfg.Prompt, standing)
+	if err != nil {
+		return nil, false, err
+	}
+	return resolveWindowsShimArgv([]string{binary, "--profile", headlessProfile, "--session-id", agentSessionID, task}, exec.LookPath), true, nil
 }
 
 // SessionInfo surfaces the standard hook-derived session metadata. DeepSeek
@@ -172,20 +188,41 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	return info, ok, nil
 }
 
-// headlessTask validates the positional task argument. DeepSeek Harness reads
+// standingInstructions resolves AO's standing instructions: inline wins, else
+// the file is read. Empty means no standing context to attach.
+func standingInstructions(inline, file string) (string, error) {
+	if strings.TrimSpace(inline) != "" {
+		return strings.TrimSpace(inline), nil
+	}
+	if strings.TrimSpace(file) == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(file) //nolint:gosec // path is AO-owned launch config
+	if err != nil {
+		return "", fmt.Errorf("%s: read system prompt file: %w", adapterID, err)
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// headlessTask validates the positional task argument and prepends standing
+// instructions when present. DeepSeek Harness reads
 // the task from stdin both when the argument is absent and when it is exactly
 // "-", and a terminal launch never writes to that stdin, so both cases are
 // rejected with an actionable error instead of blocking until the supervisor
 // kills the session. AO's --prompt is optional, which makes the empty case the
 // reachable one.
-func headlessTask(prompt string) (string, error) {
+func headlessTask(prompt, standing string) (string, error) {
 	switch strings.TrimSpace(prompt) {
 	case "":
 		return "", fmt.Errorf("%s: a terminal session needs a task; DeepSeek Harness reads stdin when the %s profile is launched without one", adapterID, headlessProfile)
 	case stdioTaskLiteral:
 		return "", fmt.Errorf("%s: refusing to pass %q as a task; DeepSeek Harness would read stdin instead of running it", adapterID, stdioTaskLiteral)
 	}
-	return prompt, nil
+	if strings.TrimSpace(standing) == "" {
+		return prompt, nil
+	}
+	return "Standing instructions from Agent Orchestrator. Follow them for this whole session:\n<ao_standing_instructions>\n" +
+		strings.TrimSpace(standing) + "\n</ao_standing_instructions>\n\nTask:\n" + prompt, nil
 }
 
 var deepseekBinarySpec = binaryutil.BinarySpec{

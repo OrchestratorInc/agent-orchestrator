@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, copyFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,7 +10,7 @@ export function wakeHelperBuildOptions(arch, root = frontend) {
   return {
     output: path.join(root, "wake-helper", "ao-wake"),
     args: ["swiftc", "-target", `${cpu}-apple-macosx11.0`, "-O",
-      path.join(root, "native/wake-helper/WakePolicy.swift"), path.join(root, "native/wake-helper/main.swift")],
+      path.join(root, "native/wake-helper/WakePolicy.swift"), path.join(root, "native/wake-helper/WakeLowPower.swift"), path.join(root, "native/wake-helper/WakeEffects.swift"), path.join(root, "native/wake-helper/WakeLights.swift"), path.join(root, "native/wake-helper/WakeBrowserActions.swift"), path.join(root, "native/wake-helper/WakeNetworkActions.swift"), path.join(root, "native/wake-helper/main.swift")],
   };
 }
 export function buildWakeHelper({ arch = process.arch, platform = process.platform, run = spawnSync, ensureDirectory = mkdirSync } = {}) {
@@ -22,6 +22,7 @@ export function buildWakeHelper({ arch = process.arch, platform = process.platfo
   const result = run("xcrun", [...args, "-module-cache-path", cache, "-o", output], { stdio: "inherit" });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`macOS wake helper compilation failed (${result.status})`);
+  copyFileSync(path.join(frontend, "native/wake-helper/THIRD_PARTY_NOTICES.md"), path.join(path.dirname(output), "THIRD_PARTY_NOTICES.md"));
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);

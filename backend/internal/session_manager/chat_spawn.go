@@ -463,6 +463,7 @@ func (m *Manager) resumeChatController(
 	reconnectOnly bool,
 	controllerGeneration string,
 	historyPolicy domain.SessionInterfaceTransitionHistoryPolicy,
+	awakeTargets ...domain.AwakeAgentTarget,
 ) (RestoreResult, error) {
 	if m.chat == nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: %w: chat mode is not available in this build",
@@ -509,8 +510,17 @@ func (m *Manager) resumeChatController(
 		return RestoreResult{}, fmt.Errorf("%s %s: recover provider ownership: %w", operation, rec.ID, err)
 	}
 	freshIfMissing := !requireNativeHistory && !reconnectOnly && providerHandoff == nil && m.providerNeverPersisted(ctx, rec)
+	var awakeTarget *domain.AwakeAgentTarget
+	if len(awakeTargets) > 0 {
+		if len(awakeTargets) != 1 || !reconnectOnly || awakeTargets[0].SessionID != rec.ID || awakeTargets[0].Owner != rec.ControllerOwner() {
+			return RestoreResult{}, fmt.Errorf("awake reconnect ownership changed")
+		}
+		target := awakeTargets[0]
+		awakeTarget = &target
+	}
 	var completionErr error
 	_, err = m.chat.StartChat(ctx, ChatStart{
+		AwakeReconnectTarget:    awakeTarget,
 		ReconnectOnly:           reconnectOnly,
 		SessionID:               rec.ID,
 		ProjectID:               rec.ProjectID,

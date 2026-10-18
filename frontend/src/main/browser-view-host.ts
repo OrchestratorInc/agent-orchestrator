@@ -381,6 +381,19 @@ function canWriteBrowserClipboard(
   }
 }
 
+// Web pages may declare `app-region: drag` for their own Electron desktop
+// builds (Linear does). Chrome ignores it, but Electron turns those areas of
+// the embedded view into AO window-drag regions that never receive wheel,
+// click, or scrollbar input. A user-origin !important rule outranks the page's
+// author rules, inline styles included.
+const BROWSER_NO_DRAG_CSS = `
+	*,
+	*::before,
+	*::after {
+		app-region: no-drag !important;
+	}
+`;
+
 const browserScrollbarCSS = (zoomFactor: number): string => {
   const effectiveZoom =
     Number.isFinite(zoomFactor) && zoomFactor > 0 ? zoomFactor : 1;
@@ -1072,7 +1085,8 @@ export function createBrowserViewHost(
         .then(async () => {
           const previousKey = scrollbarStyleKey;
           scrollbarStyleKey = await view.webContents.insertCSS(
-            browserScrollbarCSS(view.webContents.getZoomFactor()),
+            BROWSER_NO_DRAG_CSS +
+              browserScrollbarCSS(view.webContents.getZoomFactor()),
             { cssOrigin: "user" },
           );
           if (previousKey)
