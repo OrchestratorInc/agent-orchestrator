@@ -4988,6 +4988,29 @@ func TestMarkTerminated_SkipsReapWhenProjectDisables(t *testing.T) {
 	}
 }
 
+// The termination hook runs on every terminal path, including when the
+// project opts out of container reaping, and again for an already
+// terminated session.
+func TestMarkTerminated_RunsTerminationHook(t *testing.T) {
+	cr := &fakeLifecycleContainerReaper{}
+	pl := &fakeProjectConfigLoader{projects: map[string]domain.ProjectRecord{
+		"mer": {ID: "mer", Config: domain.ProjectConfig{ContainerReap: domain.ContainerReapConfig{Disabled: true}}},
+	}}
+	m, st, _ := newManagerWithContainerReaper(cr, pl)
+	st.sessions["mer-1"] = working("mer-1")
+	var hooked []domain.SessionID
+	m.SetTerminationHook(func(_ context.Context, id domain.SessionID) { hooked = append(hooked, id) })
+
+	for range 2 {
+		if err := m.MarkTerminated(ctx, "mer-1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !reflect.DeepEqual(hooked, []domain.SessionID{"mer-1", "mer-1"}) {
+		t.Fatalf("hook calls = %v, want one per MarkTerminated", hooked)
+	}
+}
+
 // TestMarkTerminated_ProjectLoadErrorSkipsRatherThanReaps is the regression
 // for failing open: a project-config load error must skip reaping rather than
 // guess and reap anyway. This package's stated bias throughout is to spare on

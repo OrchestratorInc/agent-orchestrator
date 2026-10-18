@@ -2036,6 +2036,44 @@ func TestDiscoverClaudePathRejectsGlobMetadata(t *testing.T) {
 	}
 }
 
+// A sandboxed Claude session's CLAUDE_CONFIG_DIR is the project's sandbox
+// claude dir, so its transcripts must be discoverable and accepted there, but
+// nowhere else in the agent-writable sandbox state dir.
+func TestClaudeSandboxTranscriptRoots(t *testing.T) {
+	const nativeID = "11111111-1111-4111-8111-111111111111"
+	sandbox := t.TempDir()
+	transcript := filepath.Join(sandbox, "p", "claude", "projects", "-work", nativeID+".jsonl")
+	writeUsageFixture(t, transcript, "{}\n")
+	stray := filepath.Join(sandbox, "p", "sessions", "s1", nativeID+".jsonl")
+	writeUsageFixture(t, stray, "{}\n")
+	outside := t.TempDir()
+	writeUsageFixture(t, filepath.Join(outside, "-work", "other.jsonl"), "{}\n")
+	if err := os.MkdirAll(filepath.Join(sandbox, "q", "claude"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(sandbox, "q", "claude", "projects")); err != nil {
+		t.Fatal(err)
+	}
+	collector := NewCollector(collectorTestStore(t), SourceRoots{ClaudeProjects: t.TempDir(), ClaudeSandboxProjects: sandbox}, nil)
+	ctx := context.Background()
+
+	want, err := filepath.EvalSymlinks(transcript)
+	mustNoError(t, err)
+	got, err := collector.discoverPath(ctx, domain.HarnessClaudeCode, nativeID)
+	mustNoError(t, err)
+	if got != want {
+		t.Fatalf("discovered %q, want %q", got, want)
+	}
+	if _, _, _, err := collector.validateSourcePath(ctx, domain.HarnessClaudeCode, transcript); err != nil {
+		t.Fatalf("sandbox transcript rejected: %v", err)
+	}
+	for _, path := range []string{stray, filepath.Join(sandbox, "q", "claude", "projects", "-work", "other.jsonl")} {
+		if _, _, _, err := collector.validateSourcePath(ctx, domain.HarnessClaudeCode, path); err == nil {
+			t.Fatalf("accepted %q outside a sandbox transcript root", path)
+		}
+	}
+}
+
 func TestReconcileCodexRootAcceptsScalarSourceMetadata(t *testing.T) {
 	const nativeID = "11111111-1111-4111-8111-111111111111"
 	store := collectorTestStore(t)

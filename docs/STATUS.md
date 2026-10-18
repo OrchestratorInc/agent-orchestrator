@@ -59,6 +59,10 @@ surface (`npm run sqlc`, `npm run api`).
   a provider allowlist. Shared process tests cover the registered ACP identities;
   authenticated vendor and platform coverage is tracked separately in
   [the research/evidence note](research/persistent-acp-chat-hosts.md).
+- Opt-in Docker sandbox for Claude Code terminal sessions (`sandbox.mode`:
+  `per-agent` or `shared`): agents run in a container while AO, worktrees and
+  the UI stay on the host, and hooks reach the daemon through a host relay
+  (#6663).
 - Durable Chat conversations with project-scoped orchestrator continuity,
   session-scoped worker history, bounded history pages, transactional raw-event
   archive/projection, controller-generation fencing, turns, messages,

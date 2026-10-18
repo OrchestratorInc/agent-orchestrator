@@ -5765,6 +5765,7 @@ export interface components {
             postCreate?: string[];
             preRemove?: string[];
             reviewers?: components["schemas"]["DomainReviewerConfig"][];
+            sandbox?: components["schemas"]["SandboxConfig"];
             sessionPrefix?: string;
             symlinks?: string[];
             trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
@@ -6012,6 +6013,7 @@ export interface components {
         RoleOverride: {
             agent?: string;
             agentConfig?: components["schemas"]["AgentConfig"];
+            sandbox?: components["schemas"]["SandboxConfig"];
         };
         RollbackConversationResponse: {
             turnsDiscarded: number;
@@ -6021,6 +6023,13 @@ export interface components {
             killed?: boolean;
             ok: boolean;
             sessionId: string;
+        };
+        SandboxConfig: {
+            cpus?: string;
+            image?: string;
+            memory?: string;
+            mode?: string;
+            pidsLimit?: number;
         };
         SaveRenderArtifactRequest: {
             /** @description Name for the file. Characters a file system refuses are replaced. */

@@ -6,10 +6,10 @@ package hookutil
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 )
 
 // GitignoreSentinel marks a workspace .gitignore as AO-managed so
@@ -33,30 +33,53 @@ const CopilotAgentProfileSentinel = "<!-- managed by agent-orchestrator: copilot
 // A .gitignore at the same path that lacks the sentinel is left untouched and
 // the install proceeds: the worktree then simply stays dirty and teardown
 // preserves it, which is the safe degradation.
+//
+// The .gitignore itself is read and written through an os.Root opened on dir
+// (see EnsureGitignoreInRoot), so a planted symlink or FIFO there is never
+// followed. A dir that is a symlink to a directory inside its parent gets its
+// .gitignore through a root on the parent (see ensureGitignoreThroughLink); any
+// other symlink, or a dir that is not a directory, is skipped (nil):
+// the worktree then stays dirty, the same safe degradation. The Lstat-then-open
+// of dir is not atomic; callers that hold a workspace root should call
+// EnsureGitignoreInRoot directly.
 func EnsureWorkspaceGitignore(dir string, names ...string) error {
-	path := filepath.Join(dir, ".gitignore")
-	existing, err := os.ReadFile(path) //nolint:gosec // path built from caller-owned workspace dir
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("read %s: %w", path, err)
-	}
-	if err == nil && !strings.Contains(string(existing), GitignoreSentinel) {
+	fi, err := os.Lstat(dir)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return fmt.Errorf("create %s: %w", dir, err)
+		}
+	case err != nil:
+		return fmt.Errorf("stat %s: %w", dir, err)
+	case fi.Mode()&fs.ModeSymlink != 0:
+		return ensureGitignoreThroughLink(dir, names...)
+	case !fi.IsDir():
 		return nil
 	}
-	var b strings.Builder
-	b.WriteString(GitignoreSentinel)
-	b.WriteString("\n/.gitignore\n")
-	for _, name := range names {
-		b.WriteString("/")
-		b.WriteString(filepath.ToSlash(name))
-		b.WriteString("\n")
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", dir, err)
 	}
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("create %s: %w", dir, err)
+	defer func() { _ = root.Close() }()
+	return EnsureGitignoreInRoot(root, ".", names...)
+}
+
+// ensureGitignoreThroughLink handles a hook dir that is a symlink. One that
+// resolves to a directory inside its parent (a repository that commits
+// .cursor -> config/cursor) gets its .gitignore through a root opened on the
+// parent, which confines the write there. One that escapes, dangles or names
+// a file is skipped and never removed, the same safe degradation as before.
+func ensureGitignoreThroughLink(dir string, names ...string) error {
+	parent, err := os.OpenRoot(filepath.Dir(dir))
+	if err != nil {
+		return fmt.Errorf("open %s: %w", filepath.Dir(dir), err)
 	}
-	if err := AtomicWriteFile(path, []byte(b.String()), 0o600); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
+	defer func() { _ = parent.Close() }()
+	base := filepath.Base(dir)
+	if !isInRootDir(parent, base) {
+		return nil
 	}
-	return nil
+	return EnsureGitignoreInRoot(parent, base, names...)
 }
 
 // statRegularFile returns the FileInfo for path if it names an existing regular

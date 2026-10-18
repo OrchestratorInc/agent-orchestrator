@@ -1,0 +1,79 @@
+package ports
+
+import (
+	"context"
+	"errors"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+)
+
+// ErrSandboxUnavailable reports that Docker is missing or not running. A
+// sandboxed spawn fails instead of falling back to the host.
+var ErrSandboxUnavailable = errors.New("sandbox unavailable")
+
+// ErrSandboxMisconfigured reports a sandbox that Docker can run but AO cannot
+// use: the image lacks the harness, the workspace is outside the mounted root,
+// or the session shape is not supported yet.
+var ErrSandboxMisconfigured = errors.New("sandbox misconfigured")
+
+// SandboxRequest asks for a running container that can host one session.
+type SandboxRequest struct {
+	SessionID       domain.SessionID
+	ProjectID       domain.ProjectID
+	Config          domain.SandboxConfig
+	WorkspacePath   string
+	RequireBinaries []string
+	// RepoPath is the project's repository root; the trusted source for the
+	// git dir.
+	RepoPath string
+}
+
+// SandboxTarget is a ready container plus the host directories mounted into
+// it at identical paths.
+type SandboxTarget struct {
+	Container  string
+	Docker     string // absolute path of the docker CLI on the host
+	BinDir     string // relay `ao` and `ao-enter`
+	ProjectDir string // per-project sandbox state (home, harness config)
+	SessionDir string // per-session env file and relay spool
+	RelayDir   string
+	Mode       domain.SandboxMode // per-agent or shared
+	// GitUserName and GitUserEmail are the host's git identity for the
+	// repository, passed to git inside the container. Empty when unset.
+	GitUserName  string
+	GitUserEmail string
+}
+
+// Sandbox runs agent processes inside local containers (#6663).
+type Sandbox interface {
+	Ensure(ctx context.Context, req SandboxRequest) (SandboxTarget, error)
+	// Exec writes the session env file and returns the argv that runs argv
+	// inside the container. Secrets never appear in the returned argv.
+	Exec(target SandboxTarget, workspacePath string, env map[string]string, argv []string) ([]string, error)
+	// Release removes the project's shared containers. inUse is evaluated under
+	// the project lock; an error or true keeps the containers.
+	Release(ctx context.Context, project domain.ProjectID, inUse func(context.Context) (bool, error)) error
+	// Discard removes the container behind target when it is per-agent, for a
+	// launch that failed after Ensure. It is a no-op for shared containers
+	// (Release owns those) and returns nil when Docker is unavailable.
+	Discard(ctx context.Context, target SandboxTarget) error
+	// DiscardSession removes a terminated session's per-agent container
+	// without a target (kill has none). It never touches shared containers
+	// and returns nil when Docker is unavailable.
+	DiscardSession(ctx context.Context, project domain.ProjectID, session domain.SessionID) error
+	// HasSessionState reports whether the session has ever been sandboxed,
+	// whatever the project's sandbox config says now.
+	HasSessionState(project domain.ProjectID, session domain.SessionID) bool
+	// RemoveSessionEnv deletes a terminated session's env file, which holds
+	// its credentials. The next launch writes a fresh one.
+	RemoveSessionEnv(project domain.ProjectID, session domain.SessionID) error
+}
+
+// AgentSandboxSupport is implemented by harnesses that can run sandboxed.
+type AgentSandboxSupport interface {
+	// SandboxBinary is the harness executable name on the image's PATH.
+	SandboxBinary() string
+	// PrepareSandbox seeds harness state under projectDir and sets the env the
+	// harness needs inside the container (credentials, config dir).
+	PrepareSandbox(env map[string]string, dataDir, projectDir, workspacePath string) error
+}

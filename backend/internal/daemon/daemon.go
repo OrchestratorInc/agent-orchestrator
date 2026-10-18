@@ -574,7 +574,10 @@ func Run() error {
 
 	persistentHostsReconciled := make(chan struct{})
 	reviewerChatsRecovered := make(chan struct{})
-	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, lcStack.ArtifactVersions, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, policyCoordinator, tracker, codexOperationGate, log)
+	// The sandbox probes the port the listener actually binds (below), which
+	// may be an ephemeral fallback.
+	daemonPort := newDaemonPort(cfg.Port)
+	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, daemonPort.get, runtimeAdapter, store, lcStack.LCM, lcStack.ArtifactVersions, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, policyCoordinator, tracker, codexOperationGate, log)
 	if err != nil {
 		stop()
 		lcStack.Stop()
@@ -645,6 +648,7 @@ func Run() error {
 	sessMgr.SetTerminalInputGate(termMgr)
 	lifecycleMessenger.Bind(sessionLifecycleMessenger{sessMgr})
 	lcStack.LCM.SetCompletionTerminator(sessMgr)
+	lcStack.LCM.SetTerminationHook(sessMgr.CleanupTerminatedSandbox)
 	lcStack.LCM.SetSessionInputLease(sessMgr)
 	lcStack.LCM.SetSessionOperationGate(sessMgr)
 	termMgr.SetSessionInputLease(sessMgr)
@@ -1014,6 +1018,7 @@ func Run() error {
 		}
 		return err
 	}
+	daemonPort.bound(srv.Addr())
 	previewDone := preview.NewPoller(store, sessionSvc, "http://"+srv.Addr().String(), preview.PollerConfig{Logger: log}).Start(ctx)
 	_ = os.Unsetenv(browserruntime.RuntimeAddressEnv)
 	if ln, addr, err := browserruntime.Listen(cfg.RunFilePath); err != nil {
@@ -1272,6 +1277,7 @@ func installedAgentHarness(target systeminstall.Target) (string, bool) {
 func usagePipelineWatchRoots(roots usagesvc.SourceRoots) []string {
 	return []string{
 		roots.ClaudeProjects,
+		roots.ClaudeSandboxProjects,
 		roots.CodexSessions,
 		roots.CodexArchived,
 		roots.KimiHome,
