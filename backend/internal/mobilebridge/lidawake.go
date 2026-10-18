@@ -21,8 +21,12 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-const lidHelperVersion = 2
+const lidHelperVersion = 5
 const lidHelperLabel = "com.aoagents.mobile-wake"
+
+// IsLidHelperUpgrade reports whether err means the registered wake helper must be
+// upgraded before the native coordinator can be used.
+func IsLidHelperUpgrade(err error) bool { return errors.Is(err, errLidHelperUpgrade) }
 
 var errLidHelperUpgrade = errors.New("registered wake helper is incompatible; open the lid, turn closed-lid wake off in every AO instance and wait for recovery to finish, then run in Terminal: launchctl bootout gui/$(id -u)/com.aoagents.mobile-wake; turn closed-lid wake on again")
 
@@ -30,33 +34,55 @@ var errLidHelperUpgrade = errors.New("registered wake helper is incompatible; op
 // Default-data AO instances for this login share ~/.ao/data/wake. Custom data
 // roots cannot enable host control, which would break isolation.
 type LidAwake struct {
-	mu                    sync.Mutex
-	transitionMu          sync.Mutex
-	execute               func(context.Context, string, ...string) ([]byte, error)
-	binary, directory, id string
-	pid                   int
-	started, sequence     uint64
-	supported             bool
-	reason                string
-	cancel                context.CancelFunc
-	done                  chan struct{}
+	mu                     sync.Mutex
+	transitionMu           sync.Mutex
+	execute                func(context.Context, string, ...string) ([]byte, error)
+	binary, directory, id  string
+	pid                    int
+	started, sequence      uint64
+	supported              bool
+	reason                 string
+	cancel                 context.CancelFunc
+	done                   chan struct{}
+	deadline               time.Time
+	requestedLid           *bool
+	displayAwake           bool
+	stopBatteryPercent     int
+	muteAudio              bool
+	restoreDisplay         bool
+	darkenKeyboard         bool
+	pauseApps              []string
+	lowPowerBatteryPercent int
+	lowPowerOnSeriousHeat  bool
 }
 
 type lidLease struct {
-	ID        string  `json:"id"`
-	PID       int     `json:"pid"`
-	Started   uint64  `json:"started"`
-	Sequence  uint64  `json:"sequence"`
-	WrittenAt float64 `json:"writtenAt"`
+	LowPowerBatteryPercent int      `json:"lowPowerBatteryPercent,omitempty"`
+	LowPowerOnSeriousHeat  bool     `json:"lowPowerOnSeriousHeat,omitempty"`
+	ID                     string   `json:"id"`
+	PID                    int      `json:"pid"`
+	Started                uint64   `json:"started"`
+	Sequence               uint64   `json:"sequence"`
+	WrittenAt              float64  `json:"writtenAt"`
+	ExpiresAt              *float64 `json:"expiresAt,omitempty"`
+	LidClosed              *bool    `json:"lidClosed,omitempty"`
+	DisplayAwake           bool     `json:"displayAwake,omitempty"`
+	StopBatteryPercent     int      `json:"stopBatteryPercent,omitempty"`
+	MuteAudio              bool     `json:"muteAudio,omitempty"`
+	PauseApps              []string `json:"pauseApps,omitempty"`
+	RestoreDisplay         bool     `json:"restoreDisplay,omitempty"`
+	DarkenKeyboard         bool     `json:"darkenKeyboard,omitempty"`
 }
 
 type lidStatus struct {
-	Version   int               `json:"version"`
-	UpdatedAt float64           `json:"updatedAt"`
-	Active    bool              `json:"active"`
-	Reason    string            `json:"reason"`
-	Leases    []string          `json:"leases"`
-	Blocked   map[string]string `json:"blocked"`
+	Version        int               `json:"version"`
+	UpdatedAt      float64           `json:"updatedAt"`
+	Active         bool              `json:"active"`
+	Reason         string            `json:"reason"`
+	Leases         []string          `json:"leases"`
+	Blocked        map[string]string `json:"blocked"`
+	LidActive      *bool             `json:"lidActive,omitempty"`
+	EffectsBlocked map[string]string `json:"effectsBlocked,omitempty"`
 }
 
 // NewLidAwake probes without changing power state or registering a job. The
@@ -107,7 +133,11 @@ func NewLidAwake(pid int, binary, dataDir string) *LidAwake {
 }
 
 // Status separates a saved request from the coordinator's fresh acknowledgement.
-func (l *LidAwake) Status() (supported, active bool, reason string) {
+func (l *LidAwake) Status() (supported, active bool, reason string) { return l.status(false) }
+
+// WakeActive reports idle wake ownership independently of lid control.
+func (l *LidAwake) WakeActive() bool { _, active, _ := l.status(true); return active }
+func (l *LidAwake) status(wake bool) (supported, active bool, reason string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if !l.supported {
@@ -124,9 +154,22 @@ func (l *LidAwake) Status() (supported, active bool, reason string) {
 		return true, false, blocked
 	}
 	for _, id := range st.Leases {
-		if id == l.id {
+		if id != l.id {
+			continue
+		}
+		if effect := st.EffectsBlocked[l.id]; effect != "" {
+			st.Reason = effect
+		}
+		if wake {
 			return true, st.Active, st.Reason
 		}
+		if l.requestedLid != nil && !*l.requestedLid {
+			return true, false, st.Reason
+		}
+		if st.LidActive != nil {
+			return true, st.Active && *st.LidActive, st.Reason
+		}
+		return true, st.Active, st.Reason
 	}
 	if st.Reason != "" {
 		return true, false, st.Reason
@@ -205,7 +248,14 @@ func (l *LidAwake) Start(allowSetup bool) error {
 
 func (l *LidAwake) renew() error {
 	l.sequence++
-	lease := lidLease{l.id, l.pid, l.started, l.sequence, float64(time.Now().UnixMilli()) / 1000}
+	lease := lidLease{LowPowerBatteryPercent: l.lowPowerBatteryPercent, LowPowerOnSeriousHeat: l.lowPowerOnSeriousHeat, ID: l.id, PID: l.pid, Started: l.started, Sequence: l.sequence, WrittenAt: float64(time.Now().UnixMilli()) / 1000, LidClosed: l.requestedLid, DisplayAwake: l.displayAwake, StopBatteryPercent: l.stopBatteryPercent, MuteAudio: l.muteAudio, PauseApps: l.pauseApps, RestoreDisplay: l.restoreDisplay, DarkenKeyboard: l.darkenKeyboard}
+	if !l.deadline.IsZero() {
+		// The Go service retires finished owners on its own tick; give it
+		// that margin so the helper never drops the lease (and the lid
+		// override) before the surviving aggregate is renewed.
+		end := float64(l.deadline.Add(idleRenewalMargin).UnixMilli()) / 1000
+		lease.ExpiresAt = &end
+	}
 	data, err := json.Marshal(lease)
 	if err != nil {
 		return err
@@ -459,5 +509,116 @@ func (l *LidAwake) Setup() error {
 		return err
 	}
 	l.reason = ""
+	return nil
+}
+
+// SetDeadline writes a native deadline before renewing an active request. A
+// hung daemon cannot extend a finite closed-lid session beyond that deadline.
+func (l *LidAwake) SetDeadline(deadline time.Time) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.deadline.Equal(deadline) {
+		return nil
+	}
+	l.deadline = deadline
+	if l.cancel != nil {
+		return l.renew()
+	}
+	return nil
+}
+
+// ConfigurePolicy is used by desktop wake leases; legacy mobile lid leases
+// omit lidClosed and retain their explicit closed-lid meaning.
+func (l *LidAwake) ConfigurePolicy(lid, display bool) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.requestedLid != nil && *l.requestedLid == lid && l.displayAwake == display {
+		return nil
+	}
+	l.requestedLid = &lid
+	l.displayAwake = display
+	if l.cancel != nil {
+		return l.renew()
+	}
+	return nil
+}
+
+// SetProtection sets the minimum battery level for native policy.
+func (l *LidAwake) SetProtection(percent int) error {
+	if percent < 10 || percent > 90 {
+		return errors.New("battery safety threshold must be 10–90")
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.stopBatteryPercent == percent {
+		return nil
+	}
+	l.stopBatteryPercent = percent
+	if l.cancel != nil {
+		return l.renew()
+	}
+	return nil
+}
+
+// ConfigureEffects sets optional journaled native effects.
+func (l *LidAwake) ConfigureEffects(mute bool, apps []string, restoreDisplay, darkenKeyboard bool) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.muteAudio == mute && l.restoreDisplay == restoreDisplay && l.darkenKeyboard == darkenKeyboard && strings.Join(l.pauseApps, "\x00") == strings.Join(apps, "\x00") {
+		return nil
+	}
+	l.muteAudio = mute
+	l.restoreDisplay, l.darkenKeyboard = restoreDisplay, darkenKeyboard
+	l.pauseApps = append([]string{}, apps...)
+	if l.cancel != nil {
+		return l.renew()
+	}
+	return nil
+}
+
+// RequestRecovery requests restoration of AO-owned native effects.
+func (l *LidAwake) RequestRecovery() error {
+	if err := l.Setup(); err != nil {
+		return err
+	}
+	data, err := json.Marshal(struct {
+		ID        string  `json:"id"`
+		WrittenAt float64 `json:"writtenAt"`
+	}{uuid.NewString(), float64(time.Now().UnixMilli()) / 1000})
+	if err != nil {
+		return err
+	}
+	return writeWakeFile(filepath.Join(l.directory, "effects-recovery.json"), data, 0o600)
+}
+
+// RecoveryReason reports pending restoration failures.
+func (l *LidAwake) RecoveryReason() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	status, err := l.readStatus()
+	if err != nil {
+		return ""
+	}
+	if strings.HasPrefix(status.Reason, "low_power_") {
+		return status.Reason
+	}
+	switch status.Reason {
+	case "effects_recovery_required", "effects_conflict", "recovery_failed", "audio_output_changed", "light_recovery_required", "light_unavailable", "light_sample_required":
+		return status.Reason
+	}
+	return ""
+}
+
+// ConfigureLowPower updates automatic native power-saving policy for this lease.
+func (l *LidAwake) ConfigureLowPower(percent int, serious bool) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.lowPowerBatteryPercent == percent && l.lowPowerOnSeriousHeat == serious {
+		return nil
+	}
+	l.lowPowerBatteryPercent, l.lowPowerOnSeriousHeat = percent, serious
+	if l.cancel != nil {
+		return l.renew()
+	}
 	return nil
 }

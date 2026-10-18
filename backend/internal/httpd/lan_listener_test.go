@@ -249,6 +249,11 @@ func TestLANManagerBlocksLoopbackOnlyControlRoutes(t *testing.T) {
 	defer m.Stop(context.Background())
 
 	blocked := []string{
+		"/api/v1/awake",
+		"/api/v1/awake/sessions",
+		"/api/v1/awake/settings",
+		"/api/v1/awake/low-power/revoke",
+		"/api/v1/awake/browser",
 		"/shutdown",
 		"/internal/telemetry/cli-invoked",
 		"/internal/agent-switch-observability/prepare-disable",

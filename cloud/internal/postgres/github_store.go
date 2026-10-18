@@ -1405,6 +1405,11 @@ func (s *Store) GitHubRepositoryTracked(
 					SELECT 1 FROM ao_projects
 					WHERE org_id = $1 AND github_repository_id = $2
 				) OR EXISTS (
+					SELECT 1 FROM ao_projects project
+					JOIN ao_github_repositories repository ON repository.github_repository_id = $2
+					WHERE project.org_id = $1 AND project.archived_at IS NULL
+					  AND `+projectDeclaresRepositorySQL+`
+				) OR EXISTS (
 					SELECT 1 FROM ao_worker_git_refs
 					WHERE org_id = $1 AND github_repository_id = $2
 				) OR EXISTS (

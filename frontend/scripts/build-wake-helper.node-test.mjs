@@ -6,6 +6,9 @@ describe("native wake helper build", () => {
     it(`cross-compiles ${arch} without raising the desktop minimum OS`, () => {
       const { args, output } = wakeHelperBuildOptions(arch, "/project/frontend");
       assert.ok(args.includes(`${cpu}-apple-macosx11.0`));
+      for (const file of ["WakePolicy.swift", "WakeLowPower.swift", "WakeEffects.swift", "WakeLights.swift", "WakeBrowserActions.swift", "WakeNetworkActions.swift", "main.swift"]) {
+        assert.ok(args.includes(`/project/frontend/native/wake-helper/${file}`));
+      }
       assert.equal(output, "/project/frontend/wake-helper/ao-wake");
     });
   }

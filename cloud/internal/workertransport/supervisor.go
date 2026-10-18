@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -59,8 +60,13 @@ const (
 )
 
 type Supervisor struct {
-	Control             Control
-	Workspace           string
+	Control   Control
+	Workspace string
+	// Repositories are the session's additional repository checkouts beside
+	// Workspace (worker.SessionRepoCheckouts without the main one). Workspace
+	// requests select one with "repository".
+	Repositories        []worker.RepoCheckout
+	repositories        repositoryWorkspaces
 	DataDir             string
 	Harness             string
 	SelectedModel       string
@@ -207,6 +213,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	}
 	workspace.compareBase = s.CompareBase
 	defer workspace.Close()
+	defer s.repositories.closeAll()
 	defer s.closeAllTerminals()
 	switch s.InitialInterface {
 	case InterfaceChat:
@@ -432,7 +439,7 @@ func isConcurrentlyHandledKind(kind string) bool {
 	switch kind {
 	case "browser.fetch",
 		"chat.models",
-		"workspace.list", "workspace.read", "workspace.diff", "workspace.diff-file",
+		"workspace.list", "workspace.read", "workspace.diff", "workspace.diff-file", "workspace.repositories",
 		"workspace.review.summary", "workspace.review.tree", "workspace.review.search",
 		"workspace.review.file", "workspace.review.diffs", "workspace.review.revision":
 		return true
@@ -443,12 +450,29 @@ func isConcurrentlyHandledKind(kind string) bool {
 
 func (s *Supervisor) handle(
 	ctx context.Context,
-	workspace *workspace,
+	mainWorkspace *workspace,
 	request *worker.TransportRequest,
 ) {
 	var response any
 	var err error
+	workspace, repositoryName := mainWorkspace, ""
+	if strings.HasPrefix(request.Kind, "workspace.") && request.Kind != "workspace.checkout" {
+		workspace, repositoryName, err = s.workspaceFor(mainWorkspace, request.Payload)
+		if err != nil {
+			s.respondTransport(ctx, request, nil, err)
+			return
+		}
+	}
 	switch request.Kind {
+	case "workspace.repositories":
+		response = worker.WorkspaceRepositoriesResponse{Repositories: s.workspaceRepositories()}
+	case "workspace.review.summary":
+		var summary worker.WorkspaceReviewResponse
+		summary, err = workspace.ReviewSummary(ctx)
+		if err == nil && repositoryName == "" {
+			summary.Repositories = s.workspaceRepositories()
+		}
+		response = summary
 	case "workspace.checkout":
 		if s.RequestCheckout == nil {
 			err = errors.New("workspace checkout is unavailable")
@@ -502,8 +526,6 @@ func (s *Supervisor) handle(
 		if err == nil {
 			response, err = installHarness(ctx, input)
 		}
-	case "workspace.review.summary":
-		response, err = workspace.ReviewSummary(ctx)
 	case "workspace.review.tree":
 		var input worker.WorkspaceReviewTreeRequest
 		err = decodePayload(request.Payload, &input)
@@ -526,7 +548,12 @@ func (s *Supervisor) handle(
 		var input worker.WorkspaceReviewDiffsRequest
 		err = decodePayload(request.Payload, &input)
 		if err == nil {
-			response, err = workspace.ReviewDiffs(ctx, input)
+			var diffs worker.WorkspaceReviewDiffsResponse
+			diffs, err = workspace.ReviewDiffs(ctx, input)
+			for index := range diffs.Groups {
+				diffs.Groups[index].Repository = repositoryName
+			}
+			response = diffs
 		}
 	case "workspace.review.revision":
 		var input worker.WorkspaceReviewRevisionRequest
@@ -665,6 +692,12 @@ func (s *Supervisor) handle(
 	default:
 		err = errors.New("unsupported worker transport request")
 	}
+	s.respondTransport(ctx, request, response, err)
+}
+
+// respondTransport completes a transport request with its response, or fails
+// it with err's transport error code.
+func (s *Supervisor) respondTransport(ctx context.Context, request *worker.TransportRequest, response any, err error) {
 	if err == nil {
 		if completeErr := s.Control.CompleteTransport(
 			ctx, request.ID, request.Attempt, response,
@@ -1169,6 +1202,8 @@ func transportError(err error) (string, string) {
 		return "WORKSPACE_FILE_STALE", "The file changed after it was opened."
 	case errors.Is(err, ErrWorkspaceCommitNotFound):
 		return "WORKSPACE_COMMIT_NOT_FOUND", "The requested commit is outside the workspace review range."
+	case errors.Is(err, errUnknownRepository):
+		return "WORKSPACE_REPOSITORY_NOT_FOUND", "The requested repository is not checked out in this session."
 	case errors.Is(err, errUnsafePath):
 		return "INVALID_WORKSPACE_PATH", "The requested path is outside the workspace."
 	case errors.Is(err, os.ErrNotExist):

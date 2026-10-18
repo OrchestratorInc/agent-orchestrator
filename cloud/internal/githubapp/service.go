@@ -54,7 +54,10 @@ type Store interface {
 	ApplyGitHubInstallationEvent(context.Context, string, string, string, string) error
 	WorkerGitHubCheckoutContext(context.Context, string, string) (domain.GitHubCheckoutContext, error)
 	WorkerRemoteGitHubCheckoutContext(context.Context, string, string) (domain.RemoteGitHubCheckoutContext, error)
-	WorkerSessionExtraRepos(context.Context, string, string) ([]domain.RepoRef, error)
+	// WorkerSessionGrantedExtraRepos is the project's additional repositories
+	// that still have an active grant through the main repository's GitHub App
+	// installation: the only ones an App token or pull request may cover.
+	WorkerSessionGrantedExtraRepos(context.Context, string, string) ([]domain.RepoRef, error)
 	CreatePullRequestRecord(
 		ctx context.Context,
 		orgID, sessionID string,
@@ -574,7 +577,7 @@ func (s *Service) checkoutRepositoryIDs(
 	authorization domain.GitHubCheckoutContext,
 ) []int64 {
 	primary := authorization.GitHubRepositoryID
-	extras, err := s.store.WorkerSessionExtraRepos(ctx, orgID, sessionID)
+	extras, err := s.store.WorkerSessionGrantedExtraRepos(ctx, orgID, sessionID)
 	if err != nil {
 		s.logger.Warn("load session extra repositories for checkout scope",
 			"error", err, "org_id", orgID, "session_id", sessionID)
@@ -748,22 +751,9 @@ func (s *Service) pushRepositoryID(
 	if requested == "" || strings.EqualFold(requested, primaryFullName) {
 		return authorization.GitHubRepositoryID, nil
 	}
-	extras, err := s.store.WorkerSessionExtraRepos(ctx, orgID, sessionID)
+	canonical, err := s.declaredExtraRepository(ctx, orgID, sessionID, requested)
 	if err != nil {
 		return 0, err
-	}
-	canonical := ""
-	for _, extra := range extras {
-		fullName, ok := gitHubRepositoryFullName(extra.URL)
-		if ok && strings.EqualFold(fullName, requested) {
-			canonical = fullName
-			break
-		}
-	}
-	if canonical == "" {
-		// The requested repository is not one the session is authorized to
-		// touch. Forbid the App grant; the caller decides whether a PAT applies.
-		return 0, postgres.ErrForbidden
 	}
 	ids, unresolved, err := s.client.resolveInstallationRepositoryIDs(
 		ctx, authorization.GitHubInstallationID, []string{canonical},
@@ -778,6 +768,50 @@ func (s *Service) pushRepositoryID(
 		return 0, postgres.ErrForbidden
 	}
 	return ids[0], nil
+}
+
+// declaredExtraRepository returns the owner/name, as the project declares it,
+// of the additional repository requested names, or postgres.ErrForbidden when
+// the session's project declares no such repository: a session may only touch
+// repositories it checked out.
+func (s *Service) declaredExtraRepository(ctx context.Context, orgID, sessionID, requested string) (string, error) {
+	extras, err := s.store.WorkerSessionGrantedExtraRepos(ctx, orgID, sessionID)
+	if err != nil {
+		return "", err
+	}
+	for _, extra := range extras {
+		fullName, ok := gitHubRepositoryFullName(extra.URL)
+		if ok && strings.EqualFold(fullName, requested) {
+			return fullName, nil
+		}
+	}
+	return "", postgres.ErrForbidden
+}
+
+// pullRequestRepository resolves the repository a worker's pull request is
+// for: the session's main repository when requested is empty or names it,
+// otherwise one of the project's additional repositories that the App
+// installation can access (see pushRepositoryID).
+func (s *Service) pullRequestRepository(
+	ctx context.Context,
+	orgID, sessionID string,
+	authorization domain.GitHubCheckoutContext,
+	requested string,
+) (fullName string, repositoryID int64, err error) {
+	primaryFullName := strings.Trim(authorization.FullName, "/")
+	requested = strings.Trim(strings.TrimSpace(requested), "/")
+	if requested == "" || strings.EqualFold(requested, primaryFullName) {
+		return primaryFullName, authorization.GitHubRepositoryID, nil
+	}
+	fullName, err = s.declaredExtraRepository(ctx, orgID, sessionID, requested)
+	if err != nil {
+		return "", 0, err
+	}
+	repositoryID, err = s.pushRepositoryID(ctx, orgID, sessionID, authorization, fullName)
+	if err != nil {
+		return "", 0, err
+	}
+	return fullName, repositoryID, nil
 }
 
 // resolveWorkerCheckoutAuthorization loads and re-validates a session's
@@ -889,30 +923,43 @@ func (s *Service) RaisePullRequest(
 	if err != nil {
 		return domain.PullRequest{}, err
 	}
+	fullName, repositoryID, err := s.pullRequestRepository(ctx, orgID, sessionID, authorization, input.Repository)
+	if err != nil {
+		return domain.PullRequest{}, err
+	}
+	owner, repo, ok := strings.Cut(fullName, "/")
+	if !ok || owner == "" || repo == "" {
+		return domain.PullRequest{}, postgres.ErrInvalid
+	}
+	if err := s.requireUserScopedAccess(ctx, authorization, repositoryID, true); err != nil {
+		return domain.PullRequest{}, err
+	}
+	access, err := s.client.repositoryWriteToken(
+		ctx,
+		authorization.GitHubInstallationID,
+		repositoryID,
+	)
+	if err != nil {
+		return domain.PullRequest{}, err
+	}
 	base := strings.TrimSpace(input.BaseBranch)
-	if base == "" {
+	if base == "" && repositoryID == authorization.GitHubRepositoryID {
 		base = strings.TrimSpace(authorization.DefaultBranch)
+	}
+	if base == "" && repositoryID != authorization.GitHubRepositoryID {
+		// An additional repository's default branch is not on record, so ask
+		// GitHub, with the token just minted for that repository.
+		repository, err := s.client.GetRepositoryAsUser(ctx, access.Token, owner, repo)
+		if err != nil {
+			return domain.PullRequest{}, err
+		}
+		base = strings.TrimSpace(repository.DefaultBranch)
 	}
 	if base == "" {
 		return domain.PullRequest{}, fmt.Errorf(
 			"%w: no base branch given and the repository has none on record",
 			postgres.ErrInvalid,
 		)
-	}
-	owner, repo, ok := strings.Cut(authorization.FullName, "/")
-	if !ok || owner == "" || repo == "" {
-		return domain.PullRequest{}, postgres.ErrInvalid
-	}
-	if err := s.requireUserScopedAccess(ctx, authorization, authorization.GitHubRepositoryID, true); err != nil {
-		return domain.PullRequest{}, err
-	}
-	access, err := s.client.repositoryWriteToken(
-		ctx,
-		authorization.GitHubInstallationID,
-		authorization.GitHubRepositoryID,
-	)
-	if err != nil {
-		return domain.PullRequest{}, err
 	}
 	pr, err := s.client.CreatePullRequest(ctx, access.Token, owner, repo, CreatePullRequestInput{
 		Title: title,
@@ -926,7 +973,7 @@ func (s *Service) RaisePullRequest(
 	record, err := s.store.CreatePullRequestRecord(
 		ctx,
 		orgID, sessionID,
-		"github", authorization.FullName, pr.User.Login,
+		"github", fullName, pr.User.Login,
 		pr.Number, pr.HTMLURL, head, base, pr.Head.SHA, title,
 		pr.Additions, pr.Deletions, pr.ChangedFiles,
 	)
@@ -948,21 +995,31 @@ func (s *Service) ClaimPullRequest(
 	if err != nil {
 		return domain.PullRequest{}, err
 	}
-	owner, repository, ok := strings.Cut(authorization.FullName, "/")
-	if !ok || strings.TrimSpace(owner) == "" || strings.TrimSpace(repository) == "" {
-		return domain.PullRequest{}, postgres.ErrInvalid
-	}
-	number, err := parsePullRequestReference(reference, authorization.FullName)
+	referenced, number, err := ParsePullRequestTarget(reference)
 	if err != nil {
 		return domain.PullRequest{}, err
 	}
-	if err := s.requireUserScopedAccess(ctx, authorization, authorization.GitHubRepositoryID, true); err != nil {
+	fullName, repositoryID, err := s.pullRequestRepository(ctx, orgID, sessionID, authorization, referenced)
+	if err != nil {
+		if errors.Is(err, postgres.ErrForbidden) && referenced != "" {
+			// A URL for a repository the project does not declare is a bad
+			// reference for this session, as it was before additional
+			// repositories could be claimed.
+			return domain.PullRequest{}, postgres.ErrInvalid
+		}
+		return domain.PullRequest{}, err
+	}
+	owner, repository, ok := strings.Cut(fullName, "/")
+	if !ok || strings.TrimSpace(owner) == "" || strings.TrimSpace(repository) == "" {
+		return domain.PullRequest{}, postgres.ErrInvalid
+	}
+	if err := s.requireUserScopedAccess(ctx, authorization, repositoryID, true); err != nil {
 		return domain.PullRequest{}, err
 	}
 	access, err := s.client.repositoryWriteToken(
 		ctx,
 		authorization.GitHubInstallationID,
-		authorization.GitHubRepositoryID,
+		repositoryID,
 	)
 	if err != nil {
 		return domain.PullRequest{}, err
@@ -983,7 +1040,7 @@ func (s *Service) ClaimPullRequest(
 	}
 	record, err := s.store.ClaimPullRequestRecord(ctx, orgID, sessionID, domain.PullRequest{
 		Provider:     "github",
-		Repository:   authorization.FullName,
+		Repository:   fullName,
 		Author:       pullRequest.User.Login,
 		Number:       pullRequest.Number,
 		URL:          pullRequest.HTMLURL,
@@ -1003,34 +1060,50 @@ func (s *Service) ClaimPullRequest(
 	return record, nil
 }
 
+// parsePullRequestReference returns the number of a pull request reference (a
+// number, or a github.com pull request URL) in the repository fullName.
 func parsePullRequestReference(reference, fullName string) (int, error) {
+	referenced, number, err := ParsePullRequestTarget(reference)
+	if err != nil {
+		return 0, err
+	}
+	if referenced != "" && !strings.EqualFold(referenced, strings.Trim(fullName, "/")) {
+		return 0, postgres.ErrInvalid
+	}
+	return number, nil
+}
+
+// ParsePullRequestTarget splits a pull request reference into the repository
+// it names (owner/name; empty for a bare number, which means the main
+// repository) and its number.
+func ParsePullRequestTarget(reference string) (fullName string, number int, err error) {
 	reference = strings.TrimSpace(reference)
 	if number, err := strconv.Atoi(reference); err == nil && number > 0 {
-		return number, nil
+		return "", number, nil
 	}
 	parsed, err := url.Parse(reference)
 	if err != nil || parsed.Scheme != "https" ||
 		!strings.EqualFold(parsed.Hostname(), "github.com") || parsed.Port() != "" ||
 		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return 0, postgres.ErrInvalid
+		return "", 0, postgres.ErrInvalid
 	}
 	parts := strings.Split(strings.Trim(parsed.EscapedPath(), "/"), "/")
 	if len(parts) != 4 || !strings.EqualFold(parts[2], "pull") {
-		return 0, postgres.ErrInvalid
+		return "", 0, postgres.ErrInvalid
 	}
 	owner, err := url.PathUnescape(parts[0])
-	if err != nil {
-		return 0, postgres.ErrInvalid
+	if err != nil || owner == "" {
+		return "", 0, postgres.ErrInvalid
 	}
 	repository, err := url.PathUnescape(parts[1])
-	if err != nil || !strings.EqualFold(owner+"/"+repository, strings.Trim(fullName, "/")) {
-		return 0, postgres.ErrInvalid
+	if err != nil || repository == "" {
+		return "", 0, postgres.ErrInvalid
 	}
-	number, err := strconv.Atoi(parts[3])
+	number, err = strconv.Atoi(parts[3])
 	if err != nil || number <= 0 {
-		return 0, postgres.ErrInvalid
+		return "", 0, postgres.ErrInvalid
 	}
-	return number, nil
+	return owner + "/" + repository, number, nil
 }
 
 func validGitHubCloneIdentity(cloneURL, fullName string) bool {

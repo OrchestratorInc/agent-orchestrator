@@ -20,7 +20,13 @@ app.setPath("userData", userDataPath);
 async function run(): Promise<void> {
 	await app.whenReady();
 	const fixture = await readFile(fixturePath, "utf8");
+	const dragFixture = await readFile(path.join(path.dirname(fixturePath), "drag-regions.html"), "utf8");
 	const server = createServer((request, response) => {
+		if (request.url === "/drag-regions") {
+			response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+			response.end(dragFixture);
+			return;
+		}
 		if (request.url === "/popup") {
 			response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
 			response.end(`<!doctype html><title>OAuth popup</title><script>
@@ -258,6 +264,42 @@ async function run(): Promise<void> {
 	});
 
 	try {
+		// Exercise Chromium's actual CSS cascade: a mock of insertCSS cannot
+		// prove that user-origin rules defeat author !important and inline styles.
+		const dragURL = `http://127.0.0.1:${address.port}/drag-regions`;
+		for (const zoom of [1, 2]) {
+			await host.execute("integration-session", "open", { url: dragURL });
+			const contents = activeWebContents();
+			contents.setZoomFactor(zoom);
+			await contents.executeJavaScript(`
+				const dynamic = document.createElement('div');
+				dynamic.id = 'dynamic';
+				dynamic.style.setProperty('app-region', 'drag', 'important');
+				document.body.append(dynamic);
+			`);
+			const deadline = Date.now() + 5_000;
+			for (;;) {
+				const regions = await contents.executeJavaScript(`
+					[
+						...[document.documentElement, document.body,
+							document.querySelector('#page'), document.querySelector('#button'),
+							document.querySelector('#dynamic')]
+							.map(element => getComputedStyle(element).getPropertyValue('app-region')),
+						getComputedStyle(document.querySelector('#page'), '::before').getPropertyValue('app-region'),
+						getComputedStyle(document.querySelector('#page'), '::after').getPropertyValue('app-region'),
+					]
+				`) as string[];
+				if (regions.every(region => region === "no-drag") || Date.now() >= deadline) {
+					assert.deepEqual(regions, Array(7).fill("no-drag"),
+						"page drag regions must be disabled, including inline, dynamic and pseudo-element rules");
+					break;
+				}
+				await new Promise(resolve => setTimeout(resolve, 25));
+			}
+		}
+		activeWebContents().setZoomFactor(1);
+		process.stdout.write("browser native CSS drag-region override integration passed\n");
+
 		await host.execute("integration-session", "open", { url: fixtureURL });
 		const satisfied = (await host.execute("integration-session", "act", {
 			instruction: "continue",
@@ -344,7 +386,16 @@ async function run(): Promise<void> {
 			`);
 			assert.equal(await deadline(opener.executeJavaScript("window.authComplete")), true);
 			await deadline(closed);
-			assert.equal(await opener.executeJavaScript("window.authPopup.closed"), true);
+			// Main can observe destruction before the opener updates its WindowProxy.
+			assert.equal(await deadline(opener.executeJavaScript(`
+				new Promise(resolve => {
+					const checkClosed = () => {
+						if (window.authPopup.closed) resolve(true);
+						else setTimeout(checkClosed, 25);
+					};
+					checkClosed();
+				})
+			`)), true);
 			const remaining = await host.execute("integration-session", "tabs") as BrowserTabsState;
 			assert.equal(remaining.tabs.length, 1, "self-closed guest must leave AO's tab registry");
 			assert.equal(remaining.activeTabId, remaining.tabs[0].id);

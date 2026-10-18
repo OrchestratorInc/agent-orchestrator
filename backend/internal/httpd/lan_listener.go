@@ -69,6 +69,7 @@ func NewLANManager(handler http.Handler, state *authState, defaultPort int, log 
 // the request arrived on. So the block below is applied only to the LAN-served
 // handler, outermost (wrapping authMiddleware), independent of any header.
 var lanControlBlockedPrefixes = []string{
+	"/api/v1/awake",
 	"/shutdown",
 	"/internal/",
 	"/api/v1/mobile",

@@ -196,7 +196,7 @@ func TestLaunchContextLeavesTheWorkspaceToTheWorker(t *testing.T) {
 		SessionID: "session-1", ProjectID: "project-1", ProjectName: "alice", Kind: "worker",
 		Harness: "claude-code", RepositoryURL: "https://github.com/11x-ai/alice", DefaultBranch: "main",
 	}
-	launch, err := launchContextFrom(spec, true)
+	launch, err := launchContextFrom(spec, launchCapabilities{resolvesWorkspacePath: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestLaunchContextLeavesTheWorkspaceToTheWorker(t *testing.T) {
 	if launch.ProjectName != "alice" {
 		t.Fatalf("project name = %q", launch.ProjectName)
 	}
-	legacy, err := launchContextFrom(spec, false)
+	legacy, err := launchContextFrom(spec, launchCapabilities{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestLaunchContextCarriesProjectScripts(t *testing.T) {
 	launch, err := launchContextFrom(domain.WorkerLaunch{
 		SessionID: "session-1", ProjectID: "project-1", Kind: "worker", Harness: "claude-code",
 		ProjectConfig: json.RawMessage(`{"postCreate":["npm ci","  ","make up"],"preRemove":["make down"],"coder":{"templateId":"x"}}`),
-	}, true)
+	}, launchCapabilities{resolvesWorkspacePath: true, multiRepo: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,7 @@ func TestLaunchContextCarriesProjectScripts(t *testing.T) {
 	launch, err = launchContextFrom(domain.WorkerLaunch{
 		SessionID: "session-1", Kind: "worker", Harness: "claude-code",
 		ProjectConfig: json.RawMessage(`{"postCreate":"npm ci"}`),
-	}, true)
+	}, launchCapabilities{resolvesWorkspacePath: true, multiRepo: true})
 	if err != nil || launch.PostCreate != nil || launch.PreRemove != nil {
 		t.Fatalf("malformed scripts: launch = %+v, err = %v", launch, err)
 	}

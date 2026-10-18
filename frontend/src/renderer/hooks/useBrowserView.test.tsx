@@ -148,7 +148,7 @@ function setupBridge() {
 		showProfileMenu: vi.fn(),
 		selectProfile: vi.fn(),
 		reconnectRuntime: vi.fn(async () => undefined),
-		getRuntimeState: vi.fn(async () => ({ connected: false })),
+		getRuntimeState: vi.fn(async () => ({ connected: false, connecting: false, rejected: false })),
 		historySuggestions: vi.fn(async () => []),
 		historyFavicon: vi.fn(async () => undefined),
 		captureScreenshot: vi.fn(async () => undefined),
@@ -271,15 +271,15 @@ describe("useBrowserView", () => {
 		expect(result.current.viewId).toBe("42:sess-1");
 	});
 
-	it("hydrates the runtime connection state for a late-mounted panel", async () => {
+	it("leaves the runtime link state to the Browser panel (#6466)", async () => {
 		const bridge = setupBridge();
-		bridge.getRuntimeState.mockResolvedValueOnce({ connected: false });
-		const slot = createSlot();
-		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+		createSlot();
+		renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+		await act(async () => undefined);
 
-		await waitFor(() => expect(bridge.getRuntimeState).toHaveBeenCalled());
-		await waitFor(() => expect(result.current.browserRuntimeConnected).toBe(false));
-		expect(slot).toBeInTheDocument();
+		// SessionView owns this hook; a flapping link must not re-render it.
+		expect(bridge.onRuntimeState).not.toHaveBeenCalled();
+		expect(bridge.getRuntimeState).not.toHaveBeenCalled();
 	});
 
 	it("keeps bounds revisions increasing when the same native view remounts", async () => {

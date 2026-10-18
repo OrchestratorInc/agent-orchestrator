@@ -152,6 +152,27 @@ export function qrIsReady(status: PairingReadinessStatus): boolean {
 	return true;
 }
 
+/**
+ * Why the code on screen has no public tunnel, or null when it has one (or
+ * when there is no code to judge). Without the tunnel the code reaches this
+ * machine from elsewhere only over Tailscale, if it carries a tailnet address.
+ *
+ * qrIsReady shows a LAN code while the tunnel is still starting, and the
+ * phone races only what the code carries. A code scanned or photographed in
+ * that window looks identical to a complete one, then fails away from home
+ * with "is your phone on the same Wi-Fi?" — so the panel has to say so.
+ * cloudflared being absent is stated separately (remoteAccessUnavailable), and
+ * opting out of the tunnel is the user's own choice, so neither is reported.
+ */
+export function localOnlyReason(status: PairingReadinessStatus): "starting" | "failed" | null {
+	if (!status.enabled || !status.endpoints || status.endpoints.length === 0) return null;
+	if (status.endpoints.some((e) => e.kind === "tunnel")) return null;
+	if (status.noPublicTunnel === true || status.tunnel?.supported === false) return null;
+	if (pairingIsPending(status)) return "starting";
+	if (status.tunnel?.lastError) return "failed";
+	return null;
+}
+
 /** The app's registered scheme (app.json `expo.scheme`), not a universal link:
  * it works today, with no association files to host and no store listing
  * required. Universal links can be added later without changing the payload. */
@@ -463,6 +484,8 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	// installs it. Pairing still works on the local network, so this is a
 	// caveat to state rather than a failure to block on.
 	const remoteAccessUnavailable = status?.tunnel ? status.tunnel.supported === false : false;
+	const localOnly = status ? localOnlyReason({ ...status, enabled }) : null;
+	const viaTailscale = status?.endpoints?.some((e) => e.kind === "tailscale") ?? false;
 	const secureBlocked = mode === "tailscale" && (status?.securePairing?.enabled ?? false) && !secureActive;
 	const setLidAwake = useMutation({
 		mutationFn: async (lidClosed: boolean) => {
@@ -690,6 +713,39 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				{status.tailscaleHost && secureReasonText && (
 					<p data-testid="secure-pairing-reason" className="mt-4 text-control leading-5 text-warning">
 						{secureReasonText}
+					</p>
+				)}
+
+				{qrValue && localOnly && (
+					// The code refreshes itself once the tunnel is advertised; until
+					// then it is a LAN-only code that looks exactly like a full one.
+					<p
+						className="mt-4 flex items-start gap-1.5 text-xs leading-5 text-settings-muted"
+						data-testid="mobile-local-only"
+						role="status"
+					>
+						{localOnly === "starting" && <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin" aria-hidden="true" />}
+						{/* A tailnet address does reach this machine from elsewhere, once
+						    both devices are on the tailnet; only the public tunnel is missing. */}
+						{localOnly === "starting"
+							? viaTailscale
+								? t(
+										"mobile.remoteAccessStartingTailscale",
+										"No public tunnel yet — away from this network the code works only over Tailscale. Remote access is still starting; wait for the code to update.",
+									)
+								: t(
+										"mobile.remoteAccessStarting",
+										"Works on this network only for now — remote access is still starting. Wait for the code to update before using it away from here.",
+									)
+							: viaTailscale
+								? t(
+										"mobile.remoteAccessFailedTailscale",
+										"No public tunnel — remote access couldn't start, so away from this network the code works only over Tailscale.",
+									)
+								: t(
+										"mobile.remoteAccessFailed",
+										"Works on this network only — remote access couldn't start, so this machine can't be reached from elsewhere.",
+									)}
 					</p>
 				)}
 

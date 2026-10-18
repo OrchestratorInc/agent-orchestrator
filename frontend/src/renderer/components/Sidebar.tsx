@@ -385,14 +385,6 @@ function useShowMoreCap<T extends { id: string }>(
 	return { listed, hiddenCount: Math.max(0, items.length - limit), showAll, toggleShowAll };
 }
 
-/** Scratchpad's total section cap, or none in the collapsed icon rail. Projects
- *  take whatever height remains (flex-1 + min-h-0), so the two sections share the
- *  column by flex layout alone and can never sum past it. */
-function scratchpadSectionStyle(isCollapsed: boolean): CSSProperties | undefined {
-	if (isCollapsed) return undefined;
-	return { maxHeight: "calc(50cqh - var(--space-2))" };
-}
-
 function SidebarSectionScroller({
 	children,
 	className,
@@ -1103,7 +1095,7 @@ export function Sidebar({
 				<SidebarGroup className="min-h-0 flex-1 p-0">
 					{/* Tree (project-sidebar__tree) */}
 					<SidebarGroupContent
-						className="sidebar-sections-container flex min-h-0 flex-1 flex-col"
+						className="sidebar-sections-container grid min-h-0 flex-1 auto-rows-[minmax(0,auto)] content-start group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:flex-col"
 					>
 						{workspaceError ? (
 							<div className="sidebar-expanded-chrome px-2.5 py-3 group-data-[collapsible=icon]:hidden">
@@ -2053,9 +2045,8 @@ function ScratchpadSection({
 
 	return (
 		<div
-			className="sidebar-expanded-chrome mb-2 flex min-h-0 shrink-0 flex-col overflow-hidden group-data-[collapsible=icon]:hidden"
+			className="sidebar-expanded-chrome mb-2 flex min-h-0 flex-col overflow-hidden group-data-[collapsible=icon]:hidden"
 			data-scratchpad-section=""
-			style={scratchpadSectionStyle(isCollapsed)}
 		>
 			<SectionDisclosure
 				label={workspace.name}

@@ -192,6 +192,7 @@ export function GeneralSettingsSection({
 						/>
 					</div>
 				</SettingsRow>
+				{isMacPlatform() && <WindowTranslucencyRow />}
 				<SettingsRow
 					label={t("settings.language")}
 					description={localeSaveError ? <span role="alert" className="text-error">{t("settings.language.saveFailed")}</span> : undefined}
@@ -253,7 +254,6 @@ export function GeneralSettingsSection({
 				{developerMode && <DiagnosticsRow />}
 				<CliLinkSettings enabled={developerMode} />
 				{developerMode && <SideChatsRow />}
-				{developerMode && isMacPlatform() && <WindowTranslucencyRow />}
 			</SettingsSection>
 		</>
 	);
@@ -321,7 +321,7 @@ function SideChatsRow() {
 }
 
 /**
- * Developer Mode-only, macOS-only toggle for window translucency: native
+ * macOS Appearance toggle for window translucency: native
  * vibrancy blurs the desktop behind a translucent shell. Renderer state.
  */
 function WindowTranslucencyRow() {

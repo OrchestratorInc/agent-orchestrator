@@ -139,7 +139,10 @@ func (s *Server) workerBootstrap(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	launchContext, err := launchContextFrom(launch, slices.Contains(input.Capabilities, worker.CapabilityWorkspacePathPlaceholder))
+	launchContext, err := launchContextFrom(launch, launchCapabilities{
+		resolvesWorkspacePath: slices.Contains(input.Capabilities, worker.CapabilityWorkspacePathPlaceholder),
+		multiRepo:             slices.Contains(input.Capabilities, worker.CapabilityMultiRepo),
+	})
 	if err != nil {
 		s.logger.Error("build worker launch context", "error", err, "project_id", launch.ProjectID, "request_id", requestID(r))
 		writeError(w, r, http.StatusInternalServerError, "BOOTSTRAP_FAILED", "The project's role instructions are invalid.")
@@ -231,7 +234,10 @@ func (s *Server) workerReconnect(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	launchContext, err := launchContextFrom(launch, headerReportsCapability(r, worker.CapabilityWorkspacePathPlaceholder))
+	launchContext, err := launchContextFrom(launch, launchCapabilities{
+		resolvesWorkspacePath: headerReportsCapability(r, worker.CapabilityWorkspacePathPlaceholder),
+		multiRepo:             headerReportsCapability(r, worker.CapabilityMultiRepo),
+	})
 	if err != nil {
 		s.logger.Error("build worker reconnect context", "error", err, "project_id", launch.ProjectID, "request_id", requestID(r))
 		writeError(w, r, http.StatusInternalServerError, "RECONNECT_FAILED", "The project's role instructions are invalid.")
@@ -257,10 +263,20 @@ func headerReportsCapability(r *http.Request, capability string) bool {
 	return false
 }
 
+// launchCapabilities is what the worker a launch context is for reported it
+// can do.
+type launchCapabilities struct {
+	// resolvesWorkspacePath is whether the worker substitutes
+	// worker.WorkspacePathPlaceholder.
+	resolvesWorkspacePath bool
+	// multiRepo is whether the worker advertised worker.CapabilityMultiRepo.
+	multiRepo bool
+}
+
 // launchContextFrom projects a stored launch spec onto the wire type shared by
-// bootstrap and reconnect. resolvesWorkspacePath is whether the worker
-// substitutes worker.WorkspacePathPlaceholder.
-func launchContextFrom(launch domain.WorkerLaunch, resolvesWorkspacePath bool) (worker.LaunchContext, error) {
+// bootstrap and reconnect, for a worker with the given capabilities.
+func launchContextFrom(launch domain.WorkerLaunch, capabilities launchCapabilities) (worker.LaunchContext, error) {
+	resolvesWorkspacePath := capabilities.resolvesWorkspacePath
 	var agentConfig domain.ProjectAgentConfig
 	if len(launch.AgentConfig) > 0 {
 		if err := json.Unmarshal(launch.AgentConfig, &agentConfig); err != nil {
@@ -271,21 +287,27 @@ func launchContextFrom(launch domain.WorkerLaunch, resolvesWorkspacePath bool) (
 	if err != nil {
 		return worker.LaunchContext{}, err
 	}
-	postCreate, preRemove := domain.ProjectScripts(launch.ProjectConfig)
-	// Extra repos are project-level (chosen at project setup, stored on the
-	// project config), so every session of the project clones the same set.
-	// Decoded before the prompt is built so both the project context (which
-	// makes every role aware the project is multi-repo) and the worker's clone
-	// list draw from the same source.
+	postCreate, preRemove := domain.ProjectScripts(launch.ProjectConfig, launch.RepositoryURL)
+	// Additional repositories are project-level (stored on the project config),
+	// so every session of the project clones the same set, on every sandbox
+	// provider. Decoded before the prompt is built so both the project context
+	// (which makes every role aware the project is multi-repo) and the worker's
+	// clone list draw from the same source.
 	var extraRepos []worker.RepoRef
 	var promptExtras []roleprompt.RepoRef
-	if coderCfg, ok := domain.DecodeProjectCoderConfig(launch.ProjectConfig); ok && len(coderCfg.ExtraRepos) > 0 {
-		extraRepos = make([]worker.RepoRef, 0, len(coderCfg.ExtraRepos))
-		promptExtras = make([]roleprompt.RepoRef, 0, len(coderCfg.ExtraRepos))
-		for _, repo := range coderCfg.ExtraRepos {
+	if repos := domain.ProjectAdditionalRepos(launch.ProjectConfig); len(repos) > 0 {
+		extraRepos = make([]worker.RepoRef, 0, len(repos))
+		promptExtras = make([]roleprompt.RepoRef, 0, len(repos))
+		for _, repo := range repos {
 			extraRepos = append(extraRepos, worker.RepoRef{URL: repo.URL, Branch: repo.Branch})
-			promptExtras = append(promptExtras, roleprompt.RepoRef{URL: repo.URL, Branch: repo.Branch})
+			promptExtras = append(promptExtras, roleprompt.RepoRef{URL: repo.URL, Branch: repo.Branch, Dir: domain.RepoDirName(repo.URL)})
 		}
+	}
+	// Only a multi-repo worker honours the start folder; an older one always
+	// starts in the main checkout, so the prompt must not claim otherwise.
+	agentStartsIn := ""
+	if capabilities.multiRepo && domain.ProjectAgentStartsIn(launch.ProjectConfig) == domain.ProjectAgentStartsInParent {
+		agentStartsIn = domain.ProjectAgentStartsInParent
 	}
 	systemPrompt := roleprompt.Build(roleprompt.Config{
 		Role:          launch.Kind,
@@ -297,10 +319,13 @@ func launchContextFrom(launch domain.WorkerLaunch, resolvesWorkspacePath bool) (
 		// provider, the workspace user's home and a Coder connection's working
 		// directory) and substitutes it before launching the agent. An older
 		// worker shows the prompt as is, so it gets the path it always showed.
-		WorkspacePath:     workspacePathFor(resolvesWorkspacePath),
-		AgentRules:        agentRules,
-		OrchestratorRules: orchestratorRules,
-		ExtraRepos:        promptExtras,
+		WorkspacePath:       workspacePathFor(resolvesWorkspacePath),
+		AgentRules:          agentRules,
+		OrchestratorRules:   orchestratorRules,
+		ExtraRepos:          promptExtras,
+		AgentStartsInParent: agentStartsIn == domain.ProjectAgentStartsInParent,
+		Standalone:          domain.IsStandaloneRepositoryURL(launch.RepositoryURL),
+		MultiRepoWorker:     capabilities.multiRepo,
 	})
 	return worker.LaunchContext{
 		SessionID:       launch.SessionID,
@@ -323,6 +348,7 @@ func launchContextFrom(launch domain.WorkerLaunch, resolvesWorkspacePath bool) (
 		RepositoryURL:   launch.RepositoryURL,
 		DefaultBranch:   launch.DefaultBranch,
 		ExtraRepos:      extraRepos,
+		AgentStartsIn:   agentStartsIn,
 		SystemPrompt:    systemPrompt,
 		PostCreate:      postCreate,
 		PreRemove:       preRemove,
@@ -702,6 +728,7 @@ func (s *Server) workerRaisePullRequest(w http.ResponseWriter, r *http.Request) 
 		Body:       input.Body,
 		HeadBranch: input.HeadBranch,
 		BaseBranch: input.BaseBranch,
+		Repository: strings.Trim(strings.TrimSpace(input.Repository), "/"),
 	}
 	// Prefer the GitHub App (checkout broker) to open the PR: it uses a fresh
 	// installation token that can't go stale. Fall back to the user's PAT only when
@@ -720,9 +747,12 @@ func (s *Server) workerRaisePullRequest(w http.ResponseWriter, r *http.Request) 
 	}
 	if err != nil || s.checkoutBroker == nil {
 		if grant, ok := s.patWriteGrant(r.Context(), claims); ok {
-			pr, err = s.patWrites.RaisePullRequest(
-				r.Context(), claims.OrgID, claims.SessionID, grant.CloneURL, grant.Token, raiseInput,
-			)
+			var cloneURL string
+			if cloneURL, err = s.patPullRequestCloneURL(r.Context(), claims, grant.CloneURL, raiseInput.Repository); err == nil {
+				pr, err = s.patWrites.RaisePullRequest(
+					r.Context(), claims.OrgID, claims.SessionID, cloneURL, grant.Token, raiseInput,
+				)
+			}
 		} else if s.checkoutBroker == nil {
 			writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "Raising a pull request is not available.")
 			return
@@ -794,9 +824,17 @@ func (s *Server) workerClaimPullRequest(w http.ResponseWriter, r *http.Request) 
 	}
 	if err != nil || s.checkoutBroker == nil {
 		if grant, ok := s.patWriteGrant(r.Context(), claims); ok {
-			pr, err = s.patWrites.ClaimPullRequest(
-				r.Context(), claims.OrgID, claims.SessionID, grant.CloneURL, grant.Token, input.Reference,
-			)
+			referenced, _, parseErr := githubapp.ParsePullRequestTarget(input.Reference)
+			var cloneURL string
+			if cloneURL, err = s.patPullRequestCloneURL(r.Context(), claims, grant.CloneURL, referenced); parseErr == nil && err == nil {
+				pr, err = s.patWrites.ClaimPullRequest(
+					r.Context(), claims.OrgID, claims.SessionID, cloneURL, grant.Token, input.Reference,
+				)
+			} else if parseErr != nil {
+				err = postgres.ErrInvalid
+			} else if errors.Is(err, postgres.ErrForbidden) {
+				err = postgres.ErrInvalid
+			}
 		} else if s.checkoutBroker == nil {
 			writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "Pull request tracking is not available.")
 			return
@@ -1386,4 +1424,46 @@ func workspacePathFor(resolvesWorkspacePath bool) string {
 		return worker.WorkspacePathPlaceholder
 	}
 	return worker.LegacyWorkspacePath
+}
+
+// workerExtraReposStore reads the additional repositories a session's project
+// declares (postgres.Store.WorkerSessionExtraRepos).
+type workerExtraReposStore interface {
+	WorkerSessionExtraRepos(ctx context.Context, orgID, sessionID string) ([]domain.RepoRef, error)
+}
+
+// patPullRequestCloneURL is the repository a personal-access-token pull
+// request write targets: the session's main repository (primaryCloneURL) when
+// requested is empty or names it, otherwise the project's additional
+// repository requested names (owner/name). Any other repository is
+// postgres.ErrForbidden: a session only opens pull requests in repositories it
+// checked out.
+func (s *Server) patPullRequestCloneURL(ctx context.Context, claims worker.Claims, primaryCloneURL, requested string) (string, error) {
+	if domain.IsStandaloneRepositoryURL(primaryCloneURL) {
+		// A standalone project has no repository to open pull requests in.
+		return "", postgres.ErrForbidden
+	}
+	requested = strings.Trim(strings.TrimSpace(requested), "/")
+	if requested == "" {
+		return primaryCloneURL, nil
+	}
+	if _, primary, err := domain.CanonicalGitHubRepoURL(strings.TrimSuffix(primaryCloneURL, ".git")); err == nil &&
+		strings.EqualFold(primary, requested) {
+		return primaryCloneURL, nil
+	}
+	store, ok := s.store.(workerExtraReposStore)
+	if !ok {
+		return "", postgres.ErrForbidden
+	}
+	extras, err := store.WorkerSessionExtraRepos(ctx, claims.OrgID, claims.SessionID)
+	if err != nil {
+		return "", err
+	}
+	for _, extra := range extras {
+		canonical, fullName, err := domain.CanonicalGitHubRepoURL(extra.URL)
+		if err == nil && strings.EqualFold(fullName, requested) {
+			return canonical + ".git", nil
+		}
+	}
+	return "", postgres.ErrForbidden
 }

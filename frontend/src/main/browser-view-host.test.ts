@@ -933,6 +933,30 @@ describe("browser scrollbar styling", () => {
 	});
 });
 
+describe("browser page drag regions", () => {
+	it("keeps page-declared app-region drag areas from swallowing native input", async () => {
+		const { insertCSS, invoke, setBrowserZoomFactor, webContentsListeners } = setupHost();
+
+		await invoke("browser:ensure", "sess-1");
+		webContentsListeners.get("dom-ready")?.();
+
+		await vi.waitFor(() => expect(insertCSS).toHaveBeenCalledOnce());
+		const css = insertCSS.mock.calls[0]?.[0] ?? "";
+		// Only a user-origin !important declaration outranks the page's own
+		// `app-region: drag !important` and inline styles.
+		expect(insertCSS.mock.calls[0]?.[1]).toEqual({ cssOrigin: "user" });
+		expect(css).toMatch(/\*,\s*\*::before,\s*\*::after\s*\{\s*app-region: no-drag !important;\s*\}/);
+
+		// Every new document and zoom change re-applies the sheet.
+		webContentsListeners.get("dom-ready")?.();
+		setBrowserZoomFactor(2);
+		webContentsListeners.get("zoom-changed")?.();
+		await vi.waitFor(() => expect(insertCSS).toHaveBeenCalledTimes(3));
+		for (const [injected] of insertCSS.mock.calls) {
+			expect(injected).toContain("app-region: no-drag !important");
+		}
+	});
+});
 const AGENT_VIEWER = "https://ao-preview-agent.localhost:47663/v/cdp";
 
 function setupTabHost(
