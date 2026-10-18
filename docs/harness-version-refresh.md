@@ -123,6 +123,16 @@ A private Kilo 7.8.10 → 7.8.12 run exposed native history incompatibility:
 preflight retained the old process and reported failure. Native resume flags
 alone do not guarantee compatible history across arbitrary CLI releases.
 
+Chat uses its own provider contract, independent of terminal refresh eligibility.
+Pi Chat runs the separately installed `pi-acp` helper, which embeds its own Pi
+SDK; upgrading the `pi` executable does not upgrade that SDK. The installed
+0.17.1 helper exercised privately resolved Pi SDK 0.75.5. It exposes no ACP
+approvals, so AO rejects default/auto Chat admission; a disposable bypass-only
+control required its existing custom model definitions. That control does not
+prove a Pi CLI upgrade changes the Chat SDK. Kimi ACP accepts only native-default
+approval policy; unsupported policies and unadvertised model selections are
+reported instead of silently ignored. Neither limitation changes global policy.
+
 ## Release and recovery boundaries
 
 Copilot TUI launches, native resumes and ACP Chat launches include the verified
