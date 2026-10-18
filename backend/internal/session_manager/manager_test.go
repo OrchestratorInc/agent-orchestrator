@@ -1121,13 +1121,17 @@ func (a envAugmentingAgent) AugmentRuntimeEnv(env map[string]string, dataDir str
 	env[a.key] = filepath.Join(dataDir, a.value)
 }
 
-func blockedDataDir(t *testing.T) string {
+// promptsBlockedDataDir returns a writable data dir whose prompts subtree is
+// blocked by a regular file. System-prompt file writes fail while session-temp
+// preparation still succeeds, so prompt-file fallback tests exercise the
+// prompt stage instead of the temp stage.
+func promptsBlockedDataDir(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "data")
-	if err := os.WriteFile(path, []byte("not a directory"), 0o600); err != nil {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "prompts"), []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return path
+	return dir
 }
 
 func requireNoPromptDir(t *testing.T, dataDir string, id domain.SessionID) {
@@ -3401,7 +3405,7 @@ func TestSpawn_RuntimeFailureCleansAgentWorkspaceAfterDestroy(t *testing.T) {
 		Store:     st,
 		Messenger: &fakeMessenger{},
 		Lifecycle: &fakeLCM{store: st},
-		DataDir:   "/ao/data",
+		DataDir:   t.TempDir(),
 		LookPath:  func(string) (string, error) { return "/bin/true", nil },
 	})
 
@@ -3435,6 +3439,7 @@ func TestSpawn_PrepareFailureCleansAgentWorkspaceState(t *testing.T) {
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
 	ws := &fakeWorkspace{path: "/ws/mer-1"}
 	agent := &hookErrorCleaningAgent{hookErr: errors.New("hooks failed")}
+	dataDir := t.TempDir()
 	m := New(Deps{
 		Runtime:    &fakeRuntime{},
 		Agents:     singleAgent{agent: agent},
@@ -3442,7 +3447,7 @@ func TestSpawn_PrepareFailureCleansAgentWorkspaceState(t *testing.T) {
 		Store:      st,
 		Messenger:  &fakeMessenger{},
 		Lifecycle:  &fakeLCM{store: st},
-		DataDir:    "/ao/data",
+		DataDir:    dataDir,
 		LookPath:   func(string) (string, error) { return "/bin/true", nil },
 		Executable: func() (string, error) { return "/daemon/ao", nil },
 	})
@@ -3457,8 +3462,8 @@ func TestSpawn_PrepareFailureCleansAgentWorkspaceState(t *testing.T) {
 	if cleanup.WorkspacePath != "/ws/mer-1" {
 		t.Fatalf("cleanup workspace path = %q, want /ws/mer-1", cleanup.WorkspacePath)
 	}
-	if cleanup.DataDir != "/ao/data" {
-		t.Fatalf("cleanup data dir = %q, want /ao/data", cleanup.DataDir)
+	if cleanup.DataDir != dataDir {
+		t.Fatalf("cleanup data dir = %q, want %q", cleanup.DataDir, dataDir)
 	}
 	if ws.destroyed != 1 {
 		t.Fatalf("workspace destroy calls = %d, want 1", ws.destroyed)
@@ -3473,6 +3478,7 @@ func TestSpawn_AgentRuntimeEnvAugmenterReachesRuntime(t *testing.T) {
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
 	rt := &fakeRuntime{}
 	agent := envAugmentingAgent{key: "AGENT_DATA_DIR", value: "agent"}
+	dataDir := t.TempDir()
 	m := New(Deps{
 		Runtime:    rt,
 		Agents:     singleAgent{agent: agent},
@@ -3480,7 +3486,7 @@ func TestSpawn_AgentRuntimeEnvAugmenterReachesRuntime(t *testing.T) {
 		Store:      st,
 		Messenger:  &fakeMessenger{},
 		Lifecycle:  &fakeLCM{store: st},
-		DataDir:    "/ao/data",
+		DataDir:    dataDir,
 		LookPath:   func(string) (string, error) { return "/bin/true", nil },
 		Executable: func() (string, error) { return "/daemon/ao", nil },
 	})
@@ -3488,7 +3494,7 @@ func TestSpawn_AgentRuntimeEnvAugmenterReachesRuntime(t *testing.T) {
 	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	if got, want := rt.lastCfg.Env["AGENT_DATA_DIR"], filepath.Join("/ao/data", "agent"); got != want {
+	if got, want := rt.lastCfg.Env["AGENT_DATA_DIR"], filepath.Join(dataDir, "agent"); got != want {
 		t.Fatalf("runtime env AGENT_DATA_DIR = %q, want %q", got, want)
 	}
 }
@@ -5835,7 +5841,7 @@ func TestSpawnWorker_WritesSystemPromptFile(t *testing.T) {
 func TestSpawnWorker_FallsBackToInlineWhenPromptFileUnavailable(t *testing.T) {
 	st := newFakeStore()
 	agent := &recordingAgent{}
-	dataDir := blockedDataDir(t)
+	dataDir := promptsBlockedDataDir(t)
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
 	m := New(Deps{
 		Runtime:   &fakeRuntime{},
@@ -5863,7 +5869,7 @@ func TestSpawnWorker_FallsBackToInlineWhenPromptFileUnavailable(t *testing.T) {
 func TestSpawnWorker_PromptFileFailureBlocksFileOnlyHarness(t *testing.T) {
 	st := newFakeStore()
 	agent := &recordingAgent{}
-	dataDir := blockedDataDir(t)
+	dataDir := promptsBlockedDataDir(t)
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
 	m := New(Deps{
 		Runtime:   &fakeRuntime{},
@@ -6363,7 +6369,7 @@ func TestRestore_FallsBackToInlineWhenPromptFileUnavailable(t *testing.T) {
 		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"},
 	}
 	agent := &recordingAgent{}
-	dataDir := blockedDataDir(t)
+	dataDir := promptsBlockedDataDir(t)
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
 	m := New(Deps{
 		Runtime:   &fakeRuntime{},
@@ -6395,7 +6401,7 @@ func TestRestore_PromptFileFailureBlocksFileOnlyHarness(t *testing.T) {
 		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x", Prompt: "do it"},
 	}
 	agent := &recordingAgent{}
-	dataDir := blockedDataDir(t)
+	dataDir := promptsBlockedDataDir(t)
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
 	m := New(Deps{
 		Runtime:   &fakeRuntime{},
@@ -10329,7 +10335,7 @@ func TestReconcileLive_ScratchChatReattachesPersistentController(t *testing.T) {
 		Messenger: &fakeMessenger{},
 		Lifecycle: lcm,
 		Chat:      launcher,
-		DataDir:   "/ao-test-data",
+		DataDir:   t.TempDir(),
 		LookPath:  func(string) (string, error) { return "/bin/true", nil },
 	})
 	rec := domain.SessionRecord{
