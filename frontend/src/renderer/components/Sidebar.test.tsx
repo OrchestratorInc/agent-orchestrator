@@ -518,6 +518,7 @@ beforeEach(() => {
 	cloudSessionState.signIn.mockReset();
 	cloudSessionState.signOut.mockReset().mockResolvedValue(undefined);
 	useUiStore.setState({
+		developerMode: false,
 		isCommandPaletteOpen: false,
 		newTaskRequest: null,
 		settingsModal: null,
@@ -696,6 +697,14 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		expect(screen.getAllByLabelText("Sign in to cloud")).toHaveLength(2);
+	});
+
+	it("shows Import sessions only in Developer Mode", () => {
+		renderSidebar();
+		expect(screen.queryByRole("button", { name: "Import sessions" })).not.toBeInTheDocument();
+
+		act(() => useUiStore.setState({ developerMode: true }));
+		expect(screen.getByRole("button", { name: "Import sessions" })).toBeInTheDocument();
 	});
 
 	it("shows the Artifacts row under Automations with a count of live artifacts", async () => {
