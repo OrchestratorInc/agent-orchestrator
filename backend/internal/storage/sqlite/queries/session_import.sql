@@ -33,6 +33,10 @@ WHERE id = sqlc.arg(id) AND is_terminated = 0
 UPDATE sessions SET import_source = sqlc.arg(import_source)
 WHERE id = sqlc.arg(id) AND json_extract(NULLIF(import_source, ''), '$.adopted') = 0;
 
+-- name: MaxSessionImportSequence :one
+SELECT CAST(COALESCE(MAX(sequence), 0) AS INTEGER) FROM session_import_messages
+WHERE session_id = sqlc.arg(session_id);
+
 -- name: DeleteSessionImportMessages :exec
 DELETE FROM session_import_messages WHERE session_id = sqlc.arg(session_id);
 

@@ -405,6 +405,21 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	if err != nil {
 		return Preview{}, err
 	}
+	// Config folder and native ID name one conversation; an agent switch changes
+	// the session's harness, never the conversation it came from. Histories AO
+	// already manages are not offered for a second session either.
+	imported := map[[2]string]domain.SessionID{}
+	managed := map[string]domain.SessionID{}
+	for _, rec := range sessions {
+		if imp := rec.Metadata.ImportSource; imp != nil {
+			imported[[2]string{imp.ConfigDir, imp.NativeID}] = rec.ID
+		}
+		for _, native := range []string{rec.Metadata.AgentSessionID, rec.Metadata.ProviderConversationID} {
+			if _, seen := managed[native]; native != "" && !seen {
+				managed[native] = rec.ID
+			}
+		}
+	}
 	selected := make(map[string]selection)
 	preview := Preview{Candidates: []Candidate{}}
 	cache := map[string]parsed{}
@@ -446,10 +461,10 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 		}
 		for i, file := range files {
 			result := results[i]
-			cache[file.cacheKey()] = result
 			if result.err != nil {
-				continue // Malformed, missing and unreadable histories are ineligible.
+				continue // Malformed, missing and unreadable histories are ineligible; read again next scan.
 			}
+			cache[file.cacheKey()] = result
 			source := result.source
 			id := candidateID(harness, root, source.nativeID)
 			if prior, ok := selected[id]; ok && !source.last.After(prior.source.last) {
@@ -464,18 +479,10 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 				title = "Imported conversation"
 			}
 			c := Candidate{ID: id, Harness: harness, Title: title, ProjectID: project, LastActivity: source.last, Suggested: source.last.After(recent), MessageCount: result.count, Shortened: source.shortened}
-			// Config folder and native ID name one conversation; an agent switch
-			// changes the session's harness, never the conversation it came from.
-			for _, rec := range sessions {
-				if imp := rec.Metadata.ImportSource; imp != nil && imp.NativeID == source.nativeID && imp.ConfigDir == root {
-					c.SessionID = rec.ID
-					break
-				}
-				// Already managed histories are not offered for a second session.
-				if rec.Metadata.AgentSessionID == source.nativeID || rec.Metadata.ProviderConversationID == source.nativeID {
-					c.SessionID = rec.ID
-					break
-				}
+			if sessionID, ok := imported[[2]string{root, source.nativeID}]; ok {
+				c.SessionID = sessionID
+			} else if sessionID, ok := managed[source.nativeID]; ok {
+				c.SessionID = sessionID
 			}
 			selected[id] = selection{candidate: c, source: source}
 		}
@@ -539,6 +546,12 @@ func (s *Service) Import(ctx context.Context, ids []string) ([]Result, error) {
 	results := make([]Result, 0, len(ids))
 	for _, id := range ids {
 		result := Result{ID: id, Status: "failed"}
+		// Out of time: report every row, so the dialog shows what was created.
+		if ctx.Err() != nil {
+			result.Error = "The import stopped before this conversation. Import it again."
+			results = append(results, result)
+			continue
+		}
 		item, found := s.selections[id]
 		if !found {
 			result.Error = "Scan again; this selection is no longer available"
@@ -579,9 +592,6 @@ func (s *Service) Import(ctx context.Context, ids []string) ([]Result, error) {
 			s.selections[id] = item
 		}
 		results = append(results, result)
-		if err := ctx.Err(); err != nil {
-			return results, err
-		}
 	}
 	return results, nil
 }

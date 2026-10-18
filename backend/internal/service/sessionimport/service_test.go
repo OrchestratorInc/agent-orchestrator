@@ -258,3 +258,23 @@ func TestRefreshArchiveRereadsBeforeFirstOpen(t *testing.T) {
 		t.Fatalf("adopted archive was rewritten: %+v %v", st.messages, err)
 	}
 }
+
+// An import that runs out of time still reports every row it was given.
+func TestImportOutOfTimeReportsEveryRow(t *testing.T) {
+	root := t.TempDir()
+	st := &importStore{}
+	svc := New(st, "")
+	svc.roots = map[domain.AgentHarness]string{domain.HarnessClaudeCode: root}
+	writeClaude(t, root, "11111111-1111-4111-8111-111111111111", "", "first", time.Now())
+	writeClaude(t, root, "22222222-2222-4222-8222-222222222222", "", "second", time.Now())
+	preview, err := svc.Scan(context.Background())
+	if err != nil || len(preview.Candidates) != 2 {
+		t.Fatalf("scan: %v %v", preview, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	results, err := svc.Import(ctx, []string{preview.Candidates[0].ID, preview.Candidates[1].ID})
+	if err != nil || len(results) != 2 || results[0].Status != "failed" || results[1].Error == "" || len(st.sessions) != 0 {
+		t.Fatalf("results = %+v, err = %v, created %d", results, err, len(st.sessions))
+	}
+}

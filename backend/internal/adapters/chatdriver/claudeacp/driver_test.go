@@ -487,8 +487,10 @@ func TestClaudeACPLaunchEnvPinsSelectedModel(t *testing.T) {
 	if env := claudeACPLaunchEnv(nil, "/opt/claude", "claude-haiku-5-5", nil); env["ANTHROPIC_MODEL"] != "claude-haiku-5-5" {
 		t.Fatalf("ANTHROPIC_MODEL = %q", env["ANTHROPIC_MODEL"])
 	}
-	if env := claudeACPLaunchEnv(nil, "/opt/claude", "", nil); env["ANTHROPIC_MODEL"] != "" {
-		t.Fatalf("no selection pinned %q", env["ANTHROPIC_MODEL"])
+	for _, unset := range []string{"", "default"} {
+		if env := claudeACPLaunchEnv(nil, "/opt/claude", unset, nil); env["ANTHROPIC_MODEL"] != "" {
+			t.Fatalf("selection %q pinned %q", unset, env["ANTHROPIC_MODEL"])
+		}
 	}
 	if env := claudeACPLaunchEnv(map[string]string{"ANTHROPIC_MODEL": "glm-5"}, "/opt/claude", "claude-haiku-5-5", nil); env["ANTHROPIC_MODEL"] != "glm-5" {
 		t.Fatalf("project pin replaced: %q", env["ANTHROPIC_MODEL"])

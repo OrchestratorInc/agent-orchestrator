@@ -34,7 +34,8 @@ func processStart(ctx context.Context, pid int) (string, time.Time, bool) {
 	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	cmd := process.CommandContext(probeCtx, "ps", "-o", "lstart=", "-o", "comm=", "-p", strconv.Itoa(pid))
-	cmd.Env = append(os.Environ(), "TZ=UTC")
+	// Claude records the start in this format; the C locale keeps ps from translating it.
+	cmd.Env = append(os.Environ(), "TZ=UTC", "LC_ALL=C")
 	out, err := cmd.Output()
 	fields := strings.Fields(string(out))
 	if err != nil || len(fields) < 6 {

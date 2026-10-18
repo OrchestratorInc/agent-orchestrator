@@ -647,3 +647,43 @@ func TestImportedChatInUnrelatedNestedRepositoryIsRefused(t *testing.T) {
 		t.Fatalf("created branches %q", branches)
 	}
 }
+
+// A chat that ran in a separate clone of a workspace's root repository: the
+// clone holds no child checkouts, so children start from the registered ones.
+func TestImportedWorkspaceFromRootCloneStartsChildrenFromRegisteredCheckouts(t *testing.T) {
+	m, st, _, root := newGitTaskPreparationManager(t)
+	runManagerGit(t, root, "remote", "add", "origin", "https://github.com/example/workspace-root.git")
+	child := filepath.Join(root, "child")
+	runManagerGit(t, root, "clone", newManagerGitRepo(t), child)
+	if err := os.WriteFile(filepath.Join(child, "registered-edit"), []byte("not part of the chat"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	clone := filepath.Join(t.TempDir(), "root-clone")
+	runManagerGit(t, root, "clone", "--no-local", root, clone)
+	runManagerGit(t, clone, "remote", "set-url", "origin", "git@github.com:example/workspace-root.git")
+	if err := os.WriteFile(filepath.Join(clone, "root-edit"), []byte("from the clone"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	project := st.projects["mer"]
+	project.Kind = domain.ProjectKindWorkspace
+	st.projects["mer"] = project
+	st.workspaceRepo["mer"] = []domain.WorkspaceRepoRecord{{Name: "child", RelativePath: "child", GitStatus: domain.GitStatusReady}}
+	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}}
+	rec.Metadata = domain.SessionMetadata{ProviderConversationID: "thread-1", ImportSource: &domain.SessionImportSource{NativeID: "thread-1", ConfigDir: "/provider", CWD: clone}}
+	st.sessions[rec.ID] = rec
+	ready, err := m.prepareImportedWorkspace(context.Background(), rec, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := ready.Metadata.WorkspacePath
+	if got, err := os.ReadFile(filepath.Join(workspace, "root-edit")); err != nil || string(got) != "from the clone" {
+		t.Fatalf("root edit = %q: %v", got, err)
+	}
+	target := filepath.Join(workspace, "child")
+	if got, want := runManagerGit(t, target, "rev-parse", "HEAD"), runManagerGit(t, child, "rev-parse", "HEAD"); got != want {
+		t.Fatalf("child HEAD = %s, want the registered %s", got, want)
+	}
+	if _, err := os.Lstat(filepath.Join(target, "registered-edit")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("the registered child's own edits were copied into the session")
+	}
+}

@@ -92,12 +92,19 @@ func TestImportedWorkspacePublicationKeepsConcurrentSessionEdits(t *testing.T) {
 	}
 }
 
-// The archive owns the first sequences; live rows follow it, so a refresh is
-// only accepted until the conversation exists.
+// The archive owns the first sequences; live rows follow it. A refresh is
+// accepted until the conversation holds a row of its own, including after a
+// first open that failed once its conversation existed.
 func TestImportedConversationFollowsArchive(t *testing.T) {
-	s := newTestStore(t)
-	seedProject(t, s, "hist")
 	ctx := context.Background()
+	dataDir := t.TempDir()
+	s := sqlitetest.MustOpenAt(t, dataDir)
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(dataDir, "ao.db")+failureStorePragmas)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	seedProject(t, s, "hist")
 	rec := sampleRecord("hist")
 	rec.Mode = domain.SessionModeChat
 	rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "native-1", ConfigDir: "/provider/home"}
@@ -105,10 +112,23 @@ func TestImportedConversationFollowsArchive(t *testing.T) {
 	message := func(text string) sessionimport.Message {
 		return sessionimport.Message{Role: domain.MessageRoleUser, Text: text, At: time.Now()}
 	}
+	archive := func(want ...string) {
+		t.Helper()
+		page, _, err := s.LoadSessionImportMessages(ctx, rec.ID, 0, 10)
+		if err != nil || len(page) != len(want) {
+			t.Fatalf("archive = %+v: %v", page, err)
+		}
+		for i := range want {
+			if page[i].Text != want[i] {
+				t.Fatalf("archive = %+v, want %v", page, want)
+			}
+		}
+	}
 	imported, _, err := s.CreateImportedSession(ctx, rec, []sessionimport.Message{message("one"), message("two")})
 	if err != nil {
 		t.Fatal(err)
 	}
+	rec.ID = imported.ID
 	if err := s.ReplaceImportedMessages(ctx, imported.ID, []sessionimport.Message{message("one"), message("two"), message("three")}); err != nil {
 		t.Fatal(err)
 	}
@@ -116,13 +136,23 @@ func TestImportedConversationFollowsArchive(t *testing.T) {
 	if err != nil || conversation.LatestSequence != 3 {
 		t.Fatalf("conversation = %+v: %v", conversation, err)
 	}
+	// The first open failed after creating the conversation; turns made
+	// elsewhere since then still reach the archive, and the counter follows it.
+	if err := s.ReplaceImportedMessages(ctx, imported.ID, []sessionimport.Message{message("one"), message("two"), message("three"), message("four")}); err != nil {
+		t.Fatal(err)
+	}
+	archive("one", "two", "three", "four")
+	if conversation, err := s.ConversationForSession(ctx, imported.ID); err != nil || conversation.LatestSequence != 4 {
+		t.Fatalf("counter after refresh = %+v: %v", conversation, err)
+	}
+	// A live row now follows the archive, so the archive no longer changes.
+	if _, err := db.Exec(`UPDATE conversations SET latest_sequence = latest_sequence + 1 WHERE id = ?`, "conv-hist"); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.ReplaceImportedMessages(ctx, imported.ID, []sessionimport.Message{message("late")}); err != nil {
 		t.Fatal(err)
 	}
-	page, _, err := s.LoadSessionImportMessages(ctx, imported.ID, 0, 10)
-	if err != nil || len(page) != 3 || page[2].Text != "three" {
-		t.Fatalf("archive after the conversation opened = %+v: %v", page, err)
-	}
+	archive("one", "two", "three", "four")
 }
 
 // Full-row writes come from snapshots that may predate a workspace transfer or

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -446,5 +447,49 @@ func TestScanListsOlderConversations(t *testing.T) {
 	sort.Strings(titles)
 	if strings.Join(titles, ",") != "claude 1 true,claude 2 true,claude 3 false" {
 		t.Fatalf("titles=%q", titles)
+	}
+}
+
+func TestClaudePromptOnlyStripsCommandRecords(t *testing.T) {
+	for input, want := range map[string]string{
+		"<command-name>/review</command-name>\n<command-message>review</command-message>\n<command-args>PR 12</command-args>": "/review PR 12",
+		"<command-message>review</command-message>\n<command-name>/review</command-name>":                                     "/review",
+	} {
+		if got, command := claudePrompt(input); got != want || !command {
+			t.Errorf("claudePrompt(%q) = %q, %v", input, got, command)
+		}
+	}
+	quoted := "why does my log show <command-name>/model</command-name> here?"
+	if got, command := claudePrompt(quoted); got != quoted || command {
+		t.Fatalf("a prompt quoting command tags became %q, %v", got, command)
+	}
+}
+
+// A long Claude history is not held whole while its branches are read: the
+// oldest text goes first, the opening prompt stays, and the row says so.
+func TestClaudeReadHoldsBoundedText(t *testing.T) {
+	held := maxClaudeHeld
+	maxClaudeHeld = 100
+	t.Cleanup(func() { maxClaudeHeld = held })
+	id := "6d842f77-b1fe-49f3-8585-8946df267bae"
+	var lines []string
+	parent := "null"
+	for i := range 6 {
+		role := []string{"user", "assistant"}[i%2]
+		uuid := fmt.Sprintf("n%d", i)
+		lines = append(lines, fmt.Sprintf(`{"type":%q,"uuid":%q,"parentUuid":%s,"sessionId":%q,"message":{"id":"m%d","role":%q,"content":[{"type":"text","text":"message %d %s"}]}}`, role, uuid, parent, id, i, role, i, strings.Repeat("x", 30)))
+		parent = strconv.Quote(uuid)
+	}
+	root := t.TempDir()
+	path := writeFile(t, filepath.Join(root, "projects", "-work-repo", id+".jsonl"), strings.Join(lines, "\n")+"\n")
+	got, err := readTranscript(context.Background(), domain.HarnessClaudeCode, root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.messages) < 2 || !strings.HasPrefix(got.messages[0].Text, "message 0 ") || !strings.HasPrefix(got.messages[len(got.messages)-1].Text, "message 5 ") || !got.shortened {
+		t.Fatalf("messages = %v, shortened = %v", got.messages, got.shortened)
+	}
+	if len(got.messages) == 6 {
+		t.Fatal("held every message")
 	}
 }

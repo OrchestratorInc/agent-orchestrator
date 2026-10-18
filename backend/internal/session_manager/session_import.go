@@ -46,17 +46,18 @@ func (m *Manager) refreshImportArchive(ctx context.Context, rec domain.SessionRe
 
 // importReplayedThrough is the last sequence of the provider replay projected
 // while adopting an import. Native history import runs before ControllerReady,
-// so no AO turn can sit at or below it.
-func (m *Manager) importReplayedThrough(ctx context.Context, id domain.SessionID) int64 {
+// so no AO turn can sit at or below it. Adoption records it once, so a failed
+// read fails the adoption instead of storing a boundary that hides nothing.
+func (m *Manager) importReplayedThrough(ctx context.Context, id domain.SessionID) (int64, error) {
 	store, ok := m.store.(chatProviderOwnershipStore)
 	if !ok {
-		return 0
+		return 0, nil
 	}
 	conversation, err := store.ConversationForSession(ctx, id)
 	if err != nil {
-		return 0
+		return 0, fmt.Errorf("read the imported history boundary: %w", err)
 	}
-	return conversation.LatestSequence
+	return conversation.LatestSequence, nil
 }
 
 // ErrSessionOpenElsewhere requires the other writer to close; AO never takes it over.
@@ -339,10 +340,17 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 					continue
 				}
 				rel := filepath.FromSlash(repo.RelativePath)
-				roots[filepath.Join(project.Path, rel)] = filepath.Join(copyFrom, rel)
+				registered := filepath.Join(project.Path, rel)
+				native := filepath.Join(copyFrom, rel)
 				if override := overrides[rel]; override != "" {
-					roots[filepath.Join(project.Path, rel)] = override
+					native = override
+				} else if copyFrom != project.Path && !sessionimport.SameRepository(ctx, native, registered) {
+					// A separate clone of the root holds no child checkouts: the
+					// child starts from the registered one, with nothing copied.
+					native = registered
+					overrides[rel] = ""
 				}
+				roots[registered] = native
 			}
 			for repoPath, nativePath := range roots {
 				head, err := importGit(ctx, nativePath, "rev-parse", "HEAD")
@@ -377,7 +385,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 				cwd = physical
 			}
 			for rel, nativePath := range overrides {
-				if pathWithin(nativePath, cwd) {
+				if nativePath != "" && pathWithin(nativePath, cwd) {
 					subdir, _ := filepath.Rel(nativePath, cwd)
 					cwd = filepath.Join(copyFrom, rel, subdir)
 					break
@@ -552,7 +560,9 @@ func importGitPaths(root string) ([]string, error) {
 // HEAD (the worktree has not been handed to an agent yet, and a retry follows a
 // source that moved on), then only what Git shows as changed is copied and the
 // source index is replayed. Ignored files, nested repositories and whatever the
-// workspace setup added stay as they are, and the source is only read.
+// workspace setup added stay as they are, and the source is only read. An
+// override names another checkout of one repository; an empty one leaves that
+// repository's fresh checkout as it is.
 func copyImportedWorkspace(ctx context.Context, source, destination string, overrides map[string]string, completionMarker string) error {
 	source, err := filepath.EvalSymlinks(source)
 	if err != nil {
@@ -596,7 +606,10 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 	states := make([]gitState, 0, len(gitPaths))
 	for _, rel := range gitPaths {
 		native := filepath.Join(source, rel)
-		if override := overrides[rel]; override != "" {
+		if override, ok := overrides[rel]; ok {
+			if override == "" {
+				continue
+			}
 			native = override
 		}
 		if pathWithin(native, destination) {
@@ -618,6 +631,9 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 	}
 	linkRoots := map[string]string{source: ""}
 	for rel, original := range overrides {
+		if original == "" {
+			continue
+		}
 		resolved, err := filepath.EvalSymlinks(original)
 		if err != nil {
 			return err

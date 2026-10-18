@@ -141,6 +141,18 @@ func (q *Queries) ListSessionImportMessages(ctx context.Context, arg ListSession
 	return items, nil
 }
 
+const maxSessionImportSequence = `-- name: MaxSessionImportSequence :one
+SELECT CAST(COALESCE(MAX(sequence), 0) AS INTEGER) FROM session_import_messages
+WHERE session_id = ?1
+`
+
+func (q *Queries) MaxSessionImportSequence(ctx context.Context, sessionID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, maxSessionImportSequence, sessionID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const seedImportedConversationSequence = `-- name: SeedImportedConversationSequence :one
 UPDATE conversations SET latest_sequence = (
     SELECT CAST(COALESCE(MAX(m.sequence), 0) AS INTEGER) FROM session_import_messages AS m

@@ -3929,6 +3929,9 @@ func (s *Store) conversationVisibleAfterSequence(
 		// An adopted import hides the provider's partial replay; the chat service
 		// shows the import archive below it instead.
 		raw, err := s.qr.GetSessionImportSource(ctx, *conv.SessionID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil
+		}
 		if err != nil {
 			return 0, fmt.Errorf("select session %s import source: %w", *conv.SessionID, err)
 		}

@@ -31,8 +31,10 @@ const (
 // Variables so tests can use small records. A string over maxSkimString in an
 // oversized record is omitted; it would exceed maxVisibleBytes on its own.
 var (
-	maxRecordBytes  = 64 << 20
-	maxSkimString   = maxVisibleBytes
+	maxRecordBytes = 64 << 20
+	maxSkimString  = maxVisibleBytes
+	// Claude text held while the active branch is still unknown, across all branches.
+	maxClaudeHeld   = 2 * maxVisibleBytes
 	nativeIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 	// Codex rollouts may be zstd-compressed and split into `<thread>_<segment>` files.
 	codexRolloutName = regexp.MustCompile(`^rollout-.*-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:_[0-9a-fA-F-]{36})?\.jsonl(?:\.zst)?$`)
@@ -157,6 +159,11 @@ func claudePrompt(text string) (string, bool) {
 			return ""
 		}
 		return strings.TrimSpace(value)
+	}
+	// Claude writes a command record that starts with its tags; a prompt that
+	// merely quotes them is still a prompt.
+	if !strings.HasPrefix(trimmed, "<command-name>") && !strings.HasPrefix(trimmed, "<command-message>") {
+		return text, false
 	}
 	name := between("<command-name>", "</command-name>")
 	if name == "" {
@@ -342,7 +349,7 @@ type tagged struct {
 type claudeNode struct {
 	typ, role, id, uuid, parent, logicalParent, cwd, text, model string
 	at                                                           time.Time
-	hidden, omitted                                              bool
+	hidden, omitted, dropped                                     bool
 }
 
 // readTranscript reads one native conversation; Codex segments are passed oldest first.
@@ -370,6 +377,9 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 		claude      []claudeNode
 		claudeIndex = map[string]int{}
 		claudeLeaf  string
+		claudeHeld  int // bytes of Claude text held
+		claudeFirst = -1
+		claudeDrop  int // the oldest node whose text may still be held
 		customTitle string
 		prompted    bool
 		sawMeta     bool
@@ -436,15 +446,36 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 			if r.Type == "user" || r.Type == "assistant" {
 				node.text = string(r.Message.Content)
 			}
+			index := len(claude)
 			if r.UUID != "" {
 				claudeLeaf = r.UUID
-				if index, rewritten := claudeIndex[r.UUID]; rewritten {
-					claude[index] = node // Claude rewrites some records in place, for example after a cwd change.
-					return nil
+				if at, rewritten := claudeIndex[r.UUID]; rewritten {
+					index = at
+				} else {
+					claudeIndex[r.UUID] = index
 				}
-				claudeIndex[r.UUID] = len(claude)
 			}
-			claude = append(claude, node)
+			if index < len(claude) {
+				// Claude rewrites some records in place, for example after a cwd change.
+				claudeHeld -= len(claude[index].text)
+				claude[index] = node
+			} else {
+				claude = append(claude, node)
+			}
+			if claudeFirst < 0 && node.text != "" {
+				claudeFirst = index
+			}
+			if index < claudeDrop && index != claudeFirst {
+				claude[index].text, claude[index].dropped = "", node.text != ""
+			}
+			claudeHeld += len(claude[index].text)
+			// Drop the oldest text first, as trimVisible would, but keep the opening prompt.
+			for ; claudeHeld > maxClaudeHeld && claudeDrop < len(claude); claudeDrop++ {
+				if claudeDrop != claudeFirst && claude[claudeDrop].text != "" {
+					claudeHeld -= len(claude[claudeDrop].text)
+					claude[claudeDrop].text, claude[claudeDrop].dropped = "", true
+				}
+			}
 			return nil
 		}
 		if r.Omitted && (r.Type == "response_item" || r.Type == "event_msg") {
@@ -536,7 +567,7 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 		if (node.typ != "user" && node.typ != "assistant") || node.hidden {
 			continue
 		}
-		t.shortened = t.shortened || node.omitted
+		t.shortened = t.shortened || node.omitted || node.dropped
 		// Claude marks locally generated replies, such as errors, as "<synthetic>".
 		if node.model != "" && node.model != "<synthetic>" {
 			t.model = node.model

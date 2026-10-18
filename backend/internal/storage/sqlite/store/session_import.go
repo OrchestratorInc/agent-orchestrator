@@ -52,7 +52,9 @@ func (s *Store) CreateImportedSession(ctx context.Context, rec domain.SessionRec
 }
 
 // ReplaceImportedMessages swaps in a fresher read of the source until the
-// session's conversation exists; from then on live rows follow the archive.
+// session's conversation holds a row of its own; from then on live rows follow
+// the archive. A first open that failed leaves only a conversation whose
+// counter still ends at the archive, and that counter moves with the refresh.
 func (s *Store) ReplaceImportedMessages(ctx context.Context, id domain.SessionID, messages []sessionimport.Message) error {
 	if len(messages) == 0 {
 		return errors.New("readable native history is required")
@@ -60,10 +62,19 @@ func (s *Store) ReplaceImportedMessages(ctx context.Context, id domain.SessionID
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "refresh import archive", func(q *gen.Queries) error {
-		if _, err := q.SelectConversationBySession(ctx, &id); err == nil {
-			return nil
-		} else if !errors.Is(err, sql.ErrNoRows) {
+		conversation, err := q.SelectConversationBySession(ctx, &id)
+		opened := err == nil
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
+		}
+		if opened {
+			archived, err := q.MaxSessionImportSequence(ctx, string(id))
+			if err != nil {
+				return err
+			}
+			if conversation.LatestSequence > archived {
+				return nil
+			}
 		}
 		if err := q.DeleteSessionImportMessages(ctx, string(id)); err != nil {
 			return err
@@ -73,7 +84,11 @@ func (s *Store) ReplaceImportedMessages(ctx context.Context, id domain.SessionID
 				return err
 			}
 		}
-		return nil
+		if !opened {
+			return nil
+		}
+		_, err = q.SeedImportedConversationSequence(ctx, gen.SeedImportedConversationSequenceParams{SessionID: string(id), ID: conversation.ID})
+		return err
 	})
 }
 
