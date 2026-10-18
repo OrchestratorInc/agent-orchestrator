@@ -31,6 +31,9 @@ import (
 
 const minimumNodeMajor = 22
 
+// claudeTodoToolsEnv switches on Claude Code's to-do tools in SDK sessions.
+const claudeTodoToolsEnv = "CLAUDE_CODE_ENABLE_TODO_TOOLS"
+
 type claudePlugin interface {
 	ResolveBinary(context.Context) (string, error)
 }
@@ -216,6 +219,14 @@ func claudeACPLaunchEnv(
 	// This prevents the adapter's optional native Claude package from becoming
 	// a second installation managed by AO.
 	env["CLAUDE_CODE_EXECUTABLE"] = binary
+	// Claude Code withholds its to-do tools (TaskCreate, TaskUpdate, ...) from
+	// SDK-driven sessions unless this is set, so the agent has nothing to call
+	// and AO never receives the plan updates behind the chat's plan panel. A
+	// value the user already chose, in the project env or the daemon's own, wins.
+	if _, configured := input[claudeTodoToolsEnv]; !configured &&
+		os.Getenv(claudeTodoToolsEnv) == "" {
+		env[claudeTodoToolsEnv] = "1"
+	}
 	selected := strings.TrimSpace(selectedModel)
 	if _, configured := input["ANTHROPIC_CUSTOM_MODEL_OPTION"]; selected != "" &&
 		!isClaudeNativeModelAlias(selected) && !configured &&

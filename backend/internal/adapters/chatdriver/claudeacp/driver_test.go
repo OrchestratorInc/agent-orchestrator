@@ -91,6 +91,32 @@ func TestClaudeACPLaunchEnvPreservesInvalidModelConfiguration(t *testing.T) {
 	}
 }
 
+func TestClaudeACPLaunchEnvEnablesTodoToolsByDefault(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "")
+	env := claudeACPLaunchEnv(nil, "/opt/claude", "", nil)
+	if got := env["CLAUDE_CODE_ENABLE_TODO_TOOLS"]; got != "1" {
+		t.Fatalf("CLAUDE_CODE_ENABLE_TODO_TOOLS = %q, want 1 so Claude has a to-do tool", got)
+	}
+}
+
+func TestClaudeACPLaunchEnvKeepsConfiguredTodoToolsChoice(t *testing.T) {
+	t.Run("project env", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "")
+		env := claudeACPLaunchEnv(
+			map[string]string{"CLAUDE_CODE_ENABLE_TODO_TOOLS": "0"}, "/opt/claude", "", nil)
+		if got := env["CLAUDE_CODE_ENABLE_TODO_TOOLS"]; got != "0" {
+			t.Fatalf("CLAUDE_CODE_ENABLE_TODO_TOOLS = %q, want the project's value kept", got)
+		}
+	})
+	t.Run("daemon env", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "0")
+		env := claudeACPLaunchEnv(nil, "/opt/claude", "", nil)
+		if got, set := env["CLAUDE_CODE_ENABLE_TODO_TOOLS"]; set {
+			t.Fatalf("CLAUDE_CODE_ENABLE_TODO_TOOLS = %q, want the inherited value left alone", got)
+		}
+	})
+}
+
 func TestClaudeACPLaunchEnvAdvertisesSelectedModelWithoutProviderCatalog(t *testing.T) {
 	t.Setenv("CLAUDE_MODEL_CONFIG", "")
 	env := claudeACPLaunchEnv(nil, "/opt/claude", "claude-opus-4-7", nil)
