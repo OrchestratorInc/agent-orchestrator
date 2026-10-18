@@ -108,7 +108,11 @@ func PrepareProfile(ctx context.Context, home, instructions string) error {
 			}
 			explicitlyDisabled := valid && !enabled
 			if !explicitlyDisabled {
-				if limit, ok := spill["max_chars"].(int); ok && limit > 0 && limit < len([]rune(instructions)) {
+				limit, valid := spill["max_chars"].(int)
+				if spill["max_chars"] != nil && !valid {
+					return fmt.Errorf("hermes ACP: integer hook spill limit required")
+				}
+				if limit > 0 && limit < len([]rune(instructions)) {
 					return fmt.Errorf("hermes ACP: native hook spill limit would truncate context")
 				}
 			}

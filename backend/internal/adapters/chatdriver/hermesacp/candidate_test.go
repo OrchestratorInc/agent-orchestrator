@@ -64,6 +64,8 @@ func TestPrepareProfileRejectsUnsafeConfigurationBeforeWriting(t *testing.T) {
 		{"oversized", "plugins: {enabled: []}", strings.Repeat("x", 8193)},
 		{"invalid utf8", "plugins: {enabled: []}", string([]byte{255})},
 		{"malformed spill", "plugins: {enabled: []}\nhooks: {output_spill: {enabled: 'false', max_chars: 2}}", "context"},
+		{"string spill limit", "plugins: {enabled: []}\nhooks: {output_spill: {max_chars: '2'}}", "context"},
+		{"float spill limit", "plugins: {enabled: []}\nhooks: {output_spill: {max_chars: 2.5}}", "context"},
 		{"spill", "plugins: {enabled: []}\nhooks: {output_spill: {max_chars: 2}}", "context"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
