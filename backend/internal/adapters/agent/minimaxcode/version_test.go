@@ -37,7 +37,7 @@ func TestVersionMismatchIsCachedUntilInvalidation(t *testing.T) {
 	}
 	version = "0.6.5"
 	for range 3 {
-		if got, err := plugin.ResolveBinary(context.Background()); got != "" || err != mismatch {
+		if got, err := plugin.ResolveBinary(context.Background()); got != "" || !errors.Is(err, mismatch) {
 			t.Fatalf("cached mismatch = (%q, %v), want original mismatch", got, err)
 		}
 	}
