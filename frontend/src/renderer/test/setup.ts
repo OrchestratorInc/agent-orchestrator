@@ -96,6 +96,8 @@ if (typeof window !== "undefined") {
 	const localStorageStub = (() => {
 		const values = new Map<string, string>();
 		return {
+			get length() { return values.size; },
+			key: (index: number) => [...values.keys()][index] ?? null,
 			clear: () => values.clear(),
 			getItem: (key: string) => values.get(key) ?? null,
 			removeItem: (key: string) => values.delete(key),

@@ -116,7 +116,7 @@ describe("Cloud project settings", () => {
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", expectedPatch({ model: "other-model", effort: "low", permissions: "bypass-permissions" })));
 		view.unmount();
 		mount();
-		expect(await screen.findByRole("button", { name: `${label} model` })).toHaveTextContent("Other model · Low");
+		await waitFor(() => expect(screen.getByRole("button", { name: `${label} model` })).toHaveTextContent("Other model · Low"));
 		expect(screen.getByRole("button", { name: `${label} approval` })).toHaveTextContent("Bypass permissions");
 		expect(screen.getByRole("button", { name: `${label} agent` })).toBeDisabled();
 	});

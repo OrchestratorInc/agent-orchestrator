@@ -2,6 +2,7 @@ import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { foldClaudeAliasDefault } from "../lib/agent-model-choices";
+import { cacheAgentModels, clearCachedAgentModels, readCachedAgentModels } from "../lib/agent-model-cache";
 import { clientForHost } from "../lib/host-clients";
 import { LOCAL_HOST } from "../lib/hosts";
 
@@ -43,15 +44,44 @@ async function requestAgentModels(
 				});
 	if (result.error) throw new Error(apiErrorMessage(result.error));
 	const catalog = result.data as AgentModelCatalog;
-	return agentId === "claude-code" ? { ...catalog, models: foldClaudeAliasDefault(catalog.models) } : catalog;
+	const normalized = agentId === "claude-code" ? { ...catalog, models: foldClaudeAliasDefault(catalog.models) } : catalog;
+	if (mode !== "cached" || catalogOnly) cacheAgentModels(normalized, agentId, projectId, hostId);
+	return normalized;
 }
 
 export function agentModelsQueryOptions(agentId: string, projectId: string, hostId?: string, catalogOnly = false) {
 	const key = agentModelsQueryKey(agentId, projectId, hostId);
-	return queryOptions({
+	return queryOptions<AgentModelCatalog>({
 		// Both read the shared daemon catalog; only task responses add recency.
 		queryKey: catalogOnly ? [...key, "catalog"] as const : key,
-		queryFn: () => requestAgentModels(agentId, projectId, "cached", hostId, catalogOnly),
+		initialData: () => readCachedAgentModels(agentId, projectId, hostId),
+		initialDataUpdatedAt: 0,
+		refetchOnMount: catalogOnly ? true : "always",
+		queryFn: async ({ client }): Promise<AgentModelCatalog> => {
+			if (catalogOnly) return requestAgentModels(agentId, projectId, "cached", hostId, true);
+			const catalogKey = [...key, "catalog"] as const;
+			if (!client.getQueryData<AgentModelCatalog>(key)) {
+				// Publish the DB catalog before the task response scans session history
+				// for recency. Reuse Settings' read only for this exact host and scope.
+				const cached = client.getQueryData<AgentModelCatalog>(catalogKey);
+				if (cached) client.setQueryData(key, cached);
+			}
+			// Read the DB even when the UI has a saved snapshot. Deduplicate reads
+			// shared with Settings, but never wait for recency to publish the result.
+			const catalog = await client.fetchQuery({
+				queryKey: catalogKey,
+				queryFn: () => requestAgentModels(agentId, projectId, "cached", hostId, true),
+				staleTime: 0,
+			});
+			const published = client.setQueryData(key, catalog);
+			const enriched = await requestAgentModels(agentId, projectId, "cached", hostId);
+			// A background refresh may have published newer models while recency
+			// was being read. Keep that catalog rather than restoring the old list.
+			const current = client.getQueryData<AgentModelCatalog>(key);
+			const latest = current && current !== published ? current : enriched;
+			cacheAgentModels(latest, agentId, projectId, hostId);
+			return latest;
+		},
 		enabled: agentId !== "",
 		// A catalog that carries a warning describes a problem the user may fix
 		// outside AO (a login in a terminal), so any remount re-reads it.
@@ -82,6 +112,7 @@ export function modelCatalogAuthIssue(catalog: Pick<AgentModelCatalog, "warning"
  * Call after anything that can change what the agent's login allows.
  */
 export function invalidateAgentModelCatalogs(queryClient: QueryClient, agentId: string, hostId?: string): Promise<unknown> {
+	clearCachedAgentModels(agentId, hostId);
 	return Promise.all([
 		queryClient.invalidateQueries({ queryKey: hostId ? ["agent-models", hostId, agentId] : agentModelsQueryPrefix(agentId) }),
 		queryClient.invalidateQueries({

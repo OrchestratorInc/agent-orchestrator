@@ -75,16 +75,6 @@ export function AgentModelField({
 		catalog?.warning ??
 		(query.isError ? (query.error instanceof Error ? query.error.message : t("settings.models.loadFailed")) : undefined);
 
-	if (agentId !== "" && query.isFetching && catalog === undefined) {
-		return (
-			<div className="min-w-0">
-				<span className="text-xs text-settings-muted" role="status" aria-label={t("settings.models.loading")}>
-					{t("settings.models.loading")}
-				</span>
-			</div>
-		);
-	}
-
 	if (isMode) {
 		const defaultMode = followCatalogDefaults ? offeredModels.find((item) => item.isDefault && isConcreteModelID(item.id))?.id : "agent";
 		const selectedMode = isConcreteModelID(mode) ? mode : "";

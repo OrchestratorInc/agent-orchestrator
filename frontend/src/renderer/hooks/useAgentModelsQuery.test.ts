@@ -1,6 +1,175 @@
-import { QueryClient } from "@tanstack/react-query";
-import { describe, expect, it } from "vitest";
-import { invalidateAgentModelCatalogs, modelCatalogAuthIssue } from "./useAgentModelsQuery";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { apiClient } from "../lib/api-client";
+import { cacheAgentModels, readCachedAgentModels } from "../lib/agent-model-cache";
+import { agentModelsQueryOptions, invalidateAgentModelCatalogs, modelCatalogAuthIssue, type AgentModelCatalog } from "./useAgentModelsQuery";
+
+vi.mock("../lib/api-client", () => ({
+	apiClient: { GET: vi.fn() },
+	apiErrorMessage: () => "Model request failed",
+}));
+
+beforeEach(() => window.localStorage.clear());
+afterEach(() => {
+	vi.restoreAllMocks();
+	vi.resetAllMocks();
+	window.localStorage.clear();
+});
+
+describe("cached model loading", () => {
+	const catalog: AgentModelCatalog = {
+		agentId: "codex", models: [{ id: "model-one", label: "Model one" }],
+		allowCustom: false, customModelEntry: "none", selectionMode: "catalog",
+		source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z",
+	};
+
+	it("shows the DB catalog while the task response is still pending, then updates recency", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		let finish!: (value: { data: AgentModelCatalog }) => void;
+		const taskResponse = new Promise<{ data: AgentModelCatalog }>((resolve) => { finish = resolve; });
+		vi.mocked(apiClient.GET).mockResolvedValueOnce({ data: catalog } as never).mockReturnValueOnce(taskResponse as never);
+		const observer = new QueryObserver(client, agentModelsQueryOptions("codex", "project-one"));
+		const unsubscribe = observer.subscribe(() => {});
+		try {
+			await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(catalog));
+			expect(observer.getCurrentResult().isFetching).toBe(true);
+			expect(observer.getCurrentResult().isPending).toBe(false);
+			expect(apiClient.GET).toHaveBeenNthCalledWith(1, "/api/v1/agents/{agent}/models", {
+				params: { path: { agent: "codex" }, query: { projectId: "project-one", catalogOnly: true } },
+			});
+			const enriched = { ...catalog, models: [{ ...catalog.models[0], lastUsedAt: "2026-10-18T01:00:00Z" }] };
+			finish({ data: enriched });
+			await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(enriched));
+		} finally {
+			finish({ data: catalog });
+			unsubscribe();
+			client.clear();
+		}
+	});
+
+	it("shows Settings' catalog for the same scope while the DB read fails", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		client.setQueryData(agentModelsQueryOptions("codex", "", undefined, true).queryKey, catalog);
+		vi.mocked(apiClient.GET).mockRejectedValueOnce(new Error("daemon unavailable"));
+		const options = agentModelsQueryOptions("codex", "");
+		await expect(client.fetchQuery({ ...options, retry: false })).rejects.toThrow("daemon unavailable");
+		expect(client.getQueryData(options.queryKey)).toEqual(catalog);
+		expect(apiClient.GET).toHaveBeenCalledTimes(1);
+		client.clear();
+	});
+
+	it("restores models synchronously after a frontend restart, then applies the DB update before recency", async () => {
+		cacheAgentModels({ ...catalog, refreshRecommended: true, refreshState: "refreshing" }, "codex", "project-one");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		let finishDB!: (value: { data: AgentModelCatalog }) => void;
+		let finishRecency!: (value: { data: AgentModelCatalog }) => void;
+		const dbResponse = new Promise<{ data: AgentModelCatalog }>((resolve) => { finishDB = resolve; });
+		const recencyResponse = new Promise<{ data: AgentModelCatalog }>((resolve) => { finishRecency = resolve; });
+		vi.mocked(apiClient.GET).mockReturnValueOnce(dbResponse as never).mockReturnValueOnce(recencyResponse as never);
+		const observer = new QueryObserver(client, agentModelsQueryOptions("codex", "project-one"));
+		expect(observer.getCurrentResult().data?.models).toEqual(catalog.models);
+		expect(observer.getCurrentResult().data?.refreshRecommended).toBe(false);
+		const unsubscribe = observer.subscribe(() => {});
+		const updated = { ...catalog, models: [...catalog.models, { id: "model-two", label: "Model two" }] };
+		try {
+			expect(observer.getCurrentResult().isPending).toBe(false);
+			finishDB({ data: updated });
+			await vi.waitFor(() => expect(observer.getCurrentResult().data?.models).toEqual(updated.models));
+			expect(observer.getCurrentResult().isFetching).toBe(true);
+			expect(readCachedAgentModels("codex", "project-one")?.models).toEqual(updated.models);
+			finishRecency({ data: updated });
+			await vi.waitFor(() => expect(observer.getCurrentResult().isFetching).toBe(false));
+		} finally {
+			finishDB({ data: updated });
+			finishRecency({ data: updated });
+			unsubscribe();
+			client.clear();
+		}
+	});
+
+	it("keeps the saved frontend catalog when its background DB read fails", async () => {
+		cacheAgentModels(catalog, "codex", "project-one");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		vi.mocked(apiClient.GET).mockRejectedValueOnce(new Error("DB unavailable"));
+		const options = agentModelsQueryOptions("codex", "project-one");
+		await expect(client.fetchQuery(options)).rejects.toThrow("DB unavailable");
+		expect(client.getQueryData<AgentModelCatalog>(options.queryKey)?.models).toEqual(catalog.models);
+		client.clear();
+	});
+
+	it("does not let a slow recency response overwrite a newer background catalog", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		let finish!: (value: { data: AgentModelCatalog }) => void;
+		const recency = new Promise<{ data: AgentModelCatalog }>((resolve) => { finish = resolve; });
+		vi.mocked(apiClient.GET).mockResolvedValueOnce({ data: catalog } as never).mockReturnValueOnce(recency as never);
+		const options = agentModelsQueryOptions("codex", "project-one");
+		const pending = client.fetchQuery(options);
+		await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(2));
+		const fresh = { ...catalog, models: [{ id: "new-model", label: "New model" }] };
+		client.setQueryData(options.queryKey, fresh);
+		finish({ data: catalog });
+		expect(await pending).toEqual(fresh);
+		expect(readCachedAgentModels("codex", "project-one")?.models).toEqual(fresh.models);
+		client.clear();
+	});
+
+	it("ignores corrupt saved data and still reads models from the DB", async () => {
+		cacheAgentModels(catalog, "codex", "project-one");
+		window.localStorage.setItem(window.localStorage.key(0)!, "not JSON");
+		expect(readCachedAgentModels("codex", "project-one")).toBeUndefined();
+		vi.mocked(apiClient.GET).mockResolvedValue({ data: catalog } as never);
+		const client = new QueryClient();
+		expect((await client.fetchQuery(agentModelsQueryOptions("codex", "project-one"))).models).toEqual(catalog.models);
+		client.clear();
+	});
+
+	it("continues using the DB when browser storage cannot be written", async () => {
+		vi.spyOn(window.localStorage, "setItem").mockImplementation(() => { throw new Error("quota"); });
+		vi.mocked(apiClient.GET).mockResolvedValue({ data: catalog } as never);
+		const client = new QueryClient();
+		expect((await client.fetchQuery(agentModelsQueryOptions("codex", "project-one"))).models).toEqual(catalog.models);
+		client.clear();
+	});
+
+	it("clears all saved project catalogs for the changed login without touching another host", async () => {
+		cacheAgentModels(catalog, "codex", "project-one");
+		cacheAgentModels(catalog, "codex", "project-two");
+		cacheAgentModels(catalog, "codex", "project-one", "box-a");
+		const client = new QueryClient();
+		await invalidateAgentModelCatalogs(client, "codex");
+		expect(readCachedAgentModels("codex", "project-one")).toBeUndefined();
+		expect(readCachedAgentModels("codex", "project-two")).toBeUndefined();
+		expect(readCachedAgentModels("codex", "project-one", "box-a")?.models).toEqual(catalog.models);
+		client.clear();
+	});
+
+	it("keeps a stale Settings catalog visible when its background read fails", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const settingsOptions = agentModelsQueryOptions("codex", "", undefined, true);
+		client.setQueryData(settingsOptions.queryKey, catalog);
+		await client.invalidateQueries({ queryKey: settingsOptions.queryKey });
+		vi.mocked(apiClient.GET).mockRejectedValueOnce(new Error("daemon unavailable"));
+		const options = agentModelsQueryOptions("codex", "");
+		await expect(client.fetchQuery(options)).rejects.toThrow("daemon unavailable");
+		expect(client.getQueryData(options.queryKey)).toEqual(catalog);
+		client.clear();
+	});
+
+	it.each([
+		{ agent: "codex", project: "another-project", host: undefined },
+		{ agent: "codex", project: "project-one", host: "box-a" },
+		{ agent: "claude-code", project: "project-one", host: undefined },
+	])("does not borrow a catalog from a different scope: %j", async ({ agent, project, host }) => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		cacheAgentModels({ ...catalog, agentId: agent }, agent, project, host);
+		client.setQueryData(agentModelsQueryOptions(agent, project, host, true).queryKey, catalog);
+		vi.mocked(apiClient.GET).mockRejectedValueOnce(new Error("DB read failed"));
+		const options = agentModelsQueryOptions("codex", "project-one");
+		await expect(client.fetchQuery({ ...options, retry: false })).rejects.toThrow("DB read failed");
+		expect(client.getQueryData(options.queryKey)).toBeUndefined();
+		client.clear();
+	});
+});
 
 describe("modelCatalogAuthIssue", () => {
 	it("reads the daemon's warning code", () => {

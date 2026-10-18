@@ -8,7 +8,6 @@ import {
 } from "@aoagents/product-ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2 } from "lucide-react";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
@@ -766,10 +765,7 @@ export function TaskComposer({
 				mode: selectedMode,
 				catalog: modelCatalog,
 				fetching: modelCatalogQuery.isFetching,
-				loading:
-					selectedAgent !== "" &&
-					modelCatalogQuery.isFetching &&
-					modelCatalogQuery.data === undefined,
+				loading: false,
 				onModelChange: (value) => {
 					setModel(value);
 					setMode("");
@@ -873,7 +869,6 @@ function TaskModelPicker({
 	agentLabel,
 	catalog,
 	disabled,
-	loading,
 	value,
 	mode,
 	onModelChange,
@@ -883,9 +878,7 @@ function TaskModelPicker({
 }: TaskComposerModelControl & { onRefresh: () => Promise<void>; showFollowAgentAction: boolean }) {
 	const { t } = useTranslation();
 
-	// No agent selected: there is nothing loading and no model to choose yet, so
-	// show a clear "select an agent" placeholder, never a spinner. This returns
-	// before the loading check so a no-agent state can never render one.
+	// Keep the no-agent placeholder until there is an agent to configure.
 	if (agentId === "") {
 		return (
 			<span
@@ -894,25 +887,6 @@ function TaskModelPicker({
 				aria-label={t("newTask.model")}
 			>
 				<span className="truncate text-settings-muted">{t("newTask.selectAgent")}</span>
-			</span>
-		);
-	}
-
-	if (loading) {
-		return (
-			<span
-				className="composer-chip composer-toolbar-option w-fit cursor-not-allowed justify-start opacity-50"
-				aria-label={t("newTask.model")}
-			>
-				<span
-					className="inline-flex min-w-0 items-center gap-1.5"
-					role="status"
-					aria-label={t("settings.models.loading")}
-					aria-busy="true"
-				>
-					<Loader2 className="size-icon-sm shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
-					<span className="truncate text-settings-muted">{t("settings.models.loading")}</span>
-				</span>
 			</span>
 		);
 	}
