@@ -177,7 +177,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     requested_output,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
-    claude_activity_facts, codex_activity_facts,
+    provider_base_url, provider_model, claude_activity_facts, codex_activity_facts,
     hibernated_at, client_request_id, client_request_hash, client_request_committed
 FROM sessions WHERE id = ?
 `
@@ -248,6 +248,8 @@ type GetSessionRow struct {
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
+	ProviderBaseURL                  string
+	ProviderModel                    string
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
 	HibernatedAt                     sql.NullTime
@@ -325,6 +327,8 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.IsTaskPreparation,
 		&i.AutomationRunID,
 		&i.AutomationLaunchCompleted,
+		&i.ProviderBaseURL,
+		&i.ProviderModel,
 		&i.ClaudeActivityFacts,
 		&i.CodexActivityFacts,
 		&i.HibernatedAt,
@@ -351,7 +355,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     requested_output,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
-    claude_activity_facts, codex_activity_facts,
+    provider_base_url, provider_model, claude_activity_facts, codex_activity_facts,
     hibernated_at, client_request_id, client_request_hash, client_request_committed
 FROM sessions WHERE automation_run_id = ?
 `
@@ -422,6 +426,8 @@ type GetSessionByAutomationRunIDRow struct {
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
+	ProviderBaseURL                  string
+	ProviderModel                    string
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
 	HibernatedAt                     sql.NullTime
@@ -499,6 +505,8 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.IsTaskPreparation,
 		&i.AutomationRunID,
 		&i.AutomationLaunchCompleted,
+		&i.ProviderBaseURL,
+		&i.ProviderModel,
 		&i.ClaudeActivityFacts,
 		&i.CodexActivityFacts,
 		&i.HibernatedAt,
@@ -688,7 +696,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     requested_output,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
-    claude_activity_facts, codex_activity_facts,
+    provider_base_url, provider_model, claude_activity_facts, codex_activity_facts,
     hibernated_at, client_request_id, client_request_hash, client_request_committed
 FROM sessions ORDER BY project_id, num
 `
@@ -759,6 +767,8 @@ type ListAllSessionsRow struct {
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
+	ProviderBaseURL                  string
+	ProviderModel                    string
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
 	HibernatedAt                     sql.NullTime
@@ -842,6 +852,8 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.IsTaskPreparation,
 			&i.AutomationRunID,
 			&i.AutomationLaunchCompleted,
+			&i.ProviderBaseURL,
+			&i.ProviderModel,
 			&i.ClaudeActivityFacts,
 			&i.CodexActivityFacts,
 			&i.HibernatedAt,
@@ -911,7 +923,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
     requested_output,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
-    claude_activity_facts, codex_activity_facts,
+    provider_base_url, provider_model, claude_activity_facts, codex_activity_facts,
     hibernated_at, client_request_id, client_request_hash, client_request_committed
 FROM sessions WHERE project_id IS ? ORDER BY num
 `
@@ -982,6 +994,8 @@ type ListSessionsByProjectRow struct {
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
+	ProviderBaseURL                  string
+	ProviderModel                    string
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
 	HibernatedAt                     sql.NullTime
@@ -1065,6 +1079,8 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.IsTaskPreparation,
 			&i.AutomationRunID,
 			&i.AutomationLaunchCompleted,
+			&i.ProviderBaseURL,
+			&i.ProviderModel,
 			&i.ClaudeActivityFacts,
 			&i.CodexActivityFacts,
 			&i.HibernatedAt,
@@ -1809,6 +1825,7 @@ UPDATE sessions SET
     preview_url = ?, preview_revision = ?, terminate_on_pr_merge = ?,
     cleanup_generation = ?, browser_capability_verifier = ?,
     provider_conversation_id = ?, controller_generation = ?, model = ?, effort = ?, updated_at = ?,
+    provider_base_url = ?, provider_model = ?,
     is_pinned = ?, pinned_at = ?, auto_inject_review = ?, auto_inject_ci = ?,
     automation_launch_completed = ?
 WHERE id = ?
@@ -1858,6 +1875,8 @@ type UpdateSessionParams struct {
 	Model                            string
 	Effort                           string
 	UpdatedAt                        time.Time
+	ProviderBaseURL                  string
+	ProviderModel                    string
 	IsPinned                         bool
 	PinnedAt                         sql.NullTime
 	AutoInjectReview                 bool
@@ -1911,6 +1930,8 @@ func (q *Queries) UpdateSession(ctx context.Context, arg UpdateSessionParams) er
 		arg.Model,
 		arg.Effort,
 		arg.UpdatedAt,
+		arg.ProviderBaseURL,
+		arg.ProviderModel,
 		arg.IsPinned,
 		arg.PinnedAt,
 		arg.AutoInjectReview,

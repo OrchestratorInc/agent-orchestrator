@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { appI18n } from "../i18n";
 import type { PullRequestFacts, WorkspaceSession } from "../types/workspace";
 import {
+	historicalReviewStatesFrom,
 	openReviewStatesFor,
 	reviewHasLiveActivity,
 	reviewIsRunning,
@@ -9,6 +10,7 @@ import {
 	reviewSessionRunAction,
 	sessionReviewsQueryOptions,
 	type PRReviewState,
+	type ReviewRunFacts,
 } from "./session-reviews";
 
 function session(overrides: Partial<WorkspaceSession> = {}): WorkspaceSession {
@@ -116,5 +118,59 @@ describe("shared review eligibility helpers", () => {
 		expect(reviewSessionRunAction([reviewState(1, "needs_review")], false)).toBe(
 			appI18n.t("inspector.review.runLatest"),
 		);
+	});
+});
+
+const run = (
+	number: number,
+	overrides: Partial<ReviewRunFacts> = {},
+): ReviewRunFacts => ({
+	autoInjectReview: true,
+	batchId: "b",
+	body: "review body",
+	createdAt: "2026-06-10T00:00:00Z",
+	githubReviewId: "",
+	harness: "codex",
+	id: `run-${number}`,
+	prUrl: `https://github.com/o/r/pull/${number}`,
+	reviewId: `rev-${number}`,
+	sessionId: "session-1",
+	status: "complete",
+	targetSha: "sha",
+	triggerSource: "auto",
+	verdict: "approved",
+	...overrides,
+});
+
+describe("historicalReviewStatesFrom", () => {
+	it("synthesizes states for PRs with runs but no live state (multi-PR sessions)", () => {
+		const states = historicalReviewStatesFrom(
+			[
+				run(51, { createdAt: "2026-06-10T01:38:00Z", verdict: "changes_requested" }),
+				run(51, { createdAt: "2026-06-10T01:53:00Z" }),
+				run(53, { createdAt: "2026-06-10T03:03:00Z" }),
+			],
+			[reviewState(53, "up_to_date")],
+		);
+		expect(states.map((state) => state.prNumber)).toEqual([51]);
+		expect(states[0].status).toBe("up_to_date");
+		expect(states[0].latestRun?.createdAt).toBe("2026-06-10T01:53:00Z");
+		expect(states[0].previousRun?.createdAt).toBe("2026-06-10T01:38:00Z");
+	});
+
+	it("marks a PR whose newest run requested changes", () => {
+		const states = historicalReviewStatesFrom(
+			[run(51, { verdict: "changes_requested" })],
+			[],
+		);
+		expect(states[0].status).toBe("changes_requested");
+	});
+
+	it("ignores incomplete runs and PRs that already have a live state", () => {
+		const states = historicalReviewStatesFrom(
+			[run(1, { status: "running" }), run(2)],
+			[reviewState(2, "up_to_date")],
+		);
+		expect(states).toEqual([]);
 	});
 });

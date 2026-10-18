@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { useUiStore } from "../stores/ui-store";
+import { agentModelsQueryKey } from "../hooks/useAgentModelsQuery";
 import { ReviewerSelect } from "./ReviewerSelect";
 
 describe("ReviewerSelect", () => {
@@ -64,7 +65,7 @@ describe("ReviewerSelect", () => {
 
 	it("shows the catalog's concrete model for an inherited reviewer", () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		client.setQueryData(["agent-models", "codex", ""], {
+		client.setQueryData(agentModelsQueryKey("codex", "", undefined, "reviewer"), {
 			agentId: "codex", selectionMode: "catalog", models: [
 				{ id: "gpt-test", label: "GPT Test", isDefault: true },
 			],
@@ -77,7 +78,7 @@ describe("ReviewerSelect", () => {
 
 	it("selecting the reported reviewer model keeps following the agent", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		client.setQueryData(["agent-models", "codex", ""], {
+		client.setQueryData(agentModelsQueryKey("codex", "", undefined, "reviewer"), {
 			agentId: "codex", selectionMode: "catalog", models: [
 				{ id: "gpt-test", label: "GPT Test", isDefault: true },
 				{ id: "gpt-other", label: "GPT Other" },
@@ -96,7 +97,7 @@ describe("ReviewerSelect", () => {
 
 	it("offers a keyboard-reachable agent default in a non-current harness submenu", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		client.setQueryData(["agent-models", "codex", ""], {
+		client.setQueryData(agentModelsQueryKey("codex", "", undefined, "reviewer"), {
 			agentId: "codex", selectionMode: "catalog", models: [
 				{ id: "gpt-test", label: "GPT Test", isDefault: true },
 				{ id: "gpt-other", label: "GPT Other" },
@@ -119,7 +120,7 @@ describe("ReviewerSelect", () => {
 
 	it("does not duplicate the agent default for the current harness, and marks the default model selected", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		client.setQueryData(["agent-models", "codex", ""], {
+		client.setQueryData(agentModelsQueryKey("codex", "", undefined, "reviewer"), {
 			agentId: "codex", selectionMode: "catalog", models: [
 				{ id: "gpt-test", label: "GPT Test", isDefault: true },
 				{ id: "gpt-other", label: "GPT Other" },
@@ -138,7 +139,7 @@ describe("ReviewerSelect", () => {
 
 	it("offers a single agent default for the current harness while a non-default model is selected without a reported default", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		client.setQueryData(["agent-models", "codex", ""], {
+		client.setQueryData(agentModelsQueryKey("codex", "", undefined, "reviewer"), {
 			agentId: "codex", selectionMode: "catalog", models: [{ id: "gpt-test", label: "GPT Test" }],
 		});
 		render(<QueryClientProvider client={client}><ReviewerSelect
@@ -152,7 +153,7 @@ describe("ReviewerSelect", () => {
 
 	it("can clear a reviewer model override when no agent model is reported", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		client.setQueryData(["agent-models", "codex", ""], {
+		client.setQueryData(agentModelsQueryKey("codex", "", undefined, "reviewer"), {
 			agentId: "codex", selectionMode: "catalog", models: [{ id: "gpt-test", label: "GPT Test" }],
 		});
 		const onConfigChange = vi.fn();
@@ -168,7 +169,7 @@ describe("ReviewerSelect", () => {
 
 	it("requires a concrete reviewer model when the catalog reports no default", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		client.setQueryData(["agent-models", "codex", ""], {
+		client.setQueryData(agentModelsQueryKey("codex", "", undefined, "reviewer"), {
 			agentId: "codex", selectionMode: "catalog", models: [{ id: "gpt-test", label: "GPT Test" }],
 		});
 		const onConfigChange = vi.fn();
@@ -184,6 +185,53 @@ describe("ReviewerSelect", () => {
 		expect(screen.queryByRole("menuitem", { name: "Agent choice" })).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("menuitem", { name: "GPT Test" }));
 		expect(onConfigChange).toHaveBeenCalledWith("codex", { model: "gpt-test" });
+	});
+
+	it("scopes the trigger catalog to the reviewer role", () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		client.setQueryData(agentModelsQueryKey("codex", "", undefined, "reviewer"), {
+			agentId: "codex", selectionMode: "catalog", models: [
+				{ id: "glm-reviewer", label: "GLM Reviewer", isDefault: true },
+			],
+		});
+		client.setQueryData(agentModelsQueryKey("codex", ""), {
+			agentId: "codex", selectionMode: "catalog", models: [
+				{ id: "gpt-default", label: "GPT Default", isDefault: true },
+			],
+		});
+		render(<QueryClientProvider client={client}><ReviewerSelect
+			ariaLabel="Reviewer" value="" defaultHarness="codex" onChange={() => undefined}
+		/></QueryClientProvider>);
+		expect(screen.getByRole("button", { name: "Reviewer" })).toHaveTextContent("Codex · GLM Reviewer");
+	});
+
+	it("marks a reviewer pin that is absent from the role catalog", () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		client.setQueryData(agentModelsQueryKey("claude-code", "", undefined, "reviewer"), {
+			agentId: "claude-code", selectionMode: "catalog", models: [
+				{ id: "glm-x", label: "GLM X", isDefault: true },
+			],
+		});
+		render(<QueryClientProvider client={client}><ReviewerSelect
+			ariaLabel="Reviewer" value="claude-code" model="opus" defaultHarness="claude-code" onChange={() => undefined}
+		/></QueryClientProvider>);
+		const trigger = screen.getByRole("button", { name: "Reviewer" });
+		expect(trigger).toHaveTextContent("opus (not in catalog)");
+	});
+
+	it("renders a cataloged reviewer pin without the absence marker", () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		client.setQueryData(agentModelsQueryKey("claude-code", "", undefined, "reviewer"), {
+			agentId: "claude-code", selectionMode: "catalog", models: [
+				{ id: "glm-x", label: "GLM X", isDefault: true },
+			],
+		});
+		render(<QueryClientProvider client={client}><ReviewerSelect
+			ariaLabel="Reviewer" value="claude-code" model="glm-x" defaultHarness="claude-code" onChange={() => undefined}
+		/></QueryClientProvider>);
+		const trigger = screen.getByRole("button", { name: "Reviewer" });
+		expect(trigger).toHaveTextContent("Claude Code · GLM X");
+		expect(trigger).not.toHaveTextContent("not in catalog");
 	});
 
 });

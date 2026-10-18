@@ -70,6 +70,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
+	userconfigsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/userconfig"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
@@ -558,6 +559,7 @@ func Run() error {
 	codexOperationGate := codexops.NewGate()
 	agentDeps := agentsvc.Deps{
 		Cache: store, Discoverer: modelDiscoverer, Projects: store, Sessions: store, Context: ctx, Logger: log,
+		ProviderEntries:        providerEntryLookup(store),
 		ModelDiscoveryDir:      filepath.Join(cfg.DataDir, "model-discovery"),
 		CodexAccountRoot:       filepath.Join(cfg.StateDir, "harnesses", "codex", "accounts"),
 		CodexPendingRoot:       filepath.Join(cfg.StateDir, "harnesses", "codex", "pending-accounts"),
@@ -671,6 +673,16 @@ func Run() error {
 	}()
 	lcStack.trackerDone = startTrackerIntake(ctx, cfg, store, sessionSvc, tracker, log)
 
+	// The agent catalog is the preflight dependency of ao spawn. A failure here
+	// must not be swallowed into a WARN nothing else reads: mark the daemon
+	// degraded so /readyz stops reporting ready until the catalog recovers.
+	readiness := httpd.NewReadiness()
+	go func() {
+		if _, err := agentSvc.Refresh(ctx); err != nil {
+			log.Warn("initial agent catalog refresh failed", "err", err)
+			readiness.SetDegraded("agent catalog refresh failed: " + err.Error())
+		}
+	}()
 	hostCommands := systemexec.New(cfg.DataDir)
 	systemChecks := systemcheck.NewWithCommandRunner(agentSvc, hostCommands, hostCommands)
 	privateNPMPrefixes := map[systeminstall.Target]string{}
@@ -716,6 +728,11 @@ func Run() error {
 	// HostID is assigned below, once the identity file has been read.
 	mc := &controllers.MobileController{Bridge: bs}
 	browserService := browsersvc.New(sessionSvc, browserBroker, browserAuthority)
+
+	// User-scope agent config: the lowest-precedence scope above projects. Backed
+	// by the singleton user_config row; has no effect on workers until the merge
+	// layer (#2999) wires it into effectiveAgentConfig.
+	userConfigSvc := userconfigsvc.New(store)
 
 	// Standalone shell terminals: user-opened shells with no agent session
 	// behind them. They reuse the same runtime adapter (and therefore the same
@@ -840,6 +857,12 @@ func Run() error {
 		}
 		return fmt.Errorf("reconcile sessions on boot: %w", reconcileErr)
 	}
+	// Ownerless conpty panes (the crash windows of #5948) have no one left to
+	// tear them down. Sweep before the listener accepts traffic so no fresh
+	// pane can appear mid-sweep, and before ReconcileBackground's adopt pass.
+	if reconcileErr := sessMgr.ReconcileOrphanedPtyHosts(ctx); reconcileErr != nil {
+		log.Warn("orphaned pty-host sweep deferred", "err", reconcileErr)
+	}
 	agentSvc.WarmCodexAccounts()
 	automationSvc, automationDone := startAutomations(ctx, store, sessionSvc, log)
 	lcStack.automationDone = automationDone
@@ -958,6 +981,7 @@ func Run() error {
 		ArtifactVersions:   lcStack.ArtifactVersions,
 		HostID:             hostIdentity.HostID,
 		Endpoints:          bs,
+		UserConfig:         userConfigSvc,
 		Agents:             agentSvc,
 		CodexAccounts:      agentSvc,
 		SystemChecks:       systemChecks,
@@ -982,6 +1006,7 @@ func Run() error {
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
 		Conversations:      chatSvc,
 		Settings:           settingsSvc,
+		Gateway:            newGatewayService(projectSvc),
 		CDC:                store,
 		Events:             cdcPipe.Broadcaster,
 		Activity:           lcStack.LCM,
@@ -1005,6 +1030,7 @@ func Run() error {
 		SessionCapabilities:      browserAuthority,
 		ShellPreviewCapabilities: shellTermSvc,
 		AgentSwitchPolicy:        policyCoordinator,
+		Readiness:                readiness,
 	})
 	if err != nil {
 		stop()

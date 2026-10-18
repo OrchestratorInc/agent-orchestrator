@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { markTerminalHandleFresh } from "../lib/fresh-terminal-handles";
 import type { MuxConnectionState, TerminalMux } from "../lib/terminal-mux";
 import type { WorkspaceSession } from "../types/workspace";
-import { useTerminalSession, type AttachableTerminal } from "./useTerminalSession";
+import {
+	REPLAY_WRITE_DEADLINE_MS,
+	useTerminalSession,
+	type AttachableTerminal,
+} from "./useTerminalSession";
 import { workspaceQueryKey } from "./useWorkspaceQuery";
 
 const session: WorkspaceSession = {
@@ -25,6 +29,7 @@ type FakeMux = {
 	mux: TerminalMux;
 	opens: Array<[string, number, number]>;
 	resizes: Array<[string, number, number]>;
+	forcedResizes: Array<[string, number, number]>;
 	inputs: Array<[string, string]>;
 	closes: string[];
 	events: string[];
@@ -53,6 +58,7 @@ function createFakeMux(): FakeMux {
 	const fake: FakeMux = {
 		opens: [],
 		resizes: [],
+		forcedResizes: [],
 		inputs: [],
 		closes: [],
 		events: [],
@@ -60,7 +66,10 @@ function createFakeMux(): FakeMux {
 		mux: {
 			open: (id, cols, rows) => fake.opens.push([id, cols, rows]),
 			sendInput: (id, input) => fake.inputs.push([id, input]),
-			resize: (id, cols, rows) => fake.resizes.push([id, cols, rows]),
+			resize: (id, cols, rows, force) => {
+				fake.resizes.push([id, cols, rows]);
+				if (force) fake.forcedResizes.push([id, cols, rows]);
+			},
 			close: (id) => {
 				fake.closes.push(id);
 				fake.events.push(`close:${id}`);
@@ -90,6 +99,7 @@ function createFakeMux(): FakeMux {
 type FakeTerminal = AttachableTerminal & {
 	activeBufferType: "normal" | "alternate";
 	autoCompleteWrites: boolean;
+	throwOnWrite: boolean;
 	lines: string[];
 	pendingWriteCallbacks: Array<() => void>;
 	latestOutputRequests: number;
@@ -111,11 +121,16 @@ function createFakeTerminal(): FakeTerminal {
 		rows: 24,
 		activeBufferType: "normal",
 		autoCompleteWrites: true,
+		throwOnWrite: false,
 		lines: [],
 		pendingWriteCallbacks: [],
 		latestOutputRequests: 0,
 		// Mirrors xterm: the callback fires once the chunk has been parsed.
 		write: (bytes, done) => {
+			// A renderer addon throwing out of write is the shape the guarded
+			// writer has to absorb: the chunk is lost either way, but the write
+			// accounting must not be.
+			if (terminal.throwOnWrite) throw new Error("write failed");
 			terminal.lines.push(new TextDecoder().decode(bytes));
 			if (done) {
 				if (terminal.autoCompleteWrites) done();
@@ -361,6 +376,27 @@ describe("useTerminalSession", () => {
 		act(() => view.result.current.syncVisibleSize(terminal.cols, terminal.rows));
 
 		expect(muxes[0].resizes.slice(initialResizes)).toEqual([["handle-1", 132, 47]]);
+		expect(muxes[0].forcedResizes).toEqual([["handle-1", 132, 47]]);
+	});
+
+	// The activation promote must reach the daemon even when the grid it
+	// republishes is identical to the last published one — the common case, since
+	// a parked terminal is refitted back to the size it already had. The daemon
+	// deduplicates repeat resizes, so an unforced call would be dropped and tmux
+	// would never be told to redraw, leaving the pane blank.
+	it("forces the activation resize when the grid is unchanged", () => {
+		const { view, terminal, muxes } = setup();
+		act(() => muxes[0].emitOpened("handle-1"));
+		act(() => terminal.emitResize(120, 40));
+		act(() => void vi.advanceTimersByTime(100));
+		const initialResizes = muxes[0].resizes.length;
+
+		view.rerender({ daemonReady: true, isVisible: false });
+		view.rerender({ daemonReady: true, isVisible: true });
+		act(() => view.result.current.syncVisibleSize(120, 40));
+
+		expect(muxes[0].resizes.slice(initialResizes)).toEqual([["handle-1", 120, 40]]);
+		expect(muxes[0].forcedResizes).toEqual([["handle-1", 120, 40]]);
 	});
 
 	// A tab opened and immediately covered by the next one attaches before it
@@ -438,6 +474,45 @@ describe("useTerminalSession", () => {
 			act(() => terminal.completeWrites());
 			expect(view.result.current.replaySettled).toBe(true);
 			expect(terminal.latestOutputRequests).toBe(1);
+		});
+
+		// A write callback that never arrives used to strand the pane forever:
+		// pendingReplayWrites stayed positive, so every later PTY frame queued
+		// behind it instead of reaching xterm and the cover was never lifted.
+		// The session stayed healthy on the backend while its pane showed
+		// nothing — the black-pane report.
+		it("recovers when a write callback never arrives", () => {
+			const { view, terminal, muxes } = setup();
+			terminal.autoCompleteWrites = false;
+			act(() => muxes[0].emitOpened("handle-1"));
+			act(() => muxes[0].emitData("handle-1", "replay"));
+			act(() => void vi.advanceTimersByTime(60 + 750));
+			expect(view.result.current.replaySettled).toBe(false);
+
+			act(() => void vi.advanceTimersByTime(REPLAY_WRITE_DEADLINE_MS));
+			expect(view.result.current.replaySettled).toBe(true);
+
+			// The pane is live again: bytes arriving after the deadline reach
+			// xterm rather than accumulating in the post-replay queue.
+			act(() => muxes[0].emitData("handle-1", "after deadline"));
+			expect(terminal.lines).toContain("after deadline");
+		});
+
+		it("recovers when a write throws synchronously", () => {
+			const { view, terminal, muxes } = setup();
+			terminal.throwOnWrite = true;
+			act(() => muxes[0].emitOpened("handle-1"));
+			act(() => muxes[0].emitData("handle-1", "replay"));
+			act(() => void vi.advanceTimersByTime(60 + 750));
+
+			// A throw loses the chunk, but the accounting must still settle so the
+			// cover comes off and the attachment keeps working.
+			act(() => void vi.advanceTimersByTime(REPLAY_WRITE_DEADLINE_MS));
+			expect(view.result.current.replaySettled).toBe(true);
+
+			terminal.throwOnWrite = false;
+			act(() => muxes[0].emitData("handle-1", "after throw"));
+			expect(terminal.lines).toContain("after throw");
 		});
 
 		it("streams reviewer-style attachments without the replay gate", () => {

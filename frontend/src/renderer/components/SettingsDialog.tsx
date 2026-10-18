@@ -1,4 +1,4 @@
-import { Bot, Coffee, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
+import { Bot, Coffee, FolderGit2, KeyRound, Loader2, MonitorCog, Network, Play, ScrollText, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -99,6 +99,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	}> = [
 		{ id: "general", label: t("settings.project.general"), icon: MonitorCog },
 		{ id: "agents", label: t("settings.project.agents"), icon: Bot },
+		{ id: "gateway", label: t("settings.gateway.title"), icon: Network },
 	];
 	// Scripts are project settings on local and Cloud projects alike (a Cloud
 	// session's worker runs them). Environment and cues are local-daemon

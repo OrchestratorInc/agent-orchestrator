@@ -301,6 +301,28 @@ func TestInteractiveTerminalEnvDropsAmbientNoColorAndAdvertisesTrueColor(t *test
 	}
 }
 
+// A daemon started from inside a Claude Code session inherits that session's
+// own identity markers (CLAUDECODE, CLAUDE_CODE_CHILD_SESSION, etc); base
+// here is os.Environ() at the pty-host spawn call sites (spawn_darwin.go,
+// spawn_windows.go), so those markers must not survive into the worker's
+// terminal — the worker's own claude-code process would otherwise
+// misidentify itself as a child of that unrelated parent session.
+func TestInteractiveTerminalEnvDropsParentSessionMarkers(t *testing.T) {
+	env := interactiveTerminalEnv(
+		[]string{"PATH=/usr/bin", "CLAUDECODE=1", "CLAUDE_CODE_CHILD_SESSION=1"},
+		nil,
+		nil,
+	)
+	for _, blocked := range []string{"CLAUDECODE=1", "CLAUDE_CODE_CHILD_SESSION=1"} {
+		if slices.Contains(env, blocked) {
+			t.Errorf("interactiveTerminalEnv leaked parent-session marker: %#v", env)
+		}
+	}
+	if !slices.Contains(env, "PATH=/usr/bin") {
+		t.Errorf("interactiveTerminalEnv dropped an unrelated env var: %#v", env)
+	}
+}
+
 func TestInteractiveTerminalEnvPreservesExplicitNoColor(t *testing.T) {
 	for _, tt := range []struct {
 		name        string

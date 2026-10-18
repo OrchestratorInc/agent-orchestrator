@@ -220,6 +220,14 @@ paths:
           description: Optional project identifier used as the model-catalog cache
             scope.
           type: string
+      - description: 'Optional role whose provider pin scopes the catalog: worker,
+          orchestrator, or reviewer. Requires projectId.'
+        in: query
+        name: role
+        schema:
+          description: 'Optional role whose provider pin scopes the catalog: worker,
+            orchestrator, or reviewer. Requires projectId.'
+          type: string
       responses:
         "200":
           content:
@@ -289,6 +297,14 @@ paths:
           description: When true, compare executable and config metadata before running
             discovery.
           type: boolean
+      - description: 'Optional role whose provider pin scopes the catalog: worker,
+          orchestrator, or reviewer. Requires projectId.'
+        in: query
+        name: role
+        schema:
+          description: 'Optional role whose provider pin scopes the catalog: worker,
+            orchestrator, or reviewer. Requires projectId.'
+          type: string
       responses:
         "200":
           content:
@@ -4005,6 +4021,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
       summary: Squash-merge a pull request
       tags:
       - prs
@@ -10786,6 +10808,49 @@ paths:
         decorated
       tags:
       - sessions
+  /api/v1/sessions/apply-provider:
+    post:
+      operationId: applyProviderSwitch
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplyProviderRequest'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplyProviderResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Relaunch running claude-code sessions on the effective provider, preserving
+        context
+      tags:
+      - sessions
   /api/v1/sessions/cleanup:
     post:
       operationId: cleanupSessions
@@ -10818,6 +10883,32 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Clean up terminated session workspaces
+      tags:
+      - sessions
+  /api/v1/sessions/provider-staleness:
+    get:
+      operationId: listStaleProviderSessions
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderStalenessResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List running claude-code sessions whose provider differs from the effective
+        gateway config
       tags:
       - sessions
   /api/v1/settings:
@@ -10917,6 +11008,105 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Turn the cloud offering on or off for this machine
+      tags:
+      - settings
+  /api/v1/settings/gateway:
+    get:
+      operationId: getGatewayConfig
+      parameters:
+      - description: Project id; when omitted, only the app scope is reported.
+        in: query
+        name: projectId
+        schema:
+          description: Project id; when omitted, only the app scope is reported.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersGatewayConfigResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read the Anthropic-compatible gateway configuration per scope
+      tags:
+      - settings
+    put:
+      operationId: updateGatewayConfig
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersUpdateGatewayConfigRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersGatewayConfigResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Write the Anthropic-compatible gateway entry for one scope
+      tags:
+      - settings
+  /api/v1/settings/gateway/probe:
+    post:
+      operationId: probeGateway
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersGatewayProbeRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersGatewayProbeResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Validate a gateway base URL and token without saving them
       tags:
       - settings
   /api/v1/settings/harness-defaults/{agent}:
@@ -11584,6 +11774,57 @@ paths:
       summary: List resident memory of each live session's runtime process tree
       tags:
       - usage
+  /api/v1/user-config:
+    get:
+      operationId: getUserConfig
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserConfigResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Get the user-scoped agent config (the lowest-precedence scope above
+        projects)
+      tags:
+      - config
+    put:
+      operationId: setUserConfig
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetUserConfigInput'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserConfigResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Replace the user-scoped agent config wholesale (a zero agentConfig
+        clears it)
+      tags:
+      - config
 components:
   schemas:
     APIError:
@@ -11792,11 +12033,27 @@ components:
       properties:
         effort:
           type: string
+        env:
+          additionalProperties:
+            type: string
+          type: object
+        mcp:
+          $ref: '#/components/schemas/MCPConfig'
         mode:
           type: string
         model:
           type: string
+        orchestratorPromptOverride:
+          type: string
         permissions:
+          type: string
+        pluginDirs:
+          items:
+            type: string
+          type: array
+        systemPrompt:
+          type: string
+        workerPromptOverride:
           type: string
       type: object
     AgentInfo:
@@ -11965,6 +12222,8 @@ components:
           items:
             type: string
           type: array
+        effortsSeeded:
+          type: boolean
         id:
           type: string
         inputs:
@@ -12267,6 +12526,25 @@ components:
       - processCount
       - cpuPercent
       - cpuMeasured
+      type: object
+    ApplyProviderRequest:
+      properties:
+        sessionIds:
+          items:
+            type: string
+          type: array
+      type: object
+    ApplyProviderResponse:
+      properties:
+        ok:
+          type: boolean
+        results:
+          items:
+            $ref: '#/components/schemas/SessionProviderApplyResult'
+          type: array
+      required:
+      - ok
+      - results
       type: object
     ArtifactFileResponse:
       properties:
@@ -13638,6 +13916,45 @@ components:
         disabled:
           type: boolean
       type: object
+    ControllersGatewayConfigResponse:
+      properties:
+        app:
+          $ref: '#/components/schemas/GatewayScopeValue'
+        effective:
+          $ref: '#/components/schemas/GatewayEffective'
+        project:
+          $ref: '#/components/schemas/GatewayScopeValue'
+      required:
+      - app
+      - effective
+      type: object
+    ControllersGatewayProbeRequest:
+      properties:
+        baseUrl:
+          type: string
+        token:
+          type: string
+      required:
+      - baseUrl
+      - token
+      type: object
+    ControllersGatewayProbeResponse:
+      properties:
+        detail:
+          type: string
+        models:
+          items:
+            $ref: '#/components/schemas/GatewayModel'
+          type: array
+        state:
+          enum:
+          - valid
+          - invalid
+          - unknown
+          type: string
+      required:
+      - state
+      type: object
     ControllersKeepAwakeStatus:
       properties:
         active:
@@ -14026,6 +14343,30 @@ components:
           - boolean
       required:
       - enabled
+      type: object
+    ControllersUpdateGatewayConfigRequest:
+      properties:
+        baseUrl:
+          type:
+          - "null"
+          - string
+        model:
+          type:
+          - "null"
+          - string
+        projectId:
+          type: string
+        scope:
+          enum:
+          - app
+          - project
+          type: string
+        token:
+          type:
+          - "null"
+          - string
+      required:
+      - scope
       type: object
     ConversationAccountPayload:
       properties:
@@ -15097,6 +15438,8 @@ components:
           $ref: '#/components/schemas/AgentConfig'
         harness:
           type: string
+        provider:
+          type: string
       required:
       - harness
       type: object
@@ -15310,6 +15653,35 @@ components:
       - name
       - path
       - gitRepo
+      type: object
+    GatewayEffective:
+      properties:
+        baseUrl:
+          type: string
+        model:
+          type: string
+        source:
+          type: string
+      type: object
+    GatewayModel:
+      properties:
+        displayName:
+          type: string
+        id:
+          type: string
+      required:
+      - id
+      type: object
+    GatewayScopeValue:
+      properties:
+        baseUrl:
+          type: string
+        model:
+          type: string
+        tokenSet:
+          type: boolean
+      required:
+      - tokenSet
       type: object
     GitHubRepo:
       properties:
@@ -16075,6 +16447,15 @@ components:
       - entries
       - truncated
       type: object
+    MCPConfig:
+      properties:
+        configs:
+          items:
+            type: string
+          type: array
+        strict:
+          type: boolean
+      type: object
     MarkAllNotificationsReadRequest:
       properties:
         ids:
@@ -16568,6 +16949,8 @@ components:
           type: object
         orchestrator:
           $ref: '#/components/schemas/RoleOverride'
+        orchestratorPromptOverride:
+          type: string
         orchestratorRules:
           type: string
         postCreate:
@@ -16592,11 +16975,17 @@ components:
           $ref: '#/components/schemas/TrackerIntakeConfig'
         worker:
           $ref: '#/components/schemas/RoleOverride'
+        workerPromptOverride:
+          type: string
         workersRequestReview:
           type: boolean
       type: object
     ProjectGetResponse:
       properties:
+        defaultOrchestratorPrompt:
+          type: string
+        defaultWorkerPrompt:
+          type: string
         project:
           $ref: '#/components/schemas/ProjectOrDegraded'
         status:
@@ -16662,6 +17051,15 @@ components:
       - sourceTurnId
       - providerTurnId
       - activityId
+      type: object
+    ProviderStalenessResponse:
+      properties:
+        sessions:
+          items:
+            $ref: '#/components/schemas/SessionProviderStaleness'
+          type: array
+      required:
+      - sessions
       type: object
     PublishRenderRequest:
       properties:
@@ -16954,10 +17352,22 @@ components:
       type: object
     ReportResponse:
       properties:
+        availableAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         createdAt:
           format: date-time
           type: string
+        deliveryAttempts:
+          format: int64
+          type: integer
+        deliveryState:
+          type: string
         id:
+          type: string
+        lastError:
           type: string
         message:
           type: string
@@ -17180,6 +17590,8 @@ components:
           type: string
         agentConfig:
           $ref: '#/components/schemas/AgentConfig'
+        provider:
+          type: string
       type: object
     RollbackConversationResponse:
       properties:
@@ -17856,6 +18268,42 @@ components:
       required:
       - sessionId
       type: object
+    SessionProviderApplyResult:
+      properties:
+        error:
+          type: string
+        sessionId:
+          type: string
+        state:
+          enum:
+          - applied
+          - skipped
+          - failed
+          type: string
+      required:
+      - sessionId
+      - state
+      type: object
+    SessionProviderStaleness:
+      properties:
+        currentBaseUrl:
+          type: string
+        currentModel:
+          type: string
+        displayName:
+          type: string
+        mode:
+          type: string
+        sessionId:
+          type: string
+        stampBaseUrl:
+          type: string
+        stampModel:
+          type: string
+      required:
+      - sessionId
+      - mode
+      type: object
     SessionProvisionStep:
       properties:
         endedAt:
@@ -18218,6 +18666,13 @@ components:
           - cline
           - autohand
           type: string
+      type: object
+    SetUserConfigInput:
+      properties:
+        agentConfig:
+          $ref: '#/components/schemas/AgentConfig'
+      required:
+      - agentConfig
       type: object
     SettingsResponse:
       properties:
@@ -19572,6 +20027,17 @@ components:
       - processedTokens
       - cacheReadTokens
       - estimatedCost
+      type: object
+    UserConfigResponse:
+      properties:
+        agentConfig:
+          $ref: '#/components/schemas/AgentConfig'
+        defaultOrchestratorPrompt:
+          type: string
+        defaultWorkerPrompt:
+          type: string
+      required:
+      - agentConfig
       type: object
     WorkspaceCommitSummary:
       properties:

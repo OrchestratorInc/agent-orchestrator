@@ -260,7 +260,8 @@ function decodeArtifactText(bytes: Uint8Array, truncated: boolean): { binary: bo
 	}
 }
 
-export function sessionArtifactFileQueryOptions(sessionId: string, path: string, rawUrl: string | undefined, errorMessage = "Unable to load artifact"): UseQueryOptions<WorkspaceFileDetail> {
+// fork delta: no explicit UseQueryOptions return type — the inferred literal keeps queryFn a concrete callable for tests that invoke it directly.
+export function sessionArtifactFileQueryOptions(sessionId: string, path: string, rawUrl: string | undefined, errorMessage = "Unable to load artifact") {
 	return {
 		queryKey: ["session-artifact-file", rawUrl ?? "", sessionId, path],
 		queryFn: () => fetchSessionArtifactFile(sessionId, path, rawUrl, errorMessage),

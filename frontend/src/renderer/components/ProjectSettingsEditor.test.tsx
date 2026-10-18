@@ -8,6 +8,7 @@ import { TooltipProvider } from "./ui/tooltip";
 const initialValues: ProjectSettingsDraft = {
 	displayName: "Project", defaultBranch: "main", sessionPrefix: "ao",
 	workerAgent: "codex", orchestratorAgent: "claude-code", reviewerHarness: "",
+	workerProvider: "", orchestratorProvider: "", reviewerProvider: "",
 	workerModel: "", orchestratorModel: "", reviewerModel: "",
 	workerMode: "", orchestratorMode: "", reviewerMode: "",
 	workerEffort: "", orchestratorEffort: "", reviewerEffort: "",

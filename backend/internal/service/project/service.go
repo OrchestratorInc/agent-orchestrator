@@ -25,6 +25,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/reqid"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
 
 // Manager is the controller-facing contract for the /api/v1/projects surface.
@@ -60,6 +61,13 @@ type Manager interface {
 	// Remove unregisters a project, stopping its sessions and reclaiming
 	// managed workspaces.
 	Remove(ctx context.Context, id domain.ProjectID) (RemoveResult, error)
+
+	// DefaultPrompts returns the assembled hardcoded system-prompt baselines
+	// (static skeleton, no per-session data) so the project-scope prompt
+	// override editor can prefill with the real text. Mirrors
+	// userconfigsvc.Manager.DefaultPrompts for interface symmetry; the prompts
+	// are static and cached, so this never touches the store and never errors.
+	DefaultPrompts(ctx context.Context) (DefaultPrompts, error)
 }
 
 // SessionTeardowner is the narrow session-service surface project removal
@@ -82,6 +90,11 @@ type Service struct {
 	// covered by the store's own writeMu, so path/id conflict checks plus the
 	// subsequent mutation must be atomic from the perspective of concurrent callers.
 	addMu sync.Mutex
+	// defaultPrompts caches the assembled hardcoded system-prompt baselines.
+	// They are deterministic (computed from a zero promptProject, no per-session
+	// data) and never change at runtime, so they are assembled once and reused
+	// across every project GET that surfaces them to the override editor.
+	defaultPrompts func() DefaultPrompts
 }
 
 const maxDisplayNameLen = 100
@@ -128,6 +141,14 @@ func NewWithDeps(d Deps) *Service {
 	if s.clock == nil {
 		s.clock = time.Now
 	}
+	// sync.OnceValue memoizes the deterministic baseline assembly so the prompt
+	// builders run exactly once across the Service's lifetime, not per request.
+	s.defaultPrompts = sync.OnceValue(func() DefaultPrompts {
+		return DefaultPrompts{
+			Worker:       sessionmanager.DefaultWorkerSystemPrompt(),
+			Orchestrator: sessionmanager.DefaultOrchestratorSystemPrompt(),
+		}
+	})
 	if s.logger == nil {
 		s.logger = slog.Default()
 	}
@@ -840,6 +861,13 @@ func (m *Service) Remove(ctx context.Context, id domain.ProjectID) (RemoveResult
 			return RemoveResult{}, err
 		}
 	}
+	// Teardown swallows per-session failures into its skip report and returns
+	// nil, so an exhausted request deadline only surfaces here. Archive on a
+	// dead context would fail anyway; return the cause raw so the API layer
+	// maps it to a retryable 503 instead of a generic 500.
+	if err := ctx.Err(); err != nil {
+		return RemoveResult{}, err
+	}
 	ok, err = m.store.ArchiveProject(ctx, string(id), time.Now())
 	if err != nil {
 		return RemoveResult{}, apierr.Internal("PROJECT_REMOVE_FAILED", "Failed to remove project")
@@ -1071,6 +1099,13 @@ func sessionPrefix(id string) string {
 		return id
 	}
 	return id[:12]
+}
+
+// DefaultPrompts returns the assembled hardcoded system-prompt baselines,
+// cached after the first call (see NewWithDeps). ctx is accepted for interface
+// symmetry with Get/UpdateSettings and is otherwise unused.
+func (m *Service) DefaultPrompts(_ context.Context) (DefaultPrompts, error) {
+	return m.defaultPrompts(), nil
 }
 
 // SetPermissions remembers the approval policy for future sessions of either role.

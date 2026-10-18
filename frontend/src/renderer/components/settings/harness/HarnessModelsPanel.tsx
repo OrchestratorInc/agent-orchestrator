@@ -33,7 +33,7 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 	onOpenAccount: () => void;
 }) {
 	const { i18n, t } = useTranslation();
-	const options = agentModelsQueryOptions(agentId, "", hostId, true);
+	const options = agentModelsQueryOptions(agentId, "", hostId, undefined, true);
 	const loginBlocksCatalog = needsLogin && !MULTI_PROVIDER_HARNESSES.has(agentId);
 	const catalog = useQuery({ ...options, enabled: installed && !loginBlocksCatalog });
 	const [page, setPage] = useState(0);

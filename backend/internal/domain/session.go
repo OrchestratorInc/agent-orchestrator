@@ -255,6 +255,13 @@ type SessionMetadata struct {
 	// session. Keeping the verifier durable lets a surviving worker authenticate
 	// after the desktop app or daemon restarts.
 	BrowserCapabilityVerifier string `json:"-"`
+	// ProviderBaseURL and ProviderModel are the gateway identity this session's
+	// agent process was launched with (ANTHROPIC_BASE_URL / ANTHROPIC_MODEL as
+	// resolved at launch). Written on every spawn/resume so a later gateway
+	// switch can detect which running sessions would relaunch on a different
+	// provider (issue #6096). Internal lifecycle facts, not user-visible state.
+	ProviderBaseURL string `json:"-"`
+	ProviderModel   string `json:"-"`
 }
 
 // SessionRecord is the persistence shape. It intentionally stores only durable

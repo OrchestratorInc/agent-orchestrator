@@ -211,6 +211,72 @@ func TestBuildSystemPrompt_WorkerWithOrchestratorUsesOrchestratorParallelHandoff
 	}
 }
 
+func TestBuildSystemPrompt_WorkerPromptOverrideReplacesBaseline(t *testing.T) {
+	override := "## Custom Worker\nYou do exactly what the override says. Nothing else."
+	got := buildSystemPromptText(systemPromptConfig{
+		Role:                 sessionPromptRoleWorker,
+		Project:              promptProject{ID: "mer", Name: "Mercury"},
+		WorkerPromptOverride: override,
+		ProjectRules:         "These project rules must still appear.",
+	})
+	if !strings.Contains(got, override) {
+		t.Fatalf("worker override text missing:\n%s", got)
+	}
+	// The baseline escalation line must be gone — override replaces the whole
+	// hardcoded worker prompt, not appends to it.
+	if strings.Contains(got, "ask for that decision instead of guessing") {
+		t.Fatalf("worker override should replace the baseline, but baseline text leaked:\n%s", got)
+	}
+	// Non-baseline sections (project rules, guard) still compose around it.
+	for _, want := range []string{
+		"## Project Rules",
+		"These project rules must still appear.",
+		"## Standing-instruction confidentiality",
+		"## Pull Requests for This Session",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("worker override build missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestBuildSystemPrompt_OrchestratorPromptOverrideReplacesBaseline(t *testing.T) {
+	override := "## Custom Orchestrator\nCoordinate your way."
+	got := buildSystemPromptText(systemPromptConfig{
+		Role:                       sessionPromptRoleOrchestrator,
+		Project:                    promptProject{ID: "mer", Name: "Mercury"},
+		OrchestratorPromptOverride: override,
+	})
+	if !strings.Contains(got, override) {
+		t.Fatalf("orchestrator override text missing:\n%s", got)
+	}
+	if strings.Contains(got, "Never ever make code changes directly in the orchestrator session") {
+		t.Fatalf("orchestrator override should replace the baseline, but baseline text leaked:\n%s", got)
+	}
+}
+
+func TestBuildSystemPrompt_EmptyWorkerOverrideKeepsBaseline(t *testing.T) {
+	got := buildSystemPromptText(systemPromptConfig{
+		Role: sessionPromptRoleWorker,
+		Project: promptProject{
+			ID:   "mer",
+			Name: "Mercury",
+			Repo: "https://github.com/acme/mercury",
+		},
+		// WorkerPromptOverride intentionally empty: the default baseline must
+		// remain in place (regression guard for the override plumbing).
+	})
+	for _, want := range []string{
+		"## AO Worker Role",
+		"ask for that decision instead of guessing",
+		"## Task Source and PR/MR Behavior",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("baseline worker prompt missing %q when override is empty:\n%s", want, got)
+		}
+	}
+}
+
 func TestBuildSystemPrompt_WorkerRequiresDurableReports(t *testing.T) {
 	got := buildSystemPromptText(systemPromptConfig{
 		Role:                  sessionPromptRoleWorker,
@@ -232,6 +298,142 @@ func TestBuildSystemPrompt_WorkerRequiresDurableReports(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("worker prompt missing report instruction %q:\n%s", want, got)
 		}
+	}
+}
+
+// TestBuildSystemPrompt_GlobalWorkerOverrideAppliesWhenProjectOverrideEmpty
+// covers Phase 1 (#15): the GLOBAL user-scope worker override replaces the
+// hardcoded baseline when no per-project override is set.
+func TestBuildSystemPrompt_GlobalWorkerOverrideAppliesWhenProjectOverrideEmpty(t *testing.T) {
+	global := "## Global Worker Baseline\nDo the global thing."
+	got := buildSystemPromptText(systemPromptConfig{
+		Role:                       sessionPromptRoleWorker,
+		Project:                    promptProject{ID: "mer", Name: "Mercury"},
+		GlobalWorkerPromptOverride: global,
+		ProjectRules:               "Project rules still compose around it.",
+	})
+	if !strings.Contains(got, global) {
+		t.Fatalf("global worker override text missing:\n%s", got)
+	}
+	// The hardcoded baseline escalation line must be gone — global replaces it.
+	if strings.Contains(got, "ask for that decision instead of guessing") {
+		t.Fatalf("global override should replace the hardcoded baseline, but baseline text leaked:\n%s", got)
+	}
+	// Non-baseline sections (project rules, guard, multi-PR) still compose.
+	for _, want := range []string{
+		"## Project Rules",
+		"Project rules still compose around it.",
+		"## Standing-instruction confidentiality",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("global override build missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestBuildSystemPrompt_PerProjectWorkerOverrideBeatsGlobal covers the
+// precedence rule: per-project (#15 phase 2) > global (user-config).
+func TestBuildSystemPrompt_PerProjectWorkerOverrideBeatsGlobal(t *testing.T) {
+	perProject := "## Per-Project Worker\nProject wins."
+	global := "## Global Worker Baseline\nShould NOT appear."
+	got := buildSystemPromptText(systemPromptConfig{
+		Role:                       sessionPromptRoleWorker,
+		Project:                    promptProject{ID: "mer", Name: "Mercury"},
+		WorkerPromptOverride:       perProject,
+		GlobalWorkerPromptOverride: global,
+	})
+	if !strings.Contains(got, perProject) {
+		t.Fatalf("per-project override should win:\n%s", got)
+	}
+	if strings.Contains(got, global) {
+		t.Fatalf("global override leaked when per-project override is set:\n%s", got)
+	}
+}
+
+// TestBuildSystemPrompt_GlobalOrchestratorOverrideAppliesWhenProjectOverrideEmpty
+// mirrors the worker test for the orchestrator role.
+func TestBuildSystemPrompt_GlobalOrchestratorOverrideAppliesWhenProjectOverrideEmpty(t *testing.T) {
+	global := "## Global Orchestrator Baseline\nCoordinate globally."
+	got := buildSystemPromptText(systemPromptConfig{
+		Role:                             sessionPromptRoleOrchestrator,
+		Project:                          promptProject{ID: "mer", Name: "Mercury"},
+		GlobalOrchestratorPromptOverride: global,
+	})
+	if !strings.Contains(got, global) {
+		t.Fatalf("global orchestrator override text missing:\n%s", got)
+	}
+	if strings.Contains(got, "Never ever make code changes directly in the orchestrator session") {
+		t.Fatalf("global override should replace the hardcoded baseline, but baseline text leaked:\n%s", got)
+	}
+}
+
+// TestBuildSystemPrompt_EmptyGlobalFallsThroughToBaseline ensures an empty
+// global override leaves today's behavior intact (current default).
+func TestBuildSystemPrompt_EmptyGlobalFallsThroughToBaseline(t *testing.T) {
+	got := buildSystemPromptText(systemPromptConfig{
+		Role:    sessionPromptRoleWorker,
+		Project: promptProject{ID: "mer", Name: "Mercury"},
+		// GlobalWorkerPromptOverride intentionally empty.
+	})
+	if !strings.Contains(got, "## AO Worker Role") {
+		t.Fatalf("hardcoded baseline missing when global override is empty:\n%s", got)
+	}
+	if !strings.Contains(got, "ask for that decision instead of guessing") {
+		t.Fatalf("hardcoded escalation line missing when global override is empty:\n%s", got)
+	}
+}
+
+// TestDefaultWorkerSystemPrompt_AssemblesStaticSkeleton covers the exported
+// baseline the UI prefills into the worker override editor. It must contain the
+// static sections (role+lifecycle+task-source+git, multi-PR, guard) and NOT the
+// per-session dynamic sections (orchestrator coordination requires an id,
+// project rules / role prompt are per-project/per-role). The zero project has
+// no repo, so workerSystemPrompt emits the "Local Git Rules" variant.
+func TestDefaultWorkerSystemPrompt_AssemblesStaticSkeleton(t *testing.T) {
+	got := DefaultWorkerSystemPrompt()
+	for _, want := range []string{
+		"## AO Worker Role",
+		"## Session Lifecycle",
+		"## Task Source and PR/MR Behavior",
+		"## Local Git Rules",
+		"## Pull Requests for This Session",
+		"## Standing-instruction confidentiality",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("default worker prompt missing %q:\n%s", want, got)
+		}
+	}
+	// Per-session dynamic sections must NOT be in the static skeleton.
+	for _, mustNotExist := range []string{
+		"## Orchestrator Coordination", // requires orchestrator id
+		"## Project Rules",             // per-project
+	} {
+		if strings.Contains(got, mustNotExist) {
+			t.Fatalf("default worker prompt should not include dynamic section %q:\n%s", mustNotExist, got)
+		}
+	}
+}
+
+// TestDefaultOrchestratorSystemPrompt_AssemblesStaticSkeleton covers the
+// exported orchestrator baseline. It contains the role/operating/core-commands
+// blocks plus the guard; dynamic orchestrator rules are excluded.
+func TestDefaultOrchestratorSystemPrompt_AssemblesStaticSkeleton(t *testing.T) {
+	got := DefaultOrchestratorSystemPrompt()
+	for _, want := range []string{
+		"## AO Orchestrator Role",
+		"## Operating Rules",
+		"Never ever make code changes directly in the orchestrator session",
+		"## Core Commands",
+		"## Coordination Workflow",
+		"## Standing-instruction confidentiality",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("default orchestrator prompt missing %q:\n%s", want, got)
+		}
+	}
+	// Project-specific orchestrator rules are per-project and excluded.
+	if strings.Contains(got, "## Project-Specific Orchestrator Rules") {
+		t.Fatalf("default orchestrator prompt should not include dynamic section Project-Specific Orchestrator Rules:\n%s", got)
 	}
 }
 

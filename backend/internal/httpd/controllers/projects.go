@@ -151,7 +151,12 @@ func (c *ProjectsController) get(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	resp, err := newGetProjectResponse(got)
+	// The assembled hardcoded prompt baselines are surfaced via the Manager
+	// (mirrors GET /user-config) so the UI's project-scope override editor can
+	// prefill with the real text. DefaultPrompts is cached and never errors in
+	// practice, but a failure must not break the project read.
+	defaults, _ := c.Mgr.DefaultPrompts(r.Context())
+	resp, err := newGetProjectResponse(got, defaults)
 	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "INTERNAL_ERROR", "Internal server error", nil)
 		return

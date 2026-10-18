@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/amp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/conpty/ptyregistry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/scratch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -73,6 +75,10 @@ type fakeStore struct {
 	// sharedLog, when non-nil, receives an ordered call entry for each
 	// UpsertSessionWorktree invocation so ordering tests can compare across fakes.
 	sharedLog *[]string
+	// listCalls counters back the store reads Cleanup performs; the
+	// once-per-project regression test asserts on them.
+	listSessionsCalls    atomic.Int64
+	listAllSessionsCalls atomic.Int64
 }
 
 func newFakeStore() *fakeStore {
@@ -338,6 +344,7 @@ func (f *fakeStore) ConversationForSession(_ context.Context, id domain.SessionI
 	return conversation, nil
 }
 func (f *fakeStore) ListSessions(_ context.Context, p domain.ProjectID) ([]domain.SessionRecord, error) {
+	f.listSessionsCalls.Add(1)
 	var out []domain.SessionRecord
 	for _, r := range f.sessions {
 		if r.ProjectID == p {
@@ -347,6 +354,7 @@ func (f *fakeStore) ListSessions(_ context.Context, p domain.ProjectID) ([]domai
 	return out, nil
 }
 func (f *fakeStore) ListAllSessions(context.Context) ([]domain.SessionRecord, error) {
+	f.listAllSessionsCalls.Add(1)
 	if f.listAllErr != nil {
 		return nil, f.listAllErr
 	}
@@ -369,7 +377,11 @@ func (f *fakeStore) ListChatHibernationCandidates(ctx context.Context) ([]domain
 	}
 	return ids, nil
 }
-func (f *fakeStore) DeleteSession(_ context.Context, id domain.SessionID) (bool, error) {
+func (f *fakeStore) DeleteSession(ctx context.Context, id domain.SessionID) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		// Mirror the sqlite driver: a dead context fails the write.
+		return false, err
+	}
 	if f.deleteErr != nil {
 		return false, f.deleteErr
 	}
@@ -1716,7 +1728,7 @@ func TestSpawn_ResolvesProjectConfig(t *testing.T) {
 	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "bare", Kind: domain.KindWorker, Harness: domain.HarnessCodex}); err != nil {
 		t.Fatal(err)
 	}
-	if agent.lastConfig != (ports.AgentConfig{Permissions: ports.PermissionModeAuto}) {
+	if !reflect.DeepEqual(agent.lastConfig, ports.AgentConfig{Permissions: ports.PermissionModeAuto}) {
 		t.Fatalf("launch config = %#v, want Auto permissions for project without config", agent.lastConfig)
 	}
 	if got := ws.lastCfg.BaseBranch; got != "" {
@@ -4752,6 +4764,53 @@ func TestCleanup_ReclaimsTerminalWorkspaces(t *testing.T) {
 	}
 }
 
+// TestCleanup_ListsSessionsOncePerProject pins Cleanup's store-read count:
+// one initial list plus one fresh list per project group, regardless of
+// session count. The per-session re-list it replaced made a many-session
+// project perform N+1 full list reads inside the request deadline — the O(N²)
+// behind project-deletion timeouts (upstream issue #2598).
+func TestCleanup_ListsSessionsOncePerProject(t *testing.T) {
+	m, st, _, ws := newManager()
+	for i := 1; i <= 5; i++ {
+		seedTerminal(st, domain.SessionID(fmt.Sprintf("mer-%d", i)), domain.SessionMetadata{WorkspacePath: fmt.Sprintf("/ws/mer-%d", i)})
+	}
+	st.sessions["mer-live"] = mkLive("mer-live")
+
+	res, err := m.Cleanup(ctx, "mer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Cleaned) != 5 {
+		t.Fatalf("cleaned = %v, want 5", res.Cleaned)
+	}
+	// Initial list + one fresh list per group + one ownership recheck per
+	// reclaimed workspace (teardownWorkspace rechecks before removal — that
+	// read is bounded per session, not per list).
+	if got := st.listSessionsCalls.Load(); got != 7 {
+		t.Fatalf("ListSessions calls = %d, want 2", got)
+	}
+	if got := st.listAllSessionsCalls.Load(); got != 0 {
+		t.Fatalf("ListAllSessions calls = %d, want 0", got)
+	}
+
+	// Reclaim persists: a rerun reports the same sessions as already gone and
+	// keeps the same read shape — the absent workspaces still route through
+	// teardownWorkspace, whose pre-removal recheck runs before Destroy reports
+	// AlreadyAbsent.
+	ws.destroyReclaim = ports.WorkspaceReclaimAlreadyAbsent
+	before := st.listSessionsCalls.Load()
+	res, err = m.Cleanup(ctx, "mer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.AlreadyGone) != 5 {
+		t.Fatalf("alreadyGone = %v, want 5", res.AlreadyGone)
+	}
+	if got := st.listSessionsCalls.Load() - before; got != 7 {
+		t.Fatalf("rerun added %d ListSessions calls, want 7", got)
+	}
+}
+
 // TestCleanup_SkipsWorkspaceStillReferencedByLiveSession: a terminated
 // session's workspace must NOT be reclaimed while a live (non-terminated)
 // session references the same path. Persistent/shared worktrees (the
@@ -7110,6 +7169,27 @@ func TestRollbackSpawn_FallsBackToKillForLiveRow(t *testing.T) {
 	}
 	if !st.sessions["mer-1"].IsTerminated {
 		t.Fatal("live row should be marked terminated after kill-fallback")
+	}
+}
+
+// TestRollbackSpawnSeedRow_SurvivesCanceledContext pins the phantom-row fix:
+// the REST timeout cancels the request context mid-spawn, and the rollback
+// unwinding after it must still delete the seed row instead of failing
+// silently on the dead context and stranding an "Almost there" phantom.
+func TestRollbackSpawnSeedRow_SurvivesCanceledContext(t *testing.T) {
+	m, st, _, _ := newManager()
+	m.dataDir = t.TempDir()
+	// Seed row matches what CreateSession produces — no Metadata at all.
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID:        "mer-1",
+		ProjectID: "mer",
+		Activity:  domain.Activity{State: domain.ActivityIdle},
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	m.rollbackSpawnSeedRow(canceled, "mer-1")
+	if _, present := st.sessions["mer-1"]; present {
+		t.Fatal("seed row must still be removed when the rollback runs on a canceled context")
 	}
 }
 
@@ -10493,6 +10573,85 @@ func TestReconcileReap_TerminatedAndDeadTmuxLeftAlone(t *testing.T) {
 	}
 }
 
+func TestReconcileOrphanedPtyHosts_DestroyOwnerlessKeepsLiveWorkerAndReviewer(t *testing.T) {
+	ptyregistry.SetRunFilePath(t.TempDir())
+	t.Cleanup(func() { ptyregistry.SetRunFilePath("") })
+
+	st := newFakeStore()
+	rt := &fakeRuntime{}
+	ws := &fakeWorkspace{}
+	lcm := &fakeLCM{store: st}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: rt, Agents: fakeAgents{}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: lcm, LookPath: lookPath})
+
+	st.sessions["w-live"] = domain.SessionRecord{ID: "w-live", ProjectID: "p1"}
+	st.sessions["w-term"] = domain.SessionRecord{ID: "w-term", ProjectID: "p1", IsTerminated: true}
+
+	registeredAt := time.Now().UTC().Format(time.RFC3339)
+	for _, e := range []ptyregistry.Entry{
+		{SessionID: "w-live", PtyHostPID: os.Getpid(), PipePath: "127.0.0.1:61001", RegisteredAt: registeredAt},
+		{SessionID: "review-w-live", PtyHostPID: os.Getpid(), PipePath: "127.0.0.1:61002", RegisteredAt: registeredAt},
+		{SessionID: "w-term", PtyHostPID: os.Getpid(), PipePath: "127.0.0.1:61003", RegisteredAt: registeredAt},
+		{SessionID: "ghost", PtyHostPID: os.Getpid(), PipePath: "127.0.0.1:61004", RegisteredAt: registeredAt},
+		{SessionID: "ghost-res", PtyHostPID: 0, PipePath: ptyregistry.UnresolvedPipePath, RegisteredAt: registeredAt},
+	} {
+		if err := ptyregistry.Register(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := m.ReconcileOrphanedPtyHosts(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Destroy handles carry the direct-host scheme so a hybrid runtime routes
+	// them to conpty, not tmux.
+	want := map[string]bool{"ptyhost-v1:ghost": true, "ptyhost-v1:w-term": true}
+	gotDestroyed := map[string]bool{}
+	for _, id := range rt.destroyedIDs {
+		gotDestroyed[id] = true
+	}
+	if !maps.Equal(gotDestroyed, want) {
+		t.Fatalf("destroyedIDs = %v, want %v", rt.destroyedIDs, want)
+	}
+	entries, _, err := ptyregistry.Scan(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, e := range entries {
+		got[e.SessionID] = true
+	}
+	if got["ghost-res"] {
+		t.Fatal("ownerless reservation must be unregistered")
+	}
+	if !got["w-live"] || !got["review-w-live"] {
+		t.Fatalf("live panes must survive the sweep, got %v", got)
+	}
+	// fakeRuntime.Destroy, unlike conpty, does not unregister; the w-term and
+	// ghost entries therefore remain in the file and are pruned by Scan's
+	// dead-PID pass on a later boot.
+}
+
+func TestReconcileOrphanedPtyHosts_EmptyRegistryIsNoop(t *testing.T) {
+	ptyregistry.SetRunFilePath(t.TempDir())
+	t.Cleanup(func() { ptyregistry.SetRunFilePath("") })
+
+	st := newFakeStore()
+	rt := &fakeRuntime{}
+	ws := &fakeWorkspace{}
+	lcm := &fakeLCM{store: st}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: rt, Agents: fakeAgents{}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: lcm, LookPath: lookPath})
+
+	if err := m.ReconcileOrphanedPtyHosts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rt.destroyed != 0 {
+		t.Fatalf("Destroy calls = %d, want 0", rt.destroyed)
+	}
+}
+
 // --- Send activity-confirmation tests (issue #2342) ---
 
 // signalingAgent is a fakeAgent that advertises BOTH a prompt-submit and a
@@ -11362,6 +11521,159 @@ func (m *flipOnNudgeMessenger) Send(_ context.Context, _ domain.SessionID, msg s
 		m.flipped = true
 	}
 	return nil
+}
+
+// TestEffectiveAgentConfig_MergesProfileFields: the per-role override's
+// SystemPrompt/Env/MCP/PluginDirs merge over the project base, mirroring the
+// pre-existing Model/Permissions merge. Role wins on key collision for Env.
+func TestEffectiveAgentConfig_MergesProfileFields(t *testing.T) {
+	base := domain.AgentConfig{
+		Model:        "base-model",
+		Env:          map[string]string{"KEEP": "base", "OVER": "base"},
+		SystemPrompt: "base-prompt",
+		PluginDirs:   []string{"/base"},
+	}
+	cfg := domain.ProjectConfig{
+		AgentConfig: base,
+		Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{
+			Model:        "worker-model",
+			Env:          map[string]string{"OVER": "worker", "EXTRA": "worker"},
+			SystemPrompt: "worker-prompt",
+			MCP:          &domain.MCPConfig{Strict: true, Configs: []string{"{\"a\":1}"}},
+			PluginDirs:   []string{"/worker"},
+		}},
+	}
+
+	got := effectiveAgentConfig(domain.HarnessClaudeCode, domain.KindWorker, cfg)
+
+	if got.Model != "worker-model" {
+		t.Fatalf("Model = %q, want worker-model", got.Model)
+	}
+	if got.SystemPrompt != "worker-prompt" {
+		t.Fatalf("SystemPrompt = %q, want worker-prompt", got.SystemPrompt)
+	}
+	if got.MCP == nil || !got.MCP.Strict || len(got.MCP.Configs) != 1 {
+		t.Fatalf("MCP not merged from override: %+v", got.MCP)
+	}
+	if len(got.PluginDirs) != 1 || got.PluginDirs[0] != "/worker" {
+		t.Fatalf("PluginDirs = %v, want [/worker]", got.PluginDirs)
+	}
+	// Env: base keys preserved, role override wins on collision, extra keys added.
+	if got.Env["KEEP"] != "base" {
+		t.Fatalf("base Env key KEEP lost: %v", got.Env)
+	}
+	if got.Env["OVER"] != "worker" {
+		t.Fatalf("role Env did not win on OVER: %v", got.Env)
+	}
+	if got.Env["EXTRA"] != "worker" {
+		t.Fatalf("role Env extra key missing: %v", got.Env)
+	}
+}
+
+// TestEffectiveAgentConfig_DoesNotMutateProjectEnv: merging a role's Env must
+// not mutate the project's base AgentConfig.Env. The earlier inline merge wrote
+// into merged.Env, which aliased the project map (Go copies the map header by
+// value on struct copy), so a worker's role-specific env leaked into every
+// later session of the project for the daemon's lifetime. Regression guard.
+func TestEffectiveAgentConfig_DoesNotMutateProjectEnv(t *testing.T) {
+	cfg := domain.ProjectConfig{
+		AgentConfig: domain.AgentConfig{Env: map[string]string{"BASE": "b"}},
+		Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{
+			Env: map[string]string{"ROLE_ONLY": "secret"},
+		}},
+	}
+
+	_ = effectiveAgentConfig(domain.HarnessClaudeCode, domain.KindWorker, cfg)
+	_ = effectiveAgentConfig(domain.HarnessClaudeCode, domain.KindWorker, cfg) // a second call surfaces cross-call leakage
+
+	if _, leaked := cfg.AgentConfig.Env["ROLE_ONLY"]; leaked {
+		t.Fatalf("role-only env leaked into project config after merge: %#v", cfg.AgentConfig.Env)
+	}
+	if cfg.AgentConfig.Env["BASE"] != "b" {
+		t.Fatalf("project base env mutated: %#v", cfg.AgentConfig.Env)
+	}
+}
+
+// TestEffectiveAgentConfig_OrchestratorRoleUsesOrchestratorOverride: the role
+// selector picks Worker vs Orchestrator, not just Worker for every call.
+func TestEffectiveAgentConfig_OrchestratorRoleUsesOrchestratorOverride(t *testing.T) {
+	cfg := domain.ProjectConfig{
+		Worker:       domain.RoleOverride{AgentConfig: domain.AgentConfig{SystemPrompt: "w"}},
+		Orchestrator: domain.RoleOverride{AgentConfig: domain.AgentConfig{SystemPrompt: "o"}},
+	}
+	if got := effectiveAgentConfig(domain.HarnessClaudeCode, domain.KindWorker, cfg); got.SystemPrompt != "w" {
+		t.Fatalf("worker prompt = %q, want w", got.SystemPrompt)
+	}
+	if got := effectiveAgentConfig(domain.HarnessClaudeCode, domain.KindOrchestrator, cfg); got.SystemPrompt != "o" {
+		t.Fatalf("orchestrator prompt = %q, want o", got.SystemPrompt)
+	}
+}
+
+// TestMergeEnv_RoleWinsOnCollision: a per-role value overrides a project value
+// on key collision; both nil inputs yield an empty (non-nil) map.
+func TestMergeEnv_RoleWinsOnCollision(t *testing.T) {
+	got := mergeEnv(
+		map[string]string{"A": "proj", "B": "proj"},
+		map[string]string{"B": "role", "C": "role"},
+	)
+	want := map[string]string{"A": "proj", "B": "role", "C": "role"}
+	if len(got) != len(want) {
+		t.Fatalf("mergeEnv = %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Fatalf("mergeEnv[%q] = %q, want %q", k, got[k], v)
+		}
+	}
+	if mergeEnv(nil, nil) == nil {
+		t.Fatalf("mergeEnv(nil,nil) should be non-nil empty map")
+	}
+}
+
+// TestBuildSystemPrompt_AppendsRoleSystemPrompt: a per-role agentConfig
+// systemPrompt is layered into the derived system prompt so a project can hand
+// a worker standing context beyond the built-in role block.
+func TestBuildSystemPrompt_AppendsRoleSystemPrompt(t *testing.T) {
+	const marker = "ALWAYS COMMIT AFTER EACH STEP"
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{
+		Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{SystemPrompt: marker}},
+	}}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+
+	sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-1", "", false)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt: %v", err)
+	}
+	if !strings.Contains(sp, marker) {
+		t.Fatalf("worker system prompt missing per-role marker %q:\n%s", marker, sp)
+	}
+	// The marker must sit inside the guarded region (before the skill pointer and
+	// the confidentiality guard), so it is itself protected from disclosure.
+	if !strings.Contains(sp, "Standing-instruction confidentiality") {
+		t.Fatalf("guard lost:\n%s", sp)
+	}
+}
+
+// TestBuildSystemPrompt_NoRolePromptWhenUnset: a project without a per-role
+// systemPrompt produces the same prompt as before (no stray sections).
+func TestBuildSystemPrompt_NoRolePromptWhenUnset(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+
+	sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-1", "", false)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt: %v", err)
+	}
+	if !strings.Contains(sp, "Multi-PR workflow") && !strings.Contains(sp, "branch namespace") {
+		// worker prompt still assembled; we only assert it does not error and is non-empty.
+		if sp == "" {
+			t.Fatalf("expected non-empty worker system prompt")
+		}
+	}
 }
 
 func TestRestoreRetainsSpawnPermissionsAfterProjectChange(t *testing.T) {

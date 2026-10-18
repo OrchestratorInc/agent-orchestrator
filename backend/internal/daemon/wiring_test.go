@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -404,6 +405,92 @@ func TestWiring_StartSessionSpawnsScratchWithoutGitRepo(t *testing.T) {
 	}
 	if _, err := os.Stat(wantWorkspace); err != nil {
 		t.Fatalf("scratch workspace not created at %q: %v", wantWorkspace, err)
+	}
+}
+
+// TestWiring_StartSessionLaunchCarriesStoredGatewayEntry asserts the wiring
+// hands providerEntryLookup to the session manager: with an app-scope gateway
+// entry in the Claude settings file and a pinless project, the spawn launch
+// env must carry the entry. A wiring regression here silently drops the
+// configured gateway from every launch.
+func TestWiring_StartSessionLaunchCarriesStoredGatewayEntry(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	binDir := t.TempDir()
+	writeFakeExecutable(t, filepath.Join(binDir, "claude"))
+	writeFakeExecutable(t, filepath.Join(binDir, "claude.cmd"))
+	writeFakeExecutable(t, filepath.Join(binDir, "tmux"))
+	writeFakeExecutable(t, filepath.Join(binDir, "tmux.cmd"))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
+
+	dataDir := t.TempDir()
+	scratchPath := filepath.Join(dataDir, "scratch", "default")
+	if err := os.MkdirAll(scratchPath, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertProject(ctx, domain.ProjectRecord{
+		ID:           "scratch",
+		Path:         scratchPath,
+		Kind:         domain.ProjectKindScratch,
+		RegisteredAt: time.Now(),
+		Config: domain.ProjectConfig{
+			Worker:       domain.RoleOverride{Harness: domain.HarnessClaudeCode},
+			Orchestrator: domain.RoleOverride{Harness: domain.HarnessClaudeCode},
+		},
+	}); err != nil {
+		t.Fatalf("UpsertProject: %v", err)
+	}
+	// The gateway entry lives in the app-scope Claude settings file.
+	claudeDir := filepath.Join(homeDir, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	settingsRaw, err := json.Marshal(map[string]any{"env": map[string]string{
+		"ANTHROPIC_BASE_URL":   "https://gw.example.dev",
+		"ANTHROPIC_AUTH_TOKEN": "gw-token",
+		"ANTHROPIC_MODEL":      "gw-model",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(claudeDir, "settings.json"), settingsRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	lcm := lifecycle.New(store, nil)
+	runtime := &selectableRuntime{}
+	cfg := config.Config{DataDir: dataDir, Agent: string(domain.HarnessClaudeCode)}
+	messenger := newSessionMessenger(store, runtime, log)
+	agents, err := buildAgentResolver(string(domain.HarnessClaudeCode), log)
+	if err != nil {
+		t.Fatalf("buildAgentResolver: %v", err)
+	}
+	svc, _, _, err := startSession(context.Background(), cfg, runtime, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
+	if err != nil {
+		t.Fatalf("startSession: %v", err)
+	}
+	if _, _, _, err := svc.Spawn(ctx, ports.SpawnConfig{ProjectID: "scratch", Kind: domain.KindWorker, Prompt: "gateway wiring"}); err != nil {
+		t.Fatalf("Spawn scratch: %v", err)
+	}
+	env := runtime.lastCfg.Env
+	for key, want := range map[string]string{
+		"ANTHROPIC_BASE_URL":   "https://gw.example.dev",
+		"ANTHROPIC_AUTH_TOKEN": "gw-token",
+		"ANTHROPIC_MODEL":      "gw-model",
+	} {
+		if env[key] != want {
+			t.Fatalf("launch env %s = %q, want %q", key, env[key], want)
+		}
 	}
 }
 
@@ -981,7 +1068,8 @@ func (f *fakeSessionLifecycle) ReconcileBackground(_ context.Context) error {
 	return f.reconcileErr
 }
 
-func (*fakeSessionLifecycle) HibernateIdleChats(context.Context) error { return nil }
+func (*fakeSessionLifecycle) ReconcileOrphanedPtyHosts(context.Context) error { return nil }
+func (*fakeSessionLifecycle) HibernateIdleChats(context.Context) error        { return nil }
 
 func (f *fakeSessionLifecycle) RestoreAll(_ context.Context) error {
 	f.restoreAllCalled = true

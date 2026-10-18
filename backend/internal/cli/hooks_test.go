@@ -2250,6 +2250,24 @@ func TestHooks_ReviewerPermissionRequestAnswersInsteadOfBlocking(t *testing.T) {
 	}{
 		{"ao review submit pipe", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' ` + submitJSON + ` | ao review submit --session worker-7 --reviews -"}}`, "allow"},
 		{"gh api review post", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{ \"event\": \"COMMENT\", \"body\": \"ok\" }' | gh api --method POST repos/acme/app/pulls/12/reviews --input - --jq '.id'"}}`, "allow"},
+		// #6021 staged shapes: the base64 payload cannot quote or expand, the
+		// staging target is a per-worker /tmp path (parallel reviewers cannot
+		// stage over or consume each other's payloads), and the consuming
+		// commands carry no payload at all. Every captured session id — the
+		// submit flag and the file name — must match this reviewer's worker.
+		{"staged results staging", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' 'eyJyZXZpZXdzIjpbXX0=' | base64 -d > /tmp/ao-review-worker-7-results.json"}}`, "allow"},
+		{"staged post staging", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' 'eyJldmVudCI6IkNPTU1FTlQifQ==' | base64 -d > /tmp/ao-review-worker-7-post.json"}}`, "allow"},
+		{"staged gh api post", `{"tool_name":"Bash","tool_input":{"command":"gh api --method POST repos/acme/app/pulls/12/reviews --input /tmp/ao-review-worker-7-post.json --jq '.id'"}}`, "allow"},
+		{"staged review submit", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --reviews /tmp/ao-review-worker-7-results.json"}}`, "allow"},
+		{"staged submit other worker session", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-9 --reviews /tmp/ao-review-worker-7-results.json"}}`, "deny"},
+		{"staged submit foreign results file", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --reviews /tmp/ao-review-worker-9-results.json"}}`, "deny"},
+		{"staged post staging foreign session", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' 'eyJldmVudCI6IkNPTU1FTlQifQ==' | base64 -d > /tmp/ao-review-worker-9-post.json"}}`, "deny"},
+		{"staged gh api post foreign session", `{"tool_name":"Bash","tool_input":{"command":"gh api --method POST repos/acme/app/pulls/12/reviews --input /tmp/ao-review-worker-9-post.json --jq '.id'"}}`, "deny"},
+		{"staged submit with unset worker session id", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --reviews /tmp/ao-review-worker-7-results.json"}}`, "deny"},
+		{"staged payload with embedded quote", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' 'ab'c' | base64 -d > /tmp/ao-review-worker-7-results.json"}}`, "deny"},
+		{"staged payload with command substitution", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' 'abc$(id)' | base64 -d > /tmp/ao-review-worker-7-results.json"}}`, "deny"},
+		{"staging to another path", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' 'abc=' | base64 -d > /tmp/other.json"}}`, "deny"},
+		{"staged submit from another file", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --reviews /tmp/ao-review-worker-7-results.json.bak"}}`, "deny"},
 		{"other worker session", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-9 --reviews -"}}`, "deny"},
 		{"unset worker session id", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-7 --reviews -"}}`, "deny"},
 		{"command substitution in operand", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}'$(id) | ao review submit --session worker-7 --reviews -"}}`, "deny"},
@@ -2261,7 +2279,7 @@ func TestHooks_ReviewerPermissionRequestAnswersInsteadOfBlocking(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("AO_REVIEW_SESSION_ID", "review-7")
 			t.Setenv("AO_REVIEW_WORKER_SESSION_ID", "worker-7")
-			if tc.name == "unset worker session id" {
+			if tc.name == "unset worker session id" || tc.name == "staged submit with unset worker session id" {
 				t.Setenv("AO_REVIEW_WORKER_SESSION_ID", "")
 			}
 			t.Setenv("AO_REVIEW_HARNESS", "claude-code")

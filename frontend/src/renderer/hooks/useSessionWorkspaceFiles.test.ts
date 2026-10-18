@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	sessionArtifactFileQueryOptions,
 	sessionWorkspaceFileQueryOptions,
 	sessionWorkspaceFilesQueryOptions,
 	sessionWorkspaceSearchQueryOptions,
@@ -106,5 +107,52 @@ describe("workspace files on selected hosts", () => {
 		await expect(sessionWorkspaceFileQueryOptions("same-id", "src/app.ts", "read failed", "combined", undefined, "offline").queryFn()).rejects.toThrow("not connected");
 		expect(localPut).not.toHaveBeenCalled();
 		expect(localGet).not.toHaveBeenCalled();
+	});
+});
+
+describe("artifact file fetch", () => {
+	it("marks binary raster artifacts renderable via imageMediaType", async () => {
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d]), { status: 200, headers: { "content-type": "image/png" } })));
+		try {
+			const detail = await sessionArtifactFileQueryOptions("session-1", "shots/01-home.png", "http://artifact.test/session-1/shots/01-home.png").queryFn();
+			expect(detail.binary).toBe(true);
+			expect(detail.imageMediaType).toBe("image/png");
+			expect(detail.content).toBe("");
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("falls back to the file extension when the content type is generic", async () => {
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(new Uint8Array([0x00, 0xff, 0x10]), { status: 200, headers: { "content-type": "application/octet-stream" } })));
+		try {
+			const detail = await sessionArtifactFileQueryOptions("session-1", "shot.png", "http://artifact.test/session-1/shot.png").queryFn();
+			expect(detail.binary).toBe(true);
+			expect(detail.imageMediaType).toBe("image/png");
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("keeps text artifacts textual without an image media type", async () => {
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("# Plan", { status: 200, headers: { "content-type": "text/markdown" } })));
+		try {
+			const detail = await sessionArtifactFileQueryOptions("session-1", "report.md", "http://artifact.test/session-1/report.md").queryFn();
+			expect(detail.binary).toBe(false);
+			expect(detail.imageMediaType).toBeUndefined();
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("never marks svg renderable as an image", async () => {
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("<svg xmlns='http://www.w3.org/2000/svg'/>", { status: 200, headers: { "content-type": "image/svg+xml" } })));
+		try {
+			const detail = await sessionArtifactFileQueryOptions("session-1", "icon.svg", "http://artifact.test/session-1/icon.svg").queryFn();
+			expect(detail.binary).toBe(false);
+			expect(detail.imageMediaType).toBeUndefined();
+		} finally {
+			vi.unstubAllGlobals();
+		}
 	});
 });

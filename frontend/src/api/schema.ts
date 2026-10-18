@@ -3561,6 +3561,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/apply-provider": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Relaunch running claude-code sessions on the effective provider, preserving context */
+        post: operations["applyProviderSwitch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/cleanup": {
         parameters: {
             query?: never;
@@ -3572,6 +3589,23 @@ export interface paths {
         put?: never;
         /** Clean up terminated session workspaces */
         post: operations["cleanupSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/provider-staleness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List running claude-code sessions whose provider differs from the effective gateway config */
+        get: operations["listStaleProviderSessions"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3627,6 +3661,41 @@ export interface paths {
         head?: never;
         /** Turn the cloud offering on or off for this machine */
         patch: operations["updateCloudOffering"];
+        trace?: never;
+    };
+    "/api/v1/settings/gateway": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the Anthropic-compatible gateway configuration per scope */
+        get: operations["getGatewayConfig"];
+        /** Write the Anthropic-compatible gateway entry for one scope */
+        put: operations["updateGatewayConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/gateway/probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate a gateway base URL and token without saving them */
+        post: operations["probeGateway"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/settings/harness-defaults/{agent}": {
@@ -3901,6 +3970,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/user-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the user-scoped agent config (the lowest-precedence scope above projects) */
+        get: operations["getUserConfig"];
+        /** Replace the user-scoped agent config wholesale (a zero agentConfig clears it) */
+        put: operations["setUserConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3987,9 +4074,17 @@ export interface components {
         };
         AgentConfig: {
             effort?: string;
+            env?: {
+                [key: string]: string;
+            };
+            mcp?: components["schemas"]["MCPConfig"];
             mode?: string;
             model?: string;
+            orchestratorPromptOverride?: string;
             permissions?: string;
+            pluginDirs?: string[];
+            systemPrompt?: string;
+            workerPromptOverride?: string;
         };
         AgentInfo: {
             /**
@@ -4058,6 +4153,7 @@ export interface components {
             contextWindow?: number;
             defaultEffort?: string;
             efforts?: string[];
+            effortsSeeded?: boolean;
             id: string;
             inputs?: string[];
             isDefault?: boolean;
@@ -4160,6 +4256,13 @@ export interface components {
             processCount: number;
             reviewers?: components["schemas"]["ControllersReviewerMemoryResponse"][];
             rssBytes: number;
+        };
+        ApplyProviderRequest: {
+            sessionIds?: string[];
+        };
+        ApplyProviderResponse: {
+            ok: boolean;
+            results: components["schemas"]["SessionProviderApplyResult"][];
         };
         ArtifactFileResponse: {
             /** @description Hex SHA-256 of the file's content. */
@@ -4675,6 +4778,21 @@ export interface components {
         ContainerReapConfig: {
             disabled?: boolean;
         };
+        ControllersGatewayConfigResponse: {
+            app: components["schemas"]["GatewayScopeValue"];
+            effective: components["schemas"]["GatewayEffective"];
+            project?: components["schemas"]["GatewayScopeValue"];
+        };
+        ControllersGatewayProbeRequest: {
+            baseUrl: string;
+            token: string;
+        };
+        ControllersGatewayProbeResponse: {
+            detail?: string;
+            models?: components["schemas"]["GatewayModel"][];
+            /** @enum {string} */
+            state: "valid" | "invalid" | "unknown";
+        };
         ControllersKeepAwakeStatus: {
             active: boolean;
             enabled: boolean;
@@ -4803,6 +4921,14 @@ export interface components {
         };
         ControllersUpdateCloudOfferingRequest: {
             enabled: null | boolean;
+        };
+        ControllersUpdateGatewayConfigRequest: {
+            baseUrl?: null | string;
+            model?: null | string;
+            projectId?: string;
+            /** @enum {string} */
+            scope: "app" | "project";
+            token?: null | string;
         };
         ConversationAccountPayload: {
             authFailureId?: string;
@@ -5203,6 +5329,7 @@ export interface components {
         DomainReviewerConfig: {
             agentConfig?: components["schemas"]["AgentConfig"];
             harness: string;
+            provider?: string;
         };
         DomainReviewerSurface: {
             controllerError?: string;
@@ -5287,6 +5414,20 @@ export interface components {
             name: string;
             /** @description Absolute path of the directory on the daemon host. */
             path: string;
+        };
+        GatewayEffective: {
+            baseUrl?: string;
+            model?: string;
+            source?: string;
+        };
+        GatewayModel: {
+            displayName?: string;
+            id: string;
+        };
+        GatewayScopeValue: {
+            baseUrl?: string;
+            model?: string;
+            tokenSet: boolean;
         };
         GitHubRepo: {
             clone_url: string;
@@ -5562,6 +5703,10 @@ export interface components {
             sessionId: string;
             truncated: boolean;
         };
+        MCPConfig: {
+            configs?: string[];
+            strict?: boolean;
+        };
         MarkAllNotificationsReadRequest: {
             /** @description Acknowledge exactly these notifications. Omit to acknowledge every unread notification; paginating clients should send the ids they actually rendered so later pages stay unread. */
             ids?: string[];
@@ -5761,6 +5906,7 @@ export interface components {
                 [key: string]: string;
             };
             orchestrator?: components["schemas"]["RoleOverride"];
+            orchestratorPromptOverride?: string;
             orchestratorRules?: string;
             postCreate?: string[];
             preRemove?: string[];
@@ -5769,9 +5915,12 @@ export interface components {
             symlinks?: string[];
             trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
             worker?: components["schemas"]["RoleOverride"];
+            workerPromptOverride?: string;
             workersRequestReview?: boolean;
         };
         ProjectGetResponse: {
+            defaultOrchestratorPrompt?: string;
+            defaultWorkerPrompt?: string;
             project: components["schemas"]["ProjectOrDegraded"];
             /** @enum {string} */
             status: "ok" | "degraded";
@@ -5795,6 +5944,9 @@ export interface components {
             activityId: string;
             providerTurnId: string;
             sourceTurnId: string;
+        };
+        ProviderStalenessResponse: {
+            sessions: components["schemas"]["SessionProviderStaleness"][];
         };
         PublishRenderRequest: {
             /** @description Also keep the page as a session artifact, a deliverable the user keeps. */
@@ -5924,8 +6076,14 @@ export interface components {
         };
         ReportResponse: {
             /** Format: date-time */
+            availableAt?: null | string;
+            /** Format: date-time */
             createdAt: string;
+            /** Format: int64 */
+            deliveryAttempts?: number;
+            deliveryState?: string;
             id: string;
+            lastError?: string;
             message?: string;
             note?: string;
             outputs?: components["schemas"]["ReportOutputResponse"][];
@@ -6012,6 +6170,7 @@ export interface components {
         RoleOverride: {
             agent?: string;
             agentConfig?: components["schemas"]["AgentConfig"];
+            provider?: string;
         };
         RollbackConversationResponse: {
             turnsDiscarded: number;
@@ -6265,6 +6424,21 @@ export interface components {
             previewUrl?: string;
             sessionId: string;
         };
+        SessionProviderApplyResult: {
+            error?: string;
+            sessionId: string;
+            /** @enum {string} */
+            state: "applied" | "skipped" | "failed";
+        };
+        SessionProviderStaleness: {
+            currentBaseUrl?: string;
+            currentModel?: string;
+            displayName?: string;
+            mode: string;
+            sessionId: string;
+            stampBaseUrl?: string;
+            stampModel?: string;
+        };
         SessionProvisionStep: {
             /** Format: date-time */
             endedAt?: null | string;
@@ -6423,6 +6597,9 @@ export interface components {
             agentConfig?: components["schemas"]["AgentConfig"];
             /** @enum {string} */
             harness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "opencode-v2" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
+        };
+        SetUserConfigInput: {
+            agentConfig: components["schemas"]["AgentConfig"];
         };
         SettingsResponse: {
             chatHarnesses: string[];
@@ -6945,6 +7122,11 @@ export interface components {
             /** @description Input not read from an existing provider cache. Includes cache writes. */
             uncachedInputTokens: null | number;
         };
+        UserConfigResponse: {
+            agentConfig: components["schemas"]["AgentConfig"];
+            defaultOrchestratorPrompt?: string;
+            defaultWorkerPrompt?: string;
+        };
         WorkspaceCommitSummary: {
             author: string;
             files: components["schemas"]["WorkspaceFileSummary"][];
@@ -7371,6 +7553,8 @@ export interface operations {
                 catalogOnly?: boolean;
                 /** @description Optional project identifier used as the model-catalog cache scope. */
                 projectId?: string;
+                /** @description Optional role whose provider pin scopes the catalog: worker, orchestrator, or reviewer. Requires projectId. */
+                role?: string;
             };
             header?: never;
             path: {
@@ -7437,6 +7621,8 @@ export interface operations {
                 projectId?: string;
                 /** @description When true, compare executable and config metadata before running discovery. */
                 revalidate?: boolean;
+                /** @description Optional role whose provider pin scopes the catalog: worker, orchestrator, or reviewer. Requires projectId. */
+                role?: string;
             };
             header?: never;
             path: {
@@ -12452,6 +12638,15 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -20454,6 +20649,66 @@ export interface operations {
             };
         };
     };
+    applyProviderSwitch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ApplyProviderRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApplyProviderResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     cleanupSessions: {
         parameters: {
             query?: {
@@ -20473,6 +20728,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CleanupSessionsResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listStaleProviderSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderStalenessResponse"];
                 };
             };
             /** @description Internal Server Error */
@@ -20617,6 +20910,140 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getGatewayConfig: {
+        parameters: {
+            query?: {
+                /** @description Project id; when omitted, only the app scope is reported. */
+                projectId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersGatewayConfigResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateGatewayConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ControllersUpdateGatewayConfigRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersGatewayConfigResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    probeGateway: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ControllersGatewayProbeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersGatewayProbeResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -21512,6 +21939,77 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getUserConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserConfigResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setUserConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetUserConfigInput"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserConfigResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

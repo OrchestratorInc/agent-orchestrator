@@ -64,6 +64,7 @@ import { parseNightlyVersion } from "../lib/build-channel";
 import {
 	hasConfiguredOrchestratorAgent,
 	newestActiveOrchestrator,
+	newestOrchestrator,
 	openPRs,
 	type WorkspaceSession,
 	type WorkspaceSummary,
@@ -74,7 +75,7 @@ import {
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
 } from "../types/workspace";
-import { getSessionStatusDotView } from "../lib/session-presentation";
+import { getOrchestratorStatusDotView, getSessionStatusDotView } from "../lib/session-presentation";
 import { deriveSessionAgentSwitchPresentation } from "../lib/agent-switch-presentation";
 import { aoBridge } from "../lib/bridge";
 import { hasTrustedApiBaseUrl } from "../lib/api-client";
@@ -584,6 +585,24 @@ function SessionStatusDot({ session }: { session: WorkspaceSession }) {
 				data-session-status={session.status}
 			/>
 		</span>
+	);
+}
+
+// The orchestrator row's status doesn't track activity the way a worker's
+// does (it stays "working" for its whole life), so its dot reads tone off
+// activity/isTerminated instead — see getOrchestratorStatusDotView.
+function OrchestratorStatusDot({ session }: { session: WorkspaceSession }) {
+	const dot = getOrchestratorStatusDotView(session);
+	return (
+		<span
+			aria-hidden="true"
+			className={cn(
+				"size-2 shrink-0 rounded-full",
+				dot.className,
+				dot.breathe && "animate-status-pulse",
+			)}
+			data-session-status={session.status}
+		/>
 	);
 }
 
@@ -1525,6 +1544,7 @@ const ProjectItem = memo(function ProjectItem({
 		hasInteractedWithDisclosure.current = true;
 		onToggle(workspace.id);
 	};
+	const orchestratorStatus = newestOrchestrator(workspace.sessions);
 
 	// Mirrors ShellTopbar's launcher: attach to the running orchestrator, or
 	// spawn one via the daemon and follow it once the workspace refetches.
@@ -1745,11 +1765,13 @@ const ProjectItem = memo(function ProjectItem({
 									>
 										{expanded ? <FolderOpen className="size-5" strokeWidth={1.75} /> : <Folder className="size-5" strokeWidth={1.75} />}
 									</span>
-									<span
-										className="sidebar-expanded-chrome relative z-[1] min-w-0 flex-1 translate-y-px truncate group-data-[collapsible=icon]:hidden"
-										data-project-label=""
-									>
-										{workspace.name}
+									{/* Orchestrator activity sits left of the project name, mirroring worker rows.
+		    gap-1.5 matches SessionRow's dot-to-title spacing (the row itself uses gap-2). */}
+									<span className="sidebar-expanded-chrome flex min-w-0 flex-1 items-center gap-1.5 translate-y-px group-data-[collapsible=icon]:hidden">
+										{orchestratorStatus ? <OrchestratorStatusDot session={orchestratorStatus} /> : null}
+										<span className="relative z-[1] min-w-0 flex-1 truncate" data-project-label="">
+											{workspace.name}
+										</span>
 									</span>
 									{hostLabel && <Badge variant="outline" className="sidebar-expanded-chrome relative z-[1] h-4 shrink-0 px-1.5 text-2xs group-data-[collapsible=icon]:hidden">{hostLabel}</Badge>}
 									{workspace.kind === "cloud" && (
@@ -1775,8 +1797,9 @@ const ProjectItem = memo(function ProjectItem({
 									type="button"
 								/>
 							</div>
-							{/* Per-project actions: orchestrator and kebab menu. Outside the row's
-		navigation surface so their own presses stay independent. */}
+							{/* Per-project actions: orchestrator and kebab menu. Inside the scaled visual
+		row, but outside its navigation surface so their own presses stay independent.
+		Always visible (not hover-gated) to avoid CSS :hover group propagation in Chromium. */}
 						{!isStandalone && <div
 								className={cn(
 									"sidebar-expanded-chrome z-chrome",

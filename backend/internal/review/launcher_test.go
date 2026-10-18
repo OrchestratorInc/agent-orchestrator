@@ -1222,6 +1222,18 @@ func TestLauncherPreflightEnvPrefixWithMissingBinary(t *testing.T) {
 	}
 }
 
+func TestReviewerHandleIDIsRuntimeSafe(t *testing.T) {
+	// Issue #37: a dotted project id flowed raw into the handle id and the
+	// tmux validator rejected it, failing every review trigger for the project.
+	got := reviewerHandleID(domain.SessionID("axisrow.github.io-38"))
+	if !strings.HasPrefix(got, "review-") || strings.Contains(got, ".") {
+		t.Fatalf("reviewerHandleID = %q, want review- prefixed id without the dot", got)
+	}
+	if reviewerHandleID(domain.SessionID("plain-1")) != "review-plain-1" {
+		t.Fatalf("conforming id must stay unchanged")
+	}
+}
+
 func TestDeferredCodexTerminalDispatchesTaskOnlyOnNotify(t *testing.T) {
 	t.Setenv("AO_DATA_DIR", t.TempDir())
 	t.Setenv("AO_RUN_FILE", filepath.Join(t.TempDir(), "running.json"))

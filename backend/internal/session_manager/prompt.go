@@ -39,7 +39,15 @@ type systemPromptConfig struct {
 	OrchestratorSessionID string
 	ProjectRules          string
 	OrchestratorRules     string
-	AdditionalSections    []string
+	RolePrompt            string
+	// Replace the built-in role prompt outright (project config, see #15).
+	// Empty means "use the built-in prompt for this role". The project scope
+	// wins over the Global* (user-config) scope, which wins over the built-in.
+	WorkerPromptOverride             string
+	OrchestratorPromptOverride       string
+	GlobalWorkerPromptOverride       string
+	GlobalOrchestratorPromptOverride string
+	AdditionalSections               []string
 }
 
 type projectRulesConfig struct {
@@ -71,11 +79,49 @@ The issue context above is current. Fetch comments or linked issues only if you 
 	return fmt.Sprintf("Work on issue %s.\n\nIssue details were not pre-fetched. Start by reading the issue from the tracker, then inspect the relevant code and tests. Implement the smallest appropriate fix and run focused verification. When complete, push the branch. If this issue comes from GitHub, GitLab, or another provider, create or update a PR/MR when a remote/provider is configured and the change is ready, and link the issue.", cfg.IssueID)
 }
 
+// DefaultWorkerSystemPrompt returns the assembled hardcoded worker system prompt
+// WITHOUT any override and WITHOUT per-session dynamic data (orchestrator id,
+// project rules, role prompt, additional sections). It is the static "skeleton"
+// every worker session starts from: the role+lifecycle+task-source+git blocks
+// (workerSystemPrompt), the branch-attribution block (workerMultiPRPrompt), and
+// the standing-instruction guard. The UI surfaces this as the prefilled default
+// text in the Agent defaults dialog so a user can edit the real baseline rather
+// than start from an empty box. projectContextSection is emitted with a zero
+// promptProject so project-specific fields read as "not configured" placeholders.
+func DefaultWorkerSystemPrompt() string {
+	sections := []string{
+		workerSystemPrompt(promptProject{}, false),
+		workerMultiPRPrompt(),
+		systemPromptGuard(),
+	}
+	return strings.Join(sections, "\n\n")
+}
+
+// DefaultOrchestratorSystemPrompt returns the assembled hardcoded orchestrator
+// system prompt WITHOUT any override and WITHOUT per-session dynamic data
+// (orchestrator rules, role prompt, additional sections). It is the static
+// skeleton every orchestrator session starts from: orchestratorSystemPrompt
+// (role+operating rules+core commands+coordination workflow) and the
+// standing-instruction guard. See DefaultWorkerSystemPrompt for the rationale.
+func DefaultOrchestratorSystemPrompt() string {
+	sections := []string{
+		orchestratorSystemPrompt(promptProject{}),
+		systemPromptGuard(),
+	}
+	return strings.Join(sections, "\n\n")
+}
+
 func buildSystemPromptText(cfg systemPromptConfig) string {
 	sections := make([]string, 0, 6)
 	switch cfg.Role {
 	case sessionPromptRoleOrchestrator:
-		sections = append(sections, orchestratorSystemPrompt(cfg.Project))
+		if override := strings.TrimSpace(cfg.OrchestratorPromptOverride); override != "" {
+			sections = append(sections, override)
+		} else if global := strings.TrimSpace(cfg.GlobalOrchestratorPromptOverride); global != "" {
+			sections = append(sections, global)
+		} else {
+			sections = append(sections, orchestratorSystemPrompt(cfg.Project))
+		}
 		if rules := strings.TrimSpace(cfg.OrchestratorRules); rules != "" {
 			sections = append(sections, "## Project-Specific Orchestrator Rules\n"+rules)
 		}
@@ -85,7 +131,13 @@ func buildSystemPromptText(cfg systemPromptConfig) string {
 			break
 		}
 		orchestratorID := strings.TrimSpace(cfg.OrchestratorSessionID)
-		sections = append(sections, workerSystemPrompt(cfg.Project, orchestratorID != ""))
+		if override := strings.TrimSpace(cfg.WorkerPromptOverride); override != "" {
+			sections = append(sections, override)
+		} else if global := strings.TrimSpace(cfg.GlobalWorkerPromptOverride); global != "" {
+			sections = append(sections, global)
+		} else {
+			sections = append(sections, workerSystemPrompt(cfg.Project, orchestratorID != ""))
+		}
 		if orchestratorID != "" {
 			sections = append(sections, workerOrchestratorPrompt(orchestratorID))
 		}
@@ -98,6 +150,9 @@ func buildSystemPromptText(cfg systemPromptConfig) string {
 		}
 	default:
 		return ""
+	}
+	if rolePrompt := strings.TrimSpace(cfg.RolePrompt); rolePrompt != "" {
+		sections = append(sections, rolePrompt)
 	}
 	sections = append(sections, publishingScopePrompt(), systemPromptGuard())
 	for _, section := range cfg.AdditionalSections {

@@ -41,6 +41,39 @@ func TestHealthProbes(t *testing.T) {
 	}
 }
 
+// TestReadyzReflectsDegraded verifies that /readyz reports a degraded daemon
+// as not ready (503 + reason) instead of unconditionally returning 200. A
+// daemon whose core dependency failed at startup must not keep reporting
+// ready to the supervisor and to clients gating on the probe.
+func TestReadyzReflectsDegraded(t *testing.T) {
+	readiness := NewReadiness()
+	readiness.SetDegraded("agent catalog refresh failed: no such table: agent_inventory_cache")
+
+	router := NewRouterWithControl(config.Config{}, discardLogger(), nil,
+		APIDeps{Readiness: readiness}, ControlDeps{})
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/readyz")
+	if err != nil {
+		t.Fatalf("GET /readyz: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("GET /readyz = %d, want 503 for a degraded daemon", resp.StatusCode)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode /readyz payload: %v", err)
+	}
+	if payload["status"] != "degraded" {
+		t.Errorf("status = %v, want degraded", payload["status"])
+	}
+	if payload["reason"] != "agent catalog refresh failed: no such table: agent_inventory_cache" {
+		t.Errorf("reason = %v, want the degraded cause", payload["reason"])
+	}
+}
+
 func TestHealthProbesIncludeDaemonIdentity(t *testing.T) {
 	router := newTestRouter(config.Config{StartupWorkingDirectory: "/startup"}, discardLogger(), nil)
 	srv := httptest.NewServer(router)

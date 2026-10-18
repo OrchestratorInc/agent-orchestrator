@@ -97,6 +97,8 @@ type SessionService interface {
 	Restore(ctx context.Context, id domain.SessionID) (sessionsvc.RestoreOutcome, error)
 	ExitAgent(ctx context.Context, id domain.SessionID) (sessionsvc.ExitAgentOutcome, error)
 	ResumeAgent(ctx context.Context, id domain.SessionID) (sessionsvc.ResumeAgentOutcome, error)
+	ProviderStaleness(ctx context.Context) ([]sessionsvc.ProviderStaleness, error)
+	ApplyProviderSwitch(ctx context.Context, sessionIDs []domain.SessionID) ([]sessionsvc.ProviderApplyResult, error)
 	SwitchAgent(ctx context.Context, id domain.SessionID, in sessionsvc.SwitchAgentInput) (domain.AgentSwitch, error)
 	RecoverAgentSwitch(ctx context.Context, id domain.SessionID, switchID domain.AgentSwitchID) (domain.AgentSwitch, error)
 	ListAgentSwitches(ctx context.Context, id domain.SessionID) ([]domain.AgentSwitch, error)
@@ -212,6 +214,8 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Get("/sessions", c.list)
 	r.Post("/sessions", c.spawn)
 	r.Post("/sessions/cleanup", c.cleanup)
+	r.Get("/sessions/provider-staleness", c.listProviderStaleness)
+	r.Post("/sessions/apply-provider", c.applyProvider)
 	r.Get("/sessions/{sessionId}", c.get)
 	r.Get("/sessions/{sessionId}/preview", c.preview)
 	r.Post("/sessions/{sessionId}/preview", c.setPreview)
@@ -1905,6 +1909,48 @@ func (c *SessionsController) exitAgent(w http.ResponseWriter, r *http.Request) {
 		SessionID: sessionID(r),
 		Session:   sessionView(r, out.Session),
 	})
+}
+
+func (c *SessionsController) listProviderStaleness(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/provider-staleness")
+		return
+	}
+	stale, err := c.Svc.ProviderStaleness(r.Context())
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, ProviderStalenessResponse{Sessions: stale})
+}
+
+func (c *SessionsController) applyProvider(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/apply-provider")
+		return
+	}
+	var in ApplyProviderRequest
+	if err := decodeJSONStrict(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	ids := make([]domain.SessionID, 0, len(in.SessionIds))
+	for _, raw := range in.SessionIds {
+		id := domain.SessionID(strings.TrimSpace(raw))
+		if id == "" {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "SESSION_ID_REQUIRED", "sessionIds entries must be non-empty", nil)
+			return
+		}
+		ids = append(ids, id)
+	}
+	// Per-session results, never a batch-level error: one failing resume must
+	// not mask the outcomes of the other sessions in the request.
+	results, err := c.Svc.ApplyProviderSwitch(r.Context(), ids)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, ApplyProviderResponse{OK: true, Results: results})
 }
 
 func (c *SessionsController) switchAgent(w http.ResponseWriter, r *http.Request) {

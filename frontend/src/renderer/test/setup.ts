@@ -157,6 +157,7 @@ if (typeof window !== "undefined") {
 			onMaximized: () => () => undefined,
 			isFullScreen: async () => false,
 			onFullScreen: () => () => undefined,
+			onRemeasure: () => () => undefined,
 		},
 		theme: {
 			set: async () => undefined,

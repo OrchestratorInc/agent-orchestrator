@@ -40,6 +40,14 @@ func (p *Plugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
 	if strings.TrimSpace(dataDir) == "" {
 		return
 	}
+	// Claude Code sends the effort parameter only for model ids it recognizes;
+	// behind ANTHROPIC_BASE_URL a custom id like glm-… would silently run the
+	// provider's own default no matter what `claude --effort` says. Opt every
+	// spawn into pass-through — models known to reject the parameter are still
+	// excluded by Claude Code itself — and drop an inherited level, which
+	// outranks the launch flag.
+	delete(env, "CLAUDE_CODE_EFFORT_LEVEL")
+	env["CLAUDE_CODE_ALWAYS_ENABLE_EFFORT"] = "1"
 	token := readLocalOAuthToken(dataDir)
 	if token == "" {
 		return

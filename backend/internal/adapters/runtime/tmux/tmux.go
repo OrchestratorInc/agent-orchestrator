@@ -3,8 +3,6 @@ package tmux
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -20,6 +18,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/ptyexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/envfilter"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
@@ -77,6 +76,8 @@ type Runtime struct {
 	reapSessions   func(ctx context.Context, pids []int, grace time.Duration)
 	socketMu       sync.RWMutex
 	sessionSockets map[string]string
+	versionMu      sync.Mutex
+	versionText    map[string]string // binary -> cached `tmux -V` output
 }
 
 var _ ports.Runtime = (*Runtime)(nil)
@@ -226,7 +227,14 @@ type execRunner struct{}
 
 func (execRunner) Run(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
 	cmd := aoprocess.CommandContext(ctx, name, args...)
-	cmd.Env = append(append([]string(nil), os.Environ()...), env...)
+	// A daemon started from inside a Claude Code session (rebuild-ao.sh run
+	// from an agent terminal, or the desktop app opened from one) inherits
+	// that session's own CLAUDECODE/CLAUDE_CODE_CHILD_SESSION/etc markers.
+	// The first call here auto-starts tmux's persistent server, which keeps
+	// whatever env it's given for its entire lifetime — so without this,
+	// every worker's claude-code process misidentifies itself as a child of
+	// that unrelated parent session. See envfilter for what's dropped and why.
+	cmd.Env = envfilter.DropParentSessionMarkers(append(append([]string(nil), os.Environ()...), env...))
 	// Run from a stable directory, not whatever the daemon process's cwd happens
 	// to be. The first tmux CLI call auto-starts tmux's persistent server, which
 	// inherits ITS launching process's cwd and keeps it for the server's entire
@@ -969,7 +977,7 @@ func (r *Runtime) Attach(ctx context.Context, handle ports.RuntimeHandle, rows, 
 		return nil, fmt.Errorf("tmux runtime: attach session %s: %w", id, err)
 	}
 	argv := r.attachCommandForSocket(id, socketName)
-	return ptyexec.Spawn(ctx, argv, attachEnv(os.Environ()), rows, cols)
+	return ptyexec.Spawn(ctx, argv, attachEnv(envfilter.DropParentSessionMarkers(os.Environ())), rows, cols)
 }
 
 // attachCommand returns the argv to attach a terminal to the session.
@@ -1168,7 +1176,11 @@ func (r *Runtime) runCommand(ctx context.Context, name string, args ...string) (
 		return out, cmdCtx.Err()
 	}
 	if err != nil {
-		return out, commandError{err: err, output: strings.TrimSpace(string(out))}
+		return out, commandError{
+			err:     err,
+			output:  strings.TrimSpace(string(out)),
+			version: r.tmuxVersionFor(ctx, name),
+		}
 	}
 	return out, nil
 }
@@ -1333,43 +1345,7 @@ func tmuxSessionName(id domain.SessionID) (string, error) {
 	if raw == "" {
 		return "", errors.New("tmux runtime: session id is required")
 	}
-	return SessionName(raw), nil
-}
-
-// SessionName returns the tmux session name the runtime registers for a given
-// session id, applying the same sanitisation Create does. Callers that print an
-// attach hint must use this rather than the raw id.
-func SessionName(id string) string {
-	if sessionIDPattern.MatchString(id) && len(id) <= 48 {
-		return id
-	}
-	return sanitizedSessionName(id)
-}
-
-func sanitizedSessionName(raw string) string {
-	var b strings.Builder
-	lastDash := false
-	for _, r := range raw {
-		valid := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-'
-		if valid {
-			b.WriteRune(r)
-			lastDash = false
-			continue
-		}
-		if !lastDash {
-			b.WriteByte('-')
-			lastDash = true
-		}
-	}
-	base := strings.Trim(b.String(), "-")
-	if base == "" {
-		base = "session"
-	}
-	if len(base) > 32 {
-		base = strings.TrimRight(base[:32], "-")
-	}
-	sum := sha256.Sum256([]byte(raw))
-	return base + "-" + hex.EncodeToString(sum[:4])
+	return domain.RuntimeHandleName(raw), nil
 }
 
 func handleID(handle ports.RuntimeHandle) (string, error) {
@@ -1393,9 +1369,12 @@ func handleID(handle ports.RuntimeHandle) (string, error) {
 // per-session death let a single server outage archive every session on the
 // board (issue #3475).
 func sessionMissingOutput(out string) bool {
+	// tmux >= ~3.5 reworded the missing-session error from "can't find session"
+	// to "no such session: <target>" (verified on 3.6b, issue #6099).
 	s := strings.ToLower(out)
 	return strings.Contains(s, "can't find session") ||
-		strings.Contains(s, "session not found")
+		strings.Contains(s, "session not found") ||
+		strings.Contains(s, "no such session")
 }
 
 func serverNotRunningOutput(out string) bool {
@@ -1659,15 +1638,48 @@ func sameDirectory(a, b string) bool {
 // -- error type --
 
 type commandError struct {
-	err    error
-	output string
+	err     error
+	output  string
+	version string // cached `tmux -V` output; empty when it cannot be determined
 }
 
 func (e commandError) Error() string {
-	if e.output == "" {
-		return e.err.Error()
+	prefix := e.err.Error()
+	if e.version != "" {
+		prefix += " (" + e.version + ")"
 	}
-	return e.err.Error() + ": " + e.output
+	if e.output == "" {
+		return prefix
+	}
+	return prefix + ": " + e.output
 }
 
 func (e commandError) Unwrap() error { return e.err }
+
+// resolveVersion runs `binary -V` and returns its trimmed output. It is a
+// package var so tests can stub the shell-out.
+var resolveVersion = func(ctx context.Context, binary string) (string, error) {
+	cmdCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(cmdCtx, binary, "-V").Output()
+	return strings.TrimSpace(string(out)), err
+}
+
+// tmuxVersionFor returns the `tmux -V` output for binary, resolved once per
+// binary per process and cached; "" when it cannot be determined. tmux's error
+// vocabulary drifts across versions (issue #6099), so command errors carry the
+// version for diagnosability. Resolution shells out only after a command has
+// already failed — never on the hot path.
+func (r *Runtime) tmuxVersionFor(ctx context.Context, binary string) string {
+	r.versionMu.Lock()
+	defer r.versionMu.Unlock()
+	if r.versionText == nil {
+		r.versionText = map[string]string{}
+	}
+	if v, ok := r.versionText[binary]; ok {
+		return v
+	}
+	v, _ := resolveVersion(ctx, binary)
+	r.versionText[binary] = v
+	return v
+}

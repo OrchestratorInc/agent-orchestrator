@@ -73,6 +73,15 @@ type RemoveResult struct {
 	RemovedStorageDir bool             `json:"removedStorageDir"`
 }
 
+// DefaultPrompts is the assembled hardcoded system-prompt baseline for both
+// roles, served alongside a project so the UI can prefill its override editors
+// with the real baseline text. Worker/Orchestrator hold the static "skeleton"
+// prompts (role blocks + multi-PR/guard) without any per-session dynamic data.
+type DefaultPrompts struct {
+	Worker       string `json:"defaultWorkerPrompt"`
+	Orchestrator string `json:"defaultOrchestratorPrompt"`
+}
+
 // SetPermissionsInput remembers a project-wide policy for future sessions.
 type SetPermissionsInput struct {
 	SourceHarness domain.AgentHarness   `json:"sourceHarness,omitempty"`

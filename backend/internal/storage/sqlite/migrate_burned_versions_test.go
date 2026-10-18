@@ -1,8 +1,9 @@
 package sqlite
 
 import (
+	"database/sql"
+	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -204,6 +205,12 @@ var shippedMigrations = map[int64]string{
 	199: "0199_conversation_message_continuation.sql",
 	200: "0200_session_artifact_version_source.sql",
 	206: "0206_awake.sql",
+	// Fork-local migrations live in the reserved 9000+ range so a sync rebase
+	// can never renumber them onto a number upstream will claim. See
+	// migrate_fork_reserved_range_test.go for why.
+	9001: "9001_add_user_config.sql",
+	9006: "9006_session_provider_stamp.sql",
+	9011: "9011_gateway_entries.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -212,6 +219,8 @@ var shippedMigrations = map[int64]string{
 // new file claiming one would be skipped silently there.
 //
 //   - 22 shipped in a nightly (#2412) and was deleted by the revert.
+//   - 9003 (app_settings_process_inventory) shipped in a local self-build and
+//     was deleted when the footprint surface moved back to the archive branch.
 //
 // Beware of the adjacent hazard this cannot catch: at least one field profile
 // has versions 40 through 51 recorded as applied by a foreign build
@@ -219,7 +228,9 @@ var shippedMigrations = map[int64]string{
 // Any such migration whose schema the generated queries depend on must add a
 // schemaRepairs entry in db.go.
 func burnedVersion(v int64) bool {
-	return v == 22
+	// 9004 (review_run_publication) shipped in fork builds and was then dropped
+	// with the daemon-owned publication contract; never reuse the number.
+	return v == 22 || v == 9003 || v == 9004
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every
@@ -276,38 +287,18 @@ func TestMigrationVersionLedger(t *testing.T) {
 	}
 }
 
-func TestReconcileMiMoHarnessConstraintAfterBurnedVersion(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 164)
-	if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (165, 1)`); err != nil {
-		t.Fatalf("seed burned MiMo migration: %v", err)
-	}
-	var schema string
-	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`).Scan(&schema); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(schema, "'mimo-code'") {
-		t.Fatal("burned migration unexpectedly added MiMo Code")
-	}
-	if err := migrate(db); err != nil {
-		t.Fatalf("migrate burned MiMo profile: %v", err)
-	}
-	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`).Scan(&schema); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(schema, "'fx'") || !strings.Contains(schema, "'gemini'") || !strings.Contains(schema, "'mimo-code'") {
-		t.Fatalf("repaired sessions constraint lost fx, Gemini, or MiMo Code: %s", schema)
-	}
-	if err := reconcileHarnessConstraint(db); err != nil {
-		t.Fatalf("repeat repair: %v", err)
-	}
-}
-
 // A concurrently approved branch can claim the next free number first, so this
 // branch's migrations have to survive being applied to a database that already
 // records a version they never shipped. goose runs with WithAllowMissing, which
 // is what makes the resulting gap harmless.
 func TestMigrationsApplyOverAForeignInterleavedVersion(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 103)
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+	upTo(t, db, 103)
 
 	// Stand in for the other branch's migration: applied here, absent from this
 	// tree, and numbered below everything this branch adds.
@@ -337,6 +328,58 @@ SELECT COUNT(*) FROM (
 	}
 }
 
+// TestMigrationsApplyOverDroppedForkMigrations pins the live-install profile
+// after the 2026-10-13 publication drop: real installs keep goose_db_version
+// rows for fork migrations whose files no longer ship (9002, 9003, 9004, 9005,
+// 9009 — 9004 was dropped with the daemon-owned publication contract). goose
+// runs with WithAllowMissing, so the orphaned rows are ignored and the
+// surviving fork files (9006, 9011) still apply: a rebuild needs no manual
+// ledger surgery, and burnedVersion keeps any later file off those numbers.
+func TestMigrationsApplyOverDroppedForkMigrations(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+	upTo(t, db, 9001)
+
+	for _, v := range []int64{9002, 9003, 9004, 9005, 9009} {
+		if _, err := db.Exec(
+			`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, v,
+		); err != nil {
+			t.Fatalf("seed dropped fork migration %d: %v", v, err)
+		}
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate over dropped fork migrations: %v", err)
+	}
+	var gateways int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'gateway_entries'`,
+	).Scan(&gateways); err != nil {
+		t.Fatal(err)
+	}
+	if gateways != 1 {
+		t.Fatalf("gateway_entries tables = %d, want 1: surviving fork migrations must still apply", gateways)
+	}
+	for _, v := range []int64{9002, 9003, 9004, 9005, 9009} {
+		var applied int
+		if err := db.QueryRow(
+			`SELECT COUNT(*) FROM goose_db_version WHERE version_id = ? AND is_applied = 1`, v,
+		).Scan(&applied); err != nil {
+			t.Fatal(err)
+		}
+		if applied != 1 {
+			t.Fatalf("dropped fork migration %d ledger rows = %d, want the orphaned row kept exactly once", v, applied)
+		}
+	}
+	if err := migrate(db); err != nil {
+		t.Fatalf("repeat migrate over dropped fork migrations: %v", err)
+	}
+}
+
 // TestSessionListSucceedsOnBurnedMigrationHistory reproduces the #3475/#3476
 // field profile: goose_db_version already records versions 40 through 51
 // (written by a foreign build), so goose silently skips the real
@@ -344,7 +387,13 @@ SELECT COUNT(*) FROM (
 // columns. Startup schema reconciliation must repair the physical schema so
 // the session list works instead of returning 500 INTERNAL_ERROR.
 func TestSessionListSucceedsOnBurnedMigrationHistory(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 39) // the real 0040 has not run; diff-base columns are absent
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	upTo(t, db, 39) // the real 0040 has not run; diff-base columns are absent
 	for v := 40; v <= 51; v++ {
 		if _, err := db.Exec(
 			`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, v,

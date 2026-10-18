@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -174,7 +175,12 @@ func (w *Workspace) ResolveDefaultBranch(ctx context.Context, repoPath, configur
 	branch := strings.TrimSpace(configuredBranch)
 	if branch == "" {
 		resolver := gitdefault.New(w.binary, gitdefault.Runner(w.run))
-		resolution, err := resolver.Resolve(ctx, ctx, repo)
+		// Bound the live remote lookup with its own budget. Callers pass the
+		// REST request context here, so an unbounded ls-remote against a
+		// stalled route would wedge the whole spawn until that outer deadline.
+		remoteCtx, cancelRemote := context.WithTimeout(ctx, defaultBranchResolutionBudget)
+		defer cancelRemote()
+		resolution, err := resolver.Resolve(ctx, remoteCtx, repo)
 		if err != nil {
 			return ports.WorkspaceDefaultBranch{}, fmt.Errorf("gitworktree: resolve repository default for %q: %w", repo, err)
 		}
@@ -879,6 +885,7 @@ func (w *Workspace) DeletePreparedBranch(ctx context.Context, info ports.Workspa
 }
 
 func (w *Workspace) destroy(ctx context.Context, info ports.WorkspaceInfo) (ports.WorkspaceReclaim, error) {
+	slog.InfoContext(ctx, "gitworktree: Destroy called", "sessionID", info.SessionID, "path", info.Path, "branch", info.Branch, "projectID", info.ProjectID, "repoPath", info.RepoPath, "stack", string(debug.Stack()))
 	if info.Path == "" {
 		return ports.WorkspaceReclaimAlreadyAbsent, fmt.Errorf("%w: empty path", ErrUnsafePath)
 	}
@@ -979,6 +986,7 @@ func (w *Workspace) destroy(ctx context.Context, info ports.WorkspaceInfo) (port
 // discards agent work. For interactive teardown (ao session kill, ao cleanup)
 // use Destroy, which refuses dirty worktrees via ErrWorkspaceDirty.
 func (w *Workspace) ForceDestroy(ctx context.Context, info ports.WorkspaceInfo) error {
+	slog.InfoContext(ctx, "gitworktree: ForceDestroy called", "sessionID", info.SessionID, "path", info.Path, "branch", info.Branch, "projectID", info.ProjectID, "repoPath", info.RepoPath, "stack", string(debug.Stack()))
 	if info.Path == "" {
 		return fmt.Errorf("%w: empty path", ErrUnsafePath)
 	}

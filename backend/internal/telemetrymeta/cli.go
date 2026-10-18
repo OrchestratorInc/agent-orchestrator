@@ -171,10 +171,14 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao session exit-agent":     {},
 	"ao session kill":           {},
 	"ao session rename":         {},
+	"ao session restart-all":    {},
 	"ao session resume-agent":   {},
 	"ao session restore":        {},
 	"ao spawn":                  {},
 	"ao stop":                   {},
+	"ao user-config":            {},
+	"ao user-config get":        {},
+	"ao user-config set":        {},
 	"ao version":                {},
 
 	// Legacy commands observed in PostHog's current billing-period data.

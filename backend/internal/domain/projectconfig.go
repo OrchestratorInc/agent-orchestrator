@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -45,6 +46,15 @@ type ProjectConfig struct {
 	// OrchestratorRules are project-specific standing instructions for
 	// orchestrator sessions.
 	OrchestratorRules string `json:"orchestratorRules,omitempty"`
+
+	// WorkerPromptOverride, when non-empty, REPLACES the hardcoded worker system
+	// prompt baseline (workerSystemPrompt) instead of being appended to it like
+	// AgentRules. An empty value keeps the default baseline.
+	WorkerPromptOverride string `json:"workerPromptOverride,omitempty"`
+	// OrchestratorPromptOverride, when non-empty, REPLACES the hardcoded
+	// orchestrator system prompt baseline (orchestratorSystemPrompt). An empty
+	// value keeps the default baseline.
+	OrchestratorPromptOverride string `json:"orchestratorPromptOverride,omitempty"`
 
 	// AgentConfig is the default agent config for the project.
 	AgentConfig AgentConfig `json:"agentConfig,omitempty"`
@@ -99,6 +109,8 @@ type ContainerReapConfig struct {
 type ReviewerConfig struct {
 	Harness     ReviewerHarness `json:"harness"`
 	AgentConfig AgentConfig     `json:"agentConfig,omitempty"`
+	// Provider pins the reviewer's Anthropic provider; see RoleOverride.
+	Provider string `json:"provider,omitempty"`
 }
 
 // FallbackReviewerHarness is the reviewer used when a project configures none
@@ -160,6 +172,29 @@ func (c ProjectConfig) DefaultWorkerReviewer() (ReviewerHarness, AgentConfig) {
 type RoleOverride struct {
 	Harness     AgentHarness `json:"agent,omitempty"`
 	AgentConfig AgentConfig  `json:"agentConfig,omitempty"`
+	// Provider pins the role's Anthropic provider independently of the gateway
+	// the app- or project-scope settings resolve: empty follows that resolution,
+	// ProviderDirect talks to Anthropic with no gateway, and any other value
+	// must be the base URL of a configured gateway entry.
+	Provider string `json:"provider,omitempty"`
+}
+
+// ProviderDirect is the role-provider pin that bypasses every configured
+// gateway: the launch env shadows ANTHROPIC_BASE_URL and the auth token so the
+// agent resolves Anthropic directly.
+const ProviderDirect = "direct"
+
+// ValidateProviderPin rejects provider values outside the pin vocabulary so a
+// bad pin is refused at write time instead of silently degrading at spawn.
+func ValidateProviderPin(pin string) error {
+	switch pin {
+	case "", ProviderDirect:
+		return nil
+	}
+	if u, err := url.Parse(pin); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("provider: must be empty, %q, or an http(s) gateway base URL", ProviderDirect)
+	}
+	return nil
 }
 
 const (
@@ -240,6 +275,9 @@ func (c ProjectConfig) Validate() error {
 		if ro.Harness != "" && !ro.Harness.IsKnown() {
 			return fmt.Errorf("%s.agent: unknown harness %q", role, ro.Harness)
 		}
+		if err := ValidateProviderPin(ro.Provider); err != nil {
+			return fmt.Errorf("%s.%w", role, err)
+		}
 		if err := ro.AgentConfig.Validate(); err != nil {
 			return fmt.Errorf("%s.%w", role, err)
 		}
@@ -255,6 +293,9 @@ func (c ProjectConfig) Validate() error {
 	for i, rv := range c.Reviewers {
 		if !rv.Harness.IsKnown() {
 			return fmt.Errorf("reviewers[%d].harness: unknown harness %q", i, rv.Harness)
+		}
+		if err := ValidateProviderPin(rv.Provider); err != nil {
+			return fmt.Errorf("reviewers[%d].%w", i, err)
 		}
 		if err := rv.AgentConfig.Validate(); err != nil {
 			return fmt.Errorf("reviewers[%d].agentConfig: %w", i, err)

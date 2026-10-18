@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -405,6 +406,76 @@ func TestResolveChatAgentConfigValidatesClaudeEffort(t *testing.T) {
 	}
 }
 
+// The composer pins a seeded gateway model's default effort client-side (#49);
+// every other spawn path — delegated workers, `ao spawn`, automations — sends
+// none, and claude-code then falls back to its own runtime default (low),
+// silently downgrading the launch below the level the UI displays.
+func TestResolveAgentConfigPinsSeededDefaultEffort(t *testing.T) {
+	seeded := ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+		{ID: "glm-5.3-flash", IsDefault: true, Efforts: []string{"low", "medium", "high", "xhigh", "max"}, DefaultEffort: "max", EffortsSeeded: true},
+	}}
+	// No model override: the spawn runs the catalog's default model, which is
+	// exactly the delegated-worker case.
+	m := &Manager{modelCatalog: tuningCatalog{catalog: seeded}}
+	resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+	}, domain.ProjectConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Effort != "max" {
+		t.Fatalf("spawn without effort = %q, want the seeded default max", resolved.Effort)
+	}
+
+	// With a model override the seeded default is pinned the same way.
+	resolved, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID:   "p",
+		Kind:        domain.KindWorker,
+		Harness:     domain.HarnessClaudeCode,
+		AgentConfig: ports.AgentConfig{Model: "glm-5.3-flash"},
+	}, domain.ProjectConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Effort != "max" {
+		t.Fatalf("model-override spawn effort = %q, want the seeded default max", resolved.Effort)
+	}
+
+	// A provider-advertised default stays unpinned: leaving the level to the
+	// agent is the documented contract there (#49).
+	m.modelCatalog = tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+		{ID: "sonnet", IsDefault: true, Efforts: []string{"high"}, DefaultEffort: "high"},
+	}}}
+	resolved, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+	}, domain.ProjectConfig{})
+	if err != nil || resolved.Effort != "" {
+		t.Fatalf("advertised default = %#v, %v; want no pin", resolved, err)
+	}
+
+	// An explicit "send nothing" choice (EffortOverride with an empty effort)
+	// keeps the launch unpinned.
+	m.modelCatalog = tuningCatalog{catalog: seeded}
+	resolved, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, EffortOverride: true,
+	}, domain.ProjectConfig{})
+	if err != nil || resolved.Effort != "" {
+		t.Fatalf("explicit empty effort = %#v, %v; want no pin", resolved, err)
+	}
+
+	// A stale catalog must not pin (nor fail) a spawn that carries no tuning.
+	m.modelCatalog = tuningCatalog{catalog: ports.AgentModelCatalog{
+		Stale:  true,
+		Models: seeded.Models,
+	}}
+	resolved, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+	}, domain.ProjectConfig{})
+	if err != nil || resolved.Effort != "" {
+		t.Fatalf("stale catalog = %#v, %v; want no pin and no error", resolved, err)
+	}
+}
+
 func TestResolveClaudeTUIAgentConfigRejectsUnsupportedEffort(t *testing.T) {
 	m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
 		{ID: "sonnet", IsDefault: true, Efforts: []string{"low", "high"}},
@@ -517,7 +588,7 @@ func TestResolveCodexTUIAgentConfigFallsBackWhenCatalogCannotValidate(t *testing
 		t.Run(name, func(t *testing.T) {
 			m := &Manager{modelCatalog: catalog, logger: slog.New(slog.DiscardHandler)}
 			got, err := m.resolveTUIAgentConfig(context.Background(), cfg, domain.ProjectConfig{}, unvalidated)
-			if err != nil || got != unvalidated {
+			if err != nil || !reflect.DeepEqual(got, unvalidated) {
 				t.Fatalf("got %+v, %v; want unvalidated launch", got, err)
 			}
 		})
@@ -538,7 +609,7 @@ func TestResolveCodexTUIAgentConfigFallsBackWhenCatalogLookupTimesOut(t *testing
 		AgentConfig: domain.AgentConfig{Model: "gpt-custom", Effort: "xhigh"}}
 	m := &Manager{modelCatalog: tuningCatalog{err: fmt.Errorf("codex model/list: %w", context.DeadlineExceeded)}, logger: slog.New(slog.DiscardHandler)}
 	got, err := m.resolveTUIAgentConfig(context.Background(), cfg, domain.ProjectConfig{}, cfg.AgentConfig)
-	if err != nil || got != cfg.AgentConfig {
+	if err != nil || !reflect.DeepEqual(got, cfg.AgentConfig) {
 		t.Fatalf("got %+v, %v; want unvalidated launch", got, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

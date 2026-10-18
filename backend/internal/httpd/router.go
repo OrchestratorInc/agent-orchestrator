@@ -76,7 +76,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	r.NotFound(notFoundJSON)
 	r.MethodNotAllowed(methodNotAllowedJSON)
 
-	mountHealth(r, cfg)
+	mountHealth(r, cfg, deps.Readiness)
 	mountTerminalMux(r, termMgr, log)
 	mountControl(r, control)
 	mountAgentSwitchPolicyControl(r, control.AgentSwitchPolicy)
@@ -159,12 +159,23 @@ func previewOriginMiddleware(sessions *controllers.SessionsController) func(http
 }
 
 // mountHealth registers the liveness and readiness probes the Electron
-// supervisor polls before letting the renderer connect.
-func mountHealth(r chi.Router, cfg config.Config) {
+// supervisor polls before letting the renderer connect. /healthz is liveness
+// (the process is up); /readyz is readiness (the daemon can do its job).
+func mountHealth(r chi.Router, cfg config.Config, readiness *Readiness) {
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		envelope.WriteJSON(w, http.StatusOK, daemonProbePayload("ok", cfg))
 	})
 	r.Get("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		status, reason := "ready", ""
+		if readiness != nil {
+			status, reason = readiness.Snapshot()
+		}
+		if status == "degraded" {
+			payload := daemonProbePayload("degraded", cfg)
+			payload["reason"] = reason
+			envelope.WriteJSON(w, http.StatusServiceUnavailable, payload)
+			return
+		}
 		envelope.WriteJSON(w, http.StatusOK, daemonProbePayload("ready", cfg))
 	})
 }

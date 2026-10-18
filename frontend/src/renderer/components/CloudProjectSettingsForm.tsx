@@ -269,6 +269,7 @@ function toEditorDraft(values: CloudProjectSettingsDraft): ProjectSettingsDraft 
 		displayName: values.displayName, defaultBranch: values.defaultBranch, autoReview: values.autoReview,
 		sessionPrefix: values.sessionPrefix, intakeEnabled: false, intakeRepo: "", intakeAssignee: "",
 		workerAgent: values.worker.agent, orchestratorAgent: values.orchestrator.agent, reviewerHarness: values.reviewer.agent,
+		workerProvider: "", orchestratorProvider: "", reviewerProvider: "",
 		workerModel: values.worker.agentConfig.model, orchestratorModel: values.orchestrator.agentConfig.model, reviewerModel: values.reviewer.agentConfig.model,
 		workerMode: values.worker.agentConfig.mode, orchestratorMode: values.orchestrator.agentConfig.mode, reviewerMode: values.reviewer.agentConfig.mode,
 		workerEffort: values.worker.agentConfig.effort, orchestratorEffort: values.orchestrator.agentConfig.effort, reviewerEffort: values.reviewer.agentConfig.effort,

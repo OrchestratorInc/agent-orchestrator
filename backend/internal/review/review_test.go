@@ -1608,8 +1608,17 @@ func TestTerminateReviewerCancelsRunningRunsWithoutReviewerHandle(t *testing.T) 
 	if err != nil {
 		t.Fatalf("TerminateReviewer: %v", err)
 	}
-	if launcher.destroyed {
-		t.Fatal("destroy should not run without a reviewer handle")
+	// The review row exists but its handle was cleared (teardown on terminal
+	// state). The pane is addressed by its stable per-worker id, so kill must
+	// still reach it (#6064).
+	if !launcher.destroyed {
+		t.Fatal("destroy should run against the deterministic reviewer handle")
+	}
+	if launcher.destroyedHandle != "review-mer-1" {
+		t.Fatalf("destroyed handle = %q, want review-mer-1", launcher.destroyedHandle)
+	}
+	if res.ReviewerHandleID != "review-mer-1" {
+		t.Fatalf("result handle = %q, want review-mer-1", res.ReviewerHandleID)
 	}
 	if len(res.CancelledRuns) != 1 {
 		t.Fatalf("cancelled runs = %d, want 1", len(res.CancelledRuns))
@@ -1629,6 +1638,63 @@ func TestTerminateReviewerNoopsWhenNoReviewHistory(t *testing.T) {
 	}
 	if launcher.destroyed {
 		t.Fatal("destroy should not run without a reviewer handle")
+	}
+}
+
+func TestListReportsAliveDeterministicHandleWhenDBHandleCleared(t *testing.T) {
+	store := &fakeStore{
+		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerCodex},
+	}
+	launcher := &fakeLauncher{alive: true}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+
+	res, err := eng.List(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if !launcher.aliveChecked {
+		t.Fatal("List should probe the deterministic reviewer pane")
+	}
+	if res.ReviewerHandleID != "review-mer-1" {
+		t.Fatalf("handle = %q, want review-mer-1", res.ReviewerHandleID)
+	}
+}
+
+func TestListKeepsEmptyHandleWhenDeterministicPaneIsDead(t *testing.T) {
+	store := &fakeStore{
+		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerCodex},
+	}
+	launcher := &fakeLauncher{}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+
+	res, err := eng.List(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if res.ReviewerHandleID != "" {
+		t.Fatalf("handle = %q, want empty for a dead pane", res.ReviewerHandleID)
+	}
+}
+
+func TestListDoesNotProbeDeterministicPaneForChatReviewer(t *testing.T) {
+	store := &fakeStore{
+		review: &domain.Review{
+			ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerCodex,
+			InterfaceMode: domain.ReviewerInterfaceChat,
+		},
+	}
+	launcher := &fakeLauncher{alive: true}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+
+	res, err := eng.List(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if launcher.aliveChecked {
+		t.Fatal("chat-mode rows must not probe the deterministic terminal pane")
+	}
+	if res.ReviewerHandleID != "" {
+		t.Fatalf("handle = %q, want empty for chat mode", res.ReviewerHandleID)
 	}
 }
 
@@ -2853,6 +2919,36 @@ func TestTriggerCreatesRunsForMultipleEligiblePRsWithOneReviewer(t *testing.T) {
 	if store.review == nil || store.review.ReviewerHandleID != "review-mer-1" || store.review.PRURL != "" {
 		t.Fatalf("review row = %+v, want shared handle and no behavioral pr_url", store.review)
 	}
+}
+
+func TestTriggerWithPRURLReviewsOnlyThatPR(t *testing.T) {
+	store := &fakeStore{}
+	launcher := &fakeLauncher{handle: "review-mer-1"}
+	prs := fakePRs{prs: []domain.PullRequest{
+		{URL: "https://github.com/o/r/pull/1", Number: 1, HeadSHA: "sha1"},
+		{URL: "https://github.com/o/r/pull/2", Number: 2, HeadSHA: "sha2"},
+	}}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prs, fakeProjects{}, launcher)
+
+	res, err := eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{PRURL: "https://github.com/o/r/pull/2"})
+	if err != nil {
+		t.Fatalf("Trigger: %v", err)
+	}
+	if !res.Created || len(res.CreatedRuns) != 1 {
+		t.Fatalf("created = %+v, want exactly one run", res.CreatedRuns)
+	}
+	if res.CreatedRuns[0].PRURL != "https://github.com/o/r/pull/2" || res.CreatedRuns[0].TargetSHA != "sha2" {
+		t.Fatalf("run = %+v, want PR 2 at sha2", res.CreatedRuns[0])
+	}
+	if len(launcher.specs) != 1 || len(launcher.specs[0].ReviewQueue) != 1 {
+		t.Fatalf("launch specs = %+v, want a one-PR queue", launcher.specs)
+	}
+
+	t.Run("unknown pr url", func(t *testing.T) {
+		if _, err := eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{PRURL: "https://github.com/o/r/pull/9"}); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("err = %v, want ErrInvalid", err)
+		}
+	})
 }
 
 func TestTriggerAllowsTwoPRsWithSameHeadSHA(t *testing.T) {

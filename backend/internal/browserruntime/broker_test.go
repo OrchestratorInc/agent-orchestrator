@@ -41,6 +41,32 @@ func TestReadRuntimeToken(t *testing.T) {
 	}
 }
 
+// The desktop app writes the token right after spawning the daemon, so a
+// silent pipe means the writer died before the handoff. Inherited descriptors
+// (worker processes keep the supervisor's socketpair alive) can hold the pipe
+// open forever, so EOF never arrives and the read must be bounded instead of
+// parking the daemon before it binds, logs, or can be reaped.
+func TestReadRuntimeTokenSilentPipeTimesOut(t *testing.T) {
+	old := tokenHandoffTimeout
+	tokenHandoffTimeout = 100 * time.Millisecond
+	defer func() { tokenHandoffTimeout = old }()
+	pr, pw := io.Pipe()
+	defer func() { _ = pw.Close() }()
+	done := make(chan error, 1)
+	go func() {
+		_, err := ReadRuntimeToken(pr)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "timed out") {
+			t.Fatalf("want handoff timeout error, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ReadRuntimeToken never returned on a silent pipe: the handoff read is unbounded")
+	}
+}
+
 func TestBrokerExecuteRoundTrip(t *testing.T) {
 	broker := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	ctx, cancel := context.WithCancel(context.Background())

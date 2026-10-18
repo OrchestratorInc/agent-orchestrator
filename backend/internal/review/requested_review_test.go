@@ -371,8 +371,14 @@ func TestListKeepsTheSelectedReviewerAndListsTheWorkingOneAsActive(t *testing.T)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if got.ReviewerHarness != domain.ReviewerClaudeCode || got.ReviewerHandleID != "" || got.ReviewerSurface.ReviewID != "rev-claude-code" {
+	if got.ReviewerHarness != domain.ReviewerClaudeCode || got.ReviewerSurface.ReviewID != "rev-claude-code" {
 		t.Fatalf("selected reviewer = %s/%q/%+v, want the selected claude-code reviewer", got.ReviewerHarness, got.ReviewerHandleID, got.ReviewerSurface)
+	}
+	// Fork #6064: the live deterministic terminal pane is reported through the
+	// selected reviewer's handle, so the inspector's kill control stays
+	// visible for an orphaned pane whose DB handle was cleared.
+	if got.ReviewerHandleID != "review-mer-1" {
+		t.Fatalf("handle = %q, want the live deterministic pane id", got.ReviewerHandleID)
 	}
 	if len(got.ActiveReviewers) != 1 || got.ActiveReviewers[0].Harness != domain.ReviewerCodex {
 		t.Fatalf("active = %+v, want only codex", got.ActiveReviewers)

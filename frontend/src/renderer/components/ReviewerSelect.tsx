@@ -113,7 +113,7 @@ export function ReviewerSelect({
 	const needsSetup = agents !== undefined && Boolean(effectiveHarness && !options.some((agent) => agent.id === effectiveHarness && isSelectable(agent)));
 	const management = useAgentManagementMenu(needsSetup ? effectiveHarness : undefined, hostId);
 	const menuProjectID = projectId ?? "";
-	const triggerCatalog = useQuery(agentModelsQueryOptions(effectiveHarness, menuProjectID, hostId));
+	const triggerCatalog = useQuery(agentModelsQueryOptions(effectiveHarness, menuProjectID, hostId, "reviewer"));
 
 	useEffect(() => {
 		if (!menuOpen) return;
@@ -124,12 +124,22 @@ export function ReviewerSelect({
 		}
 		for (const harness of harnesses) {
 			if (!harness) continue;
-			void queryClient.prefetchQuery(agentModelsQueryOptions(harness, menuProjectID, hostId));
+			void queryClient.prefetchQuery(agentModelsQueryOptions(harness, menuProjectID, hostId, "reviewer"));
 		}
 	}, [defaultHarness, hostId, menuOpen, menuProjectID, queryClient, selectableOptions]);
 	// An unidentified model is left off the trigger rather than labelled.
 	const selectedModelLabel = modelOrModeLabel(triggerCatalog.data, model, mode, "");
-	const triggerLabel = [value ? agentLabel(value) : defaultHarnessLabel, harnessOnly ? null : selectedModelLabel]
+	// A pinned model absent from the role's catalog is marked, never shown as a
+	// fallback-list label: the spawn would silently remap it (upstream #6434).
+	const pinNotInCatalog =
+		triggerCatalog.data !== undefined &&
+		mode === "" &&
+		isConcreteModelID(model) &&
+		!modelOptions(triggerCatalog.data).some((item) => item.value === model);
+	const triggerLabel = [
+		value ? agentLabel(value) : defaultHarnessLabel,
+		harnessOnly ? null : selectedModelLabel + (pinNotInCatalog ? ` (${t("inspector.reviewerModelNotInCatalog")})` : ""),
+	]
 		.filter(Boolean)
 		.join(" · ");
 
@@ -223,7 +233,7 @@ function ReviewerHarnessOption({
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const catalogQuery = useQuery({
-		...agentModelsQueryOptions(resolvedHarness, projectId, hostId),
+		...agentModelsQueryOptions(resolvedHarness, projectId, hostId, "reviewer"),
 		enabled: false,
 	});
 	const catalog = catalogQuery.data;

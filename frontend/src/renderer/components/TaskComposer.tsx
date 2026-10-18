@@ -49,7 +49,7 @@ import { ModelCatalogNotice } from "./ModelCatalogNotice";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
 import { EffortPicker, type EffortAvailability } from "./settings/EffortPicker";
-import { useModelTuning } from "./settings/ModelTuningControls";
+import { effortChoices, useModelTuning } from "./settings/ModelTuningControls";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import {
 	readTaskComposerPreferences,
@@ -538,15 +538,24 @@ export function TaskComposer({
 		onEffortChange: setEffort,
 		onEffortReset: setEffort,
 	});
-	const effortOptions = effortModel?.efforts?.filter((option) => option && option.toLowerCase() !== "default") ?? [];
+	const { options: effortOptions } = effortChoices(effortModel, isConcreteModelID(selectedModel));
 	const cloudDefaultEffort = isCloudProject && effortOptions.includes("medium") ? "medium" : "";
 	const inheritedEffort = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
-	const implicitEffort = inheritedEffort || effortModel?.defaultEffort || "";
 	const selectedAgentLabel = agentCatalog?.agents.find((item) => item.id === selectedAgent)?.label || selectedAgent;
 	const requiresTuiFallback =
 		selectedAgent !== "" &&
 		settings?.defaultSessionMode === "chat" &&
 		!settings.chatHarnesses.includes(selectedAgent);
+	// A choice equal to the inherited worker effort is redundant by construction
+	// (the spawn falls back to the same role value), and one equal to a
+	// provider-advertised default is redundant because the agent's runtime
+	// default matches the catalog. A seeded default (AO's gateway seed table,
+	// e.g. max for glm-) need not match the agent's own runtime default
+	// (claude-code picks low), so an explicit choice equal to it must be sent —
+	// omitting the flag silently downgrades the spawn.
+	const implicitEffort = inheritedEffort
+		|| (effortModel?.effortsSeeded ? "" : effortModel?.defaultEffort)
+		|| "";
 	// With no provider default for the reported levels AO picks one, shows it as
 	// selected, and sends it, so the picker matches what the task runs with.
 	const aoDefaultEffort = requiresTuiFallback ? undefined : fallbackEffort(effortOptions, implicitEffort);
@@ -562,7 +571,14 @@ export function TaskComposer({
 		? (effectiveEffort || undefined)
 		: effortTouched || rememberedEffortIsExplicit
 			? !effectiveEffort || effectiveEffort === implicitEffort ? undefined : effectiveEffort
-			: aoDefaultEffort;
+			// Untouched, the picker still displays the seeded catalog default; a
+			// spawn that sends nothing would fall back to the agent's own default
+			// (low for an unrecognized model), contradicting what the user sees.
+			// Role-inherited effort already reaches the spawn through the role
+			// override, so it stays unpinned.
+			: !inheritedEffort && effortModel?.effortsSeeded
+				? effortModel?.defaultEffort || undefined
+				: aoDefaultEffort;
 	const effortAvailability: EffortAvailability = requiresTuiFallback
 		? "launch-unavailable"
 		: !effortModel || effortModel.efforts === undefined
@@ -845,6 +861,10 @@ function TaskEffortPicker({
 			defaultEffort={defaultEffort}
 			availability={availability}
 			onChange={onChange}
+			// null: picking the displayed default sends it explicitly. A seeded
+			// default (e.g. max for glm-) differs from the agent's own runtime
+			// default, so omitting the flag would silently downgrade the spawn.
+			defaultValue={null}
 			triggerClassName="composer-chip composer-toolbar-option w-fit"
 			menuClassName={COMPOSER_MENU_WIDTH}
 		/>

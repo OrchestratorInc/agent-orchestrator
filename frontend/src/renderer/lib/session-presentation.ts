@@ -106,6 +106,31 @@ export function getKanbanColumnView(
 	return getPortableKanbanColumnView(column, translator(t));
 }
 
+// The orchestrator's `status` does not track its activity the way a worker's
+// does — it stays "working" for the session's whole life, so running that
+// status through getSessionStatusDotView would silently absorb waiting_input
+// and blocked into the working tone, and an exited orchestrator would read as
+// "needs you" instead of gray. Read the tone off activity/isTerminated first,
+// falling back to getSessionStatusDotView once neither applies.
+export function getOrchestratorStatusDotView(
+	session: {
+		activity?: SessionActivity | null;
+		scmStatus?: SessionStatus;
+		status: SessionStatus;
+		isTerminated?: boolean;
+	},
+	t: TFunction = appI18n.t,
+): SessionStatusDotView {
+	const state = session.activity?.state;
+	if (state === "waiting_input" || state === "blocked") {
+		return { className: getAttentionZoneView("needs_input", t).dotClassName, breathe: false };
+	}
+	if (session.isTerminated || state === "exited") {
+		return { className: getSessionStatusView("exited", t).dotClassName, breathe: false };
+	}
+	return getSessionStatusDotView(session, t);
+}
+
 export function getSessionTimelinePillView(
 	status: SessionTimelinePillStatus,
 	t: TFunction = appI18n.t,

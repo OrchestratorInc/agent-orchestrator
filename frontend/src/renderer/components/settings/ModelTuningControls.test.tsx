@@ -16,6 +16,7 @@ const models: Model[] = [
 		defaultEffort: "low",
 	},
 	{ id: "plain", label: "Plain", efforts: ["low"] },
+	{ id: "gateway", label: "Gateway", efforts: [] },
 ];
 
 describe("ModelTuningControls", () => {
@@ -83,6 +84,63 @@ describe("ModelTuningControls", () => {
 		expect(screen.getByRole("alert")).toHaveTextContent("Reviewer model tuning is no longer supported");
 		expect(onValidityChange).toHaveBeenCalledWith(false);
 	});
+
+	it("falls back to the common ladder when the provider reports no efforts", async () => {
+		const onEffortChange = vi.fn();
+		render(
+			<ModelTuningControls
+				models={models}
+				model="gateway"
+				effort=""
+				onEffortChange={onEffortChange}
+				variant="settings"
+				roleLabel="Worker"
+			/>,
+		);
+
+		await userEvent.click(screen.getByRole("button", { name: "Worker Effort" }));
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: "Medium" }));
+		expect(onEffortChange).toHaveBeenCalledWith("medium");
+		expect(screen.getByText(/best guess/i)).toBeInTheDocument();
+	});
+
+	it("keeps a saved effort for a gateway model instead of flagging it invalid", () => {
+		const onValidityChange = vi.fn();
+		const onEffortReset = vi.fn();
+		render(
+			<ModelTuningControls
+				models={models}
+				model="gateway"
+				effort="high"
+				onEffortChange={vi.fn()}
+				onEffortReset={onEffortReset}
+				onValidityChange={onValidityChange}
+				variant="settings"
+			/>,
+		);
+
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(onValidityChange).toHaveBeenCalledWith(true);
+		expect(onEffortReset).not.toHaveBeenCalled();
+	});
+
+	it("falls back to the ladder for an off-catalog model", async () => {
+		const onEffortChange = vi.fn();
+		render(
+			<ModelTuningControls
+				models={models}
+				model="custom-off-catalog"
+				effort=""
+				onEffortChange={onEffortChange}
+				variant="settings"
+			/>,
+		);
+
+		await userEvent.click(screen.getByRole("button", { name: "Effort" }));
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: "Low" }));
+		expect(onEffortChange).toHaveBeenCalledWith("low");
+	});
+
 	it("keeps the effort control and saved choice when capability metadata is missing", async () => {
 		const change = vi.fn();
 		const validity = vi.fn();
@@ -95,30 +153,6 @@ describe("ModelTuningControls", () => {
 		expect(screen.queryByText("High (unavailable)")).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("menuitem", { name: "Clear effort" }));
 		expect(change).toHaveBeenLastCalledWith("");
-	});
-
-	it("keeps a visible reset control for a model with confirmed empty effort choices", async () => {
-		const change = vi.fn();
-		const validity = vi.fn();
-		render(<ModelTuningControls models={[{ id: "plain", label: "Plain", efforts: [] }]} model="plain" effort="high" onEffortChange={change} onValidityChange={validity} variant="settings" />);
-		expect(validity).toHaveBeenLastCalledWith(false);
-		await userEvent.click(screen.getByRole("button", { name: "Effort" }));
-		expect(screen.queryByText("This model does not support an effort setting.")).not.toBeInTheDocument();
-		await userEvent.click(screen.getByRole("menuitem", { name: "Clear effort" }));
-		expect(change).toHaveBeenLastCalledWith("");
-	});
-
-	it("does not borrow effort choices for an unlisted custom model", async () => {
-		render(<ModelTuningControls models={models} model="custom" effort="" onEffortChange={vi.fn()} variant="composer" />);
-		expect(screen.queryByRole("button", { name: "Effort" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("menuitemradio", { name: "High" })).not.toBeInTheDocument();
-		expect(screen.queryByText("Effort options have not been reported for this model.")).not.toBeInTheDocument();
-	});
-
-	it("flags a saved effort for a model the loaded catalog does not list", () => {
-		const validity = vi.fn();
-		render(<ModelTuningControls models={models} model="custom" effort="high" onEffortChange={vi.fn()} onValidityChange={validity} variant="settings" />);
-		expect(validity).toHaveBeenLastCalledWith(false);
 	});
 
 	it.each([{ reset: "", expected: "" }, { reset: null, expected: "high" }])("selects the reported effort default with reset=$reset", async ({ reset, expected }) => {

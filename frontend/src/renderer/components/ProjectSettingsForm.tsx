@@ -1,14 +1,19 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ProjectSettingsSection } from "@aoagents/product-ui";
 import { useTranslation } from "react-i18next";
-import { useEffect, useRef } from "react";
+import type { TFunction } from "i18next";
+import { useEffect, useRef, useState } from "react";
 import type { components } from "../../api/schema";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { useRemoteProjectQuery, workspaceQueryKeyForHost, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { useSettings } from "../hooks/useSettings";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
-import { clientForHost } from "../lib/host-clients";
+import { clientForHost, clientForSessionHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
+import { GatewayProvidersSection, gatewayConfigQueryKey } from "./settings/GatewayProvidersSection";
+import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
+import { PromptOverrideDialog } from "./settings/PromptOverrideDialog";
 import { isLaunchableAgent } from "../lib/agent-select-options";
 import { WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
 import { captureOrchestratorReplacementFailure } from "../lib/orchestrator-replacement-telemetry";
@@ -20,7 +25,7 @@ import { newestActiveOrchestrator } from "../types/workspace";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import { buildIntake } from "./IntakeFields";
 import { ReviewerSelect, reviewerTrustWarning } from "./ReviewerSelect";
-import { ProjectSettingsEditor, type ProjectAgentPickerProps, type ProjectSettingsDraft } from "./ProjectSettingsEditor";
+import { ProjectSettingsEditor, type ProjectAgentPickerProps, type ProjectProviderPickerProps, type ProjectSettingsDraft } from "./ProjectSettingsEditor";
 import { CloudProjectSettingsAdapter } from "./CloudProjectSettingsForm";
 
 type Project = components["schemas"]["Project"];
@@ -39,7 +44,7 @@ type SettingsSaveResult = {
 	spawnError: unknown;
 };
 
-export type ProjectSettingsSection = "general" | "agents";
+export type ProjectSettingsSection = "general" | "agents" | "gateway";
 export type ProjectSettingsSaveState = {
 	phase: "idle" | "pending" | "saving" | "saved" | "failed";
 	dirty?: boolean;
@@ -143,12 +148,16 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 	const workspace = hostId ? remoteProjectQuery.data : workspaceQuery.data?.find((item) => item.id === projectId);
 	const activeOrchestrator = newestActiveOrchestrator(workspace?.sessions ?? []);
 	const intake: TrackerIntakeConfig = config.trackerIntake ?? {};
+	const [promptOverrideOpen, setPromptOverrideOpen] = useState(false);
 	const initialValues: ProjectSettingsDraft = {
 		displayName: project.name,
 		defaultBranch: config.defaultBranch ?? DEFAULT_BRANCH_AUTO,
 		sessionPrefix: config.sessionPrefix ?? "",
 		workerAgent: config.worker?.agent ?? "",
 		orchestratorAgent: config.orchestrator?.agent ?? "",
+		workerProvider: config.worker?.provider ?? "",
+		orchestratorProvider: config.orchestrator?.provider ?? "",
+		reviewerProvider: config.reviewers?.[0]?.provider ?? "",
 		workerModel: config.worker?.agentConfig?.model ?? config.agentConfig?.model ?? "",
 		workerEffort: config.worker?.agentConfig?.effort ?? config.agentConfig?.effort ?? "",
 		workerPermissions: config.worker?.agentConfig?.permissions ?? config.agentConfig?.permissions ?? "",
@@ -173,6 +182,20 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 	const replacementFailedRef = useRef(false);
 	const agentsQuery = useAgentReadinessQuery(true, hostId);
 	useEnsureAgentReadiness({ hostId });
+	// Per-role provider pins (#6156) are chosen among the configured gateway
+	// entries; the same GET the Gateway section uses reports both scopes. On a
+	// remote host the gateway settings live on that host's daemon, not local.
+	const gatewayQuery = useQuery({
+		queryKey: gatewayConfigQueryKey(projectId, hostId),
+		queryFn: async () => {
+			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/settings/gateway", {
+				params: projectId ? { query: { projectId } } : undefined,
+			});
+			if (error) throw new Error(apiErrorMessage(error));
+			return data;
+		},
+	});
+	const providerOptions = gatewayProviderOptions(gatewayQuery.data, t);
 	const persist = async (values: ProjectSettingsDraft): Promise<SettingsSaveResult> => {
 		const savedKey = JSON.stringify(values);
 		void captureRendererEvent("ao.renderer.settings_save_requested", {
@@ -188,11 +211,13 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 					worker: {
 						...config.worker,
 						agent: values.workerAgent,
+						provider: values.workerProvider || undefined,
 						agentConfig: buildRoleAgentConfig(config.worker?.agentConfig, values.workerModel, values.workerMode, values.workerEffort, values.workerPermissions),
 					},
 					orchestrator: {
 						...config.orchestrator,
 						agent: values.orchestratorAgent,
+						provider: values.orchestratorProvider || undefined,
 						agentConfig: buildRoleAgentConfig(
 							config.orchestrator?.agentConfig,
 							values.orchestratorModel,
@@ -213,11 +238,13 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 					worker: {
 						...config.worker,
 						agent: values.workerAgent,
+						provider: values.workerProvider || undefined,
 						agentConfig: buildRoleAgentConfig(config.worker?.agentConfig, values.workerModel, values.workerMode, values.workerEffort, values.workerPermissions),
 					},
 					orchestrator: {
 						...config.orchestrator,
 						agent: values.orchestratorAgent,
+						provider: values.orchestratorProvider || undefined,
 						agentConfig: buildRoleAgentConfig(
 							config.orchestrator?.agentConfig,
 							values.orchestratorModel,
@@ -234,6 +261,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 						? [
 								{
 									harness: values.reviewerHarness,
+									provider: values.reviewerProvider || undefined,
 									agentConfig: buildRoleAgentConfig(
 										existingReviewerAgentConfig,
 										values.reviewerModel,
@@ -330,7 +358,28 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		modelScope={() => projectId} defaultReviewer={(draft) => WORKER_DEFAULT_REVIEWERS[draft.workerAgent] ?? "claude-code"}
 		reviewerWarning={reviewerTrustWarning} save={save} saveUnchanged onSaveState={onSaveState}
 		modelHostId={hostId}
-		renderAgent={(props) => <LocalAgentPicker {...props} projectId={projectId} hostId={hostId} agentsQuery={agentsQuery} />} />;
+		gatewayExtra={<GatewayProvidersSection projectId={projectId} />}
+		agentsExtra={<>
+			<ProjectSettingsSection title={t("settings.project.agentDefaults")} grouped>
+				<button
+					type="button"
+					className="w-full rounded-md bg-[var(--color-bg-settings-row)] px-4 py-3 text-left"
+					onClick={() => setPromptOverrideOpen(true)}
+				>
+					{t("settings.project.promptOverride")}
+				</button>
+			</ProjectSettingsSection>
+			{promptOverrideOpen && (
+				<PromptOverrideDialog
+					open={promptOverrideOpen}
+					onOpenChange={setPromptOverrideOpen}
+					scope="project"
+					projectId={projectId}
+				/>
+			)}
+		</>}
+		renderAgent={(props) => <LocalAgentPicker {...props} projectId={projectId} hostId={hostId} agentsQuery={agentsQuery} />}
+		renderProvider={(props) => <LocalProviderPicker {...props} options={providerOptions} />} />;
 }
 
 function LocalAgentPicker({ role, draft, value, invalid, onChange, projectId, hostId, agentsQuery }: ProjectAgentPickerProps & { projectId: string; hostId?: string; agentsQuery: ReturnType<typeof useAgentReadinessQuery> }) {
@@ -341,6 +390,24 @@ function LocalAgentPicker({ role, draft, value, invalid, onChange, projectId, ho
 	return role === "reviewer"
 		? <ReviewerSelect value={value} model={draft.reviewerModel} mode={draft.reviewerMode} projectId={projectId} hostId={hostId} harnessOnly defaultHarness={WORKER_DEFAULT_REVIEWERS[draft.workerAgent] ?? "claude-code"} triggerClassName="w-full" onChange={onChange} ariaLabel={t("settings.project.defaultReviewer")} agents={agents} disabled={disabled} />
 		: <RequiredAgentField id={`${role}Agent`} variant="settings-control" value={value} placeholder={t(role === "worker" ? "settings.project.selectWorker" : "settings.project.selectOrchestrator")} label={t(role === "worker" ? "settings.project.defaultWorker" : "settings.project.defaultOrchestrator")} agents={agents} hostId={hostId} disabled={disabled} invalid={invalid} onChange={onChange} />;
+}
+
+function LocalProviderPicker({ value, onChange, options }: ProjectProviderPickerProps & { options: { value: string; label: string }[] }) {
+	const { t } = useTranslation();
+	// A persisted pin that no longer matches a configured gateway must stay
+	// visible as its own "unknown" state, not masquerade as the default.
+	const all = value !== "" && !options.some((option) => option.value === value)
+		? [...options, { value, label: t("settings.project.providerUnknown") }]
+		: options;
+	return (
+		<SettingsOptionMenu
+			aria-label={t("settings.project.providerLabel")}
+			value={value}
+			options={all}
+			triggerClassName="w-full justify-between"
+			onChange={onChange}
+		/>
+	);
 }
 
 function repositoryHref(repository: string): string | undefined {
@@ -393,4 +460,30 @@ function buildRoleAgentConfig(
 	if (permissions) next.permissions = permissions as components["schemas"]["AgentConfig"]["permissions"];
 	else delete next.permissions;
 	return Object.keys(next).length > 0 ? next : undefined;
+}
+
+type GatewayConfigResponse = components["schemas"]["ControllersGatewayConfigResponse"];
+
+// gatewayProviderOptions lists the per-role provider choices: follow the
+// gateway resolution, bypass every gateway, or pin one of the configured
+// entries. A pinned entry is labeled with the scope that wins the resolution
+// (project overrides app) so the effective source stays visible.
+function gatewayProviderOptions(config: GatewayConfigResponse | undefined, t: TFunction): { value: string; label: string }[] {
+	const options = [
+		{ value: "", label: t("settings.project.providerDefault") },
+		{ value: "direct", label: t("settings.project.providerDirect") },
+	];
+	const pushEntry = (baseUrl: string | undefined, scopeLabel: string) => {
+		if (!baseUrl) return;
+		let host = baseUrl;
+		try {
+			host = new URL(baseUrl).host;
+		} catch {
+			// Not a parseable URL — show it verbatim rather than hiding the entry.
+		}
+		options.push({ value: baseUrl, label: `${host} (${scopeLabel})` });
+	};
+	pushEntry(config?.project?.baseUrl, t("settings.project.providerScopeProject"));
+	pushEntry(config?.app?.baseUrl, t("settings.project.providerScopeApp"));
+	return options;
 }

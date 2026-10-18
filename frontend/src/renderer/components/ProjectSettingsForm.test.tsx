@@ -496,6 +496,7 @@ describe("ProjectSettingsForm", () => {
 		await userEvent.click(picker);
 		await userEvent.click(screen.getByRole("menuitem", { name: /Reasoning effort/ }));
 		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		expect(picker).toHaveTextContent("GPT Test");
 		submitSettings();
 		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
 		expect(putMock.mock.calls[0][1].body.config.worker.agentConfig).toEqual(
@@ -520,8 +521,8 @@ describe("ProjectSettingsForm", () => {
 		});
 		renderSettings("proj-1", undefined, "agents");
 		const picker = await screen.findByRole("button", { name: "Worker model" });
-		expect(picker).toHaveTextContent("Opus · Medium");
-		expect(picker).not.toHaveTextContent("Claude");
+		expect(picker).toHaveTextContent("Opus");
+		expect(picker).not.toHaveTextContent("Effort not reported");
 		await userEvent.click(picker);
 		expect(screen.getByRole("menuitem", { name: "Opus" })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("menuitem", { name: /Reasoning effort/ }));
@@ -618,6 +619,73 @@ describe("ProjectSettingsForm", () => {
 		renderSettings("proj-1", undefined, "agents");
 		expect(await screen.findByRole("button", { name: "Worker mode" })).toHaveTextContent("Low");
 	});
+
+	it("saves a per-role provider pin and scopes the model catalog to the role", async () => {
+		let lastModelsQuery: string | undefined;
+		getMock.mockImplementation(async (path: string, init?: { params?: { query?: Record<string, string> } }) => {
+			if (path === "/api/v1/agents/readiness") return agentCatalogResponse;
+			if (path === "/api/v1/settings/gateway") {
+				return {
+					data: {
+						app: { baseUrl: "https://gw.example", tokenSet: true, model: "" },
+						effective: { baseUrl: "https://gw.example", source: "app" },
+					},
+					error: undefined,
+				};
+			}
+			if (path === "/api/v1/agents/{agent}/models") {
+				lastModelsQuery = init?.params?.query?.role;
+				return {
+					data: {
+						agentId: "test-agent",
+						selectionMode: "text",
+						models: [],
+						allowCustom: true,
+						source: "manual",
+						fetchedAt: "2026-07-31T00:00:00Z",
+						stale: false,
+					},
+					error: undefined,
+				};
+			}
+			return {
+				data: {
+					status: "ok",
+					project: {
+						id: "proj-1",
+						name: "Project One",
+						kind: "single_repo",
+						path: "/repo/project-one",
+						repo: "git@github.com:acme/project-one.git",
+						defaultBranch: "main",
+						config: {
+							worker: { agent: "claude-code" },
+							orchestrator: { agent: "claude-code" },
+						},
+					},
+				},
+				error: undefined,
+			};
+		});
+
+		renderSettings("proj-1", undefined, "agents");
+
+		expect(await screen.findByText("Provider")).toBeInTheDocument();
+		const providerSelects = screen.getAllByRole("button", { name: "Provider" });
+		expect(providerSelects).toHaveLength(3);
+		expect(providerSelects[0]).toHaveTextContent("Gateway default");
+
+		// The gateway entry is offered with its effective source and, once the
+		// worker pins it, the model catalog is queried for the worker role.
+		await chooseOption(providerSelects[0], "gw.example (app)");
+		await waitFor(() => expect(lastModelsQuery).toBe("worker"));
+
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		const config = putMock.mock.calls[0][1].body.config;
+		expect(config.worker).toMatchObject({ agent: "claude-code", provider: "https://gw.example" });
+		expect(config.orchestrator.provider).toBeUndefined();
+	}, 20_000);
 
 	it("loads agents fields and saves without dropping hidden workflow config", async () => {
 		mockProject({
@@ -879,6 +947,9 @@ describe("ProjectSettingsForm", () => {
 		expect(screen.queryByRole("menuitem", { name: "Enter model ID…" })).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("menuitem", { name: /GPT-5\.4/ }));
 		expect(workerModel).toHaveTextContent("GPT-5.4");
+		// Models without reported efforts now open the fallback effort submenu; dismiss it.
+		await userEvent.keyboard("{Escape}");
+		await userEvent.keyboard("{Escape}");
 
 		await userEvent.click(workerModel);
 		expect(await screen.findByRole("menuitem", { name: /GPT-5\.6 Sol/ })).toBeInTheDocument();
@@ -1047,6 +1118,9 @@ describe("ProjectSettingsForm", () => {
 		await userEvent.click(codexOption!);
 		await userEvent.click(await screen.findByRole("button", { name: "Reviewer model" }));
 		await userEvent.click(await screen.findByRole("menuitem", { name: /GPT-5 Mini/i }));
+		// Dismiss the fallback effort submenu that now opens for models without reported efforts.
+		await userEvent.keyboard("{Escape}");
+		await userEvent.keyboard("{Escape}");
 		expect(reviewer).toHaveTextContent("Codex");
 		expect(screen.getByRole("button", { name: "Reviewer model" })).toHaveTextContent("GPT-5 Mini");
 

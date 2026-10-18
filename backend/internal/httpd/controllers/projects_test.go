@@ -49,6 +49,15 @@ func (emptyGetManager) Get(context.Context, domain.ProjectID) (projectsvc.GetRes
 
 }
 
+// DefaultPrompts is a no-op here: emptyGetManager exercises the 500 path where
+// newGetProjectResponse errors before the baselines are written, but the
+// handler calls DefaultPrompts unconditionally, so the stub must satisfy it.
+func (emptyGetManager) DefaultPrompts(context.Context) (projectsvc.DefaultPrompts, error) {
+
+	return projectsvc.DefaultPrompts{}, nil
+
+}
+
 // TestProjectsAPI_GetEmptyResultIs500 locks the fix for the discriminated-union
 
 // invariant: a degenerate GetResult must surface as a parseable 500 envelope,
@@ -72,6 +81,61 @@ func TestProjectsAPI_GetEmptyResultIs500(t *testing.T) {
 
 	assertErrorCode(t, body, status, http.StatusInternalServerError, "INTERNAL_ERROR")
 
+}
+
+// okGetManager returns a GetResult with a real Project so the GET handler can
+// be driven without a store. Only Get is exercised here; the embedded
+// projectsvc.Manager keeps the interface satisfied for routing.
+type okGetManager struct{ projectsvc.Manager }
+
+func (okGetManager) Get(context.Context, domain.ProjectID) (projectsvc.GetResult, error) {
+	return projectsvc.GetResult{
+		Status: "ok",
+		Project: &projectsvc.Project{
+			ID:   "proj-1",
+			Name: "Project One",
+			Kind: domain.ProjectKind("single_repo"),
+			Path: "/repo/project-one",
+		},
+	}, nil
+}
+
+// DefaultPrompts returns recognizable sentinels so a test can assert the GET
+// handler threads the baselines through to GetProjectResponse.
+func (okGetManager) DefaultPrompts(context.Context) (projectsvc.DefaultPrompts, error) {
+	return projectsvc.DefaultPrompts{Worker: "default-worker", Orchestrator: "default-orchestrator"}, nil
+}
+
+// TestProjectsAPI_GetSurfacesDefaultPrompts locks the contract added so the
+// project-scope prompt-override editor can prefill with the real hardcoded
+// baseline: GET /projects/{id} must surface non-empty defaultWorkerPrompt and
+// defaultOrchestratorPrompt alongside the project, mirroring GET /user-config.
+func TestProjectsAPI_GetSurfacesDefaultPrompts(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{
+		Projects: okGetManager{},
+	}, httpd.ControlDeps{}))
+	t.Cleanup(srv.Close)
+
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/projects/proj-1", "")
+	if status != 200 {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	var resp struct {
+		Status                    string `json:"status"`
+		DefaultWorkerPrompt       string `json:"defaultWorkerPrompt"`
+		DefaultOrchestratorPrompt string `json:"defaultOrchestratorPrompt"`
+	}
+	mustJSON(t, body, &resp)
+	if resp.Status != "ok" {
+		t.Fatalf("status = %q, want ok", resp.Status)
+	}
+	if resp.DefaultWorkerPrompt == "" {
+		t.Fatal("defaultWorkerPrompt empty on GET; want the assembled baseline")
+	}
+	if resp.DefaultOrchestratorPrompt == "" {
+		t.Fatal("defaultOrchestratorPrompt empty on GET; want the assembled baseline")
+	}
 }
 
 func newTestServer(t *testing.T) *httptest.Server {

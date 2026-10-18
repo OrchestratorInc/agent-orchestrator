@@ -141,6 +141,7 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/sessions/{sessionId}/workspace/file",
 	"/api/v1/sessions/{sessionId}/workspace/files",
 	"/api/v1/sessions/cleanup",
+	"/api/v1/user-config",
 ] as const;
 
 // Resource collections whose next path segment is an identifier. Only used as a
@@ -393,9 +394,12 @@ export function apiErrorMessage(error: unknown, fallback = "Request failed"): st
 	if (error instanceof Error) return error.message;
 	if (typeof error === "string" && error !== "") return error;
 	if (typeof error === "object" && error !== null) {
-		const body = error as { code?: unknown; message?: unknown; error?: unknown };
+		const body = error as { code?: unknown; message?: unknown; error?: unknown; details?: { detail?: unknown } };
 		if (typeof body.error === "object" && body.error !== null) {
 			return apiErrorMessage(body.error, fallback);
+		}
+		if (typeof body.details?.detail === "string" && body.details.detail !== "") {
+			return body.details.detail;
 		}
 		if (typeof body.message === "string" && body.message !== "") {
 			return body.message;

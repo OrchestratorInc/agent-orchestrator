@@ -1309,6 +1309,55 @@ describe("Sidebar", () => {
 		expect(row).toContainElement(screen.getByLabelText("Pin session"));
 	});
 
+	it("does not apply a tap scale effect to session rows", () => {
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		const openSession = screen.getByLabelText("Open fix login");
+		const row = openSession.closest<HTMLElement>("[data-session-row]");
+		if (!row) throw new Error("Session row not found");
+
+		fireEvent.pointerDown(openSession);
+		expect(row).not.toHaveClass("scale-[0.97]");
+	});
+
+	it("shows the orchestrator activity dot left of the project name", () => {
+		const orchestrator: WorkspaceSession = {
+			...session,
+			id: "proj-1-orchestrator",
+			title: "Orchestrator",
+			kind: "orchestrator",
+			status: "working",
+			activity: { state: "waiting_input", lastActivityAt: "2026-06-30T00:00:00Z" },
+		};
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [orchestrator] }] });
+
+		const label = document.querySelector<HTMLElement>("[data-project-label]");
+		const dot = label?.previousElementSibling as HTMLElement | null;
+		expect(dot).toHaveAttribute("data-session-status");
+		expect(dot).toHaveClass("bg-status-needs-you");
+		expect(dot).not.toHaveClass("animate-status-pulse");
+		// Dot-to-name spacing matches SessionRow's gap-1.5.
+		expect(label?.parentElement).toHaveClass("gap-1.5");
+	});
+
+	it("shows the latest orchestrator activity even when it has exited", () => {
+		const orchestrator: WorkspaceSession = {
+			...session,
+			id: "proj-1-orchestrator",
+			title: "Orchestrator",
+			kind: "orchestrator",
+			status: "exited",
+			isTerminated: true,
+			activity: { state: "exited", lastActivityAt: "2026-06-30T00:00:00Z" },
+		};
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [orchestrator] }] });
+
+		const label = document.querySelector<HTMLElement>("[data-project-label]");
+		const dot = label?.previousElementSibling as HTMLElement | null;
+		expect(dot).toHaveAttribute("data-session-status");
+		expect(dot).toHaveClass("bg-status-exited");
+	});
+
 	it("toggles project sessions from the folder icon without selecting the project first", async () => {
 		const user = userEvent.setup();
 		const other: WorkspaceSummary = {
@@ -2401,7 +2450,12 @@ describe("Sidebar", () => {
 
 		const projectRow = screen.getByText("Project One").closest('button, [role="button"]');
 		expect(projectRow?.querySelector("[data-project-folder-visual]")).toHaveClass("translate-y-px");
-		expect(projectRow?.querySelector("[data-project-label]")).toHaveClass("translate-y-px");
+		// translate-y-px sits on the wrapper around the (optional) orchestrator
+		// dot + label, not on [data-project-label] itself, so the shift applies
+		// to the whole group rather than just the text.
+		expect(projectRow?.querySelector("[data-project-label]")?.parentElement).toHaveClass(
+			"translate-y-px",
+		);
 	});
 
 	it("caps the project list at 10 until Show more is clicked", async () => {

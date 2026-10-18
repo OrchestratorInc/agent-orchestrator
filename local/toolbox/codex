@@ -1,0 +1,22 @@
+#!/bin/sh
+# Codex → напрямую SOCKS5 (xray 10808), минуя privoxy (8118).
+#
+# ROOT CAUSE (issue #96/#120, доказано codex exec + retry-count):
+# Codex (reqwest/Rust) читает HTTP_PROXY/HTTPS_PROXY/ALL_PROXY из env. Текущая shell-сессия
+# (tmux/Claude) наследует HTTP_PROXY=http://127.0.0.1:8118 (privoxy) → privoxy режёт long-lived WS
+# → "stream disconnected / request timed out" → responses_retry 37/час. launchctl gui-домен уже на
+# SOCKS5, но существующие процессы его не подхватывают (env не обновляется у запущенных).
+#
+# Wrapper: env -u СНИМАЕТ унаследованный privoxy (8 переменных), затем ставит SOCKS5 (10808).
+# socks5h:// (h = remote DNS) — важно за GFW (DNS не утекает провайдеру).
+# Источник: codex doctor показал, что [network] proxy_url и WS_PROXY/WSS_PROXY игнорируются —
+# Codex использует ТОЛЬКО HTTP_PROXY/HTTPS_PROXY (reqwest standard).
+PROXY="socks5h://127.0.0.1:10808"
+
+exec /usr/bin/env \
+  -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+  -u http_proxy -u https_proxy -u all_proxy \
+  -u NO_PROXY -u no_proxy \
+  HTTP_PROXY="$PROXY" HTTPS_PROXY="$PROXY" ALL_PROXY="$PROXY" \
+  http_proxy="$PROXY" https_proxy="$PROXY" all_proxy="$PROXY" \
+  /opt/homebrew/bin/codex "$@"

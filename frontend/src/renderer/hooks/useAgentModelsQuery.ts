@@ -18,27 +18,32 @@ export function isRefreshingCatalog(catalog: Pick<AgentModelCatalog, "refreshSta
 export const agentModelsQueryPrefix = (agentId: string) =>
 	["agent-models", agentId] as const;
 
-export const agentModelsQueryKey = (agentId: string, projectId: string, hostId?: string) =>
-	hostId ? ["agent-models", hostId, agentId, projectId] as const : [...agentModelsQueryPrefix(agentId), projectId] as const;
+export const agentModelsQueryKey = (agentId: string, projectId: string, hostId?: string, role?: string) => {
+	if (hostId) return ["agent-models", hostId, agentId, projectId, role ?? ""] as const;
+	if (role) return [...agentModelsQueryPrefix(agentId), projectId, `role:${role}`] as const;
+	return [...agentModelsQueryPrefix(agentId), projectId] as const;
+};
 
 async function requestAgentModels(
 	agentId: string,
 	projectId: string,
 	mode: "cached" | "refresh" | "revalidate",
 	hostId?: string,
+	role?: string,
 	catalogOnly = false,
 ): Promise<AgentModelCatalog> {
 	const client = hostId ? clientForHost(hostId) : apiClient;
 	const path = { agent: agentId };
+	const query = { projectId: projectId || undefined, role: role || undefined };
 	const result =
 		mode === "cached"
 			? await client.GET("/api/v1/agents/{agent}/models", {
-					params: { path, query: { projectId: projectId || undefined, ...(catalogOnly ? { catalogOnly: true } : {}) } },
+					params: { path, query: { ...query, ...(catalogOnly ? { catalogOnly: true } : {}) } },
 				})
 			: await client.POST("/api/v1/agents/{agent}/models/refresh", {
 					params: {
 						path,
-						query: { projectId: projectId || undefined, revalidate: mode === "revalidate" || undefined, ...(catalogOnly ? { catalogOnly: true } : {}) },
+						query: { ...query, revalidate: mode === "revalidate" || undefined, ...(catalogOnly ? { catalogOnly: true } : {}) },
 					},
 				});
 	if (result.error) throw new Error(apiErrorMessage(result.error));
@@ -46,12 +51,12 @@ async function requestAgentModels(
 	return agentId === "claude-code" ? { ...catalog, models: foldClaudeAliasDefault(catalog.models) } : catalog;
 }
 
-export function agentModelsQueryOptions(agentId: string, projectId: string, hostId?: string, catalogOnly = false) {
-	const key = agentModelsQueryKey(agentId, projectId, hostId);
+export function agentModelsQueryOptions(agentId: string, projectId: string, hostId?: string, role?: string, catalogOnly = false) {
+	const key = agentModelsQueryKey(agentId, projectId, hostId, role);
 	return queryOptions({
 		// Both read the shared daemon catalog; only task responses add recency.
 		queryKey: catalogOnly ? [...key, "catalog"] as const : key,
-		queryFn: () => requestAgentModels(agentId, projectId, "cached", hostId, catalogOnly),
+		queryFn: () => requestAgentModels(agentId, projectId, "cached", hostId, role, catalogOnly),
 		enabled: agentId !== "",
 		// A catalog that carries a warning describes a problem the user may fix
 		// outside AO (a login in a terminal), so any remount re-reads it.
@@ -96,10 +101,10 @@ export function invalidateAgentModelCatalogs(queryClient: QueryClient, agentId: 
 	]);
 }
 
-export function refreshAgentModels(agentId: string, projectId: string, hostId?: string, catalogOnly = false) {
-	return requestAgentModels(agentId, projectId, "refresh", hostId, catalogOnly);
+export function refreshAgentModels(agentId: string, projectId: string, hostId?: string, role?: string, catalogOnly = false) {
+	return requestAgentModels(agentId, projectId, "refresh", hostId, role, catalogOnly);
 }
 
-export function revalidateAgentModels(agentId: string, projectId: string, hostId?: string) {
-	return requestAgentModels(agentId, projectId, "revalidate", hostId);
+export function revalidateAgentModels(agentId: string, projectId: string, hostId?: string, role?: string, catalogOnly = false) {
+	return requestAgentModels(agentId, projectId, "revalidate", hostId, role, catalogOnly);
 }

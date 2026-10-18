@@ -1,0 +1,35 @@
+#!/bin/zsh
+set -eu
+
+APP_BUNDLE="/Applications/Codex.app"
+APP_EXEC="$APP_BUNDLE/Contents/MacOS/Codex"
+APP_ID="com.openai.codex"
+LOG="/tmp/codex-app-proxy.log"
+PROXY_ENV_URL="socks5h://127.0.0.1:10808"
+CHROMIUM_PROXY_URL="socks5://127.0.0.1:10808"
+NO_PROXY_LIST="localhost,127.0.0.1,::1"
+
+if [[ ! -d "$APP_BUNDLE" || ! -x "$APP_EXEC" ]]; then
+  print -ru2 -- "Codex.app not found or not executable: $APP_BUNDLE"
+  exit 1
+fi
+
+osascript -e "tell application id \"$APP_ID\" to quit" >/dev/null 2>&1 || true
+pkill -x Codex 2>/dev/null || true
+sleep 1
+
+for name in HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; do
+  launchctl setenv "$name" "$PROXY_ENV_URL"
+done
+launchctl setenv NO_PROXY "$NO_PROXY_LIST"
+launchctl setenv no_proxy "$NO_PROXY_LIST"
+
+{
+  print -r -- ""
+  print -r -- "[$(date '+%Y-%m-%dT%H:%M:%S%z')] Starting Codex.app via $CHROMIUM_PROXY_URL"
+} >>"$LOG"
+
+open -na "$APP_BUNDLE" --args "--proxy-server=$CHROMIUM_PROXY_URL" "$@"
+
+print -r -- "Started Codex.app through $CHROMIUM_PROXY_URL"
+print -r -- "Log: $LOG"

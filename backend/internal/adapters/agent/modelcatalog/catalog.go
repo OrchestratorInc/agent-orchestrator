@@ -362,7 +362,7 @@ func discoverClaudeCatalog(
 	if err != nil {
 		return base, fmt.Errorf("claude-code model discovery: %w", err)
 	}
-	normalized := normalize(models)
+	normalized := SeedEfforts(normalize(models))
 	if len(normalized) == 0 {
 		return base, errors.New("claude-code model discovery returned no models")
 	}
@@ -373,6 +373,53 @@ func discoverClaudeCatalog(
 	base.SelectionMode = ports.ModelSelectionCatalog
 	base.Source = "provider"
 	return base, nil
+}
+
+// effortSeedsVersion feeds the claude-code discovery fingerprint so catalogs
+// cached before a seed change refresh instead of staying dark. Var only so a
+// test can prove the fingerprint moves with it; treat it as const.
+var effortSeedsVersion = "2"
+
+// gatewayEffortSeeds records the reasoning levels known for common
+// Anthropic-compatible gateway model families. Gateways omit
+// capabilities.effort from their model lists entirely (z.ai probed
+// 2026-10-01: only id/created/owned_by come back), so their models arrive
+// unannotated even though they accept reasoning levels and the backend
+// plumbs --effort end to end. Advertised efforts always win; a seed fills
+// only the empty case, and a wrong guess is corrected by a per-model
+// override (service layer) rather than a string rule.
+var gatewayEffortSeeds = []struct {
+	prefix  string
+	efforts []string
+	def     string
+}{
+	// glm-: z.ai docs (glm-5.3, read 2026-10-01) list low/high/max with max as
+	// the coding default; medium is not advertised but is kept so sessions or
+	// roles already pinned to it stay valid (the gateway snaps it), and xhigh
+	// is accepted by Claude Code-compatible layers as an alias for max.
+	{"glm-", []string{"low", "medium", "high", "xhigh", "max"}, "max"},
+	{"deepseek-", []string{"low", "medium", "high"}, "medium"},
+	{"qwen", []string{"low", "medium", "high"}, "medium"},
+}
+
+// SeedEfforts annotates models whose provider did not advertise efforts with
+// the levels known for their family. Models that already carry efforts — or
+// that match no family — come back unchanged.
+func SeedEfforts(models []ports.AgentModelInfo) []ports.AgentModelInfo {
+	for i := range models {
+		if len(models[i].Efforts) > 0 {
+			continue
+		}
+		for _, seed := range gatewayEffortSeeds {
+			if strings.HasPrefix(strings.ToLower(models[i].ID), seed.prefix) {
+				models[i].Efforts = append([]string(nil), seed.efforts...)
+				models[i].DefaultEffort = seed.def
+				models[i].EffortsSeeded = true
+				break
+			}
+		}
+	}
+	return models
 }
 
 func applyClaudeConfiguredDefault(models []ports.AgentModelInfo, configured string) []ports.AgentModelInfo {
@@ -863,6 +910,9 @@ func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env 
 func claudeCodeDiscoveryFingerprint(ctx context.Context, workingDir string, env map[string]string) string {
 	settings := agentcreds.ResolveClaudeSettings(ctx, workingDir, env, agentcreds.ResolveOptions{})
 	hash := sha256.New()
+	// Seeds participate in the fingerprint: bumping or adding them must
+	// invalidate catalogs cached while the gateway data was still absent.
+	_, _ = hash.Write([]byte("effortSeeds\x00" + effortSeedsVersion + "\x00"))
 	_, _ = hash.Write([]byte("model\x00" + settings.Model + "\x00"))
 	keys := make([]string, 0, len(settings.Env))
 	for key := range settings.Env {

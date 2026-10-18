@@ -7,5 +7,5 @@
 //
 // tmux's client/server protocol is not compatible across versions, so this pin
 // also decides which running tmux servers a packaged AO can still talk to.
-export const BUNDLED_TMUX_VERSION = "3.5a";
-export const BUNDLED_TMUX_SHA256 = "16216bd0877170dfcc64157085ba9013610b12b082548c7c9542cc0103198951";
+export const BUNDLED_TMUX_VERSION = "3.6b";
+export const BUNDLED_TMUX_SHA256 = "390759d25fdba016887ec982b808927e637070fd7d03a8021f8ef3102b9ae3c7";

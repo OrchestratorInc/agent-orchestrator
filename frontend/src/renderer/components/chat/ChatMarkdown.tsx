@@ -259,7 +259,7 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 						title="Wrap long lines"
 						className={cn(
 							"flex size-7 items-center justify-center rounded-md transition-[background-color,color,transform] hover:bg-interactive-hover hover:text-foreground",
-							wrap ? "text-accent" : "text-muted-foreground",
+							wrap ? "text-accent-strong" : "text-muted-foreground",
 						)}
 					>
 						<WrapText aria-hidden="true" className="size-3" />

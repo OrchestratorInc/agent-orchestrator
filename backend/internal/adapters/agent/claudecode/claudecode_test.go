@@ -832,7 +832,11 @@ func TestGetRestoreCommandRejectsNonRegularSystemPromptFile(t *testing.T) {
 
 func TestGetRestoreCommandFallsBackToDerivedUUID(t *testing.T) {
 	// No agentSessionId captured (pre-hook session) → derive deterministically
-	// from the AO session id, the explicit fallback.
+	// from the AO session id, the explicit fallback. No WorkspacePath is set,
+	// so claudeTranscriptExists can't check for a transcript and does not
+	// block — see TestGetRestoreCommandFalseWhenDerivedUUIDTranscriptMissing
+	// for the case where a workspace path IS known and the transcript isn't
+	// there.
 	cmd, ok, err := (&Plugin{resolvedBinary: "claude"}).GetRestoreCommand(context.Background(), ports.RestoreConfig{
 		Permissions: ports.PermissionModeBypassPermissions,
 		Session:     ports.SessionRef{ID: "sess-r"},

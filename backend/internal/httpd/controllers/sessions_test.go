@@ -47,6 +47,7 @@ type fakeSessionService struct {
 	artifactsDeleted           []domain.SessionID
 	deleteArtifactsErr         error
 	sessions                   map[domain.SessionID]domain.Session
+	staleness                  []sessionsvc.ProviderStaleness
 	sent                       string
 	sentAttachment             *ports.SpawnAttachment
 	sentDeliveryOptions        ports.MessageDeliveryOptions
@@ -414,6 +415,24 @@ func (f *fakeSessionService) ResumeAgent(_ context.Context, id domain.SessionID)
 	s.Status = domain.StatusIdle
 	f.sessions[id] = s
 	return sessionsvc.ResumeAgentOutcome{Session: s, Mode: sessionsvc.RestoreModeViewNative}, nil
+}
+
+func (f *fakeSessionService) ProviderStaleness(_ context.Context) ([]sessionsvc.ProviderStaleness, error) {
+	return f.staleness, nil
+}
+
+func (f *fakeSessionService) ApplyProviderSwitch(_ context.Context, ids []domain.SessionID) ([]sessionsvc.ProviderApplyResult, error) {
+	if len(ids) == 0 {
+		ids = nil
+		for _, item := range f.staleness {
+			ids = append(ids, item.SessionID)
+		}
+	}
+	out := make([]sessionsvc.ProviderApplyResult, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, sessionsvc.ProviderApplyResult{SessionID: id, State: "applied"})
+	}
+	return out, nil
 }
 
 func (f *fakeSessionService) SwitchAgent(_ context.Context, id domain.SessionID, cfg sessionsvc.SwitchAgentInput) (domain.AgentSwitch, error) {

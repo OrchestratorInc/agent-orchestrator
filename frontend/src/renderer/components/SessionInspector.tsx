@@ -101,6 +101,7 @@ import {
 	sessionReviewsQueryOptions,
 	sessionReviewsQueryKey,
 	type PRReviewState,
+	historicalReviewStatesFrom,
 	type ReviewRunFacts,
 } from "../lib/session-reviews";
 import type { CloudCpAOReviewRun, CloudCpSessionReviewState, CloudCpPullRequestSummary } from "../lib/cloud-cp";
@@ -1134,7 +1135,7 @@ function PRTimelineLink({ pr, verb }: { pr: SessionPRSummary; verb: string }) {
 	return (
 		<AppLink
 			aria-label={`${verb} PR #${pr.number}`}
-			className="inline-flex min-w-0 items-center gap-1 rounded-xs text-foreground underline-offset-2 transition-colors hover:text-accent hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent/50"
+			className="inline-flex min-w-0 items-center gap-1 rounded-xs text-foreground underline-offset-2 transition-colors hover:text-accent-strong hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent/50"
 			href={prBrowserUrl(pr)}
 			rel="noopener noreferrer"
 			target="_blank"
@@ -1819,8 +1820,11 @@ function MergedReviewsSection({
 	const openInAOBrowser = useSessionBrowserLink(session);
 	const workspaceKey = workspaceQueryKeyForHost(hostId);
 	const openReviewStates = openReviewStatesFor(session, reviewStates);
-	const runsByPR = runsByPRFrom(openReviewStates, runs);
-	const aoStates = triggeredReviewStatesFrom(openReviewStates, runs);
+	// Merged/closed PRs from earlier in this session keep their runs but no live
+	// state — synthesize one per PR so the Reviews tab covers the whole history.
+	const reviewStatesForView = [...openReviewStates, ...historicalReviewStatesFrom(runs, openReviewStates)];
+	const runsByPR = runsByPRFrom(reviewStatesForView, runs);
+	const aoStates = triggeredReviewStatesFrom(reviewStatesForView, runs);
 
 	// Union by PR, newest PR first. A PR can appear on either side alone. A
 	// multi-repository session can have the same number in two repositories, so

@@ -153,7 +153,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const installed = useMemo(() => installedAgentIds(agents.data), [agents.data]);
 	const refreshModelsOnOpen = (agentId: AgentId) => {
 		if (!installed.has(agentId) || (needsAuthentication(agentId) && !MULTI_PROVIDER_HARNESSES.has(agentId))) return;
-		const options = agentModelsQueryOptions(agentId, "", hostId, true);
+		const options = agentModelsQueryOptions(agentId, "", hostId, undefined, true);
 		// Read the persisted cache first, then refresh without replacing the
 		// visible list with a loading state. Concurrent opens share one request.
 		void queryClient.fetchQuery({
@@ -162,7 +162,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			retry: false,
 			queryFn: async () => {
 				await queryClient.prefetchQuery(options);
-				const catalog = await refreshAgentModels(agentId, "", hostId, true);
+				const catalog = await refreshAgentModels(agentId, "", hostId, undefined, true);
 				if (catalog) queryClient.setQueryData(options.queryKey, catalog);
 				return true;
 			},

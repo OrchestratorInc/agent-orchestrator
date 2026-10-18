@@ -96,6 +96,22 @@ func (c *AgentsController) writeModels(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 	projectID := strings.TrimSpace(r.URL.Query().Get("projectId"))
+	// A role query scopes the catalog to that role's provider pin (issue
+	// #6156), reusing the encoded-scope pattern of @cred: so the cache keys
+	// separate per role with no schema change.
+	if role := strings.TrimSpace(r.URL.Query().Get("role")); role != "" {
+		switch role {
+		case "worker", "orchestrator", "reviewer":
+			if projectID == "" {
+				envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROJECT_REQUIRED", "role requires projectId", nil)
+				return
+			}
+			projectID = projectID + "@role:" + role
+		default:
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_ROLE", "role must be worker, orchestrator, or reviewer", nil)
+			return
+		}
+	}
 	var catalog ports.AgentModelCatalog
 	var err error
 	if r.URL.Query().Get("catalogOnly") == "true" {

@@ -1,0 +1,173 @@
+#!/bin/sh
+# srouter: codex CLI wrapper (managed)
+#
+# Codex CLI → напрямую SOCKS5 (xray), минуя privoxy (HTTP-CONNECT-прокси на порту brew-сервиса).
+# privoxy портит WebSocket-стриминг Codex → "Reconnecting 1..5/5 → request timed out".
+# xray-native SOCKS5 держит WS стабильно. socks5h:// = DNS резолвится на стороне прокси
+# (важно за GFW — не утекает локальный DNS). Claude Code остаётся на privoxy (ему нужен HTTP).
+#
+# Issue #96: terminal-shell наследует HTTP_PROXY=privoxy из ~/.claude/settings.json
+# (Claude Code env), и это перебивает launchctl SOCKS5 → Codex молча идёт через privoxy → режёт WS.
+# Поэтому launcher сначала СБРАСЫВАЕТ все 8 прокси-переменных через /usr/bin/env -u, а затем
+# детерминированно выставляет SOCKS5. Это гарантирует SOCKS-маршрут независимо от того, кто и как
+# испортил окружение до нас. Одного -u недостаточно (даст direct) — всегда переустанавливаем.
+#
+# Issue #144 (подход A): реальный codex НЕ вшивается install-тайм. Wrapper РАНТАЙМ-резолвит его по
+# PATH ВЫЗЫВАЮЩЕЙ оболочки, МИНУЯ сам себя (антирекурсия). Один wrapper ловит любую версию codex,
+# оказавшуюся в PATH caller'а — в т.ч. после brew upgrade (binary сменился в том же пути → подхватится
+# автоматически, reinstall не нужен). Раньше путь вшивался install-тайм в обёртку → >1 codex на диске
+# или caller с другим PATH шли напрямую (fail-closed нарушен).
+#
+# Issue #169 (rename): wrapper файл переименован codex → codex-srouter. Поэтому при runtime-резолве ниже
+# (поиск `codex` в PATH) wrapper НИКОГДА не выберет сам себя — имя не совпадает → коллизия неймспейса
+# устранена СТРУКТУРНО. Антирекурсия по realpath/inode/маркеру и cycle-guard #150/#153 остаются как
+# defense-in-depth (могут быть 2 копии wrapper'а или foreign, целенаправленно зовущий codex-srouter).
+#
+# Issue #150 (cycle-guard): антирекурсия точечными identity-чеками (realpath/inode/srouter-маркер, см.
+# ниже) не замыкается на foreign-wrapper БЕЗ маркера с `exec codex "$@"` → бесконечный цикл
+# managed→foreign→managed (rc=124). 3-й класс защиты — versioned env-сентинель SROUTER_CODEX_WRAPPER_V1:
+# cycle-state инвариант, обрывает цикл при повторном входе managed wrapper (см. блок ниже).
+#
+# ГРАНИЦА — BEST-EFFORT, НЕ fail-closed: wrapper перехватывает ТОЛЬКО вызовы, дошедшие до этого файла
+# (через ~/bin/codex-srouter или shell-функцию codex() в ~/.zshrc). Прямой абсолютный путь /opt/.../codex,
+# `node .../codex.js`, exec.LookPath с другим PATH (AO-worktree) — НЕ перехватываются. Настоящая
+# fail-closed граница = сетевой PF kill-switch (isolate_firewall.py, отдельный слой).
+#
+# Issue #169 rename: wrapper файл называется codex-srouter (НЕ codex) — убрать коллизию неймспейса с
+# real binary (оба звались codex → natural-рекурсия #150/#144). real binary по-прежнему зовётся codex,
+# его и резолвит этот wrapper в PATH ниже. Стабильная точка входа для не-zsh вызывающих сторон (bash,
+# command codex, GUI) — сам этот launcher ~/bin/codex-srouter. Shell-функция codex() зовёт codex-srouter
+# по абсолютному пути (тогда порядок brew в PATH не важен).
+# Первый комментарий — маркер srouter (uninstall удаляет только своё, чужой wrapper не трогает).
+PROXY="socks5h://127.0.0.1:10808"
+LOOPBACK="localhost,127.0.0.1,::1"
+
+# Свой fingerprint для антирекурсии: realpath (ловит symlink на wrapper) + inode:device (ловит
+# hardlink на wrapper — тот же inode, но другой realpath; сравнение только по realpath его пропускает).
+# readlink -f доступен в macOS /bin/sh (BSD readlink поддерживает -f с Monterey+); fallback — $0.
+# stat -f '%i %d' (inode device) — BSD stat на macOS; fallback — пустой fingerprint (только realpath).
+SELF="$0"
+SELF_REAL="$SELF"
+if command -v readlink >/dev/null 2>&1; then
+  _rl="$(readlink -f "$SELF" 2>/dev/null)" && [ -n "$_rl" ] && SELF_REAL="$_rl"
+fi
+SELF_INO=""
+if command -v stat >/dev/null 2>&1; then
+  _si="$(stat -f '%i %d' "$SELF_REAL" 2>/dev/null)" && [ -n "$_si" ] && SELF_INO="$_si"
+fi
+
+# Issue #150 — cycle-guard: versioned env-сентинель фиксирует динамический факт «managed wrapper уже
+# присутствует в этой цепочке вызовов». Точечные identity-чеки антирекурсии (realpath/inode/srouter-маркер)
+# — это эвристики классификации файла, у каждой есть дыра: всегда найдётся foreign-wrapper БЕЗ нашего
+# маркера, делающий рекурсивный codex-вызов (managed→foreign→managed→... → rc=124 timeout, 3-я находка
+# cycle-review PR #146). Сентинель — не очередная identity-эвристика, а cycle-state инвариант: обрываем
+# рекурсию fail-loud (exit 126), не доходя до real Codex.
+# Versioned-имя (SROUTER_CODEX_WRAPPER_V1) — чтобы не столкнуться со случайной пользовательской
+# переменной без версии; смена формата → bump суффикса (V2...). НЕ PATH-санitизация (отвергнута в #150:
+# blast radius на 24/7-инфре — tools/агенты молча теряют ~/bin); сентинель = env-ФЛАГ, PATH не трогает.
+#
+# Формат сентинели: <PID>:<hop>. Покрывает ТРИ класса рекурсии (cycle-review PR #153 rounds 1-2):
+#   1. exec-цикл (foreign с `exec codex`): exec СОХРАНЯЕТ PID → при повторном входе PID == $$ → обрыв
+#      (быстрый путь, hop не важен — тот же процесс). Round 1: булево-флаг контаминировал дерево Codex.
+#   2. fork-цикл (foreign БЕЗ exec, `codex "$@"`): fork даёт НОВЫЙ PID → не отлавливается PID-check'ом.
+#      Hop-счётчик: каждый fork-re-entry инкрементирует унаследованный hop; при hop > CEILING → обрыв,
+#      иначе переписываем sentinel своим PID:hop. Round 2: PID-only пропускал fork-bomb до process-table.
+#   3. ЛЕГИТИМНЫЙ descendant (real Codex spawn'ит worker через managed wrapper): тоже fork, hop растёт,
+#      но bounded (вложенная agent-орkeстрация — единицы уровней). CEILING=16 даёт запас для любой
+#      разумной вложенности и обрывает бесконтрольную foreign-рекурсию задолго до исчерпания лимита.
+# ПОКРЫТИЕ И ГРАНИЦА (cycle-review PR #153 rounds 1-3): sentinel ловит 3 класса NATURAL-рекурсии
+# (exec-цикл, linear fork, env-inherited re-entry). Граница threat-model: env-passing — эвристика
+# передачи состояния без замкнутого инварианта (как и identity-чеки файла, см. #150), её обходят
+# НАМЕРЕННЫЕ конструкции foreign-wrapper под контролем того же UID — `env -u SROUTER_CODEX_WRAPPER_V1`
+# (стирает sentinel) и параллельный fan-out (`codex & codex &`, экспоненциальный рост дерева). Это
+# availability-класс вне natural-рекурсии #150 (нужен active malice в PATH уже контролируемого UID),
+# осознанно не покрывается best-effort layer'ом — честная fail-closed граница = PF kill-switch.
+_CE_CYCLE_CEILING=16
+if [ "${SROUTER_CODEX_WRAPPER_V1:-}" != "" ]; then
+  _prev_pid="${SROUTER_CODEX_WRAPPER_V1%%:*}"
+  if [ "$_prev_pid" = "$$" ]; then
+    # Класс 1: повторный вход в ТОТ ЖЕ процесс (exec-цикл managed→foreign→managed). Обрыв безусловно.
+    printf '%s\n' \
+      "srouter codex wrapper: обнаружен цикл exec (managed→foreign→managed)." \
+      "SROUTER_CODEX_WRAPPER_V1=$$ — managed wrapper повторно вошёл в тот же процесс (exec сохраняет PID)." \
+      "В PATH найден foreign-wrapper (без srouter-маркера), резолвящий codex обратно в наш wrapper." \
+      "Обрываю цикл, чтобы избежать rc=124 (timeout). real Codex НЕ запускался." \
+      "Устрани конфликт codex-обёрток в PATH (см. issue #150)." >&2
+    exit 126
+  fi
+  # Класс 2/3: новый PID (fork). Извлекаем hop унаследованного sentinel и инкрементируем.
+  _prev_hop="${SROUTER_CODEX_WRAPPER_V1#*:}"
+  [ "$_prev_hop" = "$SROUTER_CODEX_WRAPPER_V1" ] && _prev_hop=0   # нет ':' (старый формат) → 0
+  # Non-numeric hop guard: аномальное/манипулированное значение (не natural) → reset, не арифм.сбой.
+  case "$_prev_hop" in
+    ''|*[!0-9]*) _prev_hop=0 ;;
+  esac
+  _next_hop=$((_prev_hop + 1))
+  if [ "$_next_hop" -gt "$_CE_CYCLE_CEILING" ]; then
+    # Класс 2: fork-рекурсия превысила потолок (foreign БЕЗ exec накапливает процессы). Обрыв.
+    printf '%s\n' \
+      "srouter codex wrapper: обнаружена fork-рекурсия (глубина re-entry ${_next_hop} > ${_CE_CYCLE_CEILING})." \
+      "В PATH foreign-wrapper БЕЗ exec, порождающий codex рекурсивно (каждый уровень — новый процесс)." \
+      "Без ceiling это исчерпало бы per-user process limit (process-table exhaustion, DoS на 24/7)." \
+      "Обрываю рекурсию fail-loud. real Codex НЕ запускался." \
+      "Устрани конфликт codex-обёрток в PATH (см. issue #150)." >&2
+    exit 126
+  fi
+  _CE_SENTINEL_VALUE="$$:${_next_hop}"   # легитимный descendant (класс 3): продолжаем, обновляем sentinel
+else
+  _CE_SENTINEL_VALUE="$$:0"              # первый вход — sentinel не установлен
+fi
+
+# Рантайм-резолв codex по PATH вызывающего, минуя сам wrapper. Обходим каждую директорию PATH, ищем
+# первый codex, который НЕ является самим wrapper'ом (ни по realpath, ни по inode:device).
+# Инвариант: wrapper никогда не exec'нет сам себя — ни напрямую, ни через symlink, ни через hardlink (#144).
+_codex_bin=""
+_save_IFS="$IFS"
+IFS=":"
+for _dir in $PATH; do
+  IFS="$_save_IFS"
+  [ -z "$_dir" ] && continue
+  _cand="$_dir/codex"
+  # -x проверяет executable (как test -x); пропускаем директории/несуществующие.
+  [ -f "$_cand" ] && [ -x "$_cand" ] || continue
+  _cand_real="$_cand"
+  if command -v readlink >/dev/null 2>&1; then
+    _cr="$(readlink -f "$_cand" 2>/dev/null)" && [ -n "$_cr" ] && _cand_real="$_cr"
+  fi
+  # Антирекурсия — symlink-случай: canonical path кандидата совпадает с wrapper'ом.
+  [ "$_cand_real" = "$SELF_REAL" ] && continue
+  # Антирекурсия — hardlink-случай: тот же inode+device (разный путь, тот же файл). Сравниваем только
+  # при наличии обоих fingerprints (иначе неопределённое совпадение пустых строк дало бы false-positive skip).
+  if [ -n "$SELF_INO" ] && command -v stat >/dev/null 2>&1; then
+    _ci="$(stat -f '%i %d' "$_cand_real" 2>/dev/null)" && [ -n "$_ci" ] && [ "$_ci" = "$SELF_INO" ] && continue
+  fi
+  # Антирекурсия — корневой инвариант: skip'аем ЛЮБУЮ управляемую srouter-копию (а не только себя).
+  # Две независимые копии wrapper'а в PATH (разные inode/realpath) дают бесконечный ping-pong: A exec'ает
+  # B как «реальный codex», B exec'ает A. Управляемый wrapper отличим от реального codex ТОЛЬКО по
+  # srouter-маркеру в содержимом (первый комментарий), не по пути/inode. grep по первым строкам; marker
+  # в начале файла, читаем лимит строк. grep/sed/head — стандартные утилиты /usr/bin; fallback пропускает
+  # проверку (только realpath+inode), не крашит.
+  if command -v grep >/dev/null 2>&1; then
+    if grep -q 'srouter: codex CLI wrapper' "$_cand" 2>/dev/null; then
+      continue
+    fi
+  fi
+  _codex_bin="$_cand"
+  break
+done
+IFS="$_save_IFS"
+
+if [ -z "$_codex_bin" ]; then
+  printf 'srouter codex wrapper: реальный codex не найден в PATH (минуя wrapper). Установи codex.\n' >&2
+  exit 127
+fi
+
+exec /usr/bin/env \
+  -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+  -u http_proxy -u https_proxy -u all_proxy \
+  -u NO_PROXY -u no_proxy \
+  HTTP_PROXY="$PROXY" HTTPS_PROXY="$PROXY" ALL_PROXY="$PROXY" \
+  http_proxy="$PROXY" https_proxy="$PROXY" all_proxy="$PROXY" \
+  NO_PROXY="$LOOPBACK" no_proxy="$LOOPBACK" \
+  SROUTER_CODEX_WRAPPER_V1="$_CE_SENTINEL_VALUE" \
+  "$_codex_bin" "$@"

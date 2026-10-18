@@ -965,6 +965,7 @@ function setupTabHost(
 	loadURLHook?: (viewIndex: number, url: string) => Promise<void>,
 	browserHistoryStore?: BrowserHistoryStore,
 	clearBrowserProfileData = vi.fn(async (_partition: string) => undefined),
+	overrides?: { entryReadyTimeoutMs?: number },
 ) {
 	const constructorOptions: Array<{
 		webPreferences: Electron.WebPreferences;
@@ -1190,6 +1191,7 @@ function setupTabHost(
 		isAgentBrowserUrl: (url: string) => agentHost.registered && /^https:\/\/ao-preview-agent\.localhost:\d+\/v\/cdp/.test(url),
 		browserProfileStore,
 		browserHistoryStore,
+		entryReadyTimeoutMs: overrides?.entryReadyTimeoutMs,
 		clearBrowserProfileData,
 		onNativeViewAdded,
 		// Kept only as a regression tripwire: the removed auto-send path used
@@ -2744,6 +2746,37 @@ describe("browser profile partitions and replacement", () => {
 		const { host, invoke } = setupTabHost(store);
 		const nav = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
 		expect(host.getProfileState(nav.viewId)).toMatchObject({ profileId: null, temporary: true });
+	});
+
+	it("bounds tab readiness so a stuck initial load cannot wedge the session queue", async () => {
+		const store = fakeBrowserProfileStore(profile, { "worker-1": profile.id });
+		let holdLoads = true;
+		const { host, invoke } = setupTabHost(
+			store,
+			false,
+			async () => {
+				if (holdLoads) await new Promise(() => {});
+			},
+			undefined,
+			undefined,
+			{ entryReadyTimeoutMs: 20 },
+		);
+		const nav = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
+
+		// A native command awaiting tab readiness must fail typed instead of
+		// hanging forever — and keep failing fast, never wedging the queue.
+		await expect(host.execute("worker-1", "snapshot", {})).rejects.toMatchObject({
+			code: "BROWSER_DEVTOOLS_UNAVAILABLE",
+		});
+		await expect(host.execute("worker-1", "snapshot", {})).rejects.toMatchObject({
+			code: "BROWSER_DEVTOOLS_UNAVAILABLE",
+		});
+
+		// Recovery path: once loads settle again, a fresh tab serves commands.
+		holdLoads = false;
+		host.destroy(nav.viewId);
+		await invoke("browser:ensure", "worker-1");
+		await expect(host.execute("worker-1", "snapshot", {})).resolves.toBeTruthy();
 	});
 
 	it("releases profile usage when worker tab startup fails", async () => {

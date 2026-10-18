@@ -163,7 +163,7 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 //
 // The prompt is passed after `--` so a prompt beginning with "-" is not
 // mistaken for a flag.
-func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
+func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
 	// Defense-in-depth: the project service validates on write, but re-check
 	// here so a config written by any other path can't launch a bad command.
 	if err := cfg.Config.Validate(); err != nil {
@@ -199,6 +199,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		Permission:       agentruntime.PermissionPolicy(permissions),
 		AllowedTools:     cfg.AllowedTools,
 		DisallowedTools:  cfg.DisallowedTools,
+		ProviderArgs:     claudeProfileArgs(cfg.Config),
 	})
 }
 
@@ -257,15 +258,33 @@ func (p *Plugin) PreLaunch(ctx context.Context, cfg ports.LaunchConfig) error {
 // permission mode, and current standing system instructions. A blank model
 // leaves model selection to Claude. When Prompt is present it is passed as the
 // resume-time user turn, avoiding a fragile terminal paste into Claude's TUI.
-func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
+func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
-	if _, ok := agentruntime.RestoreIdentity(
+	// Defense-in-depth, symmetric with GetLaunchCommand: the config was
+	// validated on write, but re-check here so a config mutated later (by a
+	// bug or a different code path) is caught at restore too, not only launch.
+	if err := cfg.Config.Validate(); err != nil {
+		return nil, false, fmt.Errorf("claude-code: %w", err)
+	}
+
+	identity, ok := agentruntime.RestoreIdentity(
 		agentruntime.HarnessClaudeCode,
 		cfg.Session.ID,
 		cfg.Session.Metadata,
-	); !ok {
+	)
+	if !ok {
+		return nil, false, nil
+	}
+	// A non-blank id is not proof a resumable transcript exists: the
+	// SessionStart hook may never have fired (process died before it ran, or
+	// the machine rebooted mid-launch) and the derived UUID above is a guess,
+	// not a persisted fact. `claude --resume <id>` on a missing transcript
+	// exits 1 with "No conversation found" instead of starting fresh, so
+	// verify the file is actually there and let the caller's fresh-launch
+	// fallback take over when it isn't. See claudecode_profile.go.
+	if !claudeTranscriptExists(cfg.Session.WorkspacePath, identity) {
 		return nil, false, nil
 	}
 
@@ -273,6 +292,8 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, err
 	}
+	// MCP/plugin flags are not in the transcript, so a resume rebuilds them —
+	// see claudeProfileArgs in claudecode_profile.go.
 	return agentruntime.BuildRestoreCommand(agentruntime.RestoreConfig{
 		Harness:          agentruntime.HarnessClaudeCode,
 		Binary:           binary,
@@ -286,6 +307,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		Permission:       agentruntime.PermissionPolicy(cfg.Permissions),
 		AllowedTools:     cfg.AllowedTools,
 		DisallowedTools:  cfg.DisallowedTools,
+		ProviderArgs:     claudeProfileArgs(cfg.Config),
 	})
 }
 

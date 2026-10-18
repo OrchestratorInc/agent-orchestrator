@@ -543,8 +543,17 @@ func ProviderCatalogFingerprint(ctx context.Context, binary, workingDir string, 
 //
 // An error means the provider could not be asked. Callers must fall back to
 // their static list rather than presenting an empty picker.
+// providerProbeTimeout bounds the whole discovery probe: credential
+// resolution plus the provider's paginated model listing. It is deliberately
+// larger than agentcreds.DefaultTimeout, which calibrates a single validation
+// probe against api.anthropic.com (~350 ms round-trip); a real gateway
+// listing under that budget died with "context deadline exceeded" and the
+// picker rendered the raw error (observed 2026-10-14 on z.ai). Var so tests
+// can shorten it.
+var providerProbeTimeout = 12 * time.Second
+
 func ProviderModels(ctx context.Context, binary, workingDir string, env map[string]string) ([]ports.AgentModelInfo, error) {
-	probeCtx, cancel := context.WithTimeout(ctx, agentcreds.DefaultTimeout)
+	probeCtx, cancel := context.WithTimeout(ctx, providerProbeTimeout)
 	defer cancel()
 	resolved := (&Plugin{}).resolveProviderContext(probeCtx, binary, workingDir, env, claudeModelAuthReport)
 	return providerModelsFor(probeCtx, resolved)

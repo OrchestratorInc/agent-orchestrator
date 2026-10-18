@@ -218,6 +218,67 @@ func TestMigrateRepairsQueuedTurnPromotionWhenVersion88WasClaimed(t *testing.T) 
 	}
 }
 
+// TestMigrateRecognizesGatewayEntriesFromEarlierBuild reproduces the
+// 2026-10-14 startup failure: gateway_entries shipped in self-builds as
+// migration 9010 before the 2026-10-13 sync settle renumbered the file to
+// 9011, and a live install holds the table (with the provider profile data)
+// while goose_db_version records no row for it. goose replayed CREATE TABLE
+// into "table gateway_entries already exists" and the daemon wedged at
+// startup. Migration must recognize the existing table, record 9011, keep the
+// data, and start.
+func TestMigrateRecognizesGatewayEntriesFromEarlierBuild(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	upTo(t, db, 9006)
+
+	if _, err := db.Exec(`
+CREATE TABLE gateway_entries (
+    scope TEXT NOT NULL CHECK (scope IN ('app', 'project')),
+    project_id TEXT NOT NULL DEFAULT '',
+    base_url TEXT NOT NULL DEFAULT '',
+    auth_token TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMP NOT NULL,
+    PRIMARY KEY (scope, project_id)
+)`); err != nil {
+		t.Fatalf("seed gateway_entries table from earlier build: %v", err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO gateway_entries (scope, project_id, base_url, auth_token, model, updated_at)
+VALUES ('app', '', 'https://example.invalid', '', 'gateway-model', '2026-10-14T00:00:00Z')
+`); err != nil {
+		t.Fatalf("seed gateway profile: %v", err)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate database with pre-existing gateway_entries: %v", err)
+	}
+
+	var applied int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 9011 AND is_applied = 1`,
+	).Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if applied != 1 {
+		t.Fatalf("gateway migration 9011 applied rows = %d, want 1", applied)
+	}
+	var profiles int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM gateway_entries`).Scan(&profiles); err != nil {
+		t.Fatal(err)
+	}
+	if profiles != 1 {
+		t.Fatalf("gateway_entries rows = %d, want the profile preserved", profiles)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("repeat migrate: %v", err)
+	}
+}
+
 func TestMigrateRepairsRetrySourceBeforeCancelledTurnRebuild(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 107)
 	if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (108, 1)`); err != nil {

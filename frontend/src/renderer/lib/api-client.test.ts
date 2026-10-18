@@ -497,6 +497,16 @@ describe("apiErrorMessage", () => {
 			}),
 		).toBe("reviewer has not reviewed this PR");
 	});
+
+	it("prefers details.detail over a generic collapsed message", () => {
+		expect(
+			apiErrorMessage({
+				code: "REVIEW_OPERATION_FAILED",
+				message: "Review operation failed",
+				details: { detail: "launch reviewer: no such session: review-1" },
+			}),
+		).toBe("launch reviewer: no such session: review-1");
+	});
 });
 
 

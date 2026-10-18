@@ -75,9 +75,21 @@ type workspaceRepoDetails struct {
 
 // agentConfig mirrors the daemon's typed domain.AgentConfig for the CLI client.
 type agentConfig struct {
-	Model       string `json:"model,omitempty"`
-	Mode        string `json:"mode,omitempty"`
-	Permissions string `json:"permissions,omitempty"`
+	Model                      string            `json:"model,omitempty"`
+	Mode                       string            `json:"mode,omitempty"`
+	Permissions                string            `json:"permissions,omitempty"`
+	SystemPrompt               string            `json:"systemPrompt,omitempty"`
+	Env                        map[string]string `json:"env,omitempty"`
+	MCP                        *mcpConfig        `json:"mcp,omitempty"`
+	PluginDirs                 []string          `json:"pluginDirs,omitempty"`
+	WorkerPromptOverride       string            `json:"workerPromptOverride,omitempty"`
+	OrchestratorPromptOverride string            `json:"orchestratorPromptOverride,omitempty"`
+}
+
+// mcpConfig mirrors domain.MCPConfig.
+type mcpConfig struct {
+	Configs []string `json:"configs,omitempty"`
+	Strict  bool     `json:"strict,omitempty"`
 }
 
 // roleOverride mirrors domain.RoleOverride.
@@ -108,21 +120,23 @@ type containerReapConfig struct {
 // client. The CLI sets common fields via flags and the whole object via
 // --config-json.
 type projectConfig struct {
-	ContainerReap     *containerReapConfig `json:"containerReap,omitempty"`
-	CanonicalRepoURL  string               `json:"canonicalRepoURL,omitempty"`
-	DefaultBranch     string               `json:"defaultBranch,omitempty"`
-	SessionPrefix     string               `json:"sessionPrefix,omitempty"`
-	Env               map[string]string    `json:"env,omitempty"`
-	Symlinks          []string             `json:"symlinks,omitempty"`
-	PostCreate        []string             `json:"postCreate,omitempty"`
-	AgentRules        string               `json:"agentRules,omitempty"`
-	AgentRulesFile    string               `json:"agentRulesFile,omitempty"`
-	OrchestratorRules string               `json:"orchestratorRules,omitempty"`
-	AgentConfig       agentConfig          `json:"agentConfig,omitempty"`
-	Worker            roleOverride         `json:"worker,omitempty"`
-	Orchestrator      roleOverride         `json:"orchestrator,omitempty"`
-	TrackerIntake     trackerIntakeConfig  `json:"trackerIntake,omitempty"`
-	AutoReview        bool                 `json:"autoReview,omitempty"`
+	ContainerReap              *containerReapConfig `json:"containerReap,omitempty"`
+	CanonicalRepoURL           string               `json:"canonicalRepoURL,omitempty"`
+	DefaultBranch              string               `json:"defaultBranch,omitempty"`
+	SessionPrefix              string               `json:"sessionPrefix,omitempty"`
+	Env                        map[string]string    `json:"env,omitempty"`
+	Symlinks                   []string             `json:"symlinks,omitempty"`
+	PostCreate                 []string             `json:"postCreate,omitempty"`
+	AgentRules                 string               `json:"agentRules,omitempty"`
+	AgentRulesFile             string               `json:"agentRulesFile,omitempty"`
+	OrchestratorRules          string               `json:"orchestratorRules,omitempty"`
+	WorkerPromptOverride       string               `json:"workerPromptOverride,omitempty"`
+	OrchestratorPromptOverride string               `json:"orchestratorPromptOverride,omitempty"`
+	AgentConfig                agentConfig          `json:"agentConfig,omitempty"`
+	Worker                     roleOverride         `json:"worker,omitempty"`
+	Orchestrator               roleOverride         `json:"orchestrator,omitempty"`
+	TrackerIntake              trackerIntakeConfig  `json:"trackerIntake,omitempty"`
+	AutoReview                 bool                 `json:"autoReview,omitempty"`
 	// WorkersRequestReview must round-trip through set-config so a CLI edit
 	// of another field never silently turns it off.
 	WorkersRequestReview bool             `json:"workersRequestReview,omitempty"`
@@ -136,26 +150,31 @@ type setConfigRequest struct {
 }
 
 type projectSetConfigOptions struct {
-	canonicalRepoURL  string
-	defaultBranch     string
-	sessionPrefix     string
-	model             string
-	permission        string
-	workerAgent       string
-	orchestratorAgent string
-	agentRules        string
-	agentRulesFile    string
-	orchestratorRules string
-	env               []string
-	symlink           []string
-	postCreate        []string
-	trackerIntake     bool
-	trackerRepo       string
-	trackerAssignee   string
-	reviewers         []string
-	configJSON        string
-	clear             bool
-	json              bool
+	canonicalRepoURL   string
+	defaultBranch      string
+	sessionPrefix      string
+	model              string
+	permission         string
+	workerAgent        string
+	orchestratorAgent  string
+	workerMCPConfig    []string
+	workerStrictMCP    bool
+	workerPluginDir    []string
+	agentRules         string
+	agentRulesFile     string
+	orchestratorRules  string
+	workerPrompt       string
+	orchestratorPrompt string
+	env                []string
+	symlink            []string
+	postCreate         []string
+	trackerIntake      bool
+	trackerRepo        string
+	trackerAssignee    string
+	reviewers          []string
+	configJSON         string
+	clear              bool
+	json               bool
 }
 
 type projectListResult struct {
@@ -336,9 +355,14 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 	f.StringVar(&opts.permission, "permission", "", "Permission mode: default, accept-edits, auto, bypass-permissions")
 	f.StringVar(&opts.workerAgent, "worker-agent", "", "Harness override for worker sessions")
 	f.StringVar(&opts.orchestratorAgent, "orchestrator-agent", "", "Harness override for orchestrator sessions")
+	f.StringArrayVar(&opts.workerMCPConfig, "worker-mcp-config", nil, "MCP config (JSON string or path to JSON file) passed to claude-code workers via --mcp-config (repeatable)")
+	f.BoolVar(&opts.workerStrictMCP, "worker-strict-mcp", false, "Isolate claude-code workers from every other MCP source (--strict-mcp-config)")
+	f.StringArrayVar(&opts.workerPluginDir, "worker-plugin-dir", nil, "Plugin path or http(s):// URL loaded by claude-code workers only (repeatable)")
 	f.StringVar(&opts.agentRules, "agent-rules", "", "Project-specific standing instructions for worker sessions")
 	f.StringVar(&opts.agentRulesFile, "agent-rules-file", "", "Repo-relative file containing worker standing instructions")
 	f.StringVar(&opts.orchestratorRules, "orchestrator-rules", "", "Project-specific standing instructions for orchestrator sessions")
+	f.StringVar(&opts.workerPrompt, "worker-prompt", "", "Replace the hardcoded worker system prompt baseline wholesale (empty = default)")
+	f.StringVar(&opts.orchestratorPrompt, "orchestrator-prompt", "", "Replace the hardcoded orchestrator system prompt baseline wholesale (empty = default)")
 	f.StringArrayVar(&opts.env, "env", nil, "Env var KEY=VALUE forwarded into sessions (repeatable)")
 	f.StringArrayVar(&opts.symlink, "symlink", nil, "Repo-relative path to symlink into workspaces (repeatable)")
 	f.StringArrayVar(&opts.postCreate, "post-create", nil, "Command to run after workspace creation (repeatable)")
@@ -373,24 +397,32 @@ func buildProjectConfig(opts projectSetConfigOptions) (projectConfig, error) {
 		return projectConfig{}, err
 	}
 	cfg := projectConfig{
-		CanonicalRepoURL:  opts.canonicalRepoURL,
-		DefaultBranch:     opts.defaultBranch,
-		SessionPrefix:     opts.sessionPrefix,
-		Env:               env,
-		Symlinks:          opts.symlink,
-		PostCreate:        opts.postCreate,
-		AgentRules:        opts.agentRules,
-		AgentRulesFile:    opts.agentRulesFile,
-		OrchestratorRules: opts.orchestratorRules,
-		AgentConfig:       agentConfig{Model: opts.model, Permissions: opts.permission},
-		Worker:            roleOverride{Agent: opts.workerAgent},
-		Orchestrator:      roleOverride{Agent: opts.orchestratorAgent},
+		CanonicalRepoURL:           opts.canonicalRepoURL,
+		DefaultBranch:              opts.defaultBranch,
+		SessionPrefix:              opts.sessionPrefix,
+		Env:                        env,
+		Symlinks:                   opts.symlink,
+		PostCreate:                 opts.postCreate,
+		AgentRules:                 opts.agentRules,
+		AgentRulesFile:             opts.agentRulesFile,
+		OrchestratorRules:          opts.orchestratorRules,
+		WorkerPromptOverride:       opts.workerPrompt,
+		OrchestratorPromptOverride: opts.orchestratorPrompt,
+		AgentConfig:                agentConfig{Model: opts.model, Permissions: opts.permission},
+		Worker:                     roleOverride{Agent: opts.workerAgent},
+		Orchestrator:               roleOverride{Agent: opts.orchestratorAgent},
 		TrackerIntake: trackerIntakeConfig{
 			Enabled:  opts.trackerIntake,
 			Repo:     opts.trackerRepo,
 			Assignee: opts.trackerAssignee,
 		},
 		Reviewers: reviewersForFlags(opts.reviewers),
+	}
+	if len(opts.workerMCPConfig) > 0 || opts.workerStrictMCP {
+		cfg.Worker.AgentConfig.MCP = &mcpConfig{Configs: opts.workerMCPConfig, Strict: opts.workerStrictMCP}
+	}
+	if len(opts.workerPluginDir) > 0 {
+		cfg.Worker.AgentConfig.PluginDirs = opts.workerPluginDir
 	}
 	if reflect.DeepEqual(cfg, projectConfig{}) {
 		return projectConfig{}, usageError{errors.New("usage: provide at least one config flag, --config-json, or --clear")}

@@ -311,9 +311,11 @@ func looksLikeAuthFailure(err error) bool {
 }
 
 // reviewerHandleID is the stable runtime handle for a worker's reviewer pane, so
-// one live reviewer is reused across passes.
+// one live reviewer is reused across passes. It must go through the shared
+// sanitiser: worker ids derive from project names and can contain dots, which
+// runtime handle validators reject (issue #37).
 func reviewerHandleID(workerID domain.SessionID) string {
-	return "review-" + string(workerID)
+	return "review-" + domain.RuntimeHandleName(string(workerID))
 }
 
 func (l *agentLauncher) invocation(spec LaunchSpec) ports.ReviewInvocation {
@@ -662,6 +664,12 @@ func outputContainsAny(output string, patterns []string) bool {
 
 func (l *agentLauncher) runtimeEnv(ctx context.Context, spec LaunchSpec, argv []string, base map[string]string) map[string]string {
 	env := agentlaunch.MergeEnv(spec.ProjectEnv, base)
+	// The reviewer's resolved agent config may carry a per-role provider pin
+	// (issue #6156): explicit env wins over settings files, same transport as
+	// the session launch path. The overlay is last so a pin cannot be undone.
+	for k, v := range spec.AgentConfig.Env {
+		env[k] = v
+	}
 	delete(env, sessionmanager.EnvSessionID)
 	env["AO_REVIEW_SESSION_ID"] = spec.ReviewSessionID
 	env["AO_REVIEW_WORKER_SESSION_ID"] = string(spec.WorkerID)

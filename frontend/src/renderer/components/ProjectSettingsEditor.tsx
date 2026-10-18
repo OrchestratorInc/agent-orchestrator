@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { ProjectSettingsSaveState, ProjectSettingsSection as SettingsSection } from "./ProjectSettingsForm";
 import { deriveRepoHost, deriveRepoPath, IntakeFields, intakeNeedsRule } from "./IntakeFields";
 import { ProductExternalLink } from "./ProductExternalLink";
-import { AgentModelField, ProjectAutoReviewToggle, ProjectWorkersRequestReviewToggle } from "./settings/ProjectAgentRoleControls";
+import { AgentModelField, ProjectAgentRoleHeader, ProjectAgentRoleRow, ProjectAutoReviewToggle, ProjectWorkersRequestReviewToggle } from "./settings/ProjectAgentRoleControls";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { Button } from "./ui/button";
 
@@ -16,6 +16,9 @@ export type ProjectSettingsDraft = {
 	sessionPrefix: string;
 	workerAgent: string;
 	orchestratorAgent: string;
+	workerProvider: string;
+	orchestratorProvider: string;
+	reviewerProvider: string;
 	reviewerHarness: string;
 	workerModel: string;
 	orchestratorModel: string;
@@ -47,6 +50,13 @@ export type ProjectAgentPickerProps = {
 	disabled?: boolean;
 	onChange: (agent: string) => void;
 };
+export type ProjectProviderPickerProps = {
+	role: ProjectSettingsRole;
+	draft: ProjectSettingsDraft;
+	value: string;
+	disabled?: boolean;
+	onChange: (provider: string) => void;
+};
 type Capabilities = {
 	workflow: boolean;
 	sessionPrefix: boolean;
@@ -63,20 +73,21 @@ type Capabilities = {
 };
 type RoleFields = {
 	agent: "workerAgent" | "orchestratorAgent" | "reviewerHarness";
+	provider: "workerProvider" | "orchestratorProvider" | "reviewerProvider";
 	model: "workerModel" | "orchestratorModel" | "reviewerModel";
 	mode: "workerMode" | "orchestratorMode" | "reviewerMode";
 	effort: "workerEffort" | "orchestratorEffort" | "reviewerEffort";
 	permissions: "workerPermissions" | "orchestratorPermissions" | "reviewerPermissions";
 };
 const roleFields: Record<ProjectSettingsRole, RoleFields> = {
-	worker: { agent: "workerAgent", model: "workerModel", mode: "workerMode", effort: "workerEffort", permissions: "workerPermissions" },
-	orchestrator: { agent: "orchestratorAgent", model: "orchestratorModel", mode: "orchestratorMode", effort: "orchestratorEffort", permissions: "orchestratorPermissions" },
-	reviewer: { agent: "reviewerHarness", model: "reviewerModel", mode: "reviewerMode", effort: "reviewerEffort", permissions: "reviewerPermissions" },
+	worker: { agent: "workerAgent", provider: "workerProvider", model: "workerModel", mode: "workerMode", effort: "workerEffort", permissions: "workerPermissions" },
+	orchestrator: { agent: "orchestratorAgent", provider: "orchestratorProvider", model: "orchestratorModel", mode: "orchestratorMode", effort: "orchestratorEffort", permissions: "orchestratorPermissions" },
+	reviewer: { agent: "reviewerHarness", provider: "reviewerProvider", model: "reviewerModel", mode: "reviewerMode", effort: "reviewerEffort", permissions: "reviewerPermissions" },
 };
 
 // Both persistence adapters render this page. Drafts, validation, autosave and
 // common controls live here so a UI change applies to local and Cloud projects.
-export function ProjectSettingsEditor({ initialValues, section, capabilities, details, workspaceRepos, repository, renderAgent, defaultReviewer = () => "", modelScope, modelHostId, reviewerWarning, autoReviewDescription, save, onSaveState, saveUnchanged = false, disabled = false, generalExtra }: {
+export function ProjectSettingsEditor({ initialValues, section, capabilities, details, workspaceRepos, repository, renderAgent, renderProvider, defaultReviewer = () => "", modelScope, modelHostId, reviewerWarning, autoReviewDescription, save, onSaveState, saveUnchanged = false, disabled = false, generalExtra, gatewayExtra, agentsExtra }: {
 	initialValues: ProjectSettingsDraft;
 	section: SettingsSection;
 	capabilities: Capabilities;
@@ -84,6 +95,8 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	workspaceRepos?: Array<{ name: string; relativePath: string; repo?: string }>;
 	repository?: string;
 	renderAgent: (props: ProjectAgentPickerProps) => ReactNode;
+	/** Renders the per-role gateway provider pin; its presence adds the column. */
+	renderProvider?: (props: ProjectProviderPickerProps) => ReactNode;
 	defaultReviewer?: (draft: ProjectSettingsDraft) => string;
 	modelScope: (agent: string) => string;
 	/** Self-hosted daemon whose model catalog the role pickers read. */
@@ -95,6 +108,10 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	saveUnchanged?: boolean;
 	/** Read-only sections appended to the General page (e.g. a Cloud project's Coder template). */
 	generalExtra?: ReactNode;
+	/** Body of the Gateway section (rendered instead of the form pages). */
+	gatewayExtra?: ReactNode;
+	/** Extra sections appended to the Agents page (e.g. per-project prompt overrides). */
+	agentsExtra?: ReactNode;
 	/** Pauses autosave and submit, e.g. while the owning host is offline. */
 	disabled?: boolean;
 }) {
@@ -166,7 +183,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	const warning = reviewerWarning?.(draft.reviewerHarness);
 	return <ProjectSettingsFormView id="project-settings-form" className={`project-settings-form${capabilities.runtimeDefaults ? " cloud-project-settings-form" : ""}`} onSubmit={submit}>
 		<fieldset disabled={disabled || mutation.isPending} className="flex min-w-0 flex-col gap-(--size-settings-section-gap)">
-			{section === "general" ? <>
+			{section === "gateway" ? gatewayExtra : section === "general" ? <>
 				<ProjectSettingsSection title={t("settings.project.details")} grouped>
 					<ProjectSettingsInputRow id="projectName" label={t("settings.project.name")} editLabel={t("settings.field.edit", { label: t("settings.project.name") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.displayName} onChange={(displayName) => patch({ displayName })} />
 					{details.map((detail) => <ProjectSettingsValueRow key={detail.label} {...detail} externalLink={ProductExternalLink} />)}
@@ -186,7 +203,8 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 					</ProjectSettingsSection>
 				</>}
 				{generalExtra}
-			</> : <>
+			</> : <><ProjectSettingsSection title={t("settings.project.agents")} titleHidden grouped>
+				<ProjectAgentRoleHeader withProvider={Boolean(renderProvider)} />
 				{visibleRoles.map((role) => {
 					const fields = roleFields[role];
 					const selectedAgent = draft[fields.agent];
@@ -202,29 +220,33 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 							: {}),
 						[key]: value,
 					}));
-					const updatePermissions = (value: string) => setDraft((current) => ({
-						...current,
-						...(role === "reviewer" && !current.reviewerHarness && agent
-							? { reviewerHarness: agent, ...(agent === current.workerAgent ? { reviewerModel: current.workerModel, reviewerEffort: current.workerEffort } : {}) }
-							: {}),
-						[fields.permissions]: value,
-					}));
-					return <ProjectSettingsSection key={role} title={t(`settings.models.${role}Role`)} grouped>
-						<ProjectSettingsRow label={t("settings.project.agent")}><div className="flex min-w-0 flex-wrap items-center justify-end gap-2"><div className="min-w-0">{renderAgent({ disabled: capabilities.lockedAgents, role, draft, value: selectedAgent, invalid: error !== undefined && !selectedAgent, onChange: (value) => setDraft((current) => ({ ...current, [fields.agent]: value, ...(value !== current[fields.agent] ? { [fields.model]: "", [fields.mode]: "", [fields.effort]: "", ...(role === "reviewer" || capabilities.runtimeDefaults ? { [fields.permissions]: "" } : {}) } : {}) })) })}</div>
-						<div className="min-w-0 space-y-1.5"><AgentModelField role={role} agentId={agent} projectId={modelScope(agent)} hostId={modelHostId} model={inheritsWorker ? draft.workerModel : draft[fields.model]} mode={draft[fields.mode]} effort={inheritsWorker ? draft.workerEffort : draft[fields.effort]}
+					return <ProjectAgentRoleRow key={role} label={t(`settings.models.${role}Role`)}
+						agent={renderAgent({ disabled: capabilities.lockedAgents, role, draft, value: selectedAgent, invalid: error !== undefined && !selectedAgent, onChange: (value) => setDraft((current) => ({ ...current, [fields.agent]: value, ...(value !== current[fields.agent] ? { [fields.model]: "", [fields.mode]: "", [fields.effort]: "", ...(role === "reviewer" || capabilities.runtimeDefaults ? { [fields.permissions]: "" } : {}) } : {}) })) })}
+						model={<div className="space-y-1.5"><AgentModelField role={role} agentId={agent} projectId={modelScope(agent)} hostId={modelHostId} catalogRole={draft[fields.provider] ? role : undefined} model={inheritsWorker ? draft.workerModel : draft[fields.model]} mode={draft[fields.mode]} effort={inheritsWorker ? draft.workerEffort : draft[fields.effort]}
 							allowCustomFallback={capabilities.runtimeDefaults} followCatalogDefaults={!capabilities.runtimeDefaults}
 							supportedEfforts={capabilities.runtimeDefaults ? agent === "codex" ? ["low", "medium", "high", "xhigh", "max"] : agent === "claude-code" ? ["low", "medium", "high", "max"] : undefined : undefined}
 							emptyLabel={capabilities.runtimeDefaults && agent === "" ? t("settings.cloudProject.sessionModel") : undefined}
 							independentMode={capabilities.runtimeDefaults && agent === "cursor"}
 							onModelChange={(value) => updateConfig(fields.model, value)} onModeChange={(value) => updateConfig(fields.mode, value)} onEffortChange={(value) => updateConfig(fields.effort, value)} onValidityChange={(valid) => setValidity((current) => current[role] === valid ? current : { ...current, [role]: valid })} />
-							{capabilities.runtimeDefaults && agent === "cursor" && <SettingsOptionMenu aria-label={t(`settings.models.${role}Mode`)} value={draft[fields.mode]} triggerClassName="w-fit" options={[{ value: "", label: t("settings.cloudProject.agentMode") }, { value: "plan", label: t("settings.cloudProject.plan") }, { value: "ask", label: t("settings.cloudProject.ask") }]} onChange={(value) => updateConfig(fields.mode, value)} />}
-						</div></div></ProjectSettingsRow>
-						<ProjectSettingsRow label={t("settings.project.approval")}><div className="min-w-0"><ProjectRolePermissions role={role} agent={agent} value={draft[fields.permissions]} runtimeDefaults={capabilities.runtimeDefaults} onChange={updatePermissions} /></div></ProjectSettingsRow>
-					</ProjectSettingsSection>;
+							{capabilities.runtimeDefaults && agent === "cursor" && <SettingsOptionMenu aria-label={t(`settings.models.${role}Mode`)} value={draft[fields.mode]} triggerClassName="w-full justify-between" options={[{ value: "", label: t("settings.cloudProject.agentMode") }, { value: "plan", label: t("settings.cloudProject.plan") }, { value: "ask", label: t("settings.cloudProject.ask") }]} onChange={(value) => updateConfig(fields.mode, value)} />}
+						</div>} provider={renderProvider ? renderProvider({ role, draft, value: draft[fields.provider], onChange: (value) => setDraft((current) => ({ ...current, [fields.provider]: value, ...(value !== current[fields.provider] ? { [fields.model]: "", [fields.mode]: "", [fields.effort]: "" } : {}) })) }) : undefined} />;
 				})}
+				<div className={capabilities.reviewer ? "grid grid-cols-3 gap-3 border-t border-border/60 pt-4" : "grid grid-cols-2 gap-3 border-t border-border/60 pt-4"}>
+					{visibleRoles.map((role) => {
+						const fields = roleFields[role];
+						const agent = draft[fields.agent] || (role === "reviewer" ? defaultReviewer(draft) : "");
+						return <ProjectRolePermissions key={role} role={role} agent={agent} value={draft[fields.permissions]} runtimeDefaults={capabilities.runtimeDefaults} onChange={(value) => setDraft((current) => ({
+							...current,
+							...(role === "reviewer" && !current.reviewerHarness && agent
+								? { reviewerHarness: agent, ...(agent === current.workerAgent ? { reviewerModel: current.workerModel, reviewerEffort: current.workerEffort } : {}) }
+								: {}),
+							[fields.permissions]: value,
+						}))} />;
+					})}
+				</div>
 				{capabilities.requiredAgents && (!draft.workerAgent || !draft.orchestratorAgent) && <p className="px-(--settings-row-inset) text-xs text-error" role="alert">{t("settings.project.agentsRequired")}</p>}
 				{warning && <p className="px-(--settings-row-inset) text-xs text-warning" role="status">{warning}</p>}
-			</>}
+			</ProjectSettingsSection>{agentsExtra}</>}
 		</fieldset>
 		{error && !onSaveState && <p role="alert" className="px-(--settings-row-inset) text-xs text-error">{error}</p>}
 		{!onSaveState && <div className="flex justify-end"><Button type="submit" disabled={!dirty || mutation.isPending}>{mutation.isPending ? t("settings.project.saving") : t("files.saveFile")}</Button></div>}

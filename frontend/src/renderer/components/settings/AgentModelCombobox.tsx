@@ -7,7 +7,7 @@ import { isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../../li
 import { fallbackEffort, useApplyEffortDefault } from "../../lib/effort";
 import { cn } from "../../lib/utils";
 import { formatEffortLabel } from "./EffortPicker";
-import { useModelTuning, type ModelTuningControlsProps } from "./ModelTuningControls";
+import { effortChoices, useModelTuning, type ModelTuningControlsProps } from "./ModelTuningControls";
 import { OptionMenuItem, OptionMenuSub, OptionMenuSubContent, OptionMenuSubTrigger } from "../ui/option-menu";
 import {
 	DropdownMenu,
@@ -130,14 +130,17 @@ export function AgentModelCombobox({
 		onEffortReset: tuning?.onEffortReset,
 		onValidityChange: tuning?.onValidityChange,
 	});
-	const effortOptions = effortModel?.efforts?.filter((effort) => effort && effort.toLowerCase() !== "default") ?? [];
 	const explicitEffort = tuning?.effort?.toLowerCase() === "default" ? "" : tuning?.effort;
+	const defaultModel = concreteModels.find((model) => model.isDefault)?.id || "";
+	const effectiveModel = explicitModel || defaultModel;
+	const choices = effortChoices(effortModel, Boolean(effectiveModel));
+	const effortOptions = choices.options;
 	const showEffort = Boolean(tuning && (effortOptions.length || explicitEffort));
-	const providerEffort = effortModel?.defaultEffort;
-	const defaultEffort = providerEffort && effortOptions.includes(providerEffort) ? providerEffort : "";
+	const defaultEffort = choices.defaultEffort;
 	// No provider default for these levels: AO picks one and saves it when the
-	// model is chosen, so the control never reads as unset.
-	const aoDefaultEffort = fallbackEffort(effortOptions, providerEffort);
+	// model is chosen, so the control never reads as unset. The fallback ladder
+	// is a display guess only — an unverified guess must never be auto-saved.
+	const aoDefaultEffort = choices.unverified ? undefined : fallbackEffort(effortOptions, defaultEffort);
 	const effectiveEffort = explicitEffort || defaultEffort || aoDefaultEffort || "";
 	useApplyEffortDefault(
 		explicitModel,
@@ -160,8 +163,6 @@ export function AgentModelCombobox({
 	const recentModelIDs = recentScope ? (sessionRecentModels[recentKey] ?? storedRecentModels) : [];
 	const normalizedSearch = normalizeSearch(search);
 	const searchIndex = useMemo(() => buildModelSearchIndex(concreteModels), [concreteModels]);
-	const defaultModel = concreteModels.find((model) => model.isDefault)?.id || "";
-	const effectiveModel = explicitModel || defaultModel;
 	const selected = searchIndex.byID.get(normalizeSearch(effectiveModel));
 	const hasMultipleProviders = useMemo(
 		() =>
@@ -239,7 +240,7 @@ export function AgentModelCombobox({
 		onChange(modelID === defaultModel ? "" : modelID);
 	};
 	const selectCatalogModel = (event: Event, item: IndexedModel) => {
-		const openEffort = Boolean(tuning && item.model.efforts?.some((effort) => effort && effort.toLowerCase() !== "default"));
+		const openEffort = Boolean(tuning && effortChoices(item.model, true).options.length);
 		if (openEffort) event.preventDefault();
 		selectModel(item.id);
 		setEffortMenuOpen(openEffort);
@@ -288,7 +289,7 @@ export function AgentModelCombobox({
 					) : (
 						<span className="min-w-0 truncate">{currentLabel}</span>
 					)}
-					{showEffort && showEffortInTrigger && <span className="shrink-0 text-settings-muted"> · {currentEffortLabel}</span>}
+					{showEffort && showEffortInTrigger && (explicitEffort || !choices.unverified) && <span className="shrink-0 text-settings-muted"> · {currentEffortLabel}</span>}
 					<ChevronDown
 						className="size-icon-sm shrink-0 opacity-70 transition-transform duration-300 ease-out group-data-[state=open]/agent-model-trigger:rotate-180"
 						aria-hidden="true"
@@ -526,6 +527,11 @@ export function AgentModelCombobox({
 										{effort === effectiveEffort && <Check className="ml-auto size-icon-sm shrink-0" aria-hidden="true" />}
 									</OptionMenuItem>
 								))}
+								{choices.unverified && effortOptions.length > 0 && (
+									<p className="px-2 py-1.5 text-xs text-settings-muted" role="note">
+										{t("settings.models.effortUnverified")}
+									</p>
+								)}
 							</OptionMenuSubContent>
 						</OptionMenuSub>
 					</div>
