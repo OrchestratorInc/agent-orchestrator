@@ -117,6 +117,11 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	if !ok {
 		return
 	}
+	var options ports.TerminalActivityOptions
+	if provider, ok := agent.(ports.TerminalActivityOptionsProvider); ok {
+		options = provider.TerminalActivityOptions()
+	}
+	nativeDecisionCards := options.SupportsBlocked
 	continuous, ok := agent.(ports.ContinuousTerminalActivityDetector)
 	if !ok || !continuous.ContinuouslyDetectTerminalActivity() {
 		if session.Activity.State == domain.ActivityWaitingInput {
@@ -130,31 +135,30 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 		}
 	} else if session.Activity.State != domain.ActivityActive &&
 		session.Activity.State != domain.ActivityIdle &&
-		session.Activity.State != domain.ActivityWaitingInput {
+		session.Activity.State != domain.ActivityWaitingInput && (!nativeDecisionCards || session.Activity.State != domain.ActivityBlocked) {
 		return
 	}
-	readOutput := o.runtime.GetOutput
-	if session.Harness == domain.HarnessMiniMaxCode {
-		if styled, available := o.runtime.(ports.StyledTerminalOutputReader); available {
-			// MiniMax needs the rendered footer and composer, not
-			// raw history (which can omit the current non-newline fragment).
-			// Capture failures must not fall back to stale raw output.
-			// Other harnesses retain their existing no-surface reconciliation,
-			// including on older detached hosts that cannot capture a surface.
-			readOutput = styled.GetStyledOutput
-		}
+	var output string
+	var err error
+	handle := ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}
+	if rendered, ok := o.runtime.(ports.StyledTerminalOutputReader); options.PreferStyledOutput && ok {
+		output, err = rendered.GetStyledOutput(ctx, handle, o.outputLines)
+	} else {
+		output, err = o.runtime.GetOutput(ctx, handle, o.outputLines)
 	}
-	output, err := readOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
 	if err != nil {
 		o.logger.Debug("activity observer: terminal output unavailable", "session", session.ID, "err", err)
 		return
 	}
 	state, ok := detector.DetectTerminalActivity(output)
 	if !ok || state == session.Activity.State ||
-		(state != domain.ActivityActive && state != domain.ActivityIdle && state != domain.ActivityWaitingInput) {
+		(state != domain.ActivityActive && state != domain.ActivityIdle && state != domain.ActivityWaitingInput && (!nativeDecisionCards || state != domain.ActivityBlocked)) {
 		return
 	}
 	event := "terminal-" + string(state)
+	if nativeDecisionCards && session.Activity.State == domain.ActivityBlocked && (state == domain.ActivityActive || state == domain.ActivityIdle) {
+		event = "permission-resolved"
+	}
 	if state == domain.ActivityWaitingInput {
 		event = "terminal-waiting-input"
 	}

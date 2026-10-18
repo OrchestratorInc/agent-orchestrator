@@ -204,6 +204,7 @@ var shippedMigrations = map[int64]string{
 	199: "0199_conversation_message_continuation.sql",
 	200: "0200_session_artifact_version_source.sql",
 	201: "0201_allow_minimax_code_harness.sql",
+	202: "0202_allow_memcode_harness.sql",
 	206: "0206_awake.sql",
 }
 

@@ -4,6 +4,7 @@ import { AgentAvatar } from "./AgentAvatar";
 import fxDarkLogo from "../assets/agents/fx-dark.svg";
 import fxLightLogo from "../assets/agents/fx-light.svg";
 import geminiLogo from "../assets/agents/gemini.svg";
+import memcodeLogo from "../assets/agents/memcode.png";
 import unrealAgentDarkLogo from "../assets/agents/unreal-agent-dark.png";
 import unrealAgentLightLogo from "../assets/agents/unreal-agent-light.png";
 
@@ -13,6 +14,10 @@ function themeSources(name: string) {
 }
 
 describe("AgentAvatar", () => {
+	it("renders the bundled Memcode mark", () => {
+		render(<AgentAvatar provider="memcode" />);
+		expect(screen.getByRole("img", { name: "memcode" })).toHaveAttribute("src", memcodeLogo);
+	});
 	it("renders the official fx light and dark marks under one accessible name", () => {
 		render(<AgentAvatar provider="fx" />);
 

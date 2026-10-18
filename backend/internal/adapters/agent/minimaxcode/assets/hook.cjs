@@ -49,11 +49,13 @@ try {
   if (!events[event]) process.exit(0);
   // Activity delivery is best effort: ao hooks also exits 0 on rejected posts.
   // Its result cannot verify the runtime generation or gate native input.
-  try {
-    spawnSync('ao',['hooks','minimax-code',events[event]],{input:JSON.stringify({...payload,launch_id:launchID}),env:hookEnv,stdio:['pipe','ignore','ignore'],timeout:8000});
-  } catch {
-    // Reporting failures must not block native prompt submission.
-  }
+  const reportActivity=()=>{
+    try {
+      spawnSync('ao',['hooks','minimax-code',events[event]],{input:JSON.stringify({...payload,launch_id:launchID}),env:hookEnv,stdio:['pipe','ignore','ignore'],timeout:8000});
+    } catch {
+      // Reporting failures must not block native prompt submission.
+    }
+  };
   if(event==='UserPromptSubmit') {
     const file=path.join(launchDir,'standing.txt');
     let context;
@@ -73,20 +75,27 @@ try {
       try {
         claim=fs.openSync(emitted,'wx',0o600);
       } catch(error) {
-        if(error.code==='EEXIST' && fs.lstatSync(emitted).isFile()) process.exit(0);
+        if(error.code==='EEXIST' && fs.lstatSync(emitted).isFile()) { reportActivity(); process.exit(0); }
         throw error;
       }
       fs.closeSync(claim);
       try {
         process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:'UserPromptSubmit',additionalContext:context}})+'\n',(error)=>{
-          if(error) fs.unlinkSync(emitted);
+          if(error) {
+            fs.unlinkSync(emitted);
+            refuse('AO MiniMax private instructions could not be delivered.');
+            return;
+          }
+          // Submit activity carries semantic acceptance. Publish it only after
+          // all refusal checks and the first context write have succeeded.
+          reportActivity();
         });
       } catch(error) {
         fs.unlinkSync(emitted);
         throw error;
       }
-    }
-  }
+    } else { reportActivity(); }
+  } else { reportActivity(); }
 } catch {
   // Missing or unreadable guard state must not authorize a replacement turn.
   refuse();

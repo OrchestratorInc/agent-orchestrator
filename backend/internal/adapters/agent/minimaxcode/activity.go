@@ -8,6 +8,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// TerminalActivityOptions requests current rendered evidence for MiniMax's composer/footer.
+func (*Plugin) TerminalActivityOptions() ports.TerminalActivityOptions {
+	return ports.TerminalActivityOptions{PreferStyledOutput: true}
+}
+
 // DeriveActivityState maps native hooks. SessionEnd is intentionally omitted:
 // MiniMax uses it for an idle timeout, not process exit.
 func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
