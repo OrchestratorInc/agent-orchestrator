@@ -938,7 +938,9 @@ printf '%s' "$PATH" > "$QWEN_TEST_PATH_OUT"
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// The wrapper polls startup for up to ten seconds. Allow that bounded
+	// window plus process scheduling under parallel race-test load.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if output, err := exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput(); err != nil {
 		t.Fatalf("worker launch failed: %v: %s", err, output)
