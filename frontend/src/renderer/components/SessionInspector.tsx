@@ -590,6 +590,7 @@ const SummaryView = memo(function SummaryView({
 					hostId={hostId}
 					onOpenFiles={onOpenFiles}
 					openPRNumber={openPRNumber}
+					shippedHeadShas={prSummaries.filter((pr) => pr.state === "merged" || pr.state === "closed").map((pr) => pr.headSha)}
 					pullRequests={hasPRs ? (branchWork) => (
 						<>
 							{prSummaries.map((pr) => (

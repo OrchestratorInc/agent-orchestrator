@@ -63,6 +63,7 @@ export function SessionBranchSummary({
 	hostId,
 	onOpenFiles,
 	openPRNumber,
+	shippedHeadShas,
 	pullRequests,
 	session,
 	title,
@@ -71,6 +72,8 @@ export function SessionBranchSummary({
 	onOpenFiles: () => void;
 	/** The open or draft PR that new commits would update. */
 	openPRNumber?: number;
+	/** Head commits of merged or closed PRs: a branch still sitting on one has nothing new to ship. */
+	shippedHeadShas?: string[];
 	/** Renders the PR rows; `branchWork` belongs inside the open PR, when there is one. */
 	pullRequests?: (branchWork: ReactNode | undefined) => ReactNode;
 	session: WorkspaceSession;
@@ -96,7 +99,7 @@ export function SessionBranchSummary({
 		// head_fallback compares against HEAD because the base is unknown.
 		base: manifest.data?.compareMode === "head_fallback" ? undefined : displayBaseRef(manifest.data?.compareBaseRef),
 	};
-	const plan = gitActionPlan(facts, openPRNumber);
+	const plan = gitActionPlan(facts, openPRNumber, shippedHeadShas);
 
 	const send = useMutation({
 		mutationFn: async (kind: SessionGitActionKind) => {
@@ -347,10 +350,14 @@ function commitsRowView(facts: GitFacts, t: TFunction): { label: string; note?: 
 	return { label, note: t("inspector.git.pushed"), noteTone: "muted" };
 }
 
-export function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined): GitActionPlan | null {
+export function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined, shippedHeadShas: string[] = []): GitActionPlan | null {
 	if (!facts.loaded) return null;
 	const dirty = facts.uncommitted.length > 0;
 	const unpushed = facts.branch?.unpushed ?? 0;
+	// A squash or rebase merge leaves the branch "ahead" of its base for good, so
+	// a branch whose tip is a merged PR's head has nothing left to open a PR for.
+	const tip = facts.branch?.lastCommit?.sha;
+	if (openPRNumber === undefined && !dirty && unpushed === 0 && tip && shippedHeadShas.some((sha) => sha && sha === tip)) return null;
 	if (openPRNumber !== undefined) {
 		if (dirty) return { primary: "commitPush", menu: ["commit"] };
 		if (unpushed > 0) return { primary: "push", menu: [] };
