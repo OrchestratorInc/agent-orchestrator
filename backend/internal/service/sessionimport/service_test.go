@@ -61,7 +61,13 @@ func TestPreviewAndSelectedImport(t *testing.T) {
 	current := "11111111-1111-4111-8111-111111111111"
 	old := "22222222-2222-4222-8222-222222222222"
 	path := writeClaude(t, root, current, project, "fix parser", time.Now())
-	writeClaude(t, root, old, "", "old standalone", time.Now().AddDate(0, 0, -60))
+	oldPath := writeClaude(t, root, old, "", "old standalone", time.Now().AddDate(0, 0, -60))
+	reply, _ := json.Marshal(map[string]any{"type": "assistant", "sessionId": old, "timestamp": time.Now().AddDate(0, 0, -60), "message": map[string]any{"id": "m1", "role": "assistant", "model": "claude-haiku-5-5", "content": []map[string]any{{"type": "text", "text": "done"}}}})
+	if f, err := os.OpenFile(oldPath, os.O_APPEND|os.O_WRONLY, 0); err != nil {
+		t.Fatal(err)
+	} else if _, err := f.Write(append(reply, '\n')); err != nil || f.Close() != nil {
+		t.Fatal(err)
+	}
 	writeClaude(t, root, "33333333-3333-4333-8333-333333333333", t.TempDir(), "unregistered", time.Now())
 	corrupt := writeClaude(t, root, "44444444-4444-4444-8444-444444444444", project, "invalid", time.Now())
 	if err := os.WriteFile(corrupt, []byte("not-json\n"), 0600); err != nil {
@@ -99,7 +105,7 @@ func TestPreviewAndSelectedImport(t *testing.T) {
 		t.Fatalf("import: %v %v", results, err)
 	}
 	rec := st.sessions[0]
-	if rec.Activity.State != domain.ActivityIdle || rec.Metadata.WorkspacePath != "" || !rec.NeedsImportResume() || rec.Mode != domain.SessionModeChat {
+	if rec.Activity.State != domain.ActivityIdle || rec.Metadata.WorkspacePath != "" || !rec.NeedsImportResume() || rec.Mode != domain.SessionModeChat || rec.Metadata.Model != "claude-haiku-5-5" {
 		t.Fatal(rec)
 	}
 	repeated, err := svc.Import(ctx, []string{oldID})

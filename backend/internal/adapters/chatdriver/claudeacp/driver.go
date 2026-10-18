@@ -274,6 +274,12 @@ func claudeACPLaunchEnv(
 		env[claudeTodoToolsEnv] = "1"
 	}
 	selected := strings.TrimSpace(selectedModel)
+	// Loading a resumed session re-applies settings.json's model over the one AO
+	// starts with, writing a /model switch into the transcript; ANTHROPIC_MODEL
+	// outranks settings.json. A project's own pin is kept.
+	if _, configured := input["ANTHROPIC_MODEL"]; selected != "" && !configured && strings.TrimSpace(os.Getenv("ANTHROPIC_MODEL")) == "" {
+		env["ANTHROPIC_MODEL"] = selected
+	}
 	if _, configured := input["ANTHROPIC_CUSTOM_MODEL_OPTION"]; selected != "" &&
 		!isClaudeNativeModelAlias(selected) && !configured &&
 		strings.TrimSpace(os.Getenv("ANTHROPIC_CUSTOM_MODEL_OPTION")) == "" {

@@ -558,6 +558,10 @@ func (s *Service) Import(ctx context.Context, ids []string) ([]Result, error) {
 		now := time.Now().UTC()
 		rec := domain.SessionRecord{ProjectID: project, Kind: domain.KindWorker, Harness: source.harness, Mode: domain.SessionModeChat, DisplayName: item.candidate.Title, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: source.last}, CreatedAt: now, UpdatedAt: source.last, ProvisionState: domain.SessionProvisionReady}
 		rec.Metadata = domain.SessionMetadata{ProviderConversationID: source.nativeID, AgentSessionID: source.nativeID, NativeTranscriptPath: source.path, ImportSource: &domain.SessionImportSource{NativeID: source.nativeID, ConfigDir: source.root, CWD: source.cwd}}
+		// Claude resumes on the user's default model unless told otherwise; keep the chat's own.
+		if source.harness == domain.HarnessClaudeCode {
+			rec.Metadata.Model = source.model
+		}
 		created, fresh, createErr := s.store.CreateImportedSession(ctx, rec, source.messages)
 		if createErr != nil {
 			result.Error = fmt.Sprintf("Import failed: %v", createErr)

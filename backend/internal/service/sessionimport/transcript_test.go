@@ -178,7 +178,7 @@ func TestClaudeTranscriptShapes(t *testing.T) {
 {"type":"user","uuid":"summary","parentUuid":"boundary","isCompactSummary":true,"message":{"role":"user","content":"This session is being continued from a previous conversation that ran out of context."}}
 {"type":"user","uuid":"cmd","parentUuid":"summary","message":{"role":"user","content":"<command-name>/review</command-name>\n<command-message>review</command-message>\n<command-args>PR 12</command-args>"}}
 {"type":"user","uuid":"out","parentUuid":"cmd","message":{"role":"user","content":"<local-command-stdout>Reviewing</local-command-stdout>"}}
-{"type":"assistant","uuid":"a2","parentUuid":"out","message":{"id":"m2","role":"assistant","content":[{"type":"text","text":"Review posted."}]}}
+{"type":"assistant","uuid":"a2","parentUuid":"out","message":{"id":"m2","role":"assistant","model":"claude-haiku-5-5","content":[{"type":"text","text":"Review posted."}]}}
 {"type":"ai-title","aiTitle":"Refactor and review","sessionId":"` + id + `"}
 {"type":"user","uuid":"torn","parentUuid":"a2","message":{"role":"user","content":"half writ`
 	root := t.TempDir()
@@ -188,8 +188,8 @@ func TestClaudeTranscriptShapes(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantTexts(t, got.messages, "user: start the refactor", "assistant: Working on it.", "user: /review PR 12", "assistant: Review posted.")
-	if got.title != "Refactor and review" || got.cwd != "/work/repo" || got.shortened {
-		t.Fatalf("title=%q cwd=%q shortened=%v", got.title, got.cwd, got.shortened)
+	if got.title != "Refactor and review" || got.cwd != "/work/repo" || got.shortened || got.model != "claude-haiku-5-5" {
+		t.Fatalf("title=%q cwd=%q shortened=%v model=%q", got.title, got.cwd, got.shortened, got.model)
 	}
 	custom := writeFile(t, path, body[:strings.LastIndex(body, "\n")]+"\n"+`{"type":"custom-title","customTitle":"My rename","sessionId":"`+id+`"}`+"\n")
 	if got, err = readTranscript(context.Background(), domain.HarnessClaudeCode, root, custom); err != nil || got.title != "My rename" {
