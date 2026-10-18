@@ -2,6 +2,7 @@ package sessionmanager
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -110,6 +111,24 @@ func importOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 		}
 	}
 	return writableTranscriptOwner(ctx, rec.Metadata.NativeTranscriptPath)
+}
+
+// adoptedOwnedElsewhere keeps the open-elsewhere rule after adoption without
+// launching the provider: Claude Code would accept a second writer, and a Codex
+// launch that Codex then refuses costs a full app-server start per retry.
+func adoptedOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
+	source := rec.Metadata.ImportSource
+	if source == nil {
+		return false
+	}
+	nativeID := cmp.Or(rec.Metadata.ProviderConversationID, source.NativeID)
+	switch rec.Harness {
+	case domain.HarnessClaudeCode:
+		return claudeSessionLive(ctx, filepath.Join(source.ConfigDir, "sessions"), nativeID, rec.Metadata.WorkspacePath)
+	case domain.HarnessCodex:
+		return providerLockHeld(filepath.Join(source.ConfigDir, "thread-writer-locks", nativeID+".lock"))
+	}
+	return false
 }
 
 // claudeSessionLive reads Claude Code's live-session registry. A launch inside

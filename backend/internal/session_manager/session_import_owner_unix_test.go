@@ -5,6 +5,7 @@ package sessionmanager
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -85,5 +86,64 @@ func TestImportOwnedElsewhereUsesProviderOwnership(t *testing.T) {
 	_ = owner.Wait()
 	if importOwnedElsewhere(ctx, claude) {
 		t.Fatalf("a crashed session's registry entry (pid %d) is still ownership", owner.Process.Pid)
+	}
+}
+
+// Claude Code accepts a second writer, so AO checks its registry after adoption too.
+func TestAdoptedClaudeImportOpenElsewhereBlocksResume(t *testing.T) {
+	home := t.TempDir()
+	claudeBin := filepath.Join(t.TempDir(), "claude")
+	if err := os.Symlink("/bin/sleep", claudeBin); err != nil {
+		t.Fatal(err)
+	}
+	owner := exec.Command(claudeBin, "30")
+	if err := owner.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owner.Process.Kill(); _ = owner.Wait() })
+	body, _ := json.Marshal(map[string]any{"pid": owner.Process.Pid, "sessionId": "thread-1", "cwd": "/source"})
+	if err := os.MkdirAll(filepath.Join(home, "sessions"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "sessions", "1.json"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	launcher := &recordingLauncher{}
+	m, st, _ := newChatManager(launcher)
+	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}}
+	rec.Metadata = domain.SessionMetadata{WorkspacePath: "/already-copied", Branch: "ao/import", ProviderConversationID: "thread-1", ImportSource: &domain.SessionImportSource{NativeID: "thread-1", ConfigDir: home, Transferred: true, Prepared: true, Adopted: true}}
+	st.sessions[rec.ID] = rec
+	if _, err := m.ResumeAgentWithMode(context.Background(), rec.ID); !errors.Is(err, ErrSessionOpenElsewhere) || len(launcher.started) != 0 {
+		t.Fatalf("resume beside a live Claude session: %v, launches %d", err, len(launcher.started))
+	}
+	_ = owner.Process.Kill()
+	_ = owner.Wait()
+	if _, err := m.ResumeAgentWithMode(context.Background(), rec.ID); err != nil || len(launcher.started) != 1 {
+		t.Fatalf("resume after the other session closed: %v, launches %d", err, len(launcher.started))
+	}
+}
+
+// A held Codex writer lock is answered without starting a Codex app-server.
+func TestAdoptedCodexImportOpenElsewhereSkipsLaunch(t *testing.T) {
+	home := t.TempDir()
+	lock := filepath.Join(home, "thread-writer-locks", "thread-1.lock")
+	if err := os.MkdirAll(filepath.Dir(lock), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	holder, err := os.Create(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = holder.Close() })
+	if err := syscall.Flock(int(holder.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	launcher := &recordingLauncher{}
+	m, st, _ := newChatManager(launcher)
+	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}}
+	rec.Metadata = domain.SessionMetadata{WorkspacePath: "/already-copied", Branch: "ao/import", ProviderConversationID: "thread-1", ImportSource: &domain.SessionImportSource{NativeID: "thread-1", ConfigDir: home, Transferred: true, Prepared: true, Adopted: true}}
+	st.sessions[rec.ID] = rec
+	if _, err := m.ResumeAgentWithMode(context.Background(), rec.ID); !errors.Is(err, ErrSessionOpenElsewhere) || len(launcher.started) != 0 {
+		t.Fatalf("resume beside a held Codex thread: %v, launches %d", err, len(launcher.started))
 	}
 }
