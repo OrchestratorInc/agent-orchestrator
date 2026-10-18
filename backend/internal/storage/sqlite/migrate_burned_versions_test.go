@@ -205,6 +205,7 @@ var shippedMigrations = map[int64]string{
 	200: "0200_session_artifact_version_source.sql",
 	202: "0202_allow_memcode_harness.sql",
 	206: "0206_awake.sql",
+	207: "0207_normalize_registered_at.sql",
 	210: "0210_agent_accounts.sql",
 	211: "0211_account_transitions.sql",
 	212: "0212_session_runtime_released.sql",

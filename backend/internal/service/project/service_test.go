@@ -1474,7 +1474,7 @@ func TestManager_AddAllocatesUniqueIDForCollidingDerivedIDs(t *testing.T) {
 			t.Fatalf("second project id = %q, want %q", p2.ID, "tool1")
 		}
 
-		if ok, err := store.ArchiveProject(ctx, string(p2.ID), time.Now()); err != nil || !ok {
+		if ok, err := store.ArchiveProject(ctx, string(p2.ID), time.Now().UTC()); err != nil || !ok {
 			t.Fatalf("archive project: ok=%v err=%v", ok, err)
 		}
 

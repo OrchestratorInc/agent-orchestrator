@@ -286,7 +286,16 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 		projectConfig = *in.Config
 	}
 
-	registeredAt := time.Now()
+	// registered_at is read back into a time.Time, and the SQLite driver renders a
+	// bound time.Time with its String() form. A local-zone clock in a zone whose
+	// Go name is a numeric offset (Asia/Tehran renders as "+0330") produces
+	// "2026-10-18 05:03:55.6144103 +0330 +0330 m=+185.7", which the driver's own
+	// "2006-01-02 15:04:05.999999999 -0700 MST" reader cannot parse: it returns
+	// the column as a string and the scan into time.Time fails, so the project is
+	// unreadable the moment it is registered (GET /api/v1/projects -> 500
+	// PROJECTS_LIST_FAILED). Store the instant in UTC, the form every other writer
+	// produces and the one migration 0207 normalizes existing rows to.
+	registeredAt := time.Now().UTC()
 	row := domain.ProjectRecord{
 		ID:           string(id),
 		Path:         path,
@@ -840,7 +849,10 @@ func (m *Service) Remove(ctx context.Context, id domain.ProjectID) (RemoveResult
 			return RemoveResult{}, err
 		}
 	}
-	ok, err = m.store.ArchiveProject(ctx, string(id), time.Now())
+	// .UTC() for the same reason as registered_at in Add: the column is scanned
+	// into a time.Time, so a local-zone value in a zone whose Go name is a numeric
+	// offset is unreadable and would take GET /api/v1/projects down with it.
+	ok, err = m.store.ArchiveProject(ctx, string(id), time.Now().UTC())
 	if err != nil {
 		return RemoveResult{}, apierr.Internal("PROJECT_REMOVE_FAILED", "Failed to remove project")
 	}
