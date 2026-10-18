@@ -212,10 +212,11 @@ var shippedMigrations = map[int64]string{
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
-// shipped in a release and were then deleted, so real installs have them
-// recorded as applied while this repository ships no file with that number. A
+// shipped in a release or preview build and were then deleted, so databases can
+// have them recorded as applied while this repository ships no such file. A
 // new file claiming one would be skipped silently there.
 //
+//   - 207 was used by competing draft harness builds before renumbering.
 //   - 22 shipped in a nightly (#2412) and was deleted by the revert.
 //
 // Beware of the adjacent hazard this cannot catch: at least one field profile
@@ -224,7 +225,7 @@ var shippedMigrations = map[int64]string{
 // Any such migration whose schema the generated queries depend on must add a
 // schemaRepairs entry in db.go.
 func burnedVersion(v int64) bool {
-	return v == 22
+	return v == 22 || v == 207
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every
