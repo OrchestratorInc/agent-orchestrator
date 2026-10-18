@@ -1196,6 +1196,8 @@
 	"pr.reason.providerBlocked": "Merge nicht verfügbar",
 	"pr.reason.reviewRequired": "Review erforderlich",
 	"pr.review.approved": "Genehmigt",
+	"pr.review.approvedBy": "Genehmigt von {{names}}",
+	"pr.review.changesRequestedBy": "Änderungen angefordert von {{names}}",
 	"pr.review.changesActive": "Änderungswünsche noch aktiv",
 	"pr.review.changesRequested": "Änderungen angefordert",
 	"pr.review.draftNotReady": "Entwurfs-PR · Noch nicht bereit für Review",

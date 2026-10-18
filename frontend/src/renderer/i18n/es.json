@@ -1215,6 +1215,8 @@
 	"pr.reason.providerBlocked": "fusión no disponible",
 	"pr.reason.reviewRequired": "revisión requerida",
 	"pr.review.approved": "Aprobado",
+	"pr.review.approvedBy": "Aprobado por {{names}}",
+	"pr.review.changesRequestedBy": "Cambios solicitados por {{names}}",
 	"pr.review.changesActive": "Cambios solicitados aún activos",
 	"pr.review.changesRequested": "Cambios solicitados",
 	"pr.review.draftNotReady": "PR en borrador · No listo para revisión",

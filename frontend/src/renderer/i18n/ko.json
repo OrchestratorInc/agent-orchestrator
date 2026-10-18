@@ -1196,6 +1196,8 @@
 	"pr.reason.providerBlocked": "병합할 수 없음",
 	"pr.reason.reviewRequired": "리뷰 필요",
 	"pr.review.approved": "승인됨",
+	"pr.review.approvedBy": "{{names}} 승인",
+	"pr.review.changesRequestedBy": "{{names}} 변경 요청",
 	"pr.review.changesActive": "변경 요청이 아직 활성 상태",
 	"pr.review.changesRequested": "변경 요청됨",
 	"pr.review.draftNotReady": "초안 PR · 리뷰 준비되지 않음",

@@ -1196,6 +1196,8 @@
 	"pr.reason.providerBlocked": "マージできません",
 	"pr.reason.reviewRequired": "レビュー必須",
 	"pr.review.approved": "承認済み",
+	"pr.review.approvedBy": "{{names}} が承認",
+	"pr.review.changesRequestedBy": "{{names}} が変更を依頼",
 	"pr.review.changesActive": "変更リクエストがまだ有効",
 	"pr.review.changesRequested": "変更リクエストあり",
 	"pr.review.draftNotReady": "下書き PR · レビュー準備ができていません",

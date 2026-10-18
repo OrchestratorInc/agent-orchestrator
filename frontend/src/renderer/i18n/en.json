@@ -1177,6 +1177,8 @@
 	"pr.reason.providerBlocked": "merge unavailable",
 	"pr.reason.reviewRequired": "review required",
 	"pr.review.approved": "Approved",
+	"pr.review.approvedBy": "Approved by {{names}}",
+	"pr.review.changesRequestedBy": "Changes requested by {{names}}",
 	"pr.review.changesActive": "Changes requested",
 	"pr.review.changesRequested": "Changes requested",
 	"pr.review.draftNotReady": "Draft PR · Not ready for review",

@@ -1215,6 +1215,8 @@
 	"pr.reason.providerBlocked": "merge indisponível",
 	"pr.reason.reviewRequired": "revisão obrigatória",
 	"pr.review.approved": "Aprovado",
+	"pr.review.approvedBy": "Aprovado por {{names}}",
+	"pr.review.changesRequestedBy": "Alterações solicitadas por {{names}}",
 	"pr.review.changesActive": "Alterações solicitadas ainda ativas",
 	"pr.review.changesRequested": "Alterações solicitadas",
 	"pr.review.draftNotReady": "PR em rascunho · Não pronto para revisão",

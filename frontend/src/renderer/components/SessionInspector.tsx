@@ -1158,6 +1158,7 @@ function PRSummaryCard({
 			openLabel={t("inspector.openPR", { number: pr.number })}
 			openedViaLabel={t("pr.openedVia")}
 			pr={viewModel}
+			reviewers={latestReviewers(pr.review.reviews)}
 		/>
 	);
 }
@@ -1196,9 +1197,11 @@ function PullRequestRows({
 	openLabel,
 	openedViaLabel,
 	pr,
+	reviewers,
 	stateKey,
 }: {
 	branchWork?: ReactNode;
+	reviewers: ReturnType<typeof latestReviewers>;
 	/** Identifies this PR in this session, for remembering its expansion. */
 	stateKey: string;
 	/** The open or draft PR that new commits update. */
@@ -1259,7 +1262,7 @@ function PullRequestRows({
 						transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
 					>
 						{pr.openedBy ? <PRSummaryMeta className="py-1" externalLink={ProductExternalLink} openedViaLabel={openedViaLabel} pr={{ ...pr, sourceBranch: "", targetBranch: "", changedFiles: 0, additions: 0, deletions: 0 }} /> : null}
-						<PullRequestDetails mergeAction={mergeAction} mergeError={mergeError} pr={pr} range={range} readiness={readiness} readinessTwin={readinessTwin} showStatus={showStatus} statuses={statuses} />
+						<PullRequestDetails mergeAction={mergeAction} mergeError={mergeError} pr={pr} range={range} readiness={readiness} readinessTwin={readinessTwin} reviewers={reviewers} showStatus={showStatus} statuses={statuses} />
 						{branchWork}
 					</motion.div>
 				) : null}
@@ -1283,18 +1286,22 @@ function PullRequestDetails({
 	range,
 	readiness,
 	readinessTwin,
+	reviewers,
 	showStatus,
 	statuses,
 }: {
 	mergeAction?: ReactNode;
 	mergeError?: string | null;
 	pr: InspectorPullRequest;
+	reviewers: ReturnType<typeof latestReviewers>;
 	range: string | undefined;
 	readiness: InspectorPullRequest["card"]["readiness"];
 	readinessTwin: InspectorPullRequest["card"]["primary"] | undefined;
 	showStatus: boolean;
 	statuses: InspectorPullRequest["card"]["primary"][];
 }) {
+	const { t } = useTranslation();
+	const { approvedBy, changesRequestedBy } = reviewers;
 	return (
 		<>
 			{range ? <InfoRow icon={GitBranch} label={range} title={range} /> : null}
@@ -1325,6 +1332,22 @@ function PullRequestDetails({
 					trailing={mergeAction}
 				/>
 			) : null}
+			{approvedBy.length > 0 ? (
+				<InfoRow
+					icon={CircleCheck}
+					iconClassName="text-success"
+					label={t("pr.review.approvedBy", { names: approvedBy.join(", ") })}
+					title={approvedBy.join(", ")}
+				/>
+			) : null}
+			{changesRequestedBy.length > 0 ? (
+				<InfoRow
+					icon={CircleAlert}
+					iconClassName="text-status-in-review"
+					label={t("pr.review.changesRequestedBy", { names: changesRequestedBy.join(", ") })}
+					title={changesRequestedBy.join(", ")}
+				/>
+			) : null}
 			{mergeError ? (
 				<p className="mt-1 text-xs leading-normal text-error" role="status">
 					{mergeError}
@@ -1332,6 +1355,18 @@ function PullRequestDetails({
 			) : null}
 		</>
 	);
+}
+
+/** Who currently approves or blocks the PR: each reviewer's newest verdict, a later comment-only review not counting. */
+function latestReviewers(reviews: NonNullable<SessionPRSummary["review"]["reviews"]> = []): { approvedBy: string[]; changesRequestedBy: string[] } {
+	const latest = new Map<string, NonNullable<SessionPRSummary["review"]["reviews"]>[number]>();
+	for (const review of reviews) {
+		if (review.verdict !== "approved" && review.verdict !== "changes_requested") continue;
+		const seen = latest.get(review.reviewerId);
+		if (!seen || Date.parse(review.submittedAt) >= Date.parse(seen.submittedAt)) latest.set(review.reviewerId, review);
+	}
+	const names = (verdict: string) => [...latest.values()].filter((review) => review.verdict === verdict).map((review) => review.reviewerId);
+	return { approvedBy: names("approved"), changesRequestedBy: names("changes_requested") };
 }
 
 /**

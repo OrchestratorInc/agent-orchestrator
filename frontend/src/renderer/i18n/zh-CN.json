@@ -1178,6 +1178,8 @@
 	"pr.reason.providerBlocked": "暂时无法合并",
 	"pr.reason.reviewRequired": "需要评审",
 	"pr.review.approved": "已批准",
+	"pr.review.approvedBy": "{{names}} 已批准",
+	"pr.review.changesRequestedBy": "{{names}} 请求更改",
 	"pr.review.changesActive": "仍有未处理的修改请求",
 	"pr.review.changesRequested": "请求修改",
 	"pr.review.draftNotReady": "草稿 PR · 尚未准备好评审",
