@@ -394,14 +394,13 @@ type runtimeMessageSender interface {
 // message body; this adapter only resolves the stored runtime handle.
 type terminalMessageAdmission struct {
 	sync.Mutex
-	pending      string
-	pendingSince time.Time
-	baseline     string
-	handleID     string
-	launchID     string
+	pending  string
+	baseline string
+	handleID string
+	launchID string
 }
 
-const terminalIdleRecoveryDelay = 4 * time.Second
+const terminalAdmissionCaptureLines = 200
 
 type runtimeMessenger struct {
 	store      *sqlite.Store
@@ -437,7 +436,7 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 			if !supports {
 				return fmt.Errorf("session %s: current rendered terminal unavailable", id)
 			}
-			screen, err := reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, 40)
+			screen, err := reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, terminalAdmissionCaptureLines)
 			if err != nil {
 				return err
 			}
@@ -448,12 +447,7 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 				admission.pending = ""
 			}
 			if admission.pending != "" {
-				// A wrapped or scrolled-off echo cannot be matched in the captured pane.
-				// After the echo deadline and a further grace period, a changed frame
-				// with an empty native composer lets a completed turn release admission.
-				recoveredIdle := !admission.pendingSince.IsZero() && time.Since(admission.pendingSince) >= terminalIdleRecoveryDelay &&
-					screen != admission.baseline && policy.ValidateTerminalMessage(admission.pending, screen) == nil
-				if !hasWitness || (!witness.TerminalMessageObserved(admission.pending, admission.baseline, screen) && !recoveredIdle) {
+				if !hasWitness || !witness.TerminalMessageObserved(admission.pending, admission.baseline, screen) {
 					return fmt.Errorf("session %s: prior terminal submission remains unconfirmed", id)
 				}
 				admission.pending = ""
@@ -476,7 +470,6 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 				admission.pending = ""
 				return err
 			}
-			admission.pendingSince = time.Now()
 			// A socket write acknowledgement precedes native acceptance. Hold admission
 			// until the adapter witnesses submission through busy chrome or a committed
 			// transcript echo; an unrelated idle redraw cannot release admission.
@@ -485,7 +478,7 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 			ticker := time.NewTicker(20 * time.Millisecond)
 			defer ticker.Stop()
 			for {
-				frame, captureErr := reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, 40)
+				frame, captureErr := reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, terminalAdmissionCaptureLines)
 				if captureErr == nil && hasWitness && witness.TerminalMessageObserved(message, admission.baseline, frame) {
 					admission.pending = ""
 					return nil

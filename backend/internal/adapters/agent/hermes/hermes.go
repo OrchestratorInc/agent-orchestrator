@@ -661,12 +661,14 @@ func (p *Plugin) TerminalMessageObserved(message, baseline, screen string) bool 
 
 // Count complete matching native echoes outside the current composer. Comparing
 // counts prevents old identical text from acknowledging a new send after a redraw.
-// Truncated or wrapped previews that cannot be matched in full remain unconfirmed.
+// Ignore whitespace inserted by terminal line wrapping, but require the entire
+// message between native transcript rules. Truncated previews remain unconfirmed.
 func committedMessageEchoes(message, screen string) int {
 	message = strings.TrimSpace(message)
 	if message == "" {
 		return 0
 	}
+	normalizedMessage := strings.Join(strings.Fields(message), "")
 	lines := terminalui.PlainTerminalLines(screen)
 	end := len(lines)
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -682,8 +684,6 @@ func committedMessageEchoes(message, screen string) int {
 		}
 		break
 	}
-	rows := strings.Split(message, "\n")
-	rows[0] = nativeUserEcho + rows[0]
 	count := 0
 	for i := 0; i < end; i++ {
 		line := strings.TrimSpace(lines[i])
@@ -691,24 +691,17 @@ func committedMessageEchoes(message, screen string) int {
 			count++
 			continue
 		}
-		if i == 0 || strings.TrimSpace(lines[i-1]) != nativeTranscriptRule || i+len(rows) >= end {
+		if i == 0 || strings.TrimSpace(lines[i-1]) != nativeTranscriptRule || !strings.HasPrefix(line, nativeUserEcho) {
 			continue
 		}
-		matches := true
-		for j, row := range rows {
-			if strings.TrimSpace(lines[i+j]) != strings.TrimSpace(row) {
-				matches = false
-				break
-			}
-		}
-		if !matches {
-			continue
-		}
-		j := i + len(rows)
-		for j < end && strings.TrimSpace(lines[j]) == "" {
+		var echo strings.Builder
+		echo.WriteString(strings.TrimPrefix(line, nativeUserEcho))
+		j := i + 1
+		for j < end && strings.TrimSpace(lines[j]) != nativeTranscriptRule {
+			echo.WriteString(strings.TrimSpace(lines[j]))
 			j++
 		}
-		if j < end && strings.TrimSpace(lines[j]) == nativeTranscriptRule {
+		if j < end && strings.Join(strings.Fields(echo.String()), "") == normalizedMessage {
 			count++
 		}
 	}

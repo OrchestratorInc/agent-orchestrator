@@ -30,9 +30,13 @@ type lineInputRuntime struct {
 	sent       chan string
 }
 
-func (r *lineInputRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
+func (r *lineInputRuntime) GetStyledOutput(_ context.Context, _ ports.RuntimeHandle, lines int) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	rows := strings.Split(r.screen, "\n")
+	if lines > 0 && len(rows) > lines {
+		return strings.Join(rows[len(rows)-lines:], "\n"), nil
+	}
 	return r.screen, nil
 }
 func (r *lineInputRuntime) SendMessage(_ context.Context, _ ports.RuntimeHandle, message string) error {
@@ -214,17 +218,21 @@ func TestHermesAdmissionRecoversAfterEchoTimeout(t *testing.T) {
 	}
 }
 
-func TestHermesAdmissionRecoversWhenEchoCannotBeCaptured(t *testing.T) {
+func TestHermesAdmissionRequiresNativeWitnessAfterTimeout(t *testing.T) {
 	rule := strings.Repeat("─", 40)
 	idle := rule + "\n❯ \n" + rule
 	longMessage := strings.Repeat("a long task prompt ", 10)
+	echo := "● " + longMessage
+	wrappedEcho := echo[:50] + "\n" + echo[50:100] + "\n" + echo[100:]
 	tests := []struct {
 		name   string
 		screen string
 		allow  bool
 	}{
-		{name: "wrapped echo", screen: rule + "\n● a long task prompt a long task prompt\n  a long task prompt\n" + rule + "\n" + idle, allow: true},
-		{name: "echo scrolled away", screen: strings.Repeat("completed output\n", 40) + idle, allow: true},
+		{name: "wrapped echo", screen: rule + "\n" + wrappedEcho + "\n" + rule + "\n" + idle, allow: true},
+		{name: "echo beyond old 40 line window", screen: rule + "\n" + echo + "\n" + rule + "\n" + strings.Repeat("completed output\n", 60) + idle, allow: true},
+		{name: "echo beyond capture history", screen: rule + "\n" + echo + "\n" + rule + "\n" + strings.Repeat("completed output\n", 220) + idle},
+		{name: "unrelated status redraw", screen: "status changed\n" + idle},
 		{name: "unchanged screen", screen: idle},
 		{name: "text remains in composer", screen: "completed output\n" + rule + "\n❯ still composing\n" + rule},
 	}
@@ -246,8 +254,7 @@ func TestHermesAdmissionRecoversWhenEchoCannotBeCaptured(t *testing.T) {
 			runtime := &lineInputRuntime{screen: tt.screen, nextScreen: "☤ ❯ msg=interrupt · Ctrl+C cancel"}
 			messenger := newSessionMessenger(store, runtime, nil, lineAgentResolver{}).(runtimeMessenger)
 			messenger.inputLocks.Store(rec.ID, &terminalMessageAdmission{
-				pending: longMessage, pendingSince: time.Now().Add(-terminalIdleRecoveryDelay),
-				baseline: idle, handleID: "pane", launchID: "generation",
+				pending: longMessage, baseline: idle, handleID: "pane", launchID: "generation",
 			})
 			err = messenger.Send(ctx, rec.ID, "next task")
 			if tt.allow && err != nil {
