@@ -202,6 +202,39 @@ func TestClaudeTranscriptShapes(t *testing.T) {
 	}
 }
 
+func TestOversizedClaudeRecordKeepsEarlierHistory(t *testing.T) {
+	limit := maxRecordBytes
+	maxRecordBytes = 1 << 10
+	t.Cleanup(func() { maxRecordBytes = limit })
+	id := "6d842f77-b1fe-49f3-8585-8946df267bae"
+	// Claude writes uuid after the tool output; quotes and braces inside it are not structure.
+	big := strings.Repeat(`x\"}{[`, 1<<10)
+	body := `{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"` + id + `","message":{"role":"user","content":"first question"}}
+{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"first answer"}]}}
+{"parentUuid":"a1","type":"user","sessionId":"` + id + `","message":{"role":"user","content":[{"type":"tool_result","content":"` + big + `"}]},"toolUseResult":{"uuid":"nested"},"uuid":"tool"}
+{"type":"user","uuid":"u2","parentUuid":"tool","message":{"role":"user","content":"second question"}}
+{"type":"assistant","uuid":"a2","parentUuid":"u2","message":{"id":"m2","role":"assistant","content":[{"type":"text","text":"second answer"}]}}
+`
+	root := t.TempDir()
+	path := writeFile(t, filepath.Join(root, "projects", "-work-repo", id+".jsonl"), body)
+	got, err := readTranscript(context.Background(), domain.HarnessClaudeCode, root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTexts(t, got.messages, "user: first question", "assistant: first answer", "user: second question", "assistant: second answer")
+
+	var skim recordSkim
+	skim.reset()
+	skim.write([]byte(`{"a":"x\"}","b":{"uuid":"no"},"c":[1,{"d":2}],"long":"` + strings.Repeat("y", maxSkimMember) + `","e":true, "f" : null,"uuid":"yes"`))
+	if skim.record() != nil {
+		t.Fatal("a torn record was kept")
+	}
+	skim.write([]byte("}\n"))
+	if got := string(skim.record()); got != `{"a":"x\"}","e":true,"f" : null,"uuid":"yes"}` {
+		t.Fatalf("skimmed record = %s", got)
+	}
+}
+
 func TestVisibleBudgetKeepsOpeningPromptAndNewestMessages(t *testing.T) {
 	limit := maxVisibleBytes
 	chunk := strings.Repeat("y", limit/4)

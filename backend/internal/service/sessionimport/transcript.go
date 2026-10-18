@@ -21,14 +21,16 @@ import (
 )
 
 // Tool output and images dominate provider files, so whole files stream while
-// oversized records are skipped before they are decoded.
+// oversized records keep only their short top-level fields.
 const (
 	maxTranscriptBytes = 1 << 30
-	maxRecordBytes     = 64 << 20
 	maxVisibleBytes    = 16 << 20
+	maxSkimMember      = 4 << 10
 )
 
 var (
+	// maxRecordBytes is a variable so tests can use a small record.
+	maxRecordBytes  = 64 << 20
 	nativeIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 	// Codex rollouts may be zstd-compressed and split into `<thread>_<segment>` files.
 	codexRolloutName = regexp.MustCompile(`^rollout-.*-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:_[0-9a-fA-F-]{36})?\.jsonl(?:\.zst)?$`)
@@ -166,26 +168,38 @@ func codexThreadID(path string) string {
 	return ""
 }
 
-// eachRecord streams JSONL, skipping records too large to be visible text.
-// ponytail: a skipped Claude record also drops its ancestry link, so history
-// before it is not shown; none of 1,033 real transcripts had a record over 8 MiB.
+// eachRecord streams JSONL. A record too large to decode is passed on with only
+// its short top-level fields, so a huge Claude tool result keeps the parent
+// link that joins the history before it.
 func eachRecord(r io.Reader, fn func([]byte) error) error {
 	br := bufio.NewReaderSize(r, 256<<10)
-	var line []byte
-	oversized := false
+	var (
+		line      []byte
+		skim      recordSkim
+		oversized bool
+	)
 	for {
 		chunk, err := br.ReadSlice('\n')
 		if !oversized && len(line)+len(chunk) > maxRecordBytes {
-			oversized, line = true, line[:0]
+			oversized = true
+			skim.reset()
+			skim.write(line)
+			line = line[:0]
 		}
-		if !oversized {
+		if oversized {
+			skim.write(chunk)
+		} else {
 			line = append(line, chunk...)
 		}
 		if errors.Is(err, bufio.ErrBufferFull) {
 			continue
 		}
-		if !oversized && len(bytes.TrimSpace(line)) > 0 {
-			if fnErr := fn(line); fnErr != nil {
+		record := line
+		if oversized {
+			record = skim.record()
+		}
+		if len(bytes.TrimSpace(record)) > 0 {
+			if fnErr := fn(record); fnErr != nil {
 				return fnErr
 			}
 		}
@@ -197,6 +211,81 @@ func eachRecord(r io.Reader, fn func([]byte) error) error {
 			return err
 		}
 	}
+}
+
+// recordSkim copies the top-level scalar members of one JSON object as they
+// stream past; object, array and long values are dropped without being kept.
+type recordSkim struct {
+	out, member            []byte
+	depth                  int
+	inString, escape, drop bool
+	closed                 bool
+}
+
+func (s *recordSkim) reset() {
+	*s = recordSkim{out: append(s.out[:0], '{'), member: s.member[:0]}
+}
+
+func (s *recordSkim) write(p []byte) {
+	for _, c := range p {
+		switch {
+		case s.closed:
+			return
+		case s.inString:
+			switch {
+			case s.escape:
+				s.escape = false
+			case c == '\\':
+				s.escape = true
+			case c == '"':
+				s.inString = false
+			}
+		case c == '"':
+			s.inString = true
+		case c == '{' || c == '[':
+			s.depth++
+			if s.depth == 1 {
+				continue
+			}
+			s.drop = true
+		case c == '}' || c == ']':
+			s.depth--
+			if s.depth == 0 {
+				s.keep()
+				s.closed = true
+				continue
+			}
+		case c == ',' && s.depth == 1:
+			s.keep()
+			continue
+		}
+		if s.depth != 1 || s.drop {
+			continue
+		}
+		if len(s.member) >= maxSkimMember {
+			s.drop = true
+			continue
+		}
+		s.member = append(s.member, c)
+	}
+}
+
+func (s *recordSkim) keep() {
+	if m := bytes.TrimSpace(s.member); len(m) > 0 && !s.drop {
+		if len(s.out) > 1 {
+			s.out = append(s.out, ',')
+		}
+		s.out = append(s.out, m...)
+	}
+	s.member, s.drop = s.member[:0], false
+}
+
+// record is nil for a torn object, as a torn small record fails to decode.
+func (s *recordSkim) record() []byte {
+	if !s.closed {
+		return nil
+	}
+	return append(s.out, '}')
 }
 
 type tagged struct {
