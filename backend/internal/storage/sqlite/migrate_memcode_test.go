@@ -66,9 +66,11 @@ func TestMigration0202AllowsMemcodeAndReversesBothHistoricalSchemas(t *testing.T
 }
 
 func TestMemcodeSchemaRepairRejectsUnmatchedLegacyConstraint(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 202)
+	// Start with all current harnesses so this negative fixture isolates Memcode,
+	// rather than failing first on another harness added after migration 0202.
+	db := openMigratedTestDB(t)
 	mustExec(t, db, `PRAGMA writable_schema = ON`)
-	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''memcode'', ''fake''))', '''fake'' ))') WHERE type = 'table' AND name = 'sessions'`)
+	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(replace(sql, '''memcode'', ', ''), '''fake''))', '''fake'' ))') WHERE type = 'table' AND name = 'sessions'`)
 	mustExec(t, db, `PRAGMA writable_schema = RESET`)
 
 	err := reconcileHarnessConstraint(db)
