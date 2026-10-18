@@ -22,6 +22,9 @@ type process struct {
 	reconnected bool
 	gate        *gatedReader
 	acpState    *persistenthost.ACPState
+	// providerExit reports how a hosted provider ended on its own, when the
+	// host recorded it. Nil for processes AO did not start through a host.
+	providerExit func(context.Context) (persistenthost.ProviderExit, bool)
 }
 
 type gatedReader struct {
