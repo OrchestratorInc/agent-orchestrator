@@ -29,12 +29,34 @@ describe("gitActionPlan after a merge", () => {
 
   it("still offers actions for uncommitted or unpushed work on a merged tip", () => {
     const dirty = facts({ uncommitted: [{ path: "a.ts", additions: 1, deletions: 0 }] });
-    expect(gitActionPlan(dirty, undefined, [tip])?.primary).toBe("createPR");
+    expect(gitActionPlan(dirty, undefined, [tip])?.primary).toBe("commitPush");
     const ahead = facts({ branch: { ...pushedBranch, unpushed: 1 } });
-    expect(gitActionPlan(ahead, undefined, [tip])?.primary).toBe("createPR");
+    expect(gitActionPlan(ahead, undefined, [tip])?.primary).toBe("push");
   });
 
   it("ignores an empty head sha", () => {
     expect(gitActionPlan(facts(), undefined, [""])?.primary).toBe("createPR");
+  });
+});
+
+describe("gitActionPlan ordering", () => {
+  const dirty = [{ path: "a.ts", additions: 1, deletions: 0 }];
+
+  it("leads with commit and push, never a PR, while work is uncommitted", () => {
+    const plan = gitActionPlan(facts({ uncommitted: dirty }), undefined);
+    expect(plan).toEqual({ primary: "commitPush", menu: ["commit"] });
+  });
+
+  it("leads with push, never a PR, while commits are unpushed", () => {
+    expect(gitActionPlan(facts({ branch: { ...pushedBranch, unpushed: 2 } }), undefined)).toEqual({ primary: "push", menu: [] });
+  });
+
+  it("pushes a branch that has commits but no remote yet", () => {
+    const local = { ...pushedBranch, remoteBranch: undefined };
+    expect(gitActionPlan(facts({ branch: local }), undefined)?.primary).toBe("push");
+  });
+
+  it("offers Create PR only once everything is committed and pushed", () => {
+    expect(gitActionPlan(facts(), undefined)).toEqual({ primary: "createPR", menu: ["createDraftPR"] });
   });
 });

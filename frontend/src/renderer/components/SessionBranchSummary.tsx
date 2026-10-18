@@ -176,7 +176,7 @@ export function SessionBranchSummary({
 			<GitActionButton
 				menu={plan.menu.map((kind) => ({ kind, label: menuLabel(kind, t) }))}
 				onRun={(kind) => send.mutate(kind)}
-				primary={{ kind: plan.primary, label: primaryLabel(plan.primary, facts, openPRNumber, t) }}
+				primary={{ kind: plan.primary, label: primaryLabel(plan.primary, openPRNumber, t) }}
 				variant={openPRNumber === undefined ? "primary" : "secondary"}
 			/>
 		);
@@ -363,9 +363,11 @@ export function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined,
 		if (unpushed > 0) return { primary: "push", menu: [] };
 		return null;
 	}
-	if (dirty) return { primary: "createPR", menu: ["commit", "commitPush", "createDraftPR"] };
-	if (unpushed > 0) return { primary: "createPR", menu: ["push", "createDraftPR"] };
-	if (facts.branch && facts.branch.commits > 0) return { primary: "createPR", menu: ["createDraftPR"] };
+	// Opening a PR comes last: nothing is offered for it until all work is committed and pushed.
+	if (dirty) return { primary: "commitPush", menu: ["commit"] };
+	const commits = facts.branch?.commits ?? 0;
+	if (unpushed > 0 || (commits > 0 && !facts.branch?.remoteBranch)) return { primary: "push", menu: [] };
+	if (commits > 0) return { primary: "createPR", menu: ["createDraftPR"] };
 	return null;
 }
 
@@ -400,11 +402,9 @@ export function gitActionMessage(kind: SessionGitActionKind, base: string | unde
 	}
 }
 
-function primaryLabel(kind: SessionGitActionKind, facts: GitFacts, openPRNumber: number | undefined, t: TFunction): string {
-	if (kind === "commitPush") return t("inspector.git.commitAndPushToPR", { number: openPRNumber });
-	if (kind === "push") return t("inspector.git.pushToPR", { number: openPRNumber });
-	if (facts.uncommitted.length > 0) return t("inspector.git.commitAndCreatePR");
-	if (!isPushed(facts.branch)) return t("inspector.git.pushAndCreatePR");
+function primaryLabel(kind: SessionGitActionKind, openPRNumber: number | undefined, t: TFunction): string {
+	if (kind === "commitPush") return openPRNumber === undefined ? t("inspector.git.commitAndPush") : t("inspector.git.commitAndPushToPR", { number: openPRNumber });
+	if (kind === "push") return openPRNumber === undefined ? t("inspector.git.push") : t("inspector.git.pushToPR", { number: openPRNumber });
 	return t("inspector.git.createPR");
 }
 
