@@ -2,6 +2,7 @@ package minimaxcode
 
 import (
 	"context"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"os"
 	"path/filepath"
 	"testing"
@@ -89,5 +90,55 @@ func TestChatProfileRejectsSymlinkedGlobalPermissionPolicy(t *testing.T) {
 	}
 	if _, err := New().PrepareChatProfile(context.Background(), data, "chat-policy", map[string]string{"MINIMAX_DATA_DIR": source}); err == nil {
 		t.Fatal("Chat accepted a symlinked global permission policy")
+	}
+}
+
+func TestChatHistoryPreflightPreservesExactHistory(t *testing.T) {
+	for _, kind := range []string{"valid", "missing", "corrupt", "workspace", "unowned", "empty-new", "empty-started"} {
+		t.Run(kind, func(t *testing.T) {
+			fixture, workspace, id := historyFixture(t)
+			data := t.TempDir()
+			parent := filepath.Join(data, "agents", adapterID, "chat")
+			if err := os.MkdirAll(parent, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			profile := filepath.Join(parent, "chat-history")
+			if err := os.Rename(fixture, profile); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(profile, ".ao-managed"), []byte(chatProfileMarker), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			messages := filepath.Join(profile, "v2", "sessions", "exact", "messages.jsonl")
+			switch kind {
+			case "empty-new", "empty-started":
+				if err := os.WriteFile(messages, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "missing":
+				if err := os.Remove(messages); err != nil {
+					t.Fatal(err)
+				}
+			case "corrupt":
+				if err := os.WriteFile(messages, []byte("broken\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "workspace":
+				workspace = t.TempDir()
+			case "unowned":
+				if err := os.Remove(filepath.Join(profile, ".ao-managed")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, beforeErr := os.ReadFile(messages)
+			err := New().ValidateChatHistory(context.Background(), ports.ChatResumeConfig{DataDir: data, SessionID: "chat-history", ProviderConversationID: id, WorkspacePath: workspace, HasPriorTurns: kind != "empty-new"})
+			if (err == nil) != (kind == "valid" || kind == "empty-new") {
+				t.Fatalf("history preflight %s: %v", kind, err)
+			}
+			after, afterErr := os.ReadFile(messages)
+			if string(before) != string(after) || (beforeErr == nil) != (afterErr == nil) {
+				t.Fatal("preflight changed native history")
+			}
+		})
 	}
 }

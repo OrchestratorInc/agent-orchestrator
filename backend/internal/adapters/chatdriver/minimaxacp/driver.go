@@ -31,6 +31,7 @@ import (
 type Plugin interface {
 	nativeacp.Plugin
 	PrepareChatProfile(context.Context, string, string, map[string]string) (string, error)
+	ValidateChatHistory(context.Context, ports.ChatResumeConfig) error
 }
 
 // New constructs a candidate binding. Production registration is a separate
@@ -54,19 +55,28 @@ func New(plugin Plugin, log *slog.Logger) ports.ChatDriver {
 			ports.ChatCapabilityCompaction:      false,
 			ports.ChatCapabilityRollback:        false,
 		},
-	}, log)}
+	}, log), plugin: plugin}
 }
 
 // Keep exact restore strict even when a generic caller permits a fresh session
 // for an unstarted conversation. MiniMax's native identity must never change.
-type driver struct{ ports.ChatDriver }
+type driver struct {
+	ports.ChatDriver
+	plugin Plugin
+}
 
 func (d *driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
+	if err := d.plugin.ValidateChatHistory(ctx, cfg); err != nil {
+		return nil, fmt.Errorf("%w: MiniMax exact history preflight: %w", ports.ErrChatResumeFailed, err)
+	}
 	cfg.FreshIfMissing = false
 	return d.ChatDriver.Resume(ctx, cfg)
 }
 
 func (d *driver) Reconnect(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
+	if err := d.plugin.ValidateChatHistory(ctx, cfg); err != nil {
+		return nil, fmt.Errorf("%w: MiniMax exact history preflight: %w", ports.ErrChatResumeFailed, err)
+	}
 	cfg.FreshIfMissing = false
 	reconnector, ok := d.ChatDriver.(ports.ChatDriverReconnector)
 	if !ok {

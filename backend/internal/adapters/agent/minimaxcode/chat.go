@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // PrepareChatProfile snapshots the user's configuration into a separate,
@@ -87,3 +88,31 @@ func (p *Plugin) PrepareChatProfile(ctx context.Context, dataDir, sessionID stri
 }
 
 const chatProfileMarker = "agent-orchestrator: private minimax-code ACP profile v1\n"
+
+// ValidateChatHistory refuses an existing native identity whose durable history
+// is unavailable. MiniMax can load its SQLite session even without messages.jsonl;
+// that success is not proof that exact conversation history survived.
+// Validate before profile refresh or starting/attaching a provider process.
+func (p *Plugin) ValidateChatHistory(ctx context.Context, cfg ports.ChatResumeConfig) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !nativeIDPattern.MatchString(cfg.ProviderConversationID) {
+		return errors.New("MiniMax Chat restore requires an exact native mvs_ session ID")
+	}
+	if _, err := profilePath(cfg.DataDir, string(cfg.SessionID)); err != nil {
+		return err
+	}
+	profile := filepath.Join(cfg.DataDir, "agents", adapterID, "chat", string(cfg.SessionID))
+	info, err := os.Lstat(profile)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("MiniMax Chat history requires an AO-owned profile directory")
+	}
+	marker, err := os.ReadFile(filepath.Join(profile, ".ao-managed"))
+	if err != nil || string(marker) != chatProfileMarker {
+		return errors.New("refusing to restore non-AO MiniMax Chat history")
+	}
+	// A native session/new has an existing empty messages file until its first turn.
+	// Missing files remain an error even when AO has no durable turns.
+	return validateNativeHistoryAllowEmpty(ctx, profile, cfg.ProviderConversationID, cfg.WorkspacePath, !cfg.HasPriorTurns)
+}

@@ -235,6 +235,65 @@ func TestNativeMiniMaxACPExactRestoreConformance(t *testing.T) {
 	if err := conv.(ports.ChatProviderHibernator).Hibernate(); err != nil {
 		t.Fatal(err)
 	}
+	// A valid SQLite identity is insufficient: stock native load can succeed
+	// when its messages file is missing. AO must refuse before reconnecting.
+	profile := filepath.Join(data, "agents", "minimax-code", "chat", string(id))
+	var messages string
+	if err := filepath.WalkDir(filepath.Join(profile, "v2", "sessions"), func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Name() != "manifest.json" {
+			return nil
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var manifest struct {
+			SessionID string `json:"sessionId"`
+		}
+		if err := json.Unmarshal(body, &manifest); err != nil {
+			return err
+		}
+		if manifest.SessionID == nativeID {
+			messages = filepath.Join(filepath.Dir(path), "messages.jsonl")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if messages == "" {
+		t.Fatal("exact native history manifest not found")
+	}
+	original, err := os.ReadFile(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, corrupt := range []bool{false, true} {
+		func() {
+			defer func() {
+				if err := os.WriteFile(messages, original, 0o600); err != nil {
+					t.Error(err)
+				}
+			}()
+			if corrupt {
+				if err := os.WriteFile(messages, []byte("broken\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.Remove(messages); err != nil {
+				t.Fatal(err)
+			}
+			candidate, err := binding.Resume(ctx, resume)
+			if candidate != nil {
+				_ = candidate.(ports.ChatProviderTerminator).Terminate()
+			}
+			if !errors.Is(err, ports.ErrChatResumeFailed) {
+				t.Fatalf("unavailable existing-ID history was accepted: %v", err)
+			}
+		}()
+	}
+	t.Log("PASS existing native ID with missing or corrupt history refused before connection")
 	for _, negative := range []ports.ChatResumeConfig{
 		func() ports.ChatResumeConfig { c := resume; c.WorkspacePath = t.TempDir(); return c }(),
 		func() ports.ChatResumeConfig {
@@ -315,7 +374,7 @@ func startNativeConformance(t *testing.T, id domain.SessionID) nativeConformance
 		resume: ports.ChatResumeConfig{
 			SessionID: id, ProviderConversationID: nativeID, DataDir: data,
 			WorkspacePath: workspace, Env: env, Model: "custom_provider:ao/native-test",
-			Permissions: ports.PermissionModeDefault,
+			Permissions: ports.PermissionModeDefault, HasPriorTurns: true,
 		},
 	}
 }

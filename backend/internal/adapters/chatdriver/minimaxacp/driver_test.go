@@ -18,8 +18,9 @@ import (
 )
 
 type stubPlugin struct {
-	profile string
-	calls   *int
+	profile    string
+	calls      *int
+	historyErr error
 }
 
 func (stubPlugin) ResolveBinary(context.Context) (string, error) { return "mcode", nil }
@@ -31,6 +32,48 @@ func (p stubPlugin) PrepareChatProfile(context.Context, string, string, map[stri
 		*p.calls++
 	}
 	return p.profile, nil
+}
+
+func (p stubPlugin) ValidateChatHistory(context.Context, ports.ChatResumeConfig) error {
+	return p.historyErr
+}
+
+type restoreRecorder struct {
+	ports.ChatDriver
+	called bool
+	fresh  bool
+}
+
+func (r *restoreRecorder) Resume(_ context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
+	r.called = true
+	r.fresh = cfg.FreshIfMissing
+	return nil, nil
+}
+func (r *restoreRecorder) Reconnect(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
+	return r.Resume(ctx, cfg)
+}
+
+func TestRestoreRejectsUnavailableHistoryBeforeConnecting(t *testing.T) {
+	for _, reconnect := range []bool{false, true} {
+		for _, historyErr := range []error{nil, errors.New("native conversation history is missing")} {
+			recorder := &restoreRecorder{}
+			d := &driver{ChatDriver: recorder, plugin: stubPlugin{historyErr: historyErr}}
+			cfg := ports.ChatResumeConfig{ProviderConversationID: "mvs_01234567890123456789012345678901", FreshIfMissing: true}
+			var err error
+			if reconnect {
+				_, err = d.Reconnect(context.Background(), cfg)
+			} else {
+				_, err = d.Resume(context.Background(), cfg)
+			}
+			if historyErr != nil {
+				if !errors.Is(err, ports.ErrChatResumeFailed) || recorder.called {
+					t.Fatalf("unavailable history reached native connection: called=%v err=%v", recorder.called, err)
+				}
+			} else if err != nil || !recorder.called || recorder.fresh {
+				t.Fatalf("valid exact restore changed: called=%v fresh=%v err=%v", recorder.called, recorder.fresh, err)
+			}
+		}
+	}
 }
 
 func TestConfigureUsesPrivateAdditiveContextOnEveryLaunch(t *testing.T) {
