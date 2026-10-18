@@ -42,6 +42,7 @@ import { SessionTopbarHost } from "./SessionTopbarPortal";
 import { TerminalSwitchAgentButton } from "./TerminalSwitchAgentButton";
 import { TopbarButton } from "./TopbarButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { useAgentAccountLabel } from "../hooks/useAgentAccounts";
 import { useBrowserView } from "../hooks/useBrowserView";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import { useOpenArtifactPreview } from "../hooks/useOpenArtifactPreview";
@@ -418,6 +419,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		: ambiguousRoute ? undefined : listedSession ?? directCloudSession ?? scopedFallback;
 	const interfaceContext = hostId ?? (session ? session.cloud ?? null : cloudOrgId && projectId ? { orgId: cloudOrgId } : undefined);
 	const interfaceUi = useSessionInterfaceSwitch(sessionId, session, interfaceContext);
+	const accountLabel = useAgentAccountLabel(Boolean(interfaceUi.accountMoveTarget));
+	const accountSwitchingLabel = interfaceUi.accountMoveTarget
+		? t("settings.agentAccounts.switching", { email: accountLabel(interfaceUi.accountMoveTarget) })
+		: undefined;
 	// Reading a cloud session counts as using it, so it is not idle-paused
 	// under someone who is watching the agent work.
 	useCloudSessionPresence(session?.cloud?.orgId, session?.cloud ? session.id : undefined, Boolean(session?.cloud));
@@ -2003,6 +2008,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									controllerResumeError={!hostId && autoResume.variables === sessionId && autoResume.isError
 										? apiErrorMessage(autoResume.error) : undefined}
 									controllerTransitioning={interfaceUi.controllerTransitioning}
+									accountMoving={Boolean(interfaceUi.accountMoveTarget)}
 									arriving={interfaceUi.optimisticTarget === "chat"}
 									agentResuming={quietResume}
 									newWorkDisabled={interfaceUi.newWorkDisabled}
@@ -2027,6 +2033,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									hostId={hostId}
 									agentInputDisabled={interfaceUi.agentInputDisabled}
 									terminalBooting={interfaceUi.optimisticTarget === "tui"}
+									terminalSwitchingLabel={accountSwitchingLabel}
 									daemonReady={hostId ? Boolean(remoteBase) : daemonStatus.state === "ready"}
 									onCloseShellTerminal={closeShellTerminalByHandle}
 									onRenameShellTerminal={renameShellTerminalByHandle}

@@ -38,6 +38,7 @@ const (
 	HarnessUnreal      AgentHarness = "unreal-agent"
 	HarnessCodewhale   AgentHarness = "codewhale"
 	HarnessMiMoCode    AgentHarness = "mimo-code"
+	HarnessMemcode     AgentHarness = "memcode"
 	HarnessDeepSeek    AgentHarness = "deepseek-harness"
 	HarnessOpenHands   AgentHarness = "openhands"
 	HarnessNeovate     AgentHarness = "neovate"
@@ -56,7 +57,7 @@ var AllHarnesses = []AgentHarness{
 	HarnessCline, HarnessKimi, HarnessMuse, HarnessKiro, HarnessKilocode, HarnessVibe, HarnessPi,
 	HarnessKimchi, HarnessPrimeAgent, HarnessAutohand,
 	HarnessOMP, HarnessFX, HarnessUnreal, HarnessCodewhale, HarnessMiMoCode, HarnessDeepSeek, HarnessOpenHands,
-	HarnessCommandCode, HarnessNeovate,
+	HarnessCommandCode, HarnessNeovate, HarnessMemcode,
 }
 
 // IsKnown reports whether h is one of the supported harnesses.

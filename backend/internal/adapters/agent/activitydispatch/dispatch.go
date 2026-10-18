@@ -24,6 +24,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/gemini"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimchi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kiro"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/mimocode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/muse"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/neovate"
@@ -61,6 +62,7 @@ var Derivers = map[string]DeriveFunc{
 	"prime-agent":  primeagent.DeriveActivityState,
 	"mimo-code":    mimocode.DeriveActivityState,
 	"neovate":      neovate.DeriveActivityState,
+	"memcode":      memcode.DeriveActivityState,
 	"amp":          amp.DeriveActivityState,
 	"pi":           pi.DeriveActivityState,
 	"auggie":       auggie.DeriveActivityState,
@@ -109,6 +111,7 @@ var signalCoverageOverrides = map[domain.AgentHarness]SignalCoverage{
 	domain.HarnessCommandCode: SignalCoveragePartial,
 	domain.HarnessContinue:    SignalCoveragePartial,
 	domain.HarnessNeovate:     SignalCoveragePartial,
+	domain.HarnessMemcode:     SignalCoveragePartial,
 }
 
 // CoverageForHarness returns the activity-signal coverage for a selectable

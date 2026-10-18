@@ -481,3 +481,38 @@ describe("SessionInterfaceTransitionNotice", () => {
 		expect(screen.queryByRole("button", { name: "Stop now and switch" })).not.toBeInTheDocument();
 	});
 });
+
+describe("account moves", () => {
+	function accountMove(phase: SessionInterfaceTransition["phase"]): SessionInterfaceTransition {
+		return {
+			...transition(phase),
+			sourceMode: "chat",
+			targetMode: "chat",
+			sourceAccountId: "device-claude",
+			targetAccountId: "acct-b",
+		};
+	}
+
+	it("reports the account switch instead of an interface destination while it runs", () => {
+		render(
+			<TooltipProvider>
+				<SessionInterfaceSwitchButton target="tui" supported transition={accountMove("target_starting")} onClick={vi.fn()} onCancel={vi.fn()} />
+			</TooltipProvider>,
+		);
+		expect(screen.getByRole("status", { name: "Resuming on the new account…" })).toBeInTheDocument();
+		expect(screen.queryByText(/Switching to/)).not.toBeInTheDocument();
+	});
+
+	it("keeps the agent on its previous account in the failure notice and offers no interface retry", () => {
+		render(
+			<SessionInterfaceTransitionNotice
+				transition={{ ...accountMove("failed"), errorCode: "DRAIN_DECISION_PENDING" }}
+				onDismiss={vi.fn()}
+				onSwitchWithInterrupt={vi.fn()}
+			/>,
+		);
+		expect(screen.getByText("Account switch failed")).toBeInTheDocument();
+		expect(screen.getByText("The agent stays on its previous account. You can retry the switch.")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Cancel request and switch" })).not.toBeInTheDocument();
+	});
+});

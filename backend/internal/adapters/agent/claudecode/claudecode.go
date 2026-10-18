@@ -240,6 +240,10 @@ func (p *Plugin) PreLaunch(ctx context.Context, cfg ports.LaunchConfig) error {
 	if cfg.WorkspacePath == "" {
 		return nil
 	}
+	// An account launch reads its own folder's config, not ~/.claude.json.
+	if dir := strings.TrimSpace(cfg.Env[claudeConfigDirEnv]); dir != "" {
+		return ensureWorkspaceTrusted(filepath.Join(dir, ".claude.json"), cfg.WorkspacePath)
+	}
 	cfgPath, err := claudeConfigPath()
 	if err != nil {
 		return err

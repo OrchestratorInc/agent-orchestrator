@@ -77,6 +77,9 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		id: "agents",
 		icon: BadgeCheck,
 		label: (t) => t("settings.agents"),
+		// In developer mode, subscription accounts live on each CLI's Harness
+		// Account tab instead.
+		visible: ({ developerMode }) => !developerMode,
 		render: (_t, titleHidden) => <CodexAccountsSection titleHidden={titleHidden} />,
 	},
 	{
