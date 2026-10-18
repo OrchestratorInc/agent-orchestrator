@@ -71,18 +71,18 @@ func (l *projectRootLocator) ProjectRoot(ctx context.Context, id domain.ProjectI
 	}
 }
 
-func (l *projectRootLocator) ProjectEnv(ctx context.Context, id domain.ProjectID) (map[string]string, error) {
+func (l *projectRootLocator) ProjectEnv(ctx context.Context, id domain.ProjectID) (map[string]string, []string, error) {
 	if l.projects == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	res, err := l.projects.Get(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if res.Project == nil || res.Project.Config == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
-	return res.Project.Config.Env, nil
+	return res.Project.Config.Env, res.Project.Config.EnvRemove, nil
 }
 
 // sessionGetter is the narrow slice of the session service the workspace

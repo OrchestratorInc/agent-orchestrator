@@ -161,7 +161,7 @@ type ActivityRecorder interface {
 // ManagedPreviewServer is the deterministic server lifecycle attached to a
 // worker. It is separate from static file rendering and browser automation.
 type ManagedPreviewServer interface {
-	Start(ctx context.Context, sessionID domain.SessionID, workspacePath, configurationName string, projectEnv map[string]string) (previewserver.Status, error)
+	Start(ctx context.Context, sessionID domain.SessionID, workspacePath, configurationName string, projectEnv map[string]string, projectEnvRemove []string) (previewserver.Status, error)
 	Stop(ctx context.Context, sessionID domain.SessionID) (previewserver.Status, error)
 	Status(sessionID domain.SessionID) previewserver.Status
 }
@@ -1486,6 +1486,7 @@ func (c *SessionsController) startPreviewServer(w http.ResponseWriter, r *http.R
 		return
 	}
 	var projectEnv map[string]string
+	var projectEnvRemove []string
 	if sess.ProjectID != "" && c.Projects != nil {
 		project, err := c.Projects.Get(r.Context(), sess.ProjectID)
 		if err != nil {
@@ -1494,6 +1495,7 @@ func (c *SessionsController) startPreviewServer(w http.ResponseWriter, r *http.R
 		}
 		if project.Project != nil && project.Project.Config != nil {
 			projectEnv = project.Project.Config.Env
+			projectEnvRemove = project.Project.Config.EnvRemove
 		}
 	}
 	previous := c.PreviewServer.Status(sessionID(r))
@@ -1503,6 +1505,7 @@ func (c *SessionsController) startPreviewServer(w http.ResponseWriter, r *http.R
 		sess.Metadata.WorkspacePath,
 		strings.TrimSpace(in.Configuration),
 		projectEnv,
+		projectEnvRemove,
 	)
 	if err != nil {
 		currentStatus := c.PreviewServer.Status(sessionID(r))

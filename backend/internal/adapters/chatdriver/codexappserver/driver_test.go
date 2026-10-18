@@ -983,7 +983,7 @@ func TestCodexProcessEnvPreservesDaemonPATH(t *testing.T) {
 		launcher := filepath.Join(t.TempDir(), "codex")
 		env := codexProcessEnv(context.Background(), launcher, map[string]string{
 			"PATH": dir + string(os.PathListSeparator) + os.Getenv("PATH"),
-		})
+		}, nil)
 		if got := strings.Split(envValue(env, "PATH"), string(os.PathListSeparator))[0]; got != dir {
 			t.Fatalf("first PATH directory = %q, want daemon directory %q", got, dir)
 		}
@@ -1250,7 +1250,7 @@ func TestEnvSliceIsSortedForReproducibleRelaunch(t *testing.T) {
 	// env". The intent was right and the mechanism never worked: the slice is only
 	// nil when the overlay is empty, which it never is in practice, so the provider
 	// was always launched with a replaced environment.
-	got := envSlice(map[string]string{"ZZ_LAST": "z", "AA_FIRST": "a"})
+	got := envSlice(map[string]string{"ZZ_LAST": "z", "AA_FIRST": "a"}, nil)
 	var previous string
 	for _, entry := range got {
 		if previous != "" && entry < previous {
@@ -1684,7 +1684,7 @@ func TestEnvSliceMergesOverTheDaemonEnvironment(t *testing.T) {
 	for _, entry := range envSlice(map[string]string{
 		"AO_SESSION": "p1-1",
 		"PATH":       "/pinned/bin:/usr/bin",
-	}) {
+	}, nil) {
 		key, value, _ := strings.Cut(entry, "=")
 		got[key] = value
 	}
@@ -1708,7 +1708,7 @@ func TestEnvSliceMergesOverTheDaemonEnvironment(t *testing.T) {
 // An empty overlay still has to hand the provider a usable environment.
 func TestEnvSliceWithNoOverlayStillInheritsTheEnvironment(t *testing.T) {
 	t.Setenv("HOME", "/Users/someone")
-	entries := envSlice(nil)
+	entries := envSlice(nil, nil)
 	var sawHome bool
 	for _, entry := range entries {
 		if entry == "HOME=/Users/someone" {

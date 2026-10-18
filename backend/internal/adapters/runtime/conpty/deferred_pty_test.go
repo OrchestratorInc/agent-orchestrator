@@ -220,7 +220,7 @@ func TestPtyHostArgsCarryHostOptions(t *testing.T) {
 		t.Fatalf("shell args = %q, want %q", shell, want)
 	}
 	got, rest := splitHostOptionArgs(shell[1:])
-	if got != opts || !slices.Equal(rest, shell[3:]) {
+	if !hostOptionsEqual(got, opts) || !slices.Equal(rest, shell[3:]) {
 		t.Fatalf("split shell = %+v, %q", got, rest)
 	}
 
@@ -231,7 +231,7 @@ func TestPtyHostArgsCarryHostOptions(t *testing.T) {
 		t.Fatalf("agent args = %q, want %q", agent, want)
 	}
 	got, rest = splitHostOptionArgs(agent[1:])
-	if got != (HostOptions{}) || !slices.Equal(rest, agent[1:]) {
+	if !hostOptionsEqual(got, HostOptions{}) || !slices.Equal(rest, agent[1:]) {
 		t.Fatalf("split agent = %+v, %q", got, rest)
 	}
 }

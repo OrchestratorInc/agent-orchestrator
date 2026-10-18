@@ -56,30 +56,43 @@ export function ProjectEnvironmentSettings({ projectId, onSaveState }: { project
 	});
 	if (query.isLoading) return <div className="project-settings-form" aria-busy="true" aria-label={t("settings.project.loading")}><section><div className="settings-grouped-rows flex w-full flex-col"><div className="settings-row-bar" /></div></section></div>;
 	if (query.isError || !query.data) return <div className="flex flex-col items-start gap-3 px-(--settings-row-inset)"><p role="alert" className="text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p><Button type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" onClick={() => void query.refetch()}>{t("settings.project.retry")}</Button></div>;
-	return <VariablesEditor key={projectId} projectId={projectId} initial={query.data.config?.env} onSaveState={onSaveState} onSaved={() => {
+	return <VariablesEditor key={projectId} projectId={projectId} initial={query.data.config?.env} initialRemove={query.data.config?.envRemove} onSaveState={onSaveState} onSaved={() => {
 		void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
 		void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 	}} />;
 }
 
-function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
+function VariablesEditor({ projectId, initial, initialRemove, onSaveState, onSaved }: {
 	projectId: string;
 	initial?: Record<string, string>;
+	initialRemove?: string[];
 	onSaveState?: (state: ProjectSettingsSaveState) => void;
 	onSaved: () => void;
 }) {
 	const { t } = useTranslation();
 	const attempted = useRef<string | null>(null);
 	const [rows, setRows] = useState(() => rowsFromEnv(initial));
+	const [removeRows, setRemoveRows] = useState<string[]>(() => initialRemove ?? []);
 	const [saved, setSaved] = useState(() => JSON.stringify(initial ?? {}));
+	const [savedRemove, setSavedRemove] = useState(() => JSON.stringify(initialRemove ?? []));
 	const [error, setError] = useState<string | null>(null);
 	const [savedAt, setSavedAt] = useState(false);
 	const [activeTab, setActiveTab] = useState<"variables" | "paste">("variables");
 	const [pasteText, setPasteText] = useState("");
 	const [importedCount, setImportedCount] = useState<number | null>(null);
 	const filled = rows.filter(({ name, value }) => name !== "" || value !== "");
-	const dirty = JSON.stringify(Object.fromEntries(filled.map(({ name, value }) => [name, value]))) !== saved;
-	// The env map this draft would save, or null while a name is invalid or duplicated.
+	const filledRemovals = removeRows.filter((name) => name !== "");
+	// A removal name follows the env grammar minus the reserved AO_ prefix; a
+	// configured removal can never strip a pin, but it also cannot spoof one.
+	const removalsDraft = (() => {
+		const names = new Set<string>();
+		for (const name of filledRemovals) {
+			const folded = name.toUpperCase();
+			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || folded.startsWith("AO_") || names.has(folded)) return null;
+			names.add(folded);
+		}
+		return filledRemovals;
+	})();
 	const envDraft = (() => {
 		const env: Record<string, string> = {};
 		const names = new Set<string>();
@@ -91,9 +104,11 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 		}
 		return env;
 	})();
-	const unsaveable = dirty && envDraft === null;
+	const dirty = JSON.stringify(Object.fromEntries(filled.map(({ name, value }) => [name, value]))) !== saved
+		|| JSON.stringify(filledRemovals) !== savedRemove;
+	const unsaveable = dirty && (envDraft === null || removalsDraft === null);
 	const mutation = useMutation({
-		mutationFn: async (env: Record<string, string>) => {
+		mutationFn: async ({ env, envRemove }: { env: Record<string, string>; envRemove: string[] }) => {
 			// Refresh before the whole-config PUT so this page cannot erase changes made elsewhere.
 			const current = await apiClient.GET("/api/v1/projects/{id}", { params: { path: { id: projectId } } });
 			if (current.error) throw new Error(apiErrorMessage(current.error));
@@ -101,13 +116,14 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 			const project = current.data.project as Project;
 			const { error: updateError } = await apiClient.PUT("/api/v1/projects/{id}", {
 				params: { path: { id: projectId } },
-				body: { displayName: project.name, config: { ...project.config, env } },
+				body: { displayName: project.name, config: { ...project.config, env, envRemove: envRemove.length ? envRemove : undefined } },
 			});
 			if (updateError) throw new Error(apiErrorMessage(updateError));
-			return env;
+			return { env, envRemove };
 		},
-		onSuccess: (env) => {
+		onSuccess: ({ env, envRemove }) => {
 			setSaved(JSON.stringify(env));
+			setSavedRemove(JSON.stringify(envRemove));
 			setSavedAt(true);
 			onSaved();
 		},
@@ -162,17 +178,21 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 			names.add(folded);
 			env[name] = row.value;
 		}
+		if (removalsDraft === null) {
+			reject(t("settings.project.envRemoveInvalid"));
+			return;
+		}
 		setError(null);
-		mutation.mutate(env);
+		mutation.mutate({ env, envRemove: removalsDraft });
 	};
 	// Autosave: a draft with valid, unique names saves shortly after the last edit.
 	useEffect(() => {
-		if (!dirty || mutation.isPending || activeTab !== "variables" || envDraft === null) return;
-		const key = JSON.stringify(envDraft);
+		if (!dirty || mutation.isPending || activeTab !== "variables" || envDraft === null || removalsDraft === null) return;
+		const key = JSON.stringify([envDraft, removalsDraft]);
 		if (attempted.current === key) return;
-		const timer = window.setTimeout(() => { attempted.current = key; mutation.mutate(envDraft); }, 700);
+		const timer = window.setTimeout(() => { attempted.current = key; mutation.mutate({ env: envDraft, envRemove: removalsDraft }); }, 700);
 		return () => window.clearTimeout(timer);
-	}, [activeTab, dirty, mutation, rows]); // eslint-disable-line react-hooks/exhaustive-deps
+	}, [activeTab, dirty, mutation, removeRows, rows]); // eslint-disable-line react-hooks/exhaustive-deps
 	return <form id="project-settings-form" className="project-settings-form flex min-h-full flex-col gap-(--size-settings-section-inner-gap)" onSubmit={(event) => { event.preventDefault(); save(); }}>
 		<p className="px-(--settings-row-inset) text-sm leading-5 text-settings-muted">{t("settings.project.environmentDescription")}</p>
 		{showEmpty ? <ProjectSettingsSection title={t("settings.project.environmentVariables")} titleHidden grouped>
@@ -203,6 +223,16 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 				<Button disabled={!pasteText.trim()} onClick={importPasted} size="sm" type="button">{t("settings.project.importVariables")}</Button>
 			</div>
 		</div></ProjectSettingsSection>}
+		<ProjectSettingsSection title={t("settings.project.environmentRemovals")} grouped>
+			<p className="px-(--settings-row-inset) text-sm leading-5 text-settings-muted">{t("settings.project.environmentRemovalsHint")}</p>
+			{removeRows.map((name, index) => <div className="settings-row-bar gap-2" key={index}>
+				<input aria-label={`${t("settings.project.envRemoveName")} ${index + 1}`} className="settings-field-control h-(--size-settings-action-height) min-w-0 flex-1 rounded-md! font-mono" placeholder={t("settings.project.envRemoveName")} value={name} onChange={(event) => { attempted.current = null; setRemoveRows(removeRows.map((item, i) => i === index ? event.target.value : item)); setError(null); setSavedAt(false); }} />
+				<Button aria-label={t("settings.project.removeRemovedVariable", { name: name || index + 1 })} className="size-7 shrink-0 p-0 text-settings-muted hover:text-destructive" onClick={() => { attempted.current = null; setRemoveRows(removeRows.filter((_, i) => i !== index)); setError(null); setSavedAt(false); }} size="icon-sm" title={t("settings.project.removeRemovedVariable", { name: name || index + 1 })} type="button" variant="ghost"><Trash2 className="size-3.5" aria-hidden="true" /></Button>
+			</div>)}
+			<div className="flex items-center justify-end gap-2">
+				<Button onClick={() => { attempted.current = null; setRemoveRows([...removeRows, ""]); setError(null); setSavedAt(false); }} type="button" variant="ghost"><Plus aria-hidden="true" />{t("settings.project.addRemovedVariable")}</Button>
+			</div>
+		</ProjectSettingsSection>
 		{importedCount !== null && <p role="status" className="px-(--settings-row-inset) text-xs text-settings-muted">{t("settings.project.envImported", { count: importedCount })}</p>}
 		{error && <p role="alert" className="px-(--settings-row-inset) text-xs text-error">{error}</p>}
 		{mutation.isError && <p role="alert" className="px-(--settings-row-inset) text-xs text-error">{mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")}</p>}

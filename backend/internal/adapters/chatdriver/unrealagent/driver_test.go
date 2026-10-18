@@ -97,7 +97,7 @@ func TestReplayFailureTerminatesFreshHost(t *testing.T) {
 		DataDir: t.TempDir(), WorkspacePath: t.TempDir(),
 	}
 
-	_, err := driver.connect(t.Context(), cfg, nil, nil, "scope")
+	_, err := driver.connect(t.Context(), cfg, nil, nil, nil, "scope")
 	if err == nil || !strings.Contains(err.Error(), "forced replay failure") {
 		t.Fatalf("connect error = %v, want replay failure", err)
 	}

@@ -275,11 +275,11 @@ func (f *fakeProjectRootLocator) ProjectRoot(_ context.Context, id domain.Projec
 	return f.roots[id], nil
 }
 
-func (f *fakeProjectRootLocator) ProjectEnv(_ context.Context, id domain.ProjectID) (map[string]string, error) {
+func (f *fakeProjectRootLocator) ProjectEnv(_ context.Context, id domain.ProjectID) (map[string]string, []string, error) {
 	if f.err != nil {
-		return nil, f.err
+		return nil, nil, f.err
 	}
-	return f.envs[id], nil
+	return f.envs[id], nil, nil
 }
 
 // fakeSessionWorkspace is one entry in fakeSessionWorkspaceLocator: a session's

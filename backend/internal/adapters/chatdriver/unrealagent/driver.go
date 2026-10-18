@@ -107,7 +107,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath,
 		Model: strings.TrimSpace(cfg.Model), Effort: normalizeEffort(cfg.Effort),
 		SystemPrompt: cfg.SystemPrompt,
-	}, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID)
+	}, cfg.Env, cfg.EnvRemove, cfg.PrepareEnv, cfg.ProviderScopeID)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +134,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath,
 		Model: strings.TrimSpace(cfg.Model), Effort: normalizeEffort(cfg.Effort),
 		SystemPrompt: cfg.SystemPrompt,
-	}, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID)
+	}, cfg.Env, nil, cfg.PrepareEnv, cfg.ProviderScopeID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, err)
 	}
@@ -189,6 +189,7 @@ func (d *Driver) connect(
 	ctx context.Context,
 	cfg providerConfig,
 	env map[string]string,
+	envRemove []string,
 	prepareEnv func(context.Context) (map[string]string, error),
 	providerScopeID string,
 ) (*conversation, error) {
@@ -215,7 +216,7 @@ func (d *Driver) connect(
 				return persistenthost.PreparedProvider{}, err
 			}
 			return persistenthost.PreparedProvider{
-				Env:  processenv.Merge(launchEnv),
+				Env:  processenv.Merge(launchEnv, envRemove),
 				Argv: []string{executable, "unreal-provider", configPath},
 			}, nil
 		},

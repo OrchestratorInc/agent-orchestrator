@@ -293,6 +293,10 @@ type ChatStartConfig struct {
 	// shell commands the agent runs. AO passes a HookPATH-augmented copy so the
 	// agent can invoke `ao` — that is how an orchestrator delegates.
 	Env map[string]string
+	// EnvRemove names variables the driver must ensure absent from the driver
+	// process environment, including names inherited from the daemon's own
+	// environ. Drivers that cannot unset ignore it.
+	EnvRemove []string
 	// PrepareEnv rotates launch-only credentials. Persistent drivers defer it
 	// until they know a new provider process is required; live adoption must keep
 	// the verifier for the bearer already held by the surviving process.

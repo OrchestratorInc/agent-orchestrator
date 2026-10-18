@@ -48,12 +48,46 @@ func (s *scriptedBrowserCapabilities) Issue(id domain.SessionID) (string, string
 	return issue.token, issue.verifier, issue.err
 }
 
+func TestSpawnEnvRemovesProjectVars(t *testing.T) {
+	env := spawnEnv("mer-1", "mer", "issue-9", "/data", map[string]string{
+		"STALE_TOKEN": "leak",
+		"KEEP_ME":     "yes",
+	}, []string{"STALE_TOKEN"})
+	if _, ok := env["STALE_TOKEN"]; ok {
+		t.Fatal("configured removal did not strip STALE_TOKEN")
+	}
+	if env["KEEP_ME"] != "yes" {
+		t.Fatalf("KEEP_ME = %q, want untouched project variable", env["KEEP_ME"])
+	}
+}
+
+func TestSpawnEnvRemovalCannotStripProtectedPins(t *testing.T) {
+	env := spawnEnv("mer-1", "mer", "issue-9", "/data", map[string]string{}, []string{
+		EnvSessionID, EnvProjectID, EnvDataDir,
+	})
+	if env[EnvSessionID] != "mer-1" || env[EnvProjectID] != "mer" || env[EnvDataDir] != "/data" {
+		t.Fatalf("protected pins stripped by envRemove: %v", env)
+	}
+}
+
+func TestRuntimeEnvRemovalCannotStripPATHPin(t *testing.T) {
+	manager := &Manager{
+		dataDir:    "/data",
+		executable: func() (string, error) { return filepath.Join("/opt", "aod", "ao"), nil },
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	env := manager.runtimeEnv("mer-1", "mer", "", nil, []string{"PATH"})
+	if env["PATH"] == "" {
+		t.Fatal("PATH pin stripped by envRemove")
+	}
+}
+
 func TestSpawnEnvProjectVarsCannotOverrideInternal(t *testing.T) {
 	env := spawnEnv("mer-1", "mer", "issue-9", "/data", map[string]string{
 		"FOO":        "bar",
 		EnvSessionID: "hacked", // a project must not override AO-internal vars
 		EnvProjectID: "hacked",
-	})
+	}, nil)
 	if env["FOO"] != "bar" {
 		t.Fatalf("FOO = %q, want bar", env["FOO"])
 	}
@@ -69,7 +103,7 @@ func TestSpawnEnvWindowsRemovesCaseVariantsOfProtectedVariables(t *testing.T) {
 	env := spawnEnvForOS("mer-1", "mer", "issue-9", `C:\ao`, map[string]string{
 		"ao_session_id": "hacked",
 		"buildMode":     "production",
-	}, true)
+	}, nil, true)
 	if _, ok := env["ao_session_id"]; ok {
 		t.Fatal("case variant of protected AO_SESSION_ID survived")
 	}
@@ -85,7 +119,7 @@ func TestRuntimeEnvInjectsBrowserCapability(t *testing.T) {
 		executable:          func() (string, error) { return filepath.Join("/opt", "aod", "ao"), nil },
 		logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
-	env, verifier, err := manager.launchRuntimeEnv("mer-1", "mer", "", nil)
+	env, verifier, err := manager.launchRuntimeEnv("mer-1", "mer", "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +140,7 @@ func TestRuntimeEnvClearsDaemonBrowserRuntimeSecrets(t *testing.T) {
 	env := manager.runtimeEnv("mer-1", "mer", "", map[string]string{
 		EnvBrowserRuntimeToken:      "runtime-secret",
 		EnvBrowserRuntimeTokenStdin: "1",
-	})
+	}, nil)
 	if env[EnvBrowserRuntimeToken] != "" || env[EnvBrowserRuntimeTokenStdin] != "" {
 		t.Fatalf("daemon browser runtime credentials leaked to worker: token=%q stdin=%q", env[EnvBrowserRuntimeToken], env[EnvBrowserRuntimeTokenStdin])
 	}
@@ -134,7 +168,7 @@ func TestRuntimeEnvWindowsRemovesCaseVariantsOfProtectedVariables(t *testing.T) 
 		"ao_browser_runtime_token":       "runtime-secret",
 		"ao_browser_runtime_token_stdin": "1",
 		"buildMode":                      "production",
-	})
+	}, nil)
 
 	for _, key := range []string{
 		"Path",
@@ -175,7 +209,7 @@ func TestRuntimeEnvPinsHooksToDaemonRunFile(t *testing.T) {
 	}
 	env := manager.runtimeEnv("mer-1", "mer", "", map[string]string{
 		"AO_RUN_FILE": "/project/cannot-redirect-hooks.json",
-	})
+	}, nil)
 	if got, want := env["AO_RUN_FILE"], daemonRunFile; got != want {
 		t.Fatalf("AO_RUN_FILE = %q, want daemon run-file %q", got, want)
 	}

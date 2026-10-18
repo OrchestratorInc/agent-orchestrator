@@ -1380,7 +1380,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w: no agent adapter for harness %q", id, ErrUnknownHarness, cfg.Harness)
 	}
 	var env map[string]string
-	rec, env, err = m.prepareWorkerLaunchEnv(ctx, rec, project.Config.Env)
+	rec, env, err = m.prepareWorkerLaunchEnv(ctx, rec, project.Config.Env, project.Config.EnvRemove)
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnBrowser, err)
@@ -1466,6 +1466,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		WorkspacePath: ws.Path,
 		Argv:          argv,
 		Env:           env,
+		EnvRemove:     project.Config.EnvRemove,
 	})
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
@@ -3413,7 +3414,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		agentConfig.Permissions = rec.Metadata.Permissions
 	}
 	var env map[string]string
-	rec, env, err = m.prepareWorkerLaunchEnv(ctx, rec, project.Config.Env)
+	rec, env, err = m.prepareWorkerLaunchEnv(ctx, rec, project.Config.Env, project.Config.EnvRemove)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: browser capability: %w", operation, rec.ID, err)
 	}
@@ -3503,6 +3504,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		WorkspacePath: ws.Path,
 		Argv:          argv,
 		Env:           env,
+		EnvRemove:     project.Config.EnvRemove,
 	}
 	var handle ports.RuntimeHandle
 	if restartHandle == nil {
@@ -5848,12 +5850,16 @@ func workspaceRepoList(repos []domain.WorkspaceRepoRecord) string {
 // AO_SESSION_ID and friends).
 var envKeysCaseInsensitive = runtime.GOOS == "windows"
 
-func spawnEnv(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, dataDir string, projectEnv map[string]string) map[string]string {
-	return spawnEnvForOS(id, project, issue, dataDir, projectEnv, envKeysCaseInsensitive)
+func spawnEnv(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, dataDir string, projectEnv map[string]string, envRemove []string) map[string]string {
+	return spawnEnvForOS(id, project, issue, dataDir, projectEnv, envRemove, envKeysCaseInsensitive)
 }
 
-func spawnEnvForOS(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, dataDir string, projectEnv map[string]string, caseInsensitive bool) map[string]string {
+func spawnEnvForOS(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, dataDir string, projectEnv map[string]string, envRemove []string, caseInsensitive bool) map[string]string {
 	env := agentlaunch.MergeEnv(projectEnv, nil)
+	// Configured removals run before the protected setters below: a project can
+	// strip inherited values from its workers, but the AO_* pins and the PATH
+	// pin applied afterwards always win.
+	agentlaunch.ApplyRemovals(env, envRemove)
 	setProtected := func(key, value string) {
 		if caseInsensitive {
 			for existing := range env {
@@ -5878,9 +5884,9 @@ func spawnEnvForOS(id domain.SessionID, project domain.ProjectID, issue domain.I
 // command, which fails every callback and silently kills activity tracking).
 // When the pin cannot be applied the inherited PATH is kept and a warning is
 // logged so the degradation isn't silent.
-func (m *Manager) runtimeEnv(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string) map[string]string {
+func (m *Manager) runtimeEnv(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string, envRemove []string) map[string]string {
 	caseInsensitive := envKeysCaseInsensitive
-	env := spawnEnvForOS(id, project, issue, m.dataDir, projectEnv, caseInsensitive)
+	env := spawnEnvForOS(id, project, issue, m.dataDir, projectEnv, envRemove, caseInsensitive)
 	// Project configuration must never redirect AO-owned hook callbacks to a
 	// different daemon. New receives the resolved absolute path in production;
 	// the environment fallback keeps focused embedders and tests compatible.
@@ -5952,8 +5958,8 @@ func pinRuntimePermissionEnv(env map[string]string, mode domain.PermissionMode) 
 	env[EnvPermissionMode] = string(ports.NormalizePermissionMode(mode))
 }
 
-func (m *Manager) launchRuntimeEnv(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string) (map[string]string, string, error) {
-	env := m.runtimeEnv(id, project, issue, projectEnv)
+func (m *Manager) launchRuntimeEnv(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string, envRemove []string) (map[string]string, string, error) {
+	env := m.runtimeEnv(id, project, issue, projectEnv, envRemove)
 	if m.browserCapabilities == nil {
 		return env, "", nil
 	}
@@ -5975,8 +5981,9 @@ func (m *Manager) prepareWorkerLaunchEnv(
 	ctx context.Context,
 	rec domain.SessionRecord,
 	projectEnv map[string]string,
+	envRemove []string,
 ) (domain.SessionRecord, map[string]string, error) {
-	env, verifier, err := m.launchRuntimeEnv(rec.ID, rec.ProjectID, rec.IssueID, projectEnv)
+	env, verifier, err := m.launchRuntimeEnv(rec.ID, rec.ProjectID, rec.IssueID, projectEnv, envRemove)
 	if err != nil {
 		return rec, nil, err
 	}
@@ -5995,8 +6002,9 @@ func (m *Manager) prepareChatControllerEnv(
 	rec domain.SessionRecord,
 	projectEnv map[string]string,
 	expected domain.SessionControllerOwner,
+	envRemove []string,
 ) (domain.SessionRecord, map[string]string, error) {
-	env, verifier, err := m.launchRuntimeEnv(rec.ID, rec.ProjectID, rec.IssueID, projectEnv)
+	env, verifier, err := m.launchRuntimeEnv(rec.ID, rec.ProjectID, rec.IssueID, projectEnv, envRemove)
 	if err != nil {
 		return rec, nil, err
 	}
@@ -6271,9 +6279,9 @@ func (m *Manager) cleanupAgentWorkspace(ctx context.Context, rec domain.SessionR
 	if !cleansWorkspace {
 		return
 	}
-	env := spawnEnv(rec.ID, rec.ProjectID, rec.IssueID, m.dataDir, nil)
+	env := spawnEnv(rec.ID, rec.ProjectID, rec.IssueID, m.dataDir, nil, nil)
 	if project, err := m.loadProject(ctx, rec.ProjectID); err == nil {
-		env = m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
+		env = m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, project.Config.EnvRemove)
 	} else {
 		m.logger.Warn("workspace cleanup: project env unavailable; agent cleanup using AO env only",
 			"sessionID", rec.ID, "projectID", rec.ProjectID, "error", err)

@@ -102,7 +102,7 @@ func New(plugin codexPlugin, log *slog.Logger) *Driver {
 // conversation without creating a provider thread.
 func DiscoverModels(ctx context.Context, binary, workdir string, env map[string]string) ([]ports.ChatModel, error) {
 	driver := New(fixedCodexPlugin(binary), slog.New(slog.DiscardHandler))
-	conv, err := driver.connect(ctx, workdir, env, "")
+	conv, err := driver.connect(ctx, workdir, env, nil, "")
 	if err != nil {
 		return nil, err
 	}
@@ -202,7 +202,7 @@ func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
-	conv, err := d.connect(probeCtx, workdir, nil, "")
+	conv, err := d.connect(probeCtx, workdir, nil, nil, "")
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +228,7 @@ func (d *Driver) DiscoverModels(ctx context.Context, workdir string, env map[str
 			workdir = os.TempDir()
 		}
 	}
-	conv, err := d.connect(ctx, workdir, env, "")
+	conv, err := d.connect(ctx, workdir, env, nil, "")
 	if err != nil {
 		return nil, err
 	}
@@ -271,7 +271,7 @@ func (v codexVersion) String() string {
 
 func installedCodexVersion(ctx context.Context, bin string) (string, error) {
 	cmd := aoprocess.CommandContext(ctx, bin, "--version")
-	cmd.Env = codexProcessEnv(ctx, bin, nil)
+	cmd.Env = codexProcessEnv(ctx, bin, nil, nil)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", err
@@ -291,7 +291,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	}
 
 	conv, reconnected, err := d.connectSession(
-		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, false,
+		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, nil, cfg.PrepareEnv, cfg.ProviderScopeID, false,
 	)
 	if err != nil {
 		return nil, err
@@ -371,7 +371,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	}
 
 	conv, reconnected, err := d.connectSession(
-		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, cfg.ReconnectOnly,
+		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, nil, cfg.PrepareEnv, cfg.ProviderScopeID, cfg.ReconnectOnly,
 	)
 	if err != nil {
 		return nil, err
@@ -472,13 +472,13 @@ func threadConfig(effort string, servers []ports.ChatMCPServerConfig) map[string
 }
 
 // connect spawns app-server and completes the initialize handshake.
-func (d *Driver) connect(ctx context.Context, workdir string, env map[string]string, providerScopeID string) (*conversation, error) {
+func (d *Driver) connect(ctx context.Context, workdir string, env map[string]string, envRemove []string, providerScopeID string) (*conversation, error) {
 	bin, err := d.plugin.ResolveBinary(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 	}
 
-	proc, err := d.spawn(ctx, bin, workdir, codexProcessEnv(ctx, bin, env))
+	proc, err := d.spawn(ctx, bin, workdir, codexProcessEnv(ctx, bin, env, envRemove))
 	if err != nil {
 		return nil, fmt.Errorf("%w: launch app-server: %w", ports.ErrChatDriverUnavailable, err)
 	}
@@ -496,6 +496,7 @@ func (d *Driver) connectSession(
 	sessionID domain.SessionID,
 	dataDir, workdir string,
 	env map[string]string,
+	envRemove []string,
 	prepareEnv func(context.Context) (map[string]string, error),
 	providerScopeID string,
 	reconnectOnly bool,
@@ -513,7 +514,7 @@ func (d *Driver) connectSession(
 				return nil, false, err
 			}
 		}
-		conv, err := d.connect(ctx, workdir, env, providerScopeID)
+		conv, err := d.connect(ctx, workdir, env, envRemove, providerScopeID)
 		return conv, false, err
 	}
 	var bin string
@@ -529,7 +530,7 @@ func (d *Driver) connectSession(
 		ReconnectOnly: reconnectOnly,
 		DataDir:       dataDir,
 		Workdir:       workdir,
-		Env:           envSlice(env),
+		Env:           envSlice(env, envRemove),
 		Argv:          []string{bin, "app-server"},
 	}
 	if prepareEnv != nil {
@@ -539,7 +540,7 @@ func (d *Driver) connectSession(
 				return persistenthost.PreparedProvider{}, prepareErr
 			}
 			return persistenthost.PreparedProvider{
-				Env: envSlice(preparedEnv), Argv: []string{bin, "app-server"},
+				Env: envSlice(preparedEnv, envRemove), Argv: []string{bin, "app-server"},
 			}, nil
 		}
 	}
@@ -719,8 +720,8 @@ func spawnAppServer(ctx context.Context, bin, workdir string, env []string) (*pr
 // no SSH agent means `git push` over SSH fails, no HOME means global git config
 // and every toolchain cache is missing. Found while writing the Claude driver,
 // where the same shape failed outright with "Not logged in".
-func envSlice(env map[string]string) []string {
-	return processenv.Merge(env)
+func envSlice(env map[string]string, envRemove []string) []string {
+	return processenv.Merge(env, envRemove)
 }
 
 // codexProcessEnv applies the same executable-aware PATH augmentation as the
@@ -728,7 +729,7 @@ func envSlice(env map[string]string) []string {
 // resolved npm launcher can be absolute and still depend on `#!/usr/bin/env
 // node`; Finder-launched daemons commonly resolve the launcher from inventory
 // while omitting the Node version manager from PATH.
-func codexProcessEnv(ctx context.Context, bin string, env map[string]string) []string {
+func codexProcessEnv(ctx context.Context, bin string, env map[string]string, envRemove []string) []string {
 	overlay := make(map[string]string, len(env)+1)
 	for key, value := range env {
 		overlay[key] = value
@@ -737,7 +738,7 @@ func codexProcessEnv(ctx context.Context, bin string, env map[string]string) []s
 		overlay["PATH"] = os.Getenv("PATH")
 	}
 	agentlaunch.AugmentRuntimePATHForLaunchBinary(ctx, overlay, []string{bin}, exec.LookPath, agentlaunch.PinnedDir(os.Executable, overlay["AO_DATA_DIR"]))
-	return envSlice(overlay)
+	return envSlice(overlay, envRemove)
 }
 
 // ForkIntoHost starts an inclusive native fork in an independent provider host.
@@ -748,7 +749,7 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 	if !filepath.IsAbs(cfg.WorkspacePath) {
 		return nil, fmt.Errorf("workspace path must be absolute, got %q", cfg.WorkspacePath)
 	}
-	conv, reconnected, err := d.connectSession(ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, false)
+	conv, reconnected, err := d.connectSession(ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.EnvRemove, cfg.PrepareEnv, cfg.ProviderScopeID, false)
 	if err != nil {
 		return nil, err
 	}

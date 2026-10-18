@@ -42,6 +42,7 @@ type LaunchConfig struct {
 	DataDir         string
 	WorkspacePath   string
 	Env             map[string]string
+	EnvRemove       []string
 	Model           string
 	Permissions     ports.PermissionMode
 	SystemPrompt    string
@@ -246,8 +247,9 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	}
 	launchCfg := LaunchConfig{
 		SessionID: cfg.SessionID, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath,
-		Env:   cfg.Env,
-		Model: cfg.Model, Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
+		Env:       cfg.Env,
+		EnvRemove: cfg.EnvRemove,
+		Model:     cfg.Model, Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
 		ProviderScopeID: cfg.ProviderScopeID,
 	}
 	connectStarted := time.Now()
@@ -735,7 +737,7 @@ func (d *Driver) connectProcess(
 				return persistenthost.PreparedProvider{}, fmt.Errorf("%w: ACP launch command is empty", ports.ErrChatDriverUnavailable)
 			}
 			return persistenthost.PreparedProvider{
-				Env:  processenv.Merge(launch.Env),
+				Env:  processenv.Merge(launch.Env, cfg.EnvRemove),
 				Argv: append([]string{launch.Command}, launch.Args...),
 			}, nil
 		},

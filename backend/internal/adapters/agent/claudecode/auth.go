@@ -413,7 +413,7 @@ var claudeAuthCommand = func(ctx context.Context, binary, workingDir string, env
 	if strings.TrimSpace(workingDir) != "" {
 		cmd.Dir = workingDir
 	}
-	cmd.Env = processenv.Merge(env)
+	cmd.Env = processenv.Merge(env, nil)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

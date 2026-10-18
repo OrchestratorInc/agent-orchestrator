@@ -71,3 +71,19 @@ it("autosaves a valid draft without a save button", async () => {
 	await waitFor(() => expect(putMock).toHaveBeenCalledOnce(), { timeout: 3000 });
 	expect(putMock.mock.calls[0][1].body.config.env).toEqual({ EXISTING: "auto" });
 });
+
+it("saves removed variables alongside the environment and rejects reserved names", async () => {
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+	render(<QueryClientProvider client={client}><ProjectEnvironmentSettings projectId="p" /></QueryClientProvider>);
+	await screen.findByLabelText("Value 1");
+	await userEvent.click(screen.getByRole("button", { name: "Add removed variable" }));
+	await userEvent.type(screen.getByLabelText("Variable name 1"), "HTTP_PROXY");
+	fireEvent.submit(document.getElementById("project-settings-form")!);
+	await waitFor(() => expect(putMock).toHaveBeenCalledOnce());
+	expect(putMock.mock.calls[0][1].body.config.envRemove).toEqual(["HTTP_PROXY"]);
+	expect(putMock.mock.calls[0][1].body.config.env).toEqual({ EXISTING: "old" });
+	await userEvent.click(screen.getByRole("button", { name: "Add removed variable" }));
+	await userEvent.type(screen.getByLabelText("Variable name 2"), "AO_SESSION_ID");
+	fireEvent.submit(document.getElementById("project-settings-form")!);
+	expect(screen.getByRole("alert")).toHaveTextContent("cannot start with AO_");
+});

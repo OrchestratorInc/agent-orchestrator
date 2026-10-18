@@ -64,6 +64,66 @@ func TestRuntimeLaunchEnvironmentAcrossSpawnRestoreAndSwitch(t *testing.T) {
 	})
 }
 
+// TestEnvRemoveAcrossSpawnRestoreAndSwitch pins the whole envRemove pipeline:
+// the project-configured removal list reaches the runtime config on every
+// launch path, strips the named key from the merged launch environment, and
+// leaves project env keys the list does not name untouched.
+func TestEnvRemoveAcrossSpawnRestoreAndSwitch(t *testing.T) {
+	config := testRoleAgents()
+	config.Env = map[string]string{"STALE": "leak", "FRESH": "1"}
+	config.EnvRemove = []string{"STALE"}
+	for _, operation := range []string{"spawn", "restore"} {
+		t.Run(operation, func(t *testing.T) {
+			store := newFakeStore()
+			store.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: config}
+			runtime := &fakeRuntime{}
+			dataDir := t.TempDir()
+			m := New(Deps{Runtime: runtime, Agents: singleAgent{agent: generationEnvAgent{}}, Workspace: &fakeWorkspace{}, Store: store, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: store}, DataDir: dataDir,
+				LookPath: func(string) (string, error) { return "/bin/true", nil }, NewLaunchID: func() string { return "launch-new" }, Executable: func() (string, error) { return "/opt/ao", nil }})
+			var id domain.SessionID
+			if operation == "spawn" {
+				rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+				if err != nil {
+					t.Fatal(err)
+				}
+				id = rec.ID
+			} else {
+				seedTerminal(store, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "branch", AgentSessionID: "native-1", RuntimeLaunchID: "launch-old"})
+				result, err := m.RestoreWithMode(ctx, "mer-1")
+				if err != nil {
+					t.Fatal(err)
+				}
+				id = result.Session.ID
+			}
+			if _, leaked := runtime.lastCfg.Env["STALE"]; leaked {
+				t.Fatalf("%s: removed key STALE survived in launch env: %v", operation, runtime.lastCfg.Env)
+			}
+			if runtime.lastCfg.Env["FRESH"] != "1" {
+				t.Fatalf("%s: FRESH = %q, want untouched project env", operation, runtime.lastCfg.Env["FRESH"])
+			}
+			if got, want := runtime.lastCfg.EnvRemove, []string{"STALE"}; len(got) != 1 || got[0] != want[0] {
+				t.Fatalf("%s: EnvRemove = %v, want %v", operation, got, want)
+			}
+			_ = id
+		})
+	}
+	t.Run("switch", func(t *testing.T) {
+		runtime := &fakeRestartRuntime{fakeRuntime: &fakeRuntime{}}
+		m, store, _ := newSwitchTestManager(t, runtime)
+		project := store.projects["proj"]
+		project.Config.EnvRemove = []string{"STALE"}
+		store.projects["proj"] = project
+		agents := m.agents.(switchTestAgents)
+		agents[domain.HarnessCodex] = switchGenerationEnvAgent{agents[domain.HarnessCodex].(*switchTestAgent)}
+		if _, err := switchAgentSynchronously(ctx, m, "proj-1", SwitchAgentConfig{TargetHarness: domain.HarnessCodex, IdempotencyKey: "env-remove"}); err != nil {
+			t.Fatal(err)
+		}
+		if len(runtime.lastCfg.EnvRemove) != 1 || runtime.lastCfg.EnvRemove[0] != "STALE" {
+			t.Fatalf("switch EnvRemove = %v, want the project-configured removal", runtime.lastCfg.EnvRemove)
+		}
+	})
+}
+
 func TestRuntimeLaunchEnvironmentAugmentedAfterGeneration(t *testing.T) {
 	for _, force := range []bool{false, true} {
 		m := New(Deps{DataDir: "/ao-data", Executable: func() (string, error) { return "/ao", nil }})
