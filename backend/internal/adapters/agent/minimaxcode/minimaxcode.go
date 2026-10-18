@@ -44,6 +44,7 @@ var _ ports.Agent = (*Plugin)(nil)
 var _ ports.AgentRuntimeLaunchEnv = (*Plugin)(nil)
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 var _ ports.ContinuousTerminalActivityDetector = (*Plugin)(nil)
+var _ ports.TerminalActivityOptionsProvider = (*Plugin)(nil)
 var _ ports.EmptyComposerDetector = (*Plugin)(nil)
 
 // Manifest identifies the terminal-only MiniMax harness.

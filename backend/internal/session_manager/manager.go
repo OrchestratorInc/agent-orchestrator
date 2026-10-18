@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
@@ -1004,6 +1005,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// Resolve the effective agent config (project base + role override + spawn
 	// override) and validate the model before any durable state is created. A
 	// model the harness cannot honor should not leave a seed row behind.
+	explicitModel := cfg.AgentConfig.Model != ""
 	agentConfig := applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, project.Config), cfg.AgentConfig)
 	if err := validateSpawnModel(cfg.Harness, agentConfig.Model); err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: %s", ErrUnsupportedModel, err.Error())
@@ -1385,6 +1387,23 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnBrowser, err)
 	}
+	if cfg.Harness == domain.HarnessMemcode && agentConfig.Model != "" {
+		// The workspace may introduce a native endpoint, so resolve this after
+		// provisioning but before hooks or launch validation see the model.
+		customEndpoint, modelErr := memcode.UsesCustomEndpoint(ctx, ws.Path, env)
+		if modelErr == nil && customEndpoint {
+			if explicitModel {
+				modelErr = fmt.Errorf("%w: memcode custom endpoints require native model selection", ErrUnsupportedModel)
+			} else {
+				agentConfig.Model = ""
+				adapterConfig.Model = ""
+			}
+		}
+		if modelErr != nil {
+			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
+			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPrepare, modelErr)
+		}
+	}
 	m.augmentAgentRuntimeEnv(agent, env)
 	pinRuntimePermissionEnv(env, adapterConfig.Permissions)
 	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok {
@@ -1511,7 +1530,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		m.markSpawnFailedTerminatedAfterFailure(ctx, id, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnCommit, err)
 	}
-	if delivery == ports.PromptDeliveryAfterStart && afterStartPrompt != "" {
+	if delivery == ports.PromptDeliveryAfterStart {
 		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, id, afterStartPrompt); err != nil {
 			runtimeDestroyed := m.destroySpawnRuntimeAfterFailure(ctx, handle)
 			workspaceDestroyed := m.rollbackPreparedSpawnWorkspaceAfterFailure(ctx, rec, ws, workspaceProject, runtimeDestroyed)
@@ -2254,6 +2273,12 @@ func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, 
 	}
 	if override.Permissions != "" {
 		merged.Permissions = override.Permissions
+	}
+	// A project may carry a model from its previous worker harness. Memcode
+	// accepts only its native catalog; leave an incompatible inherited choice
+	// to the TUI instead of making every launch and restore fail.
+	if harness == domain.HarnessMemcode && validateSpawnModel(harness, merged.Model) != nil {
+		merged.Model = ""
 	}
 	return merged
 }
@@ -3417,6 +3442,15 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: browser capability: %w", operation, rec.ID, err)
 	}
+	if rec.Harness == domain.HarnessMemcode && agentConfig.Model != "" {
+		customEndpoint, err := memcode.UsesCustomEndpoint(ctx, ws.Path, env)
+		if err != nil {
+			return RestoreResult{}, fmt.Errorf("%s %s: model configuration: %w", operation, rec.ID, err)
+		}
+		if customEndpoint || validateSpawnModel(rec.Harness, agentConfig.Model) != nil {
+			agentConfig.Model = ""
+		}
+	}
 	m.augmentAgentRuntimeEnv(agent, env)
 	pinRuntimePermissionEnv(env, agentConfig.Permissions)
 	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok {
@@ -3432,9 +3466,30 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
 	}
 	var argv []string
+	var initialization ports.NativeRestoreInitialization
 	var delivery ports.PromptDeliveryStrategy
 	var mode RestoreMode
-	if forceFresh {
+	if restorer, ok := agent.(ports.AgentInteractiveNativeRestorer); ok && !forceFresh {
+		identityUnverified := rec.Metadata.RuntimeLaunchID != "" && rec.Metadata.AgentSessionIDLaunchID != rec.Metadata.RuntimeLaunchID
+		if identityUnverified && requireNativeHistory {
+			err = ErrNotResumable
+		} else if identityUnverified {
+			argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
+				systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true)
+		} else {
+			initialization, err = restorer.PrepareNativeRestore(ctx, ports.RestoreConfig{Session: ports.SessionRef{ID: string(rec.ID), WorkspacePath: ws.Path, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID}}, DataDir: m.dataDir, Kind: rec.Kind, Config: agentConfig, Permissions: agentConfig.Permissions, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile})
+			if err == nil {
+				argv = initialization.Argv()
+				for key, value := range initialization.LaunchEnv() {
+					env[key] = value
+				}
+				delivery, mode = ports.PromptDeliveryInCommand, RestoreModeNative
+			} else if errors.Is(err, ports.ErrNativeHistoryUnavailable) && !requireNativeHistory {
+				argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
+					systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true)
+			}
+		}
+	} else if forceFresh {
 		argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
 			systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true)
 	} else {
@@ -3534,7 +3589,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	// still require current-generation identity proof from their hooks.
 	bindNativeIdentity := mode == RestoreModeNative &&
 		(rec.Harness == domain.HarnessCodex || rec.Harness == domain.HarnessClaudeCode || rec.Harness == domain.HarnessAgy)
-	if (bindNativeIdentity || (requireNativeHistory && !forceFresh)) && strings.TrimSpace(metadata.AgentSessionID) != "" {
+	if initialization == nil && (bindNativeIdentity || (requireNativeHistory && !forceFresh)) && strings.TrimSpace(metadata.AgentSessionID) != "" {
 		metadata.AgentSessionIDLaunchID = launchID
 	}
 	if err := m.lcm.MarkSpawned(ctx, rec.ID, metadata); err != nil {
@@ -3542,7 +3597,18 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, fmt.Errorf("%s %s: completed: %w", operation, rec.ID, err)
 	}
-	if delivery == ports.PromptDeliveryAfterStart && afterStartPrompt != "" {
+	if initialization != nil {
+		if err := m.initializeNativeRestore(ctx, rec, handle, launchID, initialization); err != nil {
+			cleanupCtx, cancel := spawnRollbackContext(ctx)
+			cleanupErr := m.rollbackNativeInitialization(cleanupCtx, rec, handle, launchID)
+			cancel()
+			return RestoreResult{}, fmt.Errorf("%s %s: native initialization: %w", operation, rec.ID, errors.Join(err, cleanupErr))
+		}
+	}
+	if delivery == ports.PromptDeliveryAfterStart || initialization != nil {
+		if mode == RestoreModeNative {
+			afterStartPrompt = "" // restore native state without replaying a user turn
+		}
 		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, rec.ID, afterStartPrompt); err != nil {
 			m.destroySpawnRuntimeAfterFailure(ctx, handle)
 			cleanupCtx, cancel := spawnRollbackContext(ctx)
@@ -6291,9 +6357,63 @@ func (m *Manager) cleanupAgentWorkspace(ctx context.Context, rec domain.SessionR
 }
 
 func (m *Manager) deliverAfterStartPrompt(ctx context.Context, agent ports.Agent, cfg ports.LaunchConfig, handle ports.RuntimeHandle, id domain.SessionID, prompt string) error {
+	selector, selects := agent.(ports.AgentAfterStartCommand)
+	command := ""
+	if selects {
+		var err error
+		command, err = selector.AfterStartCommand(ctx, cfg)
+		if err != nil {
+			return err
+		}
+	}
+	if prompt == "" && command == "" {
+		return nil
+	}
 	if err := m.waitForPromptReadiness(ctx, agent, cfg, handle); err != nil {
 		return err
 	}
+	if command != "" {
+		if err := m.deliverStartedInput(ctx, id, command); err != nil {
+			return err
+		}
+		if err := m.waitForAfterStartCommand(ctx, selector, cfg, handle); err != nil {
+			return err
+		}
+	}
+	if prompt == "" {
+		return nil
+	}
+	return m.deliverStartedInput(ctx, id, prompt)
+}
+
+func (m *Manager) waitForAfterStartCommand(ctx context.Context, selector ports.AgentAfterStartCommand, cfg ports.LaunchConfig, handle ports.RuntimeHandle) error {
+	rendered, ok := m.runtime.(ports.StyledTerminalOutputReader)
+	if !ok {
+		return errors.New("native startup command requires current rendered terminal output")
+	}
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		output, err := rendered.GetStyledOutput(ctx, handle, 100)
+		if err != nil {
+			return fmt.Errorf("read native startup command output: %w", err)
+		}
+		if selector.AfterStartCommandApplied(cfg, output) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return errors.New("native startup command was not confirmed")
+		case <-ticker.C:
+		}
+	}
+}
+
+func (m *Manager) deliverStartedInput(ctx context.Context, id domain.SessionID, prompt string) error {
 	// Call Deliver directly (not the Guard.Send wrapper, which folds a suppressed
 	// outcome into nil): a freshly-spawned session can terminate or hit a
 	// permission dialog between readiness and prompt injection, and folding that
