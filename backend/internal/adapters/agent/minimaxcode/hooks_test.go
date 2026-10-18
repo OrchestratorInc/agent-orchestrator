@@ -288,6 +288,10 @@ func TestStandingHookUsesImmutableGenerationContext(t *testing.T) {
 	preload := filepath.Join(t.TempDir(), "callback-failure.cjs")
 	failureFixture := `const child=require('node:child_process');
 const spawn=child.spawnSync;
+if(process.env.FIXTURE_CALLBACK_STATUS==='context-write-error') {
+  const write=process.stdout.write;
+  process.stdout.write=function(...args){process.stdout.write=write; throw new Error('context output failed');};
+}
 child.spawnSync=(...args)=>{
   if(process.env.FIXTURE_CALLBACK_STATUS==='timeout') return {status:null,error:Object.assign(new Error('timeout'),{code:'ETIMEDOUT'})};
   if(process.env.FIXTURE_CALLBACK_STATUS==='throw') throw new Error('reporting failed');
@@ -328,6 +332,9 @@ child.spawnSync=(...args)=>{
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatalf("private snapshot permissions: %v %v", info, err)
 	}
+	if value := run("restored", "UserPromptSubmit", id, "0"); len(value) != 0 {
+		t.Fatalf("repeated prompt re-injected standing context: %+v", value)
+	}
 	if value := run("first", "UserPromptSubmit", id, "0"); value["continue"] != false || value["hookSpecificOutput"] != nil {
 		t.Fatalf("pruned generation admitted stale context: %+v", value)
 	}
@@ -335,11 +342,28 @@ child.spawnSync=(...args)=>{
 		t.Fatalf("duplicate context at SessionStart: %+v", value)
 	}
 	for _, status := range []string{"1", "missing", "timeout", "throw"} {
+		// Exercise independent first-delivery attempts for each reporting failure.
+		if err := os.Remove(filepath.Join(profile, "launches", "restored", "standing-context.emitted")); err != nil {
+			t.Fatal(err)
+		}
 		value := run("restored", "UserPromptSubmit", id, status)
 		output, ok := value["hookSpecificOutput"].(map[string]any)
 		if !ok || output["additionalContext"] != "NEW_PRIVATE_CONTEXT" || value["continue"] != nil {
 			t.Fatalf("activity report failure %q blocked native input: %+v", status, value)
 		}
+	}
+	marker := filepath.Join(profile, "launches", "restored", "standing-context.emitted")
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+	if value := run("restored", "UserPromptSubmit", id, "context-write-error"); value["continue"] != false {
+		t.Fatalf("failed context output was not refused: %+v", value)
+	}
+	if _, err := os.Lstat(marker); !os.IsNotExist(err) {
+		t.Fatalf("failed context output consumed first delivery: %v", err)
+	}
+	if value := run("restored", "UserPromptSubmit", id, "0"); value["hookSpecificOutput"] == nil {
+		t.Fatalf("first context delivery could not retry: %+v", value)
 	}
 	for _, status := range []string{"0", "1", "missing"} {
 		value := run("restored", "UserPromptSubmit", "mvs_00000000000000000000000000000000", status)
@@ -352,6 +376,24 @@ child.spawnSync=(...args)=>{
 	}
 	if value := run("restored", "UserPromptSubmit", id, "0"); value["continue"] != false || value["hookSpecificOutput"] != nil {
 		t.Fatalf("missing private instructions admitted: %+v", value)
+	}
+	if err := os.WriteFile(file, []byte("LATEST_RESTORE_CONTEXT"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Env["AO_RUNTIME_LAUNCH_ID"] = "latest-restore"
+	if err := plugin.PrepareRuntimeLaunch(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	value = run("latest-restore", "UserPromptSubmit", id, "0")
+	output, ok = value["hookSpecificOutput"].(map[string]any)
+	if !ok || output["additionalContext"] != "LATEST_RESTORE_CONTEXT" {
+		t.Fatalf("new launch did not refresh first-prompt context: %+v", value)
+	}
+	if value := run("latest-restore", "UserPromptSubmit", id, "0"); len(value) != 0 {
+		t.Fatalf("restored launch repeated standing context: %+v", value)
 	}
 }
 

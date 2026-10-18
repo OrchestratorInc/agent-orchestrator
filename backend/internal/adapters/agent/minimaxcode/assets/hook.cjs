@@ -65,7 +65,27 @@ try {
       refuse('AO MiniMax private instructions are unavailable for this launch.');process.exit(0);
     }
     if(Buffer.byteLength(context,'utf8')>512*1024){refuse('AO MiniMax private instructions exceed the supported context limit.');process.exit(0);}
-    if(context) process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:'UserPromptSubmit',additionalContext:context}})+'\n');
+    if(context) {
+      // Native prompt context can become history. Emit it only for the first
+      // root submission of this launch; restore prepares a fresh launch dir.
+      const emitted=path.join(launchDir,'standing-context.emitted');
+      let claim;
+      try {
+        claim=fs.openSync(emitted,'wx',0o600);
+      } catch(error) {
+        if(error.code==='EEXIST' && fs.lstatSync(emitted).isFile()) process.exit(0);
+        throw error;
+      }
+      fs.closeSync(claim);
+      try {
+        process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:'UserPromptSubmit',additionalContext:context}})+'\n',(error)=>{
+          if(error) fs.unlinkSync(emitted);
+        });
+      } catch(error) {
+        fs.unlinkSync(emitted);
+        throw error;
+      }
+    }
   }
 } catch {
   // Missing or unreadable guard state must not authorize a replacement turn.

@@ -34,6 +34,7 @@ type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
+	resolutionErr  error
 }
 
 // New constructs the MiniMax Code TUI adapter.
@@ -169,29 +170,46 @@ func (p *Plugin) EmitsBlockedActivity() bool { return true }
 
 var binarySpec = binaryutil.BinarySpec{Label: "mcode", Names: []string{"mcode"}, WinNames: []string{"mcode.cmd", "mcode.exe", "mcode"}, UnixPaths: []string{"/usr/local/bin/mcode", "/opt/homebrew/bin/mcode"}, UnixHomePaths: binaryutil.NodeManagedUnixHomePaths("mcode"), NodeManaged: true, WinPaths: []binaryutil.WinPath{{Base: binaryutil.WinAppData, Parts: []string{"npm", "mcode.cmd"}}}}
 
+var runVersionProbe = func(ctx context.Context, binary string) ([]byte, error) {
+	return aoprocess.CommandContext(ctx, binary, "--version").Output()
+}
+
 // ResolveBinary requires the source-correlated MiniMax release.
 func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	p.binaryMu.Lock()
 	defer p.binaryMu.Unlock()
-	if p.resolvedBinary != "" {
-		return p.resolvedBinary, ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if p.resolvedBinary != "" || p.resolutionErr != nil {
+		return p.resolvedBinary, p.resolutionErr
 	}
 	b, err := binaryutil.ResolveBinary(ctx, binarySpec)
 	if err == nil {
 		probe, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		version, versionErr := aoprocess.CommandContext(probe, b, "--version").Output()
-		if versionErr != nil || strings.TrimSpace(string(version)) != "0.6.5" {
-			return "", errors.New("MiniMax Code TUI requires source-correlated version 0.6.5")
+		version, versionErr := runVersionProbe(probe, b)
+		if err := probe.Err(); err != nil {
+			return "", err
+		}
+		if versionErr != nil {
+			return "", fmt.Errorf("MiniMax Code version probe failed: %w", versionErr)
+		}
+		if strings.TrimSpace(string(version)) != "0.6.5" {
+			// A confirmed mismatch stays unavailable until an explicit harness refresh.
+			// Probe failures and caller cancellation remain retryable above.
+			p.resolutionErr = errors.New("MiniMax Code TUI requires source-correlated version 0.6.5")
+			return "", p.resolutionErr
 		}
 		p.resolvedBinary = b
 	}
 	return b, err
 }
 
-// InvalidateBinaryResolution clears the cached executable after installation changes.
+// InvalidateBinaryResolution clears the cached executable or version mismatch after installation changes.
 func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""
+	p.resolutionErr = nil
 	p.binaryMu.Unlock()
 }
