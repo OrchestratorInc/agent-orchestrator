@@ -3,6 +3,7 @@
 AO supervises Tencent's `@tencent-ai/codebuddy-code` interactive CLI (`codebuddy`,
 with `cbc` as its alias). The qualified release is **2.164.0**, requiring Node
 18.20.8 or newer. AO's native-agent installer pins that released npm package.
+AO leaves automatic updates unavailable until a newer release is qualified.
 This supersedes the closed, unmerged contract-only [PR5503](https://github.com/OrchestratorInc/agent-orchestrator/pull/5503).
 
 Configure native CodeBuddy login or its third-party provider before creating a

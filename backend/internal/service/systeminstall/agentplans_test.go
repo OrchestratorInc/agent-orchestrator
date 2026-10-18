@@ -262,6 +262,14 @@ func TestCodeBuddyInstallPinsCommandButUsesPackageNameForReleaseFeed(t *testing.
 	if got := strings.Join(plans[0].Command, " "); got != "npm install -g @tencent-ai/codebuddy-code@2.164.0" {
 		t.Fatalf("install command = %q, want pinned qualified release", got)
 	}
+	update := planner.agentMethodPlans(TargetCodeBuddy, AgentOperationUpdate)
+	if len(update) != 1 || !update[0].Unsupported || len(update[0].Command) != 0 ||
+		!strings.Contains(update[0].Reason, "2.164.0 only") {
+		t.Fatalf("CodeBuddy update plans = %+v, want no automatic unqualified update", update)
+	}
+	if _, err := planner.resolveAgentMethod(TargetCodeBuddy, "npm", AgentOperationUpdate); !errors.Is(err, ErrInstallMethod) {
+		t.Fatalf("CodeBuddy update method error = %v, want unavailable method", err)
+	}
 }
 
 func TestOfficialInstallerPlansAreAutomaticAndServerOwned(t *testing.T) {

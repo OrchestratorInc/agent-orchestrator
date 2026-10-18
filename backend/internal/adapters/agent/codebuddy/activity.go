@@ -68,10 +68,16 @@ func (*Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObserv
 	lines := terminalui.PlainTerminalLines(output)
 	start := max(0, len(lines)-24)
 	recent := strings.Join(lines[start:], "\n")
-	for _, cue := range []string{"Do you want to", "Would you like to", "Select login method:", "Enter to confirm", "Enter to login", "No, and tell CodeBuddy", "Allow this", "Do you trust the files", "Enter to select"} {
-		if strings.Contains(recent, cue) {
-			return ports.TerminalSurfaceObservation{Work: ports.TerminalSurfaceWorkWaitingInput}
+	unframedSurface := func() ports.TerminalSurfaceObservation {
+		// Native decisions replace the framed composer. Text in a completed
+		// conversation can contain the same words, so only inspect cues when
+		// the current input surface is not an initialized composer.
+		for _, cue := range []string{"Do you want to", "Would you like to", "Select login method:", "Enter to confirm", "Enter to login", "No, and tell CodeBuddy", "Allow this", "Do you trust the files", "Enter to select"} {
+			if strings.Contains(recent, cue) {
+				return ports.TerminalSurfaceObservation{Work: ports.TerminalSurfaceWorkWaitingInput}
+			}
 		}
+		return ports.TerminalSurfaceObservation{}
 	}
 	composer := terminalui.LastBorderedPromptComposerState(output, ">")
 	o := ports.TerminalSurfaceObservation{}
@@ -81,7 +87,7 @@ func (*Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObserv
 	case terminalui.ComposerDraft:
 		o.Composer = ports.TerminalComposerDraft
 	default:
-		return o
+		return unframedSurface()
 	}
 	// Require real footer chrome and an adjacent current framed composer.
 	prompt := -1
@@ -92,18 +98,18 @@ func (*Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObserv
 		}
 	}
 	if prompt < 0 {
-		return ports.TerminalSurfaceObservation{}
+		return unframedSurface()
 	}
 	footer := strings.Join(lines[prompt+1:], "\n")
 	if !strings.Contains(footer, "← for agents") && !strings.Contains(footer, "? for shortcuts") {
-		return ports.TerminalSurfaceObservation{}
+		return unframedSurface()
 	}
 	upper := prompt - 1
 	for upper >= 0 && strings.TrimSpace(lines[upper]) == "" {
 		upper--
 	}
 	if upper < 0 || !horizontalRule(lines[upper]) {
-		return ports.TerminalSurfaceObservation{}
+		return unframedSurface()
 	}
 	for i := upper - 1; i >= max(0, upper-5); i-- {
 		line := strings.TrimSpace(lines[i])

@@ -350,6 +350,12 @@ func (s requestPlanner) planKiroInstall() Plan {
 }
 
 func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Plan {
+	if operation == AgentOperationUpdate && plan.Target == TargetCodeBuddy {
+		plan.Unsupported = true
+		plan.Command = nil
+		plan.Reason = "AO has qualified CodeBuddy Code 2.164.0 only; update manually until a newer release is verified."
+		return plan
+	}
 	if operation == AgentOperationUpdate && plan.Method == "npm" && (plan.daemonRuntimeRejected || plan.daemonPrefixRejected) {
 		// The installed copy may live under another prefix (nvm, fnm, ~/.local)
 		// with its own Node. The update validates that installation once the

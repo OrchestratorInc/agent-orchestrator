@@ -166,6 +166,7 @@ func TestCurrentSurfaceProtectsDecisionsAndDrafts(t *testing.T) {
 		ready        bool
 	}{
 		{"empty", frame("● Finished.", ""), domain.ActivityIdle, true},
+		{"completed question", frame("Do you want to continue?\nEnter to confirm was quoted in the answer.\n● Finished.", ""), domain.ActivityIdle, true},
 		{"draft", frame("● Finished.", "human draft"), domain.ActivityIdle, false},
 		{"wrapped", frame("● Finished.", "\n human continuation"), domain.ActivityIdle, false},
 		{"active", frame("✹ Waking… (1s · waiting for model)", ""), domain.ActivityActive, false},
