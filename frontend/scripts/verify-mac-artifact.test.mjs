@@ -203,9 +203,12 @@ describe("verify-mac-artifact.sh", () => {
 		writeExecutable(join(mockBin, "codesign"), 'if [[ "$1" == "-d" ]]; then echo "<plist><dict></dict></plist>"; fi\n');
 		for (const tool of ["spctl", "xcrun", "ditto"]) writeExecutable(join(mockBin, tool), "exit 0\n");
 		writeExecutable(join(mockBin, "lipo"), "echo arm64\n");
+		// Read stdin like the real plutil: the script pipes codesign into it under
+		// pipefail, and an unread pipe can SIGPIPE codesign and flip the check.
 		writeExecutable(
 			join(mockBin, "plutil"),
-			"echo '  \"com.apple.security.cs.allow-jit\" => true'\n" +
+			"cat >/dev/null\n" +
+				"echo '  \"com.apple.security.cs.allow-jit\" => true'\n" +
 				"echo '  \"keychain-access-groups\" => ['\n",
 		);
 		writeExecutable(node, "exit 0\n");
