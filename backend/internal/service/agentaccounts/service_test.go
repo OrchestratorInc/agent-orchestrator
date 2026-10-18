@@ -56,6 +56,7 @@ type fakeClaude struct {
 	onIdentity func(home string) // runs as a folder's identity is read
 	apiKey     map[string]bool   // folders logged in with an API key
 	failing    map[string]bool   // folders whose check fails (a timeout)
+	windows    []domain.AgentAccountLimitWindow
 }
 
 func (*fakeClaude) Provider() domain.AgentAccountProvider { return domain.AgentAccountProviderClaude }
@@ -73,8 +74,8 @@ func (f *fakeClaude) Identity(_ context.Context, home string) (domain.AgentAccou
 	}
 	return domain.AgentAccountIdentityCheck{SignedIn: ok, LoggedIn: ok, Email: email}, nil
 }
-func (*fakeClaude) Limits(context.Context, string) (domain.AgentAccountLimits, error) {
-	return domain.AgentAccountLimits{}, nil
+func (f *fakeClaude) Limits(context.Context, string) (domain.AgentAccountLimits, error) {
+	return domain.AgentAccountLimits{Windows: f.windows}, nil
 }
 func (*fakeClaude) LoginArgv(context.Context) ([]string, error) {
 	return []string{"claude", "auth", "login"}, nil
@@ -566,6 +567,42 @@ func TestAFailedCheckDoesNotReadAsSignedOut(t *testing.T) {
 	for _, view := range views {
 		if view.Account.ID == start.OperationID && (!view.SignedIn || view.IdentityErr == "") {
 			t.Fatalf("after a failed check: signed in %v, problem %q", view.SignedIn, view.IdentityErr)
+		}
+	}
+}
+
+func TestLimitsWithNoWindowsAreReadAgainSoon(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
+	now := time.Now()
+	svc.now = func() time.Time { return now }
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	claude.signedInAs[filepath.Join(root, "claude", start.OperationID)] = "b@example.com"
+	// The read right after sign-in answers before the limits are known.
+	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	claude.windows = []domain.AgentAccountLimitWindow{{ID: "five_hour", UsedPercent: 1}}
+	now = now.Add(time.Minute) // the next poll, well inside the cache window
+	views, err := svc.List(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, view := range views {
+		if view.Account.ID == start.OperationID && (view.Limits == nil || len(view.Limits.Windows) != 1) {
+			t.Fatalf("limits a minute after an empty answer: %+v", view.Limits)
+		}
+	}
+	// An answer with windows is kept for the whole cache window.
+	claude.windows = nil
+	now = now.Add(time.Minute)
+	views, _ = svc.List(ctx, false)
+	for _, view := range views {
+		if view.Account.ID == start.OperationID && (view.Limits == nil || len(view.Limits.Windows) != 1) {
+			t.Fatalf("limits with windows were not kept: %+v", view.Limits)
 		}
 	}
 }

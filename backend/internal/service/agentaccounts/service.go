@@ -26,6 +26,10 @@ import (
 // freshFor is how long a read of an account's identity and limits is reused.
 const freshFor = 5 * time.Minute
 
+// retryEmptyAfter is how long an answer with no limit windows is reused. A
+// folder read just after its sign-in can answer before its limits are known.
+const retryEmptyAfter = 30 * time.Second
+
 // Terminals opens the embedded terminal a sign-in runs in.
 type Terminals interface {
 	OpenCommandTerminal(context.Context, shellterm.OpenCommandTerminalInput) (shellterm.ShellTerminal, error)
@@ -166,7 +170,15 @@ func (s *Service) needsReading(id string, refresh bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r := s.readings[id]
-	return refresh || r == nil || s.now().Sub(r.at) > freshFor
+	if refresh || r == nil {
+		return true
+	}
+	ttl := freshFor
+	if r.limits != nil && len(r.limits.Windows) == 0 {
+		// A plan that never reports windows is then read on every poll, one CLI call a minute.
+		ttl = retryEmptyAfter
+	}
+	return s.now().Sub(r.at) > ttl
 }
 
 // read asks the provider's CLI for the account's identity and limits.
