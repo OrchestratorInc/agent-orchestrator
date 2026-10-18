@@ -253,7 +253,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const navItems: SettingsNavEntry[] = isProjectSettings
 		? projectSections.map(({ id, label, icon }) => ({ id, label, icon, active: activeProjectSection === id, disabled: cueBusy, onSelect: () => selectProjectSection(id) }))
 		: globalSections.map(({ id, label, icon }) => ({ id, label: label(t), icon, active: activeSection === id, onSelect: () => selectGlobalSection(id) }));
-	const navigationBlocked = isProjectSettings && (cueBusy || projectSaveState.requestPending === true || projectSaveState.phase === "pending" || projectSaveState.phase === "saving");
+	const navigationBlocked = isProjectSettings && (cueBusy || projectSaveState.requestPending === true || (projectSaveState.phase === "pending" && !projectSaveState.unsaveable) || projectSaveState.phase === "saving");
 	const history = isProjectSettings ? projectHistory : globalHistory;
 	const navigation: SwipeNavigationActions = {
 		canGoBack: !navigationBlocked,

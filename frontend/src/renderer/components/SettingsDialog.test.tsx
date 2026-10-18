@@ -8,7 +8,9 @@ import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { SettingsDialog } from "./SettingsPageTestHarness";
 import { globalSettingsItemsFor, visibleGlobalSettings } from "./settings/settingsCatalog";
 
-const { postMock, cloudProjectsState, localWorkspacesState } = vi.hoisted(() => ({
+const { getMock, putMock, postMock, cloudProjectsState, localWorkspacesState } = vi.hoisted(() => ({
+	getMock: vi.fn(),
+	putMock: vi.fn(),
 	postMock: vi.fn(),
 	cloudProjectsState: {
 		data: [] as Array<{ id: string; orgId?: string; displayName: string }> | undefined,
@@ -28,7 +30,7 @@ const accountsResponse = {
 };
 
 vi.mock("../lib/api-client", () => ({
-	apiClient: { POST: postMock },
+	apiClient: { GET: getMock, PUT: putMock, POST: postMock },
 	apiErrorCode: (error: { code?: string }) => error?.code,
 	apiErrorMessage: () => "request failed",
 	hasTrustedApiBaseUrl: () => true,
@@ -67,6 +69,12 @@ vi.mock("./ProjectSettingsForm", () => ({
 			</button>
 			<button type="button" onClick={() => onSaveState?.({ phase: "saved" })}>
 				Complete save
+			</button>
+			<button type="button" onClick={() => onSaveState?.({ phase: "pending", dirty: true, unsaveable: true, requestPending: true })}>
+				Start request with invalid draft
+			</button>
+			<button type="button" onClick={() => onSaveState?.({ phase: "saving", dirty: true, unsaveable: true })}>
+				Start saving invalid draft
 			</button>
 		</>
 	),
@@ -116,6 +124,8 @@ vi.mock("../lib/cloud-session", () => ({
 
 describe("SettingsDialog", () => {
 	beforeEach(() => {
+		getMock.mockReset().mockResolvedValue({ data: { status: "ok", project: { id: "proj-1", name: "Example", config: { env: { EXISTING: "old" } } } } });
+		putMock.mockReset().mockResolvedValue({ data: { status: "ok" } });
 		postMock.mockReset().mockImplementation((path: string) => path === "/api/v1/agents/codex/accounts/ensure"
 			? Promise.resolve({ data: accountsResponse })
 			: Promise.resolve({ data: { operationId: "login-1", status: "cancelled" } }));
@@ -190,6 +200,50 @@ describe("SettingsDialog", () => {
 		await swipeSettings("back", dialog);
 		await swipeSettings("back", dialog);
 		expect(useUiStore.getState().settingsModal).toBeNull();
+	});
+
+	it("discards invalid environment drafts when swiping back or forward between sections", async () => {
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderSettingsDialog();
+		const dialog = await screen.findByRole("dialog");
+		await userEvent.click(screen.getByRole("button", { name: "Environment" }));
+		fireEvent.change(await screen.findByLabelText("Name 1"), { target: { value: "BAD-NAME" } });
+		await swipeSettings("back", dialog);
+		expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("aria-current", "page");
+		await swipeSettings("forward", dialog);
+		expect(await screen.findByLabelText("Name 1")).toHaveValue("EXISTING");
+
+		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
+		await swipeSettings("back", dialog);
+		fireEvent.change(await screen.findByLabelText("Name 1"), { target: { value: "BAD-NAME" } });
+		await swipeSettings("forward", dialog);
+		expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("aria-current", "page");
+		await swipeSettings("back", dialog);
+		expect(await screen.findByLabelText("Name 1")).toHaveValue("EXISTING");
+		expect(putMock).not.toHaveBeenCalled();
+	});
+
+	it("closes on a back swipe from the initial section with an invalid environment draft", async () => {
+		useUiStore.getState().openProjectSettings("proj-1", { section: "environment" });
+		renderSettingsDialog();
+		const dialog = await screen.findByRole("dialog");
+		fireEvent.change(await screen.findByLabelText("Name 1"), { target: { value: "BAD-NAME" } });
+		await swipeSettings("back", dialog);
+		expect(useUiStore.getState().settingsModal).toBeNull();
+		expect(putMock).not.toHaveBeenCalled();
+	});
+
+	it.each(["Start request with invalid draft", "Start saving invalid draft"])("blocks swipes for %s", async (saveAction) => {
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderSettingsDialog();
+		const dialog = await screen.findByRole("dialog");
+		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
+		await swipeSettings("back", dialog);
+		await userEvent.click(screen.getByRole("button", { name: saveAction }));
+		await swipeSettings("forward", dialog);
+		expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("aria-current", "page");
+		await swipeSettings("back", dialog);
+		expect(useUiStore.getState().settingsModal).not.toBeNull();
 	});
 
 	it("offers setup and cleanup through one local Scripts page", async () => {
