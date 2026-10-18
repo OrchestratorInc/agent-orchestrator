@@ -540,7 +540,10 @@ func Shutdown(ctx context.Context, dataDir, sessionID string) error {
 	if !response.OK {
 		return errors.New(response.Error)
 	}
-	waitCtx, stop := context.WithTimeout(ctx, 5*time.Second)
+	// The host's own shutdown can take about 6 s: 3 s for the provider to exit
+	// once stdin closes, a 1 s reap, and 2 s for its process group to exit on
+	// SIGTERM before SIGKILL. Wait past that, with room for a loaded machine.
+	waitCtx, stop := context.WithTimeout(ctx, 10*time.Second)
 	defer stop()
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
@@ -644,6 +647,18 @@ func Run(ctx context.Context, cfg Config) error {
 	acceptDone := make(chan error, 1)
 	go func() { acceptDone <- h.accept() }()
 
+	wait := sync.OnceValue(child.Wait)
+	// reapProvider waits up to a second for the provider to exit once its
+	// output ended, so its zombie does not hold the process group open while
+	// the group is asked to exit. A provider still running is left to the kill.
+	reapProvider := func() {
+		reaped := make(chan struct{})
+		go func() { _ = wait(); close(reaped) }()
+		select {
+		case <-reaped:
+		case <-time.After(time.Second):
+		}
+	}
 	stopProvider := func() {
 		_ = stdin.Close()
 		select {
@@ -651,6 +666,7 @@ func Run(ctx context.Context, cfg Config) error {
 			// Wrapper adapters may exit before their provider child. The hosted
 			// process tree is the ownership boundary, so explicit shutdown reaps
 			// any descendant that did not follow stdin closure.
+			reapProvider()
 			_ = killProviderProcess(context.WithoutCancel(ctx), child)
 		case <-time.After(3 * time.Second):
 			_ = killProviderProcess(context.WithoutCancel(ctx), child)
@@ -659,6 +675,7 @@ func Run(ctx context.Context, cfg Config) error {
 	var runErr error
 	select {
 	case runErr = <-providerDone:
+		reapProvider()
 		_ = killProviderProcess(context.WithoutCancel(ctx), child)
 	case <-h.shutdown:
 		stopProvider()
@@ -672,7 +689,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 	_ = listener.Close()
-	_ = child.Wait()
+	_ = wait()
 	return runErr
 }
 

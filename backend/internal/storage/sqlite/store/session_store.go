@@ -350,6 +350,19 @@ func (s *Store) SetSessionHibernated(ctx context.Context, id domain.SessionID, e
 	return rows > 0, nil
 }
 
+// SetSessionRuntimeReleased records that AO destroys launchID's terminal on
+// purpose, keeping the session. It writes nothing unless launchID is still the
+// session's current launch.
+func (s *Store) SetSessionRuntimeReleased(ctx context.Context, id domain.SessionID, launchID string) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.SetSessionRuntimeReleased(ctx, gen.SetSessionRuntimeReleasedParams{ID: id, LaunchID: launchID})
+	if err != nil {
+		return false, fmt.Errorf("set session runtime release for %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
 // UpdateSessionModel changes only the selected model, leaving concurrent
 // lifecycle and controller ownership updates intact.
 func (s *Store) UpdateSessionModel(ctx context.Context, id domain.SessionID, model string) (bool, error) {
@@ -866,6 +879,7 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 			DiffBaseRef:                      row.DiffBaseRef,
 			RuntimeHandleID:                  row.RuntimeHandleID,
 			RuntimeLaunchID:                  row.RuntimeLaunchID,
+			RuntimeReleasedLaunchID:          row.RuntimeReleasedLaunchID,
 			AgentSessionID:                   row.AgentSessionID,
 			AgentSessionIDLaunchID:           row.AgentSessionIDLaunchID,
 			NativeIdentityObservedAt:         nullTimeToTime(row.NativeIdentityObservedAt),

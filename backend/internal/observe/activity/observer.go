@@ -117,6 +117,11 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	if !ok {
 		return
 	}
+	var options ports.TerminalActivityOptions
+	if provider, ok := agent.(ports.TerminalActivityOptionsProvider); ok {
+		options = provider.TerminalActivityOptions()
+	}
+	nativeDecisionCards := options.SupportsBlocked
 	continuous, ok := agent.(ports.ContinuousTerminalActivityDetector)
 	if !ok || !continuous.ContinuouslyDetectTerminalActivity() {
 		if session.Activity.State == domain.ActivityWaitingInput {
@@ -130,19 +135,21 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 		}
 	} else if session.Activity.State != domain.ActivityActive &&
 		session.Activity.State != domain.ActivityIdle &&
-		session.Activity.State != domain.ActivityWaitingInput {
+		session.Activity.State != domain.ActivityWaitingInput && (!nativeDecisionCards || session.Activity.State != domain.ActivityBlocked) {
 		return
 	}
 	var output string
 	var err error
-	if _, requiresViewport := agent.(ports.TerminalMessageInputGuard); requiresViewport {
-		reader, available := o.runtime.(ports.StyledTerminalOutputReader)
-		if !available {
-			return
-		}
-		output, err = reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+	handle := ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}
+	reader, available := o.runtime.(ports.StyledTerminalOutputReader)
+	_, requiresViewport := agent.(ports.TerminalMessageInputGuard)
+	if requiresViewport && !available {
+		return
+	}
+	if available && (requiresViewport || options.PreferStyledOutput) {
+		output, err = reader.GetStyledOutput(ctx, handle, o.outputLines)
 	} else {
-		output, err = o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+		output, err = o.runtime.GetOutput(ctx, handle, o.outputLines)
 	}
 	if err != nil {
 		o.logger.Debug("activity observer: terminal output unavailable", "session", session.ID, "err", err)
@@ -150,10 +157,13 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	}
 	state, ok := detector.DetectTerminalActivity(output)
 	if !ok || state == session.Activity.State ||
-		(state != domain.ActivityActive && state != domain.ActivityIdle && state != domain.ActivityWaitingInput) {
+		(state != domain.ActivityActive && state != domain.ActivityIdle && state != domain.ActivityWaitingInput && (!nativeDecisionCards || state != domain.ActivityBlocked)) {
 		return
 	}
 	event := "terminal-" + string(state)
+	if nativeDecisionCards && session.Activity.State == domain.ActivityBlocked && (state == domain.ActivityActive || state == domain.ActivityIdle) {
+		event = "permission-resolved"
+	}
 	if state == domain.ActivityWaitingInput {
 		event = "terminal-waiting-input"
 	}

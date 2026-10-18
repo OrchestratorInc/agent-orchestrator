@@ -163,6 +163,27 @@ func Base(agentID string) ports.AgentModelCatalog {
 			model("muse-spark-1.1", "Muse Spark 1.1", false),
 			model("muse-spark-1.2", "Muse Spark 1.2", false),
 		)
+	case "memcode":
+		// Memcode v0.38.1 embeds these pinnable labels in models.json. The
+		// interactive /model picker accepts the labels, not the provider IDs.
+		return catalog(agentID, "official-catalog", entryMode, now,
+			model("grok-4.7", "Grok 4.7", false),
+			model("gemini-pro", "Gemini 3.1 Pro", false),
+			model("gemini-flash", "Gemini 3.8 Flash", false),
+			model("opus", "Opus 5.5", false),
+			model("fable", "Fable 5.1", false),
+			model("sonnet", "Sonnet 5", false),
+			model("haiku", "Haiku 4.5", false),
+			model("astra", "GPT-6 Astra", false),
+			model("sol", "GPT-5.6 Sol", false),
+			model("terra", "GPT-5.6 Terra", false),
+			model("luna", "GPT-5.6 Luna", false),
+			model("glm-5p3", "GLM-5.3", false),
+			model("glm-5p3-flash", "GLM-5.3 Flash", false),
+			model("qwen3p8-max", "Qwen3.8 Max", false),
+			model("kimi-k3", "Kimi K3", false),
+			model("deepseek-v4-flash", "DeepSeek V4.1 Flash", false),
+		)
 	case "amp":
 		c := catalog(agentID, "official-modes", entryMode, now,
 			model("low", "Low", false),
@@ -267,7 +288,7 @@ func (d Discoverer) discover(ctx context.Context, request ports.AgentModelDiscov
 	if request.AgentID == "claude-code" {
 		return discoverClaudeCatalog(ctx, request, d.ClaudeModels)
 	}
-	if request.AgentID == "muse" {
+	if request.AgentID == "muse" || request.AgentID == "memcode" {
 		return Base(request.AgentID), nil
 	}
 	if request.AgentID == "codex" {
@@ -805,11 +826,18 @@ func BinaryVersion(ctx context.Context, binary string) string {
 	return fmt.Sprintf("%x", hash.Sum(nil)[:8])
 }
 
+// catalogSchemaVersions invalidates snapshots when an adapter's catalog format
+// changes independently of its installed executable or configuration.
+var catalogSchemaVersions = map[string]string{"memcode": "native-picker-v1"}
+
 // CatalogFingerprint hashes every stable discovery input for an agent: the
 // resolved executable plus the configuration and credentials its discovery
 // reads. Only the digest is returned or persisted.
 func CatalogFingerprint(ctx context.Context, agentID, binary, workingDir string, env map[string]string) string {
 	binaryVersion := BinaryVersion(ctx, binary)
+	if version := catalogSchemaVersions[agentID]; version != "" {
+		binaryVersion += ";" + version
+	}
 	config := discoveryConfigInputs(ctx, agentID, workingDir, env)
 	// Refresh pre-provider catalogs after upgrading and when observed credential
 	// presence changes. The fingerprint includes names only, never key material.

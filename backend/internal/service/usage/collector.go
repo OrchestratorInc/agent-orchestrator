@@ -80,11 +80,17 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 	if codexHome == "" {
 		codexHome = filepath.Join(home, ".codex")
 	}
+	// Like the CLI and the accounts' shared history, a custom config folder
+	// moves Claude's transcripts.
+	claudeHome := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR"))
+	if claudeHome == "" {
+		claudeHome = filepath.Join(home, ".claude")
+	}
 	if strings.TrimSpace(dataDir) == "" {
 		dataDir = filepath.Join(home, ".ao", "data")
 	}
 	return SourceRoots{
-		ClaudeProjects: filepath.Join(home, ".claude", "projects"),
+		ClaudeProjects: filepath.Join(claudeHome, "projects"),
 		CodexSessions:  filepath.Join(codexHome, "sessions"),
 		CodexArchived:  filepath.Join(codexHome, "archived_sessions"),
 		KimiHome:       filepath.Join(dataDir, "kimi"),

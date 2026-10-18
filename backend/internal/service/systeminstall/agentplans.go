@@ -11,6 +11,7 @@ import (
 )
 
 var agentDocumentationURLs = map[Target]string{
+	TargetMemcode:     "https://github.com/memcode-ai/memcode/releases",
 	TargetClaudeCode:  "https://code.claude.com/docs/en/installation",
 	TargetCodex:       "https://github.com/openai/codex",
 	TargetCursor:      "https://docs.cursor.com/en/cli/installation",
@@ -268,6 +269,12 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		}
 	case TargetMastraCode:
 		plans = []Plan{manualPlan(target, "Install mastracode 0.45.0 (@mastra/code-sdk 1.11.0) with Node >=22.19. AO qualifies the native TUI only. ONNXRUNTIME_NODE_INSTALL=skip is the supported way to omit optional CUDA downloads for API-backed use.", agentDocumentationURLs[target])}
+	case TargetMemcode:
+		if s.goos == "darwin" || s.goos == "linux" {
+			plans = []Plan{s.planShellInstaller(target, "https://memcode.ai/install.sh", "sh")}
+		} else {
+			plans = []Plan{{Target: target, Method: "manual", Unsupported: true, Reason: "Install the official native memcode release binary", DocsURL: agentDocumentationURLs[target]}}
+		}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
 	default:

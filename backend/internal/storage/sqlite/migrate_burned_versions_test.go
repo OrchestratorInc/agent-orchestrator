@@ -203,8 +203,13 @@ var shippedMigrations = map[int64]string{
 	198: "0198_harness_defaults.sql",
 	199: "0199_conversation_message_continuation.sql",
 	200: "0200_session_artifact_version_source.sql",
+	202: "0202_allow_memcode_harness.sql",
 	206: "0206_awake.sql",
 	207: "0207_allow_mastra_code_harness.sql",
+	210: "0210_agent_accounts.sql",
+	211: "0211_account_transitions.sql",
+	212: "0212_session_runtime_released.sql",
+	213: "0213_allow_mastra_code_harness.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -220,7 +225,9 @@ var shippedMigrations = map[int64]string{
 // Any such migration whose schema the generated queries depend on must add a
 // schemaRepairs entry in db.go.
 func burnedVersion(v int64) bool {
-	return v == 22
+	// 207 was allocated by the Mastra branch before main advanced through 212.
+	// Retain its ledger identity, but apply the pending widening at 213.
+	return v == 22 || v == 207
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every
@@ -271,7 +278,7 @@ func TestMigrationVersionLedger(t *testing.T) {
 	}
 
 	for version, name := range shippedMigrations {
-		if _, ok := present[version]; !ok {
+		if _, ok := present[version]; !ok && !burnedVersion(version) {
 			t.Errorf("ledgered migration %q (version %d) was deleted: installs that have not applied it yet will silently miss its schema, and the number is burned for reuse", name, version)
 		}
 	}

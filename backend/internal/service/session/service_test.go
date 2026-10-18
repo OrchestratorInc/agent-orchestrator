@@ -3143,6 +3143,34 @@ func TestSpawnStillRejectsFreshUnauthorizedCodexAccount(t *testing.T) {
 	}
 }
 
+// The readiness gate reads the computer's own Codex login. A task that will run
+// on a saved account does not use that login, so its state is not a reason to
+// refuse; the launch checks the account it runs on.
+func TestSpawnOnASavedCodexAccountIgnoresTheComputersLogin(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	fc := &fakeCommander{}
+	readiness := &fakeAgentReadiness{snapshot: domain.AgentReadinessSnapshot{
+		ID: "codex", Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled},
+		Authentication: domain.AgentAuthenticationObservation{
+			State: domain.AgentAuthenticationUnauthorized, Freshness: domain.AgentReadinessFresh,
+		},
+	}}
+	svc := NewWithDeps(Deps{Manager: fc, Store: st, AgentReadiness: readiness})
+	var asked []string
+	svc.SetComputerLoginCheck(func(_ context.Context, harness domain.AgentHarness, accountID string) bool {
+		asked = append(asked, string(harness)+":"+accountID)
+		return false
+	})
+
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if fc.spawnCalls != 1 || len(asked) != 1 || asked[0] != "codex:" {
+		t.Fatalf("spawn calls = %d, asked %v; want the saved default to launch", fc.spawnCalls, asked)
+	}
+}
+
 func TestSpawnInvalidatesReadinessAfterTypedLaunchFailure(t *testing.T) {
 	tests := []struct {
 		name             string
