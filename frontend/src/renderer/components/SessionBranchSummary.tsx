@@ -138,7 +138,7 @@ export function SessionBranchSummary({
 	// With PRs, one card holds each PR's rows. The branch's own work is what
 	// lands on the open PR, so it renders inside that PR; with no open PR it gets
 	// a group of its own, led by the branch row so it says whose work it is.
-	const prCard = (work?: ReactNode, branchRow?: ReactNode) => (
+	const prCard = (work?: ReactNode, branchRow?: ReactNode, cardAction?: ReactNode) => (
 		<div className="flex min-w-0 flex-col divide-y divide-border rounded-(--radius-panel) border border-border/50 bg-card px-3">
 			{pullRequests?.(openPRNumber !== undefined ? work : undefined)}
 			{work && openPRNumber === undefined ? (
@@ -147,6 +147,7 @@ export function SessionBranchSummary({
 					{work}
 				</div>
 			) : null}
+			{cardAction ? <div className="flex min-w-0 justify-end py-2.5">{cardAction}</div> : null}
 		</div>
 	);
 	if (!showGit) return pullRequests ? <InspectorSection surface={false} title={title}>{prCard()}</InspectorSection> : null;
@@ -242,14 +243,14 @@ export function SessionBranchSummary({
 			<section aria-label={t("inspector.branch")} className="flex flex-col" data-testid="inspector-branch">
 				{pullRequests ? (
 					// The open PR shows its own base ← head; work outside any PR is led by the branch row.
-					prCard(hasWorkRows ? workRows : undefined, branchRow)
+					prCard(hasWorkRows ? workRows : undefined, branchRow, action)
 				) : (
 					<>
 						{branchRow}
 						{workRows}
 					</>
 				)}
-				{action ? <div className={cn("flex min-w-0 justify-end", (hasWork || pullRequests) && "mt-3")}>{action}</div> : null}
+				{action && !pullRequests ? <div className={cn("flex min-w-0 justify-end", hasWork && "mt-3")}>{action}</div> : null}
 				{sendError ? (
 					<p className="mt-1.5 text-xs leading-normal text-error" role="status">
 						{sendError}
