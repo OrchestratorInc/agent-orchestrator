@@ -27,8 +27,9 @@ func validateNativeHistory(ctx context.Context, profile, id, workspace string) e
 	if !info.Mode().IsRegular() {
 		return errors.New("native database is not a regular file")
 	}
-	uri := url.URL{Scheme: "file", Path: dbPath, RawQuery: "mode=ro"}
-	db, err := sql.Open("sqlite", uri.String())
+	// Escape the literal filename without turning a Windows drive into a URI authority.
+	uri := url.URL{Path: dbPath}
+	db, err := sql.Open("sqlite", "file:"+uri.EscapedPath()+"?mode=ro")
 	if err != nil {
 		return errors.New("native session database could not be opened")
 	}
