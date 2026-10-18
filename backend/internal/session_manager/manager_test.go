@@ -3039,7 +3039,15 @@ func TestNativeModelConfirmationIgnoresRawScrollback(t *testing.T) {
 	}
 }
 
-type modelCheckingMemcodeAgent struct{ recordingAgent }
+type modelCheckingMemcodeAgent struct {
+	recordingAgent
+	hookModel string
+}
+
+func (a *modelCheckingMemcodeAgent) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
+	a.hookModel = cfg.Config.Model
+	return memcode.New().GetAgentHooks(ctx, cfg)
+}
 
 func (a *modelCheckingMemcodeAgent) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
 	// Exercise Memcode's real launch validation without requiring its executable.
@@ -3102,7 +3110,7 @@ func TestRestoreMemcodeModelFollowsNativeEndpointConfiguration(t *testing.T) {
 				Metadata: domain.SessionMetadata{WorkspacePath: workspace, Branch: "b", Model: test.model, Prompt: "saved task"},
 			}
 			agent := &modelCheckingMemcodeAgent{}
-			m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{path: workspace}, Store: st,
+			m := New(Deps{DataDir: t.TempDir(), Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{path: workspace}, Store: st,
 				Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
 			_, err := m.RestoreWithMode(ctx, "mer-1")
 			if test.wantError {
@@ -3118,6 +3126,86 @@ func TestRestoreMemcodeModelFollowsNativeEndpointConfiguration(t *testing.T) {
 				t.Fatalf("restored model = %q, want %q (saved %q, endpoint %q)", agent.lastConfig.Model, test.want, test.model, test.endpoint)
 			}
 		})
+	}
+}
+
+func TestSpawnMemcodeCustomEndpointClearsOnlyInheritedModels(t *testing.T) {
+	for _, source := range []string{"project environment", "daemon environment", "global settings", "workspace settings", "no endpoint", "malformed settings"} {
+		for _, modelSource := range []string{"project default", "role default", "explicit override"} {
+			t.Run(source+"/"+modelSource, func(t *testing.T) {
+				configHome := t.TempDir()
+				t.Setenv("XDG_CONFIG_HOME", configHome)
+				t.Setenv("MEMCODE_ENDPOINT_URL", "")
+				workspace := t.TempDir()
+				config := testRoleAgents()
+				config.Worker.Harness = domain.HarnessMemcode
+				spawn := ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}
+				switch modelSource {
+				case "project default":
+					config.AgentConfig.Model = "opus"
+				case "role default":
+					config.Worker.AgentConfig.Model = "opus"
+				case "explicit override":
+					config.AgentConfig.Model = "sonnet"
+					spawn.AgentConfig.Model = "opus"
+				}
+				endpoint := "http://127.0.0.1:11434/v1"
+				switch source {
+				case "project environment":
+					config.Env = map[string]string{"MEMCODE_ENDPOINT_URL": endpoint}
+				case "daemon environment":
+					t.Setenv("MEMCODE_ENDPOINT_URL", endpoint)
+				case "global settings":
+					if err := os.MkdirAll(filepath.Join(configHome, "memcode"), 0o700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(configHome, "memcode", ".env"), []byte("MEMCODE_ENDPOINT_URL="+endpoint+"\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				case "workspace settings", "malformed settings":
+					if err := os.MkdirAll(filepath.Join(workspace, ".memcode"), 0o700); err != nil {
+						t.Fatal(err)
+					}
+					contents := `{"endpoints":[{"name":"local","base_url":"http://127.0.0.1:11434/v1"}]}`
+					if source == "malformed settings" {
+						contents = `{`
+					}
+					if err := os.WriteFile(filepath.Join(workspace, ".memcode", "config.json"), []byte(contents), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				st := newFakeStore()
+				st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: config}
+				agent := &modelCheckingMemcodeAgent{}
+				rt := &fakeRuntime{}
+				m := New(Deps{DataDir: t.TempDir(), Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{path: workspace}, Store: st,
+					Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
+				rec, _, _, err := m.Spawn(ctx, spawn)
+				if source == "malformed settings" || (source != "no endpoint" && modelSource == "explicit override") {
+					if err == nil || rt.created != 0 || agent.launchCalls != 0 {
+						t.Fatalf("incompatible selection reached launch: err=%v, runtimes=%d, launches=%d", err, rt.created, agent.launchCalls)
+					}
+					if source != "malformed settings" && !errors.Is(err, ErrUnsupportedModel) {
+						t.Fatalf("explicit model error = %v, want ErrUnsupportedModel", err)
+					}
+					if source == "malformed settings" && !strings.Contains(err.Error(), "read memcode model configuration") {
+						t.Fatalf("malformed model configuration error = %v", err)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := ""
+				if source == "no endpoint" {
+					want = "opus"
+				}
+				if rt.created != 1 || agent.launchCalls != 1 || agent.lastConfig.Model != want || agent.hookModel != want || rec.Metadata.Model != want {
+					t.Fatalf("spawn: runtimes=%d, launches=%d, launch model=%q, hook model=%q, saved model=%q; want model=%q",
+						rt.created, agent.launchCalls, agent.lastConfig.Model, agent.hookModel, rec.Metadata.Model, want)
+				}
+			})
+		}
 	}
 }
 

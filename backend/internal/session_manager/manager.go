@@ -1005,6 +1005,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// Resolve the effective agent config (project base + role override + spawn
 	// override) and validate the model before any durable state is created. A
 	// model the harness cannot honor should not leave a seed row behind.
+	explicitModel := cfg.AgentConfig.Model != ""
 	agentConfig := applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, project.Config), cfg.AgentConfig)
 	if err := validateSpawnModel(cfg.Harness, agentConfig.Model); err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: %s", ErrUnsupportedModel, err.Error())
@@ -1385,6 +1386,23 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnBrowser, err)
+	}
+	if cfg.Harness == domain.HarnessMemcode && agentConfig.Model != "" {
+		// The workspace may introduce a native endpoint, so resolve this after
+		// provisioning but before hooks or launch validation see the model.
+		customEndpoint, modelErr := memcode.UsesCustomEndpoint(ctx, ws.Path, env)
+		if modelErr == nil && customEndpoint {
+			if explicitModel {
+				modelErr = fmt.Errorf("%w: memcode custom endpoints require native model selection", ErrUnsupportedModel)
+			} else {
+				agentConfig.Model = ""
+				adapterConfig.Model = ""
+			}
+		}
+		if modelErr != nil {
+			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
+			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPrepare, modelErr)
+		}
 	}
 	m.augmentAgentRuntimeEnv(agent, env)
 	pinRuntimePermissionEnv(env, adapterConfig.Permissions)
