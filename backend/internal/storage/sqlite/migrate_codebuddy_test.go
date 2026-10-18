@@ -85,7 +85,7 @@ func TestReconcileCodeBuddyAfterBurnedMigration(t *testing.T) {
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`).Scan(&schema); err != nil {
 		t.Fatal(err)
 	}
-	for _, harness := range []string{"'fx'", "'gemini'", "'unreal-agent'", "'mimo-code'", "'deepseek-harness'", "'openhands'", "'command-code'", "'codebuddy'"} {
+	for _, harness := range []string{"'fx'", "'gemini'", "'unreal-agent'", "'mimo-code'", "'deepseek-harness'", "'openhands'", "'command-code'", "'memcode'", "'codebuddy'"} {
 		if !strings.Contains(schema, harness) {
 			t.Fatalf("repaired sessions constraint lost %s: %s", harness, schema)
 		}

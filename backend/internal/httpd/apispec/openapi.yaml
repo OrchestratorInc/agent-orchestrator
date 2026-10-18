@@ -14947,6 +14947,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - memcode
           - codebuddy
           - fake
           type: string
@@ -15645,6 +15646,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - memcode
           - codebuddy
           - cloudflared
           type: string
@@ -18803,6 +18805,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - memcode
           - codebuddy
           type: string
         issueId:

@@ -341,3 +341,20 @@ func TestCodeBuddyIsTUISelectable(t *testing.T) {
 		t.Fatal("CodeBuddy is not selectable")
 	}
 }
+
+func TestMemcodeAdapterIsSelectable(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("memcode")
+	if !ok || !domain.HarnessMemcode.IsKnown() {
+		t.Fatal("Memcode is not selectable")
+	}
+	if adapter.Manifest().Name != "memcode" {
+		t.Fatal(adapter.Manifest())
+	}
+	if _, ok := adapter.(ports.Agent); !ok {
+		t.Fatal("missing TUI agent")
+	}
+}
