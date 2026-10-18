@@ -135,6 +135,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	accountMoving,
 	agentResuming,
 	controllerResumeError,
+	controllerResumeErrorCode,
 	newWorkDisabled,
 	arriving,
 	onConversationWorkChange,
@@ -192,6 +193,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	/** A stopped agent is being resumed in the background after the chat opened. */
 	agentResuming?: boolean;
 	controllerResumeError?: string;
+	/** The API error code that goes with controllerResumeError. */
+	controllerResumeErrorCode?: string;
 	/** An interface handoff fences new agent work while current-turn decisions remain available. */
 	newWorkDisabled?: boolean;
 	/** A switch from the terminal is under way and the conversation is not readable yet. */
@@ -787,6 +790,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				}}
 				resumingAgent={commands.resumingAgent || (renderSnapshot.controller.state === "hibernated" && controllerBusy)}
 				resumeError={commands.resumeError ?? controllerResumeError}
+				resumeErrorCode={commands.resumeError ? commands.resumeErrorCode : controllerResumeErrorCode}
 				onOpenShell={onOpenShell}
 				openingShell={openingShell}
 				shellError={shellError}

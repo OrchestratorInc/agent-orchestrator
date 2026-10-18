@@ -112,7 +112,6 @@ export function SessionImportDialog({
 						.map((r) => r.id),
 				),
 			);
-			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 			// Close on success so the imported chats show in the sidebar; failures stay listed here.
 			if (!response.data.results.some((r) => r.status === "failed")) {
 				setOpen(false);
@@ -123,6 +122,8 @@ export function SessionImportDialog({
 				err instanceof Error ? err.message : t("sessionImport.failed"),
 			);
 		} finally {
+			// A request that fails partway may still have created sessions.
+			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 			setImporting(false);
 		}
 	};
