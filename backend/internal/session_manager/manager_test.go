@@ -10700,6 +10700,11 @@ func newSendTestManager(t *testing.T, agent ports.Agent, messenger ports.AgentMe
 		attemptDeadline: 2 * time.Millisecond,
 		maxAttempts:     3,
 	}
+	m.sendAcceptance = sendAcceptanceConfig{
+		pollInterval: time.Millisecond,
+		wait:         4 * time.Millisecond,
+		maxPastes:    2,
+	}
 	return m
 }
 

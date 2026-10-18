@@ -100,6 +100,12 @@ var (
 	// not receive the target generation's prompt-submit hook before the bounded
 	// acknowledgement window expired. AO never resends this ambiguous turn.
 	ErrSwitchDeliveryUnconfirmed = errors.New("session: target continuation delivery was not acknowledged")
+	// ErrSendDeliveryUnconfirmed means a session-to-session send was written to
+	// the pane but the agent's prompt-submit hook never correlated the wrapped
+	// delivery id, and the session stayed idle with no newer boundary, so the
+	// pane write provably never became a prompt. The sender is expected to
+	// retry; a silent exit 0 here is how ao send lost messages (issue #6685).
+	ErrSendDeliveryUnconfirmed = errors.New("session: send was not accepted by the agent")
 	// ErrSwitchSourceStopUnconfirmed means runtime teardown returned an error and
 	// AO could not prove whether the source still owns the session. No target is
 	// launched in this case.
@@ -547,6 +553,9 @@ type Manager struct {
 	// actually became active (the agent accepted the prompt). New fills in the
 	// sendConfirm* defaults; tests in this package shrink the timings directly.
 	sendConfirm sendConfirmConfig
+	// sendAcceptance bounds the acceptance wait that turns a swallowed session
+	// send into a re-paste or a visible error instead of a silent exit 0.
+	sendAcceptance sendAcceptanceConfig
 	// interfaceTransition bounds only contradictory stale-idle proof. Turns and
 	// user-paced waits reported through the activity boundary remain unbounded.
 	interfaceTransition interfaceTransitionConfig
@@ -781,12 +790,32 @@ type interfaceTransitionConfig struct {
 	staleIdleLimit time.Duration
 }
 
+// sendAcceptanceConfig bounds the acceptance wait that follows a wrapped
+// session send to a TUI harness that can prove prompt acceptance (see
+// awaitSessionDeliveryAccepted). The pane write alone cannot: a TUI at a turn
+// boundary can drop the whole paste+Enter burst and the send still exits 0
+// (issue #6685).
+type sendAcceptanceConfig struct {
+	pollInterval time.Duration
+	// wait is how long one pane write has to produce acceptance evidence.
+	wait time.Duration
+	// maxPastes counts the original pane write plus acceptance re-pastes.
+	maxPastes int
+}
+
 // Production sendConfirm bounds: 3 Enters total (1 from Send + 2 re-sends),
 // each given 2s to flip the session active, polled every 300ms.
+//
+// Production sendAcceptance bounds: 2 pane writes total (the original plus one
+// recovery re-paste), each given 10s — the same evidence window the report
+// path (SendSemantic) already requires of these harnesses — polled at the
+// shared 300ms send cadence.
 const (
 	sendConfirmPollInterval       = 300 * time.Millisecond
 	sendConfirmAttemptDeadline    = 2 * time.Second
 	sendConfirmMaxAttempts        = 3
+	sendAcceptanceWait            = 10 * time.Second
+	sendAcceptanceMaxPastes       = 2
 	defaultBranchRefreshTimeout   = 5 * time.Second
 	promptDeliveryDeadlineReserve = 5 * time.Second
 )
@@ -903,6 +932,11 @@ func New(d Deps) *Manager {
 			pollInterval:    sendConfirmPollInterval,
 			attemptDeadline: sendConfirmAttemptDeadline,
 			maxAttempts:     sendConfirmMaxAttempts,
+		},
+		sendAcceptance: sendAcceptanceConfig{
+			pollInterval: sendConfirmPollInterval,
+			wait:         sendAcceptanceWait,
+			maxPastes:    sendAcceptanceMaxPastes,
 		},
 		interfaceTransition: interfaceTransitionConfig{
 			pollInterval:   interfaceTransitionPoll,
@@ -4939,8 +4973,9 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 		return err
 	}
 
+	deliveryID := ""
 	if _, coordination := domain.CoordinationDeliveryID(message); !coordination && !options.AuthoredByUser && strings.TrimSpace(message) != "" {
-		deliveryID := clientMessageID
+		deliveryID = clientMessageID
 		if deliveryID == "" {
 			deliveryID = "session-send:" + m.newLaunchID()
 		}
@@ -5012,6 +5047,17 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 	}
 	if m.harnessNudgeSafe(rec.Harness) {
 		m.confirmActive(ctx, m.messenger, id)
+	}
+	// A wrapped session send carries a correlation id the harness's prompt-submit
+	// hook reports back on acceptance. Confirming it (and re-pasting once while
+	// the session is still idle) is what keeps a TUI that swallows the whole
+	// paste from silently losing the message (issue #6685). SendSemantic has its
+	// own wait (clientMessageID set); user-authored and coordination sends carry
+	// no wrap id and keep today's behavior.
+	if deliveryID != "" && clientMessageID == "" {
+		if err := m.awaitSessionDeliveryAccepted(ctx, id, deliveryID, message); err != nil {
+			return err
+		}
 	}
 	return nil
 }
