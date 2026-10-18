@@ -3617,6 +3617,7 @@
 	"sessionImport.selectionHelp": "지난 30일 동안 활동한 대화가 미리 선택됩니다. 이전 대화도 선택할 수 있습니다. 가져온 모든 세션은 대기 상태로 유지됩니다.",
 	"sessionImport.reading": "로컬 기록 읽는 중…",
 	"sessionImport.truncated": "읽기 한도에 도달했습니다. 일부 대화는 검색되지 않았습니다.",
+	"sessionImport.shortened": "이 대화의 일부 텍스트는 너무 커서 가져올 수 없습니다.",
 	"sessionImport.selectAllAria": "표시된 모든 대화 선택",
 	"sessionImport.selectAll_one": "표시된 항목 모두 선택 · 대화 {{count}}개",
 	"sessionImport.selectAll_other": "표시된 항목 모두 선택 · 대화 {{count}}개",

@@ -3599,6 +3599,7 @@
 	"sessionImport.selectionHelp": "默认选中最近 30 天有活动的对话。您也可以选择更早的对话。导入后所有会话均保持空闲。",
 	"sessionImport.reading": "正在读取本地历史记录…",
 	"sessionImport.truncated": "此次扫描已达到读取上限。部分对话未被扫描。",
+	"sessionImport.shortened": "此对话中的部分文本过大，无法导入。",
 	"sessionImport.selectAllAria": "选择所有显示的对话",
 	"sessionImport.selectAll_one": "选择所有显示的对话 · {{count}} 个对话",
 	"sessionImport.selectAll_other": "选择所有显示的对话 · {{count}} 个对话",

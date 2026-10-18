@@ -314,6 +314,11 @@ function ImportRow({
 					{projectName} · {agentLabel(c.harness)} · {t("sessionImport.messages", { count: c.messageCount })} ·{" "}
 					{new Date(c.lastActivity).toLocaleDateString(i18n.resolvedLanguage)}
 				</span>
+				{c.shortened ? (
+					<span className="block text-xs text-warning">
+						{t("sessionImport.shortened")}
+					</span>
+				) : null}
 				{imported ? (
 					<span className="block text-xs text-muted-foreground">
 						{t("sessionImport.alreadyImported")}

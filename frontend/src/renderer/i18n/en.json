@@ -3598,6 +3598,7 @@
 	"sessionImport.selectionHelp": "Conversations active in the last 30 days are preselected. You can also select older conversations. Import leaves every session idle.",
 	"sessionImport.reading": "Reading local histories…",
 	"sessionImport.truncated": "This scan reached its read limit. Some conversations were not scanned.",
+	"sessionImport.shortened": "Some text in this chat is too large to import.",
 	"sessionImport.selectAllAria": "Select all shown conversations",
 	"sessionImport.selectAll_one": "Select all shown · {{count}} conversation",
 	"sessionImport.selectAll_other": "Select all shown · {{count}} conversations",

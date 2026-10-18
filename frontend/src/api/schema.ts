@@ -6694,6 +6694,7 @@ export interface components {
             messageCount: number;
             projectId?: string;
             sessionId?: string;
+            shortened?: boolean;
             suggested: boolean;
             title: string;
         };

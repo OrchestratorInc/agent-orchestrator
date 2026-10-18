@@ -49,6 +49,8 @@ type Candidate struct {
 	Suggested    bool                `json:"suggested"`
 	SessionID    domain.SessionID    `json:"sessionId,omitempty"`
 	MessageCount int                 `json:"messageCount"`
+	// Shortened reports text too large to import; the rest of the history is kept.
+	Shortened bool `json:"shortened,omitempty"`
 }
 
 // Preview is a bounded, explicit scan of this host, independent of normal board reads.
@@ -460,7 +462,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 			if title == "" {
 				title = "Imported conversation"
 			}
-			c := Candidate{ID: id, Harness: harness, Title: title, ProjectID: project, LastActivity: source.last, Suggested: source.last.After(recent), MessageCount: result.count}
+			c := Candidate{ID: id, Harness: harness, Title: title, ProjectID: project, LastActivity: source.last, Suggested: source.last.After(recent), MessageCount: result.count, Shortened: source.shortened}
 			for _, rec := range sessions {
 				if rec.Harness != harness {
 					continue

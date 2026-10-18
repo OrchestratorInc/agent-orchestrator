@@ -3686,6 +3686,7 @@
 	"sessionImport.selectionHelp": "Conversas ativas nos últimos 30 dias são pré-selecionadas. Você também pode selecionar conversas mais antigas. Todas as sessões permanecem ociosas após a importação.",
 	"sessionImport.reading": "Lendo históricos locais…",
 	"sessionImport.truncated": "Esta busca atingiu o limite de leitura. Algumas conversas não foram analisadas.",
+	"sessionImport.shortened": "Parte do texto desta conversa é grande demais para ser importada.",
 	"sessionImport.selectAllAria": "Selecionar todas as conversas exibidas",
 	"sessionImport.selectAll_one": "Selecionar todas · {{count}} conversa",
 	"sessionImport.selectAll_other": "Selecionar todas · {{count}} conversas",

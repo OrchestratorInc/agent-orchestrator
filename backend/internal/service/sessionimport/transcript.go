@@ -28,9 +28,11 @@ const (
 	maxSkimMember      = 4 << 10
 )
 
+// Variables so tests can use small records. A string over maxSkimString in an
+// oversized record is omitted; it would exceed maxVisibleBytes on its own.
 var (
-	// maxRecordBytes is a variable so tests can use a small record.
 	maxRecordBytes  = 64 << 20
+	maxSkimString   = maxVisibleBytes
 	nativeIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 	// Codex rollouts may be zstd-compressed and split into `<thread>_<segment>` files.
 	codexRolloutName = regexp.MustCompile(`^rollout-.*-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:_[0-9a-fA-F-]{36})?\.jsonl(?:\.zst)?$`)
@@ -52,6 +54,8 @@ type transcript struct {
 	title                     string
 	messages                  []Message
 	last                      time.Time
+	// shortened reports visible text that was too large to keep.
+	shortened bool
 }
 
 type textBlock struct{ Type, Text string }
@@ -76,6 +80,7 @@ type record struct {
 	Sidechain         bool      `json:"isSidechain"`
 	Meta              bool      `json:"isMeta"`
 	CompactSummary    bool      `json:"isCompactSummary"`
+	Omitted           bool      `json:"aoOmitted"`
 	AITitle           string    `json:"aiTitle"`
 	CustomTitle       string    `json:"customTitle"`
 	Message           struct {
@@ -168,9 +173,9 @@ func codexThreadID(path string) string {
 	return ""
 }
 
-// eachRecord streams JSONL. A record too large to decode is passed on with only
-// its short top-level fields, so a huge Claude tool result keeps the parent
-// link that joins the history before it.
+// eachRecord streams JSONL. A record too large to decode is rewritten as it
+// streams past, so a huge tool result neither hides the text beside it nor
+// breaks the parent link that joins the history before it.
 func eachRecord(r io.Reader, fn func([]byte) error) error {
 	br := bufio.NewReaderSize(r, 256<<10)
 	var (
@@ -184,7 +189,7 @@ func eachRecord(r io.Reader, fn func([]byte) error) error {
 			oversized = true
 			skim.reset()
 			skim.write(line)
-			line = line[:0]
+			line = nil
 		}
 		if oversized {
 			skim.write(chunk)
@@ -213,24 +218,31 @@ func eachRecord(r io.Reader, fn func([]byte) error) error {
 	}
 }
 
-// recordSkim copies the top-level scalar members of one JSON object as they
-// stream past; object, array and long values are dropped without being kept.
+// recordSkim rewrites one oversized JSON record: a string over maxSkimString
+// becomes omittedText. If the rest is still over maxRecordBytes, only the
+// short top-level scalars are kept, marked aoOmitted.
 type recordSkim struct {
-	out, member            []byte
-	depth                  int
-	inString, escape, drop bool
-	closed                 bool
+	full, top, member  []byte
+	stringStart, depth int
+
+	inString, escape, longString, drop, overflow, closed bool
 }
 
+const omittedText = "\x00omitted\x00"
+
+var omittedJSON = []byte(`"\u0000omitted\u0000"`)
+
 func (s *recordSkim) reset() {
-	*s = recordSkim{out: append(s.out[:0], '{'), member: s.member[:0]}
+	*s = recordSkim{top: append(s.top[:0], '{'), member: s.member[:0]}
 }
 
 func (s *recordSkim) write(p []byte) {
 	for _, c := range p {
-		switch {
-		case s.closed:
+		if s.closed {
 			return
+		}
+		s.copyFull(c)
+		switch {
 		case s.inString:
 			switch {
 			case s.escape:
@@ -270,22 +282,51 @@ func (s *recordSkim) write(p []byte) {
 	}
 }
 
+// copyFull runs before write updates the string state for c.
+func (s *recordSkim) copyFull(c byte) {
+	if s.overflow {
+		return
+	}
+	closing := s.inString && !s.escape && c == '"'
+	switch {
+	case !s.inString && c == '"':
+		s.stringStart, s.longString = len(s.full), false
+	case s.inString && !s.longString && len(s.full)-s.stringStart > maxSkimString:
+		s.full, s.longString = s.full[:s.stringStart], true
+	}
+	if s.longString {
+		if closing {
+			s.full, s.longString = append(s.full, omittedJSON...), false
+		}
+		return
+	}
+	s.full = append(s.full, c)
+	if len(s.full) > maxRecordBytes {
+		s.full, s.overflow = nil, true
+	}
+}
+
 func (s *recordSkim) keep() {
 	if m := bytes.TrimSpace(s.member); len(m) > 0 && !s.drop {
-		if len(s.out) > 1 {
-			s.out = append(s.out, ',')
+		if len(s.top) > 1 {
+			s.top = append(s.top, ',')
 		}
-		s.out = append(s.out, m...)
+		s.top = append(s.top, m...)
 	}
 	s.member, s.drop = s.member[:0], false
 }
 
 // record is nil for a torn object, as a torn small record fails to decode.
 func (s *recordSkim) record() []byte {
-	if !s.closed {
+	switch {
+	case !s.closed:
 		return nil
+	case !s.overflow:
+		return s.full
+	case len(s.top) > 1:
+		s.top = append(s.top, ',')
 	}
-	return append(s.out, '}')
+	return append(s.top, `"aoOmitted":true}`...)
 }
 
 type tagged struct {
@@ -298,7 +339,7 @@ type tagged struct {
 type claudeNode struct {
 	typ, role, id, uuid, parent, logicalParent, cwd, text string
 	at                                                    time.Time
-	hidden                                                bool
+	hidden, omitted                                       bool
 }
 
 // readTranscript reads one native conversation; Codex segments are passed oldest first.
@@ -333,7 +374,13 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	)
 	now := time.Now()
 	add := func(kind, id, role, text string, at time.Time) {
-		if role != "user" && role != "assistant" || strings.TrimSpace(text) == "" {
+		if role != "user" && role != "assistant" {
+			return
+		}
+		if strings.Contains(text, omittedText) {
+			t.shortened, text = true, strings.ReplaceAll(text, omittedText, "")
+		}
+		if strings.TrimSpace(text) == "" {
 			return
 		}
 		msg := tagged{Message: Message{Role: domain.MessageRole(role), Text: text, At: at}, kind: kind, id: id}
@@ -352,6 +399,11 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 		}
 		visible += len(text)
 		items = append(items, msg)
+	}
+	trim := func() {
+		n := len(items)
+		items = trimVisible(items)
+		t.shortened = t.shortened || len(items) < n
 	}
 	handle := func(line []byte) error {
 		if err := ctx.Err(); err != nil {
@@ -377,7 +429,7 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 			if title := strings.TrimSpace(r.AITitle); title != "" {
 				t.title = title
 			}
-			node := claudeNode{typ: r.Type, role: r.Message.Role, id: r.Message.ID, uuid: r.UUID, parent: r.ParentUUID, logicalParent: r.LogicalParentUUID, cwd: r.CWD, at: r.Timestamp, hidden: r.Meta || r.CompactSummary}
+			node := claudeNode{typ: r.Type, role: r.Message.Role, id: r.Message.ID, uuid: r.UUID, parent: r.ParentUUID, logicalParent: r.LogicalParentUUID, cwd: r.CWD, at: r.Timestamp, hidden: r.Meta || r.CompactSummary, omitted: r.Omitted}
 			if r.Type == "user" || r.Type == "assistant" {
 				node.text = string(r.Message.Content)
 			}
@@ -391,6 +443,9 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 			}
 			claude = append(claude, node)
 			return nil
+		}
+		if r.Omitted && (r.Type == "response_item" || r.Type == "event_msg") {
+			t.shortened = true // The dropped payload may have held visible text.
 		}
 		switch r.Type {
 		case "session_meta":
@@ -426,7 +481,7 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 			}
 		}
 		if visible > 2*maxVisibleBytes {
-			items = trimVisible(items)
+			trim()
 			visible = 0
 			clear(ids)
 			for i, item := range items {
@@ -478,6 +533,7 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 		if (node.typ != "user" && node.typ != "assistant") || node.hidden {
 			continue
 		}
+		t.shortened = t.shortened || node.omitted
 		role := node.role
 		if role == "" {
 			role = node.typ
@@ -501,7 +557,7 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 		items = codexVisible(items)
 		prompted = true
 	}
-	items = trimVisible(items)
+	trim()
 	for _, item := range items {
 		t.messages = append(t.messages, item.Message)
 	}

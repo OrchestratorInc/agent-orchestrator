@@ -187,8 +187,8 @@ func TestClaudeTranscriptShapes(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantTexts(t, got.messages, "user: start the refactor", "assistant: Working on it.", "user: /review PR 12", "assistant: Review posted.")
-	if got.title != "Refactor and review" || got.cwd != "/work/repo" {
-		t.Fatalf("title=%q cwd=%q", got.title, got.cwd)
+	if got.title != "Refactor and review" || got.cwd != "/work/repo" || got.shortened {
+		t.Fatalf("title=%q cwd=%q shortened=%v", got.title, got.cwd, got.shortened)
 	}
 	custom := writeFile(t, path, body[:strings.LastIndex(body, "\n")]+"\n"+`{"type":"custom-title","customTitle":"My rename","sessionId":"`+id+`"}`+"\n")
 	if got, err = readTranscript(context.Background(), domain.HarnessClaudeCode, root, custom); err != nil || got.title != "My rename" {
@@ -202,36 +202,63 @@ func TestClaudeTranscriptShapes(t *testing.T) {
 	}
 }
 
-func TestOversizedClaudeRecordKeepsEarlierHistory(t *testing.T) {
-	limit := maxRecordBytes
-	maxRecordBytes = 1 << 10
-	t.Cleanup(func() { maxRecordBytes = limit })
+func TestOversizedClaudeRecordKeepsHistoryAndReportsLostText(t *testing.T) {
+	limits := [2]int{maxRecordBytes, maxSkimString}
+	maxRecordBytes, maxSkimString = 1<<10, 256
+	t.Cleanup(func() { maxRecordBytes, maxSkimString = limits[0], limits[1] })
 	id := "6d842f77-b1fe-49f3-8585-8946df267bae"
 	// Claude writes uuid after the tool output; quotes and braces inside it are not structure.
-	big := strings.Repeat(`x\"}{[`, 1<<10)
-	body := `{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"` + id + `","message":{"role":"user","content":"first question"}}
+	big := strings.Repeat(`x\"}{[`, 200)
+	parts := strings.TrimSuffix(strings.Repeat(`{"type":"text","text":"`+strings.Repeat("m", 200)+`"},`, 8), ",")
+	for _, tc := range []struct {
+		name, record string
+		want         []string
+		shortened    bool
+	}{
+		{"tool output beside text", `{"parentUuid":"a1","type":"user","sessionId":"` + id + `","message":{"role":"user","content":[{"type":"text","text":"note beside output"},{"type":"tool_result","content":"` + big + `"}]},"toolUseResult":{"uuid":"nested"},"uuid":"mid"}`, []string{"user: note beside output"}, false},
+		{"text too large", `{"parentUuid":"a1","type":"assistant","message":{"id":"m9","role":"assistant","content":[{"type":"text","text":"` + big + `"}]},"uuid":"mid"}`, nil, true},
+		{"too many parts", `{"parentUuid":"a1","type":"assistant","message":{"id":"m9","role":"assistant","content":[` + parts + `]},"uuid":"mid"}`, nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"` + id + `","message":{"role":"user","content":"first question"}}
 {"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"first answer"}]}}
-{"parentUuid":"a1","type":"user","sessionId":"` + id + `","message":{"role":"user","content":[{"type":"tool_result","content":"` + big + `"}]},"toolUseResult":{"uuid":"nested"},"uuid":"tool"}
-{"type":"user","uuid":"u2","parentUuid":"tool","message":{"role":"user","content":"second question"}}
+` + tc.record + `
+{"type":"user","uuid":"u2","parentUuid":"mid","message":{"role":"user","content":"second question"}}
 {"type":"assistant","uuid":"a2","parentUuid":"u2","message":{"id":"m2","role":"assistant","content":[{"type":"text","text":"second answer"}]}}
 `
-	root := t.TempDir()
-	path := writeFile(t, filepath.Join(root, "projects", "-work-repo", id+".jsonl"), body)
-	got, err := readTranscript(context.Background(), domain.HarnessClaudeCode, root, path)
-	if err != nil {
-		t.Fatal(err)
+			root := t.TempDir()
+			path := writeFile(t, filepath.Join(root, "projects", "-work-repo", id+".jsonl"), body)
+			got, err := readTranscript(context.Background(), domain.HarnessClaudeCode, root, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := append(append([]string{"user: first question", "assistant: first answer"}, tc.want...), "user: second question", "assistant: second answer")
+			wantTexts(t, got.messages, want...)
+			if got.shortened != tc.shortened {
+				t.Fatalf("shortened = %v", got.shortened)
+			}
+		})
 	}
-	wantTexts(t, got.messages, "user: first question", "assistant: first answer", "user: second question", "assistant: second answer")
+}
 
+func TestRecordSkim(t *testing.T) {
+	limits := [2]int{maxRecordBytes, maxSkimString}
+	maxRecordBytes, maxSkimString = 1<<10, 256
+	t.Cleanup(func() { maxRecordBytes, maxSkimString = limits[0], limits[1] })
 	var skim recordSkim
 	skim.reset()
-	skim.write([]byte(`{"a":"x\"}","b":{"uuid":"no"},"c":[1,{"d":2}],"long":"` + strings.Repeat("y", maxSkimMember) + `","e":true, "f" : null,"uuid":"yes"`))
+	skim.write([]byte(`{"a":"x\"}","b":{"uuid":"\\"},"long":"` + strings.Repeat(`y\"`, 100) + `","e":true, "f" : null,"uuid":"yes"`))
 	if skim.record() != nil {
 		t.Fatal("a torn record was kept")
 	}
-	skim.write([]byte("}\n"))
-	if got := string(skim.record()); got != `{"a":"x\"}","e":true,"f" : null,"uuid":"yes"}` {
-		t.Fatalf("skimmed record = %s", got)
+	skim.write([]byte("}\n{}"))
+	if got := string(skim.record()); got != `{"a":"x\"}","b":{"uuid":"\\"},"long":"\u0000omitted\u0000","e":true, "f" : null,"uuid":"yes"}` {
+		t.Fatalf("rewritten record = %s", got)
+	}
+	skim.reset()
+	skim.write([]byte(`{"uuid":"yes","p":[` + strings.TrimSuffix(strings.Repeat(`"`+strings.Repeat("m", 200)+`",`, 8), ",") + `],"type":"user"}`))
+	if got := string(skim.record()); got != `{"uuid":"yes","type":"user","aoOmitted":true}` {
+		t.Fatalf("overflowed record = %s", got)
 	}
 }
 
@@ -257,8 +284,8 @@ func TestVisibleBudgetKeepsOpeningPromptAndNewestMessages(t *testing.T) {
 	for _, m := range got.messages {
 		total += len(m.Text)
 	}
-	if total > limit {
-		t.Fatalf("visible bytes = %d", total)
+	if total > limit || !got.shortened {
+		t.Fatalf("visible bytes = %d, shortened = %v", total, got.shortened)
 	}
 }
 

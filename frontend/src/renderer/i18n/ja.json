@@ -3617,6 +3617,7 @@
 	"sessionImport.selectionHelp": "過去30日間にアクティブだった会話が選択されています。古い会話も選択できます。インポート後、すべてのセッションは待機状態になります。",
 	"sessionImport.reading": "ローカルの履歴を読み取り中…",
 	"sessionImport.truncated": "読み取り上限に達しました。一部の会話はスキャンされていません。",
+	"sessionImport.shortened": "この会話の一部のテキストは大きすぎるため、インポートできません。",
 	"sessionImport.selectAllAria": "表示中の会話をすべて選択",
 	"sessionImport.selectAll_one": "表示中をすべて選択 · {{count}} 件の会話",
 	"sessionImport.selectAll_other": "表示中をすべて選択 · {{count}} 件の会話",

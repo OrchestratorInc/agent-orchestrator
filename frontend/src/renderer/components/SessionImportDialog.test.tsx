@@ -29,6 +29,7 @@ beforeEach(() => {
 					suggested: false,
 					lastActivity: "2026-01-06T10:00:00Z",
 					messageCount: 3,
+					shortened: true,
 				},
 			],
 		},
@@ -55,6 +56,9 @@ it("preselects recent histories, lets older standalone work be selected and impo
 	expect(recent).toBeChecked();
 	const older = screen.getByRole("checkbox", { name: "Import Old discussion" });
 	expect(older).not.toBeChecked();
+	expect(
+		screen.getAllByText("Some text in this chat is too large to import."),
+	).toHaveLength(1);
 	fireEvent.click(recent);
 	fireEvent.change(screen.getByLabelText("Project"), {
 		target: { value: "standalone" },
