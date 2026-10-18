@@ -837,6 +837,42 @@ func TestRuntimeObservation_AliveWorkloadCannotResurrectExitedSession(t *testing
 	}
 }
 
+// ExitAgent destroys a terminal on purpose and keeps the session; Resume
+// builds a new one. That runtime's death must leave the session live. A release
+// names one launch only: a later launch that dies after its agent exited is a
+// crash like any other (the exit hook can win the race with the reaper).
+func TestRuntimeObservation_ReleasedRuntimeDeathKeepsSessionLive(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		released  string
+		terminate bool
+	}{
+		{name: "released launch", released: "launch-1", terminate: false},
+		{name: "earlier launch released", released: "launch-0", terminate: true},
+		{name: "nothing released", released: "", terminate: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, _ := newManager()
+			rec := working("mer-1")
+			rec.Activity = domain.Activity{State: domain.ActivityExited, LastActivityAt: time.Now().Add(-2 * time.Minute)}
+			rec.Metadata.RuntimeLaunchID = "launch-1"
+			rec.Metadata.RuntimeReleasedLaunchID = tc.released
+			st.sessions["mer-1"] = rec
+
+			if err := m.ApplyRuntimeObservation(ctx, "mer-1", ports.RuntimeFacts{
+				Runtime:  ports.ProbeDead,
+				Workload: ports.ProbeFailed,
+				LaunchID: "launch-1",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if got := st.sessions["mer-1"]; got.IsTerminated != tc.terminate {
+				t.Fatalf("terminated = %v, want %v", got.IsTerminated, tc.terminate)
+			}
+		})
+	}
+}
+
 func TestRuntimeObservation_StaleLaunchIsIgnored(t *testing.T) {
 	m, st, _ := newManager()
 	rec := working("mer-1")

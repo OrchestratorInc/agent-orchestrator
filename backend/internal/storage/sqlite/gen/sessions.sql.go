@@ -178,7 +178,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     requested_output,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
-    hibernated_at, client_request_id, client_request_hash, client_request_committed
+    hibernated_at, client_request_id, client_request_hash, client_request_committed,
+    runtime_released_launch_id
 FROM sessions WHERE id = ?
 `
 
@@ -254,6 +255,7 @@ type GetSessionRow struct {
 	ClientRequestID                  string
 	ClientRequestHash                string
 	ClientRequestCommitted           bool
+	RuntimeReleasedLaunchID          string
 }
 
 func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessionRow, error) {
@@ -331,6 +333,7 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.ClientRequestID,
 		&i.ClientRequestHash,
 		&i.ClientRequestCommitted,
+		&i.RuntimeReleasedLaunchID,
 	)
 	return i, err
 }
@@ -352,7 +355,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     requested_output,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
-    hibernated_at, client_request_id, client_request_hash, client_request_committed
+    hibernated_at, client_request_id, client_request_hash, client_request_committed,
+    runtime_released_launch_id
 FROM sessions WHERE automation_run_id = ?
 `
 
@@ -428,6 +432,7 @@ type GetSessionByAutomationRunIDRow struct {
 	ClientRequestID                  string
 	ClientRequestHash                string
 	ClientRequestCommitted           bool
+	RuntimeReleasedLaunchID          string
 }
 
 func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRunID *domain.AutomationRunID) (GetSessionByAutomationRunIDRow, error) {
@@ -505,6 +510,7 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.ClientRequestID,
 		&i.ClientRequestHash,
 		&i.ClientRequestCommitted,
+		&i.RuntimeReleasedLaunchID,
 	)
 	return i, err
 }
@@ -689,7 +695,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     requested_output,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
-    hibernated_at, client_request_id, client_request_hash, client_request_committed
+    hibernated_at, client_request_id, client_request_hash, client_request_committed,
+    runtime_released_launch_id
 FROM sessions ORDER BY project_id, num
 `
 
@@ -765,6 +772,7 @@ type ListAllSessionsRow struct {
 	ClientRequestID                  string
 	ClientRequestHash                string
 	ClientRequestCommitted           bool
+	RuntimeReleasedLaunchID          string
 }
 
 func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, error) {
@@ -848,6 +856,7 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.ClientRequestID,
 			&i.ClientRequestHash,
 			&i.ClientRequestCommitted,
+			&i.RuntimeReleasedLaunchID,
 		); err != nil {
 			return nil, err
 		}
@@ -912,7 +921,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     requested_output,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
-    hibernated_at, client_request_id, client_request_hash, client_request_committed
+    hibernated_at, client_request_id, client_request_hash, client_request_committed,
+    runtime_released_launch_id
 FROM sessions WHERE project_id IS ? ORDER BY num
 `
 
@@ -988,6 +998,7 @@ type ListSessionsByProjectRow struct {
 	ClientRequestID                  string
 	ClientRequestHash                string
 	ClientRequestCommitted           bool
+	RuntimeReleasedLaunchID          string
 }
 
 func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.ProjectID) ([]ListSessionsByProjectRow, error) {
@@ -1071,6 +1082,7 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.ClientRequestID,
 			&i.ClientRequestHash,
 			&i.ClientRequestCommitted,
+			&i.RuntimeReleasedLaunchID,
 		); err != nil {
 			return nil, err
 		}
@@ -1696,6 +1708,27 @@ func (q *Queries) SetSessionReviewerConfig(ctx context.Context, arg SetSessionRe
 		arg.UpdatedAt,
 		arg.ID,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setSessionRuntimeReleased = `-- name: SetSessionRuntimeReleased :execrows
+UPDATE sessions
+SET runtime_released_launch_id = ?1
+WHERE id = ?2 AND runtime_launch_id = ?1
+`
+
+type SetSessionRuntimeReleasedParams struct {
+	LaunchID string
+	ID       domain.SessionID
+}
+
+// Narrow write for an agent exit that keeps its session: names only the
+// released launch, and only while that launch is still the session's own.
+func (q *Queries) SetSessionRuntimeReleased(ctx context.Context, arg SetSessionRuntimeReleasedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionRuntimeReleased, arg.LaunchID, arg.ID)
 	if err != nil {
 		return 0, err
 	}

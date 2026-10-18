@@ -205,7 +205,10 @@ var shippedMigrations = map[int64]string{
 	200: "0200_session_artifact_version_source.sql",
 	202: "0202_allow_memcode_harness.sql",
 	206: "0206_awake.sql",
-	207: "0207_allow_codebuddy_harness.sql",
+	210: "0210_agent_accounts.sql",
+	211: "0211_account_transitions.sql",
+	212: "0212_session_runtime_released.sql",
+	214: "0214_allow_codebuddy_harness.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -213,6 +216,7 @@ var shippedMigrations = map[int64]string{
 // recorded as applied while this repository ships no file with that number. A
 // new file claiming one would be skipped silently there.
 //
+//   - 207 was used by CodeBuddy preview builds before reconciliation with main.
 //   - 22 shipped in a nightly (#2412) and was deleted by the revert.
 //
 // Beware of the adjacent hazard this cannot catch: at least one field profile
@@ -221,7 +225,7 @@ var shippedMigrations = map[int64]string{
 // Any such migration whose schema the generated queries depend on must add a
 // schemaRepairs entry in db.go.
 func burnedVersion(v int64) bool {
-	return v == 22
+	return v == 22 || v == 207
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every
