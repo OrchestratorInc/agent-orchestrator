@@ -61,6 +61,17 @@ func TestImportCopiesDirtyGitStateWithoutChangingSource(t *testing.T) {
 			write("binary", []byte{0, 3, 4, 255})
 			write(".env", []byte("ignored local data\n"))
 			write("new\nfile", []byte("untracked\n"))
+			// A nested repository, such as Claude's agent worktree, is not part of this checkout.
+			nested := filepath.Join(source, ".claude", "worktrees", "agent")
+			if err := os.MkdirAll(nested, 0700); err != nil {
+				t.Fatal(err)
+			}
+			git(nested, "init", "-b", "main")
+			// A tracked submodule keeps its folder.
+			git(source, "update-index", "--add", "--cacheinfo", "160000,"+strings.TrimSpace(string(git(source, "rev-parse", "HEAD")))+",sub")
+			if err := os.MkdirAll(filepath.Join(source, "sub"), 0700); err != nil {
+				t.Fatal(err)
+			}
 			if err := os.Remove(filepath.Join(source, "deleted")); err != nil {
 				t.Fatal(err)
 			}
@@ -86,7 +97,12 @@ func TestImportCopiesDirtyGitStateWithoutChangingSource(t *testing.T) {
 			if !bytes.Equal(before, git(source, "status", "--porcelain=v1", "-z", "--untracked-files=all")) || !bytes.Equal(staged, git(source, "diff", "--cached", "--binary", "--full-index")) {
 				t.Fatal("source changed")
 			}
-			for _, name := range []string{".env", "new\nfile", "binary", "file"} {
+			for _, name := range []string{".env", ".claude"} {
+				if _, err := os.Lstat(filepath.Join(destination, name)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("%s copied; ignored files and nested repositories stay behind", name)
+				}
+			}
+			for _, name := range []string{"new\nfile", "binary", "file"} {
 				a, _ := os.ReadFile(filepath.Join(source, name))
 				b, err := os.ReadFile(filepath.Join(destination, name))
 				if err != nil || !bytes.Equal(a, b) {
@@ -205,8 +221,14 @@ func TestImportPreservesNestedWorktreePointers(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(externalChild, "unregistered", ".git"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyImportedWorkspace(context.Background(), source, destination, map[string]string{"child": externalChild}, ""); err == nil {
-		t.Fatal("silently discarded nested Git metadata from the original linked checkout")
+	for _, rel := range []string{".", "child"} {
+		git(filepath.Join(destination, rel), "reset", "-q", "HEAD") // The first copy already staged its edits here.
+	}
+	if err := copyImportedWorkspace(context.Background(), source, destination, map[string]string{"child": externalChild}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(destination, "child", "unregistered")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("copied an unregistered nested repository")
 	}
 	// A source HEAD advance must not copy files onto the old AO base.
 	git(source, "-c", "user.name=AO test", "-c", "user.email=test@example.invalid", "commit", "-m", "advance")

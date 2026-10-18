@@ -442,35 +442,40 @@ type importFileFact struct {
 	Modified time.Time
 }
 
-func importManifest(ctx context.Context, root *os.Root) (map[string]importFileFact, error) {
+// importManifest covers what Git shows for a checkout: tracked files and
+// untracked files that are not ignored. Ignored output such as node_modules,
+// and nested repositories such as Claude's agent worktrees, stay behind; the
+// project's symlinks and setup provide them, as for a native session.
+func importManifest(ctx context.Context, repo string, root *os.Root) (map[string]importFileFact, error) {
+	out, err := importGit(ctx, repo, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	if err != nil {
+		return nil, err
+	}
 	facts := map[string]importFileFact{}
-	err := fs.WalkDir(root.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
+	for _, path := range strings.Split(string(out), "\x00") {
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil, err
 		}
-		if entry.Name() == ".git" {
-			if entry.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
+		// A nested repository is listed as a directory; deleted files are absent.
+		if path == "" || strings.HasSuffix(path, "/") {
+			continue
 		}
-		if path == "." {
-			return nil
-		}
+		path = filepath.FromSlash(path)
 		info, err := root.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if !info.Mode().IsRegular() && !info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
-			return fmt.Errorf("cannot copy special file %s", path)
+		switch {
+		case info.IsDir():
+			facts[path] = importFileFact{Mode: info.Mode()} // A submodule keeps its folder, as in a fresh checkout.
+		case info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0:
+			facts[path] = importFileFact{Mode: info.Mode(), Size: info.Size(), Modified: info.ModTime()}
 		}
-		facts[path] = importFileFact{Mode: info.Mode(), Size: info.Size(), Modified: info.ModTime()}
-		return nil
-	})
-	return facts, err
+	}
+	return facts, nil
 }
 
 func importGitPaths(root string) ([]string, error) {
@@ -511,26 +516,6 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 	gitPaths, err := importGitPaths(destination)
 	if err != nil {
 		return err
-	}
-	nativePaths, err := importGitPaths(source)
-	if err != nil {
-		return err
-	}
-	for _, rel := range nativePaths {
-		if !slices.Contains(gitPaths, rel) {
-			return fmt.Errorf("nested repository %s is not registered in this AO workspace", rel)
-		}
-	}
-	for rel, native := range overrides {
-		paths, err := importGitPaths(native)
-		if err != nil {
-			return err
-		}
-		for _, child := range paths {
-			if path := filepath.Join(rel, child); !slices.Contains(gitPaths, path) {
-				return fmt.Errorf("nested repository %s is not registered in this AO workspace", path)
-			}
-		}
 	}
 	type gitState struct {
 		rel, source  string
@@ -577,105 +562,86 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 		}
 		linkRoots[resolved] = rel
 	}
-	copyTree := func(native, target string) error {
-		src, err := os.OpenRoot(native)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = src.Close() }()
-		facts, err := importManifest(ctx, src)
-		if err != nil {
-			return err
-		}
-		snapshots = append(snapshots, snapshot{native, facts})
-		if err := os.MkdirAll(target, 0o700); err != nil {
-			return err
-		}
-		dst, err := os.OpenRoot(target)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = dst.Close() }()
-		return fs.WalkDir(src.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
+	copyFile := func(src, dst *os.Root, target, path string, fact importFileFact) error {
+		if fact.Mode&os.ModeSymlink != 0 {
+			link, err := src.Readlink(path)
 			if err != nil {
 				return err
 			}
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if entry.Name() == ".git" {
-				if entry.IsDir() {
-					return fs.SkipDir
+			if filepath.IsAbs(link) {
+				// Rebase links into any copied tree, including a separately cloned child.
+				physical := link
+				if parent, err := filepath.EvalSymlinks(filepath.Dir(link)); err == nil {
+					physical = filepath.Join(parent, filepath.Base(link))
 				}
-				return nil
-			}
-			if path == "." {
-				return nil
-			}
-			fact, ok := facts[path]
-			if !ok {
-				return errors.New("source files changed while copying; retry")
-			}
-			if entry.IsDir() {
-				return dst.MkdirAll(path, fact.Mode.Perm()|0o700)
-			}
-			if fact.Mode&os.ModeSymlink != 0 {
-				link, err := src.Readlink(path)
-				if err != nil {
-					return err
-				}
-				if filepath.IsAbs(link) {
-					// Rebase links into any copied tree, including a separately cloned child.
-					physical := link
-					if parent, err := filepath.EvalSymlinks(filepath.Dir(link)); err == nil {
-						physical = filepath.Join(parent, filepath.Base(link))
-					}
-					best := ""
-					for original := range linkRoots {
-						if pathWithin(original, physical) && len(original) > len(best) {
-							best = original
-						}
-					}
-					if best != "" {
-						rel, _ := filepath.Rel(best, physical)
-						targetRel, _ := filepath.Rel(temp, target)
-						link, err = filepath.Rel(filepath.Dir(filepath.Join(destination, targetRel, path)), filepath.Join(destination, linkRoots[best], rel))
-						if err != nil {
-							return err
-						}
+				best := ""
+				for original := range linkRoots {
+					if pathWithin(original, physical) && len(original) > len(best) {
+						best = original
 					}
 				}
-				return dst.Symlink(link, path)
+				if best != "" {
+					rel, _ := filepath.Rel(best, physical)
+					targetRel, _ := filepath.Rel(temp, target)
+					link, err = filepath.Rel(filepath.Dir(filepath.Join(destination, targetRel, path)), filepath.Join(destination, linkRoots[best], rel))
+					if err != nil {
+						return err
+					}
+				}
 			}
-			in, err := src.Open(path)
-			if err != nil {
-				return err
-			}
-			out, err := dst.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fact.Mode.Perm())
-			if err != nil {
-				_ = in.Close()
-				return err
-			}
-			_, copyErr := io.Copy(out, in)
+			return dst.Symlink(link, path)
+		}
+		in, err := src.Open(path)
+		if err != nil {
+			return err
+		}
+		out, err := dst.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fact.Mode.Perm())
+		if err != nil {
 			_ = in.Close()
-			if err := errors.Join(copyErr, out.Close()); err != nil {
-				return err
+			return err
+		}
+		_, copyErr := io.Copy(out, in)
+		_ = in.Close()
+		if err := errors.Join(copyErr, out.Close()); err != nil {
+			return err
+		}
+		return dst.Chtimes(path, fact.Modified, fact.Modified)
+	}
+	// Each registered repository copies its own files, so a child never rides
+	// along with its parent and an unregistered nested repository stays behind.
+	for _, state := range states {
+		target := filepath.Join(temp, state.rel)
+		src, err := os.OpenRoot(state.source)
+		if err != nil {
+			return err
+		}
+		facts, err := importManifest(ctx, state.source, src)
+		if err == nil {
+			snapshots = append(snapshots, snapshot{state.source, facts})
+			err = os.MkdirAll(target, 0o700)
+		}
+		var dst *os.Root
+		if err == nil {
+			dst, err = os.OpenRoot(target)
+		}
+		for path, fact := range facts {
+			if err != nil {
+				break
 			}
-			return dst.Chtimes(path, fact.Modified, fact.Modified)
-		})
-	}
-	if err := copyTree(source, temp); err != nil {
-		return err
-	}
-	for rel, native := range overrides {
-		if _, err := safeRelPath(rel); err != nil {
-			return err
+			switch {
+			case fact.Mode.IsDir():
+				err = dst.MkdirAll(path, 0o755)
+			default:
+				if err = dst.MkdirAll(filepath.Dir(path), 0o755); err == nil {
+					err = copyFile(src, dst, target, path, fact)
+				}
+			}
 		}
-		target := filepath.Join(temp, rel)
-		if err := os.RemoveAll(target); err != nil {
-			return err
+		_ = src.Close()
+		if dst != nil {
+			_ = dst.Close()
 		}
-		if err := copyTree(native, target); err != nil {
+		if err != nil {
 			return err
 		}
 	}
@@ -684,7 +650,7 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 		if err != nil {
 			return err
 		}
-		after, err := importManifest(ctx, root)
+		after, err := importManifest(ctx, snapshot.path, root)
 		_ = root.Close()
 		if err != nil {
 			return err
