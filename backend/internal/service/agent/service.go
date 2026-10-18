@@ -68,18 +68,21 @@ type modelCatalogCall struct {
 // Service owns normalized harness readiness and the unchanged model catalog.
 // Consumers share coordinator checks instead of probing adapters directly.
 type Service struct {
-	agents            []agentregistry.HarnessAgent
-	readiness         *readinessCoordinator
-	cache             ports.AgentModelCatalogCache
-	discoverer        ports.AgentModelDiscoverer
-	modelDiscoveryDir string
-	projects          ProjectLookup
-	sessions          SessionUsageLookup
-	resolverMu        map[string]*sync.Mutex
-	modelCallMu       sync.Mutex
-	modelCalls        map[string]*modelCatalogCall
-	modelGeneration   map[string]int64
-	discoverySlots    chan struct{}
+	agents    []agentregistry.HarnessAgent
+	readiness *readinessCoordinator
+	// savedDefaultSignIn reports the sign-in of the saved account new sessions
+	// of a harness start on; handled is false when they start on this computer.
+	savedDefaultSignIn func(ctx context.Context, harness domain.AgentHarness) (signedIn, handled bool)
+	cache              ports.AgentModelCatalogCache
+	discoverer         ports.AgentModelDiscoverer
+	modelDiscoveryDir  string
+	projects           ProjectLookup
+	sessions           SessionUsageLookup
+	resolverMu         map[string]*sync.Mutex
+	modelCallMu        sync.Mutex
+	modelCalls         map[string]*modelCatalogCall
+	modelGeneration    map[string]int64
+	discoverySlots     chan struct{}
 	// inputChecks tracks background credential-input checks for cached
 	// catalogs, so a cache read never waits on them.
 	inputCheckMu  sync.Mutex

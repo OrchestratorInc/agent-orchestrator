@@ -69,12 +69,21 @@ func (m *Manager) releaseSessionInput(id domain.SessionID) {
 
 // SessionMutationInProgress is consumed by observation-driven lifecycle paths
 // that must not independently terminate a session while AO is replacing or
-// relaunching its provider process.
+// relaunching its provider process. A live interface or account transition is
+// one: between its source stop and the target's spawn the session's runtime is
+// dead by design, and a same-mode move stays probeable all through it.
 func (m *Manager) SessionMutationInProgress(id domain.SessionID) bool {
 	id = domain.SessionID(strings.TrimSpace(string(id)))
 	m.agentOpMu.Lock()
-	defer m.agentOpMu.Unlock()
-	return m.agentOperationActiveLocked(id)
+	active := m.agentOperationActiveLocked(id)
+	m.agentOpMu.Unlock()
+	if active {
+		return true
+	}
+	m.transitionMu.Lock()
+	defer m.transitionMu.Unlock()
+	_, live := m.transitions[id]
+	return live
 }
 
 func (m *Manager) agentOperationActiveLocked(id domain.SessionID) bool {

@@ -11,6 +11,7 @@ import (
 )
 
 var agentDocumentationURLs = map[Target]string{
+	TargetMemcode:     "https://github.com/memcode-ai/memcode/releases",
 	TargetClaudeCode:  "https://code.claude.com/docs/en/installation",
 	TargetCodex:       "https://github.com/openai/codex",
 	TargetCursor:      "https://docs.cursor.com/en/cli/installation",
@@ -265,6 +266,12 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		plans = []Plan{s.planUV(target, "openhands")}
 		if s.goos == "darwin" || s.goos == "linux" {
 			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
+		}
+	case TargetMemcode:
+		if s.goos == "darwin" || s.goos == "linux" {
+			plans = []Plan{s.planShellInstaller(target, "https://memcode.ai/install.sh", "sh")}
+		} else {
+			plans = []Plan{{Target: target, Method: "manual", Unsupported: true, Reason: "Install the official native memcode release binary", DocsURL: agentDocumentationURLs[target]}}
 		}
 	case TargetHermes:
 		plans = []Plan{manualPlan(target, "Install official Hermes Agent v0.21.6 from the pinned upstream release; AO supports the classic CLI on Linux. AO does not execute a remote shell installer.", agentDocumentationURLs[target])}

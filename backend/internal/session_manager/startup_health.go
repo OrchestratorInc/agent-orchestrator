@@ -77,6 +77,8 @@ func (m *Manager) checkSessionHealth(ctx context.Context, rec domain.SessionReco
 		return fmt.Errorf("check session %s: %w", rec.ID, err)
 	}
 	if alive {
+		// The start hook may fail without stopping the TUI. Keep a live runtime
+		// intact; its unverified identity will not qualify for native restore.
 		return nil
 	}
 	return m.recordAgentExited(ctx, rec)

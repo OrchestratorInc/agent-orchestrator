@@ -7,27 +7,27 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-// TestMigration0203AllowsHermesAndReversesBothHistoricalSchemas mirrors the
+// TestMigration0213AllowsHermesAndReversesBothHistoricalSchemas mirrors the
 // fx and DeepSeek coverage: the new harness must be insertable on a current and a
 // legacy-qm schema, an unknown harness must still be rejected, and the down
 // migration must restore the exact prior constraint.
-func TestMigration0203AllowsHermesAndReversesBothHistoricalSchemas(t *testing.T) {
+func TestMigration0213AllowsHermesAndReversesBothHistoricalSchemas(t *testing.T) {
 	for _, legacyQM := range []bool{false, true} {
 		name := "current"
 		if legacyQM {
 			name = "legacy_qm"
 		}
 		t.Run(name, func(t *testing.T) {
-			db := openMigratedDatabaseCopy(t, 194)
+			db := openMigratedDatabaseCopy(t, 212)
 			if legacyQM {
 				// The retained legacy 'qm' fixture harness sits before
-				// 'codewhale' in every variant 0203 rewrites, so anchor
+				// 'codewhale' in every variant 0213 rewrites, so anchor
 				// there to produce a schema the migration still recognizes.
 				mustExec(t, db, `PRAGMA writable_schema = ON`)
 				mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''openhands'', ''codewhale''', '''openhands'', ''qm'', ''codewhale''') WHERE type = 'table' AND name = 'sessions'`)
 				mustExec(t, db, `PRAGMA writable_schema = RESET`)
 			}
-			upTo(t, db, 194)
+			upTo(t, db, 212)
 			var before string
 			if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&before); err != nil {
 				t.Fatal(err)
@@ -38,26 +38,26 @@ func TestMigration0203AllowsHermesAndReversesBothHistoricalSchemas(t *testing.T)
 			if legacyQM {
 				mustExec(t, db, insert, "existing-qm", 2, "qm")
 			}
-			upTo(t, db, 203)
+			upTo(t, db, 213)
 			if _, err := db.Exec(insert, "cc-session", 3, "hermes"); err != nil {
 				t.Fatalf("insert hermes session after migration: %v", err)
 			}
 			var version int
-			if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 203 {
-				t.Fatalf("migration version = %d, err = %v; want 203", version, err)
+			if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 213 {
+				t.Fatalf("migration version = %d, err = %v; want 213", version, err)
 			}
 			if _, err := db.Exec(insert, "unknown", 4, "unknown-agent"); err == nil {
 				t.Fatal("unknown harness bypassed the CHECK constraint")
 			}
 			gooseMu.Lock()
-			rollbackErr := goose.DownTo(db, "migrations", 196)
+			rollbackErr := goose.DownTo(db, "migrations", 212)
 			gooseMu.Unlock()
 			if rollbackErr == nil {
 				t.Fatal("rollback accepted existing hermes session")
 			}
 			// Clear the new harness value before downgrading to the older contract.
 			mustExec(t, db, `UPDATE sessions SET harness = '' WHERE harness = 'hermes'`)
-			downTo(t, db, 194)
+			downTo(t, db, 212)
 			var after string
 			if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&after); err != nil || after != before {
 				t.Fatalf("down migration did not restore original schema: %v", err)
@@ -73,8 +73,8 @@ func TestMigration0203AllowsHermesAndReversesBothHistoricalSchemas(t *testing.T)
 	}
 }
 
-func TestMigration0203RejectsUnrecognizedConstraint(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 194)
+func TestMigration0213RejectsUnrecognizedConstraint(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 212)
 	mustExec(t, db, `PRAGMA writable_schema = ON`)
 	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''fake''))', '''fake'', ''other''))') WHERE type = 'table' AND name = 'sessions'`)
 	mustExec(t, db, `PRAGMA writable_schema = RESET`)
@@ -85,24 +85,24 @@ func TestMigration0203RejectsUnrecognizedConstraint(t *testing.T) {
 		gooseMu.Unlock()
 		t.Fatal(err)
 	}
-	err := goose.UpTo(db, "migrations", 203)
+	err := goose.UpTo(db, "migrations", 213)
 	gooseMu.Unlock()
 	if err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
 		t.Fatalf("unrecognized constraint silently migrated: %v", err)
 	}
 	var applied int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 203 AND is_applied = 1`).Scan(&applied); err != nil || applied != 0 {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 213 AND is_applied = 1`).Scan(&applied); err != nil || applied != 0 {
 		t.Fatalf("failed migration marked applied: count = %d, err = %v", applied, err)
 	}
 	mustExec(t, db, `PRAGMA writable_schema = ON`)
 	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''fake'', ''other''))', '''fake''))') WHERE type = 'table' AND name = 'sessions'`)
 	mustExec(t, db, `PRAGMA writable_schema = RESET`)
-	upTo(t, db, 203)
+	upTo(t, db, 213)
 }
 
-func TestMigration0203RefusesUnrecognizedDownConstraint(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 194)
-	upTo(t, db, 203)
+func TestMigration0213RefusesUnrecognizedDownConstraint(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 212)
+	upTo(t, db, 213)
 	mustExec(t, db, `PRAGMA writable_schema = ON`)
 	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''hermes'', ''fake''))', '''fake'', ''hermes''))') WHERE type = 'table' AND name = 'sessions'`)
 	mustExec(t, db, `PRAGMA writable_schema = RESET`)
@@ -111,7 +111,7 @@ func TestMigration0203RefusesUnrecognizedDownConstraint(t *testing.T) {
 		t.Fatal(err)
 	}
 	gooseMu.Lock()
-	err := goose.DownTo(db, "migrations", 196)
+	err := goose.DownTo(db, "migrations", 212)
 	gooseMu.Unlock()
 	if err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
 		t.Fatalf("unrecognized constraint was downgraded: %v", err)
@@ -123,15 +123,15 @@ func TestMigration0203RefusesUnrecognizedDownConstraint(t *testing.T) {
 	mustExec(t, db, `PRAGMA writable_schema = ON`)
 	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''fake'', ''hermes''))', '''hermes'', ''fake''))') WHERE type = 'table' AND name = 'sessions'`)
 	mustExec(t, db, `PRAGMA writable_schema = RESET`)
-	downTo(t, db, 196)
+	downTo(t, db, 212)
 }
 
-func TestMigration0203AddsHermesBeforeLegacySchemaRepair(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 194)
+func TestMigration0213AddsHermesBeforeLegacySchemaRepair(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 212)
 	mustExec(t, db, `PRAGMA writable_schema = ON`)
 	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''command-code'', ', '') WHERE type = 'table' AND name = 'sessions'`)
 	mustExec(t, db, `PRAGMA writable_schema = RESET`)
-	upTo(t, db, 203)
+	upTo(t, db, 213)
 	var schema string
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`).Scan(&schema); err != nil {
 		t.Fatal(err)
@@ -151,8 +151,8 @@ func TestMigration0203AddsHermesBeforeLegacySchemaRepair(t *testing.T) {
 }
 
 func TestHermesLegacyRepairPreservesLaterHarness(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 194)
-	upTo(t, db, 203)
+	db := openMigratedDatabaseCopy(t, 212)
+	upTo(t, db, 213)
 	mustExec(t, db, `PRAGMA writable_schema = ON`)
 	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(replace(sql, '''command-code'', ', ''), '''fake''))', '''later-harness'', ''fake''))') WHERE type = 'table' AND name = 'sessions'`)
 	mustExec(t, db, `PRAGMA writable_schema = RESET`)
@@ -178,8 +178,8 @@ func TestHermesLegacyRepairPreservesLaterHarness(t *testing.T) {
 	}
 }
 
-func TestMigration0203PreservesHarnessesAfterHermes(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 196)
+func TestMigration0213PreservesHarnessesAfterHermes(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 212)
 	mustExec(t, db, `PRAGMA writable_schema = ON`)
 	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''fake''))', '''hermes'', ''later-harness'', ''fake''))') WHERE type = 'table' AND name = 'sessions'`)
 	mustExec(t, db, `PRAGMA writable_schema = RESET`)
@@ -189,8 +189,8 @@ func TestMigration0203PreservesHarnessesAfterHermes(t *testing.T) {
 	}
 	// A preexisting Hermes entry may be followed by a later harness even when
 	// this migration runs or retries; neither Up nor Down may drop that entry.
-	upTo(t, db, 203)
-	downTo(t, db, 196)
+	upTo(t, db, 213)
+	downTo(t, db, 212)
 	var after string
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`).Scan(&after); err != nil {
 		t.Fatal(err)

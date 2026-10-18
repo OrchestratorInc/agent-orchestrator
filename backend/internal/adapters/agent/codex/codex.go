@@ -253,6 +253,11 @@ func (p *Plugin) NativeConversationExists(
 
 	found := false
 	sessionsDir := filepath.Join(codexHome, "sessions")
+	// An account home links its sessions to the computer's own; WalkDir does
+	// not descend into a root that is itself a link.
+	if resolved, err := filepath.EvalSymlinks(sessionsDir); err == nil {
+		sessionsDir = resolved
+	}
 	err := filepath.WalkDir(sessionsDir, func(_ string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr

@@ -1,5 +1,5 @@
 -- Add Hermes Agent to the sessions harness constraint without changing usage bindings.
--- Versions 0198-0202 remain reserved for sibling migrations in flight.
+-- Allocated after canonical main 0212; historical candidate 0203 is retired.
 -- +goose NO TRANSACTION
 -- +goose Up
 -- +goose StatementBegin
