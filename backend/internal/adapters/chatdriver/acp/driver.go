@@ -522,7 +522,9 @@ func (d *Driver) resumeSession(
 		})
 		historyConversation.closeBeforeReload = d.cfg.CloseSessionBeforeReload &&
 			init.AgentCapabilities.SessionCapabilities.Close != nil
+		loadStarted := time.Now()
 		resp, err := historyConversation.loadHistory(resumeCtx)
+		d.logStartStage(launchCfg.SessionID, "session_load", loadStarted, err)
 		if err != nil {
 			if cfg.FreshIfMissing && !cfg.ReconnectOnly && isACPResourceNotFound(err) {
 				return d.resumeFresh(ctx, conv, init, launchCfg, cfg, additional, mcpServers)
@@ -533,6 +535,7 @@ func (d *Driver) resumeSession(
 		configOptions = resp.ConfigOptions
 		modes = resp.Modes
 	} else {
+		resumeStarted := time.Now()
 		resp, err := conv.conn.ResumeSession(resumeCtx, acpsdk.ResumeSessionRequest{
 			Meta:                  meta,
 			SessionId:             acpsdk.SessionId(cfg.ProviderConversationID),
@@ -540,6 +543,7 @@ func (d *Driver) resumeSession(
 			AdditionalDirectories: additional,
 			McpServers:            mcpServers,
 		})
+		d.logStartStage(launchCfg.SessionID, "session_resume", resumeStarted, err)
 		if err != nil {
 			if cfg.FreshIfMissing && !cfg.ReconnectOnly && isACPResourceNotFound(err) {
 				return d.resumeFresh(ctx, conv, init, launchCfg, cfg, additional, mcpServers)

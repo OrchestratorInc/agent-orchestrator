@@ -136,6 +136,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	auxiliaryTabOrder,
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
+	accountMoving,
 	agentResuming,
 	controllerResumeError,
 	newWorkDisabled,
@@ -188,6 +189,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	/** The target controller is being installed by an interface handoff. */
 	controllerTransitioning?: boolean;
+	/** The handoff is an account move; see ChatWorkspace. */
+	accountMoving?: boolean;
 	/** A stopped agent is being resumed in the background after the chat opened. */
 	agentResuming?: boolean;
 	controllerResumeError?: string;
@@ -676,6 +679,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				auxiliaryTabOrder={auxiliaryTabOrder}
 				onAuxiliaryTabOrderChange={onAuxiliaryTabOrderChange}
 				controllerTransitioning={controllerTransitioning}
+				accountMoving={accountMoving}
 				loadingQuietly={optimisticChat && !optimisticArrival && session.provisionState !== "provisioning"}
 				agentResuming={agentResuming}
 				hasOlder={hasOlder}

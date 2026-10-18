@@ -37,6 +37,7 @@ import {
 	X,
 } from "lucide-react";
 import type { components } from "../../api/schema";
+import { interfaceTransitionIsActive, useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
@@ -55,6 +56,7 @@ import { CopyButton } from "./chat/CopyButton";
 import { ResumeAgentControl } from "./ResumeAgentControl";
 import { AwakeControl } from "./AwakeControl";
 import { SessionBranchSummary } from "./SessionBranchSummary";
+import { SessionAccountSummary } from "./SessionAccountSummary";
 import {
 	sessionScmSummaryQueryKey,
 	useSessionScmSummary,
@@ -425,11 +427,14 @@ const SummaryView = memo(function SummaryView({
 	// have no parent/child model and every other session has no children.
 	const showWorkers =
 		session.kind === "orchestrator" && (session.cloud !== undefined || usePreviewData);
+	// Subscription accounts are a developer-mode preview.
+	const accountsPreview = useUiStore((state) => state.developerMode);
 	return (
 		<SessionInspectorSummaryView
 			activity={
 				<>
 					<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />
+					{hostId || !accountsPreview ? null : <SessionAccountSummary session={session} />}
 					<ResumeAgentControl
 						className="w-full"
 						containerClassName="mt-3 border-t border-(--color-border-settings-input) pt-3"
@@ -1098,7 +1103,14 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		);
 	}
 
-	const activityView = getAgentActivityView(session.activity);
+	// An account move stops the old agent before the new one starts. That stop
+	// is not the session ending, so the move stands in for "Exited" meanwhile.
+	// The session's own host: a remote session's id means nothing to the local daemon.
+	const { transition } = useSessionInterfaceTransitionStatus(session.cloud ? undefined : session.id, hostId);
+	const accountMoving = Boolean(transition?.targetAccountId) && interfaceTransitionIsActive(transition);
+	const activityView = accountMoving
+		? { ...getAgentActivityView({ state: "active", lastActivityAt: transition?.updatedAt ?? "" }), label: appI18n.t("settings.agentAccounts.switchingAccount") }
+		: getAgentActivityView(session.activity);
 	const activityAt = session.activity?.lastActivityAt ?? session.updatedAt ?? session.createdAt;
 	pushEvent(
 		{
@@ -1106,7 +1118,7 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 			content: (
 				<span className="inline-flex flex-wrap items-center gap-1.5">
 					<span className="inline-flex align-middle">
-						<InspectorActivityPill activity={session.activity} />
+						{accountMoving ? <TimelinePill {...activityView} /> : <InspectorActivityPill activity={session.activity} />}
 					</span>
 					{session.status === "no_signal" ? (
 						<span className="inline-flex align-middle">

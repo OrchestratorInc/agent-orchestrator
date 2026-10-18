@@ -11,6 +11,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/legacyimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentaccounts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
@@ -991,19 +992,23 @@ type StartSessionInterfaceTransitionRequest struct {
 // provider-native conversation id is intentionally not exposed: clients need
 // controller state, not an adapter implementation detail.
 type SessionInterfaceTransitionView struct {
-	ID                   string                                         `json:"id"`
-	SessionID            domain.SessionID                               `json:"sessionId"`
-	SourceMode           domain.SessionMode                             `json:"sourceMode" enum:"chat,tui"`
-	TargetMode           domain.SessionMode                             `json:"targetMode" enum:"chat,tui"`
-	Policy               domain.SessionInterfaceTransitionPolicy        `json:"policy" enum:"drain,interrupt"`
-	HistoryPolicy        domain.SessionInterfaceTransitionHistoryPolicy `json:"historyPolicy" enum:"strict,provider_history"`
-	Phase                domain.SessionInterfaceTransitionPhase         `json:"phase" enum:"requested,preflighting,draining,source_stopping,source_stopped,target_starting,activating,completed,failed,cancelled,recovery_required"`
-	ErrorCode            string                                         `json:"errorCode,omitempty"`
-	ErrorDetail          string                                         `json:"errorDetail,omitempty"`
-	CreatedAt            time.Time                                      `json:"createdAt"`
-	UpdatedAt            time.Time                                      `json:"updatedAt"`
-	CompletedAt          *time.Time                                     `json:"completedAt,omitempty"`
-	NoticeAcknowledgedAt *time.Time                                     `json:"noticeAcknowledgedAt,omitempty"`
+	ID            string                                         `json:"id"`
+	SessionID     domain.SessionID                               `json:"sessionId"`
+	SourceMode    domain.SessionMode                             `json:"sourceMode" enum:"chat,tui"`
+	TargetMode    domain.SessionMode                             `json:"targetMode" enum:"chat,tui"`
+	Policy        domain.SessionInterfaceTransitionPolicy        `json:"policy" enum:"drain,interrupt"`
+	HistoryPolicy domain.SessionInterfaceTransitionHistoryPolicy `json:"historyPolicy" enum:"strict,provider_history"`
+	Phase         domain.SessionInterfaceTransitionPhase         `json:"phase" enum:"requested,preflighting,draining,source_stopping,source_stopped,target_starting,activating,completed,failed,cancelled,recovery_required"`
+	// SourceAccountID and TargetAccountID are set when the handoff moves the
+	// agent to another provider account; the mode then stays the same.
+	SourceAccountID      string     `json:"sourceAccountId,omitempty"`
+	TargetAccountID      string     `json:"targetAccountId,omitempty"`
+	ErrorCode            string     `json:"errorCode,omitempty"`
+	ErrorDetail          string     `json:"errorDetail,omitempty"`
+	CreatedAt            time.Time  `json:"createdAt"`
+	UpdatedAt            time.Time  `json:"updatedAt"`
+	CompletedAt          *time.Time `json:"completedAt,omitempty"`
+	NoticeAcknowledgedAt *time.Time `json:"noticeAcknowledgedAt,omitempty"`
 }
 
 // SessionInterfaceTransitionStatusResponse is the body of GET
@@ -3485,4 +3490,124 @@ type SideChatLaunchState struct {
 // SideLabelRequest renames a side conversation.
 type SideLabelRequest struct {
 	Label string `json:"label"`
+}
+
+// AgentAccountIDParam documents an agent account route identifier.
+type AgentAccountIDParam struct {
+	AccountID string `path:"accountId" description:"Agent account identifier; device-claude and device-codex are this computer's own logins."`
+}
+
+// AgentAccountLoginIDParam documents a sign-in operation route identifier.
+type AgentAccountLoginIDParam struct {
+	OperationID string `path:"operationId" description:"Agent account sign-in operation identifier."`
+}
+
+// AgentAccountSessionIDParam documents the session whose account is read or moved.
+type AgentAccountSessionIDParam struct {
+	SessionID string `path:"sessionId" description:"AO session identifier."`
+}
+
+// AgentAccountListQuery documents GET /agents/accounts.
+type AgentAccountListQuery struct {
+	Refresh bool `query:"refresh" description:"Read identity and limits again even when the last reading is fresh."`
+}
+
+// AgentAccountUsageQuery documents GET /agents/accounts/usage.
+type AgentAccountUsageQuery struct {
+	Days int `query:"days" minimum:"1" maximum:"90" description:"Days of usage to sum, today included. Defaults to 30."`
+}
+
+// AgentAccountResponse is one account with its latest readings.
+type AgentAccountResponse struct {
+	ID       string                      `json:"id"`
+	Provider domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
+	// Device marks the computer's own login, which AO launches with the CLI's
+	// config folder untouched.
+	Device    bool       `json:"device"`
+	Email     string     `json:"email,omitempty"`
+	Plan      string     `json:"plan,omitempty"`
+	Default   bool       `json:"default"`
+	SignedIn  bool       `json:"signedIn"`
+	CreatedAt *time.Time `json:"createdAt,omitempty"`
+	// Problem says why identity or limits could not be read.
+	Problem string                     `json:"problem,omitempty"`
+	Limits  *domain.AgentAccountLimits `json:"limits,omitempty"`
+}
+
+// AgentAccountsResponse is the body of GET /agents/accounts.
+type AgentAccountsResponse struct {
+	Accounts []AgentAccountResponse `json:"accounts"`
+}
+
+// StartAgentAccountLoginRequest asks to add an account of a provider.
+type StartAgentAccountLoginRequest struct {
+	Provider domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
+}
+
+// StartAgentAccountLoginResponse is a sign-in running in a terminal.
+type StartAgentAccountLoginResponse struct {
+	OperationID   string                            `json:"operationId"`
+	Provider      domain.AgentAccountProvider       `json:"provider" enum:"claude,codex"`
+	ShellTerminal CodexAccountLoginTerminalResponse `json:"shellTerminal"`
+}
+
+// VerifyAgentAccountLoginResponse is how a sign-in stands. A duplicate login
+// is refused and its account names the existing one.
+type VerifyAgentAccountLoginResponse struct {
+	Status  agentaccounts.LoginStatus `json:"status" enum:"waiting,complete,duplicate,mismatch"`
+	Account *AgentAccountResponse     `json:"account,omitempty"`
+}
+
+// ConsumeAgentAccountResetCreditRequest spends one Codex usage-limit reset.
+type ConsumeAgentAccountResetCreditRequest struct {
+	IdempotencyKey string `json:"idempotencyKey" minLength:"1" maxLength:"128"`
+}
+
+// ConsumeAgentAccountResetCreditResponse is what the provider did.
+type ConsumeAgentAccountResetCreditResponse struct {
+	Outcome domain.CodexResetCreditOutcome `json:"outcome" enum:"reset,already_redeemed,nothing_to_reset"`
+}
+
+// AgentAccountUsageResponse is each account's usage in AO sessions.
+type AgentAccountUsageResponse struct {
+	Days  int                    `json:"days"`
+	Usage []AgentAccountUsageRow `json:"usage"`
+}
+
+// AgentAccountUsageRow is one account's totals, per day and per model.
+type AgentAccountUsageRow struct {
+	AccountID    string                     `json:"accountId"`
+	InputTokens  int64                      `json:"inputTokens"`
+	OutputTokens int64                      `json:"outputTokens"`
+	CostNanos    int64                      `json:"costNanos"`
+	Daily        []AgentAccountUsageDay     `json:"daily"`
+	Models       []AgentAccountUsageByModel `json:"models"`
+}
+
+// AgentAccountUsageDay is one UTC day of an account's usage.
+type AgentAccountUsageDay struct {
+	Day       string `json:"day"`
+	Tokens    int64  `json:"tokens"`
+	CostNanos int64  `json:"costNanos"`
+}
+
+// AgentAccountUsageByModel is one model's share of an account's usage.
+type AgentAccountUsageByModel struct {
+	Model     string `json:"model"`
+	Tokens    int64  `json:"tokens"`
+	CostNanos int64  `json:"costNanos"`
+}
+
+// SessionAgentAccountsResponse is the account a session uses per provider.
+type SessionAgentAccountsResponse struct {
+	Claude string `json:"claude,omitempty"`
+	Codex  string `json:"codex,omitempty"`
+}
+
+// SwitchSessionAgentAccountRequest moves a session to another account.
+type SwitchSessionAgentAccountRequest struct {
+	AccountID string `json:"accountId" minLength:"1"`
+	// StopTurn cancels a turn in progress, for an agent stuck waiting on the old
+	// account's limit. Otherwise the move waits for the turn to finish.
+	StopTurn bool `json:"stopTurn,omitempty"`
 }

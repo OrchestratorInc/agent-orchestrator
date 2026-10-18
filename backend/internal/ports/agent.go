@@ -729,6 +729,9 @@ type LaunchConfig struct {
 	SystemPrompt     string
 	SystemPromptFile string
 	WorkspacePath    string
+	// Env is the launch environment, for steps that must follow it (such as
+	// the provider config folder an account selects).
+	Env map[string]string
 }
 
 // WorkspaceHookConfig carries inputs needed to install workspace-local agent hooks.

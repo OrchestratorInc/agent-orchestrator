@@ -727,6 +727,12 @@ func (c chatLauncher) ArmChatHandoff(
 	return c.svc.ArmChatHandoff(ctx, id, policy)
 }
 
+// MarkAccountSwitch marks the turn an account move stopped, so the chat shows
+// the switch instead of a failure.
+func (c chatLauncher) MarkAccountSwitch(ctx context.Context, id domain.SessionID, accountID string) error {
+	return c.svc.MarkAccountSwitch(ctx, id, accountID)
+}
+
 func (c chatLauncher) PrepareChatHandoff(
 	ctx context.Context,
 	id domain.SessionID,

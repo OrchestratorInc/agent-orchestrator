@@ -173,6 +173,7 @@ var (
 	ErrSpawnCreate             = errors.New("create")
 	ErrSpawnSystemPrompt       = errors.New("system prompt file")
 	ErrSpawnArtifactDir        = errors.New("artifact dir")
+	ErrSpawnAgentAccount       = errors.New("agent account")
 	ErrWorkspaceCreate         = errors.New("workspace")
 	ErrWorkspaceProvision      = errors.New("provision")
 	ErrSpawnAttachments        = errors.New("attachments")
@@ -434,6 +435,9 @@ type Manager struct {
 	preview                     PreviewLifecycle
 	browser                     BrowserLifecycle
 	browserCapabilities         BrowserCapabilityIssuer
+	agentAccounts               ports.AgentAccountLaunchEnv
+	accountOverrideMu           sync.Mutex
+	accountOverrides            map[domain.SessionID]string
 	attachments                 *attachmentstore.Store
 	attachmentSuffix            func() (string, error)
 	dataDir                     string
@@ -644,6 +648,12 @@ func (m *Manager) SetTerminalInputGate(gate TerminalInputGate) {
 // SetAgentReadiness completes daemon wiring before request handling begins.
 func (m *Manager) SetAgentReadiness(provider ports.AgentReadinessProvider) {
 	m.agentReadiness = provider
+}
+
+// SetAgentAccounts completes daemon wiring before request handling begins.
+// Nil launches every agent under the computer's own CLI login.
+func (m *Manager) SetAgentAccounts(accounts ports.AgentAccountLaunchEnv) {
+	m.agentAccounts = accounts
 }
 
 // SetPersistentHostReconcileDone fences cold Chat resumes until startup has
@@ -1118,6 +1128,18 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 	}
 	id := rec.ID
+	if m.agentAccounts != nil {
+		if err := m.agentAccounts.BindSession(ctx, id, cfg.Harness, cfg.AgentAccountID); err != nil {
+			if prep != nil {
+				cleanupCtx, cancel := spawnRollbackContext(ctx)
+				m.discardClaimedTaskPreparation(cleanupCtx, prep)
+				cancel()
+			} else {
+				m.rollbackSpawnSeedRow(ctx, id)
+			}
+			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnAgentAccount, err)
+		}
+	}
 	// The system prompt embeds the artifact directory path, so the directory
 	// must exist and be known before buildSpawnTexts runs. For a prep-derived
 	// session the value is threaded through the later promoteTaskPreparation
@@ -3012,6 +3034,9 @@ func (m *Manager) ExitAgent(ctx context.Context, id domain.SessionID) (domain.Se
 	if rec.Activity.State == domain.ActivityExited {
 		return domain.SessionRecord{}, fmt.Errorf("exit agent %s: %w", id, ErrAgentExited)
 	}
+	if err := m.releaseTerminalRuntime(ctx, rec); err != nil {
+		return domain.SessionRecord{}, fmt.Errorf("exit agent %s: %w", id, err)
+	}
 	if err := m.stopAgentController(ctx, rec); err != nil {
 		return domain.SessionRecord{}, fmt.Errorf("exit agent %s: %w", id, err)
 	}
@@ -3029,6 +3054,30 @@ func (m *Manager) ExitAgent(ctx context.Context, id domain.SessionID) (domain.Se
 		return domain.SessionRecord{}, fmt.Errorf("exit agent %s: %w", id, ErrSwitchSourceStopUnconfirmed)
 	}
 	return exited, nil
+}
+
+// releaseTerminalRuntime records, before a terminal agent's runtime is
+// destroyed, that its launch ends on purpose. Without it the reaper reads the
+// dead runtime as a crash and ends the session ExitAgent keeps.
+func (m *Manager) releaseTerminalRuntime(ctx context.Context, rec domain.SessionRecord) error {
+	launchID := strings.TrimSpace(rec.Metadata.RuntimeLaunchID)
+	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat || launchID == "" {
+		return nil
+	}
+	store, ok := m.store.(interface {
+		SetSessionRuntimeReleased(context.Context, domain.SessionID, string) (bool, error)
+	})
+	if !ok {
+		return nil
+	}
+	released, err := store.SetSessionRuntimeReleased(ctx, rec.ID, launchID)
+	if err != nil {
+		return fmt.Errorf("record runtime release: %w", err)
+	}
+	if !released {
+		return fmt.Errorf("record runtime release: launch %s is no longer the session's", launchID)
+	}
+	return nil
 }
 
 // stopAgentController is the single controller-stop primitive used by the
@@ -5945,6 +5994,18 @@ func spawnEnvForOS(id domain.SessionID, project domain.ProjectID, issue domain.I
 // When the pin cannot be applied the inherited PATH is kept and a warning is
 // logged so the degradation isn't silent.
 func (m *Manager) runtimeEnv(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string) map[string]string {
+	env, err := m.runtimeEnvChecked(id, project, issue, projectEnv, m.accountOverride(id))
+	if err != nil {
+		m.logger.Warn("session agent account env incomplete", "session", id, "error", err)
+	}
+	return env
+}
+
+// runtimeEnvChecked is runtimeEnv that also reports why the session's account
+// environment could not be resolved, for callers that must not go on under
+// another login (an account move's preflight). A nonempty accountID replaces
+// the session's binding.
+func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string, accountID string) (map[string]string, error) {
 	caseInsensitive := envKeysCaseInsensitive
 	env := spawnEnvForOS(id, project, issue, m.dataDir, projectEnv, caseInsensitive)
 	// Project configuration must never redirect AO-owned hook callbacks to a
@@ -5961,14 +6022,39 @@ func (m *Manager) runtimeEnv(id domain.SessionID, project domain.ProjectID, issu
 	setProtectedEnv(env, EnvBrowserCapability, "", caseInsensitive)
 	setProtectedEnv(env, EnvBrowserRuntimeToken, "", caseInsensitive)
 	setProtectedEnv(env, EnvBrowserRuntimeTokenStdin, "", caseInsensitive)
+	accountErr := m.applyAgentAccountEnv(id, accountID, env, caseInsensitive)
 	path, err := hookPATHForOS(m.executable, os.Getenv, projectEnv, m.dataDir, caseInsensitive)
 	if err != nil {
 		m.logger.Warn("session PATH not pinned to the daemon binary; `ao hooks` callbacks may resolve to a different ao and activity tracking will stall",
 			"session", id, "error", err)
-		return env
+		return env, accountErr
 	}
 	setProtectedEnv(env, "PATH", path, caseInsensitive)
-	return env
+	return env, accountErr
+}
+
+// applyAgentAccountEnv runs each provider's CLI under the session's account.
+// It wins over project env, because a project value would silently launch the
+// agent under a different login than the one the session shows. A nonempty
+// accountID replaces the session's binding. An error means the env may lack an
+// account's variables.
+func (m *Manager) applyAgentAccountEnv(id domain.SessionID, accountID string, env map[string]string, caseInsensitive bool) error {
+	if m.agentAccounts == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var accountEnv map[string]string
+	var err error
+	if accountID != "" {
+		accountEnv, err = m.agentAccounts.SessionLaunchEnvWith(ctx, id, accountID)
+	} else {
+		accountEnv, err = m.agentAccounts.SessionLaunchEnv(ctx, id)
+	}
+	for key, value := range accountEnv {
+		setProtectedEnv(env, key, value, caseInsensitive)
+	}
+	return err
 }
 
 func deleteProtectedEnv(env map[string]string, key string, caseInsensitive bool) {
@@ -6281,7 +6367,7 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 		return fmt.Errorf("install hooks: %w", err)
 	}
 	if pl, ok := agent.(preLauncher); ok {
-		if err := pl.PreLaunch(ctx, ports.LaunchConfig{DataDir: m.dataDir, SessionID: string(id), WorkspacePath: workspacePath}); err != nil {
+		if err := pl.PreLaunch(ctx, ports.LaunchConfig{DataDir: m.dataDir, SessionID: string(id), WorkspacePath: workspacePath, Env: env}); err != nil {
 			m.cleanupPreparedAgentWorkspace(ctx, agent, id, workspacePath, env)
 			return fmt.Errorf("pre-launch: %w", err)
 		}

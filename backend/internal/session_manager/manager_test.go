@@ -155,11 +155,13 @@ func (f *fakeStore) UpdateSession(_ context.Context, rec domain.SessionRecord) e
 	if f.updateSessionErr != nil {
 		return f.updateSessionErr
 	}
-	// Like the real store, a full-row update never writes artifact_dir or
-	// session_output_type; only UpdateSessionArtifactOutput does.
+	// Like the real store, a full-row update never writes artifact_dir,
+	// session_output_type or runtime_released_launch_id; only their narrow
+	// writes do.
 	if existing, ok := f.sessions[rec.ID]; ok {
 		rec.Metadata.ArtifactDir = existing.Metadata.ArtifactDir
 		rec.OutputType = existing.OutputType
+		rec.Metadata.RuntimeReleasedLaunchID = existing.Metadata.RuntimeReleasedLaunchID
 	}
 	f.sessions[rec.ID] = rec
 	return nil
@@ -190,6 +192,15 @@ func (f *fakeStore) UpdateSessionArtifactOutput(_ context.Context, id domain.Ses
 	}
 	rec.Metadata.ArtifactDir = artifactDir
 	rec.OutputType = outputType
+	f.sessions[id] = rec
+	return true, nil
+}
+func (f *fakeStore) SetSessionRuntimeReleased(_ context.Context, id domain.SessionID, launchID string) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok || rec.Metadata.RuntimeLaunchID != launchID {
+		return false, nil
+	}
+	rec.Metadata.RuntimeReleasedLaunchID = launchID
 	f.sessions[id] = rec
 	return true, nil
 }
@@ -2312,6 +2323,10 @@ func TestExitAgentStopsOnlyControllerAndPreservesSessionIdentity(t *testing.T) {
 		},
 	}
 	runtime.aliveByHandle = map[string]bool{"tmux-mer-1": true}
+	var releasedAtDestroy string
+	runtime.onDestroy = func(int, ports.RuntimeHandle) {
+		releasedAtDestroy = st.sessions["mer-1"].Metadata.RuntimeReleasedLaunchID
+	}
 
 	got, err := m.ExitAgent(ctx, "mer-1")
 	if err != nil {
@@ -2326,6 +2341,14 @@ func TestExitAgentStopsOnlyControllerAndPreservesSessionIdentity(t *testing.T) {
 	if got.Metadata.WorkspacePath != "/ws/mer-1" || got.Metadata.RuntimeHandleID != "tmux-mer-1" ||
 		got.Metadata.RuntimeLaunchID != "launch-current" || got.Metadata.AgentSessionID != "native-thread-1" {
 		t.Fatalf("exit changed resumable identity: %+v", got.Metadata)
+	}
+	// The release is recorded before the terminal goes, so the reaper never
+	// sees the dead runtime as a crash and ends the session.
+	if got.Metadata.RuntimeReleasedLaunchID != "launch-current" {
+		t.Fatalf("released launch = %q, want launch-current", got.Metadata.RuntimeReleasedLaunchID)
+	}
+	if releasedAtDestroy != "launch-current" {
+		t.Fatalf("released launch when the runtime was destroyed = %q, want it recorded first", releasedAtDestroy)
 	}
 }
 

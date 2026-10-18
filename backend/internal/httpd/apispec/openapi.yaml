@@ -454,6 +454,397 @@ paths:
       summary: Verify an installed harness without reinstalling or probing authentication
       tags:
       - agents
+  /api/v1/agents/accounts:
+    get:
+      operationId: listAgentAccounts
+      parameters:
+      - description: Read identity and limits again even when the last reading is
+          fresh.
+        in: query
+        name: refresh
+        schema:
+          description: Read identity and limits again even when the last reading is
+            fresh.
+          type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentAccountsResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List Claude Code and Codex accounts with their limits
+      tags:
+      - agents
+  /api/v1/agents/accounts/{accountId}:
+    delete:
+      operationId: removeAgentAccount
+      parameters:
+      - description: Agent account identifier; device-claude and device-codex are
+          this computer's own logins.
+        in: path
+        name: accountId
+        required: true
+        schema:
+          description: Agent account identifier; device-claude and device-codex are
+            this computer's own logins.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentAccountsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Sign an account out and remove it
+      tags:
+      - agents
+  /api/v1/agents/accounts/{accountId}/default:
+    post:
+      operationId: setDefaultAgentAccount
+      parameters:
+      - description: Agent account identifier; device-claude and device-codex are
+          this computer's own logins.
+        in: path
+        name: accountId
+        required: true
+        schema:
+          description: Agent account identifier; device-claude and device-codex are
+            this computer's own logins.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentAccountsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Make an account the default for new sessions of its provider
+      tags:
+      - agents
+  /api/v1/agents/accounts/{accountId}/login:
+    post:
+      operationId: signInAgentAccountAgain
+      parameters:
+      - description: Agent account identifier; device-claude and device-codex are
+          this computer's own logins.
+        in: path
+        name: accountId
+        required: true
+        schema:
+          description: Agent account identifier; device-claude and device-codex are
+            this computer's own logins.
+          type: string
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StartAgentAccountLoginResponse'
+          description: Accepted
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Sign a saved account in again, in its own folder
+      tags:
+      - agents
+  /api/v1/agents/accounts/{accountId}/reset-credit:
+    post:
+      operationId: consumeAgentAccountResetCredit
+      parameters:
+      - description: Agent account identifier; device-claude and device-codex are
+          this computer's own logins.
+        in: path
+        name: accountId
+        required: true
+        schema:
+          description: Agent account identifier; device-claude and device-codex are
+            this computer's own logins.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConsumeAgentAccountResetCreditRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsumeAgentAccountResetCreditResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Spend one Codex usage-limit reset of an account
+      tags:
+      - agents
+  /api/v1/agents/accounts/login:
+    post:
+      operationId: startAgentAccountLogin
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartAgentAccountLoginRequest'
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StartAgentAccountLoginResponse'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Add an account by running the provider's own sign-in in a terminal
+      tags:
+      - agents
+  /api/v1/agents/accounts/login/{operationId}/cancel:
+    post:
+      operationId: cancelAgentAccountLogin
+      parameters:
+      - description: Agent account sign-in operation identifier.
+        in: path
+        name: operationId
+        required: true
+        schema:
+          description: Agent account sign-in operation identifier.
+          type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Stop a sign-in and remove its unsaved folder
+      tags:
+      - agents
+  /api/v1/agents/accounts/login/{operationId}/verify:
+    post:
+      operationId: verifyAgentAccountLogin
+      parameters:
+      - description: Agent account sign-in operation identifier.
+        in: path
+        name: operationId
+        required: true
+        schema:
+          description: Agent account sign-in operation identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyAgentAccountLoginResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Check a sign-in and save the account when it finished
+      tags:
+      - agents
+  /api/v1/agents/accounts/sessions/{sessionId}:
+    get:
+      operationId: getSessionAgentAccounts
+      parameters:
+      - description: AO session identifier.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: AO session identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionAgentAccountsResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read the account a session uses per provider
+      tags:
+      - agents
+    put:
+      operationId: switchSessionAgentAccount
+      parameters:
+      - description: AO session identifier.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: AO session identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SwitchSessionAgentAccountRequest'
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StartSessionInterfaceTransitionResponse'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Start moving a session to another account through the durable controller
+        handoff
+      tags:
+      - agents
+  /api/v1/agents/accounts/usage:
+    get:
+      operationId: getAgentAccountUsage
+      parameters:
+      - description: Days of usage to sum, today included. Defaults to 30.
+        in: query
+        name: days
+        schema:
+          description: Days of usage to sum, today included. Defaults to 30.
+          maximum: 90
+          minimum: 1
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentAccountUsageResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Sum each account's model usage in AO sessions
+      tags:
+      - agents
   /api/v1/agents/auth-plans:
     get:
       operationId: listAgentAuthPlans
@@ -11650,6 +12041,50 @@ components:
       required:
       - path
       type: object
+    AgentAccountActivity:
+      properties:
+        currentStreakDays:
+          type:
+          - "null"
+          - integer
+        latestDay:
+          type:
+          - "null"
+          - string
+        latestDayTokens:
+          type:
+          - "null"
+          - integer
+        lifetimeTokens:
+          type:
+          - "null"
+          - integer
+        longestTurnSeconds:
+          type:
+          - "null"
+          - integer
+        peakDailyTokens:
+          type:
+          - "null"
+          - integer
+      type: object
+    AgentAccountExtraUsage:
+      properties:
+        currency:
+          type: string
+        enabled:
+          type: boolean
+        monthlyLimit:
+          type:
+          - "null"
+          - number
+        usedCredits:
+          type:
+          - "null"
+          - number
+      required:
+      - enabled
+      type: object
     AgentAccountIdentity:
       properties:
         email:
@@ -11677,6 +12112,164 @@ components:
           - command
           - keychain
           type: string
+      type: object
+    AgentAccountLimitWindow:
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        resetsAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        usedPercent:
+          format: double
+          maximum: 100
+          minimum: 0
+          type: number
+      required:
+      - id
+      - label
+      - usedPercent
+      type: object
+    AgentAccountLimits:
+      properties:
+        activity:
+          $ref: '#/components/schemas/AgentAccountActivity'
+        extraUsage:
+          $ref: '#/components/schemas/AgentAccountExtraUsage'
+        fetchedAt:
+          format: date-time
+          type: string
+        resetCredits:
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        windows:
+          items:
+            $ref: '#/components/schemas/AgentAccountLimitWindow'
+          type: array
+      required:
+      - windows
+      - fetchedAt
+      type: object
+    AgentAccountResponse:
+      properties:
+        createdAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        default:
+          type: boolean
+        device:
+          type: boolean
+        email:
+          type: string
+        id:
+          type: string
+        limits:
+          $ref: '#/components/schemas/AgentAccountLimits'
+        plan:
+          type: string
+        problem:
+          type: string
+        provider:
+          enum:
+          - claude
+          - codex
+          type: string
+        signedIn:
+          type: boolean
+      required:
+      - id
+      - provider
+      - device
+      - default
+      - signedIn
+      type: object
+    AgentAccountUsageByModel:
+      properties:
+        costNanos:
+          format: int64
+          type: integer
+        model:
+          type: string
+        tokens:
+          format: int64
+          type: integer
+      required:
+      - model
+      - tokens
+      - costNanos
+      type: object
+    AgentAccountUsageDay:
+      properties:
+        costNanos:
+          format: int64
+          type: integer
+        day:
+          type: string
+        tokens:
+          format: int64
+          type: integer
+      required:
+      - day
+      - tokens
+      - costNanos
+      type: object
+    AgentAccountUsageResponse:
+      properties:
+        days:
+          type: integer
+        usage:
+          items:
+            $ref: '#/components/schemas/AgentAccountUsageRow'
+          type: array
+      required:
+      - days
+      - usage
+      type: object
+    AgentAccountUsageRow:
+      properties:
+        accountId:
+          type: string
+        costNanos:
+          format: int64
+          type: integer
+        daily:
+          items:
+            $ref: '#/components/schemas/AgentAccountUsageDay'
+          type: array
+        inputTokens:
+          format: int64
+          type: integer
+        models:
+          items:
+            $ref: '#/components/schemas/AgentAccountUsageByModel'
+          type: array
+        outputTokens:
+          format: int64
+          type: integer
+      required:
+      - accountId
+      - inputTokens
+      - outputTokens
+      - costNanos
+      - daily
+      - models
+      type: object
+    AgentAccountsResponse:
+      properties:
+        accounts:
+          items:
+            $ref: '#/components/schemas/AgentAccountResponse'
+          type: array
+      required:
+      - accounts
       type: object
     AgentAuthDiagnostic:
       properties:
@@ -13623,6 +14216,26 @@ components:
       - totalTokens
       - incomplete
       - estimatedCost
+      type: object
+    ConsumeAgentAccountResetCreditRequest:
+      properties:
+        idempotencyKey:
+          maxLength: 128
+          minLength: 1
+          type: string
+      required:
+      - idempotencyKey
+      type: object
+    ConsumeAgentAccountResetCreditResponse:
+      properties:
+        outcome:
+          enum:
+          - reset
+          - already_redeemed
+          - nothing_to_reset
+          type: string
+      required:
+      - outcome
       type: object
     ConsumeCodexAccountResetCreditRequest:
       properties:
@@ -17331,6 +17944,13 @@ components:
       required:
       - recent
       type: object
+    SessionAgentAccountsResponse:
+      properties:
+        claude:
+          type: string
+        codex:
+          type: string
+      type: object
     SessionArtifact:
       properties:
         inlineUrl:
@@ -17421,10 +18041,14 @@ components:
           type: string
         sessionId:
           type: string
+        sourceAccountId:
+          type: string
         sourceMode:
           enum:
           - chat
           - tui
+          type: string
+        targetAccountId:
           type: string
         targetMode:
           enum:
@@ -18874,6 +19498,32 @@ components:
       - sessionId
       - paths
       type: object
+    StartAgentAccountLoginRequest:
+      properties:
+        provider:
+          enum:
+          - claude
+          - codex
+          type: string
+      required:
+      - provider
+      type: object
+    StartAgentAccountLoginResponse:
+      properties:
+        operationId:
+          type: string
+        provider:
+          enum:
+          - claude
+          - codex
+          type: string
+        shellTerminal:
+          $ref: '#/components/schemas/CodexAccountLoginTerminalResponse'
+      required:
+      - operationId
+      - provider
+      - shellTerminal
+      type: object
     StartAgentAuthResponse:
       properties:
         action:
@@ -19133,6 +19783,16 @@ components:
           type: string
       required:
       - targetHarness
+      type: object
+    SwitchSessionAgentAccountRequest:
+      properties:
+        accountId:
+          minLength: 1
+          type: string
+        stopTurn:
+          type: boolean
+      required:
+      - accountId
       type: object
     SyncArtifactVersionsRequest:
       properties:
@@ -19578,6 +20238,20 @@ components:
       - processedTokens
       - cacheReadTokens
       - estimatedCost
+      type: object
+    VerifyAgentAccountLoginResponse:
+      properties:
+        account:
+          $ref: '#/components/schemas/AgentAccountResponse'
+        status:
+          enum:
+          - waiting
+          - complete
+          - duplicate
+          - mismatch
+          type: string
+      required:
+      - status
       type: object
     WorkspaceCommitSummary:
       properties:
