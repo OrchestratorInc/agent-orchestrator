@@ -9,17 +9,17 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 )
 
@@ -147,6 +147,7 @@ func claudeSessionLive(ctx context.Context, dir, nativeID, ownWorkspace string) 
 			PID       int    `json:"pid"`
 			SessionID string `json:"sessionId"`
 			CWD       string `json:"cwd"`
+			StartedAt int64  `json:"startedAt"`
 		}
 		if err != nil || json.Unmarshal(body, &live) != nil || live.SessionID != nativeID || live.PID <= 0 {
 			continue
@@ -154,20 +155,26 @@ func claudeSessionLive(ctx context.Context, dir, nativeID, ownWorkspace string) 
 		if ownWorkspace != "" && pathWithin(ownWorkspace, live.CWD) {
 			continue
 		}
-		// Registry files outlive crashes, so require the PID to still be a Claude process.
-		if processAlive(live.PID) && processNamed(ctx, live.PID, "claude", "node") {
+		if claudeProcessLive(ctx, live.PID, live.StartedAt) {
 			return true
 		}
 	}
 	return false
 }
 
-func processNamed(ctx context.Context, pid int, names ...string) bool {
-	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	out, err := process.CommandContext(probeCtx, "ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
-	command := strings.ToLower(filepath.Base(strings.TrimSpace(string(out))))
-	return err == nil && slices.ContainsFunc(names, func(name string) bool { return strings.Contains(command, name) })
+// claudeProcessLive checks a registry entry against the process now holding its
+// PID. Registry files outlive crashes and PIDs are reused, so the PID must still
+// be a Claude process, and one that started before it registered the session.
+func claudeProcessLive(ctx context.Context, pid int, registeredAtMillis int64) bool {
+	if !processalive.Alive(pid) {
+		return false
+	}
+	name, started, ok := processStart(ctx, pid)
+	name = strings.ToLower(name)
+	if !ok || !strings.Contains(name, "claude") && !strings.Contains(name, "node") {
+		return false
+	}
+	return registeredAtMillis <= 0 || !started.After(time.UnixMilli(registeredAtMillis))
 }
 
 // writableTranscriptOwner is the fallback for writers without a lock or registry.
@@ -273,6 +280,10 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 			}
 			repoRoot := strings.TrimSpace(string(top))
 			if copyFrom != "" {
+				// Never fetch or copy an unrelated repository that sits inside the project folder.
+				if !sessionimport.SameRepository(ctx, repoRoot, project.Path) {
+					return rec, errors.New("the conversation's folder is not a checkout of this project's repository")
+				}
 				copyFrom = repoRoot
 			}
 			head, err := importGit(ctx, repoRoot, "rev-parse", "HEAD")
@@ -286,7 +297,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 				return rec, err
 			}
 			if created {
-				ws, err = m.workspace.Create(ctx, ports.WorkspaceConfig{ProjectID: rec.ProjectID, SessionID: rec.ID, Kind: rec.Kind, SessionPrefix: sessionPrefix(project), Branch: branch, FreshBranch: true, BaseRef: sha})
+				ws, err = m.workspace.Create(ctx, ports.WorkspaceConfig{ProjectID: rec.ProjectID, SessionID: rec.ID, Kind: rec.Kind, SessionPrefix: sessionPrefix(project), Branch: branch, FreshBranch: true, BaseRef: sha, StartRef: sha})
 				if err != nil {
 					return rec, err
 				}
@@ -345,7 +356,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 				baseRefs[repoPath] = sha
 			}
 			if created {
-				ws, workspaceProject, err = m.createSessionWorkspace(ctx, project, ports.SpawnConfig{ProjectID: rec.ProjectID, Kind: rec.Kind}, rec.ID, branch, baseRefs)
+				ws, workspaceProject, err = m.createSessionWorkspaceAt(ctx, project, ports.SpawnConfig{ProjectID: rec.ProjectID, Kind: rec.Kind}, rec.ID, branch, baseRefs, baseRefs[filepath.Clean(project.Path)])
 				if err != nil {
 					return rec, err
 				}
@@ -461,25 +472,39 @@ type importFileFact struct {
 	Modified time.Time
 }
 
-// importManifest covers what Git shows for a checkout: tracked files and
-// untracked files that are not ignored. Ignored output such as node_modules,
-// and nested repositories such as Claude's agent worktrees, stay behind; the
-// project's symlinks and setup provide them, as for a native session.
-func importManifest(ctx context.Context, repo string, root *os.Root) (map[string]importFileFact, error) {
-	out, err := importGit(ctx, repo, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+// importChanges lists what Git shows as differing from HEAD: tracked edits and
+// deletions, staged or not, plus untracked files that are not ignored. Ignored
+// output such as node_modules, and nested repositories such as Claude's agent
+// worktrees, stay behind; the project's symlinks and setup provide them, as for
+// a native session. It reads without taking the source's index lock.
+func importChanges(ctx context.Context, repo string) ([]string, error) {
+	tracked, err := importGit(ctx, repo, "--no-optional-locks", "diff", "--name-only", "-z", "--no-renames", "HEAD")
 	if err != nil {
 		return nil, err
 	}
+	untracked, err := importGit(ctx, repo, "ls-files", "-z", "--others", "--exclude-standard")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, path := range strings.Split(string(tracked)+string(untracked), "\x00") {
+		// A nested repository is listed as a directory.
+		if path != "" && !strings.HasSuffix(path, "/") {
+			paths = append(paths, filepath.FromSlash(path))
+		}
+	}
+	slices.Sort(paths)
+	return slices.Compact(paths), nil
+}
+
+// importFacts records each changed path as it is now; a path missing from the
+// result was deleted.
+func importFacts(ctx context.Context, root *os.Root, paths []string) (map[string]importFileFact, error) {
 	facts := map[string]importFileFact{}
-	for _, path := range strings.Split(string(out), "\x00") {
+	for _, path := range paths {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		// A nested repository is listed as a directory; deleted files are absent.
-		if path == "" || strings.HasSuffix(path, "/") {
-			continue
-		}
-		path = filepath.FromSlash(path)
 		info, err := root.Lstat(path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
@@ -522,8 +547,12 @@ func importGitPaths(root string) ([]string, error) {
 	return paths, err
 }
 
-// Stage all files first. Preserve every AO Git pointer, HEAD and index separately,
-// so nested repositories never acquire the source's administrative metadata.
+// copyImportedWorkspace moves the original checkout's uncommitted state into
+// the AO worktree in place. Each repository is reset to the source's current
+// HEAD (the worktree has not been handed to an agent yet, and a retry follows a
+// source that moved on), then only what Git shows as changed is copied and the
+// source index is replayed. Ignored files, nested repositories and whatever the
+// workspace setup added stay as they are, and the source is only read.
 func copyImportedWorkspace(ctx context.Context, source, destination string, overrides map[string]string, completionMarker string) error {
 	source, err := filepath.EvalSymlinks(source)
 	if err != nil {
@@ -539,6 +568,30 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 	type gitState struct {
 		rel, source  string
 		head, staged []byte
+		changed      []string
+		facts        map[string]importFileFact
+	}
+	read := func(state *gitState) error {
+		head, err := importGit(ctx, state.source, "rev-parse", "HEAD")
+		if err != nil {
+			return err
+		}
+		staged, err := importGit(ctx, state.source, "diff", "--cached", "--binary", "--full-index", "HEAD")
+		if err != nil {
+			return err
+		}
+		changed, err := importChanges(ctx, state.source)
+		if err != nil {
+			return err
+		}
+		root, err := os.OpenRoot(state.source)
+		if err != nil {
+			return err
+		}
+		facts, err := importFacts(ctx, root, changed)
+		_ = root.Close()
+		state.head, state.staged, state.changed, state.facts = head, staged, changed, facts
+		return err
 	}
 	states := make([]gitState, 0, len(gitPaths))
 	for _, rel := range gitPaths {
@@ -549,30 +602,20 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 		if pathWithin(native, destination) {
 			return errors.New("destination must be outside the original folder")
 		}
-		head, err := importGit(ctx, native, "rev-parse", "HEAD")
-		if err != nil {
+		state := gitState{rel: rel, source: native}
+		if err := read(&state); err != nil {
 			return err
 		}
-		targetHead, err := importGit(ctx, filepath.Join(destination, rel), "rev-parse", "HEAD")
-		if err != nil || !bytes.Equal(head, targetHead) {
-			return errors.New("source HEAD changed before copying, or is unavailable in AO; retry")
-		}
-		staged, err := importGit(ctx, native, "diff", "--cached", "--binary", "--full-index", "HEAD")
-		if err != nil {
+		target := filepath.Join(destination, rel)
+		sha := strings.TrimSpace(string(state.head))
+		if err := importCommit(ctx, target, native, sha); err != nil {
 			return err
 		}
-		states = append(states, gitState{rel: rel, source: native, head: head, staged: staged})
+		if _, err := importGit(ctx, target, "reset", "--quiet", "--hard", sha); err != nil {
+			return err
+		}
+		states = append(states, state)
 	}
-	temp, err := os.MkdirTemp(filepath.Dir(destination), ".import-staging-")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.RemoveAll(temp) }()
-	type snapshot struct {
-		path  string
-		facts map[string]importFileFact
-	}
-	var snapshots []snapshot
 	linkRoots := map[string]string{source: ""}
 	for rel, original := range overrides {
 		resolved, err := filepath.EvalSymlinks(original)
@@ -581,7 +624,7 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 		}
 		linkRoots[resolved] = rel
 	}
-	copyFile := func(src, dst *os.Root, target, path string, fact importFileFact) error {
+	copyFile := func(src, dst *os.Root, rel, path string, fact importFileFact) error {
 		if fact.Mode&os.ModeSymlink != 0 {
 			link, err := src.Readlink(path)
 			if err != nil {
@@ -600,9 +643,8 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 					}
 				}
 				if best != "" {
-					rel, _ := filepath.Rel(best, physical)
-					targetRel, _ := filepath.Rel(temp, target)
-					link, err = filepath.Rel(filepath.Dir(filepath.Join(destination, targetRel, path)), filepath.Join(destination, linkRoots[best], rel))
+					inside, _ := filepath.Rel(best, physical)
+					link, err = filepath.Rel(filepath.Dir(filepath.Join(destination, rel, path)), filepath.Join(destination, linkRoots[best], inside))
 					if err != nil {
 						return err
 					}
@@ -626,77 +668,59 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 		}
 		return dst.Chtimes(path, fact.Modified, fact.Modified)
 	}
-	// Each registered repository copies its own files, so a child never rides
-	// along with its parent and an unregistered nested repository stays behind.
 	for _, state := range states {
-		target := filepath.Join(temp, state.rel)
 		src, err := os.OpenRoot(state.source)
 		if err != nil {
 			return err
 		}
-		facts, err := importManifest(ctx, state.source, src)
-		if err == nil {
-			snapshots = append(snapshots, snapshot{state.source, facts})
-			err = os.MkdirAll(target, 0o700)
+		dst, err := os.OpenRoot(filepath.Join(destination, state.rel))
+		if err != nil {
+			_ = src.Close()
+			return err
 		}
-		var dst *os.Root
-		if err == nil {
-			dst, err = os.OpenRoot(target)
-		}
-		for path, fact := range facts {
+		// Deletions first, then parents before children, so a file and a folder
+		// can trade places.
+		paths := slices.Clone(state.changed)
+		slices.SortStableFunc(paths, func(a, b string) int {
+			_, aKept := state.facts[a]
+			_, bKept := state.facts[b]
+			if aKept == bKept {
+				return 0
+			}
+			if aKept {
+				return 1
+			}
+			return -1
+		})
+		for _, path := range paths {
+			fact, kept := state.facts[path]
+			switch {
+			case !kept:
+				err = dst.RemoveAll(path)
+			case fact.Mode.IsDir():
+				if info, statErr := dst.Lstat(path); statErr == nil && !info.IsDir() {
+					err = dst.Remove(path)
+				}
+				if err == nil {
+					err = dst.MkdirAll(path, 0o755)
+				}
+			default:
+				if err = dst.RemoveAll(path); err == nil {
+					if err = dst.MkdirAll(filepath.Dir(path), 0o755); err == nil {
+						err = copyFile(src, dst, state.rel, path, fact)
+					}
+				}
+			}
 			if err != nil {
 				break
 			}
-			switch {
-			case fact.Mode.IsDir():
-				err = dst.MkdirAll(path, 0o755)
-			default:
-				if err = dst.MkdirAll(filepath.Dir(path), 0o755); err == nil {
-					err = copyFile(src, dst, target, path, fact)
-				}
-			}
 		}
 		_ = src.Close()
-		if dst != nil {
-			_ = dst.Close()
-		}
+		_ = dst.Close()
 		if err != nil {
 			return err
 		}
 	}
-	for _, snapshot := range snapshots {
-		root, err := os.OpenRoot(snapshot.path)
-		if err != nil {
-			return err
-		}
-		after, err := importManifest(ctx, snapshot.path, root)
-		_ = root.Close()
-		if err != nil {
-			return err
-		}
-		if !reflect.DeepEqual(snapshot.facts, after) {
-			return errors.New("source files changed while copying; retry")
-		}
-	}
-	for _, state := range states {
-		head, err := importGit(ctx, state.source, "rev-parse", "HEAD")
-		if err != nil || !bytes.Equal(state.head, head) {
-			return errors.New("source HEAD changed while copying; retry")
-		}
-		staged, err := importGit(ctx, state.source, "diff", "--cached", "--binary", "--full-index", "HEAD")
-		if err != nil || !bytes.Equal(state.staged, staged) {
-			return errors.New("source index changed while copying; retry")
-		}
-	}
-	// Only the indices of unexposed AO worktrees change before the directory swap.
-	committed := false
-	defer func() {
-		if !committed {
-			for _, state := range states {
-				_ = process.Command("git", "-C", filepath.Join(destination, state.rel), "reset", "--mixed", "HEAD").Run()
-			}
-		}
-	}()
 	for _, state := range states {
 		if len(state.staged) == 0 {
 			continue
@@ -707,46 +731,23 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 			return fmt.Errorf("preserve staged edits: %w: %s", err, out)
 		}
 	}
-	if completionMarker != "" {
-		name := filepath.Base(completionMarker)
-		if _, err := os.Lstat(filepath.Join(temp, name)); !errors.Is(err, os.ErrNotExist) {
-			return errors.New("source contains a reserved workspace transfer marker")
-		}
-		id := strings.TrimPrefix(name, ".ao-import-complete-")
-		if err := os.WriteFile(filepath.Join(temp, name), []byte(id), 0o600); err != nil {
+	for _, before := range states {
+		after := gitState{source: before.source}
+		if err := read(&after); err != nil {
 			return err
 		}
-	}
-	var moved []string
-	restoreGit := func() {
-		for _, rel := range moved {
-			_ = os.Rename(filepath.Join(temp, rel, ".git"), filepath.Join(destination, rel, ".git"))
+		if !bytes.Equal(before.head, after.head) || !bytes.Equal(before.staged, after.staged) ||
+			!slices.Equal(before.changed, after.changed) || !maps.Equal(before.facts, after.facts) {
+			return errors.New("source files changed while copying; retry")
 		}
 	}
-	for _, rel := range gitPaths {
-		if err := os.MkdirAll(filepath.Join(temp, rel), 0o700); err != nil {
-			restoreGit()
-			return err
-		}
-		if err := os.Rename(filepath.Join(destination, rel, ".git"), filepath.Join(temp, rel, ".git")); err != nil {
-			restoreGit()
-			return err
-		}
-		moved = append(moved, rel)
+	if completionMarker == "" {
+		return nil
 	}
-	backup := temp + "-empty"
-	if err := os.Rename(destination, backup); err != nil {
-		restoreGit()
-		return err
+	if _, err := os.Lstat(completionMarker); !errors.Is(err, os.ErrNotExist) {
+		return errors.New("source contains a reserved workspace transfer marker")
 	}
-	if err := os.Rename(temp, destination); err != nil {
-		_ = os.Rename(backup, destination)
-		restoreGit()
-		return err
-	}
-	committed = true
-	_ = os.RemoveAll(backup)
-	return nil
+	return os.WriteFile(completionMarker, []byte(strings.TrimPrefix(filepath.Base(completionMarker), ".ao-import-complete-")), 0o600)
 }
 
 func providerRefusedImportOwnership(err error) bool {

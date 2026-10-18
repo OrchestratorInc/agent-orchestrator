@@ -1,7 +1,6 @@
 -- name: FindImportedSession :one
 SELECT id FROM sessions
-WHERE harness = sqlc.arg(harness)
-  AND json_extract(NULLIF(import_source, ''), '$.configDir') = CAST(sqlc.arg(config_dir) AS TEXT)
+WHERE json_extract(NULLIF(import_source, ''), '$.configDir') = CAST(sqlc.arg(config_dir) AS TEXT)
   AND json_extract(NULLIF(import_source, ''), '$.nativeId') = CAST(sqlc.arg(native_id) AS TEXT)
 LIMIT 1;
 
@@ -16,14 +15,23 @@ SELECT sequence, role, text, created_at FROM session_import_messages
 WHERE session_id = sqlc.arg(session_id) AND sequence < sqlc.arg(before_sequence)
 ORDER BY sequence DESC LIMIT sqlc.arg(page_limit);
 
+-- name: GetSessionImportSource :one
+SELECT import_source FROM sessions WHERE id = sqlc.arg(id);
+
+-- The caller compares the stored source with its expectation in the same transaction.
 -- name: SetSessionImportWorkspace :execrows
 UPDATE sessions SET branch = sqlc.arg(branch), workspace_path = sqlc.arg(workspace_path),
     workspace_repo_path = sqlc.arg(workspace_repo_path), import_source = sqlc.arg(new_source),
     updated_at = sqlc.arg(updated_at)
 WHERE id = sqlc.arg(id) AND is_terminated = 0
-    AND import_source = sqlc.arg(expected_source)
     AND json_extract(NULLIF(import_source, ''), '$.adopted') = 0
     AND (workspace_path = '' OR workspace_path = sqlc.arg(workspace_path));
+
+-- Adoption is the one import fact a full session write records; the rest move
+-- only through SetSessionImportWorkspace, so an older snapshot cannot undo them.
+-- name: AdoptSessionImport :exec
+UPDATE sessions SET import_source = sqlc.arg(import_source)
+WHERE id = sqlc.arg(id) AND json_extract(NULLIF(import_source, ''), '$.adopted') = 0;
 
 -- name: DeleteSessionImportMessages :exec
 DELETE FROM session_import_messages WHERE session_id = sqlc.arg(session_id);

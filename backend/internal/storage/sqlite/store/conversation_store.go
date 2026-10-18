@@ -817,7 +817,7 @@ func (s *Store) commitChatSpawn(
 				return fmt.Errorf("project native provider history: %w", err)
 			}
 		}
-		if err := q.UpdateSession(ctx, recordToUpdate(rec)); err != nil {
+		if err := updateSessionRow(ctx, q, rec); err != nil {
 			return fmt.Errorf("commit Chat session owner: %w", err)
 		}
 		return nil
@@ -3928,11 +3928,11 @@ func (s *Store) conversationVisibleAfterSequence(
 	if conv.Scope == domain.ConversationScopeSession && conv.SessionID != nil {
 		// An adopted import hides the provider's partial replay; the chat service
 		// shows the import archive below it instead.
-		row, err := s.qr.GetSession(ctx, *conv.SessionID)
+		raw, err := s.qr.GetSessionImportSource(ctx, *conv.SessionID)
 		if err != nil {
-			return 0, fmt.Errorf("select session %s: %w", *conv.SessionID, err)
+			return 0, fmt.Errorf("select session %s import source: %w", *conv.SessionID, err)
 		}
-		if source := unmarshalImportSource(row.ImportSource); source != nil {
+		if source := unmarshalImportSource(raw); source != nil {
 			return source.HistoryThrough, nil
 		}
 		return 0, nil

@@ -46,7 +46,7 @@ func TestImportCopiesDirtyGitStateWithoutChangingSource(t *testing.T) {
 			git(source, "init", "-b", "main")
 			write("file", []byte("base\n"))
 			write("deleted", []byte("remove\n"))
-			write(".gitignore", []byte(".env\n"))
+			write(".gitignore", []byte(".env\n.setup/\n"))
 			git(source, "add", ".")
 			git(source, "-c", "user.name=AO test", "-c", "user.email=test@example.invalid", "commit", "-m", "base")
 			if linked {
@@ -88,8 +88,18 @@ func TestImportCopiesDirtyGitStateWithoutChangingSource(t *testing.T) {
 			staged := git(source, "diff", "--cached", "--binary", "--full-index")
 			local := git(source, "diff", "--binary", "--full-index")
 			git(source, "worktree", "add", "-b", "ao-test", destination, "HEAD")
+			// Workspace setup may add ignored folders to the AO worktree before the copy.
+			if err := os.MkdirAll(filepath.Join(destination, ".setup"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(destination, ".setup", "tool"), []byte("from setup\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
 			if err := copyImportedWorkspace(ctx, source, destination, nil, ""); err != nil {
 				t.Fatal(err)
+			}
+			if kept, err := os.ReadFile(filepath.Join(destination, ".setup", "tool")); err != nil || string(kept) != "from setup\n" {
+				t.Fatalf("the copy removed what workspace setup added: %q %v", kept, err)
 			}
 			if !bytes.Equal(staged, git(destination, "diff", "--cached", "--binary", "--full-index")) || !bytes.Equal(local, git(destination, "diff", "--binary", "--full-index")) {
 				t.Fatal("staged or unstaged state changed")
@@ -221,19 +231,28 @@ func TestImportPreservesNestedWorktreePointers(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(externalChild, "unregistered", ".git"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	for _, rel := range []string{".", "child"} {
-		git(filepath.Join(destination, rel), "reset", "-q", "HEAD") // The first copy already staged its edits here.
-	}
+	// A retry starts again from the source state, over whatever an earlier attempt left.
 	if err := copyImportedWorkspace(context.Background(), source, destination, map[string]string{"child": externalChild}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(filepath.Join(destination, "child", "unregistered")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("copied an unregistered nested repository")
 	}
-	// A source HEAD advance must not copy files onto the old AO base.
+	// A source that committed since the AO worktree was created is followed to
+	// its new commit; the files are never copied onto the old base.
 	git(source, "-c", "user.name=AO test", "-c", "user.email=test@example.invalid", "commit", "-m", "advance")
-	if err := copyImportedWorkspace(context.Background(), source, destination, nil, ""); err == nil {
-		t.Fatal("copied mismatched source HEAD")
+	if err := copyImportedWorkspace(context.Background(), source, destination, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{".", "child"} {
+		if !bytes.Equal(git(filepath.Join(source, rel), "rev-parse", "HEAD"), git(filepath.Join(destination, rel), "rev-parse", "HEAD")) {
+			t.Fatalf("%s did not follow the source HEAD", rel)
+		}
+		for _, args := range [][]string{{"diff", "--cached", "--binary"}, {"diff", "--binary"}} {
+			if !bytes.Equal(git(filepath.Join(source, rel), args...), git(filepath.Join(destination, rel), args...)) {
+				t.Fatalf("%s file/index state differs after following the source", rel)
+			}
+		}
 	}
 }
 
@@ -539,6 +558,9 @@ func TestImportedCloneLeavesSourceRepositoryUntouched(t *testing.T) {
 	project := st.projects["mer"]
 	clone := filepath.Join(t.TempDir(), "clone")
 	runManagerGit(t, root, "clone", "--no-local", root, clone)
+	// Clones of one repository share its origin; that is how a scan matched this one.
+	runManagerGit(t, root, "remote", "add", "origin", "https://github.com/example/mer.git")
+	runManagerGit(t, clone, "remote", "set-url", "origin", "git@github.com:example/mer.git")
 	if err := os.WriteFile(filepath.Join(clone, "new-commit"), []byte("unpublished"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -601,5 +623,27 @@ func TestImportReplayBoundaryIsFixedAtAdoption(t *testing.T) {
 	}
 	if got := st.sessions[sessionID].Metadata.ImportSource.HistoryThrough; got != 7 {
 		t.Fatalf("rebuild moved the boundary to %d", got)
+	}
+}
+
+// A repository nested inside the project folder, such as an ignored clone, is not
+// the project's repository: its commit and files never enter an AO worktree.
+func TestImportedChatInUnrelatedNestedRepositoryIsRefused(t *testing.T) {
+	m, st, _, root := newGitTaskPreparationManager(t)
+	nested := filepath.Join(root, "third_party", "foo")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runManagerGit(t, nested, "init")
+	runManagerGit(t, nested, "remote", "add", "origin", "https://github.com/acme/foo.git")
+	runManagerGit(t, nested, "-c", "user.name=AO test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "foo")
+	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}}
+	rec.Metadata = domain.SessionMetadata{ProviderConversationID: "thread-1", ImportSource: &domain.SessionImportSource{NativeID: "thread-1", ConfigDir: "/provider", CWD: nested}}
+	st.sessions[rec.ID] = rec
+	if _, err := m.prepareImportedWorkspace(context.Background(), rec, st.projects["mer"]); err == nil || !strings.Contains(err.Error(), "not a checkout of this project's repository") {
+		t.Fatalf("nested unrelated repository: %v", err)
+	}
+	if branches := runManagerGit(t, root, "branch", "--list", "ao/*"); branches != "" {
+		t.Fatalf("created branches %q", branches)
 	}
 }

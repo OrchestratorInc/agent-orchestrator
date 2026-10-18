@@ -1,6 +1,6 @@
 -- +goose Up
 ALTER TABLE sessions ADD COLUMN import_source TEXT NOT NULL DEFAULT '';
-CREATE UNIQUE INDEX sessions_import_identity ON sessions(harness, json_extract(import_source, '$.configDir'), json_extract(import_source, '$.nativeId')) WHERE import_source <> '';
+CREATE UNIQUE INDEX sessions_import_identity ON sessions(json_extract(import_source, '$.configDir'), json_extract(import_source, '$.nativeId')) WHERE import_source <> '';
 CREATE TABLE session_import_messages (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     sequence INTEGER NOT NULL,

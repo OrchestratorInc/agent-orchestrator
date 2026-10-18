@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -111,6 +112,11 @@ func TestPreviewAndSelectedImport(t *testing.T) {
 	repeated, err := svc.Import(ctx, []string{oldID})
 	if err != nil || repeated[0].SessionID != rec.ID || len(st.sessions) != 1 {
 		t.Fatalf("repeat: %v %v", repeated, err)
+	}
+	// An agent switch changes the session's harness, not the conversation it came from.
+	st.sessions[0].Harness = domain.HarnessCodex
+	if preview, err := svc.Scan(ctx); err != nil || !slices.ContainsFunc(preview.Candidates, func(c Candidate) bool { return c.ID == oldID && c.SessionID == rec.ID }) {
+		t.Fatalf("switched session offered again: %v %v", preview, err)
 	}
 	moved := writeClaude(t, root, current, t.TempDir(), "moved to an unregistered folder", time.Now())
 	stale, err := svc.Import(ctx, []string{recentID})

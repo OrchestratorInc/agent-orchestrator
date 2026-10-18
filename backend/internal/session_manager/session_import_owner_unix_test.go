@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -58,9 +59,13 @@ func TestImportOwnedElsewhereUsesProviderOwnership(t *testing.T) {
 	t.Cleanup(func() { _ = owner.Process.Kill(); _ = owner.Wait() })
 	claude := domain.SessionRecord{Harness: domain.HarnessClaudeCode}
 	claude.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "7999f45f-eb7e-43b7-90da-be3d5fd2208d", ConfigDir: home}
-	register := func(pid int, cwd string) {
+	register := func(pid int, cwd string, startedAt ...time.Time) {
 		t.Helper()
-		body, _ := json.Marshal(map[string]any{"pid": pid, "sessionId": claude.Metadata.ImportSource.NativeID, "cwd": cwd, "kind": "interactive"})
+		entry := map[string]any{"pid": pid, "sessionId": claude.Metadata.ImportSource.NativeID, "cwd": cwd, "kind": "interactive"}
+		if len(startedAt) > 0 {
+			entry["startedAt"] = startedAt[0].UnixMilli()
+		}
+		body, _ := json.Marshal(entry)
 		if err := os.MkdirAll(filepath.Join(home, "sessions"), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -75,6 +80,15 @@ func TestImportOwnedElsewhereUsesProviderOwnership(t *testing.T) {
 	register(owner.Process.Pid, "/source")
 	if !importOwnedElsewhere(ctx, claude) {
 		t.Fatal("a live Claude session was not detected")
+	}
+	// Claude registers after it starts; a process that started later reused the PID.
+	register(owner.Process.Pid, "/source", time.Now().Add(-time.Hour))
+	if importOwnedElsewhere(ctx, claude) {
+		t.Fatal("a reused PID was treated as the registered Claude session")
+	}
+	register(owner.Process.Pid, "/source", time.Now())
+	if !importOwnedElsewhere(ctx, claude) {
+		t.Fatal("a live Claude session with its registration time was not detected")
 	}
 	claude.Metadata.WorkspacePath = "/ao/worktrees/mer-1"
 	register(owner.Process.Pid, "/ao/worktrees/mer-1/sub")

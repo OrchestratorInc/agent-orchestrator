@@ -361,7 +361,22 @@ WHERE session_id = ?
 func (s *Store) UpdateSession(ctx context.Context, rec domain.SessionRecord) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return s.qw.UpdateSession(ctx, recordToUpdate(rec))
+	if source := rec.Metadata.ImportSource; source == nil || !source.Adopted {
+		return s.qw.UpdateSession(ctx, recordToUpdate(rec))
+	}
+	return s.inTx(ctx, "update session", func(q *gen.Queries) error { return updateSessionRow(ctx, q, rec) })
+}
+
+// updateSessionRow writes the general session state plus, once, an import's
+// adoption. Other import facts change only through SetSessionImportWorkspace.
+func updateSessionRow(ctx context.Context, q *gen.Queries, rec domain.SessionRecord) error {
+	if err := q.UpdateSession(ctx, recordToUpdate(rec)); err != nil {
+		return err
+	}
+	if source := rec.Metadata.ImportSource; source != nil && source.Adopted {
+		return q.AdoptSessionImport(ctx, gen.AdoptSessionImportParams{ID: rec.ID, ImportSource: marshalImportSource(source)})
+	}
+	return nil
 }
 
 // SetSessionHibernated changes only the durable sleep marker if the caller's
@@ -1171,7 +1186,6 @@ func recordToInsert(rec domain.SessionRecord, num int64) gen.InsertSessionParams
 func recordToUpdate(rec domain.SessionRecord) gen.UpdateSessionParams {
 	activity := normalActivity(rec.Activity, rec.UpdatedAt)
 	return gen.UpdateSessionParams{
-		ImportSource:                     marshalImportSource(rec.Metadata.ImportSource),
 		ID:                               rec.ID,
 		IssueID:                          rec.IssueID,
 		Kind:                             rec.Kind,

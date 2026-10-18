@@ -1616,3 +1616,57 @@ func run(t *testing.T, binary string, args ...string) {
 		t.Fatalf("%s %s: %v\n%s", binary, strings.Join(args, " "), err, out)
 	}
 }
+
+// BaseRef is the comparison base every spawn carries; only an import's
+// StartRef may move where a fresh branch or workspace root begins.
+func TestWorkspaceIntegrationOnlyStartRefMovesTheSeed(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, filepath.Join(tmp, "repo"))
+	childRepo := setupOriginClone(t, git, filepath.Join(tmp, "child"))
+	defaultSHA := gitOutput(t, git, repo, "rev-parse", "origin/main")
+	runGit(t, git, repo, "checkout", "-b", "side")
+	if err := os.WriteFile(filepath.Join(repo, "side.txt"), []byte("side\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, git, repo, "add", "side.txt")
+	runGit(t, git, repo, "commit", "-m", "side commit")
+	sideSHA := gitOutput(t, git, repo, "rev-parse", "HEAD")
+	runGit(t, git, repo, "checkout", "main")
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	single := func(session, branch, startRef string) string {
+		info, err := ws.Create(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: domain.SessionID(session), Branch: branch, FreshBranch: true, BaseRef: sideSHA, StartRef: startRef})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return gitOutput(t, git, info.Path, "rev-parse", "HEAD")
+	}
+	if got := single("ordinary", "ao/ordinary", ""); got != defaultSHA {
+		t.Fatalf("ordinary fresh branch starts at %s, want the default %s", got, defaultSHA)
+	}
+	if got := single("imported", "ao/imported", sideSHA); got != sideSHA {
+		t.Fatalf("imported branch starts at %s, want %s", got, sideSHA)
+	}
+	project := func(session, startRef string) string {
+		info, err := ws.CreateWorkspaceProject(ctx, ports.WorkspaceProjectConfig{
+			ProjectID: "proj", SessionID: domain.SessionID(session), Kind: domain.KindWorker, Branch: "ao/" + session,
+			RootRepoPath: repo, BaseRef: sideSHA, StartRef: startRef,
+			Repos: []ports.WorkspaceProjectRepoConfig{{Name: "api", RelativePath: "api", RepoPath: childRepo}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = ws.DestroyWorkspaceProject(ctx, info) })
+		return gitOutput(t, git, info.Worktrees[0].Path, "rev-parse", "HEAD")
+	}
+	if got := project("ordinary-root", ""); got != defaultSHA {
+		t.Fatalf("ordinary workspace root starts at %s, want the default %s", got, defaultSHA)
+	}
+	if got := project("imported-root", sideSHA); got != sideSHA {
+		t.Fatalf("imported workspace root starts at %s, want %s", got, sideSHA)
+	}
+}

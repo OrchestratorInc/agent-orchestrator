@@ -12,6 +12,23 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+const adoptSessionImport = `-- name: AdoptSessionImport :exec
+UPDATE sessions SET import_source = ?1
+WHERE id = ?2 AND json_extract(NULLIF(import_source, ''), '$.adopted') = 0
+`
+
+type AdoptSessionImportParams struct {
+	ImportSource string
+	ID           domain.SessionID
+}
+
+// Adoption is the one import fact a full session write records; the rest move
+// only through SetSessionImportWorkspace, so an older snapshot cannot undo them.
+func (q *Queries) AdoptSessionImport(ctx context.Context, arg AdoptSessionImportParams) error {
+	_, err := q.db.ExecContext(ctx, adoptSessionImport, arg.ImportSource, arg.ID)
+	return err
+}
+
 const deleteSessionImportMessages = `-- name: DeleteSessionImportMessages :exec
 DELETE FROM session_import_messages WHERE session_id = ?1
 `
@@ -23,23 +40,32 @@ func (q *Queries) DeleteSessionImportMessages(ctx context.Context, sessionID str
 
 const findImportedSession = `-- name: FindImportedSession :one
 SELECT id FROM sessions
-WHERE harness = ?1
-  AND json_extract(NULLIF(import_source, ''), '$.configDir') = CAST(?2 AS TEXT)
-  AND json_extract(NULLIF(import_source, ''), '$.nativeId') = CAST(?3 AS TEXT)
+WHERE json_extract(NULLIF(import_source, ''), '$.configDir') = CAST(?1 AS TEXT)
+  AND json_extract(NULLIF(import_source, ''), '$.nativeId') = CAST(?2 AS TEXT)
 LIMIT 1
 `
 
 type FindImportedSessionParams struct {
-	Harness   domain.AgentHarness
 	ConfigDir string
 	NativeID  string
 }
 
 func (q *Queries) FindImportedSession(ctx context.Context, arg FindImportedSessionParams) (domain.SessionID, error) {
-	row := q.db.QueryRowContext(ctx, findImportedSession, arg.Harness, arg.ConfigDir, arg.NativeID)
+	row := q.db.QueryRowContext(ctx, findImportedSession, arg.ConfigDir, arg.NativeID)
 	var id domain.SessionID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const getSessionImportSource = `-- name: GetSessionImportSource :one
+SELECT import_source FROM sessions WHERE id = ?1
+`
+
+func (q *Queries) GetSessionImportSource(ctx context.Context, id domain.SessionID) (string, error) {
+	row := q.db.QueryRowContext(ctx, getSessionImportSource, id)
+	var import_source string
+	err := row.Scan(&import_source)
+	return import_source, err
 }
 
 const insertSessionImportMessage = `-- name: InsertSessionImportMessage :exec
@@ -142,7 +168,6 @@ UPDATE sessions SET branch = ?1, workspace_path = ?2,
     workspace_repo_path = ?3, import_source = ?4,
     updated_at = ?5
 WHERE id = ?6 AND is_terminated = 0
-    AND import_source = ?7
     AND json_extract(NULLIF(import_source, ''), '$.adopted') = 0
     AND (workspace_path = '' OR workspace_path = ?2)
 `
@@ -154,9 +179,9 @@ type SetSessionImportWorkspaceParams struct {
 	NewSource         string
 	UpdatedAt         time.Time
 	ID                domain.SessionID
-	ExpectedSource    string
 }
 
+// The caller compares the stored source with its expectation in the same transaction.
 func (q *Queries) SetSessionImportWorkspace(ctx context.Context, arg SetSessionImportWorkspaceParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setSessionImportWorkspace,
 		arg.Branch,
@@ -165,7 +190,6 @@ func (q *Queries) SetSessionImportWorkspace(ctx context.Context, arg SetSessionI
 		arg.NewSource,
 		arg.UpdatedAt,
 		arg.ID,
-		arg.ExpectedSource,
 	)
 	if err != nil {
 		return 0, err

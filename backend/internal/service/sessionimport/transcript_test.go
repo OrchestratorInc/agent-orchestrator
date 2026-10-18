@@ -288,6 +288,9 @@ func TestVisibleBudgetKeepsOpeningPromptAndNewestMessages(t *testing.T) {
 	if total > limit || !got.shortened {
 		t.Fatalf("visible bytes = %d, shortened = %v", total, got.shortened)
 	}
+	if kept := trimVisible(nil); len(kept) != 0 {
+		t.Fatalf("empty history kept %d messages", len(kept))
+	}
 }
 
 func TestReadIgnoresRecordsAppendedDuringRead(t *testing.T) {
@@ -370,6 +373,12 @@ func TestScanDestinations(t *testing.T) {
 	runGit(t, clone, "remote", "add", "origin", "https://github.com/acme/widgets")
 	other := filepath.Join(home, "other")
 	runGit(t, home, "init", "-q", other)
+	// Inside the project folder: an agent worktree of it, and an unrelated clone.
+	agentWorktree := filepath.Join(repo, ".claude", "worktrees", "agent")
+	runGit(t, repo, "worktree", "add", "-q", "-b", "agent", agentWorktree)
+	vendored := filepath.Join(repo, "third_party", "foo")
+	runGit(t, home, "init", "-q", vendored)
+	runGit(t, vendored, "remote", "add", "origin", "https://github.com/acme/foo")
 	codexChat := filepath.Join(home, "Documents", "Codex", "2026-10-07", "wh")
 	managed := filepath.Join(data, "worktrees", "repo", "repo-1")
 	for _, dir := range []string{codexChat, managed, filepath.Join(repo, "pkg")} {
@@ -391,6 +400,8 @@ func TestScanDestinations(t *testing.T) {
 		repo:                          {"widgets", true},
 		filepath.Join(repo, "pkg"):    {"widgets", true},
 		linked:                        {"widgets", true},
+		agentWorktree:                 {"widgets", true},
+		vendored:                      {"", false},
 		clone:                         {"widgets", true},
 		other:                         {"", false},
 		home:                          {"", true},

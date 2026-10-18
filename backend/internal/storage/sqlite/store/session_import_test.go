@@ -2,12 +2,15 @@ package store_test
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 func TestImportedSessionArchiveIsAtomicAndPaged(t *testing.T) {
@@ -119,5 +122,64 @@ func TestImportedConversationFollowsArchive(t *testing.T) {
 	page, _, err := s.LoadSessionImportMessages(ctx, imported.ID, 0, 10)
 	if err != nil || len(page) != 3 || page[2].Text != "three" {
 		t.Fatalf("archive after the conversation opened = %+v: %v", page, err)
+	}
+}
+
+// Full-row writes come from snapshots that may predate a workspace transfer or
+// adoption; neither may be undone, and old rows must still match their source.
+func TestImportFactsSurviveOlderSessionWrites(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	s := sqlitetest.MustOpenAt(t, dataDir)
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(dataDir, "ao.db")+failureStorePragmas)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	rec := domain.SessionRecord{Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "native", ConfigDir: "/codex"}
+	created, _, err := s.CreateImportedSession(ctx, rec, []sessionimport.Message{{Role: domain.MessageRoleUser, Text: "hello", At: time.Now()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A row written before "transferred" and "prepared" existed still matches.
+	if _, err := db.Exec(`UPDATE sessions SET import_source = '{"nativeId":"native","configDir":"/codex","cwd":"","adopted":false}' WHERE id = ?`, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	older := created
+	older.DisplayName = "written from an older snapshot"
+	transferred := *created.Metadata.ImportSource
+	transferred.Transferred = true
+	if ok, err := s.SetSessionImportWorkspace(ctx, created.ID, created.Metadata.ImportSource, &transferred, "ao/import", "/workspace", "/repo", time.Now()); err != nil || !ok {
+		t.Fatalf("transfer: %v %v", ok, err)
+	}
+	if err := s.UpdateSession(ctx, older); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ := s.GetSession(ctx, created.ID)
+	if got.DisplayName != older.DisplayName || !got.Metadata.ImportSource.Transferred {
+		t.Fatalf("older snapshot undid the transfer: %+v", got.Metadata.ImportSource)
+	}
+	adopted := got
+	adopted.Metadata.ImportSource.Adopted = true
+	adopted.Metadata.ImportSource.HistoryThrough = 7
+	if err := s.UpdateSession(ctx, adopted); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateSession(ctx, older); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ = s.GetSession(ctx, created.ID)
+	if source := got.Metadata.ImportSource; !source.Adopted || source.HistoryThrough != 7 || !source.Transferred {
+		t.Fatalf("older snapshot undid adoption: %+v", source)
+	}
+	// An agent switch changes the harness, not the conversation it came from.
+	got.Harness = domain.HarnessClaudeCode
+	if err := s.UpdateSession(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	again, fresh, err := s.CreateImportedSession(ctx, rec, []sessionimport.Message{{Role: domain.MessageRoleUser, Text: "hello", At: time.Now()}})
+	if err != nil || fresh || again.ID != created.ID {
+		t.Fatalf("switched session imported again: %v %v %v", again.ID, fresh, err)
 	}
 }

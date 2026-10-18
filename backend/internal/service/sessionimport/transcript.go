@@ -634,11 +634,15 @@ func trimVisible(items []tagged) []tagged {
 	for _, item := range items {
 		total += len(item.Text)
 	}
-	for len(items) > 2 && total > maxVisibleBytes {
-		total -= len(items[1].Text)
-		items = slices.Delete(items, 1, 2)
+	cut := 1
+	for len(items)-cut > 1 && total > maxVisibleBytes {
+		total -= len(items[cut].Text)
+		cut++
 	}
-	return items
+	if cut == 1 {
+		return items
+	}
+	return slices.Delete(items, 1, cut)
 }
 
 // readOne reads a file as it was when opened; appended records belong to the next scan.

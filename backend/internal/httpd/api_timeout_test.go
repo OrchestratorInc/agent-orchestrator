@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -298,25 +299,29 @@ func TestResumeAgentRouteUsesExtendedTimeout(t *testing.T) {
 	}
 }
 
-type scanBudgetProbe struct{ budget time.Duration }
+type scanBudgetProbe struct{ scan, imported time.Duration }
 
 func (p *scanBudgetProbe) Scan(ctx context.Context) (sessionimport.Preview, error) {
 	deadline, _ := ctx.Deadline()
-	p.budget = time.Until(deadline)
+	p.scan = time.Until(deadline)
 	return sessionimport.Preview{}, nil
 }
 
-func (p *scanBudgetProbe) Import(context.Context, []string) ([]sessionimport.Result, error) {
-	return nil, nil
+func (p *scanBudgetProbe) Import(ctx context.Context, _ []string) ([]sessionimport.Result, error) {
+	deadline, _ := ctx.Deadline()
+	p.imported = time.Until(deadline)
+	return []sessionimport.Result{}, nil
 }
 
-// An import scan reads every local history, so it gets the long budget.
-func TestImportScanUsesExtendedTimeout(t *testing.T) {
+// Scanning and importing both read every chosen history, so both get the long budget.
+func TestSessionImportUsesExtendedTimeout(t *testing.T) {
 	probe := &scanBudgetProbe{}
 	router := NewRouterWithControl(config.Config{RequestTimeout: 250 * time.Millisecond}, discardLogger(), nil, APIDeps{SessionImport: probe}, ControlDeps{})
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/session-import", nil))
-	if response.Code != http.StatusOK || probe.budget < 9*time.Minute {
-		t.Fatalf("scan status = %d, budget = %s", response.Code, probe.budget)
+	scan := httptest.NewRecorder()
+	router.ServeHTTP(scan, httptest.NewRequest(http.MethodGet, "/api/v1/session-import", nil))
+	imported := httptest.NewRecorder()
+	router.ServeHTTP(imported, httptest.NewRequest(http.MethodPost, "/api/v1/session-import", strings.NewReader(`{"ids":["a"]}`)))
+	if scan.Code != http.StatusOK || probe.scan < 9*time.Minute || imported.Code != http.StatusOK || probe.imported < 9*time.Minute {
+		t.Fatalf("scan %d in %s, import %d in %s: %s", scan.Code, probe.scan, imported.Code, probe.imported, imported.Body)
 	}
 }

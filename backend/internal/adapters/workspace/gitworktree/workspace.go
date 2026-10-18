@@ -323,7 +323,7 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 	}
 	seedRef := ""
 	seedSHA := ""
-	if cfg.FreshBranch && cfg.BaseRef == "" {
+	if cfg.FreshBranch && cfg.StartRef == "" {
 		refs, err := w.resolveWorktreeRefsWithBudget(ctx, repo, cfg.Branch, cfg.BaseBranch)
 		if err != nil {
 			return ports.WorkspaceInfo{}, err
@@ -334,8 +334,8 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 			return ports.WorkspaceInfo{}, err
 		}
 	}
-	if cfg.FreshBranch && seedRef == "" {
-		seedRef = cfg.BaseRef
+	if cfg.FreshBranch && cfg.StartRef != "" {
+		seedRef = cfg.StartRef
 		seedSHA, err = w.revParse(ctx, repo, seedRef)
 		if err != nil {
 			return ports.WorkspaceInfo{}, err
@@ -427,7 +427,6 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 		repoPath:   rootRepo,
 		outputPath: rootPath,
 		baseBranch: cfg.BaseBranch,
-		baseRef:    cfg.BaseRef,
 	})
 	for _, child := range cfg.Repos {
 		repoPath, err := physicalAbs(child.RepoPath)
@@ -494,7 +493,11 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 	remoteCtx, cancelRemote := context.WithTimeout(ctx, defaultBranchResolutionBudget)
 	defer cancelRemote()
 	for i := range repos {
-		if i == 0 && repos[i].baseRef == "" {
+		if i == 0 && cfg.StartRef != "" {
+			repos[i].seedRef, repos[i].baseRef = cfg.StartRef, cfg.StartRef
+			continue
+		}
+		if i == 0 {
 			refs, err := w.resolveWorkspaceRootRefs(ctx, repos[i].repoPath, repos[i].baseBranch)
 			if err != nil {
 				return ports.WorkspaceProjectInfo{}, fmt.Errorf("gitworktree: resolve workspace repo %q base: %w", repos[i].name, err)

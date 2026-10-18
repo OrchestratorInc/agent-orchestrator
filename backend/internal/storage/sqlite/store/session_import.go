@@ -25,7 +25,7 @@ func (s *Store) CreateImportedSession(ctx context.Context, rec domain.SessionRec
 	var created domain.SessionRecord
 	fresh := false
 	err := s.inTx(ctx, "import session", func(q *gen.Queries) error {
-		id, err := q.FindImportedSession(ctx, gen.FindImportedSessionParams{Harness: rec.Harness, ConfigDir: source.ConfigDir, NativeID: source.NativeID})
+		id, err := q.FindImportedSession(ctx, gen.FindImportedSessionParams{ConfigDir: source.ConfigDir, NativeID: source.NativeID})
 		if err == nil {
 			row, err := q.GetSession(ctx, id)
 			if err != nil {
@@ -105,10 +105,30 @@ func (s *Store) LoadSessionImportMessages(ctx context.Context, id domain.Session
 	return messages, more, nil
 }
 
-// SetSessionImportWorkspace changes only adoption facts, preserving concurrent session edits.
+// SetSessionImportWorkspace changes only adoption facts, preserving concurrent
+// session edits. It compares decoded values, so rows written before a field was
+// added still match.
 func (s *Store) SetSessionImportWorkspace(ctx context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, branch, path, repo string, now time.Time) (bool, error) {
+	if expected == nil || next == nil {
+		return false, errors.New("import source is required")
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	rows, err := s.qw.SetSessionImportWorkspace(ctx, gen.SetSessionImportWorkspaceParams{ID: id, ExpectedSource: marshalImportSource(expected), NewSource: marshalImportSource(next), Branch: branch, WorkspacePath: path, WorkspaceRepoPath: repo, UpdatedAt: now})
-	return rows > 0, err
+	updated := false
+	err := s.inTx(ctx, "set import workspace", func(q *gen.Queries) error {
+		raw, err := q.GetSessionImportSource(ctx, id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if current := unmarshalImportSource(raw); current == nil || *current != *expected {
+			return nil
+		}
+		rows, err := q.SetSessionImportWorkspace(ctx, gen.SetSessionImportWorkspaceParams{ID: id, NewSource: marshalImportSource(next), Branch: branch, WorkspacePath: path, WorkspaceRepoPath: repo, UpdatedAt: now})
+		updated = rows > 0
+		return err
+	})
+	return updated, err
 }

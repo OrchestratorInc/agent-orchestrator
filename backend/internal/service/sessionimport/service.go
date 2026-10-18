@@ -276,22 +276,27 @@ func (d *destinations) lookup(cwd string) (domain.ProjectID, bool) {
 	if info, err := os.Stat(cwd); err != nil || !info.IsDir() {
 		return "", false
 	}
-	best := domain.ProjectID("")
-	bestLen := -1
-	for _, p := range d.projects {
-		if p.path != "" && pathWithin(p.path, cwd) && len(p.path) > bestLen {
-			best, bestLen = p.id, len(p.path)
+	var within *projectRoot
+	for i, p := range d.projects {
+		if p.path != "" && pathWithin(p.path, cwd) && (within == nil || len(p.path) > len(within.path)) {
+			within = &d.projects[i]
 		}
 	}
-	if best != "" {
-		return best, true
+	common, remote := gitIdentity(cwd)
+	same := func(p projectRoot) bool {
+		return (common != "" && p.common == common) || (remote != "" && p.remote == remote)
+	}
+	// A folder inside a project can hold an unrelated repository, such as an
+	// ignored clone; only the project's own repository belongs to the project.
+	if within != nil && (within.common == "" && within.remote == "" || same(*within)) {
+		return within.id, true
 	}
 	if d.svc.standalone(cwd) {
 		return "", true
 	}
-	common, remote := gitIdentity(cwd)
+	best := domain.ProjectID("")
 	for _, p := range d.projects {
-		if (common != "" && p.common == common) || (remote != "" && p.remote == remote) {
+		if same(p) {
 			if best != "" && best != p.id {
 				return "", false
 			} // Ambiguous destinations are not auto-adopted.
@@ -459,10 +464,9 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 				title = "Imported conversation"
 			}
 			c := Candidate{ID: id, Harness: harness, Title: title, ProjectID: project, LastActivity: source.last, Suggested: source.last.After(recent), MessageCount: result.count, Shortened: source.shortened}
+			// Config folder and native ID name one conversation; an agent switch
+			// changes the session's harness, never the conversation it came from.
 			for _, rec := range sessions {
-				if rec.Harness != harness {
-					continue
-				}
 				if imp := rec.Metadata.ImportSource; imp != nil && imp.NativeID == source.nativeID && imp.ConfigDir == root {
 					c.SessionID = rec.ID
 					break
