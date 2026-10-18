@@ -1,16 +1,19 @@
 import { Check, Copy, LoaderCircle, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { versionLabel } from "../../../hooks/useHarnessUpdates";
+import { MiddleTruncatedText } from "../../MiddleTruncatedText";
 import { Button } from "../../ui/button";
 import type { HarnessDetails } from "./describe-harness";
 import { detectedCredential } from "./harness-diagnostics";
 import { HarnessDetailGroup, HarnessDetailRow, HarnessStateText, HarnessTimestamp, hasValidTimestamp, type HarnessTone } from "./harness-ui";
 
 /** Read-only facts AO observed about one harness. */
-export function HarnessHealthTab({ details, checking, authCheckFailed, copied, onCheckAgain, onCopyReport }: {
+export function HarnessHealthTab({ details, checking, authCheckFailed, updateError, copied, onCheckAgain, onCopyReport }: {
 	details: HarnessDetails;
 	checking: boolean;
 	authCheckFailed: boolean;
+	/** The update failure a notice shortcut opened this tab for; also in the copied report. */
+	updateError?: string;
 	copied: boolean;
 	onCheckAgain: () => void;
 	onCopyReport: () => void;
@@ -33,6 +36,7 @@ export function HarnessHealthTab({ details, checking, authCheckFailed, copied, o
 	const executable = advisory?.binaryPath || details.job?.expectedDestination;
 	const hasDetails = Boolean((isInstalled && details.currentVersion) || advisory?.latestVersion || details.maintenanceMethod);
 	return <div className="flex flex-col gap-6">
+		{updateError ? <p role="alert" className="break-words text-xs text-error">{updateError}</p> : null}
 		<HarnessDetailGroup title={t("settings.harness.health.status")}>
 			<HarnessDetailRow label={t("settings.harness.installation")} description={installation?.state !== "installed" ? installation?.reason || undefined : undefined}>
 				<HarnessStateText tone={installState.tone}>{installState.label}</HarnessStateText>
@@ -53,12 +57,12 @@ export function HarnessHealthTab({ details, checking, authCheckFailed, copied, o
 		{hasDetails ? <HarnessDetailGroup title={t("settings.harness.health.details")}>
 			{/* One version row: the installed release with how it compares to the latest. */}
 			{isInstalled && details.currentVersion ? <HarnessDetailRow label={t(details.versionUnverified ? "settings.harness.lastObservedVersion" : "settings.harness.installedVersion")}>
-				<span className="break-all font-mono text-xs text-settings-label">{details.versionText}</span>
-				{details.updateAvailable ? <span className="whitespace-nowrap text-xs font-medium text-settings-accent">{t("settings.harness.versionAvailable", { version: versionLabel(advisory!.latestVersion!) })}</span>
+				<MiddleTruncatedText className="whitespace-nowrap font-mono text-xs text-settings-label" text={details.versionText} />
+				{details.updateAvailable ? <MiddleTruncatedText className="whitespace-nowrap text-xs font-medium text-settings-accent" text={versionLabel(advisory!.latestVersion!)} format={(version) => t("settings.harness.versionAvailable", { version })} />
 					: advisory?.latestVersion && !details.updateUnknown ? <span className="text-xs text-settings-muted">{t(advisory.status === "ahead_of_latest" ? "settings.harness.aheadOfLatest" : "settings.harness.latest")}</span> : null}
 			</HarnessDetailRow> : null}
 			{advisory?.latestVersion && !(isInstalled && details.currentVersion) ? <HarnessDetailRow label={t("settings.harness.health.latestVersion")}>
-				<span className="break-all font-mono text-xs text-settings-label">{versionLabel(advisory.latestVersion)}</span>
+				<MiddleTruncatedText className="whitespace-nowrap font-mono text-xs text-settings-label" text={versionLabel(advisory.latestVersion)} />
 				{details.updateAvailable ? <span className="whitespace-nowrap text-xs font-medium text-settings-accent">{t("settings.harness.updateAvailable")}</span> : null}
 			</HarnessDetailRow> : null}
 			{details.maintenanceMethod ? <HarnessDetailRow label={t("settings.harness.installMethod")}>

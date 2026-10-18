@@ -1,7 +1,7 @@
-import { Activity, BadgeCheck, Bot, CircleHelp, CreditCard, Globe2, Keyboard, RefreshCw, Server, Settings2, Smartphone, type LucideIcon } from "lucide-react";
+import { Activity, BadgeCheck, Bot, CircleHelp, Coffee, CreditCard, Globe2, Keyboard, RefreshCw, Server, Settings2, Smartphone, type LucideIcon } from "lucide-react";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
-import type { GlobalSettingsSection } from "../../stores/ui-store";
+import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
 import { BillingSection } from "./BillingSection";
 import { BrowserDownloadsSection } from "./BrowserDownloadsSection";
 import { BrowserProfilesSection } from "./BrowserProfilesSection";
@@ -15,6 +15,7 @@ import { MobileDevicesSection } from "./MobileDevicesSection";
 import { ReportProblemContent } from "./ReportProblemContent";
 import { RemoteHostsSettings } from "./RemoteHostsSettings";
 import { SettingsSection } from "./SettingsSection";
+import { StayAwakeSection } from "./StayAwakeSection";
 
 /** The memory window's own blocks, loaded only when the page is opened: it
  * samples the machine every two seconds while it is on screen. */
@@ -33,14 +34,18 @@ type CatalogContext = {
 	developerMode: boolean;
 	/** Developer mode with the Diagnostics toggle on — gates the memory and CPU page. */
 	diagnostics: boolean;
-	/** The org's cloud offering includes coder: gates the bring-your-own-Coder page. */
-	hasCoder: boolean;
+	/** The org holds the coder capability: gates the bring-your-own-Coder page. */
+	customCoder: boolean;
 	/** The org is on self-serve billing: gates the Upgrade (plans and usage) page. */
 	selfServeBilling: boolean;
 	focusAgentId?: string;
 	hostId?: string;
 	harnessView?: "local" | "cloud";
 	startLogin?: boolean;
+	showDiagnostics?: HarnessDiagnosticsRequest;
+	/** One page is shown, under its own title: a first heading that only
+	 * rewords that title ("Keyboard shortcuts" on Shortcuts) is hidden. */
+	singlePage?: boolean;
 };
 
 export type SettingsCatalogItem = {
@@ -55,10 +60,6 @@ export type SettingsCatalogItem = {
 	render: (t: TFunction, titleHidden: boolean, context: CatalogContext) => ReactNode;
 };
 
-function SettingsContentPanel({ children }: { children: ReactNode }) {
-	return <div className="rounded-md bg-[var(--color-bg-settings-row)]">{children}</div>;
-}
-
 const globalSettingsCatalog: SettingsCatalogItem[] = [
 	{
 		id: "general",
@@ -70,12 +71,15 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		id: "harness",
 		icon: Bot,
 		label: (t) => t("settings.harness"),
-		render: (_t, titleHidden, { focusAgentId, hostId, harnessView, startLogin }) => <HarnessSettingsSection focusAgentId={focusAgentId} {...(hostId ? { hostId } : {})} {...(harnessView ? { initialView: harnessView } : {})} {...(startLogin ? { startLogin } : {})} titleHidden={titleHidden} />,
+		render: (_t, titleHidden, { focusAgentId, hostId, harnessView, startLogin, showDiagnostics }) => <HarnessSettingsSection focusAgentId={focusAgentId} {...(hostId ? { hostId } : {})} {...(harnessView ? { initialView: harnessView } : {})} {...(startLogin ? { startLogin } : {})} {...(showDiagnostics ? { showDiagnostics } : {})} titleHidden={titleHidden} />,
 	},
 	{
 		id: "agents",
 		icon: BadgeCheck,
 		label: (t) => t("settings.agents"),
+		// In developer mode, subscription accounts live on each CLI's Harness
+		// Account tab instead.
+		visible: ({ developerMode }) => !developerMode,
 		render: (_t, titleHidden) => <CodexAccountsSection titleHidden={titleHidden} />,
 	},
 	{
@@ -83,7 +87,7 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		icon: CreditCard,
 		label: (t) => t("settings.billing.navLabel"),
 		visible: ({ cloudEnabled, selfServeBilling }) => cloudEnabled && selfServeBilling,
-		render: (_t, titleHidden) => <BillingSection titleHidden={titleHidden} />,
+		render: (_t, titleHidden, { singlePage }) => <BillingSection titleHidden={titleHidden || Boolean(singlePage)} />,
 	},
 	{
 		id: "browserProfiles",
@@ -100,8 +104,8 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		id: "coder",
 		icon: Server,
 		label: (t) => t("settings.coder.navLabel"),
-		visible: ({ cloudEnabled, hasCoder }) => cloudEnabled && hasCoder,
-		render: (_t, titleHidden) => <CoderSettingsSection titleHidden={titleHidden} />,
+		visible: ({ cloudEnabled, customCoder }) => cloudEnabled && customCoder,
+		render: (_t, titleHidden, { singlePage }) => <CoderSettingsSection titleHidden={titleHidden || Boolean(singlePage)} />,
 	},
 	{
 		id: "remoteHosts",
@@ -115,23 +119,27 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		icon: Smartphone,
 		label: (t) => t("settings.mobile"),
 		render: (t, titleHidden) => (
-			<SettingsSection titleHidden={titleHidden} title={t("settings.mobile")}>
-				<div className="rounded-md bg-[var(--color-bg-settings-row)] pb-4 pt-0">
+			<>
+				<SettingsSection titleHidden={titleHidden} title={t("settings.mobile")} grouped>
+					{/* Its own card rows: the pairing content row, then Keep awake. */}
 					<ConnectMobileContent active />
-					<MobileDevicesSection />
-				</div>
-			</SettingsSection>
+				</SettingsSection>
+				{/* Its own section (and card) when devices are paired; renders nothing otherwise. */}
+				<MobileDevicesSection />
+			</>
 		),
+	},
+	{
+		id: "stayAwake",
+		icon: Coffee,
+		label: (t) => t("awake.title", "Stay Awake"),
+		render: (_t, titleHidden) => <StayAwakeSection titleHidden={titleHidden} />,
 	},
 	{
 		id: "shortcuts",
 		icon: Keyboard,
 		label: (t) => t("settings.shortcuts"),
-		render: (t, titleHidden) => (
-			<SettingsSection titleHidden={titleHidden} title={t("settings.keyboardShortcuts")}>
-				<SettingsContentPanel><KeyboardShortcutsContent active /></SettingsContentPanel>
-			</SettingsSection>
-		),
+		render: (_t, titleHidden, { singlePage }) => <KeyboardShortcutsContent active titleHidden={titleHidden || Boolean(singlePage)} />,
 	},
 	{
 		id: "diagnostics",
@@ -156,8 +164,10 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		icon: CircleHelp,
 		label: (t) => t("settings.help"),
 		render: (t, titleHidden) => (
-			<SettingsSection titleHidden={titleHidden} title={t("settings.reportProblem")}>
-				<SettingsContentPanel><ReportProblemContent active /></SettingsContentPanel>
+			<SettingsSection titleHidden={titleHidden} title={t("settings.reportProblem")} grouped>
+				<div className="settings-content-row">
+					<ReportProblemContent active />
+				</div>
 			</SettingsSection>
 		),
 	},

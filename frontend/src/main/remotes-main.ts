@@ -211,10 +211,20 @@ export function registerRemotesIpc(
 		if (await accountID() !== account) throw new Error("Account changed during remote connection.");
 		return registry.previewUrl(hostId, sessionId, sourceUrl);
 	});
+	ipcMain.handle("remotes:agentBrowserUrl", async (_event, hostId: string, sessionId: string) => {
+		await requireAccount();
+		return registry.agentBrowserUrl(hostId, sessionId);
+	});
 	ipcMain.handle("remotes:resolvePreviewUrl", async (_event, hostId: string, sessionId: string, viewedUrl: string) => {
 		const account = await accountID();
 		refuseSelf(hostId, await localIdentity());
 		if (await accountID() !== account) throw new Error("Account changed during remote connection.");
 		return registry.resolvePreviewUrl(hostId, sessionId, viewedUrl);
+	});
+	ipcMain.handle("remotes:externalUrl", async (_event, hostId: string, url: string) => {
+		const account = await accountID();
+		refuseSelf(hostId, await localIdentity());
+		if (await accountID() !== account) throw new Error("Account changed during remote connection.");
+		return registry.externalUrl(hostId, url);
 	});
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/coder"
 	"github.com/go-chi/chi/v5"
@@ -68,7 +69,11 @@ type putOrgCoderConfigRequest struct {
 // connection. It never carries the token — only the non-secret config plus the
 // connection's validation metadata.
 type orgCoderConfigResponse struct {
-	Configured      bool                   `json:"configured"`
+	Configured bool `json:"configured"`
+	// Editable reports whether the organization may save a connection (it holds
+	// the coder capability). One without it may still read and clear a stored
+	// connection its sessions run on.
+	Editable        bool                   `json:"editable"`
 	CoderConfig     *domain.OrgCoderConfig `json:"coderConfig,omitempty"`
 	ValidationState string                 `json:"validationState,omitempty"`
 	ValidatedAt     *time.Time             `json:"validatedAt,omitempty"`
@@ -87,6 +92,13 @@ func (s *Server) getOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOrgCoder(w, r, orgID) {
 		return
 	}
+	// Every org that may run on Coder can read this. Desktop releases from before
+	// managed Coder opened to every org load it for any org that runs on Coder
+	// (Create Project, project settings, the Coder page), so an org without a
+	// connection gets "none" rather than a refusal. An org that lost the coder
+	// capability but still has a connection sees it, because its sessions still
+	// run there; saving one stays capability-gated.
+	editable := s.orgHasCustomCoder(principalFrom(r), orgID)
 	store, ok := s.store.(providerConnectionStore)
 	if !ok {
 		writeError(w, r, http.StatusNotImplemented, "not_implemented", "Provider connections are unavailable.")
@@ -111,6 +123,7 @@ func (s *Server) getOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 		updatedAt := connection.UpdatedAt
 		writeJSON(w, http.StatusOK, orgCoderConfigResponse{
 			Configured:      true,
+			Editable:        editable,
 			CoderConfig:     &cfg,
 			ValidationState: connection.ValidationState,
 			ValidatedAt:     validatedAt,
@@ -118,7 +131,7 @@ func (s *Server) getOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	writeJSON(w, http.StatusOK, orgCoderConfigResponse{Configured: false})
+	writeJSON(w, http.StatusOK, orgCoderConfigResponse{Configured: false, Editable: editable})
 }
 
 // putOrgCoderConfig stores an organization's bring-your-own Coder connection:
@@ -136,7 +149,7 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusServiceUnavailable, "provider_connections_unavailable", "Provider credential storage is not configured.")
 		return
 	}
-	if !s.requireOrgCoder(w, r, orgID) {
+	if !s.requireOrgCustomCoder(w, r, orgID) {
 		return
 	}
 	// Only an admin may test a connection: a save can reuse the stored token and
@@ -328,7 +341,9 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 	validatedAt := connection.ValidatedAt
 	updatedAt := connection.UpdatedAt
 	writeJSON(w, http.StatusOK, orgCoderConfigResponse{
-		Configured:      true,
+		Configured: true,
+		// Saving requires the coder capability (requireOrgCustomCoder above).
+		Editable:        true,
 		CoderConfig:     &normalized,
 		ValidationState: connection.ValidationState,
 		ValidatedAt:     validatedAt,
@@ -440,8 +455,9 @@ func (s *Server) storedCoderToken(r *http.Request, orgID, baseURL string) ([]byt
 
 // deleteOrgCoderConfig removes an organization's bring-your-own Coder connection.
 // It mirrors deleteAgentConnection: the delete is admin-gated inside the store
-// (requireOrgAdmin), and capability-gated here so an org that is not entitled to
-// the coder provider can neither write nor clear a connection.
+// (requireOrgAdmin). Clearing needs only that the org may run on Coder, not the
+// coder capability, so an org that lost the capability can still remove a
+// connection its sessions would otherwise keep using.
 func (s *Server) deleteOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 	if requireUUID(orgID, "orgId") != nil {
@@ -463,6 +479,11 @@ func (s *Server) deleteOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 		sandbox.ProviderCoder,
 		defaultAgentConnectionLabel,
 	); err != nil {
+		if errors.Is(err, postgres.ErrProviderConnectionInUse) {
+			writeError(w, r, http.StatusConflict, "connection_in_use",
+				"Sessions still run on this Coder connection. Remove their projects or sessions first.")
+			return
+		}
 		s.writeStoreError(w, r, err)
 		return
 	}

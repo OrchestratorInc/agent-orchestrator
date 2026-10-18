@@ -36,12 +36,12 @@ import { apiErrorMessage } from "../../../lib/api-client";
 import { aoBridge } from "../../../lib/bridge";
 import { clientForSessionHost, labelForHost } from "../../../lib/host-clients";
 import { LOCAL_HOST } from "../../../lib/hosts";
+import type { HarnessDiagnosticsRequest } from "../../../stores/ui-store";
 import { cn } from "../../../lib/utils";
 import { AgentAvatar } from "../../AgentAvatar";
 import { ConfirmDialog } from "../../ConfirmDialog";
 import { Button } from "../../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { describeHarness, supportsUpdate, type AgentAuthState, type AgentOperation, type HarnessDetails, type OperationAttempt } from "./describe-harness";
 import { HarnessAccountTab } from "./HarnessAccountTab";
 import { closeAuthTerminal, type AuthTerminalWorkflow } from "./HarnessAuthTerminalPanel";
@@ -72,7 +72,7 @@ const INSTALL_STATE_RANK = {
 	not_installed: 2,
 } as const;
 
-export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, startLogin = false }: { focusAgentId?: string; hostId?: string; search: string; startLogin?: boolean; onDetailChange?: (open: boolean) => void }) {
+export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, startLogin = false, showDiagnostics }: { focusAgentId?: string; hostId?: string; search: string; startLogin?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; onDetailChange?: (open: boolean) => void }) {
 	const { i18n, t } = useTranslation();
 	const queryClient = useQueryClient();
 	const client = clientForSessionHost(hostId);
@@ -109,6 +109,12 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const detailRef = useRef<HTMLDivElement>(null);
 	const focusHandledRef = useRef(false);
 	const focusPrimaryActionRef = useRef(false);
+	const focusDiagnosticsRef = useRef(false);
+	// The failure a notice shortcut reported, kept for the Health report until
+	// a later attempt supersedes it: one started here, or a new job in the shared query.
+	const [noticeError, setNoticeError] = useState<{ agentId: AgentId; error: string; jobStartedAt?: string } | null>(null);
+	const currentNoticeError = (agentId: AgentId) => noticeError?.agentId === agentId
+		&& (jobMap.get(agentId)?.startedAt ?? undefined) === noticeError.jobStartedAt ? noticeError.error : undefined;
 	const highlightTimerRef = useRef<number | null>(null);
 	const [highlightedAgentId, setHighlightedAgentId] = useState<AgentId | null>(null);
 	// The list opens one harness at a time; its page has Account, Models and Health tabs.
@@ -259,11 +265,22 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		if (focusHandledRef.current || !targetAgentId) return;
 		if (agents.isPending || installers.isPending || jobs.isPending || authPlans.isPending) return;
 		focusHandledRef.current = true;
-		focusPrimaryActionRef.current = true;
-		openDetail(targetAgentId);
+		// A failed update notice lands here: open that attempt's job diagnostics
+		// ready to copy. A failure with no job of its own, or one whose job has
+		// since been replaced, opens the Health report with the error it showed.
+		const targetJob = jobMap.get(targetAgentId);
+		if (showDiagnostics?.jobStartedAt && targetJob?.startedAt === showDiagnostics.jobStartedAt && describe(targetAgentId).hasDiagnostics) {
+			focusDiagnosticsRef.current = true;
+			setExpandedDiagnostics((current) => ({ ...current, [targetAgentId]: true }));
+			openDetail(targetAgentId);
+		} else {
+			focusPrimaryActionRef.current = true;
+			if (showDiagnostics?.error) setNoticeError({ agentId: targetAgentId, error: showDiagnostics.error, jobStartedAt: targetJob?.startedAt ?? undefined });
+			openDetail(targetAgentId, showDiagnostics ? "health" : "account");
+		}
 		setHighlightedAgentId(targetAgentId);
 		highlightTimerRef.current = window.setTimeout(() => setHighlightedAgentId(null), FOCUS_HIGHLIGHT_MS);
-	}, [agents.isPending, authPlans.isPending, installers.isPending, jobs.isPending, targetAgentId]);
+	}, [agents.isPending, authPlans.isPending, installers.isPending, jobs.isPending, showDiagnostics, targetAgentId]);
 
 	useEffect(() => {
 		if (!focusPrimaryActionRef.current || !selectedAgentId) return;
@@ -275,6 +292,28 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		const primaryAction = detail.querySelector<HTMLElement>("[data-harness-primary-action]:not(:disabled)");
 		(primaryAction ?? detail.querySelector<HTMLElement>("[role=tab][data-state=active]"))?.focus({ preventScroll: true });
 	}, [selectedAgentId]);
+
+	// Keyed on the expansion too: a wide layout may already show this harness,
+	// so opening it again does not change the selection.
+	useEffect(() => {
+		if (!focusDiagnosticsRef.current) return;
+		const diagnostics = detailRef.current?.querySelector<HTMLElement>("[data-harness-diagnostics]");
+		if (!diagnostics) return;
+		focusDiagnosticsRef.current = false;
+		diagnostics.querySelector<HTMLElement>("[data-harness-copy-diagnostics]")?.focus({ preventScroll: true });
+		// Scroll only the tab's own scroller, for the same reason as above.
+		const scroller = diagnostics.closest<HTMLElement>("[role=tabpanel]");
+		if (!scroller) return;
+		const reveal = () => { scroller.scrollTop += diagnostics.getBoundingClientRect().top - scroller.getBoundingClientRect().top; };
+		reveal();
+		// The page can still switch to the side-by-side layout after this runs,
+		// which resizes the scroller and resets its position; keep revealing briefly.
+		if (typeof ResizeObserver === "undefined") return;
+		const observer = new ResizeObserver(reveal);
+		observer.observe(scroller);
+		const stop = window.setTimeout(() => observer.disconnect(), 1_000);
+		return () => { window.clearTimeout(stop); observer.disconnect(); };
+	}, [expandedDiagnostics, selectedAgentId]);
 
 	// Wide layouts keep the list beside the open harness; narrow ones swap between them.
 	const layoutRef = useRef<HTMLDivElement>(null);
@@ -339,19 +378,26 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		}
 	}, [jobs.data, operationAttempts]);
 
+	// Collapse a failed install's diagnostics once the harness becomes installed.
+	// A harness that was already installed keeps them open: its failure was an update.
+	const observedInstalled = useRef<Set<AgentId> | null>(null);
 	useEffect(() => {
+		if (!agents.data) return;
+		const previous = observedInstalled.current;
+		observedInstalled.current = installed;
+		if (!previous) return;
 		setExpandedDiagnostics((current) => {
 			let changed = false;
 			const next = { ...current };
 			for (const agentId of installed) {
-				if (next[agentId]) {
+				if (!previous.has(agentId) && next[agentId]) {
 					delete next[agentId];
 					changed = true;
 				}
 			}
 			return changed ? next : current;
 		});
-	}, [installed]);
+	}, [agents.data, installed]);
 
 	const updateJob = (job: InstallJob) => {
 		setActionErrors((current) => ({ ...current, [job.target as AgentId]: undefined }));
@@ -362,6 +408,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		if (pendingActions.current.has(agentId)) return false;
 		pendingActions.current.add(agentId);
 		setPendingAgentIds(new Set(pendingActions.current));
+		setNoticeError((current) => current?.agentId === agentId ? null : current);
 		return true;
 	};
 
@@ -390,7 +437,6 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			if (operation === "update") {
 				const result = await startHarnessUpdate({
 					agentId,
-					latestVersion: queryClient.getQueryData<AgentUpdateAdvisory>(updateAdvisoryQueryKey(agentId, hostId))?.latestVersion,
 					methodId: method,
 					canStart: () => mountedRef.current,
 				});
@@ -708,13 +754,13 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			<div ref={layoutRef} data-harness-detail="" className={cn("relative flex w-full min-w-0 max-w-full min-h-0 flex-1 flex-col overflow-hidden", split && "grid-rows-[minmax(0,1fr)]", split && "grid grid-cols-[minmax(14rem,16rem)_minmax(0,1fr)] items-stretch overflow-clip rounded-xl border border-border bg-(--color-bg-primary)")}>
 				{split || !selectedDetails ? (
 					<div className={cn("flex w-full flex-col", split
-						? "relative h-full min-h-0 max-h-full divide-y divide-border overflow-y-auto overscroll-contain bg-(--color-bg-secondary)"
-						: "relative min-h-0 flex-1 divide-y divide-border overflow-y-auto overscroll-contain rounded-lg border border-border")}>
+						? "relative h-full min-h-0 max-h-full harness-list-scrollbar divide-y divide-border overflow-y-auto overscroll-contain bg-(--color-bg-secondary)"
+						: "relative min-h-0 flex-1 harness-list-scrollbar divide-y divide-border overflow-y-auto overscroll-contain rounded-lg border border-border")}>
 						{rows.map((agentId) => {
 							const details = describe(agentId);
 							const selected = split && selectedAgentId === agentId;
 							const statusId = `harness-list-status-${agentId}`;
-							return <Tooltip key={agentId}><TooltipTrigger asChild><button
+							return <button key={agentId}
 								type="button"
 								aria-label={t("settings.harness.openDetails", { agent: agentLabel(agentId) })}
 								// The status mark is visual only; its words reach screen readers here.
@@ -746,7 +792,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 									/>
 									: details.listTone === "error" ? <HarnessStatusDot tone="error" /> : null}
 								{split ? null : <ChevronRight className="size-4 shrink-0 text-settings-muted" aria-hidden="true" />}
-							</button></TooltipTrigger>{details.statusLabel ? <TooltipContent side="right">{details.statusLabel}</TooltipContent> : null}</Tooltip>;
+							</button>;
 						})}
 						{rows.length === 0 ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.noResults")}</p> : null}
 					</div>
@@ -791,11 +837,14 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 									details={selectedDetails}
 									checking={checkingAuth.includes(selectedDetails.agentId) || agents.isFetching || Boolean(selectedDetails.advisoryQuery?.isFetching)}
 									authCheckFailed={Boolean(authCheckErrors[selectedDetails.agentId])}
+									updateError={currentNoticeError(selectedDetails.agentId)}
 									copied={copiedAgent === selectedDetails.agentId}
 									onCheckAgain={() => refreshInstalledAgent(selectedDetails.agentId)}
 									onCopyReport={() => void (async () => {
 										const machine = await machineText(queryClient, hostId ? client : undefined);
-										await copyText(selectedDetails.agentId, [healthReport(selectedDetails), machine].filter(Boolean).join("\n\n"));
+										const noticeFailure = currentNoticeError(selectedDetails.agentId);
+										const updateError = noticeFailure ? `Update error: ${noticeFailure}` : "";
+										await copyText(selectedDetails.agentId, [updateError, healthReport(selectedDetails), machine].filter(Boolean).join("\n\n"));
 									})()}
 								/>
 							</TabsContent>

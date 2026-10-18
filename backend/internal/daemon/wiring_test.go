@@ -192,6 +192,7 @@ func TestWiring_AgentResolverResolvesRealAdapters(t *testing.T) {
 		{domain.HarnessUnreal, "unreal-agent"},
 		{domain.HarnessCommandCode, "command-code"},
 		{domain.HarnessStrands, "strands"},
+		{domain.HarnessMemcode, "memcode"},
 	} {
 		agent, ok := resolver.Agent(tc.harness)
 		if !ok {
@@ -971,6 +972,10 @@ func (f *fakeSessionLifecycle) Reconcile(_ context.Context) error {
 func (f *fakeSessionLifecycle) ReconcileStartupSafety(_ context.Context) error {
 	f.reconcileSafetyCalled = true
 	return f.reconcileErr
+}
+
+func (f *fakeSessionLifecycle) ReconnectAwakeAgent(context.Context, domain.AwakeAgentTarget) error {
+	return nil
 }
 
 func (f *fakeSessionLifecycle) ReconcileBackground(_ context.Context) error {

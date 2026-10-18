@@ -38,6 +38,8 @@ func (s *Store) CreateSessionInterfaceTransition(
 		NativeConversationID: rec.NativeConversationID,
 		CreatedAt:            rec.CreatedAt,
 		UpdatedAt:            rec.UpdatedAt,
+		SourceAccountID:      rec.SourceAccountID,
+		TargetAccountID:      rec.TargetAccountID,
 	})
 	if err == nil {
 		return interfaceTransitionToDomain(row), true, nil
@@ -87,6 +89,7 @@ func (s *Store) CreateSessionInterfaceTransitionAfter(
 			TargetMode: rec.TargetMode, Policy: rec.Policy, HistoryPolicy: rec.HistoryPolicy,
 			Phase: rec.Phase, NativeConversationID: rec.NativeConversationID,
 			CreatedAt: rec.CreatedAt, UpdatedAt: rec.UpdatedAt,
+			SourceAccountID: rec.SourceAccountID, TargetAccountID: rec.TargetAccountID,
 		})
 		if insertErr == nil {
 			transition, created = interfaceTransitionToDomain(row), true
@@ -321,6 +324,18 @@ func (s *Store) commitSessionControllerEpoch(
 		if err != nil {
 			return false, fmt.Errorf("release untouched Chat provider for %s: %w", id, err)
 		}
+		if released == 0 {
+			// A Chat whose controller never started (its start failed, or it
+			// was never opened) has no conversation row: the freshness proof
+			// accepts that, and there is no reservation to release.
+			_, lookupErr := q.SelectConversationBySession(ctx, &id)
+			switch {
+			case errors.Is(lookupErr, sql.ErrNoRows):
+				released = 1
+			case lookupErr != nil:
+				return false, fmt.Errorf("release untouched Chat provider for %s: %w", id, lookupErr)
+			}
+		}
 		if released != 1 {
 			return false, fmt.Errorf("release untouched Chat provider for %s: empty root proof changed", id)
 		}
@@ -441,7 +456,8 @@ func interfaceTransitionToDomain(row gen.SessionInterfaceTransition) domain.Sess
 		SourceMode: row.SourceMode, TargetMode: row.TargetMode,
 		Policy: row.Policy, HistoryPolicy: row.HistoryPolicy, Phase: row.Phase,
 		NativeConversationID: row.NativeConversationID,
-		ErrorCode:            row.ErrorCode, ErrorDetail: row.ErrorDetail,
+		SourceAccountID:      row.SourceAccountID, TargetAccountID: row.TargetAccountID,
+		ErrorCode: row.ErrorCode, ErrorDetail: row.ErrorDetail,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		CompletedAt:          nullTimeToTime(row.CompletedAt),
 		NoticeAcknowledgedAt: nullTimeToTime(row.NoticeAcknowledgedAt),

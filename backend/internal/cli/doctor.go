@@ -93,6 +93,7 @@ var harnessProbeSpecs = map[string]harnessProbeSpec{
 	// Command Code's binary is `cmd` on Unix and `cmdc` on Windows, where `cmd`
 	// is the built-in shell; the full name resolves on every platform.
 	"strands":      {BinaryName: "strands", VersionArg: "--version"},
+	"memcode":      {BinaryName: "memcode", VersionArg: "--version"},
 	"command-code": {BinaryName: "command-code", VersionArg: "--version"},
 }
 

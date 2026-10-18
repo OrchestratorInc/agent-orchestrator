@@ -2108,8 +2108,9 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsDeepSeek := !strings.Contains(schema, "'deepseek-harness'")
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
 	needsStrands := !strings.Contains(schema, "'strands'")
+	needsMemcode := !strings.Contains(schema, "'memcode'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
-	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsStrands {
+	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsMemcode && !needsStrands {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2226,6 +2227,9 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsStrands {
 		repairs = append(repairs, replacement{"'fake'))", "'strands', 'fake'))"})
 	}
+	if needsMemcode {
+		repairs = append(repairs, replacement{"'fake'))", "'memcode', 'fake'))"})
+	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
 			`UPDATE sqlite_master
@@ -2280,6 +2284,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'strands'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Strands and did not match known pre-Strands schema")
+	}
+	if !strings.Contains(schema, "'memcode'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Memcode and did not match known pre-Memcode schema")
 	}
 	return nil
 }

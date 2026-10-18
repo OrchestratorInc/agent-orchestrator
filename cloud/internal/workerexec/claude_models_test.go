@@ -11,6 +11,7 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
 
 func TestClaudeModelsFromACPOptions(t *testing.T) {
@@ -105,5 +106,40 @@ func TestCloudClaudeDiscoversProviderCatalogWithLaunchCredentials(t *testing.T) 
 	command.Env["CLAUDE_MODEL_CONFIG"] = `{"availableModels":["company-model"]}`
 	if got := discoverClaudeProviderModels(context.Background(), command); len(got) != 0 || requested {
 		t.Fatalf("explicit catalog was queried or replaced: %+v", got)
+	}
+}
+
+// Claude ACP lists aliases ("opus") ahead of concrete IDs, and an alias has no
+// provider ID of its own. It must still carry the effort levels of the model it
+// resolves to, or Chat hides the effort control whenever an alias is selected.
+func TestClaudeModelCatalogGivesAliasesTheirModelsEfforts(t *testing.T) {
+	five := []string{"low", "medium", "high", "xhigh", "max"}
+	models := []worker.ChatModel{
+		{ID: "opus", DisplayName: "Opus", Description: "Opus 5.5 · Best for everyday, complex tasks"},
+		{ID: "haiku", DisplayName: "Haiku", Description: "Haiku 4.5 · Fastest for quick answers"},
+		{ID: "claude-opus-5", DisplayName: "claude-opus-5", Description: "Newer version available · select Opus for Opus 5.5"},
+		{ID: "default", DisplayName: "Use agent model"},
+	}
+	provider := []agentcreds.Model{
+		{ID: "claude-opus-5-5", DisplayName: "Claude Opus 5.5", Efforts: five},
+		{ID: "claude-opus-5", DisplayName: "Claude Opus 5", Efforts: five},
+		{ID: "claude-haiku-4-5-20251001", DisplayName: "Claude Haiku 4.5"},
+	}
+	catalog := claudeModelCatalog(models, "opus", "", provider, nil, nil)
+	byID := map[string]worker.ChatModel{}
+	for _, model := range catalog.Models {
+		byID[model.ID] = model
+	}
+	if got := byID["opus"]; got.DisplayName != "Opus" || len(got.Efforts) != 5 {
+		t.Fatalf("opus = %+v, want its alias label with Opus 5.5's five efforts", got)
+	}
+	if got := byID["haiku"].Efforts; len(got) != 0 {
+		t.Fatalf("haiku efforts = %v, want none (Haiku 4.5 takes no effort)", got)
+	}
+	if got := byID["claude-opus-5"]; got.DisplayName != "Claude Opus 5" || len(got.Efforts) != 5 {
+		t.Fatalf("claude-opus-5 = %+v, want the provider's label and efforts", got)
+	}
+	if got := byID["default"].Efforts; len(got) != 0 {
+		t.Fatalf("default efforts = %v, want none without a resolvable description", got)
 	}
 }

@@ -1,9 +1,14 @@
 import { BookOpen, Check, Copy, ExternalLink, LoaderCircle, LogOut } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { agentAccountProviderFor } from "../../../hooks/useAgentAccounts";
 import { versionLabel, type InstallJob } from "../../../hooks/useHarnessUpdates";
 import type { TerminalSessionState } from "../../../hooks/useTerminalSession";
 import { aoBridge } from "../../../lib/bridge";
+import { cn } from "../../../lib/utils";
+import { useUiStore } from "../../../stores/ui-store";
+import { MiddleTruncatedText } from "../../MiddleTruncatedText";
 import { Button } from "../../ui/button";
+import { AgentAccountsPanel } from "../AgentAccountsSection";
 import { SettingsOptionMenu } from "../SettingsOptionMenu";
 import type { HarnessDetails } from "./describe-harness";
 import { HarnessAuthTerminalPanel } from "./HarnessAuthTerminalPanel";
@@ -35,7 +40,11 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 }) {
 	const { t } = useTranslation();
 	const { plan, job, isInstalled, authPlan, rowAuthWorkflow, authBusy, installMethod, availableMethods, failed } = details;
-	const progressAction = <span role="status"><Button type="button" size="sm" variant="outline" className={ACTION_CLASS} disabled><LoaderCircle className="animate-spin" aria-hidden="true" />{details.progressLabel}</Button></span>;
+	// Subscription accounts are a developer-mode preview, for local Claude Code and Codex.
+	const accountsPreview = useUiStore((state) => state.developerMode);
+	const accountProvider = accountsPreview && !hostId && isInstalled ? agentAccountProviderFor(details.agentId) : null;
+	// Progress reads as a solid state, not a greyed-out action.
+	const progressAction = <span role="status"><Button type="button" size="sm" variant="secondary" className={cn(ACTION_CLASS, "disabled:opacity-100")} aria-busy="true" disabled><LoaderCircle className="animate-spin" aria-hidden="true" />{details.progressLabel}</Button></span>;
 	const authBusyAction = <Button type="button" size="sm" className={ACTION_CLASS} disabled>
 		{rowAuthWorkflow && !["running", "verifying", "closing"].includes(rowAuthWorkflow.phase) ? null : <LoaderCircle className="animate-spin" aria-hidden="true" />}
 		{rowAuthWorkflow?.phase === "verifying" ? t(rowAuthWorkflow.action === "logout" ? "settings.harness.checkingLogout" : "settings.harness.checkingLogin") : rowAuthWorkflow?.action === "logout" ? t("settings.harness.logout") : details.isSetupAction ? t("settings.harness.setup") : t("settings.harness.login")}
@@ -81,8 +90,8 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 					: details.installationPending ? t("settings.harness.installationUnknown") : t("settings.harness.notInstalled")}
 				description={isInstalled ? (details.maintenanceMethod?.label ? t("settings.harness.installedWith", { method: details.maintenanceMethod.label }) : undefined) : details.installNote}
 			>
-				{isInstalled ? <span className="break-all font-mono text-xs text-settings-label">{details.versionText}{details.versionUnverified && details.currentVersion ? ` · ${t("settings.harness.unverified")}` : ""}</span> : null}
-				{isInstalled && details.updateAvailable ? <span className="whitespace-nowrap text-xs font-medium text-settings-accent">{t("settings.harness.versionAvailable", { version: versionLabel(details.advisory!.latestVersion!) })}</span> : null}
+				{isInstalled ? <span className="break-all font-mono text-xs text-settings-label">{details.currentVersion ? <MiddleTruncatedText className="whitespace-nowrap" text={details.versionText} /> : details.versionText}{details.versionUnverified && details.currentVersion ? ` · ${t("settings.harness.unverified")}` : ""}</span> : null}
+				{isInstalled && details.updateAvailable ? <MiddleTruncatedText className="whitespace-nowrap text-xs font-medium text-settings-accent" text={versionLabel(details.advisory!.latestVersion!)} format={(version) => t("settings.harness.versionAvailable", { version })} /> : null}
 				{isInstalled && !details.updateUnknown && !details.updateAvailable && !details.busy ? <span className="text-xs text-settings-muted">{t(details.advisory?.status === "ahead_of_latest" ? "settings.harness.aheadOfLatest" : "settings.harness.latest")}</span> : null}
 				{installationAction}
 			</HarnessDetailRow>
@@ -104,6 +113,7 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 				{isInstalled && authPlan?.logoutCommand && authPlan.available && details.authStatus !== "unauthorized" ? <Button type="button" size="sm" variant="outline" disabled={details.busy || authWorkflowActive} onClick={onLogout}><LogOut aria-hidden="true" />{t("settings.harness.logout")}</Button> : null}
 			</HarnessDetailRow>
 		</HarnessDetailGroup> : null}
+		{accountProvider ? <AgentAccountsPanel provider={accountProvider} /> : null}
 		{authPlan?.action === "instructions" && authPlan.documentationUrl ? <div><Button type="button" size="sm" variant="outline" onClick={() => void aoBridge.app.openExternal(authPlan.documentationUrl)}><BookOpen aria-hidden="true" />{t("settings.harness.instructions")}</Button></div> : null}
 		{rowAuthWorkflow ? <HarnessAuthTerminalPanel
 			workflow={rowAuthWorkflow}
@@ -120,12 +130,12 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 			<Button type="button" aria-expanded={diagnosticsExpanded} size="sm" variant="ghost" onClick={onToggleDiagnostics}>
 				{t(diagnosticsExpanded ? "settings.harness.hideDiagnostics" : "settings.harness.showDiagnostics")}
 			</Button>
-			{diagnosticsExpanded ? <div className="rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) p-3 text-xs text-settings-muted">
+			{diagnosticsExpanded ? <div data-harness-diagnostics="" className="rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) p-3 text-xs text-settings-muted">
 				{job?.method ? <p><span className="font-medium text-settings-label">{t("settings.harness.method")}:</span> {job.method}</p> : null}
 				{job?.expectedDestination ? <p className="break-all"><span className="font-medium text-settings-label">{t("settings.harness.expectedDestination")}:</span> {job.expectedDestination}</p> : null}
 				{job?.error ? <p className="mt-2 whitespace-pre-wrap text-error">{job.error}</p> : null}
 				{job?.output ? <pre className="settings-thin-scrollbar mt-2 max-h-40 overflow-auto overscroll-contain whitespace-pre-wrap break-words font-mono">{job.output}</pre> : null}
-				<Button type="button" className="mt-2" size="sm" variant="outline" onClick={() => job && onCopyDiagnostics(job)}><Copy aria-hidden="true" />{t("settings.harness.copyDiagnostics")}</Button>
+				<Button type="button" data-harness-copy-diagnostics="" className="mt-2" size="sm" variant="outline" onClick={() => job && onCopyDiagnostics(job)}><Copy aria-hidden="true" />{t("settings.harness.copyDiagnostics")}</Button>
 			</div> : null}
 		</div> : null}
 	</div>;

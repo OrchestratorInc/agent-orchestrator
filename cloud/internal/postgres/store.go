@@ -11,10 +11,14 @@ import (
 )
 
 var (
-	ErrNotFound             = errors.New("not found")
-	ErrForbidden            = errors.New("forbidden")
-	ErrConflict             = errors.New("conflict")
-	ErrInvalid              = errors.New("invalid")
+	ErrNotFound      = errors.New("not found")
+	ErrForbidden     = errors.New("forbidden")
+	ErrConflict      = errors.New("conflict")
+	ErrInvalid       = errors.New("invalid")
+	ErrInvalidBranch = errors.New("invalid session branch")
+	// ErrBranchInUse refuses a requested session branch a live session of the
+	// project already works on (BranchRefusedError carries which one).
+	ErrBranchInUse          = errors.New("session branch in use")
 	ErrIdempotencyMismatch  = errors.New("idempotency key belongs to a different operation")
 	ErrSandboxQuotaExceeded = errors.New("sandbox quota exceeded")
 	ErrWorkerUnavailable    = errors.New("worker unavailable")
@@ -26,6 +30,9 @@ var (
 	ErrTerminalSessionExited = errors.New("terminal session exited")
 	ErrTransportExpired      = errors.New("worker request expired")
 	ErrWorkspaceReadOnly     = errors.New("workspace is read-only")
+	// ErrProviderConnectionInUse refuses deleting a provider connection that a
+	// sandbox not yet fully deleted still runs on. It is a conflict.
+	ErrProviderConnectionInUse = fmt.Errorf("provider connection in use: %w", ErrConflict)
 )
 
 type Store struct {

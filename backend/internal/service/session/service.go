@@ -108,6 +108,11 @@ type exitAgentCommander interface {
 	ExitAgent(context.Context, domain.SessionID) (domain.SessionRecord, error)
 }
 
+// agentAccountCommander keeps account moves optional for focused service fakes.
+type agentAccountCommander interface {
+	StartAccountTransition(context.Context, domain.SessionID, string, domain.SessionInterfaceTransitionPolicy) (domain.SessionInterfaceTransition, error)
+}
+
 // RollbackOutcome reports what happened in a rollback: either the seed row was
 // deleted, or the partially-spawned session was killed (runtime+workspace torn
 // down, row marked terminated).
@@ -238,6 +243,15 @@ type Service struct {
 	// artifactDeleter deletes a session's artifact files and version rows. Nil
 	// makes DeleteArtifacts fail rather than delete outside the capture lock.
 	artifactDeleter artifactDeleter
+	// runsOnComputerLogin reports whether a new session would launch on the
+	// computer's own CLI login rather than a saved account. Nil means always.
+	runsOnComputerLogin func(context.Context, domain.AgentHarness, string) bool
+}
+
+// SetComputerLoginCheck late-binds the account check the launch gate needs: the
+// computer's login state matters only to a session that will run on it.
+func (s *Service) SetComputerLoginCheck(check func(ctx context.Context, harness domain.AgentHarness, accountID string) bool) {
+	s.runsOnComputerLogin = check
 }
 
 // SetChatProviderPreserver wires the live Chat lifetime observation after both
@@ -377,32 +391,49 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 		if cfg.Harness == domain.HarnessCodex &&
 			readiness.Authentication.State == domain.AgentAuthenticationUnauthorized &&
-			readiness.Authentication.Freshness == domain.AgentReadinessFresh {
+			readiness.Authentication.Freshness == domain.AgentReadinessFresh &&
+			(s.runsOnComputerLogin == nil || s.runsOnComputerLogin(ctx, cfg.Harness, cfg.AgentAccountID)) {
 			return domain.Session{}, 0, 0, apierr.Conflict("CODEX_ACCOUNT_AUTH_UNVERIFIED", "Add or sign in to a Codex account in Settings before starting a Codex session", nil)
 		}
 	}
-	start := s.now()
-	firstSession, err := s.isFirstSession(ctx)
-	if err != nil {
-		return domain.Session{}, 0, 0, fmt.Errorf("count sessions: %w", err)
-	}
 	cfg = s.withIssueContext(ctx, cfg, project)
-	rec, promptBytes, systemPromptBytes, err := s.manager.Spawn(ctx, cfg)
+	rec, promptBytes, systemPromptBytes, err := s.spawnWithTelemetry(ctx, cfg, project)
 	if err != nil {
 		s.invalidateAgentReadinessAfterLaunchFailure(cfg.Harness, err)
-		apiErr := toSpawnAPIError(err)
-		s.emitSpawnFailed(ctx, cfg, apiErr, s.now().Sub(start).Milliseconds())
-		return domain.Session{}, 0, 0, apiErr
-	}
-	s.emitSpawned(ctx, rec, s.now().Sub(start).Milliseconds())
-	if firstSession {
-		s.emitFirstSessionSpawned(ctx, rec, project)
+		return domain.Session{}, 0, 0, toSpawnAPIError(err)
 	}
 	sess, err := s.toSession(ctx, rec)
 	if err != nil {
 		return domain.Session{}, 0, 0, err
 	}
 	return sess, promptBytes, systemPromptBytes, nil
+}
+
+// spawnWithTelemetry is the only path from the service into manager.Spawn, so
+// every created session emits ao.session.spawned or ao.session.spawn_failed
+// exactly once. Client-request replays return before reaching it.
+func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectRecord) (domain.SessionRecord, int, int, error) {
+	// CLI and orchestrator workers use this same naming policy as desktop tasks.
+	if !cfg.NameFromPrompt && cfg.Kind == domain.KindWorker && project.ID != "" &&
+		project.Kind.WithDefault() != domain.ProjectKindScratch && strings.TrimSpace(cfg.Branch) == "" && strings.TrimSpace(cfg.Prompt) != "" {
+		cfg.NameFromPrompt = true
+		cfg.KeepDisplayName = cfg.DisplayName != ""
+	}
+	start := s.now()
+	firstSession, err := s.isFirstSession(ctx)
+	if err != nil {
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("count sessions: %w", err)
+	}
+	rec, promptBytes, systemPromptBytes, err := s.manager.Spawn(ctx, cfg)
+	if err != nil {
+		s.emitSpawnFailed(ctx, cfg, err, s.now().Sub(start).Milliseconds())
+		return domain.SessionRecord{}, 0, 0, err
+	}
+	s.emitSpawned(ctx, rec, s.now().Sub(start).Milliseconds())
+	if firstSession {
+		s.emitFirstSessionSpawned(ctx, rec, project)
+	}
+	return rec, promptBytes, systemPromptBytes, nil
 }
 
 func (s *Service) invalidateAgentReadinessAfterLaunchFailure(harness domain.AgentHarness, err error) {
@@ -746,6 +777,23 @@ func (s *Service) ResumeAgent(ctx context.Context, id domain.SessionID) (ResumeA
 		return ResumeAgentOutcome{}, err
 	}
 	return ResumeAgentOutcome{Session: session, Mode: restoreModeView(res.Mode)}, nil
+}
+
+// StartAccountTransition moves the session's agent to another provider account
+// through the durable controller handoff. stopTurn cancels a turn in progress;
+// otherwise the move waits for it to finish.
+func (s *Service) StartAccountTransition(ctx context.Context, id domain.SessionID, accountID string, stopTurn bool) (domain.SessionInterfaceTransition, error) {
+	manager, ok := s.manager.(agentAccountCommander)
+	if !ok {
+		return domain.SessionInterfaceTransition{}, apierr.Conflict(
+			"AGENT_ACCOUNT_UNSUPPORTED", "This build cannot move a session to another account", nil)
+	}
+	policy := domain.SessionInterfaceTransitionDrain
+	if stopTurn {
+		policy = domain.SessionInterfaceTransitionInterrupt
+	}
+	transition, err := manager.StartAccountTransition(ctx, id, accountID, policy)
+	return transition, toAPIError(err)
 }
 
 // InterfaceTransitionStatus returns capability and progress without launching
@@ -1211,6 +1259,21 @@ func matchesSessionFilter(rec domain.SessionRecord, filter ListFilter) bool {
 	return true
 }
 
+// GetRecord reads a session's stored row without the read model Get builds on
+// top (PR facts, review runs, artifact listing, agent switch). It serves hot
+// paths that need only stored fields, such as the preview proxy, which runs
+// once for every module a dev server serves.
+func (s *Service) GetRecord(ctx context.Context, id domain.SessionID) (domain.SessionRecord, error) {
+	rec, ok, err := s.store.GetSession(ctx, id)
+	if err != nil {
+		return domain.SessionRecord{}, fmt.Errorf("get %s: %w", id, err)
+	}
+	if !ok || rec.IsTaskPreparation {
+		return domain.SessionRecord{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+	return rec, nil
+}
+
 // Get returns one session as an enriched display model, or an apierr.NotFound
 // (SESSION_NOT_FOUND) if it is absent.
 func (s *Service) Get(ctx context.Context, id domain.SessionID) (domain.Session, error) {
@@ -1344,6 +1407,19 @@ func mapSessionError(err error) error {
 		return nil
 	case errors.Is(err, sessionmanager.ErrNotFound):
 		return apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	case errors.Is(err, ports.ErrAgentAccountUnknown):
+		return apierr.NotFound("AGENT_ACCOUNT_NOT_FOUND", "Unknown agent account")
+	case errors.Is(err, ports.ErrAgentAccountProviderMismatch):
+		return apierr.Invalid("AGENT_ACCOUNT_PROVIDER_MISMATCH", "The account is for a different agent", nil)
+	case errors.Is(err, ports.ErrAgentAccountDefaultUnusable):
+		return apierr.Conflict("AGENT_ACCOUNT_DEFAULT_UNUSABLE", "The default account is signed out or now holds another login. Sign it in again, or make another account the default.", nil)
+	case errors.Is(err, ports.ErrAgentAccountSignedOut):
+		return apierr.Conflict("AGENT_ACCOUNT_SIGNED_OUT", "The account is signed out; sign it in again first", nil)
+	case errors.Is(err, ports.ErrAgentAccountUnchanged):
+		return apierr.Conflict("AGENT_ACCOUNT_UNCHANGED", "The session already uses this account", nil)
+	case errors.Is(err, ports.ErrAgentAccountUnshared):
+		return apierr.Conflict("AGENT_ACCOUNT_UNSHARED",
+			"AO cannot link this account's folder to this computer's history. On Windows, turn on Developer Mode.", nil)
 	case errors.Is(err, sessionmanager.ErrNotRestorable):
 		return apierr.Conflict("SESSION_NOT_RESTORABLE", "Session is not restorable", nil)
 	case errors.Is(err, sessionmanager.ErrTerminated):
@@ -1371,6 +1447,9 @@ func mapSessionError(err error) error {
 	case errors.Is(err, sessionmanager.ErrNativeConversationUnverified):
 		return apierr.Conflict("NATIVE_SESSION_UNVERIFIED",
 			"The current terminal launch has not confirmed that it owns the stored native conversation yet", nil)
+	case errors.Is(err, sessionmanager.ErrInterfaceWorkspaceUnavailable):
+		return apierr.Conflict("WORKSPACE_UNAVAILABLE",
+			"The session's workspace was never set up; retry its start before switching interfaces", nil)
 	case errors.Is(err, sessionmanager.ErrInterfaceTransitionNotCancellable):
 		return apierr.Conflict("INTERFACE_TRANSITION_NOT_CANCELLABLE",
 			"The source controller has already stopped; AO must finish or recover the switch", nil)

@@ -454,6 +454,397 @@ paths:
       summary: Verify an installed harness without reinstalling or probing authentication
       tags:
       - agents
+  /api/v1/agents/accounts:
+    get:
+      operationId: listAgentAccounts
+      parameters:
+      - description: Read identity and limits again even when the last reading is
+          fresh.
+        in: query
+        name: refresh
+        schema:
+          description: Read identity and limits again even when the last reading is
+            fresh.
+          type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentAccountsResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List Claude Code and Codex accounts with their limits
+      tags:
+      - agents
+  /api/v1/agents/accounts/{accountId}:
+    delete:
+      operationId: removeAgentAccount
+      parameters:
+      - description: Agent account identifier; device-claude and device-codex are
+          this computer's own logins.
+        in: path
+        name: accountId
+        required: true
+        schema:
+          description: Agent account identifier; device-claude and device-codex are
+            this computer's own logins.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentAccountsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Sign an account out and remove it
+      tags:
+      - agents
+  /api/v1/agents/accounts/{accountId}/default:
+    post:
+      operationId: setDefaultAgentAccount
+      parameters:
+      - description: Agent account identifier; device-claude and device-codex are
+          this computer's own logins.
+        in: path
+        name: accountId
+        required: true
+        schema:
+          description: Agent account identifier; device-claude and device-codex are
+            this computer's own logins.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentAccountsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Make an account the default for new sessions of its provider
+      tags:
+      - agents
+  /api/v1/agents/accounts/{accountId}/login:
+    post:
+      operationId: signInAgentAccountAgain
+      parameters:
+      - description: Agent account identifier; device-claude and device-codex are
+          this computer's own logins.
+        in: path
+        name: accountId
+        required: true
+        schema:
+          description: Agent account identifier; device-claude and device-codex are
+            this computer's own logins.
+          type: string
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StartAgentAccountLoginResponse'
+          description: Accepted
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Sign a saved account in again, in its own folder
+      tags:
+      - agents
+  /api/v1/agents/accounts/{accountId}/reset-credit:
+    post:
+      operationId: consumeAgentAccountResetCredit
+      parameters:
+      - description: Agent account identifier; device-claude and device-codex are
+          this computer's own logins.
+        in: path
+        name: accountId
+        required: true
+        schema:
+          description: Agent account identifier; device-claude and device-codex are
+            this computer's own logins.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConsumeAgentAccountResetCreditRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsumeAgentAccountResetCreditResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Spend one Codex usage-limit reset of an account
+      tags:
+      - agents
+  /api/v1/agents/accounts/login:
+    post:
+      operationId: startAgentAccountLogin
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartAgentAccountLoginRequest'
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StartAgentAccountLoginResponse'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Add an account by running the provider's own sign-in in a terminal
+      tags:
+      - agents
+  /api/v1/agents/accounts/login/{operationId}/cancel:
+    post:
+      operationId: cancelAgentAccountLogin
+      parameters:
+      - description: Agent account sign-in operation identifier.
+        in: path
+        name: operationId
+        required: true
+        schema:
+          description: Agent account sign-in operation identifier.
+          type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Stop a sign-in and remove its unsaved folder
+      tags:
+      - agents
+  /api/v1/agents/accounts/login/{operationId}/verify:
+    post:
+      operationId: verifyAgentAccountLogin
+      parameters:
+      - description: Agent account sign-in operation identifier.
+        in: path
+        name: operationId
+        required: true
+        schema:
+          description: Agent account sign-in operation identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyAgentAccountLoginResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Check a sign-in and save the account when it finished
+      tags:
+      - agents
+  /api/v1/agents/accounts/sessions/{sessionId}:
+    get:
+      operationId: getSessionAgentAccounts
+      parameters:
+      - description: AO session identifier.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: AO session identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionAgentAccountsResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read the account a session uses per provider
+      tags:
+      - agents
+    put:
+      operationId: switchSessionAgentAccount
+      parameters:
+      - description: AO session identifier.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: AO session identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SwitchSessionAgentAccountRequest'
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StartSessionInterfaceTransitionResponse'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Start moving a session to another account through the durable controller
+        handoff
+      tags:
+      - agents
+  /api/v1/agents/accounts/usage:
+    get:
+      operationId: getAgentAccountUsage
+      parameters:
+      - description: Days of usage to sum, today included. Defaults to 30.
+        in: query
+        name: days
+        schema:
+          description: Days of usage to sum, today included. Defaults to 30.
+          maximum: 90
+          minimum: 1
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentAccountUsageResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Sum each account's model usage in AO sessions
+      tags:
+      - agents
   /api/v1/agents/auth-plans:
     get:
       operationId: listAgentAuthPlans
@@ -1353,6 +1744,482 @@ paths:
       summary: List durable automation run history
       tags:
       - automations
+  /api/v1/awake:
+    get:
+      operationId: getAwake
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/downloads:
+    post:
+      operationId: awakeDownloads
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AwakeDownloadsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/history:
+    delete:
+      operationId: clearAwakeHistory
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/low-power/authorize:
+    post:
+      operationId: authorizeAwakeLowPower
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/low-power/revoke:
+    post:
+      operationId: revokeAwakeLowPower
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/observations:
+    get:
+      operationId: observeAwake
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/recover:
+    post:
+      operationId: recoverAwake
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/resume:
+    post:
+      operationId: resumeAwake
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/rules:
+    put:
+      operationId: setAwakeRules
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AwakeRulesRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/sessions:
+    post:
+      operationId: startAwake
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartAwakeRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/sessions/{awakeId}/end:
+    post:
+      operationId: endAwake
+      parameters:
+      - in: path
+        name: awakeId
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/sessions/{awakeId}/extend:
+    post:
+      operationId: extendAwake
+      parameters:
+      - in: path
+        name: awakeId
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExtendAwakeRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/settings:
+    put:
+      operationId: setAwakeSettings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AwakeSettings'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
+  /api/v1/awake/stop:
+    post:
+      operationId: stopAwake
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AwakeState'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Manage desktop Stay Awake
+      tags:
+      - settings
   /api/v1/browser/commands:
     post:
       operationId: executeBrowserCommand
@@ -2011,9 +2878,7 @@ paths:
           content:
             application/json:
               schema:
-                additionalProperties:
-                  type: boolean
-                type: object
+                $ref: '#/components/schemas/GitHubStatusResponse'
           description: OK
         "500":
           content:
@@ -2021,7 +2886,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Internal Server Error
-      summary: Check whether a GitHub personal access token is stored locally
+      summary: Report whether a GitHub token is stored and the GitHub username AO
+        is signed in as
       tags:
       - github
   /api/v1/identity:
@@ -4505,6 +5371,92 @@ paths:
       summary: Record a Codewhale lifecycle outbox event
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/agent-browser/*:
+    get:
+      operationId: getSessionAgentBrowser
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            text/html:
+              schema:
+                type: string
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "502":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Bad Gateway
+      summary: Proxy the host's agent browser stream viewer (page, stream socket,
+        downloads)
+      tags:
+      - sessions
+    head:
+      operationId: headSessionAgentBrowser
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          description: OK
+        "404":
+          description: Not Found
+        "502":
+          description: Bad Gateway
+      summary: Read headers from the host's agent browser stream viewer
+      tags:
+      - sessions
+    post:
+      operationId: postSessionAgentBrowser
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: string
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "502":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Bad Gateway
+      summary: Upload a file into the host's agent browser
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/agent-switches:
     get:
       operationId: listSessionAgentSwitches
@@ -4708,6 +5660,62 @@ paths:
         session with its refreshed artifact list
       tags:
       - sessions
+    put:
+      operationId: updateSessionArtifactFile
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateArtifactFileRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArtifactFileResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Replace the text content of one file in a session's artifact directory
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/artifact-files/*:
     get:
       operationId: getSessionArtifactFile
@@ -4758,6 +5766,222 @@ paths:
           description: Not Implemented
       summary: Serve a session artifact file sandboxed, an HTML page with the render
         theme bootstrap
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/artifact-versions:
+    get:
+      operationId: listSessionArtifactVersions
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Artifact-directory-relative file path, as listed in the session's
+          artifactFiles.
+        in: query
+        name: path
+        schema:
+          description: Artifact-directory-relative file path, as listed in the session's
+            artifactFiles.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListArtifactVersionsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the saved versions of one file in a session's artifact directory
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/artifact-versions/{version}:
+    get:
+      operationId: getSessionArtifactVersion
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Version number within the file's history.
+        in: path
+        name: version
+        required: true
+        schema:
+          description: Version number within the file's history.
+          format: int64
+          type: integer
+      - description: Artifact-directory-relative file path, as listed in the session's
+          artifactFiles.
+        in: query
+        name: path
+        schema:
+          description: Artifact-directory-relative file path, as listed in the session's
+            artifactFiles.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArtifactVersionResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read one saved version of an artifact file
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/artifact-versions/restore:
+    post:
+      operationId: restoreSessionArtifactVersion
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestoreArtifactVersionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArtifactFileResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Restore an artifact file to an earlier saved version
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/artifact-versions/sync:
+    post:
+      operationId: syncSessionArtifactVersions
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncArtifactVersionsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListArtifactVersionsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Record an artifact file's unrecorded edit, then list its saved versions
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/attachments:
@@ -10817,6 +12041,50 @@ components:
       required:
       - path
       type: object
+    AgentAccountActivity:
+      properties:
+        currentStreakDays:
+          type:
+          - "null"
+          - integer
+        latestDay:
+          type:
+          - "null"
+          - string
+        latestDayTokens:
+          type:
+          - "null"
+          - integer
+        lifetimeTokens:
+          type:
+          - "null"
+          - integer
+        longestTurnSeconds:
+          type:
+          - "null"
+          - integer
+        peakDailyTokens:
+          type:
+          - "null"
+          - integer
+      type: object
+    AgentAccountExtraUsage:
+      properties:
+        currency:
+          type: string
+        enabled:
+          type: boolean
+        monthlyLimit:
+          type:
+          - "null"
+          - number
+        usedCredits:
+          type:
+          - "null"
+          - number
+      required:
+      - enabled
+      type: object
     AgentAccountIdentity:
       properties:
         email:
@@ -10844,6 +12112,164 @@ components:
           - command
           - keychain
           type: string
+      type: object
+    AgentAccountLimitWindow:
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        resetsAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        usedPercent:
+          format: double
+          maximum: 100
+          minimum: 0
+          type: number
+      required:
+      - id
+      - label
+      - usedPercent
+      type: object
+    AgentAccountLimits:
+      properties:
+        activity:
+          $ref: '#/components/schemas/AgentAccountActivity'
+        extraUsage:
+          $ref: '#/components/schemas/AgentAccountExtraUsage'
+        fetchedAt:
+          format: date-time
+          type: string
+        resetCredits:
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        windows:
+          items:
+            $ref: '#/components/schemas/AgentAccountLimitWindow'
+          type: array
+      required:
+      - windows
+      - fetchedAt
+      type: object
+    AgentAccountResponse:
+      properties:
+        createdAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        default:
+          type: boolean
+        device:
+          type: boolean
+        email:
+          type: string
+        id:
+          type: string
+        limits:
+          $ref: '#/components/schemas/AgentAccountLimits'
+        plan:
+          type: string
+        problem:
+          type: string
+        provider:
+          enum:
+          - claude
+          - codex
+          type: string
+        signedIn:
+          type: boolean
+      required:
+      - id
+      - provider
+      - device
+      - default
+      - signedIn
+      type: object
+    AgentAccountUsageByModel:
+      properties:
+        costNanos:
+          format: int64
+          type: integer
+        model:
+          type: string
+        tokens:
+          format: int64
+          type: integer
+      required:
+      - model
+      - tokens
+      - costNanos
+      type: object
+    AgentAccountUsageDay:
+      properties:
+        costNanos:
+          format: int64
+          type: integer
+        day:
+          type: string
+        tokens:
+          format: int64
+          type: integer
+      required:
+      - day
+      - tokens
+      - costNanos
+      type: object
+    AgentAccountUsageResponse:
+      properties:
+        days:
+          type: integer
+        usage:
+          items:
+            $ref: '#/components/schemas/AgentAccountUsageRow'
+          type: array
+      required:
+      - days
+      - usage
+      type: object
+    AgentAccountUsageRow:
+      properties:
+        accountId:
+          type: string
+        costNanos:
+          format: int64
+          type: integer
+        daily:
+          items:
+            $ref: '#/components/schemas/AgentAccountUsageDay'
+          type: array
+        inputTokens:
+          format: int64
+          type: integer
+        models:
+          items:
+            $ref: '#/components/schemas/AgentAccountUsageByModel'
+          type: array
+        outputTokens:
+          format: int64
+          type: integer
+      required:
+      - accountId
+      - inputTokens
+      - outputTokens
+      - costNanos
+      - daily
+      - models
+      type: object
+    AgentAccountsResponse:
+      properties:
+        accounts:
+          items:
+            $ref: '#/components/schemas/AgentAccountResponse'
+          type: array
+      required:
+      - accounts
       type: object
     AgentAuthDiagnostic:
       properties:
@@ -11435,6 +12861,107 @@ components:
       - cpuPercent
       - cpuMeasured
       type: object
+    ArtifactFileResponse:
+      properties:
+        fileFingerprint:
+          description: Hex SHA-256 of the file's content.
+          type: string
+        path:
+          type: string
+        size:
+          format: int64
+          type: integer
+      required:
+      - path
+      - size
+      - fileFingerprint
+      type: object
+    ArtifactVersionResponse:
+      properties:
+        content:
+          description: The version's UTF-8 text content, cut short when truncated
+            is set.
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        fileFingerprint:
+          description: Hex SHA-256 of the version's content.
+          type: string
+        harness:
+          description: 'Best effort: the agent that was running the session when the
+            version was recorded, which after an agent switch can differ from the
+            agent that wrote it. Absent for older versions.'
+          type: string
+        path:
+          type: string
+        restoredFrom:
+          description: The version this one restored, when it is a restore.
+          format: int64
+          type: integer
+        size:
+          format: int64
+          type: integer
+        source:
+          description: 'Who wrote the version: the agent, or the user through a save
+            or restore.'
+          enum:
+          - agent
+          - user
+          type: string
+        truncated:
+          description: The content is only the first 256 KiB of the version. A restore
+            still writes the whole version.
+          type: boolean
+        version:
+          format: int64
+          type: integer
+      required:
+      - version
+      - size
+      - source
+      - fileFingerprint
+      - createdAt
+      - path
+      - content
+      type: object
+    ArtifactVersionSummary:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        fileFingerprint:
+          description: Hex SHA-256 of the version's content.
+          type: string
+        harness:
+          description: 'Best effort: the agent that was running the session when the
+            version was recorded, which after an agent switch can differ from the
+            agent that wrote it. Absent for older versions.'
+          type: string
+        restoredFrom:
+          description: The version this one restored, when it is a restore.
+          format: int64
+          type: integer
+        size:
+          format: int64
+          type: integer
+        source:
+          description: 'Who wrote the version: the agent, or the user through a save
+            or restore.'
+          enum:
+          - agent
+          - user
+          type: string
+        version:
+          format: int64
+          type: integer
+      required:
+      - version
+      - size
+      - source
+      - fileFingerprint
+      - createdAt
+      type: object
     AttachmentInput:
       properties:
         data:
@@ -11595,6 +13122,348 @@ components:
       - id
       - status
       - scheduledFor
+      type: object
+    AwakeApplication:
+      properties:
+        id:
+          type: string
+        identity:
+          type: string
+        name:
+          type: string
+        protected:
+          type: boolean
+      required:
+      - protected
+      - id
+      - name
+      - identity
+      type: object
+    AwakeCapability:
+      properties:
+        available:
+          type: boolean
+        id:
+          type: string
+        reason:
+          type: string
+      required:
+      - id
+      - available
+      - reason
+      type: object
+    AwakeCondition:
+      properties:
+        end:
+          type: string
+        kind:
+          enum:
+          - agent_activity
+          - schedule
+          - power
+          - battery
+          - network
+          - device
+          - display
+          - app
+          - uptime
+          - download
+          type: string
+        start:
+          type: string
+        threshold:
+          type: integer
+        timezone:
+          type: string
+        value:
+          type: string
+      required:
+      - kind
+      - value
+      - threshold
+      - start
+      - end
+      - timezone
+      type: object
+    AwakeDownloadsRequest:
+      properties:
+        activeIds:
+          items:
+            type: string
+          type: array
+      required:
+      - activeIds
+      type: object
+    AwakeObservation:
+      properties:
+        agentActive:
+          type:
+          - "null"
+          - boolean
+        appPause:
+          type: boolean
+        applications:
+          items:
+            $ref: '#/components/schemas/AwakeApplication'
+          type: array
+        audioControl:
+          type: boolean
+        batteryPercent:
+          type:
+          - "null"
+          - integer
+        browsers:
+          items:
+            $ref: '#/components/schemas/AwakeApplication'
+          type: array
+        devices:
+          items:
+            type: string
+          type: array
+        displayControl:
+          type: boolean
+        externalDisplays:
+          type: integer
+        keyboardControl:
+          type: boolean
+        knownNetworks:
+          items:
+            type: string
+          type: array
+        lowPowerAuthorized:
+          type: boolean
+        lowPowerControl:
+          type: boolean
+        lowPowerMode:
+          type: boolean
+        networkAddresses:
+          items:
+            type: string
+          type: array
+        networkConnected:
+          type:
+          - "null"
+          - boolean
+        observedAt:
+          format: date-time
+          type: string
+        onBattery:
+          type:
+          - "null"
+          - boolean
+        thermal:
+          type: string
+        uptimeSeconds:
+          format: double
+          type: number
+      required:
+      - displayControl
+      - keyboardControl
+      - observedAt
+      - thermal
+      - uptimeSeconds
+      - externalDisplays
+      - networkAddresses
+      - devices
+      - lowPowerControl
+      - lowPowerAuthorized
+      - lowPowerMode
+      - applications
+      - audioControl
+      - appPause
+      - browsers
+      - knownNetworks
+      type: object
+    AwakeRule:
+      properties:
+        conditions:
+          items:
+            $ref: '#/components/schemas/AwakeCondition'
+          type: array
+        enabled:
+          type: boolean
+        id:
+          type: string
+        lidClosed:
+          type: boolean
+        match:
+          enum:
+          - all
+          - any
+          type: string
+        name:
+          type: string
+        suppressed:
+          type: boolean
+      required:
+      - id
+      - name
+      - enabled
+      - match
+      - conditions
+      - lidClosed
+      - suppressed
+      type: object
+    AwakeRulesRequest:
+      properties:
+        rules:
+          items:
+            $ref: '#/components/schemas/AwakeRule'
+          type: array
+      required:
+      - rules
+      type: object
+    AwakeSession:
+      properties:
+        boundId:
+          type: string
+        boundIdentity:
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        deadline:
+          format: date-time
+          type:
+          - "null"
+          - string
+        endReason:
+          type: string
+        endedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        id:
+          type: string
+        label:
+          type: string
+        lidClosed:
+          type: boolean
+        mode:
+          enum:
+          - indefinite
+          - duration
+          - until
+          - app
+          - download
+          type: string
+        scope:
+          enum:
+          - ao
+          - session
+          type: string
+        sessionId:
+          type: string
+      required:
+      - id
+      - scope
+      - sessionId
+      - label
+      - mode
+      - createdAt
+      - boundId
+      - boundIdentity
+      - endReason
+      - lidClosed
+      type: object
+    AwakeSettings:
+      properties:
+        agentReconnect:
+          type: boolean
+        browserActions:
+          type: boolean
+        darkenKeyboard:
+          type: boolean
+        displayAwake:
+          type: boolean
+        hotspotName:
+          type: string
+        hotspotRecovery:
+          type: boolean
+        lidClosed:
+          type: boolean
+        lowPowerBatteryPercent:
+          type: integer
+        lowPowerOnSeriousHeat:
+          type: boolean
+        muteAudio:
+          type: boolean
+        pauseApps:
+          items:
+            type: string
+          type: array
+        restoreDisplay:
+          type: boolean
+        stopBatteryPercent:
+          type: integer
+      required:
+      - lidClosed
+      - displayAwake
+      - stopBatteryPercent
+      - lowPowerBatteryPercent
+      - lowPowerOnSeriousHeat
+      - muteAudio
+      - darkenKeyboard
+      - restoreDisplay
+      - pauseApps
+      - hotspotName
+      - hotspotRecovery
+      - agentReconnect
+      - browserActions
+      type: object
+    AwakeState:
+      properties:
+        active:
+          type: boolean
+        activeRules:
+          items:
+            type: string
+          type: array
+        agentOutcome:
+          type: string
+        capabilities:
+          items:
+            $ref: '#/components/schemas/AwakeCapability'
+          type: array
+        lidActive:
+          type: boolean
+        networkOutcome:
+          type: string
+        observation:
+          $ref: '#/components/schemas/AwakeObservation'
+        paused:
+          type: boolean
+        reason:
+          type: string
+        rules:
+          items:
+            $ref: '#/components/schemas/AwakeRule'
+          type: array
+        sessions:
+          items:
+            $ref: '#/components/schemas/AwakeSession'
+          type: array
+        settings:
+          $ref: '#/components/schemas/AwakeSettings'
+        startedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+      required:
+      - agentOutcome
+      - settings
+      - sessions
+      - rules
+      - activeRules
+      - capabilities
+      - observation
+      - active
+      - lidActive
+      - reason
+      - paused
+      - networkOutcome
       type: object
     BrowserCommandRequest:
       properties:
@@ -12348,6 +14217,26 @@ components:
       - incomplete
       - estimatedCost
       type: object
+    ConsumeAgentAccountResetCreditRequest:
+      properties:
+        idempotencyKey:
+          maxLength: 128
+          minLength: 1
+          type: string
+      required:
+      - idempotencyKey
+      type: object
+    ConsumeAgentAccountResetCreditResponse:
+      properties:
+        outcome:
+          enum:
+          - reset
+          - already_redeemed
+          - nothing_to_reset
+          type: string
+      required:
+      - outcome
+      type: object
     ConsumeCodexAccountResetCreditRequest:
       properties:
         idempotencyKey:
@@ -12369,6 +14258,14 @@ components:
         enabled:
           type: boolean
         hasBattery:
+          type: boolean
+        lidActive:
+          type: boolean
+        lidClosed:
+          type: boolean
+        lidReason:
+          type: string
+        lidSupported:
           type: boolean
         supported:
           type: boolean
@@ -12713,6 +14610,10 @@ components:
       properties:
         enabled:
           type: boolean
+        lidClosed:
+          type:
+          - "null"
+          - boolean
       required:
       - enabled
       type: object
@@ -13019,6 +14920,8 @@ components:
           items:
             $ref: '#/components/schemas/ConversationContentSummaryResponse'
           type: array
+        continuation:
+          type: boolean
         createdAt:
           type: string
         editAvailable:
@@ -13251,6 +15154,8 @@ components:
           type:
           - "null"
           - string
+        continueTurnId:
+          type: string
         controller:
           enum:
           - connecting
@@ -13309,6 +15214,7 @@ components:
         usage:
           $ref: '#/components/schemas/ConversationUsagePayload'
       required:
+      - continueTurnId
       - conversationId
       - branchedFromEarlierMessage
       - sessionId
@@ -13654,6 +15560,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - memcode
           - strands
           - fake
           type: string
@@ -13995,6 +15902,13 @@ components:
       - sessionId
       - session
       type: object
+    ExtendAwakeRequest:
+      properties:
+        durationSeconds:
+          type: integer
+      required:
+      - durationSeconds
+      type: object
     FSEntry:
       properties:
         gitRepo:
@@ -14041,6 +15955,17 @@ components:
           type:
           - "null"
           - boolean
+      type: object
+    GitHubStatusResponse:
+      properties:
+        connected:
+          type: boolean
+        login:
+          description: GitHub username AO is signed in as, from a stored token or
+            the gh CLI; absent when it could not be resolved.
+          type: string
+      required:
+      - connected
       type: object
     GitPreparationEvent:
       properties:
@@ -14334,6 +16259,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - memcode
           - strands
           - cloudflared
           type: string
@@ -14471,6 +16397,18 @@ components:
       - supported
       - installed
       - authorized
+      type: object
+    ListArtifactVersionsResponse:
+      properties:
+        path:
+          type: string
+        versions:
+          items:
+            $ref: '#/components/schemas/ArtifactVersionSummary'
+          type: array
+      required:
+      - path
+      - versions
       type: object
     ListAutomationRunsResponse:
       properties:
@@ -15693,6 +17631,20 @@ components:
       required:
       - action
       type: object
+    RestoreArtifactVersionRequest:
+      properties:
+        path:
+          description: Artifact-directory-relative file path, as listed in the session's
+            artifactFiles.
+          type: string
+        version:
+          description: The version whose content becomes the file's content.
+          format: int64
+          type: integer
+      required:
+      - path
+      - version
+      type: object
     RestoreReviewResponse:
       properties:
         reviewerHandleId:
@@ -15896,6 +17848,8 @@ components:
           type: array
         clientMessageId:
           type: string
+        continuation:
+          type: boolean
         excerpts:
           items:
             $ref: '#/components/schemas/ConversationExcerptReferenceRequest'
@@ -15990,6 +17944,13 @@ components:
       required:
       - recent
       type: object
+    SessionAgentAccountsResponse:
+      properties:
+        claude:
+          type: string
+        codex:
+          type: string
+      type: object
     SessionArtifact:
       properties:
         inlineUrl:
@@ -16080,10 +18041,14 @@ components:
           type: string
         sessionId:
           type: string
+        sourceAccountId:
+          type: string
         sourceMode:
           enum:
           - chat
           - tui
+          type: string
+        targetAccountId:
           type: string
         targetMode:
           enum:
@@ -16607,6 +18572,10 @@ components:
         coordinationId:
           description: Opaque identity of an AO-authored semantic prompt accepted
             by the native agent.
+          type: string
+        entrypoint:
+          description: Provider process-kind marker (Claude's CLAUDE_CODE_ENTRYPOINT)
+            of the process that fired the hook.
           type: string
         event:
           description: AO hook sub-command that produced this state (e.g. post-tool-use).
@@ -17460,6 +19429,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - memcode
           - strands
           type: string
         issueId:
@@ -17528,6 +19498,32 @@ components:
       - sessionId
       - paths
       type: object
+    StartAgentAccountLoginRequest:
+      properties:
+        provider:
+          enum:
+          - claude
+          - codex
+          type: string
+      required:
+      - provider
+      type: object
+    StartAgentAccountLoginResponse:
+      properties:
+        operationId:
+          type: string
+        provider:
+          enum:
+          - claude
+          - codex
+          type: string
+        shellTerminal:
+          $ref: '#/components/schemas/CodexAccountLoginTerminalResponse'
+      required:
+      - operationId
+      - provider
+      - shellTerminal
+      type: object
     StartAgentAuthResponse:
       properties:
         action:
@@ -17566,6 +19562,44 @@ components:
           - reinstall
           - update
           type: string
+      type: object
+    StartAwakeRequest:
+      properties:
+        boundId:
+          type: string
+        boundIdentity:
+          type: string
+        durationSeconds:
+          type: integer
+        lidClosed:
+          type: boolean
+        mode:
+          enum:
+          - indefinite
+          - duration
+          - until
+          - app
+          - download
+          type: string
+        scope:
+          enum:
+          - ao
+          - session
+          type: string
+        sessionId:
+          type: string
+        until:
+          format: date-time
+          type:
+          - "null"
+          - string
+      required:
+      - scope
+      - sessionId
+      - mode
+      - durationSeconds
+      - boundId
+      - lidClosed
       type: object
     StartCodexAccountSwitchRequest:
       properties:
@@ -17749,6 +19783,25 @@ components:
           type: string
       required:
       - targetHarness
+      type: object
+    SwitchSessionAgentAccountRequest:
+      properties:
+        accountId:
+          minLength: 1
+          type: string
+        stopTurn:
+          type: boolean
+      required:
+      - accountId
+      type: object
+    SyncArtifactVersionsRequest:
+      properties:
+        path:
+          description: Artifact-directory-relative file path, as listed in the session's
+            artifactFiles.
+          type: string
+      required:
+      - path
       type: object
     SystemMemoryResponse:
       properties:
@@ -17964,6 +20017,23 @@ components:
       - token
       - deleted
       type: object
+    UpdateArtifactFileRequest:
+      properties:
+        content:
+          description: The file's new UTF-8 text content.
+          type: string
+        expectedFileFingerprint:
+          description: Hex SHA-256 of the file content the edit started from.
+          type: string
+        path:
+          description: Artifact-directory-relative file path, as listed in the session's
+            artifactFiles.
+          type: string
+      required:
+      - path
+      - content
+      - expectedFileFingerprint
+      type: object
     UpdateAutomationRequest:
       properties:
         cron:
@@ -18168,6 +20238,20 @@ components:
       - processedTokens
       - cacheReadTokens
       - estimatedCost
+      type: object
+    VerifyAgentAccountLoginResponse:
+      properties:
+        account:
+          $ref: '#/components/schemas/AgentAccountResponse'
+        status:
+          enum:
+          - waiting
+          - complete
+          - duplicate
+          - mismatch
+          type: string
+      required:
+      - status
       type: object
     WorkspaceCommitSummary:
       properties:

@@ -1510,7 +1510,6 @@ func TestVendorInstallerUpdateUsesHarnessSelfUpdateCommand(t *testing.T) {
 		TargetCursor:     {"cursor-agent", "update"},
 		TargetAmp:        {"amp", "update", "--porcelain"},
 		TargetGrok:       {"grok", "update"},
-		TargetKimi:       {"kimi", "upgrade", "-y"},
 		TargetDroid:      {"droid", "update"},
 		TargetQwen:       {"qwen", "update"},
 		TargetFX:         {"fx", "upgrade"},
@@ -1525,6 +1524,13 @@ func TestVendorInstallerUpdateUsesHarnessSelfUpdateCommand(t *testing.T) {
 	}
 	if _, err := planner.resolveAgentMethod(TargetMuse, "official-installer", AgentOperationUpdate); !errors.Is(err, ErrInstallMethod) {
 		t.Fatalf("Muse update error = %v, want ErrInstallMethod for a vendor without a self-update command", err)
+	}
+	kimi, err := planner.resolveAgentMethod(TargetKimi, "official-installer", AgentOperationUpdate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kimi.Unsupported || len(kimi.Command) != 0 || kimi.Script == nil || kimi.Script.URL != "https://code.kimi.com/kimi-code/install.sh" {
+		t.Fatalf("Kimi update = %+v, want the official installer, not kimi upgrade", kimi)
 	}
 }
 
@@ -1557,8 +1563,8 @@ func TestWindowsVendorUpdatesUsePowerShellInstallers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"kimi", "upgrade", "-y"}; kimi.Script != nil || !slices.Equal(kimi.Command, want) {
-		t.Fatalf("Kimi update = %+v, want native noninteractive command %v", kimi, want)
+	if kimi.Unsupported || len(kimi.Command) != 0 || kimi.Script == nil || kimi.Script.URL != "https://code.kimi.com/kimi-code/install.ps1" {
+		t.Fatalf("Kimi update = %+v, want the PowerShell installer, not kimi upgrade", kimi)
 	}
 }
 
@@ -1643,6 +1649,164 @@ func TestAutohandWindowsInstallerVerifiesCLIAfterComputerControlFailure(t *testi
 				t.Fatalf("missing Computer control warning: %q", job.Output)
 			}
 		})
+	}
+}
+
+func TestKimiUpdateReinstallsAdvisoryReleaseIntoConfirmedDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("PATH", "/usr/bin:"+home+"/.kimi-code/bin:/bin")
+	binary := home + "/.kimi-code/bin/kimi"
+	s := newTestService("darwin", "bash")
+	t.Cleanup(s.stop)
+	s.updateAdvisories = map[Target]UpdateAdvisory{TargetKimi: {AgentID: string(TargetKimi), Status: UpdateStatusBehindLatest, CurrentVersion: "2.0.2", LatestVersion: "2.2.0", CheckedAt: time.Now()}}
+	var version atomic.Value
+	version.Store("2.0.2")
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: binary, Output: version.Load().(string)}, nil
+	})
+	captured := make(chan ports.InstallScriptCommand, 1)
+	s.installScripts = installScriptRunnerFunc(func(_ context.Context, command ports.InstallScriptCommand, _, _ io.Writer) (ports.InstallScriptResult, error) {
+		captured <- command
+		version.Store("2.2.0")
+		return ports.InstallScriptResult{}, nil
+	})
+	s.commands = commandRunnerFunc(func(_ context.Context, argv []string, _, _ io.Writer) error {
+		t.Errorf("update ran %v; Kimi updates must re-run the installer", argv)
+		return nil
+	})
+	if _, err := s.StartAgentOperation(t.Context(), TargetKimi, "official-installer", AgentOperationUpdate, ""); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, s, TargetKimi, StatusSucceeded)
+	command := <-captured
+	if command.URL != "https://code.kimi.com/kimi-code/install.sh" {
+		t.Fatalf("installer = %s", command.URL)
+	}
+	for _, want := range []string{"KIMI_INSTALL_DIR=" + home + "/.kimi-code", "KIMI_NO_MODIFY_PATH=1", "KIMI_VERSION=2.2.0", "PATH=/usr/bin:/bin"} {
+		if !slices.Contains(command.Env, want) {
+			t.Fatalf("installer environment = %v, want %q", command.Env, want)
+		}
+	}
+}
+
+func TestKimiUpdateBindsOnlyKimiCodeDefaultInstall(t *testing.T) {
+	for _, test := range []struct {
+		goos, binary, home, root string
+	}{
+		{"darwin", "/Users/test/.kimi-code/bin/kimi", "/Users/test", "/Users/test/.kimi-code"},
+		{"linux", "/home/u/.kimi-code/bin/kimi", "/home/u/", "/home/u/.kimi-code"},
+		{"windows", `C:\Users\Test\.Kimi-Code\BIN\Kimi.exe`, `C:\Users\test`, `C:\Users\Test\.Kimi-Code`},
+		// Another tool's kimi: the legacy Python kimi-cli, a cargo build, a system copy.
+		{"darwin", "/Users/test/.local/bin/kimi", "/Users/test", ""},
+		{"darwin", "/Users/test/.cargo/bin/kimi", "/Users/test", ""},
+		{"darwin", "/usr/local/bin/kimi", "/Users/test", ""},
+		{"windows", `C:\Users\test\.local\bin\kimi.exe`, `C:\Users\test`, ""},
+		// Case and executable names are exact outside Windows.
+		{"linux", "/home/u/.kimi-code/BIN/kimi", "/home/u", ""},
+		{"darwin", "/Users/test/.kimi-code/bin/kimi.exe", "/Users/test", ""},
+		{"darwin", "/Users/test/.kimi-code/bin/kimi-legacy", "/Users/test", ""},
+		{"darwin", "", "/Users/test", ""},
+		{"darwin", "/Users/test/.kimi-code/bin/kimi", "", ""},
+	} {
+		script := &ports.InstallScriptCommand{Env: []string{"kimi_install_dir=/elsewhere", "KEEP=yes"}}
+		plan := bindKimiInstallerUpdate(test.goos, Plan{Target: TargetKimi, Method: "official-installer", Script: script}, test.binary, test.home, "")
+		if test.root == "" {
+			if !plan.Unsupported || plan.Reason == "" {
+				t.Errorf("%s %q: update was not refused: %+v", test.goos, test.binary, plan)
+			}
+			continue
+		}
+		want := []string{"KEEP=yes", "KIMI_INSTALL_DIR=" + test.root, "KIMI_NO_MODIFY_PATH=1"}
+		if plan.Unsupported || !slices.Equal(plan.Script.Env, want) || plan.ExpectedDestination != test.binary {
+			t.Errorf("%s %q: plan = %+v env = %v, want %v", test.goos, test.binary, plan, plan.Script.Env, want)
+		}
+		if !slices.Equal(script.Env, []string{"kimi_install_dir=/elsewhere", "KEEP=yes"}) {
+			t.Errorf("original script was mutated: %v", script.Env)
+		}
+	}
+	brew := Plan{Target: TargetKimi, Method: "homebrew", Command: []string{"brew", "upgrade", "kimi-code"}}
+	if got := bindKimiInstallerUpdate("darwin", brew, "/opt/homebrew/bin/kimi", "/Users/test", "/usr/bin"); !reflect.DeepEqual(got, brew) {
+		t.Fatalf("Homebrew plan changed: %+v", got)
+	}
+}
+
+func TestKimiUpdateAdvisoryOffersUpdateOnlyForDefaultInstall(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	for binary, want := range map[string]string{
+		home + "/.kimi-code/bin/kimi": "official-installer",
+		// The legacy Python kimi-cli and a cargo build are not Kimi Code's install.
+		home + "/.local/bin/kimi": "",
+		home + "/.cargo/bin/kimi": "",
+	} {
+		s := newTestService("darwin", "bash")
+		s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+			return VerifyResult{ResolvedPath: binary, Output: "2.0.2"}, nil
+		})
+		s.officialVersion = func(context.Context, Target) (string, error) { return "2.2.0", nil }
+		advisory, err := s.UpdateAdvisory(t.Context(), TargetKimi, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if advisory.MaintenanceMethod != want {
+			t.Errorf("%s: maintenance method = %q, want %q (advisory %+v)", binary, advisory.MaintenanceMethod, want, advisory)
+		}
+	}
+}
+
+// The installer skips its legacy-shim migration, which renames or deletes
+// other kimi commands on PATH, only while its own bin directory is off PATH.
+func TestKimiUpdateKeepsItsBinDirectoryOffInstallerPath(t *testing.T) {
+	for _, test := range []struct {
+		goos, binary, home, pathList, want string
+	}{
+		{"darwin", "/Users/test/.kimi-code/bin/kimi", "/Users/test", "/usr/bin:/Users/test/.kimi-code/bin/:/Users/test/.local/bin:/bin", "PATH=/usr/bin:/Users/test/.local/bin:/bin"},
+		{"windows", `C:\Users\Test\.kimi-code\bin\kimi.exe`, `C:\Users\Test`, `C:\Windows;c:\users\test\.KIMI-CODE\Bin;C:\tools`, `PATH=C:\Windows;C:\tools`},
+	} {
+		plan := bindKimiInstallerUpdate(test.goos, Plan{Target: TargetKimi, Method: "official-installer", Script: &ports.InstallScriptCommand{}}, test.binary, test.home, test.pathList)
+		if plan.Unsupported || !slices.Contains(plan.Script.Env, test.want) {
+			t.Errorf("%s: env = %v, want %q", test.goos, plan.Script.Env, test.want)
+		}
+	}
+}
+
+func TestLastOutputLineShowsWhatTheTerminalWouldShow(t *testing.T) {
+	long := strings.Repeat("é", maxUpdaterReportRunes+50)
+	for output, want := range map[string]string{
+		"":            "",
+		" \n\r\n\t\n": "",
+		"Checking...\nDroid is already up to date.\n\n": "Droid is already up to date.",
+		"\x1b[32m✓\x1b[0m Already up to date!\r\n":      "✓ Already up to date!",
+		"Downloading 10%\rDownloading 100%\rDone\n":     "Done",
+		"Checking...\nDownloading 50%\rDone\r":          "Done",
+		"\x1b]0;title\x07Updated to 2.2.0\n":            "Updated to 2.2.0",
+		long:                                            strings.Repeat("é", maxUpdaterReportRunes) + "…",
+	} {
+		if got := lastOutputLine(output); got != want {
+			t.Errorf("lastOutputLine(%q) = %q, want %q", output, got, want)
+		}
+	}
+}
+
+func TestFailedUpdateQuotesWhatTheUpdaterReported(t *testing.T) {
+	s := newTestService("darwin", "sh")
+	s.commands = commandRunnerFunc(func(_ context.Context, _ []string, stdout, _ io.Writer) error {
+		_, _ = io.WriteString(stdout, "Checking for updates...\nDroid is already up to date.\n\n")
+		return nil
+	})
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/Users/test/.local/bin/droid", Output: "0.159.1"}, nil
+	})
+	job := &Job{Target: TargetDroid, Method: "official-installer", Status: StatusInstalling}
+	plan := Plan{Target: TargetDroid, Method: "official-installer", Command: []string{"/Users/test/.local/bin/droid", "update"}}
+	baseline := &installedBaseline{path: "/Users/test/.local/bin/droid", version: "0.159.1", expected: "0.242.0", scheme: versionSchemeFor(TargetDroid)}
+	s.runAgentOperation(context.Background(), plan, AgentOperationUpdate, job, baseline)
+	want := `the update finished, but the installed version 0.159.1 did not reach the requested version 0.242.0; the update command reported: "Droid is already up to date."`
+	if job.Status != StatusFailed || job.Error != want {
+		t.Fatalf("status = %s, error = %q; want failed with %q", job.Status, job.Error, want)
 	}
 }
 

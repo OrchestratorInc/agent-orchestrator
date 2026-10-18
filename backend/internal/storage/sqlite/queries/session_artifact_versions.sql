@@ -19,9 +19,9 @@ WHERE session_id = sqlc.arg(session_id) AND path = sqlc.arg(path);
 
 -- name: InsertSessionArtifactVersion :one
 INSERT INTO session_artifact_versions (
-    session_id, path, version, sha256, size, content_type, mtime, created_at
+    session_id, path, version, sha256, size, content_type, mtime, created_at, source, harness, restored_from
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING *;
 
 -- name: DeleteSessionArtifactVersionsBelow :many

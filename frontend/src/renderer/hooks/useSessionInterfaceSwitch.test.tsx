@@ -128,6 +128,34 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 		expect(result.current.renderedMode).toBe("tui");
 	});
 
+	it.each(["chat", "tui"] as const)("keeps the %s surface and its content during an account move", (mode) => {
+		mocks.status = {
+			supported: true,
+			targetMode: mode === "chat" ? "tui" : "chat",
+			transition: {
+				id: "account-move",
+				sessionId: "session-1",
+				sourceMode: mode,
+				targetMode: mode,
+				policy: "drain",
+				historyPolicy: "strict",
+				phase: "target_starting",
+				sourceAccountId: "device-claude",
+				targetAccountId: "acct-b",
+				createdAt: "2026-10-01T00:00:00Z",
+				updatedAt: "2026-10-01T00:00:01Z",
+			},
+		};
+		const { cloud: _cloud, ...localSession } = cloudSession;
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...localSession, mode }));
+		// Not an arrival: the conversation or terminal on screen stays.
+		expect(result.current.optimisticTarget).toBeUndefined();
+		expect(result.current.renderedMode).toBe(mode);
+		expect(result.current.accountMoveTarget).toBe("acct-b");
+		// The stop between the two agents is still not a crash.
+		expect(result.current.controllerTransitioning).toBe(mode === "chat");
+	});
+
 	it("falls back to the source interface when a switch fails after it was shown", () => {
 		mocks.status = {
 			supported: true,

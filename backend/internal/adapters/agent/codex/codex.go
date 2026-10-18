@@ -101,20 +101,13 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// GetConfigSpec reports the per-project agent config keys Codex understands.
+// GetConfigSpec reports the per-project agent config keys Codex understands:
+// a model override and a reasoning-effort override (forwarded as
+// `-c model_reasoning_effort=<effort>`; empty defers to the model default).
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
-	if err := ctx.Err(); err != nil {
-		return ports.ConfigSpec{}, err
-	}
-	return ports.ConfigSpec{
-		Fields: []ports.ConfigField{
-			{
-				Key:         "model",
-				Type:        ports.ConfigFieldString,
-				Description: "Model override passed to `codex --model`.",
-			},
-		},
-	}, nil
+	return agentbase.ModelEffortConfigSpec(ctx,
+		"Model override passed to `codex --model`.",
+		"Reasoning effort override passed to `codex -c model_reasoning_effort`.")
 }
 
 // GetLaunchCommand builds the argv to start a new Codex session, applying the
@@ -260,6 +253,11 @@ func (p *Plugin) NativeConversationExists(
 
 	found := false
 	sessionsDir := filepath.Join(codexHome, "sessions")
+	// An account home links its sessions to the computer's own; WalkDir does
+	// not descend into a root that is itself a link.
+	if resolved, err := filepath.EvalSymlinks(sessionsDir); err == nil {
+		sessionsDir = resolved
+	}
 	err := filepath.WalkDir(sessionsDir, func(_ string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr

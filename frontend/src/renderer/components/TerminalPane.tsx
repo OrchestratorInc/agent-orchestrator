@@ -73,6 +73,10 @@ type TerminalPaneProps = {
 	inputDisabled?: boolean;
 	/** The agent terminal is coming up after an interface switch; show the boot spinner instead of ended/empty chrome. */
 	booting?: boolean;
+	/** An account move is restarting this agent in a new terminal. The label covers
+	 * the pane while nothing is drawn there, instead of boot text and an empty
+	 * terminal; the old screen stays until its terminal is gone. */
+	switchingLabel?: string;
 	/** Focus the terminal when an in-flight controller asks for human input. */
 	focusRequested?: boolean;
 	/** Observe attachment state without taking ownership of the terminal lifecycle. */
@@ -148,6 +152,7 @@ function terminalPropsMatch(left: TerminalPaneProps, right: TerminalPaneProps): 
 		left.onToggleFullscreen === right.onToggleFullscreen &&
 		left.inputDisabled === right.inputDisabled &&
 		left.booting === right.booting &&
+		left.switchingLabel === right.switchingLabel &&
 		left.focusRequested === right.focusRequested &&
 		left.onTerminalStateChange === right.onTerminalStateChange &&
 		left.onTerminalContentReadyChange === right.onTerminalContentReadyChange &&
@@ -718,7 +723,7 @@ const BOOT_STATUS_STEPS = [
 	"Almost there",
 ];
 
-function TerminalBootStatus({ subject }: { subject: string }) {
+function TerminalBootStatus({ subject, label }: { subject: string; label?: string }) {
 	const [tick, setTick] = useState(0);
 	useEffect(() => {
 		const id = window.setInterval(() => setTick((value) => value + 1), 120);
@@ -728,7 +733,7 @@ function TerminalBootStatus({ subject }: { subject: string }) {
 	return (
 		<div className="flex items-center gap-2.5 text-terminal-dim" role="status" aria-live="polite">
 			<span aria-hidden="true" className="inline-block w-[1ch] shrink-0 text-center font-mono">{BOOT_SPINNER_FRAMES[tick % BOOT_SPINNER_FRAMES.length]}</span>
-			<span>{BOOT_STATUS_STEPS[step].replace("{subject}", subject)}</span>
+			<span>{label ?? BOOT_STATUS_STEPS[step].replace("{subject}", subject)}</span>
 		</div>
 	);
 }
@@ -745,6 +750,7 @@ export function TerminalPane({
 	onToggleFullscreen,
 	inputDisabled,
 	booting,
+	switchingLabel,
 	focusRequested,
 	onTerminalStateChange,
 	onTerminalContentReadyChange,
@@ -848,6 +854,7 @@ export function TerminalPane({
 		onToggleFullscreen,
 		inputDisabled,
 		booting,
+		switchingLabel,
 		focusRequested,
 		onTerminalStateChange,
 		onTerminalContentReadyChange,
@@ -879,6 +886,7 @@ export function TerminalPane({
 			isFullscreen={isFullscreen}
 			inputDisabled={inputDisabled}
 			booting={booting}
+			switchingLabel={switchingLabel}
 			onChangeFontSize={onChangeFontSize}
 			onToggleFullscreen={onToggleFullscreen}
 			focusRequested={focusRequested}
@@ -1046,6 +1054,7 @@ function AttachedTerminal({
 	onToggleFullscreen,
 	inputDisabled,
 	booting,
+	switchingLabel,
 	focusRequested,
 	onTerminalStateChange,
 	onTerminalContentReadyChange,
@@ -1333,7 +1342,15 @@ function AttachedTerminal({
 		!showEmptyState &&
 		!showEndedStatePreview &&
 		!cloudRevealedRef.current;
-	const showEndedState = showEndedStatePreview && !isBoxComingUp && !session?.cloud && !booting;
+	// A terminal the move covered stays covered until the agent draws its first
+	// frame, even after the move commits. ponytail: no timeout; an agent that
+	// never draws exits, and the exited state ends the cover.
+	const switchingHeldRef = useRef<string | undefined>(undefined);
+	if (switchingLabel && !hasVisibleContent) switchingHeldRef.current = switchingLabel;
+	if (hasVisibleContent || state === "exited" || state === "error") switchingHeldRef.current = undefined;
+	const coverLabel = switchingLabel ?? switchingHeldRef.current;
+	const switchingCover = Boolean(coverLabel) && !hasVisibleContent && state !== "exited" && state !== "error";
+	const showEndedState = showEndedStatePreview && !isBoxComingUp && !session?.cloud && !booting && !coverLabel;
 
 	return (
 		<div className="terminal-surface flex h-full min-h-0 flex-col" data-testid="session-terminal">
@@ -1368,7 +1385,7 @@ function AttachedTerminal({
 					onLinkOpen={handleLinkOpen}
 					onSessionLinkOpen={handleSessionLinkOpen}
 					onReady={handleReady}
-					onVisibleContent={attachSession?.cloud ? () => setHasVisibleContent(true) : undefined}
+					onVisibleContent={() => setHasVisibleContent(true)}
 					onToggleFullscreen={onToggleFullscreen}
 					onVisibleSize={syncVisibleSize}
 					paneScrollsByKeyboard={providerScrollsByKeyboard(provider)}
@@ -1377,10 +1394,10 @@ function AttachedTerminal({
 				/>
 				</Suspense>
 				</LazyChunkBoundary>
-				{(showEmptyState || booting) && (
+				{(showEmptyState || booting || switchingCover) && (
 					<div className="terminal-surface absolute inset-0 grid place-items-center font-mono text-control">
 						{session ? (
-							<TerminalBootStatus subject={session.kind === "orchestrator" ? "orchestrator" : "agent"} />
+							<TerminalBootStatus subject={session.kind === "orchestrator" ? "orchestrator" : "agent"} label={coverLabel} />
 						) : (
 							<div className="text-center">
 								<div className="text-terminal">{"Agent Orchestrator"}</div>

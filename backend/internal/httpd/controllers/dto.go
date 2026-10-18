@@ -11,6 +11,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/legacyimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentaccounts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
@@ -245,6 +246,21 @@ type ArtifactFileQuery struct {
 	Path string `query:"path" description:"Artifact-directory-relative file path, as listed in the session's artifactFiles."`
 }
 
+// UpdateArtifactFileRequest replaces one listed artifact file after verifying
+// that the viewer's loaded copy is still current.
+type UpdateArtifactFileRequest struct {
+	Path                    string `json:"path" description:"Artifact-directory-relative file path, as listed in the session's artifactFiles."`
+	Content                 string `json:"content" description:"The file's new UTF-8 text content."`
+	ExpectedFileFingerprint string `json:"expectedFileFingerprint" description:"Hex SHA-256 of the file content the edit started from."`
+}
+
+// ArtifactFileResponse describes an artifact file after a write.
+type ArtifactFileResponse struct {
+	Path            string `json:"path"`
+	Size            int64  `json:"size"`
+	FileFingerprint string `json:"fileFingerprint" description:"Hex SHA-256 of the file's content."`
+}
+
 // WorkspaceFileQuery is the query string accepted by GET /api/v1/sessions/{sessionId}/workspace/file.
 type WorkspaceFileQuery struct {
 	Path string `query:"path" description:"Session-worktree-relative file path."`
@@ -423,7 +439,7 @@ type SpawnSessionRequest struct {
 	ParentSessionID domain.SessionID       `json:"parentSessionId,omitempty"`
 	TrackerProvider domain.TrackerProvider `json:"trackerProvider,omitempty" enum:"github,gitlab"`
 	Kind            domain.SessionKind     `json:"kind,omitempty" enum:"worker,orchestrator"`
-	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,strands"`
+	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,strands"`
 	Branch          string                 `json:"branch,omitempty"`
 	// Mode picks the conversation controller: chat talks to the agent over a
 	// structured connection, tui opens the agent's native terminal interface.
@@ -976,19 +992,23 @@ type StartSessionInterfaceTransitionRequest struct {
 // provider-native conversation id is intentionally not exposed: clients need
 // controller state, not an adapter implementation detail.
 type SessionInterfaceTransitionView struct {
-	ID                   string                                         `json:"id"`
-	SessionID            domain.SessionID                               `json:"sessionId"`
-	SourceMode           domain.SessionMode                             `json:"sourceMode" enum:"chat,tui"`
-	TargetMode           domain.SessionMode                             `json:"targetMode" enum:"chat,tui"`
-	Policy               domain.SessionInterfaceTransitionPolicy        `json:"policy" enum:"drain,interrupt"`
-	HistoryPolicy        domain.SessionInterfaceTransitionHistoryPolicy `json:"historyPolicy" enum:"strict,provider_history"`
-	Phase                domain.SessionInterfaceTransitionPhase         `json:"phase" enum:"requested,preflighting,draining,source_stopping,source_stopped,target_starting,activating,completed,failed,cancelled,recovery_required"`
-	ErrorCode            string                                         `json:"errorCode,omitempty"`
-	ErrorDetail          string                                         `json:"errorDetail,omitempty"`
-	CreatedAt            time.Time                                      `json:"createdAt"`
-	UpdatedAt            time.Time                                      `json:"updatedAt"`
-	CompletedAt          *time.Time                                     `json:"completedAt,omitempty"`
-	NoticeAcknowledgedAt *time.Time                                     `json:"noticeAcknowledgedAt,omitempty"`
+	ID            string                                         `json:"id"`
+	SessionID     domain.SessionID                               `json:"sessionId"`
+	SourceMode    domain.SessionMode                             `json:"sourceMode" enum:"chat,tui"`
+	TargetMode    domain.SessionMode                             `json:"targetMode" enum:"chat,tui"`
+	Policy        domain.SessionInterfaceTransitionPolicy        `json:"policy" enum:"drain,interrupt"`
+	HistoryPolicy domain.SessionInterfaceTransitionHistoryPolicy `json:"historyPolicy" enum:"strict,provider_history"`
+	Phase         domain.SessionInterfaceTransitionPhase         `json:"phase" enum:"requested,preflighting,draining,source_stopping,source_stopped,target_starting,activating,completed,failed,cancelled,recovery_required"`
+	// SourceAccountID and TargetAccountID are set when the handoff moves the
+	// agent to another provider account; the mode then stays the same.
+	SourceAccountID      string     `json:"sourceAccountId,omitempty"`
+	TargetAccountID      string     `json:"targetAccountId,omitempty"`
+	ErrorCode            string     `json:"errorCode,omitempty"`
+	ErrorDetail          string     `json:"errorDetail,omitempty"`
+	CreatedAt            time.Time  `json:"createdAt"`
+	UpdatedAt            time.Time  `json:"updatedAt"`
+	CompletedAt          *time.Time `json:"completedAt,omitempty"`
+	NoticeAcknowledgedAt *time.Time `json:"noticeAcknowledgedAt,omitempty"`
 }
 
 // SessionInterfaceTransitionStatusResponse is the body of GET
@@ -1094,7 +1114,7 @@ type DelegateTaskRequest struct {
 	ClientRequestID string              `json:"clientRequestId,omitempty" maxLength:"128"`
 	ProjectID       domain.ProjectID    `json:"projectId"`
 	Brief           string              `json:"brief" maxLength:"16384"`
-	Agent           domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,strands,fake"`
+	Agent           domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,strands,fake"`
 	Model           string              `json:"model,omitempty" maxLength:"256"`
 	// Effort is an explicit, provider-advertised model tuning override. Nil
 	// inherits the project default; an empty string selects the provider default.
@@ -1389,6 +1409,7 @@ type SetActivityRequest struct {
 	SubmissionID                 string                              `json:"submissionId,omitempty" maxLength:"36" description:"AO prompt-hook context correlation UUID, when supported."`
 	TranscriptPath               string                              `json:"transcriptPath,omitempty" maxLength:"4096" description:"Read-only provider-native transcript path exposed by the hook."`
 	LaunchID                     string                              `json:"launchId,omitempty" description:"AO process generation that produced the signal."`
+	Entrypoint                   string                              `json:"entrypoint,omitempty" description:"Provider process-kind marker (Claude's CLAUDE_CODE_ENTRYPOINT) of the process that fired the hook."`
 	Usage                        *UsageHookMetadata                  `json:"usage,omitempty" description:"Provider transcript metadata used by the local usage pipeline."`
 }
 
@@ -2386,15 +2407,20 @@ type MobileStatusResponse struct {
 // KeepAwakeStatus describes the macOS-only option that stops the machine from
 // idle-sleeping while Connect Mobile is on, so a paired phone stays connected.
 type KeepAwakeStatus struct {
-	Supported  bool `json:"supported"`  // this platform can hold the machine awake (macOS)
-	Enabled    bool `json:"enabled"`    // the user turned the option on
-	Active     bool `json:"active"`     // the sleep assertion is currently held
-	HasBattery bool `json:"hasBattery"` // a laptop, where closing the lid still sleeps it
+	Supported    bool   `json:"supported"`  // this platform can hold the machine awake (macOS)
+	Enabled      bool   `json:"enabled"`    // the user turned the option on
+	Active       bool   `json:"active"`     // the sleep assertion is currently held
+	HasBattery   bool   `json:"hasBattery"` // this machine has an internal battery
+	LidClosed    bool   `json:"lidClosed,omitempty"`
+	LidSupported bool   `json:"lidSupported,omitempty"`
+	LidActive    bool   `json:"lidActive,omitempty"` // native control armed for this daemon's live lease
+	LidReason    string `json:"lidReason,omitempty"`
 }
 
 // SetKeepAwakeRequest is the body of POST /api/v1/mobile/keep-awake.
 type SetKeepAwakeRequest struct {
-	Enabled bool `json:"enabled"`
+	Enabled   bool  `json:"enabled"`
+	LidClosed *bool `json:"lidClosed,omitempty"`
 }
 
 // SecurePairingStatus describes the optional TLS-over-Tailscale pairing mode,
@@ -2517,6 +2543,8 @@ type SendConversationMessageRequest struct {
 	Attachments     []ConversationImageContentRequest     `json:"attachments,omitempty"`
 	Resources       []ConversationResourceContentRequest  `json:"resources,omitempty"`
 	Excerpts        []ConversationExcerptReferenceRequest `json:"excerpts,omitempty"`
+	// Continuation marks the user's request to continue an interrupted task.
+	Continuation bool `json:"continuation,omitempty"`
 }
 
 // ConversationExcerptReferenceRequest attaches verified selected transcript
@@ -2877,8 +2905,11 @@ type ConversationMessageResponse struct {
 	ClientMessageID string `json:"clientMessageId,omitempty"`
 	EditAvailable   bool   `json:"editAvailable"`
 	// Streaming is true while more deltas are expected for this message.
-	Streaming bool   `json:"streaming"`
-	CreatedAt string `json:"createdAt"`
+	Streaming bool `json:"streaming"`
+	// Continuation is the user's one-click "continue" after stopping a turn,
+	// shown as a marker instead of a message bubble.
+	Continuation bool   `json:"continuation,omitempty"`
+	CreatedAt    string `json:"createdAt"`
 }
 
 // ConversationActivityResponse is one non-message timeline entry.
@@ -2928,6 +2959,7 @@ type ConversationActivityResponse struct {
 
 // ConversationSnapshotResponse is the durable read model a client bootstraps from.
 type ConversationSnapshotResponse struct {
+	ContinueTurnID string `json:"continueTurnId"`
 	// SupportsExcerpts advertises daemon-owned source verification separately from
 	// provider capabilities. Older daemons silently ignore the excerpts input.
 	SupportsExcerpts           bool   `json:"supportsExcerpts,omitempty"`
@@ -3458,4 +3490,124 @@ type SideChatLaunchState struct {
 // SideLabelRequest renames a side conversation.
 type SideLabelRequest struct {
 	Label string `json:"label"`
+}
+
+// AgentAccountIDParam documents an agent account route identifier.
+type AgentAccountIDParam struct {
+	AccountID string `path:"accountId" description:"Agent account identifier; device-claude and device-codex are this computer's own logins."`
+}
+
+// AgentAccountLoginIDParam documents a sign-in operation route identifier.
+type AgentAccountLoginIDParam struct {
+	OperationID string `path:"operationId" description:"Agent account sign-in operation identifier."`
+}
+
+// AgentAccountSessionIDParam documents the session whose account is read or moved.
+type AgentAccountSessionIDParam struct {
+	SessionID string `path:"sessionId" description:"AO session identifier."`
+}
+
+// AgentAccountListQuery documents GET /agents/accounts.
+type AgentAccountListQuery struct {
+	Refresh bool `query:"refresh" description:"Read identity and limits again even when the last reading is fresh."`
+}
+
+// AgentAccountUsageQuery documents GET /agents/accounts/usage.
+type AgentAccountUsageQuery struct {
+	Days int `query:"days" minimum:"1" maximum:"90" description:"Days of usage to sum, today included. Defaults to 30."`
+}
+
+// AgentAccountResponse is one account with its latest readings.
+type AgentAccountResponse struct {
+	ID       string                      `json:"id"`
+	Provider domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
+	// Device marks the computer's own login, which AO launches with the CLI's
+	// config folder untouched.
+	Device    bool       `json:"device"`
+	Email     string     `json:"email,omitempty"`
+	Plan      string     `json:"plan,omitempty"`
+	Default   bool       `json:"default"`
+	SignedIn  bool       `json:"signedIn"`
+	CreatedAt *time.Time `json:"createdAt,omitempty"`
+	// Problem says why identity or limits could not be read.
+	Problem string                     `json:"problem,omitempty"`
+	Limits  *domain.AgentAccountLimits `json:"limits,omitempty"`
+}
+
+// AgentAccountsResponse is the body of GET /agents/accounts.
+type AgentAccountsResponse struct {
+	Accounts []AgentAccountResponse `json:"accounts"`
+}
+
+// StartAgentAccountLoginRequest asks to add an account of a provider.
+type StartAgentAccountLoginRequest struct {
+	Provider domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
+}
+
+// StartAgentAccountLoginResponse is a sign-in running in a terminal.
+type StartAgentAccountLoginResponse struct {
+	OperationID   string                            `json:"operationId"`
+	Provider      domain.AgentAccountProvider       `json:"provider" enum:"claude,codex"`
+	ShellTerminal CodexAccountLoginTerminalResponse `json:"shellTerminal"`
+}
+
+// VerifyAgentAccountLoginResponse is how a sign-in stands. A duplicate login
+// is refused and its account names the existing one.
+type VerifyAgentAccountLoginResponse struct {
+	Status  agentaccounts.LoginStatus `json:"status" enum:"waiting,complete,duplicate,mismatch"`
+	Account *AgentAccountResponse     `json:"account,omitempty"`
+}
+
+// ConsumeAgentAccountResetCreditRequest spends one Codex usage-limit reset.
+type ConsumeAgentAccountResetCreditRequest struct {
+	IdempotencyKey string `json:"idempotencyKey" minLength:"1" maxLength:"128"`
+}
+
+// ConsumeAgentAccountResetCreditResponse is what the provider did.
+type ConsumeAgentAccountResetCreditResponse struct {
+	Outcome domain.CodexResetCreditOutcome `json:"outcome" enum:"reset,already_redeemed,nothing_to_reset"`
+}
+
+// AgentAccountUsageResponse is each account's usage in AO sessions.
+type AgentAccountUsageResponse struct {
+	Days  int                    `json:"days"`
+	Usage []AgentAccountUsageRow `json:"usage"`
+}
+
+// AgentAccountUsageRow is one account's totals, per day and per model.
+type AgentAccountUsageRow struct {
+	AccountID    string                     `json:"accountId"`
+	InputTokens  int64                      `json:"inputTokens"`
+	OutputTokens int64                      `json:"outputTokens"`
+	CostNanos    int64                      `json:"costNanos"`
+	Daily        []AgentAccountUsageDay     `json:"daily"`
+	Models       []AgentAccountUsageByModel `json:"models"`
+}
+
+// AgentAccountUsageDay is one UTC day of an account's usage.
+type AgentAccountUsageDay struct {
+	Day       string `json:"day"`
+	Tokens    int64  `json:"tokens"`
+	CostNanos int64  `json:"costNanos"`
+}
+
+// AgentAccountUsageByModel is one model's share of an account's usage.
+type AgentAccountUsageByModel struct {
+	Model     string `json:"model"`
+	Tokens    int64  `json:"tokens"`
+	CostNanos int64  `json:"costNanos"`
+}
+
+// SessionAgentAccountsResponse is the account a session uses per provider.
+type SessionAgentAccountsResponse struct {
+	Claude string `json:"claude,omitempty"`
+	Codex  string `json:"codex,omitempty"`
+}
+
+// SwitchSessionAgentAccountRequest moves a session to another account.
+type SwitchSessionAgentAccountRequest struct {
+	AccountID string `json:"accountId" minLength:"1"`
+	// StopTurn cancels a turn in progress, for an agent stuck waiting on the old
+	// account's limit. Otherwise the move waits for the turn to finish.
+	StopTurn bool `json:"stopTurn,omitempty"`
 }

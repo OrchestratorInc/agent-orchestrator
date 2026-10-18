@@ -191,6 +191,10 @@ func finalizeWorkspaceManifest(manifest WorkspaceManifest) WorkspaceManifest {
 func finalizeWorkspaceFileDetail(detail WorkspaceFileDetail) WorkspaceFileDetail {
 	detail.Editable = workspaceFileEditable(detail.Size, detail.Binary, detail.Deleted) && !detail.ContentTruncated
 	detail.FileFingerprint = hashWorkspaceReviewValue(detail.Path, detail.PreviousPath, string(detail.Status), detail.Content, detail.Diff, strconv.FormatInt(detail.Size, 10), strconv.FormatBool(detail.Binary), strconv.FormatBool(detail.Deleted))
+	// Binary bytes are omitted from the detail, so track same-size file rewrites by mtime.
+	if detail.Binary && !detail.fileModTime.IsZero() {
+		detail.FileFingerprint = hashWorkspaceReviewValue(detail.FileFingerprint, strconv.FormatInt(detail.fileModTime.UnixNano(), 10))
+	}
 	detail.WorkspaceVersion = hashWorkspaceReviewValue(string(detail.SessionID), detail.CompareBaseSHA, detail.CompareBaseRef, detail.FileFingerprint)
 	return detail
 }

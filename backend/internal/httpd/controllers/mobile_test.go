@@ -41,6 +41,9 @@ func (f *fakeBridge) SetKeepAwake(on bool) (MobileStatusResponse, error) {
 	r.KeepAwake.Enabled = on
 	return r, nil
 }
+func (f *fakeBridge) SetKeepAwakeLid(bool, bool) (MobileStatusResponse, error) {
+	return MobileStatusResponse{}, errors.New("closed-lid wakefulness unavailable")
+}
 func (f *fakeBridge) SetSecurePairing(on bool) (MobileStatusResponse, error) {
 	r := f.Status()
 	r.SecurePairing.Enabled = on

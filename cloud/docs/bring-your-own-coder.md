@@ -47,6 +47,22 @@ local project has: open the project's settings and choose **Scripts**.
   (every 10 seconds, for up to 20 minutes) and starts the agent once it
   appears.
 
+## Agent browser
+
+The agent tabs in the session's Browser panel show a headless Chromium that AO
+starts inside the workspace the first time the agent uses it. For that, the
+template's image must contain:
+
+- Chromium, as `chromium` on the `PATH` or at `/usr/bin/chromium`. On Ubuntu,
+  `chromium-browser` only installs a snap, which AO does not support; use
+  another build, such as Playwright's, linked to `/usr/local/bin/chromium`.
+- agent-browser 0.38.1 at `/usr/local/bin/agent-browser`: the
+  `agent-browser-linux-x64` or `agent-browser-linux-arm64` file of its
+  [release](https://github.com/vercel-labs/agent-browser/releases/tag/v0.38.1).
+
+`cloud/coder/Sandbox.Dockerfile` installs both, with fonts for non-Latin
+pages. Without them, sessions work as usual but have no agent browser.
+
 ## When AO starts working
 
 AO waits until the Coder agent is connected and its lifecycle is `ready`, which

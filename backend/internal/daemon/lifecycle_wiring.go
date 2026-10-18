@@ -201,6 +201,7 @@ func (l *lifecycleStack) Stop() {
 type sessionLifecycle interface {
 	Reconcile(ctx context.Context) error
 	ReconcileStartupSafety(ctx context.Context) error
+	ReconnectAwakeAgent(ctx context.Context, target domain.AwakeAgentTarget) error
 	ReconcileBackground(ctx context.Context) error
 	HibernateIdleChats(ctx context.Context) error
 	RestoreAll(ctx context.Context) error
@@ -724,6 +725,12 @@ func (c chatLauncher) ArmChatHandoff(
 	policy domain.SessionInterfaceTransitionPolicy,
 ) error {
 	return c.svc.ArmChatHandoff(ctx, id, policy)
+}
+
+// MarkAccountSwitch marks the turn an account move stopped, so the chat shows
+// the switch instead of a failure.
+func (c chatLauncher) MarkAccountSwitch(ctx context.Context, id domain.SessionID, accountID string) error {
+	return c.svc.MarkAccountSwitch(ctx, id, accountID)
 }
 
 func (c chatLauncher) PrepareChatHandoff(
