@@ -11,6 +11,19 @@ function cacheKey(agentId: string, projectId: string, hostId?: string): string {
 	return cachePrefix(agentId, hostId) + JSON.stringify(projectId);
 }
 
+/** Refresh catalog facts without dropping recency while history is pending. */
+export function withCachedModelUsage(catalog: AgentModelCatalog, cached: AgentModelCatalog | undefined): AgentModelCatalog {
+	if (!cached) return catalog;
+	const usage = new Map(cached.models.map((model) => [model.id, model.lastUsedAt]));
+	return {
+		...catalog,
+		models: catalog.models.map((model) => {
+			const lastUsedAt = model.lastUsedAt ?? usage.get(model.id);
+			return lastUsedAt ? { ...model, lastUsedAt } : model;
+		}),
+	};
+}
+
 /** A display snapshot only; the daemon DB remains the catalog authority. */
 export function readCachedAgentModels(agentId: string, projectId: string, hostId?: string): AgentModelCatalog | undefined {
 	try {

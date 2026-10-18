@@ -2,7 +2,7 @@ import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { foldClaudeAliasDefault } from "../lib/agent-model-choices";
-import { cacheAgentModels, clearCachedAgentModels, readCachedAgentModels } from "../lib/agent-model-cache";
+import { cacheAgentModels, clearCachedAgentModels, readCachedAgentModels, withCachedModelUsage } from "../lib/agent-model-cache";
 import { clientForHost } from "../lib/host-clients";
 import { LOCAL_HOST } from "../lib/hosts";
 
@@ -45,7 +45,10 @@ async function requestAgentModels(
 	if (result.error) throw new Error(apiErrorMessage(result.error));
 	const catalog = result.data as AgentModelCatalog;
 	const normalized = agentId === "claude-code" ? { ...catalog, models: foldClaudeAliasDefault(catalog.models) } : catalog;
-	if (mode !== "cached" || catalogOnly) cacheAgentModels(normalized, agentId, projectId, hostId);
+	if (mode !== "cached" || catalogOnly) {
+		const snapshot = catalogOnly ? withCachedModelUsage(normalized, readCachedAgentModels(agentId, projectId, hostId)) : normalized;
+		cacheAgentModels(snapshot, agentId, projectId, hostId);
+	}
 	return normalized;
 }
 
@@ -73,7 +76,9 @@ export function agentModelsQueryOptions(agentId: string, projectId: string, host
 				queryFn: () => requestAgentModels(agentId, projectId, "cached", hostId, true),
 				staleTime: 0,
 			});
-			const published = client.setQueryData(key, catalog);
+			const withUsage = withCachedModelUsage(catalog, client.getQueryData<AgentModelCatalog>(key));
+			cacheAgentModels(withUsage, agentId, projectId, hostId);
+			const published = client.setQueryData(key, withUsage);
 			const enriched = await requestAgentModels(agentId, projectId, "cached", hostId);
 			// A background refresh may have published newer models while recency
 			// was being read. Keep that catalog rather than restoring the old list.

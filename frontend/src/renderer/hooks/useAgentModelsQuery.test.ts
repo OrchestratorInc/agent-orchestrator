@@ -113,6 +113,46 @@ describe("cached model loading", () => {
 		client.clear();
 	});
 
+	it("preserves recency for surviving models while refreshing DB facts, even if the history read fails", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const options = agentModelsQueryOptions("codex", "project-one");
+		const lastUsedAt = "2026-10-18T01:00:00Z";
+		client.setQueryData(options.queryKey, { ...catalog, models: [
+			{ ...catalog.models[0], lastUsedAt }, { id: "removed-model", label: "Removed model", lastUsedAt },
+		] });
+		const dbCatalog = { ...catalog, models: [
+			{ ...catalog.models[0], label: "Renamed model" }, { id: "new-default", label: "New default", isDefault: true },
+		] };
+		let failHistory!: (error: Error) => void;
+		const history = new Promise<never>((_resolve, reject) => { failHistory = reject; });
+		vi.mocked(apiClient.GET).mockResolvedValueOnce({ data: dbCatalog } as never).mockReturnValueOnce(history as never);
+		const observer = new QueryObserver(client, options);
+		const unsubscribe = observer.subscribe(() => {});
+		try {
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(2));
+			const expectedModels = [{ ...dbCatalog.models[0], lastUsedAt }, dbCatalog.models[1]];
+			expect(observer.getCurrentResult().data?.models).toEqual(expectedModels);
+			expect(readCachedAgentModels("codex", "project-one")?.models).toEqual(expectedModels);
+			failHistory(new Error("history unavailable"));
+			await vi.waitFor(() => expect(observer.getCurrentResult().isError).toBe(true));
+			expect(observer.getCurrentResult().data?.models).toEqual(expectedModels);
+		} finally {
+			failHistory(new Error("history unavailable"));
+			unsubscribe();
+			client.clear();
+		}
+	});
+
+	it("keeps saved recency when Settings refreshes the same DB catalog", async () => {
+		const lastUsedAt = "2026-10-18T01:00:00Z";
+		cacheAgentModels({ ...catalog, models: [{ ...catalog.models[0], lastUsedAt }] }, "codex", "");
+		vi.mocked(apiClient.GET).mockResolvedValueOnce({ data: catalog } as never);
+		const client = new QueryClient();
+		await client.fetchQuery(agentModelsQueryOptions("codex", "", undefined, true));
+		expect(readCachedAgentModels("codex", "")?.models[0].lastUsedAt).toBe(lastUsedAt);
+		client.clear();
+	});
+
 	it("ignores corrupt saved data and still reads models from the DB", async () => {
 		cacheAgentModels(catalog, "codex", "project-one");
 		window.localStorage.setItem(window.localStorage.key(0)!, "not JSON");
