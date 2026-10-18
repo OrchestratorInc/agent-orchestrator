@@ -272,8 +272,11 @@ type Controller struct {
 	// Interface drain keeps dispatching accepted rows; interface interrupt and an
 	// idle branch mutation stop dispatch entirely. The target controller is not
 	// started until this controller reports quiescent and is closed.
-	handoff           controllerHandoff
-	branchHandoffDone chan struct{}
+	handoff controllerHandoff
+	// handoffInterrupted is the provider turn an interrupt-policy handoff
+	// stopped, so the move can say on that exact turn why it ended.
+	handoffInterrupted string
+	branchHandoffDone  chan struct{}
 	// preserveProviderOnStop is set before deliberate daemon detach. It prevents
 	// the closing controller from projecting a false provider exit or failing work
 	// that the detached host continues to run.
@@ -2373,7 +2376,18 @@ func (c *Controller) interruptForHandoff(ctx context.Context) error {
 		}
 		return fmt.Errorf("interrupt turn %s for handoff: %w", turn, err)
 	}
+	c.mu.Lock()
+	c.handoffInterrupted = turn
+	c.mu.Unlock()
 	return nil
+}
+
+// HandoffInterruptedTurn is the provider turn the handoff's interrupt stopped,
+// or "" when it stopped none.
+func (c *Controller) HandoffInterruptedTurn() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.handoffInterrupted
 }
 
 // Interrupt cancels the in-flight turn, and with it anything queued behind it.

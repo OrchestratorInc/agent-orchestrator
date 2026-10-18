@@ -158,6 +158,177 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Claude Code and Codex accounts with their limits */
+        get: operations["listAgentAccounts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/accounts/{accountId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Sign an account out and remove it */
+        delete: operations["removeAgentAccount"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/accounts/{accountId}/default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Make an account the default for new sessions of its provider */
+        post: operations["setDefaultAgentAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/accounts/{accountId}/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sign a saved account in again, in its own folder */
+        post: operations["signInAgentAccountAgain"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/accounts/{accountId}/reset-credit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Spend one Codex usage-limit reset of an account */
+        post: operations["consumeAgentAccountResetCredit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/accounts/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add an account by running the provider's own sign-in in a terminal */
+        post: operations["startAgentAccountLogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/accounts/login/{operationId}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop a sign-in and remove its unsaved folder */
+        post: operations["cancelAgentAccountLogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/accounts/login/{operationId}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check a sign-in and save the account when it finished */
+        post: operations["verifyAgentAccountLogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/accounts/sessions/{sessionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the account a session uses per provider */
+        get: operations["getSessionAgentAccounts"];
+        /** Start moving a session to another account through the durable controller handoff */
+        put: operations["switchSessionAgentAccount"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/accounts/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Sum each account's model usage in AO sessions */
+        get: operations["getAgentAccountUsage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/auth-plans": {
         parameters: {
             query?: never;
@@ -3932,6 +4103,20 @@ export interface components {
             path: string;
             projectId?: null | string;
         };
+        AgentAccountActivity: {
+            currentStreakDays?: null | number;
+            latestDay?: null | string;
+            latestDayTokens?: null | number;
+            lifetimeTokens?: null | number;
+            longestTurnSeconds?: null | number;
+            peakDailyTokens?: null | number;
+        };
+        AgentAccountExtraUsage: {
+            currency?: string;
+            enabled: boolean;
+            monthlyLimit?: null | number;
+            usedCredits?: null | number;
+        };
         AgentAccountIdentity: {
             email?: string;
             /** @enum {string} */
@@ -3943,6 +4128,68 @@ export interface components {
             source?: string;
             /** @enum {string} */
             sourceKind?: "environment" | "file" | "command" | "keychain";
+        };
+        AgentAccountLimitWindow: {
+            id: string;
+            label: string;
+            /** Format: date-time */
+            resetsAt?: null | string;
+            /** Format: double */
+            usedPercent: number;
+        };
+        AgentAccountLimits: {
+            activity?: components["schemas"]["AgentAccountActivity"];
+            extraUsage?: components["schemas"]["AgentAccountExtraUsage"];
+            /** Format: date-time */
+            fetchedAt: string;
+            resetCredits?: null | number;
+            windows: components["schemas"]["AgentAccountLimitWindow"][];
+        };
+        AgentAccountResponse: {
+            /** Format: date-time */
+            createdAt?: null | string;
+            default: boolean;
+            device: boolean;
+            email?: string;
+            id: string;
+            limits?: components["schemas"]["AgentAccountLimits"];
+            plan?: string;
+            problem?: string;
+            /** @enum {string} */
+            provider: "claude" | "codex";
+            signedIn: boolean;
+        };
+        AgentAccountUsageByModel: {
+            /** Format: int64 */
+            costNanos: number;
+            model: string;
+            /** Format: int64 */
+            tokens: number;
+        };
+        AgentAccountUsageDay: {
+            /** Format: int64 */
+            costNanos: number;
+            day: string;
+            /** Format: int64 */
+            tokens: number;
+        };
+        AgentAccountUsageResponse: {
+            days: number;
+            usage: components["schemas"]["AgentAccountUsageRow"][];
+        };
+        AgentAccountUsageRow: {
+            accountId: string;
+            /** Format: int64 */
+            costNanos: number;
+            daily: components["schemas"]["AgentAccountUsageDay"][];
+            /** Format: int64 */
+            inputTokens: number;
+            models: components["schemas"]["AgentAccountUsageByModel"][];
+            /** Format: int64 */
+            outputTokens: number;
+        };
+        AgentAccountsResponse: {
+            accounts: components["schemas"]["AgentAccountResponse"][];
         };
         AgentAuthDiagnostic: {
             cached: boolean;
@@ -4668,6 +4915,13 @@ export interface components {
              * @description Deprecated compatibility alias for processedTokens.
              */
             totalTokens: number;
+        };
+        ConsumeAgentAccountResetCreditRequest: {
+            idempotencyKey: string;
+        };
+        ConsumeAgentAccountResetCreditResponse: {
+            /** @enum {string} */
+            outcome: "reset" | "already_redeemed" | "nothing_to_reset";
         };
         ConsumeCodexAccountResetCreditRequest: {
             idempotencyKey: string;
@@ -6068,6 +6322,10 @@ export interface components {
             current?: components["schemas"]["SessionStepResponse"];
             recent: components["schemas"]["SessionStepResponse"][];
         };
+        SessionAgentAccountsResponse: {
+            claude?: string;
+            codex?: string;
+        };
         SessionArtifact: {
             inlineUrl?: string;
             /** @enum {string} */
@@ -6103,8 +6361,10 @@ export interface components {
             /** @enum {string} */
             policy: "drain" | "interrupt";
             sessionId: string;
+            sourceAccountId?: string;
             /** @enum {string} */
             sourceMode: "chat" | "tui";
+            targetAccountId?: string;
             /** @enum {string} */
             targetMode: "chat" | "tui";
             /** Format: date-time */
@@ -6670,6 +6930,16 @@ export interface components {
             paths: string[];
             sessionId: string;
         };
+        StartAgentAccountLoginRequest: {
+            /** @enum {string} */
+            provider: "claude" | "codex";
+        };
+        StartAgentAccountLoginResponse: {
+            operationId: string;
+            /** @enum {string} */
+            provider: "claude" | "codex";
+            shellTerminal: components["schemas"]["CodexAccountLoginTerminalResponse"];
+        };
         StartAgentAuthResponse: {
             action: string;
             agentId: string;
@@ -6783,6 +7053,10 @@ export interface components {
              * @enum {string}
              */
             targetHarness: "claude-code" | "codex" | "fx";
+        };
+        SwitchSessionAgentAccountRequest: {
+            accountId: string;
+            stopTurn?: boolean;
         };
         SyncArtifactVersionsRequest: {
             /** @description Artifact-directory-relative file path, as listed in the session's artifactFiles. */
@@ -6944,6 +7218,11 @@ export interface components {
             processedTokens: null | number;
             /** @description Input not read from an existing provider cache. Includes cache writes. */
             uncachedInputTokens: null | number;
+        };
+        VerifyAgentAccountLoginResponse: {
+            account?: components["schemas"]["AgentAccountResponse"];
+            /** @enum {string} */
+            status: "waiting" | "complete" | "duplicate" | "mismatch";
         };
         WorkspaceCommitSummary: {
             author: string;
@@ -7643,6 +7922,482 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listAgentAccounts: {
+        parameters: {
+            query?: {
+                /** @description Read identity and limits again even when the last reading is fresh. */
+                refresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentAccountsResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    removeAgentAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent account identifier; device-claude and device-codex are this computer's own logins. */
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentAccountsResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setDefaultAgentAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent account identifier; device-claude and device-codex are this computer's own logins. */
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentAccountsResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    signInAgentAccountAgain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent account identifier; device-claude and device-codex are this computer's own logins. */
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartAgentAccountLoginResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    consumeAgentAccountResetCredit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent account identifier; device-claude and device-codex are this computer's own logins. */
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConsumeAgentAccountResetCreditRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsumeAgentAccountResetCreditResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    startAgentAccountLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartAgentAccountLoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartAgentAccountLoginResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    cancelAgentAccountLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent account sign-in operation identifier. */
+                operationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    verifyAgentAccountLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent account sign-in operation identifier. */
+                operationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerifyAgentAccountLoginResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionAgentAccounts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description AO session identifier. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionAgentAccountsResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    switchSessionAgentAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description AO session identifier. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SwitchSessionAgentAccountRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartSessionInterfaceTransitionResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getAgentAccountUsage: {
+        parameters: {
+            query?: {
+                /** @description Days of usage to sum, today included. Defaults to 30. */
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentAccountUsageResponse"];
                 };
             };
             /** @description Not Implemented */

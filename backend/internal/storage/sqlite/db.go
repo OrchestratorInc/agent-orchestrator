@@ -2229,7 +2229,7 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	}
 	if needsCodeBuddy {
 		// Append only AFTER every historical exact-shape repair above. Migration
-		// 0207 deliberately skips incomplete old lists to keep their recognizers intact.
+		// 0215 deliberately skips incomplete old lists to keep their recognizers intact.
 		repairs = append(repairs, replacement{"'fake'))", "'codebuddy', 'fake'))"})
 	}
 	for _, r := range repairs {

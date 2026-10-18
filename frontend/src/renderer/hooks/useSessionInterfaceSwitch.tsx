@@ -271,7 +271,10 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 			["requested", "preflighting", "draining"].includes(interfaceSwitch.transition.phase)),
 	);
 	const pendingTarget = switchIntent?.owner === owner ? switchIntent.target : undefined;
-	const optimisticTarget = isCloud || localDrainWaiting || interfaceTransitionNeedsRestart(interfaceSwitch.transition)
+	// An account move keeps the mode. It is not an arrival: the conversation or
+	// terminal on screen stays while the agent restarts under the new account.
+	const accountMoveTarget = activeTransition || settling ? interfaceSwitch.transition?.targetAccountId || undefined : undefined;
+	const optimisticTarget = isCloud || localDrainWaiting || accountMoveTarget || interfaceTransitionNeedsRestart(interfaceSwitch.transition)
 		? undefined
 		: pendingTarget ?? (interfaceSwitch.starting
 			? interfaceSwitch.startingTarget
@@ -501,6 +504,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 	</>;
 
 	return {
+		accountMoveTarget,
 		activeTransition,
 		agentInputDisabled: Boolean((interfaceSwitch.starting || activeTransition) && !cloudDrainWaiting && session?.mode === "tui"),
 		cloudLoader,
