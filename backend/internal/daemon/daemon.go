@@ -607,6 +607,11 @@ func Run() error {
 		},
 	})
 	sessMgr = wiredSessMgr
+	if restorer, ok := sessMgr.(interface {
+		EnsureChatController(context.Context, domain.SessionID) error
+	}); ok {
+		chatSvc.SetControllerRestorer(restorer.EnsureChatController)
+	}
 	if runner, ok := sessMgr.(interface {
 		RunPromptSuggestionTask(context.Context, domain.SessionID, string, string, string) (string, error)
 	}); ok {
