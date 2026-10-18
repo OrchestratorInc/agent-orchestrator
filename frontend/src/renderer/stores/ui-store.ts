@@ -32,6 +32,7 @@ export type GlobalSettingsSection =
 	| "remoteHosts"
 	| "coder"
 	| "mobile"
+	| "stayAwake"
 	| "shortcuts"
 	| "browserProfiles"
 	| "diagnostics"
@@ -39,7 +40,7 @@ export type GlobalSettingsSection =
 	| "help";
 
 /** Project settings pages: the project form sections plus the cues manager. */
-export type ProjectSettingsSection = ProjectFormSection | "environment" | "scripts" | "cues";
+export type ProjectSettingsSection = ProjectFormSection | "environment" | "scripts" | "cues" | "repositories" | "instructions";
 
 /** Which failure a "Show diagnostics" shortcut is about: the job it produced,
  * if any, and the error the user saw. */

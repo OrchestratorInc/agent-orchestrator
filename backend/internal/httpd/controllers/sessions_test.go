@@ -2782,6 +2782,76 @@ func TestSessionsAPI_PreviewOriginErrorContract(t *testing.T) {
 	assertErrorCode(t, body, status, http.StatusNotFound, "NO_PREVIEW_ENTRY")
 }
 
+func TestSessionsAPI_ArtifactMediaETagTracksRapidReplacements(t *testing.T) {
+	for _, name := range []string{"image.png", "video.webm", "audio.mp3"} {
+		t.Run(name, func(t *testing.T) {
+			srv, root := artifactFileServer(t, map[string]string{name: "first clip"})
+			file := filepath.Join(root, name)
+			modified := time.Date(2026, time.October, 17, 12, 0, 0, 100_000_000, time.UTC)
+			write := func(content string, stamp time.Time) {
+				t.Helper()
+				if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chtimes(file, stamp, stamp); err != nil {
+					t.Fatal(err)
+				}
+			}
+			get := func(headers map[string]string) (*http.Response, string) {
+				t.Helper()
+				req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/sessions/ao-1/preview/files/"+name+"?source=artifact&raw=true", nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.Header.Set("Origin", "http://localhost:5173")
+				for key, value := range headers {
+					req.Header.Set(key, value)
+				}
+				resp, err := srv.Client().Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer resp.Body.Close()
+				body, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return resp, string(body)
+			}
+
+			write("first clip", modified)
+			first, body := get(nil)
+			etag, lastModified := first.Header.Get("ETag"), first.Header.Get("Last-Modified")
+			if first.StatusCode != http.StatusOK || body != "first clip" || etag == "" || lastModified == "" {
+				t.Fatalf("initial response: status=%d body=%q headers=%v", first.StatusCode, body, first.Header)
+			}
+			if first.Header.Get("Access-Control-Allow-Origin") != "http://localhost:5173" || first.Header.Get("Access-Control-Expose-Headers") != "ETag" {
+				t.Fatalf("ETag must be readable by the renderer: headers=%v", first.Header)
+			}
+			if first.Header.Get("Cache-Control") != "private, no-cache" {
+				t.Fatalf("metadata refreshes must revalidate: headers=%v", first.Header)
+			}
+			if unchanged, body := get(map[string]string{"If-None-Match": etag}); unchanged.StatusCode != http.StatusNotModified || body != "" || unchanged.Header.Get("ETag") != etag {
+				t.Fatalf("unchanged response: status=%d body=%q headers=%v", unchanged.StatusCode, body, unchanged.Header)
+			}
+			for _, replacement := range []string{"other clip", "a longer replacement clip"} {
+				// First change only subsecond mtime, then only size, within one HTTP second.
+				write(replacement, modified.Add(time.Millisecond))
+				fresh, body := get(map[string]string{"If-None-Match": etag, "If-Modified-Since": lastModified})
+				freshETag := fresh.Header.Get("ETag")
+				if fresh.StatusCode != http.StatusOK || body != replacement || freshETag == "" || freshETag == etag || fresh.Header.Get("Last-Modified") != lastModified {
+					t.Fatalf("same-second replacement: status=%d body=%q oldTag=%q headers=%v", fresh.StatusCode, body, etag, fresh.Header)
+				}
+				etag = freshETag
+			}
+			ranged, body := get(map[string]string{"Range": "bytes=2-5", "If-Range": etag})
+			if ranged.StatusCode != http.StatusPartialContent || body != "long" || ranged.Header.Get("ETag") != etag {
+				t.Fatalf("media range: status=%d body=%q headers=%v", ranged.StatusCode, body, ranged.Header)
+			}
+		})
+	}
+}
+
 func TestSessionsAPI_ArtifactRawAPIStaysInsideArtifactDirectory(t *testing.T) {
 	workspace, artifacts := t.TempDir(), t.TempDir()
 	for _, file := range []struct{ root, name, content string }{

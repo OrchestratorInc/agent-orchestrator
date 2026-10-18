@@ -972,6 +972,10 @@ func (f *fakeSessionLifecycle) ReconcileStartupSafety(_ context.Context) error {
 	return f.reconcileErr
 }
 
+func (f *fakeSessionLifecycle) ReconnectAwakeAgent(context.Context, domain.AwakeAgentTarget) error {
+	return nil
+}
+
 func (f *fakeSessionLifecycle) ReconcileBackground(_ context.Context) error {
 	f.reconcileBackgroundCalled = true
 	return f.reconcileErr

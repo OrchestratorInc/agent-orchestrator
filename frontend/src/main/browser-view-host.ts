@@ -174,7 +174,15 @@ export type BrowserAgentActivityState = {
 };
 
 export type BrowserRuntimeState = {
+	/** The daemon answered this app's hello with hello-ok. */
 	connected: boolean;
+	/** A handshake that should settle soon is in flight: the link just started, or an
+	 *  accepted link dropped and is redialing. Not yet a disconnect worth showing. */
+	connecting: boolean;
+	/** The daemon refused this app's hello. Reconnecting with the same token can't help. */
+	rejected: boolean;
+	/** The daemon's reason for the refusal (a BROWSER_RUNTIME_* code), when it gave one. */
+	rejectionCode?: string;
 };
 
 export type BrowserDevToolsState = {
@@ -380,6 +388,19 @@ function canWriteBrowserClipboard(
     return false;
   }
 }
+
+// Web pages may declare `app-region: drag` for their own Electron desktop
+// builds (Linear does). Chrome ignores it, but Electron turns those areas of
+// the embedded view into AO window-drag regions that never receive wheel,
+// click, or scrollbar input. A user-origin !important rule outranks the page's
+// author rules, inline styles included.
+const BROWSER_NO_DRAG_CSS = `
+	*,
+	*::before,
+	*::after {
+		app-region: no-drag !important;
+	}
+`;
 
 const browserScrollbarCSS = (zoomFactor: number): string => {
   const effectiveZoom =
@@ -1072,7 +1093,8 @@ export function createBrowserViewHost(
         .then(async () => {
           const previousKey = scrollbarStyleKey;
           scrollbarStyleKey = await view.webContents.insertCSS(
-            browserScrollbarCSS(view.webContents.getZoomFactor()),
+            BROWSER_NO_DRAG_CSS +
+              browserScrollbarCSS(view.webContents.getZoomFactor()),
             { cssOrigin: "user" },
           );
           if (previousKey)

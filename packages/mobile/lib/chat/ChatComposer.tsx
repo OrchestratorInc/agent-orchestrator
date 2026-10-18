@@ -11,6 +11,7 @@ import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller
 import { haptics } from "../haptics";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
+import { textSelectionColors } from "../textSelection";
 import { fontScaleCap, iconSize, space, type } from "../tokens";
 import { KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
 import { MicKey } from "../voice/MicKey";
@@ -589,6 +590,7 @@ export function ChatComposer({
 						}}
 						placeholder={stopped ? "Agent is stopped" : deliveryPresentation.placeholder}
 						placeholderTextColor={t.textFaint}
+						{...textSelectionColors(t)}
 						style={[styles.input, { height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT }]}
 						multiline
 						maxLength={40_000}

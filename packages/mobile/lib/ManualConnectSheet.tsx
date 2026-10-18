@@ -19,6 +19,7 @@ import type { Theme } from "./theme";
 import { haptics } from "./haptics";
 import { Button, SHEET_SCROLL_CONTENT, SheetHeader, SheetScreen } from "./ui";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
+import { textSelectionColors } from "./textSelection";
 import { MOBILE_EVENTS } from "./telemetry/events";
 import { mobileTelemetry } from "./telemetry/runtime";
 import { iconSize, space, touchTarget, type } from "./tokens";
@@ -141,7 +142,7 @@ export function ManualConnectSheet({ onConnected, editingHost, editingEndpointIn
 						onChangeText={set("password")}
 						placeholder="Connection password"
 						placeholderTextColor={t.textFaint}
-						selectionColor={t.accent}
+						{...textSelectionColors(t)}
 						autoCapitalize="none"
 						autoCorrect={false}
 						secureTextEntry={!showPassword}
@@ -236,7 +237,7 @@ function Field({ label, ...input }: { label: string } & React.ComponentProps<typ
 	return (
 		<View style={styles.field}>
 			<Text style={styles.fieldLabel}>{label}</Text>
-			<TextInput {...input} style={styles.input} placeholderTextColor={t.textFaint} selectionColor={t.accent} />
+			<TextInput {...input} style={styles.input} placeholderTextColor={t.textFaint} {...textSelectionColors(t)} />
 		</View>
 	);
 }
