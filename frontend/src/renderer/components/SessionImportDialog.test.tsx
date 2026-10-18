@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
 import { SessionImportDialog } from "./SessionImportDialog";
@@ -62,9 +63,9 @@ it("preselects recent histories, lets older standalone work be selected and impo
 		screen.getAllByText("Some text in this chat is too large to import."),
 	).toHaveLength(1);
 	fireEvent.click(recent);
-	fireEvent.change(screen.getByLabelText("Project"), {
-		target: { value: "standalone" },
-	});
+	const user = userEvent.setup();
+	await user.click(screen.getByRole("combobox", { name: "Project" }));
+	await user.click(screen.getByRole("option", { name: "Standalone" }));
 	expect(screen.queryByText("Fix parser")).not.toBeInTheDocument();
 	fireEvent.click(older);
 	fireEvent.click(

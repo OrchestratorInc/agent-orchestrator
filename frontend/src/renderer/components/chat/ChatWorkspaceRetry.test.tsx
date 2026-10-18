@@ -213,6 +213,25 @@ describe("ChatWorkspace retry", () => {
 		expect(screen.getByText("this is open elsewhere; close it there to continue here")).toBeVisible();
 	});
 
+	it("stops checking once the agent is running again", () => {
+		vi.useFakeTimers();
+		try {
+			const retry = vi.fn();
+			render(
+				<ChatWorkspace
+					snapshot={{ ...chatFixture, controller: { state: "ready" } }}
+					onResumeAgent={retry}
+					resumeError="this is open elsewhere; close it there to continue here"
+					resumeErrorCode="SESSION_OPEN_ELSEWHERE"
+				/>,
+			);
+			act(() => vi.advanceTimersByTime(60_000));
+			expect(retry).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("keeps checking while another app holds the chat", () => {
 		vi.useFakeTimers();
 		try {

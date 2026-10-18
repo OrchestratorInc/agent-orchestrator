@@ -7,6 +7,7 @@ import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { useUiStore } from "../stores/ui-store";
 import { Button } from "./ui/button";
+import { Checkbox } from "./ui/checkbox";
 import {
 	Dialog,
 	DialogContent,
@@ -15,6 +16,7 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "./ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import type { components } from "../../api/schema";
 
 type Candidate = components["schemas"]["SessionImportCandidate"];
@@ -158,24 +160,23 @@ export function SessionImportDialog({
 					</DialogDescription>
 				</DialogHeader>
 				<div className="flex flex-wrap gap-3">
-					<label className="flex flex-col gap-1 text-xs">
-						{t("newTask.project")}
-						<select
-							aria-label={t("newTask.project")}
-							value={project}
-							onChange={(e) => setProject(e.target.value)}
-							disabled={importing}
-							className="h-9 rounded-md border border-input bg-background px-2 text-sm"
-						>
-							<option value="all">{t("sessionImport.allProjects")}</option>
-							<option value="standalone">{t("remote.standalone")}</option>
-							{projects.map((p) => (
-								<option key={p.id} value={p.id}>
-									{p.name}
-								</option>
-							))}
-						</select>
-					</label>
+					<div className="flex flex-col gap-1 text-xs">
+						<span aria-hidden="true">{t("newTask.project")}</span>
+						<Select value={project} onValueChange={setProject} disabled={importing}>
+							<SelectTrigger size="sm" className="w-56 text-control" aria-label={t("newTask.project")}>
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent position="popper" side="bottom" align="start" sideOffset={4} className="max-h-64">
+								<SelectItem value="all">{t("sessionImport.allProjects")}</SelectItem>
+								<SelectItem value="standalone">{t("remote.standalone")}</SelectItem>
+								{projects.map((p) => (
+									<SelectItem key={p.id} value={p.id}>
+										{p.name}
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
+					</div>
 				</div>
 				<p className="text-xs text-muted-foreground">
 					{t("sessionImport.selectionHelp")}
@@ -193,16 +194,15 @@ export function SessionImportDialog({
 				) : null}
 				<div className="min-h-0 overflow-auto rounded-md border border-border">
 					<label className="sticky top-0 flex items-center gap-3 border-b border-border bg-surface px-3 py-2 text-xs">
-						<input
-							type="checkbox"
+						<Checkbox
 							aria-label={t("sessionImport.selectAllAria")}
 							checked={
 								eligible.length > 0 && eligible.every((c) => selected.has(c.id))
 							}
-							onChange={(e) =>
+							onCheckedChange={(checked) =>
 								toggle(
 									eligible.map((c) => c.id),
-									e.target.checked,
+									checked === true,
 								)
 							}
 							disabled={importing || !eligible.length}
@@ -291,13 +291,12 @@ function ImportRow({
 	);
 	return (
 		<label className="flex cursor-pointer items-start gap-3 border-b border-border px-3 py-3 last:border-0">
-			<input
-				type="checkbox"
+			<Checkbox
 				aria-label={t("sessionImport.selectConversation", { title: c.title })}
-				className="mt-1"
+				className="mt-0.5"
 				checked={selected && !imported}
 				disabled={disabled || imported}
-				onChange={(e) => onSelect(e.target.checked)}
+				onCheckedChange={(checked) => onSelect(checked === true)}
 			/>
 			<span className="min-w-0 flex-1">
 				<span className="block truncate text-sm font-medium">{c.title}</span>

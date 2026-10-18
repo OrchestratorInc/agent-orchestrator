@@ -2491,7 +2491,8 @@ function ControllerBanner({
 	openingShell?: boolean;
 	shellError?: string;
 }) {
-	const openElsewhere = resumeErrorCode === "SESSION_OPEN_ELSEWHERE";
+	// An earlier failure can outlive a later successful resume; only a stopped agent is still held elsewhere.
+	const openElsewhere = resumeErrorCode === "SESSION_OPEN_ELSEWHERE" && controller.state === "stopped";
 	// The other app releases the chat without telling AO (Codex can hold a closed
 	// one for many minutes), so keep checking instead of waiting for Retry.
 	const resumeRef = useRef(onResume);
