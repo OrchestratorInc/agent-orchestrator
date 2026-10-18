@@ -124,6 +124,7 @@ import {
 	SidebarMenuSubItem,
 	useSidebar,
 } from "./ui/sidebar";
+import { BuildInfoTooltip } from "./BuildInfoTooltip";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { OrchestratorIcon } from "./icons";
 import { Badge } from "./ui/badge";
@@ -980,7 +981,7 @@ export function Sidebar({
 					<span
 						className="sidebar-expanded-chrome min-w-0 flex-1 truncate text-base font-semibold leading-tight tracking-tight-lg text-foreground group-data-[collapsible=icon]:hidden"
 					>
-						Orchestrator.inc
+						<BuildInfoTooltip>Orchestrator.inc</BuildInfoTooltip>
 					</span>
 				</button>
 				<Tooltip>
