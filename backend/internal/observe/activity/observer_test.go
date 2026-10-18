@@ -48,6 +48,18 @@ func (f *fakeRuntime) GetOutput(context.Context, ports.RuntimeHandle, int) (stri
 	return f.output, f.err
 }
 
+type fakeStyledRuntime struct {
+	fakeRuntime
+	styledOutput string
+	styledErr    error
+	styledCalls  int
+}
+
+func (f *fakeStyledRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
+	f.styledCalls++
+	return f.styledOutput, f.styledErr
+}
+
 type fakeAgents map[domain.AgentHarness]ports.Agent
 
 func (f fakeAgents) Agent(harness domain.AgentHarness) (ports.Agent, bool) {
@@ -246,6 +258,92 @@ const claudeStuckActiveScreen = "⏺ Login expired · Please run /login\n" +
 	"────────────────────────────────────────────────\n" +
 	"\n" +
 	"  ⏵⏵ bypass permissions on (shift+tab to cycle) · PR #4090\n"
+
+const claudeInterruptedIdleScreen = "⎿ Interrupted · What should Claude do instead?\n" +
+	"\n" +
+	"────────────────────────────────────────────────\n" +
+	"❯\n" +
+	"────────────────────────────────────────────────\n" +
+	"\n" +
+	"  ⏵⏵ bypass permissions on (shift+tab to cycle) · PR #6232\n"
+
+func TestPollReconcilesInterruptedClaudeFromRenderedSurface(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessClaudeCode)
+	sink := &fakeSink{}
+	runtime := &fakeStyledRuntime{
+		fakeRuntime:  fakeRuntime{output: ""},
+		styledOutput: claudeInterruptedIdleScreen,
+	}
+	observer := New(
+		fakeSessions{rows: []domain.SessionRecord{session}},
+		sink,
+		runtime,
+		fakeAgents{domain.HarnessClaudeCode: claudecode.New()},
+		Config{Clock: func() time.Time { return now }, Logger: testLogger()},
+	)
+
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.styledCalls != 1 || runtime.calls != 0 {
+		t.Fatalf("output reads = styled:%d raw:%d, want styled:1 raw:0", runtime.styledCalls, runtime.calls)
+	}
+	if len(sink.signals) != 1 || sink.signals[0].State != domain.ActivityIdle || sink.signals[0].Event != "terminal-idle" {
+		t.Fatalf("interrupted Claude reconciliation = %+v, want terminal-idle", sink.signals)
+	}
+}
+
+func TestPollRenderedActiveClaudeWinsOverStaleRawIdleHistory(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	sink := &fakeSink{}
+	runtime := &fakeStyledRuntime{
+		fakeRuntime: fakeRuntime{output: claudeInterruptedIdleScreen},
+		styledOutput: "✻ Computing… (3m 10s · ↓ 114 tokens)\n" +
+			"────────────────────────────────────────────────\n" +
+			"❯\n" +
+			"────────────────────────────────────────────────\n" +
+			"⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ← for agents\n",
+	}
+	observer := New(
+		fakeSessions{rows: []domain.SessionRecord{activeSession(now, domain.HarnessClaudeCode)}},
+		sink,
+		runtime,
+		fakeAgents{domain.HarnessClaudeCode: claudecode.New()},
+		Config{Clock: func() time.Time { return now }, Logger: testLogger()},
+	)
+
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.styledCalls != 1 || runtime.calls != 0 || len(sink.signals) != 0 {
+		t.Fatalf("active rendered surface must stay active: styled=%d raw=%d signals=%+v",
+			runtime.styledCalls, runtime.calls, sink.signals)
+	}
+}
+
+func TestPollFallsBackToRawOutputWhenStyledSurfaceIsUnavailable(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	sink := &fakeSink{}
+	runtime := &fakeStyledRuntime{
+		fakeRuntime: fakeRuntime{output: claudeInterruptedIdleScreen},
+		styledErr:   ports.ErrStyledTerminalOutputUnavailable,
+	}
+	observer := New(
+		fakeSessions{rows: []domain.SessionRecord{activeSession(now, domain.HarnessClaudeCode)}},
+		sink,
+		runtime,
+		fakeAgents{domain.HarnessClaudeCode: claudecode.New()},
+		Config{Clock: func() time.Time { return now }, Logger: testLogger()},
+	)
+
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.styledCalls != 1 || runtime.calls != 1 || len(sink.signals) != 1 || sink.signals[0].State != domain.ActivityIdle {
+		t.Fatalf("legacy fallback = styled:%d raw:%d signals:%+v", runtime.styledCalls, runtime.calls, sink.signals)
+	}
+}
 
 func TestPollReconcilesStaleClaudeCodeAfterAbortedTurn(t *testing.T) {
 	now := time.Unix(500, 0).UTC()
