@@ -123,8 +123,8 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plans) != 37 {
-		t.Fatalf("got %d plans, want 37", len(plans))
+	if len(plans) != 38 {
+		t.Fatalf("got %d plans, want 38", len(plans))
 	}
 	seen := make(map[string]bool, len(plans))
 	for _, plan := range plans {
@@ -137,6 +137,11 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 		}
 		if plan.Available && (!plan.Automatic || plan.Command == "" || plan.Method == "") {
 			t.Fatalf("available plan %q is incomplete: %+v", plan.AgentID, plan)
+		}
+	}
+	for _, id := range []string{"mastra-code", "memcode"} {
+		if !seen[id] {
+			t.Fatalf("missing install plan for %q", id)
 		}
 	}
 }
