@@ -41,9 +41,13 @@ var (
 	ErrNotRestorable                 = errors.New("session: not restorable (not terminal)")
 	ErrTerminated                    = errors.New("session: terminated")
 	ErrAgentExited                   = errors.New("session: agent exited")
-	ErrAgentNotExited                = errors.New("session: agent has not exited")
-	ErrAgentExitInProgress           = errors.New("session: agent exit is already in progress")
-	ErrIncompleteHandle              = errors.New("session: incomplete teardown handle")
+	// ErrHarnessOneShot refuses a terminal send to a harness whose CLI runs
+	// one-shot (see ports.AgentTerminalMessagingDeclarer): nothing interactive
+	// is left in the pane to receive the message. The API maps it to a 409.
+	ErrHarnessOneShot      = errors.New("session: harness is one-shot")
+	ErrAgentNotExited      = errors.New("session: agent has not exited")
+	ErrAgentExitInProgress = errors.New("session: agent exit is already in progress")
+	ErrIncompleteHandle    = errors.New("session: incomplete teardown handle")
 	// ErrProjectNotResolvable means the spawn's project has no usable repo
 	// (unregistered, archived, or missing a path). The API maps it to a 400.
 	ErrProjectNotResolvable = errors.New("session: project repo not resolvable")
@@ -4982,6 +4986,25 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 	if handled, err := m.sendChat(ctx, id, message, clientMessageID, options); handled {
 		return err
 	}
+	// One read serves both the one-shot gate and prepareOutboundMessage.
+	session, found, err := m.store.GetSession(ctx, id)
+	if err != nil {
+		return fmt.Errorf("send %s: session: %w", id, err)
+	}
+	// A one-shot terminal harness has no interactive process to paste into:
+	// while its CLI runs the text lands in that CLI's stdin, and once it has
+	// returned the keep-alive shell EXECUTES it. Refuse before any pane write.
+	// Chat-driver sessions of the same harness were relayed above, never gated.
+	// A terminated row falls through to the guard and keeps SESSION_TERMINATED,
+	// the more precise state. An exited row is still refused here: the guard's
+	// AGENT_EXITED tells the operator to relaunch, but a relaunch of a one-shot
+	// harness is refused again (the declaration is per harness, not per
+	// generation; see ports.AgentTerminalMessagingOneShot), so the actionable
+	// advice is the one this error carries.
+	if found && !session.IsTerminated && domain.NormalizeSessionMode(session.Mode) == domain.SessionModeTUI && m.harnessTerminalOneShot(session.Harness) {
+		return fmt.Errorf("send %s: %w: %s runs one-shot in a terminal and cannot receive follow-up messages; start a new session with ao spawn --agent %s",
+			id, ErrHarnessOneShot, session.Harness, session.Harness)
+	}
 
 	if _, coordination := domain.CoordinationDeliveryID(message); !coordination && !options.AuthoredByUser && strings.TrimSpace(message) != "" {
 		deliveryID := clientMessageID
@@ -4990,10 +5013,7 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 		}
 		message = domain.WrapSessionDelivery(deliveryID, message)
 	}
-	message, err := m.prepareOutboundMessage(ctx, id, message)
-	if err != nil {
-		return err
-	}
+	message = prepareOutboundMessage(session, found, message)
 	if options.InteractionAt.IsZero() {
 		options.InteractionAt = m.clock()
 	}
@@ -5060,18 +5080,17 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 	return nil
 }
 
-func (m *Manager) prepareOutboundMessage(ctx context.Context, id domain.SessionID, message string) (string, error) {
-	rec, ok, err := m.store.GetSession(ctx, id)
-	if err != nil {
-		return "", fmt.Errorf("send %s: session: %w", id, err)
-	}
+// prepareOutboundMessage applies harness-specific framing to a terminal
+// delivery. ok=false (no session row) leaves the message untouched so the
+// runtime guard below reports the missing session.
+func prepareOutboundMessage(rec domain.SessionRecord, ok bool, message string) string {
 	if !ok {
-		return message, nil
+		return message
 	}
 	if rec.Harness != domain.HarnessCopilot || rec.Kind != domain.KindOrchestrator {
-		return message, nil
+		return message
 	}
-	return copilotOrchestratorMessage(rec.ProjectID, message), nil
+	return copilotOrchestratorMessage(rec.ProjectID, message)
 }
 
 func copilotOrchestratorMessage(projectID domain.ProjectID, message string) string {
@@ -5113,6 +5132,23 @@ func (m *Manager) harnessNudgeSafe(harness domain.AgentHarness) bool {
 	}
 	blk, ok := agent.(ports.BlockedActivitySignaler)
 	return ok && blk.EmitsBlockedActivity()
+}
+
+// harnessTerminalOneShot reports whether the session's harness declares that
+// its terminal launch runs one-shot (see ports.AgentTerminalMessagingDeclarer):
+// the CLI consumes its prompt and exits, so a pasted follow-up has no
+// interactive process to reach. Adapters that do not declare keep today's
+// paste+Enter delivery.
+func (m *Manager) harnessTerminalOneShot(harness domain.AgentHarness) bool {
+	if m.agents == nil {
+		return false
+	}
+	agent, ok := m.agents.Agent(harness)
+	if !ok {
+		return false
+	}
+	declarer, ok := agent.(ports.AgentTerminalMessagingDeclarer)
+	return ok && declarer.TerminalMessaging() == ports.AgentTerminalMessagingOneShot
 }
 
 func (m *Manager) harnessStartupSignalGatesInput(harness domain.AgentHarness) bool {

@@ -495,6 +495,34 @@ type AgentExitDetector interface {
 	ExitDetectionMode() AgentExitDetectionMode
 }
 
+// AgentTerminalMessaging describes whether a terminal (TUI-mode) launch of an
+// agent CLI can receive follow-up messages pasted into its pane.
+type AgentTerminalMessaging string
+
+const (
+	// AgentTerminalMessagingOneShot means the CLI consumes its launch prompt
+	// and exits: there is no interactive process left to read a pasted
+	// follow-up, which would instead land in the exiting CLI's stdin or be
+	// executed by the keep-alive shell behind it. The Session Manager refuses
+	// terminal sends to such a session instead of pasting.
+	//
+	// The declaration is per harness, not per runtime generation. The session
+	// record carries no durable fact that tells a native-restore relaunch
+	// (GetRestoreCommand, which may open an interactive TUI) apart from the
+	// one-shot launch, so every terminal generation of a declaring harness is
+	// refused the same way. An adapter that declares this accepts that limit
+	// for its restore shape; operators can still type into the pane directly.
+	AgentTerminalMessagingOneShot AgentTerminalMessaging = "one_shot"
+)
+
+// AgentTerminalMessagingDeclarer is an optional adapter capability. Adapters
+// that omit it keep today's paste+Enter delivery for terminal sessions. It only
+// describes the terminal launch: a chat-driver session of the same harness is
+// relayed through its conversation and never consults this.
+type AgentTerminalMessagingDeclarer interface {
+	TerminalMessaging() AgentTerminalMessaging
+}
+
 // AgentPromptReadinessProvider is an optional capability for interactive
 // adapters that receive their first task after startup. It lets AO wait until a
 // terminal UI is ready before injecting text through the runtime. When the

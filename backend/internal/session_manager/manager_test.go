@@ -11477,6 +11477,168 @@ func TestSend_ExitedAgentRejectsDelivery(t *testing.T) {
 	}
 }
 
+// oneShotAgent is a fakeAgent whose terminal launch runs one-shot (the CLI
+// consumes its prompt and exits), so Manager.send must refuse a terminal
+// delivery instead of pasting into the exiting CLI or the keep-alive shell
+// (see ports.AgentTerminalMessagingDeclarer).
+type oneShotAgent struct{ fakeAgent }
+
+func (oneShotAgent) TerminalMessaging() ports.AgentTerminalMessaging {
+	return ports.AgentTerminalMessagingOneShot
+}
+
+// oneShotSemanticAgent also advertises semantic acceptance so SendSemantic
+// gets past its capability check and reaches the shared send gate.
+type oneShotSemanticAgent struct{ oneShotAgent }
+
+func (oneShotSemanticAgent) EmitsSemanticMessageAcceptance() bool { return true }
+
+const oneShotTestHarness = domain.AgentHarness("one-shot-cli")
+
+func TestSend_OneShotHarnessRefusesTerminalDelivery(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{
+		ID: "s1", Harness: oneShotTestHarness, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle},
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "h1"},
+	})
+	msg := &fakeMessenger{}
+	m := newSendTestManager(t, oneShotAgent{}, msg, st)
+
+	err := m.Send(context.Background(), "s1", "follow-up after the one-shot turn", nil)
+	if !errors.Is(err, ErrHarnessOneShot) {
+		t.Fatalf("Send error = %v, want ErrHarnessOneShot", err)
+	}
+	for _, want := range []string{string(oneShotTestHarness), "ao spawn"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Send error %q does not mention %q", err, want)
+		}
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("Send calls = %d, want 0 (no paste into a one-shot CLI or its keep-alive shell)", len(msg.msgs))
+	}
+}
+
+func TestSend_OneShotHarnessDeadRowRefusals(t *testing.T) {
+	// The gate runs before the runtime guard, so it must not shadow the more
+	// precise SESSION_TERMINATED for a terminated row. An exited row stays
+	// HARNESS_ONE_SHOT: AGENT_EXITED would tell the operator to relaunch, and a
+	// relaunched one-shot harness is refused again.
+	cases := []struct {
+		name    string
+		row     domain.SessionRecord
+		want    error
+		notWant error
+	}{
+		{
+			name: "terminated keeps the guard's refusal",
+			row: domain.SessionRecord{
+				ID: "s1", Harness: oneShotTestHarness, Mode: domain.SessionModeTUI,
+				IsTerminated: true,
+				Activity:     domain.Activity{State: domain.ActivityIdle},
+				Metadata:     domain.SessionMetadata{RuntimeHandleID: "h1"},
+			},
+			want: ErrTerminated, notWant: ErrHarnessOneShot,
+		},
+		{
+			name: "exited is still refused as one-shot",
+			row: domain.SessionRecord{
+				ID: "s1", Harness: oneShotTestHarness, Mode: domain.SessionModeTUI,
+				Activity: domain.Activity{State: domain.ActivityExited},
+				Metadata: domain.SessionMetadata{RuntimeHandleID: "h1"},
+			},
+			want: ErrHarnessOneShot, notWant: ErrAgentExited,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			st.sessions["s1"] = pastStartupGate(tc.row)
+			msg := &fakeMessenger{}
+			m := newSendTestManager(t, oneShotAgent{}, msg, st)
+
+			err := m.Send(context.Background(), "s1", "follow-up after the one-shot turn", nil)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("Send error = %v, want %v", err, tc.want)
+			}
+			if errors.Is(err, tc.notWant) {
+				t.Fatalf("Send error = %v, must not be %v", err, tc.notWant)
+			}
+			if len(msg.msgs) != 0 {
+				t.Fatalf("Send calls = %d, want 0", len(msg.msgs))
+			}
+		})
+	}
+}
+
+func TestSend_OneShotHarnessChatModeIsRelayed(t *testing.T) {
+	// The declaration describes the terminal launch only: a chat-driver session
+	// of the same harness is relayed into its conversation and never gated.
+	st := newFakeStore()
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: oneShotTestHarness, Mode: domain.SessionModeChat,
+		Activity: domain.Activity{State: domain.ActivityIdle},
+	}
+	launcher := &recordingLauncher{}
+	msg := &fakeMessenger{}
+	m := New(Deps{
+		Runtime: &fakeRuntime{}, Agents: singleAgent{oneShotAgent{}}, Workspace: &fakeWorkspace{},
+		Store: st, Messenger: msg, Chat: launcher, Lifecycle: &fakeLCM{store: st},
+		LookPath: func(string) (string, error) { return "/bin/true", nil },
+	})
+
+	if err := m.Send(context.Background(), "s1", "relayed from an orchestrator", nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if len(launcher.relayed) != 1 || launcher.relayed[0] != "relayed from an orchestrator" {
+		t.Fatalf("relayed = %v, want the message routed to the conversation", launcher.relayed)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("pane writes = %d, want 0 for a chat session", len(msg.msgs))
+	}
+}
+
+func TestSend_ConversationalHarnessUnaffected(t *testing.T) {
+	// A harness that does not declare terminal messaging keeps today's
+	// paste+Enter delivery: one pane write, no gate error.
+	st := newFakeStore()
+	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessAider, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle},
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "h1"},
+	})
+	msg := &fakeMessenger{}
+	m := newSendTestManager(t, fakeAgent{}, msg, st)
+
+	if err := m.Send(context.Background(), "s1", "follow-up", nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("Send calls = %d, want 1 for a conversational harness", len(msg.msgs))
+	}
+}
+
+func TestSendSemantic_OneShotHarnessRefuses(t *testing.T) {
+	// SendSemantic funnels its TUI delivery through the same send path, so a
+	// one-shot harness is refused there too, before any pane write.
+	st := newFakeStore()
+	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{
+		ID: "s1", Harness: oneShotTestHarness, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle},
+		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch-1", RuntimeHandleID: "h1"},
+	})
+	msg := &fakeMessenger{}
+	m := newSendTestManager(t, oneShotSemanticAgent{}, msg, st)
+
+	err := m.SendSemantic(context.Background(), "s1", "Reports since your previous turn:", "report-batch:abc123")
+	if !errors.Is(err, ErrHarnessOneShot) {
+		t.Fatalf("SendSemantic error = %v, want ErrHarnessOneShot", err)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("pane writes = %d, want 0", len(msg.msgs))
+	}
+}
+
 func TestSend_TUIStartupPendingRejectsDelivery(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["s1"] = domain.SessionRecord{

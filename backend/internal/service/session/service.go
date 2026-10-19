@@ -1428,6 +1428,8 @@ func mapSessionError(err error) error {
 	case errors.Is(err, sessionmanager.ErrAgentExited):
 		return apierr.Conflict("AGENT_EXITED",
 			"The agent process exited; relaunch it before sending another message", nil)
+	case errors.Is(err, sessionmanager.ErrHarnessOneShot):
+		return apierr.Conflict("HARNESS_ONE_SHOT", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrAgentNotExited):
 		return apierr.Conflict("AGENT_NOT_EXITED",
 			"The agent is still running; only exited agents can be resumed", nil)
