@@ -306,6 +306,8 @@ func (d *destinations) lookup(cwd string) (domain.ProjectID, bool) {
 	return best, best != ""
 }
 
+var errManagedByAO = errors.New("this conversation already belongs to an AO session")
+
 func candidateID(harness domain.AgentHarness, root, nativeID string) string {
 	sum := sha256.Sum256([]byte(string(harness) + "\x00" + root + "\x00" + nativeID))
 	return hex.EncodeToString(sum[:])
@@ -388,6 +390,15 @@ func codexSegments(paths []string) []string {
 	return out
 }
 
+// nativeID names the conversation as readTranscript will: Claude's file name,
+// Codex's thread id.
+func (f sourceFiles) nativeID() string {
+	if f.harness == domain.HarnessClaudeCode && len(f.paths) > 0 {
+		return strings.TrimSuffix(filepath.Base(f.paths[0]), ".jsonl")
+	}
+	return f.key
+}
+
 func (f sourceFiles) cacheKey() string {
 	return fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s", f.harness, f.root, f.size, f.modTime.UnixNano(), strings.Join(f.paths, "\x00"))
 }
@@ -441,6 +452,13 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 		group, groupCtx := errgroup.WithContext(ctx)
 		group.SetLimit(max(1, runtime.GOMAXPROCS(0)/2))
 		for i, file := range files {
+			// AO's own sessions are never offered; skip reading their histories.
+			if _, own := managed[file.nativeID()]; own {
+				if _, wasImported := imported[[2]string{root, file.nativeID()}]; !wasImported {
+					results[i] = parsed{err: errManagedByAO}
+					continue
+				}
+			}
 			if cached, ok := s.cache[file.cacheKey()]; ok {
 				results[i] = cached
 				continue

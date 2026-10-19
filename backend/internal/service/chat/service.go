@@ -1979,6 +1979,11 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 	if record.NeedsImportResume() {
 		return s.importedSnapshot(ctx, record, 0, 100)
 	}
+	// An adopted import shows its archive in place of the provider's replay,
+	// which only the paged read assembles.
+	if source := record.Metadata.ImportSource; source != nil && source.HistoryThrough > 0 && s.pageReader != nil {
+		return s.SnapshotPage(ctx, id, 0, 0)
+	}
 
 	conversation, err := s.store.ConversationForSession(ctx, id)
 	if errors.Is(err, domain.ErrNoConversation) {

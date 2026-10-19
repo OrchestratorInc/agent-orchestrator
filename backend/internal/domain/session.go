@@ -161,6 +161,13 @@ const (
 	ArtifactVersionSourceUser ArtifactVersionSource = "user"
 )
 
+// ImportedMessage is one visible message read from a provider's native history.
+type ImportedMessage struct {
+	Role MessageRole
+	Text string
+	At   time.Time
+}
+
 // SessionImportSource keeps provider provenance and durable workspace adoption facts.
 // Importing does not grant AO ownership of the source working directory.
 type SessionImportSource struct {

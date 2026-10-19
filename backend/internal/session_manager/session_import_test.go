@@ -494,7 +494,33 @@ func TestImportedConfigEnvKeepsDefaultProviderLogin(t *testing.T) {
 	if value, set := env["CLAUDE_CONFIG_DIR"]; set {
 		t.Fatalf("default provider home was forced: %q", value)
 	}
+	// An AO account folder links the computer's history, so the conversation is
+	// reachable there and the account's login stays.
+	source := filepath.Join(home, "source-home")
+	transcript := filepath.Join(source, "projects", "-work", "native.jsonl")
+	account := filepath.Join(home, "account-home")
+	if err := os.MkdirAll(filepath.Dir(transcript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(transcript, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(account, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(source, "projects"), filepath.Join(account, "projects")); err != nil {
+		t.Fatal(err)
+	}
+	rec.Metadata.ImportSource.ConfigDir = source
+	rec.Metadata.NativeTranscriptPath = transcript
+	env = map[string]string{"CLAUDE_CONFIG_DIR": account, "CLAUDE_SECURESTORAGE_CONFIG_DIR": account}
+	m.applyImportedConfigEnv(context.Background(), rec, env)
+	if env["CLAUDE_CONFIG_DIR"] != account {
+		t.Fatalf("account folder replaced: %v", env)
+	}
+	// A home that cannot reach the conversation is pointed at its source.
 	rec.Metadata.ImportSource.ConfigDir = "/other-provider-home"
+	rec.Metadata.NativeTranscriptPath = "/other-provider-home/projects/-elsewhere/native.jsonl"
 	m.applyImportedConfigEnv(context.Background(), rec, env)
 	if env["CLAUDE_CONFIG_DIR"] != "/other-provider-home" {
 		t.Fatalf("env = %v", env)
@@ -685,5 +711,49 @@ func TestImportedWorkspaceFromRootCloneStartsChildrenFromRegisteredCheckouts(t *
 	}
 	if _, err := os.Lstat(filepath.Join(target, "registered-edit")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("the registered child's own edits were copied into the session")
+	}
+}
+
+// A retry starts from the source as it is now: an untracked file an earlier
+// attempt copied, and the source has since deleted, does not stay behind.
+func TestImportRetryDropsFilesTheSourceNoLongerHas(t *testing.T) {
+	root := t.TempDir()
+	source, destination := filepath.Join(root, "source"), filepath.Join(root, "ao")
+	git := func(path string, args ...string) {
+		t.Helper()
+		if out, err := exec.Command("git", append([]string{"-C", path}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	git(source, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(source, "tracked"), []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git(source, "add", ".")
+	git(source, "-c", "user.name=AO test", "-c", "user.email=test@example.invalid", "commit", "-m", "base")
+	git(source, "worktree", "add", "-b", "ao-import", destination, "HEAD")
+	if err := os.WriteFile(filepath.Join(source, "notes"), []byte("draft\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyImportedWorkspace(context.Background(), source, destination, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, "setup-output"), []byte("made by setup\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(source, "notes")); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyImportedWorkspace(context.Background(), source, destination, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(destination, "notes")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("a file the source deleted stayed from the earlier attempt")
+	}
+	if _, err := os.Lstat(filepath.Join(destination, "setup-output")); err != nil {
+		t.Fatalf("a file the earlier attempt did not copy was removed: %v", err)
 	}
 }

@@ -99,15 +99,8 @@ func findCodexTranscript(ctx context.Context, root, sessionID string) (string, b
 // codexRolloutStored also accepts the forms Codex stores a resumable thread in:
 // an inactive rollout compressed to .jsonl.zst, and `<thread>_<segment>` files.
 func codexRolloutStored(name, id string) bool {
-	name = strings.TrimSuffix(name, ".zst")
-	if !strings.HasSuffix(name, ".jsonl") {
-		return false
-	}
-	name = strings.TrimSuffix(name, ".jsonl")
-	if before, _, ok := strings.Cut(name, "-"+id+"_"); ok && before != "" {
-		return true
-	}
-	return strings.HasSuffix(name, "-"+id)
+	thread := nativeconfig.CodexRolloutThread(name)
+	return thread != "" && strings.EqualFold(thread, id)
 }
 
 func findCodexRollout(ctx context.Context, root, sessionID string, match func(name, id string) bool) (string, bool, error) {

@@ -64,9 +64,11 @@ func (m *Manager) importReplayedThrough(ctx context.Context, id domain.SessionID
 var ErrSessionOpenElsewhere = errors.New("this is open elsewhere; close it there to continue here")
 
 // applyImportedConfigEnv points a launch at the provider home that owns the
-// imported conversation. It leaves a launch alone when it already resolves
-// there: Claude Code keys its keychain login by CLAUDE_CONFIG_DIR, so setting
-// even the default path logs a keychain user out.
+// imported conversation. It leaves a launch alone when that home already holds
+// the conversation: Claude Code keys its keychain login by CLAUDE_CONFIG_DIR, so
+// setting even the default path logs a keychain user out, and an AO account's
+// folder links the computer's history, so replacing it would run the chat
+// under another login than the session's account.
 func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.SessionRecord, env map[string]string) {
 	source := rec.Metadata.ImportSource
 	if source == nil || rec.Metadata.ProviderConversationID != source.NativeID {
@@ -78,12 +80,19 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 	}
 	if agent, ok := m.agents.Agent(rec.Harness); ok {
 		if provider, ok := agent.(ports.AgentNativeSessionConfigProvider); ok {
-			if current, err := provider.NativeSessionConfigDir(ctx, env); err == nil && sameDirectory(current, source.ConfigDir) {
-				return
+			if current, err := provider.NativeSessionConfigDir(ctx, env); err == nil {
+				if sameDirectory(current, source.ConfigDir) {
+					return
+				}
+				if rel, err := filepath.Rel(source.ConfigDir, rec.Metadata.NativeTranscriptPath); err == nil && filepath.IsLocal(rel) {
+					if _, err := os.Stat(filepath.Join(current, rel)); err == nil {
+						return
+					}
+				}
 			}
 		}
 	}
-	env[key] = source.ConfigDir
+	setProtectedEnv(env, key, source.ConfigDir, envKeysCaseInsensitive)
 }
 
 func sameDirectory(a, b string) bool {
@@ -380,19 +389,27 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 			}
 		}
 		if copyFrom != "" {
-			cwd := source.CWD
-			if physical, err := filepath.EvalSymlinks(cwd); err == nil {
-				cwd = physical
+			// Compare physical paths: a project registered under a symlink, such
+			// as /tmp on macOS, still contains the conversation's folder.
+			physical := func(path string) string {
+				if resolved, err := filepath.EvalSymlinks(path); err == nil {
+					return resolved
+				}
+				return path
 			}
+			base, cwd := physical(copyFrom), physical(source.CWD)
 			for rel, nativePath := range overrides {
-				if nativePath != "" && pathWithin(nativePath, cwd) {
+				if nativePath == "" {
+					continue
+				}
+				if nativePath = physical(nativePath); pathWithin(nativePath, cwd) {
 					subdir, _ := filepath.Rel(nativePath, cwd)
-					cwd = filepath.Join(copyFrom, rel, subdir)
+					cwd = filepath.Join(base, rel, subdir)
 					break
 				}
 			}
-			if pathWithin(copyFrom, cwd) {
-				next.WorkingSubdir, _ = filepath.Rel(copyFrom, cwd)
+			if pathWithin(base, cwd) {
+				next.WorkingSubdir, _ = filepath.Rel(base, cwd)
 				if next.WorkingSubdir == "." {
 					next.WorkingSubdir = ""
 				}
@@ -528,6 +545,42 @@ func importFacts(ctx context.Context, root *os.Root, paths []string) (map[string
 		}
 	}
 	return facts, nil
+}
+
+// clearEarlierImportCopy removes what an earlier, failed copy left that the
+// source no longer shows. The reset restored tracked files; untracked ones stay
+// unless removed here. Only paths that attempt recorded are touched, so setup
+// output and nested repositories are left alone. The record lives in the
+// worktree's own Git folder and is replaced by this attempt's paths.
+func clearEarlierImportCopy(ctx context.Context, target string, dst *os.Root, changed []string) error {
+	gitDir, err := importGit(ctx, target, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return err
+	}
+	record := filepath.Join(strings.TrimSpace(string(gitDir)), "ao-import-copied")
+	if previous, err := os.ReadFile(record); err == nil {
+		earlier := map[string]bool{}
+		for _, path := range strings.Split(string(previous), "\x00") {
+			earlier[path] = path != ""
+		}
+		for _, path := range changed {
+			delete(earlier, path)
+		}
+		untracked, err := importGit(ctx, target, "ls-files", "-z", "--others", "--exclude-standard")
+		if err != nil {
+			return err
+		}
+		for _, path := range strings.Split(string(untracked), "\x00") {
+			if path = filepath.FromSlash(path); earlier[path] {
+				if err := dst.RemoveAll(path); err != nil {
+					return err
+				}
+			}
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.WriteFile(record, []byte(strings.Join(changed, "\x00")), 0o600)
 }
 
 func importGitPaths(root string) ([]string, error) {
@@ -692,6 +745,11 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 		dst, err := os.OpenRoot(filepath.Join(destination, state.rel))
 		if err != nil {
 			_ = src.Close()
+			return err
+		}
+		if err := clearEarlierImportCopy(ctx, filepath.Join(destination, state.rel), dst, state.changed); err != nil {
+			_ = src.Close()
+			_ = dst.Close()
 			return err
 		}
 		// Deletions first, then parents before children, so a file and a folder

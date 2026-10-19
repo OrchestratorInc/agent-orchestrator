@@ -278,3 +278,26 @@ func TestImportOutOfTimeReportsEveryRow(t *testing.T) {
 		t.Fatalf("results = %+v, err = %v, created %d", results, err, len(st.sessions))
 	}
 }
+
+// AO's own sessions are skipped before their histories are read; imported
+// ones are still listed as already in AO.
+func TestScanSkipsHistoriesAOStarted(t *testing.T) {
+	root := t.TempDir()
+	own, imported := "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"
+	writeClaude(t, root, own, "", "started in AO", time.Now())
+	writeClaude(t, root, imported, "", "imported earlier", time.Now())
+	native := domain.SessionRecord{ID: "standalone-1", Harness: domain.HarnessClaudeCode}
+	native.Metadata.ProviderConversationID = own
+	adopted := domain.SessionRecord{ID: "standalone-2", Harness: domain.HarnessClaudeCode}
+	adopted.Metadata.ProviderConversationID = imported
+	adopted.Metadata.ImportSource = &domain.SessionImportSource{NativeID: imported, ConfigDir: canonical(root)}
+	svc := New(&importStore{sessions: []domain.SessionRecord{native, adopted}}, "")
+	svc.roots = map[domain.AgentHarness]string{domain.HarnessClaudeCode: root}
+	preview, err := svc.Scan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.Candidates) != 1 || preview.Candidates[0].Title != "imported earlier" || preview.Candidates[0].SessionID != "standalone-2" {
+		t.Fatalf("candidates = %+v", preview.Candidates)
+	}
+}

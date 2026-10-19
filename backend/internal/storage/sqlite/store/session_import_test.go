@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
@@ -25,9 +24,9 @@ func TestImportedSessionArchiveIsAtomicAndPaged(t *testing.T) {
 	rec.Activity.State = domain.ActivityIdle
 	rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "native-1", ConfigDir: "/provider/home", CWD: "/original/folder"}
 	rec.Metadata.ProviderConversationID = "native-1"
-	messages := make([]sessionimport.Message, 205)
+	messages := make([]domain.ImportedMessage, 205)
 	for i := range messages {
-		messages[i] = sessionimport.Message{Role: domain.MessageRoleUser, Text: fmt.Sprintf("message-%d", i+1), At: time.Now()}
+		messages[i] = domain.ImportedMessage{Role: domain.MessageRoleUser, Text: fmt.Sprintf("message-%d", i+1), At: time.Now()}
 	}
 	imported, fresh, err := s.CreateImportedSession(ctx, rec, messages)
 	if err != nil || !fresh {
@@ -50,7 +49,7 @@ func TestImportedSessionArchiveIsAtomicAndPaged(t *testing.T) {
 		t.Fatalf("first page: %v %v", page, err)
 	}
 	rec.Metadata.ImportSource.NativeID = "bad-import"
-	if _, _, err := s.CreateImportedSession(ctx, rec, []sessionimport.Message{{Role: "tool", Text: "invalid", At: time.Now()}}); err == nil {
+	if _, _, err := s.CreateImportedSession(ctx, rec, []domain.ImportedMessage{{Role: "tool", Text: "invalid", At: time.Now()}}); err == nil {
 		t.Fatal("invalid archive accepted")
 	}
 	all, err := s.ListAllSessions(ctx)
@@ -64,7 +63,7 @@ func TestImportedWorkspacePublicationKeepsConcurrentSessionEdits(t *testing.T) {
 	s := newTestStore(t)
 	rec := domain.SessionRecord{ProjectID: "", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}, CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "native", ConfigDir: "/codex"}
-	created, _, err := s.CreateImportedSession(ctx, rec, []sessionimport.Message{{Role: domain.MessageRoleUser, Text: "hello", At: time.Now()}})
+	created, _, err := s.CreateImportedSession(ctx, rec, []domain.ImportedMessage{{Role: domain.MessageRoleUser, Text: "hello", At: time.Now()}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,8 +108,8 @@ func TestImportedConversationFollowsArchive(t *testing.T) {
 	rec.Mode = domain.SessionModeChat
 	rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "native-1", ConfigDir: "/provider/home"}
 	rec.Metadata.ProviderConversationID = "native-1"
-	message := func(text string) sessionimport.Message {
-		return sessionimport.Message{Role: domain.MessageRoleUser, Text: text, At: time.Now()}
+	message := func(text string) domain.ImportedMessage {
+		return domain.ImportedMessage{Role: domain.MessageRoleUser, Text: text, At: time.Now()}
 	}
 	archive := func(want ...string) {
 		t.Helper()
@@ -124,12 +123,12 @@ func TestImportedConversationFollowsArchive(t *testing.T) {
 			}
 		}
 	}
-	imported, _, err := s.CreateImportedSession(ctx, rec, []sessionimport.Message{message("one"), message("two")})
+	imported, _, err := s.CreateImportedSession(ctx, rec, []domain.ImportedMessage{message("one"), message("two")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	rec.ID = imported.ID
-	if err := s.ReplaceImportedMessages(ctx, imported.ID, []sessionimport.Message{message("one"), message("two"), message("three")}); err != nil {
+	if err := s.ReplaceImportedMessages(ctx, imported.ID, []domain.ImportedMessage{message("one"), message("two"), message("three")}); err != nil {
 		t.Fatal(err)
 	}
 	conversation, err := s.OpenNativeConversation(ctx, "conv-hist", domain.ConversationScopeSession, "hist", imported.ID, time.Now())
@@ -138,7 +137,7 @@ func TestImportedConversationFollowsArchive(t *testing.T) {
 	}
 	// The first open failed after creating the conversation; turns made
 	// elsewhere since then still reach the archive, and the counter follows it.
-	if err := s.ReplaceImportedMessages(ctx, imported.ID, []sessionimport.Message{message("one"), message("two"), message("three"), message("four")}); err != nil {
+	if err := s.ReplaceImportedMessages(ctx, imported.ID, []domain.ImportedMessage{message("one"), message("two"), message("three"), message("four")}); err != nil {
 		t.Fatal(err)
 	}
 	archive("one", "two", "three", "four")
@@ -149,7 +148,7 @@ func TestImportedConversationFollowsArchive(t *testing.T) {
 	if _, err := db.Exec(`UPDATE conversations SET latest_sequence = latest_sequence + 1 WHERE id = ?`, "conv-hist"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.ReplaceImportedMessages(ctx, imported.ID, []sessionimport.Message{message("late")}); err != nil {
+	if err := s.ReplaceImportedMessages(ctx, imported.ID, []domain.ImportedMessage{message("late")}); err != nil {
 		t.Fatal(err)
 	}
 	archive("one", "two", "three", "four")
@@ -168,7 +167,7 @@ func TestImportFactsSurviveOlderSessionWrites(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	rec := domain.SessionRecord{Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}, CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "native", ConfigDir: "/codex"}
-	created, _, err := s.CreateImportedSession(ctx, rec, []sessionimport.Message{{Role: domain.MessageRoleUser, Text: "hello", At: time.Now()}})
+	created, _, err := s.CreateImportedSession(ctx, rec, []domain.ImportedMessage{{Role: domain.MessageRoleUser, Text: "hello", At: time.Now()}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +207,7 @@ func TestImportFactsSurviveOlderSessionWrites(t *testing.T) {
 	if err := s.UpdateSession(ctx, got); err != nil {
 		t.Fatal(err)
 	}
-	again, fresh, err := s.CreateImportedSession(ctx, rec, []sessionimport.Message{{Role: domain.MessageRoleUser, Text: "hello", At: time.Now()}})
+	again, fresh, err := s.CreateImportedSession(ctx, rec, []domain.ImportedMessage{{Role: domain.MessageRoleUser, Text: "hello", At: time.Now()}})
 	if err != nil || fresh || again.ID != created.ID {
 		t.Fatalf("switched session imported again: %v %v %v", again.ID, fresh, err)
 	}

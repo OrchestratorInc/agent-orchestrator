@@ -40,8 +40,9 @@ func (q *Queries) DeleteSessionImportMessages(ctx context.Context, sessionID str
 
 const findImportedSession = `-- name: FindImportedSession :one
 SELECT id FROM sessions
-WHERE json_extract(NULLIF(import_source, ''), '$.configDir') = CAST(?1 AS TEXT)
-  AND json_extract(NULLIF(import_source, ''), '$.nativeId') = CAST(?2 AS TEXT)
+WHERE import_source <> ''
+  AND CAST(json_extract(NULLIF(import_source, ''), '$.configDir') AS TEXT) = CAST(?1 AS TEXT)
+  AND CAST(json_extract(NULLIF(import_source, ''), '$.nativeId') AS TEXT) = CAST(?2 AS TEXT)
 LIMIT 1
 `
 
@@ -50,6 +51,7 @@ type FindImportedSessionParams struct {
 	NativeID  string
 }
 
+// Matches the sessions_import_identity expressions, so this is an index search.
 func (q *Queries) FindImportedSession(ctx context.Context, arg FindImportedSessionParams) (domain.SessionID, error) {
 	row := q.db.QueryRowContext(ctx, findImportedSession, arg.ConfigDir, arg.NativeID)
 	var id domain.SessionID
@@ -92,6 +94,40 @@ func (q *Queries) InsertSessionImportMessage(ctx context.Context, arg InsertSess
 		arg.CreatedAt,
 	)
 	return err
+}
+
+const listSessionImportArchive = `-- name: ListSessionImportArchive :many
+SELECT role, text, created_at FROM session_import_messages
+WHERE session_id = ?1 ORDER BY sequence
+`
+
+type ListSessionImportArchiveRow struct {
+	Role      string
+	Text      string
+	CreatedAt time.Time
+}
+
+func (q *Queries) ListSessionImportArchive(ctx context.Context, sessionID string) ([]ListSessionImportArchiveRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionImportArchive, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSessionImportArchiveRow{}
+	for rows.Next() {
+		var i ListSessionImportArchiveRow
+		if err := rows.Scan(&i.Role, &i.Text, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listSessionImportMessages = `-- name: ListSessionImportMessages :many

@@ -17,6 +17,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -36,18 +37,12 @@ var (
 	// Claude text held while the active branch is still unknown, across all branches.
 	maxClaudeHeld   = 2 * maxVisibleBytes
 	nativeIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-	// Codex rollouts may be zstd-compressed and split into `<thread>_<segment>` files.
-	codexRolloutName = regexp.MustCompile(`^rollout-.*-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:_[0-9a-fA-F-]{36})?\.jsonl(?:\.zst)?$`)
 	// Codex injects these as separate user-role items; they are not prompts.
 	codexContextPrefixes = []string{"# AGENTS.md instructions", "<environment_context", "<user_instructions", "<INSTRUCTIONS>", "<external_codex_apps_open_page", "<recommended_plugins", "<skill>", "<codex_internal_context", "<turn_aborted"}
 )
 
 // Message is the readable archive; tool payloads and provider internal state are not display messages.
-type Message struct {
-	Role domain.MessageRole
-	Text string
-	At   time.Time
-}
+type Message = domain.ImportedMessage
 
 type transcript struct {
 	harness                   domain.AgentHarness
@@ -177,10 +172,7 @@ func claudePrompt(text string) (string, bool) {
 
 // codexThreadID is the rollout's own identity; copied fork ancestry never replaces it.
 func codexThreadID(path string) string {
-	if m := codexRolloutName.FindStringSubmatch(filepath.Base(path)); m != nil {
-		return strings.ToLower(m[1])
-	}
-	return ""
+	return nativeconfig.CodexRolloutThread(path)
 }
 
 // eachRecord streams JSONL. A record too large to decode is rewritten as it

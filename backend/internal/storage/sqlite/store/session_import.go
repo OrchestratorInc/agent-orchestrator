@@ -10,12 +10,11 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
 // CreateImportedSession registers identity and its archive in one transaction. A retry returns the original row.
-func (s *Store) CreateImportedSession(ctx context.Context, rec domain.SessionRecord, messages []sessionimport.Message) (domain.SessionRecord, bool, error) {
+func (s *Store) CreateImportedSession(ctx context.Context, rec domain.SessionRecord, messages []domain.ImportedMessage) (domain.SessionRecord, bool, error) {
 	source := rec.Metadata.ImportSource
 	if source == nil || source.NativeID == "" || source.ConfigDir == "" || len(messages) == 0 {
 		return rec, false, errors.New("readable native history is required")
@@ -55,7 +54,7 @@ func (s *Store) CreateImportedSession(ctx context.Context, rec domain.SessionRec
 // session's conversation holds a row of its own; from then on live rows follow
 // the archive. A first open that failed leaves only a conversation whose
 // counter still ends at the archive, and that counter moves with the refresh.
-func (s *Store) ReplaceImportedMessages(ctx context.Context, id domain.SessionID, messages []sessionimport.Message) error {
+func (s *Store) ReplaceImportedMessages(ctx context.Context, id domain.SessionID, messages []domain.ImportedMessage) error {
 	if len(messages) == 0 {
 		return errors.New("readable native history is required")
 	}
@@ -76,6 +75,16 @@ func (s *Store) ReplaceImportedMessages(ctx context.Context, id domain.SessionID
 				return nil
 			}
 		}
+		// Every open of a pending import refreshes; an unchanged read writes nothing.
+		stored, err := q.ListSessionImportArchive(ctx, string(id))
+		if err != nil {
+			return err
+		}
+		if slices.EqualFunc(stored, messages, func(row gen.ListSessionImportArchiveRow, msg domain.ImportedMessage) bool {
+			return row.Role == string(msg.Role) && row.Text == msg.Text && row.CreatedAt.Equal(msg.At)
+		}) {
+			return nil
+		}
 		if err := q.DeleteSessionImportMessages(ctx, string(id)); err != nil {
 			return err
 		}
@@ -94,9 +103,11 @@ func (s *Store) ReplaceImportedMessages(ctx context.Context, id domain.SessionID
 
 // LoadSessionImportMessages pages the archive. It remains after native adoption.
 func (s *Store) LoadSessionImportMessages(ctx context.Context, id domain.SessionID, before, limit int64) ([]domain.ConversationMessage, bool, error) {
-	if limit <= 0 || limit > 200 {
+	// The conversation route accepts up to 500 per page; the archive pages alike.
+	if limit <= 0 {
 		limit = 100
 	}
+	limit = min(limit, 500)
 	if before == 0 {
 		before = math.MaxInt64
 	}
