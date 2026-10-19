@@ -34,6 +34,7 @@ import { useUiStore } from "../stores/ui-store";
 import { aoBridge } from "../lib/bridge";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
+import { resetSessionPreviewWarmth } from "../hooks/useSessionPreviewHover";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
 
 type DragOverTestEvent = {
@@ -2895,6 +2896,133 @@ describe("Sidebar", () => {
 		// Needs attention without waiting on input keeps its orange-red dot.
 		expect(marker("ci task")).not.toHaveAttribute("data-needs-input");
 		expect(marker("ci task")).toHaveClass("rounded-full", "bg-status-needs-you");
+	});
+
+	it("previews the board card to the right of a hovered session row", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [
+						{
+							...session,
+							id: "proj-1-preview",
+							title: "preview task",
+							status: "needs_input",
+							displayStatus: "Blocked",
+							kanbanColumn: "building",
+							activity: { state: "waiting_input", lastActivityAt: "2026-06-30T00:00:00Z" },
+						},
+					],
+				},
+			],
+		});
+
+		resetSessionPreviewWarmth();
+		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
+		await user.hover(screen.getByLabelText("Open preview task"));
+		// The first preview waits out a short hover before it opens.
+		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
+
+		const card = await screen.findByTestId("board-session-card");
+		expect(card).toHaveTextContent("preview task");
+		expect(within(card).getByTestId("session-status")).toHaveTextContent("Blocked");
+		// Static: attention styling without the pulse, and no card-level click target.
+		expect(card).not.toHaveClass("animate-attention-card-pulse");
+		expect(card).not.toHaveClass("cursor-pointer");
+		// The first preview fades in; it never zooms, and closing is instant.
+		const content = card.closest('[data-slot="hover-card-content"]');
+		expect(content).not.toBeNull();
+		expect(content?.className).toMatch(/animate-in/);
+		expect(content?.className).not.toMatch(/zoom-|animate-out/);
+
+		await user.unhover(screen.getByLabelText("Open preview task"));
+		await waitFor(() => expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument());
+	});
+
+	it("replaces the preview straight away when the pointer moves to another row", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [
+						{ ...session, id: "proj-1-first", title: "first task", status: "working" },
+						{ ...session, id: "proj-1-second", title: "second task", status: "idle" },
+					],
+				},
+			],
+		});
+
+		resetSessionPreviewWarmth();
+		await user.hover(screen.getByLabelText("Open first task"));
+		expect(await screen.findByTestId("board-session-card")).toHaveTextContent("first task");
+
+		// Well inside the first-open delay: only a warm preview can appear this fast.
+		await user.hover(screen.getByLabelText("Open second task"));
+		await waitFor(
+			() => {
+				const cards = screen.getAllByTestId("board-session-card");
+				expect(cards).toHaveLength(1);
+				expect(cards[0]).toHaveTextContent("second task");
+			},
+			{ timeout: 150 },
+		);
+		const content = screen.getByTestId("board-session-card").closest('[data-slot="hover-card-content"]');
+		expect(content?.className).not.toMatch(/animate-|zoom-|fade-|slide-/);
+	});
+
+	it("shows only the last row's preview after a quick sweep across cold rows", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [
+						{ ...session, id: "proj-1-a", title: "sweep a", status: "working" },
+						{ ...session, id: "proj-1-b", title: "sweep b", status: "idle" },
+						{ ...session, id: "proj-1-c", title: "sweep c", status: "idle" },
+					],
+				},
+			],
+		});
+
+		resetSessionPreviewWarmth();
+		// All three hovers land inside the first-open delay, so none has opened yet.
+		await user.hover(screen.getByLabelText("Open sweep a"));
+		await user.hover(screen.getByLabelText("Open sweep b"));
+		await user.hover(screen.getByLabelText("Open sweep c"));
+
+		const card = await screen.findByTestId("board-session-card");
+		expect(card).toHaveTextContent("sweep c");
+		// Past every row's delay: nothing from the rows swept over may open late.
+		await new Promise((resolve) => setTimeout(resolve, 600));
+		const cards = screen.getAllByTestId("board-session-card");
+		expect(cards).toHaveLength(1);
+		expect(cards[0]).toHaveTextContent("sweep c");
+	});
+
+	it("goes back to a delayed, animated first preview after the pointer has left every row", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				{ ...workspace, sessions: [{ ...session, id: "proj-1-cool", title: "cool task", status: "working" }] },
+			],
+		});
+
+		resetSessionPreviewWarmth();
+		const row = screen.getByLabelText("Open cool task");
+		await user.hover(row);
+		await screen.findByTestId("board-session-card");
+		await user.unhover(row);
+		await waitFor(() => expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument());
+
+		await new Promise((resolve) => setTimeout(resolve, 400));
+		await user.hover(row);
+		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
+		const card = await screen.findByTestId("board-session-card");
+		expect(card.closest('[data-slot="hover-card-content"]')?.className).toMatch(/animate-in/);
 	});
 
 	it("lists sessions that need input above the rest", () => {

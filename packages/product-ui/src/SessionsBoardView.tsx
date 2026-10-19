@@ -249,6 +249,8 @@ export type SessionCardViewProps = {
 	overlay?: ReactNode;
 	prs?: BoardPullRequestPresentation[];
 	renderAvatar: (provider: string) => ReactNode;
+	/** A static rendering of the card (a hover preview): no attention pulse. */
+	still?: boolean;
 	renderUsage?: (usage: BoardUsagePresentation) => ReactNode;
 	/** Live cost on the machine (memory, CPU while working), shown before
 	 * token usage. Grey unless this card is part of the fix for a tight machine. */
@@ -279,6 +281,7 @@ export function SessionCardView({
 	resource,
 	session,
 	tag,
+	still = false,
 	translate,
 	usage,
 }: SessionCardViewProps) {
@@ -337,14 +340,17 @@ export function SessionCardView({
 	return (
 		<div
 			onClick={interactive ? onOpen : undefined}
-			role={interactive ? undefined : "listitem"}
+			role={interactive || still ? undefined : "listitem"}
 			className={cn(
 				"group relative w-full rounded-lg border border-border text-left transition-[background-color,box-shadow,transform] duration-[120ms] ease-out",
 				badge.cardClassName ?? "border-border bg-surface",
 				interactive &&
 					"cursor-pointer hover:bg-interactive-hover focus-within:bg-interactive-hover active:scale-[0.99] has-[button:active]:scale-100 has-[a:active]:scale-100",
 				needsAttention &&
-					"animate-attention-card-pulse border-status-needs-you bg-[color-mix(in_srgb,var(--color-status-needs-you)_8%,var(--color-surface))]",
+					cn(
+						"border-status-needs-you bg-[color-mix(in_srgb,var(--color-status-needs-you)_8%,var(--color-surface))]",
+						!still && "animate-attention-card-pulse",
+					),
 			)}
 			data-testid="board-session-card"
 			data-session-id={session.id}
