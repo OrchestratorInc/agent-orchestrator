@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HarnessUpdateNotice } from "./HarnessUpdateNotice";
+import { HarnessUpdateNotice, noticePlacement } from "./HarnessUpdateNotice";
 import { apiClient } from "../lib/api-client";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { appI18n } from "../i18n";
@@ -70,40 +70,54 @@ describe("startup harness update notice", () => {
 	});
 	afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-	it("keeps the notice above native browser pages", async () => {
+	it("never raises the native shell, which would block the live browser page", async () => {
 		mountNotice();
 		const notice = await screen.findByRole("region", { name: "Agent updates available" });
-		expect(notice).toHaveAttribute("data-browser-native-overlay", "true");
-		expect(notice).toHaveAttribute("data-state", "open");
+		expect(notice).not.toHaveAttribute("data-browser-native-overlay");
 		expect(notice).toHaveClass("fixed", "right-4");
 	});
 
-	it("stays pinned while the browser inspector opens, resizes, maximizes and closes", async () => {
+	it("keeps the app corner, hides for browser overlap, and returns after the inspector closes", async () => {
+		vi.spyOn(document.documentElement, "clientWidth", "get").mockReturnValue(1280);
+		let browserRect = new DOMRect();
+		const originalRect = HTMLElement.prototype.getBoundingClientRect;
+		vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+			if (this.classList.contains("harness-update-notice")) return new DOMRect(964, 72, 300, 200);
+			if (this.classList.contains("workspace-topbar-container")) return new DOMRect(0, 0, 1280, 60);
+			if (this.classList.contains("browser-panel__viewport")) return browserRect;
+			return originalRect.call(this);
+		});
+		const topbar = document.createElement("div");
+		topbar.className = "workspace-topbar-container";
+		document.body.append(topbar);
 		mountNotice();
-		const notice = await screen.findByRole("region", { name: "Agent updates available" });
+		await screen.findByRole("region", { name: "Agent updates available" });
 		const browser = document.createElement("div");
 		browser.className = "browser-panel";
 		browser.dataset.browserNativePage = "live";
 		const viewport = document.createElement("div");
 		viewport.className = "browser-panel__viewport";
 		browser.append(viewport);
-		const rect = vi.spyOn(viewport, "getBoundingClientRect");
 		try {
-			for (const left of [820, 600, 0]) {
-				rect.mockReturnValue({ left, top: 40, right: 1280, bottom: 800, width: 1280 - left, height: 760 } as DOMRect);
+			for (const [left, top, visible] of [[820, 400, true], [820, 100, false], [600, 400, true], [0, 40, false]] as const) {
+				browserRect = new DOMRect(left, top, 1280 - left, 800 - top);
 				await act(async () => {
 					document.body.append(browser);
 					window.dispatchEvent(new Event("resize"));
 					await new Promise((resolve) => requestAnimationFrame(resolve));
 				});
-				expect(screen.getByRole("region", { name: "Agent updates available" })).toBe(notice);
-				expect(notice).toHaveClass("fixed", "right-4");
-				expect(notice.style.right).toBe("");
+				await waitFor(() => {
+					const notice = screen.queryByRole("region", { name: "Agent updates available" });
+					if (!visible) { expect(notice).toBeNull(); return; }
+					expect(notice, `browser left=${left}, top=${top}`).toHaveClass("fixed", "right-4");
+					expect(notice).not.toHaveAttribute("data-browser-native-overlay");
+				});
 			}
 			await act(async () => { browser.remove(); });
-			expect(notice).toHaveClass("fixed", "right-4");
+			await waitFor(() => expect(screen.getByRole("region", { name: "Agent updates available" })).toHaveClass("fixed", "right-4"));
 		} finally {
 			browser.remove();
+			topbar.remove();
 		}
 	});
 
@@ -609,5 +623,30 @@ describe("harness updates while sessions run", () => {
 		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
 		await waitFor(() => expect(installs).toHaveLength(1));
 		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+});
+
+describe("noticePlacement", () => {
+	const place = (browser: Parameters<typeof noticePlacement>[0], top = 72, height = 200, width = 1280) => noticePlacement(browser, top, height, width);
+
+	it("always uses the app edge when no live page overlaps", () => {
+		expect(place(null)).toEqual({ right: 16 });
+		expect(place({ left: 200, top: 60, right: 700, bottom: 800 })).toEqual({ right: 16 });
+		expect(place({ left: 820, top: 400, right: 1280, bottom: 800 })).toEqual({ right: 16 });
+	});
+
+	it.each([820, 600, 300, 0])("hides instead of moving sideways when the page starts at %ipx", (left) => {
+		expect(place({ left, top: 100, right: 1280, bottom: 800 })).toBe("hidden");
+	});
+
+	it("hides when expanding the stack reaches the browser page", () => {
+		const browser = { left: 820, top: 400, right: 1280, bottom: 800 };
+		expect(place(browser)).toEqual({ right: 16 });
+		expect(place(browser, 72, 500)).toBe("hidden");
+	});
+
+	it("keeps the corner above the page but hides overlap in a narrow window", () => {
+		expect(place(null, 72, 200, 280)).toEqual({ right: 16 });
+		expect(place({ left: 0, top: 100, right: 280, bottom: 800 }, 72, 200, 280)).toBe("hidden");
 	});
 });
