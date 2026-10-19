@@ -2,10 +2,11 @@ package minimaxcode
 
 import (
 	"context"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func TestChatProfileRefreshPreservesNativeHistoryAndSource(t *testing.T) {
