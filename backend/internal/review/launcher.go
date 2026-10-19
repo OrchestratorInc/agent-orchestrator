@@ -562,6 +562,15 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 		workingDirectory = spec.WorkspacePath
 	}
 	env := l.runtimeEnv(ctx, spec, cmd.Argv, cmd.Env)
+	// Reviewer harnesses place their system prompt in argv too (Cline reads
+	// it into `-s`), so a Windows npm shim must be rewritten here just like
+	// worker launches: otherwise the reviewer runs through cmd.exe and dies
+	// on the same command-line limit (issue #6207). Both the initial and the
+	// restore command funnel through this function. runtimeEnv already
+	// augmented PATH for the original argv, so the resolver searches the
+	// child PATH the shim itself would have seen. The rewrite applies to the
+	// reviewer argv itself; the supervisor wrapper below stays outermost.
+	cmd.Argv = agentlaunch.ResolveWindowsShimArgvWithEnv(cmd.Argv, env, exec.LookPath)
 	argv := cmd.Argv
 	if strings.TrimSpace(spec.LaunchID) != "" {
 		executable, resolveErr := l.executable()

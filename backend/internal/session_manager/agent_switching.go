@@ -1452,7 +1452,7 @@ func (m *Manager) prepareTargetActivation(ctx context.Context, store ports.Agent
 	if err := m.validateAgentBinary(argv); err != nil {
 		return preparedTargetActivation{}, err
 	}
-	m.augmentRuntimePATHForLaunchBinary(ctx, env, argv)
+	argv = m.prepareLaunchArgv(ctx, env, argv)
 	argv, rawLaunchID, err := m.superviseAgentProcessForSwitch(agent, rec.ID, env, argv)
 	if err != nil {
 		return preparedTargetActivation{}, fmt.Errorf("supervisor: %w", err)
@@ -1594,7 +1594,7 @@ func (m *Manager) prepareTargetLaunchPrompt(ctx context.Context, rec domain.Sess
 	if err := m.validateAgentBinary(raw); err != nil {
 		return err
 	}
-	m.augmentRuntimePATHForLaunchBinary(ctx, target.env, raw)
+	raw = m.prepareLaunchArgv(ctx, target.env, raw)
 	wrapped, err := m.wrapAgentProcessWithLaunchID(target.agent, rec.ID, target.env, raw, string(target.launchID), true)
 	if err != nil {
 		return fmt.Errorf("supervisor: %w", err)
