@@ -58,6 +58,15 @@ var plans = []Plan{
 	plan("deepseek-harness", ActionSetup, "Set up DeepSeek", []string{"dsh", "--profile", "web"}, "Opens DeepSeek's Models page to store an API key and pick a model route; leave it running until the key is saved", "https://github.com/deepseek-ai/deepseek-harness"),
 	plan("openhands", ActionSetup, "Set up OpenHands", []string{"openhands"}, "Native first-run LLM settings; AO forwards terminal input without persisting or logging the raw input, while OpenHands stores settings in ~/.openhands", "https://docs.openhands.dev/openhands/usage/cli/quick-start"),
 	plan("command-code", ActionLogin, "Log in to Command Code", []string{"command-code", "login"}, "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart"),
+	zcodeLoginPlan(),
+}
+
+// zcodeLoginPlan runs the CLI's browser login against the adapter-owned
+// credential store (service.start injects ZCODE_DATA_BASE_DIR to match the
+// auth probe and session launches). The raw z.ai token lives one hour and the
+// CLI has no refresh flow, so the guidance says when a re-login is needed.
+func zcodeLoginPlan() Plan {
+	return plan("zcode", ActionLogin, "Log in to ZCode", []string{"zcode", "login", "zai"}, "Browser sign-in to Z.AI; the token lives one hour, so re-login before unattended runs", "https://z.ai")
 }
 
 func terminalInputPlan(agentID string, action Action, title string, command []string, terminalInput, guidance, docs string) Plan {

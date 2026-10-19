@@ -49,6 +49,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetDeepSeek:    "https://github.com/deepseek-ai/deepseek-harness",
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
+	TargetZcode:       "https://z.ai",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -275,6 +276,18 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
+	case TargetZcode:
+		// ZCode ships inside the ZCode desktop app, which installs no CLI
+		// launcher, and there is no standalone installer to drive, so the
+		// settings page shows an explicit not-installable entry instead of a
+		// plan: the user installs the app and provides the `zcode` launcher
+		// script themselves (docs/harnesses/zcode.md).
+		plans = []Plan{{
+			Target:      target,
+			Unsupported: true,
+			Method:      "manual",
+			Reason:      "ZCode ships inside the ZCode desktop app, which installs no CLI launcher; install the app and add a zcode launcher script to PATH (see docs/harnesses/zcode.md)",
+		}}
 	default:
 		plans = []Plan{{Target: target, Unsupported: true, Method: "manual", Reason: "unknown install target"}}
 	}

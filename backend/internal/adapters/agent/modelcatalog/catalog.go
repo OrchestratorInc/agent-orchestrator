@@ -237,6 +237,11 @@ func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 		return ports.CustomModelEntryDirect
 	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
 		return ports.CustomModelEntryConfigured
+	case "zcode":
+		// zcode has no model CLI flag; the effective model comes from
+		// defaultModelSelection in its personal provider config and switches
+		// per session with /model, so AO offers no model field for it.
+		return ports.CustomModelEntryNone
 	default:
 		return ports.CustomModelEntryNone
 	}

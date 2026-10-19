@@ -211,6 +211,9 @@ var shippedMigrations = map[int64]string{
 	213: "0213_session_stale_binary.sql",
 	214: "0214_app_settings_version_refresh.sql",
 	215: "0215_session_harness_releases.sql",
+
+	// UTC timestamp IDs from npm run migration:create start here.
+	20261019154945497: "20261019154945497_allow_zcode_harness.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

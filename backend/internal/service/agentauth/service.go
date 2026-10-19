@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/zcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
@@ -216,6 +217,17 @@ func (s *Service) start(ctx context.Context, plan Plan) (StartResult, error) {
 			return StartResult{}, apierr.Internal("AGENT_AUTH_DATA_HOME_UNAVAILABLE", err.Error())
 		}
 		input.Env = map[string]string{"XDG_DATA_HOME": dataHome}
+	}
+	if plan.AgentID == "zcode" {
+		// The login must write the same store the auth probe reads and the
+		// session launches use: the adapter-owned root under AO's data dir.
+		// An operator-set ZCODE_DATA_BASE_DIR in the daemon environment wins
+		// on all three paths, so honor it here too.
+		if explicit := strings.TrimSpace(os.Getenv("ZCODE_DATA_BASE_DIR")); explicit != "" {
+			input.Env = map[string]string{"ZCODE_DATA_BASE_DIR": explicit}
+		} else if base := zcode.CredentialStoreBase(s.dataDir); base != "" {
+			input.Env = map[string]string{"ZCODE_DATA_BASE_DIR": base}
+		}
 	}
 	if plan.prepareWorkspace != nil {
 		workingDir, err := s.prepareAuthWorkspace(ctx, plan)
