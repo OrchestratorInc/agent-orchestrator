@@ -36,6 +36,10 @@ const (
 	// harnesses for updates after its startup check. A full pass probes each
 	// harness CLI, so it runs a few times a day rather than continuously.
 	DefaultHarnessUpdateInterval = 6 * time.Hour
+	// DefaultVersionRefreshIdle is how long an open session must be quiet before
+	// it moves to a newly installed harness release. Provider prompt caches
+	// expire well within it, so the move costs no cached context.
+	DefaultVersionRefreshIdle = 10 * time.Minute
 	// MinHarnessUpdateInterval is the shortest AO_HARNESS_UPDATE_INTERVAL accepted.
 	MinHarnessUpdateInterval = time.Hour
 	// DefaultAgent is the compatibility value used when AO_AGENT is unset. The
@@ -159,6 +163,31 @@ type Config struct {
 	// harnesses after its startup check. AO_HARNESS_UPDATE_INTERVAL overrides
 	// it; values below MinHarnessUpdateInterval are rejected.
 	HarnessUpdateInterval time.Duration
+	// UpdateWhileRunning lets a harness update run while the harness's
+	// sessions stay open, when its installer keeps the running release usable
+	// and the user confirms. AO_UPDATE_WHILE_RUNNING=off makes every update
+	// wait for those sessions to end again.
+	UpdateWhileRunning bool
+	// VersionRefresh lets idle open sessions move to a harness release an
+	// update installed while they ran. AO_VERSION_REFRESH=off is the kill
+	// switch; the user's Settings toggle applies on top of it.
+	VersionRefresh bool
+	// VersionRefreshIdle is how long a session must be quiet before it moves,
+	// so a warm prompt cache is not thrown away (AO_VERSION_REFRESH_IDLE).
+	VersionRefreshIdle time.Duration
+	// TUIVersionRefresh also restarts idle terminal sessions on a newly
+	// installed release (AO_TUI_VERSION_REFRESH=off disables it).
+	TUIVersionRefresh bool
+	// WindowsUpdateWhenIdle lets a Windows harness update wait until the
+	// harness's sessions are idle, then stop them, update and resume them,
+	// instead of refusing while they run (AO_WINDOWS_UPDATE_WHEN_IDLE=off
+	// disables it).
+	WindowsUpdateWhenIdle bool
+	// ManagedHarnessInstalls installs npm, Bun, uv and pipx harness updates
+	// side by side under the AO data dir and switches to them atomically, so
+	// no update touches files a running session uses
+	// (AO_MANAGED_HARNESS_INSTALLS=off updates the installed copy in place).
+	ManagedHarnessInstalls bool
 	// StartupWorkingDirectory is the daemon process cwd before startup
 	// normalizes it. The desktop uses this to identify dev daemons after the
 	// process cwd is moved to the stable data dir.
@@ -244,9 +273,15 @@ func Load() (Config, error) {
 			Remote:      TelemetryRemoteOff,
 			PostHogHost: DefaultTelemetryPostHogHost,
 		},
-		LocalOffering:         true,
-		HarnessUpdateChecks:   true,
-		HarnessUpdateInterval: DefaultHarnessUpdateInterval,
+		LocalOffering:          true,
+		HarnessUpdateChecks:    true,
+		HarnessUpdateInterval:  DefaultHarnessUpdateInterval,
+		UpdateWhileRunning:     true,
+		VersionRefresh:         true,
+		VersionRefreshIdle:     DefaultVersionRefreshIdle,
+		TUIVersionRefresh:      true,
+		WindowsUpdateWhenIdle:  true,
+		ManagedHarnessInstalls: true,
 	}
 
 	if raw := os.Getenv("AO_PORT"); raw != "" {
@@ -314,6 +349,48 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 		cfg.HarnessUpdateChecks = v
+	}
+	if raw, present := os.LookupEnv("AO_UPDATE_WHILE_RUNNING"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_UPDATE_WHILE_RUNNING", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.UpdateWhileRunning = v
+	}
+	if raw, present := os.LookupEnv("AO_VERSION_REFRESH"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_VERSION_REFRESH", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.VersionRefresh = v
+	}
+	if raw, present := os.LookupEnv("AO_TUI_VERSION_REFRESH"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_TUI_VERSION_REFRESH", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.TUIVersionRefresh = v
+	}
+	if raw, present := os.LookupEnv("AO_WINDOWS_UPDATE_WHEN_IDLE"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_WINDOWS_UPDATE_WHEN_IDLE", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.WindowsUpdateWhenIdle = v
+	}
+	if raw, present := os.LookupEnv("AO_MANAGED_HARNESS_INSTALLS"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_MANAGED_HARNESS_INSTALLS", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.ManagedHarnessInstalls = v
+	}
+	if raw, present := os.LookupEnv("AO_VERSION_REFRESH_IDLE"); present && strings.TrimSpace(raw) != "" {
+		d, err := parsePositiveDuration("AO_VERSION_REFRESH_IDLE", strings.TrimSpace(raw))
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.VersionRefreshIdle = d
 	}
 	if raw, present := os.LookupEnv("AO_HARNESS_UPDATE_INTERVAL"); present && strings.TrimSpace(raw) != "" {
 		d, err := parsePositiveDuration("AO_HARNESS_UPDATE_INTERVAL", strings.TrimSpace(raw))
@@ -451,6 +528,33 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// telemetryEnvKeys are the variables the desktop stamps on the daemon so it
+// exports product telemetry. Load reads them once; nothing else in the daemon
+// does.
+var telemetryEnvKeys = []string{
+	"AO_TELEMETRY_EVENTS",
+	"AO_TELEMETRY_METRICS",
+	"AO_TELEMETRY_REMOTE",
+	"AO_TELEMETRY_POSTHOG_KEY",
+	"AO_TELEMETRY_POSTHOG_HOST",
+	"AO_TELEMETRY_DISABLED_EVENTS",
+	"AO_TELEMETRY_APP_VERSION",
+	"AO_SENTRY_DSN",
+}
+
+// ScrubTelemetryEnv removes the telemetry export variables from the process
+// environment after Load has consumed them. Every child the daemon starts
+// (tmux and pty shells, ACP agents, git) inherits os.Environ(), so without this
+// an agent working on the AO repo that boots a test daemon with a scratch
+// AO_DATA_DIR inherits the export settings and the host app's version, mints a
+// fresh install id, and reports to the production PostHog project as a new
+// install. The daemon keeps its own copy of the settings in Config.
+func ScrubTelemetryEnv() {
+	for _, key := range telemetryEnvKeys {
+		_ = os.Unsetenv(key)
+	}
 }
 
 func parseToggleEnv(name, raw string) (bool, error) {

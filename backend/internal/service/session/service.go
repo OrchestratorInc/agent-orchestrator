@@ -29,6 +29,7 @@ const maxDisplayNameLen = 100
 // Store is the read-only persistence surface needed to assemble controller-facing session read models.
 type Store interface {
 	GetSessionCleanupFacts(ctx context.Context, id domain.SessionID) (domain.SessionCleanupRecord, bool, error)
+	ListSessionCleanupFactsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID]domain.SessionCleanupRecord, error)
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 	GetSessionByClientRequestID(ctx context.Context, id string) (domain.SessionRecord, bool, error)
 	ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
@@ -1188,10 +1189,14 @@ func (s *Service) List(ctx context.Context, filter ListFilter) ([]domain.Session
 	}
 	filtered := make([]domain.SessionRecord, 0, len(recs))
 	ids := make([]domain.SessionID, 0, len(recs))
+	var archived []domain.SessionID
 	for _, rec := range recs {
 		if matchesSessionFilter(rec, filter) {
 			filtered = append(filtered, rec)
 			ids = append(ids, rec.ID)
+			if rec.IsTerminated {
+				archived = append(archived, rec.ID)
+			}
 		}
 	}
 	prsBySession, err := s.store.ListPRFactsForSessions(ctx, ids)
@@ -1202,9 +1207,16 @@ func (s *Service) List(ctx context.Context, filter ListFilter) ([]domain.Session
 	if err != nil {
 		return nil, fmt.Errorf("list review runs: %w", err)
 	}
+	var cleanupBySession map[domain.SessionID]domain.SessionCleanupRecord
+	if len(archived) > 0 {
+		if cleanupBySession, err = s.store.ListSessionCleanupFactsForSessions(ctx, archived); err != nil {
+			return nil, fmt.Errorf("list workspace cleanup facts: %w", err)
+		}
+	}
 	out := make([]domain.Session, 0, len(filtered))
 	for _, rec := range filtered {
-		sess, err := s.toSessionWithFacts(ctx, rec, prsBySession[rec.ID], runsBySession[rec.ID])
+		facts, found := cleanupBySession[rec.ID]
+		sess, err := s.toSessionWithFacts(ctx, rec, prsBySession[rec.ID], runsBySession[rec.ID], currentWorkspaceCleanup(rec, facts, found))
 		if err != nil {
 			return nil, err
 		}
@@ -1305,7 +1317,7 @@ func (s *Service) Get(ctx context.Context, id domain.SessionID) (domain.Session,
 	return sess, nil
 }
 
-func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun) (domain.Session, error) {
+func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun, cleanup domain.WorkspaceDisposition) (domain.Session, error) {
 	// A row created before artifact_dir existed carries it as '' (the
 	// migration's default) even though session_manager always prompts the
 	// agent to write into the deterministic dataDir/artifacts/<id> path.
@@ -1366,17 +1378,6 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 		SessionStatusReadiness(domain.SessionRecord) string
 	}); ok {
 		readiness = recovery.SessionStatusReadiness(rec)
-	}
-	var cleanup domain.WorkspaceDisposition
-	if rec.IsTerminated {
-		// ponytail: one read per archived session; batch if archive reads become a bottleneck.
-		facts, ok, err := s.store.GetSessionCleanupFacts(ctx, rec.ID)
-		if err != nil {
-			return domain.Session{}, fmt.Errorf("get workspace cleanup facts: %w", err)
-		}
-		if ok && facts.SessionGeneration == rec.CleanupGeneration {
-			cleanup = facts.WorkspaceDisposition
-		}
 	}
 	return domain.Session{
 		SessionRecord:    rec,
@@ -1683,7 +1684,24 @@ func (s *Service) toSession(ctx context.Context, rec domain.SessionRecord) (doma
 	if err != nil {
 		return domain.Session{}, err
 	}
-	return s.toSessionWithFacts(ctx, rec, prs, runs)
+	var cleanup domain.WorkspaceDisposition
+	if rec.IsTerminated {
+		facts, found, err := s.store.GetSessionCleanupFacts(ctx, rec.ID)
+		if err != nil {
+			return domain.Session{}, fmt.Errorf("get workspace cleanup facts: %w", err)
+		}
+		cleanup = currentWorkspaceCleanup(rec, facts, found)
+	}
+	return s.toSessionWithFacts(ctx, rec, prs, runs, cleanup)
+}
+
+// currentWorkspaceCleanup is the teardown disposition recorded for an archived
+// session, provided the facts row belongs to its current cleanup generation.
+func currentWorkspaceCleanup(rec domain.SessionRecord, facts domain.SessionCleanupRecord, found bool) domain.WorkspaceDisposition {
+	if found && facts.SessionGeneration == rec.CleanupGeneration {
+		return facts.WorkspaceDisposition
+	}
+	return ""
 }
 
 // currentHeadReviewRuns reads the session's AO review passes for the Kanban

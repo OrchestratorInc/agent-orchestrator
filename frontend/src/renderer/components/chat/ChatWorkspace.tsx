@@ -139,7 +139,7 @@ import { ActivityRun } from "./ActivityRun";
 import { TurnPlan } from "./TurnPlan";
 import { TurnSettingsBar } from "./TurnSettingsBar";
 import { ElicitationDock } from "./ElicitationDock";
-import { McpServerBanner, ReauthBanner, ThreadStateBanner } from "./ChatStatusBanners";
+import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
 import {
 	activeTurn,
 	activityPlan,
@@ -1704,6 +1704,7 @@ function ChatWorkspaceContent({
 						shellError={shellError}
 					/>
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
+					<VersionSwitchBanner staleBinary={session?.staleBinary} hostId={activeRemoteHostId} />
 					<div
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", arrivingWithHistory && snapshot.items.length === 0 && "justify-end")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
@@ -2023,11 +2024,24 @@ function readableItems(snapshot: ConversationSnapshot): ConversationItem[] {
 	const plannedTurns = new Set(
 		snapshot.turns.filter((turn) => turn.plan?.steps.length).map((turn) => turn.id),
 	);
+	const pendingQuestionTurns = new Set(
+		snapshot.items
+			.filter((item) => item.kind === "activity" && item.activityKind === "user_input" && item.status === "pending")
+			.map((item) => item.turnId),
+	);
 	return snapshot.items.filter((item) => {
 		if (item.kind !== "activity") return true;
 		if (item.activityKind === "usage") return false;
 		if (item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) return false;
 		if (item.activityKind === "reasoning") return false;
+		// Claude emits both a tool call and an elicitation for the same question.
+		// The pending form already presents it above the composer.
+		if (
+			item.activityKind === "mcp_tool" &&
+			item.detail?.providerToolName === "AskUserQuestion" &&
+			(item.status === "pending" || item.status === "running") &&
+			item.turnId && pendingQuestionTurns.has(item.turnId)
+		) return false;
 		return true;
 	});
 }

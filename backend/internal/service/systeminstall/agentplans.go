@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -363,6 +364,15 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 	installScript := plan.Script
 	plan.Script = nil
 	if operation == AgentOperationReinstall {
+		if record, ok := s.readManagedRecord(plan.Target); ok && record.Method == plan.Method && s.managedEligible(plan) {
+			// Sessions run AO's managed copy, so a reinstall repairs that one:
+			// the same release, installed fresh beside it.
+			plan.managed = true
+			plan.managedPin = record.Version
+			argv, _ := managedInstallCommand(plan.Method, record.Package, record.Version, filepath.Join(s.managedTargetDir(plan.Target), "versions", "<next>"))
+			plan.Command, plan.Prepare = argv, nil
+			return plan
+		}
 		switch plan.Method {
 		case "homebrew":
 		case "npm":
@@ -430,6 +440,17 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 		default:
 			plan.Unsupported = true
 			plan.Reason = "This installation method does not provide a supported update command."
+		}
+		if !plan.Unsupported {
+			plan.UpdateWhileRunning = updateWhileRunningLevel(s.goos, plan.Target, plan.Method, plan.PackageCask)
+		}
+		if s.managedEligible(plan) {
+			// Installed side by side, so no session's files are touched, on any
+			// platform: the update is safe while sessions run.
+			plan.managed = true
+			plan.UpdateWhileRunning = UpdateWhileRunningSafe
+			argv, _ := managedInstallCommand(plan.Method, packageWithoutLatest(plan.Package), "", filepath.Join(s.managedTargetDir(plan.Target), "versions", "<next>"))
+			plan.Command, plan.Prepare = argv, nil
 		}
 		return plan
 	}
