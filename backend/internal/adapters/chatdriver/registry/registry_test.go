@@ -48,6 +48,7 @@ func TestShippedChatDrivers(t *testing.T) {
 	// typed answer rather than quietly producing a terminal session.
 	for _, harness := range []domain.AgentHarness{
 		domain.HarnessAider,
+		"stakpak", // Candidate lacks mandatory released-native restore/cancellation.
 		"definitely-not-an-agent",
 	} {
 		if _, err := r.Driver(harness); err == nil {
