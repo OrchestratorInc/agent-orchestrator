@@ -24,6 +24,15 @@ export default function SettingsLayout() {
 					fullScreenGestureEnabled: true,
 				}}
 			/>
+			<Stack.Screen
+				name="theme"
+				options={{
+					headerShown: false,
+					animation: "slide_from_right",
+					gestureEnabled: true,
+					fullScreenGestureEnabled: true,
+				}}
+			/>
 		</Stack>
 	);
 }

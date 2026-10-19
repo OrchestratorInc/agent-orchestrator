@@ -41,9 +41,12 @@ export function HarnessStatusDot({ tone }: { tone: HarnessTone }) {
 	return <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", tone === "ok" ? "bg-success" : tone === "error" ? "bg-error" : "bg-settings-muted/50")} />;
 }
 
-export function HarnessDetailGroup({ title, children }: { title: string; children: ReactNode }) {
+export function HarnessDetailGroup({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
 	return <section className="flex min-w-0 max-w-full flex-col gap-1.5">
-		<h3 className="text-xs font-medium leading-4 text-settings-muted">{title}</h3>
+		{action ? <div className="flex min-h-7 items-center justify-between gap-3">
+			<h3 className="text-xs font-medium leading-4 text-settings-muted">{title}</h3>
+			{action}
+		</div> : <h3 className="text-xs font-medium leading-4 text-settings-muted">{title}</h3>}
 		<div className={HARNESS_CARD_CLASS}>{children}</div>
 	</section>;
 }

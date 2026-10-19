@@ -367,6 +367,44 @@ func TestHooks_ReviewerActivityOmitsToolCorrelationFields(t *testing.T) {
 	}
 }
 
+func TestHooks_MemcodeReportsSessionChangesAfterRestore(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	t.Setenv("AO_MEMCODE_INTERACTIVE_RESTORE", "1")
+	t.Setenv("AO_MEMCODE_RESTORE_TARGET", "sess_a0a0a0a0")
+	t.Setenv("AO_MEMCODE_SESSION", "ao-7")
+	t.Setenv("AO_MEMCODE_GENERATION", "launch-1")
+	data := t.TempDir()
+	t.Setenv("AO_MEMCODE_DATA_DIR", data)
+	instructions := filepath.Join(data, "agent-launches", "memcode", "ao-7")
+	if err := os.MkdirAll(instructions, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(instructions, "instructions.json"), []byte(`["Y29udGV4dA=="]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	for i, nativeID := range []string{"sess_b1b1b1b1", "sess_a0a0a0a0", "sess_c2c2c2c2"} {
+		t.Setenv("MEMCODE_SESSION_ID", nativeID)
+		_, stderr, err := executeCLI(t, Deps{In: strings.NewReader(`{}`), ProcessAlive: func(int) bool { return true }}, "hooks", "memcode", "session-start")
+		if err != nil {
+			t.Fatalf("hook %d: %v: %s", i, err, stderr)
+		}
+		if want := 0; i == 2 {
+			want = 1
+			if !strings.Contains(capture.body, nativeID) {
+				t.Fatalf("session change was not reported: %s", capture.body)
+			}
+			if capture.hits != want {
+				t.Fatalf("hook %d posted %d times, want %d", i, capture.hits, want)
+			}
+		} else if capture.hits != want {
+			t.Fatalf("handshake hook %d posted %d times", i, capture.hits)
+		}
+	}
+}
+
 func TestHooks_ReviewerRoutingTakesPrecedenceOverWorkerSession(t *testing.T) {
 	t.Setenv("AO_REVIEW_SESSION_ID", "review-7")
 	t.Setenv("AO_REVIEW_WORKER_SESSION_ID", "worker-context-only")

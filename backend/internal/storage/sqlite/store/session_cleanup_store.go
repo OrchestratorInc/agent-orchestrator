@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -47,6 +48,27 @@ func (s *Store) GetSessionCleanupFacts(ctx context.Context, id domain.SessionID)
 		return domain.SessionCleanupRecord{}, false, fmt.Errorf("get session cleanup facts %s: %w", id, err)
 	}
 	return sessionCleanupFromGen(row), true, nil
+}
+
+// ListSessionCleanupFactsForSessions batches GetSessionCleanupFacts for
+// session-list reads. Only sessions that have a facts row appear in the map.
+func (s *Store) ListSessionCleanupFactsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID]domain.SessionCleanupRecord, error) {
+	out := make(map[domain.SessionID]domain.SessionCleanupRecord, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return nil, fmt.Errorf("marshal session ids: %w", err)
+	}
+	rows, err := s.qr.ListSessionCleanupFactsBySessions(ctx, string(encoded))
+	if err != nil {
+		return nil, fmt.Errorf("list session cleanup facts: %w", err)
+	}
+	for _, row := range rows {
+		out[row.SessionID] = sessionCleanupFromGen(row)
+	}
+	return out, nil
 }
 
 // listTerminalCleanupCandidatesSQL is the coarse, SESSIONS-driven candidate scan

@@ -172,7 +172,11 @@ import { createWindowComposition, type WindowComposition } from "./main/window-c
 import { AgentBrowserRuntime } from "./main/agent-browser-runtime";
 import { sameBrowserRuntimeIdentity, type BrowserRuntimeIdentity } from "./main/browser-runtime-identity";
 import { connectSupervisor, type SupervisorLinkHandle } from "./main/supervisor-link";
-import { connectBrowserRuntime, type BrowserRuntimeLinkHandle } from "./main/browser-runtime-link";
+import {
+	BROWSER_RUNTIME_DISCONNECTED,
+	connectBrowserRuntime,
+	type BrowserRuntimeLinkHandle,
+} from "./main/browser-runtime-link";
 import { checkRender, measureRender } from "./main/render-check";
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
 import { readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
@@ -1552,19 +1556,28 @@ function supervisorPipeFromRunFile(rfp: string | null): string {
 	return "\\\\.\\pipe\\ao-supervise-" + dir.replace(/[^a-zA-Z0-9-]/g, "-");
 }
 
-function disposeBrowserRuntimeLink(): void {
+function dropBrowserRuntimeLink(): void {
 	browserRuntimeLink?.dispose();
 	browserRuntimeLink = null;
 	browserRuntimeLinkIdentity = null;
 }
 
-function publishBrowserRuntimeState(connected: boolean): void {
-	getShellWebContents()?.send("browser:runtimeState", { connected } satisfies BrowserRuntimeState);
+function disposeBrowserRuntimeLink(): void {
+	const hadLink = browserRuntimeLink !== null;
+	dropBrowserRuntimeLink();
+	if (hadLink) publishBrowserRuntimeState(BROWSER_RUNTIME_DISCONNECTED);
 }
 
+function publishBrowserRuntimeState(state: BrowserRuntimeState): void {
+	getShellWebContents()?.send("browser:runtimeState", state);
+}
+
+// A replacement link reports "connecting" itself, so dropping the old one first
+// does not flash a disconnect in the Browser panel.
 function reconnectBrowserRuntimeLink(): void {
-	disposeBrowserRuntimeLink();
+	dropBrowserRuntimeLink();
 	establishBrowserRuntimeLink();
+	if (!browserRuntimeLink) publishBrowserRuntimeState(BROWSER_RUNTIME_DISCONNECTED);
 }
 
 function establishBrowserRuntimeLink(): void {
@@ -1595,7 +1608,7 @@ function establishBrowserRuntimeLink(): void {
 	if (browserRuntimeLink && browserRuntimeLinkIdentity && sameBrowserRuntimeIdentity(browserRuntimeLinkIdentity, identity)) {
 		return;
 	}
-	if (browserRuntimeLink) disposeBrowserRuntimeLink();
+	if (browserRuntimeLink) dropBrowserRuntimeLink();
 	browserRuntimeLink = connectBrowserRuntime(address, {
 		token,
 		execute: (command, signal) => {
@@ -2461,7 +2474,7 @@ ipcMain.handle("browser:runtime:reconnect", (event) => {
 
 ipcMain.handle("browser:runtime:state", (event): BrowserRuntimeState => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted browser runtime request.");
-	return { connected: browserRuntimeLink?.connected ?? false };
+	return browserRuntimeLink?.state ?? BROWSER_RUNTIME_DISCONNECTED;
 });
 
 ipcMain.on("browser:overlay", (event, open: unknown) => {

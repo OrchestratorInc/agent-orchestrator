@@ -29,6 +29,7 @@ const maxDisplayNameLen = 100
 // Store is the read-only persistence surface needed to assemble controller-facing session read models.
 type Store interface {
 	GetSessionCleanupFacts(ctx context.Context, id domain.SessionID) (domain.SessionCleanupRecord, bool, error)
+	ListSessionCleanupFactsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID]domain.SessionCleanupRecord, error)
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 	GetSessionByClientRequestID(ctx context.Context, id string) (domain.SessionRecord, bool, error)
 	ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
@@ -106,6 +107,11 @@ type interfaceTransitionCommander interface {
 // service fakes while production delegates to Session Manager.
 type exitAgentCommander interface {
 	ExitAgent(context.Context, domain.SessionID) (domain.SessionRecord, error)
+}
+
+// agentAccountCommander keeps account moves optional for focused service fakes.
+type agentAccountCommander interface {
+	StartAccountTransition(context.Context, domain.SessionID, string, domain.SessionInterfaceTransitionPolicy) (domain.SessionInterfaceTransition, error)
 }
 
 // RollbackOutcome reports what happened in a rollback: either the seed row was
@@ -238,6 +244,15 @@ type Service struct {
 	// artifactDeleter deletes a session's artifact files and version rows. Nil
 	// makes DeleteArtifacts fail rather than delete outside the capture lock.
 	artifactDeleter artifactDeleter
+	// runsOnComputerLogin reports whether a new session would launch on the
+	// computer's own CLI login rather than a saved account. Nil means always.
+	runsOnComputerLogin func(context.Context, domain.AgentHarness, string) bool
+}
+
+// SetComputerLoginCheck late-binds the account check the launch gate needs: the
+// computer's login state matters only to a session that will run on it.
+func (s *Service) SetComputerLoginCheck(check func(ctx context.Context, harness domain.AgentHarness, accountID string) bool) {
+	s.runsOnComputerLogin = check
 }
 
 // SetChatProviderPreserver wires the live Chat lifetime observation after both
@@ -377,7 +392,8 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 		if cfg.Harness == domain.HarnessCodex &&
 			readiness.Authentication.State == domain.AgentAuthenticationUnauthorized &&
-			readiness.Authentication.Freshness == domain.AgentReadinessFresh {
+			readiness.Authentication.Freshness == domain.AgentReadinessFresh &&
+			(s.runsOnComputerLogin == nil || s.runsOnComputerLogin(ctx, cfg.Harness, cfg.AgentAccountID)) {
 			return domain.Session{}, 0, 0, apierr.Conflict("CODEX_ACCOUNT_AUTH_UNVERIFIED", "Add or sign in to a Codex account in Settings before starting a Codex session", nil)
 		}
 	}
@@ -762,6 +778,23 @@ func (s *Service) ResumeAgent(ctx context.Context, id domain.SessionID) (ResumeA
 		return ResumeAgentOutcome{}, err
 	}
 	return ResumeAgentOutcome{Session: session, Mode: restoreModeView(res.Mode)}, nil
+}
+
+// StartAccountTransition moves the session's agent to another provider account
+// through the durable controller handoff. stopTurn cancels a turn in progress;
+// otherwise the move waits for it to finish.
+func (s *Service) StartAccountTransition(ctx context.Context, id domain.SessionID, accountID string, stopTurn bool) (domain.SessionInterfaceTransition, error) {
+	manager, ok := s.manager.(agentAccountCommander)
+	if !ok {
+		return domain.SessionInterfaceTransition{}, apierr.Conflict(
+			"AGENT_ACCOUNT_UNSUPPORTED", "This build cannot move a session to another account", nil)
+	}
+	policy := domain.SessionInterfaceTransitionDrain
+	if stopTurn {
+		policy = domain.SessionInterfaceTransitionInterrupt
+	}
+	transition, err := manager.StartAccountTransition(ctx, id, accountID, policy)
+	return transition, toAPIError(err)
 }
 
 // InterfaceTransitionStatus returns capability and progress without launching
@@ -1156,10 +1189,14 @@ func (s *Service) List(ctx context.Context, filter ListFilter) ([]domain.Session
 	}
 	filtered := make([]domain.SessionRecord, 0, len(recs))
 	ids := make([]domain.SessionID, 0, len(recs))
+	var archived []domain.SessionID
 	for _, rec := range recs {
 		if matchesSessionFilter(rec, filter) {
 			filtered = append(filtered, rec)
 			ids = append(ids, rec.ID)
+			if rec.IsTerminated {
+				archived = append(archived, rec.ID)
+			}
 		}
 	}
 	prsBySession, err := s.store.ListPRFactsForSessions(ctx, ids)
@@ -1170,9 +1207,16 @@ func (s *Service) List(ctx context.Context, filter ListFilter) ([]domain.Session
 	if err != nil {
 		return nil, fmt.Errorf("list review runs: %w", err)
 	}
+	var cleanupBySession map[domain.SessionID]domain.SessionCleanupRecord
+	if len(archived) > 0 {
+		if cleanupBySession, err = s.store.ListSessionCleanupFactsForSessions(ctx, archived); err != nil {
+			return nil, fmt.Errorf("list workspace cleanup facts: %w", err)
+		}
+	}
 	out := make([]domain.Session, 0, len(filtered))
 	for _, rec := range filtered {
-		sess, err := s.toSessionWithFacts(ctx, rec, prsBySession[rec.ID], runsBySession[rec.ID])
+		facts, found := cleanupBySession[rec.ID]
+		sess, err := s.toSessionWithFacts(ctx, rec, prsBySession[rec.ID], runsBySession[rec.ID], currentWorkspaceCleanup(rec, facts, found))
 		if err != nil {
 			return nil, err
 		}
@@ -1273,7 +1317,7 @@ func (s *Service) Get(ctx context.Context, id domain.SessionID) (domain.Session,
 	return sess, nil
 }
 
-func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun) (domain.Session, error) {
+func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun, cleanup domain.WorkspaceDisposition) (domain.Session, error) {
 	// A row created before artifact_dir existed carries it as '' (the
 	// migration's default) even though session_manager always prompts the
 	// agent to write into the deterministic dataDir/artifacts/<id> path.
@@ -1335,17 +1379,6 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 	}); ok {
 		readiness = recovery.SessionStatusReadiness(rec)
 	}
-	var cleanup domain.WorkspaceDisposition
-	if rec.IsTerminated {
-		// ponytail: one read per archived session; batch if archive reads become a bottleneck.
-		facts, ok, err := s.store.GetSessionCleanupFacts(ctx, rec.ID)
-		if err != nil {
-			return domain.Session{}, fmt.Errorf("get workspace cleanup facts: %w", err)
-		}
-		if ok && facts.SessionGeneration == rec.CleanupGeneration {
-			cleanup = facts.WorkspaceDisposition
-		}
-	}
 	return domain.Session{
 		SessionRecord:    rec,
 		WorkspaceCleanup: cleanup,
@@ -1375,6 +1408,19 @@ func mapSessionError(err error) error {
 		return nil
 	case errors.Is(err, sessionmanager.ErrNotFound):
 		return apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	case errors.Is(err, ports.ErrAgentAccountUnknown):
+		return apierr.NotFound("AGENT_ACCOUNT_NOT_FOUND", "Unknown agent account")
+	case errors.Is(err, ports.ErrAgentAccountProviderMismatch):
+		return apierr.Invalid("AGENT_ACCOUNT_PROVIDER_MISMATCH", "The account is for a different agent", nil)
+	case errors.Is(err, ports.ErrAgentAccountDefaultUnusable):
+		return apierr.Conflict("AGENT_ACCOUNT_DEFAULT_UNUSABLE", "The default account is signed out or now holds another login. Sign it in again, or make another account the default.", nil)
+	case errors.Is(err, ports.ErrAgentAccountSignedOut):
+		return apierr.Conflict("AGENT_ACCOUNT_SIGNED_OUT", "The account is signed out; sign it in again first", nil)
+	case errors.Is(err, ports.ErrAgentAccountUnchanged):
+		return apierr.Conflict("AGENT_ACCOUNT_UNCHANGED", "The session already uses this account", nil)
+	case errors.Is(err, ports.ErrAgentAccountUnshared):
+		return apierr.Conflict("AGENT_ACCOUNT_UNSHARED",
+			"AO cannot link this account's folder to this computer's history. On Windows, turn on Developer Mode.", nil)
 	case errors.Is(err, sessionmanager.ErrNotRestorable):
 		return apierr.Conflict("SESSION_NOT_RESTORABLE", "Session is not restorable", nil)
 	case errors.Is(err, sessionmanager.ErrTerminated):
@@ -1638,7 +1684,24 @@ func (s *Service) toSession(ctx context.Context, rec domain.SessionRecord) (doma
 	if err != nil {
 		return domain.Session{}, err
 	}
-	return s.toSessionWithFacts(ctx, rec, prs, runs)
+	var cleanup domain.WorkspaceDisposition
+	if rec.IsTerminated {
+		facts, found, err := s.store.GetSessionCleanupFacts(ctx, rec.ID)
+		if err != nil {
+			return domain.Session{}, fmt.Errorf("get workspace cleanup facts: %w", err)
+		}
+		cleanup = currentWorkspaceCleanup(rec, facts, found)
+	}
+	return s.toSessionWithFacts(ctx, rec, prs, runs, cleanup)
+}
+
+// currentWorkspaceCleanup is the teardown disposition recorded for an archived
+// session, provided the facts row belongs to its current cleanup generation.
+func currentWorkspaceCleanup(rec domain.SessionRecord, facts domain.SessionCleanupRecord, found bool) domain.WorkspaceDisposition {
+	if found && facts.SessionGeneration == rec.CleanupGeneration {
+		return facts.WorkspaceDisposition
+	}
+	return ""
 }
 
 // currentHeadReviewRuns reads the session's AO review passes for the Kanban

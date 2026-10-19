@@ -25,6 +25,7 @@ import (
 	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agentaccount"
 	chatdriveracp "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
@@ -54,6 +55,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/push"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentaccounts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
 	awakesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/awake"
 	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
@@ -187,6 +189,8 @@ func Run() error {
 	if err != nil {
 		return err
 	}
+	// Children inherit os.Environ(); the export settings stay in cfg only.
+	config.ScrubTelemetryEnv()
 	if cwd, err := os.Getwd(); err == nil {
 		cfg.StartupWorkingDirectory = cwd
 	}
@@ -272,9 +276,11 @@ func Run() error {
 		log.Warn("install using-ao skill", "err", err)
 	}
 
-	telemetryCfg := cfg
-	telemetryCfg.Telemetry.Events = policyCoordinator.EventsEnabled()
-	telemetrySink := newTelemetrySink(telemetryCfg, store, log)
+	// Product telemetry answers to AO_TELEMETRY_EVENTS alone. The agent-switch
+	// consent (policyCoordinator) governs only the Sentry failure path above and
+	// the dispatcher below; wiring it in here turned the "Share error events"
+	// switch into a kill switch for every daemon product event.
+	telemetrySink := newTelemetrySink(cfg, store, log)
 	defer func() { _ = telemetrySink.Close(context.Background()) }()
 	// Daemon Sentry: captures genuine 5xx/panics with their Go stack. Gated on
 	// Initialize the transport once so a later policy opt-in works without a
@@ -622,6 +628,30 @@ func Run() error {
 		},
 	})
 	sessMgr = wiredSessMgr
+	agentAccountSvc := newAgentAccounts(cfg, store, codexHome, agentDeps.CodexAccounts, log)
+	if wired, ok := sessMgr.(interface {
+		SetAgentAccounts(ports.AgentAccountLaunchEnv)
+	}); ok {
+		wired.SetAgentAccounts(agentAccountSvc)
+	}
+	if stopper, ok := sessMgr.(interface {
+		ExitAgentsOnAccount(context.Context, string) error
+	}); ok {
+		agentAccountSvc.SetAgentStopper(stopper.ExitAgentsOnAccount)
+	}
+	sessionSvc.SetComputerLoginCheck(agentAccountSvc.RunsOnComputerLogin)
+	if agentSvc != nil {
+		agentSvc.SetSavedDefaultSignIn(agentAccountSvc.DefaultSignIn)
+		agentAccountSvc.SetDefaultChanged(func(p domain.AgentAccountProvider) {
+			harness := map[domain.AgentAccountProvider]domain.AgentHarness{
+				domain.AgentAccountProviderClaude: domain.HarnessClaudeCode,
+				domain.AgentAccountProviderCodex:  domain.HarnessCodex,
+			}[p]
+			if harness != "" {
+				agentSvc.InvalidateAgentAuthentication(string(harness))
+			}
+		})
+	}
 	if runner, ok := sessMgr.(interface {
 		RunPromptSuggestionTask(context.Context, domain.SessionID, string, string, string) (string, error)
 	}); ok {
@@ -765,6 +795,7 @@ func Run() error {
 	systemChecks.SetGitHubAuthTerminalOpener(shellTermSvc)
 	agentAuthSvc := agentauth.NewWithAgentResolver(hostCommands, agentSvc, shellTermSvc, cfg.DataDir)
 	agentSvc.SetCodexAccountLoginTerminalOpener(shellTermSvc)
+	agentAccountSvc.SetTerminals(shellTermSvc)
 	// Late-bound so Kill/Cleanup close a session's scoped shells before its
 	// worktree is torn down (shellTermSvc cannot exist before sessMgr does; see
 	// SetShellTerminalCloser).
@@ -1000,6 +1031,7 @@ func Run() error {
 		Endpoints:          bs,
 		Agents:             agentSvc,
 		CodexAccounts:      agentSvc,
+		AgentAccounts:      agentAccountSvc,
 		SystemChecks:       systemChecks,
 		Installer:          systemInstall,
 		Sessions:           sessionSvc,
@@ -1376,4 +1408,21 @@ func stabilizeWorkingDirectory(dataDir string) error {
 		return fmt.Errorf("daemon working directory: chdir %s: %w", dataDir, err)
 	}
 	return nil
+}
+
+// newAgentAccounts builds the Claude Code and Codex account catalog. Each
+// account is a config folder under the state dir; "This computer" is the CLI's
+// own folder, which AO never changes the login of.
+func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, codexAccounts ports.CodexAccountClientFactory, log *slog.Logger) *agentaccounts.Service {
+	claudeHome, claudeConfig := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")), ""
+	if claudeHome != "" {
+		claudeConfig = filepath.Join(claudeHome, ".claude.json")
+	} else if home, err := os.UserHomeDir(); err == nil {
+		claudeHome, claudeConfig = filepath.Join(home, ".claude"), filepath.Join(home, ".claude.json")
+	}
+	providers := []ports.AgentAccountProviderCLI{
+		&agentaccount.Claude{Binary: claudecodeagent.New().ResolveBinary, DeviceHome: claudeHome, DeviceConfig: claudeConfig},
+		&agentaccount.Codex{Binary: codexagent.New().ResolveBinary, Accounts: codexAccounts, DeviceHome: codexHome},
+	}
+	return agentaccounts.New(store, providers, filepath.Join(cfg.StateDir, "agent-accounts"), nil, log)
 }

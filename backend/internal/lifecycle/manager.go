@@ -484,6 +484,12 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 			delete(m.flights, id)
 			return next, true
 		}
+		// AO destroyed this launch's terminal on purpose and kept the session
+		// (an agent exit); Resume builds a new one. Its death is not a crash.
+		if cur.Activity.State == domain.ActivityExited && currentLaunch != "" &&
+			cur.Metadata.RuntimeReleasedLaunchID == currentLaunch {
+			return cur, false
+		}
 		if !runtimeClearlyDead(f, cur.Activity, now, m.window) {
 			return cur, false
 		}

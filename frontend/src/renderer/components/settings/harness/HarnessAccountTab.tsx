@@ -1,12 +1,15 @@
 import { BookOpen, Check, Copy, ExternalLink, LoaderCircle, LogOut } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { agentAccountProviderFor } from "../../../hooks/useAgentAccounts";
 import { advisoryInUse, isWaitingForIdleJob, versionLabel, type HarnessInUse, type InstallJob } from "../../../hooks/useHarnessUpdates";
 import { IdleUpdateStatus } from "./HarnessSessionsDialog";
 import type { TerminalSessionState } from "../../../hooks/useTerminalSession";
 import { aoBridge } from "../../../lib/bridge";
 import { cn } from "../../../lib/utils";
+import { useUiStore } from "../../../stores/ui-store";
 import { MiddleTruncatedText } from "../../MiddleTruncatedText";
 import { Button } from "../../ui/button";
+import { AgentAccountsPanel } from "../AgentAccountsSection";
 import { SettingsOptionMenu } from "../SettingsOptionMenu";
 import type { HarnessDetails } from "./describe-harness";
 import { HarnessAuthTerminalPanel } from "./HarnessAuthTerminalPanel";
@@ -43,6 +46,9 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 	// Sessions that must end first turn Update into a way to find them.
 	const blockedBy = advisoryInUse(details.advisory);
 	const updateBlocked = Boolean(blockedBy);
+	// Subscription accounts are a developer-mode preview, for local Claude Code and Codex.
+	const accountsPreview = useUiStore((state) => state.developerMode);
+	const accountProvider = accountsPreview && !hostId && isInstalled ? agentAccountProviderFor(details.agentId) : null;
 	// Progress reads as a solid state, not a greyed-out action.
 	const progressAction = <span role="status"><Button type="button" size="sm" variant="secondary" className={cn(ACTION_CLASS, "disabled:opacity-100")} aria-busy="true" disabled><LoaderCircle className="animate-spin" aria-hidden="true" />{details.progressLabel}</Button></span>;
 	const authBusyAction = <Button type="button" size="sm" className={ACTION_CLASS} disabled>
@@ -115,6 +121,7 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 				{isInstalled && authPlan?.logoutCommand && authPlan.available && details.authStatus !== "unauthorized" ? <Button type="button" size="sm" variant="outline" disabled={details.busy || authWorkflowActive} onClick={onLogout}><LogOut aria-hidden="true" />{t("settings.harness.logout")}</Button> : null}
 			</HarnessDetailRow>
 		</HarnessDetailGroup> : null}
+		{accountProvider ? <AgentAccountsPanel provider={accountProvider} /> : null}
 		{authPlan?.action === "instructions" && authPlan.documentationUrl ? <div><Button type="button" size="sm" variant="outline" onClick={() => void aoBridge.app.openExternal(authPlan.documentationUrl)}><BookOpen aria-hidden="true" />{t("settings.harness.instructions")}</Button></div> : null}
 		{rowAuthWorkflow ? <HarnessAuthTerminalPanel
 			workflow={rowAuthWorkflow}

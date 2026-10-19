@@ -124,6 +124,13 @@ WHERE is_terminated = 0 AND hibernated_at IS NULL AND activity_state <> 'exited'
     AND stale_binary_launch = (CASE WHEN session_mode = 'chat' THEN controller_generation ELSE runtime_launch_id END)
 GROUP BY harness;
 
+-- name: SetSessionRuntimeReleased :execrows
+-- Narrow write for an agent exit that keeps its session: names only the
+-- released launch, and only while that launch is still the session's own.
+UPDATE sessions
+SET runtime_released_launch_id = sqlc.arg(launch_id)
+WHERE id = sqlc.arg(id) AND runtime_launch_id = sqlc.arg(launch_id);
+
 -- name: UpdateSessionArtifactOutput :execrows
 -- Narrow write for lifecycle.Manager.ReconcileSessionOutputType: touches only
 -- the two output-derivation columns. A full read-then-UpdateSession write here
@@ -284,7 +291,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
-    client_request_id, client_request_hash, client_request_committed
+    client_request_id, client_request_hash, client_request_committed,
+    runtime_released_launch_id
 FROM sessions WHERE id = ?;
 
 -- name: GetSessionByAutomationRunID :one
@@ -305,7 +313,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
-    client_request_id, client_request_hash, client_request_committed
+    client_request_id, client_request_hash, client_request_committed,
+    runtime_released_launch_id
 FROM sessions WHERE automation_run_id = ?;
 
 -- name: ListSessionsByProject :many
@@ -326,7 +335,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
-    client_request_id, client_request_hash, client_request_committed
+    client_request_id, client_request_hash, client_request_committed,
+    runtime_released_launch_id
 FROM sessions WHERE project_id IS ? ORDER BY num;
 
 -- name: ListAllSessions :many
@@ -347,7 +357,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
-    client_request_id, client_request_hash, client_request_committed
+    client_request_id, client_request_hash, client_request_committed,
+    runtime_released_launch_id
 FROM sessions ORDER BY project_id, num;
 
 -- name: ListChatHibernationCandidates :many

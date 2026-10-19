@@ -174,7 +174,11 @@ type SessionMetadata struct {
 	DiffBaseRef       string `json:"diffBaseRef,omitempty"`
 	RuntimeHandleID   string `json:"runtimeHandleId,omitempty"`
 	RuntimeLaunchID   string `json:"runtimeLaunchId,omitempty"`
-	AgentSessionID    string `json:"agentSessionId,omitempty"`
+	// RuntimeReleasedLaunchID is the launch whose terminal AO destroyed on
+	// purpose while keeping the session (an agent exit). Its runtime's death is
+	// then not a crash. It names one launch, so a new launch is never covered.
+	RuntimeReleasedLaunchID string `json:"-"`
+	AgentSessionID          string `json:"agentSessionId,omitempty"`
 	// AgentSessionIDLaunchID identifies the terminal runtime generation proven to
 	// own AgentSessionID. Usually that proof comes from a provider hook. A
 	// coordinated Chat-to-TUI handoff may also establish it by launching the
