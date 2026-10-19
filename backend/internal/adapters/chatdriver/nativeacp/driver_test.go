@@ -37,8 +37,10 @@ func TestBindingLaunchesExactUserInstalledBinary(t *testing.T) {
 	var configured acpdriver.LaunchConfig
 	type contextKey struct{}
 	launchCtx := context.WithValue(context.Background(), contextKey{}, "launch-context")
+	messageFailure := errors.New("provider text failure")
 	cfg := buildConfig(fakePlugin{binary: userBinary, status: ports.AgentAuthStatusAuthorized}, Config{
-		Harness: domain.HarnessOpenCode,
+		Harness:              domain.HarnessOpenCode,
+		PromptMessageFailure: func(string) error { return messageFailure },
 		Configure: func(ctx context.Context, in acpdriver.LaunchConfig) ([]string, map[string]string, error) {
 			if ctx.Value(contextKey{}) != "launch-context" {
 				t.Fatal("Configure did not receive the launch context")
@@ -48,6 +50,9 @@ func TestBindingLaunchesExactUserInstalledBinary(t *testing.T) {
 		},
 	}, nil)
 
+	if cfg.PromptMessageFailure == nil || !errors.Is(cfg.PromptMessageFailure("text"), messageFailure) {
+		t.Fatal("provider message failure hook was not forwarded")
+	}
 	if err := cfg.Probe(context.Background()); err != nil {
 		t.Fatalf("Probe: %v", err)
 	}

@@ -35,8 +35,18 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 			createPlanMethod:  "_cursor/create_plan",
 		},
 		ValidateTurnSettings: validateTurnSettings,
+		PromptMessageFailure: cursorPromptMessageFailure,
 		VersionProbe:         versionProbe,
 	}, log)
+}
+
+func cursorPromptMessageFailure(message string) error {
+	message = strings.TrimSpace(message)
+	line := message[strings.LastIndexByte(message, '\n')+1:]
+	if !strings.HasPrefix(line, "Error: RetriableError: [resource_exhausted]") {
+		return nil
+	}
+	return ports.NewChatProviderFailure("Cursor request failed", strings.TrimPrefix(line, "Error: "), nil)
 }
 
 func validateTurnSettings(initial ports.PermissionMode, settings ports.ChatTurnSettings) error {
