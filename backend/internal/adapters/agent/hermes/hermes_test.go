@@ -475,3 +475,10 @@ func TestRestoreReportsNativeDatabaseFailureSeparately(t *testing.T) {
 		t.Fatalf("database failure disguised as missing history: ok=%v err=%v", ok, err)
 	}
 }
+
+func TestUnattendedReleaseRefreshRemainsGated(t *testing.T) {
+	var capability ports.AgentTerminalVersionRefresher = New()
+	if capability.SupportsTerminalVersionRefresh() {
+		t.Fatal("pinned Hermes native identity does not qualify unattended release changes")
+	}
+}
