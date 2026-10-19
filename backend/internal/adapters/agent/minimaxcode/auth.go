@@ -39,9 +39,11 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return providerAuthStatus(out, dataDir), nil
 }
 
-// providerAuthStatus reads the active provider from `mcode provider list
-// --json`. That list always reports the MiniMax OAuth row without a key, so
-// a /login account is read from MiniMax's OAuth state under dataDir instead.
+// providerAuthStatus combines `mcode provider list --json` with MiniMax's
+// OAuth state. The list always reports the MiniMax OAuth row without a key,
+// and its MiniMax rows are "active" by credential source even when the
+// default model is a custom provider, so no single row decides the result.
+// Unauthorized is reported only when no credential of any kind is present.
 func providerAuthStatus(data []byte, dataDir string) ports.AgentAuthStatus {
 	var snapshot struct {
 		Providers []struct {
@@ -54,27 +56,32 @@ func providerAuthStatus(data []byte, dataDir string) ports.AgentAuthStatus {
 	if json.Unmarshal(data, &snapshot) != nil {
 		return ports.AgentAuthStatusUnknown
 	}
+	minimaxListed, customListed := false, false
 	for _, p := range snapshot.Providers {
-		if !p.Active || !p.Enabled {
+		if !p.Enabled {
 			continue
 		}
-		switch p.Kind {
-		case "minimax-oauth":
-			return oauthAuthStatus(dataDir)
-		case "minimax-api-key":
-			if p.HasAPIKey {
-				return ports.AgentAuthStatusConfigured
-			}
-			return ports.AgentAuthStatusUnauthorized
-		}
-		// Custom providers may read their key from an environment variable
-		// the list does not report, so a missing key stays unknown.
-		if p.HasAPIKey {
+		if p.Active && p.HasAPIKey {
 			return ports.AgentAuthStatusConfigured
 		}
-		return ports.AgentAuthStatusUnknown
+		switch p.Kind {
+		case "minimax-oauth", "minimax-api-key":
+			minimaxListed = true
+		default:
+			customListed = true
+		}
 	}
-	return ports.AgentAuthStatusUnknown
+	oauth := oauthAuthStatus(dataDir)
+	switch {
+	case oauth == ports.AgentAuthStatusConfigured:
+		return ports.AgentAuthStatusConfigured
+	case customListed || !minimaxListed:
+		// Custom providers may read their key from an environment variable
+		// the list does not report, so a missing key stays unknown.
+		return ports.AgentAuthStatusUnknown
+	default:
+		return oauth
+	}
 }
 
 // oauthAuthStatus reads MiniMax's non-secret OAuth state files:
