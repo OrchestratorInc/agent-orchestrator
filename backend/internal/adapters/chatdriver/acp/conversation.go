@@ -82,7 +82,6 @@ type nestedMessageState struct {
 }
 
 type conversation struct {
-	validateConfigOption func(string, ports.ChatConfigOptionValue) error
 	conn                 *acpsdk.ClientSideConnection
 	legacyWire           *legacyACPTransport
 	proc                 *process

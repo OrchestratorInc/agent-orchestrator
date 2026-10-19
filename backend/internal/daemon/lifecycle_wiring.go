@@ -460,7 +460,9 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 			}
 			if admission.pending != "" {
 				if !hasWitness || !witness.TerminalMessageObserved(admission.pending, admission.baseline, screen) {
-					return fmt.Errorf("session %s: prior terminal submission remains unconfirmed", id)
+					// Admission resets only on a new runtime handle or launch, so name the
+					// recovery instead of looking like a transient failure.
+					return fmt.Errorf("session %s: prior terminal submission remains unconfirmed; check the terminal, then kill and restore the session to resume AO input", id)
 				}
 				admission.pending = ""
 			}

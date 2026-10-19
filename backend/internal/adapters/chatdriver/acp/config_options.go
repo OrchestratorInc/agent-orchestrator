@@ -38,11 +38,6 @@ func (c *conversation) SetConfigOption(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if c.validateConfigOption != nil {
-		if err := c.validateConfigOption(id, value); err != nil {
-			return nil, err
-		}
-	}
 	c.mu.Lock()
 	sessionID := c.sessionID
 	closed := c.closed
