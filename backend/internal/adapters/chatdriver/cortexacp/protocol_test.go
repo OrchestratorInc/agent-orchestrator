@@ -126,6 +126,13 @@ func protocolDriver(t *testing.T) (ports.ChatDriver, ports.ChatStartConfig) {
 	cfg := isolatedConfig(t)
 	cfg.Env["AO_CORTEX_FIXTURE_WORKSPACE"] = cfg.WorkspacePath
 	cfg.Model = "fixture-model"
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := persistenthost.Reconcile(cleanupCtx, cfg.DataDir, map[string]struct{}{}); err != nil {
+			t.Errorf("owned fixture cleanup: %v", err)
+		}
+	})
 	return NewCandidate(fixturePlugin{binary: binary}, nil), cfg
 }
 
@@ -189,7 +196,10 @@ func TestConstructorRunsNativeACPApprovalAndReconnectLifecycle(t *testing.T) {
 		if err := conv.ResolveRequest(ctx, request.RequestID, ports.ChatDecision{ID: choice}); err != nil {
 			t.Fatal(err)
 		}
-		eventUntil(t, conv.Events(), ports.ChatEventTurnCompleted)
+		completed := eventUntil(t, conv.Events(), ports.ChatEventTurnCompleted)
+		if err := conv.(ports.ChatProviderEventAcknowledger).AcknowledgeProviderEvent(ctx, completed.ProviderEventID); err != nil {
+			t.Fatal(err)
+		}
 	}
 	ref, err := conv.SendTurn(ctx, ports.ChatUserMessage{Text: "cancel pending tool", AuthoredByUser: true})
 	if err != nil {
@@ -205,6 +215,9 @@ func TestConstructorRunsNativeACPApprovalAndReconnectLifecycle(t *testing.T) {
 	completed := eventUntil(t, conv.Events(), ports.ChatEventTurnCompleted)
 	if completed.TurnState != domain.TurnStateInterrupted {
 		t.Fatalf("cancel state = %q", completed.TurnState)
+	}
+	if err := conv.(ports.ChatProviderEventAcknowledger).AcknowledgeProviderEvent(ctx, completed.ProviderEventID); err != nil {
+		t.Fatal(err)
 	}
 	assertProtocolChoices(t, cfg)
 	if err := conv.Close(); err != nil {
