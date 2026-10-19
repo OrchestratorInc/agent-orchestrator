@@ -155,6 +155,7 @@ func TestCandidateRejectsStockACPAndUnexpectedBridgeIdentity(t *testing.T) {
 		}
 	}
 	if err := validateInitialize(acpsdk.InitializeResponse{
+		ProtocolVersion:   acpsdk.ProtocolVersionNumber,
 		AgentInfo:         &acpsdk.Implementation{Name: "ao-mastra-sdk-candidate", Version: "1.11.0"},
 		AgentCapabilities: acpsdk.AgentCapabilities{LoadSession: true},
 	}); err != nil {

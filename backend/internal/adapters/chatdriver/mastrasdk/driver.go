@@ -162,7 +162,7 @@ func binding(plugin nativeacp.Plugin) acpdriver.Config {
 }
 
 func validateInitialize(response acpsdk.InitializeResponse) error {
-	if response.AgentInfo == nil || response.AgentInfo.Name != "ao-mastra-sdk-candidate" || response.AgentInfo.Version != "1.11.0" || !response.AgentCapabilities.LoadSession {
+	if response.ProtocolVersion != acpsdk.ProtocolVersionNumber || response.AgentInfo == nil || response.AgentInfo.Name != "ao-mastra-sdk-candidate" || response.AgentInfo.Version != "1.11.0" || !response.AgentCapabilities.LoadSession {
 		return fmt.Errorf("Mastra SDK candidate identity or exact-load contract changed")
 	}
 	return nil

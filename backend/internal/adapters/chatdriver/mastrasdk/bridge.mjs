@@ -73,7 +73,11 @@ export function createAgent({ connection, createRuntime, mapEvent, workspace, ow
   let disposePromise;
   const pending = new Set();
   const track = operation => {
-    const promise = Promise.resolve().then(operation);
+    // Start the async operation synchronously through its first await. A cancel
+    // arriving immediately after prompt must see its reserved native turn.
+    let promise;
+    try { promise = Promise.resolve(operation()); }
+    catch (error) { promise = Promise.reject(error); }
     pending.add(promise);
     promise.then(() => pending.delete(promise), () => pending.delete(promise));
     return promise;
@@ -100,6 +104,7 @@ export function createAgent({ connection, createRuntime, mapEvent, workspace, ow
     // approval policy. Refuse it, preserving the user's saved native settings.
     const state = session.state.get();
     if (state.yolo !== false) invalid('Native history enables unqualified automatic approval');
+    if (typeof state.projectPath !== 'string' || await realpath(state.projectPath) !== workspace) invalid('Native state belongs to another workspace');
     const rules = state.permissionRules;
     if (!rules || Object.entries(rules.categories ?? {}).some(([, value]) => !['ask', 'deny'].includes(value)) ||
         Object.entries(rules.tools ?? {}).some(([, value]) => !['ask', 'deny'].includes(value))) invalid('Native automatic permission rules are unqualified');

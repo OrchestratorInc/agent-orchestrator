@@ -15,7 +15,7 @@ async function fixture({ mapEvent } = {}) {
   const threads = new Map();
   const messages = new Map();
   let current;
-  let state = { yolo: false, permissionRules: { categories: {}, tools: { ask_user: 'deny' } } };
+  let state = { projectPath: workspace, yolo: false, permissionRules: { categories: {}, tools: { ask_user: 'deny' } } };
   let listener;
   let receivedConfig;
   let model = 'native/default';
@@ -218,4 +218,14 @@ test('native reasoning delta plus full snapshots emits each suffix once', () => 
   assert.equal(output.every(update => update.messageId === 'native-assistant:reasoning'), true);
   assert.deepEqual(reasoningUpdates(start, 'unrelated', parts), []);
   assert.throws(() => reasoningUpdates({ type: 'message_update', id: 'native-assistant', event: { type: 'part', index: 0, part: { type: 'reasoning', reasoning: 'rewritten' } } }, 'native-assistant', parts), /prefix/);
+});
+
+test('immediate cancel fences a queued prompt before native send', async () => {
+  const f = await fixture();
+  await f.agent.newSession(f.request);
+  const turn = f.agent.prompt({ sessionId: 'native-1', prompt: [{ type: 'text', text: 'ordinary task' }] });
+  await f.agent.cancel({ sessionId: 'native-1' });
+  assert.equal((await turn).stopReason, 'cancelled');
+  assert.equal(f.calls.some(([method]) => method === 'send'), false);
+  await f.agent.dispose();
 });
