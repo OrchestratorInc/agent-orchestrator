@@ -365,15 +365,17 @@ func (g *Guard) sendThen(ctx context.Context, id domain.SessionID, msg string, r
 	g.leaseMu.RLock()
 	lease := g.lease
 	g.leaseMu.RUnlock()
+	var releaseInput func()
 	if lease != nil {
 		release, ok := lease.AcquireSessionInput(id)
 		if !ok {
 			g.logger.Info("sessionguard: write suppressed", "sessionID", id, "reason", SuppressedInputGated.String())
 			return SuppressedInputGated, nil
 		}
-		defer release()
+		releaseInput = sync.OnceFunc(release)
+		defer releaseInput()
 	}
-	outcome, err := g.sendAdmitted(ctx, id, msg, refuse)
+	outcome, err := g.sendAdmittedReleasing(ctx, id, msg, refuse, nil, releaseInput)
 	if err == nil && outcome == Sent && after != nil {
 		if afterErr := after(ctx); afterErr != nil {
 			return outcome, afterErr
@@ -389,6 +391,15 @@ func (g *Guard) sendAdmitted(ctx context.Context, id domain.SessionID, msg strin
 }
 
 func (g *Guard) sendAdmittedChecked(ctx context.Context, id domain.SessionID, msg string, refuse func(domain.SessionRecord) (Outcome, bool), preWrite func(context.Context, domain.SessionRecord) error) (Outcome, error) {
+	return g.sendAdmittedReleasing(ctx, id, msg, refuse, preWrite, nil)
+}
+
+// sendAdmittedReleasing is sendAdmittedChecked for a caller holding an input
+// lease it can give up early. A chat send writes no pane, and waking a
+// hibernated chat needs an exclusive resume that waits for every lease to
+// drain, so holding the lease across a chat send would deadlock on itself.
+// Admission and the safety read above it still happened under the lease.
+func (g *Guard) sendAdmittedReleasing(ctx context.Context, id domain.SessionID, msg string, refuse func(domain.SessionRecord) (Outcome, bool), preWrite func(context.Context, domain.SessionRecord) error, releaseInput func()) (Outcome, error) {
 	rec, ok, err := g.store.GetSession(ctx, id)
 	if err != nil {
 		return SuppressedUnknown, fmt.Errorf("guard %s: read session: %w", id, err)
@@ -413,6 +424,9 @@ func (g *Guard) sendAdmittedChecked(ctx context.Context, id domain.SessionID, ms
 		if err := preWrite(ctx, rec); err != nil {
 			return SuppressedUnknown, fmt.Errorf("guard %s: pre-write check: %w", id, err)
 		}
+	}
+	if releaseInput != nil && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
+		releaseInput()
 	}
 	if err := g.messenger.Send(ctx, id, msg); err != nil {
 		return Sent, fmt.Errorf("guard %s: send: %w", id, err)
