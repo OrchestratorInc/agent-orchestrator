@@ -50,7 +50,9 @@ type LaunchConfig struct {
 
 // Config binds one harness to an ACP agent implementation.
 type Config struct {
-	Harness      domain.AgentHarness
+	Harness domain.AgentHarness
+	// Explicit false prompt capabilities stay disabled even when advertised by
+	// the native agent. Absent entries are discovered during initialization.
 	Capabilities ports.ChatCapabilities
 	Probe        func(context.Context) error
 	Launch       func(context.Context, LaunchConfig) (Launch, error)
@@ -805,11 +807,9 @@ func conversationCapabilities(
 	caps[ports.ChatCapabilityFork] = false // ACP has no turn-anchored fork in the pinned SDK.
 	caps[ports.ChatCapabilityForkCurrent] = init.AgentCapabilities.SessionCapabilities.Fork != nil &&
 		supportsSessionRestore(init)
-	if extensionSupported(init.Meta, "steering") {
-		caps[ports.ChatCapabilitySteer] = true
-	}
-	caps[ports.ChatCapabilityImages] = init.AgentCapabilities.PromptCapabilities.Image
-	caps[ports.ChatCapabilityEmbeddedContext] = init.AgentCapabilities.PromptCapabilities.EmbeddedContext
+	caps[ports.ChatCapabilitySteer] = negotiatedPromptCapability(configured, ports.ChatCapabilitySteer, extensionSupported(init.Meta, "steering"))
+	caps[ports.ChatCapabilityImages] = negotiatedPromptCapability(configured, ports.ChatCapabilityImages, init.AgentCapabilities.PromptCapabilities.Image)
+	caps[ports.ChatCapabilityEmbeddedContext] = negotiatedPromptCapability(configured, ports.ChatCapabilityEmbeddedContext, init.AgentCapabilities.PromptCapabilities.EmbeddedContext)
 	// ResourceLink is a baseline ACP content block rather than an optional prompt
 	// capability. Every ACP conversation preserves it natively.
 	caps[ports.ChatCapabilityResourceLinks] = true
@@ -819,6 +819,11 @@ func conversationCapabilities(
 	caps[ports.ChatCapabilityNestedAgents] = true
 	caps[ports.ChatCapabilityTerminalOutput] = true
 	return caps
+}
+
+func negotiatedPromptCapability(configured ports.ChatCapabilities, capability ports.ChatCapability, advertised bool) bool {
+	enabled, explicit := configured[capability]
+	return advertised && (!explicit || enabled)
 }
 
 func supportsSessionRestore(init acpsdk.InitializeResponse) bool {

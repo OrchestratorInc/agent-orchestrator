@@ -2412,6 +2412,75 @@ func TestConversationCapabilitiesTreatLoadSessionAsResume(t *testing.T) {
 	}
 }
 
+func TestACPDriverPreservesExplicitPromptCapabilityGates(t *testing.T) {
+	for _, resume := range []bool{false, true} {
+		name := "start"
+		if resume {
+			name = "resume"
+		}
+		t.Run(name, func(t *testing.T) {
+			agent := &fakeAgent{
+				steering: true,
+				capabilities: &acpsdk.AgentCapabilities{
+					LoadSession:        true,
+					PromptCapabilities: acpsdk.PromptCapabilities{Image: true, EmbeddedContext: true},
+				},
+			}
+			driver := New(Config{
+				Harness: domain.HarnessMiniMaxCode,
+				Capabilities: ports.ChatCapabilities{
+					ports.ChatCapabilityStreaming:       true,
+					ports.ChatCapabilityResume:          true,
+					ports.ChatCapabilityImages:          false,
+					ports.ChatCapabilityEmbeddedContext: false,
+					ports.ChatCapabilitySteer:           false,
+				},
+				Probe:  func(context.Context) error { return nil },
+				Launch: func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+			}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			driver.useTestProcess(fakeSpawn(agent))
+			var conv ports.ChatConversation
+			var err error
+			if resume {
+				conv, err = driver.Resume(context.Background(), ports.ChatResumeConfig{
+					ProviderConversationID: "claude-session-1", WorkspacePath: t.TempDir(),
+				})
+			} else {
+				conv, err = driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conv.Close()
+			for _, capability := range []ports.ChatCapability{ports.ChatCapabilityImages, ports.ChatCapabilityEmbeddedContext, ports.ChatCapabilitySteer} {
+				if conv.Capabilities().Has(capability) {
+					t.Fatalf("provider advertisement overrode explicit %s exclusion", capability)
+				}
+			}
+			for _, content := range []ports.ChatContent{
+				{Type: "image", Data: "aW1hZ2U=", MIMEType: "image/png"},
+				{Type: "resource", URI: "file:///repo/notes.txt", Text: "private context"},
+			} {
+				if _, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "inspect", Content: []ports.ChatContent{content}}); err == nil {
+					t.Fatalf("explicitly excluded %s content was admitted", content.Type)
+				}
+			}
+		})
+	}
+}
+
+func TestConversationPromptCapabilitiesRequireNativeSupport(t *testing.T) {
+	configured := ports.ChatCapabilities{
+		ports.ChatCapabilityImages: true, ports.ChatCapabilityEmbeddedContext: true, ports.ChatCapabilitySteer: true,
+	}
+	caps := conversationCapabilities(configured, acpsdk.InitializeResponse{})
+	for capability := range configured {
+		if caps.Has(capability) {
+			t.Fatalf("%s enabled without native support", capability)
+		}
+	}
+}
+
 func TestACPDriverUsesProviderPermissionPolicyBeforeParking(t *testing.T) {
 	agent := &fakeAgent{promptNoPermission: true}
 	driver := New(Config{

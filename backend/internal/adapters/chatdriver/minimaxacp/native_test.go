@@ -345,6 +345,11 @@ func startNativeConformance(t *testing.T, id domain.SessionID) nativeConformance
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, capability := range []ports.ChatCapability{ports.ChatCapabilityImages, ports.ChatCapabilityEmbeddedContext, ports.ChatCapabilitySteer} {
+		if conv.Capabilities().Has(capability) {
+			t.Fatalf("unqualified MiniMax capability %s was enabled", capability)
+		}
+	}
 	configurer, ok := conv.(ports.ChatConfigOptionController)
 	if !ok {
 		t.Fatal("native session did not expose its effective permission policy")
