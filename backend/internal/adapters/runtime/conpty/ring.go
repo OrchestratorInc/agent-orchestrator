@@ -8,6 +8,18 @@ import (
 // MaxOutputLines is the rolling line-buffer cap, matching MAX_OUTPUT_LINES in pty-host.ts.
 const MaxOutputLines = 1000
 
+// Byte bounds. A line count alone does not bound the retained stream: a
+// full-screen TUI repaints with cursor control and few newlines, so each
+// "line" grows into megabytes and a 1000-line replay can reach tens of MB.
+// MaxRingBytes bounds what a viewer replays and a probe reads;
+// MaxRingLineBytes splits such a repaint into entries that eviction can drop;
+// MaxTailBytes caps one GetOutput/GetStyledOutput response.
+const (
+	MaxRingBytes     = 4 << 20
+	MaxRingLineBytes = 64 << 10
+	MaxTailBytes     = 128 << 10
+)
+
 // Ring is a bounded rolling buffer of terminal output lines, ANSI codes preserved.
 // It mirrors the appendOutput state machine from pty-host.ts.
 // Concurrent Append and Snapshot/Tail calls are safe.
@@ -15,6 +27,7 @@ type Ring struct {
 	mu          sync.Mutex
 	lines       []string // each entry is "line\n" (or bare text on FlushPartial)
 	partialLine string
+	bytes       int // len(partialLine) + sum of len(line) for line in lines
 }
 
 // NewRing returns an empty Ring.
@@ -24,7 +37,7 @@ func NewRing() *Ring {
 
 // Append mirrors appendOutput from pty-host.ts: prepend the current partialLine,
 // split on newlines, store completed lines with "\n" re-appended, keep the last
-// element as the new partialLine, then trim to MaxOutputLines.
+// element as the new partialLine, then trim to the byte and line caps.
 func (r *Ring) Append(raw []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -36,11 +49,45 @@ func (r *Ring) Append(raw []byte) {
 	for _, line := range parts[:len(parts)-1] {
 		r.lines = append(r.lines, line+"\n")
 	}
-	if len(r.lines) > MaxOutputLines {
-		// ponytail: slice off the head; ceiling: O(n) copy on every trim cycle.
-		// Upgrade path: circular buffer if trim rate is very high.
-		r.lines = r.lines[len(r.lines)-MaxOutputLines:]
+	// The buffer's content grows by exactly the appended bytes; the split above
+	// only moves bytes between partialLine and lines.
+	r.bytes += len(raw)
+	// A full-screen TUI can repaint for hours without a newline, so the partial
+	// line is not covered by MaxOutputLines. Split it into MaxRingLineBytes
+	// entries so trimLocked's byte accounting can evict it; entries concatenate
+	// in order, so the joined stream is unchanged.
+	for len(r.partialLine) >= MaxRingLineBytes {
+		r.lines = append(r.lines, r.partialLine[:MaxRingLineBytes])
+		r.partialLine = r.partialLine[MaxRingLineBytes:]
 	}
+	r.trimLocked()
+}
+
+// trimLocked drops the oldest entries until the ring is within both caps. The
+// newest bytes are the ones a viewer or probe came for, so eviction is always
+// from the head.
+func (r *Ring) trimLocked() {
+	if len(r.lines) <= MaxOutputLines && r.bytes <= MaxRingBytes {
+		return
+	}
+	drop := 0
+	for drop < len(r.lines) && (len(r.lines)-drop > MaxOutputLines || r.bytes > MaxRingBytes) {
+		r.bytes -= len(r.lines[drop])
+		drop++
+	}
+	// ponytail: slice off the head; ceiling: O(n) copy on every trim cycle.
+	// Upgrade path: circular buffer if trim rate is very high.
+	r.lines = r.lines[drop:]
+}
+
+// capTailBytes returns the last MaxTailBytes bytes of b, so one GetOutput or
+// GetStyledOutput response cannot carry a full scrollback. The cut can land
+// mid-rune or mid-escape, which only affects the leading glyph of the reply.
+func capTailBytes(b []byte) []byte {
+	if len(b) > MaxTailBytes {
+		return b[len(b)-MaxTailBytes:]
+	}
+	return b
 }
 
 // FlushPartial pushes any in-progress partial line as a final entry.
@@ -54,6 +101,7 @@ func (r *Ring) FlushPartial() {
 	}
 	r.lines = append(r.lines, r.partialLine)
 	r.partialLine = ""
+	r.trimLocked()
 }
 
 // Snapshot returns all stored lines concatenated as raw bytes for scrollback replay.

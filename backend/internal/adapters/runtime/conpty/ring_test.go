@@ -1,6 +1,7 @@
 package conpty
 
 import (
+	"bytes"
 	"strings"
 	"sync"
 	"testing"
@@ -131,6 +132,93 @@ func TestRingReplayIncludesPartialTUIOutput(t *testing.T) {
 
 	if got, want := string(r.Replay()), "complete\n\x1b[?1049h\rcurrent tui"; got != want {
 		t.Errorf("Replay = %q, want %q", got, want)
+	}
+}
+
+// TestRingByteCapEvictsOldestAndKeepsTail: a newline-free repaint cannot grow
+// the ring past MaxRingBytes; eviction drops the oldest bytes and keeps the
+// newest, which is what a viewer replays and a probe reads.
+func TestRingByteCapEvictsOldestAndKeepsTail(t *testing.T) {
+	r := NewRing()
+	const chunkBytes = 512 << 10
+	for i := 0; i < 10; i++ { // 5 MiB in total, past the 4 MiB cap
+		r.Append(bytes.Repeat([]byte{byte('a' + i)}, chunkBytes))
+	}
+
+	got := r.Replay()
+	if len(got) > MaxRingBytes {
+		t.Fatalf("Replay = %d bytes, want <= the %d-byte cap", len(got), MaxRingBytes)
+	}
+	if len(got) <= MaxRingBytes-chunkBytes {
+		t.Fatalf("Replay = %d bytes, want the cap to be used", len(got))
+	}
+	if !bytes.HasSuffix(got, bytes.Repeat([]byte("j"), chunkBytes)) {
+		t.Fatal("the newest chunk was evicted")
+	}
+	if bytes.Contains(got, bytes.Repeat([]byte("a"), chunkBytes)) {
+		t.Fatal("the oldest chunk survived the byte cap")
+	}
+}
+
+// TestRingSplitsAnOversizedPartialLine: a newline-free repaint is stored as
+// MaxRingLineBytes-sized entries; every entry is bounded and the joined stream
+// is unchanged.
+func TestRingSplitsAnOversizedPartialLine(t *testing.T) {
+	r := NewRing()
+	r.Append([]byte("start\n"))
+	blob := bytes.Repeat([]byte("y"), MaxRingLineBytes*3+17)
+	r.Append(blob)
+
+	want := "start\n" + string(blob)
+	if got := string(r.Replay()); got != want {
+		t.Fatalf("Replay changed by the split: %d bytes, want %d", len(got), len(want))
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, entry := range r.lines {
+		if len(entry) > MaxRingLineBytes {
+			t.Fatalf("entry %d is %d bytes, want <= %d", i, len(entry), MaxRingLineBytes)
+		}
+	}
+	if len(r.lines) < 3 {
+		t.Fatalf("oversized partial stored as %d entries, want it split", len(r.lines))
+	}
+	if len(r.partialLine) > MaxRingLineBytes {
+		t.Fatalf("partialLine is %d bytes, want <= %d", len(r.partialLine), MaxRingLineBytes)
+	}
+}
+
+// TestRingByteAccountingMatchesContent verifies the internal byte counter used
+// by eviction always equals the retained content's length.
+func TestRingByteAccountingMatchesContent(t *testing.T) {
+	r := NewRing()
+	r.Append([]byte("a\n"))
+	r.Append(bytes.Repeat([]byte("b"), MaxRingLineBytes+1)) // forces a split
+	r.Append([]byte("c\n"))
+	r.FlushPartial()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	total := len(r.partialLine)
+	for _, line := range r.lines {
+		total += len(line)
+	}
+	if r.bytes != total {
+		t.Fatalf("bytes = %d, content = %d", r.bytes, total)
+	}
+}
+
+// TestCapTailBytes verifies the response-tail cap used by the GetOutput
+// handlers.
+func TestCapTailBytes(t *testing.T) {
+	short := []byte("short")
+	if got := capTailBytes(short); !bytes.Equal(got, short) {
+		t.Fatalf("capTailBytes(short) = %q", got)
+	}
+	long := bytes.Repeat([]byte("x"), MaxTailBytes+10)
+	got := capTailBytes(long)
+	if len(got) != MaxTailBytes || !bytes.Equal(got, long[10:]) {
+		t.Fatalf("capTailBytes(long) = %d bytes, want the last %d", len(got), MaxTailBytes)
 	}
 }
 
