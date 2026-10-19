@@ -20,6 +20,16 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  mastra-sdk-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Test candidate Mastra SDK lifecycle and native history contract
+        run: node --test backend/internal/adapters/chatdriver/mastrasdk/*.test.mjs
+
   backend-core:
     runs-on: ubuntu-latest
     strategy:
@@ -143,7 +153,7 @@ jobs:
   # Keep the existing required check as the gate for every backend race test.
   build-test:
     if: always()
-    needs: [backend-core, chat-race, session-store-race, sqlite-race]
+    needs: [backend-core, chat-race, session-store-race, sqlite-race, mastra-sdk-contract]
     runs-on: ubuntu-latest
     steps:
       - name: Check backend results
@@ -152,6 +162,7 @@ jobs:
           test '${{ needs.chat-race.result }}' = success
           test '${{ needs.session-store-race.result }}' = success
           test '${{ needs.sqlite-race.result }}' = success
+          test '${{ needs.mastra-sdk-contract.result }}' = success
 
   # The suite above only ever runs on Linux, so the packages whose behaviour is
   # genuinely platform-specific have never been exercised on Windows: worktree
