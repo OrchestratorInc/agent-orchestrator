@@ -16,8 +16,17 @@ import (
 //go:embed assets/ao-activity.mjs
 var hookSource []byte
 
+//go:embed assets/ao-node-hooks.mjs
+var nodePreloadSource []byte
+
 func hookPath(dataDir string) string {
 	return filepath.Join(dataDir, "agents", "strands", "ao-activity.mjs")
+}
+
+// nodePreloadPath is imported before the Strands CLI so its plugin loading
+// works on Node releases with synchronous module hooks.
+func nodePreloadPath(dataDir string) string {
+	return filepath.Join(dataDir, "agents", "strands", "ao-node-hooks.mjs")
 }
 
 // GetAgentHooks installs a private external plugin; no workspace or user
@@ -33,7 +42,10 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return hookutil.AtomicWriteFile(path, hookSource, 0o600)
+	if err := hookutil.AtomicWriteFile(path, hookSource, 0o600); err != nil {
+		return err
+	}
+	return hookutil.AtomicWriteFile(nodePreloadPath(cfg.DataDir), nodePreloadSource, 0o600)
 }
 
 // EmitsSubmitActivity reports the native BeforeInvocationEvent callback.

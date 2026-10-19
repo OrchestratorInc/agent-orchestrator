@@ -3,7 +3,9 @@ package strands
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -282,5 +284,44 @@ func TestRuntimeLaunchEnvFencesNativeHomeAndDisablesMCPDiscovery(t *testing.T) {
 	}
 	if env["STRANDS_CLI_MCP_DISCOVERY"] != "off" {
 		t.Fatalf("MCP discovery = %q; want off", env["STRANDS_CLI_MCP_DISCOVERY"])
+	}
+}
+
+// Strands 0.2.x crashes loading any plugin on Node with synchronous module
+// hooks; every launch must preload AO's workaround and keep existing options.
+func TestRuntimeLaunchEnvPreloadsNodeHookWorkaround(t *testing.T) {
+	p, cfg := setup(t, `{}`)
+	if _, err := p.GetLaunchCommand(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	preload, err := os.ReadFile(nodePreloadPath(cfg.DataDir))
+	if err != nil || string(preload) != string(nodePreloadSource) {
+		t.Fatalf("preload not installed: %v", err)
+	}
+	env := map[string]string{"NODE_OPTIONS": "--max-old-space-size=4096"}
+	p.AugmentRuntimeLaunchEnv(env, cfg.DataDir, "ao-1", "launch-1")
+	want := `--import "` + (&url.URL{Scheme: "file", Path: filepath.ToSlash(nodePreloadPath(cfg.DataDir))}).String() + `"`
+	if !strings.HasPrefix(env["NODE_OPTIONS"], want) || !strings.HasSuffix(env["NODE_OPTIONS"], "--max-old-space-size=4096") {
+		t.Fatalf("NODE_OPTIONS = %q", env["NODE_OPTIONS"])
+	}
+	p.AugmentRuntimeLaunchEnv(env, cfg.DataDir, "ao-1", "launch-2")
+	if strings.Count(env["NODE_OPTIONS"], "--import") != 1 {
+		t.Fatalf("preload duplicated: %q", env["NODE_OPTIONS"])
+	}
+}
+
+func TestNodePreloadHidesSynchronousModuleHooks(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	path := filepath.Join(t.TempDir(), "ao-node-hooks.mjs")
+	if err := os.WriteFile(path, nodePreloadSource, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(node, "--import", (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String(),
+		"--input-type=module", "-e", `import * as m from "node:module"; console.log(typeof m.registerHooks, typeof m.register)`).CombinedOutput()
+	if err != nil || strings.TrimSpace(string(out)) != "undefined function" {
+		t.Fatalf("preload output %q, %v", out, err)
 	}
 }
