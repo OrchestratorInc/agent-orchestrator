@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
@@ -172,6 +173,7 @@ var (
 	ErrSpawnCreate             = errors.New("create")
 	ErrSpawnSystemPrompt       = errors.New("system prompt file")
 	ErrSpawnArtifactDir        = errors.New("artifact dir")
+	ErrSpawnAgentAccount       = errors.New("agent account")
 	ErrWorkspaceCreate         = errors.New("workspace")
 	ErrWorkspaceProvision      = errors.New("provision")
 	ErrSpawnAttachments        = errors.New("attachments")
@@ -433,6 +435,9 @@ type Manager struct {
 	preview                     PreviewLifecycle
 	browser                     BrowserLifecycle
 	browserCapabilities         BrowserCapabilityIssuer
+	agentAccounts               ports.AgentAccountLaunchEnv
+	accountOverrideMu           sync.Mutex
+	accountOverrides            map[domain.SessionID]string
 	attachments                 *attachmentstore.Store
 	attachmentSuffix            func() (string, error)
 	dataDir                     string
@@ -549,6 +554,19 @@ type Manager struct {
 
 	terminalInputGateMu sync.Mutex
 	terminalInputGate   TerminalInputGate
+	// updateStops holds input gates of terminals stopped for an update.
+	updateStops updateStops
+	// versionRetries are sessions a version move could not start again.
+	versionRetries versionRetries
+	// versionMoves bounds the version moves restarting sessions at once.
+	versionMoves versionMoveSlots
+	// versionPolicy says whether and when sessions move to a new release;
+	// nil means they do not (see SetVersionRefreshPolicy).
+	versionPolicyMu sync.Mutex
+	versionPolicy   func() VersionRefreshPolicy
+	// versionTelemetry receives version-move events; nil drops them.
+	versionTelemetryMu sync.Mutex
+	versionTelemetry   ports.EventSink
 
 	reviewersMu sync.Mutex
 	reviewers   ReviewerTerminator
@@ -643,6 +661,12 @@ func (m *Manager) SetTerminalInputGate(gate TerminalInputGate) {
 // SetAgentReadiness completes daemon wiring before request handling begins.
 func (m *Manager) SetAgentReadiness(provider ports.AgentReadinessProvider) {
 	m.agentReadiness = provider
+}
+
+// SetAgentAccounts completes daemon wiring before request handling begins.
+// Nil launches every agent under the computer's own CLI login.
+func (m *Manager) SetAgentAccounts(accounts ports.AgentAccountLaunchEnv) {
+	m.agentAccounts = accounts
 }
 
 // SetPersistentHostReconcileDone fences cold Chat resumes until startup has
@@ -1004,6 +1028,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// Resolve the effective agent config (project base + role override + spawn
 	// override) and validate the model before any durable state is created. A
 	// model the harness cannot honor should not leave a seed row behind.
+	explicitModel := cfg.AgentConfig.Model != ""
 	agentConfig := applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, project.Config), cfg.AgentConfig)
 	if err := validateSpawnModel(cfg.Harness, agentConfig.Model); err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: %s", ErrUnsupportedModel, err.Error())
@@ -1116,6 +1141,18 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 	}
 	id := rec.ID
+	if m.agentAccounts != nil {
+		if err := m.agentAccounts.BindSession(ctx, id, cfg.Harness, cfg.AgentAccountID); err != nil {
+			if prep != nil {
+				cleanupCtx, cancel := spawnRollbackContext(ctx)
+				m.discardClaimedTaskPreparation(cleanupCtx, prep)
+				cancel()
+			} else {
+				m.rollbackSpawnSeedRow(ctx, id)
+			}
+			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnAgentAccount, err)
+		}
+	}
 	// The system prompt embeds the artifact directory path, so the directory
 	// must exist and be known before buildSpawnTexts runs. For a prep-derived
 	// session the value is threaded through the later promoteTaskPreparation
@@ -1385,6 +1422,23 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnBrowser, err)
 	}
+	if cfg.Harness == domain.HarnessMemcode && agentConfig.Model != "" {
+		// The workspace may introduce a native endpoint, so resolve this after
+		// provisioning but before hooks or launch validation see the model.
+		customEndpoint, modelErr := memcode.UsesCustomEndpoint(ctx, ws.Path, env)
+		if modelErr == nil && customEndpoint {
+			if explicitModel {
+				modelErr = fmt.Errorf("%w: memcode custom endpoints require native model selection", ErrUnsupportedModel)
+			} else {
+				agentConfig.Model = ""
+				adapterConfig.Model = ""
+			}
+		}
+		if modelErr != nil {
+			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
+			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPrepare, modelErr)
+		}
+	}
 	m.augmentAgentRuntimeEnv(agent, env)
 	pinRuntimePermissionEnv(env, adapterConfig.Permissions)
 	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok {
@@ -1511,7 +1565,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		m.markSpawnFailedTerminatedAfterFailure(ctx, id, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnCommit, err)
 	}
-	if delivery == ports.PromptDeliveryAfterStart && afterStartPrompt != "" {
+	if delivery == ports.PromptDeliveryAfterStart {
 		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, id, afterStartPrompt); err != nil {
 			runtimeDestroyed := m.destroySpawnRuntimeAfterFailure(ctx, handle)
 			workspaceDestroyed := m.rollbackPreparedSpawnWorkspaceAfterFailure(ctx, rec, ws, workspaceProject, runtimeDestroyed)
@@ -2255,6 +2309,12 @@ func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, 
 	if override.Permissions != "" {
 		merged.Permissions = override.Permissions
 	}
+	// A project may carry a model from its previous worker harness. Memcode
+	// accepts only its native catalog; leave an incompatible inherited choice
+	// to the TUI instead of making every launch and restore fail.
+	if harness == domain.HarnessMemcode && validateSpawnModel(harness, merged.Model) != nil {
+		merged.Model = ""
+	}
 	return merged
 }
 
@@ -2987,6 +3047,9 @@ func (m *Manager) ExitAgent(ctx context.Context, id domain.SessionID) (domain.Se
 	if rec.Activity.State == domain.ActivityExited {
 		return domain.SessionRecord{}, fmt.Errorf("exit agent %s: %w", id, ErrAgentExited)
 	}
+	if err := m.releaseTerminalRuntime(ctx, rec); err != nil {
+		return domain.SessionRecord{}, fmt.Errorf("exit agent %s: %w", id, err)
+	}
 	if err := m.stopAgentController(ctx, rec); err != nil {
 		return domain.SessionRecord{}, fmt.Errorf("exit agent %s: %w", id, err)
 	}
@@ -3004,6 +3067,30 @@ func (m *Manager) ExitAgent(ctx context.Context, id domain.SessionID) (domain.Se
 		return domain.SessionRecord{}, fmt.Errorf("exit agent %s: %w", id, ErrSwitchSourceStopUnconfirmed)
 	}
 	return exited, nil
+}
+
+// releaseTerminalRuntime records, before a terminal agent's runtime is
+// destroyed, that its launch ends on purpose. Without it the reaper reads the
+// dead runtime as a crash and ends the session ExitAgent keeps.
+func (m *Manager) releaseTerminalRuntime(ctx context.Context, rec domain.SessionRecord) error {
+	launchID := strings.TrimSpace(rec.Metadata.RuntimeLaunchID)
+	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat || launchID == "" {
+		return nil
+	}
+	store, ok := m.store.(interface {
+		SetSessionRuntimeReleased(context.Context, domain.SessionID, string) (bool, error)
+	})
+	if !ok {
+		return nil
+	}
+	released, err := store.SetSessionRuntimeReleased(ctx, rec.ID, launchID)
+	if err != nil {
+		return fmt.Errorf("record runtime release: %w", err)
+	}
+	if !released {
+		return fmt.Errorf("record runtime release: launch %s is no longer the session's", launchID)
+	}
+	return nil
 }
 
 // stopAgentController is the single controller-stop primitive used by the
@@ -3133,6 +3220,12 @@ func (m *Manager) WakeHibernatedChat(ctx context.Context, id domain.SessionID) e
 // identity and never changes the durable terminated flag as an intermediate
 // step.
 func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (result RestoreResult, err error) {
+	return m.resumeAgentWithMode(ctx, id, false)
+}
+
+// resumeAgentWithMode preserves strict native-history intent for automatic
+// retries, including update stops that have no stale-binary failure marker.
+func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, requireNativeHistory bool) (result RestoreResult, err error) {
 	if err := m.beginAgentResume(ctx, id); err != nil {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, err)
 	}
@@ -3265,7 +3358,17 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 			return RestoreResult{}, fmt.Errorf("resume agent %s: hibernation state changed: %w", id, ErrResumeInProgress)
 		}
 	}
-	return m.resumeAgentRecordWithPolicy(ctx, "resume agent", rec, false, false)
+	result, err = m.resumeAgentRecordWithPolicy(ctx, "resume agent", rec,
+		requireNativeHistory || (rec.StaleBinary != nil && rec.StaleBinary.SwitchFailedAt != nil))
+	if err == nil && m.chat != nil && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat &&
+		rec.StaleBinary != nil && rec.StaleBinary.SwitchFailedAt != nil {
+		// A failed move to a new release kept the user's queued messages for
+		// this start; deliver them now, as a wake would.
+		if drainErr := m.chat.DrainChatQueue(ctx, id); drainErr != nil {
+			m.logger.Warn("could not deliver messages queued before a failed version switch", "sessionID", id, "error", drainErr)
+		}
+	}
+	return result, err
 }
 
 // launchedTUIAgentStillAlive reports whether the exact AO supervisor of the
@@ -3297,10 +3400,9 @@ func (m *Manager) resumeAgentRecordWithPolicy(
 	ctx context.Context,
 	operation string,
 	rec domain.SessionRecord,
-	forceFresh bool,
 	requireNativeHistory bool,
 ) (RestoreResult, error) {
-	return m.resumeAgentRecordWithReservedGeneration(ctx, operation, rec, forceFresh, requireNativeHistory, "")
+	return m.resumeAgentRecordWithReservedGeneration(ctx, operation, rec, false, requireNativeHistory, "")
 }
 
 func (m *Manager) resumeAgentRecordWithReservedGeneration(
@@ -3417,6 +3519,15 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: browser capability: %w", operation, rec.ID, err)
 	}
+	if rec.Harness == domain.HarnessMemcode && agentConfig.Model != "" {
+		customEndpoint, err := memcode.UsesCustomEndpoint(ctx, ws.Path, env)
+		if err != nil {
+			return RestoreResult{}, fmt.Errorf("%s %s: model configuration: %w", operation, rec.ID, err)
+		}
+		if customEndpoint || validateSpawnModel(rec.Harness, agentConfig.Model) != nil {
+			agentConfig.Model = ""
+		}
+	}
 	m.augmentAgentRuntimeEnv(agent, env)
 	pinRuntimePermissionEnv(env, agentConfig.Permissions)
 	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok {
@@ -3431,10 +3542,42 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	if err := m.prepareWorkspace(ctx, agent, rec.ID, ws.Path, systemPrompt, systemPromptFile, agentConfig, env); err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
 	}
+	if requireNativeHistory && !forceFresh {
+		if probe, ok := agent.(ports.AgentInterfaceHandoffHistoryProbe); ok {
+			ref := ports.SessionRef{ID: string(rec.ID), WorkspacePath: ws.Path,
+				Metadata: map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID}}
+			exists, probeErr := probe.NativeConversationExists(ctx, ref, rec.Metadata.AgentSessionID, env)
+			if probeErr != nil || !exists {
+				return RestoreResult{}, fmt.Errorf("%s %s: native history could not be verified: %w", operation, rec.ID,
+					errors.Join(ErrNotResumable, probeErr))
+			}
+		}
+	}
 	var argv []string
+	var initialization ports.NativeRestoreInitialization
 	var delivery ports.PromptDeliveryStrategy
 	var mode RestoreMode
-	if forceFresh {
+	if restorer, ok := agent.(ports.AgentInteractiveNativeRestorer); ok && !forceFresh {
+		identityUnverified := rec.Metadata.RuntimeLaunchID != "" && rec.Metadata.AgentSessionIDLaunchID != rec.Metadata.RuntimeLaunchID
+		if identityUnverified && requireNativeHistory {
+			err = ErrNotResumable
+		} else if identityUnverified {
+			argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
+				systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true)
+		} else {
+			initialization, err = restorer.PrepareNativeRestore(ctx, ports.RestoreConfig{Session: ports.SessionRef{ID: string(rec.ID), WorkspacePath: ws.Path, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID}}, DataDir: m.dataDir, Kind: rec.Kind, Config: agentConfig, Permissions: agentConfig.Permissions, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile})
+			if err == nil {
+				argv = initialization.Argv()
+				for key, value := range initialization.LaunchEnv() {
+					env[key] = value
+				}
+				delivery, mode = ports.PromptDeliveryInCommand, RestoreModeNative
+			} else if errors.Is(err, ports.ErrNativeHistoryUnavailable) && !requireNativeHistory {
+				argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
+					systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true)
+			}
+		}
+	} else if forceFresh {
 		argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
 			systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true)
 	} else {
@@ -3514,6 +3657,35 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, fmt.Errorf("%s %s: runtime: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env))
 	}
+	// A runtime accepting Restart only proves that its supervisor was created.
+	// Keep the previous launch (and stale/release references) until the exact
+	// resumed child is observable. A failed native resume remains recoverable.
+	if requireNativeHistory && !forceFresh {
+		var startErr error
+		if rec.StaleBinary != nil {
+			startErr = m.verifyRefreshedTerminal(ctx, handle, rec.ID, launchID)
+		} else {
+			alive, err := m.waitForTargetGeneration(ctx, handle, rec.ID, domain.AgentGenerationID(launchID))
+			if err != nil || !alive {
+				startErr = errors.Join(ErrNotResumable, err)
+			}
+		}
+		if startErr != nil {
+			if rec.StaleBinary != nil && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI {
+				// This replacement has not committed its launch ID, so its exit
+				// hook is correctly fenced from the old row. Reconcile a proven
+				// dead child explicitly: otherwise that row stays idle and Resume
+				// (including the automatic retry) cannot recover it. Unknown
+				// probes retain state without claiming that a process has died.
+				probe := m.runtime.ProbeFencedRuntime(ctx, ports.FencedRuntimeRef{Handle: handle, SessionID: rec.ID, Generation: launchID})
+				if probe.Liveness == ports.FencedDead {
+					_, preserveErr := m.preserveFailedReconcileRelaunch(ctx, rec)
+					startErr = errors.Join(startErr, preserveErr)
+				}
+			}
+			return RestoreResult{}, fmt.Errorf("%s %s: resumed agent did not start: %w", operation, rec.ID, startErr)
+		}
+	}
 	metadata := domain.SessionMetadata{
 		Permissions:               rec.Metadata.Permissions,
 		Branch:                    ws.Branch,
@@ -3533,8 +3705,8 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	// and transfers the required native history. Fresh and fallback launches
 	// still require current-generation identity proof from their hooks.
 	bindNativeIdentity := mode == RestoreModeNative &&
-		(rec.Harness == domain.HarnessCodex || rec.Harness == domain.HarnessClaudeCode || rec.Harness == domain.HarnessAgy)
-	if (bindNativeIdentity || (requireNativeHistory && !forceFresh)) && strings.TrimSpace(metadata.AgentSessionID) != "" {
+		(rec.Harness == domain.HarnessCodex || rec.Harness == domain.HarnessClaudeCode || rec.Harness == domain.HarnessAgy || m.terminalVersionRefreshSupported(rec.Harness))
+	if initialization == nil && (bindNativeIdentity || (requireNativeHistory && !forceFresh)) && strings.TrimSpace(metadata.AgentSessionID) != "" {
 		metadata.AgentSessionIDLaunchID = launchID
 	}
 	if err := m.lcm.MarkSpawned(ctx, rec.ID, metadata); err != nil {
@@ -3542,7 +3714,18 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, fmt.Errorf("%s %s: completed: %w", operation, rec.ID, err)
 	}
-	if delivery == ports.PromptDeliveryAfterStart && afterStartPrompt != "" {
+	if initialization != nil {
+		if err := m.initializeNativeRestore(ctx, rec, handle, launchID, initialization); err != nil {
+			cleanupCtx, cancel := spawnRollbackContext(ctx)
+			cleanupErr := m.rollbackNativeInitialization(cleanupCtx, rec, handle, launchID)
+			cancel()
+			return RestoreResult{}, fmt.Errorf("%s %s: native initialization: %w", operation, rec.ID, errors.Join(err, cleanupErr))
+		}
+	}
+	if delivery == ports.PromptDeliveryAfterStart || initialization != nil {
+		if mode == RestoreModeNative {
+			afterStartPrompt = "" // restore native state without replaying a user turn
+		}
 		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, rec.ID, afterStartPrompt); err != nil {
 			m.destroySpawnRuntimeAfterFailure(ctx, handle)
 			cleanupCtx, cancel := spawnRollbackContext(ctx)
@@ -5879,6 +6062,18 @@ func spawnEnvForOS(id domain.SessionID, project domain.ProjectID, issue domain.I
 // When the pin cannot be applied the inherited PATH is kept and a warning is
 // logged so the degradation isn't silent.
 func (m *Manager) runtimeEnv(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string) map[string]string {
+	env, err := m.runtimeEnvChecked(id, project, issue, projectEnv, m.accountOverride(id))
+	if err != nil {
+		m.logger.Warn("session agent account env incomplete", "session", id, "error", err)
+	}
+	return env
+}
+
+// runtimeEnvChecked is runtimeEnv that also reports why the session's account
+// environment could not be resolved, for callers that must not go on under
+// another login (an account move's preflight). A nonempty accountID replaces
+// the session's binding.
+func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string, accountID string) (map[string]string, error) {
 	caseInsensitive := envKeysCaseInsensitive
 	env := spawnEnvForOS(id, project, issue, m.dataDir, projectEnv, caseInsensitive)
 	// Project configuration must never redirect AO-owned hook callbacks to a
@@ -5895,14 +6090,39 @@ func (m *Manager) runtimeEnv(id domain.SessionID, project domain.ProjectID, issu
 	setProtectedEnv(env, EnvBrowserCapability, "", caseInsensitive)
 	setProtectedEnv(env, EnvBrowserRuntimeToken, "", caseInsensitive)
 	setProtectedEnv(env, EnvBrowserRuntimeTokenStdin, "", caseInsensitive)
+	accountErr := m.applyAgentAccountEnv(id, accountID, env, caseInsensitive)
 	path, err := hookPATHForOS(m.executable, os.Getenv, projectEnv, m.dataDir, caseInsensitive)
 	if err != nil {
 		m.logger.Warn("session PATH not pinned to the daemon binary; `ao hooks` callbacks may resolve to a different ao and activity tracking will stall",
 			"session", id, "error", err)
-		return env
+		return env, accountErr
 	}
 	setProtectedEnv(env, "PATH", path, caseInsensitive)
-	return env
+	return env, accountErr
+}
+
+// applyAgentAccountEnv runs each provider's CLI under the session's account.
+// It wins over project env, because a project value would silently launch the
+// agent under a different login than the one the session shows. A nonempty
+// accountID replaces the session's binding. An error means the env may lack an
+// account's variables.
+func (m *Manager) applyAgentAccountEnv(id domain.SessionID, accountID string, env map[string]string, caseInsensitive bool) error {
+	if m.agentAccounts == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var accountEnv map[string]string
+	var err error
+	if accountID != "" {
+		accountEnv, err = m.agentAccounts.SessionLaunchEnvWith(ctx, id, accountID)
+	} else {
+		accountEnv, err = m.agentAccounts.SessionLaunchEnv(ctx, id)
+	}
+	for key, value := range accountEnv {
+		setProtectedEnv(env, key, value, caseInsensitive)
+	}
+	return err
 }
 
 func deleteProtectedEnv(env map[string]string, key string, caseInsensitive bool) {
@@ -6215,7 +6435,7 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 		return fmt.Errorf("install hooks: %w", err)
 	}
 	if pl, ok := agent.(preLauncher); ok {
-		if err := pl.PreLaunch(ctx, ports.LaunchConfig{DataDir: m.dataDir, SessionID: string(id), WorkspacePath: workspacePath}); err != nil {
+		if err := pl.PreLaunch(ctx, ports.LaunchConfig{DataDir: m.dataDir, SessionID: string(id), WorkspacePath: workspacePath, Env: env}); err != nil {
 			m.cleanupPreparedAgentWorkspace(ctx, agent, id, workspacePath, env)
 			return fmt.Errorf("pre-launch: %w", err)
 		}
@@ -6291,9 +6511,63 @@ func (m *Manager) cleanupAgentWorkspace(ctx context.Context, rec domain.SessionR
 }
 
 func (m *Manager) deliverAfterStartPrompt(ctx context.Context, agent ports.Agent, cfg ports.LaunchConfig, handle ports.RuntimeHandle, id domain.SessionID, prompt string) error {
+	selector, selects := agent.(ports.AgentAfterStartCommand)
+	command := ""
+	if selects {
+		var err error
+		command, err = selector.AfterStartCommand(ctx, cfg)
+		if err != nil {
+			return err
+		}
+	}
+	if prompt == "" && command == "" {
+		return nil
+	}
 	if err := m.waitForPromptReadiness(ctx, agent, cfg, handle); err != nil {
 		return err
 	}
+	if command != "" {
+		if err := m.deliverStartedInput(ctx, id, command); err != nil {
+			return err
+		}
+		if err := m.waitForAfterStartCommand(ctx, selector, cfg, handle); err != nil {
+			return err
+		}
+	}
+	if prompt == "" {
+		return nil
+	}
+	return m.deliverStartedInput(ctx, id, prompt)
+}
+
+func (m *Manager) waitForAfterStartCommand(ctx context.Context, selector ports.AgentAfterStartCommand, cfg ports.LaunchConfig, handle ports.RuntimeHandle) error {
+	rendered, ok := m.runtime.(ports.StyledTerminalOutputReader)
+	if !ok {
+		return errors.New("native startup command requires current rendered terminal output")
+	}
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		output, err := rendered.GetStyledOutput(ctx, handle, 100)
+		if err != nil {
+			return fmt.Errorf("read native startup command output: %w", err)
+		}
+		if selector.AfterStartCommandApplied(cfg, output) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return errors.New("native startup command was not confirmed")
+		case <-ticker.C:
+		}
+	}
+}
+
+func (m *Manager) deliverStartedInput(ctx context.Context, id domain.SessionID, prompt string) error {
 	// Call Deliver directly (not the Guard.Send wrapper, which folds a suppressed
 	// outcome into nil): a freshly-spawned session can terminate or hit a
 	// permission dialog between readiness and prompt injection, and folding that
@@ -6615,10 +6889,13 @@ func (m *Manager) validateRuntimePrerequisites() error {
 func (m *Manager) superviseAgentProcess(agent ports.Agent, id domain.SessionID, env map[string]string, argv []string) ([]string, string, error) {
 	// Switching-capable providers always use the exact-generation
 	// supervisor, even when their native hooks also report exit. That gives a
-	// later semantic handoff a safe foreground-process proof and ensures an exit
-	// races into the non-interpreting tmux sink rather than a shell.
+	// later semantic handoff a safe foreground-process proof. Refresh-capable
+	// providers need the same proof for command protection and startup checks.
+	// An exit races into the non-interpreting tmux sink rather than a shell.
 	_, switchingCapable := agent.(ports.AgentContinuationCapabilityProvider)
-	return m.superviseAgentProcessMode(agent, id, env, argv, switchingCapable)
+	refreshCapability, refreshCapable := agent.(ports.AgentTerminalVersionRefresher)
+	refreshCapable = refreshCapable && refreshCapability.SupportsTerminalVersionRefresh()
+	return m.superviseAgentProcessMode(agent, id, env, argv, switchingCapable || refreshCapable)
 }
 
 // superviseAgentProcessForSwitch always installs AO's generation-bearing

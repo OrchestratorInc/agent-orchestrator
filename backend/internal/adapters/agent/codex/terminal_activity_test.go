@@ -153,6 +153,49 @@ func TestInspectTerminalSurfaceSeparatesCodexWorkFromComposer(t *testing.T) {
 			wantWork:   ports.TerminalSurfaceWorkIdle,
 			wantEditor: ports.TerminalComposerEmpty,
 		},
+		// Codex v0.162 draws the current composer as "»" and keeps "›" for
+		// submitted prompts and picker rows (frames captured from v0.162.1).
+		{
+			name: "v0.162 idle empty composer below a submitted prompt",
+			output: "› Remember the code word FOXTROT for later.\n\n• OK\n\n" +
+				"\x1b[1m\x1b[38;2;186;130;255m»\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m\n\n" +
+				"  \x1b[38;2;246;226;183mGPT-6.1-Sol ultra fast\x1b[39m · \x1b[38;2;171;223;167m~/project\x1b[39m\n" +
+				"  \x1b[1m?\x1b[0m for shortcuts    ⚠ 2 warnings · f2 to view\n",
+			wantWork:   ports.TerminalSurfaceWorkIdle,
+			wantEditor: ports.TerminalComposerEmpty,
+		},
+		{
+			name: "v0.162 idle draft",
+			output: "\x1b[1m\x1b[38;2;186;130;255m»\x1b[0m Keep this draft\n\n" +
+				"  \x1b[38;2;246;226;183mGPT-6.1-Sol ultra fast\x1b[39m · \x1b[38;2;171;223;167m~/project\x1b[39m\n",
+			wantWork:   ports.TerminalSurfaceWorkIdle,
+			wantEditor: ports.TerminalComposerDraft,
+		},
+		{
+			name:       "v0.162 active empty composer",
+			output:     "• Working (2m 10s • esc to interrupt)\n» \x1b[2mAsk Codex to do anything\x1b[0m\n\nGPT-6.1-Sol low · ~/project\n",
+			wantWork:   ports.TerminalSurfaceWorkActive,
+			wantEditor: ports.TerminalComposerEmpty,
+		},
+		{
+			name:       "v0.162 idle empty composer when constrained viewport hides footer",
+			output:     "\x1b[2m• \x1b[0mE2E_ROUNDTRIP_TWO\n\n\n\x1b[1m»\x1b[0m\n",
+			wantWork:   ports.TerminalSurfaceWorkIdle,
+			wantEditor: ports.TerminalComposerEmpty,
+		},
+		{
+			name:       "v0.162 approval picker",
+			output:     "Run this command?\n› 1. Approve once\n  2. Deny\nPress enter to confirm or esc to go back\n",
+			wantWork:   ports.TerminalSurfaceWorkWaitingInput,
+			wantEditor: ports.TerminalComposerUnknown,
+		},
+		{
+			name: "v0.162 completed approval picker above the current composer is idle",
+			output: "Run this command?\n› 1. Approve once\n  2. Deny\nPress enter to confirm or esc to go back\n" +
+				"» \x1b[2mAsk Codex to do anything\x1b[0m\n\nGPT-6.1-Sol low · ~/project\n",
+			wantWork:   ports.TerminalSurfaceWorkIdle,
+			wantEditor: ports.TerminalComposerEmpty,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -194,6 +237,15 @@ func TestInspectTerminalSurfaceOnlyProvesAnUnstartedConversationOnInitialFrame(t
 		{
 			name:   "active turn",
 			output: header + "\n• Working (4s • esc to interrupt)\n\x1b[1m›\x1b[0m" + footer,
+		},
+		{
+			name:   "v0.162 initial empty composer",
+			output: header + "\n\x1b[1m»\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m" + footer,
+			want:   true,
+		},
+		{
+			name:   "v0.162 completed turn",
+			output: header + "\n› Say hello\n\n• Hello\n\n\x1b[1m»\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m" + footer,
 		},
 	}
 	for _, tt := range tests {

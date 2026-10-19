@@ -1117,3 +1117,26 @@ func TestDoctorLaunchProbesMirrorLaunchFlags(t *testing.T) {
 		}
 	}
 }
+
+// An account home links its sessions folder to the computer's own, so the
+// rollout of a conversation started on another account is visible through it.
+func TestNativeConversationExistsFollowsALinkedSessionsFolder(t *testing.T) {
+	p := &Plugin{}
+	id := "019fc430-1234-7abc-8def-0123456789ab"
+	shared := t.TempDir()
+	activeDir := filepath.Join(shared, "sessions", "2026", "10", "17")
+	if err := os.MkdirAll(activeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(activeDir, "rollout-2026-10-17T02-00-00-"+id+".jsonl"), []byte("{\"type\":\"session_meta\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	account := t.TempDir()
+	if err := os.Symlink(filepath.Join(shared, "sessions"), filepath.Join(account, "sessions")); err != nil {
+		t.Fatal(err)
+	}
+	exists, err := p.NativeConversationExists(context.Background(), ports.SessionRef{}, id, map[string]string{"CODEX_HOME": account})
+	if err != nil || !exists {
+		t.Fatalf("rollout through a linked sessions folder: exists=%v err=%v", exists, err)
+	}
+}

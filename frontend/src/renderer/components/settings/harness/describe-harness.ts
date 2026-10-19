@@ -118,7 +118,8 @@ export function describeHarness(input: HarnessDescribeInput) {
 		: authPlan && !authPlan.available ? (authPlan.reason ?? t("settings.harness.authFailed"))
 		: authStatus === "unauthorized" ? t(isSetupAction ? "settings.harness.notConfigured" : "settings.harness.loginRequired")
 		: t(isSetupAction ? "settings.harness.configurationUnknown" : "settings.harness.loginUnknown");
-	const progressLabel = job?.status === "verifying" ? t("settings.harness.verifying")
+	const progressLabel = job?.status === "waiting_for_idle" ? t("settings.harness.waitingForIdle")
+		: job?.status === "verifying" ? t("settings.harness.verifying")
 		: currentOperation === "update" ? t("settings.harness.updating")
 		: currentOperation === "install" ? t("settings.harness.installing") : t("settings.harness.working");
 	const rowError = actionError ?? authState?.error ?? (jobFailed ? job?.error ?? t("settings.harness.installFailed") : undefined);

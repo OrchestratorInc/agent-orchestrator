@@ -104,7 +104,8 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		return nil, err
 	}
 
-	cmd = append(cmd, binary)
+	// Keep the release immutable while AO owns refresh and retention.
+	cmd = append(cmd, binary, "--no-auto-update")
 	appendApprovalFlags(&cmd, cfg.Permissions)
 	appendModelFlag(&cmd, cfg.Config)
 	if agentName := copilotAgentName(cfg.SessionID, cfg.SystemPrompt, cfg.SystemPromptFile); agentName != "" {
@@ -149,7 +150,8 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 
-	cmd = append(cmd, binary)
+	// Keep the release immutable while AO owns refresh and retention.
+	cmd = append(cmd, binary, "--no-auto-update")
 	appendApprovalFlags(&cmd, cfg.Permissions)
 	// Deliberately does not forward cfg.Config.Model: --model + --resume
 	// composition is unverified against a real copilot install (see #2895
@@ -181,6 +183,9 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 func ResolveCopilotBinary(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
+	}
+	if managed, ok := binaryutil.ManagedBinary("copilot"); ok {
+		return managed, nil
 	}
 
 	if runtime.GOOS == "windows" {
@@ -377,4 +382,12 @@ func appendModelFlag(cmd *[]string, cfg ports.AgentConfig) {
 	if trimmed := strings.TrimSpace(cfg.Model); trimmed != "" {
 		*cmd = append(*cmd, "--model", trimmed)
 	}
+}
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
 }

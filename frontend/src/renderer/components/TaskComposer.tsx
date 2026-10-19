@@ -46,11 +46,11 @@ import {
 import { useModelCatalogAuthRecovery } from "../hooks/useModelCatalogAuthRecovery";
 import { useUiStore } from "../stores/ui-store";
 import { ModelCatalogNotice } from "./ModelCatalogNotice";
+import { NativeModePicker } from "./NativeModePicker";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
 import { EffortPicker, type EffortAvailability } from "./settings/EffortPicker";
 import { useModelTuning } from "./settings/ModelTuningControls";
-import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import {
 	readTaskComposerPreferences,
 	rememberTaskComposerPreference,
@@ -918,32 +918,15 @@ function TaskModelPicker({
 	}
 
 	if (catalog?.selectionMode === "mode") {
-		const options = (catalog.models ?? []).filter((item) => isConcreteModelID(item.id)).map((item) => ({
-			value: item.id,
-			label: modelChoiceLabel(item),
-		}));
-		const explicitMode = isConcreteModelID(mode) ? mode : "";
-		const defaultMode = catalog.models?.find((item) => item.isDefault && isConcreteModelID(item.id))?.id || "";
-		const effectiveMode = explicitMode || defaultMode;
-		const visibleModeLabel = options.find((option) => option.value === effectiveMode)?.label ?? t("settings.models.modeNotReported");
 		return (
-			<SettingsOptionMenu
-				aria-label={t("newTask.model")}
-				disabled={disabled || options.length === 0}
-				value={effectiveMode}
-				options={options}
-				action={explicitMode && !defaultMode && showFollowAgentAction
-					? { label: t("settings.models.useAgentMode"), onSelect: () => onModeChange("") }
-					: undefined}
+			<NativeModePicker
+				models={catalog.models ?? []}
+				mode={mode}
+				onModeChange={onModeChange}
+				disabled={disabled}
+				showFollowAgentAction={showFollowAgentAction}
 				triggerClassName="composer-chip composer-toolbar-option w-fit"
-				menuAlign="start"
 				menuClassName={COMPOSER_MENU_WIDTH}
-				renderTrigger={() => (
-					<span className="min-w-0 truncate text-control text-foreground" title={visibleModeLabel}>
-						{visibleModeLabel}
-					</span>
-				)}
-				onChange={(value) => onModeChange(value === defaultMode ? "" : value)}
 			/>
 		);
 	}
