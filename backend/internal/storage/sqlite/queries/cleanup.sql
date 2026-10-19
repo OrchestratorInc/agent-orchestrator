@@ -18,6 +18,19 @@ SELECT session_id, session_generation, runtime_released_at, workspace_dispositio
 FROM session_cleanup_facts
 WHERE session_id = ?;
 
+-- name: ListSessionCleanupFactsBySessions :many
+-- Batch form of GetSessionCleanupFacts for session-list reads: the JSON array of
+-- session ids replaces one lookup per archived session. Sessions with no facts
+-- row are simply absent from the result.
+WITH wanted_session AS (
+    SELECT CAST(j.value AS TEXT) AS session_id
+    FROM json_each(?) AS j
+)
+SELECT f.session_id, f.session_generation, f.runtime_released_at, f.workspace_disposition,
+    f.attempt_count, f.last_attempt_at, f.next_attempt_at, f.failure_code
+FROM session_cleanup_facts f
+JOIN wanted_session ON wanted_session.session_id = f.session_id;
+
 -- NOTE: the coarse sessions-driven candidate scan (ListTerminalCleanupCandidates)
 -- is intentionally NOT a sqlc query. sqlc 1.31's SQLite parser strips the trailing
 -- clause after the final `?` placeholder (the same bug documented in

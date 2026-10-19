@@ -1057,8 +1057,12 @@ func (q *Queries) InsertConversationMessage(ctx context.Context, arg InsertConve
 
 const insertConversationProviderEvent = `-- name: InsertConversationProviderEvent :execrows
 INSERT OR IGNORE INTO conversation_provider_events (
-    conversation_id, session_id, provider_event_id, method, payload_json, received_at
-) VALUES (?, ?, ?, ?, ?, ?)
+    conversation_id, session_id, provider_event_id, method, payload_json, received_at, branch_id
+) VALUES (
+    ?1, ?2, ?3, ?4,
+    ?5, ?6,
+    COALESCE((SELECT active_branch_id FROM conversations WHERE id = ?1), '')
+)
 `
 
 type InsertConversationProviderEventParams struct {
@@ -1072,6 +1076,13 @@ type InsertConversationProviderEventParams struct {
 
 // The raw provider event archive. Append-only, and the only way to answer "what
 // did the provider actually say" once a projection turns out to be wrong.
+//
+// branch_id is the conversation's active branch, written by the INSERT itself:
+// conversation_provider_events_branch_insert only acts on a row that arrives with
+// an empty branch_id, and would otherwise UPDATE every row it has just written.
+// The COALESCE keeps a conversation that does not exist failing on its foreign key,
+// as before; a NULL here would be a NOT NULL violation, which INSERT OR IGNORE skips
+// without an error.
 func (q *Queries) InsertConversationProviderEvent(ctx context.Context, arg InsertConversationProviderEventParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, insertConversationProviderEvent,
 		arg.ConversationID,

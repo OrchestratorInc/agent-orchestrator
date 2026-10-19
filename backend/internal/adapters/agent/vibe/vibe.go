@@ -238,7 +238,7 @@ func vibeAgentFlag(mode ports.PermissionMode, inlinePrompt, promptFile, model, d
 			return "", "", fmt.Errorf("vibe: write prompt: %w", err)
 		}
 	}
-	agentConfig, err := vibeAgentTOML(vibePromptAgentName, mode, trimmedModel, hasPrompt)
+	agentConfig, err := vibeAgentTOML(mode, trimmedModel, promptText, hasPrompt)
 	if err != nil {
 		return "", "", err
 	}
@@ -265,19 +265,21 @@ func vibeManagerOwnedAgentRoot(dataDir, sessionID string) string {
 	return filepath.Join(dataDir, "prompts", sessionID, "vibe")
 }
 
-func vibeAgentTOML(agentName string, mode ports.PermissionMode, model string, hasPrompt bool) (string, error) {
+func vibeAgentTOML(mode ports.PermissionMode, model, promptText string, hasPrompt bool) (string, error) {
 	var b strings.Builder
 	b.WriteString(`agent_type = "agent"` + "\n")
 	b.WriteString(`display_name = "AO Session"` + "\n")
 	b.WriteString(`description = "AO session standing instructions."` + "\n")
 	b.WriteString(`safety = "neutral"` + "\n")
 	if hasPrompt {
-		promptID, err := vibeTOMLBasicString(agentName)
+		instructions, err := vibeTOMLBasicString(promptText)
 		if err != nil {
-			return "", fmt.Errorf("vibe: encode system prompt id: %w", err)
+			return "", fmt.Errorf("vibe: encode standing instructions: %w", err)
 		}
-		b.WriteString("system_prompt_id = ")
-		b.WriteString(promptID)
+		// Vibe validates profiles before add-dir prompt discovery is available.
+		// Native profile instructions carry the same rules without a missing ID.
+		b.WriteString("instructions = ")
+		b.WriteString(instructions)
 		b.WriteString("\n")
 	}
 	if model != "" {
@@ -363,4 +365,12 @@ func (p *Plugin) vibeBinary(ctx context.Context) (string, error) {
 	}
 	p.resolvedBinary = binary
 	return binary, nil
+}
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
 }
