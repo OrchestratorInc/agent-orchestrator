@@ -49,7 +49,7 @@ const (
 )
 
 var (
-	nativeVersionLine   = regexp.MustCompile("^" + regexp.QuoteMeta(nativeVersion) + "$")
+	nativeVersionLine   = regexp.MustCompile("^" + regexp.QuoteMeta(nativeVersion) + `(?: \(2026\.9\.24\) · upstream 818c13be)?$`)
 	terminalKeyUnsafe   = regexp.MustCompile(`[^A-Za-z0-9._-]`)
 	nativeStyleSequence = regexp.MustCompile(`\x1b\[[0-9;:]*m`)
 )

@@ -181,7 +181,14 @@ func TestNativeChromeCannotBeForgedInTranscript(t *testing.T) {
 }
 
 func TestNativeVersionRequiresExactFirstLine(t *testing.T) {
-	for _, output := range []string{"Hermes Agent v0.21.60", "Hermes Agent v0.21.6-malicious", "wrapper\nHermes Agent v0.21.6"} {
+	// The official pinned checkout includes the date/source suffix in --version.
+	for _, line := range []string{"Hermes Agent v0.21.6", "Hermes Agent v0.21.6 (2026.9.24) · upstream 818c13be"} {
+		if !nativeVersionLine.MatchString(line) {
+			t.Fatalf("rejected pinned native banner %q", line)
+		}
+	}
+
+	for _, output := range []string{"Hermes Agent v0.21.60", "Hermes Agent v0.21.6-malicious", "wrapper\nHermes Agent v0.21.6", "Hermes Agent v0.21.6 (2026.9.24) · upstream deadbeef", "Hermes Agent v0.21.6 (2026.9.24) · upstream 818c13be extra"} {
 		first, _, _ := strings.Cut(output, "\n")
 		if nativeVersionLine.MatchString(first) {
 			t.Fatalf("accepted version %q", output)
