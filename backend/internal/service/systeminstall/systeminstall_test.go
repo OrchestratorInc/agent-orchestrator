@@ -1288,9 +1288,8 @@ func TestHarnessMaintenanceGateBlocksCodexLaunchThroughWorkerLifetime(t *testing
 	case <-time.After(2 * time.Second):
 		t.Fatal("maintenance worker did not start")
 	}
-	if release, ok := s.TryBeginHarnessUse(domain.HarnessCodex); ok {
-		release()
-		t.Fatal("Codex launch acquired the gate while maintenance worker was running")
+	if !harnessHeld(s, domain.HarnessCodex) {
+		t.Fatal("Codex launch could acquire the gate while maintenance worker was running")
 	}
 	unblock()
 	s.workers.Wait()
@@ -1303,7 +1302,14 @@ func TestHarnessMaintenanceGateBlocksCodexLaunchThroughWorkerLifetime(t *testing
 }
 
 func TestHarnessMaintenanceSeesSessionCreatedBeforeLaunchGateRelease(t *testing.T) {
-	s := newTestService("darwin")
+	s := newTestService("darwin", "npm")
+	// With AO_UPDATE_WHILE_RUNNING off, the update must see the new session.
+	s.updateWhileRunningDisabled = true
+	// Sessions are checked once the update proves which method owns the copy.
+	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/verified/codex", Output: "codex 1.0.0"}, nil
+	})
 	release, ok := s.TryBeginHarnessUse(domain.HarnessCodex)
 	if !ok {
 		t.Fatal("Codex launch lease was unexpectedly rejected")
@@ -1892,6 +1898,29 @@ func TestOpenCodeVendorUpdatePinsApprovedReleaseOverAdvisory(t *testing.T) {
 	if want := []string{"/Users/test/.opencode/bin/opencode", "upgrade", "1.18.35", "--method", "curl"}; !slices.Equal(ran, want) {
 		t.Fatalf("ran %v, want the approved release %v", ran, want)
 	}
+	// Reaching the approved release is success, though 1.18.36 was announced.
+	waitForStatus(t, s, TargetOpencode, StatusSucceeded)
+}
+
+func TestOpenCodeVendorUpdateNeverPinsAStaleCachedRelease(t *testing.T) {
+	s := newTestService("darwin", "bash")
+	// The cache still announces 1.18.35, but 1.18.36 was installed since.
+	s.updateAdvisories = map[Target]UpdateAdvisory{TargetOpencode: {AgentID: string(TargetOpencode), Status: UpdateStatusBehindLatest, CurrentVersion: "1.18.34", LatestVersion: "1.18.35", CheckedAt: time.Now()}}
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/Users/test/.opencode/bin/opencode", Output: "1.18.36"}, nil
+	})
+	var ran []string
+	s.commands = commandRunnerFunc(func(_ context.Context, argv []string, _, _ io.Writer) error {
+		ran = argv
+		return nil
+	})
+	if _, err := s.StartAgentOperation(context.Background(), TargetOpencode, "official-installer", AgentOperationUpdate, ""); err != nil {
+		t.Fatal(err)
+	}
+	s.workers.Wait()
+	if slices.Contains(ran, "1.18.35") {
+		t.Fatalf("ran %v, which installs the stale cached release over 1.18.36", ran)
+	}
 }
 
 func TestOpenCodeVendorUpdateNeverPinsUnvettedApprovedRelease(t *testing.T) {
@@ -1950,6 +1979,9 @@ func TestHarnessUpdateIsBlockedWhileItsReviewerRuns(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := newTestService("darwin", "npm")
+			// Updates run alongside live work unless AO_UPDATE_WHILE_RUNNING is off;
+			// with it off a reviewer still counts as live work.
+			s.updateWhileRunningDisabled = true
 			// The worker runs Claude Code; only its reviewer uses Codex.
 			s.sessions = sessionListerStub{sessions: []domain.SessionRecord{{ID: "claude-worker", Harness: domain.HarnessClaudeCode}}}
 			s.reviewers = reviewers
@@ -1965,8 +1997,8 @@ func TestHarnessUpdateIsBlockedWhileItsReviewerRuns(t *testing.T) {
 		handles: []domain.ReviewerHandle{{Harness: domain.ReviewerClaudeCode, HandleID: "pane-1"}},
 		chats:   []domain.Review{{Harness: domain.ReviewerCodex, InterfaceMode: domain.ReviewerInterfaceChat}},
 	}
-	if err := s.requireNoLiveReviewer(context.Background(), TargetCodex); err != nil {
-		t.Fatalf("requireNoLiveReviewer = %v, want nil", err)
+	if sessions, reviewers, err := s.harnessInUse(context.Background(), TargetCodex); err != nil || len(sessions)+len(reviewers) != 0 {
+		t.Fatalf("harnessInUse = %v, %v, %v; want nothing in use", sessions, reviewers, err)
 	}
 }
 

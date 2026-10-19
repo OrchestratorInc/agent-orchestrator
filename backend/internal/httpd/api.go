@@ -24,8 +24,10 @@ import (
 
 // APIDeps bundles every service the API layer's controllers depend on.
 type APIDeps struct {
+	Awake              controllers.AwakeService
 	Agents             controllers.AgentCatalog
 	CodexAccounts      controllers.CodexAccountService
+	AgentAccounts      controllers.AgentAccountService
 	Projects           projectsvc.Manager
 	Sessions           controllers.SessionService
 	ArtifactVersions   controllers.ArtifactVersionService
@@ -121,6 +123,7 @@ type API struct {
 	deps          APIDeps
 	agents        *controllers.AgentsController
 	codexAccounts *controllers.CodexAccountsController
+	agentAccounts *controllers.AgentAccountsController
 	projects      *controllers.ProjectsController
 	sessions      *controllers.SessionsController
 	automations   *controllers.AutomationsController
@@ -166,6 +169,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 			Catalog: deps.Agents,
 		},
 		codexAccounts: &controllers.CodexAccountsController{Svc: deps.CodexAccounts},
+		agentAccounts: newAgentAccountsController(deps),
 		projects: &controllers.ProjectsController{
 			Mgr: deps.Projects,
 		},
@@ -250,6 +254,7 @@ func (a *API) Register(root chi.Router) {
 			r.Use(presenceMiddleware(a.deps.Presence))
 			a.agents.Register(r)
 			a.codexAccounts.Register(r)
+			a.agentAccounts.Register(r)
 			a.projects.Register(r)
 			a.sessions.Register(r)
 			a.automations.Register(r)
@@ -335,6 +340,16 @@ func memoryPressure(svc controllers.SessionMemoryService) controllers.MemoryPres
 		return p
 	}
 	return nil
+}
+
+// newAgentAccountsController moves sessions through the session service when
+// it can, so a move maps errors like every other session command.
+func newAgentAccountsController(deps APIDeps) *controllers.AgentAccountsController {
+	c := &controllers.AgentAccountsController{Svc: deps.AgentAccounts}
+	if mover, ok := deps.Sessions.(controllers.AgentAccountSessionMover); ok {
+		c.Sessions = mover
+	}
+	return c
 }
 
 // agentBrowserURL is the host's agent browser, or nil when it has none.

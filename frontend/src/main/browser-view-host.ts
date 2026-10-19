@@ -1,5 +1,4 @@
 import type {
-  Clipboard,
   IpcMain,
   IpcMainEvent,
   IpcMainInvokeEvent,
@@ -12,6 +11,7 @@ import type {
 } from "electron";
 import { nativeImage } from "electron";
 import { randomUUID } from "node:crypto";
+import type { BrowserCloseFailure } from "./browser-close-diagnostics";
 import type {
   BrowserAnnotationCancelPayload,
   BrowserAnnotationActionInput,
@@ -175,7 +175,15 @@ export type BrowserAgentActivityState = {
 };
 
 export type BrowserRuntimeState = {
+	/** The daemon answered this app's hello with hello-ok. */
 	connected: boolean;
+	/** A handshake that should settle soon is in flight: the link just started, or an
+	 *  accepted link dropped and is redialing. Not yet a disconnect worth showing. */
+	connecting: boolean;
+	/** The daemon refused this app's hello. Reconnecting with the same token can't help. */
+	rejected: boolean;
+	/** The daemon's reason for the refusal (a BROWSER_RUNTIME_* code), when it gave one. */
+	rejectionCode?: string;
 };
 
 export type BrowserDevToolsState = {
@@ -382,6 +390,19 @@ function canWriteBrowserClipboard(
   }
 }
 
+// Web pages may declare `app-region: drag` for their own Electron desktop
+// builds (Linear does). Chrome ignores it, but Electron turns those areas of
+// the embedded view into AO window-drag regions that never receive wheel,
+// click, or scrollbar input. A user-origin !important rule outranks the page's
+// author rules, inline styles included.
+const BROWSER_NO_DRAG_CSS = `
+	*,
+	*::before,
+	*::after {
+		app-region: no-drag !important;
+	}
+`;
+
 const browserScrollbarCSS = (zoomFactor: number): string => {
   const effectiveZoom =
     Number.isFinite(zoomFactor) && zoomFactor > 0 ? zoomFactor : 1;
@@ -466,10 +487,13 @@ export type BrowserViewHostOptions = {
   browserHistoryStore?: BrowserHistoryStore;
   browserDownloadManager?: BrowserDownloadManager;
   clearBrowserProfileData?: (partition: string) => Promise<void>;
-  clipboard?: Pick<Clipboard, "writeImage">;
+  // Electron 44 removed clipboard.writeImage; main.ts adapts the async
+  // ClipboardItem API to this narrow image-only writer.
+  clipboard?: { writeImage(image: Electron.NativeImage): void | Promise<void> };
   // Called after a page view is appended to the window so the composition can
   // keep a raised shell (open dialog/notice) above the new view.
   onNativeViewAdded?: () => void;
+  onTabCloseFailure?: (failure: BrowserCloseFailure) => void;
 };
 
 export type BrowserViewHost = {
@@ -1071,7 +1095,8 @@ export function createBrowserViewHost(
         .then(async () => {
           const previousKey = scrollbarStyleKey;
           scrollbarStyleKey = await view.webContents.insertCSS(
-            browserScrollbarCSS(view.webContents.getZoomFactor()),
+            BROWSER_NO_DRAG_CSS +
+              browserScrollbarCSS(view.webContents.getZoomFactor()),
             { cssOrigin: "user" },
           );
           if (previousKey)
@@ -2152,8 +2177,27 @@ export function createBrowserViewHost(
     tabId: string,
   ): Promise<BrowserTabsState> => {
     if (!session.tabs.has(tabId)) return listTabs(session);
-    // Dispose the final tab directly: no replacement page is needed.
-    return session.tabs.get(tabId)?.driver().close() ?? listTabs(session);
+    const entry = session.tabs.get(tabId)!;
+    const wasActive = session.activeTabId === tabId;
+    try {
+      assertProfileStable(session);
+      return await entry.driver().close();
+    } catch (error) {
+      try {
+        options.onTabCloseFailure?.({
+          error, sessionId: session.sessionId, tabId,
+          tabCount: session.tabs.size, tabPresent: session.tabs.has(tabId),
+          wasActive, agentTab: entry.agentTab !== undefined,
+        });
+      } catch {
+        // Logging must not change close semantics.
+      }
+      // A concurrent close (including the runtime's own Target.closeTarget)
+      // may have completed the requested operation before reporting failure.
+      // Keep its diagnostic, but don't report an already-closed tab as stuck.
+      if (!session.tabs.has(tabId)) return listTabs(session);
+      throw error;
+    }
   };
 
   const focusLocation = (session: BrowserSessionEntry): void => {
@@ -3320,7 +3364,7 @@ export function createBrowserViewHost(
     if (!entry || !options.clipboard) return false;
     const image = await capturePageImage(entry);
     if (!image) return false;
-    options.clipboard.writeImage(image);
+    await options.clipboard.writeImage(image);
     return true;
   };
 
@@ -3593,7 +3637,7 @@ export function createBrowserViewHost(
         "The browser page could not be captured",
       );
     }
-    options.clipboard.writeImage(image);
+    await options.clipboard.writeImage(image);
   });
   handle("browser:downloads:list", (event) => {
     if (event.sender.id !== shellWebContents.id) return { downloads: [] };
@@ -3661,13 +3705,7 @@ export function createBrowserViewHost(
     const session = entries.get(input.viewId);
     if (!session || !isRendererOwned(event, input.viewId))
       return emptyTabsState(input.viewId);
-    assertProfileStable(session);
-    if (!session.tabs.has(input.tabId)) {
-      throw browserError(
-        "TAB_NOT_FOUND",
-        `Browser tab ${input.tabId} does not exist`,
-      );
-    }
+    // A renderer can still show a tab removed by another close or by its page.
     return closeUserTab(session, input.tabId);
   });
   on("browser:panelUsed", (event, viewId: string) => {

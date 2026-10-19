@@ -8,6 +8,7 @@ import {
 	BaseWindow,
 	BrowserWindow,
 	clipboard,
+	ClipboardItem,
 	dialog,
 	ipcMain,
 	Menu,
@@ -155,8 +156,10 @@ import {
 	type BrowserViewHost,
 	type BrowserRuntimeState,
 } from "./main/browser-view-host";
+import { createBrowserCloseDiagnostics } from "./main/browser-close-diagnostics";
 import { createBrowserProfileStore } from "./main/browser-profile-store";
 import { BrowserHistoryStore } from "./main/browser-history-store";
+import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
@@ -170,7 +173,11 @@ import { createWindowComposition, type WindowComposition } from "./main/window-c
 import { AgentBrowserRuntime } from "./main/agent-browser-runtime";
 import { sameBrowserRuntimeIdentity, type BrowserRuntimeIdentity } from "./main/browser-runtime-identity";
 import { connectSupervisor, type SupervisorLinkHandle } from "./main/supervisor-link";
-import { connectBrowserRuntime, type BrowserRuntimeLinkHandle } from "./main/browser-runtime-link";
+import {
+	BROWSER_RUNTIME_DISCONNECTED,
+	connectBrowserRuntime,
+	type BrowserRuntimeLinkHandle,
+} from "./main/browser-runtime-link";
 import { checkRender, measureRender } from "./main/render-check";
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
 import { readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
@@ -325,6 +332,12 @@ let daemonRestartAfterExitProcess: ChildProcess | null = null;
 let daemonStartPromise: Promise<DaemonStatus> | null = null;
 let daemonStartEpoch = 0;
 let daemonStatus: DaemonStatus = { state: "stopped" };
+const awakeDownloads = createAwakeDownloadBridge({
+ baseURL: () => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null,
+ request: (url, init) => net.fetch(url, init),
+});
+app.once("will-quit", () => awakeDownloads.dispose());
+
 let daemonAttachmentGeneration = 0;
 let daemonOutput = "";
 let browserViewHost: BrowserViewHost | null = null;
@@ -423,6 +436,11 @@ let windowTranslucent = false;
 
 function syncNativeWindowBackground(): void {
 	if (!windowComposition || !mainWindow || mainWindow.isDestroyed()) return;
+	// Keep vibrancy and the native background in sync after window/renderer
+	// lifecycle changes, as well as theme updates.
+	if (process.platform === "darwin") {
+		mainWindow.setVibrancy(windowTranslucent ? "under-window" : null);
+	}
 	if (windowTranslucent) {
 		mainWindow.setBackgroundColor("#00000000");
 		return;
@@ -534,6 +552,14 @@ function windowIconPath(): string | undefined {
 	return existsSync(fallback) ? fallback : undefined;
 }
 
+// Electron 44 removed clipboard.writeImage in favour of the W3C-style
+// ClipboardItem API; the browser host and chat images share this adapter.
+function writeClipboardImage(image: Electron.NativeImage): Promise<void> {
+	return clipboard.write([
+		new ClipboardItem({ "image/png": new Blob([new Uint8Array(image.toPNG())], { type: "image/png" }) }),
+	]);
+}
+
 function applyRuntimeAppIcon(): void {
 	if (process.platform !== "darwin") return;
 	// Unpackaged runs keep Electron's default dock icon so the dev window is
@@ -543,7 +569,7 @@ function applyRuntimeAppIcon(): void {
 	if (!iconPath) return;
 	const icon = nativeImage.createFromPath(iconPath);
 	if (!icon.isEmpty()) {
-		app.dock.setIcon(icon);
+		app.dock?.setIcon(icon);
 	}
 }
 
@@ -780,8 +806,8 @@ async function createWindowInternal(): Promise<void> {
 						titleBarStyle: "hiddenInset" as const,
 						// Window transparency: an opaque window keeps Chromium's compositor
 						// opaque, hiding the vibrancy view. Transparent windows still paint
-						// the theme colour via setBackgroundColor unless the Developer Mode
-						// window transparency flag is on.
+						// the theme colour via setBackgroundColor unless window transparency
+						// is enabled in Appearance.
 						transparent: true,
 						// Keep the window-transparency blur vivid when the window loses focus.
 						visualEffectState: "active" as const,
@@ -953,6 +979,7 @@ async function createWindowInternal(): Promise<void> {
 	);
 
 	browserViewHost = createBrowserViewHost({
+		onTabCloseFailure: createBrowserCloseDiagnostics(browserProfileStateDir(), app.getVersion()),
 		// Agent tabs: only a connected host's or a cloud session's own
 		// agent-browser viewer may report the remote page a Browser tab shows.
 		isAgentBrowserUrl: (url) => remoteRegistry.isAgentBrowserUrl(url) || cloudAgentProxy.isAgentBrowserUrl(url),
@@ -974,10 +1001,10 @@ async function createWindowInternal(): Promise<void> {
 			downloadsDirectory: app.getPath("downloads"),
 			historyPath: path.join(desktopDataDir, "browser-downloads.json"),
 			shell,
-			notify: (state) => shellWebContents.send("browser:downloadsChanged", state),
+			notify: (state) => { awakeDownloads.update(state); shellWebContents.send("browser:downloadsChanged", state); },
 		}),
 		clearBrowserProfileData: clearElectronBrowserProfileData,
-		clipboard,
+		clipboard: { writeImage: writeClipboardImage },
 		onNativeViewAdded: () => windowComposition?.restackShell(),
 	});
 	browserProfileImporter = profileImporter;
@@ -1026,11 +1053,14 @@ async function createWindowInternal(): Promise<void> {
 
 	const syncWindowChrome = () => {
 		if (!mainWindow || shellWebContents.isDestroyed()) return;
+		syncNativeWindowBackground();
 		if (process.platform === "darwin") syncMacWindowButtons(mainWindow, shellWebContents);
 		shellWebContents.send("window:zoom", shellWebContents.getZoomFactor());
 	};
 	// Resize/zoom and fullscreen exit can reset AppKit's button placement.
 	mainWindow.on("resize", syncWindowChrome);
+	mainWindow.on("show", syncWindowChrome);
+	mainWindow.on("restore", syncWindowChrome);
 	shellWebContents.on("did-finish-load", syncWindowChrome);
 	shellWebContents.on("zoom-changed", () => setTimeout(syncWindowChrome, 0));
 
@@ -1038,6 +1068,7 @@ async function createWindowInternal(): Promise<void> {
 	// the renderer keeps the same header height and navigation centerline.
 	const pushFullScreen = () => {
 		if (!mainWindow) return;
+		syncNativeWindowBackground();
 		getShellWebContents()?.send("window:fullscreen", mainWindow.isFullScreen());
 	};
 	const pushMaximized = () => {
@@ -1074,9 +1105,6 @@ async function createWindowInternal(): Promise<void> {
 		disposeBrowserRuntimeLink();
 		keybindingRecordingActive = false;
 		if (windowComposition === composition) windowComposition = null;
-		// Vibrancy belongs to the closed window. The shell of a recreated window
-		// (macOS Quit keeps the process, then Dock reopen) asks for it again.
-		windowTranslucent = false;
 		void disposeBrowserViewHost()
 			.finally(() => {
 				composition.dispose();
@@ -1530,19 +1558,28 @@ function supervisorPipeFromRunFile(rfp: string | null): string {
 	return "\\\\.\\pipe\\ao-supervise-" + dir.replace(/[^a-zA-Z0-9-]/g, "-");
 }
 
-function disposeBrowserRuntimeLink(): void {
+function dropBrowserRuntimeLink(): void {
 	browserRuntimeLink?.dispose();
 	browserRuntimeLink = null;
 	browserRuntimeLinkIdentity = null;
 }
 
-function publishBrowserRuntimeState(connected: boolean): void {
-	getShellWebContents()?.send("browser:runtimeState", { connected } satisfies BrowserRuntimeState);
+function disposeBrowserRuntimeLink(): void {
+	const hadLink = browserRuntimeLink !== null;
+	dropBrowserRuntimeLink();
+	if (hadLink) publishBrowserRuntimeState(BROWSER_RUNTIME_DISCONNECTED);
 }
 
+function publishBrowserRuntimeState(state: BrowserRuntimeState): void {
+	getShellWebContents()?.send("browser:runtimeState", state);
+}
+
+// A replacement link reports "connecting" itself, so dropping the old one first
+// does not flash a disconnect in the Browser panel.
 function reconnectBrowserRuntimeLink(): void {
-	disposeBrowserRuntimeLink();
+	dropBrowserRuntimeLink();
 	establishBrowserRuntimeLink();
+	if (!browserRuntimeLink) publishBrowserRuntimeState(BROWSER_RUNTIME_DISCONNECTED);
 }
 
 function establishBrowserRuntimeLink(): void {
@@ -1573,7 +1610,7 @@ function establishBrowserRuntimeLink(): void {
 	if (browserRuntimeLink && browserRuntimeLinkIdentity && sameBrowserRuntimeIdentity(browserRuntimeLinkIdentity, identity)) {
 		return;
 	}
-	if (browserRuntimeLink) disposeBrowserRuntimeLink();
+	if (browserRuntimeLink) dropBrowserRuntimeLink();
 	browserRuntimeLink = connectBrowserRuntime(address, {
 		token,
 		execute: (command, signal) => {
@@ -1728,8 +1765,49 @@ function daemonLaunchEnv(): NodeJS.ProcessEnv {
 	return process.env;
 }
 
+// `npm run dev` builds resources/acp-runtime in predev, but a cache cleaner or a
+// plain `electron .` launch can leave it missing and every chat resume then fails
+// with "entrypoint ... no such file". Rebuild it here. The script is idempotent
+// and a no-op when the runtime is intact. Dev only: a packaged runtime is signed.
+async function repairDevAcpRuntime(): Promise<void> {
+	if (app.isPackaged || process.env.AO_ACP_RUNTIME_DIR) return;
+	const runtimeDir = path.join(app.getAppPath(), "resources", "acp-runtime");
+	const adapter = path.join(
+		runtimeDir,
+		"node_modules",
+		"@agentclientprotocol",
+		"claude-agent-acp",
+		"dist",
+		"index.js",
+	);
+	if (existsSync(adapter)) return;
+	const script = path.join(app.getAppPath(), "scripts", "build-acp-runtime.mjs");
+	if (!existsSync(script)) return;
+	console.warn(`[ao] ACP runtime missing at ${runtimeDir}; rebuilding`);
+	await new Promise<void>((resolve) => {
+		const child = spawn(process.execPath, [script], {
+			cwd: app.getAppPath(),
+			env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+			stdio: "inherit",
+		});
+		child.once("error", (err) => {
+			console.error("[ao] ACP runtime rebuild failed to start:", err);
+			resolve();
+		});
+		child.once("exit", (code) => {
+			if (code !== 0) console.error(`[ao] ACP runtime rebuild exited with ${code}`);
+			resolve();
+		});
+	});
+}
+
 async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	if (daemonProcess) {
+		return daemonStatus;
+	}
+
+	await repairDevAcpRuntime();
+	if (startEpoch !== daemonStartEpoch) {
 		return daemonStatus;
 	}
 
@@ -2379,7 +2457,6 @@ ipcMain.handle("theme:set-window-translucent", (_event, enabled: unknown) => {
 	if (process.platform !== "darwin" || typeof enabled !== "boolean") return;
 	if (!mainWindow || mainWindow.isDestroyed()) return;
 	windowTranslucent = enabled;
-	mainWindow.setVibrancy(enabled ? "under-window" : null);
 	syncNativeWindowBackground();
 });
 
@@ -2399,7 +2476,7 @@ ipcMain.handle("browser:runtime:reconnect", (event) => {
 
 ipcMain.handle("browser:runtime:state", (event): BrowserRuntimeState => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted browser runtime request.");
-	return { connected: browserRuntimeLink?.connected ?? false };
+	return browserRuntimeLink?.state ?? BROWSER_RUNTIME_DISCONNECTED;
 });
 
 ipcMain.on("browser:overlay", (event, open: unknown) => {
@@ -2700,16 +2777,18 @@ ipcMain.handle("app:checkGitHubRepositoryAvailability", async (_event, input: { 
 		return { available: false, message: "Could not check this repository name. Confirm GitHub CLI is signed in." };
 	}
 });
-ipcMain.handle("clipboard:writeText", (_event, text: string) => {
-	clipboard.writeText(text, "clipboard");
+ipcMain.handle("clipboard:writeText", async (_event, text: string) => {
+	// Electron 44: writeText is async and the Linux selection clipboard moved
+	// to the clipboard.selection sub-namespace.
+	await clipboard.writeText(text);
 	if (process.platform === "linux") {
-		clipboard.writeText(text, "selection");
+		await clipboard.selection.writeText(text);
 	}
 });
 ipcMain.handle("clipboard:readText", () => clipboard.readText());
 registerChatImageIpc({
 	ipcMain,
-	clipboard,
+	clipboard: { writeImage: writeClipboardImage },
 	createImage: (bytes) => nativeImage.createFromBuffer(bytes),
 	dialog,
 	downloadsDirectory: () => app.getPath("downloads"),

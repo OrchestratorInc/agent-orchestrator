@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 )
 
-func TestReadCodexTurnStatusFindsExactCompletedTurn(t *testing.T) {
+func TestReadCodexTurnStatusFindsTheExactTurnAndItsError(t *testing.T) {
 	requestReader, requestWriter := io.Pipe()
 	responseReader, responseWriter := io.Pipe()
 	defer requestReader.Close()
@@ -45,17 +46,20 @@ func TestReadCodexTurnStatusFindsExactCompletedTurn(t *testing.T) {
 			served <- errors.New("thread status read omitted the exact thread or turns")
 			return
 		}
-		_, err = responseWriter.Write([]byte(`{"id":1,"result":{"thread":{"id":"thread-1","turns":[{"id":"older","status":"completed"},{"id":"current","status":"completed"}]}}}` + "\n"))
+		_, err = responseWriter.Write([]byte(`{"id":1,"result":{"thread":{"id":"thread-1","turns":[{"id":"older","status":"completed"},{"id":"current","status":"failed","error":{"message":"unexpected status 401 Unauthorized","codexErrorInfo":"unauthorized"}}]}}}` + "\n"))
 		served <- err
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	status, err := readCodexTurnStatus(ctx, conn, "thread-1", "current")
+	status, turnErr, err := readCodexTurnStatus(ctx, conn, "thread-1", "current")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status != "completed" {
-		t.Fatalf("turn status = %q, want completed", status)
+	if status != "failed" || turnErr == nil || turnErr.Message != "unexpected status 401 Unauthorized" {
+		t.Fatalf("turn status = %q error = %+v, want failed with Codex's reason", status, turnErr)
+	}
+	if got := codexTurnFailure(status, turnErr).Error(); !strings.Contains(got, "401 Unauthorized") || !strings.Contains(got, "Sign in to Codex again") {
+		t.Fatalf("failure = %q", got)
 	}
 	if err := <-served; err != nil {
 		t.Fatal(err)

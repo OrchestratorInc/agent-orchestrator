@@ -171,7 +171,12 @@ type CreateSession struct {
 	ReasoningEffort string
 	DeniedCommands  []string
 	Interface       SessionInterface
-	Provider        string
+	// Branch is the session's git branch. Empty means a generated
+	// <prefix>/<short id>; a named branch that already exists on the remote is
+	// continued from its commits. Omitted when empty so the idempotency payload
+	// of every other create is unchanged.
+	Branch   string `json:",omitempty"`
+	Provider string
 	// SandboxConnectionID names a bring-your-own provider credential. It is
 	// empty for sandboxes that run on the platform's own account.
 	SandboxConnectionID string

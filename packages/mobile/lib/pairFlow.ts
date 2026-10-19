@@ -9,7 +9,17 @@ export type PairResult =
 	| { ok: true; config: ServerConfig; host: Host }
 	| {
 			ok: false;
-			reason: "not-ao-qr" | "outdated-desktop" | "no-candidates" | "none-reachable" | "incompatible" | "verify-failed" | "wrong-machine" | "cancelled" | "name-required";
+			reason: "not-ao-qr" | "outdated-desktop" | "no-candidates" | "none-reachable" | "incompatible" | "wrong-machine" | "cancelled" | "name-required";
+		}
+	| {
+			ok: false;
+			reason: "verify-failed";
+			/** The endpoint that won the race: verification reached it, so it is
+			 * the address to name, not whichever came first in the code. */
+			endpoint: Endpoint;
+			/** What the daemon answered, or undefined when it never did. Kept so a
+			 * rejected password is not reported as an unreachable machine. */
+			status?: number;
 		};
 
 export type PairDeps = {
@@ -57,8 +67,11 @@ export async function pairFromCode(raw: string, deps: PairDeps, options: PairOpt
 	const config = configForEndpoint(outcome.endpoint, offer.token, offer.hostId || outcome.hostId);
 	try {
 		await deps.verify(config);
-	} catch {
-		return { ok: false, reason: "verify-failed" };
+	} catch (error) {
+		const status = typeof error === "object" && error !== null && typeof (error as { status?: unknown }).status === "number"
+			? (error as { status: number }).status
+			: undefined;
+		return { ok: false, reason: "verify-failed", endpoint: outcome.endpoint, ...(status === undefined ? {} : { status }) };
 	}
 
 	let name = options.repairHost?.name.trim() ?? "";

@@ -53,6 +53,22 @@ const phaseCopy: Record<SessionInterfaceTransition["phase"], string> = {
 	recovery_required: "Interface switch needs attention",
 };
 
+// An account move is the same durable handoff in the same interface; it names
+// the account change instead of a destination interface.
+const accountPhaseCopy: Record<SessionInterfaceTransition["phase"], string> = {
+	requested: "Preparing account switch…",
+	preflighting: "Checking the account…",
+	draining: "Waiting for the turn to finish…",
+	source_stopping: "Switching account…",
+	source_stopped: "Switching account…",
+	target_starting: "Resuming on the new account…",
+	activating: "Switching account…",
+	completed: "Account switched",
+	failed: "Account switch failed",
+	cancelled: "Account switch cancelled",
+	recovery_required: "Account switch needs attention",
+};
+
 const targetStopUnconfirmedDetail =
 	"AO could not confirm the target controller stopped. Restart AO to retry shutdown before restoring the original interface.";
 
@@ -85,11 +101,13 @@ export function SessionInterfaceSwitchButton({
 	if (transition && interfaceTransitionIsActive(transition)) {
 		const needsRestart = interfaceTransitionNeedsRestart(transition);
 		const cancellable = !needsRestart && interfaceTransitionIsCancellable(transition) && Boolean(onCancel);
+		const accountMove = Boolean(transition.targetAccountId);
 		const statusLabel = needsRestart
-			? `Interface switch needs attention. ${transition.errorDetail || targetStopUnconfirmedDetail}`
-			: cancelError ||
-				`${phaseCopy[transition.phase]} Switching to ${targetTitleLabel(transition.targetMode)}.`;
-		const cancelLabel = `Cancel switch to ${targetTitleLabel(transition.targetMode)}`;
+			? `${accountMove ? "Account" : "Interface"} switch needs attention. ${transition.errorDetail || targetStopUnconfirmedDetail}`
+			: cancelError || (accountMove
+				? accountPhaseCopy[transition.phase]
+				: `${phaseCopy[transition.phase]} Switching to ${targetTitleLabel(transition.targetMode)}.`);
+		const cancelLabel = accountMove ? "Cancel account switch" : `Cancel switch to ${targetTitleLabel(transition.targetMode)}`;
 		return (
 			<div
 				role="status"
@@ -318,6 +336,8 @@ export function SessionInterfaceTransitionNotice({
 	}
 	const recovered =
 		transition.phase === "recovery_required" && transition.errorCode === "DAEMON_RESTARTED";
+	const accountMove = Boolean(transition.targetAccountId);
+	const copy = accountMove ? accountPhaseCopy : phaseCopy;
 	const historyRecoveryPolicy = interfaceTransitionHistoryRecoveryPolicy(transition);
 	const interactiveSourceUnverified =
 		transition.phase === "failed" &&
@@ -341,10 +361,10 @@ export function SessionInterfaceTransitionNotice({
 			<div className="min-w-0 flex-1">
 				<strong className="block text-xs font-medium text-foreground">
 					{needsRestart
-						? "Interface switch needs attention"
+						? copy.recovery_required
 						: recovered
-							? "Interface switch recovered"
-							: phaseCopy[transition.phase]}
+							? accountMove ? "Account switch recovered" : "Interface switch recovered"
+							: copy[transition.phase]}
 				</strong>
 				<p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
 					{(interactiveSourceUnverified
@@ -353,12 +373,14 @@ export function SessionInterfaceTransitionNotice({
 						(needsRestart
 							? targetStopUnconfirmedDetail
 							: recovered
-								? "AO restored the session in its last committed interface."
+								? accountMove ? "The session stays on its previous account." : "AO restored the session in its last committed interface."
 								: transition.phase === "recovery_required"
 									? "Restart AO to reconcile this session before sending more work."
-									: "The original interface remains available. You can retry the switch.")}
+									: accountMove
+										? "The agent stays on its previous account. You can retry the switch."
+										: "The original interface remains available. You can retry the switch.")}
 				</p>
-				{transition.phase === "failed" &&
+				{transition.phase === "failed" && !accountMove &&
 				(interactiveSourceUnverified || transition.errorCode === "DRAIN_DECISION_PENDING") &&
 				onSwitchWithInterrupt ? (
 					<Button

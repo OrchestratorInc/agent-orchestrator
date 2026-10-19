@@ -31,6 +31,44 @@ import (
 
 const minimumNodeMajor = 22
 
+// claudeTodoToolsEnv switches on Claude Code's to-do tools in SDK sessions.
+const claudeTodoToolsEnv = "CLAUDE_CODE_ENABLE_TODO_TOOLS"
+
+// claudePlanGuidance asks Claude to plan multi-step work with its to-do tools.
+// Claude Code defers TaskCreate and TaskUpdate until ToolSearch loads them and
+// does not look for them on an ordinary request, so without this line the chat's
+// plan panel stays empty unless the user names the tools.
+const claudePlanGuidance = "When you make a to-do list or plan, or do work with several steps, track it with " +
+	"the TaskCreate and TaskUpdate tools (load them with ToolSearch if needed) and keep the tasks updated as " +
+	"you go. Do not write the list only as text."
+
+// claudeTodoToolsChoice returns the value the user chose for the to-do tools in
+// the project env or the daemon's own environment. A blank value is no choice.
+func claudeTodoToolsChoice(input map[string]string) (string, bool) {
+	if value := strings.TrimSpace(input[claudeTodoToolsEnv]); value != "" {
+		return value, true
+	}
+	if value := strings.TrimSpace(os.Getenv(claudeTodoToolsEnv)); value != "" {
+		return value, true
+	}
+	return "", false
+}
+
+// claudeTodoToolsEnabled reports whether a Claude launch with this env has the
+// to-do tools: AO turns them on unless the user chose to turn them off.
+func claudeTodoToolsEnabled(input map[string]string) bool {
+	value, chosen := claudeTodoToolsChoice(input)
+	if !chosen {
+		return true
+	}
+	switch strings.ToLower(value) {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
+}
+
 type claudePlugin interface {
 	ResolveBinary(context.Context) (string, error)
 }
@@ -216,6 +254,13 @@ func claudeACPLaunchEnv(
 	// This prevents the adapter's optional native Claude package from becoming
 	// a second installation managed by AO.
 	env["CLAUDE_CODE_EXECUTABLE"] = binary
+	// Claude Code withholds its to-do tools (TaskCreate, TaskUpdate, ...) from
+	// SDK-driven sessions unless this is set, so the agent has nothing to call
+	// and AO never receives the plan updates behind the chat's plan panel. A
+	// value the user already chose, in the project env or the daemon's own, wins.
+	if _, chosen := claudeTodoToolsChoice(input); !chosen {
+		env[claudeTodoToolsEnv] = "1"
+	}
 	selected := strings.TrimSpace(selectedModel)
 	if _, configured := input["ANTHROPIC_CUSTOM_MODEL_OPTION"]; selected != "" &&
 		!isClaudeNativeModelAlias(selected) && !configured &&
@@ -319,6 +364,12 @@ func validateClaudeACPExecutable(binary, goos string) error {
 
 func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 	standing := strings.TrimSpace(cfg.SystemPrompt)
+	if claudeTodoToolsEnabled(cfg.Env) {
+		if standing != "" {
+			standing += "\n\n"
+		}
+		standing += claudePlanGuidance
+	}
 	if standing == "" {
 		return nil
 	}

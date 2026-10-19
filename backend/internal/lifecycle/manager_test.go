@@ -837,6 +837,42 @@ func TestRuntimeObservation_AliveWorkloadCannotResurrectExitedSession(t *testing
 	}
 }
 
+// ExitAgent destroys a terminal on purpose and keeps the session; Resume
+// builds a new one. That runtime's death must leave the session live. A release
+// names one launch only: a later launch that dies after its agent exited is a
+// crash like any other (the exit hook can win the race with the reaper).
+func TestRuntimeObservation_ReleasedRuntimeDeathKeepsSessionLive(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		released  string
+		terminate bool
+	}{
+		{name: "released launch", released: "launch-1", terminate: false},
+		{name: "earlier launch released", released: "launch-0", terminate: true},
+		{name: "nothing released", released: "", terminate: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, _ := newManager()
+			rec := working("mer-1")
+			rec.Activity = domain.Activity{State: domain.ActivityExited, LastActivityAt: time.Now().Add(-2 * time.Minute)}
+			rec.Metadata.RuntimeLaunchID = "launch-1"
+			rec.Metadata.RuntimeReleasedLaunchID = tc.released
+			st.sessions["mer-1"] = rec
+
+			if err := m.ApplyRuntimeObservation(ctx, "mer-1", ports.RuntimeFacts{
+				Runtime:  ports.ProbeDead,
+				Workload: ports.ProbeFailed,
+				LaunchID: "launch-1",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if got := st.sessions["mer-1"]; got.IsTerminated != tc.terminate {
+				t.Fatalf("terminated = %v, want %v", got.IsTerminated, tc.terminate)
+			}
+		})
+	}
+}
+
 func TestRuntimeObservation_StaleLaunchIsIgnored(t *testing.T) {
 	m, st, _ := newManager()
 	rec := working("mer-1")
@@ -5471,5 +5507,46 @@ func TestPRObservation_ReviewCommentNudgesDedupPerComment(t *testing.T) {
 	if len(msg.msgs) != sent {
 		t.Fatalf("second poll re-sent %d nudges for unchanged comments:\n%v",
 			len(msg.msgs)-sent, msg.msgs[sent:])
+	}
+}
+
+func TestScopedPostAgentRefreshesIdleProofWithoutStateTransition(t *testing.T) {
+	for _, tc := range []struct {
+		name, launch, native string
+		newer, wantAdvance   bool
+	}{
+		{"completed turn", "launch-1", "native-1", true, true},
+		{"unscoped hook", "", "native-1", true, false},
+		{"stale generation", "launch-old", "native-1", true, false},
+		{"missing native identity", "launch-1", "", true, false},
+		{"duplicate boundary", "launch-1", "native-1", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, _ := newManager()
+			at := time.Now().Add(-time.Minute)
+			rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Harness: domain.HarnessVibe, Mode: domain.SessionModeTUI,
+				Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: at}, FirstSignalAt: at,
+				Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch-1", AgentSessionID: "native-1", AgentSessionIDLaunchID: "launch-1"}}
+			st.sessions["mer-1"] = rec
+			observed := at
+			if tc.newer {
+				observed = at.Add(time.Second)
+			}
+			err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{Valid: true, State: domain.ActivityIdle, Event: "post-agent", LaunchID: tc.launch, AgentSessionID: tc.native, Timestamp: observed})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := st.sessions["mer-1"].Activity
+			if got.State != domain.ActivityIdle {
+				t.Fatalf("state = %q", got.State)
+			}
+			want := at
+			if tc.wantAdvance {
+				want = observed
+			}
+			if !got.LastActivityAt.Equal(want) {
+				t.Fatalf("idle proof = %v, want %v", got.LastActivityAt, want)
+			}
+		})
 	}
 }

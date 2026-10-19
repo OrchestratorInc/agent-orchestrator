@@ -79,13 +79,25 @@ type Service struct {
 	sides              *sideManager
 	wakeChat           func(context.Context, domain.SessionID) error
 	hibernationEnabled func() bool
-	viewMu             sync.Mutex
-	viewLeases         map[domain.SessionID]map[string]time.Time
-	viewClosedAt       map[domain.SessionID]time.Time
-	wakeMu             sync.Mutex
-	waking             map[domain.SessionID]int
-	wakeRuns           map[domain.SessionID]*wakeRun
-	backgroundWakes    map[domain.SessionID]bool
+	// versionRefresh reports whether open sessions move to a newly installed
+	// harness release, and how long they must be quiet first.
+	versionRefresh func() (time.Duration, bool)
+	// versionSwitches holds the release each stopped-for-refresh session is
+	// moving to, until its wake succeeds or fails.
+	versionSwitchMu sync.Mutex
+	versionSwitches map[domain.SessionID]string
+	// versionSwitchObserver hears how each such move ended.
+	versionSwitchObserver func(id domain.SessionID, version, result string)
+	viewMu                sync.Mutex
+	viewLeases            map[domain.SessionID]map[string]time.Time
+	viewClosedAt          map[domain.SessionID]time.Time
+	wakeMu                sync.Mutex
+	waking                map[domain.SessionID]int
+	wakeRuns              map[domain.SessionID]*wakeRun
+	backgroundWakes       map[domain.SessionID]bool
+	// updateStops are sessions stopped so an update could replace their
+	// executable; the update starts them again, so their queue is kept.
+	updateStops map[domain.SessionID]bool
 
 	runPromptSuggestion   func(context.Context, domain.SessionID, string, string, string) (string, error)
 	promptSuggestionSlots chan struct{}
@@ -94,10 +106,14 @@ type Service struct {
 	controllers      map[domain.SessionID]*Controller
 	ownerControllers map[domain.ConversationOwner]*Controller
 	startConfigs     map[domain.ConversationOwner]StartConfig
-	gateMu           sync.Mutex
-	gates            map[domain.ConversationOwner]controllerGate
-	probeMu          sync.Mutex
-	probed           map[domain.AgentHarness]ports.ChatCapabilities
+	awakeInterrupted map[domain.ConversationOwner]domain.AwakeAgentTarget
+	// handoffInterrupted is the provider turn each session's pending handoff
+	// stopped, kept until the account move that stopped it commits.
+	handoffInterrupted map[domain.SessionID]string
+	gateMu             sync.Mutex
+	gates              map[domain.ConversationOwner]controllerGate
+	probeMu            sync.Mutex
+	probed             map[domain.AgentHarness]ports.ChatCapabilities
 }
 
 // SetReportCoordinator installs the report piggyback hook after daemon wiring
@@ -168,6 +184,10 @@ type Options struct {
 	ReconcileOutputType func(context.Context, domain.SessionID) error
 	// HibernationEnabled reads the daemon-owned feature gate. Nil is disabled.
 	HibernationEnabled func() bool
+	// VersionRefresh reports whether an idle session still on a replaced
+	// harness release moves to the installed one on its next message, and the
+	// quiet time required first. Nil never moves a session.
+	VersionRefresh func() (time.Duration, bool)
 }
 
 // New builds a Chat service.
@@ -198,9 +218,12 @@ func New(opts Options) *Service {
 		dataDir:                opts.DataDir,
 		reconcileOutput:        opts.ReconcileOutputType,
 		hibernationEnabled:     opts.HibernationEnabled,
+		versionRefresh:         opts.VersionRefresh,
 		controllers:            make(map[domain.SessionID]*Controller),
+		handoffInterrupted:     make(map[domain.SessionID]string),
 		ownerControllers:       make(map[domain.ConversationOwner]*Controller),
 		startConfigs:           make(map[domain.ConversationOwner]StartConfig),
+		awakeInterrupted:       make(map[domain.ConversationOwner]domain.AwakeAgentTarget),
 		gates:                  make(map[domain.ConversationOwner]controllerGate),
 		probed:                 make(map[domain.AgentHarness]ports.ChatCapabilities),
 		waking:                 make(map[domain.SessionID]int),
@@ -240,9 +263,26 @@ func providerHostID(cfg StartConfig) domain.SessionID {
 // StartConfig opens a controller for a session.
 type StartConfig = ports.ChatControllerStart
 
+// liveControllerClaimer claims a generation for a Chat that reconnected to its
+// still-running provider and, in the same write, keeps the harness release and
+// stale-release mark the replaced generation recorded for that process.
+type liveControllerClaimer interface {
+	ClaimLiveChatControllerGeneration(ctx context.Context, session domain.SessionID, generation string) error
+}
+
 type reviewerConversationStore interface {
 	ConversationForReview(context.Context, string) (domain.ConversationRecord, error)
 	GetReviewByID(context.Context, string) (domain.Review, bool, error)
+}
+
+// claimChatController claims generation for the session. A live reconnect
+// keeps the old provider process, so it carries what that process runs in the
+// same write as the claim.
+func (s *Service) claimChatController(ctx context.Context, id domain.SessionID, generation string, liveReconnect bool) error {
+	if claimer, ok := s.store.(liveControllerClaimer); ok && liveReconnect {
+		return claimer.ClaimLiveChatControllerGeneration(ctx, id, generation)
+	}
+	return s.store.ClaimChatControllerGeneration(ctx, id, generation)
 }
 
 // ControllerCommit is the conversation state committed by ControllerReady.
@@ -290,6 +330,10 @@ func notifyControllerReady(
 
 func cloneStartConfig(cfg StartConfig) StartConfig {
 	cloned := cfg
+	if cfg.AwakeReconnectTarget != nil {
+		target := *cfg.AwakeReconnectTarget
+		cloned.AwakeReconnectTarget = &target
+	}
 	cloned.Env = make(map[string]string, len(cfg.Env))
 	for key, value := range cfg.Env {
 		cloned.Env[key] = value
@@ -346,6 +390,19 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		return nil, err
 	}
 	defer gate.unlock()
+	if target := cfg.AwakeReconnectTarget; target != nil {
+		s.mu.Lock()
+		candidate, exists := s.awakeInterrupted[owner]
+		old, hasConfig := s.startConfigs[owner]
+		valid := cfg.ReconnectOnly && !cfg.FreshIfProviderConversationMissing && owner.Kind == domain.ConversationOwnerSession && target.SessionID == cfg.SessionID && target.Owner == cfg.ExpectedControllerOwner && exists && candidate == *target && hasConfig && old.ExpectedControllerOwner == target.Owner && s.ownerControllers[owner] == nil
+		if valid {
+			delete(s.awakeInterrupted, owner)
+		}
+		s.mu.Unlock()
+		if !valid {
+			return nil, fmt.Errorf("%w: interrupted attachment proof expired or was explicitly stopped", ports.ErrChatRecoveryInconclusive)
+		}
+	}
 	if cfg.HistoryMode > ports.ChatHistoryDeferred {
 		return nil, errors.New("invalid Chat history mode")
 	}
@@ -618,6 +675,11 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	queuedBeforeFirstController := false
 	preserveUndispatchedQueue := false
 	waking := s.isWaking(cfg.SessionID)
+	// A session whose move to a new harness release failed kept its queued
+	// messages for this start, the way a wake does (see versionSwitchFailed).
+	if sessionFound && sessionRecord.StaleBinary != nil && sessionRecord.StaleBinary.SwitchFailedAt != nil {
+		waking = true
+	}
 	hadProviderHistory := false
 	if sessionFound && (sessionRecord.ProvisionState.IsProvisioning() || waking) {
 		hadProviderHistory = sessionRecord.Metadata.ProviderConversationID != ""
@@ -843,7 +905,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 				}
 				return nil, errors.New("reviewer chat controller ownership changed")
 			}
-		} else if err := s.store.ClaimChatControllerGeneration(ctx, cfg.SessionID, generation); err != nil {
+		} else if err := s.claimChatController(ctx, cfg.SessionID, generation, liveReconnect); err != nil {
 			_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
 			return nil, fmt.Errorf("claim chat controller: %w", err)
 		}
@@ -1070,8 +1132,10 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	// resume the now-current branch, not retry its old ownership snapshot.
 	cfg.ProviderHandoff = nil
 	cfg.ProviderScopeID = ""
+	cfg.AwakeReconnectTarget = nil
 	cfg.HistoryMode = ports.ChatHistoryImport
 	s.startConfigs[owner] = cloneStartConfig(cfg)
+	delete(s.awakeInterrupted, owner)
 	controller.start()
 	s.mu.Unlock()
 
@@ -1082,6 +1146,12 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		controller.waitForBranchHandoff()
 		s.mu.Lock()
 		if current, ok := s.ownerControllers[owner]; ok && current == controller {
+			controller.mu.Lock()
+			interrupted := controller.transportInterrupted && !controller.explicitClose
+			controller.mu.Unlock()
+			if interrupted && owner.Kind == domain.ConversationOwnerSession && cfg.ExpectedControllerOwner.ControllerGeneration != "" {
+				s.awakeInterrupted[owner] = domain.AwakeAgentTarget{SessionID: cfg.SessionID, Owner: cfg.ExpectedControllerOwner}
+			}
 			delete(s.ownerControllers, owner)
 			if owner.Kind == domain.ConversationOwnerSession {
 				delete(s.controllers, cfg.SessionID)
@@ -1187,6 +1257,13 @@ func (s *Service) Send(
 	record, err := s.requireChatSession(ctx, id)
 	if err != nil {
 		return domain.ConversationTurn{}, err
+	}
+	if s.switchBeforeSend(ctx, record) {
+		// The provider stopped on its old release. The hibernated path below
+		// queues this message and wakes the session on the installed one.
+		if record, err = s.requireChatSession(ctx, id); err != nil {
+			return domain.ConversationTurn{}, err
+		}
 	}
 	if msg.ClientMessageID != "" && len(msg.Excerpts) > 0 {
 		if controller, controllerErr := s.Controller(id); controllerErr == nil {
@@ -1501,12 +1578,25 @@ func (s *Service) PrepareChatHandoff(
 	if controller.State() == ports.ChatControllerStopped {
 		return nil
 	}
-	return controller.BeginHandoff(ctx, policy)
+	if err := controller.BeginHandoff(ctx, policy); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if turn := controller.HandoffInterruptedTurn(); turn != "" {
+		s.handoffInterrupted[id] = turn
+	} else {
+		delete(s.handoffInterrupted, id)
+	}
+	s.mu.Unlock()
+	return nil
 }
 
 // AbortChatHandoff reopens the existing controller when the user cancels before
 // Session Manager has stopped it.
 func (s *Service) AbortChatHandoff(id domain.SessionID) {
+	s.mu.Lock()
+	delete(s.handoffInterrupted, id)
+	s.mu.Unlock()
 	controller, err := s.Controller(id)
 	if err == nil {
 		controller.AbortHandoff()
@@ -1538,6 +1628,7 @@ func (s *Service) Stop(ctx context.Context, id domain.SessionID) error {
 	if !ok {
 		s.mu.Lock()
 		delete(s.startConfigs, owner)
+		delete(s.awakeInterrupted, owner)
 		s.mu.Unlock()
 		var stopErr error
 		if s.stopProviderHost != nil {
@@ -1578,6 +1669,7 @@ func (s *Service) Stop(ctx context.Context, id domain.SessionID) error {
 			delete(s.controllers, id)
 		}
 		delete(s.startConfigs, owner)
+		delete(s.awakeInterrupted, owner)
 		s.mu.Unlock()
 	default:
 	}
@@ -1600,6 +1692,7 @@ func (s *Service) StopForOwner(ctx context.Context, owner domain.ConversationOwn
 	if errors.Is(err, ErrNoController) {
 		s.mu.Lock()
 		delete(s.startConfigs, owner)
+		delete(s.awakeInterrupted, owner)
 		s.mu.Unlock()
 		return nil
 	}
@@ -1613,6 +1706,7 @@ func (s *Service) StopForOwner(ctx context.Context, owner domain.ConversationOwn
 		if s.ownerControllers[owner] == controller {
 			delete(s.ownerControllers, owner)
 			delete(s.startConfigs, owner)
+			delete(s.awakeInterrupted, owner)
 			if owner.Kind == domain.ConversationOwnerSession {
 				delete(s.controllers, controller.sessionID)
 			}
@@ -2723,4 +2817,19 @@ func truncateUTF8Head(text string, limit int) string {
 		end--
 	}
 	return text[:end]
+}
+
+// InterruptedAwakeAgents exposes only a positively observed transport loss.
+// It does not infer failure from inactivity, lack of network, or a missing PID.
+func (s *Service) InterruptedAwakeAgents() []domain.AwakeAgentTarget {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := []domain.AwakeAgentTarget{}
+	for owner, target := range s.awakeInterrupted {
+		cfg, ok := s.startConfigs[owner]
+		if ok && cfg.ExpectedControllerOwner == target.Owner && s.ownerControllers[owner] == nil {
+			result = append(result, target)
+		}
+	}
+	return result
 }

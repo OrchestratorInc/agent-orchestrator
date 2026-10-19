@@ -21,7 +21,10 @@ const (
 type ChatControllerStart struct {
 	// ReconnectOnly restricts startup recovery to an existing provider process.
 	ReconnectOnly bool
-	SessionID     domain.SessionID
+	// AwakeReconnectTarget additionally requires current, unconsumed evidence
+	// of an interrupted persistent transport under the controller gate.
+	AwakeReconnectTarget *domain.AwakeAgentTarget
+	SessionID            domain.SessionID
 	// Owner distinguishes worker and review conversations that share a worker
 	// session. Empty preserves the existing worker-session owner.
 	Owner         domain.ConversationOwner

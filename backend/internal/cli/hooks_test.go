@@ -367,6 +367,44 @@ func TestHooks_ReviewerActivityOmitsToolCorrelationFields(t *testing.T) {
 	}
 }
 
+func TestHooks_MemcodeReportsSessionChangesAfterRestore(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	t.Setenv("AO_MEMCODE_INTERACTIVE_RESTORE", "1")
+	t.Setenv("AO_MEMCODE_RESTORE_TARGET", "sess_a0a0a0a0")
+	t.Setenv("AO_MEMCODE_SESSION", "ao-7")
+	t.Setenv("AO_MEMCODE_GENERATION", "launch-1")
+	data := t.TempDir()
+	t.Setenv("AO_MEMCODE_DATA_DIR", data)
+	instructions := filepath.Join(data, "agent-launches", "memcode", "ao-7")
+	if err := os.MkdirAll(instructions, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(instructions, "instructions.json"), []byte(`["Y29udGV4dA=="]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	for i, nativeID := range []string{"sess_b1b1b1b1", "sess_a0a0a0a0", "sess_c2c2c2c2"} {
+		t.Setenv("MEMCODE_SESSION_ID", nativeID)
+		_, stderr, err := executeCLI(t, Deps{In: strings.NewReader(`{}`), ProcessAlive: func(int) bool { return true }}, "hooks", "memcode", "session-start")
+		if err != nil {
+			t.Fatalf("hook %d: %v: %s", i, err, stderr)
+		}
+		if want := 0; i == 2 {
+			want = 1
+			if !strings.Contains(capture.body, nativeID) {
+				t.Fatalf("session change was not reported: %s", capture.body)
+			}
+			if capture.hits != want {
+				t.Fatalf("hook %d posted %d times, want %d", i, capture.hits, want)
+			}
+		} else if capture.hits != want {
+			t.Fatalf("handshake hook %d posted %d times", i, capture.hits)
+		}
+	}
+}
+
 func TestHooks_ReviewerRoutingTakesPrecedenceOverWorkerSession(t *testing.T) {
 	t.Setenv("AO_REVIEW_SESSION_ID", "review-7")
 	t.Setenv("AO_REVIEW_WORKER_SESSION_ID", "worker-context-only")
@@ -1051,6 +1089,34 @@ func TestHookPayloadHelpersTolerateUTF8BOM(t *testing.T) {
 	facts := hookConversationFacts(domain.HarnessClaudeCode, "user-prompt-submit", payload)
 	if facts.LatestUserPrompt != "do it" || facts.TranscriptPath != "/tmp/t.jsonl" {
 		t.Fatalf("hookConversationFacts = %+v", facts)
+	}
+}
+
+func TestHookAgentSessionIDPrefersClineDurableRootSession(t *testing.T) {
+	payload := []byte(`{"taskId":"conv_internal","conversationId":"conv_internal","sessionContext":{"rootSessionId":"1792275014518_yyjbm"}}`)
+	if got := hookAgentSessionID(payload); got != "1792275014518_yyjbm" {
+		t.Fatalf("native resume ID = %q, want durable Cline CLI root session, not internal task ID", got)
+	}
+}
+
+func TestHooksClineReportsDurableRootSession(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"taskId":"conv_internal","sessionContext":{"rootSessionId":"1792275014518_yyjbm"}}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "cline", "session-start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.AgentSessionID != "1792275014518_yyjbm" {
+		t.Fatalf("reported native ID = %q", req.AgentSessionID)
 	}
 }
 

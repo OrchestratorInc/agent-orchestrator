@@ -8,6 +8,7 @@ import {
 	type Http2SecureServer, type Http2Server, type Http2ServerRequest, type Http2ServerResponse, type ServerHttp2Session,
 } from "node:http2";
 import { WebSocketServer, createWebSocketStream, type WebSocket } from "ws";
+import * as agentViewer from "./agent-viewer";
 import { previewCertificate } from "./preview-certificate";
 import { startRemoteProxy, type ActiveProxy } from "./remote-proxy";
 
@@ -136,7 +137,9 @@ describe("startRemoteProxy", () => {
 		expect(await request(raw)).toBe(200);
 	});
 
-	it("keeps an app preview's origin across dev-server and proxy restarts", async () => {
+	it("keeps an app preview's origin across restarts with the same preview port", async () => {
+		// Port contention permits a different origin; isolate stable-port URL mapping.
+		vi.spyOn(agentViewer, "listenOnStablePort").mockResolvedValue(44000);
 		const { port } = await startUpstream(() => ({ status: 200, body: "{}" }));
 		const entry = { label: "box", url: `http://127.0.0.1:${port}/ao`, password: "pw" };
 		proxy = await startRemoteProxy(entry);
@@ -1194,7 +1197,9 @@ describe("startRemoteProxy when the upstream fails", () => {
 	// An HTTPS daemon carrying HTTP/2 inside a WebSocket at /api/v1/tunnel, as
 	// AO's does behind a Cloudflare tunnel. drop() closes every tunnel; direct
 	// requests answer {direct}.
-	async function startTunnelDaemon(handler: DaemonHandler, options: { failUpgrades?: number; answerUpgrades?: boolean } = {}) {
+	// holdMs sends what the daemon wrote within that time as one tunnel
+	// message, as the Cloudflare edge passes a small answer on.
+	async function startTunnelDaemon(handler: DaemonHandler, options: { failUpgrades?: number; answerUpgrades?: boolean; holdMs?: number } = {}) {
 		const tunnels = new Set<WebSocket>();
 		const drop = () => { for (const tunnel of tunnels) tunnel.terminate(); };
 		const inner = createHttp2Server((req, res) => (req.url === "/api/v1/identity" ? void res.end(identity) : handler(req, res, drop)));
@@ -1218,6 +1223,7 @@ describe("startRemoteProxy when the upstream fails", () => {
 			sockets.handleUpgrade(req, socket, head, (ws) => {
 				tunnels.add(ws);
 				ws.once("close", () => tunnels.delete(ws));
+				if (options.holdMs) holdSends(ws, options.holdMs);
 				const stream = createWebSocketStream(ws);
 				stream.on("error", () => undefined);
 				inner.emit("connection", stream);
@@ -1231,6 +1237,20 @@ describe("startRemoteProxy when the upstream fails", () => {
 			return new Promise<void>((resolve) => host.close(() => resolve()));
 		});
 		return state;
+	}
+
+	function holdSends(ws: WebSocket, holdMs: number): void {
+		const send = ws.send.bind(ws);
+		let held: Buffer[] = [];
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		ws.send = ((data: Buffer, callback?: (error?: Error) => void) => {
+			held.push(Buffer.from(data));
+			callback?.();
+			timer ??= setTimeout(() => {
+				timer = undefined;
+				send(Buffer.concat(held.splice(0)));
+			}, holdMs);
+		}) as typeof ws.send;
 	}
 
 	// A TCP relay to a daemon. silence() makes every connection it carries go
@@ -1328,9 +1348,23 @@ describe("startRemoteProxy when the upstream fails", () => {
 		}
 	});
 
+	it("relays a small body whose tunnelled stream closed before its end", async () => {
+		// Through the tunnel, a small answer's stream closes with NO_ERROR before
+		// its body ends. Once the request has gone out, as it has over any real
+		// network, Node destroys that stream before "end": the body is complete.
+		const host = await startTunnelDaemon((_req, res) => void setTimeout(() => res.end('{"ok":true}'), 30), { holdMs: 10 });
+		proxy = await startRemoteProxy(daemonEntry(`https://127.0.0.1:${host.port}`));
+		for (let attempt = 0; attempt < 3; attempt++) {
+			const response = await fetch(`${proxy.base}/api/v1/projects`);
+			expect(response.status).toBe(200);
+			expect(await within(response.json())).toEqual({ ok: true });
+		}
+		expect(host.upgrades).toBe(1);
+	});
+
 	it("fails a body whose host destroyed its session mid-body", async () => {
 		// A destroyed session ends its streams with code 0 and no reset: only the
-		// stream's own state tells this cut from a finished body.
+		// destroyed session tells this cut from a finished body.
 		const port = await startH2Daemon((_req, res) => {
 			res.writeHead(200, { "content-type": "text/javascript" });
 			res.write("x".repeat(5_000));

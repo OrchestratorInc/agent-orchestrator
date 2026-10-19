@@ -1868,6 +1868,24 @@ func TestDefaultSourceRootsIncludesManagedKimiHome(t *testing.T) {
 	}
 }
 
+func TestDefaultSourceRootsFollowsClaudeConfigDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	got, err := DefaultSourceRoots(context.Background(), "")
+	mustNoError(t, err)
+	if want := filepath.Join(home, ".claude", "projects"); got.ClaudeProjects != want {
+		t.Fatalf("Claude projects = %q, want %q", got.ClaudeProjects, want)
+	}
+	custom := filepath.Join(home, "claude-config")
+	t.Setenv("CLAUDE_CONFIG_DIR", custom)
+	got, err = DefaultSourceRoots(context.Background(), "")
+	mustNoError(t, err)
+	if want := filepath.Join(custom, "projects"); got.ClaudeProjects != want {
+		t.Fatalf("Claude projects with CLAUDE_CONFIG_DIR = %q, want %q", got.ClaudeProjects, want)
+	}
+}
+
 func TestCollectorDiscoversKimiWireSourcesFromSessionIndex(t *testing.T) {
 	const nativeID = "kimi-session-1"
 	store := collectorTestStore(t)

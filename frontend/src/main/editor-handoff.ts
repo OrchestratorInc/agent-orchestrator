@@ -93,7 +93,7 @@ export type EditorHandoffDeps = {
 	/** Resolves symlinks in an existing path. */
 	realPath: (candidatePath: string) => Promise<string>;
 	/** Puts text on the system clipboard. The workspace path never reaches the renderer. */
-	copyText?: (text: string) => void;
+	copyText?: (text: string) => void | Promise<void>;
 	/** Reads a native app icon as a data URL; installation paths stay in main. */
 	readIcon?: (appPath: string) => Promise<string>;
 	/** Registered macOS shell apps that accept folder-open events. */
@@ -577,7 +577,7 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 			const id = sessionId.trim();
 			if (!id) throw new Error("Session is required.");
 			if (!deps.copyText) throw new Error("Copying is not available.");
-			deps.copyText(await deps.resolveWorkspace(id));
+			await deps.copyText(await deps.resolveWorkspace(id));
 		},
 	};
 }

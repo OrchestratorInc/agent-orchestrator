@@ -498,6 +498,17 @@ describe("browser download manager", () => {
 		expect(replacementNotify).toHaveBeenCalled();
 	});
 
+	it("publishes an empty state on dispose so observers drop stale downloads", () => {
+		const test = setup();
+		test.start(new FakeDownloadItem());
+		test.notify.mockClear();
+
+		test.manager.dispose();
+
+		expect(test.notify).toHaveBeenCalledOnce();
+		expect(test.notify).toHaveBeenCalledWith({ downloads: [] });
+	});
+
 	it("detaches active item listeners when disposed", () => {
 		const test = setup();
 		const item = new FakeDownloadItem();

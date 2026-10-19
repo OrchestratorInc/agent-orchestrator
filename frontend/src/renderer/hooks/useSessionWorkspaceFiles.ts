@@ -5,6 +5,8 @@ import type { components } from "../../api/schema";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
+import { fileMediaKind } from "../lib/file-media";
+import { artifactContentUrl } from "../lib/artifact-content-url";
 import { WORKSPACE_REVIEW_BATCH_SIZE } from "../lib/workspace-review";
 import {
 	getWorkspaceFileConnectionState,
@@ -39,6 +41,8 @@ export type WorkspaceFilesResponse = Omit<components["schemas"]["ListWorkspaceFi
 	refreshing?: boolean;
 };
 export type WorkspaceFileDetail = Omit<components["schemas"]["WorkspaceFileResponse"], "editable" | "fileFingerprint" | "workspaceVersion"> & {
+	/** HTTP validator for streamed artifacts, so an unchanged refetch keeps playing. */
+	mediaVersion?: string;
 	editable?: boolean;
 	previousPath?: string;
 	compareMode?: WorkspaceCompareMode;
@@ -147,15 +151,22 @@ async function fetchSessionPRFile(sessionId: string, number: number, sourceUrl: 
 
 // Artifact files live in the session's artifact directory, outside the git
 // workspace, so they have no diff/status and aren't reachable through the
-// workspace-files endpoint. rawUrl (from the artifact list response) fetches
-// raw bytes on the artifact preview origin, a distinct host from the
-// workspace preview origin — unlike the legacy __ao_artifacts__/ path-prefix
-// form, a workspace-relative path of the same name can never resolve there.
+// workspace-files endpoint. Local preview hostnames can resolve to ::1, where
+// another app may own the daemon's port. Read through the trusted daemon API
+// instead, explicitly selecting the artifact root. Remote proxy and cloud URLs
+// already identify their content endpoint and must keep their original routing.
 async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl: string | undefined, errorMessage: string): Promise<WorkspaceFileDetail> {
 	if (!rawUrl) throw new Error(errorMessage);
-	const response = await fetch(rawUrl);
+	const contentUrl = artifactContentUrl(sessionId, path, rawUrl);
+	if (!contentUrl) throw new Error(errorMessage);
+	const media = fileMediaKind(path);
+	// The artifact route only supports GET; media elements stream their own body.
+	const response = await fetch(contentUrl);
+	if (media) void response.body?.cancel();
 	if (!response.ok) throw new Error(errorMessage);
-	const { binary, bytes, content, size, truncated } = await readArtifactTextResponse(response);
+	const { binary, bytes, content, size, truncated } = media
+		? { binary: true, bytes: new Uint8Array(), content: "", size: Number(response.headers.get("content-length")) || 0, truncated: false }
+		: await readArtifactTextResponse(response);
 	// Only a complete text file can be edited: the save sends it back whole.
 	const editable = !binary && !truncated;
 	return {
@@ -169,6 +180,8 @@ async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl:
 		diffTruncated: false,
 		editable,
 		fileFingerprint: editable ? await artifactFingerprint(bytes) : "",
+		imageMediaType: media === "image" ? response.headers.get("content-type") ?? "image" : undefined,
+		mediaVersion: media ? response.headers.get("etag") ?? response.headers.get("last-modified") ?? undefined : undefined,
 		path,
 		sessionId,
 		size,

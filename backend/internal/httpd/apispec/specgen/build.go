@@ -11,6 +11,8 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+
 	jsonschema "github.com/swaggest/jsonschema-go"
 	openapi "github.com/swaggest/openapi-go"
 	"github.com/swaggest/openapi-go/openapi31"
@@ -155,6 +157,41 @@ func schemaName(_ reflect.Type, defaultName string) string {
 // by projectOperations(). Add an entry when a new contract type is introduced;
 // the drift test fails until the spec is regenerated, which flags the gap.
 var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
+	"ControllersAgentAccountIDParam":                       "AgentAccountIDParam",
+	"ControllersAgentAccountLoginIDParam":                  "AgentAccountLoginIDParam",
+	"ControllersAgentAccountSessionIDParam":                "AgentAccountSessionIDParam",
+	"ControllersAgentAccountListQuery":                     "AgentAccountListQuery",
+	"ControllersAgentAccountUsageQuery":                    "AgentAccountUsageQuery",
+	"ControllersAgentAccountResponse":                      "AgentAccountResponse",
+	"ControllersAgentAccountsResponse":                     "AgentAccountsResponse",
+	"ControllersStartAgentAccountLoginRequest":             "StartAgentAccountLoginRequest",
+	"ControllersStartAgentAccountLoginResponse":            "StartAgentAccountLoginResponse",
+	"ControllersVerifyAgentAccountLoginResponse":           "VerifyAgentAccountLoginResponse",
+	"ControllersConsumeAgentAccountResetCreditRequest":     "ConsumeAgentAccountResetCreditRequest",
+	"ControllersConsumeAgentAccountResetCreditResponse":    "ConsumeAgentAccountResetCreditResponse",
+	"ControllersAgentAccountUsageResponse":                 "AgentAccountUsageResponse",
+	"ControllersAgentAccountUsageRow":                      "AgentAccountUsageRow",
+	"ControllersAgentAccountUsageDay":                      "AgentAccountUsageDay",
+	"ControllersAgentAccountUsageByModel":                  "AgentAccountUsageByModel",
+	"ControllersSessionAgentAccountsResponse":              "SessionAgentAccountsResponse",
+	"ControllersSwitchSessionAgentAccountRequest":          "SwitchSessionAgentAccountRequest",
+	"DomainAgentAccountLimits":                             "AgentAccountLimits",
+	"DomainAgentAccountLimitWindow":                        "AgentAccountLimitWindow",
+	"DomainAgentAccountExtraUsage":                         "AgentAccountExtraUsage",
+	"DomainAgentAccountActivity":                           "AgentAccountActivity",
+	"DomainAwakeState":                                     "AwakeState",
+	"DomainAwakeSettings":                                  "AwakeSettings",
+	"DomainAwakeSession":                                   "AwakeSession",
+	"DomainAwakeRule":                                      "AwakeRule",
+	"DomainAwakeCondition":                                 "AwakeCondition",
+	"DomainAwakeCapability":                                "AwakeCapability",
+	"DomainAwakeObservation":                               "AwakeObservation",
+	"DomainAwakeApplication":                               "AwakeApplication",
+	"DomainStartAwakeRequest":                              "StartAwakeRequest",
+	"ControllersAwakeIDParam":                              "AwakeIDParam",
+	"ControllersExtendAwakeRequest":                        "ExtendAwakeRequest",
+	"ControllersAwakeRulesRequest":                         "AwakeRulesRequest",
+	"ControllersAwakeDownloadsRequest":                     "AwakeDownloadsRequest",
 	"DomainHarnessDefault":                                 "HarnessDefault",
 	"ControllersUpdateHarnessDefaultRequest":               "UpdateHarnessDefaultRequest",
 	"ControllersSettingsResponse":                          "SettingsResponse",
@@ -162,6 +199,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersDesktopArtifactLocationResponse":           "DesktopArtifactLocationResponse",
 	"ControllersUpdateSessionInterfaceRequest":             "UpdateSessionInterfaceRequest",
 	"ControllersUpdateChatHibernationRequest":              "UpdateChatHibernationRequest",
+	"ControllersUpdateVersionRefreshRequest":               "UpdateVersionRefreshRequest",
 	"ControllersConversationSnapshotResponse":              "ConversationSnapshotResponse",
 	"ControllersConversationTurnResponse":                  "ConversationTurnResponse",
 	"ControllersConversationTurnDiffResponse":              "ConversationTurnDiffResponse",
@@ -265,6 +303,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"DomainSession":                   "Session",
 	"DomainSessionProvisionStep":      "SessionProvisionStep",
 	"DomainSessionBranchState":        "SessionBranchState",
+	"DomainSessionStaleBinary":        "SessionStaleBinary",
+	"DomainSessionWait":               "SessionWait",
 	"DomainProjectConfig":             "ProjectConfig",
 	"DomainTrackerIntakeConfig":       "TrackerIntakeConfig",
 	"ControllersTriggerReviewRequest": "TriggerReviewRequest",
@@ -441,6 +481,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"SysteminstallAgentPlan":                      "AgentInstallPlan",
 	"SysteminstallAgentInstallMethod":             "AgentInstallMethod",
 	"SysteminstallUpdateAdvisory":                 "AgentUpdateAdvisory",
+	"SysteminstallUpdateInUse":                    "AgentUpdateInUse",
 	"ControllersAgentUpdateAdvisoryQuery":         "AgentUpdateAdvisoryQuery",
 	"ControllersAgentInstallerCatalogResponse":    "AgentInstallerCatalogResponse",
 	"ControllersStartAgentInstallRequest":         "StartAgentInstallRequest",
@@ -682,6 +723,7 @@ func operations() []operation {
 	ops = append(ops, fsOperations()...)
 	ops = append(ops, devOperations()...)
 	ops = append(ops, mobileOperations()...)
+	ops = append(ops, awakeOperations()...)
 	ops = append(ops, mobileDeviceOperations()...)
 	ops = append(ops, browserOperations()...)
 	ops = append(ops, shellTerminalOperations()...)
@@ -990,6 +1032,17 @@ func shellTerminalOperations() []operation {
 			method: http.MethodPatch, path: "/api/v1/settings/chat-hibernation", id: "updateChatHibernation", tag: "settings",
 			summary: "Turn idle Chat hibernation on or off for this machine",
 			reqBody: controllers.UpdateChatHibernationRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SettingsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/settings/version-refresh", id: "updateVersionRefresh", tag: "settings",
+			summary: "Choose whether idle open sessions move to newly installed harness releases",
+			reqBody: controllers.UpdateVersionRefreshRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.SettingsResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
@@ -1790,6 +1843,64 @@ func agentOperations() []operation {
 			resps: []respUnit{{http.StatusOK, controllers.CodexAccountSwitchResponse{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
+			method: http.MethodGet, path: "/api/v1/agents/accounts", id: "listAgentAccounts", tag: "agents",
+			summary: "List Claude Code and Codex accounts with their limits", pathParams: []any{controllers.AgentAccountListQuery{}},
+			resps: []respUnit{{http.StatusOK, controllers.AgentAccountsResponse{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/agents/accounts/usage", id: "getAgentAccountUsage", tag: "agents",
+			summary: "Sum each account's model usage in AO sessions", pathParams: []any{controllers.AgentAccountUsageQuery{}},
+			resps: []respUnit{{http.StatusOK, controllers.AgentAccountUsageResponse{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/agents/accounts/login", id: "startAgentAccountLogin", tag: "agents",
+			summary: "Add an account by running the provider's own sign-in in a terminal",
+			reqBody: controllers.StartAgentAccountLoginRequest{},
+			resps:   []respUnit{{http.StatusAccepted, controllers.StartAgentAccountLoginResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/agents/accounts/login/{operationId}/verify", id: "verifyAgentAccountLogin", tag: "agents",
+			summary: "Check a sign-in and save the account when it finished", pathParams: []any{controllers.AgentAccountLoginIDParam{}},
+			resps: []respUnit{{http.StatusOK, controllers.VerifyAgentAccountLoginResponse{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/agents/accounts/login/{operationId}/cancel", id: "cancelAgentAccountLogin", tag: "agents",
+			summary: "Stop a sign-in and remove its unsaved folder", pathParams: []any{controllers.AgentAccountLoginIDParam{}},
+			resps: []respUnit{{http.StatusNoContent, nil}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/agents/accounts/sessions/{sessionId}", id: "getSessionAgentAccounts", tag: "agents",
+			summary: "Read the account a session uses per provider", pathParams: []any{controllers.AgentAccountSessionIDParam{}},
+			resps: []respUnit{{http.StatusOK, controllers.SessionAgentAccountsResponse{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/agents/accounts/sessions/{sessionId}", id: "switchSessionAgentAccount", tag: "agents",
+			summary: "Start moving a session to another account through the durable controller handoff", pathParams: []any{controllers.AgentAccountSessionIDParam{}},
+			reqBody: controllers.SwitchSessionAgentAccountRequest{},
+			resps:   []respUnit{{http.StatusAccepted, controllers.StartSessionInterfaceTransitionResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/agents/accounts/{accountId}/login", id: "signInAgentAccountAgain", tag: "agents",
+			summary: "Sign a saved account in again, in its own folder", pathParams: []any{controllers.AgentAccountIDParam{}},
+			resps: []respUnit{{http.StatusAccepted, controllers.StartAgentAccountLoginResponse{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/agents/accounts/{accountId}/default", id: "setDefaultAgentAccount", tag: "agents",
+			summary: "Make an account the default for new sessions of its provider", pathParams: []any{controllers.AgentAccountIDParam{}},
+			resps: []respUnit{{http.StatusOK, controllers.AgentAccountsResponse{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/agents/accounts/{accountId}/reset-credit", id: "consumeAgentAccountResetCredit", tag: "agents",
+			summary: "Spend one Codex usage-limit reset of an account", pathParams: []any{controllers.AgentAccountIDParam{}},
+			reqBody: controllers.ConsumeAgentAccountResetCreditRequest{},
+			resps:   []respUnit{{http.StatusOK, controllers.ConsumeAgentAccountResetCreditResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/agents/accounts/{accountId}", id: "removeAgentAccount", tag: "agents",
+			summary: "Sign an account out and remove it", pathParams: []any{controllers.AgentAccountIDParam{}},
+			resps: []respUnit{{http.StatusOK, controllers.AgentAccountsResponse{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
 			method: http.MethodPost, path: "/api/v1/agents/refresh", id: "refreshAgents", tag: "agents",
 			summary: "Refresh the cached local agent adapter catalog",
 			resps: []respUnit{
@@ -1836,6 +1947,18 @@ func agentOperations() []operation {
 			reqBody:    controllers.StartAgentInstallRequest{}, optionalReqBody: true,
 			resps: []respUnit{
 				{http.StatusAccepted, controllers.AgentInstallResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/agents/{agent}/install/cancel", id: "cancelAgentInstall", tag: "agents",
+			summary:    "Cancel an update that is waiting for the harness's sessions to be idle",
+			pathParams: []any{controllers.AgentIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.AgentInstallResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
@@ -3456,5 +3579,27 @@ func prOperations() []operation {
 			summary: "List repositories accessible with the stored GitHub token",
 			resps:   []respUnit{{http.StatusOK, map[string]any{"repos": []githubpat.Repo{}}}, {http.StatusUnauthorized, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}},
 		},
+	}
+}
+
+func awakeOperations() []operation {
+	common := func(method, path, id string, body any, params []any) operation {
+		return operation{method: method, path: path, id: id, tag: "settings", summary: "Manage desktop Stay Awake", reqBody: body, pathParams: params, resps: []respUnit{{http.StatusOK, domain.AwakeState{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}}}
+	}
+	return []operation{
+		common(http.MethodGet, "/api/v1/awake", "getAwake", nil, nil),
+		common(http.MethodGet, "/api/v1/awake/observations", "observeAwake", nil, nil),
+		common(http.MethodPost, "/api/v1/awake/sessions", "startAwake", domain.StartAwakeRequest{}, nil),
+		common(http.MethodPost, "/api/v1/awake/sessions/{awakeId}/end", "endAwake", nil, []any{controllers.AwakeIDParam{}}),
+		common(http.MethodPost, "/api/v1/awake/sessions/{awakeId}/extend", "extendAwake", controllers.ExtendAwakeRequest{}, []any{controllers.AwakeIDParam{}}),
+		common(http.MethodPut, "/api/v1/awake/settings", "setAwakeSettings", domain.AwakeSettings{}, nil),
+		common(http.MethodPut, "/api/v1/awake/rules", "setAwakeRules", controllers.AwakeRulesRequest{}, nil),
+		common(http.MethodPost, "/api/v1/awake/low-power/authorize", "authorizeAwakeLowPower", nil, nil),
+		common(http.MethodPost, "/api/v1/awake/low-power/revoke", "revokeAwakeLowPower", nil, nil),
+		common(http.MethodPost, "/api/v1/awake/stop", "stopAwake", nil, nil),
+		common(http.MethodPost, "/api/v1/awake/resume", "resumeAwake", nil, nil),
+		common(http.MethodPost, "/api/v1/awake/recover", "recoverAwake", nil, nil),
+		common(http.MethodDelete, "/api/v1/awake/history", "clearAwakeHistory", nil, nil),
+		common(http.MethodPost, "/api/v1/awake/downloads", "awakeDownloads", controllers.AwakeDownloadsRequest{}, nil),
 	}
 }

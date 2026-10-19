@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 )
 
 var agentDocumentationURLs = map[Target]string{
+	TargetMemcode:     "https://github.com/memcode-ai/memcode/releases",
 	TargetClaudeCode:  "https://code.claude.com/docs/en/installation",
 	TargetCodex:       "https://github.com/openai/codex",
 	TargetCursor:      "https://docs.cursor.com/en/cli/installation",
@@ -265,6 +267,12 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		if s.goos == "darwin" || s.goos == "linux" {
 			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
 		}
+	case TargetMemcode:
+		if s.goos == "darwin" || s.goos == "linux" {
+			plans = []Plan{s.planShellInstaller(target, "https://memcode.ai/install.sh", "sh")}
+		} else {
+			plans = []Plan{{Target: target, Method: "manual", Unsupported: true, Reason: "Install the official native memcode release binary", DocsURL: agentDocumentationURLs[target]}}
+		}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
 	default:
@@ -356,6 +364,15 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 	installScript := plan.Script
 	plan.Script = nil
 	if operation == AgentOperationReinstall {
+		if record, ok := s.readManagedRecord(plan.Target); ok && record.Method == plan.Method && s.managedEligible(plan) {
+			// Sessions run AO's managed copy, so a reinstall repairs that one:
+			// the same release, installed fresh beside it.
+			plan.managed = true
+			plan.managedPin = record.Version
+			argv, _ := managedInstallCommand(plan.Method, record.Package, record.Version, filepath.Join(s.managedTargetDir(plan.Target), "versions", "<next>"))
+			plan.Command, plan.Prepare = argv, nil
+			return plan
+		}
 		switch plan.Method {
 		case "homebrew":
 		case "npm":
@@ -423,6 +440,17 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 		default:
 			plan.Unsupported = true
 			plan.Reason = "This installation method does not provide a supported update command."
+		}
+		if !plan.Unsupported {
+			plan.UpdateWhileRunning = updateWhileRunningLevel(s.goos, plan.Target, plan.Method, plan.PackageCask)
+		}
+		if s.managedEligible(plan) {
+			// Installed side by side, so no session's files are touched, on any
+			// platform: the update is safe while sessions run.
+			plan.managed = true
+			plan.UpdateWhileRunning = UpdateWhileRunningSafe
+			argv, _ := managedInstallCommand(plan.Method, packageWithoutLatest(plan.Package), "", filepath.Join(s.managedTargetDir(plan.Target), "versions", "<next>"))
+			plan.Command, plan.Prepare = argv, nil
 		}
 		return plan
 	}

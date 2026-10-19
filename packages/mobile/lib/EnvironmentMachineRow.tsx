@@ -13,6 +13,7 @@ import { machineAppearance, machineAppearancePalette, machineSymbolLabels, type 
 import { LAYOUT_MS, ROW_ENTER_MS } from "./motion";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
+import { textSelectionColors } from "./textSelection";
 import { easingCurve, iconSize, radius, space, touchTarget, type } from "./tokens";
 import { useReducedMotion } from "./useReducedMotion";
 
@@ -413,7 +414,7 @@ export function EnvironmentMachineRow({ host, activeConfig, isDefault, expanded,
 						<View>
 							<Text style={styles.fieldLabel}>Password</Text>
 							<View style={styles.passwordRow}>
-								<TextInput accessibilityLabel="Password" value={config.password} onChangeText={set("password")} autoCapitalize="none" autoCorrect={false} secureTextEntry={!showPassword} textContentType="password" editable={!saving} placeholder="Connection password" placeholderTextColor={t.textFaint} selectionColor={t.accent} style={[styles.input, styles.passwordInput]} />
+								<TextInput accessibilityLabel="Password" value={config.password} onChangeText={set("password")} autoCapitalize="none" autoCorrect={false} secureTextEntry={!showPassword} textContentType="password" editable={!saving} placeholder="Connection password" placeholderTextColor={t.textFaint} {...textSelectionColors(t)} style={[styles.input, styles.passwordInput]} />
 								<Pressable accessibilityRole="button" accessibilityLabel={showPassword ? "Hide password" : "Show password"} disabled={saving} onPress={() => { haptics.tap(); setShowPassword((visible) => !visible); }} style={({ pressed }) => [styles.passwordToggle, pressed && styles.pressed]}>
 									<Feather name={showPassword ? "eye-off" : "eye"} size={iconSize.lg} color={t.textSecondary} />
 								</Pressable>
@@ -467,7 +468,7 @@ function EditField({ label, ...input }: { label: string } & React.ComponentProps
 	return (
 		<View style={styles.field}>
 			<Text style={styles.fieldLabel}>{label}</Text>
-			<TextInput {...input} accessibilityLabel={input.accessibilityLabel ?? label} placeholderTextColor={t.textFaint} selectionColor={t.accent} style={styles.input} />
+			<TextInput {...input} accessibilityLabel={input.accessibilityLabel ?? label} placeholderTextColor={t.textFaint} {...textSelectionColors(t)} style={styles.input} />
 		</View>
 	);
 }

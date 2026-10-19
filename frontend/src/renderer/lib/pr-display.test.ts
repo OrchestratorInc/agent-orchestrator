@@ -954,3 +954,18 @@ describe("prSummaryParts", () => {
 		});
 	});
 });
+
+describe("pull request repositories", () => {
+	it("reads owner/name from GitHub and GitLab pull request URLs", async () => {
+		const { prRepositoryFromUrl } = await import("./pr-display");
+		expect(prRepositoryFromUrl("https://github.com/acme/11x/pull/12")).toBe("acme/11x");
+		expect(prRepositoryFromUrl("https://gitlab.com/acme/app/-/merge_requests/3")).toBe("acme/app");
+		expect(prRepositoryFromUrl("not a url")).toBeUndefined();
+	});
+
+	it("tells when a session's pull requests span repositories", async () => {
+		const { prsSpanRepositories } = await import("./pr-display");
+		expect(prsSpanRepositories([{ url: "https://github.com/acme/a/pull/1" }, { url: "https://github.com/acme/a/pull/2" }])).toBe(false);
+		expect(prsSpanRepositories([{ url: "https://github.com/acme/a/pull/1" }, { url: "https://github.com/acme/b/pull/1" }])).toBe(true);
+	});
+});

@@ -57,6 +57,10 @@ description: Common questions about the current Agent Orchestrator desktop produ
 	</Accordion>
 
 	<Accordion title="How do I uninstall Orchestrator?">
+		On macOS, first open **Settings → Stay Awake → Battery and heat protection** and choose **Revoke authorization…** if you authorized Low Power Mode. Disable Low Power Mode policies in other AO instances first. AO disables its automation, restores AO-owned changes, and asks for administrator approval to remove only `/etc/sudoers.d/ao-low-power-<your numeric uid>`. Canceling removal leaves automation disabled and the permission installed; retry before uninstalling. Existing user-owned power preferences are preserved.
+
+		If AO is already removed, cannot open, or the revoke action is unavailable, first confirm all AO-owned power changes are restored, then remove only the account's grant with `sudo rm -f /etc/sudoers.d/ao-low-power-$(id -u)` and verify with `sudo visudo -c`. Keep `~/.ao` recovery journals until restoration is confirmed. Disabling automation or deleting the app alone does not remove this permission.
+
 		Remove the desktop application using your operating system's normal process. If you also remove `~/.ao`, you permanently delete Orchestrator's database, session history, managed state, Electron data, and mobile pairing configuration. Inspect and preserve any work you need first. Legacy CLI users can separately run `npm uninstall -g @aoagents/ao`.
 	</Accordion>
 </Accordions>
