@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -25,8 +27,10 @@ import (
 // for single files from local sessions.
 type artifactShareStore interface {
 	CountArtifactShares(ctx context.Context, userID string) (int, error)
+	RecordArtifactShareUpload(ctx context.Context, userID, s3Key, versionID string, size int64) error
+	DiscardArtifactShareUpload(ctx context.Context, userID, s3Key, versionID string) error
 	CreateArtifactShare(ctx context.Context, share domain.ArtifactShare, baseSlug string, limit int) (domain.ArtifactShare, error)
-	UpdateArtifactShare(ctx context.Context, share domain.ArtifactShare) (domain.ArtifactShare, string, error)
+	UpdateArtifactShare(ctx context.Context, share domain.ArtifactShare) (domain.ArtifactShare, error)
 	GetArtifactShare(ctx context.Context, userID, shareID string) (domain.ArtifactShare, error)
 	ListArtifactShares(ctx context.Context, userID string) ([]domain.ArtifactShare, error)
 	DeleteArtifactShare(ctx context.Context, userID, shareID string) (domain.ArtifactShare, error)
@@ -53,6 +57,10 @@ type artifactShareConfig struct {
 var shareSlugPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 const maxArtifactShareName = 255
+
+// shareCleanupTimeout bounds the cleanup a share request does after its
+// client may have gone.
+const shareCleanupTimeout = 10 * time.Second
 
 func parseArtifactShareOptions(options *ArtifactShareOptions) (*artifactShareConfig, error) {
 	if options == nil {
@@ -167,7 +175,7 @@ func (s *Server) createArtifactShare(w http.ResponseWriter, r *http.Request) {
 	}
 	shareID := uuid.NewString()
 	key := "shares/" + shareID
-	versionID, ok := s.putShareObject(w, r, key, upload)
+	versionID, ok := s.putShareObject(w, r, principal.UserID, key, upload)
 	if !ok {
 		return
 	}
@@ -182,7 +190,7 @@ func (s *Server) createArtifactShare(w http.ResponseWriter, r *http.Request) {
 		VersionID:   versionID,
 	}, domain.ArtifactShareSlug(query.Get("project"), query.Get("feature"), principal.Email), s.shareConfig.limit)
 	if err != nil {
-		s.dropShareVersion(r.Context(), key, versionID)
+		s.discardShareUpload(r.Context(), principal.UserID, key, versionID)
 		if errors.Is(err, postgres.ErrArtifactShareLimit) {
 			s.writeShareLimit(w, r)
 			return
@@ -194,7 +202,8 @@ func (s *Server) createArtifactShare(w http.ResponseWriter, r *http.Request) {
 }
 
 // updateArtifactShare replaces the file an existing link serves. The link
-// keeps its URL and does not count against the limit again.
+// keeps its URL and does not count against the limit again; the sweeper
+// deletes the replaced version after a grace period.
 func (s *Server) updateArtifactShare(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	principal := principalFrom(r)
@@ -212,11 +221,11 @@ func (s *Server) updateArtifactShare(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	versionID, ok := s.putShareObject(w, r, current.S3Key, upload)
+	versionID, ok := s.putShareObject(w, r, principal.UserID, current.S3Key, upload)
 	if !ok {
 		return
 	}
-	share, previousVersion, err := s.shareRows.UpdateArtifactShare(r.Context(), domain.ArtifactShare{
+	share, err := s.shareRows.UpdateArtifactShare(r.Context(), domain.ArtifactShare{
 		ID:          shareID,
 		UserID:      principal.UserID,
 		Name:        upload.name,
@@ -226,30 +235,25 @@ func (s *Server) updateArtifactShare(w http.ResponseWriter, r *http.Request) {
 		VersionID:   versionID,
 	})
 	if err != nil {
-		s.dropShareVersion(r.Context(), current.S3Key, versionID)
+		s.discardShareUpload(r.Context(), principal.UserID, current.S3Key, versionID)
 		s.writeStoreError(w, r, err)
 		return
-	}
-	if previousVersion != versionID {
-		s.dropShareVersion(r.Context(), share.S3Key, previousVersion)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"share": s.toArtifactShareResponse(share)})
 }
 
-// deleteArtifactShare revokes a link and removes its stored file, freeing a
-// slot under the limit.
+// deleteArtifactShare revokes a link, freeing a slot under the limit. The
+// sweeper deletes its stored file after a grace period.
 func (s *Server) deleteArtifactShare(w http.ResponseWriter, r *http.Request) {
 	shareID := chi.URLParam(r, "shareId")
 	if requireUUID(shareID, "shareId") != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "shareId must be a UUID.")
 		return
 	}
-	share, err := s.shareRows.DeleteArtifactShare(r.Context(), principalFrom(r).UserID, shareID)
-	if err != nil {
+	if _, err := s.shareRows.DeleteArtifactShare(r.Context(), principalFrom(r).UserID, shareID); err != nil {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	s.dropShareVersion(r.Context(), share.S3Key, share.VersionID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -285,25 +289,54 @@ func (s *Server) readShareUpload(w http.ResponseWriter, r *http.Request) (shareU
 			worker.ArtifactSHA256Header+" must be 64 lowercase hex characters.")
 		return shareUpload{}, false
 	}
+	if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(artifactUploadReadTimeout)); err != nil {
+		s.logger.WarnContext(r.Context(), "extend artifact share upload deadline", "error", err, "request_id", requestID(r))
+	}
+	// The body is read whole before it goes to the bucket, so a slow client
+	// cannot hold the S3 request open; a share is at most
+	// MaxArtifactShareBytes.
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, r.ContentLength))
+	if err != nil || int64(len(body)) != r.ContentLength {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "The body ended before Content-Length.")
+		return shareUpload{}, false
+	}
 	return shareUpload{
 		name:        name,
 		contentType: shareContentType(name),
 		size:        r.ContentLength,
 		sha256:      sha,
-		body:        http.MaxBytesReader(w, r.Body, r.ContentLength),
+		body:        bytes.NewReader(body),
 	}, true
 }
 
-// putShareObject stores an upload at key and returns its new version,
-// writing an error and returning false when the bucket refuses it.
-func (s *Server) putShareObject(w http.ResponseWriter, r *http.Request, key string, upload shareUpload) (string, bool) {
+// putShareObject stores an upload at key and records its version in the
+// sweeper's queue, writing an error and returning false when either fails.
+func (s *Server) putShareObject(w http.ResponseWriter, r *http.Request, userID, key string, upload shareUpload) (string, bool) {
 	sum, _ := hex.DecodeString(upload.sha256)
-	return s.putArtifactObject(w, r, key, upload.body, upload.size, sum)
+	versionID, ok := s.putArtifactObject(w, r, key, upload.body, upload.size, sum)
+	if !ok {
+		return "", false
+	}
+	if err := s.shareRows.RecordArtifactShareUpload(r.Context(), userID, key, versionID, upload.size); err != nil {
+		// An unrecorded version would never be collected, so remove it now.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), shareCleanupTimeout)
+		defer cancel()
+		if deleteErr := s.artifacts.DeleteVersion(ctx, key, versionID); deleteErr != nil {
+			s.logger.ErrorContext(r.Context(), "delete unrecorded artifact share version", "error", deleteErr, "request_id", requestID(r))
+		}
+		s.writeStoreError(w, r, err)
+		return "", false
+	}
+	return versionID, true
 }
 
-func (s *Server) dropShareVersion(ctx context.Context, key, versionID string) {
-	if err := s.artifacts.DeleteVersion(context.WithoutCancel(ctx), key, versionID); err != nil {
-		s.logger.WarnContext(ctx, "delete artifact share version", "error", err, "key", key)
+// discardShareUpload makes an upload no share claimed due for the sweeper
+// now. When that fails, the sweeper still deletes it after ArtifactUploadTTL.
+func (s *Server) discardShareUpload(ctx context.Context, userID, key, versionID string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shareCleanupTimeout)
+	defer cancel()
+	if err := s.shareRows.DiscardArtifactShareUpload(ctx, userID, key, versionID); err != nil {
+		s.logger.WarnContext(ctx, "discard artifact share upload", "error", err, "key", key)
 	}
 }
 
@@ -321,6 +354,14 @@ func shareContentType(name string) string {
 		return "text/plain; charset=utf-8"
 	}
 	return artifactstore.ContentType(name)
+}
+
+// shareETag validates a share's bytes and its Content-Type together, because
+// republishing can change the file name, and so the type, of identical bytes
+// at the same URL.
+func shareETag(share domain.ArtifactShare) string {
+	sum := sha256.Sum256([]byte(share.ContentType))
+	return `"` + share.SHA256 + "-" + hex.EncodeToString(sum[:4]) + `"`
 }
 
 // artifactShareHost serves requests whose host is a share link subdomain and
@@ -356,7 +397,7 @@ func (s *Server) serveArtifactShare(w http.ResponseWriter, r *http.Request, slug
 	s.writeArtifactObject(w, r, artifactObject{
 		key:          share.S3Key,
 		versionID:    share.VersionID,
-		sha256:       share.SHA256,
+		etag:         shareETag(share),
 		contentType:  share.ContentType,
 		cacheControl: "public, no-cache",
 	})

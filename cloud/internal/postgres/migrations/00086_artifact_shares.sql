@@ -30,6 +30,35 @@ CREATE POLICY ao_artifact_shares_service_policy ON ao_artifact_shares
     USING (ao_service_context())
     WITH CHECK (ao_service_context());
 
+-- Share object versions use the same sweeper queue as session artifacts. A
+-- share version belongs to a user rather than a session, so its row carries
+-- user_id and no organization or session. user_id has no foreign key: the
+-- queued version must still be deleted after its user is.
+ALTER TABLE ao_artifact_object_versions
+    ALTER COLUMN org_id DROP NOT NULL,
+    ALTER COLUMN session_id DROP NOT NULL,
+    ADD COLUMN user_id UUID,
+    ADD CONSTRAINT ao_artifact_object_versions_owner_check CHECK (
+        (org_id IS NOT NULL AND session_id IS NOT NULL AND user_id IS NULL)
+        OR (org_id IS NULL AND session_id IS NULL AND user_id IS NOT NULL
+            AND s3_key LIKE 'shares/%')
+    );
+CREATE INDEX ao_artifact_object_versions_user_idx
+    ON ao_artifact_object_versions(user_id) WHERE user_id IS NOT NULL;
+CREATE POLICY ao_artifact_object_versions_share_owner_policy ON ao_artifact_object_versions
+    USING (user_id = ao_current_user_id())
+    WITH CHECK (user_id = ao_current_user_id());
+
 -- +goose Down
 
+-- Dropping these leaves share objects in the bucket; empty the shares/
+-- prefix first if the data must go.
+DROP POLICY IF EXISTS ao_artifact_object_versions_share_owner_policy ON ao_artifact_object_versions;
+DELETE FROM ao_artifact_object_versions WHERE user_id IS NOT NULL;
+DROP INDEX IF EXISTS ao_artifact_object_versions_user_idx;
+ALTER TABLE ao_artifact_object_versions
+    DROP CONSTRAINT IF EXISTS ao_artifact_object_versions_owner_check,
+    DROP COLUMN IF EXISTS user_id,
+    ALTER COLUMN org_id SET NOT NULL,
+    ALTER COLUMN session_id SET NOT NULL;
 DROP TABLE IF EXISTS ao_artifact_shares;

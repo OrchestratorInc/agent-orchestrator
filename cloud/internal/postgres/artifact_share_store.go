@@ -23,10 +23,78 @@ func (s *Store) CountArtifactShares(ctx context.Context, userID string) (int, er
 	return count, err
 }
 
+// RecordArtifactShareUpload queues an uploaded share object version that no
+// share serves yet. The sweeper deletes it after ArtifactUploadTTL unless
+// creating or updating a share claims it first.
+func (s *Store) RecordArtifactShareUpload(ctx context.Context, userID, s3Key, versionID string, size int64) error {
+	return s.withUser(ctx, userID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO ao_artifact_object_versions (
+				user_id, s3_key, version_id, reason, size, collect_after
+			) VALUES ($1, $2, $3, 'upload', $4, now() + $5::interval)
+			ON CONFLICT (s3_key, version_id) DO NOTHING`,
+			userID, s3Key, versionID, size, domain.ArtifactUploadTTL.String(),
+		); err != nil {
+			return fmt.Errorf("record artifact share upload: %w", normalizeConstraintError(err))
+		}
+		return nil
+	})
+}
+
+// DiscardArtifactShareUpload makes an unclaimed share upload due for the
+// sweeper now.
+func (s *Store) DiscardArtifactShareUpload(ctx context.Context, userID, s3Key, versionID string) error {
+	return s.withUser(ctx, userID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`UPDATE ao_artifact_object_versions SET collect_after = now()
+			WHERE user_id = $1 AND s3_key = $2 AND version_id = $3 AND reason = 'upload'`,
+			userID, s3Key, versionID,
+		); err != nil {
+			return fmt.Errorf("discard artifact share upload: %w", err)
+		}
+		return nil
+	})
+}
+
+// claimShareUploadTx removes a recorded upload from the sweeper's queue once
+// a share serves it. It returns ErrArtifactVersionUnknown when the upload is
+// not queued: never recorded, or already swept.
+func claimShareUploadTx(ctx context.Context, tx pgx.Tx, userID, s3Key, versionID string) error {
+	tag, err := tx.Exec(ctx,
+		`DELETE FROM ao_artifact_object_versions
+		WHERE user_id = $1 AND s3_key = $2 AND version_id = $3 AND reason = 'upload'`,
+		userID, s3Key, versionID,
+	)
+	if err != nil {
+		return fmt.Errorf("claim artifact share upload: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrArtifactVersionUnknown
+	}
+	return nil
+}
+
+// queueReplacedShareVersionTx queues a version no share serves any more. The
+// sweeper deletes it after ArtifactReplacedGrace, so a read that started
+// before the change can finish.
+func queueReplacedShareVersionTx(ctx context.Context, tx pgx.Tx, userID, s3Key, versionID string, size int64) error {
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO ao_artifact_object_versions (
+			user_id, s3_key, version_id, reason, size, collect_after
+		) VALUES ($1, $2, $3, 'replaced', $4, now() + $5::interval)
+		ON CONFLICT (s3_key, version_id) DO NOTHING`,
+		userID, s3Key, versionID, size, domain.ArtifactReplacedGrace.String(),
+	); err != nil {
+		return fmt.Errorf("queue replaced artifact share version: %w", err)
+	}
+	return nil
+}
+
 // CreateArtifactShare inserts a new share link for share.UserID under the
 // first free slug of baseSlug, baseSlug-2, baseSlug-3, and so on. It returns
 // ErrArtifactShareLimit, and inserts nothing, when the user already holds
-// limit links. A per-user advisory lock makes the count and the insert one
+// limit links. The share claims its upload, recorded by
+// RecordArtifactShareUpload, from the sweeper's queue. A per-user advisory lock makes the count and the insert one
 // step, so concurrent requests cannot pass the limit.
 func (s *Store) CreateArtifactShare(
 	ctx context.Context,
@@ -71,7 +139,7 @@ func (s *Store) CreateArtifactShare(
 			if err != nil {
 				return fmt.Errorf("insert artifact share: %w", normalizeConstraintError(err))
 			}
-			return nil
+			return claimShareUploadTx(ctx, tx, share.UserID, share.S3Key, share.VersionID)
 		}
 		return ErrConflict
 	})
@@ -79,23 +147,25 @@ func (s *Store) CreateArtifactShare(
 }
 
 // UpdateArtifactShare points one of the user's share links at a new object
-// version and returns the updated row and the version it replaced. A link
-// the user does not own is ErrNotFound.
-func (s *Store) UpdateArtifactShare(
-	ctx context.Context,
-	share domain.ArtifactShare,
-) (domain.ArtifactShare, string, error) {
+// version recorded by RecordArtifactShareUpload, and queues the version it
+// replaced for the sweeper. A link the user does not own is ErrNotFound.
+func (s *Store) UpdateArtifactShare(ctx context.Context, share domain.ArtifactShare) (domain.ArtifactShare, error) {
 	var updated domain.ArtifactShare
-	var previousVersion string
 	err := s.withUser(ctx, share.UserID, func(tx pgx.Tx) error {
+		var s3Key, previousVersion string
+		var previousSize int64
 		if err := tx.QueryRow(ctx,
-			`SELECT version_id FROM ao_artifact_shares WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+			`SELECT s3_key, version_id, size FROM ao_artifact_shares
+			WHERE id = $1 AND user_id = $2 FOR UPDATE`,
 			share.ID, share.UserID,
-		).Scan(&previousVersion); err != nil {
+		).Scan(&s3Key, &previousVersion, &previousSize); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
 			return fmt.Errorf("lock artifact share: %w", err)
+		}
+		if err := claimShareUploadTx(ctx, tx, share.UserID, s3Key, share.VersionID); err != nil {
+			return err
 		}
 		rows, err := tx.Query(ctx,
 			`UPDATE ao_artifact_shares
@@ -110,9 +180,15 @@ func (s *Store) UpdateArtifactShare(
 			return fmt.Errorf("update artifact share: %w", normalizeConstraintError(err))
 		}
 		updated, err = pgx.CollectExactlyOneRow(rows, scanArtifactShare)
-		return err
+		if err != nil {
+			return err
+		}
+		if previousVersion == share.VersionID {
+			return nil
+		}
+		return queueReplacedShareVersionTx(ctx, tx, share.UserID, s3Key, previousVersion, previousSize)
 	})
-	return updated, previousVersion, err
+	return updated, err
 }
 
 // GetArtifactShare returns one of the user's share links, or ErrNotFound.
@@ -153,8 +229,9 @@ func (s *Store) ListArtifactShares(ctx context.Context, userID string) ([]domain
 	return shares, err
 }
 
-// DeleteArtifactShare removes one of the user's share links and returns the
-// deleted row, or ErrNotFound.
+// DeleteArtifactShare removes one of the user's share links, queues the
+// version it served for the sweeper, and returns the deleted row, or
+// ErrNotFound.
 func (s *Store) DeleteArtifactShare(ctx context.Context, userID, shareID string) (domain.ArtifactShare, error) {
 	var deleted domain.ArtifactShare
 	err := s.withUser(ctx, userID, func(tx pgx.Tx) error {
@@ -170,7 +247,10 @@ func (s *Store) DeleteArtifactShare(ctx context.Context, userID, shareID string)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		return queueReplacedShareVersionTx(ctx, tx, userID, deleted.S3Key, deleted.VersionID, deleted.Size)
 	})
 	return deleted, err
 }

@@ -34,10 +34,98 @@ type memoryShareRows struct {
 	mu     sync.Mutex
 	shares map[string]domain.ArtifactShare
 	clock  time.Time
+	// queue is the sweeper queue of share object versions, keyed by
+	// key+"@"+version.
+	queue map[string]queuedShareVersion
+}
+
+type queuedShareVersion struct {
+	version domain.ArtifactObjectVersion
+	reason  string
+	due     bool
 }
 
 func newMemoryShareRows() *memoryShareRows {
-	return &memoryShareRows{shares: map[string]domain.ArtifactShare{}, clock: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)}
+	return &memoryShareRows{
+		shares: map[string]domain.ArtifactShare{},
+		clock:  time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
+		queue:  map[string]queuedShareVersion{},
+	}
+}
+
+func (m *memoryShareRows) queueLocked(key, versionID, reason string, due bool) {
+	m.queue[key+"@"+versionID] = queuedShareVersion{
+		version: domain.ArtifactObjectVersion{S3Key: key, VersionID: versionID}, reason: reason, due: due,
+	}
+}
+
+func (m *memoryShareRows) claimUploadLocked(key, versionID string) error {
+	entry, ok := m.queue[key+"@"+versionID]
+	if !ok || entry.reason != "upload" {
+		return postgres.ErrArtifactVersionUnknown
+	}
+	delete(m.queue, key+"@"+versionID)
+	return nil
+}
+
+// expireGrace makes every queued version due, as if its grace had passed.
+func (m *memoryShareRows) expireGrace() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for name, entry := range m.queue {
+		entry.due = true
+		m.queue[name] = entry
+	}
+}
+
+func (m *memoryShareRows) queued(reason string) []domain.ArtifactObjectVersion {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var versions []domain.ArtifactObjectVersion
+	for _, entry := range m.queue {
+		if entry.reason == reason {
+			versions = append(versions, entry.version)
+		}
+	}
+	return versions
+}
+
+func (m *memoryShareRows) RecordArtifactShareUpload(_ context.Context, _ string, key, versionID string, _ int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.queueLocked(key, versionID, "upload", false)
+	return nil
+}
+
+func (m *memoryShareRows) DiscardArtifactShareUpload(_ context.Context, _ string, key, versionID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if entry, ok := m.queue[key+"@"+versionID]; ok && entry.reason == "upload" {
+		entry.due = true
+		m.queue[key+"@"+versionID] = entry
+	}
+	return nil
+}
+
+func (m *memoryShareRows) ClaimArtifactObjectVersions(_ context.Context, limit int, _ time.Duration) ([]domain.ArtifactObjectVersion, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var versions []domain.ArtifactObjectVersion
+	for _, entry := range m.queue {
+		if entry.due && len(versions) < limit {
+			versions = append(versions, entry.version)
+		}
+	}
+	return versions, nil
+}
+
+func (m *memoryShareRows) ForgetArtifactObjectVersions(_ context.Context, versions []domain.ArtifactObjectVersion) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, version := range versions {
+		delete(m.queue, version.S3Key+"@"+version.VersionID)
+	}
+	return nil
 }
 
 func (m *memoryShareRows) countLocked(userID string) int {
@@ -71,6 +159,9 @@ func (m *memoryShareRows) CreateArtifactShare(_ context.Context, share domain.Ar
 		if taken[slug] {
 			continue
 		}
+		if err := m.claimUploadLocked(share.S3Key, share.VersionID); err != nil {
+			return domain.ArtifactShare{}, err
+		}
 		m.clock = m.clock.Add(time.Second)
 		share.Slug, share.CreatedAt, share.UpdatedAt = slug, m.clock, m.clock
 		m.shares[share.ID] = share
@@ -79,19 +170,24 @@ func (m *memoryShareRows) CreateArtifactShare(_ context.Context, share domain.Ar
 	return domain.ArtifactShare{}, postgres.ErrConflict
 }
 
-func (m *memoryShareRows) UpdateArtifactShare(_ context.Context, share domain.ArtifactShare) (domain.ArtifactShare, string, error) {
+func (m *memoryShareRows) UpdateArtifactShare(_ context.Context, share domain.ArtifactShare) (domain.ArtifactShare, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	current, ok := m.shares[share.ID]
 	if !ok || current.UserID != share.UserID {
-		return domain.ArtifactShare{}, "", postgres.ErrNotFound
+		return domain.ArtifactShare{}, postgres.ErrNotFound
 	}
-	previous := current.VersionID
+	if err := m.claimUploadLocked(current.S3Key, share.VersionID); err != nil {
+		return domain.ArtifactShare{}, err
+	}
+	if current.VersionID != share.VersionID {
+		m.queueLocked(current.S3Key, current.VersionID, "replaced", false)
+	}
 	m.clock = m.clock.Add(time.Second)
 	current.Name, current.ContentType, current.Size = share.Name, share.ContentType, share.Size
 	current.SHA256, current.VersionID, current.UpdatedAt = share.SHA256, share.VersionID, m.clock
 	m.shares[share.ID] = current
-	return current, previous, nil
+	return current, nil
 }
 
 func (m *memoryShareRows) GetArtifactShare(_ context.Context, userID, shareID string) (domain.ArtifactShare, error) {
@@ -125,6 +221,7 @@ func (m *memoryShareRows) DeleteArtifactShare(_ context.Context, userID, shareID
 		return domain.ArtifactShare{}, postgres.ErrNotFound
 	}
 	delete(m.shares, shareID)
+	m.queueLocked(share.S3Key, share.VersionID, "replaced", false)
 	return share, nil
 }
 
@@ -157,10 +254,19 @@ func (s *shareRouterStore) PrincipalFromLocalToken(_ context.Context, hash []byt
 }
 
 type shareHarness struct {
-	t      *testing.T
-	server *Server
-	rows   *memoryShareRows
-	fake   *s3fake.Server
+	t         *testing.T
+	server    *Server
+	rows      *memoryShareRows
+	fake      *s3fake.Server
+	artifacts *artifactstore.Store
+}
+
+// sweepAfterGrace runs the artifact sweeper once every queued version is due.
+func (h *shareHarness) sweepAfterGrace() error {
+	h.t.Helper()
+	h.rows.expireGrace()
+	_, err := artifactstore.Sweep(context.Background(), h.rows, h.artifacts)
+	return err
 }
 
 func newShareHarness(t *testing.T, shares *ArtifactShareOptions) *shareHarness {
@@ -184,7 +290,7 @@ func newShareHarness(t *testing.T, shares *ArtifactShareOptions) *shareHarness {
 		ArtifactAccessSecret: bytes.Repeat([]byte{7}, 32),
 		ArtifactShares:       shares,
 	})
-	return &shareHarness{t: t, server: server, rows: rows, fake: fake}
+	return &shareHarness{t: t, server: server, rows: rows, fake: fake, artifacts: artifacts}
 }
 
 func (h *shareHarness) request(method, target, host, token string, body []byte, headers map[string]string) *httptest.ResponseRecorder {
@@ -278,13 +384,13 @@ func TestArtifactSharePublishAndServe(t *testing.T) {
 	if headers.Get("Content-Type") != "text/html; charset=utf-8" ||
 		headers.Get("X-Content-Type-Options") != "nosniff" ||
 		headers.Get("Referrer-Policy") != "no-referrer" ||
-		headers.Get("ETag") != `"`+hexSHA(html)+`"` ||
+		!strings.HasPrefix(headers.Get("ETag"), `"`+hexSHA(html)+"-") ||
 		!strings.HasPrefix(headers.Get("Content-Security-Policy"), "sandbox ") ||
 		strings.Contains(headers.Get("Content-Security-Policy"), "allow-same-origin") ||
 		headers.Get("Set-Cookie") != "" {
 		t.Fatalf("headers = %v", headers)
 	}
-	if rec := h.visit(share.URL, map[string]string{"If-None-Match": `"` + hexSHA(html) + `"`}); rec.Code != http.StatusNotModified {
+	if rec := h.visit(share.URL, map[string]string{"If-None-Match": headers.Get("ETag")}); rec.Code != http.StatusNotModified {
 		t.Fatalf("If-None-Match status = %d", rec.Code)
 	}
 
@@ -343,8 +449,17 @@ func TestArtifactShareRepublishKeepsLinkAndSlot(t *testing.T) {
 			t.Fatalf("served %q after republishing %q", page.Body.String(), body)
 		}
 	}
+	if versions := h.fake.Versions("shares/" + share.ID); versions != 3 {
+		t.Fatalf("stored versions before the sweep = %d, want all 3 kept for in-flight reads", versions)
+	}
+	if replaced := h.rows.queued("replaced"); len(replaced) != 2 {
+		t.Fatalf("queued replaced versions = %d, want 2", len(replaced))
+	}
+	if err := h.sweepAfterGrace(); err != nil {
+		t.Fatal(err)
+	}
 	if versions := h.fake.Versions("shares/" + share.ID); versions != 1 {
-		t.Fatalf("stored versions = %d, want only the live one", versions)
+		t.Fatalf("stored versions after the sweep = %d, want only the live one", versions)
 	}
 	if rec := h.republish(artifactTokenB, share.ID, "report.html", []byte("hijack")); rec.Code != http.StatusNotFound {
 		t.Fatalf("another user republished: %d", rec.Code)
@@ -380,8 +495,11 @@ func TestArtifactShareLimitAndRevoke(t *testing.T) {
 	if rec := h.visit(shares[0].URL, nil); rec.Code != http.StatusNotFound {
 		t.Fatalf("revoked link status = %d", rec.Code)
 	}
+	if err := h.sweepAfterGrace(); err != nil {
+		t.Fatal(err)
+	}
 	if versions := h.fake.Versions("shares/" + shares[0].ID); versions != 0 {
-		t.Fatalf("revoked share kept %d stored versions", versions)
+		t.Fatalf("revoked share kept %d stored versions after the sweep", versions)
 	}
 	h.mustPublish(artifactTokenA, "four.html", "proj", "four", []byte("four"))
 }
@@ -454,5 +572,113 @@ func TestArtifactShareHostRouting(t *testing.T) {
 	if rec := h.request(http.MethodGet, "/", host, "", nil, nil); rec.Code != http.StatusNotFound ||
 		!strings.Contains(rec.Body.String(), "artifact_unavailable") {
 		t.Fatalf("missing object: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A delete that fails stays queued and is retried by the next sweep, so a
+// revoked share's bytes are not kept forever.
+func TestArtifactShareRevokeRetriesFailedDeletes(t *testing.T) {
+	h := newShareHarness(t, &ArtifactShareOptions{Origin: shareOrigin, Limit: 3})
+	share := h.mustPublish(artifactTokenA, "report.html", "proj", "feat", []byte("secret"))
+	h.fake.FailDeletes(true)
+	if rec := h.request(http.MethodDelete, "/api/cloud/v1/me/artifact-shares/"+share.ID, "", artifactTokenA, nil, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("revoke: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := h.sweepAfterGrace(); err == nil {
+		t.Fatal("sweep reported success while deletes fail")
+	}
+	if versions := h.fake.Versions("shares/" + share.ID); versions != 1 || len(h.rows.queued("replaced")) != 1 {
+		t.Fatalf("after a failed delete: %d stored versions, %d queued", versions, len(h.rows.queued("replaced")))
+	}
+	h.fake.FailDeletes(false)
+	if err := h.sweepAfterGrace(); err != nil {
+		t.Fatal(err)
+	}
+	if versions := h.fake.Versions("shares/" + share.ID); versions != 0 || len(h.rows.queued("replaced")) != 0 {
+		t.Fatalf("after recovery: %d stored versions, %d queued", versions, len(h.rows.queued("replaced")))
+	}
+}
+
+// A read that loaded the share row before a republish can still fetch the
+// version it named until the grace period ends.
+func TestArtifactShareReplacedVersionOutlivesRepublish(t *testing.T) {
+	h := newShareHarness(t, &ArtifactShareOptions{Origin: shareOrigin, Limit: 3})
+	share := h.mustPublish(artifactTokenA, "report.html", "proj", "feat", []byte("v1"))
+	before, err := h.rows.ArtifactShareBySlug(context.Background(), share.Slug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := h.republish(artifactTokenA, share.ID, "report.html", []byte("v2")); rec.Code != http.StatusOK {
+		t.Fatalf("republish: %d", rec.Code)
+	}
+	object, err := h.artifacts.Get(context.Background(), before.S3Key, before.VersionID)
+	if err != nil {
+		t.Fatalf("in-flight read of the replaced version: %v", err)
+	}
+	body, _ := io.ReadAll(object.Body)
+	object.Body.Close()
+	if string(body) != "v1" {
+		t.Fatalf("replaced version body = %q", body)
+	}
+}
+
+// Republishing identical bytes under another file type changes the ETag, so
+// a cached copy is not revalidated with the old Content-Type.
+func TestArtifactShareETagChangesWithContentType(t *testing.T) {
+	h := newShareHarness(t, &ArtifactShareOptions{Origin: shareOrigin, Limit: 3})
+	html := []byte("<h1>same bytes</h1>")
+	share := h.mustPublish(artifactTokenA, "report.txt", "proj", "feat", html)
+	first := h.visit(share.URL, nil)
+	if first.Header().Get("Content-Type") != "text/plain; charset=utf-8" {
+		t.Fatalf("first type = %q", first.Header().Get("Content-Type"))
+	}
+	oldETag := first.Header().Get("ETag")
+	if rec := h.republish(artifactTokenA, share.ID, "report.html", html); rec.Code != http.StatusOK {
+		t.Fatalf("republish: %d", rec.Code)
+	}
+	revalidated := h.visit(share.URL, map[string]string{"If-None-Match": oldETag})
+	if revalidated.Code != http.StatusOK || revalidated.Header().Get("Content-Type") != "text/html; charset=utf-8" {
+		t.Fatalf("revalidation with the old ETag: %d %q", revalidated.Code, revalidated.Header().Get("Content-Type"))
+	}
+	if revalidated.Header().Get("ETag") == oldETag {
+		t.Fatal("ETag did not change with the Content-Type")
+	}
+	if rec := h.visit(share.URL, map[string]string{"If-None-Match": revalidated.Header().Get("ETag")}); rec.Code != http.StatusNotModified {
+		t.Fatalf("revalidation with the current ETag: %d", rec.Code)
+	}
+}
+
+// A share upload may keep streaming past the server's ReadTimeout.
+func TestArtifactShareUploadOutlivesServerReadTimeout(t *testing.T) {
+	h := newShareHarness(t, &ArtifactShareOptions{Origin: shareOrigin, Limit: 3})
+	const readTimeout = 200 * time.Millisecond
+	listener := httptest.NewUnstartedServer(h.server.Handler())
+	listener.Config.ReadTimeout = readTimeout
+	listener.Start()
+	defer listener.Close()
+
+	body := []byte("slow but complete")
+	reader, writer := io.Pipe()
+	go func() {
+		_, _ = writer.Write(body[:4])
+		time.Sleep(3 * readTimeout)
+		_, _ = writer.Write(body[4:])
+		_ = writer.Close()
+	}()
+	req, err := http.NewRequest(http.MethodPost, listener.URL+"/api/cloud/v1/me/artifact-shares?name=slow.html&project=p&feature=f", reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.ContentLength = int64(len(body))
+	req.Header.Set("Authorization", "Bearer "+artifactTokenA)
+	req.Header.Set(worker.ArtifactSHA256Header, hexSHA(body))
+	resp, err := listener.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		payload, _ := io.ReadAll(resp.Body)
+		t.Fatalf("slow upload: %d %s", resp.StatusCode, payload)
 	}
 }

@@ -585,7 +585,7 @@ func (s *Server) serveArtifactFile(w http.ResponseWriter, r *http.Request) {
 	s.writeArtifactObject(w, r, artifactObject{
 		key:          artifact.S3Key,
 		versionID:    artifact.VersionID,
-		sha256:       artifact.SHA256,
+		etag:         `"` + artifact.SHA256 + `"`,
 		contentType:  artifactstore.ContentType(artifact.Path),
 		cacheControl: "private, no-cache",
 	})
@@ -595,16 +595,16 @@ func (s *Server) serveArtifactFile(w http.ResponseWriter, r *http.Request) {
 type artifactObject struct {
 	key          string
 	versionID    string
-	sha256       string
+	etag         string
 	contentType  string
 	cacheControl string
 }
 
 // writeArtifactObject serves one object version inside the artifact sandbox
-// CSP. It answers If-None-Match from the SHA-256 and HEAD from the object's
+// CSP. It answers If-None-Match from the object's ETag and HEAD from its
 // metadata without reading its body.
 func (s *Server) writeArtifactObject(w http.ResponseWriter, r *http.Request, object artifactObject) {
-	etag := `"` + object.sha256 + `"`
+	etag := object.etag
 	if r.Header.Get("If-None-Match") == etag {
 		setArtifactFileHeaders(w, etag, object.cacheControl)
 		w.WriteHeader(http.StatusNotModified)
