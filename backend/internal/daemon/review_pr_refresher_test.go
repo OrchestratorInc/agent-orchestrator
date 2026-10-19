@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	scmmulti "github.com/aoagents/agent-orchestrator/backend/internal/adapters/scm/multi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -63,12 +62,12 @@ func TestReviewPRRefresherClaimsWithoutTakeoverAndTranslatesErrors(t *testing.T)
 }
 
 // The session service finds a just-opened branch PR only when the daemon's
-// SCM provider can list a repository's PRs; keep that capability wired.
-func TestDaemonSCMProviderListsRepositoryPRs(t *testing.T) {
+// SCM provider can list a branch's open PRs; keep that capability wired.
+func TestDaemonSCMProviderListsBranchPRs(t *testing.T) {
 	var provider any = (*scmmulti.Provider)(nil)
 	if _, ok := provider.(interface {
-		ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, updatedAfter time.Time) ([]ports.SCMPRObservation, error)
+		ListOpenPRsByBranch(ctx context.Context, repo ports.SCMRepo, branch string) ([]ports.SCMPRObservation, error)
 	}); !ok {
-		t.Fatal("daemon SCM provider cannot list repository PRs")
+		t.Fatal("daemon SCM provider cannot list a branch's open PRs")
 	}
 }

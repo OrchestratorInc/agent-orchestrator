@@ -516,15 +516,11 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// recentBranchPRWindow bounds FindBranchPRs to recently updated PRs. It exists
-// for a PR opened moments ago that the SCM observer has not discovered yet, so
-// it never needs a repository's full open-PR list.
-const recentBranchPRWindow = 24 * time.Hour
-
-// branchPRLister lists a repository's open PRs. The production SCM provider
-// implements it; it stays optional so claim-only fakes keep working.
+// branchPRLister lists a repository's open PRs from one branch, filtered by
+// the provider. The production SCM provider implements it; it stays optional
+// so claim-only fakes keep working.
 type branchPRLister interface {
-	ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, updatedAfter time.Time) ([]ports.SCMPRObservation, error)
+	ListOpenPRsByBranch(ctx context.Context, repo ports.SCMRepo, branch string) ([]ports.SCMPRObservation, error)
 }
 
 // FindBranchPRs returns the web URLs of open PRs in the project's repository
@@ -555,7 +551,7 @@ func (s *Service) FindBranchPRs(ctx context.Context, id domain.SessionID) ([]str
 	if !ok {
 		return nil, nil
 	}
-	pulls, err := lister.ListPRsByRepo(ctx, repo, s.clock().Add(-recentBranchPRWindow))
+	pulls, err := lister.ListOpenPRsByBranch(ctx, repo, branch)
 	if err != nil {
 		return nil, fmt.Errorf("list open PRs for %s/%s: %w", repo.Owner, repo.Name, err)
 	}

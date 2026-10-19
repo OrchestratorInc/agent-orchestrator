@@ -1102,15 +1102,16 @@ func TestTriggerRequestedAttachesTheBranchPRWhenNoneIsTracked(t *testing.T) {
 		t.Fatalf("order = %v, want the branch PR attached before planning", order)
 	}
 
-	// A lookup failure is not fatal: the engine still explains that no PR
-	// is tracked.
+	// A failed lookup says so, with the exact retry, instead of claiming the
+	// branch has no PR.
 	order = nil
 	refresher.branchPRs, refresher.findErr = nil, errors.New("provider down")
-	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent}); err != nil {
-		t.Fatalf("TriggerRequested: %v", err)
+	_, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "could not look up open PRs") || !strings.Contains(err.Error(), "`ao review trigger mer-1 --pr <url>`") {
+		t.Fatalf("err = %v, want a lookup failure with the exact retry", err)
 	}
-	if strings.Join(order, ",") != "trigger" {
-		t.Fatalf("order = %v, want planning without an attach", order)
+	if len(order) != 0 {
+		t.Fatalf("order = %v, want no attach and no planning", order)
 	}
 }
 

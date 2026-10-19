@@ -220,6 +220,37 @@ func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, update
 	return result, nil
 }
 
+// ListOpenPRsByBranch lists the open merge requests whose source branch is
+// branch. GitLab filters on the server, so a project's other MRs are never
+// paged through.
+func (p *Provider) ListOpenPRsByBranch(ctx context.Context, repo ports.SCMRepo, branch string) ([]ports.SCMPRObservation, error) {
+	q := url.Values{
+		"state":         {"opened"},
+		"source_branch": {branch},
+		"per_page":      {"100"},
+	}
+	path := fmt.Sprintf("/projects/%s/merge_requests", projectPath(repo.Owner, repo.Name))
+	hc, err := p.clientForRepoErr(repo)
+	if err != nil {
+		return nil, err
+	}
+	var result []ports.SCMPRObservation
+	_, err = hc.doGETPaginated(ctx, path, q, func(body []byte) error {
+		var mrs []restMR
+		if err := json.Unmarshal(body, &mrs); err != nil {
+			return fmt.Errorf("gitlab scm: unmarshal branch MR list: %w", err)
+		}
+		for i := range mrs {
+			result = append(result, mrToSCMPRObservation(repo, &mrs[i]))
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 type restMR struct {
 	ID                  int64  `json:"id"`
 	IID                 int    `json:"iid"`

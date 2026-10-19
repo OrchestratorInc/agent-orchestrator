@@ -12,18 +12,19 @@ import (
 
 type branchListSCM struct {
 	fakeSCM
-	pulls        []ports.SCMPRObservation
-	repo         ports.SCMRepo
-	updatedAfter time.Time
+	pulls  []ports.SCMPRObservation
+	repo   ports.SCMRepo
+	branch string
 }
 
-func (f *branchListSCM) ListPRsByRepo(_ context.Context, repo ports.SCMRepo, updatedAfter time.Time) ([]ports.SCMPRObservation, error) {
-	f.repo, f.updatedAfter = repo, updatedAfter
+func (f *branchListSCM) ListOpenPRsByBranch(_ context.Context, repo ports.SCMRepo, branch string) ([]ports.SCMPRObservation, error) {
+	f.repo, f.branch = repo, branch
 	return f.pulls, nil
 }
 
 // A PR opened moments ago is found by the session's branch in the project's
-// canonical repository; other branches, forks, and closed PRs are not.
+// canonical repository; other branches, forks, and closed PRs are not, even
+// if a provider returns them.
 func TestFindBranchPRsMatchesOpenPRsFromTheSessionBranch(t *testing.T) {
 	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
 	st := newFakeStore()
@@ -44,8 +45,8 @@ func TestFindBranchPRsMatchesOpenPRsFromTheSessionBranch(t *testing.T) {
 	if strings.Join(urls, ",") != "https://github.com/acme/repo/pull/7" {
 		t.Fatalf("urls = %v, want only the open same-repo PR from the session branch", urls)
 	}
-	if scm.repo.Repo != "acme/repo" || !scm.updatedAfter.Equal(now.Add(-recentBranchPRWindow)) {
-		t.Fatalf("listed %+v since %v, want the canonical repo's recently updated PRs", scm.repo, scm.updatedAfter)
+	if scm.repo.Repo != "acme/repo" || scm.branch != "ao/demo-1/fix" {
+		t.Fatalf("listed %+v branch %q, want the canonical repo filtered to the session branch", scm.repo, scm.branch)
 	}
 }
 
