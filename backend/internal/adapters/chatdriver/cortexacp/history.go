@@ -225,6 +225,15 @@ func nativeMessageIdentity(data []byte, legacy bool) (string, bool) {
 			if json.Unmarshal(block["type"], &kind) != nil || kind == "" {
 				return "", false
 			}
+			// The pinned native ACP replay emits text only when typeof text is
+			// string. Counting a missing/null/nonstring payload would admit a
+			// corrupt message that silently disappears from restored AO history.
+			if kind == "text" {
+				var text string
+				if json.Unmarshal(block["text"], &text) != nil || bytes.Equal(bytes.TrimSpace(block["text"]), []byte("null")) {
+					return "", false
+				}
+			}
 		}
 		if message.MessageID != "" {
 			return message.MessageID, true

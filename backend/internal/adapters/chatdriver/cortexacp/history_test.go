@@ -240,3 +240,40 @@ func TestNativeHistoryGuardAcceptsLegacyTextMessages(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestColdRestoreRejectsMalformedTextPayloadBeforeNativeLoad(t *testing.T) {
+	for _, record := range []string{
+		`{"id":"m","role":"user","content":[{"type":"text"}]}`,
+		`{"id":"m","role":"assistant","content":[{"type":"text","text":null}]}`,
+		`{"id":"m","role":"user","content":[{"type":"text","text":123}]}`,
+		`{"id":"m","role":"assistant","content":[{"type":"text","text":false}]}`,
+		`{"id":"m","role":"user","content":[{"type":"text","text":{}}]}`,
+	} {
+		for _, split := range []bool{false, true} {
+			t.Run(record+map[bool]string{false: "/inline", true: "/journal"}[split], func(t *testing.T) {
+				cfg := isolatedConfig(t)
+				snapshot := nativeSnapshot(cfg)
+				snapshot["history"] = []any{json.RawMessage(record)}
+				if split {
+					delete(snapshot, "history")
+					snapshot["history_length"] = 1
+				}
+				path := writeSnapshot(t, cfg, "fixture-native-id", snapshot)
+				if split {
+					if err := os.WriteFile(path[:len(path)-5]+".history.jsonl", []byte(record+"\n"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				inner := &recordingDriver{err: errors.New("must not reach native load")}
+				driver := &candidate{driver: inner, reconnect: inner}
+				resume := ports.ChatResumeConfig{ProviderConversationID: "fixture-native-id", DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, HasPriorTurns: true}
+				if _, err := driver.Resume(context.Background(), resume); !errors.Is(err, ports.ErrChatResumeFailed) {
+					t.Fatalf("malformed text admitted: %v", err)
+				}
+				if inner.resume.ProviderConversationID != "" {
+					t.Fatal("native load reached with text it would silently skip")
+				}
+			})
+		}
+	}
+}
