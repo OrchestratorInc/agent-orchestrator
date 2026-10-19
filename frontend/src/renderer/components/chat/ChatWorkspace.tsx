@@ -2544,7 +2544,8 @@ function ControllerBanner({
 		<div
 			role={actionable ? "alert" : "status"}
 			aria-atomic="true"
-			className="flex shrink-0 items-start gap-2.5 rounded-lg border border-border bg-surface px-4 py-2.5"
+			// Docked above the composer, like the queued-message dock, so it takes the same frame.
+			className="flex shrink-0 items-start gap-2.5 rounded-[var(--radius-chat-composer)] border border-border bg-surface px-4 py-2.5"
 		>
 			{loading ? (
 				<Loader2
