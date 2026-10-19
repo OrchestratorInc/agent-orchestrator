@@ -89,6 +89,27 @@ func (d *candidate) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (por
 	if err := validateNativeHistory(ctx, cfg); err != nil {
 		return nil, err
 	}
+	// Shared host preparation can replace Env just before a cold launch. The
+	// admitted snapshot must belong to that actual profile, not only the
+	// caller's preliminary environment. Live adoption never invokes PrepareEnv.
+	if prepare := cfg.PrepareEnv; prepare != nil {
+		original := cfg
+		cfg.PrepareEnv = func(prepareCtx context.Context) (map[string]string, error) {
+			env, err := prepare(prepareCtx)
+			if err != nil {
+				return nil, err
+			}
+			prepared := original
+			prepared.Env = env
+			if err := validateLaunch(prepared.DataDir, prepared.WorkspacePath, prepared.SystemPrompt, env); err != nil {
+				return nil, err
+			}
+			if err := validateNativeHistory(prepareCtx, prepared); err != nil {
+				return nil, err
+			}
+			return env, nil
+		}
+	}
 	return guardConversation(d.driver.Resume(ctx, cfg))
 }
 

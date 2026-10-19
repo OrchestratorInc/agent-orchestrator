@@ -387,3 +387,31 @@ func waitFixtureReady(t *testing.T, events <-chan ports.ChatEvent) {
 		}
 	}
 }
+
+func TestConstructorRejectsHistoryFromDifferentPreparedProfile(t *testing.T) {
+	driver, cfg := protocolDriver(t)
+	writeSnapshot(t, cfg, "fixture-native-id", nativeSnapshot(cfg))
+	prepared := cfg
+	prepared.Env = map[string]string{"HOME": filepath.Join(cfg.DataDir, "prepared-profile")}
+	if err := os.Mkdir(prepared.Env["HOME"], 0o700); err != nil {
+		t.Fatal(err)
+	}
+	wrong := nativeSnapshot(prepared)
+	wrong["working_directory"] = t.TempDir()
+	writeSnapshot(t, prepared, "fixture-native-id", wrong)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resume := ports.ChatResumeConfig{SessionID: cfg.SessionID, ProviderConversationID: "fixture-native-id", DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, HasPriorTurns: true,
+		PrepareEnv: func(context.Context) (map[string]string, error) { return prepared.Env, nil }}
+	if conv, err := driver.Resume(ctx, resume); !errors.Is(err, ports.ErrChatResumeFailed) {
+		if conv != nil {
+			closeFixture(t, conv)
+		}
+		t.Fatalf("prepared profile mismatch = %v", err)
+	}
+	for _, home := range []string{cfg.Env["HOME"], prepared.Env["HOME"]} {
+		if _, err := os.Stat(filepath.Join(home, "protocol-calls")); !os.IsNotExist(err) {
+			t.Fatalf("native process started before actual profile admission: %v", err)
+		}
+	}
+}
