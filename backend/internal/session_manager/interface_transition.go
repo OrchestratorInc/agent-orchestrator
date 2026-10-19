@@ -927,11 +927,21 @@ func (m *Manager) preflightTerminalLaunch(
 	project domain.ProjectRecord,
 	nativeConversationID string,
 ) error {
+	return m.preflightTerminalLaunchOnAccount(ctx, agent, rec, project, nativeConversationID, m.accountOverride(rec.ID))
+}
+
+func (m *Manager) preflightTerminalLaunchOnAccount(ctx context.Context, agent ports.Agent, rec domain.SessionRecord, project domain.ProjectRecord, nativeConversationID, accountID string) error {
 	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, false)
 	if err != nil {
 		return err
 	}
 	config := restoredAgentConfig(rec, project.Config)
+	if config.SpeedMode.Accelerated() {
+		config, err = m.resolveAgentConfigForSession(ctx, ports.SpawnConfig{ProjectID: rec.ProjectID, Kind: rec.Kind, Harness: rec.Harness, AgentConfig: config, EffortOverride: true}, project.Config, rec.ID, accountID)
+		if err != nil {
+			return err
+		}
+	}
 	var cmd []string
 	if nativeConversationID == "" {
 		cmd, _, _, err = freshLaunchArgv(ctx, agent, rec.ID, rec.Metadata.WorkspacePath,

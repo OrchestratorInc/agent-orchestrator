@@ -127,6 +127,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	}
 	appendTerminalCompatibilityFlags(&providerArgs)
 	appendReasoningEffortFlag(&providerArgs, cfg.Config.Effort)
+	appendSpeedFlags(&providerArgs, cfg.Config.SpeedMode)
 	return agentruntime.BuildLaunchCommand(agentruntime.LaunchConfig{
 		Harness:          agentruntime.HarnessCodex,
 		Binary:           binary,
@@ -166,6 +167,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	}
 	appendTerminalCompatibilityFlags(&providerArgs)
 	appendReasoningEffortFlag(&providerArgs, cfg.Config.Effort)
+	appendSpeedFlags(&providerArgs, cfg.Config.SpeedMode)
 	return agentruntime.BuildRestoreCommand(agentruntime.RestoreConfig{
 		Harness:          agentruntime.HarnessCodex,
 		Binary:           binary,
@@ -569,4 +571,21 @@ func appendTerminalCompatibilityFlags(cmd *[]string) {
 var fileExists = func(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+func appendSpeedFlags(args *[]string, speed domain.SpeedMode) {
+	if speed == "" {
+		return
+	}
+	tier := "default"
+	if speed == domain.SpeedModeFast {
+		tier = "priority"
+	}
+	if speed == domain.SpeedModeUltrafast {
+		tier = "ultrafast"
+	}
+	if speed.Accelerated() {
+		*args = append(*args, "-c", "features.fast_mode=true")
+	}
+	*args = append(*args, "-c", "service_tier="+codexTOMLConfigString(tier))
 }

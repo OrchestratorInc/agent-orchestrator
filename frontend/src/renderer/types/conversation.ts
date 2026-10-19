@@ -611,7 +611,11 @@ export type ApprovalMode = "default" | "accept-edits" | "auto" | "bypass-permiss
  * Every field is optional and empty means the provider's own default, so clearing
  * a choice and never making one are the same thing.
  */
+export type SpeedMode = "normal" | "fast" | "ultrafast";
+export interface ModelServiceTier { id: string; name: string; description?: string; }
+
 export interface TurnSettings {
+	speedMode?: SpeedMode;
 	model?: string;
 	reasoningEffort?: string;
 	approvalMode?: ApprovalMode;
@@ -619,6 +623,7 @@ export interface TurnSettings {
 
 /** One model the provider offers for this session. */
 export interface ChatModel {
+	serviceTiers?: ModelServiceTier[];
 	id: string;
 	displayName: string;
 	description?: string;

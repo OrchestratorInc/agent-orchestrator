@@ -1,3 +1,5 @@
+import { SpeedMenu, supportsSpeed } from "../chat/SpeedMenu";
+import type { SpeedMode } from "../../types/conversation";
 import { Check, ChevronDown, Loader2, RefreshCw, Search } from "lucide-react";
 import { type ReactNode, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -77,6 +79,7 @@ export function AgentModelCombobox({
 	showEffortInTrigger = true,
 	agentId,
 	tuning,
+	speed,
 	disabled = false,
 	"aria-label": ariaLabel,
 }: {
@@ -112,6 +115,8 @@ export function AgentModelCombobox({
 	showEffortInTrigger?: boolean;
 	/** Callers opt into a combined model and reasoning-effort menu. */
 	tuning?: ModelEffortSelection;
+	/** Only the new-task picker opts into serving speed. */
+	speed?: { value: SpeedMode; onChange(value: SpeedMode): void; unavailableReason?: string };
 	disabled?: boolean;
 	"aria-label": string;
 }) {
@@ -241,6 +246,7 @@ export function AgentModelCombobox({
 	const selectCatalogModel = (event: Event, item: IndexedModel) => {
 		const openEffort = Boolean(tuning && item.model.efforts?.some((effort) => effort && effort.toLowerCase() !== "default"));
 		if (openEffort) event.preventDefault();
+		if (speed && !supportsSpeed(item.model.serviceTiers, speed.value)) speed.onChange("normal");
 		selectModel(item.id);
 		setEffortMenuOpen(openEffort);
 		setAwaitingEffort(openEffort);
@@ -288,6 +294,7 @@ export function AgentModelCombobox({
 					) : (
 						<span className="min-w-0 truncate">{currentLabel}</span>
 					)}
+					{speed && speed.value !== "normal" ? <span className="shrink-0 text-settings-muted"> · {t(speed.value === "fast" ? "settings.models.speedFast" : "settings.models.speedUltrafast")}</span> : null}
 					{showEffort && showEffortInTrigger && <span className="shrink-0 text-settings-muted"> · {currentEffortLabel}</span>}
 					<ChevronDown
 						className="size-icon-sm shrink-0 opacity-70 transition-transform duration-300 ease-out group-data-[state=open]/agent-model-trigger:rotate-180"
@@ -408,7 +415,7 @@ export function AgentModelCombobox({
 											className={modelItemClass(item.id === effectiveModel)}
 											aria-current={tuning && item.id === effectiveModel ? true : undefined}
 										>
-											<span className="truncate text-settings-label">{item.label}</span>
+											<span className="flex min-w-0 flex-col"><span className="truncate text-settings-label">{item.label}</span>{speed && !supportsSpeed(item.model.serviceTiers, speed.value) ? <span className="whitespace-normal text-xs text-settings-muted">{t("settings.models.speedSwitchNormal")}</span> : null}</span>
 											{tuning && item.id === effectiveModel && <Check className="ml-auto size-icon-sm shrink-0" aria-hidden="true" />}
 										</DropdownMenuItem>
 									) : (
@@ -419,7 +426,7 @@ export function AgentModelCombobox({
 										>
 										<div className="flex min-w-0 flex-1 items-center gap-3">
 											<div className="min-w-0 flex-1">
-												<span className="truncate text-settings-label">{item.label}</span>
+												<span className="flex min-w-0 flex-col"><span className="truncate text-settings-label">{item.label}</span>{speed && !supportsSpeed(item.model.serviceTiers, speed.value) ? <span className="whitespace-normal text-xs text-settings-muted">{t("settings.models.speedSwitchNormal")}</span> : null}</span>
 													{shouldShowModelID(item, visibleModels, normalizedSearch) && (
 														<p className="truncate text-xs text-settings-muted">{item.id}</p>
 													)}
@@ -500,7 +507,9 @@ export function AgentModelCombobox({
 						aria-hidden="true"
 					/>
 				</div>
-				{showEffort && tuning && (
+				{speed ? <><DropdownMenuSeparator /><SpeedMenu value={speed.value} tiers={selected?.model.serviceTiers}
+						disabled={disabled} unavailableReason={speed.unavailableReason} onChange={speed.onChange} onRefresh={onRefresh ? runRefresh : undefined} refreshing={refreshBusy} /></> : null}
+					{showEffort && tuning && (
 					<div className="shrink-0">
 						<DropdownMenuSeparator />
 						<OptionMenuSub open={effortMenuOpen} onOpenChange={(open) => {

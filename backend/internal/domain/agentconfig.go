@@ -28,6 +28,9 @@ type AgentConfig struct {
 	// Effort selects a model-advertised reasoning level. Empty defers to the
 	// provider/model default.
 	Effort string `json:"effort,omitempty"`
+	// SpeedMode selects a Codex serving tier. The UI defaults to Normal;
+	// omission preserves the native provider default for legacy callers.
+	SpeedMode SpeedMode `json:"speedMode,omitempty" enum:"normal,fast,ultrafast"`
 	// Mode selects an agent-owned operating mode when the adapter exposes modes
 	// instead of raw model ids (currently Amp: low|medium|high|ultra).
 	Mode string `json:"mode,omitempty"`
@@ -59,6 +62,9 @@ func (m PermissionMode) Valid() bool {
 // Validate rejects values outside the typed vocabulary so a bad config is
 // refused when it is set (CLI/API) rather than silently dropped at spawn.
 func (c AgentConfig) Validate() error {
+	if !c.SpeedMode.Valid() {
+		return fmt.Errorf("invalid speed mode %q", c.SpeedMode)
+	}
 	switch c.Mode {
 	case "", "low", "medium", "high", "ultra":
 	default:

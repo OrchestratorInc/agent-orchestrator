@@ -1096,6 +1096,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		rec = prep.record
 	} else {
 		seed := seedRecord(cfg, project.Config, m.clock())
+		seed.Metadata.SpeedMode = cfg.AgentConfig.SpeedMode
 		if mode == domain.SessionModeChat {
 			seed.Metadata.Model = cfg.AgentConfig.Model
 			seed.Metadata.Effort = cfg.AgentConfig.Effort
@@ -1193,6 +1194,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			}
 		}
 		seed := seedRecord(cfg, project.Config, m.clock())
+		seed.Metadata.SpeedMode = cfg.AgentConfig.SpeedMode
 		seed.ID = id
 		seed.Metadata.ArtifactDir = artifactDir
 		if mode == domain.SessionModeChat {
@@ -1527,8 +1529,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		// The user-visible resolved selection is Model for regular harnesses and
 		// Mode for adapters whose catalog is a mode list (e.g. Amp). If an explicit
 		// Model override exists it wins; otherwise fall back to the resolved Mode.
-		Model:  resolvedModelForMetadata(cfg.Harness, agentConfig, adapterConfig),
-		Effort: agentConfig.Effort,
+		Model:     resolvedModelForMetadata(cfg.Harness, agentConfig, adapterConfig),
+		Effort:    agentConfig.Effort,
+		SpeedMode: agentConfig.SpeedMode,
 	}
 	if prompt != "" {
 		metadata.LatestUserPromptAt = m.clock()
@@ -1607,12 +1610,13 @@ func replayClientRequest(rec domain.SessionRecord, hash string) (domain.SessionR
 // catalog. Claude Code requires it. The Codex CLI validates its own model and
 // effort, so for Codex the catalog only refines the launch: when it is
 // unavailable, stale, lacks a custom model or lists other efforts, the session
-// launches with the unvalidated config, as it would without a catalog.
+// launches with the unvalidated config. Accelerated speed requires verified
+// capabilities and never uses this fallback.
 func (m *Manager) resolveTUIAgentConfig(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig, unvalidated ports.AgentConfig) (ports.AgentConfig, error) {
 	resolved, err := m.resolveAgentConfig(ctx, cfg, project)
 	// Only the spawn's own cancellation stops the launch; a catalog lookup's
 	// internal timeout is one more way the catalog can be unavailable.
-	if err == nil || cfg.Harness != domain.HarnessCodex || ctx.Err() != nil {
+	if err == nil || cfg.Harness != domain.HarnessCodex || ctx.Err() != nil || unvalidated.SpeedMode.Accelerated() || !unvalidated.SpeedMode.Valid() {
 		return resolved, err
 	}
 	m.logger.Warn("spawn: Codex model catalog could not validate the launch; leaving it to the CLI",
@@ -1621,6 +1625,10 @@ func (m *Manager) resolveTUIAgentConfig(ctx context.Context, cfg ports.SpawnConf
 }
 
 func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig) (ports.AgentConfig, error) {
+	return m.resolveAgentConfigForSession(ctx, cfg, project, "", "")
+}
+
+func (m *Manager) resolveAgentConfigForSession(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig, sessionID domain.SessionID, accountID string) (ports.AgentConfig, error) {
 	base := effectiveAgentConfig(cfg.Harness, cfg.Kind, project)
 	requested := cfg.AgentConfig
 	resolved := applySpawnAgentConfig(base, requested)
@@ -1628,6 +1636,9 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		!cfg.EffortOverride && requested.Effort == ""
 	if cfg.EffortOverride {
 		resolved.Effort = requested.Effort
+	}
+	if !resolved.SpeedMode.Valid() || resolved.SpeedMode.Accelerated() && cfg.Harness != domain.HarnessCodex {
+		return ports.AgentConfig{}, fmt.Errorf("%w: %q for %s", ports.ErrUnsupportedSpeed, resolved.SpeedMode, cfg.Harness)
 	}
 	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode {
 		// Only a flagged explicit override (the spawn API and delegation mark
@@ -1649,21 +1660,29 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	}
 	modelID := strings.TrimSpace(resolved.Model)
 	validateClaudeModel := cfg.Harness == domain.HarnessClaudeCode && modelID != ""
-	if resolved.Effort == "" && !validateClaudeModel {
+	if resolved.Effort == "" && !validateClaudeModel && !resolved.SpeedMode.Accelerated() {
 		return resolved, nil
 	}
 	if m.modelCatalog == nil {
-		if validateClaudeModel {
+		if validateClaudeModel || resolved.SpeedMode.Accelerated() {
 			return ports.AgentConfig{}, fmt.Errorf("%w: model catalog is unavailable", ports.ErrModelCapabilitiesUnavailable)
 		}
 		return resolved, nil
 	}
-	catalog, err := m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), true)
+	var catalog ports.AgentModelCatalog
+	var err error
+	if scoped, ok := m.modelCatalog.(interface {
+		ModelsForSession(context.Context, string, string, domain.SessionID, string, bool) (ports.AgentModelCatalog, error)
+	}); ok {
+		catalog, err = scoped.ModelsForSession(ctx, string(cfg.Harness), string(cfg.ProjectID), sessionID, accountID, true)
+	} else {
+		catalog, err = m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), true)
+	}
 	if err != nil {
 		if modelChangedWithoutExplicitEffort {
 			resolved.Effort = ""
 		}
-		if validateClaudeModel || resolved.Effort != "" {
+		if validateClaudeModel || resolved.Effort != "" || resolved.SpeedMode.Accelerated() {
 			return ports.AgentConfig{}, fmt.Errorf("%w: %w", ports.ErrModelCapabilitiesUnavailable, err)
 		}
 		return resolved, nil
@@ -1699,6 +1718,14 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	if modelChangedWithoutExplicitEffort {
 		if selected == nil || !containsString(selected.Efforts, base.Effort) {
 			resolved.Effort = ""
+		}
+	}
+	if resolved.SpeedMode.Accelerated() {
+		if catalog.Stale || selected == nil {
+			return ports.AgentConfig{}, fmt.Errorf("%w: speed capabilities unavailable", ports.ErrUnsupportedSpeed)
+		}
+		if _, supported := ports.ServiceTierForSpeed(selected.ServiceTiers, resolved.SpeedMode); !supported {
+			return ports.AgentConfig{}, fmt.Errorf("%w: %s for model %q", ports.ErrUnsupportedSpeed, resolved.SpeedMode, modelID)
 		}
 	}
 	if resolved.Effort == "" {
@@ -2290,6 +2317,9 @@ func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, 
 	if harnessMatches && override.Effort != "" {
 		merged.Effort = override.Effort
 	}
+	if harnessMatches && override.SpeedMode != "" {
+		merged.SpeedMode = override.SpeedMode
+	}
 	if harnessMatches && override.Mode != "" {
 		merged.Mode = override.Mode
 	}
@@ -2311,6 +2341,15 @@ func restoredAgentConfig(rec domain.SessionRecord, cfg domain.ProjectConfig) por
 		merged.Model = rec.Metadata.Model
 		merged.Effort = rec.Metadata.Effort
 	}
+	if rec.Harness == domain.HarnessCodex {
+		merged.SpeedMode = rec.Metadata.SpeedMode
+		if merged.SpeedMode.Accelerated() && rec.Metadata.Model != "" {
+			// Validate and restore the speed/model pair the user selected in
+			// Chat, rather than a different model from the project defaults.
+			merged.Model = rec.Metadata.Model
+			merged.Effort = rec.Metadata.Effort
+		}
+	}
 	return merged
 }
 
@@ -2320,6 +2359,9 @@ func applySpawnAgentConfig(base, override ports.AgentConfig) ports.AgentConfig {
 	}
 	if override.Effort != "" {
 		base.Effort = override.Effort
+	}
+	if override.SpeedMode != "" {
+		base.SpeedMode = override.SpeedMode
 	}
 	if override.Mode != "" {
 		base.Mode = override.Mode
@@ -2935,6 +2977,15 @@ func (m *Manager) retireWorkspaceProjectForReplacement(ctx context.Context, rec 
 // runs before any durable session write, so a failure never resurrects the row
 // or destroys the worktree (it may hold the agent's prior work).
 func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (RestoreResult, error) {
+	return m.restoreWithSpeed(ctx, id, false)
+}
+
+// RestoreWithNormal is an explicit recovery choice; ordinary retries retain speed.
+func (m *Manager) RestoreWithNormal(ctx context.Context, id domain.SessionID) (RestoreResult, error) {
+	return m.restoreWithSpeed(ctx, id, true)
+}
+
+func (m *Manager) restoreWithSpeed(ctx context.Context, id domain.SessionID, normal bool) (RestoreResult, error) {
 	if err := m.beginAgentOperation(ctx, id, agentOperationRestore); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
 			err = ErrSwitchInProgress
@@ -2987,6 +3038,12 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (Res
 	ws, err := m.restoreSessionWorkspace(ctx, project, rec)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("restore %s: workspace: %w", id, err)
+	}
+	if normal {
+		rec, err = m.resumeWithNormalSettings(ctx, rec)
+		if err != nil {
+			return RestoreResult{}, err
+		}
 	}
 	return m.relaunchRestoredSession(ctx, rec, project, ws)
 }
@@ -3206,7 +3263,16 @@ func (m *Manager) WakeHibernatedChat(ctx context.Context, id domain.SessionID) e
 // Unlike RestoreWithMode, it preserves the existing worktree and terminal
 // identity and never changes the durable terminated flag as an intermediate
 // step.
-func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (result RestoreResult, err error) {
+func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (RestoreResult, error) {
+	return m.resumeAgentWithSpeed(ctx, id, false)
+}
+
+// ResumeAgentWithNormal preserves native history while explicitly selecting Normal.
+func (m *Manager) ResumeAgentWithNormal(ctx context.Context, id domain.SessionID) (RestoreResult, error) {
+	return m.resumeAgentWithSpeed(ctx, id, true)
+}
+
+func (m *Manager) resumeAgentWithSpeed(ctx context.Context, id domain.SessionID, normal bool) (result RestoreResult, err error) {
 	if err := m.beginAgentResume(ctx, id); err != nil {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, err)
 	}
@@ -3256,7 +3322,16 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 	if rec.ProvisionState.IsProvisioning() {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrResumeInProgress)
 	}
+	if normal && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat && m.chat != nil && m.chat.HasLiveChatController(id) {
+		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrAgentNotExited)
+	}
 	if rec.ProvisionState == domain.SessionProvisionFailed {
+		if normal {
+			rec, err = m.resumeWithNormalSettings(ctx, rec)
+			if err != nil {
+				return RestoreResult{}, err
+			}
+		}
 		result, handedOff, err := m.retryFailedChatSpawn(ctx, rec, releaseHarness)
 		if handedOff {
 			releaseHarness = nil
@@ -3264,7 +3339,7 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 		}
 		return result, err
 	}
-	if rec.HibernatedAt == nil && m.SessionStatusReadiness(rec) == "unavailable" {
+	if !normal && rec.HibernatedAt == nil && m.SessionStatusReadiness(rec) == "unavailable" {
 		m.beginStatusRecovery(id)
 		recoveryCtx, cancel := context.WithTimeout(ctx, m.statusVerificationLimit)
 		defer cancel()
@@ -3309,6 +3384,12 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 			m.logger.Warn("resume agent: reconcile live agent activity failed", "sessionID", rec.ID, "error", err)
 		}
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrAgentNotExited)
+	}
+	if normal {
+		rec, err = m.resumeWithNormalSettings(ctx, rec)
+		if err != nil {
+			return RestoreResult{}, err
+		}
 	}
 	if rec.HibernatedAt != nil {
 		store, ok := m.store.(interface {
@@ -3477,11 +3558,15 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	if model := strings.TrimSpace(rec.Metadata.Model); model != "" {
 		agentConfig.Model = model
 	}
-	// A per-spawn or ChatUI-selected reasoning effort is the same kind of
-	// durable session-level choice: it must survive the rebuild for every
-	// effort-capable harness, not only Claude Code.
+	// A selected effort survives terminal rebuilds alongside the model and speed.
 	if effort := strings.TrimSpace(rec.Metadata.Effort); effort != "" {
 		agentConfig.Effort = effort
+	}
+	if agentConfig.SpeedMode.Accelerated() {
+		agentConfig, err = m.resolveAgentConfigForSession(ctx, ports.SpawnConfig{ProjectID: rec.ProjectID, Kind: rec.Kind, Harness: rec.Harness, AgentConfig: agentConfig, EffortOverride: true}, project.Config, rec.ID, m.accountOverride(rec.ID))
+		if err != nil {
+			return RestoreResult{}, err
+		}
 	}
 	if rec.Metadata.Permissions != "" {
 		agentConfig.Permissions = rec.Metadata.Permissions
@@ -6911,4 +6996,27 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// resumeWithNormalSettings runs only under the session restore/resume operation
+// lock, after rejecting live controllers. The store updates both durable views
+// atomically and refuses a changed session snapshot.
+func (m *Manager) resumeWithNormalSettings(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, error) {
+	if rec.Harness != domain.HarnessCodex {
+		return rec, ports.ErrUnsupportedSpeed
+	}
+	store, ok := m.store.(interface {
+		ResumeWithNormalSettings(context.Context, domain.SessionID, int64) (bool, error)
+	})
+	if !ok {
+		return rec, fmt.Errorf("normal-speed recovery storage unavailable")
+	}
+	changed, err := store.ResumeWithNormalSettings(ctx, rec.ID, rec.Revision)
+	if err != nil {
+		return rec, err
+	}
+	if !changed {
+		return rec, ErrResumeInProgress
+	}
+	return m.getRecord(ctx, rec.ID)
 }

@@ -843,6 +843,45 @@ func (s *Service) SessionAccounts(ctx context.Context, id domain.SessionID) (map
 	return out, nil
 }
 
+// CatalogLaunchEnv resolves the same provider account as launch without binding
+// a session. New-task discovery follows the current default; existing tasks keep
+// their binding, and a proposed account can be checked before committing a move.
+func (s *Service) CatalogLaunchEnv(ctx context.Context, harness domain.AgentHarness, id domain.SessionID, accountID string) (string, map[string]string, error) {
+	p, ok := domain.AgentAccountProviderFor(harness)
+	if !ok || s.providers[p] == nil {
+		return "", nil, nil
+	}
+	var account domain.AgentAccount
+	var err error
+	if accountID != "" {
+		account, err = s.find(ctx, accountID)
+	} else if id != "" {
+		account, _, err = s.SessionAccount(ctx, id, p)
+	} else {
+		var defaultID string
+		defaultID, err = s.defaultID(ctx, p)
+		if err == nil {
+			account, err = s.find(ctx, defaultID)
+		}
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	if account.Provider != p {
+		return "", nil, ports.ErrAgentAccountProviderMismatch
+	}
+	if s.beingRemoved(account.ID) {
+		return "", nil, ports.ErrAgentAccountUnknown
+	}
+	if account.Device() {
+		return account.ID, nil, nil
+	}
+	if err := s.prepare(s.providers[p], account.Home); err != nil {
+		return "", nil, err
+	}
+	return account.ID, s.providers[p].LaunchEnv(account.Home), nil
+}
+
 // SessionLaunchEnv is the environment that runs each provider's CLI under the
 // session's account. A session with no account for a provider yet is bound to
 // that provider's default here, so a later default change does not move it.

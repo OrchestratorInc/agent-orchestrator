@@ -205,6 +205,18 @@ paths:
         schema:
           description: Agent adapter identifier.
           type: string
+      - description: Optional session whose bound account supplies model capabilities.
+        in: query
+        name: sessionId
+        schema:
+          description: Optional session whose bound account supplies model capabilities.
+          type: string
+      - description: Optional target account to check before switching.
+        in: query
+        name: accountId
+        schema:
+          description: Optional target account to check before switching.
+          type: string
       - description: Return catalog facts without reading session history for model
           recency. Cached catalogs are served while discovery refreshes in the background.
         in: query
@@ -265,6 +277,18 @@ paths:
         required: true
         schema:
           description: Agent adapter identifier.
+          type: string
+      - description: Optional session whose bound account supplies model capabilities.
+        in: query
+        name: sessionId
+        schema:
+          description: Optional session whose bound account supplies model capabilities.
+          type: string
+      - description: Optional target account to check before switching.
+        in: query
+        name: accountId
+        schema:
+          description: Optional target account to check before switching.
           type: string
       - description: Refresh the Harness Settings browsing catalog without session-history
           enrichment; FX includes all connections in a separate cache.
@@ -9811,6 +9835,11 @@ paths:
         schema:
           description: Session identifier, e.g. project-1.
           type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResumeSessionRequest'
       responses:
         "200":
           content:
@@ -9818,6 +9847,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/RestoreSessionResponse'
           description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
         "404":
           content:
             application/json:
@@ -9850,6 +9885,11 @@ paths:
         schema:
           description: Session identifier, e.g. project-1.
           type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResumeSessionRequest'
       responses:
         "200":
           content:
@@ -9857,6 +9897,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ResumeAgentResponse'
           description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
         "404":
           content:
             application/json:
@@ -12391,6 +12437,12 @@ components:
           type: string
         permissions:
           type: string
+        speedMode:
+          enum:
+          - normal
+          - fast
+          - ultrafast
+          type: string
       type: object
     AgentInfo:
       properties:
@@ -12575,6 +12627,10 @@ components:
           - string
         provider:
           type: string
+        serviceTiers:
+          items:
+            $ref: '#/components/schemas/ModelServiceTier'
+          type: array
       required:
       - id
       - label
@@ -15006,6 +15062,10 @@ components:
           type: array
         id:
           type: string
+        serviceTiers:
+          items:
+            $ref: '#/components/schemas/ModelServiceTier'
+          type: array
       required:
       - id
       - displayName
@@ -15318,6 +15378,12 @@ components:
           type: string
         reasoningEffort:
           type: string
+        speedMode:
+          enum:
+          - normal
+          - fast
+          - ultrafast
+          type: string
       type: object
     ConversationUsagePayload:
       properties:
@@ -15594,6 +15660,12 @@ components:
           maxLength: 256
           type: string
         projectId:
+          type: string
+        speedMode:
+          enum:
+          - normal
+          - fast
+          - ultrafast
           type: string
         taskPreparation:
           type: string
@@ -16894,6 +16966,18 @@ components:
       - location
       - lastError
       type: object
+    ModelServiceTier:
+      properties:
+        description:
+          type: string
+        id:
+          type: string
+        name:
+          type: string
+      required:
+      - id
+      - name
+      type: object
     MuteDeviceRequest:
       properties:
         muted:
@@ -17701,6 +17785,13 @@ components:
       - sessionId
       - resumeMode
       - session
+      type: object
+    ResumeSessionRequest:
+      properties:
+        speedMode:
+          enum:
+          - normal
+          type: string
       type: object
     RetryTurnResponse:
       properties:
@@ -19454,6 +19545,12 @@ components:
         requestedOutput:
           enum:
           - artifact
+          type: string
+        speedMode:
+          enum:
+          - normal
+          - fast
+          - ultrafast
           type: string
         trackerProvider:
           enum:

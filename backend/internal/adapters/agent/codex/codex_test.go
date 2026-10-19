@@ -451,6 +451,38 @@ func TestGetLaunchCommandAppendsConfiguredEffort(t *testing.T) {
 	}
 }
 
+func TestSpeedFlagsApplyToLaunchAndRestore(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "codex"}
+	for _, step := range []struct {
+		speed domain.SpeedMode
+		tier  string
+	}{
+		{domain.SpeedModeNormal, "default"}, {domain.SpeedModeFast, "priority"}, {domain.SpeedModeUltrafast, "ultrafast"},
+	} {
+		t.Run(string(step.speed), func(t *testing.T) {
+			config := ports.AgentConfig{SpeedMode: step.speed}
+			launch, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{Config: config})
+			if err != nil {
+				t.Fatal(err)
+			}
+			restore, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+				Config: config, Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "thread-123"}},
+			})
+			if err != nil || !ok {
+				t.Fatalf("restore = %v, %v", ok, err)
+			}
+			for _, argv := range [][]string{launch, restore} {
+				if !containsSubsequence(argv, []string{"-c", "service_tier='" + step.tier + "'"}) {
+					t.Fatalf("missing speed override: %#v", argv)
+				}
+				if containsSubsequence(argv, []string{"-c", "features.fast_mode=true"}) != step.speed.Accelerated() {
+					t.Fatalf("incorrect feature override: %#v", argv)
+				}
+			}
+		})
+	}
+}
+
 func TestGetLaunchCommandOmitsBlankConfiguredModel(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "codex"}
 

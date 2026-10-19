@@ -606,3 +606,43 @@ func TestLimitsWithNoWindowsAreReadAgainSoon(t *testing.T) {
 		}
 	}
 }
+
+func TestCatalogLaunchEnvFollowsAccountsWithoutBindingSessions(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
+	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(root, "claude", start.OperationID)
+	claude.signedInAs[home] = "b@example.com"
+	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	store.bindings["saved"] = start.OperationID
+	id, env, err := svc.CatalogLaunchEnv(ctx, domain.HarnessClaudeCode, "saved", "")
+	if err != nil || id != start.OperationID || env["CLAUDE_CONFIG_DIR"] != home {
+		t.Fatalf("bound catalog env=%v id=%q err=%v", env, id, err)
+	}
+	id, env, err = svc.CatalogLaunchEnv(ctx, domain.HarnessClaudeCode, "new", "")
+	if err != nil || id != "device-claude" || len(env) != 0 {
+		t.Fatalf("default catalog env=%v id=%q err=%v", env, id, err)
+	}
+	if _, bound := store.bindings["new"]; bound {
+		t.Fatal("discovery bound a new session")
+	}
+	id, env, err = svc.CatalogLaunchEnv(ctx, domain.HarnessClaudeCode, "saved", "device-claude")
+	if err != nil || id != "device-claude" || len(env) != 0 || store.bindings["saved"] != start.OperationID {
+		t.Fatalf("target catalog changed binding: env=%v id=%q err=%v bindings=%v", env, id, err, store.bindings)
+	}
+	if err := svc.SetDefault(ctx, start.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	id, env, err = svc.CatalogLaunchEnv(ctx, domain.HarnessClaudeCode, "", "")
+	if err != nil || id != start.OperationID || env["CLAUDE_CONFIG_DIR"] != home {
+		t.Fatalf("new default env=%v id=%q err=%v", env, id, err)
+	}
+}

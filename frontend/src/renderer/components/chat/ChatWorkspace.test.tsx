@@ -1750,6 +1750,17 @@ describe("ChatWorkspace timeline", () => {
 		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
 	});
 
+	it("offers explicit Normal recovery alongside ordinary resume without changing history", async () => {
+		const resume = vi.fn();
+		const normal = vi.fn();
+		render(<ChatWorkspace snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
+			onResumeAgent={resume} onResumeWithNormal={normal} />);
+		await userEvent.setup().click(screen.getByRole("button", { name: "Resume with Normal" }));
+		expect(normal).toHaveBeenCalledOnce();
+		expect(resume).not.toHaveBeenCalled();
+		expect(screen.getByRole("button", { name: "Resume agent" })).toBeInTheDocument();
+	});
+
 	it("offers real recovery actions when the controller stops", async () => {
 		const user = userEvent.setup();
 		const resume = vi.fn();

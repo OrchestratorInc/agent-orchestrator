@@ -457,7 +457,8 @@ type SpawnSessionRequest struct {
 	// selected harness can honor the model before launching.
 	Model string `json:"model,omitempty" maxLength:"256"`
 	// Effort is the optional reasoning level for the selected model.
-	Effort string `json:"effort,omitempty" maxLength:"32"`
+	Effort    string           `json:"effort,omitempty" maxLength:"32"`
+	SpeedMode domain.SpeedMode `json:"speedMode,omitempty" enum:"normal,fast,ultrafast"`
 
 	// RequestedOutput asks for a specific deliverable. artifact tells the worker to
 	// write a file in its artifact directory instead of opening a PR. Omitted is
@@ -957,6 +958,12 @@ type SetSessionAutoInjectCIResponse struct {
 	Session      SessionView      `json:"session"`
 }
 
+// ResumeSessionRequest optionally selects Normal for an explicit recovery.
+// Omitting the body or speedMode preserves the saved user preference.
+type ResumeSessionRequest struct {
+	SpeedMode domain.SpeedMode `json:"speedMode,omitempty" enum:"normal"`
+}
+
 // RestoreSessionResponse is the body of POST /api/v1/sessions/{sessionId}/restore.
 type RestoreSessionResponse struct {
 	OK          bool                       `json:"ok"`
@@ -1118,7 +1125,8 @@ type DelegateTaskRequest struct {
 	Model           string              `json:"model,omitempty" maxLength:"256"`
 	// Effort is an explicit, provider-advertised model tuning override. Nil
 	// inherits the project default; an empty string selects the provider default.
-	Effort *string `json:"effort,omitempty" maxLength:"64"`
+	Effort    *string          `json:"effort,omitempty" maxLength:"64"`
+	SpeedMode domain.SpeedMode `json:"speedMode,omitempty" enum:"normal,fast,ultrafast"`
 	// ApprovalMode is an optional per-session override. The UI uses the explicit
 	// bypass value only after the user accepts an approval-less Chat fallback.
 	ApprovalMode domain.PermissionMode `json:"approvalMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
@@ -1734,6 +1742,8 @@ type AgentAuthenticationObservation = domain.AgentAuthenticationObservation
 // AgentModelsQuery scopes a model catalog to a project where providers may be
 // configured per workspace.
 type AgentModelsQuery struct {
+	SessionID   string `query:"sessionId,omitempty" description:"Optional session whose bound account supplies model capabilities."`
+	AccountID   string `query:"accountId,omitempty" description:"Optional target account to check before switching."`
 	CatalogOnly bool   `query:"catalogOnly,omitempty" description:"Return catalog facts without reading session history for model recency. Cached catalogs are served while discovery refreshes in the background."`
 	ProjectID   string `query:"projectId,omitempty" description:"Optional project identifier used as the model-catalog cache scope."`
 }
@@ -1741,6 +1751,8 @@ type AgentModelsQuery struct {
 // AgentModelsRefreshQuery controls forced refresh versus cheap background
 // revalidation for a project-scoped model catalog.
 type AgentModelsRefreshQuery struct {
+	SessionID   string `query:"sessionId,omitempty" description:"Optional session whose bound account supplies model capabilities."`
+	AccountID   string `query:"accountId,omitempty" description:"Optional target account to check before switching."`
 	CatalogOnly bool   `query:"catalogOnly,omitempty" description:"Refresh the Harness Settings browsing catalog without session-history enrichment; FX includes all connections in a separate cache."`
 	ProjectID   string `query:"projectId,omitempty" description:"Optional project identifier used as the model-catalog cache scope."`
 	Revalidate  bool   `query:"revalidate,omitempty" description:"When true, compare executable and config metadata before running discovery."`
@@ -2739,8 +2751,9 @@ type ConversationModelResponse struct {
 	Default bool `json:"default"`
 	// Efforts are the reasoning levels this model supports, in the provider's
 	// order. Empty means the model does not take one.
-	Efforts       []string `json:"efforts,omitempty"`
-	DefaultEffort string   `json:"defaultEffort,omitempty"`
+	Efforts       []string                 `json:"efforts,omitempty"`
+	DefaultEffort string                   `json:"defaultEffort,omitempty"`
+	ServiceTiers  []ports.ModelServiceTier `json:"serviceTiers,omitempty"`
 }
 
 // ConversationSkillsResponse is the named skills the provider will let this
@@ -2772,9 +2785,10 @@ type ConversationSkillResponse struct {
 // Every field is optional and an empty value means "use the provider's default",
 // so clearing a choice and never making one are the same thing.
 type ConversationTurnSettingsPayload struct {
-	Model           string `json:"model,omitempty"`
-	ReasoningEffort string `json:"reasoningEffort,omitempty"`
-	ApprovalMode    string `json:"approvalMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
+	Model           string           `json:"model,omitempty"`
+	ReasoningEffort string           `json:"reasoningEffort,omitempty"`
+	SpeedMode       domain.SpeedMode `json:"speedMode,omitempty" enum:"normal,fast,ultrafast"`
+	ApprovalMode    string           `json:"approvalMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
 }
 
 // ResolveConversationApprovalRequest answers a pending approval. DecisionID must

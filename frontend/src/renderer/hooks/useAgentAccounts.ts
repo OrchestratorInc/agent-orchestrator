@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { invalidateAgentModelCatalogs } from "./useAgentModelsQuery";
 import { sessionInterfaceTransitionQueryKey } from "./useSessionInterfaceTransition";
 
 export type AgentAccount = components["schemas"]["AgentAccountResponse"];
@@ -76,6 +77,10 @@ export function useSessionAgentAccounts(sessionId: string | undefined) {
 
 export function useAgentAccountActions() {
 	const queryClient = useQueryClient();
+	const invalidateAccountModels = (provider?: AgentAccountProvider) => Promise.all(
+		(provider ? [provider] : ["claude", "codex"] as const).map((accountProvider) =>
+			invalidateAgentModelCatalogs(queryClient, accountProvider === "claude" ? "claude-code" : "codex")),
+	);
 	const setAccounts = (accounts: AgentAccount[]) => queryClient.setQueryData(agentAccountsQueryKey, accounts);
 	return {
 		refresh: async () => setAccounts(await fetchAgentAccounts(true)),
@@ -86,17 +91,26 @@ export function useAgentAccountActions() {
 			unwrap(await apiClient.POST("/api/v1/agents/accounts/{accountId}/login", { params: { path: { accountId } } })),
 		verifyLogin: async (operationId: string) => {
 			const result = unwrap(await apiClient.POST("/api/v1/agents/accounts/login/{operationId}/verify", { params: { path: { operationId } } }));
-			if (result.status === "complete") await queryClient.invalidateQueries({ queryKey: agentAccountsQueryKey });
+			if (result.status === "complete") await Promise.all([
+				queryClient.invalidateQueries({ queryKey: agentAccountsQueryKey }),
+				invalidateAccountModels(result.account?.provider),
+			]);
 			return result;
 		},
 		cancelLogin: async (operationId: string) => {
 			const { error } = await apiClient.POST("/api/v1/agents/accounts/login/{operationId}/cancel", { params: { path: { operationId } } });
 			if (error) throw new Error(apiErrorMessage(error));
 		},
-		makeDefault: async (accountId: string) =>
-			setAccounts(unwrap(await apiClient.POST("/api/v1/agents/accounts/{accountId}/default", { params: { path: { accountId } } })).accounts),
-		remove: async (accountId: string) =>
-			setAccounts(unwrap(await apiClient.DELETE("/api/v1/agents/accounts/{accountId}", { params: { path: { accountId } } })).accounts),
+		makeDefault: async (accountId: string) => {
+			const result = unwrap(await apiClient.POST("/api/v1/agents/accounts/{accountId}/default", { params: { path: { accountId } } }));
+			setAccounts(result.accounts);
+			await invalidateAccountModels(result.accounts.find((account) => account.id === accountId)?.provider);
+		},
+		remove: async (accountId: string) => {
+			const provider = queryClient.getQueryData<AgentAccount[]>(agentAccountsQueryKey)?.find((account) => account.id === accountId)?.provider;
+			setAccounts(unwrap(await apiClient.DELETE("/api/v1/agents/accounts/{accountId}", { params: { path: { accountId } } })).accounts);
+			await invalidateAccountModels(provider);
+		},
 		useReset: async (accountId: string) => {
 			const result = unwrap(await apiClient.POST("/api/v1/agents/accounts/{accountId}/reset-credit", {
 				params: { path: { accountId } }, body: { idempotencyKey: crypto.randomUUID() },

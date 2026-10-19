@@ -523,3 +523,17 @@ describe("AgentModelCombobox", () => {
 		expect(onCustom).toHaveBeenCalledWith("private/custom-model");
 	});
 });
+
+ it("offers model plus Normal when the new-task speed is incompatible", async () => {
+  const user = userEvent.setup(); const onSpeedChange = vi.fn();
+  const { onChange } = renderCombobox([
+   { id: "fast-model", label: "Fast Model", serviceTiers: [{ id: "priority", name: "Fast" }] },
+   { id: "plain-model", label: "Plain Model" },
+  ], { value: "fast-model", compact: true, speed: { value: "fast", onChange: onSpeedChange } });
+  const trigger = screen.getByRole("button", { name: "Worker model" });
+  expect(trigger).toHaveTextContent("Fast Model · Fast");
+  await user.click(trigger);
+  await user.click(screen.getByRole("menuitem", { name: "Plain Model Switch model and use Normal" }));
+  expect(onSpeedChange).toHaveBeenCalledExactlyOnceWith("normal");
+  expect(onChange).toHaveBeenCalledExactlyOnceWith("plain-model");
+ });

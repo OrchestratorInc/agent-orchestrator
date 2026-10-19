@@ -233,7 +233,7 @@ func (d *Driver) DiscoverModels(ctx context.Context, workdir string, env map[str
 		return nil, err
 	}
 	defer func() { _ = conv.Close() }()
-	return listModels(ctx, conv.conn)
+	return listModels(ctx, conv.conn, conv.workspacePath)
 }
 
 type codexVersion [3]int
@@ -333,11 +333,20 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		Thread struct {
 			ID string `json:"id"`
 		} `json:"thread"`
-		Model           string `json:"model"`
-		ReasoningEffort string `json:"reasoningEffort"`
+		Model           string  `json:"model"`
+		ReasoningEffort string  `json:"reasoningEffort"`
+		ServiceTier     *string `json:"serviceTier"`
 	}
 	openCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
+	tier, speedErr := conv.speedTier(openCtx, cfg.Model, cfg.SpeedMode)
+	if speedErr != nil {
+		_ = conv.Terminate()
+		return nil, speedErr
+	}
+	if cfg.SpeedMode != "" {
+		params["serviceTier"] = tier
+	}
 	if err := conv.conn.request(openCtx, "thread/start", params, &resp); err != nil {
 		_ = conv.Terminate()
 		return nil, fmt.Errorf("thread/start: %w", err)
@@ -347,6 +356,10 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		return nil, errors.New("thread/start returned no thread id")
 	}
 
+	if cfg.SpeedMode != "" && !acknowledgedSpeed(tier, resp.ServiceTier) {
+		_ = conv.Terminate()
+		return nil, fmt.Errorf("%w: Codex did not acknowledge speed %s", ports.ErrUnsupportedSpeed, cfg.SpeedMode)
+	}
 	conv.start(resp.Thread.ID, resp.Model, resp.ReasoningEffort)
 	return conv, nil
 }
@@ -414,8 +427,17 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	resumeCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
 	var resp struct {
-		Model           string `json:"model"`
-		ReasoningEffort string `json:"reasoningEffort"`
+		Model           string  `json:"model"`
+		ReasoningEffort string  `json:"reasoningEffort"`
+		ServiceTier     *string `json:"serviceTier"`
+	}
+	tier, speedErr := conv.speedTier(resumeCtx, cfg.Model, cfg.SpeedMode)
+	if speedErr != nil {
+		_ = conv.Terminate()
+		return nil, speedErr
+	}
+	if cfg.SpeedMode != "" {
+		params["serviceTier"] = tier
 	}
 	err = conv.conn.request(resumeCtx, "thread/resume", params, &resp)
 	if err != nil {
@@ -425,6 +447,10 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		return nil, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, err)
 	}
 
+	if cfg.SpeedMode != "" && !acknowledgedSpeed(tier, resp.ServiceTier) {
+		_ = conv.Terminate()
+		return nil, fmt.Errorf("%w: Codex did not acknowledge speed %s", ports.ErrUnsupportedSpeed, cfg.SpeedMode)
+	}
 	conv.start(cfg.ProviderConversationID, resp.Model, resp.ReasoningEffort)
 	return conv, nil
 }
@@ -484,6 +510,7 @@ func (d *Driver) connect(ctx context.Context, workdir string, env map[string]str
 	}
 
 	conv := newConversation(proc, d.log, providerScopeID)
+	conv.workspacePath = workdir
 	if err := d.initialize(ctx, conv); err != nil {
 		_ = conv.Close()
 		return nil, err
@@ -570,6 +597,7 @@ func (d *Driver) connectSession(
 		},
 	}
 	conv := newConversation(proc, d.log, providerScopeID)
+	conv.workspacePath = workdir
 	if transport.Reconnected {
 		return conv, true, nil
 	}

@@ -207,12 +207,16 @@ func (c *ConversationsController) reviewSetSettings(w http.ResponseWriter, r *ht
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
+	if !req.SpeedMode.Valid() {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "UNSUPPORTED_SPEED_MODE", "speedMode must be normal, fast, or ultrafast", nil)
+		return
+	}
 	approval := domain.PermissionMode(req.ApprovalMode)
 	if req.ApprovalMode != "" && !approval.Valid() {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_APPROVAL_MODE_INVALID", "unknown approval mode", nil)
 		return
 	}
-	settings, err := svc.SetTurnSettingsForOwner(r.Context(), domain.ReviewConversationOwner(chi.URLParam(r, "reviewId")), domain.ConversationSettings{Model: req.Model, ReasoningEffort: req.ReasoningEffort, ApprovalMode: approval})
+	settings, err := svc.SetTurnSettingsForOwner(r.Context(), domain.ReviewConversationOwner(chi.URLParam(r, "reviewId")), domain.ConversationSettings{Model: req.Model, ReasoningEffort: req.ReasoningEffort, SpeedMode: req.SpeedMode, ApprovalMode: approval})
 	if errors.Is(err, chatsvc.ErrReviewerPermissionsFixed) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_REVIEW_PERMISSIONS_FIXED", err.Error(), nil)
 		return
@@ -682,6 +686,10 @@ func (c *ConversationsController) setSettings(w http.ResponseWriter, r *http.Req
 	// An unknown approval mode is refused rather than normalized: silently
 	// downgrading a permission choice is the one direction that must never happen
 	// by accident.
+	if !req.SpeedMode.Valid() {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "UNSUPPORTED_SPEED_MODE", "speedMode must be normal, fast, or ultrafast", nil)
+		return
+	}
 	approval := domain.PermissionMode(req.ApprovalMode)
 	if req.ApprovalMode != "" && !approval.Valid() {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
@@ -693,8 +701,8 @@ func (c *ConversationsController) setSettings(w http.ResponseWriter, r *http.Req
 	settings, err := c.Svc.SetTurnSettings(r.Context(),
 		domain.SessionID(chi.URLParam(r, "sessionId")), domain.ConversationSettings{
 			Model:           req.Model,
-			ReasoningEffort: req.ReasoningEffort,
-			ApprovalMode:    approval,
+			ReasoningEffort: req.ReasoningEffort, SpeedMode: req.SpeedMode,
+			ApprovalMode: approval,
 		})
 	if err != nil {
 		writeConversationError(w, r, err)
@@ -719,6 +727,7 @@ func conversationModelsResponse(
 			Default:       model.Default,
 			Efforts:       model.Efforts,
 			DefaultEffort: model.DefaultEffort,
+			ServiceTiers:  model.ServiceTiers,
 		})
 	}
 	return out
@@ -758,6 +767,7 @@ func turnSettingsPayload(settings domain.ConversationSettings) ConversationTurnS
 	return ConversationTurnSettingsPayload{
 		Model:           settings.Model,
 		ReasoningEffort: settings.ReasoningEffort,
+		SpeedMode:       settings.SpeedMode,
 		ApprovalMode:    string(settings.ApprovalMode),
 	}
 }
@@ -1024,6 +1034,8 @@ func decodeConversationBodyLimit(w http.ResponseWriter, r *http.Request, into an
 // codes, so a client can tell a permanent answer from a retryable one.
 func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, ports.ErrUnsupportedSpeed):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "UNSUPPORTED_SPEED_MODE", err.Error(), nil)
 	case errors.Is(err, ports.ErrSessionNotFound):
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found",
 			"SESSION_NOT_FOUND", "session not found", nil)

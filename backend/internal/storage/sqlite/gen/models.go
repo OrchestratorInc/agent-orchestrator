@@ -268,6 +268,7 @@ type Conversation struct {
 	UsageCurrency              sql.NullString
 	ActiveBranchID             string
 	OpencodeMode               string
+	SpeedMode                  sql.NullString
 }
 
 type ConversationActivity struct {
@@ -712,6 +713,7 @@ type Session struct {
 	BranchState                      string
 	RequestedOutput                  string
 	RuntimeReleasedLaunchID          string
+	SpeedMode                        string
 }
 
 type SessionAgentAccount struct {

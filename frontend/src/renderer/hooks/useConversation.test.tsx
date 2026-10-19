@@ -1146,6 +1146,15 @@ describe("controller recovery", () => {
 		invalidateSpy.mockRestore();
 	});
 
+	it("only sends a Normal override for explicit recovery", async () => {
+		postMock.mockResolvedValue({ data: {}, error: undefined, response: { status: 200 } });
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+		await act(async () => { await result.current.resumeAgent(true); });
+		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/resume-agent", {
+			params: { path: { sessionId: "ao-1" } }, body: { speedMode: "normal" },
+		});
+	});
+
 	it("resumes the agent and refreshes both chat and task state", async () => {
 		postMock.mockResolvedValue({ data: {}, error: undefined, response: { status: 200 } });
 		const invalidateSpy = vi.spyOn(QueryClient.prototype, "invalidateQueries");

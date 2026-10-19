@@ -4237,6 +4237,8 @@ export interface components {
             mode?: string;
             model?: string;
             permissions?: string;
+            /** @enum {string} */
+            speedMode?: "normal" | "fast" | "ultrafast";
         };
         AgentInfo: {
             /**
@@ -4312,6 +4314,7 @@ export interface components {
             /** Format: date-time */
             lastUsedAt?: null | string;
             provider?: string;
+            serviceTiers?: components["schemas"]["ModelServiceTier"][];
         };
         AgentModelsResponse: {
             agentId: string;
@@ -5201,6 +5204,7 @@ export interface components {
             displayName: string;
             efforts?: string[];
             id: string;
+            serviceTiers?: components["schemas"]["ModelServiceTier"][];
         };
         ConversationModelsResponse: {
             models: components["schemas"]["ConversationModelResponse"][];
@@ -5316,6 +5320,8 @@ export interface components {
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             model?: string;
             reasoningEffort?: string;
+            /** @enum {string} */
+            speedMode?: "normal" | "fast" | "ultrafast";
         };
         ConversationUsagePayload: {
             /** Format: int64 */
@@ -5411,6 +5417,8 @@ export interface components {
             mode?: "tui" | "chat";
             model?: string;
             projectId: string;
+            /** @enum {string} */
+            speedMode?: "normal" | "fast" | "ultrafast";
             taskPreparation?: string;
         };
         DelegateTaskResponse: {
@@ -5899,6 +5907,11 @@ export interface components {
             running: boolean;
             supported: boolean;
         };
+        ModelServiceTier: {
+            description?: string;
+            id: string;
+            name: string;
+        };
         MuteDeviceRequest: {
             /** @description True to stop sending push notifications to this device. */
             muted: boolean;
@@ -6231,6 +6244,10 @@ export interface components {
             resumeMode: "native" | "saved_prompt" | "fresh";
             session: components["schemas"]["ControllersSessionView"];
             sessionId: string;
+        };
+        ResumeSessionRequest: {
+            /** @enum {string} */
+            speedMode?: "normal";
         };
         RetryTurnResponse: {
             providerTurnId?: string;
@@ -6915,6 +6932,8 @@ export interface components {
             prompt?: string;
             /** @enum {string} */
             requestedOutput?: "artifact";
+            /** @enum {string} */
+            speedMode?: "normal" | "fast" | "ultrafast";
             /** @enum {string} */
             trackerProvider?: "github" | "gitlab";
         };
@@ -7646,6 +7665,10 @@ export interface operations {
     getAgentModels: {
         parameters: {
             query?: {
+                /** @description Optional session whose bound account supplies model capabilities. */
+                sessionId?: string;
+                /** @description Optional target account to check before switching. */
+                accountId?: string;
                 /** @description Return catalog facts without reading session history for model recency. Cached catalogs are served while discovery refreshes in the background. */
                 catalogOnly?: boolean;
                 /** @description Optional project identifier used as the model-catalog cache scope. */
@@ -7710,6 +7733,10 @@ export interface operations {
     refreshAgentModels: {
         parameters: {
             query?: {
+                /** @description Optional session whose bound account supplies model capabilities. */
+                sessionId?: string;
+                /** @description Optional target account to check before switching. */
+                accountId?: string;
                 /** @description Refresh the Harness Settings browsing catalog without session-history enrichment; FX includes all connections in a separate cache. */
                 catalogOnly?: boolean;
                 /** @description Optional project identifier used as the model-catalog cache scope. */
@@ -19600,7 +19627,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ResumeSessionRequest"];
+            };
+        };
         responses: {
             /** @description OK */
             200: {
@@ -19609,6 +19640,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RestoreSessionResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Not Found */
@@ -19650,7 +19690,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ResumeSessionRequest"];
+            };
+        };
         responses: {
             /** @description OK */
             200: {
@@ -19659,6 +19703,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResumeAgentResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Not Found */

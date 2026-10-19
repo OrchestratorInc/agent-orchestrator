@@ -73,6 +73,7 @@ type Service struct {
 	// savedDefaultSignIn reports the sign-in of the saved account new sessions
 	// of a harness start on; handled is false when they start on this computer.
 	savedDefaultSignIn func(ctx context.Context, harness domain.AgentHarness) (signedIn, handled bool)
+	accountModels      accountModelEnvironment
 	cache              ports.AgentModelCatalogCache
 	discoverer         ports.AgentModelDiscoverer
 	modelDiscoveryDir  string
@@ -316,7 +317,11 @@ func (s *Service) monitorModelCatalogFreshness(ctx context.Context) {
 // documented CLI discovery attempt. Discovery failures degrade to the last
 // cached catalog or a custom model input.
 func (s *Service) Models(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
-	catalog, err := s.modelCatalog(ctx, agentID, projectID, refresh)
+	scope, err := s.accountModelScope(ctx, agentID, projectID, "", "")
+	if err != nil {
+		return ports.AgentModelCatalog{}, err
+	}
+	catalog, err := s.modelCatalog(ctx, agentID, scope, refresh)
 	if err != nil {
 		return catalog, err
 	}
@@ -331,7 +336,11 @@ func (s *Service) Models(ctx context.Context, agentID, projectID string, refresh
 // checks, which run in the background. A scope with no persisted catalog still
 // needs its first discovery.
 func (s *Service) ModelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
-	return s.modelCatalog(ctx, agentID, projectID, refresh)
+	scope, err := s.accountModelScope(ctx, agentID, projectID, "", "")
+	if err != nil {
+		return ports.AgentModelCatalog{}, err
+	}
+	return s.modelCatalog(ctx, agentID, scope, refresh)
 }
 
 func (s *Service) modelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
@@ -481,6 +490,9 @@ func credentialTypeFromScope(scope string) (string, bool) {
 }
 
 func (s *Service) modelCatalogScope(ctx context.Context, projectID string) (string, error) {
+	if _, ok := decodeAccountModelScope(projectID); ok {
+		return projectID, nil
+	}
 	// A credential scope has no backing project; keep it verbatim so its catalog
 	// caches under its own key instead of collapsing to the device-global scope.
 	if _, ok := credentialTypeFromScope(projectID); ok {
@@ -500,6 +512,25 @@ func (s *Service) modelCatalogScope(ctx context.Context, projectID string) (stri
 }
 
 func (s *Service) modelDiscoveryRequest(ctx context.Context, agentID, projectID, binary string) (ports.AgentModelDiscoveryRequest, error) {
+	if scope, ok := decodeAccountModelScope(projectID); ok {
+		request, err := s.modelDiscoveryRequest(ctx, agentID, scope.ProjectID, binary)
+		if err != nil {
+			return request, err
+		}
+		if s.accountModels != nil {
+			_, env, err := s.accountModels.CatalogLaunchEnv(ctx, domain.AgentHarness(agentID), "", scope.AccountID)
+			if err != nil {
+				return ports.AgentModelDiscoveryRequest{}, err
+			}
+			if request.Env == nil {
+				request.Env = map[string]string{}
+			}
+			for key, value := range env {
+				request.Env[key] = value
+			}
+		}
+		return request, nil
+	}
 	request := ports.AgentModelDiscoveryRequest{AgentID: agentID, Binary: binary}
 	// Credential-scoped discovery reflects a cloud session's pushed credential,
 	// not a local project: leave WorkingDir/Env empty and let the adapter unlock
@@ -545,7 +576,11 @@ func (s *Service) globalModelDiscoveryRequest(request ports.AgentModelDiscoveryR
 // RevalidateModels rediscovers a cache-first catalog after the normal read path
 // marks it old enough to refresh in the background.
 func (s *Service) RevalidateModels(ctx context.Context, agentID, projectID string) (ports.AgentModelCatalog, error) {
-	catalog, err := s.revalidateModels(ctx, agentID, projectID)
+	scope, err := s.accountModelScope(ctx, agentID, projectID, "", "")
+	if err != nil {
+		return ports.AgentModelCatalog{}, err
+	}
+	catalog, err := s.revalidateModels(ctx, agentID, scope)
 	if err != nil {
 		return catalog, err
 	}
@@ -616,7 +651,11 @@ func (s *Service) InvalidateProjectModelCatalogs(projectID string) {
 			return
 		}
 		for _, record := range records {
-			if record.ProjectID != projectID || s.ctx.Err() != nil {
+			scopeProjectID := record.ProjectID
+			if scope, ok := decodeAccountModelScope(scopeProjectID); ok {
+				scopeProjectID = scope.ProjectID
+			}
+			if scopeProjectID != projectID || s.ctx.Err() != nil {
 				continue
 			}
 			var catalog ports.AgentModelCatalog
@@ -979,6 +1018,15 @@ func catalogLastSuccess(catalog ports.AgentModelCatalog) time.Time {
 func (s *Service) saveCatalog(ctx context.Context, projectID string, catalog ports.AgentModelCatalog, generation, retryCount int64) error {
 	if s.cache == nil {
 		return nil
+	}
+	if scope, ok := decodeAccountModelScope(projectID); ok {
+		metadata := make(map[string]string, len(catalog.Metadata)+2)
+		for key, value := range catalog.Metadata {
+			metadata[key] = value
+		}
+		metadata["projectId"] = scope.ProjectID
+		metadata["accountId"] = scope.AccountID
+		catalog.Metadata = metadata
 	}
 	data, err := json.Marshal(catalog)
 	if err != nil {

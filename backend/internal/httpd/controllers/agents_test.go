@@ -338,3 +338,33 @@ func btoi(value bool) int {
 	}
 	return 0
 }
+
+type scopedAgentCatalog struct {
+	fakeAgentCatalog
+	sessionID domain.SessionID
+	accountID string
+}
+
+func (f *scopedAgentCatalog) ModelsForSession(ctx context.Context, agentID, projectID string, sessionID domain.SessionID, accountID string, refresh bool) (ports.AgentModelCatalog, error) {
+	f.sessionID, f.accountID = sessionID, accountID
+	return f.Models(ctx, agentID, projectID, refresh)
+}
+
+func TestAgentModelsUsesSessionAndTargetAccountScope(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		t.Run(method, func(t *testing.T) {
+			catalog := &scopedAgentCatalog{}
+			router := httpd.NewRouterWithControl(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, httpd.APIDeps{Agents: catalog}, httpd.ControlDeps{})
+			path := "/api/v1/agents/codex/models"
+			if method == http.MethodPost {
+				path += "/refresh"
+			}
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, httptest.NewRequest(method, path+"?projectId=project&sessionId=saved&accountId=target", nil))
+			status := recorder.Code
+			if status != http.StatusOK || catalog.sessionID != "saved" || catalog.accountID != "target" || catalog.modelProject != "project" || catalog.modelAgent != "codex" || catalog.modelRefresh != (method == http.MethodPost) {
+				t.Fatalf("status=%d catalog=%+v", status, catalog)
+			}
+		})
+	}
+}

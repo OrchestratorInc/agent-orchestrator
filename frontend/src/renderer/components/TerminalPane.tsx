@@ -1223,12 +1223,12 @@ function AttachedTerminal({
 	}, [initFailed, onFatal, onTerminalStateChange]);
 	const handleLinkOpen = useSessionBrowserLink(session);
 	const handleSessionLinkOpen = useSessionLinkNavigation(session?.hostId);
-	const restoreSession = useCallback(async () => {
+	const restoreSession = useCallback(async (normal = false) => {
 		if (!session?.id || !canRestoreSession || isRestoring) return;
 		setIsRestoring(true);
 		setRestoreError(undefined);
 		try {
-			const result = await restoreSessionById(session.id, session.hostId);
+			const result = await restoreSessionById(session.id, session.hostId, normal);
 			if (result.status === "not_resumable") {
 				setRestoreUnavailable(true);
 				return;
@@ -1359,7 +1359,8 @@ function AttachedTerminal({
 					canRestore={canRestoreSession}
 					error={restoreError}
 					isRestoring={isRestoring}
-					onRestore={restoreSession}
+					onRestore={() => { void restoreSession(); }}
+					onRestoreWithNormal={() => { void restoreSession(true); }}
 					session={session}
 					variant={
 						terminalTarget?.kind === "reviewer" ? "reviewer" : terminalTarget?.kind === "shell" ? "shell" : "session"
@@ -1483,12 +1484,13 @@ type TerminalEndedStripProps = {
 	error?: string;
 	isRestoring: boolean;
 	onRestore: () => void;
+	onRestoreWithNormal?: () => void;
 	reviewStatus?: "running" | "complete" | "delivered" | "failed" | "cancelled";
 	session?: WorkspaceSession;
 	variant: "reviewer" | "session" | "shell";
 };
 
-function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewStatus, session, variant }: TerminalEndedStripProps) {
+function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, onRestoreWithNormal, reviewStatus, session, variant }: TerminalEndedStripProps) {
 	const { t } = useTranslation();
 	const reviewDelivered = variant === "reviewer" && reviewStatus === "delivered";
 	const message = reviewDelivered
@@ -1512,6 +1514,12 @@ function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewS
 				</div>
 				{error && <div className="max-w-content-max truncate text-xs text-destructive">{error}</div>}
 				{variant === "session" && session ? <ResumeAgentControl session={session} /> : null}
+				{canRestore && error && session?.provider === "codex" && onRestoreWithNormal ? (
+					<button type="button" disabled={isRestoring} onClick={onRestoreWithNormal}
+						className="rounded-md border border-border px-2 py-1 text-xs" title={t("inspector.resumeWithNormalHint")}>
+						{t("inspector.resumeWithNormal")}
+					</button>
+				) : null}
 				{canRestore && (
 					<Tooltip>
 						<TooltipTrigger asChild>

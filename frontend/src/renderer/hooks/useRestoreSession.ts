@@ -41,11 +41,11 @@ function findCloudSession(
 	return undefined;
 }
 
-export function useRestoreSession(): (sessionId: string, hostId?: string) => Promise<RestoreSessionResult> {
+export function useRestoreSession(): (sessionId: string, hostId?: string, normal?: boolean) => Promise<RestoreSessionResult> {
 	const queryClient = useQueryClient();
 
 	return useCallback(
-		async (sessionId: string, hostId?: string) => {
+		async (sessionId: string, hostId?: string, normal = false) => {
 			const cloudSession = hostId ? undefined : findCloudSession(queryClient, sessionId);
 			const role = queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKeyForHost(hostId))
 				?.flatMap((workspace) => workspace.sessions)
@@ -86,6 +86,7 @@ export function useRestoreSession(): (sessionId: string, hostId?: string) => Pro
 			try {
 				const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/sessions/{sessionId}/restore", {
 					params: { path: { sessionId } },
+					...(normal ? { body: { speedMode: "normal" as const } } : {}),
 				});
 				if (error) {
 					const code = (error as { code?: string }).code;

@@ -1,3 +1,4 @@
+import { SpeedMenu, supportsSpeed } from "./SpeedMenu";
 /**
  * What the next turn will be sent with: model, reasoning effort, approval mode.
  *
@@ -91,10 +92,13 @@ export function TurnSettingsBar({
 	models,
 	settings,
 	harness,
+	showSpeed = true,
 	showApprovalMode = true,
 	approvalModes,
 	reroute,
 	onChange,
+	onRefreshModels,
+	modelCatalogError,
 	onRememberPermissions,
 	rememberPermissionsPending,
 	rememberPermissionsError,
@@ -111,6 +115,8 @@ export function TurnSettingsBar({
 	settings: TurnSettings;
 	/** The active provider selects its own supported permission vocabulary. */
 	harness?: string;
+	/** The cloud control plane has no serving-speed contract. */
+	showSpeed?: boolean;
 	/** Cloud permissions are fixed for the session, not a per-turn setting. */
 	showApprovalMode?: boolean;
 	approvalModes?: ApprovalMode[];
@@ -122,6 +128,8 @@ export function TurnSettingsBar({
 	 */
 	reroute?: ModelReroute;
 	onChange?: (next: TurnSettings) => void;
+	onRefreshModels?: () => void;
+	modelCatalogError?: string;
 	onRememberPermissions?: (mode: ApprovalMode) => Promise<unknown> | void;
 	rememberPermissionsPending?: boolean;
 	rememberPermissionsError?: string;
@@ -200,7 +208,7 @@ export function TurnSettingsBar({
 			: optionId;
 		void Promise.resolve(onChangeConfigOption(providerId, value)).catch(() => {});
 	};
-	const nativeModelMenu = Boolean(onChange && displayModels.length > 0 && grouped.model.length === 0);
+	const nativeModelMenu = Boolean(onChange && (displayModels.length > 0 || showSpeed && harness === "codex") && grouped.model.length === 0);
 	// A model with effort levels but no provider default would otherwise show no
 	// selected effort. AO picks a level and sets it, so what the picker shows is
 	// what the next turn uses.
@@ -260,9 +268,12 @@ export function TurnSettingsBar({
 				<div className="flex h-7 min-w-0 flex-wrap items-center gap-0.5">
 					{nativeModelMenu && onChange ? (
 						<ModelEffortPicker
+							showSpeed={showSpeed && harness === "codex"}
 							models={harness === "claude-code" ? displayModels.filter((model) => model.id !== "default") : displayModels}
 							settings={settings}
 							onChange={onChange}
+							onRefreshModels={onRefreshModels}
+							modelCatalogError={modelCatalogError}
 							disabled={optionDisabled}
 							modelLabel={modelLabel}
 							groupLabel={modelGroupLabel}
@@ -429,9 +440,12 @@ function claudeChoiceLabels(catalog: { id: string; displayName: string }[]) {
 }
 
 function ModelEffortPicker({
+	showSpeed,
 	models,
 	settings,
 	onChange,
+	onRefreshModels,
+	modelCatalogError,
 	disabled,
 	modelLabel,
 	groupLabel,
@@ -448,8 +462,11 @@ function ModelEffortPicker({
 	onChangeConfigOption,
 }: {
 	models: ChatModel[];
+	showSpeed?: boolean;
 	settings: TurnSettings;
 	onChange: (next: TurnSettings) => void;
+	onRefreshModels?: () => void;
+	modelCatalogError?: string;
 	disabled?: boolean;
 	modelLabel: string;
 	groupLabel: string;
@@ -487,6 +504,7 @@ function ModelEffortPicker({
 					className={TRIGGER_CLASS}
 				>
 					<span className="min-w-0 max-w-[38ch] truncate">{groupLabel}</span>
+					{showSpeed && settings.speedMode && settings.speedMode !== "normal" ? <span className="shrink-0"> · {t(settings.speedMode === "fast" ? "settings.models.speedFast" : "settings.models.speedUltrafast")}</span> : null}
 					{reroute ? (
 						// A mark, not a second name. Two truncated model names side by side is
 						// less legible than one readable name plus a flag that says it is not
@@ -499,7 +517,7 @@ function ModelEffortPicker({
 				</OptionMenuTrigger>
 			<OptionMenuContent align="start" className={CHAT_MENU_CLASS} onCloseAutoFocus={restoreComposerFocus}>
 				<OptionMenuSub>
-					<OptionMenuSubTrigger label="Model" value={modelLabel} />
+					<OptionMenuSubTrigger label="Model" value={modelLabel} disabled={models.length === 0} />
 					{/* Scroll on an inner strip: the surface utility caps height but wheel
 					    events do not reliably reach an outer overflow on nested submenus. */}
 					<OptionMenuSubContent scrollable className={CHAT_MENU_CLASS} onFocus={focusModelSearch}>
@@ -511,15 +529,19 @@ function ModelEffortPicker({
 									active={model.id === settings.model}
 									searchActive={model.id === searchActiveID}
 									radio
-									onSelect={() => onChange({ ...settings, model: model.id, reasoningEffort: undefined })}
+									onSelect={() => onChange({ ...settings, model: model.id, reasoningEffort: undefined, ...(showSpeed && settings.speedMode && !supportsSpeed(model.serviceTiers, settings.speedMode) ? { speedMode: "normal" as const } : {}) })}
 									className={cn("text-xs", model.id === settings.model ? "text-foreground" : "text-muted-foreground")}
 								>
-									{model.displayName}
+									<span className="flex min-w-0 flex-col"><span>{model.displayName}</span>
+									{showSpeed && settings.speedMode && !supportsSpeed(model.serviceTiers, settings.speedMode) ? <span className="text-xs text-muted-foreground">{t("settings.models.speedSwitchNormal")}</span> : null}</span>
 								</OptionMenuItem>
 							))}
 						</ModelMenuChoices>
 					</OptionMenuSubContent>
 				</OptionMenuSub>
+
+				{showSpeed ? <SpeedMenu value={settings.speedMode} tiers={models.find((model) => model.id === settings.model || !settings.model && model.default)?.serviceTiers}
+					disabled={disabled} unavailableReason={modelCatalogError} onRefresh={onRefreshModels} onChange={(speedMode) => onChange({ ...settings, speedMode })} /> : null}
 
 				{efforts.length > 0 || savedEffort ? (
 					<OptionMenuSub>

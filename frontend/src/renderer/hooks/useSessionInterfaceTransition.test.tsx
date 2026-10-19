@@ -1031,3 +1031,29 @@ describe("interface switch readiness", () => {
 		);
 	});
 });
+
+it.each(["completed", "failed"] as const)("refreshes account-specific conversation models only after a %s account handoff", async (phase) => {
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const catalogKey = ["conversation-models", "session-account"];
+	queryClient.setQueryData(catalogKey, { models: [] });
+	getMock.mockResolvedValue({ data: {
+		supported: true,
+		targetMode: "tui",
+		transition: {
+			id: "account-handoff",
+			sessionId: "session-account",
+			sourceMode: "chat",
+			targetMode: "chat",
+			targetAccountId: "codex-b",
+			policy: "interrupt",
+			phase,
+			createdAt: "2026-10-19T00:00:00Z",
+			updatedAt: "2026-10-19T00:00:01Z",
+		},
+	} });
+	const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+	const { result } = renderHook(() => useSessionInterfaceTransition("session-account"), { wrapper });
+	await waitFor(() => expect(result.current.transition?.phase).toBe(phase));
+	await waitFor(() => expect(result.current.settling).toBe(false));
+	expect(queryClient.getQueryState(catalogKey)?.isInvalidated).toBe(phase === "completed");
+});

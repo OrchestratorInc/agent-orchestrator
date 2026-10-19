@@ -1,3 +1,5 @@
+import { supportsSpeed } from "./chat/SpeedMenu";
+import type { SpeedMode } from "../types/conversation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	TaskComposerView,
@@ -67,6 +69,7 @@ type CreateTaskInput = {
 	agent?: DelegateAgent;
 	model?: string;
 	effort?: string;
+	speedMode?: SpeedMode;
 	mode?: "chat" | "tui";
 	approvalMode?: "bypass-permissions";
 	attachments?: FileAttachmentPayload[];
@@ -144,6 +147,7 @@ export function TaskComposer({
 	const [model, setModel] = useState("");
 	const [mode, setMode] = useState("");
 	const [effort, setEffort] = useState("");
+	const [speedMode, setSpeedMode] = useState<SpeedMode>("normal");
 	const [agent, setAgent] = useState("");
 	const [agentTouched, setAgentTouched] = useState(false);
 	const [modelTouched, setModelTouched] = useState(false);
@@ -221,6 +225,7 @@ export function TaskComposer({
 						agent: input.agent,
 						...(input.model ? { model: input.model } : {}),
 						...(input.effort !== undefined ? { effort: input.effort } : {}),
+						...(input.speedMode ? { speedMode: input.speedMode } : {}),
 						...(input.mode ? { mode: input.mode } : {}),
 						...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
 						...(input.attachments && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
@@ -271,6 +276,7 @@ export function TaskComposer({
 					displayName,
 					model: input.model,
 					...(input.effort ? { effort: input.effort } : {}),
+					...(input.speedMode ? { speedMode: input.speedMode } : {}),
 					...(input.mode ? { mode: input.mode } : {}),
 					...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
 					...(input.attachments && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
@@ -622,7 +628,10 @@ export function TaskComposer({
 		if (!effortTouched) setEffort(defaultEffortForSelectedAgent || cloudDefaultEffort);
 	}, [cloudDefaultEffort, defaultEffortForSelectedAgent, effortTouched]);
 
-	const isDirty = isPromptDirty || modelTouched || effortTouched || attachments.length > 0;
+	useEffect(() => setSpeedMode("normal"), [selectedAgent, projectId]);
+	const speedTiers = catalogModels.find((item) => item.id === selectedModel || !selectedModel && item.isDefault)?.serviceTiers;
+	const speedValid = speedMode === "normal" || selectedAgent === "codex" && !isCloudProject && supportsSpeed(speedTiers, speedMode);
+	const isDirty = isPromptDirty || modelTouched || effortTouched || speedMode !== "normal" || attachments.length > 0;
 	const handlePromptChange = useCallback((value: string) => {
 		const nextDirty = value.trim() !== "";
 		setIsPromptDirty((wasDirty) => (wasDirty === nextDirty ? wasDirty : nextDirty));
@@ -644,6 +653,7 @@ export function TaskComposer({
 		approvalMode?: "bypass-permissions",
 	) => {
 		if (!projectId || !canSubmit || isSubmitting) return;
+		if (!speedValid) { setError(t("settings.models.speedSelectionUnavailable")); return; }
 
 		setIsSubmitting(true);
 		setError(undefined);
@@ -666,6 +676,7 @@ export function TaskComposer({
 				model: requestedModel,
 				// Only explicit Codex picks set this; agent changes reset it, and TUI retries preserve it.
 				effort: requestedEffort,
+				speedMode: selectedAgent === "codex" && !isCloudProject ? speedMode : undefined,
 				mode: interfaceMode,
 				approvalMode,
 				attachments: attachmentPayloads.length > 0 ? attachmentPayloads : undefined,
@@ -818,7 +829,8 @@ export function TaskComposer({
 			renderAgentControl={(control) => <DesktopAgentControl {...control} hostId={hostId} manageView={isCloudProject ? "cloud" : "local"} />}
 			renderEffortControl={(control) => <TaskEffortPicker {...control} value={control.value || cloudDefaultEffort} defaultEffort={inheritedEffort || effortModel?.defaultEffort} availability={effortAvailability} />}
 			renderModelControl={(control) => <TaskModelPicker {...control} onRefresh={refreshSelectedModels}
-				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />}
+				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))}
+				speed={selectedAgent === "codex" ? { value: speedMode, onChange: setSpeedMode, unavailableReason: isCloudProject ? t("settings.models.speedCloudUnavailable") : undefined } : undefined} />}
 			showEffort={!requiresTuiFallback && (effortOptions.length > 0 || Boolean(effort && effort !== "default"))}
 		/>
 	);
@@ -880,7 +892,8 @@ function TaskModelPicker({
 	onModeChange,
 	onRefresh,
 	showFollowAgentAction,
-}: TaskComposerModelControl & { onRefresh: () => Promise<void>; showFollowAgentAction: boolean }) {
+	speed,
+}: TaskComposerModelControl & { onRefresh: () => Promise<void>; showFollowAgentAction: boolean; speed?: { value: SpeedMode; onChange(value: SpeedMode): void; unavailableReason?: string } }) {
 	const { t } = useTranslation();
 
 	// No agent selected: there is nothing loading and no model to choose yet, so
@@ -942,6 +955,7 @@ function TaskModelPicker({
 	return (
 		<AgentModelCombobox
 			key={agentId}
+			speed={speed}
 			aria-label={t("newTask.model")}
 			value={value}
 			models={displayModels}

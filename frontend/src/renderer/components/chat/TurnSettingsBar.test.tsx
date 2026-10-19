@@ -1710,6 +1710,22 @@ describe("effort default when the provider reports none", () => {
 	});
 });
 
+
+describe("Codex speed in the model menu", () => {
+ it("places Speed below Model and preserves reasoning when speed changes", async () => {
+  const onChange = vi.fn(); const user = userEvent.setup();
+  render(<TurnSettingsBar harness="codex" models={[{ id: "gpt-test", displayName: "GPT Test", default: true, efforts: ["high"], serviceTiers: [{ id: "priority", name: "Fast" }] }]} settings={{ model: "gpt-test", reasoningEffort: "high" }} onChange={onChange} />);
+  await user.click(screen.getByRole("button", { name: "Model and reasoning effort for the next turn" }));
+  const model = screen.getByRole("menuitem", { name: /^Model/ });
+  const speed = screen.getByRole("menuitem", { name: /^Speed/ });
+  expect(model.compareDocumentPosition(speed) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  await user.click(speed);
+  expect(screen.getByRole("menuitem", { name: /^Speed/ })).toHaveTextContent("Provider default");
+  fireEvent.click(screen.getByRole("menuitemradio", { name: /^Fast/ }));
+  expect(onChange).toHaveBeenCalledWith({ model: "gpt-test", reasoningEffort: "high", speedMode: "fast" });
+ });
+});
+
 it("presents Antigravity model variants as Codex-style model and effort choices with one approval picker", async () => {
 	const user = userEvent.setup();
 	const onChangeConfigOption = vi.fn();
@@ -1752,3 +1768,37 @@ it("presents Antigravity model variants as Codex-style model and effort choices 
 	expect(onChangeConfigOption).toHaveBeenCalledWith("mode", { value: "yolo" });
 	expect(options[0].choices).toHaveLength(4);
 });
+
+ it("makes an incompatible model switch explicit and applies model and Normal together", async () => {
+  const user = userEvent.setup(); const onChange = vi.fn();
+  render(<TurnSettingsBar harness="codex" settings={{ model: "fast-model", speedMode: "fast", reasoningEffort: "high" }} onChange={onChange} models={[
+   { id: "fast-model", displayName: "Fast Model", serviceTiers: [{ id: "priority", name: "Fast" }] },
+   { id: "plain-model", displayName: "Plain Model" },
+  ]} />);
+  const trigger = screen.getByRole("button", { name: "Model and reasoning effort for the next turn" });
+  expect(trigger).toHaveTextContent("Fast Model High · Fast");
+  await user.click(trigger);
+  await user.click(screen.getByRole("menuitem", { name: /^Model/ }));
+  await user.click(screen.getByRole("menuitemradio", { name: "Plain Model Switch model and use Normal" }));
+  expect(onChange).toHaveBeenCalledExactlyOnceWith({ model: "plain-model", speedMode: "normal", reasoningEffort: undefined });
+ });
+
+ it("keeps Codex speed recovery available when the model catalog fails", async () => {
+  const user = userEvent.setup(); const onChange = vi.fn(); const onRefreshModels = vi.fn();
+  render(<TurnSettingsBar harness="codex" models={[]} settings={{ model: "saved-model", speedMode: "fast", reasoningEffort: "high" }} onChange={onChange} onRefreshModels={onRefreshModels} modelCatalogError="Could not load account models" />);
+  const trigger = screen.getByRole("button", { name: "Model and reasoning effort for the next turn" });
+  expect(trigger).toHaveTextContent("saved-model High · Fast");
+  await user.click(trigger);
+  expect(screen.getByRole("menuitem", { name: /^Model/ })).toHaveAttribute("aria-disabled", "true");
+  await user.click(screen.getByRole("menuitem", { name: /^Speed/ }));
+  expect(screen.getAllByText("Could not load account models")).toHaveLength(2);
+  await user.click(screen.getByRole("menuitem", { name: "Refresh models" }));
+  expect(onRefreshModels).toHaveBeenCalledOnce();
+  await user.click(screen.getByRole("menuitem", { name: "Use Normal" }));
+  expect(onChange).toHaveBeenCalledExactlyOnceWith({ model: "saved-model", speedMode: "normal", reasoningEffort: "high" });
+ });
+
+ it("keeps an empty catalog hidden for harnesses without Codex speed controls", () => {
+  render(<TurnSettingsBar harness="claude-code" models={[]} settings={{}} onChange={vi.fn()} />);
+  expect(screen.queryByRole("button", { name: "Model and reasoning effort for the next turn" })).not.toBeInTheDocument();
+ });

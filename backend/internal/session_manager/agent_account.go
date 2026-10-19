@@ -114,6 +114,12 @@ func (m *Manager) preflightAccountTarget(
 		return err
 	}
 	config := restoredAgentConfig(rec, project.Config)
+	if config.SpeedMode.Accelerated() {
+		config, err = m.resolveAgentConfigForSession(ctx, ports.SpawnConfig{ProjectID: rec.ProjectID, Kind: rec.Kind, Harness: rec.Harness, AgentConfig: config, EffortOverride: true}, project.Config, rec.ID, transition.TargetAccountID)
+		if err != nil {
+			return err
+		}
+	}
 	pinRuntimePermissionEnv(env, config.Permissions)
 	m.augmentAgentRuntimeEnv(agent, env)
 	if err := m.preflightLaunchAuth(ctx, agent, rec, env); err != nil {
@@ -141,7 +147,7 @@ func (m *Manager) preflightAccountTarget(
 		}
 		return m.chat.PreflightChat(ctx, rec.Harness, config.Permissions)
 	}
-	return m.preflightTerminalLaunch(ctx, agent, rec, project, transition.NativeConversationID)
+	return m.preflightTerminalLaunchOnAccount(ctx, agent, rec, project, transition.NativeConversationID, transition.TargetAccountID)
 }
 
 // markAccountSwitch tells the conversation that a move which stopped the turn

@@ -1798,7 +1798,7 @@ func (q *Queries) ReserveQueuedConversationTurnForPromotion(ctx context.Context,
 
 const resetConversationAgentOverridesForSession = `-- name: ResetConversationAgentOverridesForSession :exec
 UPDATE conversations
-SET model = NULL, reasoning_effort = NULL, updated_at = ?
+SET model = NULL, reasoning_effort = NULL, speed_mode = NULL, updated_at = ?
 WHERE current_session_id = ?
 `
 
@@ -2287,7 +2287,7 @@ func (q *Queries) SelectConversationBranches(ctx context.Context, conversationID
 }
 
 const selectConversationByID = `-- name: SelectConversationByID :one
-SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode FROM conversations WHERE id = ? LIMIT 1
+SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode, speed_mode FROM conversations WHERE id = ? LIMIT 1
 `
 
 func (q *Queries) SelectConversationByID(ctx context.Context, id string) (Conversation, error) {
@@ -2329,12 +2329,13 @@ func (q *Queries) SelectConversationByID(ctx context.Context, id string) (Conver
 		&i.UsageCurrency,
 		&i.ActiveBranchID,
 		&i.OpencodeMode,
+		&i.SpeedMode,
 	)
 	return i, err
 }
 
 const selectConversationByReview = `-- name: SelectConversationByReview :one
-SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode FROM conversations WHERE current_review_id = ? LIMIT 1
+SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode, speed_mode FROM conversations WHERE current_review_id = ? LIMIT 1
 `
 
 func (q *Queries) SelectConversationByReview(ctx context.Context, currentReviewID sql.NullString) (Conversation, error) {
@@ -2376,12 +2377,13 @@ func (q *Queries) SelectConversationByReview(ctx context.Context, currentReviewI
 		&i.UsageCurrency,
 		&i.ActiveBranchID,
 		&i.OpencodeMode,
+		&i.SpeedMode,
 	)
 	return i, err
 }
 
 const selectConversationBySession = `-- name: SelectConversationBySession :one
-SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode FROM conversations WHERE current_session_id = ?
+SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode, speed_mode FROM conversations WHERE current_session_id = ?
 ORDER BY scope = 'project' DESC, created_at DESC, id DESC
 LIMIT 1
 `
@@ -2429,6 +2431,7 @@ func (q *Queries) SelectConversationBySession(ctx context.Context, currentSessio
 		&i.UsageCurrency,
 		&i.ActiveBranchID,
 		&i.OpencodeMode,
+		&i.SpeedMode,
 	)
 	return i, err
 }
@@ -3583,7 +3586,7 @@ func (q *Queries) SelectNextQueuedConversationTurn(ctx context.Context, conversa
 }
 
 const selectProjectConversation = `-- name: SelectProjectConversation :one
-SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode FROM conversations WHERE project_id = ? AND scope = 'project' LIMIT 1
+SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode, speed_mode FROM conversations WHERE project_id = ? AND scope = 'project' LIMIT 1
 `
 
 func (q *Queries) SelectProjectConversation(ctx context.Context, projectID *domain.ProjectID) (Conversation, error) {
@@ -3625,6 +3628,7 @@ func (q *Queries) SelectProjectConversation(ctx context.Context, projectID *doma
 		&i.UsageCurrency,
 		&i.ActiveBranchID,
 		&i.OpencodeMode,
+		&i.SpeedMode,
 	)
 	return i, err
 }
@@ -4383,13 +4387,14 @@ func (q *Queries) UpdateConversationTurnPlan(ctx context.Context, arg UpdateConv
 
 const updateConversationTurnSettings = `-- name: UpdateConversationTurnSettings :exec
 UPDATE conversations
-SET model = ?, reasoning_effort = ?, approval_mode = ?, opencode_mode = ?, updated_at = ?
+SET model = ?, reasoning_effort = ?, speed_mode = ?, approval_mode = ?, opencode_mode = ?, updated_at = ?
 WHERE id = ?
 `
 
 type UpdateConversationTurnSettingsParams struct {
 	Model           sql.NullString
 	ReasoningEffort sql.NullString
+	SpeedMode       sql.NullString
 	ApprovalMode    sql.NullString
 	OpencodeMode    string
 	UpdatedAt       time.Time
@@ -4404,6 +4409,7 @@ func (q *Queries) UpdateConversationTurnSettings(ctx context.Context, arg Update
 	_, err := q.db.ExecContext(ctx, updateConversationTurnSettings,
 		arg.Model,
 		arg.ReasoningEffort,
+		arg.SpeedMode,
 		arg.ApprovalMode,
 		arg.OpencodeMode,
 		arg.UpdatedAt,

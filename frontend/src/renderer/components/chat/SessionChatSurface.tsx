@@ -370,7 +370,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	// Only asked for once the conversation is actually readable: the catalog comes
 	// from the live controller, so there is nothing to fetch before then.
-	const { models: controllerModels } = useConversationModels(
+	const { models: controllerModels, refreshModels, modelCatalogError } = useConversationModels(
 		session.id,
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot) && !hasProviderModel,
 		hostId,
@@ -731,6 +731,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onResumeAgent={() => {
 					void commands.resumeAgent().catch(() => {});
 				}}
+				onResumeWithNormal={session.provider === "codex" && snapshot?.settings.speedMode !== "normal" ? () => {
+					void commands.resumeAgent(true).catch(() => {});
+				} : undefined}
 				resumingAgent={commands.resumingAgent || (renderSnapshot.controller.state === "hibernated" && controllerBusy)}
 				resumeError={commands.resumeError ?? controllerResumeError}
 				onOpenShell={onOpenShell}
@@ -738,6 +741,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				shellError={shellError}
 				settingsReady={!optimisticChat && (targetChatControllerReady || agentResuming) && (!can(renderSnapshot, "config_options") || configOptions.loaded)}
 				models={models}
+				onRefreshModels={refreshModels}
+				modelCatalogError={modelCatalogError}
 				onChooseSettings={hasProviderMode ? undefined : commands.chooseSettings}
 				onRememberPermissions={can(renderSnapshot, "config_options") && !configOptions.loaded
 					? undefined : projectPermissions.remember}

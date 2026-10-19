@@ -735,7 +735,26 @@ func (s *Service) lockOrchestratorProject(projectID domain.ProjectID) func() {
 
 // Restore relaunches a terminated session and returns the API-facing read model.
 func (s *Service) Restore(ctx context.Context, id domain.SessionID) (RestoreOutcome, error) {
-	res, err := s.manager.RestoreWithMode(ctx, id)
+	return s.restore(ctx, id, false)
+}
+
+// RestoreWithNormal restores a terminated session with an explicit Normal speed preference.
+func (s *Service) RestoreWithNormal(ctx context.Context, id domain.SessionID) (RestoreOutcome, error) {
+	return s.restore(ctx, id, true)
+}
+
+func (s *Service) restore(ctx context.Context, id domain.SessionID, normal bool) (RestoreOutcome, error) {
+	restore := s.manager.RestoreWithMode
+	if normal {
+		manager, ok := s.manager.(interface {
+			RestoreWithNormal(context.Context, domain.SessionID) (sessionmanager.RestoreResult, error)
+		})
+		if !ok {
+			return RestoreOutcome{}, apierr.Conflict("NORMAL_RECOVERY_UNSUPPORTED", "This build cannot recover with Normal speed", nil)
+		}
+		restore = manager.RestoreWithNormal
+	}
+	res, err := restore(ctx, id)
 	if err != nil {
 		return RestoreOutcome{}, toAPIError(err)
 	}
@@ -768,7 +787,26 @@ func (s *Service) ExitAgent(ctx context.Context, id domain.SessionID) (ExitAgent
 // ResumeAgent relaunches an exited agent without restoring a terminated
 // session or recreating its workspace.
 func (s *Service) ResumeAgent(ctx context.Context, id domain.SessionID) (ResumeAgentOutcome, error) {
-	res, err := s.manager.ResumeAgentWithMode(ctx, id)
+	return s.resumeAgent(ctx, id, false)
+}
+
+// ResumeAgentWithNormal resumes an exited agent with an explicit Normal speed preference.
+func (s *Service) ResumeAgentWithNormal(ctx context.Context, id domain.SessionID) (ResumeAgentOutcome, error) {
+	return s.resumeAgent(ctx, id, true)
+}
+
+func (s *Service) resumeAgent(ctx context.Context, id domain.SessionID, normal bool) (ResumeAgentOutcome, error) {
+	resume := s.manager.ResumeAgentWithMode
+	if normal {
+		manager, ok := s.manager.(interface {
+			ResumeAgentWithNormal(context.Context, domain.SessionID) (sessionmanager.RestoreResult, error)
+		})
+		if !ok {
+			return ResumeAgentOutcome{}, apierr.Conflict("NORMAL_RECOVERY_UNSUPPORTED", "This build cannot recover with Normal speed", nil)
+		}
+		resume = manager.ResumeAgentWithNormal
+	}
+	res, err := resume(ctx, id)
 	if err != nil {
 		return ResumeAgentOutcome{}, toAPIError(err)
 	}
@@ -1580,6 +1618,8 @@ func mapSessionError(err error) error {
 			"The agent could not resume its saved conversation. Your AO history is still available.", nil)
 	case errors.Is(err, ports.ErrAgentAuthRequired):
 		return apierr.Conflict("AGENT_AUTH_REQUIRED", "The agent is installed but the project credential was rejected", nil)
+	case errors.Is(err, ports.ErrUnsupportedSpeed):
+		return apierr.Invalid("UNSUPPORTED_SPEED_MODE", err.Error(), nil)
 	case errors.Is(err, ports.ErrUnsupportedEffort):
 		return apierr.Invalid("UNSUPPORTED_EFFORT", err.Error(), nil)
 	case errors.Is(err, ports.ErrModelCapabilitiesUnavailable):

@@ -34,10 +34,11 @@ export function ResumeAgentControl({
 	const resuming = useIsMutating({ mutationKey: ["resume-agent", hostId ?? "local", session.id] }) > 0;
 	const resume = useMutation({
 		mutationKey: ["resume-agent", hostId ?? "local", session.id],
-		mutationFn: async () => {
+		mutationFn: async (normal = false) => {
 			if (usePreviewData) return;
 			const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/resume-agent", {
 				params: { path: { sessionId: session.id } },
+				...(normal ? { body: { speedMode: "normal" as const } } : {}),
 			});
 			if (error) throw new Error(apiErrorMessage(error, `Failed to resume agent (${response.status})`));
 			return data;
@@ -69,7 +70,7 @@ export function ResumeAgentControl({
 			<Button
 				className={cn("shrink-0", className)}
 				disabled={resuming}
-				onClick={() => resume.mutate()}
+				onClick={() => resume.mutate(false)}
 				size="sm"
 				type="button"
 				variant="outline"
@@ -77,6 +78,12 @@ export function ResumeAgentControl({
 				<Play className="size-icon-sm" aria-hidden="true" />
 				{t("inspector.resumeAgent")}
 			</Button>
+			{session.provider === "codex" && error ? (
+				<Button className={cn("shrink-0", className)} disabled={resuming} size="sm" type="button" variant="outline"
+					title={t("inspector.resumeWithNormalHint")} onClick={() => resume.mutate(true)}>
+					{t("inspector.resumeWithNormal")}
+				</Button>
+			) : null}
 			{error ? (
 				<p className="mt-2 text-xs leading-normal text-error" role="status">
 					{error}

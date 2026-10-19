@@ -663,11 +663,12 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	const resumingAgent = useIsMutating({ mutationKey: ["resume-agent", hostId ?? "local", sessionId] }) > 0;
 	const resume = useMutation({
 		mutationKey: ["resume-agent", hostId ?? "local", sessionId],
-		mutationFn: async () => {
+		mutationFn: async (normal = false) => {
 			const { data, error, response } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/resume-agent",
 				{
 					params: { path: { sessionId: sessionId as string } },
+					...(normal ? { body: { speedMode: "normal" as const } } : {}),
 				},
 			);
 			if (error)
@@ -1019,7 +1020,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			content?: Record<string, unknown>,
 		) => resolveInput.mutateAsync({ requestId, action, content }),
 		interrupt: () => interrupt.mutate({ targetSessionId: sessionId as string }),
-		resumeAgent: () => resume.mutateAsync(),
+		resumeAgent: (normal = false) => resume.mutateAsync(normal),
 		resumingAgent,
 		resumeError: resume.error ? apiErrorMessage(resume.error) : undefined,
 		compact: () => compact.mutateAsync(),
@@ -1255,10 +1256,12 @@ export function useConversationModels(sessionId: string | undefined, enabled: bo
 		},
 	});
 	return {
-		// An empty list is a real answer: this agent offers no choice, so the picker
-		// hides itself rather than showing an error the user cannot act on.
+		// Empty may mean no choices or a failed lookup. Keep refresh and Normal
+		// recovery available independently, and let the picker explain failures.
 		models: query.data ?? [],
 		isLoading: query.isLoading,
+		modelCatalogError: query.error ? apiErrorMessage(query.error, "Unable to load models. Refresh models or use Normal.") : undefined,
+		refreshModels: () => { void query.refetch(); },
 	};
 }
 
@@ -1498,6 +1501,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 		settings: {
 			model: wire.settings?.model || undefined,
 			reasoningEffort: wire.settings?.reasoningEffort || undefined,
+			speedMode: wire.settings?.speedMode || undefined,
 			approvalMode: (wire.settings?.approvalMode as ApprovalMode | undefined) || undefined,
 		},
 		// Absent means the provider has not reported, which the meter renders as

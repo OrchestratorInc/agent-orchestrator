@@ -332,6 +332,10 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Mode = mode
+	if !in.SpeedMode.Valid() {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "UNSUPPORTED_SPEED_MODE", "speedMode must be normal, fast, or ultrafast", nil)
+		return
+	}
 	if !in.ApprovalMode.Valid() {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_APPROVAL_MODE", "approvalMode is invalid", nil)
 		return
@@ -368,7 +372,7 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		keyless.Attachments = nil
 		requestHash = clientRequestFingerprint("session", keyless, attachments)
 	}
-	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, RequestedMode: in.Mode, Prompt: in.Prompt, RequestedOutput: in.RequestedOutput, DisplayName: displayName, Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, EffortOverride: strings.TrimSpace(in.Effort) != "", ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash})
+	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, RequestedMode: in.Mode, Prompt: in.Prompt, RequestedOutput: in.RequestedOutput, DisplayName: displayName, Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, SpeedMode: in.SpeedMode, Permissions: in.ApprovalMode}, EffortOverride: strings.TrimSpace(in.Effort) != "", ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash})
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -1833,14 +1837,61 @@ func (c *SessionsController) setAutoReview(w http.ResponseWriter, r *http.Reques
 	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, sess)})
 }
 
+type normalRestoreService interface {
+	RestoreWithNormal(context.Context, domain.SessionID) (sessionsvc.RestoreOutcome, error)
+}
+
+type normalResumeAgentService interface {
+	ResumeAgentWithNormal(context.Context, domain.SessionID) (sessionsvc.ResumeAgentOutcome, error)
+}
+
+func decodeResumeSpeed(w http.ResponseWriter, r *http.Request) (domain.SpeedMode, bool) {
+	var in ResumeSessionRequest
+	if err := decodeJSON(r, &in); err != nil && !errors.Is(err, io.EOF) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return "", false
+	}
+	if in.SpeedMode != "" && in.SpeedMode != domain.SpeedModeNormal {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "UNSUPPORTED_SPEED_MODE", "Recovery speedMode must be normal", nil)
+		return "", false
+	}
+	return in.SpeedMode, true
+}
+
+func runSessionRecovery[T any](w http.ResponseWriter, r *http.Request,
+	resume, resumeWithNormal func(context.Context, domain.SessionID) (T, error),
+) (T, bool) {
+	var zero T
+	speedMode, ok := decodeResumeSpeed(w, r)
+	if !ok {
+		return zero, false
+	}
+	if speedMode == domain.SpeedModeNormal {
+		if resumeWithNormal == nil {
+			envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "NORMAL_RECOVERY_UNSUPPORTED", "This build cannot recover with Normal speed", nil)
+			return zero, false
+		}
+		resume = resumeWithNormal
+	}
+	out, err := resume(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return zero, false
+	}
+	return out, true
+}
+
 func (c *SessionsController) restore(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/restore")
 		return
 	}
-	out, err := c.Svc.Restore(r.Context(), sessionID(r))
-	if err != nil {
-		envelope.WriteError(w, r, err)
+	var resumeWithNormal func(context.Context, domain.SessionID) (sessionsvc.RestoreOutcome, error)
+	if svc, ok := c.Svc.(normalRestoreService); ok {
+		resumeWithNormal = svc.RestoreWithNormal
+	}
+	out, ok := runSessionRecovery(w, r, c.Svc.Restore, resumeWithNormal)
+	if !ok {
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, RestoreSessionResponse{OK: true, SessionID: sessionID(r), RestoreMode: out.Mode, Session: sessionView(r, out.Session)})
@@ -1877,9 +1928,12 @@ func (c *SessionsController) resumeAgent(w http.ResponseWriter, r *http.Request)
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/resume-agent")
 		return
 	}
-	out, err := c.Svc.ResumeAgent(r.Context(), sessionID(r))
-	if err != nil {
-		envelope.WriteError(w, r, err)
+	var resumeWithNormal func(context.Context, domain.SessionID) (sessionsvc.ResumeAgentOutcome, error)
+	if svc, ok := c.Svc.(normalResumeAgentService); ok {
+		resumeWithNormal = svc.ResumeAgentWithNormal
+	}
+	out, ok := runSessionRecovery(w, r, c.Svc.ResumeAgent, resumeWithNormal)
+	if !ok {
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, ResumeAgentResponse{
@@ -2153,6 +2207,10 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		}
 		in.Mode = mode
 	}
+	if !in.SpeedMode.Valid() {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "UNSUPPORTED_SPEED_MODE", "speedMode must be normal, fast, or ultrafast", nil)
+		return
+	}
 	if !in.ApprovalMode.Valid() {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_APPROVAL_MODE", "approvalMode is invalid", nil)
 		return
@@ -2179,6 +2237,7 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		RequestedAgent:    in.Agent,
 		Model:             domain.SanitizeControlChars(strings.TrimSpace(in.Model)),
 		Effort:            sanitizedOptionalString(in.Effort),
+		SpeedMode:         in.SpeedMode,
 		ApprovalMode:      in.ApprovalMode,
 		RequestedMode:     in.Mode,
 		Attachments:       attachments,

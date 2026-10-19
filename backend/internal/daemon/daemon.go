@@ -572,7 +572,6 @@ func Run() error {
 		CodexOperationGate: codexOperationGate,
 	}
 	agentSvc = agentsvc.NewWithDeps(agentDeps)
-	agentSvc.WarmModelCatalogs(ctx)
 
 	persistentHostsReconciled := make(chan struct{})
 	reviewerChatsRecovered := make(chan struct{})
@@ -622,6 +621,8 @@ func Run() error {
 	}
 	sessionSvc.SetComputerLoginCheck(agentAccountSvc.RunsOnComputerLogin)
 	if agentSvc != nil {
+		agentSvc.SetAccountModelEnvironment(agentAccountSvc)
+		agentSvc.WarmModelCatalogs(ctx)
 		agentSvc.SetSavedDefaultSignIn(agentAccountSvc.DefaultSignIn)
 		agentAccountSvc.SetDefaultChanged(func(p domain.AgentAccountProvider) {
 			harness := map[domain.AgentAccountProvider]domain.AgentHarness{

@@ -1268,11 +1268,36 @@ func TestClaudeCatalogFingerprintUsesOnlyResolvedSettings(t *testing.T) {
 func TestCatalogFingerprintKeepsTheExecutableOnlyValueForConfiglessAgents(t *testing.T) {
 	dir := t.TempDir()
 	writeClaudeSettings(t, dir, "opus")
-	// codex reads no configuration, so its fingerprint must stay byte-identical
-	// to the executable fingerprint earlier daemons cached under.
-	got := CatalogFingerprint(context.Background(), "codex", "codex", dir, nil)
+	// An agent without discovery configuration keeps the executable-only
+	// fingerprint earlier daemons cached under.
+	got := CatalogFingerprint(context.Background(), "test-configless-agent", "codex", dir, nil)
 	if want := BinaryVersion(context.Background(), "codex"); got != want {
 		t.Fatalf("fingerprint = %q, want the executable fingerprint %q", got, want)
+	}
+}
+
+func TestCodexCatalogFingerprintTracksSelectedAccountAndLogin(t *testing.T) {
+	firstHome, secondHome := t.TempDir(), t.TempDir()
+	request := ports.AgentModelDiscoveryRequest{AgentID: "codex", WorkingDir: t.TempDir(), Env: map[string]string{"CODEX_HOME": firstHome}}
+	discoverer := Discoverer{}
+	first := discoverer.CatalogFingerprint(context.Background(), request)
+	request.Env["CODEX_HOME"] = secondHome
+	second := discoverer.CatalogFingerprint(context.Background(), request)
+	if first == second {
+		t.Fatal("different account folders share a catalog fingerprint")
+	}
+	for _, file := range []string{"auth.json", "config.toml"} {
+		if err := os.WriteFile(filepath.Join(secondHome, file), []byte("changed-test-input"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		next := discoverer.CatalogFingerprint(context.Background(), request)
+		if next == second {
+			t.Fatalf("changing %s did not invalidate account capabilities", file)
+		}
+		if strings.Contains(next, secondHome) || strings.Contains(next, "changed-test-input") {
+			t.Fatal("catalog fingerprint exposes account paths or credentials")
+		}
+		second = next
 	}
 }
 

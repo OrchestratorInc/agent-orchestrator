@@ -595,7 +595,8 @@ func discoverCodexCatalog(ctx context.Context, request ports.AgentModelDiscovery
 		normalized = append(normalized, ports.AgentModelInfo{
 			ID: id, Label: label, Provider: provider, IsDefault: item.Default,
 			Efforts: append([]string(nil), item.Efforts...), DefaultEffort: item.DefaultEffort,
-			Inputs: modelInputs(item.Inputs),
+			ServiceTiers: append([]ports.ModelServiceTier(nil), item.ServiceTiers...),
+			Inputs:       modelInputs(item.Inputs),
 		})
 	}
 	if len(normalized) == 0 {
@@ -863,6 +864,19 @@ func CatalogFingerprint(ctx context.Context, agentID, binary, workingDir string,
 // discoveryConfigInputs returns the configuration an agent's discovery consults,
 // or "" when the catalog depends on the binary alone.
 func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env map[string]string) string {
+	if agentID == "codex" {
+		home := envValue(env, "CODEX_HOME")
+		if home == "" {
+			userHome, _ := os.UserHomeDir()
+			home = filepath.Join(userHome, ".codex")
+		}
+		// Catalog tiers belong to the selected login and effective configuration.
+		// Persist only the digest, never credentials or account-folder paths.
+		return "codex-account-v1=" + fingerprintConfigPaths([]string{
+			filepath.Join(home, "auth.json"), filepath.Join(home, "config.toml"),
+			filepath.Join(workingDir, ".codex", "config.toml"),
+		}) + ";home=" + home
+	}
 	if agentID == "unreal-agent" {
 		provider, selected := unrealConfiguredModel(env)
 		return "provider=" + provider + ";model=" + selected

@@ -51,6 +51,7 @@ type conversation struct {
 	threadID        string
 	historyParentID string
 	providerScopeID string
+	workspacePath   string
 	readOnly        bool
 	disableNetwork  bool
 	// launchMode is the permission mode the thread started or resumed with;
@@ -323,6 +324,13 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 		// must not produce a second turn.
 		params["clientUserMessageId"] = msg.ClientMessageID
 	}
+	tier, err := c.speedTier(ctx, msg.Settings.Model, msg.Settings.SpeedMode)
+	if err != nil {
+		return ports.ChatTurnRef{}, err
+	}
+	if msg.Settings.SpeedMode != "" {
+		params["serviceTier"] = tier
+	}
 	applyTurnSettings(params, msg.Settings, c.readOnly, c.disableNetwork)
 
 	var resp struct {
@@ -393,7 +401,7 @@ func turnSandboxPolicy(sandbox string) map[string]any {
 // account, and gated by entitlement that AO cannot see. A table in AO would be
 // wrong within a week.
 func (c *conversation) ListModels(ctx context.Context) ([]ports.ChatModel, error) {
-	models, err := listModels(ctx, c.conn)
+	models, err := listModels(ctx, c.conn, c.workspacePath)
 	if err != nil {
 		return nil, err
 	}
@@ -412,18 +420,19 @@ func (c *conversation) ListModels(ctx context.Context) ([]ports.ChatModel, error
 	return models, nil
 }
 
-func listModels(ctx context.Context, connection *conn) ([]ports.ChatModel, error) {
+func listModels(ctx context.Context, connection *conn, workdir string) ([]ports.ChatModel, error) {
 	type modelListResponse struct {
 		Data []struct {
-			ID          string   `json:"id"`
-			Model       string   `json:"model"`
-			DisplayName string   `json:"displayName"`
-			Description string   `json:"description"`
-			IsDefault   bool     `json:"isDefault"`
-			Hidden      bool     `json:"hidden"`
-			DefaultEff  string   `json:"defaultReasoningEffort"`
-			Inputs      []string `json:"inputModalities"`
-			Efforts     []struct {
+			ID           string                   `json:"id"`
+			Model        string                   `json:"model"`
+			DisplayName  string                   `json:"displayName"`
+			Description  string                   `json:"description"`
+			IsDefault    bool                     `json:"isDefault"`
+			Hidden       bool                     `json:"hidden"`
+			DefaultEff   string                   `json:"defaultReasoningEffort"`
+			ServiceTiers []ports.ModelServiceTier `json:"serviceTiers"`
+			Inputs       []string                 `json:"inputModalities"`
+			Efforts      []struct {
 				ReasoningEffort string `json:"reasoningEffort"`
 			} `json:"supportedReasoningEfforts"`
 		} `json:"data"`
@@ -432,7 +441,14 @@ func listModels(ctx context.Context, connection *conn) ([]ports.ChatModel, error
 
 	var models []ports.ChatModel
 	var cursor string
-	for {
+	seenCursors := make(map[string]bool)
+	for page := 0; ; page++ {
+		// Accelerated turns consult this catalog before inference. A broken
+		// provider must not hold dispatch in an unbounded pagination loop.
+		if page >= 100 || seenCursors[cursor] {
+			return nil, errors.New("model/list pagination did not terminate")
+		}
+		seenCursors[cursor] = true
 		params := map[string]any{}
 		if cursor != "" {
 			params["cursor"] = cursor
@@ -467,7 +483,8 @@ func listModels(ctx context.Context, connection *conn) ([]ports.ChatModel, error
 			models = append(models, ports.ChatModel{
 				ID: id, DisplayName: display, Description: entry.Description,
 				Default: entry.IsDefault, Efforts: efforts, DefaultEffort: entry.DefaultEff,
-				Inputs: entry.Inputs,
+				ServiceTiers: entry.ServiceTiers,
+				Inputs:       entry.Inputs,
 			})
 		}
 		if resp.NextCursor == nil || *resp.NextCursor == "" {
@@ -475,6 +492,7 @@ func listModels(ctx context.Context, connection *conn) ([]ports.ChatModel, error
 		}
 		cursor = *resp.NextCursor
 	}
+	filterSpeedTiers(ctx, connection, models, workdir)
 	return models, nil
 }
 

@@ -417,6 +417,7 @@ export interface ChatWorkspaceProps {
 	onContinueTurn?: () => Promise<unknown> | void;
 	commandError?: string;
 	onResumeAgent?: () => void | Promise<unknown>;
+	onResumeWithNormal?: () => void | Promise<unknown>;
 	resumingAgent?: boolean;
 	resumeError?: string;
 	onOpenShell?: () => void;
@@ -429,6 +430,8 @@ export interface ChatWorkspaceProps {
 	busy?: boolean;
 	/** The provider's model catalog. Empty hides the model control. */
 	models?: ChatModel[];
+	onRefreshModels?: () => void;
+	modelCatalogError?: string;
 	/** The AO session this surface renders for. Used to attach the reviewer pane. */
 	session?: WorkspaceSession;
 	/** Refresh the owning workspace cache after the shared primary tab is renamed. */
@@ -675,6 +678,7 @@ function ChatWorkspaceContent({
 	onContinueTurn,
 	commandError,
 	onResumeAgent,
+	onResumeWithNormal,
 	resumingAgent,
 	resumeError,
 	onOpenShell,
@@ -684,6 +688,8 @@ function ChatWorkspaceContent({
 	onSessionLinkOpen,
 	busy,
 	models,
+	onRefreshModels,
+	modelCatalogError,
 	onChooseSettings,
 	onRememberPermissions,
 	showApprovalMode,
@@ -1349,6 +1355,8 @@ function ChatWorkspaceContent({
 			settingsReady && (onChooseSettings || onChooseConfigOption) ? (
 				<TurnSettingsBar
 					models={models ?? []}
+					onRefreshModels={onRefreshModels}
+					modelCatalogError={modelCatalogError}
 					settings={stableSettings}
 					onRememberPermissions={onRememberPermissions}
 					rememberPermissionsPending={rememberPermissionsPending}
@@ -1356,6 +1364,7 @@ function ChatWorkspaceContent({
 					rememberedPermissionMode={rememberedPermissionMode}
 					harness={snapshot.harness}
 					showApprovalMode={showApprovalMode ?? !session?.cloud}
+					showSpeed={!session?.cloud}
 					approvalModes={approvalModes}
 					reroute={stableModelReroute}
 					onChange={newWorkDisabled ? undefined : onChooseSettings}
@@ -1383,6 +1392,8 @@ function ChatWorkspaceContent({
 			configOptions,
 			controllerTransitioning,
 			models,
+			onRefreshModels,
+			modelCatalogError,
 			newWorkDisabled,
 			session?.provisionState,
 			onChooseConfigOption,
@@ -1691,12 +1702,22 @@ function ChatWorkspaceContent({
 							{t("chat.draft.storageUnavailable")}
 						</div>
 					) : null}
+					{startupState === "failed" && onResumeWithNormal && !newWorkDisabled ? (
+						<div className="shrink-0 border-b border-border px-4 py-2">
+							<Button type="button" size="sm" variant="outline" disabled={resumingAgent}
+								title={t("inspector.resumeWithNormalHint")}
+								onClick={() => { void Promise.resolve().then(onResumeWithNormal).catch(() => {}); }}>
+								{t("inspector.resumeWithNormal")}
+							</Button>
+						</div>
+					) : null}
 					<ControllerBanner
 						controller={snapshot.controller}
 						provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
 						transitioning={controllerTransitioning || agentResuming}
 						automaticWakePending={suppressStopped}
 						onResume={newWorkDisabled ? undefined : onResumeAgent}
+						onResumeWithNormal={newWorkDisabled ? undefined : onResumeWithNormal}
 						resuming={resumingAgent}
 						resumeError={resumeError}
 						onOpenShell={onOpenShell}
@@ -2252,6 +2273,7 @@ function ControllerBanner({
 	transitioning,
 	automaticWakePending,
 	onResume,
+	onResumeWithNormal,
 	resuming,
 	resumeError,
 	onOpenShell,
@@ -2263,12 +2285,14 @@ function ControllerBanner({
 	transitioning?: boolean;
 	automaticWakePending?: boolean;
 	onResume?: () => void | Promise<unknown>;
+	onResumeWithNormal?: () => void | Promise<unknown>;
 	resuming?: boolean;
 	resumeError?: string;
 	onOpenShell?: () => void;
 	openingShell?: boolean;
 	shellError?: string;
 }) {
+	const { t } = useTranslation();
 	// Startup failures use the checklist's Retry action.
 	if (provisionState === "provisioning" || provisionState === "failed") return null;
 	const waking = Boolean(resuming && controller.state === "stopped");
@@ -2341,6 +2365,13 @@ function ControllerBanner({
 									disabled={resuming}
 								>
 									{resuming ? "Resuming…" : "Resume agent"}
+								</Button>
+							) : null}
+							{onResumeWithNormal ? (
+								<Button type="button" size="sm" variant="outline" disabled={resuming}
+									title={t("inspector.resumeWithNormalHint")}
+									onClick={() => { void Promise.resolve().then(onResumeWithNormal).catch(() => {}); }}>
+									{t("inspector.resumeWithNormal")}
 								</Button>
 							) : null}
 							{onOpenShell ? (
