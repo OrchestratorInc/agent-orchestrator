@@ -288,6 +288,12 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		return advisory, nil
 	}
 	advisory.LatestVersion = parsedLatest.display
+	if qualified, ok := qualifiedVersions[target]; ok && current.display == qualified && comparison < 0 {
+		// Newer releases are refused at launch until qualified, so updating
+		// would break the harness. Report the qualified release as current.
+		advisory.LatestVersion = current.display
+		comparison = 0
+	}
 	switch {
 	case comparison < 0:
 		advisory.Status = UpdateStatusBehindLatest
@@ -300,6 +306,12 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		advisory.Reason = ""
 	}
 	return advisory, nil
+}
+
+// qualifiedVersions pins harnesses whose integration admits only one native
+// release; AO does not offer updates past it.
+var qualifiedVersions = map[Target]string{
+	TargetDockerAgent: "1.150.0",
 }
 
 // vendorMaintainable reports whether the harness can update the binary

@@ -27,3 +27,20 @@ func TestRejectsTerminalEvenWithTaskAndNativeIdentity(t *testing.T) {
 		t.Fatal("unproven interface handoff")
 	}
 }
+
+func TestDefaultConfigUsesAvailableProviders(t *testing.T) {
+	for _, key := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"} {
+		t.Setenv(key, "")
+	}
+	if _, err := DefaultConfig(nil); err == nil {
+		t.Fatal("default config without a provider key")
+	}
+	b, err := DefaultConfig(map[string]string{"OPENAI_API_KEY": "key", "GEMINI_API_KEY": "key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := string(b)
+	if !strings.Contains(config, "root:\n    model: gpt-5.6\n") || !strings.Contains(config, "provider: google") || strings.Contains(config, "anthropic") {
+		t.Fatalf("unexpected default config:\n%s", config)
+	}
+}

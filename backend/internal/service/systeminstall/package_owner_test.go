@@ -200,3 +200,24 @@ func TestNPMInstallerHarnessUpdatesThroughVendorCommand(t *testing.T) {
 		t.Fatal("another harness's installer claimed an npm layout")
 	}
 }
+
+// Docker Agent Chat admits only its qualified release, so a newer Homebrew
+// formula must not be offered as an update.
+func TestUpdateAdvisoryHoldsQualifiedDockerAgentRelease(t *testing.T) {
+	binary := writeFileAt(t, filepath.Join(t.TempDir(), "homebrew", "Cellar", "docker-agent", "1.150.0", "bin", "docker-agent"), "")
+	s := newTestService("darwin", "brew")
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: binary, Output: "docker-agent version v1.150.0"}, nil
+	})
+	s.ownsInstallation = func(_ context.Context, _ string, method, pkg string, cask bool) (bool, error) {
+		return method == "homebrew" && pkg == "docker-agent" && !cask, nil
+	}
+	s.managedVersion = fixedManagedVersion("1.151.0", nil)
+	advisory, err := s.UpdateAdvisory(context.Background(), TargetDockerAgent, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if advisory.Status != UpdateStatusCurrent || advisory.LatestVersion != "1.150.0" {
+		t.Fatalf("advisory = %+v", advisory)
+	}
+}

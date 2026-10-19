@@ -59,7 +59,8 @@ func TestContextualConfigValidation(t *testing.T) {
 		env          map[string]string
 		wantError    bool
 	}{
-		{name: "missing", wantError: true},
+		{name: "missing config and provider key", wantError: true},
+		{name: "provider key uses AO default config", env: map[string]string{"GEMINI_API_KEY": "key"}},
 		{name: "relative", env: map[string]string{dockeragent.ConfigEnv: "native.yaml"}, wantError: true},
 		{name: "nonexistent", env: map[string]string{dockeragent.ConfigEnv: filepath.Join(dir, "missing.yaml")}, wantError: true},
 		{name: "directory", env: map[string]string{dockeragent.ConfigEnv: dir}, wantError: true},
@@ -67,9 +68,10 @@ func TestContextualConfigValidation(t *testing.T) {
 		{name: "trimmed daemon config", daemonConfig: "  " + config + " \n"},
 		{name: "session config", env: map[string]string{dockeragent.ConfigEnv: config}},
 		{name: "session overrides invalid daemon config", daemonConfig: "relative.yaml", env: map[string]string{dockeragent.ConfigEnv: config}},
-		{name: "explicit empty override", daemonConfig: config, env: map[string]string{dockeragent.ConfigEnv: ""}, wantError: true},
+		{name: "explicit empty override without key", daemonConfig: config, env: map[string]string{dockeragent.ConfigEnv: ""}, wantError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			clearProviderKeys(t)
 			t.Setenv(dockeragent.ConfigEnv, tc.daemonConfig)
 			err := validator.ValidateEnvironment(context.Background(), tc.env)
 			if (err != nil) != tc.wantError {
@@ -174,6 +176,7 @@ func TestPrivateHookPreservesNativeConfigAndRefreshesRestoreContext(t *testing.T
 }
 
 func TestConfigureFailsClosed(t *testing.T) {
+	clearProviderKeys(t)
 	for _, cfg := range []acpdriver.LaunchConfig{
 		{}, {Env: map[string]string{dockeragent.ConfigEnv: "relative.yaml"}},
 		{DataDir: t.TempDir(), SessionID: "s", Env: map[string]string{dockeragent.ConfigEnv: t.TempDir()}},
@@ -206,5 +209,42 @@ func TestUnsupportedTurnSettingsAreRejected(t *testing.T) {
 		if got := sessionMode(mode); got != want {
 			t.Fatalf("%s: %s", mode, got)
 		}
+	}
+}
+
+func clearProviderKeys(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"} {
+		t.Setenv(key, "")
+	}
+}
+
+// Without AO_DOCKER_AGENT_CONFIG, AO writes a private default config for the
+// available provider and launches Docker Agent with it.
+func TestConfigureWritesDefaultConfigFromProviderKey(t *testing.T) {
+	clearProviderKeys(t)
+	t.Setenv(dockeragent.ConfigEnv, "")
+	cfg := acpdriver.LaunchConfig{DataDir: t.TempDir(), SessionID: "s", WorkspacePath: t.TempDir(), Env: map[string]string{"GEMINI_API_KEY": "secret-value-123"}}
+	args, _, err := configure(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config string
+	for i, arg := range args {
+		if arg == "acp" && i+1 < len(args) {
+			config = args[i+1]
+		}
+	}
+	b, err := os.ReadFile(config)
+	if err != nil || !filepath.IsAbs(config) || !strings.HasPrefix(config, cfg.DataDir) {
+		t.Fatalf("default config %q not written: %v", config, err)
+	}
+	for _, want := range []string{"provider: google", "model: gemini-flash-lite-latest", "model: gemini-flash-latest", "type: filesystem", "type: shell"} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("default config missing %q:\n%s", want, b)
+		}
+	}
+	if strings.Contains(string(b), "secret-value-123") {
+		t.Fatal("default config must not embed credentials")
 	}
 }

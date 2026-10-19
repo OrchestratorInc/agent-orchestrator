@@ -66,6 +66,8 @@ func validateEnvironment(ctx context.Context, env map[string]string) error {
 	return nil
 }
 
+// nativeConfig returns the user's selected config, or "" when AO's generated
+// default applies; the default needs a provider key it can use.
 func nativeConfig(ctx context.Context, env map[string]string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -75,6 +77,12 @@ func nativeConfig(ctx context.Context, env map[string]string) (string, error) {
 		config = value
 	}
 	config = strings.TrimSpace(config)
+	if config == "" {
+		if _, err := dockeragent.DefaultConfig(env); err != nil {
+			return "", err
+		}
+		return "", nil
+	}
 	if !filepath.IsAbs(config) {
 		return "", fmt.Errorf("%s must name an absolute existing Docker Agent YAML config", dockeragent.ConfigEnv)
 	}
@@ -105,6 +113,16 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 	dir := filepath.Join(cfg.DataDir, "agent-runtime", "docker-agent", fmt.Sprintf("%x", owner))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, nil, err
+	}
+	if config == "" {
+		defaultConfig, err := dockeragent.DefaultConfig(cfg.Env)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
+		}
+		config = filepath.Join(dir, "agent.yaml")
+		if err := os.WriteFile(config, defaultConfig, 0o600); err != nil {
+			return nil, nil, err
+		}
 	}
 	contextBytes, err := json.Marshal(map[string]any{"hook_specific_output": map[string]string{"additional_context": cfg.SystemPrompt + "\n\nAO session working directory: " + cfg.WorkspacePath + ". Use this directory for workspace tools and task files; do not use the repository source checkout."}})
 	if err != nil {

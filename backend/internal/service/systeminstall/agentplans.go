@@ -267,7 +267,14 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
 		}
 	case TargetDockerAgent:
-		plans = []Plan{manualPlan(target, "Install the official standalone Docker Agent v1.150.0 binary on Unix and configure AO_DOCKER_AGENT_CONFIG with an absolute native YAML path. Docker Desktop is optional; AO supports native ACP Chat only.", agentDocumentationURLs[target])}
+		// Docker publishes the standalone CLI as a Homebrew formula. Chat admission
+		// still pins the native ACP version, so an unqualified upgrade is refused.
+		manual := manualPlan(target, "Install the official standalone Docker Agent v1.150.0 binary. Docker Desktop is optional; AO supports native ACP Chat only.", agentDocumentationURLs[target])
+		if s.goos == "darwin" || s.goos == "linux" {
+			plans = []Plan{s.planBrew(target, "docker-agent"), manual}
+		} else {
+			plans = []Plan{manual}
+		}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
 	default:
