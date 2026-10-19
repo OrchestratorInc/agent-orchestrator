@@ -364,6 +364,39 @@ func migrate(db *sql.DB) error {
 	return reconcileSchema(db)
 }
 
+// rejectNewerDatabase prevents an older daemon from opening a database that
+// was migrated by a newer build. goose.WithAllowMissing is intentionally used
+// for forward-compatible interleaved migrations, but it also allows a
+// downgrade to proceed against a schema whose generated queries this binary
+// cannot understand. That failure is otherwise delayed until a background
+// observer or the first user request, where it becomes an opaque SQL error.
+func rejectNewerDatabase(db *sql.DB, expected int64) error {
+	var gooseTable int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`,
+	).Scan(&gooseTable); err != nil {
+		return fmt.Errorf("inspect migration ledger: %w", err)
+	}
+	if gooseTable == 0 {
+		return nil
+	}
+
+	var applied int64
+	if err := db.QueryRow(
+		`SELECT COALESCE(MAX(version_id), 0) FROM goose_db_version WHERE is_applied = 1`,
+	).Scan(&applied); err != nil {
+		return fmt.Errorf("read migration ledger: %w", err)
+	}
+	if applied <= expected {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"database schema version %d is newer than this AO binary supports (version %d); update Agent Orchestrator before starting it",
+		applied, expected,
+	)
+}
+
 // repairRenumberedCueMigrationHistory preserves preview Cue databases that
 // recorded 0149, 0155, 0156, 0159, 0161, 0162, or 0163 for Cues before main
 // assigned those versions to other features. Move only an identifiable Cue
