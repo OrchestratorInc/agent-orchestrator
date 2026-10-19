@@ -2015,6 +2015,29 @@ BEGIN
 	// this column, so repair field databases that recorded 0132 without adding it.
 	{version: 132, table: "conversations", column: "opencode_mode",
 		addDDL: `ALTER TABLE conversations ADD COLUMN opencode_mode TEXT NOT NULL DEFAULT ''`},
+	// The Mastra development branch previously used 0213 for its harness
+	// constraint. Preserve that ledger while restoring main's physical 0213
+	// effects before later migrations and generated session reads execute.
+	{version: 213, table: "sessions", column: "stale_binary_since",
+		addDDL: `ALTER TABLE sessions ADD COLUMN stale_binary_since TIMESTAMP`},
+	{version: 213, table: "sessions", column: "stale_binary_version",
+		addDDL: `ALTER TABLE sessions ADD COLUMN stale_binary_version TEXT NOT NULL DEFAULT ''`},
+	{version: 213, table: "sessions", column: "stale_binary_launch",
+		addDDL: `ALTER TABLE sessions ADD COLUMN stale_binary_launch TEXT NOT NULL DEFAULT ''`},
+	{version: 213, table: "sessions", column: "stale_binary_switch_failed_at",
+		addDDL: `ALTER TABLE sessions ADD COLUMN stale_binary_switch_failed_at TIMESTAMP`,
+		postAdd: []string{`CREATE TRIGGER IF NOT EXISTS sessions_stale_binary_cdc_update
+AFTER UPDATE OF stale_binary_since, stale_binary_launch, stale_binary_switch_failed_at ON sessions
+WHEN OLD.stale_binary_since IS NOT NEW.stale_binary_since
+    OR OLD.stale_binary_launch IS NOT NEW.stale_binary_launch
+    OR OLD.stale_binary_switch_failed_at IS NOT NEW.stale_binary_switch_failed_at
+BEGIN
+    INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+    VALUES (NEW.project_id, NEW.id, 'session_updated',
+        json_object('id', NEW.id, 'conversationId',
+            (SELECT id FROM conversations WHERE current_session_id = NEW.id LIMIT 1)),
+        CURRENT_TIMESTAMP);
+END`}},
 }
 
 // reconcileSchema verifies that the columns in schemaRepairs physically exist

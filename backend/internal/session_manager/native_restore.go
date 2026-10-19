@@ -138,6 +138,15 @@ func (m *Manager) verifyNativeRestore(ctx context.Context, verifier ports.Native
 			return err
 		}
 		if ready {
+			// A receipt and retained viewport survive the child. Publish identity
+			// only while the exact replacement generation is still observable.
+			alive, err := m.exactTargetGenerationAlive(proofCtx, handle, domain.SessionID(cfg.Session.ID), domain.AgentGenerationID(generation))
+			if err != nil {
+				return fmt.Errorf("native restore process verification: %w", err)
+			}
+			if !alive {
+				return errors.New("native restore process exited before identity publication")
+			}
 			return nil
 		}
 		if err := sleepContext(proofCtx, 250*time.Millisecond); err != nil {

@@ -340,3 +340,35 @@ func TestInteractiveRestoreRequiresRenderedScreen(t *testing.T) {
 		t.Fatal("unsupported runtime not rolled back", raw.destroyed)
 	}
 }
+
+// A provider's current-generation receipt and composer are insufficient when
+// its exact supervised child has exited or the process probe is inconclusive.
+type receiptRestoreVerifier struct{}
+
+func (receiptRestoreVerifier) VerifyNativeRestore(context.Context, ports.RestoreConfig, string, string) (bool, error) {
+	return true, nil
+}
+
+func TestNativeRestoreReceiptRequiresLiveExactGeneration(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		alive     bool
+		probeErr  error
+		wantError bool
+	}{
+		{name: "live exact child", alive: true},
+		{name: "receipt survives dead child", wantError: true},
+		{name: "probe unknown", probeErr: errors.New("probe unavailable"), wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := &fakeRuntime{aliveByHandle: map[string]bool{"target": tc.alive}, supervisedErr: tc.probeErr}
+			m := New(Deps{Runtime: &renderedRestoreRuntime{fakeRuntime: rt}})
+			err := m.verifyNativeRestore(t.Context(), receiptRestoreVerifier{}, ports.RestoreConfig{
+				Session: ports.SessionRef{ID: "mastra-1"},
+			}, "replacement", ports.RuntimeHandle{ID: "target"})
+			if (err != nil) != tc.wantError {
+				t.Fatalf("verification error = %v, wantError=%t", err, tc.wantError)
+			}
+		})
+	}
+}
