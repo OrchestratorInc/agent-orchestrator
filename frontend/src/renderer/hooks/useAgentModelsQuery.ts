@@ -28,6 +28,7 @@ async function requestAgentModels(
 	mode: "cached" | "refresh" | "revalidate",
 	hostId?: string,
 	catalogOnly = false,
+	signal?: AbortSignal,
 ): Promise<AgentModelCatalog> {
 	const client = hostId ? clientForHost(hostId) : apiClient;
 	const path = { agent: agentId };
@@ -42,6 +43,7 @@ async function requestAgentModels(
 						query: { projectId: projectId || undefined, revalidate: mode === "revalidate" || undefined, ...(catalogOnly ? { catalogOnly: true } : {}) },
 					},
 				});
+	signal?.throwIfAborted();
 	if (result.error) throw new Error(apiErrorMessage(result.error));
 	const catalog = result.data as AgentModelCatalog;
 	const normalized = agentId === "claude-code" ? { ...catalog, models: foldClaudeAliasDefault(catalog.models) } : catalog;
@@ -59,8 +61,8 @@ export function agentModelsQueryOptions(agentId: string, projectId: string, host
 		queryKey: catalogOnly ? [...key, "catalog"] as const : key,
 		initialData: () => readCachedAgentModels(agentId, projectId, hostId),
 		initialDataUpdatedAt: 0,
-		queryFn: async ({ client }): Promise<AgentModelCatalog> => {
-			if (catalogOnly) return requestAgentModels(agentId, projectId, "cached", hostId, true);
+		queryFn: async ({ client, signal }): Promise<AgentModelCatalog> => {
+			if (catalogOnly) return requestAgentModels(agentId, projectId, "cached", hostId, true, signal);
 			const catalogKey = [...key, "catalog"] as const;
 			if (!client.getQueryData<AgentModelCatalog>(key)) {
 				// Publish the DB catalog before the task response scans session history
@@ -73,9 +75,10 @@ export function agentModelsQueryOptions(agentId: string, projectId: string, host
 			const beforeDBRead = client.getQueryData<AgentModelCatalog>(key);
 			const catalog = await client.fetchQuery({
 				queryKey: catalogKey,
-				queryFn: () => requestAgentModels(agentId, projectId, "cached", hostId, true),
+				queryFn: ({ signal: catalogSignal }) => requestAgentModels(agentId, projectId, "cached", hostId, true, catalogSignal),
 				staleTime: 0,
 			});
+			signal.throwIfAborted();
 			// A manual refresh may finish while this older DB read is pending.
 			// Preserve that update in both memory and the saved snapshot.
 			const afterDBRead = client.getQueryData<AgentModelCatalog>(key);
@@ -86,7 +89,7 @@ export function agentModelsQueryOptions(agentId: string, projectId: string, host
 			const withUsage = withCachedModelUsage(catalog, client.getQueryData<AgentModelCatalog>(key));
 			cacheAgentModels(withUsage, agentId, projectId, hostId);
 			const published = client.setQueryData(key, withUsage);
-			const enriched = await requestAgentModels(agentId, projectId, "cached", hostId);
+			const enriched = await requestAgentModels(agentId, projectId, "cached", hostId, false, signal);
 			// A background refresh may have published newer models while recency
 			// was being read. Keep that catalog rather than restoring the old list.
 			const current = client.getQueryData<AgentModelCatalog>(key);
@@ -123,10 +126,14 @@ export function modelCatalogAuthIssue(catalog: Pick<AgentModelCatalog, "warning"
  * revalidation results keyed off it, so mounted pickers re-read the daemon.
  * Call after anything that can change what the agent's login allows.
  */
-export function invalidateAgentModelCatalogs(queryClient: QueryClient, agentId: string, hostId?: string): Promise<unknown> {
+export async function invalidateAgentModelCatalogs(queryClient: QueryClient, agentId: string, hostId?: string): Promise<unknown> {
+	const queryKey = hostId ? ["agent-models", hostId, agentId] : agentModelsQueryPrefix(agentId);
+	// Cancel inactive catalog reads too, so the next task read cannot dedupe
+	// onto a request made before the login changed.
+	await queryClient.cancelQueries({ queryKey });
 	clearCachedAgentModels(agentId, hostId);
 	return Promise.all([
-		queryClient.invalidateQueries({ queryKey: hostId ? ["agent-models", hostId, agentId] : agentModelsQueryPrefix(agentId) }),
+		queryClient.invalidateQueries({ queryKey }),
 		queryClient.invalidateQueries({
 			predicate: ({ queryKey: [root, first, second] }) => {
 				if (root !== "agent-model-revalidation") return false;

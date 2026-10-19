@@ -219,6 +219,59 @@ describe("cached model loading", () => {
 		client.clear();
 	});
 
+	it("bounds saved snapshots by write recency without removing other renderer state", () => {
+		window.localStorage.setItem("another-feature", "keep");
+		for (let project = 0; project < 10; project++) cacheAgentModels(catalog, "codex", `project-${project}`);
+		cacheAgentModels(catalog, "codex", "project-0");
+		cacheAgentModels(catalog, "codex", "project-10");
+		cacheAgentModels(catalog, "codex", "project-11");
+		expect(window.localStorage.length).toBe(11);
+		expect(readCachedAgentModels("codex", "project-0")?.models).toEqual(catalog.models);
+		expect(readCachedAgentModels("codex", "project-1")).toBeUndefined();
+		expect(readCachedAgentModels("codex", "project-2")).toBeUndefined();
+		expect(readCachedAgentModels("codex", "project-11")?.models).toEqual(catalog.models);
+		expect(window.localStorage.getItem("another-feature")).toBe("keep");
+	});
+
+	it("bounds the total snapshot size and skips catalogs larger than the cache budget", () => {
+		const large = { ...catalog, models: [{ id: "large", label: "x".repeat(300_000) }] };
+		cacheAgentModels(large, "codex", "first");
+		cacheAgentModels(large, "codex", "second");
+		expect(readCachedAgentModels("codex", "first")).toBeUndefined();
+		expect(readCachedAgentModels("codex", "second")?.models).toEqual(large.models);
+		cacheAgentModels({ ...large, models: [{ id: "huge", label: "x".repeat(600_000) }] }, "codex", "second");
+		expect(readCachedAgentModels("codex", "second")).toBeUndefined();
+	});
+
+	it.each(["catalog", "history"])("ignores a cancelled pre-login %s response after login revalidation", async (phase) => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const beforeLogin = { ...catalog, warning: "Not signed in", warningCode: "auth_required" as const };
+		const afterLogin = { ...catalog, models: [{ id: "signed-in-model", label: "Signed in model" }] };
+		cacheAgentModels(beforeLogin, "codex", "project-one");
+		let finishOld!: (value: { data: AgentModelCatalog }) => void;
+		const oldResponse = new Promise<{ data: AgentModelCatalog }>((resolve) => { finishOld = resolve; });
+		if (phase === "history") vi.mocked(apiClient.GET).mockResolvedValueOnce({ data: beforeLogin } as never);
+		vi.mocked(apiClient.GET).mockReturnValueOnce(oldResponse as never).mockResolvedValue({ data: afterLogin } as never);
+		const options = agentModelsQueryOptions("codex", "project-one");
+		const observer = new QueryObserver(client, options);
+		const unsubscribe = observer.subscribe(() => {});
+		try {
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(phase === "catalog" ? 1 : 2));
+			await invalidateAgentModelCatalogs(client, "codex");
+			expect(observer.getCurrentResult().data).toEqual(afterLogin);
+			finishOld({ data: beforeLogin });
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(observer.getCurrentResult().data).toEqual(afterLogin);
+			expect(readCachedAgentModels("codex", "project-one")?.models).toEqual(afterLogin.models);
+			expect(readCachedAgentModels("codex", "project-one")?.warning).toBeUndefined();
+			expect(apiClient.GET).toHaveBeenCalledTimes(phase === "catalog" ? 3 : 4);
+		} finally {
+			finishOld({ data: beforeLogin });
+			unsubscribe();
+			client.clear();
+		}
+	});
+
 	it("clears all saved project catalogs for the changed login without touching another host", async () => {
 		cacheAgentModels(catalog, "codex", "project-one");
 		cacheAgentModels(catalog, "codex", "project-two");

@@ -3,8 +3,12 @@ import { LOCAL_HOST } from "./hosts";
 
 type AgentModelCatalog = components["schemas"]["AgentModelsResponse"];
 
+const SNAPSHOT_PREFIX = "ao.agentModels.v1:";
+const MAX_SNAPSHOTS = 10;
+const MAX_SNAPSHOT_BYTES = 1024 * 1024;
+
 function cachePrefix(agentId: string, hostId?: string): string {
-	return `ao.agentModels.v1:${JSON.stringify([hostId || LOCAL_HOST, agentId])}:`;
+	return `${SNAPSHOT_PREFIX}${JSON.stringify([hostId || LOCAL_HOST, agentId])}:`;
 }
 
 function cacheKey(agentId: string, projectId: string, hostId?: string): string {
@@ -27,7 +31,7 @@ export function withCachedModelUsage(catalog: AgentModelCatalog, cached: AgentMo
 /** A display snapshot only; the daemon DB remains the catalog authority. */
 export function readCachedAgentModels(agentId: string, projectId: string, hostId?: string): AgentModelCatalog | undefined {
 	try {
-		const catalog = JSON.parse(window.localStorage.getItem(cacheKey(agentId, projectId, hostId)) ?? "null") as AgentModelCatalog | null;
+		const catalog = JSON.parse(window.localStorage.getItem(cacheKey(agentId, projectId, hostId)) ?? "null") as (AgentModelCatalog & { snapshotWrittenAt?: number }) | null;
 		if (!catalog || catalog.agentId !== agentId || !Array.isArray(catalog.models)
 			|| !catalog.models.every((model) => model && typeof model.id === "string" && typeof model.label === "string"
 				&& (model.provider === undefined || typeof model.provider === "string")
@@ -36,6 +40,7 @@ export function readCachedAgentModels(agentId: string, projectId: string, hostId
 			|| typeof catalog.fetchedAt !== "string" || typeof catalog.stale !== "boolean"
 			|| !["catalog", "text", "mode"].includes(catalog.selectionMode)
 			|| !["none", "direct", "configured"].includes(catalog.customModelEntry)) return undefined;
+		delete catalog.snapshotWrittenAt;
 		// Refresh state belongs to the running daemon, not a previous UI visit.
 		return { ...catalog, refreshRecommended: false, refreshState: "idle", refreshError: undefined, retryAt: undefined };
 	} catch {
@@ -45,7 +50,34 @@ export function readCachedAgentModels(agentId: string, projectId: string, hostId
 
 export function cacheAgentModels(catalog: AgentModelCatalog, agentId: string, projectId: string, hostId?: string): void {
 	try {
-		window.localStorage.setItem(cacheKey(agentId, projectId, hostId), JSON.stringify(catalog));
+		const key = cacheKey(agentId, projectId, hostId);
+		const snapshots: { key: string; bytes: number; writtenAt: number }[] = [];
+		for (let index = 0; index < window.localStorage.length; index++) {
+			const savedKey = window.localStorage.key(index);
+			if (!savedKey?.startsWith(SNAPSHOT_PREFIX) || savedKey === key) continue;
+			const value = window.localStorage.getItem(savedKey) ?? "";
+			let writtenAt = 0; // Legacy or corrupt snapshots are evicted first.
+			try {
+				const timestamp = JSON.parse(value)?.snapshotWrittenAt;
+				if (typeof timestamp === "number" && Number.isFinite(timestamp)) writtenAt = timestamp;
+			} catch { /* A corrupt snapshot must not prevent pruning the cache. */ }
+			snapshots.push({ key: savedKey, bytes: (savedKey.length + value.length) * 2, writtenAt });
+		}
+		const snapshotWrittenAt = Math.max(Date.now(), ...snapshots.map((snapshot) => snapshot.writtenAt + 1));
+		const value = JSON.stringify({ ...catalog, snapshotWrittenAt });
+		const bytes = (key.length + value.length) * 2;
+		if (bytes > MAX_SNAPSHOT_BYTES) {
+			window.localStorage.removeItem(key);
+			return;
+		}
+		snapshots.sort((a, b) => a.writtenAt - b.writtenAt);
+		let totalBytes = snapshots.reduce((total, snapshot) => total + snapshot.bytes, bytes);
+		while (snapshots.length >= MAX_SNAPSHOTS || totalBytes > MAX_SNAPSHOT_BYTES) {
+			const oldest = snapshots.shift()!;
+			window.localStorage.removeItem(oldest.key);
+			totalBytes -= oldest.bytes;
+		}
+		window.localStorage.setItem(key, value);
 	} catch {
 		// Blocked or full browser storage must not interrupt the DB read.
 	}
