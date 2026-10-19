@@ -3,7 +3,6 @@ package minimaxcode
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -112,18 +111,17 @@ func readOAuthState(path string) string {
 	if os.IsNotExist(err) {
 		return ""
 	}
-	if err != nil || !info.Mode().IsRegular() {
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 64<<10 {
 		return "unreadable"
 	}
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return "unreadable"
 	}
-	defer f.Close()
 	var state struct {
 		Status string `json:"status"`
 	}
-	if json.NewDecoder(io.LimitReader(f, 64<<10)).Decode(&state) != nil || state.Status == "" {
+	if json.Unmarshal(data, &state) != nil || state.Status == "" {
 		return "unreadable"
 	}
 	return state.Status
