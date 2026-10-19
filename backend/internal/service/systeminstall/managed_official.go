@@ -276,7 +276,7 @@ func droidDownloadCommand(dir, pin, goos, goarch string) ([]string, error) {
 	if version == "" {
 		return nil, errors.New("AO needs the release to install, but no newer Droid release is known")
 	}
-	arch := ""
+	var arch string
 	switch goarch {
 	case "arm64":
 		arch = "arm64"
