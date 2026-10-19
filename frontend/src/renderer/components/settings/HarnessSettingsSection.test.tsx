@@ -187,7 +187,7 @@ function readyCatalog() {
 	return readiness;
 }
 
-function mockInstalledOperations(savedMethod?: string, readiness = readyCatalog()) {
+function mockInstalledOperations(savedMethod?: string, readiness = readyCatalog(), codexInUse?: { liveSessions: number; sessionIds: string[]; level: "safe" | "warn" | "blocked" | "idle" }) {
 	const managedPlans = { agents: plans.agents.map((plan) => ({
 		...plan,
 		methods: plan.methods.map((method) => ({
@@ -204,7 +204,7 @@ function mockInstalledOperations(savedMethod?: string, readiness = readyCatalog(
 		if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "codex", action: "login", launchMode: "terminal", available: true, logoutCommand: "codex logout" }] } } as never;
 		if (path === "/api/v1/agents/{agent}/update-advisory") {
 			const agentId = (options as { params: { path: { agent: string } } }).params.path.agent;
-			return { data: { agentId, status: agentId === "codex" ? "behind_latest" : "current", currentVersion: "1.2.3", latestVersion: "1.3.0", binaryPath: "~/.local/bin/codex", maintenanceMethod: savedMethod, checkedAt: "2026-10-06T00:00:00Z" } } as never;
+			return { data: { agentId, status: agentId === "codex" ? "behind_latest" : "current", currentVersion: "1.2.3", latestVersion: "1.3.0", binaryPath: "~/.local/bin/codex", maintenanceMethod: savedMethod, checkedAt: "2026-10-06T00:00:00Z", ...(agentId === "codex" && codexInUse ? { inUse: codexInUse } : {}) } } as never;
 		}
 		return { data: undefined } as never;
 	});
@@ -1109,6 +1109,55 @@ describe("HarnessSettingsSection", () => {
 		const requests = (vi.mocked(apiClient.POST).mock.calls as unknown[][]).filter(([path]) => path === "/api/v1/agents/{agent}/install");
 		expect(requests).toHaveLength(2);
 		for (const [, options] of requests) expect(options).toMatchObject({ body: { method: "npm", operation: "update" } });
+	});
+
+	it("updates without asking when the installer replaces the running release", async () => {
+		mockInstalledOperations("npm", readyCatalog(), { liveSessions: 2, sessionIds: ["s1", "s2"], level: "warn" });
+		renderSection();
+		const row = await findAgentRow("codex");
+		await userEvent.click(await within(row).findByRole("button", { name: "Update" }));
+		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", {
+			params: { path: { agent: "codex" } },
+			body: { method: "npm", operation: "update", expectedVersion: "1.3.0" },
+		}));
+		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+
+	it("updates without asking when the installer keeps the running release", async () => {
+		mockInstalledOperations("npm", readyCatalog(), { liveSessions: 2, sessionIds: ["s1", "s2"], level: "safe" });
+		renderSection();
+		const row = await findAgentRow("codex");
+		await userEvent.click(await within(row).findByRole("button", { name: "Update" }));
+		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", {
+			params: { path: { agent: "codex" } },
+			body: { method: "npm", operation: "update", expectedVersion: "1.3.0" },
+		}));
+		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+
+	it("turns Update into View sessions when the sessions must end first", async () => {
+		mockInstalledOperations("npm", readyCatalog(), { liveSessions: 2, sessionIds: ["s1", "s2"], level: "blocked" });
+		renderSection();
+		const row = await findAgentRow("codex");
+		await userEvent.click(await within(row).findByRole("button", { name: "View sessions (2)" }));
+		expect(await screen.findByRole("dialog", { name: "Sessions using Codex" })).toHaveTextContent("2 open sessions are using Codex.");
+		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
+	});
+
+	it("lists the sessions instead of offering Retry when the daemon refuses for them", async () => {
+		mockInstalledOperations("npm");
+		const post = vi.mocked(apiClient.POST);
+		const previous = post.getMockImplementation()!;
+		post.mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/{agent}/install") return { error: { error: "conflict", code: "HARNESS_ACTIVE", message: "end active sessions", requestId: "r1", details: { count: 1, sessionIds: ["s1"], reviewerSessionIds: [], level: "blocked", starting: false } } } as never;
+			return (previous as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		renderSection();
+		const row = await findAgentRow("codex");
+		await userEvent.click(await within(row).findByRole("button", { name: "Update" }));
+		expect(await screen.findByRole("dialog", { name: "Sessions using Codex" })).toBeInTheDocument();
+		expect(within(row).queryByRole("button", { name: "Retry update" })).toBeNull();
+		expect(within(row).queryByRole("alert")).toBeNull();
 	});
 
 	it("opens a failed update once and does not reopen it while unrelated jobs are polled", async () => {

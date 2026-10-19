@@ -2917,6 +2917,7 @@ func (c *Controller) projectEvent(ctx context.Context, event ports.ChatEvent) (b
 		}
 	}
 	record["diff"] = event.Diff
+	dropEmptyArchiveFields(record)
 	if event.Input != nil {
 		record["input"] = event.Input
 	}

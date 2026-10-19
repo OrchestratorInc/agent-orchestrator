@@ -1948,13 +1948,15 @@ func TestSpawnAmpModelOverrideLaunchArgv(t *testing.T) {
 	rt := &fakeRuntime{}
 	ws := &fakeWorkspace{path: wsDir}
 	lookPath := func(string) (string, error) { return fakeAmp, nil }
-	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: amp.New()}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: amp.New()}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath,
+		Executable: func() (string, error) { return "/opt/ao", nil }, NewLaunchID: func() string { return "amp-launch" },
+	})
 
 	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, AgentConfig: ports.AgentConfig{Model: "high"}}); err != nil {
 		t.Fatalf("amp spawn with model high failed: %v", err)
 	}
 
-	want := []string{fakeAmp, "--mode", "high"}
+	want := []string{"/opt/ao", "agent-process", "supervise", "--session", "mer-1", "--launch", "amp-launch", "--", fakeAmp, "--mode", "high"}
 	if !reflect.DeepEqual(rt.lastCfg.Argv, want) {
 		t.Fatalf("launch argv = %#v, want %#v", rt.lastCfg.Argv, want)
 	}
@@ -2000,14 +2002,16 @@ func TestSpawnAmpProjectDefaultModePersistsAsModel(t *testing.T) {
 	rt := &fakeRuntime{}
 	ws := &fakeWorkspace{path: wsDir}
 	lookPath := func(string) (string, error) { return fakeAmp, nil }
-	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: amp.New()}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: amp.New()}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath,
+		Executable: func() (string, error) { return "/opt/ao", nil }, NewLaunchID: func() string { return "amp-launch" },
+	})
 
 	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
 	if err != nil {
 		t.Fatalf("amp spawn with project default mode failed: %v", err)
 	}
 
-	want := []string{fakeAmp, "--mode", "high"}
+	want := []string{"/opt/ao", "agent-process", "supervise", "--session", "mer-1", "--launch", "amp-launch", "--", fakeAmp, "--mode", "high"}
 	if !reflect.DeepEqual(rt.lastCfg.Argv, want) {
 		t.Fatalf("launch argv = %#v, want %#v", rt.lastCfg.Argv, want)
 	}

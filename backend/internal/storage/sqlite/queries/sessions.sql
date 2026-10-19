@@ -69,6 +69,61 @@ UPDATE sessions
 SET hibernated_at = sqlc.narg(hibernated_at)
 WHERE id = sqlc.arg(id) AND revision = sqlc.arg(expected_revision);
 
+-- name: MarkHarnessSessionsStale :execrows
+-- Marks the live launches of a harness an update just replaced. A launch that
+-- was already marked keeps when it first went stale; the version moves on.
+UPDATE sessions
+SET stale_binary_since = CASE
+        WHEN stale_binary_since IS NOT NULL AND stale_binary_launch =
+            (CASE WHEN session_mode = 'chat' THEN controller_generation ELSE runtime_launch_id END)
+        THEN stale_binary_since ELSE sqlc.arg(since) END,
+    stale_binary_version = sqlc.arg(version),
+    stale_binary_launch = CASE WHEN session_mode = 'chat' THEN controller_generation ELSE runtime_launch_id END,
+    stale_binary_switch_failed_at = NULL
+WHERE harness = sqlc.arg(harness) AND is_terminated = 0 AND is_task_preparation = 0
+    AND hibernated_at IS NULL AND activity_state <> 'exited';
+
+-- name: SetSessionVersionSwitchFailed :execrows
+-- Records that the move to the new release failed for the launch that tried it.
+UPDATE sessions
+SET stale_binary_switch_failed_at = sqlc.arg(failed_at),
+    stale_binary_since = COALESCE(stale_binary_since, sqlc.arg(failed_at)),
+    stale_binary_version = sqlc.arg(version),
+    stale_binary_launch = CASE WHEN session_mode = 'chat' THEN controller_generation ELSE runtime_launch_id END
+WHERE id = sqlc.arg(id);
+
+-- name: ListVersionRefreshChatCandidates :many
+-- Idle Chat sessions whose current launch still runs a replaced release.
+SELECT id FROM sessions
+WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
+    AND kind <> 'orchestrator'
+    AND provision_state IN ('', 'ready') AND hibernated_at IS NULL
+    AND activity_state = 'idle' AND activity_last_at IS NOT NULL
+    AND activity_last_at <= sqlc.arg(idle_before)
+    AND trim(provider_conversation_id) <> ''
+    AND stale_binary_since IS NOT NULL AND stale_binary_switch_failed_at IS NULL
+    AND stale_binary_launch = controller_generation;
+
+-- name: ListVersionRefreshTerminalCandidates :many
+-- Idle terminal sessions whose current launch still runs a replaced release
+-- and can be resumed natively.
+SELECT id FROM sessions
+WHERE session_mode = 'tui' AND is_terminated = 0 AND is_task_preparation = 0
+    AND kind <> 'orchestrator'
+    AND activity_state = 'idle' AND activity_last_at IS NOT NULL
+    AND activity_last_at <= sqlc.arg(idle_before)
+    AND trim(agent_session_id) <> '' AND trim(runtime_handle_id) <> ''
+    AND stale_binary_since IS NOT NULL AND stale_binary_switch_failed_at IS NULL
+    AND stale_binary_launch = runtime_launch_id;
+
+-- name: CountStaleBinarySessions :many
+-- Live launches still on a replaced release, per harness.
+SELECT harness, COUNT(*) AS sessions FROM sessions
+WHERE is_terminated = 0 AND hibernated_at IS NULL AND activity_state <> 'exited'
+    AND stale_binary_since IS NOT NULL
+    AND stale_binary_launch = (CASE WHEN session_mode = 'chat' THEN controller_generation ELSE runtime_launch_id END)
+GROUP BY harness;
+
 -- name: SetSessionRuntimeReleased :execrows
 -- Narrow write for an agent exit that keeps its session: names only the
 -- released launch, and only while that launch is still the session's own.
@@ -235,7 +290,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     requested_output,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
-    hibernated_at, client_request_id, client_request_hash, client_request_committed,
+    hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
+    client_request_id, client_request_hash, client_request_committed,
     runtime_released_launch_id
 FROM sessions WHERE id = ?;
 
@@ -256,7 +312,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     requested_output,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
-    hibernated_at, client_request_id, client_request_hash, client_request_committed,
+    hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
+    client_request_id, client_request_hash, client_request_committed,
     runtime_released_launch_id
 FROM sessions WHERE automation_run_id = ?;
 
@@ -277,7 +334,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     requested_output,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
-    hibernated_at, client_request_id, client_request_hash, client_request_committed,
+    hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
+    client_request_id, client_request_hash, client_request_committed,
     runtime_released_launch_id
 FROM sessions WHERE project_id IS ? ORDER BY num;
 
@@ -298,7 +356,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     requested_output,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
-    hibernated_at, client_request_id, client_request_hash, client_request_committed,
+    hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
+    client_request_id, client_request_hash, client_request_committed,
     runtime_released_launch_id
 FROM sessions ORDER BY project_id, num;
 
