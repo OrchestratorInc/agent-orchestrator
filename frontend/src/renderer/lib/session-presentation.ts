@@ -23,7 +23,7 @@ import {
 } from "@aoagents/product-ui";
 import type { TFunction } from "i18next";
 import { appI18n, type MessageKey } from "../i18n";
-import type { SessionActivity, SessionStatus } from "../types/workspace";
+import { toKanbanColumn, type SessionActivity, type SessionStatus } from "../types/workspace";
 
 function translator(t: TFunction): ProductUITranslator {
 	return (key, values) => t(key as MessageKey, values);
@@ -60,43 +60,81 @@ export function getAttentionZoneViewForZone(
 export type SessionStatusDotView = {
 	className: string;
 	breathe: boolean;
+	/** The agent is waiting on the user; the sidebar swaps the dot for an alert icon. */
+	needsInput?: true;
 };
 
-// The session dot carries two independent signals. Colour comes from the board
-// section represented by the SCM state, which survives a running agent —
-// `status` is activity-first, so it collapses to `working` the moment an agent
-// wakes and would otherwise take every pull request tone with it. Merged keeps
-// its split-section tone instead of sharing Ready to merge's tone.
+// The session dot carries two independent signals. Colour matches the card on
+// the board: the lane the session sits in (building, validating, in review,
+// ready; a merged PR is purple), which survives a running agent — `status` is
+// activity-first, so it collapses to `working` the moment an agent wakes and
+// would otherwise take every pull request tone with it. A session that needs
+// the user overrides the lane with the card's needs-attention tone. Finished
+// sessions (archive lane) go grey.
 //
-// Motion stays on raw agent activity. A no-PR idle session is the exception to
-// the preserved section colour: when its agent starts working it blinks blue.
+// Motion stays on raw agent activity, except once the PR is done for good
+// (merged or closed): the card drops its loader there, so the dot holds still
+// even if the agent keeps running.
 export function getSessionStatusDotView(
 	session: {
 		activity?: SessionActivity | null;
 		displayStatus?: string;
+		kanbanColumn?: KanbanColumn;
 		scmStatus?: SessionStatus;
 		status: SessionStatus;
 	},
 	t: TFunction = appI18n.t,
 ): SessionStatusDotView {
-	const working = isAgentActivityWorking(session.activity);
-	const closedWithoutMerge = session.displayStatus === "Closed without merge";
-	const sectionStatus: SessionStatus =
-		closedWithoutMerge ? "exited" : (session.scmStatus ?? session.status);
-	const toneStatus = sectionStatus === "idle" && working ? "working" : sectionStatus;
-	const className =
-		closedWithoutMerge
-			? getSessionStatusView("exited", t).dotClassName
-			: toneStatus === "exited"
-				? "bg-passive"
-				: toneStatus === "idle" || toneStatus === "merged"
-					? getSessionStatusView(toneStatus, t).dotClassName
-					: getAttentionZoneView(toneStatus, t).dotClassName;
+	const breathe = isAgentActivityWorking(session.activity);
+	const sectionStatus: SessionStatus = session.scmStatus ?? session.status;
+	const dot = (className: string): SessionStatusDotView => ({ className, breathe });
 
-	return {
-		className,
-		breathe: working,
-	};
+	if (session.displayStatus === "Closed without merge") {
+		return { className: getSessionStatusView("exited", t).dotClassName, breathe: false };
+	}
+	if (sectionStatus === "exited") return dot("bg-passive");
+	if (sessionNeedsInput(session)) return { ...dot("bg-status-needs-you"), needsInput: true };
+	if (sessionNeedsYou(session)) return dot("bg-status-needs-you");
+
+	const column = toKanbanColumn(session.kanbanColumn, sectionStatus);
+	// The card paints a merged PR purple inside the Ready lane; the dot follows.
+	const merged = session.displayStatus ? session.displayStatus === "Merged" : sectionStatus === "merged";
+	if (column === "ready" && merged) {
+		return { className: getSessionStatusView("merged", t).dotClassName, breathe: false };
+	}
+	return dot(getKanbanColumnView(column, t).dotClassName);
+}
+
+// The agent has stopped and is waiting on the user (a question or a decision).
+function sessionNeedsInput(session: {
+	activity?: SessionActivity | null;
+	displayStatus?: string;
+	status: SessionStatus;
+}): boolean {
+	return (
+		session.status === "needs_input" ||
+		session.activity?.state === "waiting_input" ||
+		session.activity?.state === "blocked" ||
+		session.displayStatus === "Blocked"
+	);
+}
+
+// Mirrors the board card's needs-attention check; waiting on input is handled
+// before this by sessionNeedsInput.
+function sessionNeedsYou(session: {
+	displayStatus?: string;
+	status: SessionStatus;
+}): boolean {
+	switch (session.displayStatus) {
+		case "CI failing":
+		case "Changes requested":
+			return true;
+		case undefined:
+			// A daemon too old to send `displayStatus`: the card falls back to the zone.
+			return attentionZone(session.status) === "action";
+		default:
+			return false;
+	}
 }
 
 export function getKanbanColumnView(
