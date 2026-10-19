@@ -34,7 +34,8 @@ var _ ports.ChatDriverReconnector = (*candidate)(nil)
 
 // NewCandidate uses the caller's existing installation discovery/auth plugin;
 // it never downloads a CLI or creates credentials. The caller must prepare an
-// isolated HOME underneath DataDir, including native user rules and connection
+// isolated HOME underneath DataDir with at most 4096 directories/regular files
+// and no symlinks or special files, including native user rules and connection
 // configuration. No source profile is read, copied or changed by this binding.
 // Probe deliberately rejects production admission. Explicit qualification can
 // exercise Start/Resume using empty standing instructions; real AO instructions
@@ -198,6 +199,9 @@ func configureInstructions(ctx context.Context, cfg acpdriver.LaunchConfig, inst
 	if err := validateLaunch(cfg.DataDir, cfg.WorkspacePath, "", cfg.Env); err != nil {
 		return nil, nil, err
 	}
+	if err := validateProfile(ctx, cfg.Env["HOME"]); err != nil {
+		return nil, nil, err
+	}
 	args := []string{"acp", "serve", "--workdir", cfg.WorkspacePath}
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
@@ -219,6 +223,8 @@ func configureInstructions(ctx context.Context, cfg acpdriver.LaunchConfig, inst
 		"HOME":            home,
 		"USERPROFILE":     home,
 		"XDG_CONFIG_HOME": filepath.Join(home, ".config"),
+		"SNOWFLAKE_HOME":  filepath.Join(home, ".snowflake"),
+		"COCO_LOG_DIR":    filepath.Join(home, ".snowflake", "cortex", "logs"),
 	}, nil
 }
 

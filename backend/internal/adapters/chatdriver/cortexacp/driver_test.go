@@ -115,10 +115,12 @@ func TestNativeLaunchAndAdvertisedSettings(t *testing.T) {
 	cfg := isolatedConfig(t)
 	cfg.Env["USERPROFILE"] = t.TempDir()
 	cfg.Env["XDG_CONFIG_HOME"] = t.TempDir()
+	cfg.Env["SNOWFLAKE_HOME"] = t.TempDir()
+	cfg.Env["COCO_LOG_DIR"] = t.TempDir()
 	launch := acpdriver.LaunchConfig{DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Model: "provider-owned-model"}
 	args, env, err := configure(context.Background(), launch)
 	want := []string{"acp", "serve", "--workdir", cfg.WorkspacePath, "--model", "provider-owned-model"}
-	if err != nil || !reflect.DeepEqual(args, want) || !reflect.DeepEqual(env, map[string]string{"HOME": cfg.Env["HOME"], "USERPROFILE": cfg.Env["HOME"], "XDG_CONFIG_HOME": filepath.Join(cfg.Env["HOME"], ".config")}) {
+	if err != nil || !reflect.DeepEqual(args, want) || !reflect.DeepEqual(env, map[string]string{"HOME": cfg.Env["HOME"], "USERPROFILE": cfg.Env["HOME"], "XDG_CONFIG_HOME": filepath.Join(cfg.Env["HOME"], ".config"), "SNOWFLAKE_HOME": filepath.Join(cfg.Env["HOME"], ".snowflake"), "COCO_LOG_DIR": filepath.Join(cfg.Env["HOME"], ".snowflake", "cortex", "logs")}) {
 		t.Fatalf("configure = %v, %v, %v", args, env, err)
 	}
 	options := sessionOptions(ports.ChatTurnSettings{Model: launch.Model})

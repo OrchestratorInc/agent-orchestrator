@@ -485,6 +485,12 @@ func TestInstructionConstructorSeparatesContextAcrossColdRestoreAndLiveReconnect
 	}
 	resume := ports.ChatResumeConfig{SessionID: cfg.SessionID, ProviderConversationID: conv.ProviderConversationID(), DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, HasPriorTurns: true, SystemPrompt: cfg.SystemPrompt}
 	resume.SystemPrompt = "changed caller context must not rewrite a live host"
+	// A live provider may have unsettled state. Adoption must not run the cold
+	// profile scan, just as it must not regenerate launch context.
+	unsettled := filepath.Join(cfg.Env["HOME"], "unsettled-state-link")
+	if err := os.Symlink(t.TempDir(), unsettled); err != nil {
+		t.Fatal(err)
+	}
 	if err := conv.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -499,6 +505,9 @@ func TestInstructionConstructorSeparatesContextAcrossColdRestoreAndLiveReconnect
 		t.Fatalf("live adoption rewrote context: %v", got)
 	}
 	if err := conv.(ports.ChatProviderTerminator).Terminate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(unsettled); err != nil {
 		t.Fatal(err)
 	}
 	resume.SystemPrompt = "NEW post-Kill private context"
