@@ -440,9 +440,11 @@ func run(logger *slog.Logger) error {
 	// The scanner only has anything to do where sandboxes exist to pause, and
 	// only when some provider has idle-pause enabled. With both
 	// AO_CLOUD_IDLE_PAUSE_THRESHOLD=0 and AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD=0
-	// it never runs. Freestyle has its own threshold; every other provider uses
-	// the general one, and 0 keeps that provider's sessions warm (the scanner
-	// skips them, and the reconciler's KeepWarm follows the general threshold).
+	// it never runs. Freestyle, and any other billed sandbox (Coder for an
+	// organization without the coder capability), uses the Freestyle threshold;
+	// every other sandbox uses the general one, and 0 keeps those sessions warm
+	// (the scanner skips them, and the reconciler's KeepWarm follows the general
+	// threshold).
 	var idlePauseScanner *idlepause.Scanner
 	if reconciler != nil && cfg.IdlePauseScannerEnabled() {
 		idlePauseScanner = idlepause.New(store, idlepause.Options{
@@ -451,7 +453,10 @@ func run(logger *slog.Logger) error {
 			ProviderIdleThresholds: map[string]time.Duration{
 				sandbox.ProviderFreestyle: cfg.FreestyleIdlePauseThreshold,
 			},
-			Logger: logger,
+			// Plans meter running minutes the same on every provider, so a
+			// billed Coder sandbox pauses when quiet just as Freestyle does.
+			BilledIdleThreshold: cfg.FreestyleIdlePauseThreshold,
+			Logger:              logger,
 		})
 	}
 	// Worker tokens are only issued where sandboxes are provisioned. Leaving
@@ -501,7 +506,6 @@ func run(logger *slog.Logger) error {
 		AvailableSandboxProviders: cfg.AvailableSandboxProviders,
 		CapabilityGatedProviders:  cfg.CapabilityGatedProviders,
 		DefaultOrgCapabilities:    cfg.DefaultOrgCapabilities,
-		DefaultOrgBilling:         cfg.DefaultOrgBilling,
 		Provisioning:              provisioningDefaults(cfg),
 		WorkerTokens:              workerTokens,
 		WorkerTokenTTL:            cfg.WorkerTokenTTL(),

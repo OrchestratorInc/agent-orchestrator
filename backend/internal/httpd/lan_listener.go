@@ -23,6 +23,7 @@ import (
 // authMiddleware. The loopback listener is unaffected.
 type LANManager struct {
 	handler     http.Handler // shared router, already auth-wrapped
+	tunnel      http.Handler // lanTunnelPath, behind the same auth
 	defaultPort int
 	log         *slog.Logger
 	state       *authState // shared with authMiddleware; SetPasswordHash writes through here
@@ -42,13 +43,16 @@ type LANManager struct {
 // network-facing listener. Most callers want NewMobileLAN, which owns the state.
 func NewLANManager(handler http.Handler, state *authState, defaultPort int, log *slog.Logger, sink ports.EventSink) *LANManager {
 	lock := newLockout(time.Now)
-	return &LANManager{
-		handler:     lanControlBlock(authMiddleware(state, lock, newMobileConnectReporter(sink, time.Now))(handler)),
+	auth := authMiddleware(state, lock, newMobileConnectReporter(sink, time.Now))
+	m := &LANManager{
+		handler:     lanControlBlock(auth(handler)),
 		defaultPort: defaultPort,
 		log:         loggerOrDefault(log),
 		state:       state,
 		lock:        lock,
 	}
+	m.tunnel = auth(http.HandlerFunc(m.serveTunnel))
+	return m
 }
 
 // lanControlBlockedPrefixes are the loopback-only daemon-control route
@@ -57,7 +61,8 @@ func NewLANManager(handler http.Handler, state *authState, defaultPort int, log 
 // surface under /api/v1/mobile, developer maintenance routes under /api/v1/dev,
 // host-mutating installer routes under /api/v1/system/install, and personal
 // Codex account-management routes under /api/v1/agents/codex/accounts and
-// /api/v1/agents/codex/account-switches (the harmless read-only Codex model
+// /api/v1/agents/codex/account-switches, and agent accounts under
+// /api/v1/agents/accounts (the harmless read-only Codex model
 // routes stay reachable so mobile can pick a model). Some routes
 // are gated in the shared router by localControlRequest, which trusts the
 // client-supplied Host header. That header is spoofable by any LAN client. The
@@ -65,6 +70,7 @@ func NewLANManager(handler http.Handler, state *authState, defaultPort int, log 
 // the request arrived on. So the block below is applied only to the LAN-served
 // handler, outermost (wrapping authMiddleware), independent of any header.
 var lanControlBlockedPrefixes = []string{
+	"/api/v1/awake",
 	"/shutdown",
 	"/internal/",
 	"/api/v1/mobile",
@@ -75,6 +81,7 @@ var lanControlBlockedPrefixes = []string{
 	"/api/v1/system/install",
 	"/api/v1/agents/codex/accounts",
 	"/api/v1/agents/codex/account-switches",
+	"/api/v1/agents/accounts",
 }
 
 // lanControlBlock returns 404 for any request whose path is, or is nested
@@ -248,13 +255,20 @@ func (m *LANManager) start(port int, host string) (int, error) {
 	m.bound = tcpAddr.Port
 	m.bindHost = host
 	m.srv = &http.Server{
-		Handler:           m.handler,
+		Handler:           m.dispatch(),
 		ReadHeaderTimeout: 10 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return streamCtx },
 		ConnContext: func(ctx context.Context, conn net.Conn) context.Context {
 			return context.WithValue(ctx, lanConnContextKey{}, conn)
 		},
 	}
+	// HTTP/2 without TLS (prior knowledge) lets a desktop carry a remote
+	// preview's hundreds of module requests over one connection; over HTTP/1.1
+	// each waits its turn on a handful of connections, a round trip apiece.
+	// HTTP/1.1 clients and WebSocket upgrades are unaffected.
+	m.srv.Protocols = new(http.Protocols)
+	m.srv.Protocols.SetHTTP1(true)
+	m.srv.Protocols.SetUnencryptedHTTP2(true)
 	srv := m.srv
 	boundPort := m.bound
 	m.mu.Unlock()
@@ -294,6 +308,16 @@ func (m *LANManager) Stop(ctx context.Context) error {
 	m.srv, m.ln, m.cancel, m.bound, m.bindHost = nil, nil, nil, 0, ""
 	m.mu.Unlock()
 	return err
+}
+
+func (m *LANManager) dispatch() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == lanTunnelPath {
+			m.tunnel.ServeHTTP(w, r)
+			return
+		}
+		m.handler.ServeHTTP(w, r)
+	})
 }
 
 // lanListener tracks the lifetime of the underlying connections rather than

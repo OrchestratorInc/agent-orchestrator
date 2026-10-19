@@ -50,6 +50,13 @@ export function isKanbanColumn(value: string | null | undefined): value is Kanba
 	return !!value && (KANBAN_COLUMNS as readonly string[]).includes(value);
 }
 
+export type SessionProvisionStep = {
+	id: "fetch" | "worktree" | "setup" | "agent";
+	status: "pending" | "running" | "done";
+	startedAt?: string;
+	endedAt?: string;
+};
+
 export type DashboardSession = {
 	id: string;
 	projectId: string;
@@ -103,6 +110,8 @@ export type DashboardSession = {
 	isTerminated?: boolean;
 	provisionState?: "provisioning" | "ready" | "failed";
 	provisionError?: string;
+	/** The daemon's start-up stages while a Chat session provisions. Absent from older daemons. */
+	provisionSteps?: SessionProvisionStep[];
 	isPinned?: boolean;
 	pinnedAt?: string | null;
 	/** Whether the cloud worker has a current control-plane connection. Cloud sessions only. */
@@ -225,6 +234,7 @@ type WireSession = {
 	isTerminated?: boolean;
 	provisionState?: "provisioning" | "ready" | "failed";
 	provisionError?: string;
+	provisionSteps?: SessionProvisionStep[];
 	status?: string | null;
 	kanbanColumn?: string | null;
 	displayStatus?: string | null;
@@ -328,6 +338,7 @@ function mapSession(s: WireSession): DashboardSession {
 		isTerminated: !!s.isTerminated,
 		provisionState: s.provisionState,
 		provisionError: s.provisionError,
+		provisionSteps: s.provisionSteps?.length ? s.provisionSteps : undefined,
 		isPinned: !!s.isPinned,
 		pinnedAt: s.pinnedAt ?? null,
 		autoReviewEnabled: !!s.autoReviewEnabled,

@@ -22,6 +22,7 @@ import { openGitHub } from "../lib/openGitHub";
 import { useApp } from "../lib/store";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemeState, useThemedStyles } from "../lib/ThemeProvider";
+import { textSelectionColors } from "../lib/textSelection";
 import { Button, HeaderIconButton } from "../lib/ui";
 import { fontScaleCap, iconSize, radius, sheetInset, space, touchTarget, type as typography } from "../lib/tokens";
 
@@ -646,7 +647,7 @@ export default function CreateCloudProject() {
 										{repositoryPickerOpen ? <>
 											<View style={styles.repositorySearch}>
 												<Feather name="search" size={iconSize.md} color={t.textSecondary} />
-												<TextInput style={styles.repositorySearchInput} value={repositorySearch} onChangeText={setRepositorySearch} placeholder="Search repositories" placeholderTextColor={t.textSecondary} autoFocus autoCapitalize="none" autoCorrect={false} accessibilityLabel="Search repositories" editable={!busy && githubReadyToImport && !loadingRepositories && !scopedReserved} />
+												<TextInput {...textSelectionColors(t)} style={styles.repositorySearchInput} value={repositorySearch} onChangeText={setRepositorySearch} placeholder="Search repositories" placeholderTextColor={t.textSecondary} autoFocus autoCapitalize="none" autoCorrect={false} accessibilityLabel="Search repositories" editable={!busy && githubReadyToImport && !loadingRepositories && !scopedReserved} />
 											</View>
 											{!repositorySearch.trim() ? <Text style={styles.hint}>Search by repository name.</Text> : <View style={styles.repositoryList}>
 												{visibleRepositories.length === 0 ? <Text style={styles.emptyText}>No matching repositories</Text> : shownRepositories.map((repository) => (
@@ -679,7 +680,7 @@ export default function CreateCloudProject() {
 						<Text style={styles.description}>For manual setup, add a fine-grained token with access to the repository. Orchestrator Cloud stores it securely and never shows it again.</Text>
 						<View style={styles.field}>
 							<Text style={styles.label}>GitHub access token</Text>
-							<TextInput style={styles.input} value={token} onChangeText={setToken} placeholder="github_pat_…" placeholderTextColor={t.textTertiary} selectionColor={t.accent} secureTextEntry autoCapitalize="none" autoCorrect={false} textContentType="password" accessibilityLabel="GitHub access token" />
+							<TextInput {...textSelectionColors(t)} style={styles.input} value={token} onChangeText={setToken} placeholder="github_pat_…" placeholderTextColor={t.textTertiary} secureTextEntry autoCapitalize="none" autoCorrect={false} textContentType="password" accessibilityLabel="GitHub access token" />
 						</View>
 						<Text style={styles.hint}>Use a fine-grained token with Contents read and write access to the repository.</Text>
 						<Button title="Create a GitHub token" variant="text" icon="external-link" onPress={() => void openGitHub("https://github.com/settings/personal-access-tokens/new", { fromSheet: true, throwOnFailure: true }).catch((cause) => setError(messageFor(cause, "Could not open GitHub.")))} />
@@ -692,15 +693,15 @@ export default function CreateCloudProject() {
 						<Text style={styles.description}>Enter the repository URL and branch for this project.</Text>
 						<View style={styles.field}>
 							<Text style={styles.label}>Repository URL</Text>
-							<TextInput style={styles.input} value={repositoryUrl} onChangeText={(value) => { setRepositoryUrl(value); setReadOnly(false); }} placeholder="https://github.com/owner/repo" placeholderTextColor={t.textTertiary} selectionColor={t.accent} autoCapitalize="none" autoCorrect={false} keyboardType="url" accessibilityLabel="Repository URL" editable={!busy && !scopedReserved} />
+							<TextInput {...textSelectionColors(t)} style={styles.input} value={repositoryUrl} onChangeText={(value) => { setRepositoryUrl(value); setReadOnly(false); }} placeholder="https://github.com/owner/repo" placeholderTextColor={t.textTertiary} autoCapitalize="none" autoCorrect={false} keyboardType="url" accessibilityLabel="Repository URL" editable={!busy && !scopedReserved} />
 						</View>
 						<View style={styles.field}>
 							<Text style={styles.label}>Project name</Text>
-							<TextInput style={styles.input} value={displayName} onChangeText={(value) => { setDisplayName(value); }} placeholder="My project" placeholderTextColor={t.textTertiary} selectionColor={t.accent} accessibilityLabel="Project name" editable={!busy && !scopedReserved} />
+							<TextInput {...textSelectionColors(t)} style={styles.input} value={displayName} onChangeText={(value) => { setDisplayName(value); }} placeholder="My project" placeholderTextColor={t.textTertiary} accessibilityLabel="Project name" editable={!busy && !scopedReserved} />
 						</View>
 						<View style={styles.field}>
 							<Text style={styles.label}>Default branch</Text>
-							<TextInput style={styles.input} value={defaultBranch} onChangeText={(value) => { setDefaultBranch(value); }} placeholder="main" placeholderTextColor={t.textTertiary} selectionColor={t.accent} autoCapitalize="none" autoCorrect={false} accessibilityLabel="Default branch" editable={!busy && !scopedReserved} />
+							<TextInput {...textSelectionColors(t)} style={styles.input} value={defaultBranch} onChangeText={(value) => { setDefaultBranch(value); }} placeholder="main" placeholderTextColor={t.textTertiary} autoCapitalize="none" autoCorrect={false} accessibilityLabel="Default branch" editable={!busy && !scopedReserved} />
 						</View>
 						{readOnly ? <Text style={styles.warning}>Your GitHub token can read this repository but cannot push changes. Workers may be unable to publish their work.</Text> : null}
 						<Button title={readOnly ? "Continue anyway" : "Check repository access"} loading={busy} onPress={() => readOnly ? (setReadOnly(false), setStep("agents")) : void checkRepository()} />
@@ -711,7 +712,7 @@ export default function CreateCloudProject() {
 					<View style={styles.group}>
 						<Text style={styles.title}>Review project</Text>
 						{selectedRepository ? <View style={styles.selectedSummary}><Feather name="book" size={iconSize.md} color={t.textSecondary} /><View style={styles.repositoryCopy}><Text style={styles.repositoryName}>{selectedRepository.fullName}</Text><Text style={styles.repositoryMeta}>Default branch · {selectedRepository.defaultBranch}</Text></View></View> : null}
-						{selectedRepository ? <View style={styles.field}><Text style={styles.label}>Project name</Text><TextInput style={styles.input} value={displayName} onChangeText={(value) => { setDisplayName(value); }} placeholder="Project name" placeholderTextColor={t.textTertiary} selectionColor={t.accent} accessibilityLabel="Project name" editable={!busy && !scopedReserved} /></View> : null}
+						{selectedRepository ? <View style={styles.field}><Text style={styles.label}>Project name</Text><TextInput {...textSelectionColors(t)} style={styles.input} value={displayName} onChangeText={(value) => { setDisplayName(value); }} placeholder="Project name" placeholderTextColor={t.textTertiary} accessibilityLabel="Project name" editable={!busy && !scopedReserved} /></View> : null}
 						<Text style={styles.description}>Uses your connected coding agents. Creating a project doesn’t start any sessions.</Text>
 						{agents.length === 0 ? <><Text style={styles.warning}>Connect a personal default coding agent in desktop Settings, then refresh here. Your project draft will stay in place.</Text><Button title="Refresh connected agents" variant="text" disabled={busy} onPress={refreshAgents} /></> : (
 							<View style={styles.agentGroup}>
@@ -724,7 +725,7 @@ export default function CreateCloudProject() {
 							<Text style={styles.label}>Workspace</Text>
 							{computeLoading ? <ActivityIndicator color={t.accent} /> : null}
 							{coderConfig ? <CloudChoice label="Coder template" value={templateId} options={[{ value: "", label: coderConfig.configured ? "Choose a template" : "Deployment default" }, ...coderTemplates.map((template) => ({ value: template.id, label: template.displayName || template.name }))]} onChange={(value) => { setTemplateId(value); setParameterValues({}); }} enabled={!busy && !scopedReserved} styles={styles} scheme={scheme} /> : null}
-							{coderConfig?.configured ? <View style={styles.field}><Text style={styles.label}>Workspace name prefix</Text><TextInput value={workspacePrefix} onChangeText={setWorkspacePrefix} editable={!busy && !scopedReserved} style={styles.input} autoCapitalize="none" autoCorrect={false} placeholder="ao" placeholderTextColor={t.textTertiary} selectionColor={t.accent} accessibilityLabel="Workspace name prefix" /></View> : null}
+							{coderConfig?.configured ? <View style={styles.field}><Text style={styles.label}>Workspace name prefix</Text><TextInput {...textSelectionColors(t)} value={workspacePrefix} onChangeText={setWorkspacePrefix} editable={!busy && !scopedReserved} style={styles.input} autoCapitalize="none" autoCorrect={false} placeholder="ao" placeholderTextColor={t.textTertiary} accessibilityLabel="Workspace name prefix" /></View> : null}
 							{parametersLoading ? <ActivityIndicator color={t.accent} /> : null}
 							{parameters.map((parameter) => {
 								const value = valueForParameter(parameter);
@@ -736,7 +737,7 @@ export default function CreateCloudProject() {
 								return <View key={parameter.name} style={styles.group}>
 									{parameter.type === "list(string)" && parameter.options.length ? <><Text style={styles.label}>{label}</Text><Host matchContents={{ vertical: true }} colorScheme={scheme}><Column>{parameter.options.map((option) => <Checkbox key={option.value} label={option.name} value={selected.includes(option.value)} disabled={busy || Boolean(scopedReserved)} onValueChange={(checked) => update(JSON.stringify(checked ? [...new Set([...selected, option.value])] : selected.filter((item) => item !== option.value)))} />)}</Column></Host></>
 									: parameter.type === "bool" || parameter.options.length ? <CloudChoice label={label} value={value} options={[...(value ? [] : [{ label: "Choose a value", value: "" }]), ...(parameter.type === "bool" ? [{ label: "True", value: "true" }, { label: "False", value: "false" }] : parameter.options.map((option) => ({ label: option.name, value: option.value })))]} onChange={update} enabled={!busy && !scopedReserved} styles={styles} scheme={scheme} />
-									: <View style={styles.field}><Text style={styles.label}>{label}</Text><TextInput style={styles.input} value={value} onChangeText={update} editable={!busy && !scopedReserved} selectionColor={t.accent} autoCapitalize="none" autoCorrect={false} keyboardType={parameter.type === "number" ? "numbers-and-punctuation" : "default"} multiline={parameter.name === "startup_script"} accessibilityLabel={label} /></View>}
+									: <View style={styles.field}><Text style={styles.label}>{label}</Text><TextInput {...textSelectionColors(t)} style={styles.input} value={value} onChangeText={update} editable={!busy && !scopedReserved} autoCapitalize="none" autoCorrect={false} keyboardType={parameter.type === "number" ? "numbers-and-punctuation" : "default"} multiline={parameter.name === "startup_script"} accessibilityLabel={label} /></View>}
 									{parameter.description ? <Text style={styles.hint}>{parameter.description}</Text> : null}
 									{parameterErrors[parameter.name] ? <Text selectable accessibilityRole="alert" style={styles.error}>{parameterErrors[parameter.name]}</Text> : null}
 								</View>;

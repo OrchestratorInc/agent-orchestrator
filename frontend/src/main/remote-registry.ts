@@ -54,10 +54,26 @@ export class RemoteRegistry {
 		return connected.proxy.previewUrl(sessionId, sourceUrl);
 	}
 
+	isAgentBrowserUrl(url: string): boolean {
+		return [...this.live.values()].some(({ proxy }) => proxy.isAgentBrowserUrl(url));
+	}
+
+	agentBrowserUrl(hostId: string, sessionId: string): Promise<string> {
+		const connected = [...this.live.values()].find(({ view }) => view.hostId === hostId);
+		if (!connected) throw new Error(`Host ${hostId} is not connected`);
+		return connected.proxy.agentBrowserUrl(sessionId);
+	}
+
 	resolvePreviewUrl(hostId: string, sessionId: string, viewedUrl: string): string {
 		const connected = [...this.live.values()].find(({ view }) => view.hostId === hostId);
 		if (!connected) throw new Error(`Host ${hostId} is not connected`);
 		return connected.proxy.resolvePreviewUrl(sessionId, viewedUrl);
+	}
+
+	externalUrl(hostId: string, url: string): string {
+		const connected = [...this.live.values()].find(({ view }) => view.hostId === hostId);
+		if (!connected) throw new Error(`Host ${hostId} is not connected`);
+		return connected.proxy.externalUrl(url);
 	}
 
 	disconnect(url: string): Promise<void> {

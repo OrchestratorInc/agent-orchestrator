@@ -4,13 +4,14 @@ import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { appI18n } from "../i18n";
 import { AGENT_OPTIONS, agentLabel, type AgentId } from "../lib/agent-options";
-import { apiErrorMessage } from "../lib/api-client";
+import { apiErrorCode, apiErrorDetails, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { LOCAL_HOST } from "../lib/hosts";
 import type { AgentAuthPlan } from "./useAgentAuth";
 import type { AgentReadiness } from "./useAgentReadinessQuery";
 
 export type AgentUpdateAdvisory = components["schemas"]["AgentUpdateAdvisory"];
+export type UpdateWhileRunningLevel = components["schemas"]["AgentUpdateInUse"]["level"];
 export type InstallJob = components["schemas"]["InstallJob"];
 export const installerQueryKey = ["agent-installers"] as const;
 export const installJobsQueryKey = ["agent-install-jobs"] as const;
@@ -46,7 +47,22 @@ export function installJobsQueryOptions(hostId?: string) {
 }
 
 export function isActiveInstallJob(job?: Pick<InstallJob, "status">): boolean {
-	return job?.status === "running" || job?.status === "installing" || job?.status === "verifying";
+	return job?.status === "running" || job?.status === "waiting_for_idle" || job?.status === "installing" || job?.status === "verifying";
+}
+
+/** An update queued until the harness's sessions are idle (Windows). */
+export function isWaitingForIdleJob(job?: Pick<InstallJob, "status">): boolean {
+	return job?.status === "waiting_for_idle";
+}
+
+/** How long a waiting update reads as normal before it names what it waits for. */
+export const IDLE_WAIT_DETAIL_MS = 5 * 60_000;
+
+/** Cancels an update still waiting for idle sessions; sessions are left untouched. */
+export async function cancelHarnessUpdate(agentId: AgentId, hostId?: string): Promise<InstallJob> {
+	const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/install/cancel", { params: { path: { agent: agentId } } });
+	if (error || !data) throw new Error(apiErrorMessage(error, appI18n.t("settings.harness.cancelUpdateFailed")));
+	return data;
 }
 
 export function isFailedInstallJob(job?: Pick<InstallJob, "status">): boolean {
@@ -117,20 +133,63 @@ export async function fetchUpdateAdvisory(agentId: AgentId, hostId?: string, ref
 	return data;
 }
 
-/** No job and no error: the click-time check found nothing left to install. */
-export type HarnessUpdateStart = { job?: InstallJob; error?: string };
+/**
+ * Sessions that keep an update from starting: they must end first
+ * (update-while-running is off), or one is still starting.
+ */
+export type HarnessInUse = {
+	count: number;
+	sessionIds: string[];
+	level: UpdateWhileRunningLevel;
+	starting: boolean;
+};
+
+/**
+ * No job and no error: the click-time check found nothing left to install.
+ * advisory is that check's result once an install was requested, so a failed
+ * update names the release it actually tried.
+ */
+export type HarnessUpdateStart = { job?: InstallJob; error?: string; advisory?: AgentUpdateAdvisory; inUse?: HarnessInUse };
+
+/**
+ * The sessions an update must wait for, when the advisory says it cannot run
+ * alongside them. Otherwise an update installs while sessions
+ * run, and they restart on the new release once idle; on Windows the daemon
+ * waits for them itself.
+ */
+export function advisoryInUse(advisory?: Pick<AgentUpdateAdvisory, "inUse">): HarnessInUse | undefined {
+	const inUse = advisory?.inUse;
+	if (!inUse || inUse.liveSessions <= 0 || inUse.level !== "blocked") return undefined;
+	return { count: inUse.liveSessions, sessionIds: inUse.sessionIds ?? [], level: inUse.level, starting: false };
+}
+
+/** Reads a 409 HARNESS_ACTIVE into the sessions it names. */
+export function harnessInUseFromError(error: unknown): HarnessInUse | undefined {
+	// An older daemon refuses without details; its message is shown as before.
+	const details = apiErrorDetails(error);
+	if (apiErrorCode(error) !== "HARNESS_ACTIVE" || !details) return undefined;
+	const ids = (value: unknown) => Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : [];
+	const sessionIds = [...new Set([...ids(details.sessionIds), ...ids(details.reviewerSessionIds)])];
+	return {
+		count: typeof details.count === "number" ? details.count : sessionIds.length,
+		sessionIds,
+		level: "blocked",
+		starting: details.starting === true,
+	};
+}
 
 /**
  * Starts an update the user saw, shared by the notice and the Harness page.
- * The advisory is re-checked at click time, and only that release, through
- * that method, is installed. The started job lands in the shared jobs query.
+ * The advisory is re-checked at click time, and its latest release is
+ * installed through the method the user saw: a release published since the
+ * card was last checked is the update they asked for, not a reason to stop.
+ * The started job lands in the shared jobs query.
  */
 export function useStartHarnessUpdate(hostId?: string) {
 	const queryClient = useQueryClient();
 	const { t } = useTranslation();
-	return useCallback(async ({ agentId, latestVersion, methodId, canStart }: {
+	return useCallback(async ({ agentId, methodId, canStart }: {
 		agentId: AgentId;
-		latestVersion: string | undefined;
 		methodId: string;
 		/** Checked after the click-time probe, e.g. so an unmounted page starts nothing. */
 		canStart?: () => boolean;
@@ -142,15 +201,16 @@ export function useStartHarnessUpdate(hostId?: string) {
 			queryClient.setQueryData(key, fresh);
 			// No longer behind: the refreshed advisory already shows why.
 			if (!hasConfirmedHarnessUpdate(fresh) || canStart?.() === false) return {};
-			if (fresh.latestVersion !== latestVersion) return { error: t("settings.harness.updateTargetChanged", { version: versionLabel(fresh.latestVersion!) }) };
 			if (maintenanceMethodId(fresh) !== methodId) return { error: t("settings.harness.updateMethodChanged", { agent: agentLabel(agentId) }) };
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/install", {
 				params: { path: { agent: agentId } },
 				body: { method: methodId, operation: "update", expectedVersion: fresh.latestVersion },
 			});
-			if (error || !data) return { error: apiErrorMessage(error, t("settings.harness.updateFailed")) };
+			const inUse = harnessInUseFromError(error);
+			if (inUse) return { inUse };
+			if (error || !data) return { error: apiErrorMessage(error, t("settings.harness.updateFailed")), advisory: fresh };
 			queryClient.setQueryData<InstallJob[]>(installJobsQueryKeyForHost(hostId), (current) => upsertInstallJob(current, data));
-			return { job: data };
+			return { job: data, advisory: fresh };
 		} catch (error) {
 			return { error: error instanceof Error ? error.message : t("settings.harness.updateFailed") };
 		}

@@ -3,6 +3,8 @@ package systeminstall
 import (
 	"context"
 	"fmt"
+	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -10,6 +12,7 @@ import (
 )
 
 var agentDocumentationURLs = map[Target]string{
+	TargetMemcode:     "https://github.com/memcode-ai/memcode/releases",
 	TargetClaudeCode:  "https://code.claude.com/docs/en/installation",
 	TargetCodex:       "https://github.com/openai/codex",
 	TargetCursor:      "https://docs.cursor.com/en/cli/installation",
@@ -264,6 +267,12 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		if s.goos == "darwin" || s.goos == "linux" {
 			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
 		}
+	case TargetMemcode:
+		if s.goos == "darwin" || s.goos == "linux" {
+			plans = []Plan{s.planShellInstaller(target, "https://memcode.ai/install.sh", "sh")}
+		} else {
+			plans = []Plan{{Target: target, Method: "manual", Unsupported: true, Reason: "Install the official native memcode release binary", DocsURL: agentDocumentationURLs[target]}}
+		}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
 	default:
@@ -355,6 +364,15 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 	installScript := plan.Script
 	plan.Script = nil
 	if operation == AgentOperationReinstall {
+		if record, ok := s.readManagedRecord(plan.Target); ok && record.Method == plan.Method && s.managedEligible(plan) {
+			// Sessions run AO's managed copy, so a reinstall repairs that one:
+			// the same release, installed fresh beside it.
+			plan.managed = true
+			plan.managedPin = record.Version
+			argv, _ := managedInstallCommand(plan.Method, record.Package, record.Version, filepath.Join(s.managedTargetDir(plan.Target), "versions", "<next>"))
+			plan.Command, plan.Prepare = argv, nil
+			return plan
+		}
 		switch plan.Method {
 		case "homebrew":
 		case "npm":
@@ -402,11 +420,12 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 		case "bun":
 			plan.Command = []string{"bun", "install", "-g", packageWithoutLatest(plan.Package) + "@latest"}
 		case "official-installer":
-			// These Windows self-updaters do not reliably replace the installed
-			// binary headlessly. Re-run the vendor's Windows installer instead;
-			// ownership and post-update version checks still guard the operation.
-			if s.goos == "windows" && installScript != nil &&
-				(plan.Target == TargetAutohand || plan.Target == TargetGrok) {
+			// These self-updaters do not reliably replace the installed binary
+			// headlessly: installerUpdateTargets on every platform, and these
+			// Windows ones. Re-run the vendor's installer instead; ownership and
+			// post-update version checks still guard the operation.
+			if installScript != nil && (installerUpdateTargets[plan.Target] || s.goos == "windows" &&
+				(plan.Target == TargetAutohand || plan.Target == TargetGrok)) {
 				plan.Command = nil
 				plan.Script = installScript
 				break
@@ -421,6 +440,17 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 		default:
 			plan.Unsupported = true
 			plan.Reason = "This installation method does not provide a supported update command."
+		}
+		if !plan.Unsupported {
+			plan.UpdateWhileRunning = updateWhileRunningLevel(s.goos, plan.Target, plan.Method, plan.PackageCask)
+		}
+		if s.managedEligible(plan) {
+			// Installed side by side, so no session's files are touched, on any
+			// platform: the update is safe while sessions run.
+			plan.managed = true
+			plan.UpdateWhileRunning = UpdateWhileRunningSafe
+			argv, _ := managedInstallCommand(plan.Method, packageWithoutLatest(plan.Package), "", filepath.Join(s.managedTargetDir(plan.Target), "versions", "<next>"))
+			plan.Command, plan.Prepare = argv, nil
 		}
 		return plan
 	}
@@ -446,12 +476,30 @@ var vendorUpdateCommands = map[Target][]string{
 	TargetCursor:     {"cursor-agent", "update"},
 	TargetAmp:        {"amp", "update", "--porcelain"},
 	TargetGrok:       {"grok", "update"},
-	TargetKimi:       {"kimi", "upgrade", "-y"},
 	TargetDroid:      {"droid", "update"},
 	TargetQwen:       {"qwen", "update"},
 	TargetFX:         {"fx", "upgrade"},
 	TargetPi:         {"pi", "update", "self", "--no-approve"},
 	TargetPrimeAgent: {"prime-agent", "update"},
+}
+
+// vendorUpdateEnv turns a vendor's own auto-update switch back on for an
+// update the user asked for. `droid update` exits 0 without updating, and
+// prints "Auto-update is not available for npm installations", whenever
+// FACTORY_DROID_AUTO_UPDATE_ENABLED is false or its build (npm's) turns
+// auto-update off, even for the copy at the official installer's location.
+var vendorUpdateEnv = map[Target][]string{
+	TargetDroid: {"FACTORY_DROID_AUTO_UPDATE_ENABLED=true"},
+}
+
+// installerUpdateTargets update by re-running the vendor installer, pinned to
+// the approved release and bound to the confirmed install directory. Kimi's
+// `kimi upgrade` exits 0 without replacing the binary: it reports "already up
+// to date" from its own staged-rollout channel, prints a manual command for
+// installs it does not manage, and on native installs only stages the new
+// binary for a later launch to swap in.
+var installerUpdateTargets = map[Target]bool{
+	TargetKimi: true,
 }
 
 func packageWithoutLatest(pkg string) string {
@@ -536,14 +584,114 @@ func manualPlan(target Target, reason, docsURL string) Plan {
 	return Plan{Target: target, Unsupported: true, Method: "manual", Reason: reason, DocsURL: docsURL}
 }
 
-// pinVendorUpdate asks OpenCode for the exact release the update advisory
-// reported, so the version installed is the one the update badge announced.
+// pinVendorUpdate asks OpenCode and Kimi's installer for the exact release
+// the update advisory reported, so the version installed is the one the
+// update badge announced.
 func pinVendorUpdate(plan Plan, latest string) Plan {
-	if plan.Method != "official-installer" || plan.Target != TargetOpencode || latest == "" || len(plan.Command) < 2 {
+	if plan.Method != "official-installer" || latest == "" {
+		return plan
+	}
+	if plan.Target == TargetKimi && plan.Script != nil {
+		plan.Script = withInstallerEnv(plan.Script, "KIMI_VERSION="+latest)
+		return plan
+	}
+	if plan.Target != TargetOpencode || len(plan.Command) < 2 {
 		return plan
 	}
 	plan.Command = append([]string{plan.Command[0], plan.Command[1], latest}, plan.Command[2:]...)
 	return plan
+}
+
+// withInstallerEnv returns a copy of script whose environment sets entries,
+// replacing any earlier value of the same keys. Keys compare case-insensitively
+// because Windows environment names do.
+func withInstallerEnv(script *ports.InstallScriptCommand, entries ...string) *ports.InstallScriptCommand {
+	next := *script
+	next.Env = nil
+	for _, entry := range script.Env {
+		key, _, _ := strings.Cut(entry, "=")
+		replaced := slices.ContainsFunc(entries, func(set string) bool {
+			setKey, _, _ := strings.Cut(set, "=")
+			return strings.EqualFold(key, setKey)
+		})
+		if !replaced {
+			next.Env = append(next.Env, entry)
+		}
+	}
+	next.Env = append(next.Env, entries...)
+	return &next
+}
+
+// bindKimiInstallerUpdate binds a Kimi installer update to the Kimi Code
+// native install sessions run. Only the installer's own default root,
+// ~/.kimi-code, is accepted: a kimi in ~/.local, ~/.cargo or /usr/local may
+// belong to another tool (the legacy Python kimi-cli, a cargo build), and the
+// installer would replace it with the native binary. KIMI_NO_MODIFY_PATH and
+// a PATH without <root>/bin keep the installer from editing shell rc files
+// and from its legacy-shim migration, which renames or deletes other kimi
+// commands on PATH; the update only replaces <root>/bin/kimi.
+func bindKimiInstallerUpdate(goos string, plan Plan, binaryPath, home, pathList string) Plan {
+	if plan.Target != TargetKimi || plan.Method != "official-installer" || plan.Script == nil {
+		return plan
+	}
+	root, ok := kimiInstallRoot(goos, binaryPath, home)
+	if !ok {
+		plan.Unsupported = true
+		plan.Reason = fmt.Sprintf("AO updates Kimi Code only in its default ~/.kimi-code installation; %q is managed elsewhere, so update it manually.", binaryPath)
+		return plan
+	}
+	env := []string{"KIMI_INSTALL_DIR=" + root, "KIMI_NO_MODIFY_PATH=1"}
+	if pathList != "" {
+		env = append(env, "PATH="+pathWithoutDir(goos, pathList, root+kimiPathSeparator(goos)+"bin"))
+	}
+	plan.Script = withInstallerEnv(plan.Script, env...)
+	plan.ExpectedDestination = binaryPath
+	return plan
+}
+
+// kimiInstallRoot is the KIMI_INSTALL_DIR whose bin/kimi is binaryPath, when
+// that is Kimi Code's default root under home. Windows paths compare
+// case-insensitively with either separator; other platforms compare exactly.
+func kimiInstallRoot(goos, binaryPath, home string) (string, bool) {
+	if home == "" {
+		return "", false
+	}
+	if goos != "windows" {
+		root, found := strings.CutSuffix(binaryPath, "/bin/kimi")
+		return root, found && path.Clean(root) == path.Clean(home+"/.kimi-code")
+	}
+	slashed := strings.ToLower(strings.ReplaceAll(binaryPath, `\`, "/"))
+	if !strings.HasSuffix(slashed, "/bin/kimi.exe") {
+		return "", false
+	}
+	root := binaryPath[:len(binaryPath)-len("/bin/kimi.exe")]
+	want := strings.ToLower(strings.ReplaceAll(home, `\`, "/")) + "/.kimi-code"
+	return root, path.Clean(slashed[:len(root)]) == path.Clean(want)
+}
+
+func kimiPathSeparator(goos string) string {
+	if goos == "windows" {
+		return `\`
+	}
+	return "/"
+}
+
+// pathWithoutDir removes dir from a PATH list, comparing as the platform does.
+func pathWithoutDir(goos, pathList, dir string) string {
+	separator, clean := ":", path.Clean
+	if goos == "windows" {
+		separator = ";"
+		clean = func(entry string) string {
+			return path.Clean(strings.ToLower(strings.ReplaceAll(entry, `\`, "/")))
+		}
+	}
+	var kept []string
+	for _, entry := range strings.Split(pathList, separator) {
+		if entry == "" || clean(entry) != clean(dir) {
+			kept = append(kept, entry)
+		}
+	}
+	return strings.Join(kept, separator)
 }
 
 // targetInstalledCopy points an update at the copy sessions run. A
@@ -566,16 +714,7 @@ func targetInstalledCopy(goos string, plan Plan, target Target, binaryPath strin
 		if driveAbsolute && end == 2 {
 			end++ // Keep the separator in a drive root such as D:\.
 		}
-		script := *plan.Script
-		script.Env = nil
-		for _, entry := range plan.Script.Env {
-			key, _, _ := strings.Cut(entry, "=")
-			if !strings.EqualFold(key, "GROK_BIN_DIR") {
-				script.Env = append(script.Env, entry)
-			}
-		}
-		script.Env = append(script.Env, "GROK_BIN_DIR="+binaryPath[:end])
-		plan.Script = &script
+		plan.Script = withInstallerEnv(plan.Script, "GROK_BIN_DIR="+binaryPath[:end])
 		plan.ExpectedDestination = binaryPath
 		return plan
 	}

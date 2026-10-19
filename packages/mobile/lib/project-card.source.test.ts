@@ -52,4 +52,12 @@ describe("project page", () => {
 		expect(page).toContain("<WorkerBoardList");
 		expect(page).toContain("projectDetailSessions(");
 	});
+
+	// The Workers dock's bottom-right spawn button, scoped to this project.
+	it("floats a spawn button that starts a task in this project", () => {
+		expect(page).toContain('<SpawnFab onPress={startTask} testID="project-spawn-worker" />');
+		expect(page).toContain('params: { projectId: id, source: source.kind, sourceId: source.id }');
+		expect(page).toContain("workerDockRestingBottom(insets.bottom)");
+		expect(page).toContain("contentBottomInset={workerListBottomInset(fabBottom)}");
+	});
 });

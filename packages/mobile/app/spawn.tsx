@@ -40,6 +40,7 @@ import { useApp } from "../lib/store";
 import { useVoiceInput } from "../lib/voice/useVoiceInput";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
+import { textSelectionColors } from "../lib/textSelection";
 import { Button } from "../lib/ui";
 import { iconSize, space, type } from "../lib/tokens";
 import { backOr } from "../lib/backNavigation";
@@ -579,7 +580,7 @@ function SpawnModalContent() {
 					</View> : null}
 					{customModelOpen ? <View>
 						<Text style={styles.warn}>Enter a model ID supported by this Cloud agent.</Text>
-						<TextInput accessibilityLabel="Custom model ID" value={customModel} onChangeText={setCustomModel} autoCapitalize="none" autoCorrect={false} returnKeyType="done" style={[styles.customModel, { color: t.textPrimary, backgroundColor: t.bgElevated }]} />
+						<TextInput {...textSelectionColors(t)} accessibilityLabel="Custom model ID" value={customModel} onChangeText={setCustomModel} autoCapitalize="none" autoCorrect={false} returnKeyType="done" style={[styles.customModel, { color: t.textPrimary, backgroundColor: t.bgElevated }]} />
 						<Button title="Use model" disabled={!customModel.trim()} onPress={() => { selectModel(customModel.trim()); setCustomModelOpen(false); }} />
 						<Button title="Cancel model entry" variant="ghost" onPress={() => setCustomModelOpen(false)} />
 					</View> : null}

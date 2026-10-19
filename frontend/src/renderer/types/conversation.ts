@@ -180,6 +180,8 @@ export interface ConversationMessage {
 	content?: ConversationContentSummary[];
 	/** False when the original prompt content cannot be reproduced safely. */
 	editAvailable?: boolean;
+	/** The user's one-click "continue" after stopping a turn; drawn as a marker, not a bubble. */
+	continuation?: boolean;
 	/** True while more deltas are expected. */
 	streaming: boolean;
 	delivery?: DeliveryState;
@@ -435,7 +437,10 @@ export interface SystemEventDetail {
 		| "context.boundary"
 		| "render"
 		| "artifact"
-		| "workspace.setup";
+		| "workspace.setup"
+		| "account.switched";
+	/** account.switched: the account a stopped turn's conversation continues on. */
+	accountId?: string;
 	/** workspace.setup: how the project's Setup commands ended (exitCode, durationMs and output carry the rest). */
 	setupStatus?: "succeeded" | "failed" | "timed_out";
 	/** workspace.setup: the 1-based Setup step that failed or timed out. */
@@ -773,6 +778,8 @@ export interface McpServer {
 }
 
 export interface ConversationSnapshot {
+	/** Backend-selected dispatched turn; an empty value means Continue is unavailable. */
+	continueTurnId?: string;
 	conversationId: string;
 	sessionId: string;
 	harness: string;

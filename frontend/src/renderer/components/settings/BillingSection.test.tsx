@@ -74,23 +74,65 @@ describe("BillingSection", () => {
 		mocks.client.me.mockResolvedValue({ user: { id: "user-1" }, organizations: [{ id: "org-1", role: "owner" }] });
 	});
 
-	it("shows Free, Starter and Pro with Starter recommended and Free current, and opens Checkout", async () => {
+	it("shows Free, Starter, Pro and Enterprise with Starter recommended and Free current, and opens Checkout", async () => {
 		mocks.client.getBilling.mockResolvedValue({ enabled: true, exempt: false, plan: "free", entitled: false, plans });
 		mocks.client.createBillingCheckout.mockResolvedValue({ url: "https://checkout.stripe.test/cs_1" });
 		renderSection();
 		await screen.findByText("Starter");
-		expect(screen.getAllByTestId("plan-card")).toHaveLength(3);
+		expect(screen.getAllByTestId("plan-card")).toHaveLength(4);
 		expect(within(card("free")).getByText("Current")).toBeInTheDocument();
 		expect(within(card("starter")).getByText("Recommended")).toBeInTheDocument();
 		expect(within(card("starter")).queryByText("Current")).not.toBeInTheDocument();
-		expect(within(card("starter")).getByText("$20 / month")).toBeInTheDocument();
-		expect(within(card("starter")).getByText("2 sessions at once")).toBeInTheDocument();
-		expect(within(card("pro")).getByText("16 sessions in total")).toBeInTheDocument();
-		expect(within(card("pro")).getByText("16 session hours every 6 h")).toBeInTheDocument();
+		expect(within(card("starter")).getByText("$20")).toBeInTheDocument();
+		expect(within(card("starter")).getByText("/ month")).toBeInTheDocument();
+		expect(within(card("starter")).getByText("2 simultaneous cloud agents")).toBeInTheDocument();
+		expect(within(card("pro")).getByText("4 simultaneous cloud agents")).toBeInTheDocument();
+		expect(within(card("pro")).queryByText("16 sessions in total")).not.toBeInTheDocument();
+		// Session-hour windows and resets stay on the Usage section, not the plan cards.
+		expect(within(card("pro")).queryByText("16 session hours every 6 h")).not.toBeInTheDocument();
+		expect(within(card("starter")).queryByText("1 usage reset a month")).not.toBeInTheDocument();
 		expect(screen.queryByText("Usage")).not.toBeInTheDocument();
 		fireEvent.click(within(card("starter")).getByRole("button", { name: "Upgrade" }));
 		await waitFor(() => expect(mocks.openExternal).toHaveBeenCalledWith("https://checkout.stripe.test/cs_1"));
 		expect(mocks.client.createBillingCheckout).toHaveBeenCalledWith("org-1", "starter");
+	});
+
+	it("lists what each plan includes and books Enterprise with the founders", async () => {
+		mocks.client.getBilling.mockResolvedValue({ enabled: true, exempt: false, plan: "free", entitled: false, plans });
+		renderSection();
+		await screen.findByText("Starter");
+		expect(within(card("free")).getByText("Claude Code, Codex and Cursor")).toBeInTheDocument();
+		expect(within(card("free")).getByText("Unlimited local agents on your machine")).toBeInTheDocument();
+		expect(within(card("free")).getByText("No cloud agents")).toBeInTheDocument();
+		expect(within(card("free")).getByText("2 devices logged in at once")).toBeInTheDocument();
+		expect(within(card("free")).getByText("Same-network connectivity (no cloud relay)")).toBeInTheDocument();
+		expect(within(card("free")).queryByRole("list", { name: "Cloud agents" })).not.toBeInTheDocument();
+		expect(within(card("starter")).getByText("Agents keep working when your computer sleeps")).toBeInTheDocument();
+		expect(within(card("starter")).getByText("Cloud relay for seamless connectivity across devices")).toBeInTheDocument();
+		expect(within(card("starter")).getByText("Unlimited devices, including mobile (bring your own)")).toBeInTheDocument();
+		// Plan limits only cap cloud agents, so they sit under their own label.
+		const starterCloud = within(card("starter")).getByRole("list", { name: "Cloud agents" });
+		expect(within(starterCloud).getByText("1 cloud project")).toBeInTheDocument();
+		expect(within(starterCloud).getByText("2 simultaneous cloud agents")).toBeInTheDocument();
+		expect(within(starterCloud).queryByText("8 sessions in total")).not.toBeInTheDocument();
+		expect(within(starterCloud).queryByText("Agents keep working when your computer sleeps")).not.toBeInTheDocument();
+		expect(within(within(card("pro")).getByRole("list", { name: "Cloud agents" })).getByText("4 simultaneous cloud agents")).toBeInTheDocument();
+		const enterpriseCloud = within(card("enterprise")).getByRole("list", { name: "Cloud agents" });
+		expect(within(enterpriseCloud).getByText("Unlimited cloud projects")).toBeInTheDocument();
+		expect(within(enterpriseCloud).getByText("Unlimited simultaneous cloud agents")).toBeInTheDocument();
+		expect(within(card("enterprise")).getByText("Collaborate on cloud agents")).toBeInTheDocument();
+		// Bring-your-own Coder is a Pro feature.
+		expect(within(card("pro")).getByText("Bring your own Coder deployment")).toBeInTheDocument();
+		expect(within(card("enterprise")).queryByText("Bring your own Coder deployment")).not.toBeInTheDocument();
+		expect(within(card("starter")).queryByText(/Coder/)).not.toBeInTheDocument();
+		expect(within(card("pro")).getByText("Everything in Starter")).toBeInTheDocument();
+		expect(within(card("pro")).queryByText("Agents keep working when your computer sleeps")).not.toBeInTheDocument();
+		const enterprise = card("enterprise");
+		expect(within(enterprise).getByText("Custom pricing")).toBeInTheDocument();
+		expect(within(enterprise).queryByText("Current")).not.toBeInTheDocument();
+		fireEvent.click(within(enterprise).getByRole("button", { name: "Talk to founder" }));
+		expect(mocks.openExternal).toHaveBeenCalledWith("https://cal.com/agentwrapper/ao-design-partner?overlayCalendar=true");
+		expect(mocks.client.createBillingCheckout).not.toHaveBeenCalled();
 	});
 
 	it("marks the subscribed plan current and shows usage with session counts", async () => {
@@ -136,8 +178,10 @@ describe("BillingSection", () => {
 		renderSection();
 		expect(await screen.findByText(/^Your Starter plan ends on .+\. You'll move to Free then\.$/)).toBeInTheDocument();
 		expect(within(card("starter")).getByText("Current")).toBeInTheDocument();
-		const starts = within(card("free")).getByRole("button", { name: /^Starts / });
-		expect(starts).toBeDisabled();
+		// When Free starts is a status, so it is plain text in the Free row, not a
+		// disabled button.
+		expect(within(card("free")).getByText(/^Starts /)).toBeInTheDocument();
+		expect(within(card("free")).queryByRole("button", { name: /^Starts / })).not.toBeInTheDocument();
 		expect(within(card("free")).queryByRole("button", { name: "Downgrade" })).not.toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Keep Starter" }));
 		await waitFor(() => expect(mocks.client.createBillingPortal).toHaveBeenCalledWith("org-1"));
@@ -170,7 +214,7 @@ describe("BillingSection", () => {
 		mocks.client.getBilling.mockResolvedValue(subscribed());
 		renderSection();
 		await screen.findByText("Usage");
-		expect(screen.getAllByTestId("plan-card")).toHaveLength(3);
+		expect(screen.getAllByTestId("plan-card")).toHaveLength(4);
 		expect(within(card("starter")).queryByRole("button")).not.toBeInTheDocument();
 		expect(within(card("pro")).queryByRole("button")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Reset now" })).not.toBeInTheDocument();
@@ -205,7 +249,7 @@ describe("BillingSection", () => {
 		mocks.client.getBilling.mockResolvedValue(subscribed({ billingMode: "self_serve" }));
 		renderSection();
 		await screen.findByText("Usage");
-		expect(screen.getAllByTestId("plan-card")).toHaveLength(3);
+		expect(screen.getAllByTestId("plan-card")).toHaveLength(4);
 	});
 
 	it("reads an exempt org as contract on an older control plane", async () => {

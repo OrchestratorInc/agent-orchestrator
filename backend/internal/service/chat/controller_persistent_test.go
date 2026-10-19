@@ -251,3 +251,71 @@ func TestPersistentTransportFailureRetainsWorkForReconnect(t *testing.T) {
 		t.Fatal("lost controller remained live or terminated its persistent provider")
 	}
 }
+
+func TestAwakeReconnectCandidatesRequireObservedTransportLoss(t *testing.T) {
+	for _, deliberate := range []bool{false, true} {
+		t.Run(map[bool]string{false: "lost attachment", true: "explicit close"}[deliberate], func(t *testing.T) {
+			provider := &terminatingConversation{fakeConversation: newFakeConversation()}
+			h := newHarnessWithConversation(t, provider)
+			if got := h.svc.InterruptedAwakeAgents(); len(got) != 0 {
+				t.Fatal("live controller offered as interrupted")
+			}
+			if deliberate {
+				if err := h.ctrl.Close(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				provider.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerStopped, Err: ports.ErrChatRecoveryInconclusive})
+				_ = provider.Close()
+				h.ctrl.Wait()
+			}
+			deadline := time.Now().Add(time.Second)
+			for time.Now().Before(deadline) {
+				got := h.svc.InterruptedAwakeAgents()
+				if !deliberate && len(got) == 1 {
+					if got[0].SessionID != testSession || got[0].Owner.ControllerGeneration != h.ctrl.Generation() || got[0].Owner.ProviderConversationID != h.ctrl.ProviderConversationID() {
+						t.Fatalf("candidate lost provider identity: %+v", got)
+					}
+					return
+				}
+				if deliberate && len(got) > 0 {
+					t.Fatal("explicit close offered for automatic reconnect")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if !deliberate {
+				t.Fatal("observed loss did not retain a recovery candidate")
+			}
+		})
+	}
+}
+
+func TestAwakeReconnectProofIsInvalidatedByExplicitStop(t *testing.T) {
+	provider := &terminatingConversation{fakeConversation: newFakeConversation()}
+	h := newHarnessWithConversation(t, provider)
+	provider.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerStopped, Err: ports.ErrChatRecoveryInconclusive})
+	_ = provider.Close()
+	h.ctrl.Wait()
+	var target domain.AwakeAgentTarget
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if list := h.svc.InterruptedAwakeAgents(); len(list) == 1 {
+			target = list[0]
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if target.SessionID == "" {
+		t.Fatal("missing interrupted proof")
+	}
+	if err := h.svc.Stop(context.Background(), testSession); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.svc.InterruptedAwakeAgents()) != 0 {
+		t.Fatal("explicit stop retained recovery proof")
+	}
+	_, err := h.svc.Start(context.Background(), chatsvc.StartConfig{SessionID: testSession, Harness: domain.HarnessCodex, ReconnectOnly: true, AwakeReconnectTarget: &target, ExpectedControllerOwner: target.Owner, ProviderConversationID: target.Owner.ProviderConversationID})
+	if !errors.Is(err, ports.ErrChatRecoveryInconclusive) {
+		t.Fatalf("stale proof reached provider startup: %v", err)
+	}
+}

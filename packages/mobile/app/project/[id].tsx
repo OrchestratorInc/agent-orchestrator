@@ -13,12 +13,12 @@ import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { useOrchestratorLauncher } from "../../lib/useOrchestratorLauncher";
 import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader } from "../../lib/ui";
 import { WorkerBoardList } from "../../lib/worker-board-list";
-import { WorkerDock } from "../../lib/worker-dock";
-import { workerListBottomInset } from "../../lib/worker-dock-layout";
 import { backOr } from "../../lib/backNavigation";
 import { resourceKey, sourceKey, sourceSlice } from "../../lib/environment/scopedBoard";
 import { resolveSessionRouteSource } from "../../lib/session/sessionRoute";
 import { useCloudSignInAction } from "../../lib/cloud/useCloudSignInAction";
+import { SpawnFab } from "../../lib/spawn-fab";
+import { workerDockRestingBottom, workerListBottomInset } from "../../lib/worker-dock-layout";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -77,6 +77,9 @@ function ProjectScreenContent() {
 		haptics.tap();
 		router.push({ pathname: "/spawn", params: { projectId: id, source: source.kind, sourceId: source.id } });
 	};
+	// Same corner and height as the Workers dock, so the spawn button does not
+	// move between the two screens.
+	const fabBottom = workerDockRestingBottom(insets.bottom);
 
 	return (
 		<View style={styles.screen}>
@@ -120,7 +123,7 @@ function ProjectScreenContent() {
 				<WorkerBoardList
 					sessions={source ? projectSessions.map((value) => ({ source, value })) : []}
 					showProject={false}
-					contentBottomInset={configured ? workerListBottomInset(insets.bottom + 12) : insets.bottom + 32}
+					contentBottomInset={workerListBottomInset(fabBottom)}
 					refreshing={refreshing}
 					onRefresh={onRefresh}
 					ListHeaderComponent={
@@ -145,25 +148,8 @@ function ProjectScreenContent() {
 				/>
 			)}
 			{detailState === "project" && configured ? (
-				<View style={[styles.dock, { bottom: insets.bottom + 12 }]}>
-					<WorkerDock
-						controlsEnabled={false}
-						query=""
-						onQueryChange={() => {}}
-						searchOpen={false}
-						onSearchOpen={() => {}}
-						onSearchClose={() => {}}
-						onOpenControls={() => {}}
-						projectFiltered={false}
-						environments={[]}
-						selectedEnvironmentId="all"
-						onSelectEnvironment={() => {}}
-						projectOptions={[{ id: "all", label: "All projects" }]}
-						selectedProjectId="all"
-						selectedProjectLabel="All projects"
-						onSelectProject={() => {}}
-						onSpawn={startTask}
-					/>
+				<View style={[styles.fab, { bottom: fabBottom }]}>
+					<SpawnFab onPress={startTask} testID="project-spawn-worker" />
 				</View>
 			) : null}
 		</View>
@@ -174,5 +160,5 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		screen: { flex: 1, backgroundColor: t.bgBase },
 		center: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 60 },
-		dock: { position: "absolute", left: 16, right: 16, height: 52, flexDirection: "row" },
+		fab: { position: "absolute", right: 16 },
 	});

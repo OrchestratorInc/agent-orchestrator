@@ -46,11 +46,11 @@ import {
 import { useModelCatalogAuthRecovery } from "../hooks/useModelCatalogAuthRecovery";
 import { useUiStore } from "../stores/ui-store";
 import { ModelCatalogNotice } from "./ModelCatalogNotice";
+import { NativeModePicker } from "./NativeModePicker";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
 import { EffortPicker, type EffortAvailability } from "./settings/EffortPicker";
 import { useModelTuning } from "./settings/ModelTuningControls";
-import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import {
 	readTaskComposerPreferences,
 	rememberTaskComposerPreference,
@@ -513,9 +513,15 @@ export function TaskComposer({
 	const selectedMode = mode || (modelTouched ? (catalogUsesModes ? catalogDefaultOption : "") : defaultModeForSelectedAgent);
 	const selectedModelOrMode = (selectedModel || selectedMode).trim();
 	const projectModelOrMode = projectModelForSelectedAgent || projectModeForSelectedAgent;
-	const requestedModel = selectedModelOrMode && selectedModelOrMode !== projectModelOrMode && (
-		selectedModelOrMode !== catalogDefaultOption || isConcreteModelID(projectModelOrMode)
-	) ? selectedModelOrMode : undefined;
+	const requestedModel = isStandalone
+		// Standalone sessions have no project config to inherit. If the UI shows a
+		// concrete catalog default, send it explicitly; otherwise the native agent
+		// may launch with a different harness-owned default than the one displayed.
+		? (isConcreteModelID(selectedModelOrMode) ? selectedModelOrMode : undefined)
+		: selectedModelOrMode && selectedModelOrMode !== projectModelOrMode && (
+				selectedModelOrMode !== catalogDefaultOption || isConcreteModelID(projectModelOrMode) ||
+				(!catalogUsesModes && !projectModelOrMode)
+			) ? selectedModelOrMode : undefined;
 	const rememberedEffortIsExplicit = Boolean(
 		rememberedConfigForSelectedAgent &&
 			Object.prototype.hasOwnProperty.call(rememberedConfigForSelectedAgent, "effort"),
@@ -544,9 +550,16 @@ export function TaskComposer({
 	// With no provider default for the reported levels AO picks one, shows it as
 	// selected, and sends it, so the picker matches what the task runs with.
 	const aoDefaultEffort = requiresTuiFallback ? undefined : fallbackEffort(effortOptions, implicitEffort);
-	const effectiveEffort = effort && effort !== "default" ? effort : aoDefaultEffort ?? "";
+	const effectiveEffort = effort && effort !== "default"
+		? effort
+		: aoDefaultEffort ?? (isStandalone && effortOptions.includes(implicitEffort) ? implicitEffort : "");
 	const requestedEffort = isCloudProject
 		? effort || cloudDefaultEffort || undefined
+		: isStandalone
+		// Standalone sessions have no project role to inherit from. Send the
+		// concrete effort shown by the picker even when the UI is retrying in TUI
+		// mode, otherwise the native harness may use a different default.
+		? (effectiveEffort || undefined)
 		: effortTouched || rememberedEffortIsExplicit
 			? !effectiveEffort || effectiveEffort === implicitEffort ? undefined : effectiveEffort
 			: aoDefaultEffort;
@@ -905,32 +918,15 @@ function TaskModelPicker({
 	}
 
 	if (catalog?.selectionMode === "mode") {
-		const options = (catalog.models ?? []).filter((item) => isConcreteModelID(item.id)).map((item) => ({
-			value: item.id,
-			label: modelChoiceLabel(item),
-		}));
-		const explicitMode = isConcreteModelID(mode) ? mode : "";
-		const defaultMode = catalog.models?.find((item) => item.isDefault && isConcreteModelID(item.id))?.id || "";
-		const effectiveMode = explicitMode || defaultMode;
-		const visibleModeLabel = options.find((option) => option.value === effectiveMode)?.label ?? t("settings.models.modeNotReported");
 		return (
-			<SettingsOptionMenu
-				aria-label={t("newTask.model")}
-				disabled={disabled || options.length === 0}
-				value={effectiveMode}
-				options={options}
-				action={explicitMode && !defaultMode && showFollowAgentAction
-					? { label: t("settings.models.useAgentMode"), onSelect: () => onModeChange("") }
-					: undefined}
+			<NativeModePicker
+				models={catalog.models ?? []}
+				mode={mode}
+				onModeChange={onModeChange}
+				disabled={disabled}
+				showFollowAgentAction={showFollowAgentAction}
 				triggerClassName="composer-chip composer-toolbar-option w-fit"
-				menuAlign="start"
 				menuClassName={COMPOSER_MENU_WIDTH}
-				renderTrigger={() => (
-					<span className="min-w-0 truncate text-control text-foreground" title={visibleModeLabel}>
-						{visibleModeLabel}
-					</span>
-				)}
-				onChange={(value) => onModeChange(value === defaultMode ? "" : value)}
 			/>
 		);
 	}

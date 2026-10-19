@@ -7,6 +7,7 @@ import { localAuthAvailable } from "./cloud/localAuthAvailable";
 import { haptics } from "./haptics";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
+import { textSelectionColors } from "./textSelection";
 import { SheetScreen } from "./ui";
 
 type Mode = "sign-in" | "register";
@@ -128,6 +129,7 @@ export function CloudSignInSheet({ onDone, onClose }: { onDone: () => void; onCl
 
 						{mode === "register" ? (
 							<TextInput
+								{...textSelectionColors(t)}
 								value={displayName}
 								onChangeText={setDisplayName}
 								placeholder="Your name"
@@ -138,6 +140,7 @@ export function CloudSignInSheet({ onDone, onClose }: { onDone: () => void; onCl
 							/>
 						) : null}
 						<TextInput
+							{...textSelectionColors(t)}
 							value={email}
 							onChangeText={setEmail}
 							placeholder="you@example.com"
@@ -150,6 +153,7 @@ export function CloudSignInSheet({ onDone, onClose }: { onDone: () => void; onCl
 							style={s.input}
 						/>
 						<TextInput
+							{...textSelectionColors(t)}
 							value={password}
 							onChangeText={setPassword}
 							placeholder="Password"

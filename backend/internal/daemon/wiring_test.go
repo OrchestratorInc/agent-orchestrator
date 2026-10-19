@@ -94,6 +94,56 @@ func TestInstalledAgentHarnessMapsManagedHarnessInstalls(t *testing.T) {
 	}
 }
 
+type cachedBinaryAgent struct {
+	ports.Agent
+	invalidated int
+}
+
+func (a *cachedBinaryAgent) InvalidateBinaryResolution() { a.invalidated++ }
+
+type cachedBinaryAgents map[domain.AgentHarness]ports.Agent
+
+func (a cachedBinaryAgents) Agent(harness domain.AgentHarness) (ports.Agent, bool) {
+	agent, ok := a[harness]
+	return agent, ok
+}
+
+type installationInvalidations struct {
+	wiringReadinessProvider
+	harnesses []string
+}
+
+func (p *installationInvalidations) InvalidateAgentInstallation(harness string) {
+	p.harnesses = append(p.harnesses, harness)
+}
+
+// Launches, Chat drivers and model discovery each hold their own plugins: an
+// install that clears only the agent service's cache leaves them on the old binary.
+func TestInvalidateHarnessBinaryClearsEveryCache(t *testing.T) {
+	launch := &cachedBinaryAgent{}
+	models := &cachedBinaryAgent{}
+	readiness := &installationInvalidations{}
+
+	invalidateHarnessBinary(readiness, "pi",
+		resolverBinaryCache{agents: cachedBinaryAgents{"pi": launch}},
+		pluginBinaryCache{harness: domain.HarnessCodex, plugin: models},
+	)
+	if launch.invalidated != 1 {
+		t.Fatalf("launch adapter invalidations = %d, want 1", launch.invalidated)
+	}
+	if models.invalidated != 0 {
+		t.Fatalf("another harness's plugin was invalidated %d times", models.invalidated)
+	}
+	if len(readiness.harnesses) != 1 || readiness.harnesses[0] != "pi" {
+		t.Fatalf("service invalidations = %v, want [pi]", readiness.harnesses)
+	}
+
+	invalidateHarnessBinary(readiness, "codex", pluginBinaryCache{harness: domain.HarnessCodex, plugin: models})
+	if models.invalidated != 1 {
+		t.Fatalf("model discovery plugin invalidations = %d, want 1", models.invalidated)
+	}
+}
+
 // TestWiring_WriteFlowsToBroadcaster exercises the real boot path end to end:
 // a lifecycle write -> sqlite -> DB trigger -> change_log -> CDC poller ->
 // broadcaster, through the same cdc.Source implementation the daemon uses.
@@ -191,6 +241,7 @@ func TestWiring_AgentResolverResolvesRealAdapters(t *testing.T) {
 		{domain.HarnessFX, "fx"},
 		{domain.HarnessUnreal, "unreal-agent"},
 		{domain.HarnessCommandCode, "command-code"},
+		{domain.HarnessMemcode, "memcode"},
 	} {
 		agent, ok := resolver.Agent(tc.harness)
 		if !ok {
@@ -321,7 +372,7 @@ func TestWiring_StartSessionBuildsSessionService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildAgentResolver: %v", err)
 	}
-	svc, reviewSvc, lc, err := startSession(context.Background(), cfg, rt, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
+	svc, reviewSvc, lc, err := startSession(context.Background(), cfg, rt, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("startSession: %v", err)
 	}
@@ -382,7 +433,7 @@ func TestWiring_StartSessionSpawnsScratchWithoutGitRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildAgentResolver: %v", err)
 	}
-	svc, _, _, err := startSession(context.Background(), cfg, runtime, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
+	svc, _, _, err := startSession(context.Background(), cfg, runtime, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("startSession: %v", err)
 	}
@@ -439,7 +490,7 @@ func TestStartSession_SpawnDoesNotPanicWhenNoTrackerToken(t *testing.T) {
 	if agentsErr != nil {
 		t.Fatalf("buildAgentResolver: %v", agentsErr)
 	}
-	svc, _, _, err := startSession(context.Background(), cfg, rt, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
+	svc, _, _, err := startSession(context.Background(), cfg, rt, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("startSession: %v", err)
 	}
@@ -473,7 +524,7 @@ func TestStartTrackerIntake_RunsEvenWithoutEnabledProjects(t *testing.T) {
 	if agentsErr != nil {
 		t.Fatalf("buildAgentResolver: %v", agentsErr)
 	}
-	svc, _, _, err := startSession(context.Background(), cfg, rt, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
+	svc, _, _, err := startSession(context.Background(), cfg, rt, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("startSession: %v", err)
 	}
@@ -972,12 +1023,41 @@ func (f *fakeSessionLifecycle) ReconcileStartupSafety(_ context.Context) error {
 	return f.reconcileErr
 }
 
+func (f *fakeSessionLifecycle) ReconnectAwakeAgent(context.Context, domain.AwakeAgentTarget) error {
+	return nil
+}
+
 func (f *fakeSessionLifecycle) ReconcileBackground(_ context.Context) error {
 	f.reconcileBackgroundCalled = true
 	return f.reconcileErr
 }
 
 func (*fakeSessionLifecycle) HibernateIdleChats(context.Context) error { return nil }
+func (*fakeSessionLifecycle) RefreshStaleChats(context.Context, time.Duration) error {
+	return nil
+}
+func (*fakeSessionLifecycle) RefreshStaleTerminals(context.Context, time.Duration) error {
+	return nil
+}
+func (*fakeSessionLifecycle) BusyHarnessSessions(context.Context, domain.AgentHarness) ([]domain.SessionWait, error) {
+	return nil, nil
+}
+func (*fakeSessionLifecycle) StopHarnessSessions(context.Context, domain.AgentHarness) ([]domain.SessionID, error) {
+	return nil, nil
+}
+func (*fakeSessionLifecycle) ResumeHarnessSessions(context.Context, []domain.SessionID) error {
+	return nil
+}
+func (*fakeSessionLifecycle) SetVersionTelemetry(ports.EventSink)                                {}
+func (*fakeSessionLifecycle) SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy) {}
+func (*fakeSessionLifecycle) RetryVersionMoves(context.Context) error                            { return nil }
+func (*fakeSessionLifecycle) ObserveChatVersionSwitch(domain.SessionID, string, string)          {}
+func (*fakeSessionLifecycle) MarkHarnessUpdated(context.Context, domain.AgentHarness, string, time.Time) error {
+	return nil
+}
+func (*fakeSessionLifecycle) CountStaleBinarySessions(context.Context) (map[domain.AgentHarness]int64, error) {
+	return nil, nil
+}
 
 func (f *fakeSessionLifecycle) RestoreAll(_ context.Context) error {
 	f.restoreAllCalled = true

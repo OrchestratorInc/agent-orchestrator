@@ -78,8 +78,26 @@ describe("active turn controls", () => {
 	it("shows a failed start's reason instead of only a stopped-agent banner", () => {
 		expect(screenSource).toContain('session.provisionState !== "failed"');
 		expect(screenSource).toContain('title="Session failed to start" message={failedStart}');
-		expect(screenSource).toContain('startFailure={failedStart}');
+		// The setup checklist reports a failed start in place, with Retry; the banner covers the rest.
+		expect(screenSource).toContain('startFailure={startupShown ? undefined : failedStart}');
+		// A starting session shows its checklist while the conversation loads, not a bare spinner.
+		expect(screenSource).toContain("conversation.loading && !conversation.snapshot && startupView && !startupView.failed");
+		expect(screenSource).toContain("<SessionStartupStatus startup={startupView} />");
+		// While the checklist reports setup, the yellow "Starting the agent…" banner stands down.
+		expect(screenSource).toContain('!startFailure && !starting && (snapshot.controller.state === "recovering"');
+		// The agent coming up emits no conversation event; keep re-reading until it reports connected.
+		expect(screenSource).toContain('if (before === "provisioning" && provisionState === "ready") setAwaitingAgent(true);');
+		// Serially, so a read slower than the poll interval is never superseded (see serialPoll.test.ts).
+		expect(screenSource).toContain("return startSerialPoll(refreshConversation, STARTUP_POLL_MS);");
+		expect(screenSource).not.toContain("setInterval(() => void refreshConversation()");
 		expect(screenSource).toContain('disabled={interfaceTransitionActive || cloudComposerLocked || Boolean(failedStart)}');
+	});
+
+	it("keeps startup polling and the daemon checklist scoped to the routed local host", () => {
+		expect(screenSource).toContain('const config = source.kind === "local" ? configForHost(source.id) : null;');
+		expect(screenSource).toContain('const session = useStartupSession(config, boardSession);');
+		expect(screenSource).toContain('cloudSession || "projectName" in session ? undefined : sessionStartupView(session, conversation.snapshot)');
+		expect(screenSource).toContain('const provisionState = cloudSession || "projectName" in session ? undefined : session.provisionState;');
 	});
 
 	it("shows a paused Coder sandbox before an unavailable conversation fallback", () => {
@@ -91,8 +109,8 @@ describe("active turn controls", () => {
 
 	it("does not offer the local-agent resume path for a paused cloud sandbox", () => {
 		expect(screenSource).toContain('cloudPaused={isResumable(cloudStage)}');
-		expect(screenSource).toContain('!cloudPaused && snapshot.controller.state === "stopped"');
-		expect(screenSource).toContain('!cloudPaused && !startFailure && (snapshot.controller.state === "recovering"');
+		expect(screenSource).toContain('!cloudPaused && !starting && snapshot.controller.state === "stopped"');
+		expect(screenSource).toContain('!cloudPaused && !startFailure && !starting && (snapshot.controller.state === "recovering"');
 		expect(screenSource).toContain('conversation.error && !isResumable(cloudStage)');
 	});
 

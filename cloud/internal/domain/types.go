@@ -171,7 +171,12 @@ type CreateSession struct {
 	ReasoningEffort string
 	DeniedCommands  []string
 	Interface       SessionInterface
-	Provider        string
+	// Branch is the session's git branch. Empty means a generated
+	// <prefix>/<short id>; a named branch that already exists on the remote is
+	// continued from its commits. Omitted when empty so the idempotency payload
+	// of every other create is unchanged.
+	Branch   string `json:",omitempty"`
+	Provider string
 	// SandboxConnectionID names a bring-your-own provider credential. It is
 	// empty for sandboxes that run on the platform's own account.
 	SandboxConnectionID string
@@ -187,6 +192,13 @@ type CreateSession struct {
 	// orchestrator, a standalone worker, or a worker created for a project that
 	// has no active orchestrator.
 	ParentSessionID string
+	// CoderCapability: the caller's organization holds the coder capability
+	// (WorkOS metadata capabilities=coder), so its Coder sessions are not
+	// billed. Set by the HTTP layer, which owns the capability rule; a worker
+	// an orchestrator spawns inherits its parent's billing instead. It is read
+	// from a cache, so it stays out of the create's idempotency payload: a
+	// retry after the cache changed still replays the first create.
+	CoderCapability bool `json:"-"`
 }
 
 // RepoRef is one additional repository (beyond the project's primary repo) to

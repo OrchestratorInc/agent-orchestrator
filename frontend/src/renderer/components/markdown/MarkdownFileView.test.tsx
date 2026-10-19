@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
 import { renderMermaidDiagram } from "../../lib/mermaid-diagram";
+import { TooltipProvider } from "../ui/tooltip";
 import { MarkdownFileView } from "./MarkdownFileView";
 
 const { baseUrlForHostMock } = vi.hoisted(() => ({ baseUrlForHostMock: vi.fn((_hostId: string): string | undefined => undefined) }));
@@ -27,13 +28,15 @@ afterEach(() => {
 
 function view(content: string, filePath = "docs/README.md", truncated = false) {
 	return (
-		<MarkdownFileView
-			content={content}
-			filePath={filePath}
-			sessionId="sess-1"
-			truncated={truncated}
-			version={7}
-		/>
+		<TooltipProvider>
+			<MarkdownFileView
+				content={content}
+				filePath={filePath}
+				sessionId="sess-1"
+				truncated={truncated}
+				version={7}
+			/>
+		</TooltipProvider>
 	);
 }
 
@@ -51,6 +54,19 @@ describe("MarkdownFileView", () => {
 		await waitFor(() =>
 			expect(container.querySelector(".markdown-code .hljs-keyword")).toHaveTextContent("const"),
 		);
+	});
+
+	it("copies each fenced code block's source from its copy button", async () => {
+		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		render(view("```ts\nconst ready = true;\n```\n\n```\nplain text\n```"));
+
+		const buttons = screen.getAllByRole("button", { name: "Copy code" });
+		expect(buttons).toHaveLength(2);
+		expect(buttons[0]).toHaveTextContent("");
+		fireEvent.click(buttons[1]!);
+
+		await waitFor(() => expect(writeText).toHaveBeenCalledWith("plain text"));
+		expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
 	});
 
 	it("resolves relative images through the workspace blob route without double encoding", () => {

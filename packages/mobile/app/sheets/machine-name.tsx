@@ -8,6 +8,7 @@ import { Button, SheetScreen } from "../../lib/ui";
 import { releaseSheetResult, takeSheetResult } from "../../lib/sheetResult";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
+import { textSelectionColors } from "../../lib/textSelection";
 import { space, type } from "../../lib/tokens";
 
 export default function MachineNameSheetRoute() {
@@ -52,7 +53,7 @@ export default function MachineNameSheetRoute() {
 					onChangeText={setName}
 					placeholder="Studio Mac"
 					placeholderTextColor={t.textFaint}
-					selectionColor={t.accent}
+					{...textSelectionColors(t)}
 					maxLength={48}
 					returnKeyType="done"
 					onSubmitEditing={save}

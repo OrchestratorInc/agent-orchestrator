@@ -27,7 +27,10 @@ type AppSettings struct {
 	// CloudOffering is the user's cloud toggle (Settings, Developer Mode). The
 	// daemon gate combines it with the deployment's control-plane URL.
 	CloudOffering bool
-	UpdatedAt     time.Time
+	// VersionRefresh moves idle open sessions to a harness release installed
+	// while they ran.
+	VersionRefresh bool
+	UpdatedAt      time.Time
 }
 
 // GetAppSettings reads the preference row.
@@ -46,6 +49,7 @@ func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 		// one does not must still resolve to something dispatchable.
 		DefaultSessionMode: domain.NormalizeSessionMode(row.DefaultSessionMode),
 		CloudOffering:      row.CloudOffering,
+		VersionRefresh:     row.VersionRefresh,
 		UpdatedAt:          row.UpdatedAt,
 	}, nil
 }
@@ -75,6 +79,19 @@ func (s *Store) SetCloudOffering(ctx context.Context, enabled bool, now time.Tim
 		UpdatedAt:     now,
 	}); err != nil {
 		return fmt.Errorf("set cloud offering: %w", err)
+	}
+	return nil
+}
+
+// SetVersionRefresh persists whether open sessions move to new harness releases.
+func (s *Store) SetVersionRefresh(ctx context.Context, enabled bool, now time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetVersionRefresh(ctx, gen.SetVersionRefreshParams{
+		VersionRefresh: enabled,
+		UpdatedAt:      now,
+	}); err != nil {
+		return fmt.Errorf("set version refresh: %w", err)
 	}
 	return nil
 }

@@ -120,6 +120,7 @@ func isCodexAccountPath(path string) bool {
 	for _, prefix := range []string{
 		"/api/v1/agents/codex/accounts",
 		"/api/v1/agents/codex/account-switches",
+		"/api/v1/agents/accounts",
 	} {
 		if path == prefix || strings.HasPrefix(path, prefix+"/") {
 			return true

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pelletier/go-toml/v2"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -199,8 +201,8 @@ func TestGetLaunchCommandBuildsCustomAgentForSystemPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(agentData), `system_prompt_id = "ao-system-prompt"`) {
-		t.Fatalf("agent config missing prompt id:\n%s", agentData)
+	if !strings.Contains(string(agentData), `instructions = "follow AO rules"`) {
+		t.Fatalf("agent config missing standing instructions:\n%s", agentData)
 	}
 }
 
@@ -327,7 +329,7 @@ func TestGetLaunchCommandBuildsCustomAgentForSystemPromptAndModel(t *testing.T) 
 		`display_name = "AO Session"`,
 		`description = "AO session standing instructions."`,
 		`safety = "neutral"`,
-		`system_prompt_id = "ao-system-prompt"`,
+		`instructions = "follow AO rules"`,
 		`active_model = "mistral \"medium\" \\ latest"`,
 		"",
 	}, "\n")
@@ -766,5 +768,32 @@ func TestResolveVibeBinaryContextCancellation(t *testing.T) {
 
 	if _, err := ResolveVibeBinary(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("ResolveVibeBinary err = %v, want context.Canceled", err)
+	}
+}
+
+func TestCustomAgentCarriesInstructionsWithoutPromptDiscovery(t *testing.T) {
+	p := &Plugin{resolvedBinary: "vibe"}
+	dir := t.TempDir()
+	prompt := "Remember \"quoted\" rules.\nKeep the same conversation.\n"
+	_, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		DataDir: dir, SessionID: "instructions-test", SystemPrompt: prompt,
+		SystemPromptFile: filepath.Join(dir, "prompts", "instructions-test", "system.md"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := readVibeAgentConfig(t, filepath.Join(dir, "prompts", "instructions-test", "vibe"))
+	var profile struct {
+		Instructions   string `toml:"instructions"`
+		SystemPromptID string `toml:"system_prompt_id"`
+	}
+	if err := toml.Unmarshal([]byte(body), &profile); err != nil {
+		t.Fatal(err)
+	}
+	if profile.Instructions != prompt {
+		t.Fatalf("standing instructions lost: got %q, want %q", profile.Instructions, prompt)
+	}
+	if profile.SystemPromptID != "" {
+		t.Fatalf("custom prompt ID depends on separate prompt discovery: %q", profile.SystemPromptID)
 	}
 }

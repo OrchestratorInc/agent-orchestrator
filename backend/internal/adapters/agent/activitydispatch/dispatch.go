@@ -23,6 +23,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/fake"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/gemini"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimchi"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kiro"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/mimocode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/muse"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/omp"
@@ -58,6 +60,7 @@ var Derivers = map[string]DeriveFunc{
 	"opencode-v2":  opencodev2.DeriveActivityState,
 	"prime-agent":  primeagent.DeriveActivityState,
 	"mimo-code":    mimocode.DeriveActivityState,
+	"memcode":      memcode.DeriveActivityState,
 	"amp":          amp.DeriveActivityState,
 	"pi":           pi.DeriveActivityState,
 	"auggie":       auggie.DeriveActivityState,
@@ -70,7 +73,7 @@ var Derivers = map[string]DeriveFunc{
 	"copilot":      activitystate.StandardDeriveActivityState,
 	"kimi":         activitystate.StandardDeriveActivityState,
 	"cline":        activitystate.StandardDeriveActivityState,
-	"kiro":         activitystate.StandardDeriveActivityState,
+	"kiro":         kiro.DeriveActivityState,
 	"kilocode":     activitystate.StandardDeriveActivityState,
 	"autohand":     activitystate.StandardDeriveActivityState,
 	"vibe":         vibe.DeriveActivityState,
@@ -105,6 +108,7 @@ var signalCoverageOverrides = map[domain.AgentHarness]SignalCoverage{
 	domain.HarnessAider:       SignalCoveragePartial,
 	domain.HarnessCommandCode: SignalCoveragePartial,
 	domain.HarnessContinue:    SignalCoveragePartial,
+	domain.HarnessMemcode:     SignalCoveragePartial,
 }
 
 // CoverageForHarness returns the activity-signal coverage for a selectable

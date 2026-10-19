@@ -110,6 +110,24 @@ describe("mobile Chat timeline model", () => {
 		expect(readableConversationItems(value).map((item) => item.id)).not.toContain("u2");
 	});
 
+	it("shows a starting session's opening brief as sent instead of queued", () => {
+		const value = snapshot();
+		value.turns = [{ id: "t1", state: "queued", requestedAt: "2026-08-05T00:00:00Z" }];
+		value.items = value.items.filter((item) => item.id === "u1");
+		expect(timelineModel.queuedConversationMessages(value)).toHaveLength(1);
+		expect(timelineModel.queuedConversationMessages(value, "t1")).toEqual([]);
+		expect(readableConversationItems(value).map((item) => item.id)).toEqual([]);
+		expect(readableConversationItems(value, "t1").map((item) => item.id)).toEqual(["u1"]);
+	});
+
+	it("always places a visible setup checklist, standalone when no turn hosts it", () => {
+		const groups = [{ turnId: "t1" }, { turnId: "t2" }];
+		expect(timelineModel.startupPlacement(groups, "t1", true)).toBe("turn");
+		expect(timelineModel.startupPlacement(groups, "t9", true)).toBe("standalone");
+		expect(timelineModel.startupPlacement(groups, undefined, true)).toBe("standalone");
+		expect(timelineModel.startupPlacement(groups, "t1", false)).toBe("none");
+	});
+
 	it("gates rollback on the daemon capability, accepted history and idle state", () => {
 		const value = snapshot();
 		expect(canRollbackTurn(value, value.turns[0])).toBe(true);

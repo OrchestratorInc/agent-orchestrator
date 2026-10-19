@@ -89,7 +89,7 @@ func (e env) environ(portOverride string) []string {
 	if portOverride != "" {
 		port = portOverride
 	}
-	return append(out, "AO_RUN_FILE="+e.runFile, "AO_DATA_DIR="+e.dataDir, "AO_PORT="+port, "GH_CONFIG_DIR="+filepath.Join(e.dataDir, "gh-config"))
+	return append(out, "AO_RUN_FILE="+e.runFile, "AO_DATA_DIR="+e.dataDir, "AO_PORT="+port, "GH_CONFIG_DIR="+filepath.Join(e.dataDir, "gh-config"), "AO_TELEMETRY_REMOTE=off")
 }
 
 func freePort(t *testing.T) int {

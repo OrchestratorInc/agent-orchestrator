@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 )
 
-func TestReadCodexTurnStatusFindsExactCompletedTurn(t *testing.T) {
+func TestReadCodexTurnStatusFindsTheExactTurnAndItsError(t *testing.T) {
 	requestReader, requestWriter := io.Pipe()
 	responseReader, responseWriter := io.Pipe()
 	defer requestReader.Close()
@@ -45,17 +46,20 @@ func TestReadCodexTurnStatusFindsExactCompletedTurn(t *testing.T) {
 			served <- errors.New("thread status read omitted the exact thread or turns")
 			return
 		}
-		_, err = responseWriter.Write([]byte(`{"id":1,"result":{"thread":{"id":"thread-1","turns":[{"id":"older","status":"completed"},{"id":"current","status":"completed"}]}}}` + "\n"))
+		_, err = responseWriter.Write([]byte(`{"id":1,"result":{"thread":{"id":"thread-1","turns":[{"id":"older","status":"completed"},{"id":"current","status":"failed","error":{"message":"unexpected status 401 Unauthorized","codexErrorInfo":"unauthorized"}}]}}}` + "\n"))
 		served <- err
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	status, err := readCodexTurnStatus(ctx, conn, "thread-1", "current")
+	status, turnErr, err := readCodexTurnStatus(ctx, conn, "thread-1", "current")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status != "completed" {
-		t.Fatalf("turn status = %q, want completed", status)
+	if status != "failed" || turnErr == nil || turnErr.Message != "unexpected status 401 Unauthorized" {
+		t.Fatalf("turn status = %q error = %+v, want failed with Codex's reason", status, turnErr)
+	}
+	if got := codexTurnFailure(status, turnErr).Error(); !strings.Contains(got, "401 Unauthorized") || !strings.Contains(got, "Sign in to Codex again") {
+		t.Fatalf("failure = %q", got)
 	}
 	if err := <-served; err != nil {
 		t.Fatal(err)
@@ -346,6 +350,32 @@ func TestACPSteeringRequiresProviderAdvertisement(t *testing.T) {
 	}
 	if !acpSteeringSupported(map[string]any{"steering": map[string]any{"supported": true}}) {
 		t.Fatal("advertised steering was hidden")
+	}
+}
+
+// After a turn on the "fable" alias, Claude ACP lists that model as
+// "claude-fable-5-1". The next turn still names the alias and must not be
+// refused with "ACP session does not offer model".
+func TestACPModelAliasResolvesToTheListedModel(t *testing.T) {
+	describe := func(text string) *string { return &text }
+	choices := acp.SessionConfigSelectOptionsUngrouped{
+		{Value: "default", Name: "Sonnet", Description: describe("Sonnet")},
+		{Value: "sonnet", Name: "Sonnet", Description: describe("Sonnet 5.5 · Efficient for routine tasks")},
+		{Value: "claude-fable-5-1", Name: "Claude Fable 5.1", Description: describe("Fable 5.1 · Most capable for your hardest tasks")},
+		{Value: "opus", Name: "Opus", Description: describe("Opus 5.5 · Best for everyday, complex tasks")},
+		{Value: "claude-opus-5", Name: "Claude Opus 5", Description: describe("Newer version available · select Opus for Opus 5.5")},
+	}
+	options := []acp.SessionConfigOption{{Select: &acp.SessionConfigOptionSelect{
+		Id: "model", CurrentValue: "claude-fable-5-1", Options: acp.SessionConfigSelectOptions{Ungrouped: &choices},
+	}}}
+	for value, want := range map[string]string{
+		"fable": "claude-fable-5-1", "Fable": "claude-fable-5-1",
+		"opus": "opus", "sonnet": "sonnet", "claude-opus-5": "claude-opus-5",
+		"haiku": "haiku", "": "",
+	} {
+		if got := acpModelValue(options, value); got != want {
+			t.Errorf("acpModelValue(%q) = %q, want %q", value, got, want)
+		}
 	}
 }
 

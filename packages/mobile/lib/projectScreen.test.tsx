@@ -45,12 +45,12 @@ vi.mock("./StaleBanner", () => ({ StaleBanner: "StaleBanner" }));
 vi.mock("./UnpairedState", () => ({ CloudUnreadyState: "CloudUnreadyState" }));
 vi.mock("./ThemeProvider", async () => {
 	const { darkTheme } = await import("./theme");
-	return { useTheme: () => darkTheme, useThemedStyles: (makeStyles: (theme: typeof darkTheme) => unknown) => makeStyles(darkTheme) };
+	return { useTheme: () => darkTheme, useThemeState: () => ({ scheme: "dark" }), useThemedStyles: (makeStyles: (theme: typeof darkTheme) => unknown) => makeStyles(darkTheme) };
 });
 vi.mock("./useOrchestratorLauncher", () => ({ useOrchestratorLauncher: () => ({ busyProjects: new Set(), openOrchestrator: state.openOrchestrator }) }));
 vi.mock("./ui", async (importOriginal) => ({ ...await importOriginal<typeof import("./ui")>(), Button: "Button", EmptyState: "EmptyState", HeaderIconButton: "HeaderIconButton", ListSectionHeader: "ListSectionHeader" }));
 vi.mock("./worker-board-list", () => ({ WorkerBoardList: "WorkerBoardList" }));
-vi.mock("./worker-dock", () => ({ WorkerDock: "WorkerDock" }));
+vi.mock("@expo/ui", () => ({ Host: "NativeHost", Button: "NativeButton" }));
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: "RouteErrorBoundary" }));
 
 import ProjectScreen from "../app/project/[id]";
@@ -131,11 +131,17 @@ describe("Cloud project page", () => {
 		await act(async () => { header.props.onPress(); });
 		expect(state.openOrchestrator).toHaveBeenCalledWith(expect.objectContaining({ source: { kind: "cloud", id: "org-1" } }));
 	});
-	it("places worker spawn at the bottom, not in the header, and keeps the project selected", async () => {
+	it.each([
+		{ kind: "cloud" as const, id: "org-1" },
+		{ kind: "local" as const, id: "host-dev" },
+	])("keeps the project and source selected when spawning with the floating button from %j", async (source) => {
+		state.params = { id: "project-1", source: source.kind, sourceId: source.id };
+		state.projects.push({ source: { kind: "local", id: "host-dev" }, value: { id: "project-1", name: "Local Tappy", kind: "single_repo" } });
 		await act(async () => { renderer = create(<ProjectScreen />); });
 		const root = renderer!.root;
-		const dock = root.find((node) => String(node.type) === "WorkerDock");
-		await act(async () => dock.props.onSpawn());
-		expect(state.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { projectId: "project-1", source: "cloud", sourceId: "org-1" } });
+		const button = root.find((node) => String(node.type) === "NativeButton" && node.props.testID === "project-spawn-worker");
+		expect(root.findByType(ScreenHeader).findAll((node) => node === button)).toHaveLength(0);
+		await act(async () => button.props.onPress());
+		expect(state.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { projectId: "project-1", source: source.kind, sourceId: source.id } });
 	});
 });
