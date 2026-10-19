@@ -51,7 +51,7 @@ func protocolFixture() {
 		if json.Unmarshal(scanner.Bytes(), &request) != nil {
 			continue
 		}
-		calls, err := os.OpenFile(filepath.Join(os.Getenv("HERMES_HOME"), "fixture-calls"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		calls, err := os.OpenFile(filepath.Join(os.Getenv("HERMES_HOME"), "fixture-calls"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 		if err != nil {
 			os.Exit(5)
 		}
@@ -244,7 +244,7 @@ func TestConstructorStartSendDetachReconnectAndExactResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = db.Close()
-	if err := os.WriteFile(filepath.Join(home, "fixture-calls"), nil, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "fixture-calls"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	restored, err := driver.Resume(ctx, cfg)

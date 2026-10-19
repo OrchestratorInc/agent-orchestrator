@@ -167,7 +167,7 @@ func prepareProfile(ctx context.Context, home, instructions string, refresh bool
 	}
 	if created {
 		for name, contents := range map[string][]byte{"__init__.py": contextPlugin, "plugin.yaml": manifest} {
-			if err := os.WriteFile(filepath.Join(dir, name), contents, 0600); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, name), contents, 0o600); err != nil {
 				return err
 			}
 		}

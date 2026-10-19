@@ -3,11 +3,12 @@ package hermesacp
 import (
 	"context"
 	"errors"
-	acpsdk "github.com/coder/acp-go-sdk"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	acpsdk "github.com/coder/acp-go-sdk"
 
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -20,10 +21,10 @@ func provision(t *testing.T, data string, session domain.SessionID) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(home, 0700); err != nil {
+	if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, "config.yaml"), []byte("plugins:\n  enabled: []\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "config.yaml"), []byte("plugins:\n  enabled: []\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return home
@@ -71,7 +72,7 @@ func TestConfigureRefusesModifiedManagedPlugin(t *testing.T) {
 	if _, _, err := configure(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, "plugins", pluginName, "__init__.py"), []byte("user edits"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "plugins", pluginName, "__init__.py"), []byte("user edits"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := configure(context.Background(), cfg); err == nil {
