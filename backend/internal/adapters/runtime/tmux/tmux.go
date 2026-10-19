@@ -1177,6 +1177,13 @@ func (r *Runtime) socketForSession(ctx context.Context, id string) (string, erro
 		return r.socketName, nil
 	}
 	if r.legacyBinary == "" {
+		// With no system tmux to ask, the legacy default socket's file is the
+		// only evidence left. No file means no server, so nothing can live
+		// there and the private socket is authoritative. A present file may
+		// still belong to a live server that only a matching client can query.
+		if legacyDefaultSocketAbsent() {
+			return r.socketName, nil
+		}
 		return "", fmt.Errorf(
 			"%w: cannot inspect legacy system-socket session %s because system tmux is unavailable",
 			ports.ErrRuntimeProbeInconclusive,
@@ -1472,6 +1479,19 @@ func sessionMissingOutput(out string) bool {
 	s := strings.ToLower(out)
 	return strings.Contains(s, "can't find session") ||
 		strings.Contains(s, "session not found")
+}
+
+// legacyDefaultSocketAbsent reports whether tmux's historical default socket
+// file definitively does not exist, mirroring how tmux itself resolves it:
+// $TMUX_TMPDIR (or /tmp), then tmux-<uid>/default.
+func legacyDefaultSocketAbsent() bool {
+	dir := getenv("TMUX_TMPDIR")
+	if dir == "" {
+		dir = "/tmp"
+	}
+	path := filepath.Join(dir, "tmux-"+strconv.Itoa(os.Getuid()), "default")
+	_, err := os.Lstat(path)
+	return errors.Is(err, os.ErrNotExist)
 }
 
 func serverNotRunningOutput(out string) bool {
