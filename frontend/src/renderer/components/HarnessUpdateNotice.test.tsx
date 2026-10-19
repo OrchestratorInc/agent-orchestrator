@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HarnessUpdateNotice, noticePlacement } from "./HarnessUpdateNotice";
+import { HarnessUpdateNotice } from "./HarnessUpdateNotice";
 import { apiClient } from "../lib/api-client";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { appI18n } from "../i18n";
@@ -70,10 +70,41 @@ describe("startup harness update notice", () => {
 	});
 	afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-	it("never raises the native shell, which would block the live browser page", async () => {
+	it("keeps the notice above native browser pages", async () => {
 		mountNotice();
 		const notice = await screen.findByRole("region", { name: "Agent updates available" });
-		expect(notice).not.toHaveAttribute("data-browser-native-overlay");
+		expect(notice).toHaveAttribute("data-browser-native-overlay", "true");
+		expect(notice).toHaveAttribute("data-state", "open");
+		expect(notice).toHaveClass("fixed", "right-4");
+	});
+
+	it("stays pinned while the browser inspector opens, resizes, maximizes and closes", async () => {
+		mountNotice();
+		const notice = await screen.findByRole("region", { name: "Agent updates available" });
+		const browser = document.createElement("div");
+		browser.className = "browser-panel";
+		browser.dataset.browserNativePage = "live";
+		const viewport = document.createElement("div");
+		viewport.className = "browser-panel__viewport";
+		browser.append(viewport);
+		const rect = vi.spyOn(viewport, "getBoundingClientRect");
+		try {
+			for (const left of [820, 600, 0]) {
+				rect.mockReturnValue({ left, top: 40, right: 1280, bottom: 800, width: 1280 - left, height: 760 } as DOMRect);
+				await act(async () => {
+					document.body.append(browser);
+					window.dispatchEvent(new Event("resize"));
+					await new Promise((resolve) => requestAnimationFrame(resolve));
+				});
+				expect(screen.getByRole("region", { name: "Agent updates available" })).toBe(notice);
+				expect(notice).toHaveClass("fixed", "right-4");
+				expect(notice.style.right).toBe("");
+			}
+			await act(async () => { browser.remove(); });
+			expect(notice).toHaveClass("fixed", "right-4");
+		} finally {
+			browser.remove();
+		}
 	});
 
 	it("finds updates without mounting Harness settings and starts no installation automatically", async () => {
@@ -578,28 +609,5 @@ describe("harness updates while sessions run", () => {
 		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
 		await waitFor(() => expect(installs).toHaveLength(1));
 		expect(screen.queryByRole("dialog")).toBeNull();
-	});
-});
-
-describe("noticePlacement", () => {
-	// 1280px window, notice 300px wide starting 72px down and 200px tall.
-	const place = (browser: Parameters<typeof noticePlacement>[0]) => noticePlacement(browser, 72, 200, 1280);
-
-	it("keeps the default corner without a live browser page", () => {
-		expect(place(null)).toEqual({ right: 16 });
-	});
-
-	it("keeps the default corner when the page is elsewhere", () => {
-		expect(place({ left: 200, top: 60, right: 700, bottom: 800 })).toEqual({ right: 16 });
-		expect(place({ left: 800, top: 400, right: 1280, bottom: 800 })).toEqual({ right: 16 });
-	});
-
-	it("moves beside a docked page it would cover", () => {
-		expect(place({ left: 820, top: 100, right: 1270, bottom: 800 })).toEqual({ right: 1280 - 808 });
-	});
-
-	it("steps aside while the page leaves no room beside it", () => {
-		expect(place({ left: 0, top: 40, right: 1280, bottom: 800 })).toBe("hidden");
-		expect(place({ left: 300, top: 40, right: 1280, bottom: 800 })).toBe("hidden");
 	});
 });
