@@ -61,12 +61,13 @@ var officialManagedRecipes = map[Target]officialManagedRecipe{
 		},
 		args: func(string, string) []string { return []string{"--no-modify-path"} },
 	},
-	// Kimi installs to $KIMI_INSTALL_DIR/bin and migrates other kimi
-	// executables it finds on PATH.
+	// Kimi installs to $KIMI_INSTALL_DIR/bin, migrates other kimi executables
+	// it finds on PATH, and writes a region marker to $KIMI_CODE_HOME.
 	TargetKimi: {
 		binRel: filepath.Join("bin", "kimi"),
 		env: func(dir, pin string) []string {
-			return officialInstallerEnv(dir, "KIMI_INSTALL_DIR="+dir, "KIMI_VERSION="+strings.TrimPrefix(pin, "v"), "KIMI_NO_MODIFY_PATH=1")
+			return officialInstallerEnv(dir, "KIMI_INSTALL_DIR="+dir, "KIMI_CODE_HOME="+filepath.Join(dir, ".install-home", ".kimi-code"),
+				"KIMI_VERSION="+strings.TrimPrefix(pin, "v"), "KIMI_NO_MODIFY_PATH=1")
 		},
 		args: noArgs,
 	},
@@ -232,11 +233,17 @@ func (s *Service) runOfficialManagedInstall(ctx context.Context, plan Plan, reci
 			return err
 		}
 		_, _ = fmt.Fprintf(out, "Downloading %s %s into %s\n", plan.Target, pin, dir)
-		return s.installCommands.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: append(append([]string(nil), env...), recipeEnv...)}, out, out)
+		return s.installCommands.RunInstall(ctx, ports.InstallCommand{
+			Argv: argv, Env: append(append([]string(nil), env...), recipeEnv...), Dir: dir, Isolated: true,
+		}, out, out)
 	}
 	command := *plan.Script
 	command.Env = append(append(append([]string(nil), env...), command.Env...), recipeEnv...)
 	command.Args = recipe.args(dir, pin)
+	// Only the recipe's environment reaches the installer: a variable the
+	// user exported, such as KIMI_CODE_HOME or OPENCODE_INSTALL_DIR, would
+	// otherwise send the install into the user's own files.
+	command.Isolated = true
 	_, _ = fmt.Fprintf(out, "Installing %s with its official installer into %s\n", plan.Target, dir)
 	result, err := s.installScripts.RunInstallScript(ctx, command, out, out)
 	if result.SHA256 != "" {

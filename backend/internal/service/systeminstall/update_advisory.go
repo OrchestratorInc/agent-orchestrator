@@ -69,6 +69,9 @@ type UpdateAdvisory struct {
 	// maintenanceCask records that MaintenanceMethod upgrades a Homebrew cask,
 	// which replaces the running release instead of keeping it like a formula.
 	maintenanceCask bool
+	// maintenancePackage is the package MaintenanceMethod upgrades, as the
+	// binary's installation receipt names it.
+	maintenancePackage string
 	// binaryIdentity fingerprints the binary the check probed, so a launch can
 	// notice it was replaced outside AO.
 	binaryIdentity binaryIdentity
@@ -276,6 +279,7 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 	if source.Package != "" {
 		advisory.MaintenanceMethod = source.Method
 		advisory.maintenanceCask = source.PackageCask
+		advisory.maintenancePackage = source.Package
 	} else if home, _ := os.UserHomeDir(); vendorMaintainable(s.goos, target, verified.ResolvedPath, home) {
 		advisory.MaintenanceMethod = "official-installer"
 	}

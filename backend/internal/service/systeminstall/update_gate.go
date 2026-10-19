@@ -74,13 +74,13 @@ func liveSession(session domain.SessionRecord) bool {
 // installs are promoted to safe only after selecting the side-by-side plan.
 // Windows cannot replace a running executable at all, so its updates
 // wait for idle sessions and restart them around the install.
-func updateWhileRunningLevel(goos string, target Target, method string, cask bool) UpdateWhileRunning {
+func updateWhileRunningLevel(goos string, target Target, method string, cask bool, pkg string) UpdateWhileRunning {
 	if goos == "windows" {
 		return UpdateWhileRunningBlocked
 	}
 	switch method {
 	case "homebrew":
-		if cask && !singleBinaryCasks[target] {
+		if cask && (pkg == "" || singleBinaryCasks[target] != pkg) {
 			return UpdateWhileRunningWarn
 		}
 		return UpdateWhileRunningSafe
@@ -96,15 +96,17 @@ func updateWhileRunningLevel(goos string, target Target, method string, cask boo
 	}
 }
 
-// singleBinaryCasks ship one self-contained executable. A cask upgrade
-// deletes the old version's folder, but a running process keeps the file it
-// already opened and loads nothing else from that folder. Codex's cask also
-// ships codex-resources, which a running session can load later, so it stays
-// out.
-var singleBinaryCasks = map[Target]bool{
-	TargetClaudeCode: true,
-	TargetCopilot:    true,
-	TargetDroid:      true,
+// singleBinaryCasks names, per target, the one cask whose layout was checked
+// to ship a single self-contained executable. A cask upgrade deletes the old
+// version's folder, but a running process keeps the file it already opened
+// and loads nothing else from that folder. Any other cask owning the target
+// (another tap, a channel cask) has a layout nobody checked and stays warn.
+// Codex's cask also ships codex-resources, which a running session can load
+// later, so it stays out.
+var singleBinaryCasks = map[Target]string{
+	TargetClaudeCode: "claude-code",
+	TargetCopilot:    "copilot-cli",
+	TargetDroid:      "droid",
 }
 
 // versionedVendorInstalls keep every release in its own file or directory and
@@ -227,7 +229,7 @@ func (s *Service) updateInUse(ctx context.Context, target Target, advisory Updat
 	for _, id := range uniqueSessionIDs(append(slices.Clone(sessions), reviewers...)) {
 		ids = append(ids, string(id))
 	}
-	level := updateWhileRunningLevel(s.goos, target, advisory.MaintenanceMethod, advisory.maintenanceCask)
+	level := updateWhileRunningLevel(s.goos, target, advisory.MaintenanceMethod, advisory.maintenanceCask, advisory.maintenancePackage)
 	_, officialRecipe := officialManagedRecipes[target]
 	officialManaged := advisory.MaintenanceMethod == "official-installer" && officialRecipe && (s.goos == "darwin" || s.goos == "linux")
 	if (managedMethods[advisory.MaintenanceMethod] || officialManaged) && s.managedRoot != "" {

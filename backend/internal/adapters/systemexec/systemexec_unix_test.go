@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -102,3 +103,25 @@ func (b *lockedBuffer) String() string {
 }
 
 var _ io.Writer = (*lockedBuffer)(nil)
+
+// An isolated installer runs in its own directory and sees only the
+// environment it was given plus proxy, temp and locale settings.
+func TestRunInstallIsolatedKeepsUserVariablesOut(t *testing.T) {
+	t.Setenv("KIMI_CODE_HOME", "/Users/me/.kimi-code")
+	t.Setenv("HTTPS_PROXY", "http://proxy:8080")
+	dir := t.TempDir()
+	var output bytes.Buffer
+	err := (Adapter{}).RunInstall(context.Background(), ports.InstallCommand{
+		Argv:     []string{"/bin/sh", "-c", `printf '%s|%s|%s|%s' "${KIMI_CODE_HOME-unset}" "$HTTPS_PROXY" "$GIVEN" "$(pwd -P)"`},
+		Env:      []string{"PATH=/usr/bin:/bin", "GIVEN=yes"},
+		Dir:      dir,
+		Isolated: true,
+	}, &output, &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDir, _ := filepath.EvalSymlinks(dir)
+	if want := "unset|http://proxy:8080|yes|" + wantDir; output.String() != want {
+		t.Fatalf("installer saw %q, want %q", output.String(), want)
+	}
+}

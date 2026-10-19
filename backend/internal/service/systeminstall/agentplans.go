@@ -451,7 +451,7 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 			plan.Reason = "This installation method does not provide a supported update command."
 		}
 		if !plan.Unsupported {
-			plan.UpdateWhileRunning = updateWhileRunningLevel(s.goos, plan.Target, plan.Method, plan.PackageCask)
+			plan.UpdateWhileRunning = updateWhileRunningLevel(s.goos, plan.Target, plan.Method, plan.PackageCask, plan.Package)
 		}
 		if s.managedEligible(plan) {
 			// Installed side by side, so no session's files are touched, on any

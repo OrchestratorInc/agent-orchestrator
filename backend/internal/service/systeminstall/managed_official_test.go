@@ -35,7 +35,7 @@ func TestOfficialManagedRecipesInstallInsideTheRelease(t *testing.T) {
 		args []string
 	}{
 		TargetOpencode: {env: map[string]string{"VERSION": "1.19.3"}, args: []string{"--no-modify-path"}},
-		TargetKimi:     {env: map[string]string{"KIMI_INSTALL_DIR": dir, "KIMI_VERSION": "1.19.3", "KIMI_NO_MODIFY_PATH": "1"}},
+		TargetKimi:     {env: map[string]string{"KIMI_INSTALL_DIR": dir, "KIMI_CODE_HOME": dir + "/.install-home/.kimi-code", "KIMI_VERSION": "1.19.3", "KIMI_NO_MODIFY_PATH": "1"}},
 		TargetGoose:    {env: map[string]string{"GOOSE_BIN_DIR": dir + "/bin", "GOOSE_VERSION": "v1.19.3", "CONFIGURE": "false"}},
 		TargetMemcode:  {env: map[string]string{"MEMCODE_INSTALL_DIR": dir + "/bin", "MEMCODE_VERSION": "v1.19.3"}},
 		TargetFX:       {env: map[string]string{"FX_INSTALL_DIR": dir + "/bin"}, args: []string{"v1.19.3"}},
@@ -145,6 +145,9 @@ func TestOfficialInstallerUpdatesBesideARunningSession(t *testing.T) {
 	release := filepath.Join(root, string(TargetOpencode), "versions", "v1")
 	if home := envValue(scripts[0].Env, "HOME"); !strings.HasPrefix(home, release+string(filepath.Separator)) {
 		t.Fatalf("installer HOME = %q, want inside %s", home, release)
+	}
+	if !scripts[0].Isolated {
+		t.Fatal("the installer inherits the daemon's environment, want only the recipe's")
 	}
 	if got := envValue(scripts[0].Env, "VERSION"); got != "1.19.3" {
 		t.Fatalf("installer VERSION = %q, want the advisory's release", got)
