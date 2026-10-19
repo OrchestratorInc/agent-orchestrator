@@ -74,6 +74,7 @@ func runSyntheticCodeBuddy() {
 		}})
 	}
 	var parkedPrompt json.RawMessage
+	permissionPending := false
 	scan := bufio.NewScanner(os.Stdin)
 	for scan.Scan() {
 		var req struct {
@@ -93,12 +94,17 @@ func runSyntheticCodeBuddy() {
 		trace(req.Method, req.Params.SessionID)
 		if req.Method == "" && string(req.ID) == `"permission-1"` && len(parkedPrompt) > 0 {
 			trace("permission-response", string(req.Result))
+			permissionPending = false
 			update("agent_message_chunk", "synthetic decision settled", "00000000-0000-4000-8000-000000000003")
 			_ = out.Encode(map[string]any{"jsonrpc": "2.0", "id": parkedPrompt, "result": map[string]string{"stopReason": "end_turn"}})
 			parkedPrompt = nil
 			continue
 		}
 		if req.Method == "session/cancel" && len(parkedPrompt) > 0 {
+			if permissionPending {
+				_ = out.Encode(map[string]any{"jsonrpc": "2.0", "method": "$/cancel_request", "params": map[string]string{"requestId": "permission-1"}})
+				permissionPending = false
+			}
 			_ = out.Encode(map[string]any{"jsonrpc": "2.0", "id": parkedPrompt, "result": map[string]string{"stopReason": "cancelled"}})
 			parkedPrompt = nil
 			continue
@@ -136,6 +142,7 @@ func runSyntheticCodeBuddy() {
 				text += part.Text
 			}
 			if strings.Contains(text, "permission") {
+				permissionPending = true
 				parkedPrompt = append(json.RawMessage(nil), req.ID...)
 				_ = out.Encode(map[string]any{"jsonrpc": "2.0", "id": "permission-1", "method": "session/request_permission", "params": map[string]any{
 					"sessionId": syntheticSession, "toolCall": map[string]any{"toolCallId": "synthetic-tool", "title": "Synthetic shell approval", "kind": "execute"},
@@ -453,13 +460,19 @@ func TestCandidateSyntheticPermissionAndInterruptPorts(t *testing.T) {
 				t.Fatal(err)
 			}
 			ready, done, terminal := false, false, false
+			controllerReady, approvalResolved := false, false
+			approvalID := ""
 			for !done {
 				select {
 				case e, ok := <-conv.Events():
 					if !ok {
 						t.Fatal("closed before settlement")
 					}
+					if e.Kind == ports.ChatEventApprovalResolved && e.RequestID == approvalID {
+						approvalResolved = true
+					}
 					if !ready && choice != "interrupt" && e.Kind == ports.ChatEventApprovalRequested {
+						approvalID = e.RequestID
 						if err := conv.ResolveRequest(f.ctx, e.RequestID, ports.ChatDecision{ID: "unoffered"}); !errors.Is(err, ports.ErrChatDecisionNotOffered) {
 							t.Fatalf("invented decision accepted: %v", err)
 						}
@@ -492,10 +505,16 @@ func TestCandidateSyntheticPermissionAndInterruptPorts(t *testing.T) {
 						terminal = true
 					}
 					if terminal && e.Kind == ports.ChatEventControllerState && e.ControllerState == ports.ChatControllerReady {
-						done = true
+						controllerReady = true
 					}
+					done = terminal && controllerReady && (choice != "cancel" || approvalResolved)
 				case <-f.ctx.Done():
 					t.Fatal(f.ctx.Err())
+				}
+			}
+			if choice == "cancel" {
+				if err := conv.ResolveRequest(f.ctx, approvalID, ports.ChatDecision{ID: "allow"}); !errors.Is(err, ports.ErrChatRequestNotPending) {
+					t.Fatalf("cancelled approval remained pending: %v", err)
 				}
 			}
 			calls := traceCalls(t, f.trace)
