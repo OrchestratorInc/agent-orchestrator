@@ -37,13 +37,19 @@ const (
 	zcodeSecretFallbackPrefix = "zcode-credential-fallback:" //nolint:gosec // a key-derivation seed prefix, not a credential value
 )
 
-// AuthStatus reports the local login state for the zcode CLI. A valid,
-// unexpired z.ai OAuth token in the (possibly redirected) shared credential
-// store means authorized; a missing or expired one means the CLI is installed
-// but not logged in — reported as unauthorized rather than unknown so
-// readiness surfaces an actionable "needs auth" (`zcode login zai`) instead
-// of a doomed spawn. The CLI has no refresh flow for z.ai and the raw token
-// lives one hour, so expiry is the expected steady state between logins.
+// AuthStatus reports the local login state for the zcode CLI. A coding-plan
+// API key in the AO-owned personal provider config (written by
+// `ao zcode-login`) is checked first and means authorized with API-key file
+// evidence: the key has no hourly expiry, and the launch path exports the
+// same file, so it is what a session will actually run on. The port doc
+// would call file-held evidence "configured"; the deviation is deliberate so
+// the UI reads as ready instead of asking for a login the key makes moot.
+// Otherwise a valid, unexpired z.ai OAuth token in the (possibly redirected)
+// shared credential store means authorized; a missing or expired one means
+// the CLI is installed but not logged in — reported as unauthorized rather
+// than unknown so readiness surfaces an actionable "needs auth" instead of a
+// doomed spawn. The CLI has no refresh flow for z.ai and the raw token lives
+// one hour, so expiry is the expected steady state between logins.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	return zcodeLocalAuthStatus(ctx)
 }
@@ -51,6 +57,16 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 func zcodeLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, err
+	}
+	if configPath := PersonalProviderConfigPath(aoDataDir()); configPath != "" {
+		hasKey, err := providerConfigHasKey(ctx, configPath)
+		if err != nil {
+			return ports.AgentAuthStatusUnknown, err
+		}
+		if hasKey {
+			ports.RecordAuthEvidence(ctx, authprobe.FileSource(configPath).WithMethod(domain.AgentAccountMethodAPIKey))
+			return ports.AgentAuthStatusAuthorized, nil
+		}
 	}
 	path, ok := zcodeCredentialsPath()
 	if !ok {
@@ -134,6 +150,16 @@ func zcodeHarnessStoreBase(aoDataDir string) string {
 // runs without a LaunchConfig. Adapters cannot import internal/config
 // (layering), so the two-name rule is restated here; config.go:215 is the
 // authoritative description.
+//
+// Known limitation: config.Load absolutizes a relative AO_DATA_DIR against the
+// launch cwd before the daemon chdirs into it, while this reads the raw value
+// (and cannot Abs it post-chdir without double-nesting). agentauth and the
+// session manager use the absolutized cfg.DataDir, so with a relative override
+// (AO_DATA_DIR=data) the probe would look under a different directory than the
+// login menu writes and the launches export. The fix belongs in daemon startup
+// (re-export AO_DATA_DIR as cfg.DataDir right after config.Load); until then a
+// relative AO_DATA_DIR is unsupported for the zcode credential and API-key
+// probes.
 func aoDataDir() string {
 	// EnvDataDir in session_manager; restated to avoid the import cycle.
 	const envAODataDir = "AO_DATA_DIR"

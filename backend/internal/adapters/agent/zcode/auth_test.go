@@ -52,9 +52,20 @@ func jwtWithClaims(t *testing.T, claims map[string]any) string {
 	return header + "." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
 }
 
+// isolateAODataDir points the probe's AO-owned provider config lookup at an
+// empty data dir, so a developer's real ~/.ao/data provider config can never
+// turn an OAuth-branch case into an API-key hit.
+func isolateAODataDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("AO_DATA_DIR", dir)
+	return dir
+}
+
 // writeStore points the auth probe at a fresh store directory holding entries.
 func writeStore(t *testing.T, entries map[string]string) {
 	t.Helper()
+	isolateAODataDir(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".zcode", "v2", "credentials.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -78,6 +89,7 @@ func TestAuthStatus(t *testing.T) {
 	noExpiry := jwtWithClaims(t, map[string]any{"sub": "u"})
 
 	t.Run("missing store is unauthorized", func(t *testing.T) {
+		isolateAODataDir(t)
 		t.Setenv(zcodeDataBaseDirEnv, t.TempDir())
 		t.Setenv(zcodeCredentialSecretEnv, testSecret)
 		status, err := New().AuthStatus(context.Background())

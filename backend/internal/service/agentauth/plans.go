@@ -61,12 +61,15 @@ var plans = []Plan{
 	zcodeLoginPlan(),
 }
 
-// zcodeLoginPlan runs the CLI's browser login against the adapter-owned
-// credential store (service.start injects ZCODE_DATA_BASE_DIR to match the
-// auth probe and session launches). The raw z.ai token lives one hour and the
-// CLI has no refresh flow, so the guidance says when a re-login is needed.
+// zcodeLoginPlan opens the trusted `ao zcode-login` menu: the CLI's browser
+// login against the adapter-owned credential store (service.start injects
+// ZCODE_DATA_BASE_DIR to match the auth probe and session launches), or a
+// Z.ai Coding Plan API key saved to the AO-owned provider config
+// (service.start appends --provider-config with that path). The raw z.ai
+// OAuth token lives one hour and the CLI has no refresh flow; the API key
+// does not expire, so the guidance steers unattended runs to it.
 func zcodeLoginPlan() Plan {
-	return plan("zcode", ActionLogin, "Log in to ZCode", []string{"zcode", "login", "zai"}, "Browser sign-in to Z.AI; the token lives one hour, so re-login before unattended runs", "https://z.ai")
+	return loginMenuPlan("zcode", "zcode-login", nil, "Log in to ZCode", []string{"zcode", "login", "zai"}, "Choose browser sign-in to Z.AI (token lives one hour) or a Z.ai Coding Plan API key for unattended runs", "https://z.ai")
 }
 
 func terminalInputPlan(agentID string, action Action, title string, command []string, terminalInput, guidance, docs string) Plan {

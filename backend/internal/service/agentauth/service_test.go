@@ -434,3 +434,38 @@ func TestLogoutRejectsUnknownUnsupportedAndMissingExecutable(t *testing.T) {
 		})
 	}
 }
+
+func TestStartOpensZcodeLoginMenu(t *testing.T) {
+	// Not parallel: clears the operator store override so the AO-owned paths
+	// derived from dataDir are what the login menu receives.
+	t.Setenv("ZCODE_DATA_BASE_DIR", "")
+
+	dataDir := t.TempDir()
+	opener := &recordingTerminalOpener{}
+	resolver := managedExecutableResolver{agentID: "zcode", path: "/managed/bin/zcode"}
+	svc := NewWithAgentResolver(resolver, resolver, opener, dataDir)
+	svc.selfExecutable = func() (string, error) { return "/Applications/AO.app/Contents/MacOS/ao", nil }
+
+	got, err := svc.Start(context.Background(), "zcode")
+	if err != nil {
+		t.Fatalf("Start(zcode): %v", err)
+	}
+	wantArgv := []string{
+		"/Applications/AO.app/Contents/MacOS/ao", "zcode-login",
+		"--executable", "/managed/bin/zcode",
+		"--provider-config", filepath.Join(dataDir, "harnesses", "zcode", "provider_config.json"),
+	}
+	if !reflect.DeepEqual(opener.input.Argv, wantArgv) {
+		t.Fatalf("terminal argv = %#v, want trusted ZCode login menu %#v", opener.input.Argv, wantArgv)
+	}
+	wantEnv := map[string]string{"ZCODE_DATA_BASE_DIR": filepath.Join(dataDir, "harnesses", "zcode")}
+	if !reflect.DeepEqual(opener.input.Env, wantEnv) {
+		t.Fatalf("terminal env = %#v, want %#v", opener.input.Env, wantEnv)
+	}
+	if opener.input.Title != "Log in to ZCode" {
+		t.Fatalf("terminal title = %q, want Log in to ZCode", opener.input.Title)
+	}
+	if got.Action != ActionLogin {
+		t.Fatalf("action = %q, want login so the UI keeps its Log in button", got.Action)
+	}
+}

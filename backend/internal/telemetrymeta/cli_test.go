@@ -20,6 +20,7 @@ func TestIsRoutineInternalCLICommandNormalizesLegacyShapes(t *testing.T) {
 		"ao project ls",
 		"ao pty-host session-1",
 		"ao unreal-provider /tmp/config.json",
+		"ao zcode-login --executable /usr/local/bin/zcode",
 	} {
 		if !IsRoutineInternalCLICommand(commandPath) {
 			t.Errorf("IsRoutineInternalCLICommand(%q) = false, want true", commandPath)
