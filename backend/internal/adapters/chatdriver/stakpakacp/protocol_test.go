@@ -84,6 +84,11 @@ func runProtocolHelper() {
 
 func TestCandidateUsesRealSharedTransportForPermissionAndReconnect(t *testing.T) {
 	d, cfg := stagedProtocolCandidate(t)
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = persistenthost.Shutdown(cleanupCtx, cfg.DataDir, string(cfg.SessionID))
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	first, err := d.Start(ctx, cfg)
@@ -94,7 +99,8 @@ func TestCandidateUsesRealSharedTransportForPermissionAndReconnect(t *testing.T)
 	if first.ProviderConversationID() != "native-controlled-id" {
 		t.Fatal("native identity was synthesized")
 	}
-	runControlledTurn(t, ctx, first, "reject")
+	runControlledTurn(t, ctx, first, "reject", "first-reject")
+	runControlledTurn(t, ctx, first, "allow", "first-allow")
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -109,19 +115,20 @@ func TestCandidateUsesRealSharedTransportForPermissionAndReconnect(t *testing.T)
 	if err := second.(ports.ChatLiveReconnectActivator).ActivateLiveReconnect(ctx, ""); err != nil {
 		t.Fatal(err)
 	}
-	runControlledTurn(t, ctx, second, "allow")
+	runControlledTurn(t, ctx, second, "allow", "after-reconnect")
 }
 
-func runControlledTurn(t *testing.T, ctx context.Context, c ports.ChatConversation, decision string) {
+func runControlledTurn(t *testing.T, ctx context.Context, c ports.ChatConversation, decision, clientID string) {
 	t.Helper()
-	ref, err := c.SendTurn(ctx, ports.ChatUserMessage{Text: "ordinary controlled task", ClientMessageID: decision})
+	ref, err := c.SendTurn(ctx, ports.ChatUserMessage{Text: "ordinary controlled task", ClientMessageID: clientID})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := c.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
 		t.Fatal(err)
 	}
-	requested, observed := false, false
+	requested := false
+	var response strings.Builder
 	for {
 		select {
 		case <-ctx.Done():
@@ -140,10 +147,16 @@ func runControlledTurn(t *testing.T, ctx context.Context, c ports.ChatConversati
 					t.Fatal(err)
 				}
 			case ports.ChatEventMessageDelta:
-				observed = strings.Contains(event.Delta, `"optionId":"`+decision+`"`)
+				response.WriteString(event.Delta)
 			case ports.ChatEventTurnCompleted:
-				if !requested || !observed {
-					t.Fatalf("missing permission/text events: requested=%v observed=%v", requested, observed)
+				var actual struct {
+					Outcome struct {
+						Outcome  string `json:"outcome"`
+						OptionID string `json:"optionId"`
+					} `json:"outcome"`
+				}
+				if err := json.Unmarshal([]byte(response.String()), &actual); err != nil || !requested || actual.Outcome.Outcome != "selected" || actual.Outcome.OptionID != decision {
+					t.Fatalf("native permission response = %q, requested=%v; want selected %q", response.String(), requested, decision)
 				}
 				if event.ProviderEventID == "" {
 					t.Fatal("completion lost persistent event identity")
