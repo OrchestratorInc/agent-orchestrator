@@ -9,6 +9,7 @@ import { resolveInstalledSDK, frozenPluginManager } from './loader.mjs';
 // No package download, vendor patch, mutable source profile, or CLI fallback.
 if (Number(process.versions.node.split('.')[0]) < 24) throw new Error('Mastra SDK candidate requires Node 24 or newer');
 const { sdkPath, mapperPath, acpPath, pluginManagerPath, projectPath } = await resolveInstalledSDK(process.argv[2]);
+console.log = (...args) => process.stderr.write(args.map(String).join(' ') + '\n');
 const { createMastraCode } = await import(pathToFileURL(sdkPath));
 const { PluginManager } = await import(pathToFileURL(pluginManagerPath));
 const { detectProject } = await import(pathToFileURL(projectPath));
@@ -20,7 +21,6 @@ const config = JSON.parse(configBytes);
 const workspace = await realpath(config.workspace);
 if (!config.owner || typeof config.hostInstructions !== 'string') throw new Error('Invalid owned host configuration');
 setAutoApprove(false);
-console.log = (...args) => process.stderr.write(args.map(String).join(' ') + '\n');
 let agent;
 let shutdown;
 const dispose = () => agent?.dispose();
@@ -43,7 +43,7 @@ try {
         const pluginManager = frozenPluginManager(PluginManager, { projectRoot: detectProject(workspace).rootPath });
         const runtime = await createMastraCode({ ...options, pluginManager });
         let cleanup;
-        return { ...runtime, cleanup: () => cleanup ??= (async () => {
+        const owned = { ...runtime, managedInstructions: pluginManager.managedInstructions, cleanup: () => cleanup ??= (async () => {
           const errors = [];
           const stop = async fn => { try { await fn(); } catch (error) { errors.push(error); } };
           await stop(() => runtime.session.abort());
@@ -60,6 +60,12 @@ try {
           await stop(() => runtime.storage.close());
           if (errors.length) throw new AggregateError(errors, 'Native SDK cleanup failed');
         })() };
+        try {
+          const clients = new Set(Object.keys(options.mcpServers ?? {}));
+          const failed = (await runtime.mcpManager?.initInBackground())?.failed.filter(server => clients.has(server.name)) ?? [];
+          if (failed.length) throw new Error('A required client MCP server failed to initialize');
+          return owned;
+        } catch (error) { await owned.cleanup(); throw error; }
       },
     });
     return agent;

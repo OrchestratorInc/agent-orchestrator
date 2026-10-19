@@ -10,6 +10,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -18,6 +19,7 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/mastracode"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/nativeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -39,8 +41,8 @@ var _ ports.ChatDriver = (*candidateDriver)(nil)
 var _ ports.ChatDriverReconnector = (*candidateDriver)(nil)
 
 func (d *candidateDriver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
-	if cfg.ReadOnly || cfg.DisableNetwork || cfg.Ephemeral || len(cfg.AdditionalDirectories) != 0 || len(cfg.MCPServers) != 0 {
-		return nil, fmt.Errorf("%w: Mastra SDK candidate does not enforce sandbox, ephemeral, extra-directory or client MCP settings", ports.ErrChatCapabilityUnavailable)
+	if cfg.ReadOnly || cfg.DisableNetwork || cfg.Ephemeral || len(cfg.AdditionalDirectories) != 0 {
+		return nil, fmt.Errorf("%w: Mastra SDK candidate does not enforce sandbox, ephemeral or extra-directory settings", ports.ErrChatCapabilityUnavailable)
 	}
 	return d.Driver.Start(ctx, cfg)
 }
@@ -49,7 +51,7 @@ func validateResume(cfg ports.ChatResumeConfig) error {
 	if cfg.FreshIfMissing || strings.TrimSpace(cfg.ProviderConversationID) == "" {
 		return fmt.Errorf("%w: Mastra SDK restore requires an exact native identity without fresh fallback", ports.ErrChatResumeFailed)
 	}
-	if cfg.ReadOnly || len(cfg.AdditionalDirectories) != 0 || len(cfg.MCPServers) != 0 {
+	if cfg.ReadOnly || len(cfg.AdditionalDirectories) != 0 {
 		return fmt.Errorf("%w: Mastra SDK candidate cannot enforce requested restore settings", ports.ErrChatCapabilityUnavailable)
 	}
 	return nil
@@ -109,7 +111,13 @@ func binding(plugin nativeacp.Plugin) acpdriver.Config {
 			if len(cfg.SystemPrompt) > 512*1024 {
 				return acpdriver.Launch{}, fmt.Errorf("Mastra host instructions exceed 512 KiB")
 			}
-			for _, key := range []string{"MASTRA_APP_DATA_DIR", "MASTRA_DB_PATH", "MASTRA_DB_URL", "MASTRA_STORAGE_BACKEND", "MASTRACODE_YOLO"} {
+			sharedProfile := filepath.Join(cfg.DataDir, "mastra-code", "profile")
+			for _, profile := range []string{cfg.Env["MASTRA_APP_DATA_DIR"], os.Getenv("MASTRA_APP_DATA_DIR")} {
+				if profile != "" && filepath.Clean(profile) != sharedProfile {
+					return acpdriver.Launch{}, fmt.Errorf("Mastra SDK candidate refuses an unrelated native profile")
+				}
+			}
+			for _, key := range []string{"MASTRA_DB_PATH", "MASTRA_DB_URL", "MASTRA_STORAGE_BACKEND", "MASTRACODE_YOLO"} {
 				if cfg.Env[key] != "" || os.Getenv(key) != "" {
 					return acpdriver.Launch{}, fmt.Errorf("Mastra SDK candidate refuses native storage/approval override %s", key)
 				}
@@ -132,6 +140,12 @@ func binding(plugin nativeacp.Plugin) acpdriver.Config {
 				return acpdriver.Launch{}, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 			}
 			root := filepath.Join(cfg.DataDir, "mastra-code", "chat", fmt.Sprintf("%x", sha256.Sum256([]byte(cfg.SessionID))))
+			if err := copyNativeProfile(sharedProfile, filepath.Join(root, "profile")); err != nil {
+				return acpdriver.Launch{}, err
+			}
+			if err := mastracode.ValidateNativeSettings(filepath.Join(root, "profile"), cfg.Permissions); err != nil {
+				return acpdriver.Launch{}, err
+			}
 			module, err := installBridge(root)
 			if err != nil {
 				return acpdriver.Launch{}, err
@@ -156,6 +170,8 @@ func binding(plugin nativeacp.Plugin) acpdriver.Config {
 			env["MASTRA_DB_PATH"] = filepath.Join(root, "history.db")
 			env["MASTRA_OBSERVABILITY_DB_PATH"] = filepath.Join(root, "observability.db")
 			env["MASTRA_PLANS_DIR"] = filepath.Join(root, "plans")
+			// This SDK controller never publishes a terminal-generation witness.
+			env["AO_MASTRA_RECEIPT_PATH"] = ""
 			return acpdriver.Launch{Command: node, Args: []string{module, native, config}, Env: env}, nil
 		},
 	}
@@ -225,4 +241,53 @@ func writePrivate(path string, content []byte) error {
 		return writeErr
 	}
 	return closeErr
+}
+
+// Copy only native configuration/credentials into the owned profile. Never
+// overwrite refreshed owned credentials or write to the source profile/history.
+func copyNativeProfile(from, to string) error {
+	for _, name := range []string{"auth.json", "settings.json"} {
+		target := filepath.Join(to, name)
+		if info, err := os.Lstat(target); err == nil {
+			if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Size() > 4*1024*1024 {
+				return fmt.Errorf("unsafe owned Mastra profile file %s", name)
+			}
+			continue
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		sourcePath := filepath.Join(from, name)
+		info, err := os.Lstat(sourcePath)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() || info.Size() > 4*1024*1024 {
+			return fmt.Errorf("invalid native Mastra profile file %s", name)
+		}
+		file, err := os.Open(sourcePath)
+		if err != nil {
+			return err
+		}
+		data, readErr := io.ReadAll(io.LimitReader(file, 4*1024*1024+1))
+		closeErr := file.Close()
+		if readErr != nil {
+			return readErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if len(data) > 4*1024*1024 || !json.Valid(data) {
+			return fmt.Errorf("invalid native Mastra profile JSON %s", name)
+		}
+		if err := os.MkdirAll(to, 0o700); err != nil {
+			return err
+		}
+		if err := writePrivate(target, data); err != nil {
+			return err
+		}
+	}
+	return nil
 }

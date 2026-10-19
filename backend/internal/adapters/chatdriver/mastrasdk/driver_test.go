@@ -36,7 +36,6 @@ func TestCandidateRejectsUnsupportedLifecycleSettingsBeforeDiscovery(t *testing.
 	for _, cfg := range []ports.ChatStartConfig{
 		{ReadOnly: true}, {DisableNetwork: true}, {Ephemeral: true},
 		{AdditionalDirectories: []string{"/other"}},
-		{MCPServers: []ports.ChatMCPServerConfig{{Name: "extra"}}},
 	} {
 		if _, err := driver.Start(t.Context(), cfg); !errors.Is(err, ports.ErrChatCapabilityUnavailable) {
 			t.Fatalf("Start: %v", err)
@@ -92,7 +91,7 @@ func TestCandidateLaunchOwnsPrivateInstructionsAndNativeStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := acpdriver.LaunchConfig{SessionID: domain.SessionID("owned-session"), DataDir: root,
-		WorkspacePath: t.TempDir(), SystemPrompt: "private additive context", Env: map[string]string{"KEEP": "yes"}}
+		WorkspacePath: t.TempDir(), SystemPrompt: "private additive context", Env: map[string]string{"KEEP": "yes", "MASTRA_APP_DATA_DIR": filepath.Join(root, "mastra-code", "profile")}}
 	launch, err := binding(&installedPlugin{binary: native}).Launch(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -124,6 +123,17 @@ func TestCandidateLaunchOwnsPrivateInstructionsAndNativeStorage(t *testing.T) {
 	cfg.Env["MASTRA_DB_PATH"] = "/unrelated/native.db"
 	if _, err := binding(&installedPlugin{binary: native}).Launch(t.Context(), cfg); err == nil {
 		t.Fatal("accepted unrelated native database")
+	}
+	delete(cfg.Env, "MASTRA_DB_PATH")
+	profile := launch.Env["MASTRA_APP_DATA_DIR"]
+	if err := os.MkdirAll(profile, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profile, "settings.json"), []byte(`{"backgroundTools":{"enabled":true}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := binding(&installedPlugin{binary: native}).Launch(t.Context(), cfg); err == nil || !strings.Contains(err.Error(), "background tools") {
+		t.Fatalf("unsupported background settings were not rejected before SDK boot: %v", err)
 	}
 }
 
@@ -160,5 +170,34 @@ func TestCandidateRejectsStockACPAndUnexpectedBridgeIdentity(t *testing.T) {
 		AgentCapabilities: acpsdk.AgentCapabilities{LoadSession: true},
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCandidateCopiesOnlyNativeProfileConfigurationWithoutOverwriting(t *testing.T) {
+	from, to := t.TempDir(), filepath.Join(t.TempDir(), "owned")
+	for _, name := range []string{"auth.json", "settings.json", "history.db"} {
+		if err := os.WriteFile(filepath.Join(from, name), []byte(`{"testOnly":true}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := copyNativeProfile(from, to); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(to, "history.db")); !os.IsNotExist(err) {
+		t.Fatal("copied unrelated native history")
+	}
+	if err := os.WriteFile(filepath.Join(to, "auth.json"), []byte(`{"refreshed":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyNativeProfile(from, to); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(to, "auth.json"))
+	if string(data) != `{"refreshed":true}` {
+		t.Fatal("overwrote owned credentials")
+	}
+	sourceData, _ := os.ReadFile(filepath.Join(from, "auth.json"))
+	if string(sourceData) != `{"testOnly":true}` {
+		t.Fatal("changed source profile")
 	}
 }

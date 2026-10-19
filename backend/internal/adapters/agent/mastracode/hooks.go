@@ -97,7 +97,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 			return err
 		}
 	}
-	if err := validateNativeSettings(profile, cfg.Config.Permissions); err != nil {
+	if err := ValidateNativeSettings(profile, cfg.Config.Permissions); err != nil {
 		return err
 	}
 	database := cfg.Env["MASTRA_DB_PATH"]

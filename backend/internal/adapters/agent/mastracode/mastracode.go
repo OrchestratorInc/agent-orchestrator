@@ -129,7 +129,7 @@ func (*Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHook
 	if err != nil {
 		return err
 	}
-	if err := validateNativeSettings(state.Profile, cfg.Config.Permissions); err != nil {
+	if err := ValidateNativeSettings(state.Profile, cfg.Config.Permissions); err != nil {
 		return err
 	}
 	if ports.NormalizePermissionMode(cfg.Config.Permissions) != ports.PermissionModeBypassPermissions {
@@ -188,7 +188,8 @@ func (*Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHook
 	return nil
 }
 
-func validateNativeSettings(profile string, mode ports.PermissionMode) error {
+// ValidateNativeSettings rejects native settings outside qualified foreground ownership.
+func ValidateNativeSettings(profile string, mode ports.PermissionMode) error {
 	data, err := os.ReadFile(filepath.Join(profile, "settings.json"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil

@@ -61,11 +61,28 @@ export function reasoningUpdates(event, activeMessageId, parts) {
   return updates;
 }
 
+export function stdioMCPServers(servers, workspace) {
+  if (!Array.isArray(servers)) throw new Error('Invalid client MCP servers');
+  const result = Object.create(null);
+  for (const server of servers) {
+    if (!server || typeof server.name !== 'string' || !server.name || Object.hasOwn(result, server.name) ||
+        server.type || typeof server.command !== 'string' || !server.command ||
+        !Array.isArray(server.args) || server.args.some(arg => typeof arg !== 'string') ||
+        !Array.isArray(server.env) || server.env.some(item => typeof item.name !== 'string' || typeof item.value !== 'string')) {
+      throw new Error('Only distinct, valid stdio MCP servers are supported');
+    }
+    result[server.name] = { command: server.command, args: [...server.args],
+      env: Object.fromEntries(server.env.map(item => [item.name, item.value])), cwd: workspace };
+  }
+  return result;
+}
+
 // One native runtime per owned AO session, using an isolated native database.
 // Dependencies are explicit so CI can exercise this boundary without inference.
 export function createAgent({ connection, createRuntime, mapEvent, workspace, owner, hostInstructions, storage }) {
   let runtime;
   let runtimePromise;
+  let requestedMCP;
   let sessionId;
   let active;
   let opening = false;
@@ -88,11 +105,14 @@ export function createAgent({ connection, createRuntime, mapEvent, workspace, ow
     if (disposed) invalid('Bridge is closed');
     if (await realpath(request.cwd) !== workspace) invalid('Workspace mismatch');
     assertOpen();
-    if (request.mcpServers?.length) invalid('Client MCP configuration is not supported by this candidate');
+    const servers = stdioMCPServers(request.mcpServers ?? [], workspace);
+    const signature = JSON.stringify(servers);
+    if (requestedMCP && requestedMCP.signature !== signature) invalid('Cannot change client MCP configuration on a live native runtime');
+    requestedMCP ??= { signature, servers };
   };
   const getRuntime = async () => {
     runtimePromise ??= createRuntime({ cwd: workspace, createInitialThread: false,
-      hostInstructions, storage, unixSocketPubSub: false, disableEnvFile: true,
+      hostInstructions, storage, mcpServers: requestedMCP.servers, unixSocketPubSub: false, disableEnvFile: true,
       initialState: { projectPath: workspace, yolo: false, permissionRules: { categories: {}, tools: { ask_user: 'deny' } } },
       disabledTools: ['ask_user'] });
     runtime = await runtimePromise;
@@ -105,6 +125,7 @@ export function createAgent({ connection, createRuntime, mapEvent, workspace, ow
     const state = session.state.get();
     if (state.yolo !== false) invalid('Native history enables unqualified automatic approval');
     if (typeof state.projectPath !== 'string' || await realpath(state.projectPath) !== workspace) invalid('Native state belongs to another workspace');
+    if ((state.pluginInstructions ?? []).some(text => runtime.managedInstructions?.has(text))) invalid('Native history contains legacy AO TUI instruction context');
     const rules = state.permissionRules;
     if (!rules || Object.entries(rules.categories ?? {}).some(([, value]) => !['ask', 'deny'].includes(value)) ||
         Object.entries(rules.tools ?? {}).some(([, value]) => !['ask', 'deny'].includes(value))) invalid('Native automatic permission rules are unqualified');

@@ -27,15 +27,33 @@ test('loader follows public import-only SDK exports from the native CLI installa
   await assert.rejects(resolveInstalledSDK(join(root, 'cli.js')), /reviewed 1.11.0/);
 });
 
-test('public plugin manager override preserves instructions and prevents source auto-update', async () => {
-  const options = { projectRoot: '/project' };
+test('public plugin manager override preserves instructions and prevents source auto-update', async t => {
+  const projectRoot = await mkdtemp(join(tmpdir(), 'mastra-sdk-plugins-'));
+  t.after(() => rm(projectRoot, { recursive: true, force: true }));
+  const entry = join(projectRoot, '.mastracode', 'plugins', 'ao-runtime');
+  await mkdir(entry, { recursive: true });
+  await writeFile(join(entry, 'index.ts'), '// agent-orchestrator: managed mastra-code\n// owned test fixture');
+  const options = { projectRoot };
+  const user = { id: 'user', status: 'active', instructions: 'independent user rules' };
+  const owned = { id: 'ao-runtime', scope: 'project', source: 'local', specifier: 'agent-orchestrator',
+    path: 'ao-runtime', entry: 'index.ts', enabled: true, status: 'active', instructions: 'owned AO TUI context', tools: { existing: true } };
   class NativePluginManager {
     constructor(received) { this.options = received; }
-    getPluginInstructions() { return ['independent user rules']; }
+    getLoadedPlugins() { return [user, owned]; }
+    async reload() { return this.getLoadedPlugins(); }
+    async listPlugins() { return this.getLoadedPlugins(); }
     async pollGithubSourcesForUpdates() { throw new Error('would fetch/reset source plugin'); }
   }
   const manager = frozenPluginManager(NativePluginManager, options);
   assert.deepEqual(manager.getPluginInstructions(), ['independent user rules']);
   assert.equal(manager.options, options);
   assert.equal(await manager.pollGithubSourcesForUpdates(), false);
+  const loaded = await manager.reload();
+  assert.equal(loaded[1].instructions, undefined);
+  assert.equal(loaded[1].tools, owned.tools);
+  assert.equal(owned.instructions, 'owned AO TUI context');
+  assert.equal(manager.managedInstructions.has('owned AO TUI context'), true);
+  assert.throws(() => manager.withoutOwnedContext([{ ...owned, specifier: 'unrelated-user-plugin' }]), /Ambiguous/);
+  await writeFile(join(entry, 'index.ts'), '// unrelated user source');
+  assert.throws(() => manager.withoutOwnedContext([owned]), /ownership witness/);
 });

@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
-import { dirname, resolve, sep } from 'node:path';
+import { readFileSync, lstatSync } from 'node:fs';
+import { dirname, resolve, sep, join } from 'node:path';
 
 // The reviewed Mastra package exposes import-only entrypoints. Resolve its
 // public package.json first, then honor its declared import export targets;
@@ -30,6 +31,30 @@ export async function resolveInstalledSDK(nativeEntrypoint) {
 // while preventing the native background updater from writing source profiles.
 export function frozenPluginManager(PluginManager, options) {
   return new (class extends PluginManager {
+    managedInstructions = new Set();
+    withoutOwnedContext(plugins) {
+      return plugins.map(plugin => {
+        if (plugin.id !== 'ao-runtime') return plugin;
+        if (plugin.scope !== 'project' || plugin.source !== 'local' || plugin.specifier !== 'agent-orchestrator' ||
+            plugin.path !== 'ao-runtime' || plugin.entry !== 'index.ts' || plugin.enabled !== true || plugin.status !== 'active') {
+          throw new Error('Ambiguous or disabled AO native instruction plugin');
+        }
+        const entry = join(options.projectRoot, '.mastracode', 'plugins', 'ao-runtime', 'index.ts');
+        if (!lstatSync(entry).isFile() || !readFileSync(entry, 'utf8').startsWith('// agent-orchestrator: managed mastra-code\n')) {
+          throw new Error('AO native instruction plugin has no managed ownership witness');
+        }
+        if (typeof plugin.instructions === 'string') this.managedInstructions.add(plugin.instructions);
+        // AO's contribution moves to trusted hostInstructions. Every native
+        // user plugin, tool, processor, signal and other contribution remains.
+        return { ...plugin, instructions: undefined };
+      });
+    }
+    async reload() { return this.withoutOwnedContext(await super.reload()); }
+    getLoadedPlugins() { return this.withoutOwnedContext(super.getLoadedPlugins()); }
+    async listPlugins() { return this.withoutOwnedContext(await super.listPlugins()); }
+    getPluginInstructions() {
+      return this.getLoadedPlugins().flatMap(plugin => plugin.status === 'active' && plugin.instructions ? [plugin.instructions] : []);
+    }
     async pollGithubSourcesForUpdates() { return false; }
   })(options);
 }

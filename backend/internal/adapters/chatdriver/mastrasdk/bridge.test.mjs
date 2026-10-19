@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createAgent, replayMessages, reasoningUpdates } from './bridge.mjs';
+import { createAgent, replayMessages, reasoningUpdates, stdioMCPServers } from './bridge.mjs';
 
 const row = (id = 'user-1', role = 'user', parts = [{ type: 'text', text: 'ordinary task' }]) =>
   ({ id, role, threadId: 'native-1', content: { format: 2, parts } });
@@ -228,4 +228,35 @@ test('immediate cancel fences a queued prompt before native send', async () => {
   assert.equal((await turn).stopReason, 'cancelled');
   assert.equal(f.calls.some(([method]) => method === 'send'), false);
   await f.agent.dispose();
+});
+
+test('AO stdio MCP server is passed through the public SDK without changing argv or environment', async () => {
+  const f = await fixture();
+  const request = { ...f.request, mcpServers: [{ name: 'ao', command: '/owned/ao', args: ['mcp'], env: [{ name: 'AO_DATA_DIR', value: '/owned/data' }] }] };
+  await f.agent.newSession(request);
+  assert.deepEqual(f.config().mcpServers.ao, { command: '/owned/ao', args: ['mcp'], env: { AO_DATA_DIR: '/owned/data' }, cwd: f.request.cwd });
+  await assert.rejects(f.agent.loadSession({ ...f.request, sessionId: 'native-1' }), /Cannot change client MCP/);
+  await f.agent.dispose();
+  assert.throws(() => stdioMCPServers([{ name: 'remote', type: 'http', url: 'https://example.invalid' }], '/owned'), /stdio/);
+  const duplicate = { name: 'ao', command: '/owned/ao', args: [], env: [] };
+  assert.throws(() => stdioMCPServers([duplicate, duplicate], '/owned'), /distinct/);
+});
+
+test('dispose fences a delayed model catalog before any model switch', async () => {
+  const f = await fixture();
+  await f.agent.newSession(f.request);
+  let release;
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const blocked = new Promise(resolve => { release = resolve; });
+  f.runtime.controller.listAvailableModels = async () => { entered(); await blocked; return [{ id: 'native/default', hasApiKey: true }]; };
+  const selection = f.agent.unstable_setSessionModel({ sessionId: 'native-1', modelId: 'native/default' });
+  const rejected = assert.rejects(selection, /closed/);
+  await started;
+  const disposal = f.agent.dispose();
+  release();
+  await rejected;
+  await disposal;
+  assert.equal(f.calls.some(([method]) => method === 'model'), false);
+  assert.equal(f.calls.filter(([method]) => method === 'cleanup').length, 1);
 });
