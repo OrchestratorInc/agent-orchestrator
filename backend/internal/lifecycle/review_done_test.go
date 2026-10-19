@@ -291,3 +291,74 @@ func TestReviewDoneNotice_NothingOwedSendsNothing(t *testing.T) {
 		t.Fatalf("message sent for a pass that owes none: %v", msg.msgs)
 	}
 }
+
+// A pass replaced by a newer head's trigger, or stopped by the user, must not
+// send the worker off to request another review: the newer pass is already
+// running, and the user's stop was deliberate.
+func TestReviewDoneNotice_SupersededAndUserCancelledDoNotAskForAnotherReview(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	st.runs = []domain.ReviewRun{
+		doneRun("run-s", domain.ReviewRunFailed, domain.VerdictNone, "", domain.ReviewRunSupersededReason),
+		doneRun("run-u", domain.ReviewRunCancelled, domain.VerdictNone, "", domain.ReviewRunCancelledByUserReason),
+		doneRun("run-x", domain.ReviewRunFailed, domain.VerdictNone, "", "reviewer exited before submitting a result"),
+	}
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 3 {
+		t.Fatalf("want three done messages, got %v", msg.msgs)
+	}
+	assertContains(t, msg.msgs[0], "AO review done: failed", "already under way", "instead of requesting another review")
+	assertContains(t, msg.msgs[1], "AO review done: cancelled", "stopped this review on purpose", "do not request another unless they ask")
+	for _, m := range msg.msgs[:2] {
+		if strings.Contains(m, "Request another review if you still need one") {
+			t.Fatalf("superseded/user-cancelled notice asks for another review:\n%s", m)
+		}
+	}
+	assertContains(t, msg.msgs[2], "Request another review if you still need one")
+}
+
+// Notices go out oldest first: a later pass is not announced while an
+// earlier one still waits for its provider review to be observed.
+func TestReviewDoneNotice_KeepsOldestFirstOrder(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	st.runs = []domain.ReviewRun{
+		doneRun("run-1", domain.ReviewRunComplete, domain.VerdictApproved, "555", "first"),
+		doneRun("run-2", domain.ReviewRunCancelled, domain.VerdictNone, "", "cancelled by user"),
+	}
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("later notice sent ahead of a waiting earlier one: %v", msg.msgs)
+	}
+	st.reviews[donePR] = []domain.PullRequestReview{observedReview("555")}
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 2 || !strings.Contains(msg.msgs[0], "Run: run-1") || !strings.Contains(msg.msgs[1], "Run: run-2") {
+		t.Fatalf("want run-1 then run-2, got %v", msg.msgs)
+	}
+}
+
+// A worker that ends while a pass waits for its review to be observed does
+// not leave the wait behind.
+func TestReviewDoneNotice_ForgetsWaitsOfEndedWorkers(t *testing.T) {
+	m, st, _ := newNoticeManager(t)
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictApproved, "555", "LGTM")}
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.reviewNoticeSeen) != 1 {
+		t.Fatalf("waits = %v, want the run waiting", m.reviewNoticeSeen)
+	}
+	rec := st.sessions["w-1"]
+	rec.IsTerminated = true
+	st.sessions["w-1"] = rec
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.reviewNoticeSeen) != 0 {
+		t.Fatalf("waits = %v, want none after the worker ended", m.reviewNoticeSeen)
+	}
+}

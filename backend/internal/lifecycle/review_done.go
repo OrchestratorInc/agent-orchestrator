@@ -52,6 +52,7 @@ func (m *Manager) DeliverReviewDoneNotices(ctx context.Context, id domain.Sessio
 		return err
 	}
 	if rec.IsTerminated || rec.Activity.State == domain.ActivityExited {
+		m.forgetReviewNoticeWaits(id)
 		return nil
 	}
 	runs, err := store.ListPendingReviewRunNotices(ctx, id)
@@ -64,7 +65,9 @@ func (m *Manager) DeliverReviewDoneNotices(ctx context.Context, id domain.Sessio
 			return err
 		}
 		if !ready {
-			continue
+			// Keep notices in the order the passes were requested: a later
+			// pass is not announced ahead of an earlier one still waiting.
+			return nil
 		}
 		outcome, err := m.guard.Nudge(ctx, id, msg)
 		if outcome != sessionguard.Sent {
@@ -82,6 +85,23 @@ func (m *Manager) DeliverReviewDoneNotices(ctx context.Context, id domain.Sessio
 		delete(m.reviewNoticeSeen, run.ID)
 	}
 	return nil
+}
+
+// reviewNoticeWait is when a finished pass was first found waiting for its
+// provider review to be observed, and whose worker it belongs to.
+type reviewNoticeWait struct {
+	session domain.SessionID
+	since   time.Time
+}
+
+// forgetReviewNoticeWaits drops the observe waits of a worker that can no
+// longer take a notice. Caller holds reviewNoticeMu.
+func (m *Manager) forgetReviewNoticeWaits(id domain.SessionID) {
+	for runID, wait := range m.reviewNoticeSeen {
+		if wait.session == id {
+			delete(m.reviewNoticeSeen, runID)
+		}
+	}
 }
 
 // SweepReviewDoneNotices retries every worker's pending notices once.
@@ -158,12 +178,12 @@ func (m *Manager) reviewDoneNotice(ctx context.Context, run domain.ReviewRun) (s
 		observed = observed || inline > 0
 		if !observed {
 			now := m.clock()
-			first, seen := m.reviewNoticeSeen[run.ID]
+			wait, seen := m.reviewNoticeSeen[run.ID]
 			if !seen {
-				m.reviewNoticeSeen[run.ID] = now
+				m.reviewNoticeSeen[run.ID] = reviewNoticeWait{session: run.SessionID, since: now}
 				return "", false, nil
 			}
-			if now.Sub(first) < reviewNoticeObserveGrace {
+			if now.Sub(wait.since) < reviewNoticeObserveGrace {
 				return "", false, nil
 			}
 		}
@@ -208,7 +228,17 @@ func formatReviewDoneNotice(run domain.ReviewRun, reviewURL string, inline int, 
 		if body != "" {
 			fmt.Fprintf(&msg, "Reason: %s\n", body)
 		}
-		msg.WriteString("\nNo review result was recorded for this pass. Request another review if you still need one.")
+		msg.WriteString("\nNo review result was recorded for this pass. ")
+		switch run.Body {
+		case domain.ReviewRunSupersededReason:
+			// The trigger that superseded this pass already started a review
+			// of the newer head; re-triggering would race it.
+			msg.WriteString("A review of the newer head is already under way; wait for its own review done message instead of requesting another review.")
+		case domain.ReviewRunCancelledByUserReason:
+			msg.WriteString("The user stopped this review on purpose; do not request another unless they ask.")
+		default:
+			msg.WriteString("Request another review if you still need one.")
+		}
 		return msg.String()
 	}
 	// Changes requested with inline comments: the required changes are those

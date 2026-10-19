@@ -120,6 +120,17 @@ const (
 	ReviewWorkerNoticeSent ReviewWorkerNotice = "sent"
 )
 
+// Recorded reasons for review passes that end without a result. The "review
+// done" notice reads them to tell the worker whether another review is worth
+// requesting.
+const (
+	// ReviewRunSupersededReason marks a pass replaced by a trigger for a newer
+	// head commit; the newer pass is already running.
+	ReviewRunSupersededReason = "superseded by a review trigger for a newer commit"
+	// ReviewRunCancelledByUserReason marks a pass the user stopped on purpose.
+	ReviewRunCancelledByUserReason = "cancelled by user"
+)
+
 // ReviewTriggerSource identifies who initiated a review pass.
 type ReviewTriggerSource string
 
