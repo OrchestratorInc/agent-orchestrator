@@ -103,6 +103,11 @@ func TestStartAndResumeRejectBeforeCreatingOrLoadingSession(t *testing.T) {
 	for _, resume := range []bool{false, true} {
 		t.Run(fmt.Sprintf("resume=%t", resume), func(t *testing.T) {
 			dataDir, workspace := t.TempDir(), t.TempDir()
+			t.Cleanup(func() {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cleanupCancel()
+				_ = persistenthost.Shutdown(cleanupCtx, dataDir, "candidate")
+			})
 			methods := filepath.Join(dataDir, "methods")
 			d := NewCandidate(&plugin{binary: binary}, nil)
 			ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
