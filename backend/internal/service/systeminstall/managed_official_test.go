@@ -16,12 +16,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-type installScriptRunnerFunc func(context.Context, ports.InstallScriptCommand, io.Writer, io.Writer) (ports.InstallScriptResult, error)
-
-func (f installScriptRunnerFunc) RunInstallScript(ctx context.Context, command ports.InstallScriptCommand, stdout, stderr io.Writer) (ports.InstallScriptResult, error) {
-	return f(ctx, command, stdout, stderr)
-}
-
 func envValue(env []string, key string) string {
 	value := ""
 	for _, entry := range env {
