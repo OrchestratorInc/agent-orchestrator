@@ -2,10 +2,14 @@ package systeminstall
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
+	"runtime"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // officialManagedRecipe runs a vendor's own installer into one AO release
@@ -19,7 +23,10 @@ type officialManagedRecipe struct {
 	// env and args configure one install into dir; pin is a bare version
 	// ("1.2.3"), or "" for the installer's latest.
 	env  func(dir, pin string) []string
-	args func(pin string) []string
+	args func(dir, pin string) []string
+	// command, when set, replaces the vendor's script: AO downloads the
+	// release itself because the script cannot run beside live sessions.
+	command func(dir, pin, goos, goarch string) ([]string, error)
 }
 
 // managedInstallerPath is the PATH an official installer runs with: system
@@ -42,7 +49,7 @@ func withV(pin string) string {
 	return "v" + pin
 }
 
-func noArgs(string) []string { return nil }
+func noArgs(string, string) []string { return nil }
 
 var officialManagedRecipes = map[Target]officialManagedRecipe{
 	// opencode.ai/install installs to $HOME/.opencode/bin, takes VERSION, and
@@ -52,7 +59,7 @@ var officialManagedRecipes = map[Target]officialManagedRecipe{
 		env: func(dir, pin string) []string {
 			return officialInstallerEnv(dir, "VERSION="+strings.TrimPrefix(pin, "v"))
 		},
-		args: func(string) []string { return []string{"--no-modify-path"} },
+		args: func(string, string) []string { return []string{"--no-modify-path"} },
 	},
 	// Kimi installs to $KIMI_INSTALL_DIR/bin and migrates other kimi
 	// executables it finds on PATH.
@@ -89,7 +96,7 @@ var officialManagedRecipes = map[Target]officialManagedRecipe{
 		env: func(dir, _ string) []string {
 			return officialInstallerEnv(dir, "FX_INSTALL_DIR="+filepath.Join(dir, "bin"))
 		},
-		args: func(pin string) []string {
+		args: func(_, pin string) []string {
 			if pin == "" {
 				return nil
 			}
@@ -102,7 +109,7 @@ var officialManagedRecipes = map[Target]officialManagedRecipe{
 		env: func(dir, _ string) []string {
 			return officialInstallerEnv(dir, "PI_INSTALL_DIR="+filepath.Join(dir, "bin"))
 		},
-		args: func(pin string) []string {
+		args: func(_, pin string) []string {
 			if pin == "" {
 				return []string{"--binary"}
 			}
@@ -128,6 +135,78 @@ var officialManagedRecipes = map[Target]officialManagedRecipe{
 		},
 		args: noArgs,
 	},
+	// Codex keeps each release in its own folder under $CODEX_HOME; a
+	// private CODEX_HOME keeps the user's config, auth and their own
+	// installs out of it.
+	TargetCodex: {
+		binRel: filepath.Join("bin", "codex"),
+		env: func(dir, pin string) []string {
+			release := strings.TrimPrefix(pin, "v")
+			if release == "" {
+				release = "latest"
+			}
+			return officialInstallerEnv(dir,
+				"CODEX_HOME="+filepath.Join(dir, "codex-home"),
+				"CODEX_INSTALL_DIR="+filepath.Join(dir, "bin"),
+				"CODEX_RELEASE="+release,
+				"CODEX_NON_INTERACTIVE=1")
+		},
+		args: noArgs,
+	},
+	// OpenCode 2 installs the same opencode binary (plus an opencode2 shim)
+	// to $HOME/.opencode/bin; its launcher stays distinct from version 1's.
+	TargetOpencodeV2: {
+		binRel: filepath.Join(".install-home", ".opencode", "bin", "opencode"),
+		env: func(dir, pin string) []string {
+			return officialInstallerEnv(dir, "VERSION="+strings.TrimPrefix(pin, "v"))
+		},
+		args: func(string, string) []string { return []string{"--no-modify-path"} },
+	},
+	// Amp installs to $AMP_HOME/bin and always links itself into the HOME's
+	// ~/.local/bin, which the private HOME keeps away from the user's.
+	TargetAmp: {
+		binRel: filepath.Join("bin", "amp"),
+		env: func(dir, pin string) []string {
+			return officialInstallerEnv(dir, "AMP_HOME="+dir, "AMP_VERSION="+strings.TrimPrefix(pin, "v"))
+		},
+		args: noArgs,
+	},
+	// Autohand also installs zit, a computer-control component and a first
+	// run, and replaces any agent command it can write on PATH.
+	TargetAutohand: {
+		binRel: filepath.Join("bin", "autohand"),
+		env: func(dir, pin string) []string {
+			version := strings.TrimPrefix(pin, "v")
+			if version == "" {
+				version = "latest"
+			}
+			return officialInstallerEnv(dir,
+				"AUTOHAND_INSTALL_DIR="+filepath.Join(dir, "bin"),
+				"AUTOHAND_VERSION="+version,
+				"AUTOHAND_SKIP_ZIT_INSTALL=1",
+				"AUTOHAND_SKIP_COMPUTER_CONTROL_INSTALL=1",
+				"AUTOHAND_INSTALL_FIRST_RUN=no",
+				"AUTOHAND_INSTALL_LOCAL_AI=0")
+		},
+		args: noArgs,
+	},
+	// Agy installs its latest release only; the installed version is still
+	// checked against the release the update picked.
+	TargetAgy: {
+		binRel: filepath.Join("bin", "agy"),
+		env:    func(dir, _ string) []string { return officialInstallerEnv(dir) },
+		args: func(dir, _ string) []string {
+			return []string{"--dir", filepath.Join(dir, "bin")}
+		},
+	},
+	// Droid's script kills every running droid before it installs, so AO
+	// downloads the release and its checksum from the same place itself.
+	TargetDroid: {
+		binRel:  filepath.Join("bin", "droid"),
+		env:     func(dir, _ string) []string { return officialInstallerEnv(dir) },
+		args:    noArgs,
+		command: droidDownloadCommand,
+	},
 }
 
 // officialManagedRecipeFor returns the recipe that installs plan's official
@@ -137,19 +216,75 @@ func (s *Service) officialManagedRecipeFor(plan Plan) (officialManagedRecipe, bo
 		return officialManagedRecipe{}, false
 	}
 	recipe, ok := officialManagedRecipes[plan.Target]
-	return recipe, ok
+	if !ok || recipe.command == nil && s.installScripts == nil || recipe.command != nil && s.installCommands == nil {
+		return officialManagedRecipe{}, false
+	}
+	return recipe, true
 }
 
-// runOfficialManagedInstall runs the vendor's installer script for one
-// release into dir.
+// runOfficialManagedInstall installs one release into dir: the vendor's
+// installer script, or the recipe's own download.
 func (s *Service) runOfficialManagedInstall(ctx context.Context, plan Plan, recipe officialManagedRecipe, pin, dir string, env []string, out io.Writer) error {
+	recipeEnv := recipe.env(dir, pin)
+	if recipe.command != nil {
+		argv, err := recipe.command(dir, pin, s.goos, runtime.GOARCH)
+		if err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(out, "Downloading %s %s into %s\n", plan.Target, pin, dir)
+		return s.installCommands.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: append(append([]string(nil), env...), recipeEnv...)}, out, out)
+	}
 	command := *plan.Script
-	command.Env = append(append(append([]string(nil), env...), command.Env...), recipe.env(dir, pin)...)
-	command.Args = recipe.args(pin)
+	command.Env = append(append(append([]string(nil), env...), command.Env...), recipeEnv...)
+	command.Args = recipe.args(dir, pin)
 	_, _ = fmt.Fprintf(out, "Installing %s with its official installer into %s\n", plan.Target, dir)
 	result, err := s.installScripts.RunInstallScript(ctx, command, out, out)
 	if result.SHA256 != "" {
 		_, _ = fmt.Fprintf(out, "\nsource: %s\nsha256: %s\n", command.URL, result.SHA256)
 	}
 	return err
+}
+
+// droidDownloadScript fetches one Droid release and its published checksum,
+// verifies it, and moves it into place: what Droid's installer does, without
+// killing the droids that are running.
+const droidDownloadScript = `set -eu
+url="$1"; sum_url="$2"; dest="$3"
+mkdir -p "$(dirname "$dest")"
+tmp="$dest.download"
+curl -fsSL -o "$tmp" "$url"
+want="$(curl -fsSL "$sum_url" | awk '{print $1}')"
+if command -v shasum >/dev/null 2>&1; then
+  got="$(shasum -a 256 "$tmp" | awk '{print $1}')"
+else
+  got="$(sha256sum "$tmp" | awk '{print $1}')"
+fi
+if [ -z "$want" ] || [ "$want" != "$got" ]; then
+  rm -f "$tmp"
+  echo "checksum mismatch for $url" >&2
+  exit 1
+fi
+chmod 755 "$tmp"
+mv "$tmp" "$dest"
+`
+
+// droidDownloadCommand downloads Droid's release from downloads.factory.ai,
+// where its installer gets it. Intel Macs and PCs get the baseline build,
+// which runs whether or not the CPU has AVX2.
+func droidDownloadCommand(dir, pin, goos, goarch string) ([]string, error) {
+	version := strings.TrimPrefix(pin, "v")
+	if version == "" {
+		return nil, errors.New("AO needs the release to install, but no newer Droid release is known")
+	}
+	arch := ""
+	switch goarch {
+	case "arm64":
+		arch = "arm64"
+	case "amd64":
+		arch = "x64-baseline"
+	default:
+		return nil, fmt.Errorf("no Droid build is published for %s", goarch)
+	}
+	base := fmt.Sprintf("https://downloads.factory.ai/factory-cli/releases/%s/%s/%s/droid", version, goos, arch)
+	return []string{"/bin/sh", "-c", droidDownloadScript, "droid-install", base, base + ".sha256", filepath.Join(dir, "bin", "droid")}, nil
 }

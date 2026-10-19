@@ -50,6 +50,18 @@ func TestOfficialManagedRecipesInstallInsideTheRelease(t *testing.T) {
 			"QWEN_INSTALL_LIB_DIR": dir + "/lib", "QWEN_INSTALL_BIN_DIR": dir + "/bin",
 			"QWEN_INSTALL_VERSION": "1.19.3", "QWEN_INSTALL_METHOD": "standalone", "QWEN_NO_MODIFY_PATH": "1",
 		}},
+		TargetCodex: {env: map[string]string{
+			"CODEX_HOME": dir + "/codex-home", "CODEX_INSTALL_DIR": dir + "/bin",
+			"CODEX_RELEASE": "1.19.3", "CODEX_NON_INTERACTIVE": "1",
+		}},
+		TargetOpencodeV2: {env: map[string]string{"VERSION": "1.19.3"}, args: []string{"--no-modify-path"}},
+		TargetAmp:        {env: map[string]string{"AMP_HOME": dir, "AMP_VERSION": "1.19.3"}},
+		TargetAutohand: {env: map[string]string{
+			"AUTOHAND_INSTALL_DIR": dir + "/bin", "AUTOHAND_VERSION": "1.19.3",
+			"AUTOHAND_SKIP_ZIT_INSTALL": "1", "AUTOHAND_SKIP_COMPUTER_CONTROL_INSTALL": "1", "AUTOHAND_INSTALL_FIRST_RUN": "no",
+		}},
+		TargetAgy:   {args: []string{"--dir", dir + "/bin"}},
+		TargetDroid: {},
 	} {
 		t.Run(string(target), func(t *testing.T) {
 			recipe, ok := officialManagedRecipes[target]
@@ -68,7 +80,7 @@ func TestOfficialManagedRecipesInstallInsideTheRelease(t *testing.T) {
 					t.Fatalf("%s = %q, want %q", key, got, value)
 				}
 			}
-			if got := recipe.args("1.19.3"); !slices.Equal(got, want.args) {
+			if got := recipe.args(dir, "1.19.3"); !slices.Equal(got, want.args) {
 				t.Fatalf("args = %q, want %q", got, want.args)
 			}
 			if recipe.binRel == "" || filepath.IsAbs(recipe.binRel) {
@@ -145,5 +157,27 @@ func TestOfficialInstallerUpdatesBesideARunningSession(t *testing.T) {
 	}
 	if target, err := filepath.EvalSymlinks(launcher); err != nil || !strings.HasPrefix(target, release) {
 		t.Fatalf("launcher resolves to %q (%v), want the new release", target, err)
+	}
+}
+
+// Droid's own script kills every running droid, so AO downloads the pinned
+// release and its checksum from where the script gets them.
+func TestDroidDownloadsThePinnedReleaseWithoutItsScript(t *testing.T) {
+	argv, err := droidDownloadCommand("/rel/v2", "0.244.0", "darwin", "arm64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "https://downloads.factory.ai/factory-cli/releases/0.244.0/darwin/arm64/droid"
+	if len(argv) != 7 || argv[0] != "/bin/sh" || argv[4] != want || argv[5] != want+".sha256" || argv[6] != "/rel/v2/bin/droid" {
+		t.Fatalf("argv = %q", argv)
+	}
+	if strings.Contains(argv[2], "kill") {
+		t.Fatal("the download must never stop running droids")
+	}
+	if argv, _ := droidDownloadCommand("/rel/v2", "0.244.0", "linux", "amd64"); !strings.Contains(argv[4], "/linux/x64-baseline/") {
+		t.Fatalf("Intel download = %q, want the baseline build", argv[4])
+	}
+	if _, err := droidDownloadCommand("/rel/v2", "", "darwin", "arm64"); err == nil {
+		t.Fatal("an unpinned download must fail instead of guessing a release")
 	}
 }

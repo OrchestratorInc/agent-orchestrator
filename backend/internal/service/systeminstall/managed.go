@@ -79,7 +79,7 @@ func (s *Service) SetBinaryInvalidator(invalidate func(Target)) {
 // managedEligible reports whether an update through plan installs side by side.
 func (s *Service) managedEligible(plan Plan) bool {
 	if _, ok := s.officialManagedRecipeFor(plan); ok {
-		return s.managedRoot != "" && s.installScripts != nil && !plan.Unsupported
+		return s.managedRoot != "" && !plan.Unsupported
 	}
 	return s.managedRoot != "" && s.installCommands != nil && managedMethods[plan.Method] &&
 		plan.Package != "" && !plan.Unsupported &&

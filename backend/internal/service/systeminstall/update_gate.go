@@ -80,7 +80,7 @@ func updateWhileRunningLevel(goos string, target Target, method string, cask boo
 	}
 	switch method {
 	case "homebrew":
-		if cask {
+		if cask && !singleBinaryCasks[target] {
 			return UpdateWhileRunningWarn
 		}
 		return UpdateWhileRunningSafe
@@ -94,6 +94,17 @@ func updateWhileRunningLevel(goos string, target Target, method string, cask boo
 	default:
 		return UpdateWhileRunningBlocked
 	}
+}
+
+// singleBinaryCasks ship one self-contained executable. A cask upgrade
+// deletes the old version's folder, but a running process keeps the file it
+// already opened and loads nothing else from that folder. Codex's cask also
+// ships codex-resources, which a running session can load later, so it stays
+// out.
+var singleBinaryCasks = map[Target]bool{
+	TargetClaudeCode: true,
+	TargetCopilot:    true,
+	TargetDroid:      true,
 }
 
 // versionedVendorInstalls keep every release in its own file or directory and
