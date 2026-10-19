@@ -189,7 +189,7 @@ jobs:
         run: go test -race -count=1 -run '^TestWindowsProviderJobReapsGrandchild$' ./internal/adapters/chatdriver/persistenthost/
 
       - name: Test Windows Chat hibernate and native resume
-        run: go test -race -count=1 -run '^(TestPersistentClaudeACPHibernateAndNativeResume|TestCodexHibernateStopsAppServerAndNativeResumesThread)$' ./internal/adapters/chatdriver/acp/ ./internal/adapters/chatdriver/codexappserver/
+        run: go test -race -count=1 -run '^(TestPersistentClaudeACPHibernateAndNativeResume|TestCodexHibernateStopsAppServerAndNativeResumesThread|TestZcodeHibernateStopsAppServerAndNativeResumesSession)$' ./internal/adapters/chatdriver/acp/ ./internal/adapters/chatdriver/codexappserver/ ./internal/adapters/chatdriver/zcodeappserver/
 
       - name: Test Windows background agent commands have no console
         run: go test -race -count=1 -run '^TestBackgroundCommandHasNoConsole$' ./internal/adapters/agent/pi ./internal/adapters/agent/omp ./internal/adapters/agent/primeagent
