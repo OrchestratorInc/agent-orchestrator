@@ -772,8 +772,6 @@ func autoReviewSessionReason(worker domain.SessionRecord, now time.Time) string 
 	}
 }
 
-// headHasReview reports whether any reviewer has a running or completed pass
-// on the PR head. Failed and cancelled passes never produced a review.
 // noTrackedPRMessage explains a trigger with no PR to review and gives the
 // exact retry command, since the PR may simply not be discovered yet.
 func noTrackedPRMessage(worker domain.SessionRecord) string {
@@ -784,6 +782,8 @@ func noTrackedPRMessage(worker domain.SessionRecord) string {
 	return fmt.Sprintf("AO is not tracking a PR for worker %q yet; if you just opened one, run %s with that PR's URL", worker.ID, retry)
 }
 
+// headHasReview reports whether any reviewer has a running or completed pass
+// on the PR head. Failed and cancelled passes never produced a review.
 func headHasReview(runs []domain.ReviewRun, prURL, targetSHA string) bool {
 	for _, run := range runs {
 		if run.PRURL != prURL || run.TargetSHA != targetSHA {

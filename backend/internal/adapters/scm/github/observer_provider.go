@@ -95,6 +95,30 @@ func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, update
 	}
 }
 
+// ListOpenPRsByBranch lists the open pull requests whose head is branch in
+// repo itself (head=<owner>:<branch>), so PRs from forks are not returned. One
+// request: GitHub filters on the server, so a repository's other open PRs
+// are never paged through.
+func (p *Provider) ListOpenPRsByBranch(ctx context.Context, repo ports.SCMRepo, branch string) ([]ports.SCMPRObservation, error) {
+	q := url.Values{}
+	q.Set("state", "open")
+	q.Set("head", repo.Owner+":"+branch)
+	q.Set("per_page", "100")
+	resp, err := p.client.doREST(ctx, http.MethodGet, repoPath(repo.Owner, repo.Name, "pulls"), q, nil)
+	if err != nil {
+		return nil, err
+	}
+	var pulls []restListPull
+	if err := json.Unmarshal(resp.Body, &pulls); err != nil {
+		return nil, fmt.Errorf("github scm: decode branch PR list: %w", err)
+	}
+	out := make([]ports.SCMPRObservation, 0, len(pulls))
+	for _, pull := range pulls {
+		out = append(out, restListPullToSCM(pull))
+	}
+	return out, nil
+}
+
 // githubCheckRunsPageSize fetches the complete check-run set for a commit in a
 // single REST page when the commit has no more than this many runs. A commit
 // virtually never exceeds GitHub's 100-result cap, so one request carries the

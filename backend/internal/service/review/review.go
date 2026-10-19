@@ -573,8 +573,8 @@ func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prU
 
 // attachBranchPR attaches the one open PR from the worker's branch when AO
 // tracks none yet, typically because the PR was opened moments ago. Finding
-// nothing leaves the engine to report that no PR is tracked; several
-// candidates are reported with the exact command for each.
+// nothing leaves the engine to report that no PR is tracked; a failed lookup
+// and several candidates are reported with the exact retry command.
 func (s *Service) attachBranchPR(ctx context.Context, workerID domain.SessionID) error {
 	finder, ok := s.prRefresher.(BranchPRFinder)
 	if !ok {
@@ -582,8 +582,10 @@ func (s *Service) attachBranchPR(ctx context.Context, workerID domain.SessionID)
 	}
 	urls, err := finder.FindBranchPRs(ctx, workerID)
 	if err != nil {
+		// Nothing is tracked, so the review cannot go ahead; say the lookup
+		// failed rather than that the branch has no PR.
 		slog.Default().WarnContext(ctx, "review trigger: find PR on worker branch failed", "session", workerID, "err", err)
-		return nil
+		return fmt.Errorf("%w: AO is not tracking a PR for worker %q yet and could not look up open PRs from its branch (%w); if you just opened one, run `ao review trigger %s --pr <url>` with that PR's URL", ErrInvalid, workerID, err, workerID)
 	}
 	switch len(urls) {
 	case 0:
