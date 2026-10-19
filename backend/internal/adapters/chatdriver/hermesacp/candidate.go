@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
+	// Register the SQLite driver used for read-only native history validation.
 	_ "modernc.org/sqlite"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -119,7 +120,7 @@ func PrepareProfile(ctx context.Context, home, instructions string) error {
 		}
 	}
 	pluginRoot := filepath.Join(home, "plugins")
-	if err := os.Mkdir(pluginRoot, 0700); err != nil && !os.IsExist(err) {
+	if err := os.Mkdir(pluginRoot, 0o700); err != nil && !os.IsExist(err) {
 		return err
 	}
 	if st, err := os.Lstat(pluginRoot); err != nil || !st.IsDir() || st.Mode()&os.ModeSymlink != 0 {
@@ -128,7 +129,7 @@ func PrepareProfile(ctx context.Context, home, instructions string) error {
 	dir := filepath.Join(pluginRoot, pluginName)
 	// Exclusive creation refuses user/plugin collisions. A new generation gets
 	// its own isolated profile; never overwrite an existing plugin installation.
-	if err := os.Mkdir(dir, 0700); err != nil {
+	if err := os.Mkdir(dir, 0o700); err != nil {
 		return fmt.Errorf("hermes ACP: managed plugin collision: %w", err)
 	}
 	for name, contents := range map[string][]byte{
@@ -136,7 +137,7 @@ func PrepareProfile(ctx context.Context, home, instructions string) error {
 		"plugin.yaml":      []byte("name: ao-standing-context\nversion: \"0.1.0\"\ndescription: Isolated AO ACP standing context candidate\nprovides_hooks: [pre_llm_call]\n"),
 		"instructions.txt": []byte(instructions),
 	} {
-		if err := os.WriteFile(filepath.Join(dir, name), contents, 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), contents, 0o600); err != nil {
 			return err
 		}
 	}

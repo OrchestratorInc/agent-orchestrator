@@ -10,8 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"gopkg.in/yaml.v3"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func TestPrepareProfilePreservesNativeConfiguration(t *testing.T) {
@@ -122,9 +123,10 @@ func TestValidateHistoryFailsClosed(t *testing.T) {
 				cwd = other
 			}
 			meta := `{"cwd":"` + filepath.ToSlash(workspace) + `"}`
-			if tc.meta == "other" {
+			switch tc.meta {
+			case "other":
 				meta = `{"cwd":"` + filepath.ToSlash(other) + `"}`
-			} else if tc.meta == "bad" {
+			case "bad":
 				meta = "not-json"
 			}
 			if _, err := db.Exec(`INSERT INTO sessions VALUES('native-id',?,?,?,NULL)`, tc.source, cwd, meta); err != nil {
