@@ -4796,6 +4796,16 @@ describe("SessionInspector branch summary", () => {
     });
   });
 
+  it("keeps the git-derived base when the attached PR has no target branch yet", async () => {
+    mockGitState({});
+    renderWithQuery(<SessionInspector session={session([pr(52, "open")], { branch: "ao/root" })} />);
+
+    await waitFor(() => {
+      const header = screen.getByTestId("inspector-branch");
+      expect(within(header).getByText("→ main")).toBeInTheDocument();
+    });
+  });
+
   it("shows uncommitted work and commits, pushes, and opens a PR in one step", async () => {
     mockGitState({ uncommitted: [changedFile("src/a.ts", 10, 2), changedFile("src/b.ts", 3, 1)] });
     renderWithQuery(<SessionInspector session={session([])} />);

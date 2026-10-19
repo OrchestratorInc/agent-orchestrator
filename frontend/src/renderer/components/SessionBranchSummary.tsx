@@ -135,7 +135,8 @@ export function SessionBranchSummary({
 	const presented = sessionBranchPresentation(session);
 	const branch = pullRequest?.sourceBranch || presented.branch;
 	const { naming } = presented;
-	const base = pullRequest ? pullRequest.targetBranch || undefined : facts.base;
+	// Fact-only PR summaries have no target branch yet; keep the git-derived base.
+	const base = pullRequest?.targetBranch || facts.base;
 	if (!branch && !naming && !pullRequests && !hasWork) return null;
 
 	const sendError = send.error instanceof Error ? send.error.message : null;
