@@ -555,6 +555,50 @@ export function WorkspaceReviewPane({
 		if (refMoved) invalidateWorkspaceViews(queryClient, sessionId, hostId);
 	}, [hostId, queryClient, refMoved, sessionId]);
 
+	const fallbackFiles = useMemo(() => files.filter((file) => file.binary || !metadataByPath.has(file.path)), [files, metadataByPath]);
+	// Keep non-text rows in Pierre's measured scroll content, including reviews
+	// with no text items. Its ResizeObserver tracks late image loads and collapse.
+	const renderFallbackFiles = useCallback(() => (
+		<>
+			{fallbackFiles.map((file) => {
+				const collapsed = collapsedPaths.has(file.path);
+				const deferred = isDeferredByDefault(file) && !loadedDeferredPaths.has(file.path);
+				const serverDeferredReason = serverDeferredByPath.get(file.path);
+				const pending = pendingDiffPaths.has(file.path);
+				const unavailable = !file.binary && !deferred && !serverDeferredReason && !pending;
+				const image = file.binary && !target.source && target.openable && isWorkspaceImagePath(file.path);
+				return (
+					<div className="m-2 overflow-hidden rounded-md border border-border bg-surface" key={file.path}>
+						<div className="flex min-w-0 items-center gap-2 p-3">
+							<button
+								aria-expanded={!collapsed}
+								aria-label={t(collapsed ? "files.expandFile" : "files.collapseFile", { file: file.path })}
+								className="flex min-w-0 flex-1 items-center gap-2 text-left text-xs focus-visible:underline"
+								onClick={() => toggleCollapsed(file.path)}
+								type="button"
+							>
+								<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground", !collapsed && "rotate-90")} />
+								<span className="truncate" title={file.path}>{file.path}</span>
+							</button>
+							{onOpenFile ? <Button onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "file" })} size="sm" type="button" variant="outline">{t("files.fileView")}</Button> : null}
+						</div>
+						{!collapsed ? (
+							<div className="min-w-0 p-3 pt-0">
+								{image ? (
+									<ImageDiffView path={file.path} sessionId={sessionId} hostId={hostId} split={split} status={file.status} version={workspaceVersion ?? ""} />
+								) : (
+									<p className="text-caption text-muted-foreground">{file.binary ? t("files.binaryUnavailable") : deferred ? t("files.deferredDiff") : serverDeferredReason ? t("files.diffUnavailableReason", { reason: serverDeferredReason }) : pending ? t("files.loadingDiff") : t("files.diffUnavailable")}</p>
+								)}
+								{deferred ? <Button onClick={() => setLoadedDeferredPaths((current) => new Set(current).add(file.path))} size="sm" type="button" variant="outline">{t("files.loadDiff")}</Button> : null}
+								{unavailable ? <RetryButton onClick={() => patchQueries.forEach((query) => void query.refetch())} /> : null}
+							</div>
+						) : null}
+					</div>
+				);
+			})}
+		</>
+	), [collapsedPaths, workspaceVersion, fallbackFiles, fileOpenContext, hostId, loadedDeferredPaths, onOpenFile, patchQueries, pendingDiffPaths, serverDeferredByPath, sessionId, split, t, toggleCollapsed]);
+
 	return (
 		<div
 			className="@container/review flex h-full min-h-0 flex-col"
@@ -592,12 +636,13 @@ export function WorkspaceReviewPane({
 				/>
 			) : null}
 			<div className={cn("min-h-0 overflow-hidden", files.length > 0 && "flex-1")}>
-				{items.length > 0 ? (
+				{items.length > 0 || fallbackFiles.length > 0 ? (
 					<CodeView<"feedback">
 						ref={codeViewRef}
 						className="ao-pierre-surface board-scrollbar h-full min-h-0 select-text overflow-y-auto overscroll-contain"
 						disableWorkerPool={typeof Worker === "undefined"}
 						items={items}
+						renderCodeViewFooter={renderFallbackFiles}
 						options={{
 							collapsedContextThreshold: 8,
 							diffIndicators: "classic",
@@ -771,39 +816,6 @@ export function WorkspaceReviewPane({
 					/>
 				) : null}
 				<SelectionAskButton onAsk={codeSelection.ask} source={codeSelection.source} />
-				{files.filter((file) => file.binary || !metadataByPath.has(file.path)).map((file) => {
-					const deferred = isDeferredByDefault(file) && !loadedDeferredPaths.has(file.path);
-					const serverDeferredReason = serverDeferredByPath.get(file.path);
-					const pending = pendingDiffPaths.has(file.path);
-					const unavailable = !file.binary && !deferred && !serverDeferredReason && !pending;
-					// The image preview reads the worktree and its base, so it only fits targets the centre pane can open.
-					const image = file.binary && !target.source && target.openable && isWorkspaceImagePath(file.path);
-					return (
-					<div className="m-2 flex items-center gap-2 rounded-md border border-border bg-surface p-3" key={file.path}>
-						{image ? (
-							<div className="min-w-0 flex-1">
-								<p className="truncate text-xs">{file.path}</p>
-								<ImageDiffView
-									path={file.path}
-									sessionId={sessionId}
-									hostId={hostId}
-									split={split}
-									status={file.status}
-									version={workspaceVersion ?? ""}
-								/>
-							</div>
-						) : (
-							<>
-								<FileCode2 aria-hidden="true" className="text-passive" />
-								<div className="min-w-0 flex-1"><p className="truncate text-xs">{file.path}</p><p className="text-caption text-muted-foreground">{file.binary ? t("files.binaryUnavailable") : deferred ? t("files.deferredDiff") : serverDeferredReason ? t("files.diffUnavailableReason", { reason: serverDeferredReason }) : pending ? t("files.loadingDiff") : t("files.diffUnavailable")}</p></div>
-							</>
-						)}
-						{deferred ? <Button onClick={() => setLoadedDeferredPaths((current) => new Set(current).add(file.path))} size="sm" type="button" variant="outline">{t("files.loadDiff")}</Button> : null}
-						{unavailable ? <RetryButton onClick={retryAll} /> : null}
-						{onOpenFile ? <Button onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "file" })} size="sm" type="button" variant="outline">{t("files.fileView")}</Button> : null}
-					</div>
-					);
-				})}
 			</div>
 				</>
 			)}
