@@ -160,12 +160,18 @@ func TestLifecycleDelegatesExactIdentityAndReconnectOnly(t *testing.T) {
 	if !reflect.DeepEqual(inner.start, cfg) {
 		t.Fatal("Start changed native launch context")
 	}
+	snapshot := nativeSnapshot(cfg)
+	snapshot["session_id"] = "native-owned-id"
+	writeSnapshot(t, cfg, "native-owned-id", snapshot)
 	resume := ports.ChatResumeConfig{SessionID: cfg.SessionID, ProviderConversationID: "native-owned-id", DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, HasPriorTurns: true}
 	if _, err := d.Resume(context.Background(), resume); !errors.Is(err, sentinel) {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(inner.resume, resume) {
 		t.Fatal("Resume changed history identity")
+	}
+	if err := os.Remove(filepath.Join(cfg.Env["HOME"], ".snowflake", "cortex", "conversations", "native-owned-id.json")); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := d.Reconnect(context.Background(), resume); !errors.Is(err, sentinel) {
 		t.Fatal(err)

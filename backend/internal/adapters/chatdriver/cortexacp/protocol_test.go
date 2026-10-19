@@ -73,6 +73,17 @@ func runProtocolFixture() {
 		case "initialize":
 			reply(`{"protocolVersion":1,"agentCapabilities":{"loadSession":true},"authMethods":[]}`)
 		case "session/new":
+			// The controlled native fixture owns its snapshot, just as stock
+			// Cortex does. The adapter must never synthesize one to admit load.
+			var params struct {
+				Cwd string `json:"cwd"`
+			}
+			_ = json.Unmarshal(req.Params, &params)
+			dir := filepath.Join(os.Getenv("HOME"), ".snowflake", "cortex", "conversations")
+			data, _ := json.Marshal(map[string]any{"session_id": "fixture-native-id", "working_directory": params.Cwd, "history": []any{map[string]any{"id": "prior-user", "role": "user", "content": []any{map[string]any{"type": "text", "text": "prior user"}}}}})
+			if os.MkdirAll(dir, 0o700) != nil || os.WriteFile(filepath.Join(dir, "fixture-native-id.json"), data, 0o600) != nil {
+				os.Exit(2)
+			}
 			reply(`{"sessionId":"fixture-native-id","configOptions":` + fixtureOptions + `}`)
 		case "session/load":
 			var params struct {
@@ -250,8 +261,10 @@ func TestConstructorRejectsUnknownModelAndNativeMissingHistory(t *testing.T) {
 		}
 		t.Fatalf("unknown model = %v", err)
 	}
-	// Each failed launch owns a separate AO session; no synthetic native state is
-	// inserted into the real history path. The fixture alone returns not-found.
+	// The snapshot exists, but the controlled native returns not-found.
+	writeSnapshot(t, cfg, "missing-native-id", map[string]any{"session_id": "missing-native-id", "working_directory": cfg.WorkspacePath})
+	// Each failed launch owns a separate AO session and isolated test profile.
+	// These snapshots and the native not-found response are controlled fixtures.
 	cfg.SessionID = "cortex-missing"
 	resume := ports.ChatResumeConfig{SessionID: cfg.SessionID, ProviderConversationID: "missing-native-id", DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env}
 	if conv, err := driver.Resume(ctx, resume); !errors.Is(err, ports.ErrChatResumeFailed) {
@@ -322,6 +335,7 @@ func assertProtocolChoices(t *testing.T, cfg ports.ChatStartConfig) {
 
 func TestConstructorLoadsExactHistoryAndRejectsWrongWorkspace(t *testing.T) {
 	driver, cfg := protocolDriver(t)
+	writeSnapshot(t, cfg, "fixture-native-id", nativeSnapshot(cfg))
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	resume := ports.ChatResumeConfig{SessionID: cfg.SessionID, ProviderConversationID: "fixture-native-id", DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, HasPriorTurns: true}
@@ -358,7 +372,7 @@ func TestConstructorLoadsExactHistoryAndRejectsWrongWorkspace(t *testing.T) {
 		if other != nil {
 			closeFixture(t, other)
 		}
-		t.Fatalf("native wrong-workspace error = %v", err)
+		t.Fatalf("wrong-workspace admission = %v", err)
 	}
 }
 

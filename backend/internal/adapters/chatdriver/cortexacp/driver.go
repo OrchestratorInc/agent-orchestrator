@@ -86,6 +86,9 @@ func (d *candidate) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (por
 	if err := validateResume(cfg); err != nil {
 		return nil, err
 	}
+	if err := validateNativeHistory(ctx, cfg); err != nil {
+		return nil, err
+	}
 	return guardConversation(d.driver.Resume(ctx, cfg))
 }
 
