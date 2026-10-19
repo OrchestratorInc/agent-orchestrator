@@ -46,6 +46,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	"github.com/aoagents/agent-orchestrator/backend/internal/notify"
 	agentswitchobs "github.com/aoagents/agent-orchestrator/backend/internal/observe/agentswitch"
+	scmobserve "github.com/aoagents/agent-orchestrator/backend/internal/observe/scm"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	usagepipeline "github.com/aoagents/agent-orchestrator/backend/internal/observe/usage"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -886,6 +887,7 @@ func Run() error {
 			Resolver:     prReader,
 			Writer:       store,
 			ThreadWriter: store,
+			Recorder:     scmobserve.NewMergeRecorder(store, lcStack.LCM, nil, log),
 		})
 	} else {
 		log.Warn("pr action service disabled: no usable SCM provider")

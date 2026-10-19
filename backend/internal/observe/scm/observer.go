@@ -576,47 +576,14 @@ func (o *Observer) Poll(ctx context.Context) error {
 			preserveLocalReviewHash:     reviewStale[key],
 			preserveLocalReviewDecision: reviewStale[key],
 		}
-		prepared := o.prepareForPersistence(obs, local, opts, now)
+		prepared := prepareForPersistence(obs, local, opts, now)
 		if !prepared.Changed.Metadata && !prepared.Changed.CI && !prepared.Changed.Review {
 			prRefreshOK[key] = true
 			continue
 		}
-		finalPR, finalChecks, finalReviews, finalThreads, finalComments := domainFromObservation(subj.session.ID, subj.session, prepared, local, opts, now)
-		pr, checks, reviews, threads, comments := finalPR, finalChecks, finalReviews, finalThreads, finalComments
-		// Lifecycle is allowed to run only after the observed facts are durable,
-		// but semantic hashes are the observer's acknowledgement cursor. Keep
-		// changed hashes at their local values until lifecycle succeeds; if the
-		// daemon restarts after a lifecycle failure, the stale hashes force the
-		// same observation to be fetched and delivered again.
-		if o.lifecycle != nil {
-			pendingOpts := opts
-			if prepared.Changed.Metadata {
-				pendingOpts.preserveLocalMetadataHash = true
-			}
-			if prepared.Changed.CI {
-				pendingOpts.preserveLocalCIHash = true
-			}
-			if prepared.Changed.Review {
-				pendingOpts.preserveLocalReviewHash = true
-			}
-			pr, checks, reviews, threads, comments = domainFromObservation(subj.session.ID, subj.session, prepared, local, pendingOpts, now)
-		}
-		if err := o.store.WriteSCMObservation(ctx, pr, checks, reviews, threads, comments, reviewMode); err != nil {
-			o.logger.Error("scm observer: DB write failed", "session", subj.session.ID, "pr", pr.URL, "err", err)
+		if err := persistObservation(ctx, o.store, o.lifecycle, o.logger, subj.session, local, prepared, opts, reviewMode, now); err != nil {
 			markRepoRefreshFailed(subj.repo)
 			continue
-		}
-		if o.lifecycle != nil {
-			if err := o.lifecycle.ApplySCMObservation(ctx, subj.session.ID, prepared); err != nil {
-				o.logger.Error("scm observer: lifecycle notification failed", "session", subj.session.ID, "pr", firstNonEmpty(prepared.PR.URL, prepared.PR.HTMLURL, local.URL), "err", err)
-				markRepoRefreshFailed(subj.repo)
-				continue
-			}
-			if err := o.store.WriteSCMObservation(ctx, finalPR, finalChecks, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
-				o.logger.Error("scm observer: DB lifecycle acknowledgement failed", "session", subj.session.ID, "pr", finalPR.URL, "err", err)
-				markRepoRefreshFailed(subj.repo)
-				continue
-			}
 		}
 		// If this observation came from terminal reconciliation, a successful
 		// terminal persistence (merged/closed transition observed and
@@ -1692,7 +1659,7 @@ func (o *Observer) needsReviewRefresh(key string, local domain.PullRequest, deci
 	return false
 }
 
-func (o *Observer) prepareForPersistence(obs ports.SCMObservation, local domain.PullRequest, opts persistenceOptions, now time.Time) ports.SCMObservation {
+func prepareForPersistence(obs ports.SCMObservation, local domain.PullRequest, opts persistenceOptions, now time.Time) ports.SCMObservation {
 	metadataHash := metadataSemanticHash(obs)
 	if opts.preserveLocalMetadataHash {
 		metadataHash = local.MetadataHash

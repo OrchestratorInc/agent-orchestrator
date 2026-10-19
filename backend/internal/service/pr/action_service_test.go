@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -150,6 +151,73 @@ func TestActionServiceMerge_GuardsAndSquashMergesExactHead(t *testing.T) {
 	}
 	if scm.mergeCalls != 1 || scm.request.ExpectedHeadSHA != pr.HeadSHA || scm.request.Method != ports.SCMMergeSquash {
 		t.Fatalf("request = %#v, calls = %d", scm.request, scm.mergeCalls)
+	}
+}
+
+type fakeMergeRecorder struct {
+	calls      int
+	trackedURL string
+	obs        ports.SCMObservation
+	err        error
+}
+
+func (f *fakeMergeRecorder) RecordMerge(_ context.Context, trackedURL string, obs ports.SCMObservation) error {
+	f.calls++
+	f.trackedURL = trackedURL
+	f.obs = obs
+	return f.err
+}
+
+func TestActionServiceMerge_RecordsMergedStateFromTheMergeResponse(t *testing.T) {
+	pr, scm := mergeableActionFixture()
+	scm.review = ports.SCMReviewObservation{Decision: string(domain.ReviewApproved)}
+	recorder := &fakeMergeRecorder{}
+	now := time.Date(2026, 10, 19, 0, 52, 53, 0, time.UTC)
+	svc := NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Reader: scm, Merger: scm, Recorder: recorder, Clock: func() time.Time { return now }})
+	if _, err := svc.Merge(context.Background(), MergeRequest{PRID: "42", PRURL: pr.URL, ExpectedHeadSHA: pr.HeadSHA}); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.calls != 1 || recorder.trackedURL != pr.URL {
+		t.Fatalf("recorder calls = %d url = %q, want 1 call for %q", recorder.calls, recorder.trackedURL, pr.URL)
+	}
+	got := recorder.obs
+	if !got.Fetched || !got.PR.Merged || got.PR.Closed || got.PR.State != string(domain.PRStateMerged) {
+		t.Fatalf("recorded PR = %#v, want merged", got.PR)
+	}
+	if got.PR.MergeCommitSHA != "merge-sha" || !got.PR.MergedAtProvider.Equal(now) {
+		t.Fatalf("recorded merge commit = %q at %v", got.PR.MergeCommitSHA, got.PR.MergedAtProvider)
+	}
+	if got.Mergeability.State != string(domain.MergeUnknown) {
+		t.Fatalf("recorded mergeability = %q, want unknown", got.Mergeability.State)
+	}
+	if got.Review.Decision != string(domain.ReviewApproved) || got.CI.Summary != string(domain.CIPassing) {
+		t.Fatalf("recorded review/CI = %q/%q, want the pre-merge facts", got.Review.Decision, got.CI.Summary)
+	}
+}
+
+func TestActionServiceMerge_RecordFailureDoesNotFailTheMerge(t *testing.T) {
+	pr, scm := mergeableActionFixture()
+	recorder := &fakeMergeRecorder{err: errors.New("db locked")}
+	svc := NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Reader: scm, Merger: scm, Recorder: recorder})
+	result, err := svc.Merge(context.Background(), MergeRequest{PRID: "42", PRURL: pr.URL, ExpectedHeadSHA: pr.HeadSHA})
+	if err != nil || result.MergeCommitSHA != "merge-sha" {
+		t.Fatalf("Merge = %#v, %v; want success after a recording failure", result, err)
+	}
+	if recorder.calls != 1 {
+		t.Fatalf("recorder calls = %d, want 1", recorder.calls)
+	}
+}
+
+func TestActionServiceMerge_FailedMergeRecordsNothing(t *testing.T) {
+	pr, scm := mergeableActionFixture()
+	scm.mergeErr = ports.ErrSCMNotMergeable
+	recorder := &fakeMergeRecorder{}
+	svc := NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Reader: scm, Merger: scm, Recorder: recorder})
+	if _, err := svc.Merge(context.Background(), MergeRequest{PRID: "42", PRURL: pr.URL, ExpectedHeadSHA: pr.HeadSHA}); !errors.Is(err, ErrPRNotMergeable) {
+		t.Fatalf("error = %v", err)
+	}
+	if recorder.calls != 0 {
+		t.Fatalf("recorder calls = %d after a failed merge, want 0", recorder.calls)
 	}
 }
 

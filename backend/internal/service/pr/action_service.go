@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -39,6 +41,11 @@ type actionReader interface {
 	FetchReviewThreads(ctx context.Context, ref ports.SCMPRRef) (ports.SCMReviewObservation, error)
 }
 
+// mergeRecorder persists a merge this service just performed.
+type mergeRecorder interface {
+	RecordMerge(ctx context.Context, trackedURL string, obs ports.SCMObservation) error
+}
+
 // ActionDeps contains the storage and SCM boundaries used by ActionService.
 type ActionDeps struct {
 	Store        actionStore
@@ -47,6 +54,11 @@ type ActionDeps struct {
 	Reader       actionReader
 	Resolver     ports.SCMReviewResolver
 	Writer       ports.SCMWriter
+	// Recorder persists a successful merge right away, so the PR reads as
+	// merged without waiting for the next SCM poll.
+	Recorder mergeRecorder
+	// Clock stamps recorded merges. Nil uses time.Now.
+	Clock func() time.Time
 	// ThreadWriter updates one resolved thread and its comments without
 	// replacing a potentially newer SCM observation.
 	ThreadWriter interface {
@@ -61,6 +73,8 @@ type ActionService struct {
 	merger       ports.SCMMerger
 	reader       actionReader
 	resolver     ports.SCMReviewResolver
+	recorder     mergeRecorder
+	clock        func() time.Time
 	threadWriter interface {
 		MarkPRReviewThreadResolved(context.Context, string, string) error
 	}
@@ -80,12 +94,18 @@ func NewActionService(deps ActionDeps) *ActionService {
 			MarkPRReviewThreadResolved(context.Context, string, string) error
 		})
 	}
+	clock := deps.Clock
+	if clock == nil {
+		clock = time.Now
+	}
 	return &ActionService{
 		store:        deps.Store,
 		resolve:      resolve,
 		merger:       deps.Merger,
 		reader:       deps.Reader,
 		resolver:     deps.Resolver,
+		recorder:     deps.Recorder,
+		clock:        clock,
 		threadWriter: threadWriter,
 	}
 }
@@ -151,7 +171,32 @@ func (s *ActionService) Merge(ctx context.Context, request MergeRequest) (MergeR
 			return MergeResult{}, fmt.Errorf("merge pull request: %w", err)
 		}
 	}
+	s.recordMerge(context.WithoutCancel(ctx), tracked.URL, fresh, review, out)
 	return MergeResult{PRNumber: tracked.Number, Method: string(ports.SCMMergeSquash), MergeCommitSHA: out.MergeCommitSHA}, nil
+}
+
+// recordMerge persists the merge the provider just confirmed. The merge has
+// already happened, so a recording failure is logged rather than returned:
+// the next SCM poll still observes the merged PR.
+func (s *ActionService) recordMerge(ctx context.Context, trackedURL string, fresh ports.SCMObservation, review ports.SCMReviewObservation, out ports.SCMMergeResult) {
+	if s.recorder == nil {
+		return
+	}
+	now := s.clock().UTC()
+	merged := fresh
+	merged.Review = review
+	merged.PR.State = string(domain.PRStateMerged)
+	merged.PR.Draft = false
+	merged.PR.Merged = true
+	merged.PR.Closed = false
+	merged.PR.MergeCommitSHA = out.MergeCommitSHA
+	merged.PR.UpdatedAtProvider = now
+	merged.PR.MergedAtProvider = now
+	merged.PR.ClosedAtProvider = now
+	merged.Mergeability = ports.SCMMergeabilityObservation{State: string(domain.MergeUnknown)}
+	if err := s.recorder.RecordMerge(ctx, trackedURL, merged); err != nil {
+		slog.Default().Warn("pr: record merged pull request", "pr", trackedURL, "err", err)
+	}
 }
 
 func (s *ActionService) fetchMergeReadiness(ctx context.Context, ref ports.SCMPRRef) (ports.SCMObservation, ports.SCMReviewObservation, error) {
